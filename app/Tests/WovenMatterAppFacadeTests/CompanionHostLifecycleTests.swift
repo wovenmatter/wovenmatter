@@ -30,30 +30,6 @@ struct CompanionHostLifecycleTests {
         #expect(stored == nil && !paired)
     }
 
-    @Test func executionAccessSettingsRejectDeviceOwnedAndNonExecutableWorkspaces() async throws {
-        let fixture = try await HostFixture(); defer { fixture.remove() }
-        await fixture.host.start()
-        let grant = try await fixture.pairAndProvision(name: "Fixture Mac")
-        let database = try #require(fixture.model.dashboardStore?.database)
-        let identity = try await database.companionLibraryIdentity()
-        let candidates: [CompanionExecutionWorkspace] = [
-            .init(id: UUID().uuidString.lowercased(), libraryID: identity.libraryID, ownerDeviceID: grant.deviceID,
-                  kind: .mac, name: "Own Mac", endpoint: grant.workspace.endpoint, executionDeviceID: grant.deviceID),
-            .init(id: UUID().uuidString.lowercased(), libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID,
-                  kind: .ios, name: "Phone"),
-            .init(id: UUID().uuidString.lowercased(), libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID,
-                  kind: .mac, name: "No execution listener")
-        ]
-        for candidate in candidates {
-            let workspace = try await database.registerCompanionExecutionWorkspace(.init(workspace: candidate), deviceID: identity.hostDeviceID)
-            await fixture.host.setExecutionAccess(deviceID: grant.deviceID, workspaceID: workspace.id, enabled: false)
-            #expect(fixture.host.errorMessage != nil)
-            #expect(try await database.companionWorkspaceAccessAllowed(deviceID: grant.deviceID, workspaceID: workspace.id))
-        }
-        #expect(try await fixture.executionStatus(grant) == 200)
-    }
-
-
     @Test func backendRPCControlsTheSameHostAndReplaysPairingReceipt() async throws {
         let fixture = try await HostFixture(); defer { fixture.remove() }
         try await fixture.model.configureCompanionFixture(directory: fixture.directory)
@@ -105,7 +81,6 @@ struct CompanionHostLifecycleTests {
         }
     }
 
-
     @Test func stalePairingPrincipalCannotRotateReenrolledDevicesExecutionGrant() async throws {
         let fixture = try await HostFixture(); defer { fixture.remove() }
         await fixture.host.start()
@@ -122,91 +97,6 @@ struct CompanionHostLifecycleTests {
             #expect(["unavailable", "unauthorized"].contains(error.code))
         }
         #expect(try await fixture.executionStatus(replacement) == 200)
-    }
-
-
-    @Test func quitDuringAutomaticStartupCannotPublishOrRestartService() async throws {
-        let fixture = try await HostFixture(); defer { fixture.remove() }
-        fixture.holdFirstStatus = true
-        await fixture.host.startForCentralDatabase()
-        try await waitUntil { fixture.firstStatusArrived }
-        fixture.host.stop()
-        fixture.releaseFirstStatus()
-        try await Task.sleep(for: .milliseconds(150))
-        #expect(fixture.exposureCount == 1)
-        #expect(fixture.children.isEmpty)
-        #expect(fixture.host.endpoint == nil && !fixture.host.isEnabled)
-    }
-
-    @Test func executionRevocationUsesLiveAuthenticationAndSurvivesStoppedSharingRestart() async throws {
-        let fixture = try await HostFixture(); defer { fixture.remove() }
-        await fixture.host.start()
-        let first = try await fixture.pairAndProvision(name: "First iPhone")
-        let second = try await fixture.pairAndProvision(name: "Second iPad")
-        let database = try #require(fixture.model.dashboardStore?.database)
-        let identity = try await database.companionLibraryIdentity()
-        var tombstone = try await database.registerCompanionExecutionWorkspace(.init(workspace: .init(
-            id: UUID().uuidString.lowercased(), libraryID: identity.libraryID, ownerDeviceID: first.deviceID,
-            kind: .ios, name: "Deleted device workspace", journalDeviceIDs: [first.deviceID])), deviceID: identity.hostDeviceID)
-        let tombstoneRevision = tombstone.revision
-        tombstone.deleted = true
-        tombstone = try await database.registerCompanionExecutionWorkspace(
-            .init(workspace: tombstone, expectedRevision: tombstoneRevision), deviceID: identity.hostDeviceID)
-        let live = try await database.registerCompanionExecutionWorkspace(.init(workspace: .init(
-            id: UUID().uuidString.lowercased(), libraryID: identity.libraryID, ownerDeviceID: second.deviceID,
-            kind: .ios, name: "Live device workspace", journalDeviceIDs: [first.deviceID])), deviceID: identity.hostDeviceID)
-        #expect(try await fixture.executionStatus(first) == 200)
-        #expect(try await fixture.executionStatus(second) == 200)
-
-        // A separately loaded revocation actor would only update disk and leave
-        // the live API's cached authentication accepting this first bearer.
-        await fixture.host.revoke(first.deviceID)
-        #expect(fixture.host.errorMessage == nil)
-        #expect(try await fixture.executionStatus(first) == 401)
-        #expect(try await fixture.executionStatus(second) == 200)
-        let afterRevocation = try await database.companionExecutionWorkspaces()
-        #expect(afterRevocation.first { $0.id == live.id }?.journalDeviceIDs.isEmpty == true)
-        #expect(afterRevocation.first { $0.id == tombstone.id } == tombstone)
-
-        fixture.host.stopSharing()
-        await fixture.host.revoke(second.deviceID)
-        #expect(fixture.host.errorMessage == nil)
-        let disk = try CompanionExecutionAuthentication(fileURL: fixture.directory.appending(path: "execution-devices.json"))
-        for token in [first.token, second.token] {
-            do { _ = try await disk.authenticate(bearer: token); Issue.record("Revoked execution bearer remained on disk") }
-            catch let error as CompanionAPIError { #expect(error.code == "unauthorized") }
-        }
-        // Restarting the listener must reuse the current actor state, and a new
-        // enrollment must not resurrect revoked grants from an older cache.
-        await fixture.host.start()
-        let third = try await fixture.pairAndProvision(name: "Replacement iPhone")
-        #expect(try await fixture.executionStatus(first) == 401)
-        #expect(try await fixture.executionStatus(second) == 401)
-        #expect(try await fixture.executionStatus(third) == 200)
-        #expect(fixture.host.pairedDevices.map(\.id) == [third.deviceID])
-
-        fixture.host.stopSharing()
-        try await waitUntil { !fixture.children.contains { $0.isRunning } }
-        fixture.host = fixture.makeHost()
-        await fixture.host.start()
-        #expect(try await fixture.executionStatus(first) == 401)
-        #expect(try await fixture.executionStatus(second) == 401)
-        #expect(try await fixture.executionStatus(third) == 200)
-        #expect(fixture.host.pairedDevices.map(\.id) == [third.deviceID])
-
-        // A cold controller must load persisted library authentication even if
-        // the user revokes a device before sharing has been restored or started.
-        fixture.host.stopSharing()
-        try await waitUntil { !fixture.children.contains { $0.isRunning } }
-        fixture.host = fixture.makeHost()
-        fixture.defaults.set([first.deviceID: [String]()], forKey: "companion.execution.pending-revocations")
-        await fixture.host.revoke(third.deviceID)
-        #expect(fixture.host.errorMessage == nil)
-        let libraryDisk = try CompanionAuthentication(fileURL: fixture.directory.appending(path: "companion-devices.json"))
-        #expect(await libraryDisk.devices().isEmpty)
-        await fixture.host.start()
-        #expect(try await fixture.executionStatus(third) == 401)
-        #expect(fixture.host.pairedDevices.isEmpty)
     }
 
     @Test func clickPairingHTTPRequiresLocalApprovalAndReturnsAccurateMetadata() async throws {

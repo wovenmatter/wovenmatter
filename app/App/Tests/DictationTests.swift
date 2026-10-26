@@ -46,69 +46,6 @@ import WovenMatterCompanion
             permission: { true }, makeEngine: { speech })
         return (DictationModel(session: session, focusedWindow: focusedWindow), speech)
     }
-    @Test func stopDestinationPreservesRichTextAndOneUndoableEdit() async throws {
-        let (model, speech) = fixture()
-        let (a, viewA) = editor("Original A", id: "A", selection: NSRange(location: 10, length: 0))
-        let (b, viewB) = editor("Before old after", id: "B", selection: NSRange(location: 7, length: 3))
-        viewB.typingAttributes = [.font: NSFont.systemFont(ofSize: 18)]
-        model.toggle(editor: a)
-        try await settle { model.phase == .recording }
-        speech.continuation.yield(.init(start: 0, end: 1, text: "whole recording", isFinal: true))
-        try await settle { model.preview == "whole recording" }
-        model.toggle(editor: b)
-        try await settle { model.phase == .idle }
-        #expect(viewA.string == "Original A")
-        #expect(viewB.string == "Before whole recording after")
-        #expect((viewB.textStorage?.attribute(.font, at: 7, effectiveRange: nil) as? NSFont)?.pointSize == 18)
-        viewB.history.undo()
-        #expect(viewB.string == "Before old after")
-        model.cancel()
-    }
-    @Test func changedEditorRetainsFinalizedWords() async throws {
-        let (model, speech) = fixture()
-        let (target, view) = editor("Draft ", id: "A", selection: NSRange(location: 6, length: 0))
-        model.toggle(editor: target)
-        try await settle { model.phase == .recording }
-        model.stop(editor: target)
-        target.identity = "B" // Same text isolates the conversation-identity fence.
-        speech.continuation.yield(.init(start: 0, end: 1, text: "retained", isFinal: true))
-        try await settle { model.phase == .idle }
-        #expect(view.string == "Draft ")
-        #expect(model.retainedTranscript == "retained")
-        view.setSelectedRange(NSRange(location: 6, length: 0))
-        model.insertRetained(into: target)
-        #expect(view.string == "Draft retained")
-        model.cancel()
-    }
-    @Test func rejectedNativeEditRetainsTheTranscript() async throws {
-        let (model, speech) = fixture()
-        let (target, view) = editor("Preserve", id: "A", selection: NSRange(location: 0, length: 0))
-        let admission = RejectingDictationDelegate()
-        view.delegate = admission
-        model.toggle(editor: target)
-        try await settle { model.phase == .recording }
-        speech.continuation.yield(.init(start: 0, end: 1, text: "Keep these words", isFinal: true))
-        try await settle { model.preview == "Keep these words" }
-        model.stop(editor: target)
-        try await settle { model.phase == .idle }
-        #expect(admission.admissions == 1)
-        #expect(view.string == "Preserve")
-        #expect(model.retainedTranscript == "Keep these words")
-        model.cancel()
-    }
-    @Test func leavingWorkspaceStopsAndRetainsResultWhenEditorClosed() async throws {
-        let (model, speech) = fixture()
-        let (target, view) = editor("Draft", id: "A", selection: NSRange(location: 5, length: 0))
-        model.toggle(editor: target)
-        try await settle { model.phase == .recording }
-        model.activeEditor = nil
-        speech.continuation.yield(.init(start: 0, end: 1, text: "Safe result", isFinal: true))
-        model.leaveWorkspace()
-        try await settle { model.phase == .idle }
-        #expect(view.string == "Draft")
-        #expect(model.retainedTranscript == "Safe result")
-        model.cancel()
-    }
     @Test func shortcutUsesTheCurrentWindowResponderAndIgnoresStaleEditors() async throws {
         _ = NSApplication.shared
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 200),

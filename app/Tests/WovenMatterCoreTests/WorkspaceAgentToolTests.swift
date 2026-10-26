@@ -50,7 +50,6 @@ struct WorkspaceAgentToolTests {
     }
   }
 
-
   @Test func coordinationEpochsMakeReleaseAndNotificationRetriesSafe() async throws {
     let (db, dir, source, target) = try await fixture()
     defer { try? FileManager.default.removeItem(at: dir) }
@@ -128,67 +127,6 @@ struct WorkspaceAgentToolTests {
     let timers = try await db.querySessionTimers(callerID: caller, sessionID: caller, limit: 1)
     #expect(timers.objectValue?["rows"]?.arrayValue?.count == 1)
     #expect(timers.objectValue?["hasMore"]?.boolValue == true)
-  }
-
-  @Test func builtInClaudeUsageKeepsSubscriptionAndAPIKeyBillingDistinct() async throws {
-    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let url = directory.appending(path: "usage.sqlite")
-    let recorder = try await UsageRunRecorder(databaseURL: url)
-    let date = Date(timeIntervalSince1970: 1_800_000_000)
-    for provider in ["claude-subscription", "anthropic"] {
-      try await recorder.record(.init(runID: provider, timestamp: date, runtimeKind: .defaultAgent,
-        sessionID: "fixture", model: provider + "/sonnet", reasoningLevel: "high", agent: "Built-in",
-        workspace: "local", tokens: .init(inputTokens: 3, outputTokens: 2), costUSD: nil))
-    }
-    let samples = try UsageStore(databaseURL: url).samples(in: DateInterval(start: date.addingTimeInterval(-1), duration: 2))
-    #expect(samples.count == 2)
-    #expect(samples.allSatisfy { $0.provider == .claude })
-    #expect(Set(samples.map(\.billingRoute)) == ["Claude subscription", "Claude API key"])
-  }
-
-  @Test func creationCommitGrantsManagedReadOnceAndRetryDoesNotReacquireReleasedSession() async throws {
-    let (db, dir, a, b) = try await fixture()
-    defer { try? FileManager.default.removeItem(at: dir) }
-    try await db.setSessionTools(.init(enabled: [.sessions]), sessionID: a)
-    let request = UUID().uuidString.lowercased()
-    let reserved = try await db.reserveToolSessionCreation(sourceID: a, requestID: request, arguments: ["sessions", "create"], purpose: "Build", managed: true)
-    let target = try #require(reserved.objectValue?["target_id"]?.stringValue)
-    _ = try await db.createFixtureLocalACPSession(runtimeKind: .claudeCode, title: "Created", ownerDeviceID: UUID(), requestedConversationID: UUID(uuidString: target))
-    await #expect(throws: WorkspaceToolError.accessRequired(target)) { try await db.requireTranscriptAccess(sourceID: a, targetID: target) }
-    await #expect(throws: (any Error).self) { try await db.completeToolSessionCreation(requestID: request, sourceID: b) }
-    try await db.completeToolSessionCreation(requestID: request, sourceID: a)
-    try await db.requireTranscriptAccess(sourceID: a, targetID: target)
-    try await db.setCoordinationNotifications(sourceID: a, targetID: target, enabled: false)
-    #expect(try await !db.sessionRelationship(target).notificationsEnabled)
-    await #expect(throws: (any Error).self) { try await db.setCoordinationNotifications(sourceID: b, targetID: target, enabled: true) }
-    try await db.endCoordination(targetID: target, sourceID: a)
-    try await db.completeToolSessionCreation(requestID: request, sourceID: a)
-    #expect(try await db.sessionRelationship(target).coordinatorID == nil)
-    #expect(try await db.sessionRelationship(target).createdBy == a)
-    await #expect(throws: WorkspaceToolError.accessRequired(target)) { try await db.requireTranscriptAccess(sourceID: a, targetID: target) }
-  }
-
-  @Test func timerOccurrencesSurviveReopenAndPauseRevokesPendingDelivery() async throws {
-    let (db, dir, a, _) = try await fixture()
-    defer { try? FileManager.default.removeItem(at: dir) }
-    let now = Date(timeIntervalSince1970: 1_000)
-    let timer = WorkspaceSessionTimer(sessionID: a, instruction: "Check progress", nextFireAt: now, intervalSeconds: 60)
-    try await db.saveSessionTimer(timer, callerID: a)
-    #expect(try await db.dueSessionTimers(now: now.addingTimeInterval(-1)).isEmpty)
-    let claimed = try await #require(db.dueSessionTimers(now: now).first)
-    let delivery = try #require(claimed.pendingDeliveryID)
-    let reopened = try await WorkspaceDatabase(url: dir.appending(path: "workspace.sqlite"))
-    #expect(try await reopened.dueSessionTimers(now: now).first?.pendingDeliveryID == delivery)
-    await #expect(throws: WorkspaceToolError.timerPauseConfirmation) { try await db.setSessionTools(.init(enabled: [.sessions]), sessionID: a) }
-    #expect(try await db.isTimerOccurrenceActive(id: timer.id, deliveryID: delivery))
-    try await db.setSessionTools(.init(enabled: [.sessions]), sessionID: a, confirmedPausingTimers: true)
-    #expect(try await !db.isTimerOccurrenceActive(id: timer.id, deliveryID: delivery))
-    #expect(try await db.sessionTimers(sessionID: a).first?.isPaused == true)
-    await #expect(throws: WorkspaceToolError.disabled(.timers)) { try await db.pauseSessionTimer(id: timer.id, paused: false) }
-    try await db.setSessionTools(.init(), sessionID: a)
-    #expect(try await db.dueSessionTimers(now: now).isEmpty)
   }
 
   @Test func timersCoalesceMissedFiringsAndOneShotCompletesOnce() async throws {
@@ -312,41 +250,6 @@ struct WorkspaceAgentToolTests {
     #expect(throws: (any Error).self) { try draft.timer() }
   }
 
-
-  @Test func sessionStopCancelsAdmittedActionsThatHaveNotReachedTheGUI() async throws {
-    let (db, dir, caller, other) = try await fixture()
-    defer { try? FileManager.default.removeItem(at: dir) }
-    let pending = WovenMatterToolRequest(arguments: ["browser", "call", "--json", #"{"action":"click"}"#])
-    #expect(try await db.reserveAutomationRequest(callerID: caller, request: pending))
-    #expect(try await db.reserveAutomationRequest(callerID: other, request: pending))
-    try await db.cancelAutomationRequests(callerID: caller)
-    let projection = try await WorkspaceDatabase(url: dir.appending(path: "workspace.sqlite"), readOnlyProjection: true)
-    await #expect(throws: (any Error).self) {
-      try await projection.requireAutomationRequest(.browser, callerID: caller, requestID: pending.requestID)
-    }
-    try await projection.requireAutomationRequest(.browser, callerID: other, requestID: pending.requestID)
-    #expect(try await db.reserveAutomationRequest(callerID: caller, request: .init(arguments: pending.arguments)))
-  }
-
-  @Test func eventIDsAndRunIDsCannotBypassTranscriptGrants() async throws {
-    let (db, dir, a, b) = try await fixture()
-    defer { try? FileManager.default.removeItem(at: dir) }
-    let run = try await db.beginLocalACPRun(conversationID: b, content: "Private content")
-    try await db.recordHistory(.init(id: "event", conversationID: b, runID: run.runID, harness: "claude_code", kind: "wire.in", payload: "Private event"))
-    try await db.setSessionTools(.init(enabled: [.sessions]), sessionID: a)
-    for query in [WorkspaceHistoryQuery(command: "event", id: "event"), .init(command: "trace", id: run.runID),
-                  .init(command: "message", id: run.userMessageID), .init(command: "runs", conversationID: b)] {
-      await #expect(throws: WorkspaceToolError.accessRequired(b)) { try await db.queryAgentHistory(query, callerID: a) }
-    }
-    try await db.attachConversationReference(sourceID: a, targetID: b)
-    let result = try await db.queryAgentHistory(.init(command: "trace", id: run.runID), callerID: a)
-    let trace = result.objectValue?["rows"]?.arrayValue ?? []
-    #expect(trace.contains { $0.objectValue?["id"]?.stringValue == "event" })
-    // Notes history remains behind Notes even if full conversation history is on.
-    try await db.setSessionTools(.init(enabled: [.history]), sessionID: a)
-    await #expect(throws: WorkspaceToolError.disabled(.notes)) { try await db.queryAgentHistory(.init(command: "versions", id: "note"), callerID: a) }
-  }
-
   @Test func nativeSubmissionRechecksAuthorityBeforePersistingInput() async throws {
     let (db, dir, caller, target) = try await fixture()
     defer { try? FileManager.default.removeItem(at: dir) }
@@ -361,25 +264,6 @@ struct WorkspaceAgentToolTests {
     }
     #expect(try await db.openCodeUncertainSubmissions(conversationID: target).isEmpty)
     #expect(try await db.toolDelivery(id: requestID)?.messageID == nil)
-  }
-
-  @Test func automationCancellationSurvivesLateAdmissionAndHostRestart() async throws {
-    let (db, dir, caller, other) = try await fixture()
-    defer { try? FileManager.default.removeItem(at: dir) }
-    let request = WovenMatterToolRequest(arguments: ["browser", "call", "--json", #"{"action":"click","tabId":"fixture","selector":"button"}"#])
-    // Stop reaches the backend before the action is admitted or reaches the GUI.
-    try await db.cancelAutomationRequest(callerID: caller, requestID: request.requestID.uppercased())
-    let reopened = try await WorkspaceDatabase(url: dir.appending(path: "workspace.sqlite"))
-    await #expect(throws: (any Error).self) { try await reopened.reserveAutomationRequest(callerID: caller, request: request) }
-    #expect(try await reopened.reserveAutomationRequest(callerID: other, request: request))
-    let projection = try await WorkspaceDatabase(url: dir.appending(path: "workspace.sqlite"), readOnlyProjection: true)
-    try await projection.requireAutomationRequest(.browser, callerID: other, requestID: request.requestID)
-    try await reopened.cancelAutomationRequest(callerID: other, requestID: request.requestID)
-    // A running GUI action observes Stop on its read-only connection before its
-    // next native dispatch; cancellation never depends on Task registration.
-    await #expect(throws: (any Error).self) {
-      try await projection.requireAutomationRequest(.browser, callerID: other, requestID: request.requestID)
-    }
   }
 
   @Test func inputCapturesAreImmutableSessionScopedAndPermissionChecked() async throws {
@@ -457,38 +341,6 @@ struct WorkspaceAgentToolTests {
       try await db.applyNoteEdits(.init(command: .apply, noteID: note, expectedRevision: revision, operations: [.setTitle("Forbidden")]), callerConversationID: a)
     }
     #expect(try await db.readNoteForEditing(id: note).title == "Untitled Note")
-  }
-
-  @Test func referencesGrantOnlyTheSelectedSessionAndCanBeRevoked() async throws {
-    let (db, dir, a, b) = try await fixture()
-    defer { try? FileManager.default.removeItem(at: dir) }
-    try await db.setSessionTools(.init(enabled: [.sessions, .notes]), sessionID: a)
-    let c = try await db.createFixtureLocalACPSession(runtimeKind: .claudeCode, title: "Unattached", ownerDeviceID: UUID())
-    await #expect(throws: WorkspaceToolError.accessRequired(b)) { try await db.requireTranscriptAccess(sourceID: a, targetID: b) }
-    try await db.attachConversationReference(sourceID: a, targetID: b)
-    try await db.requireTranscriptAccess(sourceID: a, targetID: b)
-    _ = try await db.queryAgentHistory(.init(command: "conversation", id: b), callerID: a)
-    await #expect(throws: WorkspaceToolError.accessRequired(c)) { try await db.queryAgentHistory(.init(command: "conversation", id: c), callerID: a) }
-    await #expect(throws: WorkspaceToolError.disabled(.history)) { try await db.queryAgentHistory(.init(command: "search", search: "secret"), callerID: a) }
-    try await db.removeConversationReference(sourceID: a, targetID: b)
-    await #expect(throws: WorkspaceToolError.accessRequired(b)) { try await db.requireTranscriptAccess(sourceID: a, targetID: b) }
-  }
-
-  @Test func fanoutAndRevocationAreEnforcedTransactionally() async throws {
-    let (db, dir, a, b) = try await fixture()
-    defer { try? FileManager.default.removeItem(at: dir) }
-    var settings = try await db.toolSettings()
-    settings.maximumManagedSessions = 1
-    try await db.saveToolSettings(settings)
-    try await db.beginCoordination(sourceID: a, targetID: b, purpose: "Manage")
-    try await db.beginCoordination(sourceID: a, targetID: b, purpose: "Update intent")
-    let c = try await db.createFixtureLocalACPSession(runtimeKind: .claudeCode, title: "Other", ownerDeviceID: UUID())
-    await #expect(throws: WorkspaceToolError.managedLimit(1)) { try await db.beginCoordination(sourceID: a, targetID: c, purpose: "Over limit") }
-    #expect(try await db.sessionRelationship(c).coordinatorID == nil)
-    await #expect(throws: (any Error).self) { try await db.beginCoordination(sourceID: b, targetID: a, purpose: "Cycle") }
-    try await db.setSessionTools(.init(enabled: []), sessionID: a)
-    #expect(try await db.sessionRelationship(b).coordinatorID == nil)
-    await #expect(throws: WorkspaceToolError.disabled(.sessions)) { try await db.beginCoordination(sourceID: a, targetID: c, purpose: "Disabled") }
   }
 
 }

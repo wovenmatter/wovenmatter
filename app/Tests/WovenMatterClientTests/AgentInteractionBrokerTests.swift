@@ -4,22 +4,8 @@ import Testing
 import WovenMatterCore
 
 struct AgentInteractionBrokerTests {
-    @Test @MainActor func invalidPermissionCannotConsumeAndFirstValidResponseWins() async {
-        let broker = AgentInteractionBroker()
-        let id = UUID()
-        let answer = await withCheckedContinuation { continuation in
-            broker.registerPermission(id: id, request: .init(title: "Run command?", options: [
-                .init(id: "once", name: "Allow once", kind: "allow_once"),
-                .init(id: "deny", name: "Deny", kind: "reject_once")
-            ]), continuation: continuation)
-            #expect(!broker.resolvePermission(id: id, optionID: "not-an-option"))
-            #expect(broker.resolvePermission(id: id, optionID: "once"))
-            #expect(!broker.resolvePermission(id: id, optionID: "deny"))
-        }
-        #expect(answer == "once")
-    }
 
-    @Test @MainActor func questionValidationPreservesPendingUntilCompleteAnswer() async {
+    @Test @MainActor func responsesMustValidateBeforeResolvingOnce() async {
         let broker = AgentInteractionBroker()
         let id = UUID()
         let request = LocalACPInteractionRequest.questions(.init(questions: [
@@ -39,6 +25,18 @@ struct AgentInteractionBrokerTests {
             #expect(!broker.resolveInteraction(id: id, response: .cancelled))
         }
         #expect(answer == .answers(["a": .single("freeform response"), "b": .multiple(["one", "two"])]))
+
+        // A completed request releases its identifier for the next permission prompt.
+        let permission = await withCheckedContinuation { continuation in
+            broker.registerPermission(id: id, request: .init(title: "Run command?", options: [
+                .init(id: "once", name: "Allow once", kind: "allow_once"),
+                .init(id: "deny", name: "Deny", kind: "reject_once")
+            ]), continuation: continuation)
+            #expect(!broker.resolvePermission(id: id, optionID: "not-an-option"))
+            #expect(broker.resolvePermission(id: id, optionID: "once"))
+            #expect(!broker.resolvePermission(id: id, optionID: "deny"))
+        }
+        #expect(permission == "once")
     }
 
 }

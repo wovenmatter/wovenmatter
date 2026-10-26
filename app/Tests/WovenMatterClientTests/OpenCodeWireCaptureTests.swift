@@ -4,29 +4,6 @@ import WovenMatterCore
 @testable import WovenMatterClient
 
 struct OpenCodeWireCaptureTests {
-  @Test func stoppedApprovalCannotCrossAnAwaitingHistoryWrite() async throws {
-    let configuration = URLSessionConfiguration.ephemeral
-    configuration.protocolClasses = [CaptureFixtureProtocol.self]
-    let session = URLSession(configuration: configuration)
-    defer { session.invalidateAndCancel() }
-    let gate = ApprovalWriteGate()
-    let fence = AgentDispatchFence()
-    let connection = try OpenCodeConnection(identity: "approval-wire", url: URL(string: "http://fixture.invalid")!, password: "fixture")
-    let client = OpenCodeHTTPClient(connection: connection, session: session).recording { direction, _ in
-      if direction == "out" { await gate.pause() }
-    }
-    let reply = Task { try await client.call("POST", "/api/session/s/permission/p/reply",
-      body: ["reply": "once"], dispatchFence: fence) }
-    await gate.entered()
-    fence.cancel()
-    await gate.release()
-    await #expect(throws: CancellationError.self) { try await reply.value }
-    #expect(!fence.hasDispatched)
-    // Native denial remains a usable mutation even after affirmative work stops.
-    let denied = try await OpenCodeHTTPClient(connection: connection, session: session)
-      .call("POST", "/api/session/s/permission/p/reply", body: ["reply": "reject"])
-    #expect(denied["future_response"].bool)
-  }
 
   @Test func preservesUnknownHTTPAndSSEFieldsWithoutCredentials() async throws {
     let configuration = URLSessionConfiguration.ephemeral

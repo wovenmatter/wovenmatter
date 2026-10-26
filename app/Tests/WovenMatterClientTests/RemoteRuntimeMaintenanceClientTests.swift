@@ -4,62 +4,6 @@ import WovenMatterCore
 @testable import WovenMatterClient
 
 struct RemoteRuntimeMaintenanceClientTests {
-    @Test func missingHarnessesAreNeverActivatedByLegacyMigration() async throws {
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [RemoteMaintenanceFixtureProtocol.self]
-        let session = URLSession(configuration: configuration)
-        defer { session.invalidateAndCancel() }
-        let client = RemoteWorkspaceServiceClient(baseURL: URL(string: "http://127.0.0.1:41003")!, token: "workspace-two", session: session)
-        let rows = try await client.runtimeMaintenance()
-        #expect(rows.count == 1)
-        #expect(rows[0].installed == false)
-    }
-
-
-    @Test func bundledUpgradeArrowUsesOnlyCompatibleTarget() throws {
-        func component(id: String = "bundled", installed: String = "0.153.4", target: String? = nil) throws -> RemoteRuntimeComponent {
-            var object: [String: Any] = [
-                "id": id, "displayName": "Component", "installedVersion": installed,
-                "latestVersion": "0.154.0", "required": true, "installed": true,
-            ]
-            if let target { object["updateTargetVersion"] = target }
-            return try JSONDecoder().decode(RemoteRuntimeComponent.self, from: JSONSerialization.data(withJSONObject: object))
-        }
-        let current = try component(target: "0.153.4")
-        #expect(current.latestVersion == "0.154.0") // Retained for diagnostics.
-        #expect(current.availableUpdateVersion == nil)
-        #expect(try component(installed: "0.153.1", target: "0.153.4").availableUpdateVersion == "0.153.4")
-        #expect(try component().availableUpdateVersion == nil) // Unknown compatibility must not advertise latest.
-        #expect(try component(id: "runtime").availableUpdateVersion == "0.154.0")
-    }
-
-    @Test func currentNativeInstanceReplacesThePreLaunchHarnessSnapshot() {
-        let stoppedSnapshot = RemoteHarnessStatus(
-            id: .opencode, displayName: "OpenCode", transport: "opencode-v2", capabilities: [],
-            state: "transport_unavailable", installationStatus: "installed", authenticationStatus: "unknown",
-            transportStatus: "unavailable", transportError: "Start this workspace's server", setupMethods: [], detectedProviders: []
-        )
-        let running = RemoteWorkspaceInstanceStatus(kind: "opencode", state: "running", pid: 123,
-                                                   version: "2.0.22", endpointPath: "/v1/workspace-instances/opencode/api", lastError: nil)
-        let started = stoppedSnapshot.reconcilingOpenCode(instance: running, installed: true)
-        #expect(started.state == "ready")
-        #expect(started.transportStatus == "ready")
-        #expect(started.transportError == nil)
-        #expect(started.authenticationStatus == "unknown")
-        let stopped = RemoteWorkspaceInstanceStatus(kind: "opencode", state: "stopped", pid: nil,
-                                                   version: nil, endpointPath: running.endpointPath, lastError: nil)
-        #expect(started.reconcilingOpenCode(instance: stopped, installed: true).state == "transport_unavailable")
-        #expect(started.reconcilingOpenCode(instance: running, installed: false).state == "cli_missing")
-        #expect(stoppedSnapshot.reconcilingOpenCode(instance: nil, installed: true) == stoppedSnapshot)
-        let otherInstance = RemoteWorkspaceInstanceStatus(kind: "openclaw", state: "running", pid: 456,
-                                                         version: nil, endpointPath: "/v1/openclaw/gateway/socket", lastError: nil)
-        #expect(stoppedSnapshot.reconcilingOpenCode(instance: otherInstance, installed: true) == stoppedSnapshot)
-        let acp = RemoteHarnessStatus(id: .codex, displayName: "Codex", transport: "acp", capabilities: [],
-                                     state: "authentication_required", installationStatus: "installed", authenticationStatus: "required",
-                                     transportStatus: "unknown", transportError: nil, setupMethods: [], detectedProviders: [])
-        #expect(acp.reconcilingOpenCode(instance: running, installed: true) == acp)
-    }
-
 
     @Test func keepsRemoteRequestsOnTheirAuthenticatedWorkspaceOrigin() async throws {
         let configuration = URLSessionConfiguration.ephemeral

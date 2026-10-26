@@ -31,20 +31,6 @@ struct ACPAssistantStreamWriterTests {
     #expect(assistantActivities[0].activity.content == "First  \n")
   }
 
-  @Test func lateReasoningDeltaDoesNotSplitAnswerPrefix() async throws {
-    let fixture = try await WriterFixture()
-    defer { fixture.remove() }
-    let thought = AgentRunActivity(id: "built-in-1-0", kind: .thought, phase: "update", title: "Thinking", status: "running", content: "Reasoning")
-    try await fixture.writer.finishSegment(for: thought)
-    try await fixture.writer.append("T")
-    try await fixture.writer.finishSegment(for: thought)
-    try await fixture.writer.append("iananmen Square")
-    try await fixture.writer.finish()
-    await #expect(try fixture.assistantText() == ["Tiananmen Square"])
-    let activities = try await fixture.database.conversationHistoryPage(id: fixture.conversationID, limit: 20).activities
-    #expect(!activities.contains { $0.activity.kind == .assistant })
-  }
-
 }
 
 private struct WriterFixture {

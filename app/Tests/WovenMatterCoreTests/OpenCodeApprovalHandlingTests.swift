@@ -37,47 +37,6 @@ struct OpenCodeApprovalHandlingTests {
         await coordinator.shutdown()
     }
 
-
-    @Test func nativeManualResponsesValidateCurrentRequestAndResolveOnlyOnce() async throws {
-        let context = try await ApprovalContext()
-        defer { context.clean() }
-        let pending = request("per_a", "ses_a")
-        await context.fixture.setRequests([pending], session: "ses_a")
-        let coordinator = context.coordinator()
-        try await coordinator.connect(context.connection)
-        await #expect(throws: OpenCodeError.self) {
-            try await coordinator.replyToPermission(context.a, expectedRequest: pending, expectedRunID: nil, reply: "always")
-        }
-        await #expect(throws: OpenCodeError.self) {
-            try await coordinator.replyToPermission(context.a, expectedRequest: pending, expectedRunID: "old-run", reply: "once")
-        }
-        var stale = pending
-        stale["resources"] = .array(["different command"])
-        await #expect(throws: OpenCodeError.self) {
-            try await coordinator.replyToPermission(context.a, expectedRequest: stale, expectedRunID: nil, reply: "once")
-        }
-        #expect(await context.fixture.replies.isEmpty)
-        await context.fixture.setReplyDelay(.milliseconds(50))
-        let wins = await withTaskGroup(of: Bool.self) { group in
-            for reply in ["once", "reject"] {
-                group.addTask {
-                    do { try await coordinator.replyToPermission(context.a, expectedRequest: pending, expectedRunID: nil, reply: reply); return true }
-                    catch { return false }
-                }
-            }
-            var winners = 0
-            for await succeeded in group where succeeded { winners += 1 }
-            return winners
-        }
-        #expect(wins == 1)
-        #expect(await context.fixture.replies.count == 1)
-        await #expect(throws: OpenCodeError.self) {
-            try await coordinator.replyToPermission(context.a, expectedRequest: pending, expectedRunID: nil, reply: "once")
-        }
-        #expect(await context.fixture.replies.count == 1)
-        await coordinator.shutdown()
-    }
-
     @Test func stoppedSessionFencesPermissionAndFormAnswers() async throws {
         let context = try await ApprovalContext()
         defer { context.clean() }

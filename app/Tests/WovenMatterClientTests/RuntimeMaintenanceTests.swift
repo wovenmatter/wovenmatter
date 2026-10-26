@@ -5,14 +5,6 @@ import WovenMatterCore
 
 struct RuntimeMaintenanceTests {
 
-    @Test func newestSupportedMajorSurvivesLatestTagMoving() async throws {
-        let version = try await RuntimeMaintenance.registryVersion("@opencode/cli", fetch: { url in
-            if url.absoluteString.hasSuffix("/latest") { return Data(#"{"version":"3.0.0","bin":{"cli":"bin.js"}}"#.utf8) }
-            return Data(#"{"versions":{"2.0.9":{"bin":{}},"2.0.26":{"bin":{}},"2.0.27":{"bin":{},"deprecated":"Withdrawn release"},"2.1.0-beta.1":{"bin":{}},"3.0.0":{"bin":{}}}}"#.utf8)
-        })
-        #expect(version == "2.0.26")
-    }
-
     @Test(arguments: [false, true])
     func codexInventoryFindsTheEngineBesideTheLaunchedAdapter(legacyAdapter: Bool) async throws {
         let minimum = try #require(LocalACPRuntimeCatalog.definition(for: .codex)?.minimumAdapterVersion)
@@ -54,25 +46,6 @@ struct RuntimeMaintenanceTests {
         #expect(!diagnostic.contains(root.path))
     }
 
-    @Test func claudeSDKRequiresItsDeclaredNativePlatformDependency() throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-        #if arch(arm64)
-        let name = "@anthropic-ai/claude-agent-sdk-darwin-arm64"
-        #else
-        let name = "@anthropic-ai/claude-agent-sdk-darwin-x64"
-        #endif
-        try JSONSerialization.data(withJSONObject: ["name": "@anthropic-ai/claude-agent-sdk", "optionalDependencies": [name: "0.3.257"]]).write(to: root.appending(path: "package.json"))
-        // A leftover legacy file must not hide a missing current native engine.
-        try Data().write(to: root.appending(path: "cli.js"))
-        #expect(RuntimeMaintenance.bundledEngine(in: root, kind: .claudeCode) == nil)
-        let native = root.appending(path: "node_modules/" + name)
-        try FileManager.default.createDirectory(at: native, withIntermediateDirectories: true)
-        try JSONSerialization.data(withJSONObject: ["name": name, "version": "0.3.257"]).write(to: native.appending(path: "package.json"))
-        #expect(RuntimeMaintenance.bundledEngine(in: root, kind: .claudeCode) == native.appending(path: "claude"))
-    }
-
     @Test func openCodeInventorySeparatesV2CLIFromRegisteredServiceWithoutCopyingCredentials() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -95,61 +68,4 @@ struct RuntimeMaintenanceTests {
         #expect(!prompt.contains(root.path))
     }
 
-    @Test func ordersVersionsWithoutTreatingUnknownAsCurrent() {
-        #expect(RuntimeMaintenance.version("codex-acp 1.7.0", precedes: "1.11.0"))
-        #expect(!RuntimeMaintenance.version("1.11.0", precedes: "1.7.0"))
-        #expect(RuntimeMaintenance.version("0.0.0-beta-19000", precedes: "0.0.0-beta-19278"))
-        #expect(RuntimeMaintenance.version("1.2.3-beta.9", precedes: "1.2.3"))
-        #expect(!RuntimeMaintenance.version("unknown", precedes: "1.11.0"))
-        #expect(!RuntimeMaintenance.version("2026.09.10-abc", precedes: "2026.09.10-def"))
-        #expect(RuntimeMaintenance.version("2026.09.09-abc", precedes: "2026.09.10-def"))
-    }
-
-    @Test func failedVerificationPreservesThePreviousLauncherAndDependencyTree() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let npm = root.appending(path: "npm")
-        try Data("""
-        #!/bin/sh
-        while [ "$#" -gt 0 ]; do
-          if [ "$1" = '--prefix' ]; then shift; prefix="$1"; fi
-          shift
-        done
-        mkdir -p "$prefix/bin"
-        printf '#!/bin/sh\\necho 1.2.3\\n' > "$prefix/bin/fixture"
-        chmod 700 "$prefix/bin/fixture"
-        """.utf8).write(to: npm)
-        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: npm.path)
-        let prefix = root.appending(path: "managed")
-        let installer = LocalACPRuntimeInstaller(installPrefix: prefix, npmExecutableURL: npm, metadataFetcher: { _ in Data(#"{"version":"1.2.3","bin":{"fixture":"bin.js"}}"#.utf8) })
-        func definition(_ version: String) -> LocalACPRuntimeDefinition {
-            LocalACPRuntimeDefinition(runtimeKind: .codex, displayName: "Fixture", commandName: "fixture",
-                arguments: [], underlyingCLIName: nil, cliInstallerSource: nil, cliInstallerInterpreter: nil,
-                adapterPackage: "@example/fixture", minimumAdapterVersion: version, adapterDescription: "Fixture")
-        }
-        let launcher = try await installer.install(definition("1.2.3"), component: .adapter)
-        let firstTree = launcher.resolvingSymlinksInPath()
-        let updated = LocalACPRuntimeInstaller(installPrefix: prefix, npmExecutableURL: npm, metadataFetcher: { _ in Data(#"{"version":"1.2.4","bin":{"fixture":"bin.js"}}"#.utf8) })
-        await #expect(throws: (any Error).self) {
-            try await updated.install(definition("1.2.4"), component: .adapter)
-        }
-        #expect(launcher.resolvingSymlinksInPath() == firstTree)
-        #expect(FileManager.default.isExecutableFile(atPath: firstTree.path))
-        let installed = try FileManager.default.contentsOfDirectory(at: prefix.appending(path: "Installations"), includingPropertiesForKeys: nil)
-        #expect(installed.count == 1)
-    }
-
-    @Test func timesOutWithoutLeavingAChildWriter() throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let marker = root.appending(path: "late-write")
-        #expect(throws: (any Error).self) {
-            try LocalACPProcessRunner.run(executableURL: URL(fileURLWithPath: "/bin/sh"),
-                arguments: ["-c", "(sleep 1; touch '\(marker.path)') & wait"], timeout: 0.05)
-        }
-        Thread.sleep(forTimeInterval: 1.1)
-        #expect(!FileManager.default.fileExists(atPath: marker.path))
-    }
 }

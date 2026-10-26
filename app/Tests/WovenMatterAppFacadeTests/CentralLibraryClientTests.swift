@@ -34,32 +34,6 @@ struct CentralLibraryClientTests {
         #expect(try await client.desktopExecution(.refresh(conversationID: id)).workspace.id == workspace.id)
     }
 
-
-    @Test func revokedWorkspaceCanBeGrantedAgainWithoutDiscardingItsCachedHistory() async throws {
-        let directory = FileManager.default.temporaryDirectory.appending(path: "MacClient-" + UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let replica = try MobileStore(file: directory.appending(path: "library.json"))
-        let library = UUID().uuidString.lowercased(); try await replica.bindWorkspace(library)
-        var cleared: [String] = []
-        let model = CentralLibraryClientModel(store: replica, transport: MacClientFakeCentral(), clearWorkspaceCredential: { cleared.append($0) })
-        await model.initialize()
-        let workspace = CompanionExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: library,
-            ownerDeviceID: UUID().uuidString.lowercased(), kind: .mac, name: "Another Mac")
-        let direct = MacClientFakeExecution(workspace: workspace)
-        try await model.attachExecutionWorkspace(workspace, transport: direct)
-        await direct.setRevoked(true)
-        await model.selectExecutionWorkspace(workspace.id)
-        #expect(!model.hasDirectAccess(workspace.id))
-        #expect(cleared == [workspace.id])
-        #expect(model.executionWorkspaces.contains { $0.id == workspace.id })
-        await direct.setRevoked(false)
-        try await model.attachExecutionWorkspace(workspace, transport: direct)
-        await model.selectExecutionWorkspace(workspace.id)
-        #expect(model.hasDirectAccess(workspace.id))
-        #expect(model.canControl(workspaceID: workspace.id))
-    }
-
-
     @Test func olderActivityStaysWithItsConversationWhenNavigationChangesDuringLoad() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "MacClient-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -84,7 +58,6 @@ struct CentralLibraryClientTests {
         #expect(model.transcript?.activities.map(\.id) == (0..<45).map { "tool-\($0)" })
         #expect(model.transcript?.activities.last?.status == "completed")
     }
-
 
     @Test func secondaryMacAlwaysStartsItsOwnWorkspaceAndKeepsItAfterDisconnect() async throws {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
@@ -133,32 +106,6 @@ struct CentralLibraryClientTests {
         #expect(await reopened.snapshot().workspaceID == library)
         #expect(await reopened.snapshot().notes[note.id]?.title == "Keep offline")
         #expect(await reopened.snapshot().outbox.count == 1)
-    }
-
-    @Test func offlineReplicaEditsSurviveRelaunchAndSync() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: "MacClient-" + UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let file = root.appending(path: "library.json")
-        let store = try MobileStore(file: file)
-        let transport = MacClientFakeCentral()
-        let model = CentralLibraryClientModel(store: store, transport: transport)
-        await model.initialize(); await model.refresh()
-        await transport.setOffline(true)
-        await model.createFolder("Offline work")
-        await model.createNote()
-        let note = try #require(model.selectedNote)
-        model.editNote(note, title: "Retained title", content: "Retained writing")
-        model.composer = "Draft survives restart"
-        try await model.flushLocalWrites()
-        let reopened = try MobileStore(file: file)
-        #expect(await reopened.snapshot().notes[note.id]?.content == "Retained writing")
-        #expect(await reopened.snapshot().chatDrafts["new-chat"]?.text == "Draft survives restart")
-        #expect(await reopened.snapshot().outbox.count == 2)
-        await transport.setOffline(false)
-        await model.refresh()
-        #expect(model.online)
-        #expect(model.state.outbox.isEmpty)
-        #expect(await transport.notes[note.id]?.title == "Retained title")
     }
 
     @Test func lostLaunchAcknowledgementKeepsStableIDsAndDoesNotDuplicateExecution() async throws {

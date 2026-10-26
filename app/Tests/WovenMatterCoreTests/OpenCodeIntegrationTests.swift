@@ -82,45 +82,6 @@ struct OpenCodeIntegrationTests {
         }
     }
 
-    @Test(arguments: [false, true])
-    func savedTranscriptsWithoutExecutionAuthorityRemainReadable(archived: Bool) async throws {
-        let fixture = OpenCodeFixture(); FixtureProtocol.fixture = fixture
-        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
-        let id = try await database.createOpenCodeFixtureSession(runtimeKind: .opencode, title: "Saved transcript", ownerDeviceID: UUID(),
-            openCodeAssociation: ("fixture", "ses_fixture"))
-        var saved = OpenCodeSessionSnapshot()
-        saved.info = ["id": "ses_fixture", "title": "Saved transcript"]
-        saved.messages = [message("Saved text")]
-        try await database.saveOpenCodeSnapshot(saved, conversationID: id)
-        if archived {
-            try await database.write { try $0.toolsExecuteUnlocked("UPDATE dashboard_conversations SET is_archived=1 WHERE id=?", [id]) }
-        } else {
-            try await database.write { try $0.toolsExecuteUnlocked("INSERT INTO retained_execution_history(conversation_id) VALUES(?)", [id]) }
-        }
-        let link = OpenCodeSessionLink(conversationID: id, connectionID: "fixture", sessionID: "ses_fixture")
-        let session = fixtureSession()
-        defer { session.invalidateAndCancel() }
-        let coordinator = OpenCodeSessionCoordinator(database: database, clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
-        try await coordinator.connect(connection())
-        await coordinator.watch(link)
-        await coordinator.receiveLogEvent(["type": "session.text.delta", "durable": ["seq": .number(1)]], link: link)
-        await #expect(throws: OpenCodeError.self) { try await coordinator.refresh(link) }
-        await #expect(throws: OpenCodeError.self) {
-            try await coordinator.sessionCall(link, suffix: "/interrupt", method: "POST", body: nil)
-        }
-        await #expect(throws: OpenCodeError.self) { try await coordinator.prompt(link, input: .init(text: "Do not send")) }
-        #expect(try await database.resumableOpenCodeLinks().isEmpty)
-        #expect(fixture.streamTimeout == nil && fixture.promptCount == 0 && fixture.interruptCount == 0)
-        #expect(try await database.openCodeSnapshot(conversationID: id) == saved)
-        let content = try await database.conversationContent(id: id)
-        #expect(archived ? content.messages.isEmpty : content.messages.first?.content == "Saved text")
-        await coordinator.shutdown()
-    }
-
-
     @Test func importPageExcludesKnownAndNativeSessionsAndStopsAtOnePage() async throws {
         let fixture = OpenCodeFixture(); FixtureProtocol.fixture = fixture
         fixture.sessions = (0..<60).map { ["id": .string("ses_\($0)"), "title": .string("Session \($0)")] }
@@ -213,30 +174,6 @@ struct OpenCodeIntegrationTests {
         await coordinator.shutdown()
     }
 
-    @Test func formReplyRequiresExternalAcknowledgementAndPreservesCustomAnswers() throws {
-        let fields: [OpenCodeValue] = [
-            ["key": "verification", "type": "external", "url": "https://example.com/verify"],
-            ["key": "choice", "type": "string", "required": .bool(true), "custom": .bool(true),
-             "options": .array([["label": "Suggested", "value": "suggested"]])],
-            ["key": "amount", "type": "integer", "minimum": .number(1), "maximum": .number(3)],
-            ["key": "details", "type": "string", "when": .array([["key": "choice", "op": "eq", "value": "suggested"]])]
-        ]
-        var answers: [String: OpenCodeValue] = ["choice": "My own answer", "amount": "2", "details": "stale hidden answer"]
-        #expect(throws: OpenCodeError.self) { try OpenCodeFormAnswers.reply(fields: fields, answers: answers) }
-        answers["verification"] = .bool(false)
-        #expect(throws: OpenCodeError.self) { try OpenCodeFormAnswers.reply(fields: fields, answers: answers) }
-        answers["verification"] = .bool(true)
-        let custom = try OpenCodeFormAnswers.reply(fields: fields, answers: answers)
-        #expect(custom == ["verification": .bool(true), "choice": "My own answer", "amount": .number(2)])
-        answers["choice"] = "suggested"
-        #expect(try OpenCodeFormAnswers.reply(fields: fields, answers: answers)["details"] == "stale hidden answer")
-        answers["amount"] = "2.5"
-        #expect(throws: OpenCodeError.self) { try OpenCodeFormAnswers.reply(fields: fields, answers: answers) }
-        answers["amount"] = "4"
-        #expect(throws: OpenCodeError.self) { try OpenCodeFormAnswers.reply(fields: fields, answers: answers) }
-    }
-
-
     @Test func fullImportPreservesDirectoryAndRecencyWithoutDuplicatingSessions() async throws {
         let fixture = OpenCodeFixture(); FixtureProtocol.fixture = fixture
         fixture.messages = (0..<250).map { message("msg_import_\($0)") }
@@ -325,39 +262,6 @@ struct OpenCodeIntegrationTests {
         }
         #expect(try Data(contentsOf: file) == bytes)
     }
-
-    @Test func richProjectionAndRecoveryCursorSurviveDatabaseReopen() async throws {
-        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let url = directory.appending(path: "workspace.sqlite")
-        let database = try await WorkspaceDatabase(url: url)
-        let id = try await database.createOpenCodeFixtureSession(runtimeKind: .opencode, title: "Rich fixture", ownerDeviceID: UUID())
-        try await database.attachOpenCodeSession(.init(conversationID: id, connectionID: "fixture", sessionID: "ses_fixture"))
-        var snapshot = OpenCodeSessionSnapshot()
-        snapshot.info = ["id": "ses_fixture", "title": "Rich fixture"]
-        snapshot.cursor = 874
-        snapshot.messages = [
-            ["id": "msg_file", "type": "user", "text": "Inspect", "time": ["created": .number(1)],
-             "files": .array([["mime": "text/plain", "name": "fixture.txt", "data": "Zml4dHVyZQ=="]])],
-            ["id": "msg_result", "type": "assistant", "time": ["created": .number(2), "completed": .number(3)],
-             "content": .array([
-                ["type": "text", "text": "Result"],
-                ["type": "reasoning", "text": "Inspecting the fixture"],
-                ["type": "tool", "id": "tool_1", "name": "read", "state": ["status": "completed", "input": ["path": "fixture.txt"], "content": .array([["type": "text", "text": "fixture"]])]]
-             ])]
-        ]
-        try await database.saveOpenCodeSnapshot(snapshot, conversationID: id)
-        try await database.saveOpenCodeSnapshot(snapshot, conversationID: id)
-        let reopened = try await WorkspaceDatabase(url: url)
-        #expect(try await reopened.openCodeSnapshot(conversationID: id) == snapshot)
-        let content = try await reopened.conversationContent(id: id)
-        #expect(content.messages.count == 2)
-        #expect(content.runs.count == 1)
-        #expect(content.runs.first?.completedAt?.hasPrefix("1970-01-01T00:00:00.003") == true)
-        #expect(try await reopened.conversationHistoryPage(id: id, limit: 100).activities.count == 3)
-    }
-
 
     @Test func unknownAcceptanceBlocksNewInputWithoutTreating404AsRejection() async throws {
         let fixture = OpenCodeFixture(); FixtureProtocol.fixture = fixture

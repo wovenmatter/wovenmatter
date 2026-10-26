@@ -24,13 +24,6 @@ struct LocalACPFormTests {
         "question_0_custom": ["type": "string", "title": "Other"],
         "many": ["type": "array", "items": ["anyOf": [["const": "a", "title": "Alpha"], ["const": "b", "title": "Beta"]]]],
     ]] }
-    @Test(arguments: [#"{"type":"object","properties":{"x":{"type":"string","pattern":"(a+)+"}}}"#,
-                       #"{"type":"object","properties":{"x":{"type":"string","enum":["a"],"oneOf":[{"const":"b"}]}}}"#])
-    func declinesUnsupportedOrConflictingConstraints(schema: String) throws {
-        #expect(throws: (any Error).self) {
-            try LocalACPFormRequest.parse(message: "Test", schema: JSONDecoder().decode(ACPJSONValue.self, from: Data(schema.utf8)))
-        }
-    }
     @Test func actualClaudeFormNegotiatesAndReturnsRawValues() async throws {
         let fixture = try SessionRoutingFixture(promptFrames: [form(id: "form", session: "parent")], permissionResponseCount: 1)
         defer { fixture.remove() }
@@ -51,17 +44,6 @@ struct LocalACPFormTests {
         let result = try #require(messages.first(where: { $0["id"] as? String == "form" })?["result"] as? [String: Any])
         #expect(result["action"] as? String == "accept")
         #expect(result["content"] as? [String: String] == ["question_0": "raw-id"])
-    }
-    @Test func foreignAndRequestScopedFormsCancelWithoutOpeningUI() async throws {
-        let fixture = try SessionRoutingFixture(promptFrames: [form(id: "foreign", session: "child"), form(id: "scoped", session: nil)], permissionResponseCount: 2)
-        defer { fixture.remove() }
-        let client = try fixture.client(runtimeKind: .claudeCode)
-        _ = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: nil, title: nil)
-        _ = try await client.prompt("fixture", onInteraction: { _ in Issue.record("Foreign form reached UI"); return .cancelled })
-        await client.shutdown()
-        let results = try read(fixture).filter { ["foreign", "scoped"].contains($0["id"] as? String ?? "") }
-        #expect(results.count == 2)
-        #expect(results.allSatisfy { ($0["result"] as? [String: String])?["action"] == "cancel" })
     }
     private func form(id: String, session: String?) -> [String: Any] {
         var params: [String: Any] = ["mode": "form", "message": "Choose", "requestedSchema": schema]

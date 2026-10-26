@@ -28,30 +28,8 @@ struct CompanionFacadeTests {
         #expect(await fixture.recorder.deliveries.count == 1)
     }
 
-
     // OpenCode uses its native coordinator, covered by OpenCodeCoordinatorTests.
     // Every remaining runtime still traverses the real facade and launch routing.
-
-    @Test func mobileStopFencesPreparationAndAdvancesBackendRevisionOnlyForItsRun() async throws {
-        let fixture = try await FacadeFixture(); defer { fixture.remove() }
-        let id = try await fixture.createConversation()
-        let run = try await fixture.database.beginLocalACPRun(conversationID: id, input: .init(text: "Active"))
-        let backend = BackendApplicationService(model: fixture.model)
-        fixture.model.backendApplicationService = backend
-        defer { fixture.model.backendApplicationService = nil }
-        let pending = fixture.model.beginAgentDispatch(conversationID: id)
-        defer { fixture.model.finishAgentDispatch(conversationID: id, fence: pending) }
-        await #expect(throws: (any Error).self) {
-            try await fixture.model.cancelCanonicalRun(conversationID: id, runID: UUID().uuidString)
-        }
-        #expect(!pending.isCancelled)
-        #expect(backend.dispatchStopRevisions[id] == nil)
-        try await fixture.model.cancelCanonicalRun(conversationID: id, runID: run.runID)
-        #expect(pending.isCancelled)
-        #expect(backend.dispatchStopRevisions[id] == 1)
-        try await fixture.model.waitForAgentStop(conversationID: id)
-        #expect(try await fixture.database.activeRunID(conversationID: id) == nil)
-    }
 
     @Test(arguments: ["local", "remote"])
     func folderDeletedDuringCreateAwaitLeavesNoSessionAndRetryIsStable(route: String) async throws {

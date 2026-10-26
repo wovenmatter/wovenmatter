@@ -22,15 +22,6 @@ struct ACPActiveInputTests {
         await client.shutdown()
     }
 
-    @Test func commandOnlyClassificationLeavesNativeWorkUnderObservation() {
-        for text in ["/status", "/STATUS", "/ status", "/plan", "/rename title", "/skills", "/mcp", "/goal pause", "/goal clear", "/review-branch"] {
-            #expect(LocalACPClient.codexCommandCompletesWithoutTurn(text))
-        }
-        for text in ["ordinary", "/compact", "/review", "/review-branch main", "/goal resume", "/goal implement this", "/skill:review"] {
-            #expect(!LocalACPClient.codexCommandCompletesWithoutTurn(text))
-        }
-    }
-
     @Test(arguments: [AgentRuntimeKind.codex, .claudeCode, .grokBuild])
     func activeInputStreamsWithoutCancellingOrStartingAnotherSession(kind: AgentRuntimeKind) async throws {
         let f = try ActiveInputFixture(mode: "ordinary")

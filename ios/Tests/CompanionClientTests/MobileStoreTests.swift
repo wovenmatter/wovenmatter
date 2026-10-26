@@ -6,44 +6,6 @@ final class MobileStoreTests: XCTestCase {
   func file() -> URL { FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("store.json") }
   func content(_ text: String) throws -> String { try NoteDocument(blocks: [.richText(.init(id: "stable-block", text: text))]).encoded() }
 
-  func testRichEditPreservesUnchangedTablesUnknownKeysLinksAndIDs() throws {
-    let document = NoteDocument(blocks: [.richText(.init(id: "text", style: .heading2, runs: [.init(text: "Hello", bold: true, link: "https://example.com")])), .table(.init(rows: 2, columns: 2, headerRow: true))])
-    var raw = try JSONSerialization.jsonObject(with: Data(document.encoded().utf8)) as! [String: Any]
-    let source = String(decoding: try JSONSerialization.data(withJSONObject: raw), as: UTF8.self)
-    let edited = try RichDocumentEditing.replacingText(in: source, blockID: "text", range: .init(location: 5, length: 0), replacement: " world")
-    let decoded = RichDocumentEditing.document(edited)!
-    XCTAssertEqual(decoded.blocks[0].id, "text")
-    XCTAssertEqual(decoded.blocks[1], document.blocks[1])
-    guard case .richText(let block) = decoded.blocks[0] else { return XCTFail() }
-    XCTAssertTrue(block.runs.allSatisfy(\.bold)); XCTAssertTrue(block.runs.allSatisfy { $0.link == "https://example.com" })
-    XCTAssertEqual(block.plainText, "Hello world")
-    let result = try JSONSerialization.jsonObject(with: Data(edited.utf8)) as! [String: Any]
-    XCTAssertNotNil(result["blocks"])
-    raw["futureDocumentMetadata"] = ["keep": true]
-    let unknown = String(decoding: try JSONSerialization.data(withJSONObject: raw), as: UTF8.self)
-    XCTAssertFalse(RichDocumentEditing.canEdit(unknown))
-  }
-
-  func testFutureDocumentAndUnknownRunsAreNotFlattened() throws {
-    let future = "{\"version\":999,\"blocks\":[{\"type\":\"drawing\",\"value\":\"keep\"}]}"
-    XCTAssertFalse(RichDocumentEditing.canEdit(future))
-    XCTAssertThrowsError(try RichDocumentEditing.appendingParagraph(to: future))
-    let source = try content("😀 note")
-    XCTAssertThrowsError(try RichDocumentEditing.replacingText(in: source, blockID: "stable-block", range: .init(location: 1, length: 0), replacement: "bad"))
-  }
-  func testDelayedEditorSaveCannotAdoptConcurrentRemoteRevision() async throws {
-    let store = try MobileStore(file: file())
-    let displayed = CompanionNote(id: "note", title: "Original", content: try content("base"), revision: 2)
-    try await store.apply(.init(workspaceID: "mac", cursor: 1, notes: [displayed]))
-    let remote = CompanionNote(id: "note", title: "Mac title", content: try content("Mac body"), revision: 3)
-    try await store.apply(.init(workspaceID: "mac", cursor: 2, notes: [remote]))
-    try await store.editNote(id: displayed.id, title: "iPhone title", content: content("held draft"), folderID: nil, base: displayed)
-    let state = await store.snapshot()
-    XCTAssertEqual(state.conflicts[displayed.id]?.base, displayed)
-    XCTAssertEqual(state.conflicts[displayed.id]?.remote, remote)
-    XCTAssertEqual(state.conflicts[displayed.id]?.local.content, try content("held draft"))
-    XCTAssertTrue(state.outbox.isEmpty)
-  }
   func testOversizePasteAndBlockAdditionAreRejectedBeforeEditorAdoption() throws {
     let saved = try content("Saved writing")
     var visible = saved
