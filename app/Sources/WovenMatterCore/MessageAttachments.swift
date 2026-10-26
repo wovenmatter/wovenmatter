@@ -181,7 +181,7 @@ public struct AgentMessageInput: Codable, Equatable, Sendable {
       let label = reference.kind == .note ? "Note" : "Conversation"
       sections.append("""
         <wovenmatter-reference type="\(label.lowercased())" id="\(reference.resourceID)" revision="\(reference.revisionSnapshot)" title="\(reference.titleSnapshot)">
-        \(reference.kind == .conversation ? "Read this attached session with wovenmatter history conversation " + reference.resourceID + ". This attachment grants read-only access to this session." : reference.contentSnapshot)
+        \(reference.kind == .conversation ? "Read this attached session with woven_history_conversation using id " + reference.resourceID + ". This attachment grants read-only access to this session." : reference.contentSnapshot)
         </wovenmatter-reference>
         """)
     }

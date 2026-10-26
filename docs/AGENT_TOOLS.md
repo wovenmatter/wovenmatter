@@ -297,6 +297,17 @@ contain `replayed: true` and the original revision, without an old document that
 could be adopted into the editor. Use `woven_notes_read` for the current document.
 Receipts retain hashes and acknowledgements, not extra note snapshots.
 
+## Reference implementation
+
+The transport and invocation design was compared with T3 Code at
+[`3f944874`](https://github.com/pingdotgg/t3code/tree/3f9448747bb8848050dc2cacf83affa6f94a66a1/apps/server/src/mcp):
+`McpHttpServer.ts` authenticates HTTP requests before dispatch;
+`McpSessionRegistry.ts` binds credentials to an execution scope and supports
+expiry and revocation; the orchestrator toolkit exposes typed operations with
+descriptions and access annotations. Woven MCP follows those patterns using
+Woven's existing ownership, permission, scheduling, and coordination services.
+Its catalog covers Woven capabilities; it does not reproduce T3-specific tools.
+
 ## Validation boundaries
 
 `scripts/test-changes.sh --all` exercises provider-free transport fixtures,

@@ -37,6 +37,10 @@ struct StorageCorrectnessReviewTests {
     }
     try await db.write { connection in try connection.transaction {
       try connection.toolsExecuteUnlocked("UPDATE desktop_local_acp_sessions SET runtime_kind='hermes',acp_session_id=? WHERE conversation_id=?", [archived.identity,conversation])
+      // Historical sessions carry the retirement marker created by import or
+      // the execution-ownership migration, with no executable workspace root.
+      try connection.toolsExecuteUnlocked("INSERT INTO retained_execution_history(conversation_id) VALUES(?)", [conversation])
+      try connection.toolsExecuteUnlocked("DELETE FROM session_execution_roots WHERE conversation_id=?", [conversation])
       try connection.toolsExecuteUnlocked("UPDATE dashboard_conversations SET is_archived=1 WHERE id=?", [conversation])
     } }
     let reopened = try await WorkspaceDatabase(url: fixture.databaseURL)

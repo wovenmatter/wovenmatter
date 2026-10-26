@@ -59,7 +59,7 @@ struct ExecutorConnectionsCard: View {
         }
     }
     var body: some View {
-        SettingsCard(title: "Executor", detail: "One connection shared by every agent through the Woven Matter CLI, powered by Executor.\nSet app-access defaults globally and adjust access within each conversation between turns.") {
+        SettingsCard(title: "Executor", detail: "One connection shared by every agent through Woven MCP, powered by Executor.\nSet app-access defaults globally and adjust access within each conversation between turns.") {
             if tools.settings.executor == nil || editing {
                 Picker("Run Executor", selection: $draft.location) {
                     Text("On this Mac").tag(ExecutorConfiguration.Location.local)
