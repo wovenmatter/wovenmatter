@@ -43,8 +43,10 @@ mkdir -p "$legacy_data"
 if [ "$build_image" = true ]; then
   docker build --pull --no-cache --tag wovenmatter/workspace:latest --file remote/Dockerfile .
 fi
+image_id="$(docker image inspect --format '{{.Id}}' wovenmatter/workspace:latest)"
 WOVENMATTER_API_TOKEN="$token_a" \
-  scripts/remote-workspace.sh create "$workspace_a" "$port_a" >/dev/null
+  scripts/remote-workspace.sh create "$workspace_a" "$port_a" '' '' "$image_id" >/dev/null
+[ "$(docker inspect --format '{{.Image}}' "$container_a")" = "$image_id" ]
 WOVENMATTER_API_TOKEN="$token_b" \
   scripts/remote-workspace.sh create "$workspace_b" "$port_b" >/dev/null
 
@@ -71,6 +73,9 @@ wait_for_health "$port_a" "$token_a"
 wait_for_health "$port_b" "$token_b"
 verify_browser "$container_a"
 verify_browser "$container_b"
+# Fresh named homes must not inherit a root-owned npm cache from image builds.
+docker exec "$container_a" sh -c 'test ! -e /home/.npm || test -w /home/.npm'
+docker exec "$container_a" npm cache verify >/dev/null
 printf '%s\n' 'Checking API authentication and persistent home ownership.'
 [ "$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:${port_a}/v1/health")" = 401 ]
 [ "$(docker inspect -f '{{.State.Running}}' "$container_a")" = true ]
@@ -108,8 +113,10 @@ delete_status="$(scripts/remote-workspace.sh delete "$workspace_a")"
 printf '%s\n' 'Checking explicit data deletion and legacy storage safety.'
 jq -e '.persistentDataRemoved == false' <<< "$delete_status" >/dev/null
 docker volume inspect "$volume_a" >/dev/null
+image_id="$(docker image inspect --format '{{.Id}}' wovenmatter/workspace:latest)"
 WOVENMATTER_API_TOKEN="$token_a" \
-  scripts/remote-workspace.sh create "$workspace_a" "$port_a" >/dev/null
+  scripts/remote-workspace.sh create "$workspace_a" "$port_a" '' '' "$image_id" >/dev/null
+[ "$(docker inspect --format '{{.Image}}' "$container_a")" = "$image_id" ]
 wait_for_health "$port_a" "$token_a"
 [ "$(docker exec "$container_a" cat /home/.woven-matter/smoke-marker)" = persistent ]
 

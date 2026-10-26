@@ -30,6 +30,11 @@ rather than maintaining a separate SSH key store.
    it. Changing the hostname or SSH username requires a matching host check.
 5. Choose its agent in **New chat**.
 
+The first workspace on a host builds its image and shows each build phase.
+Later creations reuse a matching image built within the last 24 hours, skipping
+that download and build. Changed or older images rebuild automatically. The
+workspace's **Update** action always builds a fresh image.
+
 If preparation is blocked, resolve the reported requirement on the host and
 inspect again. The app does not remove conflicting container packages or change
 your SSH account's Docker group membership for you. Existing Docker Engine

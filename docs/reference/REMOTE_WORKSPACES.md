@@ -49,6 +49,27 @@ containers or installing measurement packages. In particular, usage for a
 stopped named-volume workspace is unavailable because Woven Matter does not
 start a measurement container or access Docker-managed volume contents directly.
 
+## Image reuse and build progress
+
+Creation checks a SHA-256 fingerprint of the bundled Docker inputs before
+packing or uploading them. It reuses a Linux image only when its fingerprint
+and host architecture match and it was built less than 24 hours ago. This bounds
+the delay for upstream base/security updates; it is not an upstream package
+check. Missing, changed, or older images rebuild with `--pull --no-cache`.
+**Update container** always rebuilds, regardless of age.
+
+Builds serialize for the SSH user and recheck after acquiring the lock. Creation
+uses the resulting immutable image ID, so another build cannot change the image
+between verification and container creation. The app streams named build phases
+(base image, Linux dependencies, browser/agent dependencies, and image export)
+without inventing a percentage or duration. A failed build leaves the previous
+image available and does not create a workspace from it.
+
+Build-time npm caches stay outside `/home` and are removed from the image.
+Harness installation uses a workspace-owned npm cache so preserved homes with a
+legacy root-owned `~/.npm` do not prevent adapter installation. Operation IDs are
+normalized when polling installation progress.
+
 ## Updates and deletion
 
 **Update container** rebuilds the app's bundled image definition with a fresh

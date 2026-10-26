@@ -70,6 +70,8 @@ struct RemoteRuntimeMaintenanceClientTests {
         try await first.setRuntimePreferences(.codex, enabled: true, visible: false)
         let operation = try await second.maintainRuntime(.codex, action: "update", sourceSHA256: "reviewed-digest", packageSpec: "fixture@1.2.3")
         #expect(operation.status == "running")
+        let polled = try await second.operation(id: operation.id)
+        #expect(polled.id == operation.id)
         let hermes = try await second.maintainRuntime(.hermes, action: "update", sourceSHA256: nil)
         #expect(hermes.harnessID == .hermes)
         let status = try await second.workspaceInstance(.opencode, action: "start")
@@ -126,7 +128,11 @@ private final class RemoteMaintenanceFixtureProtocol: URLProtocol, @unchecked Se
             #expect(payload?["sourceSHA256"] as? String == "reviewed-digest")
             #expect(payload?["packageSpec"] as? String == "fixture@1.2.3")
             #expect(request.httpMethod == "POST")
-            value = #"{"id":"00000000-0000-0000-0000-000000000001","harnessID":"codex","action":"update","status":"running","output":"","error":null,"startedAt":"2026-09-11T00:00:00Z","finishedAt":null}"#
+            value = #"{"id":"abcdef01-abcd-abcd-abcd-abcdef012345","harnessID":"codex","action":"update","status":"running","output":"","error":null,"startedAt":"2026-09-11T00:00:00Z","finishedAt":null}"#
+        case "/v1/operations/abcdef01-abcd-abcd-abcd-abcdef012345":
+            #expect(!first)
+            #expect(request.httpMethod == "GET")
+            value = #"{"id":"abcdef01-abcd-abcd-abcd-abcdef012345","harnessID":"codex","action":"update","status":"succeeded","output":"","error":null,"startedAt":"2026-09-11T00:00:00Z","finishedAt":null}"#
         case "/v1/runtime-maintenance/hermes/update":
             #expect(!first)
             #expect(request.httpMethod == "POST")

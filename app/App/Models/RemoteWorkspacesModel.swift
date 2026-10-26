@@ -74,6 +74,7 @@ final class RemoteWorkspacesModel {
     private(set) var isCheckingHost = false
     private(set) var isCreating = false
     private(set) var progress: String?
+    private var deploymentProgressID: UUID?
     private(set) var errorMessage: String?
     private(set) var checkedPreflight: RemoteWorkspacePreflight?
     private var checkedHostKey: String?
@@ -934,15 +935,11 @@ final class RemoteWorkspacesModel {
     func updateContainer(_ configuration: RemoteWorkspaceConfiguration) {
         if forwardToBackend(.updateContainer(configuration.id)) { return }
         performBusy(configuration) {
-            self.progress = "Building the updated workspace image…"
             defer { self.progress = nil }
-            try await self.sshClient.deployService(
-                hostName: configuration.hostName,
-                userName: configuration.userName
-            )
+            let imageID = try await self.deployImage(configuration, forceRefresh: true)
             self.progress = "Recreating the container and preserving its home…"
             self.statuses[configuration.id] = try await self.sshClient.update(
-                configuration: configuration
+                configuration: configuration, imageID: imageID
             )
             await self.refreshService(configuration)
         }
@@ -1378,20 +1375,31 @@ final class RemoteWorkspacesModel {
         }
     }
 
+    private func deployImage(_ configuration: RemoteWorkspaceConfiguration, forceRefresh: Bool = false) async throws -> String {
+        let operationID = UUID()
+        deploymentProgressID = operationID
+        defer { if deploymentProgressID == operationID { deploymentProgressID = nil } }
+        progress = "Checking the workspace image on the host…"
+        return try await sshClient.deployService(
+            hostName: configuration.hostName, userName: configuration.userName, forceRefresh: forceRefresh
+        ) { [weak self] message in
+            Task { @MainActor [weak self] in
+                guard let self, self.deploymentProgressID == operationID else { return }
+                self.progress = message
+            }
+        }
+    }
+
     private func provision(
         _ configuration: RemoteWorkspaceConfiguration
     ) async throws {
-        progress = "Provisioning the pinned workspace image…"
-        try await sshClient.deployService(
-            hostName: configuration.hostName,
-            userName: configuration.userName
-        )
+        let imageID = try await deployImage(configuration)
         let token = try Self.generateToken()
         try await credentials.save(token: token, for: configuration.id)
         progress = "Creating and health-checking the loopback-only container…"
         let status = try await sshClient.create(
             configuration: configuration,
-            token: token
+            token: token, imageID: imageID
         )
         workspaces.append(configuration)
         workspaces.sort { $0.createdAt < $1.createdAt }

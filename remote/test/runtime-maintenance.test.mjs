@@ -21,7 +21,7 @@ async function fixture(t, overrides = {}) {
   const calls = []
   const options = {acquireLock:async()=>()=>{},catalog:new Map([['opencode',opencode]]),workspaceRoot:root,environment:()=>({HOME:root,SECRET_TOKEN:'very-secret-token'}),verifiedInstaller:async()=>{throw Error('unexpected')},
     execute:async(command,env,cwd)=>{
-      assert.equal(cwd,root); assert.equal(env.HOME,root); calls.push(command)
+      assert.equal(cwd,root); assert.equal(env.HOME,root); assert.equal(env.npm_config_cache, resolve(root, ".wovenmatter/npm-cache")); calls.push(command)
       if(command==='ps -eo pid=,args=') return {code:0,output:''}
       if(command.startsWith('command -v')) return {code:installed?0:1,output:root+'/opencode'}
       if(command.endsWith('--version')) return {code:0,output:'opencode 2.1.0'}
@@ -52,6 +52,7 @@ test('duplicate operations share a reservation and verify actual installed resul
   const f=await fixture(t)
   const [a,b]=await Promise.all([f.service.start(opencode,'install',{confirmed:true}),f.service.start(opencode,'install',{confirmed:true})])
   assert.equal(a.id,b.id)
+  assert.equal((await f.service.operation(a.id.toUpperCase())).id, a.id)
   const value=await finished(f.service)
   assert.equal(value.operation.status,'succeeded');assert.equal(value.installed,true);assert.equal(f.executions,1)
 })

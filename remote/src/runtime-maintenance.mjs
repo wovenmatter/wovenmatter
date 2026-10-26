@@ -105,7 +105,11 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
       await writeFile(statePath + '.tmp', JSON.stringify(data), { mode: 0o600 }); await rename(statePath + '.tmp', statePath)
     }); return saveQueue
   }
-  const run = (command, timeout) => execute(command, environment(), workspaceRoot, timeout)
+  // Older images copied a root-owned $HOME/.npm into named home volumes.
+  // Keep all installer subprocesses on a cache owned by this workspace user.
+  const run = (command, timeout) => execute(command, {
+    ...environment(), npm_config_cache: resolve(workspaceRoot, '.wovenmatter/npm-cache'),
+  }, workspaceRoot, timeout)
   async function component(id, name, command, required = true) {
     const found = await run(`command -v ${quote(command)}`)
     const path = found.code === 0 ? found.output.trim().split('\n')[0] : null
@@ -286,7 +290,7 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
       return s.enabled === true
     },
     isBusy(id) { return Boolean(operations.get(id) && !operations.get(id).finishedAt) },
-    operation: id => { const op = [...operations.values()].find(op => op.id === id); return op && !op.finishedAt ? { ...op, status: 'running' } : op },
+    operation: id => { const op = [...operations.values()].find(op => op.id === String(id).toLowerCase()); return op && !op.finishedAt ? { ...op, status: 'running' } : op },
     start,
     async list() { return { runtimes: await Promise.all([...catalog.values()].map(h => inventory(h))) } },
     async check() {

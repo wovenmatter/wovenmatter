@@ -23,6 +23,14 @@ struct SettingsRemoteWorkspacesView: View {
     @State private var managedSwapLimit = ""
     @State private var browserWorkspace: RemoteWorkspaceConfiguration?
 
+    private func deploymentProgress(_ message: String) -> some View {
+        HStack(spacing: 8) {
+            ProgressView().controlSize(.small)
+            SettingsNote(message)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
     var body: some View {
         SettingsPage(
             title: selectedWorkspace?.name ?? "Remote Agent Workspaces",
@@ -46,13 +54,13 @@ struct SettingsRemoteWorkspacesView: View {
                     resourceCard(selectedWorkspace)
                     harnessesCard(selectedWorkspace)
                     if let progress = model.progress {
-                        SettingsNote(progress)
+                        deploymentProgress(progress)
                     }
                 } else {
                     workspacesCard
                     hostCard
                     if currentPreflight?.ready == true { createCard }
-                    if let progress = model.progress { SettingsNote(progress) }
+                    if let progress = model.progress { deploymentProgress(progress) }
                 }
                 if let error = model.errorMessage {
                     SettingsError(error)

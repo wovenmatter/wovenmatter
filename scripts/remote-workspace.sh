@@ -19,7 +19,7 @@ workspace_storage_legacy=true
 workspace_storage_used=''
 
 usage() {
-  printf '%s\n' 'usage: remote-workspace.sh inspect | expose ID PORT [HTTPS_PORT] | prepare AUTHORIZED | create ID PORT [MEMORY_BYTES] [MEMORY_AND_SWAP_BYTES] | status ID | start ID | stop ID | restart ID | update ID IMAGE [MEMORY_BYTES] [MEMORY_AND_SWAP_BYTES] [PORT] | delete ID [--data]' >&2
+  printf '%s\n' 'usage: remote-workspace.sh inspect | expose ID PORT [HTTPS_PORT] | prepare AUTHORIZED | create ID PORT [MEMORY_BYTES] [MEMORY_AND_SWAP_BYTES] [IMAGE_ID] | status ID | start ID | stop ID | restart ID | update ID IMAGE [MEMORY_BYTES] [MEMORY_AND_SWAP_BYTES] [PORT] | delete ID [--data]' >&2
   exit 64
 }
 
@@ -521,9 +521,13 @@ validate_workspace_volume() {
 }
 
 create_workspace() {
-  [ "$#" -ge 2 ] && [ "$#" -le 4 ] || usage
+  [ "$#" -ge 2 ] && [ "$#" -le 5 ] || usage
   local id="$1" port="$2" token="${WOVENMATTER_API_TOKEN:-}" memory="${3:-}"
   local memory_and_swap="${4:-}" name volume output
+  if [ -n "${5:-}" ]; then
+    [[ "$5" =~ ^sha256:[a-f0-9]{64}$ ]] || fail "invalid_image_identity" "Expected a verified Docker image identity."
+    image_name="$5"
+  fi
   validate_id "$id"
   validate_port "$port"
   [ -n "$token" ] || fail "missing_api_token" "The workspace API token is empty."

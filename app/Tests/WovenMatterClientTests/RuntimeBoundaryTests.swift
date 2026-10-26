@@ -120,11 +120,16 @@ struct RuntimeBoundaryTests {
       swapLimit: "4"
     )
 
-    _ = try await client.create(configuration: configuration, token: "secret-token")
+    let imageID = "sha256:" + String(repeating: "a", count: 64)
+    _ = try await client.create(configuration: configuration, token: "secret-token", imageID: imageID)
+    #expect(recorder.command?.contains("'" + imageID + "'") == true)
     #expect(recorder.destination == "woven@linux-box")
     #expect(recorder.command?.contains("secret-token") == false)
     #expect(recorder.command?.contains("'8589934592' '12884901888'") == true)
     #expect(recorder.input?.starts(with: Data("secret-token\nscript".utf8)) == true)
+    _ = try await client.update(configuration: configuration, imageID: imageID)
+    #expect(recorder.command?.contains("'" + imageID + "'") == true)
+
 
     let launch = try RemoteHarnessLaunchResolver.resolve(
       configuration: configuration,

@@ -16,7 +16,7 @@ mkdir -p "$swift_scratch" "$derived_data"
 
 run_static_checks() {
   local file
-  for file in remote/entrypoint.sh remote/executor-deploy.sh scripts/*.sh; do
+  for file in remote/build-image.sh remote/entrypoint.sh remote/executor-deploy.sh scripts/*.sh; do
     bash -n "$file"
   done
   scripts/test-release.sh
@@ -37,6 +37,7 @@ run_static_checks() {
   node --test scripts/test-support/native-cli.test.mjs
   PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-support/test_owner_local_databases.py
   scripts/test-remote-workspace.sh
+  PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-support/test_remote_image.py
   for file in remote/src/*.mjs remote/test/*.test.mjs; do
     node --check "$file"
   done

@@ -530,19 +530,31 @@ public actor RemoteWorkspaceSSHClient {
         _ input: Data?
     ) throws -> Data
 
+    public typealias StreamingRunner = @Sendable (String, String, Data?, @escaping @Sendable (Data) -> Void) throws -> Data
     private let runner: Runner
+    private let streamingRunner: StreamingRunner
+    private let deploymentRoot: URL?
     private let scriptLoader: @Sendable () throws -> Data
 
     public init() {
         self.runner = RemoteWorkspaceSSHClient.runSSH
+        self.streamingRunner = { destination, command, input, progress in
+            try RemoteWorkspaceSSHClient.runSSH(destination: destination, command: command, input: input,
+                                               timeLimit: nil, onStandardError: progress)
+        }
+        self.deploymentRoot = nil
         self.scriptLoader = RemoteWorkspaceSSHClient.loadLifecycleScript
     }
 
     public init(
         runner: @escaping Runner,
-        scriptLoader: @escaping @Sendable () throws -> Data
+        scriptLoader: @escaping @Sendable () throws -> Data,
+        deploymentRoot: URL? = nil,
+        streamingRunner: StreamingRunner? = nil
     ) {
         self.runner = runner
+        self.streamingRunner = streamingRunner ?? { destination, command, input, _ in try runner(destination, command, input) }
+        self.deploymentRoot = deploymentRoot
         self.scriptLoader = scriptLoader
     }
 
@@ -592,7 +604,8 @@ public actor RemoteWorkspaceSSHClient {
 
     public func create(
         configuration: RemoteWorkspaceConfiguration,
-        token: String
+        token: String,
+        imageID: String? = nil
     ) throws -> RemoteWorkspaceStatus {
         let resources = try RemoteWorkspaceResourceLimits.commandValues(
             for: configuration
@@ -608,26 +621,46 @@ public actor RemoteWorkspaceSSHClient {
                     String(configuration.remotePort),
                     resources.memoryBytes,
                     resources.memoryAndSwapBytes,
+                    imageID ?? "",
                 ],
                 secret: token
             )
         )
     }
 
+    @discardableResult
     public func deployService(
         hostName: String,
-        userName: String?
-    ) throws {
-        let destination = try Self.validatedDestination(
-            hostName: hostName,
-            userName: userName
-        )
-        let command = #"if docker info >/dev/null 2>&1; then exec docker build --pull --no-cache --tag wovenmatter/workspace:latest --file remote/Dockerfile -; elif sudo -n docker info >/dev/null 2>&1; then exec sudo -n docker build --pull --no-cache --tag wovenmatter/workspace:latest --file remote/Dockerfile -; else printf '%s\n' 'Docker Engine is unavailable after host verification.' >&2; exit 69; fi"#
-        _ = try runner(
-            destination,
-            command,
-            try Self.loadDeploymentArchive()
-        )
+        userName: String?,
+        forceRefresh: Bool = false,
+        progress: @escaping @Sendable (String) -> Void = { _ in }
+    ) throws -> String {
+        let destination = try Self.validatedDestination(hostName: hostName, userName: userName)
+        let root = try deploymentRoot ?? Self.loadDeploymentRoot()
+        let deployment = try RemoteWorkspaceDeployment(root: root)
+        func command(_ action: String) -> String {
+            "exec bash -c " + Self.shellQuote(deployment.script) + " -- " + action + " "
+                + deployment.fingerprint + " " + (forceRefresh ? "true" : "false")
+        }
+        progress("Checking the workspace image on the host…")
+        if !forceRefresh {
+            let result = try runner(destination, command("inspect"), nil)
+            if let image = RemoteWorkspaceDeployment.imageID(result) {
+                progress("Reusing the up-to-date workspace image…")
+                return image
+            }
+            guard String(decoding: result, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines) == "build" else {
+                throw RemoteWorkspaceClientError.invalidResponse("The host returned an invalid image check.")
+            }
+        }
+        progress("Preparing workspace files for the image build…")
+        let archive = try Self.loadDeploymentArchive(root: root)
+        let updates = RemoteWorkspaceBuildProgress(report: progress)
+        let output = try streamingRunner(destination, command("build"), archive) { updates.receive($0) }
+        guard let image = RemoteWorkspaceDeployment.imageID(output) else {
+            throw RemoteWorkspaceClientError.invalidResponse("Docker did not return a verified image identity.")
+        }
+        return image
     }
 
     public func status(
@@ -658,7 +691,8 @@ public actor RemoteWorkspaceSSHClient {
     }
 
     public func update(
-        configuration: RemoteWorkspaceConfiguration
+        configuration: RemoteWorkspaceConfiguration,
+        imageID: String? = nil
     ) throws -> RemoteWorkspaceStatus {
         let resources = try RemoteWorkspaceResourceLimits.commandValues(
             for: configuration
@@ -671,7 +705,7 @@ public actor RemoteWorkspaceSSHClient {
                 arguments: [
                     "update",
                     configuration.workspaceID,
-                    "wovenmatter/workspace:latest",
+                    imageID ?? "wovenmatter/workspace:latest",
                     resources.memoryBytes,
                     resources.memoryAndSwapBytes,
                     String(configuration.remotePort),
@@ -790,7 +824,8 @@ public actor RemoteWorkspaceSSHClient {
         destination: String,
         command: String,
         input: Data?,
-        timeLimit: TimeInterval?
+        timeLimit: TimeInterval?,
+        onStandardError: (@Sendable (Data) -> Void)? = nil
     ) throws -> Data {
         let result = try RemoteWorkspaceProcess.run(
             executable: "/usr/bin/ssh",
@@ -803,7 +838,8 @@ public actor RemoteWorkspaceSSHClient {
                 command,
             ],
             input: input,
-            timeLimit: timeLimit
+            timeLimit: timeLimit,
+            onStandardError: onStandardError
         )
         guard result.status == 0 else {
             throw RemoteWorkspaceClientError.commandFailed(result.output)
@@ -829,7 +865,7 @@ public actor RemoteWorkspaceSSHClient {
         return try Data(contentsOf: url)
     }
 
-    private static func loadDeploymentArchive() throws -> Data {
+    private static func loadDeploymentRoot() throws -> URL {
         let fileManager = FileManager.default
         let currentDirectory = URL(
             fileURLWithPath: fileManager.currentDirectoryPath,
@@ -854,6 +890,10 @@ public actor RemoteWorkspaceSSHClient {
         }) else {
             throw RemoteWorkspaceClientError.deploymentBundleUnavailable
         }
+        return root
+    }
+
+    private static func loadDeploymentArchive(root: URL) throws -> Data {
         let result = try RemoteWorkspaceProcess.run(
             executable: "/usr/bin/tar",
             arguments: [
@@ -1294,7 +1334,7 @@ public struct RemoteWorkspaceServiceClient: Sendable {
 
     public func operation(id: UUID) async throws -> RemoteHarnessOperation {
         try await request(
-            path: "v1/operations/\(id.uuidString)",
+            path: "v1/operations/\(id.uuidString.lowercased())",
             method: "GET",
             body: nil
         )
@@ -1533,7 +1573,8 @@ enum RemoteWorkspaceProcess {
         arguments: [String],
         input: Data? = nil,
         timeLimit: TimeInterval? = nil,
-        onProcessStarted: (@Sendable (pid_t) -> Void)? = nil
+        onProcessStarted: (@Sendable (pid_t) -> Void)? = nil,
+        onStandardError: (@Sendable (Data) -> Void)? = nil
     ) throws -> Result {
         let process = Process()
         let fileManager = FileManager.default
@@ -1556,6 +1597,13 @@ enum RemoteWorkspaceProcess {
         )
         let outputHandle = try FileHandle(forWritingTo: outputURL)
         let errorHandle = try FileHandle(forWritingTo: errorURL)
+        let errorReader = try onStandardError.map { _ in try FileHandle(forReadingFrom: errorURL) }
+        func drainProgress() {
+            guard let errorReader, let onStandardError else { return }
+            // Progress is best-effort; a transient read failure must not orphan SSH.
+            // The complete stderr file is still read on command failure below.
+            while let chunk = try? errorReader.read(upToCount: 65536), !chunk.isEmpty { onStandardError(chunk) }
+        }
         var inputURL: URL?
         var inputHandle: FileHandle?
         process.executableURL = URL(fileURLWithPath: executable)
@@ -1580,6 +1628,7 @@ enum RemoteWorkspaceProcess {
             try? inputHandle?.close()
             try? outputHandle.close()
             try? errorHandle.close()
+            try? errorReader?.close()
             if let inputURL { try? FileManager.default.removeItem(at: inputURL) }
             try? fileManager.removeItem(at: outputURL)
             try? fileManager.removeItem(at: errorURL)
@@ -1589,9 +1638,10 @@ enum RemoteWorkspaceProcess {
         // Internal readiness observation keeps cancellation fixtures tied to
         // the owned child rather than detached-task scheduling latency.
         onProcessStarted?(process.processIdentifier)
-        if let timeLimit {
-            let deadline = ProcessInfo.processInfo.systemUptime + timeLimit
+        if timeLimit != nil || onStandardError != nil {
+            let deadline = timeLimit.map { ProcessInfo.processInfo.systemUptime + $0 } ?? .infinity
             while process.isRunning {
+                drainProgress()
                 if Task.isCancelled || ProcessInfo.processInfo.systemUptime >= deadline {
                     process.terminate()
                     let grace = ProcessInfo.processInfo.systemUptime + 1
@@ -1603,10 +1653,11 @@ enum RemoteWorkspaceProcess {
                     try Task.checkCancellation()
                     throw RemoteWorkspaceClientError.commandFailed("Attachment transfer timed out. Please try again.")
                 }
-                Thread.sleep(forTimeInterval: 0.02)
+                Thread.sleep(forTimeInterval: timeLimit == nil ? 0.1 : 0.02)
             }
         }
         process.waitUntilExit()
+        drainProgress()
         try outputHandle.close()
         try errorHandle.close()
         var data = try Data(contentsOf: outputURL)
