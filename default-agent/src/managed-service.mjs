@@ -1,5 +1,6 @@
 import { fork } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { sdkStatus, checkSDKUpdates, updateSDK, resolveSDKRuntime, SDKMaintenanceError } from './sdk-management.mjs';
 
 // Only this proxy is loaded by the long-lived workspace HTTP service. SDKs and
@@ -23,6 +24,7 @@ export function createManagedDefaultAgentService({ cwd, directory }) {
     const inheritedAttachmentState = attachmentState;
     attachmentState = undefined;
     const child = fork(fileURLToPath(new URL('./sdk-worker.mjs', import.meta.url)), [], { cwd, execPath: process.execPath,
+      env: {...process.env,WOVEN_DEFAULT_AGENT_DATABASE:join(cwd,'.wovenmatter','workspace.sqlite')},
       stdio: ['ignore', 'ignore', 'ignore', 'ipc'], serialization: 'advanced' });
     const pending = new Map();
     let exited = false;
@@ -122,6 +124,13 @@ export function createManagedDefaultAgentService({ cwd, directory }) {
     return { ...result, pendingActivation, ...(pendingActivation ? { notice: 'SDK updated. Active work will finish before this workspace switches to it.' } : {}) };
   }
   return {
+    async inspection() {
+      const current = worker;
+      if (!current || !current.child.connected || current.child.exitCode !== null) return [];
+      const items = await bounded(current.call('inspection'), 3000);
+      if (worker !== current) throw new SDKMaintenanceError('The runtime changed during inspection. Refresh again.');
+      return [{id:'pi-worker',parentID:'server:remote',kind:'runtime',title:'Pi Durable runtime',state:'running',processID:current.child.pid},...items];
+    },
     async configure(payload) {
       // Save only after the service accepted it; the payload stays in private
       // process memory and is never written by SDK management or diagnostics.

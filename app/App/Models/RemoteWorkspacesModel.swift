@@ -25,9 +25,10 @@ struct RemoteHarnessChatTarget: Equatable, Identifiable {
 @Observable
 final class RemoteWorkspacesModel {
     struct PendingHostPreparation: Codable, Equatable, Identifiable {
-        let configuration: RemoteWorkspaceConfiguration
+        let hostName: String
+        let userName: String?
         let inspection: RemoteWorkspacePreflight
-        var id: UUID { configuration.id }
+        var id: String { RemoteWorkspacesModel.hostKey(hostName: hostName, userName: userName ?? "") }
     }
 
     struct PreparedHarnessAction: Codable, Equatable, Identifiable {
@@ -49,6 +50,7 @@ final class RemoteWorkspacesModel {
     private(set) var statuses: [UUID: RemoteWorkspaceStatus] = [:]
     private(set) var harnesses: [UUID: [RemoteHarnessStatus]] = [:]
     var onRuntimeMaintenanceChanged: (@MainActor () async -> Void)?
+    private var browserFeeds: [UUID: RemoteBrowserFrameFeed] = [:]
     private var credentialEpoch = UUID()
     private var authorizingWorkspaceIDs: Set<UUID> = []
     private var workspaceEpochs: [UUID: UUID] = [:]
@@ -72,13 +74,15 @@ final class RemoteWorkspacesModel {
     private(set) var isCheckingHost = false
     private(set) var isCreating = false
     private(set) var progress: String?
+    private var deploymentProgressID: UUID?
     private(set) var errorMessage: String?
     private(set) var checkedPreflight: RemoteWorkspacePreflight?
     private var checkedHostKey: String?
+    private var hostInspectionID = UUID()
 
     let isBackendProjection: Bool
     var backendRequest: (@MainActor (String, Data) async throws -> Data)?
-    private let sshClient = RemoteWorkspaceSSHClient()
+    private let sshClient: RemoteWorkspaceSSHClient
     private let credentials = RemoteWorkspaceCredentialStore()
     private var tunnels: [UUID: RemoteWorkspaceTunnel] = [:]
     private let defaults: UserDefaults
@@ -140,8 +144,10 @@ final class RemoteWorkspacesModel {
         }
     }
 
-    init(defaults: UserDefaults = .standard, backendProjection: Bool = LocalExecutionRole.current == .frontend) {
+    init(defaults: UserDefaults = .standard, backendProjection: Bool = LocalExecutionRole.current == .frontend,
+         sshClient: RemoteWorkspaceSSHClient = RemoteWorkspaceSSHClient()) {
         self.defaults = defaults
+        self.sshClient = sshClient
         self.isBackendProjection = backendProjection
         guard !backendProjection else { return }
         // Configured workspaces are always available. Keychain reads remain silent;
@@ -206,6 +212,7 @@ final class RemoteWorkspacesModel {
         }
     }
 
+
     var readyChatTargets: [RemoteHarnessChatTarget] {
         workspaces.flatMap { configuration -> [RemoteHarnessChatTarget] in
             guard !invalidatingWorkspaceIDs.contains(configuration.id), statuses[configuration.id]?.running == true else { return [] }
@@ -213,7 +220,7 @@ final class RemoteWorkspacesModel {
                 harness.state == "ready"
                     && !isRuntimeInventoryUnavailable(harness.id, configuration: configuration)
                     && (harness.id == .defaultAgent || self.runtimeMaintenance[configuration.id]?.contains(where: {
-                        $0.id == harness.id && $0.enabled && $0.visible && $0.installed && $0.operation?.status != "running"
+                        $0.id == harness.id && $0.installed && $0.operation?.status != "running"
                     }) == true)
                     ? RemoteHarnessChatTarget(
                         configuration: configuration,
@@ -268,13 +275,13 @@ final class RemoteWorkspacesModel {
         _ runtimeKind: AgentRuntimeKind,
         in configuration: RemoteWorkspaceConfiguration
     ) -> Bool {
-        (runtimeKind == .defaultAgent || isRuntimeEnabled(runtimeKind, in: configuration))
+        (runtimeKind == .defaultAgent || isRuntimeInstalled(runtimeKind, in: configuration))
             && !isRuntimeInventoryUnavailable(runtimeKind, configuration: configuration)
             && statuses[configuration.id]?.running == true
             && currentHarnesses(for: configuration).contains {
                 $0.id == runtimeKind && $0.state == "ready"
             } && (runtimeKind == .defaultAgent || runtimeMaintenance[configuration.id]?.contains(where: {
-                $0.id == runtimeKind && $0.enabled && $0.installed && $0.operation?.status != "running"
+                $0.id == runtimeKind && $0.installed && $0.operation?.status != "running"
             }) == true)
     }
 
@@ -289,10 +296,10 @@ final class RemoteWorkspacesModel {
         for workspace in workspaces { refresh(workspace) }
     }
 
-    func isRuntimeEnabled(_ kind: AgentRuntimeKind, in configuration: RemoteWorkspaceConfiguration) -> Bool {
+    func isRuntimeInstalled(_ kind: AgentRuntimeKind, in configuration: RemoteWorkspaceConfiguration) -> Bool {
         self.configuration(id: configuration.id) == configuration
             && !invalidatingWorkspaceIDs.contains(configuration.id)
-            && runtimeMaintenance[configuration.id]?.contains { $0.id == kind && $0.enabled && $0.installed } == true
+            && runtimeMaintenance[configuration.id]?.contains { $0.id == kind && $0.installed } == true
     }
 
     func refreshRuntimeMaintenanceAtStartup() { checkRuntimeMaintenanceOnActivation() }
@@ -315,7 +322,11 @@ final class RemoteWorkspacesModel {
         guard !isBackendProjection else { return }
         for workspace in workspaces {
             performBusy(workspace) {
-                await self.refreshRuntimeMaintenance(workspace, checkLatest: true)
+                let identity = try self.requestIdentity(workspace)
+                let status = try await self.sshClient.status(configuration: workspace)
+                try self.requireCurrent(identity)
+                self.statuses[workspace.id] = status
+                if status.running { await self.refreshService(workspace, checkLatest: true) }
             }
         }
     }
@@ -365,22 +376,6 @@ final class RemoteWorkspacesModel {
         }
     }
 
-    func setRuntimePreferences(
-        _ runtime: RemoteRuntimeMaintenance, configuration: RemoteWorkspaceConfiguration,
-        enabled: Bool? = nil, visible: Bool? = nil
-    ) {
-        if forwardToBackend(.setRuntimePreferences(configuration.id, runtime.id, enabled: enabled, visible: visible)) { return }
-        guard enabled != true || runtime.installed else { return }
-        performBusy(configuration) {
-            let identity = try self.requestIdentity(configuration)
-            let client = try await self.serviceClient(for: configuration)
-            try self.requireCurrent(identity)
-            try await client.setRuntimePreferences(runtime.id, enabled: enabled, visible: visible)
-            try self.requireCurrent(identity)
-            await self.refreshRuntimeMaintenance(configuration)
-        }
-    }
-
     func refreshWorkspaceInstance(_ kind: AgentRuntimeKind, configuration: RemoteWorkspaceConfiguration,
                                   action: String? = nil) {
         if forwardToBackend(.workspaceInstance(configuration.id, kind, action: action)) { return }
@@ -388,7 +383,7 @@ final class RemoteWorkspacesModel {
             let identity = try self.requestIdentity(configuration)
             let client = try await self.serviceClient(for: configuration)
             try self.requireCurrent(identity)
-            if action == "start", !self.isRuntimeEnabled(kind, in: configuration) { throw CancellationError() }
+            if action == "start", !self.isRuntimeInstalled(kind, in: configuration) { throw CancellationError() }
             let status = try await client.workspaceInstance(kind, action: action)
             try self.requireCurrent(identity)
             self.workspaceInstances[configuration.id, default: [:]][kind] = status
@@ -397,14 +392,14 @@ final class RemoteWorkspacesModel {
 
     func prepareOpenCodeConnection(for configuration: RemoteWorkspaceConfiguration, allowStart: Bool = true) async throws -> OpenCodeConnection {
         let identity = try requestIdentity(configuration)
-        guard isRuntimeEnabled(.opencode, in: configuration), runtimeMaintenance[configuration.id]?.contains(where: {
-            $0.id == .opencode && $0.installed && $0.enabled && $0.operation?.status != "running"
+        guard isRuntimeInstalled(.opencode, in: configuration), runtimeMaintenance[configuration.id]?.contains(where: {
+            $0.id == .opencode && $0.installed && $0.operation?.status != "running"
         }) == true else { throw RemoteWorkspaceClientError.harnessUnavailable }
         let client = try await serviceClient(for: configuration)
         try requireCurrent(identity)
         let health = try await client.health()
         try requireCurrent(identity)
-        guard isRuntimeEnabled(.opencode, in: configuration) else { throw CancellationError() }
+        guard isRuntimeInstalled(.opencode, in: configuration) else { throw CancellationError() }
         let status = try await client.workspaceInstance(.opencode, action: allowStart ? "start" : nil)
         try requireCurrent(identity)
         workspaceRoots[configuration.id] = health.workspaceRoot
@@ -414,7 +409,7 @@ final class RemoteWorkspacesModel {
             throw RemoteWorkspaceClientError.invalidResponse(status.lastError ?? "The workspace OpenCode server is unavailable.")
         }
         try requireCurrent(identity)
-        guard isRuntimeEnabled(.opencode, in: configuration) else { throw CancellationError() }
+        guard isRuntimeInstalled(.opencode, in: configuration) else { throw CancellationError() }
         return try OpenCodeConnection(
             identity: "remote-workspace:\(configuration.id.uuidString.lowercased())",
             url: URL(string: "http://127.0.0.1:\(port)")!, password: "",
@@ -426,7 +421,7 @@ final class RemoteWorkspacesModel {
                                           checkLatest: Bool = false) async {
         guard let identity = try? requestIdentity(configuration) else { return }
         let checking: Set<AgentRuntimeKind> = checkLatest
-            ? Set((runtimeMaintenance[configuration.id] ?? []).filter(\.enabled).map(\.id)) : []
+            ? Set((runtimeMaintenance[configuration.id] ?? []).filter(\.installed).map(\.id)) : []
         checkingRuntimeIDs[configuration.id, default: []].formUnion(checking)
         defer {
             if credentialEpoch == identity.credentialEpoch && workspaceEpochs[configuration.id] == identity.workspaceEpoch {
@@ -464,6 +459,89 @@ final class RemoteWorkspacesModel {
 
     func createProject(name: String, in configuration: RemoteWorkspaceConfiguration, reuseExisting: Bool = false) async throws -> RemoteProjectDirectory {
         try await databaseRequest(configuration) { try await $0.createProject(name: name, reuseExisting: reuseExisting) }
+    }
+
+    func browserIdentity(for configuration: RemoteWorkspaceConfiguration) -> RemoteWorkspaceRequestIdentity? {
+        guard self.configuration(id: configuration.id) == configuration,
+              !invalidatingWorkspaceIDs.contains(configuration.id) else { return nil }
+        return .init(configuration: configuration, credentialEpoch: credentialEpoch,
+                     workspaceEpoch: workspaceEpochs[configuration.id] ?? configuration.id)
+    }
+
+    private func browserBackend(_ command: BackendRemoteWorkspaceCommand,
+                                configuration: RemoteWorkspaceConfiguration) async throws -> BackendRemoteWorkspaceResponse {
+        guard let identity = browserIdentity(for: configuration), let backendRequest else {
+            throw RemoteWorkspaceClientError.invalidResponse("Reconnect to this workspace in Settings to view its browser.")
+        }
+        let data = try await backendRequest("remoteWorkspaces.command", JSONEncoder().encode(command))
+        guard identity == browserIdentity(for: configuration), !Task.isCancelled else { throw CancellationError() }
+        // A live frame must never apply an older administration snapshot over a
+        // workspace removal or edit that arrived while it was loading.
+        return try JSONDecoder().decode(BackendRemoteWorkspaceResponse.self, from: data)
+    }
+
+    private func browserRequest<Value: Sendable>(_ configuration: RemoteWorkspaceConfiguration,
+        operation: (RemoteWorkspaceServiceClient) async throws -> Value) async throws -> Value {
+        let identity = try requestIdentity(configuration)
+        let client: RemoteWorkspaceServiceClient
+        if let feed = browserFeeds[configuration.id], feed.identity == identity, !feed.stopped, let existing = feed.client {
+            // The live stream already owns a ready, authenticated connection.
+            // Probing SSH/HTTP before every local video read adds a full WAN RTT.
+            client = existing
+        } else { client = try await serviceClient(for: configuration) }
+        try requireCurrent(identity)
+        let value = try await operation(client)
+        try requireCurrent(identity)
+        return value
+    }
+
+    func browserTabs(for configuration: RemoteWorkspaceConfiguration) async throws -> RemoteBrowserTabs {
+        if isBackendProjection {
+            guard let value = try await browserBackend(.browserTabs(configuration.id), configuration: configuration).browserTabs else {
+                throw BackendRPCError.remote("The background service returned no browser tabs.")
+            }
+            return value
+        }
+        return try await browserRequest(configuration) { try await $0.browserTabs() }
+    }
+
+    func browserAction(_ action: RemoteBrowserAction, for configuration: RemoteWorkspaceConfiguration) async throws -> RemoteBrowserActionResult {
+        if isBackendProjection {
+            guard let value = try await browserBackend(.browserAction(configuration.id, action), configuration: configuration).browserAction else {
+                throw BackendRPCError.remote("The background service returned no browser input acknowledgement.")
+            }
+            return value
+        }
+        return try await browserRequest(configuration) { try await $0.browserAction(action) }
+    }
+
+    func browserActions(_ actions: [RemoteBrowserAction], for configuration: RemoteWorkspaceConfiguration) async throws -> RemoteBrowserActionBatchResult {
+        if isBackendProjection {
+            guard let value = try await browserBackend(.browserActions(configuration.id, actions), configuration: configuration).browserActions else {
+                throw BackendRPCError.remote("The background service returned no browser input acknowledgement.")
+            }
+            return value
+        }
+        return try await browserRequest(configuration) { try await $0.browserActions(actions) }
+    }
+
+    func browserFrame(tabID: String, previousFrameID: String? = nil, for configuration: RemoteWorkspaceConfiguration) async throws -> RemoteBrowserFrame {
+        if isBackendProjection {
+            guard let value = try await browserBackend(.browserFrame(configuration.id, tabID: tabID, previousFrameID: previousFrameID), configuration: configuration).browserFrame else {
+                throw BackendRPCError.remote("The background service returned no browser image.")
+            }
+            return value
+        }
+        return try await browserRequest(configuration) { client in
+            let identity = try self.requestIdentity(configuration)
+            if let feed = self.browserFeeds[configuration.id], feed.tabID != tabID || feed.identity != identity || feed.stopped {
+                feed.stop(); self.browserFeeds[configuration.id] = nil
+            }
+            if self.browserFeeds[configuration.id] == nil {
+                self.browserFeeds[configuration.id] = RemoteBrowserFrameFeed(tabID: tabID, identity: identity, client: client, frames: client.browserFrames(tabID: tabID))
+            }
+            return try await self.browserFeeds[configuration.id]!.latest(previousFrameID: previousFrameID)
+        }
     }
 
     func databases(for configuration: RemoteWorkspaceConfiguration) async throws -> [RemoteAgentDatabase] {
@@ -618,27 +696,30 @@ final class RemoteWorkspacesModel {
         hostName: String,
         userName: String
     ) -> RemoteWorkspacePreflight? {
-        checkedHostKey == Self.hostKey(
-            hostName: hostName,
-            userName: userName
-        )
-            ? checkedPreflight
-            : nil
+        guard !hostName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !isCheckingHost,
+              checkedHostKey == Self.hostKey(hostName: hostName, userName: userName) else { return nil }
+        return checkedPreflight
     }
 
     func checkHost(hostName: String, userName: String) {
         if forwardToBackend(.checkHost(hostName: hostName, userName: userName)) { return }
-        guard !isCheckingHost else { return }
+        guard !isCreating else { return }
         let cleanHost = hostName.trimmingCharacters(in: .whitespacesAndNewlines)
         let cleanUser = userName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanHost.isEmpty else {
-            errorMessage = "Enter an SSH hostname before checking the host."
+            errorMessage = "Enter a Tailscale machine name before checking the host."
             return
         }
+        let inspectionID = UUID()
+        hostInspectionID = inspectionID
+        checkedPreflight = nil
+        checkedHostKey = nil
+        pendingHostPreparation = nil
         isCheckingHost = true
         errorMessage = nil
         Task {
-            defer { isCheckingHost = false }
+            defer { if hostInspectionID == inspectionID { isCheckingHost = false } }
             do {
                 _ = try RemoteWorkspaceSSHClient.validatedDestination(
                     hostName: cleanHost,
@@ -648,15 +729,31 @@ final class RemoteWorkspacesModel {
                     hostName: cleanHost,
                     userName: cleanUser.nilIfEmpty
                 )
+                guard hostInspectionID == inspectionID else { return }
                 checkedHostKey = Self.hostKey(
                     hostName: cleanHost,
                     userName: cleanUser
                 )
                 checkedPreflight = result
             } catch {
+                guard hostInspectionID == inspectionID else { return }
                 errorMessage = error.localizedDescription
             }
         }
+    }
+
+    func prepareHost(hostName: String, userName: String) {
+        if forwardToBackend(.prepareHost(hostName: hostName, userName: userName)) { return }
+        guard !isCreating, !isCheckingHost else { return }
+        guard let inspection = preflight(hostName: hostName, userName: userName),
+              inspection.canPrepare == true else {
+            errorMessage = "Inspect this host before preparing it."
+            return
+        }
+        pendingHostPreparation = .init(
+            hostName: hostName.trimmingCharacters(in: .whitespacesAndNewlines),
+            userName: userName.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
+            inspection: inspection)
     }
 
     func create(
@@ -674,7 +771,11 @@ final class RemoteWorkspacesModel {
         let cleanID = workspaceID.trimmingCharacters(in: .whitespacesAndNewlines)
         let cleanHost = hostName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanName.isEmpty, !cleanID.isEmpty, !cleanHost.isEmpty else {
-            errorMessage = "Enter a name, workspace ID, and SSH hostname."
+            errorMessage = "Enter a name, workspace ID, and Tailscale machine name."
+            return
+        }
+        guard preflight(hostName: cleanHost, userName: userName)?.ready == true else {
+            errorMessage = "Select and inspect a ready host before creating a workspace."
             return
         }
         let configuration = RemoteWorkspaceConfiguration(
@@ -736,19 +837,8 @@ final class RemoteWorkspacesModel {
                     userName: configuration.userName ?? ""
                 )
                 checkedPreflight = preflight
-                if preflight.preparationRequired == true {
-                    guard preflight.canPrepare == true else {
-                        let blockers = preflight.blockingIssues ?? []
-                        throw RemoteWorkspaceClientError.commandFailed(
-                            (blockers.isEmpty ? preflight.limitations : blockers)
-                                .joined(separator: " ")
-                        )
-                    }
-                    pendingHostPreparation = PendingHostPreparation(
-                        configuration: configuration,
-                        inspection: preflight
-                    )
-                    return
+                if preflight.preparationRequired == true, preflight.canPrepare == true {
+                    throw RemoteWorkspaceClientError.commandFailed("Prepare this host before creating a workspace.")
                 }
                 guard preflight.ready else {
                     throw RemoteWorkspaceClientError.commandFailed(
@@ -769,44 +859,33 @@ final class RemoteWorkspacesModel {
 
     func authorizeHostPreparation() {
         if forwardToBackend(.authorizeHostPreparation) { return }
-        guard let pending = pendingHostPreparation, !isCreating else { return }
+        guard let pending = pendingHostPreparation, !isCreating, !isCheckingHost else { return }
         pendingHostPreparation = nil
         isCreating = true
         errorMessage = nil
         Task {
-            defer {
-                isCreating = false
-                progress = nil
-            }
+            defer { isCreating = false; progress = nil }
             do {
-                progress = "Preparing the authorized remote host…"
-                _ = try await sshClient.prepareHost(
-                    hostName: pending.configuration.hostName,
-                    userName: pending.configuration.userName
-                )
-                progress = "Verifying the prepared host…"
-                let verified = try await sshClient.preflight(
-                    hostName: pending.configuration.hostName,
-                    userName: pending.configuration.userName
-                )
-                checkedHostKey = Self.hostKey(
-                    hostName: pending.configuration.hostName,
-                    userName: pending.configuration.userName ?? ""
-                )
-                checkedPreflight = verified
-                guard verified.ready,
-                      verified.preparationRequired != true else {
-                    throw RemoteWorkspaceClientError.commandFailed(
-                        verified.limitations.joined(separator: " ")
-                    )
+                progress = "Checking \(pending.hostName)…"
+                let current = try await sshClient.preflight(hostName: pending.hostName, userName: pending.userName)
+                checkedHostKey = Self.hostKey(hostName: pending.hostName, userName: pending.userName ?? "")
+                checkedPreflight = current
+                if current.ready { return }
+                guard current.canPrepare == true,
+                      current.preparationActions == pending.inspection.preparationActions else {
+                    throw RemoteWorkspaceClientError.commandFailed("Host requirements changed. Inspect the host and review its preparation again.")
                 }
-                try Self.requireCapabilities(
-                    verified,
-                    for: pending.configuration
-                )
-                try await provision(pending.configuration)
+                progress = "Preparing \(pending.hostName)…"
+                _ = try await sshClient.prepareHost(hostName: pending.hostName, userName: pending.userName)
+                progress = "Verifying \(pending.hostName)…"
+                let verified = try await sshClient.preflight(hostName: pending.hostName, userName: pending.userName)
+                checkedPreflight = verified
+                guard verified.ready, verified.preparationRequired != true else {
+                    throw RemoteWorkspaceClientError.commandFailed(verified.limitations.joined(separator: " "))
+                }
             } catch {
-                try? await credentials.deleteToken(for: pending.configuration.id, allowInteraction: false)
+                // A partial installation cannot leave a stale readiness result.
+                checkedPreflight = nil
                 errorMessage = error.localizedDescription
             }
         }
@@ -844,15 +923,11 @@ final class RemoteWorkspacesModel {
     func updateContainer(_ configuration: RemoteWorkspaceConfiguration) {
         if forwardToBackend(.updateContainer(configuration.id)) { return }
         performBusy(configuration) {
-            self.progress = "Building the updated workspace image…"
             defer { self.progress = nil }
-            try await self.sshClient.deployService(
-                hostName: configuration.hostName,
-                userName: configuration.userName
-            )
+            let imageID = try await self.deployImage(configuration, forceRefresh: true)
             self.progress = "Recreating the container and preserving its home…"
             self.statuses[configuration.id] = try await self.sshClient.update(
-                configuration: configuration
+                configuration: configuration, imageID: imageID
             )
             await self.refreshService(configuration)
         }
@@ -872,6 +947,7 @@ final class RemoteWorkspacesModel {
         performBusy(configuration) {
             self.checkingRuntimeIDs.removeValue(forKey: configuration.id)
             self.actionErrors.removeValue(forKey: configuration.id)
+            self.browserFeeds.removeValue(forKey: configuration.id)?.stop()
             self.workspaceEpochs[configuration.id] = UUID()
             self.invalidatingWorkspaceIDs.insert(configuration.id)
             defer { self.invalidatingWorkspaceIDs.remove(configuration.id) }
@@ -903,6 +979,7 @@ final class RemoteWorkspacesModel {
         performBusy(configuration) {
             self.checkingRuntimeIDs.removeValue(forKey: configuration.id)
             self.actionErrors.removeValue(forKey: configuration.id)
+            self.browserFeeds.removeValue(forKey: configuration.id)?.stop()
             self.workspaceEpochs[configuration.id] = UUID()
             self.invalidatingWorkspaceIDs.insert(configuration.id)
             defer { self.invalidatingWorkspaceIDs.remove(configuration.id) }
@@ -1260,7 +1337,7 @@ final class RemoteWorkspacesModel {
     }
 
     private func refreshService(
-        _ configuration: RemoteWorkspaceConfiguration
+        _ configuration: RemoteWorkspaceConfiguration, checkLatest: Bool = false
     ) async {
         guard let identity = try? requestIdentity(configuration) else { return }
         // A lifecycle snapshot from before this refresh must not override newer
@@ -1277,8 +1354,8 @@ final class RemoteWorkspacesModel {
             try requireCurrent(identity)
             workspaceRoots[configuration.id] = health.workspaceRoot
             harnesses[configuration.id] = inventory
+            await refreshRuntimeMaintenance(configuration, checkLatest: checkLatest)
             if inventory.contains(where: { $0.id == .defaultAgent }) { try await synchronizeDefaultAgent(configuration) }
-            await refreshRuntimeMaintenance(configuration)
             await refreshTaskGateway(configuration)
         } catch {
             guard (try? requireCurrent(identity)) != nil else { return }
@@ -1286,27 +1363,43 @@ final class RemoteWorkspacesModel {
         }
     }
 
+    private func deployImage(_ configuration: RemoteWorkspaceConfiguration, forceRefresh: Bool = false) async throws -> String {
+        let operationID = UUID()
+        deploymentProgressID = operationID
+        defer { if deploymentProgressID == operationID { deploymentProgressID = nil } }
+        progress = "Checking the workspace image on the host…"
+        return try await sshClient.deployService(
+            hostName: configuration.hostName, userName: configuration.userName, forceRefresh: forceRefresh
+        ) { [weak self] message in
+            Task { @MainActor [weak self] in
+                guard let self, self.deploymentProgressID == operationID else { return }
+                self.progress = message
+            }
+        }
+    }
+
     private func provision(
         _ configuration: RemoteWorkspaceConfiguration
     ) async throws {
-        progress = "Provisioning the pinned workspace image…"
-        try await sshClient.deployService(
-            hostName: configuration.hostName,
-            userName: configuration.userName
-        )
+        let imageID = try await deployImage(configuration)
         let token = try Self.generateToken()
         try await credentials.save(token: token, for: configuration.id)
         progress = "Creating and health-checking the loopback-only container…"
         let status = try await sshClient.create(
             configuration: configuration,
-            token: token
+            token: token, imageID: imageID
         )
         workspaces.append(configuration)
         workspaces.sort { $0.createdAt < $1.createdAt }
         statuses[configuration.id] = status
         save()
         requestHarnessSetup(configuration.id)
+        await onRuntimeMaintenanceChanged?()
         await refreshService(configuration)
+    }
+
+    func inspectRuntime(_ configuration: RemoteWorkspaceConfiguration) async throws -> RuntimeInspection {
+        try await databaseRequest(configuration) { try await $0.runtimeInspection() }
     }
 
     private func serviceClient(
@@ -1502,7 +1595,7 @@ final class RemoteWorkspacesModel {
         }
         let data = try await backendRequest("remoteWorkspaces.command", JSONEncoder().encode(command))
         let response = try JSONDecoder().decode(BackendRemoteWorkspaceResponse.self, from: data)
-        applyBackendSnapshot(response.snapshot)
+        if let snapshot = response.snapshot { applyBackendSnapshot(snapshot) }
         return response
     }
 
@@ -1523,7 +1616,7 @@ final class RemoteWorkspacesModel {
             .replacingOccurrences(of: "=", with: "")
     }
 
-    private static func hostKey(hostName: String, userName: String) -> String {
+    private nonisolated static func hostKey(hostName: String, userName: String) -> String {
         "\(userName.trimmingCharacters(in: .whitespacesAndNewlines))@\(hostName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())"
     }
 
@@ -1564,4 +1657,95 @@ extension RemoteWorkspacesModel {
     func deleteProject(path: String, in configuration: RemoteWorkspaceConfiguration) async throws {
         _ = try await databaseRequest(configuration) { try await $0.deleteProject(path: path) }
     }
+}
+
+/// The owner keeps one latest image, never a playback queue. Viewing renews a
+/// short lease, so closing/crashing the frontend stops remote capture automatically.
+@MainActor
+final class RemoteBrowserFrameFeed {
+    let tabID: String
+    let identity: RemoteWorkspaceRequestIdentity
+    let client: RemoteWorkspaceServiceClient?
+    private(set) var stopped = false
+    private var frame: RemoteBrowserFrame?
+    private var error: (any Error)?
+    private var equivalentFrames: [String] = []
+    private var waiters: [UUID: (continuation: CheckedContinuation<Void, Never>, timeout: Task<Void, Never>)] = [:]
+    private var lastRead = ContinuousClock.now
+    private var activeReads = 0
+    private var receiver: Task<Void, Never>?
+    private var lease: Task<Void, Never>?
+    init(tabID: String, identity: RemoteWorkspaceRequestIdentity, client: RemoteWorkspaceServiceClient? = nil, frames: AsyncThrowingStream<RemoteBrowserFrame, any Error>) {
+        self.tabID = tabID; self.identity = identity; self.client = client
+        receiver = Task { [weak self] in
+            do {
+                for try await incoming in frames {
+                    guard let self, !self.stopped else { return }
+                    guard incoming.tabID == tabID, incoming.imageBase64.utf8.count <= 2 * 1024 * 1024,
+                          incoming.frameID != nil else { throw BackendRPCError.invalidFrame }
+                    if let imageID = incoming.imageID, imageID == self.frame?.imageID {
+                        if let previous = self.frame?.frameID { self.equivalentFrames.append(previous) }
+                        if self.equivalentFrames.count > 128 { self.equivalentFrames.removeFirst() }
+                    } else { self.equivalentFrames.removeAll() }
+                    self.frame = incoming
+                    self.wakeReaders()
+                }
+                self?.error = URLError(.networkConnectionLost)
+            } catch { self?.error = error }
+            self?.frame = nil
+            self?.wakeReaders()
+        }
+        lease = Task { [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(1)) } catch { return }
+                guard let self else { return }
+                self.stopIfLeaseExpired()
+                if self.stopped { return }
+            }
+        }
+    }
+    func latest(previousFrameID: String?) async throws -> RemoteBrowserFrame {
+        guard !stopped else { throw CancellationError() }
+        if let error { throw error }
+        activeReads += 1
+        lastRead = .now
+        defer { activeReads -= 1; lastRead = .now }
+        if let previousFrameID, frame?.frameID == previousFrameID {
+            let id = UUID()
+            guard waiters.count < 16 else { throw BackendRPCError.remote("Too many browser viewers.") }
+            await withTaskCancellationHandler {
+                await withCheckedContinuation { continuation in
+                    let timeout = Task { [weak self] in
+                        do { try await Task.sleep(for: .seconds(1)) } catch { return }
+                        self?.wakeReader(id)
+                    }
+                    waiters[id] = (continuation, timeout)
+                }
+            } onCancel: { Task { @MainActor [weak self] in self?.wakeReader(id) } }
+            try Task.checkCancellation()
+        }
+        let started = ContinuousClock.now
+        while frame == nil, error == nil, !stopped {
+            lastRead = .now
+            if started.duration(to: .now) > .seconds(10) { throw URLError(.timedOut) }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        guard !stopped else { throw CancellationError() }
+        if let error { throw error }
+        guard let frame else { throw CancellationError() }
+        return .init(tabID: tabID, imageBase64: frame.frameID == previousFrameID || equivalentFrames.contains(previousFrameID ?? "") ? "" : frame.imageBase64, frameID: frame.frameID, imageID: frame.imageID)
+    }
+    func stopIfLeaseExpired(at now: ContinuousClock.Instant = .now) {
+        // A suspended reader still owns the feed, even if the main actor is busy.
+        if activeReads == 0, lastRead.duration(to: now) >= .seconds(3) { stop() }
+    }
+    private func wakeReader(_ id: UUID) {
+        guard let waiter = waiters.removeValue(forKey: id) else { return }
+        waiter.timeout.cancel(); waiter.continuation.resume()
+    }
+    private func wakeReaders() {
+        for id in Array(waiters.keys) { wakeReader(id) }
+    }
+    func stop() { stopped = true; receiver?.cancel(); lease?.cancel(); frame = nil; equivalentFrames.removeAll(); wakeReaders() }
+    deinit { receiver?.cancel(); lease?.cancel() }
 }

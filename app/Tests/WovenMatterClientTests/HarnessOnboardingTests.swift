@@ -52,21 +52,6 @@ struct HarnessOnboardingTests {
 }
 
 extension HarnessOnboardingTests {
-    @Test func installedHarnessesAppearWithoutAnEnableStepAndRespectExplicitHiding() throws {
-        let suite = "HarnessOnboardingTests.\(UUID())"
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
-        let preferences = LocalACPRuntimePreferences(defaults: defaults)
-        let available = preferences.adoptInstalled([.codex, .claudeCode])
-        #expect(available.enabledRuntimeKinds == [.defaultAgent, .codex, .claudeCode])
-        #expect(available.shownRuntimeKinds == available.enabledRuntimeKinds)
-        preferences.setShown(false, for: .codex)
-        let refreshed = preferences.adoptInstalled([.codex, .claudeCode, .opencode])
-        #expect(refreshed.shownRuntimeKinds == [.defaultAgent, .claudeCode, .opencode])
-        #expect(defaults.dictionaryRepresentation().keys.allSatisfy { !$0.contains("credential-access") })
-        #expect(preferences.adoptInstalled([]).shownRuntimeKinds == [.defaultAgent])
-    }
-
     @Test func signInCommandsQuotePathsAndKeepOpenCodeProviderChoiceInteractive() throws {
         let executable = URL(fileURLWithPath: "/fixture/O'Brien $(touch danger)/tool")
         let script = try #require(HarnessOnboarding.signInScript(.opencode, executable: executable, searchPath: "/fixture/bin:$PATH"))

@@ -12,8 +12,6 @@ enum BackendRuntimeCommand: Codable, Sendable {
     case cancelInstall
     case refreshRuntimes(Set<AgentRuntimeKind>)
     case refreshSignIn
-    case setShown(AgentRuntimeKind, Bool)
-    case setCredentialAccess(AgentRuntimeKind, Bool)
     case setUpWorkspace(URL)
     case titleEnabled(Bool)
     case titleModel(String)
@@ -27,8 +25,7 @@ struct BackendRuntimeSnapshot: Codable, Sendable {
     var launchableKinds: Set<AgentRuntimeKind>
     var reconciliationError: String?
     var checkingKinds: Set<AgentRuntimeKind>
-    var enabledKinds: Set<AgentRuntimeKind>
-    var shownKinds: Set<AgentRuntimeKind>
+    var installedKinds: Set<AgentRuntimeKind>
     var inventories: [AgentRuntimeKind: RuntimeInventory]
     var failures: [AgentRuntimeKind: Int]
     var failureDetails: [AgentRuntimeKind: String]

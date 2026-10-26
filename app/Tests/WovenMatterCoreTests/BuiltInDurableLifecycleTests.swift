@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import Foundation
 import Testing
 import WovenMatterClient
@@ -11,13 +12,52 @@ struct BuiltInDurableLifecycleTests {
     .init(runtimeKind: .defaultAgent, executableURL: URL(fileURLWithPath: "/fixture"), arguments: [])
   }
 
+  @Test(arguments: [false, true])
+  func initialPermissionSetupWaitsForTheConfigurationIdleProbe(cancelRequest: Bool) async throws {
+    let directory = FileManager.default.temporaryDirectory.appending(path: "wm-durable-permission-" + UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+    let conversation = try await database.createLocalACPSession(runtimeKind: .defaultAgent,
+      title: "New chat", ownerDeviceID: UUID())
+    let lease = ConfigurationTestProcessLease(), client = BackgroundDriverFixture()
+    let coordinator = LocalACPSessionCoordinator(database: database, processLease: lease,
+      clientFactory: { _, _ in client.driver() })
+    let workspace = LocalACPWorkspaceLaunchConfiguration(rootURL: directory)
+    _ = try await coordinator.configuration(conversationID: conversation, launch: launch(), workspace: workspace)
+    await client.waitUntilIdleRequested()
+    let update = Task {
+      try await coordinator.updateConfiguration(conversationID: conversation, permission: "full",
+        launch: launch(), workspace: workspace)
+    }
+    try await Task.sleep(for: .milliseconds(30))
+    #expect(await client.permissionSetCount == 0)
+    #expect(lease.snapshot.holds == 1)
+    if cancelRequest { update.cancel() }
+    await client.finishBackgroundWork()
+    do {
+      if cancelRequest {
+        await #expect(throws: CancellationError.self) { try await update.value }
+      } else {
+        #expect(try await update.value.permission == "full")
+      }
+      #expect(try await database.localACPSession(conversationID: conversation).permission == "full")
+      #expect(await client.permissionSetCount == (cancelRequest ? 0 : 1))
+      #expect(await client.promptCount == 0)
+    } catch {
+      await coordinator.shutdown()
+      throw error
+    }
+    await coordinator.shutdown()
+  }
+
   @Test(arguments: ["configuration", "prompt", "nextPrompt", "shutdown"])
   func backgroundWorkRetainsOneOwnerUntilIdleOrShutdown(mode: String) async throws {
     let directory = FileManager.default.temporaryDirectory.appending(path: "wm-durable-idle-" + UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: directory) }
     let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
-    let conversation = try await database.createLocalACPSession(runtimeKind: .defaultAgent,
+    let conversation = try await database.createFixtureLocalACPSession(runtimeKind: .defaultAgent,
       title: "Background fixture", ownerDeviceID: UUID())
     let lease = ConfigurationTestProcessLease(), client = BackgroundDriverFixture()
     let coordinator = LocalACPSessionCoordinator(database: database, processLease: lease,
@@ -65,7 +105,7 @@ struct BuiltInDurableLifecycleTests {
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: directory) }
     let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
-    let conversation = try await database.createLocalACPSession(runtimeKind: .defaultAgent,
+    let conversation = try await database.createFixtureLocalACPSession(runtimeKind: .defaultAgent,
       title: "Dispatch fixture", ownerDeviceID: UUID())
     let configuration = LocalACPSessionConfiguration(permission: "full", permissionOptions: ["full"])
     let coordinator = LocalACPSessionCoordinator(database: database, clientFactory: { _, _ in
@@ -103,14 +143,18 @@ private actor BackgroundDriverFixture {
   var idleRequestCount = 0
   var initializeCount = 0
   var promptCount = 0
+  var permissionSetCount = 0
   nonisolated func driver() -> LocalACPSessionDriver {
     let configuration = LocalACPSessionConfiguration(permission: "full", permissionOptions: ["full"])
     return LocalACPSessionDriver(initializeSession: { _, existing, _, _ in
         await self.initialize(existing: existing, configuration: configuration)
       }, prompt: { _, event, _, _ in try await self.prompt(event: event) },
-      configuration: { configuration }, setConfiguration: { _, _ in configuration }, cancel: {},
-      shutdown: { await self.shutdown() }, awaitIdle: { await self.awaitIdle() })
+      configuration: { configuration }, setConfiguration: { _, _ in configuration }, setPermission: { _ in
+        await self.didSetPermission()
+        return configuration
+      }, cancel: {}, shutdown: { await self.shutdown() }, awaitIdle: { await self.awaitIdle() })
   }
+  private func didSetPermission() { permissionSetCount += 1 }
   private func initialize(existing: String?, configuration: LocalACPSessionConfiguration) -> LocalACPInitializedSession {
     initializeCount += 1
     return .init(sessionID: existing ?? "native", loadedExistingSession: existing != nil, configuration: configuration)

@@ -26,7 +26,7 @@ public struct RemoteMachineCandidate: Codable, Equatable, Identifiable, Sendable
     public let hostName: String
     public let displayName: String
     public let online: Bool
-    /// Preserve the SSH alias separately from the DNS name required for HTTPS.
+    /// Keep the Tailnet short name and the DNS name required for private HTTPS.
     public let dnsName: String?
 
     public var id: String { hostName }
@@ -115,7 +115,8 @@ public enum RemoteHarnessLaunchResolver {
         processWorkingDirectory: URL,
         workspaceRoot: URL = URL(fileURLWithPath: "/home/.woven-matter"),
         workingDirectory: URL? = nil,
-        durableChannelID: String? = nil
+        durableChannelID: String? = nil,
+        tailnetSSHOptions: @Sendable (String) throws -> [String] = RemoteWorkspaceTailnet.sshOptions
     ) throws -> RemoteHarnessLaunchContext {
         let idPattern = /^[a-z0-9][a-z0-9-]{0,47}$/
         guard configuration.workspaceID.wholeMatch(of: idPattern) != nil else {
@@ -173,7 +174,7 @@ public enum RemoteHarnessLaunchResolver {
             command.append(contentsOf: harness.arguments)
         }
         let remoteCommand = command.map(shellQuote).joined(separator: " ")
-        let sshArguments = [
+        let sshArguments = try tailnetSSHOptions(destination) + [
             "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", destination, remoteCommand,
         ]
         var launchEnvironment = ["WOVEN_EXECUTION_SCOPE": configuration.id.uuidString.lowercased()]
@@ -323,6 +324,7 @@ public struct RemoteRuntimeComponent: Codable, Equatable, Identifiable, Sendable
 public struct RemoteRuntimeMaintenance: Codable, Equatable, Identifiable, Sendable {
     public let id: AgentRuntimeKind
     public let displayName: String
+    // Decoded only for compatibility with workspaces created by older apps.
     public let enabled: Bool
     public let visible: Bool
     public let installed: Bool
@@ -392,13 +394,7 @@ public enum RemoteWorkspaceLifecycleAction: String, Sendable {
 
 public enum RemoteMachineDiscovery {
     public static func tailnetMachines() throws -> [RemoteMachineCandidate] {
-        guard let executable = [
-            "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
-            "/usr/local/bin/tailscale",
-            "/opt/homebrew/bin/tailscale",
-        ].first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else {
-            return []
-        }
+        let executable = try RemoteWorkspaceTailnet.executable()
         let result = try RemoteWorkspaceProcess.run(
             executable: executable,
             arguments: ["status", "--json"]
@@ -411,18 +407,19 @@ public enum RemoteMachineDiscovery {
 
     static func decodeTailnetMachines(from data: Data) throws -> [RemoteMachineCandidate] {
         let document = try JSONSerialization.jsonObject(with: data)
-        guard let root = document as? [String: Any],
+        guard let root = document as? [String: Any], root["BackendState"] as? String == "Running",
               let peers = root["Peer"] as? [String: Any]
-        else { return [] }
+        else { throw RemoteWorkspaceClientError.commandFailed("Connect Tailscale before using remote workspaces.") }
         return peers.values.compactMap { value in
-            guard let peer = value as? [String: Any] else { return nil }
+            guard let peer = value as? [String: Any], peer["Online"] as? Bool == true,
+                  peer["Expired"] as? Bool != true else { return nil }
             let dnsName = (peer["DNSName"] as? String)?
                 .trimmingCharacters(in: CharacterSet(charactersIn: "."))
             let shortName = (peer["HostName"] as? String)?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             let preferredName = shortName.flatMap { $0.isEmpty ? nil : $0 }
-            // Prefer the name shown by Tailscale. It can match an existing SSH
-            // Host entry, preserving its username, identity, and trust settings.
+            // SSH config still selects the user and identity. The transport is
+            // always pinned to this peer through the local Tailscale daemon.
             let hostName = preferredName ?? dnsName
             guard let hostName, !hostName.isEmpty else { return nil }
             return RemoteMachineCandidate(
@@ -530,19 +527,31 @@ public actor RemoteWorkspaceSSHClient {
         _ input: Data?
     ) throws -> Data
 
+    public typealias StreamingRunner = @Sendable (String, String, Data?, @escaping @Sendable (Data) -> Void) throws -> Data
     private let runner: Runner
+    private let streamingRunner: StreamingRunner
+    private let deploymentRoot: URL?
     private let scriptLoader: @Sendable () throws -> Data
 
     public init() {
         self.runner = RemoteWorkspaceSSHClient.runSSH
+        self.streamingRunner = { destination, command, input, progress in
+            try RemoteWorkspaceSSHClient.runSSH(destination: destination, command: command, input: input,
+                                               timeLimit: nil, onStandardError: progress)
+        }
+        self.deploymentRoot = nil
         self.scriptLoader = RemoteWorkspaceSSHClient.loadLifecycleScript
     }
 
     public init(
         runner: @escaping Runner,
-        scriptLoader: @escaping @Sendable () throws -> Data
+        scriptLoader: @escaping @Sendable () throws -> Data,
+        deploymentRoot: URL? = nil,
+        streamingRunner: StreamingRunner? = nil
     ) {
         self.runner = runner
+        self.streamingRunner = streamingRunner ?? { destination, command, input, _ in try runner(destination, command, input) }
+        self.deploymentRoot = deploymentRoot
         self.scriptLoader = scriptLoader
     }
 
@@ -567,7 +576,10 @@ public actor RemoteWorkspaceSSHClient {
         let result = try decode(Result.self, from: runScript(
             hostName: configuration.hostName, userName: configuration.userName,
             arguments: ["expose", configuration.workspaceID, String(configuration.remotePort), String(httpsPort)]))
-        guard result.endpoint.scheme == "https", result.endpoint.host?.hasSuffix(".ts.net") == true else {
+        guard result.endpoint.scheme == "https", result.endpoint.host?.hasSuffix(".ts.net") == true,
+              result.endpoint.port == httpsPort, result.endpoint.user == nil, result.endpoint.password == nil,
+              result.endpoint.query == nil, result.endpoint.fragment == nil,
+              result.endpoint.path == "/wovenmatter-execution/\(configuration.workspaceID)" else {
             throw RemoteWorkspaceClientError.invalidResponse("The workspace did not return a private Tailscale endpoint.")
         }
         return result.endpoint
@@ -592,7 +604,8 @@ public actor RemoteWorkspaceSSHClient {
 
     public func create(
         configuration: RemoteWorkspaceConfiguration,
-        token: String
+        token: String,
+        imageID: String? = nil
     ) throws -> RemoteWorkspaceStatus {
         let resources = try RemoteWorkspaceResourceLimits.commandValues(
             for: configuration
@@ -608,26 +621,46 @@ public actor RemoteWorkspaceSSHClient {
                     String(configuration.remotePort),
                     resources.memoryBytes,
                     resources.memoryAndSwapBytes,
+                    imageID ?? "",
                 ],
                 secret: token
             )
         )
     }
 
+    @discardableResult
     public func deployService(
         hostName: String,
-        userName: String?
-    ) throws {
-        let destination = try Self.validatedDestination(
-            hostName: hostName,
-            userName: userName
-        )
-        let command = #"if docker info >/dev/null 2>&1; then exec docker build --pull --no-cache --tag wovenmatter/workspace:latest --file remote/Dockerfile -; elif sudo -n docker info >/dev/null 2>&1; then exec sudo -n docker build --pull --no-cache --tag wovenmatter/workspace:latest --file remote/Dockerfile -; else printf '%s\n' 'Docker Engine is unavailable after host verification.' >&2; exit 69; fi"#
-        _ = try runner(
-            destination,
-            command,
-            try Self.loadDeploymentArchive()
-        )
+        userName: String?,
+        forceRefresh: Bool = false,
+        progress: @escaping @Sendable (String) -> Void = { _ in }
+    ) throws -> String {
+        let destination = try Self.validatedDestination(hostName: hostName, userName: userName)
+        let root = try deploymentRoot ?? Self.loadDeploymentRoot()
+        let deployment = try RemoteWorkspaceDeployment(root: root)
+        func command(_ action: String) -> String {
+            "exec bash -c " + Self.shellQuote(deployment.script) + " -- " + action + " "
+                + deployment.fingerprint + " " + (forceRefresh ? "true" : "false")
+        }
+        progress("Checking the workspace image on the host…")
+        if !forceRefresh {
+            let result = try runner(destination, command("inspect"), nil)
+            if let image = RemoteWorkspaceDeployment.imageID(result) {
+                progress("Reusing the up-to-date workspace image…")
+                return image
+            }
+            guard String(decoding: result, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines) == "build" else {
+                throw RemoteWorkspaceClientError.invalidResponse("The host returned an invalid image check.")
+            }
+        }
+        progress("Preparing workspace files for the image build…")
+        let archive = try Self.loadDeploymentArchive(root: root)
+        let updates = RemoteWorkspaceBuildProgress(report: progress)
+        let output = try streamingRunner(destination, command("build"), archive) { updates.receive($0) }
+        guard let image = RemoteWorkspaceDeployment.imageID(output) else {
+            throw RemoteWorkspaceClientError.invalidResponse("Docker did not return a verified image identity.")
+        }
+        return image
     }
 
     public func status(
@@ -658,7 +691,8 @@ public actor RemoteWorkspaceSSHClient {
     }
 
     public func update(
-        configuration: RemoteWorkspaceConfiguration
+        configuration: RemoteWorkspaceConfiguration,
+        imageID: String? = nil
     ) throws -> RemoteWorkspaceStatus {
         let resources = try RemoteWorkspaceResourceLimits.commandValues(
             for: configuration
@@ -671,7 +705,7 @@ public actor RemoteWorkspaceSSHClient {
                 arguments: [
                     "update",
                     configuration.workspaceID,
-                    "wovenmatter/workspace:latest",
+                    imageID ?? "wovenmatter/workspace:latest",
                     resources.memoryBytes,
                     resources.memoryAndSwapBytes,
                     String(configuration.remotePort),
@@ -790,11 +824,12 @@ public actor RemoteWorkspaceSSHClient {
         destination: String,
         command: String,
         input: Data?,
-        timeLimit: TimeInterval?
+        timeLimit: TimeInterval?,
+        onStandardError: (@Sendable (Data) -> Void)? = nil
     ) throws -> Data {
         let result = try RemoteWorkspaceProcess.run(
             executable: "/usr/bin/ssh",
-            arguments: [
+            arguments: try RemoteWorkspaceTailnet.sshOptions(destination: destination) + [
                 "-T",
                 "-o", "BatchMode=yes",
                 "-o", "ConnectTimeout=10",
@@ -803,7 +838,8 @@ public actor RemoteWorkspaceSSHClient {
                 command,
             ],
             input: input,
-            timeLimit: timeLimit
+            timeLimit: timeLimit,
+            onStandardError: onStandardError
         )
         guard result.status == 0 else {
             throw RemoteWorkspaceClientError.commandFailed(result.output)
@@ -829,7 +865,7 @@ public actor RemoteWorkspaceSSHClient {
         return try Data(contentsOf: url)
     }
 
-    private static func loadDeploymentArchive() throws -> Data {
+    private static func loadDeploymentRoot() throws -> URL {
         let fileManager = FileManager.default
         let currentDirectory = URL(
             fileURLWithPath: fileManager.currentDirectoryPath,
@@ -854,11 +890,18 @@ public actor RemoteWorkspaceSSHClient {
         }) else {
             throw RemoteWorkspaceClientError.deploymentBundleUnavailable
         }
+        return root
+    }
+
+    private static func loadDeploymentArchive(root: URL) throws -> Data {
         let result = try RemoteWorkspaceProcess.run(
             executable: "/usr/bin/tar",
             arguments: [
                 "--no-mac-metadata", "-czf", "-",
                 "--exclude=.DS_Store",
+                "--exclude=*/node_modules",
+                "--exclude=*/.env",
+                "--exclude=*/.env.*",
                 "--exclude=remote/test",
                 "--exclude=remote/.env.example",
                 "--exclude=remote/compose.yaml",
@@ -880,7 +923,8 @@ public actor RemoteWorkspaceSSHClient {
 
 public actor RemoteWorkspaceTunnel {
     private var process: Process?
-    private var configurationID: UUID?
+    private var activeConfiguration: RemoteWorkspaceConfiguration?
+    private var activeSSHOptions: [String]?
     public private(set) var localPort: Int?
 
     public init() {}
@@ -890,8 +934,19 @@ public actor RemoteWorkspaceTunnel {
         localPort: Int,
         readinessProbe: @escaping @Sendable (Int) async -> Bool
     ) async throws {
+        // Revalidate the peer even when reusing a healthy tunnel.
+        let destination: String
+        let tailnetOptions: [String]
+        do {
+            destination = try RemoteWorkspaceSSHClient.validatedDestination(
+                hostName: configuration.hostName, userName: configuration.userName)
+            tailnetOptions = try RemoteWorkspaceTailnet.sshOptions(destination: destination)
+        } catch {
+            stop()
+            throw error
+        }
         if process?.isRunning == true,
-           configurationID == configuration.id,
+           activeConfiguration == configuration, activeSSHOptions == tailnetOptions,
            let activePort = self.localPort {
             if await readinessProbe(activePort) { return }
         }
@@ -902,17 +957,13 @@ public actor RemoteWorkspaceTunnel {
         guard (1024...65535).contains(configuration.remotePort) else {
             throw RemoteWorkspaceClientError.invalidPort
         }
-        let destination = try RemoteWorkspaceSSHClient.validatedDestination(
-            hostName: configuration.hostName,
-            userName: configuration.userName
-        )
         var lastFailure = "The SSH loopback tunnel could not be opened."
         for offset in 0..<20 {
             let candidate = 40_000 + ((localPort - 40_000 + offset) % 20_000)
             let candidateProcess = Process()
             let errors = Pipe()
             candidateProcess.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-            candidateProcess.arguments = [
+            candidateProcess.arguments = tailnetOptions + [
                 "-N", "-T",
                 "-o", "BatchMode=yes",
                 "-o", "ConnectTimeout=10",
@@ -933,7 +984,8 @@ public actor RemoteWorkspaceTunnel {
                 }
                 if await readinessProbe(candidate) {
                     process = candidateProcess
-                    configurationID = configuration.id
+                    activeConfiguration = configuration
+                    activeSSHOptions = tailnetOptions
                     self.localPort = candidate
                     return
                 }
@@ -964,7 +1016,8 @@ public actor RemoteWorkspaceTunnel {
     public func stop() {
         process?.terminate()
         process = nil
-        configurationID = nil
+        activeConfiguration = nil
+        activeSSHOptions = nil
         localPort = nil
     }
 }
@@ -1050,10 +1103,18 @@ public struct RemoteWorkspaceServiceClient: Sendable {
     private let token: String
     private let session: URLSession
 
-    public init(baseURL: URL, token: String, session: URLSession = .shared) {
+    private static let loopbackSession: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.connectionProxyDictionary = [:]
+        configuration.httpShouldSetCookies = false
+        configuration.urlCache = nil
+        return URLSession(configuration: configuration)
+    }()
+
+    public init(baseURL: URL, token: String, session: URLSession? = nil) {
         self.baseURL = baseURL
         self.token = token
-        self.session = session
+        self.session = session ?? Self.loopbackSession
     }
 
     public func provisionExecutionDevice(libraryID: String, workspaceID: String, ownerDeviceID: String,
@@ -1126,6 +1187,46 @@ public struct RemoteWorkspaceServiceClient: Sendable {
             RemoteDatabaseRequest(databaseID: link.databaseID, relativePath: link.relativePath, sqliteQuery: link.sqliteQuery)))
     }
 
+    public func browserFrames(tabID: String) -> AsyncThrowingStream<RemoteBrowserFrame, any Error> {
+        do { try validateOrigin() }
+        catch { return AsyncThrowingStream { $0.finish(throwing: error) } }
+        var components = URLComponents(url: baseURL.appending(path: "v1/browser/stream"), resolvingAgainstBaseURL: false)!
+        components.queryItems = [URLQueryItem(name: "tabID", value: tabID)]
+        var request = URLRequest(url: components.url!)
+        request.timeoutInterval = 10
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let configuration = session.configuration
+        configuration.urlCache = nil
+        configuration.httpShouldSetCookies = false
+        configuration.timeoutIntervalForRequest = 10
+        configuration.timeoutIntervalForResource = 24 * 60 * 60
+        return AsyncThrowingStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
+            let decoder = RemoteBrowserStreamDecoder(continuation)
+            let session = URLSession(configuration: configuration, delegate: decoder, delegateQueue: nil)
+            let task = session.dataTask(with: request)
+            continuation.onTermination = { @Sendable _ in task.cancel(); session.invalidateAndCancel() }
+            task.resume()
+        }
+    }
+
+    public func browserTabs() async throws -> RemoteBrowserTabs {
+        try await request(path: "v1/browser/tabs", method: "GET", body: nil)
+    }
+
+    public func browserAction(_ action: RemoteBrowserAction) async throws -> RemoteBrowserActionResult {
+        try await request(path: "v1/browser/action", method: "POST", body: JSONEncoder().encode(action))
+    }
+
+    public func browserActions(_ actions: [RemoteBrowserAction]) async throws -> RemoteBrowserActionBatchResult {
+        struct Payload: Encodable { let actions: [RemoteBrowserAction] }
+        return try await request(path: "v1/browser/actions", method: "POST", body: JSONEncoder().encode(Payload(actions: actions)))
+    }
+
+    public func browserFrame(tabID: String, previousFrameID: String? = nil) async throws -> RemoteBrowserFrame {
+        struct Payload: Encodable { let tabID: String; let previousFrameID: String? }
+        return try await request(path: "v1/browser/frame", method: "POST", body: JSONEncoder().encode(Payload(tabID: tabID, previousFrameID: previousFrameID)))
+    }
+
     public func health() async throws -> RemoteWorkspaceHealth {
         try await request(path: "v1/health", method: "GET", body: nil)
     }
@@ -1155,23 +1256,23 @@ public struct RemoteWorkspaceServiceClient: Sendable {
             path: checkLatest ? "v1/runtime-maintenance/check" : "v1/runtime-maintenance",
             method: checkLatest ? "POST" : "GET", body: nil
         )
-        return document.runtimes
+        var runtimes = document.runtimes
+        for index in runtimes.indices {
+            let runtime = runtimes[index]
+            // Existing containers may still persist the removed opt-in flags.
+            // Retire those flags on verified installations without rebuilding the workspace.
+            if runtime.installed && (!runtime.enabled || !runtime.visible) {
+                runtimes[index] = try await request(
+                    path: "v1/runtime-maintenance/\(runtime.id.rawValue)", method: "PATCH",
+                    body: JSONEncoder().encode(["enabled": true, "visible": true])
+                )
+            }
+        }
+        return runtimes
     }
 
     public func checkRuntimeUpdates(_ id: AgentRuntimeKind) async throws -> RemoteRuntimeMaintenance {
         try await request(path: "v1/runtime-maintenance/\(id.rawValue)/check", method: "POST", body: nil)
-    }
-
-    public func setRuntimePreferences(
-        _ id: AgentRuntimeKind, enabled: Bool? = nil, visible: Bool? = nil
-    ) async throws {
-        var payload: [String: Bool] = [:]
-        if let enabled { payload["enabled"] = enabled }
-        if let visible { payload["visible"] = visible }
-        let _: RemoteRuntimeMaintenance = try await request(
-            path: "v1/runtime-maintenance/\(id.rawValue)", method: "PATCH",
-            body: try JSONSerialization.data(withJSONObject: payload)
-        )
     }
 
     public func maintainRuntime(
@@ -1256,7 +1357,7 @@ public struct RemoteWorkspaceServiceClient: Sendable {
 
     public func operation(id: UUID) async throws -> RemoteHarnessOperation {
         try await request(
-            path: "v1/operations/\(id.uuidString)",
+            path: "v1/operations/\(id.uuidString.lowercased())",
             method: "GET",
             body: nil
         )
@@ -1265,6 +1366,10 @@ public struct RemoteWorkspaceServiceClient: Sendable {
     public func configureDefaultAgent(_ payload: Data) async throws -> DefaultAgentSyncReceipt {
         try await request(path: "v1/default-agent/configuration", method: "POST", body: payload)
     }
+    public func runtimeInspection() async throws -> RuntimeInspection {
+        try await request(path: "v1/runtime/inspection", method: "GET", body: nil)
+    }
+
     public func defaultAgentStatus() async throws -> DefaultAgentStatus {
         try await request(path: "v1/default-agent/status", method: "GET", body: nil)
     }
@@ -1278,12 +1383,20 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         return value.statuses
     }
 
+    private func validateOrigin() throws {
+        guard baseURL.scheme == "http", baseURL.host == "127.0.0.1",
+              baseURL.user == nil, baseURL.password == nil, baseURL.query == nil, baseURL.fragment == nil else {
+            throw RemoteWorkspaceClientError.invalidResponse("The workspace API must use its local Tailscale SSH tunnel.")
+        }
+    }
+
     private func request<Value: Decodable>(
         path: String,
         method: String,
         body: Data?,
         queryItems: [URLQueryItem]? = nil
     ) async throws -> Value {
+        try validateOrigin()
         let endpoint = baseURL.appending(path: path)
         guard var components = URLComponents(
             url: endpoint,
@@ -1299,15 +1412,26 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         request.httpMethod = method
         request.httpBody = body
         if path.hasPrefix("v1/databases") { request.timeoutInterval = 15 }
+        if path.hasPrefix("v1/browser/") { request.timeoutInterval = 10 }
         if path == "v1/default-agent/sdks" { request.timeoutInterval = 900 }
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         if body != nil {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await session.data(for: request, delegate: RemoteWorkspaceRedirectPolicy.shared)
         guard let http = response as? HTTPURLResponse,
               (200..<300).contains(http.statusCode)
         else {
+            if path.hasPrefix("v1/browser/") {
+                let message: String
+                switch (response as? HTTPURLResponse)?.statusCode {
+                case 404: message = "Update this workspace container in Settings to view its browser."
+                case 410: message = "This tab has closed. Waiting for the workspace’s current tabs."
+                case 409: message = "The page changed or another input is finishing. Check the refreshed page and try again."
+                default: message = "The remote browser is unavailable. Reconnect to the workspace and try again."
+                }
+                throw RemoteWorkspaceClientError.invalidResponse(message)
+            }
             if path == "v1/default-agent/sdks" {
                 if (response as? HTTPURLResponse)?.statusCode == 404 {
                     throw RemoteWorkspaceClientError.invalidResponse("Update this workspace service in Settings to manage SDKs for Pi Durable.")
@@ -1332,6 +1456,9 @@ public struct RemoteWorkspaceServiceClient: Sendable {
             throw RemoteWorkspaceClientError.invalidResponse(
                 String(decoding: data, as: UTF8.self)
             )
+        }
+        if path.hasPrefix("v1/browser/"), data.count > 3 * 1024 * 1024 {
+            throw RemoteWorkspaceClientError.invalidResponse("The browser response is too large.")
         }
         let decoder = JSONDecoder()
         if path.hasPrefix("v1/task-gateway") {
@@ -1450,7 +1577,7 @@ public enum RemoteWorkspaceClientError: LocalizedError, Equatable, Sendable {
 
     public var errorDescription: String? {
         switch self {
-        case .invalidHost: "Enter a valid SSH hostname, IP address, or SSH config alias."
+        case .invalidHost: "Enter a Tailscale machine name, MagicDNS name, or Tailscale IP address."
         case .invalidUser: "Enter a valid remote username (letters, digits, dot, underscore, or hyphen) or leave it blank for SSH configuration."
         case .invalidPort: "The remote loopback port must be between 1024 and 65535."
         case .invalidWorkspaceID: "Use 1-48 lowercase letters, digits, or hyphens for the workspace ID, beginning with a letter or digit."
@@ -1481,7 +1608,8 @@ enum RemoteWorkspaceProcess {
         arguments: [String],
         input: Data? = nil,
         timeLimit: TimeInterval? = nil,
-        onProcessStarted: (@Sendable (pid_t) -> Void)? = nil
+        onProcessStarted: (@Sendable (pid_t) -> Void)? = nil,
+        onStandardError: (@Sendable (Data) -> Void)? = nil
     ) throws -> Result {
         let process = Process()
         let fileManager = FileManager.default
@@ -1504,6 +1632,13 @@ enum RemoteWorkspaceProcess {
         )
         let outputHandle = try FileHandle(forWritingTo: outputURL)
         let errorHandle = try FileHandle(forWritingTo: errorURL)
+        let errorReader = try onStandardError.map { _ in try FileHandle(forReadingFrom: errorURL) }
+        func drainProgress() {
+            guard let errorReader, let onStandardError else { return }
+            // Progress is best-effort; a transient read failure must not orphan SSH.
+            // The complete stderr file is still read on command failure below.
+            while let chunk = try? errorReader.read(upToCount: 65536), !chunk.isEmpty { onStandardError(chunk) }
+        }
         var inputURL: URL?
         var inputHandle: FileHandle?
         process.executableURL = URL(fileURLWithPath: executable)
@@ -1528,6 +1663,7 @@ enum RemoteWorkspaceProcess {
             try? inputHandle?.close()
             try? outputHandle.close()
             try? errorHandle.close()
+            try? errorReader?.close()
             if let inputURL { try? FileManager.default.removeItem(at: inputURL) }
             try? fileManager.removeItem(at: outputURL)
             try? fileManager.removeItem(at: errorURL)
@@ -1537,9 +1673,10 @@ enum RemoteWorkspaceProcess {
         // Internal readiness observation keeps cancellation fixtures tied to
         // the owned child rather than detached-task scheduling latency.
         onProcessStarted?(process.processIdentifier)
-        if let timeLimit {
-            let deadline = ProcessInfo.processInfo.systemUptime + timeLimit
+        if timeLimit != nil || onStandardError != nil {
+            let deadline = timeLimit.map { ProcessInfo.processInfo.systemUptime + $0 } ?? .infinity
             while process.isRunning {
+                drainProgress()
                 if Task.isCancelled || ProcessInfo.processInfo.systemUptime >= deadline {
                     process.terminate()
                     let grace = ProcessInfo.processInfo.systemUptime + 1
@@ -1551,10 +1688,11 @@ enum RemoteWorkspaceProcess {
                     try Task.checkCancellation()
                     throw RemoteWorkspaceClientError.commandFailed("Attachment transfer timed out. Please try again.")
                 }
-                Thread.sleep(forTimeInterval: 0.02)
+                Thread.sleep(forTimeInterval: timeLimit == nil ? 0.1 : 0.02)
             }
         }
         process.waitUntilExit()
+        drainProgress()
         try outputHandle.close()
         try errorHandle.close()
         var data = try Data(contentsOf: outputURL)
@@ -1601,5 +1739,16 @@ extension RemoteWorkspaceServiceClient {
 extension RemoteWorkspaceServiceClient {
     public func deleteProject(path: String) async throws -> RemoteProjectDirectory {
         try await request(path: "v1/projects/delete", method: "POST", body: JSONEncoder().encode(["path": path]))
+    }
+}
+
+// A compromised service must not redirect administrative credentials or request
+// bodies from the loopback tunnel to another origin or another local service.
+private final class RemoteWorkspaceRedirectPolicy: NSObject, URLSessionTaskDelegate, Sendable {
+    static let shared = RemoteWorkspaceRedirectPolicy()
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
+                    completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
+        completionHandler(nil)
     }
 }

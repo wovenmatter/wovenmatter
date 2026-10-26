@@ -18,7 +18,7 @@ separately from the workspace database. Installation progress and failures stay
 visible in Settings → General → Executor, including after reopening the app.
 
 For remote hosting, choose **On a Linux host** and select an existing discovered
-machine or enter its SSH host and username. Use its private Tailscale HTTPS
+machine or enter its Tailscale machine name and SSH username. Use its private Tailscale HTTPS
 origin, such as `https://machine.tailnet.ts.net:8443`. **Inspect host** uses
 Woven's existing SSH inspection. An unprepared host requires explicit host
 preparation; deployment rechecks it before proceeding.

@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import Foundation
 import Testing
 @testable import WovenMatterClient
@@ -49,10 +50,8 @@ struct OpenCodeStableCompatibilityTests {
         let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
         let coordinator = OpenCodeSessionCoordinator(database: database)
         try await coordinator.connect(connection)
-        let conversationID = try await database.createLocalACPSession(runtimeKind: .opencode, title: "Fixture", ownerDeviceID: UUID(), openCodeAssociation: (connection.identity, sessionID))
-        try await database.saveSessionExecutionRoot(id: conversationID, folderID: nil,
-            location: .init(workspaceID: "device:" + UUID().uuidString.lowercased(), rootPath: root.path, managed: false),
-            defaultPath: root.path)
+        let conversationID = try await database.createFixtureLocalACPSession(runtimeKind: .opencode, title: "Fixture", ownerDeviceID: UUID(), openCodeAssociation: (connection.identity, sessionID),
+            fixtureLocation: .init(workspaceID: "device:test", rootPath: root.path, managed: false))
         let link = OpenCodeSessionLink(conversationID: conversationID, connectionID: connection.identity, sessionID: sessionID)
         try await coordinator.refresh(link)
         let pending = try await database.openCodeSnapshot(conversationID: conversationID)

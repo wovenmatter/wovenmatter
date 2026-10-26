@@ -141,9 +141,8 @@ struct CompanionFederationTests {
       ownerDeviceID: identity.hostDeviceID, kind: .linux, name: "Remote", executionDeviceID: uuid())
     _ = try await db.registerCompanionExecutionWorkspace(.init(workspace: descriptor), deviceID: identity.hostDeviceID)
     let conversationID = try await db.createRemoteACPSession(runtimeKind: .codex, remoteWorkspaceID: remoteID,
-      remoteWorkspaceName: "Remote", title: "Existing conversation", ownerDeviceID: UUID())
-    try await db.saveSessionExecutionRoot(id: conversationID, folderID: nil,
-      location: .init(workspaceID: "remote:" + descriptor.id, rootPath: "/workspace/projects/existing", managed: false), defaultPath: "/workspace")
+      remoteWorkspaceName: "Remote", title: "Existing conversation", ownerDeviceID: UUID(),
+      executionRoot: .init(folderID: nil, location: .init(workspaceID: "remote:" + descriptor.id, rootPath: "/workspace/projects/existing", managed: false), defaultPath: "/workspace"))
     try await db.updateLocalACPSessionID(conversationID: conversationID, sessionID: "native-existing")
     let run = try await db.beginLocalACPRun(conversationID: conversationID, content: "Preserve this history")
     await #expect(throws: CompanionAPIError.self) {

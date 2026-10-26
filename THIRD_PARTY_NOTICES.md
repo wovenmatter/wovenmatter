@@ -38,7 +38,9 @@ SOFTWARE.
 
 Pi Durable bundles `@earendil-works/pi-durable` 1.4.0 from
 [Earendil Works Pi](https://github.com/earendil-works/pi/tree/v1.4.0/packages/durable)
-for native execution and persistence. Its
+for native execution and persistence. The format-1 JSONL migration reader in
+`default-agent/src/legacy-jsonl-migration.mjs` adapts its recovery and reclamation
+rules under the same license. Its
 [upstream license](https://github.com/earendil-works/pi/blob/v1.4.0/LICENSE)
 is MIT, with `Copyright (c) 2025 Mario Zechner`.
 
@@ -296,3 +298,37 @@ HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
 STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
 IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 POSSIBILITY OF SUCH DAMAGE.
+
+## Remote workspace tools
+
+The remote workspace image builds unmodified OpenSSH Portable 10.6p1 client
+sources from [OpenSSH](https://www.openssh.org/portable.html). It retains the
+upstream `LICENCE` at `/usr/local/share/licenses/openssh/LICENCE` in the image;
+that file contains the component copyright, permission, and disclaimer notices.
+The source archive's SHA-256 and detached signature are checked during the build.
+
+The image installs GitHub CLI from its signed official package repository and
+retains its MIT license and dependency notices. npm retains its upstream
+Artistic License 2.0 and dependency notices. Its bundled undici is replaced by the
+locked current security selection in `remote/npm-runtime`; undici retains its
+MIT license in its installed package. This replacement changes dependency
+selection and does not modify undici source.
+
+The image includes the official Python 3.15 runtime and the current pip and
+setuptools distributions. Their installed license and notice files are retained.
+Archive::Tar 3.14 is installed from its checksummed CPAN release under the same
+terms as Perl; its module documentation is retained.
+
+The standalone Executor image replaces the runtime's bundled sharp selection
+with locked sharp 0.35.5 and the corresponding prebuilt libvips packages.
+Their Apache-2.0, LGPL-3.0-or-later, and dependency notices remain in the
+installed packages. The replacement changes dependency selection and does not
+modify upstream source.
+
+Selected Debian runtime libraries are rebuilt from authenticated Debian source
+packages. Reviewed Ubuntu or upstream security patches are applied where Debian
+stable has not yet published a fixed binary. Package copyright files remain
+under `/usr/share/doc`; exact source versions, patch origins, hashes, and Debian
+build provenance are retained under
+`/usr/local/share/wovenmatter/security/provenance` in the image and in
+`remote/security/backports.json` in this repository.

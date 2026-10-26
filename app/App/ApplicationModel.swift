@@ -129,9 +129,39 @@ final class ApplicationModel {
                     await self.refreshConversation(id: id)
                 }
             }
-            if remoteWorkspaces.isRuntimeEnabled(.opencode, in: configuration) {
+            if remoteWorkspaces.isRuntimeInstalled(.opencode, in: configuration) {
                 if !instance.isReady && !instance.isConnecting && instance.canRestoreAutomatically { await instance.restore() }
             } else { await instance.suspendConnection() }
+        }
+    }
+
+    /// The database owns sidebar membership; live inventory only discovers additions.
+    /// Saved agents remain browsable while a workspace is stopped or unreachable.
+    func synchronizeRemoteAgentCatalog() async {
+        guard !isBackendFrontend, let dashboardStore else { return }
+        do {
+            let ownerID = try await dashboardStore.dashboardDeviceID()
+            var saved = try await dashboardStore.database.dashboardAgents()
+            for configuration in remoteWorkspaces.workspaces {
+                // Pi Durable ships with every managed workspace. Other harnesses
+                // enter the catalog after a verified installation, before sign-in.
+                let installed = Set((remoteWorkspaces.runtimeMaintenance[configuration.id] ?? [])
+                    .filter(\.installed).map(\.id)).union([.defaultAgent])
+                for kind in installed.sorted(by: { $0.presentationRank < $1.presentationRank }) {
+                    guard remoteWorkspaces.configuration(id: configuration.id) == configuration else { break }
+                    guard !saved.contains(where: {
+                        $0.governingPlane == .remoteWorkspace && $0.authorityDeviceID == ownerID
+                            && $0.runtimeDeviceID == configuration.id && $0.runtimeKind == kind
+                    }) else { continue }
+                    _ = try await dashboardStore.database.ensureRemoteHarnessAgent(
+                        runtimeKind: kind, remoteWorkspaceID: configuration.id,
+                        remoteWorkspaceName: configuration.name, ownerDeviceID: ownerID, status: .offline)
+                    saved = try await dashboardStore.database.dashboardAgents()
+                }
+            }
+            await refreshWorkspaceIfChanged()
+        } catch {
+            NSLog("Could not save remote workspace agents: %@", error.localizedDescription)
         }
     }
 
@@ -300,8 +330,7 @@ final class ApplicationModel {
     var selectedCodexUsageWorkspaceID: String? { usage.selectedCodexUsageWorkspaceID }
     private var currentUsageRange: UsageTimeRange { usage.currentUsageRange }
 
-    private(set) var enabledLocalACPRuntimeKinds: Set<AgentRuntimeKind> = []
-    private(set) var shownLocalACPRuntimeKinds: Set<AgentRuntimeKind> = []
+    private(set) var installedLocalACPRuntimeKinds: Set<AgentRuntimeKind> = [.defaultAgent]
 
     let analytics = ProductAnalyticsModel()
     private(set) var dashboardStore: DashboardStore?
@@ -324,6 +353,7 @@ final class ApplicationModel {
     @ObservationIgnored var backendApplicationService: BackendApplicationService?
     @ObservationIgnored var backendClientTask: Task<Void, Never>?
     @ObservationIgnored var backendStopping = false
+    @ObservationIgnored var backgroundServerTermination: @MainActor () -> Void = { WovenMatterLifecycleDelegate.requestTerminationAfterUpdate() }
     @ObservationIgnored var backendCommandsInFlight = 0
     @ObservationIgnored private var backendExecutionErrorIDs: Set<String> = []
     @ObservationIgnored private var backendStopRequestedForLifecycle = false
@@ -346,7 +376,6 @@ final class ApplicationModel {
     @ObservationIgnored var applyInitialSessionToolIDs: ((String, [String]) async throws -> Void)?
     @ObservationIgnored var applyingSessionSelectionTasks: [String: Task<Void, any Error>] = [:]
     @ObservationIgnored
-    private let localACPRuntimePreferences: LocalACPRuntimePreferences
     @ObservationIgnored
     private let localACPWorkspaceStore: LocalACPWorkspaceConfigurationStore
     @ObservationIgnored
@@ -405,9 +434,6 @@ final class ApplicationModel {
             usageDatabaseURL: (CompanionTestWorkspace.supportDirectory ?? DevelopmentLaunch.supportDirectory)?
                 .appending(path: "workspace.sqlite")))
         self.sessionSelectionPreferences = SessionSelectionPreferences(defaults: applicationDefaults)
-        self.localACPRuntimePreferences = LocalACPRuntimePreferences(
-            defaults: applicationDefaults
-        )
         self.remoteWorkspaces = RemoteWorkspacesModel(defaults: applicationDefaults)
         self.localACPWorkspaceStore = LocalACPWorkspaceConfigurationStore(
             homeDirectory: CompanionTestWorkspace.supportDirectory?.appending(path: "ProviderFixtureHome")
@@ -415,11 +441,6 @@ final class ApplicationModel {
                 ?? FileManager.default.homeDirectoryForCurrentUser,
             databasesDirectory: try? Self.dashboardSupportDirectory().appendingPathComponent("ManagedDatabases", isDirectory: true))
         self.dashboardStore = dashboardStore
-        let localACPRuntimePreferenceState = localACPRuntimePreferences.state
-        enabledLocalACPRuntimeKinds =
-            localACPRuntimePreferenceState.enabledRuntimeKinds
-        shownLocalACPRuntimeKinds =
-            localACPRuntimePreferenceState.shownRuntimeKinds
         if applicationDefaults.object(
             forKey: Self.titleGenerationEnabledDefaultsKey
         ) == nil {
@@ -494,20 +515,21 @@ final class ApplicationModel {
 
     #if COMPANION_FACADE_TESTS
     var runtimeMaintenanceFixture: (@Sendable (AgentRuntimeKind) async throws -> RuntimeInventory)?
+    var remoteSSHOptionsFixture: (@Sendable (String) throws -> [String])?
 
     /// Installs explicit inert provider metadata while preserving real routing,
     /// session preferences, tools, persistence and note recovery.
     func configureCompanionFixture(directory: URL) async throws {
         guard let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
         titleGenerationSettings.isEnabled = false
+        remoteSSHOptionsFixture = { _ in [] }
         let runtimes = AgentRuntimeKind.allCases.filter { $0 != .opencode }
         localACPLaunchConfigurations = Dictionary(uniqueKeysWithValues: runtimes.map {
             ($0, LocalACPRuntimeLaunchConfiguration(runtimeKind: $0,
                 executableURL: directory.appending(path: "fake-provider"), arguments: [],
                 environment: [:]))
         })
-        enabledLocalACPRuntimeKinds = Set(runtimes)
-        shownLocalACPRuntimeKinds = Set(runtimes)
+        installedLocalACPRuntimeKinds = Set(runtimes)
         localACPWorkspaceLaunchConfiguration = .init(rootURL: directory)
         localACPDatabaseReadyRuntimeKinds = Set(runtimes)
         try await dashboardStore.prepareLocalWorkspace()
@@ -527,13 +549,13 @@ final class ApplicationModel {
 
     /// Starts only the optional execution workspace belonging to a library client.
     /// Its database stores runtime state and a replica projection, never library authority.
-    func configureClientExecutionWorkspace(directory: URL) async throws {
+    func configureClientExecutionWorkspace(directory: URL, executionWorkspaceDeviceID: UUID? = nil) async throws {
         guard !isLibraryClient, !isBackendFrontend, let dashboardStore else {
             throw ApplicationModelError.dashboardStoreUnavailable
         }
         titleGenerationSettings.isEnabled = false
         clientExecutionDirectory = directory
-        try await dashboardStore.prepareLocalWorkspace()
+        try await dashboardStore.prepareLocalWorkspace(executionWorkspaceDeviceID: executionWorkspaceDeviceID)
         await dashboardStore.setLocalACPResumePermissionHandler { [weak self] conversationID, request in
             await self?.requestLocalACPPermission(conversationID: conversationID, request: request)
         }
@@ -666,9 +688,11 @@ final class ApplicationModel {
                 return try await self.changeRemoteCalendarGateway(configuration, enabled: enabled)
             }
             remoteWorkspaces.onRuntimeMaintenanceChanged = { [weak self] in
+                await self?.synchronizeRemoteAgentCatalog()
                 await self?.synchronizeRemoteOpenCodeInstances()
                 await self?.refreshDatabases()
             }
+            await synchronizeRemoteAgentCatalog()
             remoteWorkspaces.refreshRuntimeMaintenanceAtStartup()
             await synchronizeRemoteOpenCodeInstances()
             localACPDatabaseReadyRuntimeKinds = Set(
@@ -906,7 +930,7 @@ final class ApplicationModel {
             body["harnesses"] = LocalACPRuntimeCatalog.definitions.filter { $0.runtimeKind != .defaultAgent }.map { definition -> [String: Any] in
                 let executable = resolver.executable(named: definition.underlyingCLIName ?? definition.commandName)?.path
                 return ["id": definition.runtimeKind.rawValue, "name": definition.displayName,
-                        "enabled": enabledLocalACPRuntimeKinds.contains(definition.runtimeKind), "executable": executable ?? NSNull() as Any]
+                        "enabled": installedLocalACPRuntimeKinds.contains(definition.runtimeKind), "executable": executable ?? NSNull() as Any]
             }
             struct Result: Decodable { let statuses: [AgentSignInStatus] }
             let response = try await DefaultAgentControl.run(JSONSerialization.data(withJSONObject: body))
@@ -926,15 +950,8 @@ final class ApplicationModel {
         )
     }
 
-    var visibleOrderedLocalCLIAgents: [WorkspaceAgent] {
-        let visibleRuntimeKinds = LocalACPRuntimePreferences.visibleRuntimeKinds(
-            in: orderedLocalCLIAgents.map(\.runtimeKind),
-            shownRuntimeKinds: shownLocalACPRuntimeKinds
-        )
-        let visibleRuntimeKindSet = Set(visibleRuntimeKinds)
-        return orderedLocalCLIAgents.filter {
-            visibleRuntimeKindSet.contains($0.runtimeKind)
-        }
+    var installedOrderedLocalCLIAgents: [WorkspaceAgent] {
+        orderedLocalCLIAgents.filter { installedLocalACPRuntimeKinds.contains($0.runtimeKind) }
     }
 
     var orderedLocalACPRuntimeDefinitions: [LocalACPRuntimeDefinition] {
@@ -2279,55 +2296,6 @@ final class ApplicationModel {
         usage.reconnectSelectedCodexUsageWorkspace()
     }
 
-    func isLocalACPRuntimeCredentialAccessEnabled(
-        _ runtimeKind: AgentRuntimeKind
-    ) -> Bool {
-        enabledLocalACPRuntimeKinds.contains(runtimeKind)
-    }
-
-    func isLocalACPRuntimeShown(_ runtimeKind: AgentRuntimeKind) -> Bool {
-        shownLocalACPRuntimeKinds.contains(runtimeKind)
-    }
-
-    func setLocalACPRuntimeShown(
-        _ isShown: Bool,
-        runtimeKind: AgentRuntimeKind
-    ) {
-        if isBackendFrontend { sendBackendRuntimeCommand(.setShown(runtimeKind, isShown)); return }
-        let state = localACPRuntimePreferences.setShown(
-            isShown,
-            for: runtimeKind
-        )
-        shownLocalACPRuntimeKinds = state.shownRuntimeKinds
-    }
-
-    func enableLocalACPRuntimeCredentialAccess(
-        _ runtimeKind: AgentRuntimeKind
-    ) {
-        if isBackendFrontend { sendBackendRuntimeCommand(.setCredentialAccess(runtimeKind, true)); return }
-        guard runtimeInventories[runtimeKind]?.isInstalled == true,
-              installingLocalACPRuntimeKinds.isEmpty else { return }
-        acknowledgeCredentialAccessDisclosure()
-        let state = localACPRuntimePreferences.enable(runtimeKind)
-        enabledLocalACPRuntimeKinds = state.enabledRuntimeKinds
-        shownLocalACPRuntimeKinds = state.shownRuntimeKinds
-        refreshLocalACPRuntimesNow(checkCredentialsFor: [runtimeKind])
-    }
-
-    func disableLocalACPRuntimeCredentialAccess(
-        _ runtimeKind: AgentRuntimeKind
-    ) {
-        if isBackendFrontend { sendBackendRuntimeCommand(.setCredentialAccess(runtimeKind, false)); return }
-        guard enabledLocalACPRuntimeKinds.contains(runtimeKind) else {
-            return
-        }
-
-        let state = localACPRuntimePreferences.disable(runtimeKind)
-        enabledLocalACPRuntimeKinds = state.enabledRuntimeKinds
-        shownLocalACPRuntimeKinds = state.shownRuntimeKinds
-        refreshLocalACPRuntimesNow()
-    }
-
     @discardableResult
     func sendAgentMessage(
         conversation: WorkspaceConversationRecord,
@@ -2582,6 +2550,7 @@ final class ApplicationModel {
         admissionDecision: WorkspaceSessionAdmission.Decision? = nil,
         dispatchFence suppliedFence: AgentDispatchFence? = nil
     ) async throws -> (accepted: Bool, identifiers: LocalACPRunIdentifiers?) {
+        guard !backendStopping else { throw BackendRPCError.remote("The background server is stopping.") }
         let dispatchFence = suppliedFence ?? beginAgentDispatch(conversationID: conversation.id)
         defer { if suppliedFence == nil { finishAgentDispatch(conversationID: conversation.id, fence: dispatchFence) } }
         try dispatchFence.check()
@@ -3312,8 +3281,12 @@ final class ApplicationModel {
         conversation: WorkspaceConversationRecord,
         runtimeKind: AgentRuntimeKind
     ) async throws -> RemoteHarnessLaunchContext {
-        let savedDirectory = try await dashboardStore?.database.sessionExecutionRoot(id: conversation.id)?.rootPath
-        let inheritedRoot = savedDirectory.map { URL(fileURLWithPath: $0) }
+        guard !conversation.isArchived,
+              let savedRoot = try await dashboardStore?.database.availableSessionExecutionRoot(id: conversation.id),
+              savedRoot.workspaceID == (try await executionWorkspaceIdentity(workspaceID: conversation.remoteWorkspaceID)) else {
+            throw WorkspaceToolError.invalid("This chat has no available execution workspace. Start a new chat.")
+        }
+        let inheritedRoot = URL(fileURLWithPath: savedRoot.rootPath)
         if let remoteWorkspaceID = conversation.remoteWorkspaceID {
             guard let configuration = remoteWorkspaces.configuration(
                 id: remoteWorkspaceID
@@ -3323,31 +3296,30 @@ final class ApplicationModel {
             let processDirectory = localACPWorkspaceLaunchConfiguration?.rootURL
                 ?? FileManager.default.homeDirectoryForCurrentUser
 
+            var sshOptions: @Sendable (String) throws -> [String] = RemoteWorkspaceTailnet.sshOptions
+            #if COMPANION_FACADE_TESTS
+            if let fixture = remoteSSHOptionsFixture { sshOptions = fixture }
+            #endif
             return try RemoteHarnessLaunchResolver.resolve(
                 configuration: configuration,
                 runtimeKind: runtimeKind,
                 processWorkingDirectory: processDirectory,
                 workspaceRoot: URL(fileURLWithPath: remoteWorkspaces.remoteWorkspaceRoot(for: configuration)),
                 workingDirectory: inheritedRoot,
-                durableChannelID: conversation.id
+                durableChannelID: conversation.id,
+                tailnetSSHOptions: sshOptions
             )
         }
         guard let launch = localACPLaunchConfigurations[runtimeKind],
               let workspace = localACPWorkspaceLaunchConfiguration else {
             throw ApplicationModelError.localACPRuntimeUnavailable
         }
-        if let inheritedRoot {
-            var scopedLaunch = LocalACPRuntimeLaunchConfiguration(runtimeKind: launch.runtimeKind,
-                executableURL: launch.executableURL, arguments: launch.arguments, environment: launch.environment,
-                processWorkingDirectoryURL: inheritedRoot)
-            scopedLaunch.historyRecorder = launch.historyRecorder
-            return .init(launch: scopedLaunch, workspace: .init(rootURL: inheritedRoot,
-                databasesURL: workspace.databasesURL))
-        }
-        return RemoteHarnessLaunchContext(
-            launch: launch,
-            workspace: workspace
-        )
+        var scopedLaunch = LocalACPRuntimeLaunchConfiguration(runtimeKind: launch.runtimeKind,
+            executableURL: launch.executableURL, arguments: launch.arguments, environment: launch.environment,
+            processWorkingDirectoryURL: inheritedRoot)
+        scopedLaunch.historyRecorder = launch.historyRecorder
+        return .init(launch: scopedLaunch, workspace: .init(rootURL: inheritedRoot,
+            databasesURL: workspace.databasesURL))
     }
 
     func runtimeMaintenanceBusy(_ kind: AgentRuntimeKind) -> Bool {
@@ -3857,9 +3829,7 @@ final class ApplicationModel {
         let installed = Set(resolutions.compactMap { resolution in
             resolution.availability.executablePath == nil ? nil : resolution.availability.runtimeKind
         })
-        let preferences = localACPRuntimePreferences.adoptInstalled(installed)
-        enabledLocalACPRuntimeKinds = preferences.enabledRuntimeKinds
-        shownLocalACPRuntimeKinds = preferences.shownRuntimeKinds
+        installedLocalACPRuntimeKinds = installed.union([.defaultAgent])
         localACPLaunchConfigurations = resolutions.reduce(into: [:]) {
             configurations, resolution in
             if let launchConfiguration = resolution.launchConfiguration {
@@ -4422,7 +4392,7 @@ extension ApplicationModel {
         }
     }
 
-    private func handleBackendRequest(_ request: BackendRPCRequest) async -> BackendRPCResponse {
+    func handleBackendRequest(_ request: BackendRPCRequest) async -> BackendRPCResponse {
         let isCommand = request.method.hasSuffix(".command")
         guard !backendStopping else { return .init(id: request.id, error: "The background service is stopping.") }
         if isCommand { backendCommandsInFlight += 1 }
@@ -4491,22 +4461,50 @@ extension ApplicationModel {
             if request.method == "application.state" {
                 return .init(id: request.id, result: try JSONEncoder().encode(backendApplicationState()))
             }
-            if request.method == "application.stop" {
-                guard backendCommandsInFlight == 0, !executionHasPendingOperations, !connections.busy, !connections.sdks.isBusy, remoteWorkspaces.busyWorkspaceIDs.isEmpty,
-                      !remoteWorkspaces.isCreating, runningToolSessionIDs.isEmpty, pendingLocalACPPermissions.isEmpty,
-                      pendingLocalACPInteractions.isEmpty, pendingSessionAccess.isEmpty else {
-                    throw BackendRPCError.remote("Wait for running sessions and pending approvals before stopping the background service.")
+            if request.method == "server.inspect" {
+                let query = try JSONDecoder().decode(RuntimeInspectionRequest.self, from: request.payload)
+                return .init(id: request.id, result: try JSONEncoder().encode(await runtimeInspection(query)))
+            }
+            if request.method == "server.stop" || request.method == "application.stop" {
+                let confirmed = request.method == "server.stop"
+                    ? try JSONDecoder().decode(BackgroundServerStopRequest.self, from: request.payload).confirmed : false
+                let activeIDs = runningToolSessionIDs.union(pendingAgentDispatches.keys)
+                    .union(pendingLocalACPPermissions.map(\.conversationID))
+                    .union(pendingLocalACPInteractions.map(\.conversationID))
+                let activeCount = activeIDs.count + pendingLocalACPPermissions.count + pendingLocalACPInteractions.count
+                    + executorRuntime.jobs.count + pendingSessionAccess.count
+                if activeCount > 0 && !confirmed {
+                    if request.method == "application.stop" {
+                        throw BackendRPCError.remote("Finish active work before restarting the background server.")
+                    }
+                    return .init(id: request.id, result: try JSONEncoder().encode(
+                        BackgroundServerStopResult(confirmationRequired: true, activeWorkCount: activeCount)))
                 }
+                guard backendCommandsInFlight == 0, !connections.busy, !connections.sdks.isBusy,
+                      remoteWorkspaces.busyWorkspaceIDs.isEmpty, !remoteWorkspaces.isCreating,
+                      installingLocalACPRuntimeKinds.isEmpty, updatingRuntimeKinds.isEmpty,
+                      !executorRuntime.isSettingUp else {
+                    throw BackendRPCError.remote("Wait for setup and maintenance operations before stopping the background server.")
+                }
+                // Fence admissions before awaiting cancellation. A new input cannot
+                // enter while confirmed work is being withdrawn and drained.
                 backendStopping = true
                 do {
                     guard await flushNoteDrafts() else { throw ApplicationModelError.noteDraftSaveFailed }
+                    executorRuntime.cancelAll()
+                    try await dashboardStore?.database.cancelPendingCoordinationAccess()
+                    pendingSessionAccess.removeAll()
+                    let stops = activeIDs.map { beginAgentStop(conversationID: $0) }
+                    for stop in stops { try await stop.value }
                     try await prepareOpenCodeInstancesToQuit()
+                    agentTools?.stop()
                 } catch { backendStopping = false; throw error }
                 Task { @MainActor in
                     try? await Task.sleep(for: .milliseconds(150))
-                    WovenMatterLifecycleDelegate.requestTerminationAfterUpdate()
+                    backgroundServerTermination()
                 }
-                return .init(id: request.id, result: Data("{}".utf8))
+                return .init(id: request.id, result: try JSONEncoder().encode(
+                    BackgroundServerStopResult(confirmationRequired: false, activeWorkCount: activeCount)))
             }
             guard let service = backendApplicationService else { throw BackendRPCError.remote("The background service is starting.") }
             return await service.handle(request)
@@ -4618,7 +4616,7 @@ extension ApplicationModel {
                    let status = try? JSONDecoder().decode(BackendApplicationReadiness.self, from: data), status.ready {
                     guard status.protocolVersion == 1, status.capabilities.contains("session.dispatch-epochs") else { throw AgentDispatchAdmissionError.invalid }
                     guard status.completeClientRouting else {
-                        throw BackendRPCError.remote("Background execution is not ready in this build. Keep using the normal app while integration is completed.")
+                        throw BackendRPCError.remote("The background server is unavailable. Open Background Server in Settings to start it or try again.")
                     }
                     ready = true; break
                 }
@@ -4847,41 +4845,6 @@ extension ApplicationModel {
         WovenMatterLifecycleDelegate.requestTerminationAfterUpdate()
     }
 
-    func changeLocalBackgroundExecution(enabled: Bool) async throws {
-        guard DevelopmentLaunch.mode == nil else { throw WorkspaceToolError.invalid("Development instances keep execution within their own app process.") }
-        guard !DictationModel.shared.isBusy else { throw BackendRPCError.remote("Finish dictation before switching execution modes.") }
-        guard !executionHasPendingOperations, localRunningConversationIDs.isEmpty, pendingLocalACPPermissions.isEmpty,
-              pendingLocalACPInteractions.isEmpty, pendingSessionAccess.isEmpty else {
-            throw BackendRPCError.remote("Wait for running sessions and pending approvals before switching execution modes.")
-        }
-        let wasSuspended = noteEditingSuspended
-        suspendNoteEditing()
-        defer {
-            if !isPreparedForExecutionRestart {
-                WorkspaceAssetSession.cancelPreparedRestart()
-                if !wasSuspended { resumeNoteEditing() }
-            }
-        }
-        guard await flushNotesBeforeBackendClientQuit() else { throw ApplicationModelError.noteDraftSaveFailed }
-        guard await WorkspaceAssetSession.prepareForRestart() else { throw CancellationError() }
-        let previous = LocalBackgroundExecution.shared.isEnabled
-        try await LocalExecutionTransition.perform(prepare: {
-            if self.isBackendFrontend { try await self.prepareBackendForUpdate() }
-            else { try await self.prepareOpenCodeInstancesToQuit() }
-        }, commit: {
-            try LocalBackgroundExecution.shared.commitEnabled(enabled)
-        }, relaunch: {
-            try LocalBackgroundExecution.relaunchAfterCurrentProcessExits()
-        }, rollback: {
-            try LocalBackgroundExecution.shared.commitEnabled(previous)
-        }, recover: {
-            if self.isBackendFrontend { try await self.recoverBackendAfterFailedUpdate() }
-            else { await self.restoreOpenCodeInstances() }
-        })
-        isPreparedForExecutionRestart = true
-        WovenMatterLifecycleDelegate.requestTerminationAfterUpdate()
-    }
-
     func prepareBackendForUpdate() async throws {
         guard isBackendFrontend else { return }
         let wasSuspended = noteEditingSuspended
@@ -4932,7 +4895,7 @@ extension ApplicationModel {
             launchableKinds: Set(localACPLaunchConfigurations.keys),
             reconciliationError: localACPAgentReconciliationError,
             checkingKinds: checkingLocalACPRuntimeKinds,
-            enabledKinds: enabledLocalACPRuntimeKinds, shownKinds: shownLocalACPRuntimeKinds,
+            installedKinds: installedLocalACPRuntimeKinds,
             inventories: runtimeInventories, failures: runtimeFailures, failureDetails: runtimeFailureDetails,
             checkingInventory: checkingRuntimeInventory, checkingUpdates: checkingRuntimeKinds,
             checkedUpdates: checkedRuntimeKinds, updatingKinds: updatingRuntimeKinds,
@@ -4951,8 +4914,7 @@ extension ApplicationModel {
         backendLaunchableRuntimeKinds = value.launchableKinds
         localACPAgentReconciliationError = value.reconciliationError
         checkingLocalACPRuntimeKinds = value.checkingKinds
-        enabledLocalACPRuntimeKinds = value.enabledKinds
-        shownLocalACPRuntimeKinds = value.shownKinds
+        installedLocalACPRuntimeKinds = value.installedKinds
         runtimeInventories = value.inventories
         runtimeFailures = value.failures
         runtimeFailureDetails = value.failureDetails
@@ -5010,10 +4972,6 @@ extension ApplicationModel {
         case .cancelInstall: cancelPreparedLocalACPRuntimeInstall()
         case .refreshRuntimes(let kinds): refreshLocalACPRuntimesNow(checkCredentialsFor: kinds)
         case .refreshSignIn: await refreshLocalSignInStatus()
-        case .setShown(let kind, let shown): setLocalACPRuntimeShown(shown, runtimeKind: kind)
-        case .setCredentialAccess(let kind, let enabled):
-            if enabled { enableLocalACPRuntimeCredentialAccess(kind) }
-            else { disableLocalACPRuntimeCredentialAccess(kind) }
         case .setUpWorkspace(let url): setUpLocalACPWorkspace(homeDirectory: url)
         case .titleEnabled(let enabled): setTitleGenerationEnabled(enabled)
         case .titleModel(let model): setTitleGenerationModel(model)
@@ -5235,7 +5193,7 @@ extension ApplicationModel {
     func executionWorkspaceIdentity(workspaceID: UUID?) async throws -> String {
         if let workspaceID { return "remote:" + workspaceID.uuidString.lowercased() }
         guard let store = dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
-        return "device:" + (try await store.dashboardDeviceID()).uuidString.lowercased()
+        return try await store.executionWorkspaceID()
     }
 
     func folderWorkingDirectory(folderID: String?, workspaceID: UUID?, explicit: URL? = nil,
@@ -5257,24 +5215,6 @@ extension ApplicationModel {
             guard let snapshot = try await dashboardStore?.database.workspaceOverview(),
                   let folder = snapshot.folders.first(where: { $0.id == folderID }) else {
                 throw WorkspaceToolError.invalid("This folder is no longer available.")
-            }
-            if folder.executionWorkspaceID == nil {
-                guard clientExecutionDirectory == nil else {
-                    throw WorkspaceToolError.invalid("This shared folder has no execution root on this instance. Create a folder here or use All Workspaces.")
-                }
-                guard !isBackendFrontend, let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
-                let path: String
-                if let workspaceID, let configuration = remoteWorkspaces.configuration(id: workspaceID) {
-                    path = try await remoteWorkspaces.createProject(name: folder.name, in: configuration, reuseExisting: true).path
-                } else if workspaceID == nil, let workspace = localACPWorkspaceLaunchConfiguration {
-                    path = try LocalACPWorkspaceProvisioner.createProject(named: folder.name, in: workspace.rootURL, reuseExisting: true).path
-                } else { throw ApplicationModelError.localACPRuntimeUnavailable }
-                if let explicit, explicit.path != path { throw WorkspaceToolError.invalid("The folder's root directory is fixed.") }
-                // Existing directories remain user-owned, including after a retry.
-                try await database.bindFolderExecutionRoot(id: folderID,
-                    location: .init(workspaceID: owner, rootPath: path, managed: false))
-                await refreshWorkspace()
-                return URL(fileURLWithPath: path)
             }
             guard folder.executionWorkspaceID == owner, let path = folder.rootPath else {
                 throw WorkspaceToolError.invalid("Select a folder owned by this agent's workspace, or All Workspaces.")

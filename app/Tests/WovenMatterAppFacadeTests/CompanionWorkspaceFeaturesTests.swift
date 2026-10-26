@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import Foundation
 import Testing
 import WovenMatterCore
@@ -9,7 +10,7 @@ import WovenMatterClient
 struct CompanionWorkspaceFeaturesTests {
     @Test func libraryDownloadPreservesFileExtensionForPreview() async throws {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
-        let chat = try await fixture.database.createLocalACPSession(runtimeKind: .codex, title: "Budget", ownerDeviceID: UUID())
+        let chat = try await fixture.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Budget", ownerDeviceID: UUID())
         let source = fixture.directory.appending(path: "budget.csv")
         let bytes = Data("Category,Amount\nTravel,120".utf8)
         try bytes.write(to: source)
@@ -93,7 +94,7 @@ struct CompanionWorkspaceFeaturesTests {
 
     @Test func settingsReadsNeverStartAgentAndInvalidToolsAreRejected() async throws {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
-        let id = try await fixture.database.createLocalACPSession(runtimeKind: .defaultAgent, title: "Settings", ownerDeviceID: UUID())
+        let id = try await fixture.database.createFixtureLocalACPSession(runtimeKind: .defaultAgent, title: "Settings", ownerDeviceID: UUID())
         let service = fixture.model.companionCommands
         guard case .session(let settings) = try await service.readWorkspace(.session(id: id)) else { Issue.record("Missing settings"); return }
         #expect(settings.availableTools.map(\.id).contains("calendar"))

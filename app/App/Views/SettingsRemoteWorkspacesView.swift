@@ -21,6 +21,15 @@ struct SettingsRemoteWorkspacesView: View {
     @State private var pendingDeletion: RemoteWorkspaceConfiguration?
     @State private var managedMemoryLimit = ""
     @State private var managedSwapLimit = ""
+    @State private var browserWorkspace: RemoteWorkspaceConfiguration?
+
+    private func deploymentProgress(_ message: String) -> some View {
+        HStack(spacing: 8) {
+            ProgressView().controlSize(.small)
+            SettingsNote(message)
+        }
+        .accessibilityElement(children: .combine)
+    }
 
     var body: some View {
         SettingsPage(
@@ -45,11 +54,13 @@ struct SettingsRemoteWorkspacesView: View {
                     resourceCard(selectedWorkspace)
                     harnessesCard(selectedWorkspace)
                     if let progress = model.progress {
-                        SettingsNote(progress)
+                        deploymentProgress(progress)
                     }
                 } else {
                     workspacesCard
-                    createCard
+                    hostCard
+                    if currentPreflight?.ready == true { createCard }
+                    if let progress = model.progress { deploymentProgress(progress) }
                 }
                 if let error = model.errorMessage {
                     SettingsError(error)
@@ -65,6 +76,9 @@ struct SettingsRemoteWorkspacesView: View {
                 model.discoverMachines()
                 for workspace in model.workspaces { model.refresh(workspace) }
             }
+        }
+        .sheet(item: $browserWorkspace) { workspace in
+            RemoteBrowserView(workspaces: model, configuration: workspace)
         }
         .onChange(of: model.workspaces.map(\.id)) { _, workspaceIDs in
             if let selectedWorkspaceID,
@@ -100,7 +114,7 @@ struct SettingsRemoteWorkspacesView: View {
                     (pending.inspection.preparationActions ?? [])
                         .map { "• \($0)" }
                         .joined(separator: "\n")
-                    + "\n\nThis changes the remote host and may download packages. Woven Matter will verify the result before creating anything. It will not format, repartition, or remount storage."
+                    + "\n\nThis prepares \(pending.hostName) and may download packages. Woven Matter will verify the host, then you can create a workspace."
                 )
             }
         }
@@ -264,6 +278,10 @@ struct SettingsRemoteWorkspacesView: View {
             .buttonStyle(SettingsQuietButtonStyle())
             .disabled(busy)
 
+            Button("View browser") { browserWorkspace = workspace }
+                .buttonStyle(SettingsQuietButtonStyle())
+                .disabled(busy)
+
             VStack(alignment: .leading, spacing: 6) {
                 Toggle("Keep tasks and sessions running in the background", isOn: Binding(
                     get: { workspace.backgroundExecutionEnabled },
@@ -308,8 +326,8 @@ struct SettingsRemoteWorkspacesView: View {
         "\(workspace.workspaceID) · \(workspace.userName.map { "\($0)@" } ?? "")\(workspace.hostName)"
     }
 
-    private var createCard: some View {
-        SettingsCard(title: "Create workspace") {
+    private var hostCard: some View {
+        SettingsCard(title: "Host", detail: "Choose a machine, then check that it can run a workspace.") {
             SettingsField("Tailnet machines") {
                 VStack(alignment: .leading, spacing: 8) {
                     let onlineMachines = model.machineCandidates.filter(\.online)
@@ -319,8 +337,18 @@ struct SettingsRemoteWorkspacesView: View {
                             .foregroundStyle(DashboardPalette.mutedForeground)
                     }
                     ForEach(onlineMachines.prefix(5)) { machine in
-                        Button(machine.displayName) { hostName = machine.hostName }
-                            .buttonStyle(SettingsQuietButtonStyle())
+                        Button {
+                            hostName = machine.hostName
+                            model.checkHost(hostName: hostName, userName: userName)
+                        } label: {
+                            HStack(spacing: 8) {
+                                Text(machine.displayName)
+                                if hostName.trimmingCharacters(in: .whitespacesAndNewlines) == machine.hostName {
+                                    Text("Selected").font(.system(size: 11.5, weight: .medium))
+                                }
+                            }
+                        }
+                        .buttonStyle(SettingsQuietButtonStyle())
                     }
                     Button(model.isDiscovering ? "Discovering…" : "Refresh") {
                         model.discoverMachines()
@@ -330,23 +358,16 @@ struct SettingsRemoteWorkspacesView: View {
                 }
             }
 
-            SettingsField("Name") {
-                TextField("Remote workspace name", text: $name)
-                    .settingsInput()
-            }
-            SettingsField("Workspace ID") {
-                TextField("remote-workspace-id", text: $workspaceID)
-                    .settingsInput()
-            }
-            SettingsField("SSH hostname") {
+            SettingsField("Tailscale machine") {
                 TextField("machine.tailnet-name.ts.net", text: $hostName)
                     .settingsInput()
+                    .onSubmit { model.checkHost(hostName: hostName, userName: userName) }
             }
             SettingsField("Remote username (optional)") {
                 TextField("Resolved by SSH config", text: $userName)
                     .settingsInput()
             }
-            SettingsNote("Uses your SSH agent. Woven Matter does not store SSH keys.")
+            SettingsNote("Requires connected Tailscale on both machines. Uses your SSH agent; Woven Matter does not store SSH keys.")
             Button(model.isCheckingHost ? "Inspecting host…" : "Inspect host") {
                 model.checkHost(
                     hostName: hostName,
@@ -355,19 +376,28 @@ struct SettingsRemoteWorkspacesView: View {
             }
             .buttonStyle(SettingsQuietButtonStyle())
             .disabled(model.isCheckingHost || hostName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            if currentPreflight == nil {
-                Text("Inspecting the host makes no changes.")
+            if currentPreflight == nil, !model.isCheckingHost {
+                Text(hostName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? "Select a host to see whether it is ready."
+                    : "Inspect this host to continue. Inspection makes no changes.")
                     .font(.system(size: 11.5))
                     .foregroundStyle(DashboardPalette.mutedForeground)
             }
             if let preflight = currentPreflight {
                 SettingsInset {
                     VStack(alignment: .leading, spacing: 8) {
+                        remoteValueRow(label: "Selected host", value: hostName.trimmingCharacters(in: .whitespacesAndNewlines))
+                        remoteValueRow(
+                            label: "Host status",
+                            value: preflight.ready ? "Ready to create a workspace"
+                                : preflight.canPrepare == true ? "Host preparation available"
+                                : "Needs attention"
+                        )
                         remoteValueRow(
                             label: "Runtime",
                             value: preflight.version.isEmpty
                                 ? "Docker Engine not ready · \(preflight.architecture)"
-                                : "Docker Engine \(preflight.version) · \(preflight.architecture)"
+                                : "\(preflight.ready ? "Docker Engine" : "Container runtime") \(preflight.version) · \(preflight.architecture)"
                         )
                         VStack(alignment: .leading, spacing: 8) {
                             remoteValueRow(
@@ -406,8 +436,28 @@ struct SettingsRemoteWorkspacesView: View {
                                     .foregroundStyle(DashboardPalette.mutedForeground)
                             }
                         }
+                        if preflight.canPrepare == true {
+                            Button(model.isCreating ? "Preparing host…" : "Prepare host") {
+                                model.prepareHost(hostName: hostName, userName: userName)
+                            }
+                            .buttonStyle(DashboardPrimaryButtonStyle())
+                        }
                     }
                 }
+            }
+        }
+        .disabled(model.isCreating)
+    }
+
+    private var createCard: some View {
+        SettingsCard(title: "Create workspace", detail: "On \(hostName.trimmingCharacters(in: .whitespacesAndNewlines))") {
+            SettingsField("Name") {
+                TextField("Remote workspace name", text: $name)
+                    .settingsInput()
+            }
+            SettingsField("Workspace ID") {
+                TextField("remote-workspace-id", text: $workspaceID)
+                    .settingsInput()
             }
             SettingsField("Remote loopback port") {
                 TextField("7337", value: $port, format: .number)
@@ -437,12 +487,9 @@ struct SettingsRemoteWorkspacesView: View {
                 )
             }
             .buttonStyle(DashboardPrimaryButtonStyle())
-            .disabled(model.isCreating)
-            if let progress = model.progress {
-                Text(progress)
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(DashboardPalette.mutedForeground)
-            }
+            .disabled(model.isCreating || currentPreflight?.ready != true
+                || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || workspaceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
     }
 
@@ -542,16 +589,6 @@ struct SettingsRemoteWorkspacesView: View {
             }
         }
         if let runtime {
-            SettingsHarnessControlRow(title: "Sidebar") {
-                Toggle("Show in sidebar", isOn: Binding(get: { runtime.visible }, set: {
-                    model.setRuntimePreferences(runtime, configuration: workspace, visible: $0)
-                })).disabled(busy || unavailable)
-            }
-            SettingsHarnessControlRow(title: "Availability") {
-                Toggle("Enable harness", isOn: Binding(get: { runtime.enabled }, set: {
-                    model.setRuntimePreferences(runtime, configuration: workspace, enabled: $0)
-                })).disabled(busy || unavailable)
-            }
             if runtime.installed {
                 SettingsHarnessControlRow(title: "Account") {
                     Text(HarnessAccountPresentation.remoteLabel(harness))

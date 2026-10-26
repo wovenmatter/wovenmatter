@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import Foundation
 import Testing
 import WovenMatterCore
@@ -11,7 +12,7 @@ struct ConversationHTMLRenderTests {
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: root) }
     let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
-    let caller = try await database.createLocalACPSession(runtimeKind: .opencode, title: "HTML", ownerDeviceID: UUID())
+    let caller = try await database.createFixtureLocalACPSession(runtimeKind: .opencode, title: "HTML", ownerDeviceID: UUID())
     try await database.attachOpenCodeSession(.init(conversationID: caller, connectionID: "fixture", sessionID: "ses_fixture"))
     var snapshot = OpenCodeSessionSnapshot()
     snapshot.active = true
@@ -51,8 +52,8 @@ struct ConversationHTMLRenderTests {
     defer { try? FileManager.default.removeItem(at: root) }
     let url = root.appending(path: "workspace.sqlite")
     let database = try await WorkspaceDatabase(url: url)
-    let caller = try await database.createLocalACPSession(runtimeKind: .codex, title: "Visuals", ownerDeviceID: UUID())
-    let other = try await database.createLocalACPSession(runtimeKind: .codex, title: "Other", ownerDeviceID: UUID())
+    let caller = try await database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Visuals", ownerDeviceID: UUID())
+    let other = try await database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Other", ownerDeviceID: UUID())
     let run = try await database.beginLocalACPRun(conversationID: caller, content: "Make a chart")
     let id = UUID().uuidString.lowercased()
     let page = try ConversationHTMLPage(html: "<h2>Chart</h2><script>console.log('ready')</script>", title: "Chart", height: 250)

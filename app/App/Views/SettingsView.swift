@@ -19,6 +19,7 @@ private enum HarnessSettingsOrigin: Equatable {
 private enum SettingsSection: Equatable {
     case landing
     case general
+    case backgroundServer
     case connections(String)
     case defaultAgent(String, HarnessSettingsOrigin)
     case harness(AgentRuntimeKind, UUID?, HarnessSettingsOrigin)
@@ -60,12 +61,13 @@ struct SettingsView: View {
                     onBack: { section = .landing })
             case .defaultAgent(let scope, let origin):
                 SettingsDefaultAgentView(model: model, initialScope: scope, reservesRailControlSpace: reservesRailControlSpace, onBack: { section = origin.section })
+            case .backgroundServer:
+                SettingsBackgroundServerView(model: model, reservesRailControlSpace: reservesRailControlSpace, onBack: { section = .landing })
             case .general:
                 SettingsGeneralView(
                     model: applicationContext ?? model,
                     executionModel: model,
                     clientAnalytics: clientContext?.analytics,
-                    showsBackgroundExecution: clientContext == nil,
                     reservesRailControlSpace: reservesRailControlSpace,
                     onBack: { section = .landing }
                 )
@@ -169,6 +171,12 @@ struct SettingsView: View {
                     detail: "Theme, sidebar layout, and conversation titles.",
                     icon: { DashboardLucideIcon(glyph: .settings, size: 15) },
                     action: { section = .general }
+                )
+                SettingsDestinationRow(
+                    title: "Background Server",
+                    detail: "Server controls and managed activity on this Mac and remote workspaces.",
+                    icon: { DashboardLucideIcon(glyph: .terminal, size: 15) },
+                    action: { section = .backgroundServer }
                 )
                 SettingsDestinationRow(
                     title: "Dictation",

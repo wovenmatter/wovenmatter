@@ -3,6 +3,7 @@ import { dirname } from 'node:path';
 import { localServers } from './local-servers.mjs';
 
 export const providers = ['openai-codex', 'openai', 'openrouter', 'opencode-go', 'xai', 'xai-api', 'claude-subscription', 'anthropic'];
+export const searchProviderNames = { exa: 'Exa', brave: 'Brave', firecrawl: 'Firecrawl' };
 export const providerNames = { 'openai-codex': 'OpenAI · ChatGPT subscription', openai: 'OpenAI · API key', openrouter: 'OpenRouter', 'opencode-go': 'OpenCode Go', xai: 'Grok subscription', 'xai-api': 'xAI · API key', 'claude-subscription': 'Claude · Subscription', anthropic: 'Claude · API key' };
 export const emptyConfig = { providers, models: [], defaultModel: null, fallbackModels: [], searchProvider: 'exa', codeMode: 'on', subagentConcurrency: 8 };
 
@@ -12,6 +13,25 @@ export class DefaultAgentError extends Error {}
 export function operationErrorMessage(error) {
   return error instanceof DefaultAgentError ? error.message
     : 'Pi Durable could not complete this operation. Check its connections and workspace unlock state in Settings → Pi Durable.';
+}
+
+// Only fixed, app-authored diagnostics cross the provider/native-state boundary.
+// Never include response bodies, request URLs, headers or exception text.
+export function providerFailure(statusOrMessage) {
+  const messages = {
+    400: 'The provider rejected the model request (HTTP 400).',
+    403: 'The connection does not have access to this model (HTTP 403).',
+    404: 'The provider could not find the selected model or endpoint (HTTP 404). Refresh models in Settings → Pi Durable.',
+    408: 'The provider timed out while processing the model request (HTTP 408). Try again.',
+    422: 'The provider rejected the model request (HTTP 422).',
+    429: 'The provider is rate limiting this connection (HTTP 429). Wait and try again.',
+  };
+  if (typeof statusOrMessage === 'string') {
+    return Object.values(messages).includes(statusOrMessage) || statusOrMessage === 'The provider is temporarily unavailable (HTTP 5xx). Try again.'
+      ? statusOrMessage : null;
+  }
+  return messages[statusOrMessage] ?? (Number.isInteger(statusOrMessage) && statusOrMessage >= 500 && statusOrMessage <= 599
+    ? 'The provider is temporarily unavailable (HTTP 5xx). Try again.' : null);
 }
 export async function readJSON(path, fallback = {}) {
   try { return JSON.parse(await readFile(path, 'utf8')); } catch (e) { if (e.code === 'ENOENT') return fallback; throw e; }
@@ -37,7 +57,7 @@ export function validateConfig(input) {
   const supported = [...providers, ...customServers.map(s => s.id)];
   return { customServers, providers: uniqueStrings(input.providers ?? providers).filter(p => supported.includes(p)),
     models: uniqueStrings(input.models), defaultModel: typeof input.defaultModel === 'string' ? input.defaultModel : null,
-    fallbackModels: uniqueStrings(input.fallbackModels), searchProvider: 'exa', codeMode: ['on', 'only', 'off'].includes(input.codeMode) ? input.codeMode : 'on',
+    fallbackModels: uniqueStrings(input.fallbackModels), searchProvider: typeof input.searchProvider === 'string' && Object.hasOwn(searchProviderNames, input.searchProvider) ? input.searchProvider : 'exa', codeMode: ['on', 'only', 'off'].includes(input.codeMode) ? input.codeMode : 'on',
     subagentConcurrency: Number.isInteger(input.subagentConcurrency) && input.subagentConcurrency >= 2 && input.subagentConcurrency <= 24 ? input.subagentConcurrency : 8 };
 }
 // Deliberately excludes generic 429s, transport failures and ambiguous permission errors.

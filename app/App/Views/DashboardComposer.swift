@@ -93,7 +93,7 @@ struct DashboardComposer: View {
                         ForEach(availableFolders) { folder in
                             Button(folder.name) { onSelectFolder?(folder.id) }
                                 .disabled(selectedFolderID == folder.id
-                                    || (folder.executionWorkspaceID != nil && folder.executionWorkspaceID != folderWorkspaceID))
+                                    || (folder.executionWorkspaceID == nil || folder.executionWorkspaceID != folderWorkspaceID))
                         }
                     } label: {
                         Label(folderLabel, systemImage: "folder")

@@ -294,6 +294,7 @@ final class DefaultAgentSettingsModel {
         set {
             let base = configuration
             if base.defaultModel != newValue.defaultModel { resolvedDefaultModelID = nil }
+            if base.searchProvider != newValue.searchProvider { searchConfigured = !(effectiveAccounts[newValue.searchProvider] ?? []).isEmpty }
             if backendRequest != nil || LocalExecutionRole.current == .frontend {
                 if scope == "global" { settings.global = newValue } else { settings.workspaces[scope] = newValue }
                 publishCatalog()
@@ -311,6 +312,7 @@ final class DefaultAgentSettingsModel {
             let merged = current.applyingChanges(from: original, to: edited)
             if scope == "global" { value.global = merged } else { value.workspaces[scope] = merged }
         }
+        searchConfigured = !(effectiveAccounts[configuration.searchProvider] ?? []).isEmpty
         publishCatalog()
     }
     var inherits: Bool { scope != "global" && settings.workspaces[scope] == nil }
@@ -321,7 +323,7 @@ final class DefaultAgentSettingsModel {
             if provider.connected { result.insert(provider.id) }
             else { result.remove(provider.id) }
         }
-        return result
+        return result.subtracting(ProviderConnectionID.searchProviders.map(\.rawValue))
     }
     var effectiveDefaultModel: String? {
         // A subset's first row is not the runtime's implicit default. Keep an
@@ -408,7 +410,7 @@ final class DefaultAgentSettingsModel {
             if accounts != value.accounts { accounts = value.accounts }
             sharedAccounts = shared?.accounts ?? [:]
             publishCatalog()
-            if !providers.contains(where: { $0.id == "exa" }) { searchConfigured = !(effectiveAccounts["exa"] ?? []).isEmpty }
+            searchConfigured = !(effectiveAccounts[configuration.searchProvider] ?? []).isEmpty
         } catch is CancellationError { }
         catch { if generation == runID, keyScope == accountScope { self.error = error.localizedDescription } }
     }
@@ -905,9 +907,9 @@ final class DefaultAgentSettingsModel {
                 if let login {
                     body["provider"] = login
                     if login == "claude-subscription" {
-                        body["profile"] = profile ?? (action == "logout"
-                            ? prepared.credentials[login]?.accountId ?? "legacy"
-                            : UUID().uuidString.lowercased())
+                        // Reuse the single native connection, including its legacy
+                        // profile after migration. New connections use one stable slot.
+                        body["profile"] = profile ?? prepared.credentials[login]?.accountId ?? "default"
                     }
                 }
                 let child = Process()

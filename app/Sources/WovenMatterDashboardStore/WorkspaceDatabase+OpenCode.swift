@@ -31,6 +31,7 @@ extension WorkspaceDatabaseConnection {
         JOIN dashboard_conversations c ON c.id=r.conversation_id
         JOIN desktop_opencode_sessions o ON o.conversation_id=c.id
         WHERE c.id=? AND c.is_archived=0 AND c.deleted_at IS NULL
+          AND NOT EXISTS(SELECT 1 FROM retained_execution_history WHERE conversation_id=c.id)
         """)
       defer { sqlite3_finalize(statement) }
       try bind(conversationID, at: 1, to: statement)
@@ -48,6 +49,7 @@ extension WorkspaceDatabaseConnection {
 
   public func archiveImportedOpenCodeSession(conversationID: String) throws {
     try transaction {
+      try toolsExecuteUnlocked("INSERT OR IGNORE INTO retained_execution_history SELECT conversation_id FROM desktop_opencode_sessions WHERE conversation_id=?", [conversationID])
       try toolsExecuteUnlocked("UPDATE dashboard_conversations SET is_archived=1 WHERE id=? AND EXISTS(SELECT 1 FROM desktop_opencode_sessions WHERE conversation_id=?)", [conversationID,conversationID])
     }
   }

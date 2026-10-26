@@ -2,6 +2,10 @@
 ios/Sources/EmbeddedExecution/Resources/Emscripten-LICENSE.txt whitespace=-blank-at-eol,-blank-at-eof
 ios/Sources/EmbeddedExecution/Resources/xz-COPYING.txt whitespace=-blank-at-eol,-blank-at-eof
 
+# Preserve checksum-verified upstream security patches and public crash input.
+remote/security/patches/*.patch whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab,-tab-in-indent
+remote/security/fixtures/CVE-2026-6653.xml whitespace=-blank-at-eol,-blank-at-eof
+
 # Generated runtime bundles; review the source bridges and locked dependencies.
 ios/Sources/PiDurableRuntime/Resources/pi-durable.js linguist-generated=true
 ios/Sources/EmbeddedExecution/Resources/worker.js linguist-generated=true

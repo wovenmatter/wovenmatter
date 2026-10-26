@@ -141,123 +141,6 @@ public enum LocalACPRuntimeCatalog {
     }
 }
 
-public struct LocalACPRuntimePreferences {
-    public struct State: Equatable, Sendable {
-        public var enabledRuntimeKinds: Set<AgentRuntimeKind>
-        public var shownRuntimeKinds: Set<AgentRuntimeKind>
-
-        public init(
-            enabledRuntimeKinds: Set<AgentRuntimeKind>,
-            shownRuntimeKinds: Set<AgentRuntimeKind>
-        ) {
-            self.enabledRuntimeKinds = enabledRuntimeKinds
-            self.shownRuntimeKinds = shownRuntimeKinds
-        }
-    }
-
-    public static let enabledRuntimeKindsKey =
-        "wovenmatter.local-acp.enabled-runtimes"
-    public static let shownRuntimeKindsKey =
-        "wovenmatter.local-acp.shown-runtimes"
-
-    private static let hiddenRuntimeKindsKey = "wovenmatter.local-acp.hidden-runtimes"
-    private let defaults: UserDefaults
-
-    public init(defaults: UserDefaults = .standard) {
-        self.defaults = defaults
-    }
-
-    public var state: State {
-        State(
-            enabledRuntimeKinds: runtimeKinds(forKey: Self.enabledRuntimeKindsKey).union([.defaultAgent]),
-            shownRuntimeKinds: runtimeKinds(forKey: Self.shownRuntimeKindsKey).union([.defaultAgent])
-        )
-    }
-
-    @discardableResult
-    public func enable(_ runtimeKind: AgentRuntimeKind) -> State {
-        guard AgentRuntimeKind.allCases.contains(runtimeKind) else { return state }
-        var state = state
-        state.enabledRuntimeKinds.insert(runtimeKind)
-        state.shownRuntimeKinds.insert(runtimeKind)
-        save(state)
-        return state
-    }
-
-    @discardableResult
-    public func disable(_ runtimeKind: AgentRuntimeKind) -> State {
-        var state = state
-        state.enabledRuntimeKinds.remove(runtimeKind)
-        save(state)
-        return state
-    }
-
-    @discardableResult
-    public func setShown(
-        _ isShown: Bool,
-        for runtimeKind: AgentRuntimeKind
-    ) -> State {
-        guard AgentRuntimeKind.allCases.contains(runtimeKind) else { return state }
-        var state = state
-        var hidden = hiddenRuntimeKinds
-        if isShown { hidden.remove(runtimeKind) } else { hidden.insert(runtimeKind) }
-        defaults.set(hidden.map(\.rawValue).sorted(), forKey: Self.hiddenRuntimeKindsKey)
-        if isShown {
-            state.shownRuntimeKinds.insert(runtimeKind)
-        } else {
-            state.shownRuntimeKinds.remove(runtimeKind)
-        }
-        save(state)
-        return state
-    }
-
-    /// Installed harnesses are immediately available; sidebar hiding stays a
-    /// separate presentation preference and never grants app Keychain access.
-    @discardableResult
-    public func adoptInstalled(_ installed: Set<AgentRuntimeKind>) -> State {
-        let hidden = hiddenRuntimeKinds
-        defaults.set(hidden.map(\.rawValue).sorted(), forKey: Self.hiddenRuntimeKindsKey)
-        let available = installed.union([.defaultAgent])
-        let value = State(enabledRuntimeKinds: available,
-                          shownRuntimeKinds: available.subtracting(hidden).union([.defaultAgent]))
-        save(value)
-        return value
-    }
-
-    private var hiddenRuntimeKinds: Set<AgentRuntimeKind> {
-        if defaults.object(forKey: Self.hiddenRuntimeKindsKey) != nil {
-            return runtimeKinds(forKey: Self.hiddenRuntimeKindsKey)
-        }
-        // Only an enabled runtime absent from the old sidebar list was hidden.
-        return state.enabledRuntimeKinds.subtracting(state.shownRuntimeKinds)
-    }
-
-    public static func visibleRuntimeKinds(
-        in orderedRuntimeKinds: [AgentRuntimeKind],
-        shownRuntimeKinds: Set<AgentRuntimeKind>
-    ) -> [AgentRuntimeKind] {
-        orderedRuntimeKinds.filter(shownRuntimeKinds.contains)
-    }
-
-    private func runtimeKinds(forKey key: String) -> Set<AgentRuntimeKind> {
-        Set(
-            defaults.stringArray(forKey: key)?
-                .compactMap(AgentRuntimeKind.init(rawValue:)).filter { AgentRuntimeKind.allCases.contains($0) } ?? []
-        )
-    }
-
-    private func save(_ state: State) {
-        defaults.set(
-            state.enabledRuntimeKinds.map(\.rawValue).sorted(),
-            forKey: Self.enabledRuntimeKindsKey
-        )
-        defaults.set(
-            state.shownRuntimeKinds.map(\.rawValue).sorted(),
-            forKey: Self.shownRuntimeKindsKey
-        )
-    }
-}
-
 public struct LocalACPRuntimeAvailability: Codable, Equatable, Identifiable, Sendable {
     public enum State: String, Codable, Equatable, Sendable {
         case ready
@@ -322,6 +205,8 @@ public struct LocalACPRuntimeWrappedCommand: Sendable {
 }
 
 public struct LocalACPRuntimeLaunchConfiguration: Sendable {
+    /// Owner metadata; never forwarded into the harness environment or command.
+    public var inspectionConversationID: String? = nil
     public var historyRecorder: WorkspaceWireRecorder? = nil
     public var cliConnection: AgentCLIContext? = nil
     public let runtimeKind: AgentRuntimeKind

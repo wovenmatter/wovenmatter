@@ -196,7 +196,7 @@ extension WorkspaceDatabaseConnection {
   public func createFolder(
     id: UUID = UUID(),
     name: String,
-    location: WorkspaceFolderLocation? = nil,
+    location: WorkspaceFolderLocation,
     createdAt: Date = Date()
   ) throws -> String {
     let normalizedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -236,13 +236,9 @@ extension WorkspaceDatabaseConnection {
       try bind(timestamp, at: 6, to: insert)
       try stepDone(insert)
 
-      if let location {
-        guard location.rootPath.hasPrefix("/"), !location.workspaceID.isEmpty else {
-          throw WorkspaceToolError.invalid("A folder needs an owning workspace and absolute root.")
-        }
-        try toolsExecuteUnlocked("INSERT INTO folder_execution_roots(folder_id,workspace_id,root_path,managed) VALUES(?,?,?,?)",
-          [folderID, location.workspaceID, location.rootPath, location.managed ? "1" : "0"])
-      }
+      try validateExecutionLocation(location)
+      try toolsExecuteUnlocked("INSERT INTO folder_execution_roots(folder_id,workspace_id,root_path,managed) VALUES(?,?,?,?)",
+        [folderID, location.workspaceID, location.rootPath, location.managed ? "1" : "0"])
       return folderID
     }
   }
@@ -564,8 +560,8 @@ extension WorkspaceDatabaseConnection {
           WHERE (user_id = ? OR desktop_owned = 1)
             AND deleted_at IS NULL
             AND (is_archived = 0 OR (desktop_owned = 1
-              AND NOT EXISTS (SELECT 1 FROM session_execution_roots
-                WHERE conversation_id = dashboard_conversations.id)))
+              AND EXISTS (SELECT 1 FROM retained_execution_history
+                WHERE conversation_id=dashboard_conversations.id)))
             AND governing_plane = 'wovenmatter_macos'
           ORDER BY last_message_at DESC, id DESC
           """,
@@ -710,7 +706,7 @@ extension WorkspaceDatabase {
   public func createFolder(
     id: UUID = UUID(),
     name: String,
-    location: WorkspaceFolderLocation? = nil,
+    location: WorkspaceFolderLocation,
     createdAt: Date = Date()
   ) async throws -> String {
     try await write { try $0.createFolder(id: id, name: name, location: location, createdAt: createdAt) }
@@ -772,6 +768,16 @@ extension WorkspaceDatabase {
 }
 
 extension WorkspaceDatabaseConnection {
+  public func availableSessionExecutionRoot(id: String) throws -> WorkspaceFolderLocation {
+    try withLock {
+      guard let root = try sessionExecutionRoot(id: id),
+            try historyRowsUnlocked("SELECT 1 FROM dashboard_conversations WHERE id=? AND deleted_at IS NULL AND is_archived=0 AND NOT EXISTS(SELECT 1 FROM retained_execution_history WHERE conversation_id=?)", values: [id,id]).count == 1 else {
+        throw WorkspaceToolError.invalid("This saved chat is read-only. Start a new chat in an available execution workspace.")
+      }
+      return root
+    }
+  }
+
   public func sessionExecutionRoot(id: String) throws -> WorkspaceFolderLocation? {
     try withLock {
       guard let row = try historyRowsUnlocked("SELECT * FROM session_execution_roots WHERE conversation_id=?", values: [id]).first?.objectValue,
@@ -784,7 +790,18 @@ extension WorkspaceDatabaseConnection {
     try transaction { try saveSessionExecutionRootUnlocked(id: id, folderID: folderID, location: location, defaultPath: defaultPath) }
   }
 
+  func validateExecutionLocation(_ location: WorkspaceFolderLocation) throws {
+    guard !location.workspaceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+          !location.workspaceID.contains("\0"), location.rootPath.hasPrefix("/"), !location.rootPath.contains("\0") else {
+      throw WorkspaceToolError.invalid("An execution location needs an owning workspace and an absolute directory.")
+    }
+  }
+
   func saveSessionExecutionRootUnlocked(id: String, folderID: String?, location: WorkspaceFolderLocation, defaultPath: String) throws {
+    try validateExecutionLocation(location)
+    guard defaultPath.hasPrefix("/"), !defaultPath.contains("\0") else {
+      throw WorkspaceToolError.invalid("An execution workspace needs an absolute default directory.")
+    }
     // A scheduled session keeps its captured root after its UI folder is removed.
     // Reuse is valid only when the saved owner and directory still match.
     if let existing = try sessionExecutionRoot(id: id) {
@@ -815,15 +832,16 @@ extension WorkspaceDatabaseConnection {
 
   public func lockSessionFolder(id: String) throws {
     try transaction {
-      guard try sessionExecutionRoot(id: id) != nil else {
-        throw WorkspaceToolError.invalid("This archived session is readable but cannot be resumed. Start a new chat.")
-      }
+      _ = try availableSessionExecutionRoot(id: id)
       try toolsExecuteUnlocked("UPDATE session_execution_roots SET folder_locked=1 WHERE conversation_id=?", [id])
     }
   }
 }
 
 extension WorkspaceDatabase {
+  public func availableSessionExecutionRoot(id: String) async throws -> WorkspaceFolderLocation {
+    try await read { try $0.availableSessionExecutionRoot(id: id) }
+  }
   public func sessionExecutionRoot(id: String) async throws -> WorkspaceFolderLocation? {
     try await read { try $0.sessionExecutionRoot(id: id) }
   }
@@ -842,6 +860,7 @@ extension WorkspaceDatabase {
 extension WorkspaceDatabaseConnection {
   public func canChooseSessionFolder(id: String) throws -> Bool {
     try withLock {
+      guard (try? availableSessionExecutionRoot(id: id)) != nil else { return false }
       guard let row = try historyRowsUnlocked("SELECT folder_locked FROM session_execution_roots WHERE conversation_id=?", values: [id]).first?.objectValue,
             row["folder_locked"]?.intValue == 0 else { return false }
       return try historyRowsUnlocked("SELECT 1 FROM dashboard_messages WHERE conversation_id=? AND role='user' LIMIT 1", values: [id]).isEmpty
@@ -870,35 +889,8 @@ extension WorkspaceDatabase {
 }
 
 
-extension WorkspaceDatabaseConnection {
-  /// Older sidebar folders were virtual. Their first use gives them an immutable
-  /// execution owner and root without moving history or adopting file deletion.
-  public func bindFolderExecutionRoot(id: String, location: WorkspaceFolderLocation) throws {
-    try transaction {
-      try validateFolderUnlocked(id: id, operatorID: localMutationOperatorIDUnlocked())
-      guard !location.workspaceID.isEmpty, location.rootPath.hasPrefix("/"), !location.rootPath.contains("\0") else {
-        throw WorkspaceToolError.invalid("A folder needs an owning workspace and absolute root.")
-      }
-      if let saved = try historyRowsUnlocked("SELECT workspace_id,root_path FROM folder_execution_roots WHERE folder_id=?", values: [id]).first?.objectValue {
-        guard saved["workspace_id"]?.stringValue == location.workspaceID, saved["root_path"]?.stringValue == location.rootPath else {
-          throw WorkspaceToolError.invalid("This folder's execution workspace and root are fixed.")
-        }
-        return
-      }
-      try toolsExecuteUnlocked("INSERT INTO folder_execution_roots(folder_id,workspace_id,root_path,managed) VALUES(?,?,?,?)",
-        [id,location.workspaceID,location.rootPath,location.managed ? "1" : "0"])
-    }
-  }
-}
-
-extension WorkspaceDatabase {
-  public func bindFolderExecutionRoot(id: String, location: WorkspaceFolderLocation) async throws {
-    try await write { try $0.bindFolderExecutionRoot(id: id, location: location) }
-  }
-}
-
 /// Captured owner and directory committed atomically with a new conversation.
-public struct SessionCreationRoot: Sendable {
+public struct SessionCreationRoot: Codable, Sendable {
   public let folderID: String?
   public let location: WorkspaceFolderLocation
   public let defaultPath: String

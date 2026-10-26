@@ -64,10 +64,10 @@ if [ "$data_mode" = snapshot ] && [ ! -f "$support_directory/development-snapsho
 fi
 
 # Replacing the executable of an active execution owner can interrupt sessions.
-# Its lifetime is independent of the UI; disabling background execution performs
-# the app's idle check and graceful ownership handoff before a development rebuild.
+# Its lifetime is independent of the UI; stop it from Background Server settings
+# before rebuilding so active work uses the normal cancellation path.
 if pgrep -f "^${executable} --backend$" >/dev/null 2>&1; then
-  printf '%s\n' 'Disable background execution in this Dev app before rebuilding so its sessions can stop safely.' >&2
+  printf '%s\n' 'Stop the server in this Dev app’s Background Server settings before rebuilding.' >&2
   exit 75
 fi
 

@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import Foundation
 import Testing
 import WovenMatterCore
@@ -53,7 +54,7 @@ struct ConversationHTMLResourceTests {
     #expect(html.utf8.count > 10 * 1024 * 1024)
     let page = try ConversationHTMLPage(html: html, title: "Large image", height: 200)
     let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
-    let caller = try await database.createLocalACPSession(runtimeKind: .codex, title: "Images", ownerDeviceID: UUID())
+    let caller = try await database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Images", ownerDeviceID: UUID())
     let run = try await database.beginLocalACPRun(conversationID: caller, content: "Images")
     let reference = try await database.publishConversationHTML(page, callerID: caller, requestID: UUID().uuidString)
     let detail = try #require(try await database.conversationActivityDetails(conversationID: caller, runID: run.runID, activityID: "html-render:" + reference.id))

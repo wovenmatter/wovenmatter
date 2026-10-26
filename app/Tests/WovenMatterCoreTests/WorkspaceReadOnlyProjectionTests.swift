@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import Foundation
 import Testing
 import WovenMatterCore
@@ -10,7 +11,7 @@ struct WorkspaceReadOnlyProjectionTests {
     try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:true)
     defer { try? FileManager.default.removeItem(at:directory) }
     let owner = try await WorkspaceDatabase(url:directory.appending(path:"workspace.sqlite"))
-    let session = try await owner.createLocalACPSession(runtimeKind:.codex,title:"Running",ownerDeviceID:UUID())
+    let session = try await owner.createFixtureLocalACPSession(runtimeKind:.codex,title:"Running",ownerDeviceID:UUID())
     let run = try await owner.beginLocalACPRun(conversationID:session,content:"Keep running")
     let before = Set(try FileManager.default.contentsOfDirectory(atPath:directory.path))
     let projection = try await DashboardStore(supportDirectory:directory,readOnlyProjection:true)

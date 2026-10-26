@@ -1,6 +1,7 @@
+import { realpathSync } from 'node:fs';
 import { createInterface } from 'node:readline'
 import { randomUUID } from 'node:crypto'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath } from 'node:url'
 
 export async function runStdioRelay({ channelID, harnessID, cwd, permission, nativeSessionID,
   token = process.env.WOVENMATTER_API_TOKEN, port = process.env.WOVENMATTER_LISTEN_PORT ?? '7337',
@@ -148,7 +149,7 @@ export async function runStdioRelay({ channelID, harnessID, cwd, permission, nat
   } finally { stopped = true; lifecycle.abort(); reader.close() }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const args = process.argv.slice(2)
   const option = name => args.includes(name) ? args[args.indexOf(name) + 1] : undefined
   runStdioRelay({ channelID: option('--channel-id'), harnessID: option('--harness-id'), cwd: option('--cwd'), permission: option('--permission-mode'), nativeSessionID: option('--session') }).catch(() => {

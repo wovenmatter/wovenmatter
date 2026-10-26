@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import Foundation
 import Testing
 import WovenMatterCore
@@ -57,7 +58,7 @@ private struct WriterFixture {
     root = FileManager.default.temporaryDirectory.appending(path: "acp-writer-\(UUID())")
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
-    conversationID = try await database.createLocalACPSession(
+    conversationID = try await database.createFixtureLocalACPSession(
       runtimeKind: .codex, title: "Writer", ownerDeviceID: UUID()
     )
     run = try await database.beginLocalACPRun(conversationID: conversationID, content: "Start")

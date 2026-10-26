@@ -29,6 +29,9 @@ when an intentional design change is accepted.
   permission and tool labels inside their popouts so the model and thinking
   selection stay visible. Keep the dictation microphone beside the text entry
   area above this row.
+- **Composer setup notices:** explain missing model configuration in a full-width
+  quiet action above the input. Use regular-weight secondary text, allow wrapping,
+  and open Pi Durable settings in the relevant workspace scope.
 - **Components:** reuse the shared cards, selectors, search fields, and button
   styles in `DashboardStyle.swift` and `DashboardDesign.swift`, and the page/row
   patterns in
@@ -60,6 +63,12 @@ when an intentional design change is accepted.
   rows. Keep versions and labeled maintenance controls inside the expanded row,
   rather than a horizontal strip of actions. Remote workspaces have no global
   enable switch; saved workspaces reconnect using silent Keychain reads.
+  Installed harnesses are available automatically in local and remote workspaces.
+  Do not add harness enable/disable, Use harness, or per-harness sidebar visibility
+  controls. Installation, sign-in, and connection status communicate readiness.
+  Save remote agents in the workspace database when installed and show them on
+  launch, including while disconnected or awaiting sign-in. Background readiness
+  checks gate execution, never sidebar membership.
 - **Harness accounts:** sign-in belongs to each harness settings page, scoped to
   Local agent workspace or a named remote workspace. Workspace inventory shows status and links
   to that scoped page. Never label credentials present as verified sign-in.
@@ -95,8 +104,13 @@ when an intentional design change is accepted.
   defaults disclosures, workspace overrides, local model servers, fallback models,
   and workspace synchronization.
   OpenAI, Anthropic, and Grok retain separate subscription and API-key groups.
-  OpenRouter, OpenCode, and Exa show API-key controls directly when expanded.
-  Keep their content and Cursor's controls at the same indentation as the content
+  Each subscription group shows one account with Reconnect/Remove, without
+  Add account, priority labels, or ordering controls. Show the subscription identity
+  without primary/backup wording. API-key lists show Primary followed by numbered
+  backups. Mobile permits one subscription connection per provider per device,
+  with reconnect through the saved connection.
+  OpenRouter, OpenCode, Exa, Brave, and Firecrawl show API-key controls directly when expanded.
+  Keep their content at the same indentation as the content
   inside the nested credential groups.
 - **Icons:** use the existing `DashboardLucideIcon` glyphs and bundled harness
   logos, matching nearby icon sizes and stroke weights. Pi Durable’s color and
@@ -118,7 +132,8 @@ when an intentional design change is accepted.
   section. Each Folders section starts with New folder, scoped to that workspace.
   Remote workspace names align with the local workspace heading; both use the same
   child indentation. All Workspaces sits above the workspaces, Trash below them,
-  and Recents remains global. Folder hover cards match chat previews and show the
+  and Recents remains global. Never add an Unassigned workspace section: folderless
+  chats appear in All Workspaces and still have an execution owner. Folder hover cards match chat previews and show the
   workspace, chat/note counts, root directory, and additional reference directories.
 - **Sidebar headers:** in Single and Adaptive layouts, mirror the header button
   order when the sidebar moves to the right, and point the workspace back arrow

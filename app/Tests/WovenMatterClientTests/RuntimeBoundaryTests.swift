@@ -120,18 +120,23 @@ struct RuntimeBoundaryTests {
       swapLimit: "4"
     )
 
-    _ = try await client.create(configuration: configuration, token: "secret-token")
+    let imageID = "sha256:" + String(repeating: "a", count: 64)
+    _ = try await client.create(configuration: configuration, token: "secret-token", imageID: imageID)
+    #expect(recorder.command?.contains("'" + imageID + "'") == true)
     #expect(recorder.destination == "woven@linux-box")
     #expect(recorder.command?.contains("secret-token") == false)
     #expect(recorder.command?.contains("'8589934592' '12884901888'") == true)
     #expect(recorder.input?.starts(with: Data("secret-token\nscript".utf8)) == true)
+    _ = try await client.update(configuration: configuration, imageID: imageID)
+    #expect(recorder.command?.contains("'" + imageID + "'") == true)
+
 
     let launch = try RemoteHarnessLaunchResolver.resolve(
       configuration: configuration,
       runtimeKind: .codex,
-      processWorkingDirectory: URL(filePath: "/private/tmp")
+      processWorkingDirectory: URL(filePath: "/private/tmp"), tailnetSSHOptions: { _ in [] }
     )
-    let builtIn = try RemoteHarnessLaunchResolver.resolve(configuration: configuration, runtimeKind: .defaultAgent, processWorkingDirectory: URL(filePath: "/private/tmp"))
+    let builtIn = try RemoteHarnessLaunchResolver.resolve(configuration: configuration, runtimeKind: .defaultAgent, processWorkingDirectory: URL(filePath: "/private/tmp"), tailnetSSHOptions: { _ in [] })
     #expect(builtIn.launch.arguments.last?.contains("default-agent/src/main.mjs") == true)
     #expect(builtIn.launch.arguments.last?.contains("'--remote'") == true)
     #expect(builtIn.launch.arguments.last?.contains("runtime-operation.lock") == false)
@@ -144,7 +149,7 @@ struct RuntimeBoundaryTests {
       let directory = URL(fileURLWithPath: "/home/projects/a quoted ' directory")
       let inherited = try RemoteHarnessLaunchResolver.resolve(configuration: configuration, runtimeKind: runtime,
         processWorkingDirectory: URL(fileURLWithPath: "/private/tmp"),
-        workspaceRoot: URL(fileURLWithPath: "/home/shared"), workingDirectory: directory)
+        workspaceRoot: URL(fileURLWithPath: "/home/shared"), workingDirectory: directory, tailnetSSHOptions: { _ in [] })
       #expect(inherited.workspace.rootURL == directory)
       #expect(inherited.workspace.databasesURL.path == "/home/.local/share/wovenmatter/databases")
       #expect(inherited.launch.processWorkingDirectoryURL?.path == "/private/tmp")

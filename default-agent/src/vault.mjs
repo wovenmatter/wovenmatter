@@ -2,7 +2,7 @@ import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { mkdir, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import lockfile from 'proper-lockfile';
-import { readJSON, writePrivateJSON } from './config.mjs';
+import { readJSON, searchProviderNames, writePrivateJSON } from './config.mjs';
 
 // Only the Mac persists the key. Every new helper starts sealed.
 export class CredentialVault {
@@ -62,7 +62,7 @@ export class CredentialVault {
 
 export function sharedCredentials(input = {}) {
   const result = {};
-  for (const id of ['openai', 'anthropic', 'xai-api', 'openrouter', 'opencode-go', 'exa', ...Object.keys(input).filter(id => /^local-server-[a-f0-9-]{36}$/.test(id)).slice(0, 12)]) {
+  for (const id of ['openai', 'anthropic', 'xai-api', 'openrouter', 'opencode-go', ...Object.keys(searchProviderNames), ...Object.keys(input).filter(id => /^local-server-[a-f0-9-]{36}$/.test(id)).slice(0, 12)]) {
     if (input[id]?.type === 'api_key' && typeof input[id].key === 'string') result[id] = { type: 'api_key', key: input[id].key };
   }
   for (const id of ['openai-codex', 'xai']) {
@@ -84,9 +84,9 @@ export function sharedCredentials(input = {}) {
 // Account ordering and credentials are encrypted alongside the canonical slot.
 export function sharedAccounts(input = {}) {
   const result = {};
-  for (const provider of ['openai', 'openai-codex', 'anthropic', 'xai', 'xai-api', 'openrouter', 'opencode-go', 'exa']) {
+  for (const provider of ['openai', 'openai-codex', 'anthropic', 'xai', 'xai-api', 'openrouter', 'opencode-go', ...Object.keys(searchProviderNames)]) {
     if (!Array.isArray(input[provider])) continue;
-    const entries = input[provider].slice(0, 4).flatMap(account => {
+    const entries = input[provider].slice(0, ['openai-codex', 'xai'].includes(provider) ? 1 : 4).flatMap(account => {
       const credential = sharedCredentials({ [provider]: account?.credential })[provider];
       return credential && typeof account.id === 'string' && typeof account.label === 'string'
         ? [{ id: account.id, label: account.label, credential }] : [];
@@ -94,9 +94,9 @@ export function sharedAccounts(input = {}) {
     if (entries.length) result[provider] = entries;
   }
   // Native profile names are identifiers, never native token material.
-  for (const provider of ['claude-subscription', 'cursor']) {
-    if (!Array.isArray(input[provider])) continue;
-    result[provider] = input[provider].slice(0, 4).filter(a => typeof a.id === 'string' && typeof a.label === 'string' && a.credential?.type === 'native' && typeof a.credential.accountId === 'string' && /^[a-zA-Z0-9-]{1,64}$/.test(a.credential.accountId))
+  const profiles = input['claude-subscription'];
+  if (Array.isArray(profiles)) {
+    result['claude-subscription'] = profiles.slice(0, 1).filter(a => typeof a.id === 'string' && typeof a.label === 'string' && a.credential?.type === 'native' && typeof a.credential.accountId === 'string' && /^[a-zA-Z0-9-]{1,64}$/.test(a.credential.accountId))
       .map(a => ({ id: a.id, label: a.label, credential: { type: 'native', accountId: a.credential.accountId } }));
   }
   return result;

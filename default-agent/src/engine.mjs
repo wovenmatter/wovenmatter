@@ -5,7 +5,7 @@ import { ModelRuntime } from '@earendil-works/pi-coding-agent';
 import { openDurableSession } from './durable-session.mjs';
 import { credentialRouteIdentity } from './native-context.mjs';
 import { Credentials } from './credentials.mjs';
-import { accessFailure, DefaultAgentError, emptyConfig, modelRef, providerNames, providers, validateConfig } from './config.mjs';
+import { accessFailure, DefaultAgentError, emptyConfig, modelRef, providerNames, providers, validateConfig, providerFailure } from './config.mjs';
 import { registerLocalServers } from './local-servers.mjs';
 import { ClaudeRuntime, isClaude } from './claude-runtime.mjs';
 import { registerClaudeProviders } from './claude-provider.mjs';
@@ -18,6 +18,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 export class DefaultAgentEngine {
   constructor({ cwd, directory, config = {}, credentials = {}, credentialAccounts = {}, vault, requestCredentials, claude, catalog }) {
     this.cwd = cwd; this.directory = directory; this.config = validateConfig({ ...emptyConfig, ...config }); this.supplied = credentials; this.credentialAccounts = credentialAccounts; this.vault = vault; this.requestCredentials = requestCredentials; this.sessions = new Map();
+    this.databasePath = process.env.WOVEN_DEFAULT_AGENT_DATABASE ?? join(directory, 'workspace.sqlite');
     this.providerCatalog = catalog ?? new ProviderCatalog(directory);
     this.claude = claude ?? new ClaudeRuntime(directory);
     this.programStatusContext = new AsyncLocalStorage();
@@ -153,7 +154,7 @@ export class DefaultAgentEngine {
     signal?.throwIfAborted();
     const subscription = await this.claude.status((await this.credentials.read('claude-subscription'))?.accountId, { signal });
     signal?.throwIfAborted();
-    return { providers: await Promise.all([...providers, ...this.config.customServers.map(s => s.id)].map(async id => { if (id === 'claude-subscription') return { id, name: this.providerName(id), ...subscription }; const c = await this.credentials.read(id); const expired = c?.type === 'oauth' && c.expires <= Date.now(); return { id, name: this.providerName(id), connected: Boolean(c) && !expired, state: !c || expired ? 'sign_in_required' : 'credentials_present', detail: expired ? 'Access expired. Reconnect Woven Matter or sign in.' : c ? 'Credentials stored; provider access has not been verified.' : 'No credentials stored.' }; })), models: this.catalog(), searchConfigured: Boolean((await this.credentials.read('exa'))?.key) };
+    return { providers: await Promise.all([...providers, ...this.config.customServers.map(s => s.id)].map(async id => { if (id === 'claude-subscription') return { id, name: this.providerName(id), ...subscription }; const c = await this.credentials.read(id); const expired = c?.type === 'oauth' && c.expires <= Date.now(); return { id, name: this.providerName(id), connected: Boolean(c) && !expired, state: !c || expired ? 'sign_in_required' : 'credentials_present', detail: expired ? 'Access expired. Reconnect Woven Matter or sign in.' : c ? 'Credentials stored; provider access has not been verified.' : 'No credentials stored.' }; })), models: this.catalog(), searchConfigured: Boolean((await this.credentials.read(this.config.searchProvider))?.key) };
   }
 
   modelOptions() {
@@ -432,7 +433,7 @@ export class DefaultAgentEngine {
           if (controller.signal.aborted) return { stopReason: 'cancelled' };
           if (record.nativeContextFailure) throw new DefaultAgentError(record.nativeContextFailure.message);
           reason = record.httpAccessFailure !== undefined ? record.httpAccessFailure : (error.accessReason ?? accessFailure(error));
-          if (!reason || visible || steered || record.nativeVisible) throw new DefaultAgentError(reason ?? (error instanceof DefaultAgentError ? error.message : 'The model request failed. Retry or check Settings → Pi Durable.'));
+          if (!reason || visible || steered || record.nativeVisible) throw new DefaultAgentError(reason ?? providerFailure(error?.message) ?? (error instanceof DefaultAgentError ? error.message : 'The model request failed. Retry or check Settings → Pi Durable.'));
           record.allowFallback = true;
           await record.rewind(beforeLeaf);
           await record.session.refreshContext();

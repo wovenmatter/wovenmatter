@@ -433,10 +433,29 @@ struct DashboardCloudConversation: View {
                     VStack(spacing: 8) {
                         if let conversation, !conversation.isArchived, conversation.localRuntimeKind == .defaultAgent,
                            model.localACPSessionMetadata[conversation.id]?.selectableModels.isEmpty == true {
-                            Button("Choose models for chat") {
+                            Button {
                                 let scope = conversation.remoteWorkspaceID?.uuidString.lowercased() ?? "local"
                                 model.pendingDefaultAgentSettingsScope = model.connections.settings.workspaces[scope] == nil ? "global" : scope
-                            }.buttonStyle(SettingsQuietButtonStyle())
+                            } label: {
+                                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                    Text("No models configured for Pi Durable. Go to settings to complete setup.")
+                                        .font(.system(size: 12.5, weight: .regular))
+                                        .foregroundStyle(DashboardPalette.mutedForeground)
+                                        .multilineTextAlignment(.leading)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                    Spacer(minLength: 0)
+                                    Image(systemName: "arrow.right")
+                                        .font(.system(size: 11, weight: .regular))
+                                        .foregroundStyle(DashboardPalette.mutedForeground)
+                                        .accessibilityHidden(true)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.vertical, 6)
+                            }
+                            .buttonStyle(SettingsQuietButtonStyle(horizontalPadding: 12, minimumHeight: 32))
+                            .background(theme.palette.themeWhisper,
+                                in: RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
+                            .help("Open Pi Durable settings")
                         }
                         if let conversation, !conversation.isArchived,
                            WorkspaceGoal.supports(conversation.localRuntimeKind),

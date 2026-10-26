@@ -10,6 +10,11 @@ public protocol CompanionServingProcess: AnyObject {
 
 @MainActor
 private final class NativeCompanionServeProcess: CompanionServingProcess {
+  private final class Observation {
+    weak var process: Process?
+    init(_ process: Process) { self.process = process }
+  }
+  private static var observations: [Int32: Observation] = [:]
   private let process: Process
   private var heartbeat: FileHandle?
   init(executable: URL, arguments: [String]) throws {
@@ -26,10 +31,18 @@ private final class NativeCompanionServeProcess: CompanionServingProcess {
     process.standardOutput = FileHandle.nullDevice
     process.standardError = FileHandle.nullDevice
     try process.run()
+    Self.observations[process.processIdentifier] = Observation(process)
     try? pipe.fileHandleForReading.close()
     heartbeat = writer
   }
   var isRunning: Bool { process.isRunning }
+  static func inspectionItems() -> [RuntimeInspection.Item] {
+    observations = observations.filter { $0.value.process?.isRunning == true }
+    return observations.keys.sorted().map { pid in
+      .init(id: "connection-supervisor:\(pid)", kind: "connectionSupervisor",
+            title: "Device connection supervisor", state: "running", processID: pid)
+    }
+  }
   func terminate() { try? heartbeat?.close(); heartbeat = nil }
   deinit { try? heartbeat?.close() }
 }
@@ -39,6 +52,7 @@ private final class NativeCompanionServeProcess: CompanionServingProcess {
 /// are never rewritten, reset, or stopped.
 @MainActor
 public final class CompanionTailscaleServe {
+  public static func inspectionItems() -> [RuntimeInspection.Item] { NativeCompanionServeProcess.inspectionItems() }
   public typealias Probe = @Sendable (URL, [String]) async throws -> Data
   public typealias Launch = @MainActor @Sendable (URL, [String]) throws -> any CompanionServingProcess
   private var process: (any CompanionServingProcess)?

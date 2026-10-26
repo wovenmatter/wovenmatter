@@ -536,16 +536,30 @@ private final class LocalACPProcessRegistry: @unchecked Sendable {
 
     private let lock = NSLock()
     private var processes: [ObjectIdentifier: Process] = [:]
+    private var observations: [ObjectIdentifier: RuntimeInspection.Item] = [:]
 
-    func register(_ process: Process) {
+    func register(_ process: Process, kind: AgentRuntimeKind, conversationID: String?) {
         lock.withLock {
             processes[ObjectIdentifier(process)] = process
+            observations[ObjectIdentifier(process)] = .init(id: UUID().uuidString,
+                conversationID: conversationID,
+                kind: "runtime", title: kind.displayName, state: "running",
+                processID: process.processIdentifier, startedAt: Date())
         }
     }
 
     func unregister(_ process: Process) {
-        _ = lock.withLock {
+        lock.withLock {
+            observations.removeValue(forKey: ObjectIdentifier(process))
             processes.removeValue(forKey: ObjectIdentifier(process))
+        }
+    }
+
+    func snapshot() -> [RuntimeInspection.Item] {
+        lock.withLock {
+            processes.compactMap { key, process in
+                process.isRunning ? observations[key] : nil
+            }.sorted { $0.id < $1.id }
         }
     }
 
@@ -725,6 +739,10 @@ public actor LocalACPClient {
         self.workingDirectory = workingDirectory.standardizedFileURL
     }
 
+    public nonisolated static func inspectionItems() -> [RuntimeInspection.Item] {
+        LocalACPProcessRegistry.shared.snapshot()
+    }
+
     public static func start(
         launch: LocalACPRuntimeLaunchConfiguration,
         workingDirectory: URL,
@@ -773,7 +791,7 @@ public actor LocalACPClient {
         process.standardOutput = stdout
         process.standardError = FileHandle.standardError
         try process.run()
-        LocalACPProcessRegistry.shared.register(process)
+        LocalACPProcessRegistry.shared.register(process, kind: launch.runtimeKind, conversationID: launch.inspectionConversationID)
 
         return LocalACPClient(
             process: process,
@@ -902,9 +920,11 @@ public actor LocalACPClient {
         let initializeResult = try await request(
             method: "initialize",
             params: .object([
-                // Claude ACP 0.95 routes version 2 into its experimental wire
-                // protocol. This client implements its stable v1 session API.
-                "protocolVersion": .integer(runtimeKind == .claudeCode ? 1 : Self.latestProtocolVersion),
+                // Codex ACP 2.3 and Claude ACP 0.97 route version 2 into their
+                // draft wire protocol. This client implements their v1 session API.
+                "protocolVersion": .integer(
+                    [.codex, .claudeCode].contains(runtimeKind) ? 1 : Self.latestProtocolVersion
+                ),
                 "clientCapabilities": .object(clientCapabilities),
                 "clientInfo": .object([
                     "name": .string("Woven Matter"),
@@ -2637,7 +2657,7 @@ public actor LocalACPClient {
                 ?? (phase == "start" ? displayToolName(update["kind"]?.stringValue) : nil),
             status: status ?? (phase == "start" ? "pending" : nil),
             toolName: update["kind"]?.stringValue,
-            content: terminalDelta ?? textParts.joined(separator: "\n\n").nilIfEmpty,
+            content: terminalDelta ?? (update["content"]?.arrayValue == nil ? nil : textParts.joined(separator: "\n\n")),
             contentIsDelta: terminalDelta != nil,
             locations: locations,
             changes: changes,

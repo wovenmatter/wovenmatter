@@ -10,15 +10,35 @@ private actor FixtureOwner {
     let database: WorkspaceDatabase
     let journal = BackendInvalidationJournal()
     var shouldStop = false
+    var streamingRun: (conversationID: String, runID: String)?
     init(root: URL) async throws { database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite")) }
     func handle(_ request: BackendRPCRequest) async -> BackendRPCResponse {
         do {
             switch request.method {
+            case "stream":
+                let id = try await database.createLocalACPSession(runtimeKind: .codex,
+                    title: "Streaming fixture", ownerDeviceID: UUID())
+                let run = try await database.beginLocalACPRun(conversationID: id, content: "Fixture only")
+                streamingRun = (id, run.runID)
+                try await database.upsertDeviceOwnedRunActivity(runID: run.runID,
+                    activity: .init(id: "shell", kind: .tool, phase: "update", title: "Shell",
+                        status: "in_progress", content: "progress one 🧵"))
+                await journal.publish(conversationIDs: [id])
+                return .init(id: request.id, result: try JSONEncoder().encode(id))
+            case "finishStream":
+                guard let run = streamingRun else { throw BackendRPCError.unavailable }
+                try await database.upsertDeviceOwnedRunActivity(runID: run.runID,
+                    activity: .init(id: "shell", kind: .tool, phase: "end", status: "completed",
+                        content: "progress one 🧵\nprogress two"))
+                try await database.completeLocalACPRun(runID: run.runID)
+                await journal.publish(conversationIDs: [run.conversationID])
+                streamingRun = nil
+                return .init(id: request.id)
             case "admit":
                 Task {
                     try? await Task.sleep(for: .milliseconds(250))
                     do {
-                        _ = try await self.database.createFolder(name: "Completed after frontend exit")
+                        _ = try await self.database.createFolder(name: "Completed after frontend exit", location: .init(workspaceID: "device:test", rootPath: "/tmp", managed: false))
                         await self.journal.publish(scopes: [.workspace])
                     } catch { fatalError("Fixture write failed: \(error)") }
                 }
@@ -80,10 +100,11 @@ private actor FixtureOwner {
             if CommandLine.arguments[1] == "frontend" {
                 let projection = try await DashboardStore(supportDirectory: root, readOnlyProjection: true)
                 var refused = false
-                do { _ = try await projection.database.createFolder(name: "Forbidden frontend write") }
+                do { _ = try await projection.database.createFolder(name: "Forbidden frontend write", location: .init(workspaceID: "device:test", rootPath: "/tmp", managed: false)) }
                 catch { refused = true }
                 try require(refused, "Read-only frontend accepted a database mutation")
                 _ = try await BackendRPCClient(socketURL: endpoint).call(method: "admit")
+                _ = try await BackendRPCClient(socketURL: endpoint).call(method: "stream")
                 // Exit with work admitted but not yet written. No provider/runtime is launched.
                 return
             }
@@ -101,12 +122,31 @@ private actor FixtureOwner {
         try await wait(frontend)
         try require(backend.isRunning, "Frontend exit stopped backend")
         let projection = try await DashboardStore(supportDirectory: root, readOnlyProjection: true)
-        let changed = try JSONDecoder().decode(BackendInvalidations.self,
+        var changed = try JSONDecoder().decode(BackendInvalidations.self,
             from: await client.call(method: "changes", payload: JSONEncoder().encode(initial.cursor)))
+        var observedConversations = changed.conversationIDs
+        for _ in 0..<10 where !changed.scopes.contains(.workspace) {
+            changed = try JSONDecoder().decode(BackendInvalidations.self,
+                from: await client.call(method: "changes", payload: JSONEncoder().encode(changed.cursor)))
+            observedConversations.formUnion(changed.conversationIDs)
+        }
         try require(changed.scopes.contains(.workspace), "Detached completion did not publish invalidation")
         let snapshot = try await projection.snapshot()
         try require(snapshot.workspace.folders.contains { $0.name == "Completed after frontend exit" }, "Reconnected frontend did not observe backend result")
         try require(!snapshot.workspace.folders.contains { $0.name == "Forbidden frontend write" }, "Frontend altered backend data")
+        let streamingID = try await projection.database.workspaceOverview().conversations.first {
+            $0.title == "Streaming fixture"
+        }?.id
+        try require(streamingID != nil, "Detached client lost its active conversation")
+        try require(observedConversations.contains(streamingID!), "Live transcript write did not notify the frontend")
+        let active = try await projection.database.conversationHistoryPage(id: streamingID!, limit: 20, compactActivities: true)
+        try require(active.activities.contains { $0.activity.content == "progress one 🧵" && $0.activity.status == "in_progress" },
+                    "Read-only frontend could not observe output before completion")
+        _ = try await client.call(method: "finishStream")
+        let settled = try await projection.database.conversationHistoryPage(id: streamingID!, limit: 20,
+            compactActivities: true, activityCursor: active.activityRevision, knownActivityRunIDs: active.runs.map(\.id))
+        try require(settled.activities.contains { $0.activity.content == "progress one 🧵\nprogress two" && $0.activity.status == "completed" },
+                    "Read-only frontend missed the terminal output delta")
         _ = try await client.call(method: "stop")
         try await wait(backend)
         try require(!FileManager.default.fileExists(atPath: client.socketURL.path), "Orderly shutdown left a stale endpoint")
@@ -120,6 +160,6 @@ private actor FixtureOwner {
         try require(afterRestart.workspace.folders.contains { $0.name == "Completed after frontend exit" }, "Restart lost persisted result")
         _ = try await client.call(method: "stop")
         try await wait(backend)
-        print("Backend process boundary: passed (separate owner, frontend write exclusion, completion after client exit, reconnect, restart).")
+        print("Backend process boundary: passed (separate owner, frontend write exclusion, live transcript/terminal delta after client exit, reconnect, restart).")
     }
 }

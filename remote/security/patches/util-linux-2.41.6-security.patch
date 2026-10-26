@@ -1,0 +1,354 @@
+diff --git a/include/fileutils.h b/include/fileutils.h
+index 996e183..0939562 100644
+--- a/include/fileutils.h
++++ b/include/fileutils.h
+@@ -11,6 +11,10 @@
+ #include <dirent.h>
+ #include <sys/stat.h>
+ 
++#ifdef HAVE_LINUX_OPENAT2_H
++# include <linux/openat2.h>
++#endif
++
+ #include "c.h"
+ 
+ extern int mkstemp_cloexec(char *template);
+@@ -62,6 +62,15 @@ static inline int is_same_inode(const int fd, const struct stat *st)
+ }
+ 
+ extern int ul_open_no_symlinks(const char *path, int flags, mode_t mode);
++extern int ul_openat_resolve(int dirfd, const char *path, int flags,
++			     mode_t mode, unsigned long long resolve);
++
++#ifndef RESOLVE_NO_SYMLINKS
++# define RESOLVE_NO_SYMLINKS	0x04
++#endif
++#ifndef RESOLVE_BENEATH
++# define RESOLVE_BENEATH	0x08
++#endif
+ 
+ extern int dup_fd_cloexec(int oldfd, int lowfd);
+ extern unsigned int get_fd_tabsize(void);
+diff --git a/lib/fileutils.c b/lib/fileutils.c
+index a9c2022..c600708 100644
+--- a/lib/fileutils.c
++++ b/lib/fileutils.c
+@@ -16,10 +16,6 @@
+ #include <fcntl.h>
+ #include <errno.h>
+ 
+-#ifdef HAVE_LINUX_OPENAT2_H
+-# include <linux/openat2.h>
+-#endif
+-
+ #include "c.h"
+ #include "all-io.h"
+ #include "fileutils.h"
+@@ -351,19 +351,25 @@ char *ul_basename(char *path)
+ 	return p;
+ }
+ 
+-int ul_open_no_symlinks(const char *path, int flags, mode_t mode)
++int ul_openat_resolve(int dirfd, const char *path, int flags,
++		      mode_t mode, unsigned long long resolve)
+ {
+-#if defined(SYS_openat2) && defined(RESOLVE_NO_SYMLINKS)
++#if defined(SYS_openat2)
+ 	struct open_how how = {
+ 		.flags = (__u64) flags,
+ 		.mode = (__u64) mode,
+-		.resolve = RESOLVE_NO_SYMLINKS,
++		.resolve = resolve,
+ 	};
+-	int fd = syscall(SYS_openat2, AT_FDCWD, path, &how, sizeof(how));
+ 
+-	/* only fall back to O_NOFOLLOW if the syscall is unavailable */
+-	if (fd >= 0 || errno != ENOSYS)
+-		return fd;
++	return syscall(SYS_openat2, dirfd, path, &how, sizeof(how));
++#else
++	errno = ENOSYS;
++	return -1;
+ #endif
+-	return open(path, flags | O_NOFOLLOW, mode);
++}
++
++int ul_open_no_symlinks(const char *path, int flags, mode_t mode)
++{
++	return ul_openat_resolve(AT_FDCWD, path, flags, mode,
++				 RESOLVE_NO_SYMLINKS);
+ }
+diff --git a/libmount/src/context.c b/libmount/src/context.c
+index 00fd099..158be96 100644
+--- a/libmount/src/context.c
++++ b/libmount/src/context.c
+@@ -1934,7 +1934,9 @@ int mnt_context_open_tree(struct libmnt_context *cxt, const char *path, unsigned
+ 	DBG(CXT, ul_debugobj(cxt, "open_tree(path=%s%s%s)", path,
+ 				oflg & OPEN_TREE_CLONE ? " clone" : "",
+ 				oflg & AT_RECURSIVE ? " recursive" : ""));
+-	fd = open_tree(AT_FDCWD, path, oflg);
++
++	fd = mnt_open_tree(AT_FDCWD, path, oflg,
++			mnt_context_is_restricted(cxt) ? RESOLVE_NO_SYMLINKS : 0);
+ 	mnt_context_syscall_save_status(cxt, "open_tree", fd >= 0);
+ 
+ 	return fd;
+diff --git a/libmount/src/context_mount.c b/libmount/src/context_mount.c
+index 7743568..80c45be 100644
+--- a/libmount/src/context_mount.c
++++ b/libmount/src/context_mount.c
+@@ -582,6 +582,22 @@ static int is_success_status(struct libmnt_context *cxt)
+ 	return 0;
+ }
+ 
++/* Check if the mount stage explicitly failed (helper or syscall returned
++ * an error). Unlike is_success_status(), this treats "nothing happened"
++ * as not-failed -- the MOUNT stage may be a no-op for operations like
++ * bind/move with the new mount API where open_tree() runs in PREP and
++ * move_mount() is deferred to MOUNT_POST. */
++static int is_mount_stage_failed(struct libmnt_context *cxt)
++{
++	if (mnt_context_helper_executed(cxt))
++		return mnt_context_get_helper_status(cxt) != 0;
++
++	if (mnt_context_syscall_called(cxt))
++		return mnt_context_get_status(cxt) != 1;
++
++	return 0;
++}
++
+ static int is_termination_status(struct libmnt_context *cxt)
+ {
+ 	if (is_success_status(cxt))
+@@ -888,8 +904,9 @@ int mnt_context_do_mount(struct libmnt_context *cxt)
+ 	} else
+ 		res = do_mount_by_pattern(cxt, cxt->fstype_pattern);
+ 
+-	/* after mount stage */
+-	if (res == 0) {
++	/* after mount stage -- the post-mount hooks are commit-path only,
++	 * skip them if the mount helper or syscall has failed */
++	if (res == 0 && !is_mount_stage_failed(cxt)) {
+ 		rc = mnt_context_call_hooks(cxt, MNT_STAGE_MOUNT_POST);
+ 		if (rc)
+ 			return rc;
+@@ -1107,7 +1124,7 @@ again:
+ 			goto again;
+ 	}
+ 
+-	if (rc == 0)
++	if (rc == 0 && !is_mount_stage_failed(cxt))
+ 		rc = mnt_context_call_hooks(cxt, MNT_STAGE_POST);
+ 
+ 	mnt_context_deinit_hooksets(cxt);
+diff --git a/libmount/src/hook_idmap.c b/libmount/src/hook_idmap.c
+index adaa9c6..97d8e0d 100644
+--- a/libmount/src/hook_idmap.c
++++ b/libmount/src/hook_idmap.c
+@@ -23,6 +23,7 @@
+ 
+ #include "strutils.h"
+ #include "all-io.h"
++#include "fileutils.h"
+ #include "namespace.h"
+ 
+ #include "mountP.h"
+@@ -328,9 +328,11 @@ static int hook_mount_post(
+ 	}
+ #endif
+ 	if (fd_tree < 0)
+-		fd_tree = open_tree(-1, target,
++		fd_tree = mnt_open_tree(AT_FDCWD, target,
+ 			    OPEN_TREE_CLONE | OPEN_TREE_CLOEXEC |
+-			    (recursive ? AT_RECURSIVE : 0));
++			    (recursive ? AT_RECURSIVE : 0),
++			    mnt_context_is_restricted(cxt) ?
++				RESOLVE_NO_SYMLINKS : 0);
+ 	if (fd_tree < 0) {
+ 		DBG(HOOK, ul_debugobj(hs, " failed to open tree"));
+ 		mnt_context_syscall_save_status(cxt, "open_tree", 0);
+diff --git a/libmount/src/hook_loopdev.c b/libmount/src/hook_loopdev.c
+index 3435111..af9a522 100644
+--- a/libmount/src/hook_loopdev.c
++++ b/libmount/src/hook_loopdev.c
+@@ -23,6 +23,8 @@ struct hook_data {
+ 	int loopdev_fd;
+ };
+ 
++static int delete_loopdev(struct libmnt_context *cxt, struct hook_data *hd);
++
+ /* de-initiallize this module */
+ static int hookset_deinit(struct libmnt_context *cxt, const struct libmnt_hookset *hs)
+ {
+@@ -30,9 +32,16 @@ static int hookset_deinit(struct libmnt_context *cxt, const struct libmnt_hookse
+ 
+ 	DBG(HOOK, ul_debugobj(hs, "deinit '%s'", hs->name));
+ 
+-	/* remove all our hooks */
++	/* remove all our hooks and free hook data */
+ 	while (mnt_context_remove_hook(cxt, hs, 0, &data) == 0) {
+-		free(data);
++		if (data) {
++			struct hook_data *hd = (struct hook_data *) data;
++
++			/* cleanup after skipped MOUNT_POST hook */
++			if (hd->loopdev_fd > -1)
++				delete_loopdev(cxt, hd);
++			free(hd);
++		}
+ 		data = NULL;
+ 	}
+ 
+diff --git a/libmount/src/mountP.h b/libmount/src/mountP.h
+index 97d0bf8..9d022d1 100644
+--- a/libmount/src/mountP.h
++++ b/libmount/src/mountP.h
+@@ -746,6 +746,8 @@ static inline struct libmnt_sysapi *mnt_context_get_sysapi(struct libmnt_context
+ }
+ 
+ int mnt_context_open_tree(struct libmnt_context *cxt, const char *path, unsigned long mflg);
++int mnt_open_tree(int dirfd, const char *path, unsigned long flags,
++		  unsigned long long resolve);
+ 
+ #endif
+ 
+diff --git a/libmount/src/utils.c b/libmount/src/utils.c
+index 4c90c95..e430168 100644
+--- a/libmount/src/utils.c
++++ b/libmount/src/utils.c
+@@ -24,6 +24,7 @@
+ #include "strutils.h"
+ #include "pathnames.h"
+ #include "mountP.h"
++#include "fileutils.h"
+ #include "mangle.h"
+ #include "canonicalize.h"
+ #include "env.h"
+@@ -1357,6 +1358,34 @@ done:
+ 	return 1;
+ }
+ 
++#ifdef USE_LIBMOUNT_MOUNTFD_SUPPORT
++/*
++ * Open a mount tree, optionally pinning the path with openat2() first.
++ *
++ * When @resolve is non-zero, the path is resolved with openat2() using the
++ * given resolve flags, then the tree is opened with open_tree(AT_EMPTY_PATH).
++ * When @resolve is zero, open_tree() is called directly with the path.
++ */
++int mnt_open_tree(int dirfd, const char *path, unsigned long flags,
++		  unsigned long long resolve)
++{
++	if (resolve) {
++		int pin_fd, fd;
++
++		pin_fd = ul_openat_resolve(dirfd, path,
++					O_PATH | O_CLOEXEC, 0, resolve);
++		if (pin_fd < 0)
++			return pin_fd;
++
++		fd = open_tree(pin_fd, "", flags | AT_EMPTY_PATH);
++		close(pin_fd);
++		return fd;
++	}
++
++	return open_tree(dirfd, path, flags);
++}
++#endif /* USE_LIBMOUNT_MOUNTFD_SUPPORT */
++
+ #ifdef TEST_PROGRAM
+ static int test_match_fstype(struct libmnt_test *ts __attribute__((unused)),
+ 			     int argc, char *argv[])
+diff --git a/sys-utils/nsenter.c b/sys-utils/nsenter.c
+index cf6c831..9d9d90a 100644
+--- a/sys-utils/nsenter.c
++++ b/sys-utils/nsenter.c
+@@ -171,7 +171,7 @@ static void open_target_fd(int *fd, const char *type, const char *path)
+ 	if (*fd >= 0)
+ 		close(*fd);
+ 
+-	*fd = open(path, O_RDONLY);
++	*fd = open(path, O_RDONLY | O_CLOEXEC);
+ 	if (*fd < 0)
+ 		err(EXIT_FAILURE, _("cannot open %s"), path);
+ }
+@@ -396,7 +396,7 @@ static void open_cgroup_procs(void)
+ 
+ 	snprintf(fdpath, sizeof(fdpath), _PATH_SYS_CGROUP "/%s/cgroup.procs", path);
+ 
+-	if ((cgroup_procs_fd = open(fdpath, O_WRONLY | O_APPEND)) < 0)
++	if ((cgroup_procs_fd = open(fdpath, O_WRONLY | O_APPEND | O_CLOEXEC)) < 0)
+ 		err(EXIT_FAILURE, _("failed to open cgroup.procs"));
+ 
+ 	free(buf);
+@@ -762,7 +762,7 @@ int main(int argc, char *argv[])
+ 
+ 	/* Remember the current working directory if I'm not changing it */
+ 	if (root_fd >= 0 && wd_fd < 0 && wdns == NULL) {
+-		wd_fd = open(".", O_RDONLY);
++		wd_fd = open(".", O_RDONLY | O_CLOEXEC);
+ 		if (wd_fd < 0)
+ 			err(EXIT_FAILURE,
+ 			    _("cannot open current working directory"));
+@@ -785,7 +785,7 @@ int main(int argc, char *argv[])
+ 
+ 	/* working directory specified as in-namespace path */
+ 	if (wdns) {
+-		wd_fd = open(wdns, O_RDONLY);
++		wd_fd = open(wdns, O_RDONLY | O_CLOEXEC);
+ 		if (wd_fd < 0)
+ 			err(EXIT_FAILURE,
+ 			    _("cannot open current working directory"));
+diff --git a/sys-utils/unshare.c b/sys-utils/unshare.c
+index 05db627..c477398 100644
+--- a/sys-utils/unshare.c
++++ b/sys-utils/unshare.c
+@@ -108,7 +108,7 @@ static void setgroups_control(int action)
+ 		return;
+ 	cmd = setgroups_strings[action];
+ 
+-	fd = open(file, O_WRONLY);
++	fd = open(file, O_WRONLY | O_CLOEXEC);
+ 	if (fd < 0) {
+ 		if (errno == ENOENT)
+ 			return;
+@@ -125,7 +125,7 @@ static void map_id(const char *file, uint32_t from, uint32_t to)
+ 	char *buf;
+ 	int fd;
+ 
+-	fd = open(file, O_WRONLY);
++	fd = open(file, O_WRONLY | O_CLOEXEC);
+ 	if (fd < 0)
+ 		 err(EXIT_FAILURE, _("cannot open %s"), file);
+ 
+@@ -219,7 +219,7 @@ static void settime(int64_t offset, clockid_t clk_id)
+ 
+ 	len = snprintf(buf, sizeof(buf), "%d %" PRId64 " 0", clk_id, offset);
+ 
+-	fd = open("/proc/self/timens_offsets", O_WRONLY);
++	fd = open("/proc/self/timens_offsets", O_WRONLY | O_CLOEXEC);
+ 	if (fd < 0)
+ 		err(EXIT_FAILURE, _("failed to open /proc/self/timens_offsets"));
+ 
+@@ -289,7 +289,7 @@ static pid_t fork_and_wait(int *fd)
+ 	pid_t pid;
+ 	uint64_t ch;
+ 
+-	*fd = eventfd(0, 0);
++	*fd = eventfd(0, EFD_CLOEXEC);
+ 	if (*fd < 0)
+ 		err(EXIT_FAILURE, _("eventfd failed"));
+ 
+@@ -744,11 +744,11 @@ static void load_interp(const char *binfmt_mnt, const char *interp)
+ {
+ 	int dirfd, fd;
+ 
+-	dirfd = open(binfmt_mnt, O_PATH | O_DIRECTORY);
++	dirfd = open(binfmt_mnt, O_PATH | O_DIRECTORY | O_CLOEXEC);
+ 	if (dirfd < 0)
+ 		err(EXIT_FAILURE, _("cannot open %s"), binfmt_mnt);
+ 
+-	fd = openat(dirfd, "register", O_WRONLY);
++	fd = openat(dirfd, "register", O_WRONLY | O_CLOEXEC);
+ 	if (fd < 0)
+ 		err(EXIT_FAILURE, _("cannot open %s/register"), binfmt_mnt);

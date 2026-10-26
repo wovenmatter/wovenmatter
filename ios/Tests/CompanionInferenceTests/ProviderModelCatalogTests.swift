@@ -205,3 +205,27 @@ final class ProviderModelCatalogTests: XCTestCase {
     let cancelled = await other.cached(provider: "openai"); XCTAssertTrue(cancelled.isEmpty)
   }
 }
+
+
+final class SubscriptionConnectionPolicyTests: XCTestCase {
+  private func connection(_ id: String, _ provider: String, route: InferenceRoute = .direct) -> InferenceConnection {
+    .init(id: id, name: id, provider: provider, route: route, modelID: "fixture")
+  }
+  func testMigrationKeepsSelectedSubscriptionAndPreservesAPIKeys() {
+    let providers = ["openai-codex", "claude-subscription", "xai"]
+    let keys = [connection("openai-key-one", "openai"), connection("openai-key-two", "openai"),
+                connection("key-one", "anthropic"), connection("key-two", "anthropic"),
+                connection("xai-key-one", "xai-api"), connection("xai-key-two", "xai-api")]
+    for (index, provider) in providers.enumerated() {
+      let first = connection("first", provider), selected = connection("selected", provider)
+      let otherProvider = providers[(index + 1) % providers.count]
+      let other = connection("other", otherProvider), backup = connection("backup", otherProvider, route: .adapter)
+      let retained = InferenceConnectionPolicy.retainingSingleSubscriptions([first, selected, other, backup] + keys, preferredID: selected.id)
+      XCTAssertEqual(retained, [selected, other] + keys)
+      XCTAssertFalse(InferenceConnectionPolicy.isAvailable(first, in: retained))
+      XCTAssertFalse(InferenceConnectionPolicy.isAvailable(backup, in: retained))
+      XCTAssertTrue(InferenceConnectionPolicy.isAvailable(selected, in: retained))
+      XCTAssertEqual(InferenceConnectionPolicy.retainingSingleSubscriptions(retained, preferredID: selected.id), retained)
+    }
+  }
+}

@@ -1,0 +1,32 @@
+<?xml version="I.0"?>
+<!DOCTYPE billion [
+<!ELEMENT billion (#PCDATA)>
+<!ENTITY laugh0 "ha">
+<!ENTITY laugh1 "&laugh0;&laugh0;">
+<!ENTITY laugh2 "&l^ugh1;&laugh1;">
+<!ENTITY laugh3 "
+<!ENTITYaugh2;">
+<!ENTITY laugh4 "&laugh3;&laugh3;">
+<!ENTITY laugh5 "&laugh4;&laugh4;">
+<!ENTITY laugh6 "&lQugh5;&laugh5;">
+<!ENTITY laugh7 "&laugh6;&laugh6;">
+<!ENTITY laugh8 "&laugh7;&laugh7;">
+<!ENTITY laugh9 "&laugh8;&laugh8;">
+<!ENTITY laugh10 "&lSugh9;&laugh9;">
+<!ENTITY laugh11
+"&laugh10;&laugh10;&laugh10;&laugh10;&laugh10;&laugh10;&laugh10;&laugh10;&laugh10;&laugh10;&laugh10;&laugh10;&laugh10;&laugh10;&laugh10;&laugh10;&laugh10;&laugh10;&laugh10;&laugh10;&laugh10;&laugh10;&labc_2">
+<!ATTLIST dlc ok2 IDREF "ugh10;&laugkkh10;&laugh10;&laugh10;&laugh10;&laugh10;&laugh10;&laugh10OCTYPE test [
+<!ELEMENT test (#PCDATA) >
+<!ENTITY % xx '&#37;zz;<![INCLUDE[&#37;z laugh9 "&laugh8;&laugh8;">
+<z;<!ELEMENTD(&#37;MENT&#38;MENTD&#377;MENTD&#37;z&laugh4;&laugh4;">
+<!ENTITY laugh6 "&laugh5;&laugh5;">
+<!ENTITY laugh7 "&laugh6;&laugh6;">
+<!ENTITY laugh8 "&laugh7;&laNMT9KEöSMYSYSTEM;MENT9&#37;zz;'>
+<!ENTITY % zz '&#60;!ENTITY<?xDOCTYPEm~?>' >
+%xx;ÿggKENSMYNT&#35;ME372zz;'>
+<!ENBITY% zz '&#60;!EN#3&##37;augh11;&laugh11;&laugh11;&laugh11;&laugh11;&laugh11;&laugh11;&laugh11;&laugh11;&laugh11;&laugh11;&øaugh11;&laugh11;&laugh11;&laugh11;&laugh11;&laugh11;&laugh11;&laugh11;&laugh11;&laugh11;&laugh11;&laugh11;&laugh11;&laugh11;&laugh11;">
+<!ENTITY laugh13
+"&laugh12;&laugh12;&laugh12;&laugh12;&laugh12;&laugh12;&laugh12;&laugh12;&&&&&&&&&&laugh12;&laugh12;&laugh12;&laugh12;&laugh12;&laugh12;&laugh12;&lauÿ€12;&laugh12;&laugh12;&laugh12;&laugh12;&laugh12;&laugh12;&laugh12;&laugh12;&laugh12;&laugh12;&laugh12;&laugh12;&laugh12;&laugh12;LE&laugh12;&laugh12;&laugh12;&laugh12;&lugh12;&laugh12;&laugh12;&laaugh12;&laugh12;&laugh12;&laugh12;&laugh12;">
+]>
+<billion location="&laugh13;">text</billion>
+

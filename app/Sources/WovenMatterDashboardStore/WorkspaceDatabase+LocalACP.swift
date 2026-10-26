@@ -120,13 +120,15 @@ extension WorkspaceDatabaseConnection {
     importedOpenCodeSnapshot: OpenCodeSessionSnapshot? = nil,
     requestedConversationID: UUID? = nil,
     allowMissingCalendarFolder: Bool = false,
-    executionRoot: SessionCreationRoot? = nil
+    executionRoot: SessionCreationRoot
   ) throws -> String {
     try transaction {
       let id = try createLocalACPSessionUnlocked(runtimeKind: runtimeKind, title: title, ownerDeviceID: ownerDeviceID, createdAt: createdAt, openCodeAssociation: openCodeAssociation, importedOpenCodeSnapshot: importedOpenCodeSnapshot, requestedConversationID: requestedConversationID, allowMissingCalendarFolder: allowMissingCalendarFolder)
-      if let executionRoot {
-        try saveSessionExecutionRootUnlocked(id: id, folderID: executionRoot.folderID,
-          location: executionRoot.location, defaultPath: executionRoot.defaultPath)
+      try saveSessionExecutionRootUnlocked(id: id, folderID: executionRoot.folderID,
+        location: executionRoot.location, defaultPath: executionRoot.defaultPath)
+      if importedOpenCodeSnapshot != nil {
+        try toolsExecuteUnlocked("INSERT OR IGNORE INTO retained_execution_history(conversation_id) VALUES(?)", [id])
+        try toolsExecuteUnlocked("UPDATE dashboard_conversations SET is_archived=1 WHERE id=?", [id])
       }
       return id
     }
@@ -242,14 +244,15 @@ extension WorkspaceDatabaseConnection {
     openCodeAssociation: (connectionID: String, sessionID: String)? = nil,
     requestedConversationID: UUID? = nil,
     allowMissingCalendarFolder: Bool = false,
-    executionRoot: SessionCreationRoot? = nil
+    executionRoot: SessionCreationRoot
   ) throws -> String {
-    try transaction {
+    guard executionRoot.location.workspaceID == "remote:" + remoteWorkspaceID.uuidString.lowercased() else {
+      throw WorkspaceToolError.invalid("Create this chat in its owning execution workspace.")
+    }
+    return try transaction {
       let id = try createRemoteACPSessionUnlocked(runtimeKind: runtimeKind, remoteWorkspaceID: remoteWorkspaceID, remoteWorkspaceName: remoteWorkspaceName, title: title, ownerDeviceID: ownerDeviceID, createdAt: createdAt, openCodeAssociation: openCodeAssociation, requestedConversationID: requestedConversationID, allowMissingCalendarFolder: allowMissingCalendarFolder)
-      if let executionRoot {
-        try saveSessionExecutionRootUnlocked(id: id, folderID: executionRoot.folderID,
-          location: executionRoot.location, defaultPath: executionRoot.defaultPath)
-      }
+      try saveSessionExecutionRootUnlocked(id: id, folderID: executionRoot.folderID,
+        location: executionRoot.location, defaultPath: executionRoot.defaultPath)
       return id
     }
   }
@@ -511,6 +514,7 @@ extension WorkspaceDatabaseConnection {
       throw OpenCodeError.message("OpenCode v1 transcripts are read-only. OpenCode v2 uses the shared server directly.")
     }
     return try transaction {
+      _ = try availableSessionExecutionRoot(id: conversationID)
       guard try companionIDsUnlocked("SELECT workspace_id FROM companion_execution_conversations WHERE id=?", bindings: [conversationID]).isEmpty else {
         throw CompanionAPIError(code: "execution_owner", message: "This conversation is owned by its independent execution workspace. Reconnect it instead of starting a legacy attachment.")
       }
@@ -1862,7 +1866,7 @@ extension WorkspaceDatabase {
     importedOpenCodeSnapshot: OpenCodeSessionSnapshot? = nil,
     requestedConversationID: UUID? = nil,
     allowMissingCalendarFolder: Bool = false,
-    executionRoot: SessionCreationRoot? = nil
+    executionRoot: SessionCreationRoot
   ) async throws -> String {
     try await write { try $0.createLocalACPSession(runtimeKind: runtimeKind, title: title, ownerDeviceID: ownerDeviceID, createdAt: createdAt, openCodeAssociation: openCodeAssociation, importedOpenCodeSnapshot: importedOpenCodeSnapshot, requestedConversationID: requestedConversationID, allowMissingCalendarFolder: allowMissingCalendarFolder, executionRoot: executionRoot) }
   }
@@ -1878,7 +1882,7 @@ extension WorkspaceDatabase {
     openCodeAssociation: (connectionID: String, sessionID: String)? = nil,
     requestedConversationID: UUID? = nil,
     allowMissingCalendarFolder: Bool = false,
-    executionRoot: SessionCreationRoot? = nil
+    executionRoot: SessionCreationRoot
   ) async throws -> String {
     try await write { try $0.createRemoteACPSession(runtimeKind: runtimeKind, remoteWorkspaceID: remoteWorkspaceID, remoteWorkspaceName: remoteWorkspaceName, title: title, ownerDeviceID: ownerDeviceID, createdAt: createdAt, openCodeAssociation: openCodeAssociation, requestedConversationID: requestedConversationID, allowMissingCalendarFolder: allowMissingCalendarFolder, executionRoot: executionRoot) }
   }

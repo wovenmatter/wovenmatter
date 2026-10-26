@@ -11,7 +11,9 @@ import { createClientExecutionRuntime } from './client-execution-runtime.mjs'
 import { createTaskGateway } from './task-gateway.mjs'
 import { createTaskExecutor } from './task-gateway-runner.mjs'
 import { createDurableACP } from './durable-acp.mjs'
+import { inspectProcesses } from './runtime-inspection.mjs'
 import { createWorkspaceInstances } from './workspace-instances.mjs'
+import { createWorkspaceBrowser, streamBrowserFrames } from './workspace-browser.mjs'
 import { createServer } from 'node:http'
 import { timingSafeEqual, randomUUID, createHash } from 'node:crypto'
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
@@ -51,7 +53,7 @@ const maximumInstallerRedirects = 5
 const authenticationSessionTimeoutMilliseconds = 30 * 60_000
 const instances = createWorkspaceInstances({
   workspaceRoot, environment: harnessEnvironment,
-  isEnabled: async id => await maintenance.isEnabled(id),
+  isEnabled: async id => await maintenance.isInstalled(id),
 })
 const maintenance = createRuntimeMaintenance({
   catalog, workspaceRoot, environment: harnessEnvironment, verifiedInstaller,
@@ -67,14 +69,14 @@ const releaseTaskOwner = runningAsService
   : null
 const durableACP = createDurableACP({ catalog, workspaceRoot,
   environment: harness => harness.id === 'codex' ? harnessRuntimeEnvironment(harness) : harnessEnvironment(),
-  isEnabled:async () => taskGateway?.enabled() === true, isHarnessEnabled:id => maintenance.isEnabled(id) })
+  isEnabled:async () => taskGateway?.enabled() === true, isHarnessEnabled:id => maintenance.isInstalled(id) })
 const taskGateway = runningAsService ? createTaskGateway({
   workspaceRoot,
   directory:resolve(workspaceRoot,'.wovenmatter/task-gateway'),
   execute:createTaskExecutor({catalog,workspaceRoot,
     environment: harness => harness?.id === 'codex' ? harnessRuntimeEnvironment(harness) : harnessEnvironment(),
     defaultAgent,instances,
-    isEnabled:id => maintenance.isEnabled(id)}),
+    isEnabled:id => maintenance.isInstalled(id)}),
   onDisable:async () => { await Promise.all([durableACP.stopAll(), defaultAgent.cancelActive(), clientExecution?.cancelActive()]); foregroundDefaultRuns.clear() },
 }) : null
 
@@ -92,16 +94,32 @@ const retainedExecution = runningAsService ? createRetainedExecutionCapture({
   resolveAssociation:request=>clientExecution.resolveRetainedAssociation(request),
 }) : null
 
-const server = createServer(async (request, response) => {
+const workspaceBrowser = createWorkspaceBrowser({ profile: resolve(process.env.HOME, '.local/share/wovenmatter/browser') })
+
+const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
+  requestTimeout: 30_000, connectionsCheckingInterval: 1_000 }, async (request, response) => {
   try {
+    // This control service is called by native clients, never browser pages.
+    if (request.headers.origin) return json(response, 403, { error: 'browser_origin_forbidden' })
+    if (!request.url?.startsWith('/') || request.url.startsWith('//')) return json(response, 400, { error: 'invalid_request_target' })
     const administrator = authorized(request)
-    const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`)
+    const url = new URL(request.url, 'http://localhost')
     const scope = url.pathname.startsWith('/v1/inference/') ? 'inference' : 'execution'
     const device = clientExecution?.principal(request.headers.authorization, scope)
     if (!administrator && !device) return json(response, 401, { error: 'unauthorized' })
     if (device) {
       const material = clientExecution.unlockMaterial(request.headers.authorization)
       if (material) await defaultAgent.unlockForClient(material)
+    }
+    if (url.pathname === '/v1/runtime/inspection' && request.method === 'GET') {
+      if (!administrator) return json(response,403,{error:'administrator_required'})
+      return json(response,200,{ownerID:'remote',observedAt:Date.now()/1000-978307200,items:await inspectProcesses([
+        {id:'server:remote',kind:'service',title:'Workspace server',state:'running',processID:process.pid,
+         startedAt:Date.now()/1000-978307200-process.uptime(),residentBytes:process.memoryUsage().rss},
+        ...await defaultAgent.inspection(),...durableACP.inspection(),
+        {id:'scheduler',parentID:'server:remote',kind:'scheduler',title:'Scheduled work',
+         state:taskGateway.status().activeRuns?'working':'idle',detail:`${taskGateway.status().activeRuns} active runs`},
+      ])})
     }
     if (url.pathname === '/v1/execution/devices' && request.method === 'POST') {
       if (!administrator) return json(response,403,{error:'administrator_required'})
@@ -128,6 +146,7 @@ const server = createServer(async (request, response) => {
     }
     if (url.pathname === '/v1/execution/retained-history' && request.method === 'GET') {
       if (!administrator) return json(response,403,{error:'scope_not_granted'})
+
       return json(response,200,retainedExecution.status())
     }
     if (url.pathname === '/v1/execution' && request.method === 'GET') return json(response,200,clientExecution.descriptor())
@@ -165,6 +184,18 @@ const server = createServer(async (request, response) => {
     // Device grants never convey workspace administration, credentials, SDK
     // installation, shell access, or native authentication routes.
     if (!administrator) return json(response,403,{error:'scope_not_granted'})
+
+    if (url.pathname === '/v1/browser/stream' && request.method === 'GET') {
+      await streamBrowserFrames(workspaceBrowser, url.searchParams.get('tabID'), response); return
+    }
+    if (url.pathname === '/v1/browser/tabs' && request.method === 'GET') return json(response,200,await workspaceBrowser.tabs())
+    if (url.pathname === '/v1/browser/connect' && request.method === 'POST') return json(response,200,await workspaceBrowser.connect())
+    if (url.pathname === '/v1/browser/actions' && request.method === 'POST') return json(response,200,await workspaceBrowser.actions((await readJSON(request, 65536)).actions))
+    if (url.pathname === '/v1/browser/action' && request.method === 'POST') return json(response,200,await workspaceBrowser.action(await readJSON(request, 131072)))
+    if (url.pathname === '/v1/browser/frame' && request.method === 'POST') {
+      const body = await readJSON(request, 1024)
+      return json(response,200,await workspaceBrowser.frame(body.tabID, body.previousFrameID))
+    }
 
     if (url.pathname === '/v1/task-gateway' && request.method === 'GET') return json(response,200,taskGateway.status())
     if (url.pathname === '/v1/task-gateway' && request.method === 'PATCH') return json(response,200,await taskGateway.configure(await readJSON(request)))
@@ -241,7 +272,8 @@ const server = createServer(async (request, response) => {
     if (maintenanceMatch) {
       const harness = requireHarness(maintenanceMatch[1])
       if (request.method === 'POST' && maintenanceMatch[2] === 'check') return json(response, 200, await maintenance.inventory(harness, true))
-      if (request.method === 'PATCH' && !maintenanceMatch[2]) return json(response, 200, await maintenance.preferences(harness, await readJSON(request)))
+      // Older apps may send retired visibility/enable preferences. Ignore them.
+      if (request.method === 'PATCH' && !maintenanceMatch[2]) { await readJSON(request); return json(response, 200, await maintenance.inventory(harness)) }
       if (request.method === 'POST' && maintenanceMatch[2]) return json(response, 202, await maintenance.start(harness, maintenanceMatch[2], await readJSON(request)))
     }
 
@@ -329,10 +361,14 @@ const server = createServer(async (request, response) => {
 
     return json(response, 404, { error: 'not_found' })
   } catch (error) {
-    const status = error.statusCode ?? 500
-    return json(response, status, { error: error.message ?? 'internal_error' })
+    const status = Number.isInteger(error.statusCode) && error.statusCode >= 400 && error.statusCode <= 599 ? error.statusCode : 500
+    if (response.headersSent) { response.destroy(); return }
+    return json(response, status, { error: status === 500 ? 'internal_error' : error.message ?? 'invalid_request' })
   }
 })
+
+server.maxConnections = 256
+server.maxRequestsPerSocket = 1_000
 
 if (runningAsService) {
   taskGateway.start()
@@ -351,7 +387,7 @@ if (runningAsService) {
   })
   process.once('SIGTERM', async () => {
     server.close()
-    try { await taskGateway.close(); await retainedExecution.close(); await clientExecution.close(); await durableACP.stopAll(); await defaultAgent.close(); releaseTaskOwner?.(); process.exit(0) }
+    try { await workspaceBrowser.close(); await taskGateway.close(); await retainedExecution.close(); await clientExecution.close(); await durableACP.stopAll(); await defaultAgent.close(); releaseTaskOwner?.(); process.exit(0) }
     catch { process.exit(1) }
   })
 }
@@ -1055,7 +1091,9 @@ function json(response, statusCode, value) {
 
 function requiredEnvironment(name) {
   const value = process.env[name]
-  if (!value) throw new Error(`${name} is required`)
+  if (!value || value.length < 32 || value.length > 256 || /[^A-Za-z0-9+\/=_-]/.test(value)) {
+    throw new Error(`${name} must be a 32-256 character random credential`)
+  }
   return value
 }
 

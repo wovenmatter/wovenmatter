@@ -223,14 +223,14 @@ export function createDurableACP({ catalog, workspaceRoot, environment, isEnable
       if (agent >= 0) args.splice(agent + 1, 0, '--no-leader')
     }
     if (!await isEnabled()) throw new Error('Background execution is disabled')
-    if (!await isHarnessEnabled(selected)) throw new Error('This harness is disabled')
+    if (!await isHarnessEnabled(selected)) throw new Error('This harness is not installed')
     const creation = metadata ? { type: 'recovered' } : { type: 'created', harnessID: selected, permission, cwd: workingDirectory }
     await record(channel, creation)
     updateSnapshot(channel.snapshot, creation)
     channels.set(id, channel)
     if (!await isEnabled() || !await isHarnessEnabled(selected)) {
       channel.state = 'stopped'
-      throw new Error('Background execution or harness is disabled')
+      throw new Error('Background execution is disabled or the harness is not installed')
     }
     const wrapped = ['codex', 'claude_code', 'grok_build'].includes(selected);
     const child = spawnProcess(wrapped ? process.execPath : harness.command, wrapped
@@ -360,6 +360,11 @@ export function createDurableACP({ catalog, workspaceRoot, environment, isEnable
     return result
   }
   return { handle,
+    inspection: () => [...channels.values()].map(channel => ({
+      id:'acp:'+channel.id,parentID:'server:remote',kind:'runtime',title:catalog.get(channel.harnessID)?.displayName ?? channel.harnessID,
+      state:channel.state,processID:channel.process?.exitCode === null ? channel.process.pid : undefined,
+      nativeSessionID:channel.snapshot.session?.sessionId,
+    })),
     hasActiveRuntime: id => [...channels.values()].some(channel => channel.process && (!id || channel.harnessID === id)),
     stopAll: () => serialize(async () => {
       await Promise.all([...channels.values()].map(channel => new Promise(resolve => {

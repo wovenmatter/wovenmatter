@@ -9,13 +9,17 @@ services:
     container_name: ${WOVENMATTER_CONTAINER_NAME:-wovenmatter-workspace}
     restart: unless-stopped
     read_only: true
+    user: "10001:10001"
+    pids_limit: 512
+    ulimits:
+      core: 0
     cap_drop:
       - ALL
     security_opt:
       - no-new-privileges:true
     tmpfs:
-      - /tmp:rw,noexec,nosuid,size=256m
-      - /run:rw,noexec,nosuid,size=16m
+      - /tmp:rw,noexec,nosuid,nodev,size=256m
+      - /run:rw,noexec,nosuid,nodev,size=16m
     logging:
       driver: local
       options:
@@ -31,3 +35,12 @@ services:
 volumes:
   workspace-home:
     name: ${WOVENMATTER_VOLUME_NAME:-wovenmatter-workspace-home}
+
+networks:
+  default:
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.enable_icc: "false"
+      com.docker.network.bridge.gateway_mode_ipv4: nat
+      com.docker.network.bridge.host_binding_ipv4: 127.0.0.1
+      com.docker.network.bridge.trusted_host_interfaces: ""

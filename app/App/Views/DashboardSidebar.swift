@@ -283,6 +283,7 @@ struct DashboardSidebarNavigationPage: View {
     @AppStorage(DashboardWorkspaceSidebarVisibility.remoteWorkspaces.storageKey)
     private var showsRemoteWorkspaces = true
 
+    @State private var browserWorkspace: RemoteWorkspaceConfiguration?
     @State private var presentedFolderID: String?
     @State private var recentsOpen = true
     @State private var scrollHoverCoordinator = DashboardScrollHoverCoordinator()
@@ -326,6 +327,9 @@ struct DashboardSidebarNavigationPage: View {
             .onScrollPhaseChange { _, phase in
                 scrollHoverCoordinator.setScrolling(phase.isScrolling)
             }
+        }
+        .sheet(item: $browserWorkspace) { configuration in
+            RemoteBrowserView(workspaces: remoteWorkspaces, configuration: configuration)
         }
     }
 
@@ -474,11 +478,10 @@ struct DashboardSidebarNavigationPage: View {
                     }
                 }
             }
-            // Keep folders from disconnected/deleted configurations and legacy
-            // unassigned folders reachable without claiming they belong to this Mac.
+            // A disconnected workspace retains its captured folder ownership.
             ForEach(unavailableFolderOwnerIDs, id: \.self) { ownerID in
                 let key = "unavailable-workspace:" + ownerID
-                let title = ownerID.isEmpty ? "Unassigned workspace" : "Unavailable workspace"
+                let title = "Unavailable workspace"
                 agentDisclosureHeading(title: title, key: key)
                 if agentSectionExpanded(key) {
                     workspaceContents(
@@ -495,7 +498,7 @@ struct DashboardSidebarNavigationPage: View {
     private var unavailableFolderOwnerIDs: [String] {
         let known = Set(remoteWorkspaceLinks.map { "remote:" + $0.id.uuidString.lowercased() }
             + [localExecutionWorkspaceID].compactMap { $0 })
-        return Set(folders.map { $0.executionWorkspaceID ?? "" }).subtracting(known).sorted()
+        return Set(folders.compactMap { $0.executionWorkspaceID }.filter { !$0.isEmpty }).subtracting(known).sorted()
     }
 
     @ViewBuilder
@@ -588,15 +591,13 @@ struct DashboardSidebarNavigationPage: View {
         let ownerID = "remote:" + workspace.id.uuidString.lowercased()
         // Remote workspace names deliberately align with the local heading.
         agentDisclosureHeading(title: workspace.configuration.name, key: key)
+            .contextMenu {
+                Button("View browser") { browserWorkspace = workspace.configuration }
+            }
         if agentSectionExpanded(key) {
             workspaceContents(
                 key: key, title: workspace.configuration.name,
-                workspaceAgents: agents.filter { agent in
-                    agent.governingPlane == .remoteWorkspace && agent.runtimeDeviceID == workspace.id
-                        && (pinnedAgentIDs.contains(agent.id) || workspace.readyTargets.contains { target in
-                            target.harness.id == agent.runtimeKind
-                        })
-                },
+                workspaceAgents: DashboardRemoteWorkspaceSidebarModel.agents(agents, in: workspace.id),
                 workspaceFolders: folders.filter { $0.executionWorkspaceID == ownerID },
                 remoteWorkspace: workspace
             )
@@ -707,7 +708,7 @@ struct DashboardSidebarNavigationPage: View {
 
     private func canCreateChat(workspaceID: String?) -> Bool {
         let owner = folders.first { $0.id == selectedFolderID }?.executionWorkspaceID
-        return owner == nil || owner == workspaceID
+        return selectedFolderID == nil || (owner != nil && owner == workspaceID)
     }
 
     private func newChatButton(label: String, action: @escaping () -> Void) -> some View {
@@ -1303,7 +1304,7 @@ struct DashboardNewChatDrawer: View {
                                         ),
                                         title: definition.displayName,
                                         detail: definition.runtimeKind == .opencode
-                                            ? ((model.openCode?.isEnabled == true && model.openCode?.canConnect == true) ? "Local OpenCode v2" : "Enable OpenCode in Settings")
+                                            ? ((model.openCode?.isEnabled == true && model.openCode?.canConnect == true) ? "Local OpenCode v2" : "Set up OpenCode in Settings")
                                             : isChecking || availability == nil
                                             ? "Checking…"
                                             : availability?.isReady == true

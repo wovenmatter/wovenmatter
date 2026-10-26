@@ -16,7 +16,7 @@ enum ConnectionSettingsFocus {
     var detail: String {
         switch self {
         case .providers: "Sign in or add API keys for one or more providers."
-        case .webSearch: "Add an Exa API key so Pi Durable can search the web."
+        case .webSearch: "Add an Exa, Brave, or Firecrawl API key so Pi Durable can search the web."
         }
     }
 }
@@ -63,11 +63,14 @@ struct SettingsConnectionsView: View {
                     .background(theme.palette.themeWhisper)
                     .clipShape(DashboardShapes.card)
             } else {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Exa API key").font(.system(size: 13, weight: .medium))
-                    connectionContent("exa")
+                VStack(spacing: 0) {
+                    ForEach(ProviderConnectionID.searchProviders) { provider in
+                        if provider != .exa { providerDivider }
+                        providerRow(provider.name, detail: "API keys") {
+                            connectionContent(provider.id).padding(.leading, 12)
+                        }
+                    }
                 }
-                .padding(16)
                 .background(theme.palette.themeWhisper)
                 .clipShape(DashboardShapes.card)
             }
@@ -87,18 +90,18 @@ struct SettingsConnectionsView: View {
 
     private var providerRows: some View {
         Group {
-            providerRow("OpenAI", detail: "ChatGPT subscriptions or API keys") {
-                connectionGroup("openai-codex", title: "ChatGPT subscriptions", subscription: true)
+            providerRow("OpenAI", detail: "ChatGPT subscription or API keys") {
+                connectionGroup("openai-codex", title: "ChatGPT subscription")
                 connectionGroup("openai", title: "API keys")
             }
             providerDivider
-            providerRow("Anthropic", detail: "Claude subscriptions or API keys") {
-                connectionGroup("claude-subscription", title: "Claude subscriptions", subscription: true)
+            providerRow("Anthropic", detail: "Claude subscription or API keys") {
+                connectionGroup("claude-subscription", title: "Claude subscription")
                 connectionGroup("anthropic", title: "API keys")
             }
             providerDivider
-            providerRow("Grok · xAI", detail: "Grok subscriptions or xAI API keys") {
-                connectionGroup("xai", title: "Grok subscriptions", subscription: true)
+            providerRow("Grok · xAI", detail: "Grok subscription or xAI API keys") {
+                connectionGroup("xai", title: "Grok subscription")
                 connectionGroup("xai-api", title: "xAI API keys")
             }
             providerDivider
@@ -129,24 +132,29 @@ struct SettingsConnectionsView: View {
         case "Anthropic": ids = ["claude-subscription", "anthropic"]
         case "Grok · xAI": ids = ["xai", "xai-api"]
         case "OpenRouter": ids = ["openrouter"]
+        case "Exa search": ids = ["exa"]
+        case "Brave Search": ids = ["brave"]
+        case "Firecrawl": ids = ["firecrawl"]
         default: ids = ["opencode-go"]
         }
         let accounts = ids.flatMap { agent.effectiveAccounts[$0] ?? [] }
         return accounts.isEmpty ? nil : accounts.map(\.label).joined(separator: " · ")
     }
-    private func connectionGroup(_ id: String, title: String, subscription: Bool = false) -> some View {
+    private func connectionGroup(_ id: String, title: String) -> some View {
         DisclosureGroup(title) {
-            connectionContent(id, subscription: subscription)
+            connectionContent(id)
         }.padding(.leading, 12)
     }
-    private func connectionContent(_ id: String, subscription: Bool = false) -> some View {
+    private func connectionContent(_ id: String) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             let stored = agent.accounts[id] ?? []
+            let subscription = ProviderConnectionID(rawValue: id)?.isSubscription == true
             let accounts = stored.filter(\.isSelected) + stored.filter { !$0.isSelected }
             if agent.scope != "global" {
                 if accounts.isEmpty, let shared = agent.sharedAccounts[id], !shared.isEmpty {
                     SettingsNote(id == "claude-subscription"
                         ? "Shared profile names · Claude sign-in is required on this machine."
+                        : subscription ? "Using the shared Pi Durable account"
                         : remote == nil ? "Using shared Pi Durable accounts" : "Shared fallback accounts")
                     ForEach(shared) { account in
                         Text(account.label).font(.system(size: 12.5, weight: .medium))
@@ -161,43 +169,53 @@ struct SettingsConnectionsView: View {
             if id == "claude-subscription" {
                 SettingsNote("Claude signs in on each machine. Only profile names are shared; Claude tokens are not synced.")
             }
-            ForEach(Array(accounts.enumerated()), id: \.element.id) { index, account in
-                DisclosureGroup {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(account.createdAt.map { "Added " + $0.formatted(date: .abbreviated, time: .shortened) } ?? "Existing connection")
-                            .font(.caption).foregroundStyle(.secondary)
-                        HStack {
-                            Button("Use first") { Task { await agent.selectAccount(account.id, provider: id, remote: remote) } }.disabled(account.isSelected)
-                            Button("Move up") { Task { await agent.moveAccount(account.id, provider: id, offset: -1) } }.disabled(account.isSelected || index <= 1)
-                            Button("Move down") { Task { await agent.moveAccount(account.id, provider: id, offset: 1) } }.disabled(account.isSelected || index == accounts.count - 1)
-                            if subscription { Button("Reconnect") { Task { await agent.reconnectAccount(account.id, provider: id, remote: remote) } } }
-                            Spacer()
-                            Button("Remove") { Task { await agent.removeAccount(account.id, provider: id, remote: remote) } }
-                        }.buttonStyle(SettingsQuietButtonStyle()).disabled(!editable || agent.busy)
-                    }
-                } label: {
+            if subscription {
+                ForEach(accounts) { account in
                     HStack {
-                        Text(account.label)
+                        Text(account.label).font(.system(size: 12.5, weight: .medium))
                         Spacer()
-                        Text(account.isSelected ? "Preferred" : "Backup \(index)").font(.caption).foregroundStyle(.secondary)
-                        Text(account.isSelected && subscription ? agent.connectionLabel(id) : "Credential saved").font(.caption).foregroundStyle(.secondary)
+                        Button("Reconnect") { Task { await agent.reconnectAccount(account.id, provider: id, remote: remote) } }
+                        Button("Remove") { Task { await agent.removeAccount(account.id, provider: id, remote: remote) } }
+                    }.buttonStyle(SettingsQuietButtonStyle()).disabled(agent.busy || !editable)
+                }
+                Text(agent.connectionLabel(id)).font(.callout).foregroundStyle(.secondary)
+                if accounts.isEmpty || remote != nil && id != "claude-subscription" {
+                    Button(id == "claude-subscription" ? "Sign in with Claude" : "Sign in") {
+                        if id == "claude-subscription" { agent.signInClaude(remote: remote) }
+                        else { agent.refresh(remote: remote, login: id) }
+                    }.buttonStyle(SettingsQuietButtonStyle()).disabled(agent.busy || !editable)
+                }
+            } else {
+                ForEach(Array(accounts.enumerated()), id: \.element.id) { index, account in
+                    DisclosureGroup {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(account.createdAt.map { "Added " + $0.formatted(date: .abbreviated, time: .shortened) } ?? "Existing connection")
+                                .font(.caption).foregroundStyle(.secondary)
+                            HStack {
+                                Button("Use first") { Task { await agent.selectAccount(account.id, provider: id, remote: remote) } }.disabled(account.isSelected)
+                                Button("Move up") { Task { await agent.moveAccount(account.id, provider: id, offset: -1) } }.disabled(account.isSelected || index <= 1)
+                                Button("Move down") { Task { await agent.moveAccount(account.id, provider: id, offset: 1) } }.disabled(account.isSelected || index == accounts.count - 1)
+                                Spacer()
+                                Button("Remove") { Task { await agent.removeAccount(account.id, provider: id, remote: remote) } }
+                            }.buttonStyle(SettingsQuietButtonStyle()).disabled(!editable || agent.busy)
+                        }
+                    } label: {
+                        HStack {
+                            Text(account.label)
+                            Spacer()
+                            Text(account.isSelected ? "Primary" : "Backup \(index)").font(.caption).foregroundStyle(.secondary)
+                            Text("Credential saved").font(.caption).foregroundStyle(.secondary)
+                        }
                     }
                 }
-            }
-            if id == "claude-subscription", accounts.count < 4 {
-                Text(agent.connectionLabel(id)).font(.callout).foregroundStyle(.secondary)
-                Button(accounts.isEmpty ? "Sign in with Claude" : "Add Claude account") { agent.signInClaude(remote: remote) }
-                    .buttonStyle(SettingsQuietButtonStyle()).disabled(agent.busy || !editable)
-            } else if accounts.count < 4 {
-                if subscription {
-                    Button(accounts.isEmpty ? "Sign in" : "Add account") { agent.refresh(remote: remote, login: id) }
-                        .buttonStyle(SettingsQuietButtonStyle()).disabled(agent.busy || !editable)
-                } else { keyEntry(id) }
-            } else {
-                Text("Four connections maximum. Remove one to add another.").font(.caption).foregroundStyle(.secondary)
+                if accounts.count < ProviderConnectionAccounts.limit {
+                    keyEntry(id)
+                } else {
+                    Text("Four connections maximum. Remove one to add another.").font(.caption).foregroundStyle(.secondary)
+                }
             }
             if remote != nil && ["openai-codex", "xai"].contains(id) {
-                Text("This workspace can own one independent sign-in, tried before its shared accounts.")
+                Text("An independent workspace sign-in replaces the shared account.")
                     .font(.caption).foregroundStyle(.secondary)
                 Button("Use shared sign-in") { Task { await agent.signOut(id, remote: remote) } }
                     .buttonStyle(SettingsQuietButtonStyle()).disabled(agent.busy || !editable)
@@ -211,14 +229,14 @@ struct SettingsConnectionsView: View {
             if focus != .webSearch {
                 TextField("Label (optional)", text: Binding(get: { keyLabels[id] ?? "" }, set: { keyLabels[id] = $0 })).settingsInput().frame(maxWidth: 180)
             }
-            SecureField(id == "exa" ? "Enter Exa API key" : "Add API key", text: Binding(get: { keyDrafts[id] ?? "" }, set: { keyDrafts[id] = $0 }))
+            SecureField("Add API key", text: Binding(get: { keyDrafts[id] ?? "" }, set: { keyDrafts[id] = $0 }))
                 .settingsInput().accessibilityLabel("\(id) API key")
             Button("Save key") {
                 Task { @MainActor in
                     guard await agent.saveKeyConfirmed(keyDrafts[id] ?? "", provider: id, label: (keyLabels[id] ?? "").isEmpty ? nil : keyLabels[id]) else { return }
                     keyDrafts[id] = nil
                     keyLabels[id] = nil
-                    if let onConnected, id != "exa" { onConnected(id) }
+                    if let onConnected, ProviderConnectionID(rawValue: id)?.isSearchProvider != true { onConnected(id) }
                     else { agent.refresh(remote: remote) }
                 }
             }.disabled((keyDrafts[id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)

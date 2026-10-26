@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import Foundation
 import Testing
 import WovenMatterClient
@@ -13,14 +14,14 @@ struct OpenCodeRemoteAssociationTests {
         let owner = UUID(), firstHost = UUID(), secondHost = UUID()
         let firstIdentity = "remote-workspace:" + firstHost.uuidString.lowercased()
         let secondIdentity = "remote-workspace:" + secondHost.uuidString.lowercased()
-        let first = try await database.createRemoteACPSession(runtimeKind: .opencode, remoteWorkspaceID: firstHost,
+        let first = try await database.createFixtureRemoteACPSession(runtimeKind: .opencode, remoteWorkspaceID: firstHost,
             remoteWorkspaceName: "First", title: "First session", ownerDeviceID: owner,
             openCodeAssociation: (firstIdentity, "ses_same"))
-        let second = try await database.createRemoteACPSession(runtimeKind: .opencode, remoteWorkspaceID: secondHost,
+        let second = try await database.createFixtureRemoteACPSession(runtimeKind: .opencode, remoteWorkspaceID: secondHost,
             remoteWorkspaceName: "Second", title: "Second session", ownerDeviceID: owner,
             openCodeAssociation: (secondIdentity, "ses_same"))
         #expect(first != second)
-        let reopened = try await database.createRemoteACPSession(runtimeKind: .opencode, remoteWorkspaceID: firstHost,
+        let reopened = try await database.createFixtureRemoteACPSession(runtimeKind: .opencode, remoteWorkspaceID: firstHost,
             remoteWorkspaceName: "First", title: "Ignored duplicate", ownerDeviceID: owner,
             openCodeAssociation: (firstIdentity, "ses_same"))
         #expect(reopened == first)
@@ -28,7 +29,7 @@ struct OpenCodeRemoteAssociationTests {
         #expect(try await database.localACPSession(conversationID: first).remoteWorkspaceID == firstHost)
         #expect(try await database.localACPSession(conversationID: second).remoteWorkspaceID == secondHost)
         await #expect(throws: (any Error).self) {
-            try await database.createRemoteACPSession(runtimeKind: .opencode, remoteWorkspaceID: firstHost,
+            try await database.createFixtureRemoteACPSession(runtimeKind: .opencode, remoteWorkspaceID: firstHost,
                 remoteWorkspaceName: "First", title: "Wrong host", ownerDeviceID: owner,
                 openCodeAssociation: (secondIdentity, "ses_other"))
         }
