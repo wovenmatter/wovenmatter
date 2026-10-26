@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Keep desktop source checks separate from companion/mobile and container work."""
+"""Scope portable tests and native/image validation to their actual inputs."""
 import re
 import sys
 
-# Desktop sources also compiled by the iOS target. The classifier test checks
-# this list against ios/project.yml so new shared sources cannot silently skip CI.
+# Keep this contract synchronized with the iOS target's desktop sources.
 IOS_DESKTOP_SOURCES = frozenset({
     'app/App/Views/DashboardStyle.swift',
     'app/App/Views/DashboardColors.swift',
@@ -24,23 +23,62 @@ IOS_DESKTOP_SOURCES = frozenset({
     'app/App/SharedAssets.xcassets',
 })
 
+
 def scopes(paths):
+    paths = tuple(paths)
+
     def changed(pattern):
         return any(re.search(pattern, path) for path in paths)
-    # Changes to the orchestrator must exercise every lane it controls.
-    infrastructure = changed(r'^(\.github/workflows/ci\.yml|scripts/(test-changes\.sh|ci-scopes\.py|test-support/test_(ci_scopes|ios_runner)\.py))$')
+
+    infrastructure = changed(
+        r'^(\.github/workflows/ci\.yml|scripts/(test-changes\.sh|test-ci\.sh|'
+        r'ci-scopes\.py|test-support/test_ci_(scopes|runner)\.py))$')
     shared_desktop = any(path == source or path.startswith(source + '/')
                          for path in paths for source in IOS_DESKTOP_SOURCES)
+    agent = infrastructure or changed(r'^(default-agent/|harnesses/)')
+    ios = infrastructure or shared_desktop or changed(
+        r'^(shared/|ios/|scripts/(test-ios\.sh|build-ios[^/]*|test-support/test_ios_runner\.py)$)')
+    companion = infrastructure or changed(
+        r'^(shared/|integration/|ios/Sources/|app/Sources/|app/Package\.(swift|resolved)$|'
+        r'app/App/(Services/Companion|Models/.*Companion)|'
+        r'scripts/test-companion[^/]*$)')
+    # JavaScript changes are tested once on Linux. Image builds exercise packaging
+    # inputs, including everything installed/copied by the Dockerfiles.
+    containers = infrastructure or changed(
+        r'^(remote/(?!src/|test/)|default-agent/(package[^/]*\.json$|\.node-version$)|'
+        r'harnesses/|\.dockerignore$|scripts/(test-container\.sh|'
+        r'test-support/(test-executor-(image\.sh|runtime\.mjs)|summarize-trivy\.py))$)')
+    updates = changed(r'^(scripts/.*(release|update|sparkle|delta)|app/Updater/|'
+                      r'app/App/Services/DesktopUpdater\.swift|'
+                      r'\.github/(release-refresh\.json|workflows/(refresh-release|release)\.yml))')
+    native_scripts = changed(
+        r'^scripts/(test-(app-termination|composer-text-editor|conversation-layout|appearance|'
+        r'note-editor|note-drafts|embedded-runtime-macos|application-usage|backend-process|'
+        r'desktop-updater)\.sh|test-support/[^/]+\.swift|build_and_run\.sh|'
+        r'prepare-(browser|default-agent|sparkle-tools)\.sh|validate-native-app\.sh|'
+        r'browser-build-cache\.py|cached-download\.py)$')
+    desktop = infrastructure or shared_desktop or agent or updates or native_scripts or changed(
+        r'^(app/|shared/|ios/(EmbeddedRuntime/|Sources/EmbeddedExecution/))')
     return dict(
-        macos=changed(r'^(app/|shared/|ios/|integration/|default-agent/|harnesses/|scripts/|\.github/(workflows/|release-refresh\.json))'),
-        # Integration consumes DashboardStore -> Client -> Core. Conservatively
-        # cover package sources as the target graph evolves, plus its manifests
-        # and lockfile. The companion job also compiles iOS shared desktop files.
-        companion=infrastructure or shared_desktop or changed(r'^(shared/|ios/|integration/|default-agent/|harnesses/|app/App/(Services/Companion|Models/.*Companion)|app/Sources/|app/Package\.(swift|resolved)$|scripts/(test-companion|test-ios|build-ios))'),
-        ios=infrastructure or shared_desktop or changed(r'^(shared/|ios/|integration/|default-agent/|harnesses/|scripts/(test-ios|build-ios))'),
-        remote=infrastructure or changed(r'^(remote/|default-agent/|harnesses/|\.dockerignore$|scripts/(remote-workspace|scan-public-tree|test-container|test-remote-workspace)\.sh$)'),
-        updates=changed(r'^(scripts/.*(release|update|sparkle|delta)|app/Updater/|app/App/Services/DesktopUpdater\.swift|\.github/(release-refresh\.json|workflows/(refresh-release|release)\.yml))'),
+        macos=desktop or companion,
+        desktop=desktop,
+        companion=companion,
+        ios=ios,
+        remote=containers,
+        updates=updates,
+        agent=agent or changed(r'^scripts/test-support/native-mcp\.test\.mjs$'),
+        service=agent or changed(r'^(remote/|\.dockerignore$|scripts/(remote-workspace|'
+                                r'test-remote-workspace|test-container)\.sh$)'),
+        pi=agent or changed(r'^(ios/Runtime/|ios/Sources/PiDurableRuntime/Resources/|'
+                            r'ios/Sources/CompanionInference/PiSDKVersion\.swift$|'
+                            r'scripts/build-ios-pi-runtime\.mjs$|THIRD_PARTY_NOTICES\.md$)'),
+        embedded=infrastructure or changed(r'^(ios/EmbeddedRuntime/|'
+                                          r'ios/Sources/EmbeddedExecution/Resources/|'
+                                          r'scripts/build-ios-embedded-runtime\.mjs$)'),
+        scripts=infrastructure or changed(r'^(scripts/|remote/|app/Updater/|'
+                                         r'\.github/workflows/|\.github/release-refresh\.json$)'),
     )
+
 
 if __name__ == '__main__':
     for name, enabled in scopes(sys.stdin.read().splitlines()).items():

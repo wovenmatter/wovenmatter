@@ -5,136 +5,157 @@ on:
     branches: [main]
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   changes:
-    name: Detect changes
+    name: Quick checks
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 12
     outputs:
       macos: ${{ steps.paths.outputs.macos }}
+      desktop: ${{ steps.paths.outputs.desktop }}
       remote: ${{ steps.paths.outputs.remote }}
       ios: ${{ steps.paths.outputs.ios }}
       companion: ${{ steps.paths.outputs.companion }}
       updates: ${{ steps.paths.outputs.updates }}
     steps:
       - uses: actions/checkout@main
+      - uses: actions/setup-node@main
         with:
-          fetch-depth: 0
-
-      - name: Scan the public tree
-        run: scripts/scan-public-tree.sh
-
+          node-version-file: default-agent/.node-version
+          cache: npm
+          cache-dependency-path: default-agent/package-lock.json
       - name: Select focused validation
         id: paths
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          ALL: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
-          base_sha="$BASE_SHA"
-          if [ -z "$base_sha" ] || [ "$base_sha" = "0000000000000000000000000000000000000000" ]; then
-            base_sha="$(git rev-parse "${HEAD_SHA}^")"
+          if [ "$ALL" = true ]; then
+            git ls-files > "$RUNNER_TEMP/changed-files"
+          else
+            # Fetch just the two immutable trees, rather than the entire history.
+            if [ -z "$BASE_SHA" ] || [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ]; then
+              git ls-files > "$RUNNER_TEMP/changed-files"
+            else
+              git fetch --no-tags --depth=1 origin "$BASE_SHA" "$HEAD_SHA"
+              git diff --name-only --no-renames "$BASE_SHA" "$HEAD_SHA" > "$RUNNER_TEMP/changed-files"
+            fi
           fi
-
-          git diff --name-only "$base_sha" "$HEAD_SHA" > "$RUNNER_TEMP/changed-files"
-
-          python3 scripts/test-support/test_ci_scopes.py
           python3 scripts/ci-scopes.py < "$RUNNER_TEMP/changed-files" >> "$GITHUB_OUTPUT"
+      - name: Run portable validation once
+        run: scripts/test-ci.sh --files "$RUNNER_TEMP/changed-files"
 
   macos:
     name: macOS
     needs: changes
     if: needs.changes.outputs.macos == 'true'
     runs-on: macos-26
-    # Cold desktop builds and companion integration have a separate budget from UI tests.
-    timeout-minutes: 60
+    timeout-minutes: 40
+    env:
+      WOVENMATTER_TEST_CACHE_DIR: /private/tmp/wovenmatter-ci
     steps:
       - uses: actions/checkout@main
       - uses: actions/setup-node@main
         with:
           # The bundled Node stable release, refreshed during dependency maintenance.
           node-version-file: default-agent/.node-version
+          cache: npm
+          cache-dependency-path: default-agent/package-lock.json
       - name: Ensure CEF build tools
         run: command -v cmake >/dev/null || brew install cmake
 
-      - name: Test desktop
+      - name: Identify native toolchain
+        id: toolchain
+        run: |
+          { xcodebuild -version; xcrun --sdk macosx --show-sdk-version; cmake --version; } |
+            shasum -a 256 | awk '{print "key=" $1}' >> "$GITHUB_OUTPUT"
+      - name: Reuse native build intermediates
+        uses: actions/cache@main
+        with:
+          path: |
+            ${{ env.WOVENMATTER_TEST_CACHE_DIR }}/SwiftPM
+            ${{ env.WOVENMATTER_TEST_CACHE_DIR }}/ModuleCache
+            ${{ env.WOVENMATTER_TEST_CACHE_DIR }}/DerivedData/Build/Intermediates.noindex
+            ${{ env.WOVENMATTER_TEST_CACHE_DIR }}/DerivedData/SourcePackages
+            ${{ env.WOVENMATTER_TEST_CACHE_DIR }}/SharedSwiftPM
+            ${{ env.WOVENMATTER_TEST_CACHE_DIR }}/Integration
+            ~/Library/Caches/WovenMatter/Downloads
+          key: native-v1-${{ runner.arch }}-${{ steps.toolchain.outputs.key }}-${{ hashFiles('app/Package.resolved', 'app/Package.swift', 'shared/Package.swift', 'integration/Package.swift', 'app/Browser/cef-version.json', 'default-agent/package-lock.json') }}-${{ github.sha }}
+          restore-keys: native-v1-${{ runner.arch }}-${{ steps.toolchain.outputs.key }}-${{ hashFiles('app/Package.resolved', 'app/Package.swift', 'shared/Package.swift', 'integration/Package.swift', 'app/Browser/cef-version.json', 'default-agent/package-lock.json') }}-
+      - name: Test native desktop
+        if: needs.changes.outputs.desktop == 'true'
         shell: bash
-        env:
-          WOVENMATTER_TEST_CACHE_DIR: ${{ runner.temp }}/wovenmatter-ci-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           mkdir -p "$WOVENMATTER_TEST_CACHE_DIR"
-          scripts/test-changes.sh --desktop 2>&1 | tee "$WOVENMATTER_TEST_CACHE_DIR/desktop.log"
+          scripts/test-changes.sh --native 2>&1 | tee "$WOVENMATTER_TEST_CACHE_DIR/desktop.log"
+      - name: Test companion integration on the same runner
+        if: needs.changes.outputs.companion == 'true'
+        shell: bash
+        run: |
+          mkdir -p "$WOVENMATTER_TEST_CACHE_DIR"
+          scripts/test-changes.sh --companion-desktop 2>&1 | tee "$WOVENMATTER_TEST_CACHE_DIR/companion.log"
+      - name: Verify signed delta round trip
+        if: needs.changes.outputs.updates == 'true'
+        run: python3 scripts/test-delta-updates.py
       - name: Preserve desktop failure diagnostics
         if: failure()
         uses: actions/upload-artifact@main
         with:
           name: desktop-results-${{ github.run_attempt }}
           path: |
-            ${{ runner.temp }}/wovenmatter-ci-${{ github.run_id }}-${{ github.run_attempt }}/*.log
-            ${{ runner.temp }}/wovenmatter-ci-${{ github.run_id }}-${{ github.run_attempt }}/embedded-runtime-report.json
+            ${{ env.WOVENMATTER_TEST_CACHE_DIR }}/*.log
+            ${{ env.WOVENMATTER_TEST_CACHE_DIR }}/embedded-runtime-report.json
           if-no-files-found: warn
           retention-days: 7
-      - name: Verify signed delta round trip
-        if: needs.changes.outputs.updates == 'true'
-        run: python3 scripts/test-delta-updates.py
-
-  companion:
-    name: Companion runtime integration
-    needs: changes
-    if: needs.changes.outputs.companion == 'true'
-    runs-on: macos-26
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@main
-      - uses: actions/setup-node@main
-        with:
-          # The bundled Node stable release, refreshed during dependency maintenance.
-          node-version-file: default-agent/.node-version
-      - name: Test companion protocol and runtime integration
-        env:
-          WOVENMATTER_TEST_CACHE_DIR: ${{ runner.temp }}/wovenmatter-companion-${{ github.run_id }}-${{ github.run_attempt }}
-          IOS_CHANGED: ${{ needs.changes.outputs.ios }}
-        run: |
-          if [ "$IOS_CHANGED" = true ]; then
-            scripts/test-changes.sh --companion
-          else
-            scripts/test-changes.sh --companion-desktop
-          fi
 
   ios:
-    name: iOS UI (${{ matrix.device.name }})
+    name: iOS (${{ matrix.device }})
     needs: changes
     if: needs.changes.outputs.ios == 'true'
     runs-on: macos-26
     timeout-minutes: 25
+    env:
+      WOVENMATTER_IOS_TEST_CACHE_DIR: /private/tmp/wovenmatter-ios-${{ matrix.device }}
     strategy:
       fail-fast: false
       matrix:
-        device:
-          - name: iPhone
-            type: com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro
-          - name: iPad
-            type: com.apple.CoreSimulator.SimDeviceType.iPad-Pro-11-inch-M4-8GB
+        # One simulator on PRs; manual full validation also covers iPad.
+        device: ${{ github.event_name == 'workflow_dispatch' && fromJSON('["iPhone", "iPad"]') || fromJSON('["iPhone"]') }}
     steps:
       - uses: actions/checkout@main
+      - name: Identify mobile toolchain
+        id: toolchain
+        run: xcodebuild -version | shasum -a 256 | awk '{print "key=" $1}' >> "$GITHUB_OUTPUT"
+      - name: Reuse mobile build intermediates
+        uses: actions/cache@main
+        with:
+          path: |
+            ${{ env.WOVENMATTER_IOS_TEST_CACHE_DIR }}/package
+            ${{ env.WOVENMATTER_IOS_TEST_CACHE_DIR }}/modules
+            ${{ env.WOVENMATTER_IOS_TEST_CACHE_DIR }}/xcode/Build/Intermediates.noindex
+            ${{ env.WOVENMATTER_IOS_TEST_CACHE_DIR }}/xcode/SourcePackages
+          key: ios-v1-${{ runner.arch }}-${{ matrix.device }}-${{ steps.toolchain.outputs.key }}-${{ hashFiles('ios/Package.swift', 'shared/Package.swift', 'ios/WovenMatterCompanion.xcodeproj/project.pbxproj') }}-${{ github.sha }}
+          restore-keys: ios-v1-${{ runner.arch }}-${{ matrix.device }}-${{ steps.toolchain.outputs.key }}-${{ hashFiles('ios/Package.swift', 'shared/Package.swift', 'ios/WovenMatterCompanion.xcodeproj/project.pbxproj') }}-
       - name: Test native mobile flows
         env:
-          WOVENMATTER_IOS_TEST_CACHE_DIR: ${{ runner.temp }}/wovenmatter-ios-${{ github.run_id }}-${{ github.run_attempt }}
-          WOVENMATTER_IOS_SIMULATOR_DEVICE_TYPE: ${{ matrix.device.type }}
+          WOVENMATTER_IOS_SIMULATOR_DEVICE_TYPE: ${{ matrix.device == 'iPhone' && 'com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro' || 'com.apple.CoreSimulator.SimDeviceType.iPad-Pro-11-inch-M4-8GB' }}
         run: scripts/test-ios.sh --ui
       - name: Preserve mobile test results
         if: always()
         uses: actions/upload-artifact@main
         with:
-          name: ios-results-${{ matrix.device.name }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/wovenmatter-ios-${{ github.run_id }}-${{ github.run_attempt }}/results.*
+          name: ios-results-${{ matrix.device }}-${{ github.run_attempt }}
+          path: ${{ env.WOVENMATTER_IOS_TEST_CACHE_DIR }}/results.*
           if-no-files-found: warn
           retention-days: 7
 
@@ -158,8 +179,6 @@ jobs:
         with:
           # The bundled Node stable release, refreshed during dependency maintenance.
           node-version-file: default-agent/.node-version
-      - name: Run deterministic remote validation
-        run: scripts/test-changes.sh --remote
       - name: Build the remote workspace image
         run: docker build --pull --no-cache --file remote/Dockerfile --tag wovenmatter-remote:ci --tag wovenmatter/workspace:latest .
 
@@ -211,7 +230,7 @@ jobs:
 
   gate:
     name: CI
-    needs: [changes, macos, companion, ios, remote]
+    needs: [changes, macos, ios, remote]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -220,12 +239,10 @@ jobs:
         env:
           CHANGES_RESULT: ${{ needs.changes.result }}
           MACOS_RESULT: ${{ needs.macos.result }}
-          COMPANION_RESULT: ${{ needs.companion.result }}
           IOS_RESULT: ${{ needs.ios.result }}
           REMOTE_RESULT: ${{ needs.remote.result }}
         run: |
           test "$CHANGES_RESULT" = success
           case "$MACOS_RESULT" in success|skipped) ;; *) exit 1 ;; esac
-          case "$COMPANION_RESULT" in success|skipped) ;; *) exit 1 ;; esac
           case "$IOS_RESULT" in success|skipped) ;; *) exit 1 ;; esac
           case "$REMOTE_RESULT" in success|skipped) ;; *) exit 1 ;; esac

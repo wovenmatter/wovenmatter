@@ -7,10 +7,27 @@ build. Use `--macos` or `--remote` for focused validation.
 Container lifecycle changes also use `scripts/test-container.sh` when Docker is
 available. Tests use temporary data and must not consume provider services.
 
-CI selects desktop, companion integration, iPhone/iPad UI, and remote jobs by
-changed paths. Changes to the CI orchestrator or its scope/runner tests exercise
-every lane. Documentation-only changes run the public-tree scan and stable CI
-gate. Remote image builds run on Linux.
+CI starts with **Quick checks**: public-tree and syntax checks, then portable
+fixtures, agent/service tests and generated-resource verification selected by
+changed paths. JavaScript tests run once on Linux. Use
+`scripts/test-changes.sh --ci` for the same selection locally, or
+`scripts/test-ci.sh --all` for all portable suites.
+
+Native source changes retain the macOS build/package tests. Companion protocol
+integration shares that runner and runs without a simulator; integration-only
+changes skip the desktop build. Mobile changes run one iPhone simulator, which
+already includes the app tests previously repeated by the companion job.
+Desktop and mobile build intermediates use toolchain/dependency-specific caches.
+Service JavaScript edits run service tests; Docker/packaging/dependency changes
+also build and exercise both Linux image architectures and retain the
+vulnerability inventory. The stable **CI** gate requires every selected job.
+
+CI runs on PRs and main. New commits cancel obsolete runs on either, preventing
+main's previous per-commit jobs from accumulating. Run the CI workflow manually
+for all lanes, including iPad UI. CI orchestrator/scope/runner edits exercise all
+automatic lanes. Release dependency/compiler warming is manual through
+**Prepare release dependencies** on main; releases can also build from a cache
+miss. See the [CI audit](CI_AUDIT.md) for measured bottlenecks and coverage changes.
 
 The embedded Python smoke uses the production WebKit executor with no visible
 web view. Its inactive scheduling policy must keep the worker running until

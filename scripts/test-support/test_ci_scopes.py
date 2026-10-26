@@ -1,49 +1,65 @@
+"""CI routing regression cases: keep native coverage without unrelated fanout."""
 import importlib.util
 import re
 from pathlib import Path
-spec = importlib.util.spec_from_file_location('scopes', Path(__file__).resolve().parents[1] / 'ci-scopes.py')
+
+ROOT = Path(__file__).resolve().parents[2]
+spec = importlib.util.spec_from_file_location('scopes', ROOT / 'scripts/ci-scopes.py')
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 
-updater = module.scopes(['app/App/Services/DesktopUpdater.swift', 'app/App/Views/SettingsGeneralView.swift',
-                        'scripts/stage-update.py', '.github/workflows/release.yml',
-                        '.github/release-refresh.json'])
-assert updater == dict(macos=True, companion=False, ios=False, remote=False, updates=True), updater
-# The security-critical updater record changes both the framework and tools;
-# metadata-only refreshes must run signed delta validation too.
-sparkle_record = module.scopes(['app/Updater/sparkle-version.json'])
-assert sparkle_record == dict(macos=True, companion=False, ios=False, remote=False, updates=True), sparkle_record
-# The updater's downloader and dependency lockfile are package changes, and
-# therefore require integration coverage even though the UI itself is desktop.
-updater_package = module.scopes(['app/Sources/WovenMatterClient/LocalACPManagedRuntime.swift',
-                                'app/Package.resolved', 'app/App/Services/DesktopUpdater.swift'])
-assert updater_package == dict(macos=True, companion=True, ios=False, remote=False, updates=True), updater_package
-for path in ['app/Sources/WovenMatterDashboardStore/CompanionService.swift',
-             'app/Sources/WovenMatterClient/LocalACPManagedRuntime.swift',
-             'app/Sources/WovenMatterCore/Workspace.swift',
-             'app/Sources/WovenMatterAutomation/Automation.swift',
-             'app/Package.swift', 'app/Package.resolved']:
-    assert module.scopes([path])['companion'], path
-for path in ['ios/App/Views/ConversationView.swift', 'shared/Sources/Protocol.swift', 'integration/Sources/Client.swift', 'default-agent/src/runtime.mjs', 'harnesses/catalog.json']:
-    value = module.scopes([path])
-    assert value['macos'] and value['companion'] and value['ios'], (path, value)
-assert module.scopes(['app/App/Services/CompanionCommandService.swift'])['companion']
-assert module.scopes(['remote/Dockerfile'])['remote']
-assert not module.scopes(['README.md'])['macos']
-# Keep the explicit classifier contract synchronized with XcodeGen's shared
-# desktop inputs, including directories whose children are changed by git.
-project = (Path(__file__).resolve().parents[2] / 'ios/project.yml').read_text()
+
+def active(*paths):
+    return {name for name, enabled in module.scopes(paths).items() if enabled and name != 'desktop'}
+
+
+assert active('README.md', 'docs/guide/notes-and-data.md') == set()
+assert active('app/App/Views/SettingsGeneralView.swift') == {'macos'}
+assert active('app/Sources/WovenMatterClient/LocalACPManagedRuntime.swift') == {'macos', 'companion'}
+assert active('app/Package.resolved') == {'macos', 'companion'}
+assert active('shared/Sources/Protocol.swift') == {'macos', 'companion', 'ios'}
+assert active('integration/Sources/Client.swift') == {'macos', 'companion'}
+assert active('ios/App/Views/ConversationView.swift') == {'ios'}
+assert active('default-agent/src/runtime.mjs') == {'macos', 'agent', 'service', 'pi'}
+assert active('default-agent/package-lock.json') == {'macos', 'remote', 'agent', 'service', 'pi'}
+assert active('remote/src/server.mjs') == {'service', 'scripts'}
+for path in ['remote/Dockerfile', 'remote/Executor.Dockerfile', 'remote/entrypoint.sh',
+             'remote/security/build-backports.py', 'remote/npm-runtime/package-lock.json',
+             'remote/executor-runtime/package-lock.json']:
+    assert active(path) == {'remote', 'service', 'scripts'}, (path, active(path))
+assert active('.dockerignore') == {'remote', 'service'}
+assert active('app/App/Services/CompanionCommandService.swift') == {'macos', 'companion'}
+assert active('app/App/Services/DesktopUpdater.swift') == {'macos', 'updates'}
+assert active('app/Updater/sparkle-version.json') == {'macos', 'updates', 'scripts'}
+assert active('scripts/test-support/test_ios_runner.py') == {'ios', 'scripts'}
+assert active('.github/workflows/release-cache.yml') == {'scripts'}
+assert active('scripts/build-ios-pi-runtime.mjs') == {'ios', 'pi', 'scripts'}
+assert active('scripts/build-ios-embedded-runtime.mjs') == {'ios', 'embedded', 'scripts'}
+assert active('ios/Sources/EmbeddedExecution/Resources/provenance.json') == {'macos', 'companion', 'ios', 'embedded'}
+assert active('ios/Sources/CompanionClient/Client.swift') == {'macos', 'companion', 'ios'}
+for path in ['app/App/Views/SettingsGeneralView.swift', 'app/Sources/WovenMatterCore/Workspace.swift',
+             'shared/Sources/Protocol.swift', 'default-agent/src/runtime.mjs']:
+    assert module.scopes([path])['desktop'], path
+for path in ['integration/Tests/ClientTests.swift', 'ios/App/Views/ConversationView.swift',
+             'ios/Sources/CompanionClient/Client.swift', 'remote/src/server.mjs', 'README.md']:
+    assert not module.scopes([path])['desktop'], path
+
+# A rename must consider both deleted and added names (git diff --no-renames).
+assert active('remote/src/server.mjs', 'remote/lib/server.mjs') == {'remote', 'service', 'scripts'}
+assert active('README.md', 'remote/src/server.mjs', 'app/App/Views/SettingsGeneralView.swift') == {'macos', 'service', 'scripts'}
+assert module.scopes(iter(['remote/src/server.mjs'])) == module.scopes(['remote/src/server.mjs'])
+
+project = (ROOT / 'ios/project.yml').read_text()
 desktop_sources = set(re.findall(r'^\s*-\s*path:\s*[\"\']?\.\./(app/[^\s\"\'#]+)', project, re.MULTILINE))
 assert desktop_sources == module.IOS_DESKTOP_SOURCES, (desktop_sources, module.IOS_DESKTOP_SOURCES)
 for path in desktop_sources:
-    assert module.scopes([path])['ios'], path
-    assert module.scopes([path])['companion'], path
-asset = 'app/App/SharedAssets.xcassets/AccentColor.colorset/Contents.json'
-assert module.scopes([asset])['ios'], asset
-assert not module.scopes(['app/App/Views/DashboardStyle.swift.backup'])['ios']
+    assert active(path) >= {'macos', 'ios'}, path
+assert active('app/App/SharedAssets.xcassets/AccentColor.colorset/Contents.json') == {'macos', 'ios'}
+assert active('app/App/Views/DashboardStyle.swift.backup') == {'macos'}
 
-for path in ['.github/workflows/ci.yml', 'scripts/test-changes.sh', 'scripts/ci-scopes.py',
-             'scripts/test-support/test_ci_scopes.py', 'scripts/test-support/test_ios_runner.py']:
-    assert module.scopes([path]) == dict(macos=True, companion=True, ios=True, remote=True, updates=False), path
+for path in ['.github/workflows/ci.yml', 'scripts/test-changes.sh', 'scripts/test-ci.sh',
+             'scripts/ci-scopes.py', 'scripts/test-support/test_ci_scopes.py',
+             'scripts/test-support/test_ci_runner.py']:
+    assert active(path) == {'macos', 'companion', 'ios', 'remote', 'agent', 'service', 'pi', 'embedded', 'scripts'}, path
 
-print('CI scopes passed: desktop UI stays scoped; orchestrator changes exercise every lane.')
+print('CI scopes passed: portable tests once; native, mobile and image inputs retain validation.')
