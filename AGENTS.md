@@ -28,8 +28,11 @@
   of one worktree or a fresh snapshot; existing snapshots retain their edits.
 - For UI work, follow [the style guide](docs/STYLE_GUIDE.md).
 - Validate: `scripts/test-changes.sh`; use `--all` for changes spanning components.
-  Development/main CI owns source validation. Release preparation never runs
-  local test suites or reruns CI; follow the release skill to start the workflow.
+  Use `--ci` for CI-only changes. Automatic PR CI is one portable Linux check;
+  native/mobile/image workflows run only when explicitly requested.
+  PR CI and explicitly requested platform validation own source validation.
+  Release preparation never runs local test suites or reruns CI; follow the
+  release skill to start the workflow.
   Tests must not consume provider services. Container lifecycle tests use
   `scripts/test-container.sh` when in scope and Docker is available.
 - Release, installation, publication, and delivery require an explicit request.

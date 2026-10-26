@@ -70,6 +70,18 @@ if os.environ.get('CI_FIXTURE_FAIL') == '1' and sys.argv[1:] == ['test', '--pref
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(calls, [])
 
+    def test_native_and_mobile_source_do_not_start_platform_validation(self):
+        result, calls = self.run_fixture(['app/Sources/WovenMatterCore/Workspace.swift',
+            'ios/App/Views/ConversationView.swift', 'integration/Tests/ClientTests.swift'])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(calls, [])
+
+    def test_image_recipe_runs_portable_tests_without_building_images(self):
+        result, calls = self.run_fixture(['remote/Dockerfile'])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        npm = [call[1:] for call in calls if call[0] == 'npm']
+        self.assertEqual([call for call in npm if call[0] == 'test'], [['test', '--prefix', 'remote']])
+
     def test_remote_source_runs_service_tests_once(self):
         result, calls = self.run_fixture(['remote/src/server.mjs'])
         self.assertEqual(result.returncode, 0, result.stderr)

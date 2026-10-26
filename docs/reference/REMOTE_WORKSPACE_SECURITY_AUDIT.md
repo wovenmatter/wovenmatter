@@ -83,9 +83,10 @@ graph with `npm update --package-lock-only --ignore-scripts` before hardening.
   upgrades remain operator actions; no installed machine was changed by this PR.
   The enforced Docker security floor is 28, which contains the localhost
   publishing isolation fix. Current patch releases are still required by policy.
-- CI builds and runs the full image lifecycle independently on native amd64 and
-  arm64 GitHub-hosted runners. Build stages contain compilers; the final runtime
-  does not.
+- Explicit **Manual validation** runs (`scope=images` or `all`) build and test the
+  full image lifecycle independently on native amd64 and arm64 GitHub-hosted
+  runners. These checks do not run automatically on PRs. Build stages contain
+  compilers; the final runtime does not.
 
 Sources: [Node security release](https://nodejs.org/en/blog/release/v26.12.1),
 [Docker releases](https://github.com/moby/moby/releases),

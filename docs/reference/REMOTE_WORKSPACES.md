@@ -143,8 +143,9 @@ provenance with their resource-generation scripts. Review integration changes
 and record focused checks and any pending native validation in the PR.
 Dependency maintenance does not deploy a host or update a running workspace.
 
-CI verifies the generated resources and builds both images on Linux. Its
-workspace smoke test verifies authenticated access, per-workspace volumes,
+PR CI verifies generated resources. The explicitly requested **Manual validation**
+workflow (`scope=images` or `all`) builds both images on Linux. Its workspace
+smoke test verifies authenticated access, per-workspace volumes,
 restart/update preservation, and explicit data-deletion boundaries. Executor
 image tags include the Dockerfile fingerprint, so setup replaces an old base
 even when the selected Executor SDK version is unchanged; unchanged setup

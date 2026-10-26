@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Portable PR feedback; native builds and image validation run in scoped jobs.
+# Portable PR feedback; native/mobile/image validation is explicitly requested.
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
@@ -54,7 +54,7 @@ if enabled embedded; then
   node scripts/build-ios-embedded-runtime.mjs --check
 fi
 if enabled scripts; then
-  # These fixtures stub external tools; native fixtures run in the macOS job.
+  # These fixtures stub external tools; native fixtures run in manual validation.
   scripts/test-release.sh --portable
   for suite in update_refresh ios_runner dev_build executor_deployment remote_image; do
     python3 "scripts/test-support/test_${suite}.py"
