@@ -104,3 +104,41 @@ test('active sessions survive credential and settings updates and use the latest
   const restarted = createDefaultAgentService({ cwd: directory, directory });
   await assert.rejects(restarted.engine(), /locked/);
 });
+
+
+for (const provider of ['openai-codex', 'claude-subscription', 'xai']) {
+  test(`${provider} exposes one account and never falls back from workspace-owned auth`, async t => {
+    const { Credentials } = await import('../src/credentials.mjs');
+    const { sharedAccounts } = await import('../src/vault.mjs');
+    const credential = id => provider === 'claude-subscription'
+      ? { type: 'native', accountId: id } : { type: 'oauth', access: id, expires: 9000000000000 };
+    const entries = ['preferred', 'backup'].map(id => ({ id, label: id, credential: credential(id) }));
+    assert.deepEqual(sharedAccounts({ [provider]: entries })[provider].map(a => a.id), ['preferred']);
+    const directory = await temporary(t), vault = new CredentialVault(directory);
+    await vault.unlock('fixture', randomBytes(32).toString('base64'));
+    // Simulate an encrypted store from a version that still allowed backups.
+    await vault.modify(async value => ({ ...value, accounts: { [provider]: entries } }));
+    const credentials = await new Credentials({}, vault).initialize();
+    assert.deepEqual((await credentials.candidates(provider)).map(a => a.id), ['preferred']);
+    assert.equal(await credentials.runWithAccount(provider, entries[1], () => credentials.read(provider)), undefined);
+    await vault.modify(async value => ({ ...value, owned: { [provider]: credential('workspace') } }));
+    assert.deepEqual((await credentials.candidates(provider)).map(a => a.credential), [credential('workspace')]);
+    assert.equal(await credentials.runWithAccount(provider, entries[0], () => credentials.read(provider)), undefined);
+    const [owned] = await credentials.candidates(provider);
+    await vault.modify(async value => ({ ...value, owned: {} }));
+    assert.equal(await credentials.runWithAccount(provider, owned, () => credentials.read(provider)), undefined);
+    // A later explicit removal of the workspace sign-in restores shared auth.
+    assert.deepEqual((await credentials.candidates(provider)).map(a => a.id), ['preferred']);
+  });
+}
+
+test('API keys retain multiple accounts', async () => {
+  const { Credentials } = await import('../src/credentials.mjs');
+  for (const provider of ['openai', 'anthropic', 'xai-api', 'openrouter', 'opencode-go', 'exa']) {
+    const entries = ['first', 'second'].map(id => ({ id, label: id, credential: { type: 'api_key', key: id } }));
+    const credentials = await new Credentials({}, undefined, { [provider]: entries }).initialize();
+    assert.deepEqual((await credentials.candidates(provider)).map(a => a.id), ['first', 'second']);
+    credentials.owned[provider] = { type: 'api_key', key: 'owned' };
+    assert.equal((await credentials.candidates(provider)).length, 3);
+  }
+});

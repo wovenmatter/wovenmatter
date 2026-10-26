@@ -43,9 +43,16 @@ preferences. Updating the local SDK does not update remote workspaces or the
 separately installed Pi and Claude Code CLIs. Older remote workspace services
 need a workspace software update before they can expose SDK management.
 
+ChatGPT, Claude, and Grok each support one subscription account per workspace.
+API keys still support up to four accounts per connection type. Existing subscription
+account lists retain the preferred account and discard backup entries. Reconnect
+the current subscription or remove it before changing accounts.
+
 Fallback applies when a connection loses authentication or exhausts its available
-usage. Woven Matter tries the preferred account and its ordered backups first,
-then your enabled fallback models in order, updates the
+usage. API-key connections try the preferred key and its ordered backups first.
+Subscription connections use only their current account; an
+independent workspace sign-in does not fall back to a shared subscription account.
+Woven Matter then tries your enabled fallback models in order, updates the
 model selector, and shows a popup explaining the switch. Ordinary transient
 rate limits do not trigger fallback. A turn that has already produced output or
 executed tools is not automatically replayed.
@@ -121,7 +128,7 @@ a separate boundary: interrupted sends are not automatically repeated. See
 
 ## Claude models
 
-In **Settings → Pi Durable → Anthropic**, expand **Claude subscriptions** and click
+In **Settings → Pi Durable → Anthropic**, expand **Claude subscription** and click
 **Sign in with Claude**. Open the inline link and complete Anthropic’s sign-in flow.
 Paste the full code returned by Claude into the sign-in form and click **Continue**.
 The account list refreshes when sign-in completes. Woven Matter bundles the unmodified
@@ -151,3 +158,17 @@ Usage shows the native Claude account’s sign-in status. Remaining subscription
 limits are checked in Claude; Woven Matter does not extract its token to query
 those limits. Live account acceptance and billing attribution require testing
 with your own account.
+
+## iPhone and iPad subscription accounts
+
+Pi Durable on iPhone and iPad supports one subscription connection per provider
+(ChatGPT, Claude, and Grok) per device, including direct and hosted inference.
+Edit the saved connection to reconnect or change its sign-in. Multiple API-key
+connections remain supported.
+
+On upgrade, the selected subscription connection is retained; if no connection for a provider is selected,
+the first saved connection for each provider is retained. Extra subscription
+connections and their device-only credentials are removed. Conversation history
+remains, but chats bound to a removed connection require an explicit connection
+change before they can run again. Reconnecting the same account keeps its chats
+usable; changing to a different subscription account retires the old binding.

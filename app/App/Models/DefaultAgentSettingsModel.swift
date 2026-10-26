@@ -905,9 +905,9 @@ final class DefaultAgentSettingsModel {
                 if let login {
                     body["provider"] = login
                     if login == "claude-subscription" {
-                        body["profile"] = profile ?? (action == "logout"
-                            ? prepared.credentials[login]?.accountId ?? "legacy"
-                            : UUID().uuidString.lowercased())
+                        // Reuse the single native connection, including its legacy
+                        // profile after migration. New connections use one stable slot.
+                        body["profile"] = profile ?? prepared.credentials[login]?.accountId ?? "default"
                     }
                 }
                 let child = Process()

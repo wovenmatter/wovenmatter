@@ -619,6 +619,34 @@ final class InferenceSetupTests: XCTestCase {
     let stored = await credentials.snapshot()
     XCTAssertEqual(stored, [original.id: "oauth-after-refresh"])
   }
+  @MainActor func testDuplicateSubscriptionsFailBeforeCredentialOrModelChanges() async throws {
+    for provider in ["openai-codex", "claude-subscription", "xai"] {
+      let descriptor = Self.descriptor(provider: provider)
+      let current = InferenceConnection(id: "current", name: provider, provider: provider, route: .direct, modelID: descriptor.id)
+      let extra = InferenceConnection(id: "extra", name: provider, provider: provider, route: .direct, modelID: descriptor.id)
+      let credentials = InferenceSetupMemoryCredentials([current.id: "current-secret"])
+      do {
+        _ = try await InferenceConnectionSaveTransaction.save(extra, secret: "new-secret", existing: [current], credentials: credentials,
+          resolveModel: { _, _ in XCTFail("Duplicate account must fail before model resolution"); return descriptor },
+          persist: { _ in XCTFail("Duplicate account must not persist") })
+        XCTFail("Duplicate subscription was accepted")
+      } catch InferenceError.singleSubscriptionAccount {}
+      let stored = await credentials.snapshot()
+      XCTAssertEqual(stored, [current.id: "current-secret"])
+    }
+  }
+  @MainActor func testSingleSubscriptionReconnectKeepsItsExistingBinding() async throws {
+    for provider in ["openai-codex", "claude-subscription", "xai"] {
+      let descriptor = Self.descriptor(provider: provider)
+      let current = InferenceConnection(id: "current", name: provider, provider: provider, accountID: "same-account", route: .direct, modelID: descriptor.id)
+      let credentials = InferenceSetupMemoryCredentials([current.id: "old-secret"])
+      let saved = try await InferenceConnectionSaveTransaction.save(current, secret: "new-secret", existing: [current], credentials: credentials,
+        resolveModel: { _, _ in descriptor }, persist: { _ in })
+      XCTAssertEqual(saved.id, current.id)
+      let stored = await credentials.snapshot()
+      XCTAssertEqual(stored, [current.id: "new-secret"])
+    }
+  }
   @MainActor func testEmptyKeyCannotCreateConnectionOrStartModelResolution() async throws {
     let credentials = InferenceSetupMemoryCredentials(), descriptor = Self.descriptor()
     let connection = InferenceConnection(name: "OpenCode Go", provider: "opencode-go", route: .direct, modelID: descriptor.id)

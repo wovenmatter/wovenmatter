@@ -136,7 +136,7 @@ test('real ModelRuntime uses ambient Claude auth while native profiles retain ac
   assert.equal(auth.auth.headers, undefined);
   assert.deepEqual(await engine.runtime.models.getAuth(selected), { auth: {}, source: 'Claude runtime' });
   assert.deepEqual(await engine.credentials.read('claude-subscription'), first);
-  assert.deepEqual((await engine.credentials.candidates('claude-subscription')).map(value => value.credential), [first, second]);
+  assert.deepEqual((await engine.credentials.candidates('claude-subscription')).map(value => value.credential), [first]);
 
   // Keep Pi's real stream/auth machinery; replace only the provider transport.
   const checks = claude.checks;
@@ -296,4 +296,18 @@ test('Claude profile adaptation preserves unrelated provider credentials and rej
   // A wrong credential type on Claude is not treated as native profile metadata.
   await engine.apply({ credentials: { 'claude-subscription': oauth } });
   assert.equal(await engine.runtime.getAuth('claude-subscription'), undefined);
+});
+
+
+test('Claude usage exhaustion never tries a legacy backup subscription profile', async t => {
+  const accounts = ['preferred', 'backup'].map(id => ({ id, label: id, credential: { type: 'native', accountId: id } }));
+  const { engine } = await fixture(t, { credentials: { 'claude-subscription': accounts[0].credential },
+    credentialAccounts: { 'claude-subscription': accounts } });
+  const record = await engine.create(), attempted = [];
+  record.streamFunction = () => {
+    attempted.push(engine.credentials.context.getStore().id);
+    throw new Error('insufficient_quota');
+  };
+  await assert.rejects(engine.prompt(record, 'Fixture only', () => {}));
+  assert.deepEqual(attempted, ['preferred']);
 });

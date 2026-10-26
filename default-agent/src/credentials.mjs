@@ -2,6 +2,8 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { InMemoryCredentialStore } from '@earendil-works/pi-ai';
 import { providers } from './config.mjs';
 
+export const singleSubscriptionAccount = provider => ['openai-codex', 'claude-subscription', 'xai'].includes(provider);
+
 // Local sessions use access-only credentials supplied over private IPC. Only
 // control operations own local refresh tokens; their results go back to Keychain.
 export class Credentials extends InMemoryCredentialStore {
@@ -28,15 +30,23 @@ export class Credentials extends InMemoryCredentialStore {
     const vault = this.vault ? await this.vault.read() : undefined;
     const entries = (vault ? vault.accounts : this.accounts)?.[provider] ?? [];
     const owned = vault?.owned?.[provider] ?? this.owned[provider];
-    if (owned) return [{ id: 'default', label: 'Workspace account', credential: owned, owned: true }, ...entries];
-    return entries.length ? entries : [{ id: 'default', label: 'Current account', credential: await this.read(provider) }];
+    if (owned) {
+      const account = { id: 'default', label: 'Workspace account', credential: owned, owned: true };
+      return singleSubscriptionAccount(provider) ? [account] : [account, ...entries];
+    }
+    return entries.length ? (singleSubscriptionAccount(provider) ? entries.slice(0, 1) : entries) : [{ id: 'default', label: 'Current account', credential: await this.read(provider) }];
   }
   runWithAccount(provider, account, operation) { return this.context.run({ provider, id: account.id, owned: account.owned === true }, operation); }
   async read(provider) {
     const context = this.context.getStore();
     if (context?.provider === provider && context.id !== 'default') {
-      const accounts = this.vault ? (await this.vault.read()).accounts : this.accounts;
-      return accounts?.[provider]?.find(a => a.id === context.id)?.credential;
+      const stored = this.vault ? await this.vault.read() : { accounts: this.accounts, owned: this.owned };
+      const entries = stored.accounts?.[provider] ?? [];
+      if (singleSubscriptionAccount(provider)) {
+        const owned = stored.owned?.[provider];
+        if (owned || entries[0]?.id !== context.id) return undefined;
+      }
+      return entries.find(a => a.id === context.id)?.credential;
     }
     const stored = this.vault ? await this.vault.read() : { shared: this.supplied, owned: this.owned };
     // Removing a workspace-owned sign-in must not silently change accounts

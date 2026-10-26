@@ -24,6 +24,7 @@ public enum ProviderConnectionID: String, CaseIterable, Identifiable, Sendable {
         case .exa: "Exa search"
         }
     }
+    public var allowsMultipleAccounts: Bool { !isSubscription }
     public var isSubscription: Bool { self == .chatGPT || self == .grok || self == .claudeSubscription }
 }
 
@@ -61,6 +62,9 @@ extension ProviderAccountCoordinator {
 /// existing shared key. Nothing here writes credentials to preferences or disk.
 public enum ProviderConnectionAccounts {
     public static let limit = 4
+    public static func limit(for provider: String) -> Int {
+        ProviderConnectionID(rawValue: provider)?.allowsMultipleAccounts == false ? 1 : limit
+    }
     public struct Account: Identifiable, Codable, Equatable, Sendable {
         public let id: String
         public var label: String
@@ -111,6 +115,15 @@ public enum ProviderConnectionAccounts {
             else { store.entries.remove(at: index) }
         } else if let current {
             store.entries.insert(Entry(account: Account(id: UUID().uuidString.lowercased(), label: current.accountLabel ?? "Existing connection", createdAt: nil, isSelected: true), credential: current), at: 0)
+        }
+        // Keep the canonical account; legacy backups must never become eligible
+        // again after sign-out, a failed refresh, or a remote synchronization.
+        if limit(for: provider) == 1 {
+            let retained = current == nil ? [] : store.entries.filter { $0.account.isSelected }
+            if retained.count != store.entries.count {
+                store.entries = retained
+                try persist(store, provider: provider, scope: scope, keychain: keychain)
+            }
         }
         // Save only the account index during migration; never replace the old
         // canonical key, so existing installations keep their working connection.
@@ -164,7 +177,10 @@ public enum ProviderConnectionAccounts {
                 account = store.entries[index].account
                 return
             }
-            guard store.entries.count < limit else { throw DefaultAgentError.message("You can connect up to four accounts of each type.") }
+            guard store.entries.count < limit(for: provider) else {
+                if limit(for: provider) == 1 { throw DefaultAgentError.message("Only one subscription account is supported. Reconnect or remove the current account first.") }
+                throw DefaultAgentError.message("You can connect up to four accounts of each type.")
+            }
             account.isSelected = store.entries.isEmpty
             if label == nil && credential.type == "api_key" { account.label = "API key \(store.entries.count + 1)" }
             store.entries.append(Entry(account: account, credential: credential))

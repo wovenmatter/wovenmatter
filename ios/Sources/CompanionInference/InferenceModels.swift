@@ -58,6 +58,31 @@ public struct InferenceConnection: Codable, Sendable, Identifiable, Equatable {
   }
 }
 
+/// Each provider has one subscription connection on each device. API-key
+/// connections retain independent account choices.
+public enum InferenceConnectionPolicy {
+  public static func isSingleSubscription(_ provider: String) -> Bool {
+    ["openai-codex", "claude-subscription", "xai"].contains(provider)
+  }
+  public static func retainingSingleSubscriptions(_ connections: [InferenceConnection], preferredID: String) -> [InferenceConnection] {
+    let preferred = connections.first { $0.id == preferredID }
+    var seen = Set<String>()
+    return connections.filter { connection in
+      guard isSingleSubscription(connection.provider) else { return true }
+      if preferred?.provider == connection.provider { return connection.id == preferredID && seen.insert(connection.provider).inserted }
+      return seen.insert(connection.provider).inserted
+    }
+  }
+  public static func isAvailable(_ connection: InferenceConnection, in connections: [InferenceConnection]) -> Bool {
+    !isSingleSubscription(connection.provider) || connections.contains { $0.id == connection.id && $0.provider == connection.provider }
+  }
+  public static func validateSave(_ proposed: InferenceConnection, existing: [InferenceConnection]) throws {
+    if isSingleSubscription(proposed.provider), existing.contains(where: { $0.provider == proposed.provider && $0.id != proposed.id }) {
+      throw InferenceError.singleSubscriptionAccount
+    }
+  }
+}
+
 public enum InferenceJSON: Codable, Sendable, Equatable {
   case object([String: InferenceJSON]), array([InferenceJSON]), string(String), number(Double), bool(Bool), null
   public init(from decoder: any Decoder) throws {
@@ -179,7 +204,7 @@ public enum InferenceCatalog {
 }
 
 public enum InferenceError: Error, LocalizedError, Sendable, Equatable {
-  case invalidConfiguration, invalidEndpoint, adapterRequired, missingCredential, modelUnavailable, accountUnavailable
+  case invalidConfiguration, invalidEndpoint, adapterRequired, missingCredential, modelUnavailable, accountUnavailable, singleSubscriptionAccount
   case malformedResponse, interrupted, responseTooLarge, http(Int), connectionFailed, unsupportedImageInput
   public var errorDescription: String? {
     switch self {
@@ -188,6 +213,7 @@ public enum InferenceError: Error, LocalizedError, Sendable, Equatable {
     case .adapterRequired: "Choose direct sign-in on this device for a supported subscription, or configure the authorized Tailscale host for this adapter connection."
     case .missingCredential: "Add an API key, sign in to this subscription on this device, or configure the credential for the selected inference host in Settings."
     case .modelUnavailable: "The selected model is unavailable on this connection. Choose a model explicitly; no fallback was attempted."
+    case .singleSubscriptionAccount: "Only one subscription connection is supported for this provider. Edit the saved connection to change its sign-in."
     case .accountUnavailable: "The selected account is unavailable on this inference host. No account fallback was attempted."
     case .malformedResponse: "The inference endpoint returned an unsupported response."
     case .unsupportedImageInput: "The selected model does not accept images. Choose an image-capable model explicitly; no fallback was attempted."

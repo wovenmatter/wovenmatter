@@ -95,6 +95,10 @@ when an intentional design change is accepted.
   defaults disclosures, workspace overrides, local model servers, fallback models,
   and workspace synchronization.
   OpenAI, Anthropic, and Grok retain separate subscription and API-key groups.
+  Each subscription group shows one account with Reconnect/Remove, without
+  Add account, preferred/backup labels, or ordering controls. API keys retain their
+  account lists. Mobile permits one subscription connection per provider per device,
+  with reconnect through the saved connection.
   OpenRouter, OpenCode, and Exa show API-key controls directly when expanded.
   Keep their content and Cursor's controls at the same indentation as the content
   inside the nested credential groups.
