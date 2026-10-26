@@ -25,7 +25,7 @@ public struct ConversationHTMLPage: Codable, Equatable, Sendable {
       throw WorkspaceToolError.invalid("Provide nonempty HTML up to 25 MiB including images, a title up to 200 characters, and a height from 80 to 2000 pixels.")
     }
     // A frame that fits its content cannot itself determine that content's height.
-    let css = try NSRegularExpression(pattern: #"(?is)<!--[\s\S]*?(?:-->|$)|<style\b[^>]*>(.*?)</style\s*>|\sstyle\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))"#)
+    let css = try NSRegularExpression(pattern: #"(?is)<!--[\s\S]*?(?:-->|$)|<style\b[^>]*(?:>|$)([\s\S]*?)(?:</style\s*>|$)|\sstyle\s*=\s*(?:"([^"]*)(?:"|$)|'([^']*)(?:'|$)|([^\s>]+))"#)
     let units = try NSRegularExpression(pattern: #"(?i)(?<![\w.+/])(?:\d+(?:\.\d+)?|\.\d+)[sld]?vh(?![\w-])"#)
     let source = html as NSString
     for match in css.matches(in: html, range: NSRange(location: 0, length: source.length)) {
