@@ -29,7 +29,7 @@ RUN export DEBIAN_FRONTEND=noninteractive \
     && echo 'deb http://deb.debian.org/debian trixie-backports main' > /etc/apt/sources.list.d/wovenmatter-backports.list \
     && apt-get update && apt-get upgrade --yes \
     && apt-get install --yes --no-install-recommends ca-certificates git libatomic1 \
-    && apt-get install --yes --no-install-recommends \
+    && apt-get install --yes --target-release trixie-backports --no-install-recommends \
       /tmp/security-output/curl_*.deb \
       /tmp/security-output/libcurl4t64_*.deb \
       /tmp/security-output/libcurl4-gnutls_*.deb \

@@ -76,7 +76,7 @@ RUN export DEBIAN_FRONTEND=noninteractive \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list \
     && apt-get update && apt-get install -y --no-install-recommends gh \
     && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' gh)" ge 2.103.2 \
-    && apt-get install -y --no-install-recommends /tmp/security-output/*.deb \
+    && apt-get install -y --target-release trixie-backports --no-install-recommends /tmp/security-output/*.deb \
     && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' curl)" ge 8.23.0 \
     && mkdir -p /usr/local/share/wovenmatter/security \
     && cp -a /tmp/security-output/provenance /usr/local/share/wovenmatter/security/ \
