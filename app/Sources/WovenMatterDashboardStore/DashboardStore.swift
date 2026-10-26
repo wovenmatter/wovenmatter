@@ -226,8 +226,8 @@ public actor DashboardStore {
     localWorkspacePrepared = true
   }
 
-  public func setCLIConnectionProvider(_ provider: @escaping @Sendable (String) async throws -> AgentCLIContext?) async throws {
-    try await localSessions.setCLIConnectionProvider(provider)
+  public func setMCPConnectionProvider(onRelease: (@Sendable (String) async -> Void)? = nil, _ provider: @escaping @Sendable (String) async throws -> WovenMCPConnection?) async throws {
+    try await localSessions.setMCPConnectionProvider(onRelease: onRelease, provider)
   }
 
   public func sessionNativeWorkingDirectories(ids: [String]) async throws -> [String: String] {
@@ -403,7 +403,7 @@ public actor DashboardStore {
       case .apply: try await database.applyNoteEdits(request)
       }
       if case .apply = request.command {
-        try await database.recordHistory(WorkspaceHistoryEvent(harness:"woven-note",kind:"cli.mutation",
+        try await database.recordHistory(WorkspaceHistoryEvent(harness:"woven",kind:"mcp.mutation",
           payload:String(decoding:try JSONEncoder().encode([
             "action":"apply", "noteID":request.noteID, "success":"true"
           ]),as:UTF8.self)))
@@ -411,7 +411,7 @@ public actor DashboardStore {
       return response
     } catch {
       if case .apply = request.command {
-        try await database.recordHistory(WorkspaceHistoryEvent(harness:"woven-note",kind:"cli.mutation",
+        try await database.recordHistory(WorkspaceHistoryEvent(harness:"woven",kind:"mcp.mutation",
           payload:String(decoding:try JSONEncoder().encode([
             "action":"apply", "noteID":request.noteID, "success":"false"
           ]),as:UTF8.self)))

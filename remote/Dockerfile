@@ -195,9 +195,6 @@ COPY --chown=woven:woven remote/src ./src
 COPY --chown=woven:woven remote/entrypoint.sh ./entrypoint.sh
 COPY --chown=woven:woven harnesses ./harnesses
 
-RUN ln -s /opt/wovenmatter/src/wovenmatter /usr/local/bin/wovenmatter \
-    && ln -s /opt/wovenmatter/src/woven-browser /usr/local/bin/woven-browser
-
 USER woven
 EXPOSE 7337
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \

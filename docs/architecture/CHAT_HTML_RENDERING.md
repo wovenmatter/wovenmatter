@@ -35,24 +35,24 @@ not a Markdown HTML renderer:
 
 ## Woven Matter implementation
 
-`default-agent/src/automation-tools.mjs` exposes both tools to Pi Durable and
-the existing MCP server. The dependency-free remote MCP adapter exposes the
-same schemas. Native harnesses also receive CLI instructions:
+The canonical Woven MCP catalog exposes `woven_html_preview`,
+`woven_html_render`, and `woven_html_cancel`. Pi Durable discovers these through
+its native MCP client; Codex, Claude Code, Grok Build, and OpenCode receive the
+same tools through their caller-bound native MCP adapters. For example:
 
-```sh
-wovenmatter html call --json - --request-id UUID <<'JSON'
-{"action":"render","html":"<button onclick='this.textContent=42'>Calculate</button>","title":"Calculator","height":160}
-JSON
+```json
+{"name":"woven_html_render","arguments":{"html":"<button onclick='this.textContent=42'>Calculate</button>","title":"Calculator","height":160}}
 ```
 
-Use `action: "preview"`, optional `width` (240–1600, default 728), and optional
-`appearance` (`light` or `dark`, default `dark`) to inspect a screenshot and console messages.
-Preview uses an ephemeral WebKit view through the existing GUI automation relay;
-the app must be open. Publishing needs no browser and remains available to a
-connected local or remote harness. Phone tools use the existing central Mac
-route. This does not add an offline phone publishing service.
+`woven_html_preview` accepts HTML, optional `width` (240–1600, default 728),
+and optional `appearance` (`light` or `dark`, default `dark`). It returns a
+screenshot, console messages, and measured height. Preview uses an ephemeral
+WebKit view through the existing GUI automation relay; the app must be open.
+Publishing needs no browser and remains available to a connected local or
+remote harness. Phone tools use the existing central Mac route. This does not
+add an offline phone publishing service.
 
-The invoking CLI/device validates authored HTML (512,000 UTF-16 code units,
+The invoking MCP adapter/device validates authored HTML (512,000 UTF-16 code units,
 matching T3's JavaScript schema) and embeds absolute local image paths before
 transport. This includes quoted HTML, CSS, JavaScript and backtick references,
 and bare CSS `url(/path)`. Protocol-relative and HTTP(S) URLs remain URLs.
@@ -69,7 +69,11 @@ conversation's private device files, as in the on-device command runtime. Phone
 SDK result metadata retains prepared HTML
 without returning the image bytes as model-visible tool text. Ordinary tool
 requests keep their existing limits; HTML requests and the underlying bounded
-RPC/companion transports accommodate prepared pages.
+RPC/companion transports accommodate prepared pages. The same canonical catalog
+is generated for remote workspaces. Visual replies remain available with older
+saved tool selections; explicitly limited outside-client grants still apply.
+Publication is marked non-idempotent so adapters never automatically replay it
+after an uncertain transport failure.
 
 Publication validates prepared HTML, title (200 characters), and initial height
 (80–2000px). It writes a normalized activity into the caller's
@@ -108,7 +112,7 @@ existing tool-response transport limit, reducing image resolution when necessary
 
 | Behavior | T3 Code | Woven Matter |
 | --- | --- | --- |
-| Agent contract | `html_preview`, then `html_render`; caller-owned thread | Same tools and caller-owned conversation; CLI available to native harnesses |
+| Agent contract | `html_preview`, then `html_render`; caller-owned thread | Equivalent focused MCP tools and caller-owned conversation |
 | Page and image budgets | 512,000 authored characters; 10 MiB/image; 25 MiB prepared | Same |
 | Local images | Absolute quoted and CSS paths; signatures; retained data URIs | Same; prepared on the executing host/device |
 | Missing images | Preview reports; render fails | Same |
@@ -132,16 +136,16 @@ feature and are outside this HTML-reply implementation.
 `scripts/test-changes.sh` exercises the real packaged tool paths after building
 the native app, without inference or provider credentials. The opt-in Swift
 test `packagedHTMLToolsWorkAcrossHarnesses` runs the Node driver in
-`default-agent/test/fixtures/html-harness.mjs` against a real caller-bound socket,
+`default-agent/test/fixtures/html-harness.mjs` against a real caller-bound HTTP MCP endpoint,
 the normal publication service and the production WebKit preview implementation.
 
 | Harness | Exercised entry points |
 | --- | --- |
-| Codex | Packaged MCP discovery/preview/render, native shell-hook CLI fallback |
-| Claude Code | Packaged MCP discovery/preview/render, native shell-hook CLI fallback |
-| Grok Build | Packaged MCP discovery/preview/render, native shell-hook CLI fallback |
-| Pi Durable | Packaged native `automationTools` registration and execution |
-| OpenCode | Packaged plugin tool/shell hooks, captured-input binding, CLI preview/render |
+| Codex | Packaged native adapter, HTTP MCP discovery/preview/render |
+| Claude Code | Packaged native adapter, HTTP MCP discovery/preview/render |
+| Grok Build | Packaged native adapter, HTTP MCP discovery/preview/render |
+| Pi Durable | Packaged native MCP discovery, tool registration and execution |
+| OpenCode | Packaged plugin, native-tool session binding, HTTP MCP preview/render |
 
 Every path previews at 728px/light and 390px/dark, checks PNG output, responsive
 height, JavaScript execution, and embedded-image loading; then publishes, deletes
@@ -155,5 +159,5 @@ Claude Code, and Grok Build sessions.
 These are deterministic integration checks of the harness adapters and tool
 transports. They do not make model calls or certify account authentication or a
 particular model's decision to use the tools. The phone package/journal tests,
-native iOS builds, and remote CLI/MCP/relay fixtures cover their corresponding
+native iOS builds, and remote MCP/relay fixtures cover their corresponding
 boundaries separately.

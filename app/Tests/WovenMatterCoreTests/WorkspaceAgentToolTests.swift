@@ -246,7 +246,8 @@ struct WorkspaceAgentToolTests {
   func creationConfigurationSurvivesReopenAndKeepsResolvedDefaults(remote: Bool, emptyTools: Bool) async throws {
     let (db, dir, source, other) = try await fixture()
     defer { try? FileManager.default.removeItem(at: dir) }
-    let owner = remote ? "remote:test" : "device:test"
+    let remoteWorkspaceID = remote ? UUID() : nil
+    let owner = remoteWorkspaceID.map { "remote:" + $0.uuidString.lowercased() } ?? "device:test"
     let folder = try await db.createFolder(name: "Original folder", location: .init(workspaceID: owner, rootPath: "/workspace/original", managed: false))
     let laterFolder = try await db.createFolder(name: "Later folder", location: .init(workspaceID: owner, rootPath: "/workspace/later", managed: false))
     try await db.setSessionTools(.init(enabled: [.sessions, .notes]), sessionID: source)
@@ -257,7 +258,7 @@ struct WorkspaceAgentToolTests {
     let target = try #require(reservation.objectValue?["target_id"]?.stringValue)
     let resolvedTools = WorkspaceSessionTools(enabled: emptyTools ? [] : [.history, .calendar, .executor],
       executorProfiles: emptyTools ? [] : ["saved:profile"])
-    let proposed = WorkspaceSessionCreationConfiguration(runtimeKind: .codex, workspaceID: remote ? UUID() : nil,
+    let proposed = WorkspaceSessionCreationConfiguration(runtimeKind: .codex, workspaceID: remoteWorkspaceID,
       folderID: folder, title: "Planned title", model: "original-model", thinking: "high", permission: "native-permission",
       selectionWorkspace: remote ? "remote:fixture" : "local:/workspace/original",
       nativeWorkingDirectory: "/workspace/original", nativeWorkspaceID: "native-workspace", tools: resolvedTools)

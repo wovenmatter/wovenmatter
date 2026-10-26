@@ -91,9 +91,9 @@ struct SettingsAgentDefaultsSection: View {
                     }
                 }
             }.disabled(!scopeAvailable || inheritsDefaults)
-            if showsTools { SettingsCard(title: "Woven Matter CLI", detail: "Tools available in new chats. Adjust them from Tools in any chat.") {
+            if showsTools { SettingsCard(title: "Woven MCP", detail: "Tools available in new chats. Adjust them from Tools in any chat.") {
                 VStack(alignment: .leading, spacing: 12) {
-                    Toggle("Enable Woven Matter CLI", isOn: Binding(get: { !enabledTools.subtracting(["goals"]).isEmpty }, set: { enabled in
+                    Toggle("Enable Woven MCP", isOn: Binding(get: { !enabledTools.subtracting(["goals"]).isEmpty }, set: { enabled in
                         save(.tools, selections: SessionSelections(tools: enabled
                             ? WorkspaceToolSettings().enabledByDefault.map(\.rawValue).sorted() : []))
                     }))

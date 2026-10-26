@@ -25,6 +25,10 @@ async function main() {
     <button onclick="document.querySelector('output').textContent =
       'Hello ' + document.querySelector('input').value">Greet</button><output></output>`;
   const server = createServer((request, response) => {
+    if (request.url === '/download') {
+      response.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Disposition': 'attachment; filename="mcp-proof.txt"' });
+      response.end('Woven MCP download proof'); return;
+    }
     response.writeHead(200, { 'Content-Type': 'text/html' });
     response.end(html);
   });
@@ -69,14 +73,16 @@ async function main() {
       return response;
     };
     assert.equal((await (await request('tabs')).json()).running, false);
-    const { stdout } = await exec('woven-browser', ['endpoint'], { timeout: 20000 });
+    const connected = await request('connect', {});
+    assert.equal(connected.status, 200);
+    const stdout = (await connected.json()).endpoint;
     assert.match(stdout.trim(), /^ws:\/\/127\.0\.0\.1:\d+\/devtools\/browser\//);
     const endpoint = new URL(stdout.trim());
     const interfaces = Object.values(require('node:os').networkInterfaces()).flat();
     for (const address of interfaces.filter(value => value.family === 'IPv4' && !value.internal)) {
       await assert.rejects(fetch(`http://${address.address}:${endpoint.port}/json/version`, { signal: AbortSignal.timeout(1500) }));
     }
-    browser = await chromium.connectOverCDP(stdout.trim());
+    browser = await chromium.connectOverCDP(stdout.trim(), { noDefaults: true });
     const sharedPage = await browser.contexts()[0].newPage();
     await sharedPage.goto(url);
     const sharedTab = (await (await request('tabs')).json()).tabs.find(tab => tab.url === url);
@@ -107,10 +113,11 @@ async function main() {
     assert.equal(Buffer.from(streamed.imageBase64, 'base64').readUInt16BE(), 0xffd8);
     await reader.cancel();
     console.log('Shared browser performance transport: ordered 30-key batch and authenticated live stream passed.');
+    await verifyMCP(serviceURL, sharedTab.id, sharedPage, url, request);
     await browser.close(); browser = undefined;
     assert.ok((await (await request('tabs')).json()).tabs.some(tab => tab.id === sharedTab.id));
     assert.equal((await request('frame', { tabID: sharedTab.id })).status, 200);
-    browser = await chromium.connectOverCDP(stdout.trim());
+    browser = await chromium.connectOverCDP(stdout.trim(), { noDefaults: true });
     await browser.contexts()[0].pages().find(page => page.url() === sharedPage.url()).close();
     assert.equal((await request('frame', { tabID: sharedTab.id })).status, 410);
     await browser.close(); browser = undefined;
@@ -122,6 +129,53 @@ async function main() {
     process.chdir('/home');
     await rm(directory, { recursive: true, force: true });
   }
+}
+async function verifyMCP(serviceURL, tabId, page, url, viewerRequest) {
+  const uuid = require('node:crypto').randomUUID;
+  const admin = async (path, method, body) => {
+    const response = await fetch(serviceURL + path, { method,
+      headers: { Authorization: 'Bearer ' + process.env.WOVENMATTER_API_TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body), signal: AbortSignal.timeout(30000) });
+    assert.ok(response.ok, path + ': ' + response.status);
+    return response.json();
+  };
+  const callerID = uuid();
+  const call = async (name, input, caller = callerID) => {
+    const reply = await admin(name === 'woven_browser_cancel' ? '/v1/browser/mcp/cancel' : '/v1/browser/mcp', 'POST', {
+      callerID: caller, input: { ...input, requestID: input.requestID || uuid() },
+    });
+    return reply;
+  };
+  const invoke = async input => {
+    const response = await call('woven_browser', input);
+    assert.equal(response.success, true, JSON.stringify(response));
+    return response.result;
+  };
+  const snapshot = await invoke({ action: 'snapshot', tabId });
+  assert.match(snapshot.content[0].text, /Name/);
+  await invoke({ action: 'fill', tabId, selector: 'input[aria-label="Name"]', text: 'MCP and viewer share this tab' });
+  assert.equal(await page.locator('input[aria-label="Name"]').inputValue(), 'MCP and viewer share this tab');
+  const image = await invoke({ action: 'screenshot', tabId });
+  assert.equal(image.content[0].type, 'image');
+  assert.equal(Buffer.from(image.content[0].data, 'base64').readUInt16BE(), 0xffd8);
+  const added = JSON.parse((await invoke({ action: 'open', url: url + '?mcp=1' })).content[0].text);
+  assert.ok((await (await viewerRequest('tabs')).json()).tabs.some(tab => tab.id === added.tabId));
+  await invoke({ action: 'close', tabId: added.tabId });
+  await page.evaluate(() => { const link = document.createElement('a'); link.href = '/download'; link.id = 'mcp-download'; link.textContent = 'Download proof'; document.body.append(link); });
+  const downloaded = JSON.parse((await invoke({ action: 'download', tabId, selector: '#mcp-download' })).content[0].text);
+  assert.equal(downloaded.status, 'complete');
+  const listed = JSON.parse((await invoke({ action: 'downloads', tabId })).content[0].text);
+  assert.ok(listed.some(item => item.id === downloaded.id));
+  const read = JSON.parse((await invoke({ action: 'read-download', tabId, id: downloaded.id })).content[0].text);
+  assert.equal(Buffer.from(read.data, 'base64').toString(), 'Woven MCP download proof');
+  const requestID = uuid(), pending = call('woven_browser', { action: 'click', tabId, selector: '#never-present', requestID });
+  await new Promise(resolve => setTimeout(resolve, 250));
+  assert.equal((await call('woven_browser_cancel', { id: requestID }, uuid())).result.cancelled, 0);
+  const cancelled = await call('woven_browser_cancel', { id: requestID });
+  assert.equal(cancelled.result.cancelled, 1);
+  assert.equal((await pending).success, false);
+  assert.equal((await viewerRequest('frame', { tabID: tabId })).status, 200);
+  console.log('Authenticated remote Woven MCP forwarding: shared tabs, snapshot, form input, inline screenshot, downloads, lifecycle and caller-bound joined cancellation passed without starting a provider runtime.');
 }
 async function verifyInteraction(page, tabID, request) {
   const assert = require('node:assert/strict');

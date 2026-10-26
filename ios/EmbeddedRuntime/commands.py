@@ -8,7 +8,6 @@ import ast, asyncio, contextlib, inspect, io, json, os, pathlib, re, runpy, shut
 COMMANDS = {
     "python": "python [-c SOURCE | -m MODULE | FILE] [ARGS...]; supports top-level await",
     "python3": "Alias of python (CPython 3.14.2)",
-    "wovenmatter": "wovenmatter GROUP COMMAND [OPTIONS...]; native Woven Matter CLI bridge",
     "pwd": "pwd",
     "ls": "ls [-a] [PATH...]",
     "cat": "cat [FILE...]; no files reads stdin",
@@ -22,31 +21,13 @@ COMMANDS = {
     "help": "help; lists these exact supported commands",
 }
 
-async def wovenmatter(arguments):
-    """Use await wovenmatter(['calendar', ...]) from Python; returns decoded CLI JSON."""
-    from woven_native import command
-    arguments = list(arguments)
-    require(all(isinstance(value, str) for value in arguments), "CLI arguments must be strings")
-    offset = 2 if arguments[:1] == ["--target"] else 0
-    group, action = (arguments[offset:offset + 2] + ["", ""])[:2]
-    # These are the shared CLI's only file-input commands. Resolve against the
-    # running virtual cwd, not the native workspace's pre-command snapshot.
-    inline = {("executor", "execute"): "--code", ("notes", "apply"): "--json", ("notes", "set-html"): "--html"}.get((group, action))
-    if inline:
-        index = offset + 2
-        while index < len(arguments):
-            value = arguments[index]
-            if value in ("--help", "-h"):
-                index += 1; continue
-            if value == "--file":
-                require(index + 1 < len(arguments), "--file requires a workspace path")
-                path = pathlib.Path(arguments[index + 1]).resolve()
-                require(path.is_relative_to("/workspace"), "CLI input file must be inside /workspace")
-                require(path.stat().st_size <= 4 * 1024 * 1024, "The command input file is too large (maximum 4 MiB).")
-                arguments[index] = inline
-                arguments[index + 1] = path.read_text(encoding="utf-8", errors="strict")
-            index += 2 if value.startswith("--") else 1
-    return json.loads(await command(json.dumps(arguments)))
+async def woven_mcp(name, arguments=None):
+    """Call a focused Woven MCP tool with a name and a structured argument object."""
+    from woven_native import call_tool
+    require(isinstance(name, str) and name.startswith("woven_"), "Use a Woven MCP tool name")
+    arguments = {} if arguments is None else arguments
+    require(isinstance(arguments, dict), "MCP arguments must be an object")
+    return json.loads(await call_tool(name, json.dumps(arguments)))
 
 
 def require(condition, usage):
@@ -76,7 +57,7 @@ async def execute(argv, stdin=""):
     try:
         if command in ("python", "python3"):
             require(bool(args), COMMANDS[command])
-            namespace = {"__name__": "__main__", "__builtins__": __builtins__, "wovenmatter": wovenmatter}
+            namespace = {"__name__": "__main__", "__builtins__": __builtins__, "woven_mcp": woven_mcp}
             if args[0] == "-c":
                 require(len(args) >= 2, COMMANDS[command])
                 sys.argv = ["-c"] + args[2:]
@@ -95,13 +76,11 @@ async def execute(argv, stdin=""):
             result = eval(compile(source, filename, "exec", flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT), namespace)
             if inspect.isawaitable(result):
                 await result
-        elif command == "wovenmatter":
-            print(json.dumps(await wovenmatter(args), ensure_ascii=False))
         elif command == "help":
             import pyodide
             print(json.dumps({"runtime": "CPython " + sys.version.split()[0] + " / Pyodide " + pyodide.__version__, "commands": COMMANDS,
               "modules": ["json", "csv", "sqlite3", "re", "statistics", "decimal", "pathlib", "zipfile", "tarfile", "unittest", "asyncio"],
-              "limits": "No OS processes, sockets, package downloads, or native extension installs. Files persist only under /workspace. Native CLI uses awaited wovenmatter(arguments)."}, indent=2))
+              "limits": "No OS processes, sockets, package downloads, or native extension installs. Files persist only under /workspace. Woven tools use await woven_mcp(name, arguments), with the same named tools and schemas as the app."}, indent=2))
         elif command == "pwd":
             require(not args, COMMANDS[command]); print(os.getcwd())
         elif command == "ls":

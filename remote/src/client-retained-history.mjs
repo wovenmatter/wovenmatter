@@ -122,7 +122,7 @@ export function createRetainedExecutionCapture({directory, defaultDirectory, tas
     }
   }
   // Persist only public identity and message text, never attachment tokens,
-  // provider configuration, CLI sockets, tool capabilities, or the RPC envelope.
+  // provider configuration, MCP credentials, tool capabilities, or the RPC envelope.
   function prepareRPC(message) {
     if(message.method!=='session/prompt')return message
     const operationID=message.operationID??randomUUID(),meta=message.params?._meta??{}

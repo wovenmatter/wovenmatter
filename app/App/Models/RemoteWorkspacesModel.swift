@@ -1316,6 +1316,38 @@ final class RemoteWorkspacesModel {
         guard value.configured, value.grantID == grant.grantID else { throw RemoteWorkspaceClientError.invalidResponse("The execution owner did not save its publisher grant.") }
     }
 
+    func executionMCPLibraryStatus(configuration: RemoteWorkspaceConfiguration) async throws -> CompanionWorkspacePublisherStatus {
+        let identity = try requestIdentity(configuration)
+        let client = try await serviceClient(for: configuration)
+        try requireCurrent(identity)
+        let value = try await client.executionMCPLibraryStatus()
+        try requireCurrent(identity)
+        return value
+    }
+
+    func configureExecutionMCPLibrary(configuration: RemoteWorkspaceConfiguration, grant: GatewayJSONValue) async throws {
+        let identity = try requestIdentity(configuration)
+        guard grant.objectValue?["workspaceID"]?.stringValue == configuration.id.uuidString.lowercased(),
+              let grantID = grant.objectValue?["grantID"]?.stringValue else {
+            throw RemoteWorkspaceClientError.invalidResponse("The MCP grant belongs to another execution workspace.")
+        }
+        let client = try await serviceClient(for: configuration)
+        try requireCurrent(identity)
+        let value = try await client.configureExecutionMCPLibrary(grant)
+        try requireCurrent(identity)
+        guard value.configured, value.grantID == grantID else {
+            throw RemoteWorkspaceClientError.invalidResponse("The execution owner did not save its library MCP grant.")
+        }
+    }
+
+    func configureExecutionMCPSettings(configuration: RemoteWorkspaceConfiguration, settings: GatewayJSONValue) async throws {
+        let identity = try requestIdentity(configuration)
+        let client = try await serviceClient(for: configuration)
+        try requireCurrent(identity)
+        _ = try await client.configureExecutionMCPSettings(settings)
+        try requireCurrent(identity)
+    }
+
     func adoptExecutionConversation(configuration: RemoteWorkspaceConfiguration, adoption: CompanionExecutionAdoption) async throws -> CompanionConversation {
         let identity = try requestIdentity(configuration)
         guard adoption.workspaceID == configuration.id.uuidString.lowercased() else {
@@ -1400,6 +1432,17 @@ final class RemoteWorkspacesModel {
 
     func inspectRuntime(_ configuration: RemoteWorkspaceConfiguration) async throws -> RuntimeInspection {
         try await databaseRequest(configuration) { try await $0.runtimeInspection() }
+    }
+
+    func browserMCP(configuration: RemoteWorkspaceConfiguration, callerID: String,
+                    input: GatewayJSONValue, requestID: String, cancelling: Bool = false) async throws -> WovenMatterToolResponse {
+        let identity = try requestIdentity(configuration)
+        let client = try await serviceClient(for: configuration)
+        try requireCurrent(identity)
+        let value = try await client.browserMCP(callerID: callerID, input: input,
+            requestID: requestID, cancelling: cancelling)
+        try requireCurrent(identity)
+        return value
     }
 
     private func serviceClient(

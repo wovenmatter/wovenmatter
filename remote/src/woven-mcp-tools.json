@@ -1,0 +1,3127 @@
+[
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : true
+    },
+    "description" : "Read the asset ID captured for the consumed user message. Switching the visible asset does not change this capture. Requires Notes access. Scheduled, agent-originated and outside-agent messages have no implicit UI asset capture.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        }
+      },
+      "required" : [
+
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_context"
+  },
+  {
+    "annotations" : {
+      "destructiveHint" : false,
+      "idempotentHint" : false,
+      "openWorldHint" : true,
+      "readOnlyHint" : true
+    },
+    "description" : "Publish interactive HTML above your final reply in this conversation. Use woven_html_preview first. Inline CSS/JavaScript or external HTTPS resources; absolute local image paths in HTML/CSS/JavaScript are embedded on the invoking machine (10 MiB each, 25 MiB prepared page). Use theme variables --background, --foreground, --primary, --muted, --muted-foreground, --border, --card, --chart-1 through --chart-6, --radius, --font-sans, --font-mono. Make the layout responsive; content sets height, never use vh units. Pages stay isolated from the app/session. Do not restate the page in your written reply.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "height" : {
+          "maximum" : 2000,
+          "minimum" : 80,
+          "type" : "integer"
+        },
+        "html" : {
+          "maxLength" : 512000,
+          "minLength" : 1,
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        },
+        "title" : {
+          "maxLength" : 200,
+          "minLength" : 1,
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "height",
+        "html",
+        "title"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_html_render"
+  },
+  {
+    "annotations" : {
+      "destructiveHint" : false,
+      "idempotentHint" : true,
+      "openWorldHint" : true,
+      "readOnlyHint" : true
+    },
+    "description" : "Preview HTML before publishing. Returns PNG, contentHeight, console messages and missing-image diagnostics. Width defaults to 728; use 390 for phones. Appearance defaults to dark. Native harness clients embed local images before transport; external resources follow CORS and platform transport policy. Requires the Woven Matter app open; publishing does not.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "appearance" : {
+          "enum" : [
+            "light",
+            "dark"
+          ],
+          "type" : "string"
+        },
+        "html" : {
+          "maxLength" : 512000,
+          "minLength" : 1,
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        },
+        "width" : {
+          "maximum" : 1600,
+          "minimum" : 240,
+          "type" : "integer"
+        }
+      },
+      "required" : [
+        "html"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_html_preview"
+  },
+  {
+    "annotations" : {
+      "destructiveHint" : false,
+      "idempotentHint" : true,
+      "openWorldHint" : true,
+      "readOnlyHint" : true
+    },
+    "description" : "Cancel this caller's HTML preview by operation UUID, or all.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "id" : {
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "id"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_html_cancel"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : true
+    },
+    "description" : "Databases List using the authenticated caller's current Woven permissions.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        }
+      },
+      "required" : [
+
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_databases_list"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : false
+    },
+    "description" : "Databases Create using the authenticated caller's current Woven permissions. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        },
+        "title" : {
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "title"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_databases_create"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : true
+    },
+    "description" : "Read the execution workspace's managed SQLite database. Database writes are not replayable after an uncertain outcome; query current data before another write.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "databaseID" : {
+          "type" : "string"
+        },
+        "query" : {
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "databaseID",
+        "query"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_databases_query"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : false
+    },
+    "description" : "Modify the execution workspace's managed SQLite database. Database writes are not replayable after an uncertain outcome; query current data before another write. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "databaseID" : {
+          "type" : "string"
+        },
+        "query" : {
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "databaseID",
+        "query"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_databases_execute"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : true
+    },
+    "description" : "Notes List using the authenticated caller's current Woven permissions.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "after" : {
+          "minimum" : 0,
+          "type" : "integer"
+        },
+        "folder" : {
+          "type" : "string"
+        },
+        "limit" : {
+          "maximum" : 200,
+          "minimum" : 1,
+          "type" : "integer"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        },
+        "search" : {
+          "type" : "string"
+        },
+        "sort" : {
+          "enum" : [
+            "newest",
+            "oldest"
+          ],
+          "type" : "string"
+        }
+      },
+      "required" : [
+
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_notes_list"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : true
+    },
+    "description" : "Notes Folders using the authenticated caller's current Woven permissions.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "after" : {
+          "minimum" : 0,
+          "type" : "integer"
+        },
+        "limit" : {
+          "maximum" : 200,
+          "minimum" : 1,
+          "type" : "integer"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        }
+      },
+      "required" : [
+
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_notes_folders"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : false
+    },
+    "description" : "Notes Create using the authenticated caller's current Woven permissions. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "folder" : {
+          "type" : "string"
+        },
+        "kind" : {
+          "enum" : [
+            "note",
+            "spreadsheet",
+            "html"
+          ],
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        },
+        "title" : {
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "title"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_notes_create"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : true
+    },
+    "description" : "Notes Read using the authenticated caller's current Woven permissions.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "characters" : {
+          "maximum" : 65536,
+          "minimum" : 1,
+          "type" : "integer"
+        },
+        "noteID" : {
+          "type" : "string"
+        },
+        "offset" : {
+          "minimum" : 0,
+          "type" : "integer"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "noteID"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_notes_read"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : false
+    },
+    "description" : "Notes Append using the authenticated caller's current Woven permissions. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "noteID" : {
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        },
+        "revision" : {
+          "type" : "string"
+        },
+        "style" : {
+          "type" : "string"
+        },
+        "text" : {
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "noteID",
+        "text"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_notes_append"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : false
+    },
+    "description" : "Notes Insert using the authenticated caller's current Woven permissions. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "after" : {
+          "type" : "string"
+        },
+        "noteID" : {
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        },
+        "revision" : {
+          "type" : "string"
+        },
+        "style" : {
+          "type" : "string"
+        },
+        "text" : {
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "noteID",
+        "revision",
+        "text"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_notes_insert"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : false
+    },
+    "description" : "Notes Replace Block using the authenticated caller's current Woven permissions. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "block" : {
+          "type" : "object"
+        },
+        "id" : {
+          "type" : "string"
+        },
+        "noteID" : {
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        },
+        "revision" : {
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "block",
+        "id",
+        "noteID",
+        "revision"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_notes_replace_block"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : false
+    },
+    "description" : "Notes Delete Block using the authenticated caller's current Woven permissions. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "id" : {
+          "type" : "string"
+        },
+        "noteID" : {
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        },
+        "revision" : {
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "id",
+        "noteID",
+        "revision"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_notes_delete_block"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : false
+    },
+    "description" : "Notes Format using the authenticated caller's current Woven permissions. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "blockID" : {
+          "type" : "string"
+        },
+        "noteID" : {
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        },
+        "revision" : {
+          "type" : "string"
+        },
+        "style" : {
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "blockID",
+        "noteID",
+        "revision",
+        "style"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_notes_format"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : false
+    },
+    "description" : "Notes Set Title using the authenticated caller's current Woven permissions. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "noteID" : {
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        },
+        "revision" : {
+          "type" : "string"
+        },
+        "title" : {
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "noteID",
+        "revision",
+        "title"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_notes_set_title"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : false
+    },
+    "description" : "Notes Set Html using the authenticated caller's current Woven permissions. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "html" : {
+          "type" : "string"
+        },
+        "noteID" : {
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        },
+        "revision" : {
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "html",
+        "noteID",
+        "revision"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_notes_set_html"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : false
+    },
+    "description" : "Apply up to 128 typed note operations. Read the document first for block/table IDs and revision. Destructive edits require revision; append-only operations may omit it. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "noteID" : {
+          "type" : "string"
+        },
+        "operations" : {
+          "items" : {
+            "type" : "object"
+          },
+          "maxItems" : 128,
+          "type" : "array"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        },
+        "revision" : {
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "noteID",
+        "operations"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_notes_apply"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : false
+    },
+    "description" : "Notes Link using the authenticated caller's current Woven permissions. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "databaseID" : {
+          "type" : "string"
+        },
+        "noteID" : {
+          "type" : "string"
+        },
+        "query" : {
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        },
+        "revision" : {
+          "type" : "string"
+        },
+        "sourceID" : {
+          "type" : "string"
+        },
+        "tableID" : {
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "databaseID",
+        "noteID",
+        "query",
+        "revision",
+        "sourceID"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_notes_link"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : false
+    },
+    "description" : "Notes Unlink using the authenticated caller's current Woven permissions. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "noteID" : {
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        },
+        "revision" : {
+          "type" : "string"
+        },
+        "tableID" : {
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "noteID",
+        "revision"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_notes_unlink"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : true
+    },
+    "description" : "Notes Versions using the authenticated caller's current Woven permissions.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "after" : {
+          "minimum" : 0,
+          "type" : "integer"
+        },
+        "limit" : {
+          "maximum" : 200,
+          "minimum" : 1,
+          "type" : "integer"
+        },
+        "noteID" : {
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "noteID"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_notes_versions"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : true
+    },
+    "description" : "Notes Version using the authenticated caller's current Woven permissions.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "characters" : {
+          "maximum" : 65536,
+          "minimum" : 1,
+          "type" : "integer"
+        },
+        "offset" : {
+          "minimum" : 0,
+          "type" : "integer"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        },
+        "version" : {
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "version"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_notes_version"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : false
+    },
+    "description" : "Notes Restore using the authenticated caller's current Woven permissions. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "noteID" : {
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        },
+        "revision" : {
+          "type" : "string"
+        },
+        "version" : {
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "noteID",
+        "revision",
+        "version"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_notes_restore"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : false
+    },
+    "description" : "Notes Table Create using the authenticated caller's current Woven permissions. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "after" : {
+          "type" : "string"
+        },
+        "columns" : {
+          "maximum" : 128,
+          "minimum" : 1,
+          "type" : "integer"
+        },
+        "header" : {
+          "type" : "boolean"
+        },
+        "noteID" : {
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        },
+        "revision" : {
+          "type" : "string"
+        },
+        "rows" : {
+          "maximum" : 1000,
+          "minimum" : 1,
+          "type" : "integer"
+        }
+      },
+      "required" : [
+        "noteID"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_notes_table_create"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : false
+    },
+    "description" : "Notes Table Set Cell using the authenticated caller's current Woven permissions. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "column" : {
+          "minimum" : 0,
+          "type" : "integer"
+        },
+        "noteID" : {
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        },
+        "revision" : {
+          "type" : "string"
+        },
+        "row" : {
+          "minimum" : 0,
+          "type" : "integer"
+        },
+        "tableID" : {
+          "type" : "string"
+        },
+        "text" : {
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "column",
+        "noteID",
+        "revision",
+        "row",
+        "tableID",
+        "text"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_notes_table_set_cell"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : false
+    },
+    "description" : "Notes Table Add Row using the authenticated caller's current Woven permissions. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "after" : {
+          "minimum" : -1,
+          "type" : "integer"
+        },
+        "noteID" : {
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        },
+        "revision" : {
+          "type" : "string"
+        },
+        "tableID" : {
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "noteID",
+        "tableID"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_notes_table_add_row"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : false
+    },
+    "description" : "Notes Table Remove Row using the authenticated caller's current Woven permissions. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "noteID" : {
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        },
+        "revision" : {
+          "type" : "string"
+        },
+        "row" : {
+          "minimum" : 0,
+          "type" : "integer"
+        },
+        "tableID" : {
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "noteID",
+        "revision",
+        "row",
+        "tableID"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_notes_table_remove_row"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : false
+    },
+    "description" : "Notes Table Add Column using the authenticated caller's current Woven permissions. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "after" : {
+          "minimum" : -1,
+          "type" : "integer"
+        },
+        "noteID" : {
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        },
+        "revision" : {
+          "type" : "string"
+        },
+        "tableID" : {
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "noteID",
+        "tableID"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_notes_table_add_column"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : false
+    },
+    "description" : "Notes Table Remove Column using the authenticated caller's current Woven permissions. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "column" : {
+          "minimum" : 0,
+          "type" : "integer"
+        },
+        "noteID" : {
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        },
+        "revision" : {
+          "type" : "string"
+        },
+        "tableID" : {
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "column",
+        "noteID",
+        "revision",
+        "tableID"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_notes_table_remove_column"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : true
+    },
+    "description" : "History Search using the authenticated caller's current Woven permissions.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "after" : {
+          "minimum" : 0,
+          "type" : "integer"
+        },
+        "allWorkspace" : {
+          "type" : "boolean"
+        },
+        "conversation" : {
+          "type" : "string"
+        },
+        "folder" : {
+          "type" : "string"
+        },
+        "harness" : {
+          "type" : "string"
+        },
+        "kind" : {
+          "type" : "string"
+        },
+        "limit" : {
+          "maximum" : 200,
+          "minimum" : 1,
+          "type" : "integer"
+        },
+        "nativeConversationID" : {
+          "type" : "string"
+        },
+        "nativeRecordID" : {
+          "type" : "string"
+        },
+        "nativeSessionID" : {
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        },
+        "run" : {
+          "type" : "string"
+        },
+        "search" : {
+          "type" : "string"
+        },
+        "since" : {
+          "type" : "string"
+        },
+        "sourceID" : {
+          "type" : "string"
+        },
+        "until" : {
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "search"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_history_search"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : true
+    },
+    "description" : "History Conversations using the authenticated caller's current Woven permissions.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "after" : {
+          "minimum" : 0,
+          "type" : "integer"
+        },
+        "allWorkspace" : {
+          "type" : "boolean"
+        },
+        "folder" : {
+          "type" : "string"
+        },
+        "limit" : {
+          "maximum" : 200,
+          "minimum" : 1,
+          "type" : "integer"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        },
+        "search" : {
+          "type" : "string"
+        },
+        "sort" : {
+          "enum" : [
+            "newest",
+            "oldest"
+          ],
+          "type" : "string"
+        }
+      },
+      "required" : [
+
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_history_conversations"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : true
+    },
+    "description" : "History Conversation using the authenticated caller's current Woven permissions.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "after" : {
+          "minimum" : 0,
+          "type" : "integer"
+        },
+        "characters" : {
+          "maximum" : 65536,
+          "minimum" : 1,
+          "type" : "integer"
+        },
+        "id" : {
+          "type" : "string"
+        },
+        "limit" : {
+          "maximum" : 200,
+          "minimum" : 1,
+          "type" : "integer"
+        },
+        "offset" : {
+          "minimum" : 0,
+          "type" : "integer"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "id"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_history_conversation"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : true
+    },
+    "description" : "History Message using the authenticated caller's current Woven permissions.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "characters" : {
+          "maximum" : 65536,
+          "minimum" : 1,
+          "type" : "integer"
+        },
+        "id" : {
+          "type" : "string"
+        },
+        "offset" : {
+          "minimum" : 0,
+          "type" : "integer"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "id"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_history_message"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : true
+    },
+    "description" : "History Event using the authenticated caller's current Woven permissions.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "characters" : {
+          "maximum" : 65536,
+          "minimum" : 1,
+          "type" : "integer"
+        },
+        "id" : {
+          "type" : "string"
+        },
+        "offset" : {
+          "minimum" : 0,
+          "type" : "integer"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "id"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_history_event"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : true
+    },
+    "description" : "History Runs using the authenticated caller's current Woven permissions.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "after" : {
+          "minimum" : 0,
+          "type" : "integer"
+        },
+        "conversation" : {
+          "type" : "string"
+        },
+        "limit" : {
+          "maximum" : 200,
+          "minimum" : 1,
+          "type" : "integer"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        }
+      },
+      "required" : [
+
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_history_runs"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : true
+    },
+    "description" : "History Trace using the authenticated caller's current Woven permissions.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "after" : {
+          "minimum" : 0,
+          "type" : "integer"
+        },
+        "id" : {
+          "type" : "string"
+        },
+        "kind" : {
+          "type" : "string"
+        },
+        "limit" : {
+          "maximum" : 200,
+          "minimum" : 1,
+          "type" : "integer"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        },
+        "since" : {
+          "type" : "string"
+        },
+        "until" : {
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "id"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_history_trace"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : true
+    },
+    "description" : "History Events using the authenticated caller's current Woven permissions.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "after" : {
+          "minimum" : 0,
+          "type" : "integer"
+        },
+        "conversation" : {
+          "type" : "string"
+        },
+        "folder" : {
+          "type" : "string"
+        },
+        "harness" : {
+          "type" : "string"
+        },
+        "kind" : {
+          "type" : "string"
+        },
+        "limit" : {
+          "maximum" : 200,
+          "minimum" : 1,
+          "type" : "integer"
+        },
+        "nativeConversationID" : {
+          "type" : "string"
+        },
+        "nativeRecordID" : {
+          "type" : "string"
+        },
+        "nativeSessionID" : {
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        },
+        "run" : {
+          "type" : "string"
+        },
+        "search" : {
+          "type" : "string"
+        },
+        "since" : {
+          "type" : "string"
+        },
+        "sourceID" : {
+          "type" : "string"
+        },
+        "until" : {
+          "type" : "string"
+        }
+      },
+      "required" : [
+
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_history_events"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : true
+    },
+    "description" : "Sessions List using the authenticated caller's current Woven permissions.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "after" : {
+          "minimum" : 0,
+          "type" : "integer"
+        },
+        "allWorkspace" : {
+          "type" : "boolean"
+        },
+        "folder" : {
+          "type" : "string"
+        },
+        "limit" : {
+          "maximum" : 200,
+          "minimum" : 1,
+          "type" : "integer"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        },
+        "search" : {
+          "type" : "string"
+        },
+        "sort" : {
+          "enum" : [
+            "newest",
+            "oldest"
+          ],
+          "type" : "string"
+        }
+      },
+      "required" : [
+
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_sessions_list"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : true
+    },
+    "description" : "Read status and coordination epoch. Permission, question and authentication states require the user; status never grants approval.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "id" : {
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "id"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_sessions_status"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : false
+    },
+    "description" : "Create a conversation and normally begin coordination. Inherit destination defaults unless overridden. Permissions and enabled tools come only from user controls. Pending approval is not approval; retry the identical requestID after the user resolves it. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "directory" : {
+          "type" : "string"
+        },
+        "folder" : {
+          "type" : "string"
+        },
+        "harness" : {
+          "type" : "string"
+        },
+        "independent" : {
+          "type" : "boolean"
+        },
+        "model" : {
+          "type" : "string"
+        },
+        "purpose" : {
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        },
+        "text" : {
+          "type" : "string"
+        },
+        "thinking" : {
+          "type" : "string"
+        },
+        "title" : {
+          "type" : "string"
+        },
+        "workspace" : {
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "purpose",
+        "text",
+        "title"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_sessions_create"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : false
+    },
+    "description" : "Sessions Send using the authenticated caller's current Woven permissions. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "id" : {
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        },
+        "text" : {
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "id",
+        "text"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_sessions_send"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : false
+    },
+    "description" : "Sessions Manage using the authenticated caller's current Woven permissions. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "id" : {
+          "type" : "string"
+        },
+        "noNotify" : {
+          "type" : "boolean"
+        },
+        "purpose" : {
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "id",
+        "purpose"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_sessions_manage"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : false
+    },
+    "description" : "Sessions Release using the authenticated caller's current Woven permissions. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "epoch" : {
+          "type" : "string"
+        },
+        "id" : {
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "epoch",
+        "id"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_sessions_release"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : false
+    },
+    "description" : "Sessions Notifications using the authenticated caller's current Woven permissions. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "enabled" : {
+          "type" : "boolean"
+        },
+        "epoch" : {
+          "type" : "string"
+        },
+        "id" : {
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "enabled",
+        "epoch",
+        "id"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_sessions_notifications"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : true
+    },
+    "description" : "Sessions Receipts using the authenticated caller's current Woven permissions.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "before" : {
+          "type" : "string"
+        },
+        "limit" : {
+          "maximum" : 200,
+          "minimum" : 1,
+          "type" : "integer"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        }
+      },
+      "required" : [
+
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_sessions_receipts"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : true
+    },
+    "description" : "Sessions Folders using the authenticated caller's current Woven permissions.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "after" : {
+          "minimum" : 0,
+          "type" : "integer"
+        },
+        "limit" : {
+          "maximum" : 200,
+          "minimum" : 1,
+          "type" : "integer"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        }
+      },
+      "required" : [
+
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_sessions_folders"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : true
+    },
+    "description" : "Sessions Harnesses using the authenticated caller's current Woven permissions.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "limit" : {
+          "maximum" : 200,
+          "minimum" : 1,
+          "type" : "integer"
+        },
+        "offset" : {
+          "minimum" : 0,
+          "type" : "integer"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        }
+      },
+      "required" : [
+
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_sessions_harnesses"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : true
+    },
+    "description" : "Goals Get using the authenticated caller's current Woven permissions.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        }
+      },
+      "required" : [
+
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_goals_get"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : false
+    },
+    "description" : "Set a persistent objective for this conversation only when explicitly requested by the user. Never start a parallel provider-native goal. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "objective" : {
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        },
+        "tokenBudget" : {
+          "minimum" : 1,
+          "type" : "integer"
+        },
+        "turnBudget" : {
+          "minimum" : 1,
+          "type" : "integer"
+        }
+      },
+      "required" : [
+        "objective"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_goals_set"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : false
+    },
+    "description" : "Pause this conversation's goal only with explicit user intent. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "id" : {
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "id"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_goals_pause"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : false
+    },
+    "description" : "Resume this conversation's goal only with explicit user intent. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "id" : {
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "id"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_goals_resume"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : false
+    },
+    "description" : "Clear this conversation's goal only with explicit user intent. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "id" : {
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "id"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_goals_clear"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : false
+    },
+    "description" : "Complete this conversation's goal with concrete evidence. Complete only when its objective is achieved. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "evidence" : {
+          "type" : "string"
+        },
+        "id" : {
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "evidence",
+        "id"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_goals_complete"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : false
+    },
+    "description" : "Block this conversation's goal with concrete evidence. Complete only when its objective is achieved. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "evidence" : {
+          "type" : "string"
+        },
+        "id" : {
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "evidence",
+        "id"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_goals_block"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : false
+    },
+    "description" : "Checkpoint this conversation's goal with concrete evidence. Complete only when its objective is achieved. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "evidence" : {
+          "type" : "string"
+        },
+        "id" : {
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "evidence",
+        "id"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_goals_checkpoint"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : true
+    },
+    "description" : "Timers List using the authenticated caller's current Woven permissions.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "after" : {
+          "minimum" : 0,
+          "type" : "integer"
+        },
+        "limit" : {
+          "maximum" : 200,
+          "minimum" : 1,
+          "type" : "integer"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        },
+        "session" : {
+          "type" : "string"
+        }
+      },
+      "required" : [
+
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_timers_list"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : false
+    },
+    "description" : "Timers Create using the authenticated caller's current Woven permissions. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "at" : {
+          "type" : "string"
+        },
+        "every" : {
+          "minimum" : 1,
+          "type" : "number"
+        },
+        "paused" : {
+          "type" : "boolean"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        },
+        "session" : {
+          "type" : "string"
+        },
+        "text" : {
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "at",
+        "text"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_timers_create"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : false
+    },
+    "description" : "Timers Update using the authenticated caller's current Woven permissions. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "at" : {
+          "type" : "string"
+        },
+        "every" : {
+          "minimum" : 1,
+          "type" : "number"
+        },
+        "id" : {
+          "type" : "string"
+        },
+        "paused" : {
+          "type" : "boolean"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        },
+        "text" : {
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "at",
+        "id",
+        "text"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_timers_update"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : false
+    },
+    "description" : "Timers Pause using the authenticated caller's current Woven permissions. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "id" : {
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "id"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_timers_pause"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : false
+    },
+    "description" : "Timers Resume using the authenticated caller's current Woven permissions. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "id" : {
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "id"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_timers_resume"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : false
+    },
+    "description" : "Timers Remove using the authenticated caller's current Woven permissions. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "id" : {
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "id"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_timers_remove"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : true
+    },
+    "description" : "Usage Read using the authenticated caller's current Woven permissions.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "limit" : {
+          "maximum" : 200,
+          "minimum" : 1,
+          "type" : "integer"
+        },
+        "offset" : {
+          "minimum" : 0,
+          "type" : "integer"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        },
+        "since" : {
+          "type" : "string"
+        },
+        "until" : {
+          "type" : "string"
+        }
+      },
+      "required" : [
+
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_usage_read"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : true
+    },
+    "description" : "Calendar List using the authenticated caller's current Woven permissions.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "after" : {
+          "minimum" : 0,
+          "type" : "integer"
+        },
+        "limit" : {
+          "maximum" : 200,
+          "minimum" : 1,
+          "type" : "integer"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        },
+        "since" : {
+          "type" : "string"
+        },
+        "until" : {
+          "type" : "string"
+        }
+      },
+      "required" : [
+
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_calendar_list"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : true
+    },
+    "description" : "Calendar Read using the authenticated caller's current Woven permissions.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "after" : {
+          "minimum" : 0,
+          "type" : "integer"
+        },
+        "id" : {
+          "type" : "string"
+        },
+        "limit" : {
+          "maximum" : 200,
+          "minimum" : 1,
+          "type" : "integer"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "id"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_calendar_read"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : true
+    },
+    "description" : "Calendar Occurrences using the authenticated caller's current Woven permissions.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "after" : {
+          "minimum" : 0,
+          "type" : "integer"
+        },
+        "id" : {
+          "type" : "string"
+        },
+        "limit" : {
+          "maximum" : 200,
+          "minimum" : 1,
+          "type" : "integer"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        },
+        "since" : {
+          "type" : "string"
+        },
+        "until" : {
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "id",
+        "since",
+        "until"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_calendar_occurrences"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : false
+    },
+    "description" : "Calendar Create using the authenticated caller's current Woven permissions. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "allDay" : {
+          "type" : "boolean"
+        },
+        "description" : {
+          "type" : "string"
+        },
+        "directory" : {
+          "type" : "string"
+        },
+        "endsAt" : {
+          "type" : "string"
+        },
+        "folder" : {
+          "type" : "string"
+        },
+        "harness" : {
+          "type" : "string"
+        },
+        "model" : {
+          "type" : "string"
+        },
+        "noRepeat" : {
+          "type" : "boolean"
+        },
+        "prompt" : {
+          "type" : "string"
+        },
+        "regularEvent" : {
+          "type" : "boolean"
+        },
+        "repeatInterval" : {
+          "minimum" : 1,
+          "type" : "integer"
+        },
+        "repeatUnit" : {
+          "enum" : [
+            "day",
+            "week",
+            "month"
+          ],
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        },
+        "sessionMode" : {
+          "type" : "string"
+        },
+        "startsAt" : {
+          "type" : "string"
+        },
+        "thinking" : {
+          "type" : "string"
+        },
+        "timeZone" : {
+          "type" : "string"
+        },
+        "timed" : {
+          "type" : "boolean"
+        },
+        "title" : {
+          "type" : "string"
+        },
+        "workspace" : {
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "startsAt",
+        "title"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_calendar_create"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : false
+    },
+    "description" : "Calendar Update using the authenticated caller's current Woven permissions. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "allDay" : {
+          "type" : "boolean"
+        },
+        "description" : {
+          "type" : "string"
+        },
+        "directory" : {
+          "type" : "string"
+        },
+        "endsAt" : {
+          "type" : "string"
+        },
+        "folder" : {
+          "type" : "string"
+        },
+        "harness" : {
+          "type" : "string"
+        },
+        "id" : {
+          "type" : "string"
+        },
+        "model" : {
+          "type" : "string"
+        },
+        "noRepeat" : {
+          "type" : "boolean"
+        },
+        "prompt" : {
+          "type" : "string"
+        },
+        "regularEvent" : {
+          "type" : "boolean"
+        },
+        "repeatInterval" : {
+          "minimum" : 1,
+          "type" : "integer"
+        },
+        "repeatUnit" : {
+          "enum" : [
+            "day",
+            "week",
+            "month"
+          ],
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        },
+        "revision" : {
+          "minimum" : 0,
+          "type" : "integer"
+        },
+        "sessionMode" : {
+          "type" : "string"
+        },
+        "startsAt" : {
+          "type" : "string"
+        },
+        "thinking" : {
+          "type" : "string"
+        },
+        "timeZone" : {
+          "type" : "string"
+        },
+        "timed" : {
+          "type" : "boolean"
+        },
+        "title" : {
+          "type" : "string"
+        },
+        "workspace" : {
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "id",
+        "revision"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_calendar_update"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : false
+    },
+    "description" : "Calendar Copy using the authenticated caller's current Woven permissions. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "allDay" : {
+          "type" : "boolean"
+        },
+        "description" : {
+          "type" : "string"
+        },
+        "directory" : {
+          "type" : "string"
+        },
+        "endsAt" : {
+          "type" : "string"
+        },
+        "folder" : {
+          "type" : "string"
+        },
+        "harness" : {
+          "type" : "string"
+        },
+        "id" : {
+          "type" : "string"
+        },
+        "model" : {
+          "type" : "string"
+        },
+        "noRepeat" : {
+          "type" : "boolean"
+        },
+        "prompt" : {
+          "type" : "string"
+        },
+        "regularEvent" : {
+          "type" : "boolean"
+        },
+        "repeatInterval" : {
+          "minimum" : 1,
+          "type" : "integer"
+        },
+        "repeatUnit" : {
+          "enum" : [
+            "day",
+            "week",
+            "month"
+          ],
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        },
+        "sessionMode" : {
+          "type" : "string"
+        },
+        "startsAt" : {
+          "type" : "string"
+        },
+        "thinking" : {
+          "type" : "string"
+        },
+        "timeZone" : {
+          "type" : "string"
+        },
+        "timed" : {
+          "type" : "boolean"
+        },
+        "title" : {
+          "type" : "string"
+        },
+        "workspace" : {
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "id",
+        "startsAt"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_calendar_copy"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : false
+    },
+    "description" : "Calendar Detach using the authenticated caller's current Woven permissions. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "allDay" : {
+          "type" : "boolean"
+        },
+        "description" : {
+          "type" : "string"
+        },
+        "directory" : {
+          "type" : "string"
+        },
+        "endsAt" : {
+          "type" : "string"
+        },
+        "folder" : {
+          "type" : "string"
+        },
+        "harness" : {
+          "type" : "string"
+        },
+        "id" : {
+          "type" : "string"
+        },
+        "model" : {
+          "type" : "string"
+        },
+        "noRepeat" : {
+          "type" : "boolean"
+        },
+        "occurrence" : {
+          "minimum" : 0,
+          "type" : "integer"
+        },
+        "prompt" : {
+          "type" : "string"
+        },
+        "regularEvent" : {
+          "type" : "boolean"
+        },
+        "repeatInterval" : {
+          "minimum" : 1,
+          "type" : "integer"
+        },
+        "repeatUnit" : {
+          "enum" : [
+            "day",
+            "week",
+            "month"
+          ],
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        },
+        "revision" : {
+          "minimum" : 0,
+          "type" : "integer"
+        },
+        "sessionMode" : {
+          "type" : "string"
+        },
+        "startsAt" : {
+          "type" : "string"
+        },
+        "thinking" : {
+          "type" : "string"
+        },
+        "timeZone" : {
+          "type" : "string"
+        },
+        "timed" : {
+          "type" : "boolean"
+        },
+        "title" : {
+          "type" : "string"
+        },
+        "workspace" : {
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "id",
+        "occurrence",
+        "revision"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_calendar_detach"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : false
+    },
+    "description" : "Calendar Remove using the authenticated caller's current Woven permissions. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "id" : {
+          "type" : "string"
+        },
+        "occurrence" : {
+          "minimum" : 0,
+          "type" : "integer"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        },
+        "revision" : {
+          "minimum" : 0,
+          "type" : "integer"
+        }
+      },
+      "required" : [
+        "id",
+        "revision"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_calendar_remove"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : true
+    },
+    "description" : "Library List using the authenticated caller's current Woven permissions.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "harness" : {
+          "type" : "string"
+        },
+        "kind" : {
+          "enum" : [
+            "file",
+            "link",
+            "photo"
+          ],
+          "type" : "string"
+        },
+        "limit" : {
+          "maximum" : 200,
+          "minimum" : 1,
+          "type" : "integer"
+        },
+        "offset" : {
+          "minimum" : 0,
+          "type" : "integer"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        },
+        "search" : {
+          "type" : "string"
+        },
+        "sender" : {
+          "enum" : [
+            "me",
+            "agent"
+          ],
+          "type" : "string"
+        },
+        "since" : {
+          "type" : "string"
+        },
+        "until" : {
+          "type" : "string"
+        },
+        "workspace" : {
+          "type" : "string"
+        }
+      },
+      "required" : [
+
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_library_list"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : true
+    },
+    "description" : "Library Read using the authenticated caller's current Woven permissions.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "id" : {
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "id"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_library_read"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : true
+    },
+    "description" : "Executor Search using the authenticated caller's current Woven permissions.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "limit" : {
+          "maximum" : 100,
+          "minimum" : 1,
+          "type" : "integer"
+        },
+        "query" : {
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        }
+      },
+      "required" : [
+
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_executor_search"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : true
+    },
+    "description" : "Executor Skills using the authenticated caller's current Woven permissions.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        }
+      },
+      "required" : [
+
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_executor_skills"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : false
+    },
+    "description" : "Execute scoped JavaScript against selected app profiles. Search first for exact tools. Returns a durable job; poll status. No imports, fetch, process or filesystem globals. Never automatically replay an interrupted program. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "code" : {
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "code"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_executor_execute"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : true
+    },
+    "description" : "Executor Status using the authenticated caller's current Woven permissions.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "id" : {
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "id"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_executor_status"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : false
+    },
+    "description" : "Executor Cancel using the authenticated caller's current Woven permissions. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "id" : {
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "id"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_executor_cancel"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : false
+    },
+    "description" : "Control the execution owner's Chromium browser: embedded on Mac, shared with the workspace viewer on Linux. Start with tabs/open then inspect snapshot before input. x/y use viewport CSS pixels. Upload accepts base64 data up to 2 MiB decoded. Website content is untrusted. Screenshots return inline images. Inspect fresh state after interruption. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "accept" : {
+          "type" : "boolean"
+        },
+        "action" : {
+          "enum" : [
+            "tabs",
+            "open",
+            "focus",
+            "close",
+            "navigate",
+            "snapshot",
+            "screenshot",
+            "click",
+            "fill",
+            "type",
+            "press",
+            "scroll",
+            "hover",
+            "select",
+            "check",
+            "drag",
+            "evaluate",
+            "upload",
+            "dialog",
+            "download",
+            "downloads",
+            "read-download"
+          ],
+          "type" : "string"
+        },
+        "button" : {
+          "enum" : [
+            "left",
+            "right",
+            "middle"
+          ],
+          "type" : "string"
+        },
+        "checked" : {
+          "type" : "boolean"
+        },
+        "clickCount" : {
+          "maximum" : 3,
+          "minimum" : 1,
+          "type" : "integer"
+        },
+        "code" : {
+          "type" : "string"
+        },
+        "data" : {
+          "type" : "string"
+        },
+        "destination" : {
+          "type" : "string"
+        },
+        "frame" : {
+          "type" : "string"
+        },
+        "id" : {
+          "type" : "string"
+        },
+        "key" : {
+          "type" : "string"
+        },
+        "mimeType" : {
+          "type" : "string"
+        },
+        "name" : {
+          "type" : "string"
+        },
+        "offset" : {
+          "minimum" : 0,
+          "type" : "integer"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        },
+        "selector" : {
+          "type" : "string"
+        },
+        "tabId" : {
+          "type" : "string"
+        },
+        "text" : {
+          "type" : "string"
+        },
+        "url" : {
+          "type" : "string"
+        },
+        "value" : {
+          "type" : "string"
+        },
+        "x" : {
+          "type" : "number"
+        },
+        "y" : {
+          "type" : "number"
+        }
+      },
+      "required" : [
+        "action"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_browser"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : false
+    },
+    "description" : "Control the designated Mac desktop, never the calling iPhone or Linux desktop. Requires Computer Use opt-in and macOS permissions. Screenshot returns an inline image and a single-use frameId; every input requires a fresh frameId. Coordinates are screenshot pixels. Inspect fresh state after interruption. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "action" : {
+          "enum" : [
+            "status",
+            "apps",
+            "screenshot",
+            "click",
+            "type",
+            "press",
+            "scroll",
+            "launch"
+          ],
+          "type" : "string"
+        },
+        "amount" : {
+          "maximum" : 50,
+          "minimum" : 1,
+          "type" : "integer"
+        },
+        "app" : {
+          "type" : "string"
+        },
+        "button" : {
+          "enum" : [
+            "single",
+            "right",
+            "double",
+            "middle"
+          ],
+          "type" : "string"
+        },
+        "direction" : {
+          "enum" : [
+            "up",
+            "down",
+            "left",
+            "right"
+          ],
+          "type" : "string"
+        },
+        "frameId" : {
+          "type" : "string"
+        },
+        "key" : {
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        },
+        "screen" : {
+          "minimum" : 0,
+          "type" : "integer"
+        },
+        "text" : {
+          "type" : "string"
+        },
+        "x" : {
+          "type" : "number"
+        },
+        "y" : {
+          "type" : "number"
+        }
+      },
+      "required" : [
+        "action"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_computer"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : false
+    },
+    "description" : "Cancel this caller's automation request by operation UUID, or all. Does not grant new surface access. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "id" : {
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "id"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_browser_cancel"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : false
+    },
+    "description" : "Cancel this caller's automation request by operation UUID, or all. Does not grant new surface access. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "id" : {
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "id"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_computer_cancel"
+  }
+]

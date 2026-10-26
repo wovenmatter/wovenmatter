@@ -149,7 +149,7 @@ public struct WorkspaceCoordinationMutationReceipt: Codable, Equatable, Sendable
   }
 }
 
-/// A management intent is independent of its short-lived CLI connection.
+/// A management intent is independent of its short-lived MCP request.
 /// Only the app's user controls may resolve a pending access request.
 public struct WorkspaceCoordinationAccessRequest: Codable, Identifiable, Equatable, Sendable {
   public let id: String

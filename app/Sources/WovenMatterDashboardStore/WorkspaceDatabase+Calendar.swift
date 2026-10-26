@@ -526,31 +526,34 @@ extension WorkspaceDatabaseConnection {
   /// occurrence uniqueness key prevents a repeated receipt from creating a run.
   public func importRemoteCalendarRun(_ run: WorkspaceCalendarRun, workspaceID: UUID,
       coalescedThrough: Date? = nil, eventRevision: Int? = nil) throws {
-    try transaction {
-      guard run.task.configuration.workspaceID == workspaceID,
-        try calendarItemsUnlocked(includeDeleted: true).contains(where: { $0.id == run.eventID }) else {
-        throw WorkspaceToolError.invalid("Remote scheduled task does not belong to this workspace.")
+    try transaction { try importRemoteCalendarRunUnlocked(run, workspaceID: workspaceID, coalescedThrough: coalescedThrough, eventRevision: eventRevision) }
+  }
+
+  func importRemoteCalendarRunUnlocked(_ run: WorkspaceCalendarRun, workspaceID: UUID,
+      coalescedThrough: Date? = nil, eventRevision: Int? = nil) throws {
+    guard run.task.configuration.workspaceID == workspaceID,
+      try calendarItemsUnlocked(includeDeleted: true).contains(where: { $0.id == run.eventID }) else {
+      throw WorkspaceToolError.invalid("Remote scheduled task does not belong to this workspace.")
+    }
+    try toolsExecuteUnlocked("""
+      INSERT INTO workspace_calendar_runs(id,event_id,scheduled_at,occurrence_index,session_id,task_json,title,status,error,coalesced_through)
+      VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(event_id,scheduled_at) DO UPDATE SET
+        id=excluded.id,status=excluded.status,error=excluded.error,session_id=excluded.session_id
+      WHERE workspace_calendar_runs.status IN ('pending','queued','cancelled')
+      """, [run.id,run.eventID,Self.timestamp(run.scheduledAt),String(run.occurrenceIndex),run.sessionID,
+        try toolsJSON(run.task),run.title,run.status,run.error,
+        String((coalescedThrough ?? run.scheduledAt).timeIntervalSince1970)])
+    try toolsExecuteUnlocked("INSERT INTO workspace_calendar_sessions(id,configuration_json) VALUES(?,?) ON CONFLICT(id) DO NOTHING",
+      [run.sessionID,try toolsJSON(run.task.configuration)])
+    if let event = try calendarItemsUnlocked().first(where: { $0.id == run.eventID }),
+       event.calendar.revision == eventRevision,
+       event.calendar.task?.configuration.workspaceID == workspaceID {
+      if run.task.sessionMode == .same {
+        try toolsExecuteUnlocked("UPDATE dashboard_calendar_items SET task_session_id=? WHERE id=?", [run.sessionID,run.eventID])
       }
-      try toolsExecuteUnlocked("""
-        INSERT INTO workspace_calendar_runs(id,event_id,scheduled_at,occurrence_index,session_id,task_json,title,status,error,coalesced_through)
-        VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(event_id,scheduled_at) DO UPDATE SET
-          id=excluded.id,status=excluded.status,error=excluded.error,session_id=excluded.session_id
-        WHERE workspace_calendar_runs.status IN ('pending','queued','cancelled')
-        """, [run.id,run.eventID,Self.timestamp(run.scheduledAt),String(run.occurrenceIndex),run.sessionID,
-          try toolsJSON(run.task),run.title,run.status,run.error,
-          String((coalescedThrough ?? run.scheduledAt).timeIntervalSince1970)])
-      try toolsExecuteUnlocked("INSERT INTO workspace_calendar_sessions(id,configuration_json) VALUES(?,?) ON CONFLICT(id) DO NOTHING",
-        [run.sessionID,try toolsJSON(run.task.configuration)])
-      if let event = try calendarItemsUnlocked().first(where: { $0.id == run.eventID }),
-         event.calendar.revision == eventRevision,
-         event.calendar.task?.configuration.workspaceID == workspaceID {
-        if run.task.sessionMode == .same {
-          try toolsExecuteUnlocked("UPDATE dashboard_calendar_items SET task_session_id=? WHERE id=?", [run.sessionID,run.eventID])
-        }
-        let row = try historyRowsUnlocked("SELECT next_fire_at FROM dashboard_calendar_items WHERE id=?", values: [run.eventID]).first?.objectValue
-        if let next = row?["next_fire_at"]?.doubleValue, next <= run.scheduledAt.timeIntervalSince1970 {
-          try advanceCalendarUnlocked(event, after: coalescedThrough ?? run.scheduledAt)
-        }
+      let row = try historyRowsUnlocked("SELECT next_fire_at FROM dashboard_calendar_items WHERE id=?", values: [run.eventID]).first?.objectValue
+      if let next = row?["next_fire_at"]?.doubleValue, next <= run.scheduledAt.timeIntervalSince1970 {
+        try advanceCalendarUnlocked(event, after: coalescedThrough ?? run.scheduledAt)
       }
     }
   }
@@ -563,216 +566,221 @@ extension WorkspaceDatabaseConnection {
       workspaceID: UUID, workspaceName: String, ownerDeviceID: UUID,
       nativeSessionID: String?, updates: [GatewayJSONValue], error: String?, completedAt: Date,
       updateOffset: Int = 0, complete: Bool = true) throws {
-    try transaction {
-      guard updateOffset >= 0, updateOffset <= Int.max - updates.count,
-            run.task.configuration.workspaceID == workspaceID,
-            let conversationID = UUID(uuidString: run.sessionID) else {
-        throw WorkspaceToolError.invalid("Invalid remote scheduled session.")
-      }
-      let configuration = run.task.configuration
-      let receipt = try historyRowsUnlocked("SELECT workspace_id,session_id FROM workspace_calendar_remote_receipts WHERE id=?", values: [receiptID]).first?.objectValue
-      if let receipt {
-        guard receipt["workspace_id"]?.stringValue?.lowercased() == workspaceID.uuidString.lowercased(),
-              receipt["session_id"]?.stringValue == run.sessionID else {
-          throw WorkspaceToolError.invalid("Remote result identity conflicts with an existing receipt.")
-        }
-      }
-      let existing = try historyRowsUnlocked("SELECT remote_workspace_id,runtime_kind,acp_session_id FROM desktop_local_acp_sessions WHERE conversation_id=?", values: [run.sessionID]).first?.objectValue
-      if let existing {
-        guard existing["remote_workspace_id"]?.stringValue?.lowercased() == workspaceID.uuidString.lowercased(),
-              existing["runtime_kind"]?.stringValue == configuration.runtimeKind.rawValue else {
-          throw WorkspaceToolError.invalid("Remote session identity conflicts with an existing session.")
-        }
-      } else {
-        try toolsExecuteUnlocked("INSERT INTO workspace_calendar_sessions(id,configuration_json) VALUES(?,?) ON CONFLICT(id) DO NOTHING", [run.sessionID,try toolsJSON(configuration)])
-        _ = try createRemoteACPSessionUnlocked(runtimeKind: configuration.runtimeKind,
-          remoteWorkspaceID: workspaceID, remoteWorkspaceName: workspaceName,
-          title: configuration.title, ownerDeviceID: ownerDeviceID, createdAt: run.scheduledAt,
-          openCodeAssociation: configuration.runtimeKind == .opencode ? nativeSessionID.map { ("remote-workspace:" + workspaceID.uuidString.lowercased(),$0) } : nil,
-          requestedConversationID: conversationID, allowMissingCalendarFolder: true)
-      }
-      guard let path = configuration.nativeWorkingDirectory, path.hasPrefix("/"), !path.contains("\0") else {
-        throw WorkspaceToolError.invalid("The scheduled session has no captured execution directory.")
-      }
-      let location = WorkspaceFolderLocation(workspaceID: "remote:" + workspaceID.uuidString.lowercased(), rootPath: path, managed: false)
-      let directory = URL(fileURLWithPath: path)
-      if configuration.folderID == nil, directory.deletingLastPathComponent().lastPathComponent == "scratch" {
-        let base = directory.deletingLastPathComponent().deletingLastPathComponent().path
-        if let scratch = try sessionScratchDirectory(id: run.sessionID) {
-          guard scratch == location else { throw WorkspaceToolError.invalid("Remote scratch directory changed.") }
-        } else {
-          try toolsExecuteUnlocked("INSERT INTO session_scratch_directories(session_id,workspace_id,workspace_root,root_path) VALUES(?,?,?,?)",
-            [run.sessionID,location.workspaceID,base,path])
-        }
-      }
-      if let saved = try sessionExecutionRoot(id: run.sessionID) {
-        guard saved.workspaceID == location.workspaceID, saved.rootPath == path else { throw WorkspaceToolError.invalid("Scheduled session execution directory changed.") }
-      } else {
-        // The remote owner's saved configuration is authoritative even when its
-        // UI folder was removed while the Mac was disconnected.
-        try toolsExecuteUnlocked("INSERT INTO session_execution_roots(conversation_id,workspace_id,root_path,folder_locked) VALUES(?,?,?,1)", [run.sessionID,location.workspaceID,path])
-      }
-      try toolsExecuteUnlocked("UPDATE session_execution_roots SET folder_locked=1 WHERE conversation_id=?", [run.sessionID])
-      if let recordedNativeID = existing?["acp_session_id"]?.stringValue,
-         let nativeSessionID, recordedNativeID != nativeSessionID {
-        throw WorkspaceToolError.invalid("Remote result belongs to a different native session.")
-      }
-      try toolsExecuteUnlocked("UPDATE desktop_local_acp_sessions SET acp_session_id=coalesce(acp_session_id,?) WHERE conversation_id=?",
-        [nativeSessionID, run.sessionID])
-      let previousSequence = try historyRowsUnlocked("SELECT coalesce(max(sequence),0) AS sequence FROM workspace_history_events", values: [])
-        .first?.objectValue?["sequence"]?.intValue ?? 0
-      try archiveRemoteCalendarUpdatesUnlocked(receiptID: receiptID, workspaceID: workspaceID,
-        conversationID: run.sessionID, nativeSessionID: nativeSessionID,
-        harness: configuration.runtimeKind.rawValue, runID: run.id, updates: updates, updateOffset: updateOffset)
-      // Observed updates belong to this result; native snapshots may also
-      // expose historical records whose run association remains unknown.
-      try toolsExecuteUnlocked("UPDATE workspace_history_events SET run_id=? WHERE sequence>? AND conversation_id=? AND source_id=? AND run_id IS NULL",
-        [run.id, String(previousSequence), run.sessionID,
-          "remote:" + workspaceID.uuidString.lowercased() + ":calendar"])
-      guard receipt == nil, complete else { return }
-      try toolsExecuteUnlocked("""
-        UPDATE desktop_local_acp_sessions SET model=?,thinking=?,permission=?,updated_at=?,revision=revision+1
-        WHERE conversation_id=?
-        """, [configuration.model,configuration.thinking,configuration.permission,Self.timestamp(completedAt),run.sessionID])
-      // OpenCode's server remains its transcript owner; attaching the native
-      // session above makes the existing synchronization path fetch its history.
-      if configuration.runtimeKind != .opencode {
-        var response = ""
-        var responseAssembly = NativeTextSnapshotAssembler()
-        try forEachRemoteCalendarUpdateUnlocked(receiptID: receiptID, workspaceID: workspaceID, conversationID: run.sessionID) { update in
-          guard update.objectValue?["sessionUpdate"]?.stringValue == "agent_message_chunk" else { return }
-          let text = update.objectValue?["content"]?.objectValue?["text"]?.stringValue ?? ""
-          let meta = update.objectValue?["_meta"]?.objectValue
-          if configuration.runtimeKind == .defaultAgent, meta?["wovenAssistantSnapshot"]?.boolValue == true {
-            if let complete = responseAssembly.receive(text,
-                starts: meta?["wovenSnapshotStart"]?.boolValue == true,
-                ends: meta?["wovenSnapshotEnd"]?.boolValue == true) { response = complete }
-          } else { response += text }
-        }
-        // The execution host already assigned the stable Woven run identity.
-        let runID = run.id
-        let userID = UUID().uuidString.lowercased(), assistantID = UUID().uuidString.lowercased()
-        let status = error == nil ? "completed" : "failed"
-        let started = Self.timestamp(run.scheduledAt), finished = Self.timestamp(completedAt)
-        for (id,role,content,stamp) in [(userID,"user",run.task.prompt,started),
-          (assistantID,"assistant",response,Self.timestamp(run.scheduledAt.addingTimeInterval(0.001)))] {
-          try toolsExecuteUnlocked("""
-            INSERT INTO dashboard_messages(id,conversation_id,run_id,role,message_source,content,status,
-              governing_plane,authority_kind,authority_device_id,authority_agent_id,created_at,updated_at,desktop_owned)
-            SELECT ?,id,?,?,'local_acp',?,?,'wovenmatter_macos','device_owned',authority_device_id,agent_id,?,?,1
-            FROM dashboard_conversations WHERE id=?
-            """, [id,runID,role,content,role == "user" ? "completed" : status,stamp,finished,run.sessionID])
-        }
-        try toolsExecuteUnlocked("""
-          INSERT INTO dashboard_runs(id,conversation_id,user_id,agent_id,agent_codename,governing_plane,authority_kind,
-            authority_device_id,authority_agent_id,openclaw_session_key,user_message_id,assistant_message_id,status,
-            started_at,created_at,updated_at,completed_at,error,desktop_owned)
-          SELECT ?,id,user_id,agent_id,agent_codename,'wovenmatter_macos','device_owned',authority_device_id,agent_id,
-            ?,?,?,?,?,?,?,?,?,1 FROM dashboard_conversations WHERE id=?
-          """, [runID,nativeSessionID ?? "",userID,assistantID,status,started,started,finished,finished,error,run.sessionID])
-        try toolsExecuteUnlocked("UPDATE dashboard_runs SET status='running' WHERE id=?", [runID])
-        var thoughtSequence = 0
-        var activeThought: String?
-        var thoughtAssemblies: [String: NativeTextSnapshotAssembler] = [:]
-        var assistantAssembly = NativeTextSnapshotAssembler()
-        var assistantPrefix = "", frozenPrefix = ""
-        var boundarySequence = 0
-        var hermesChecklistRevision: Double = 0
-        try forEachRemoteCalendarUpdateUnlocked(receiptID: receiptID, workspaceID: workspaceID, conversationID: run.sessionID) { value in
-          guard let object = value.objectValue, let kind = object["sessionUpdate"]?.stringValue else { return }
-          let raw = try toolsJSON(value)
-          var activity: AgentRunActivity?
-          var appending = false
-          let meta = object["_meta"]?.objectValue
-          if kind == "woven_hermes_tool_complete" || kind == "woven_cursor_todos" {
-            guard let nativeSessionID, !nativeSessionID.isEmpty,
-                  object["nativeSessionID"]?.stringValue == nativeSessionID,
-                  let payload = object["payload"] else { return }
-            if kind == "woven_hermes_tool_complete", configuration.runtimeKind == .hermes {
-              let native = try HermesValue.decode(JSONEncoder().encode(payload))
-              if let checklist = HermesSessionArchive.checklistUpdate(native),
-                 let revision = native["result"]["revision"].number, revision > hermesChecklistRevision {
-                hermesChecklistRevision = revision
-                activity = checklist
-              }
-            } else if kind == "woven_cursor_todos", configuration.runtimeKind == .cursor {
-              activity = Self.remoteCursorChecklist(payload, sessionID: nativeSessionID, rawPayloadJSON: raw)
-            }
-            guard activity != nil else { return }
-          }
-          if kind == "agent_message_chunk" {
-            let text = object["content"]?.objectValue?["text"]?.stringValue ?? ""
-            if configuration.runtimeKind == .defaultAgent, meta?["wovenAssistantSnapshot"]?.boolValue == true {
-              if let complete = assistantAssembly.receive(text,
-                  starts: meta?["wovenSnapshotStart"]?.boolValue == true,
-                  ends: meta?["wovenSnapshotEnd"]?.boolValue == true) { assistantPrefix = complete }
-            } else { assistantPrefix += text }
-            activeThought = nil
-            return
-          }
-          if assistantPrefix != frozenPrefix, !assistantPrefix.isEmpty,
-             ["agent_thought_chunk", "tool_call", "plan", "woven_assistant_boundary", "woven_hermes_tool_complete", "woven_cursor_todos"].contains(kind) {
-            let segment = assistantPrefix.hasPrefix(frozenPrefix)
-              ? String(assistantPrefix.dropFirst(frozenPrefix.count)) : assistantPrefix
-            boundarySequence += 1
-            try upsertDeviceOwnedRunActivityUnlocked(runID: runID,
-              activity: .init(id: "calendar-assistant-\(boundarySequence)", kind: .assistant,
-                phase: "commentary", content: segment, assistantMessageID: assistantID,
-                assistantCheckpoint: AssistantTextCheckpoint(assistantPrefix)), appendingContent: false, updatedAt: completedAt)
-            frozenPrefix = assistantPrefix
-          }
-          if kind == "agent_thought_chunk" {
-            if activeThought == nil { thoughtSequence += 1; activeThought = "thought-\(thoughtSequence)" }
-            let id = object["_meta"]?.objectValue?["wovenThoughtID"]?.stringValue ?? activeThought!
-            let text = object["content"]?.objectValue?["text"]?.stringValue ?? ""
-            if configuration.runtimeKind == .defaultAgent, meta?["wovenThoughtSnapshot"]?.boolValue == true {
-              var assembly = thoughtAssemblies[id] ?? NativeTextSnapshotAssembler()
-              let complete = assembly.receive(text, starts: meta?["wovenSnapshotStart"]?.boolValue == true,
-                ends: meta?["wovenSnapshotEnd"]?.boolValue == true)
-              thoughtAssemblies[id] = assembly
-              guard let complete else { return }
-              thoughtAssemblies.removeValue(forKey: id)
-              activity = .init(id: id, kind: .thought, title: "Thinking", status: "completed",
-                content: complete, contentIsDelta: false, rawPayloadJSON: raw)
-            } else {
-              activity = .init(id: id, kind: .thought, title: "Thinking", status: "completed",
-                content: text, contentIsDelta: true, rawPayloadJSON: raw)
-              appending = true
-            }
-          } else {
-            activeThought = nil
-            if kind == "woven_subagents", configuration.runtimeKind == .defaultAgent {
-              activity = AgentRunActivity.builtInSubagentSnapshot(rawPayloadJSON: raw)
-            } else if ["tool_call", "tool_call_update"].contains(kind), let id = object["toolCallId"]?.stringValue {
-              activity = .init(id: id, kind: .tool, title: object["title"]?.stringValue,
-                status: object["status"]?.stringValue, toolName: object["kind"]?.stringValue,
-                rawInputJSON: try object["rawInput"].map(toolsJSON),
-                rawOutputJSON: try object["rawOutput"].map(toolsJSON), rawPayloadJSON: raw)
-            } else if kind == "plan" {
-              let entries = object["entries"]?.arrayValue?.compactMap { entry -> AgentRunPlanEntry? in
-                guard let fields = entry.objectValue, let content = fields["content"]?.stringValue,
-                      let status = fields["status"]?.stringValue else { return nil }
-                return .init(content: content, priority: fields["priority"]?.stringValue, status: status,
-                  nativeID: fields["id"]?.stringValue)
-              } ?? []
-              activity = .init(id: "plan", kind: .plan, phase: entries.isEmpty ? "clear" : "update",
-                title: "Plan", planEntries: entries, rawPayloadJSON: raw,
-                planKind: "checklist", planOperation: entries.isEmpty ? "clear" : "replace")
-            }
-          }
-          if let activity {
-            try upsertDeviceOwnedRunActivityUnlocked(runID: runID, activity: activity,
-              appendingContent: appending, updatedAt: completedAt)
-          }
-        }
-        try toolsExecuteUnlocked("UPDATE dashboard_runs SET status=? WHERE id=?", [status,runID])
-        try toolsExecuteUnlocked("""
-          UPDATE dashboard_conversations SET last_message_preview=?,last_message_at=max(coalesce(last_message_at,''),?),updated_at=max(updated_at,?) WHERE id=?
-          """, [String((response.isEmpty ? run.task.prompt : response).prefix(200)),finished,finished,run.sessionID])
-      }
-      try toolsExecuteUnlocked("INSERT INTO workspace_calendar_remote_receipts(id,workspace_id,session_id,payload_json) VALUES(?,?,?,?)",
-        [receiptID,workspaceID.uuidString.lowercased(),run.sessionID,try toolsJSON(updates)])
+    try transaction { try importRemoteCalendarTranscriptUnlocked(receiptID: receiptID, run: run, workspaceID: workspaceID, workspaceName: workspaceName, ownerDeviceID: ownerDeviceID, nativeSessionID: nativeSessionID, updates: updates, error: error, completedAt: completedAt, updateOffset: updateOffset, complete: complete) }
+  }
+
+  func importRemoteCalendarTranscriptUnlocked(receiptID: String, run: WorkspaceCalendarRun,
+      workspaceID: UUID, workspaceName: String, ownerDeviceID: UUID,
+      nativeSessionID: String?, updates: [GatewayJSONValue], error: String?, completedAt: Date,
+      updateOffset: Int = 0, complete: Bool = true) throws {
+    guard updateOffset >= 0, updateOffset <= Int.max - updates.count,
+          run.task.configuration.workspaceID == workspaceID,
+          let conversationID = UUID(uuidString: run.sessionID) else {
+      throw WorkspaceToolError.invalid("Invalid remote scheduled session.")
     }
+    let configuration = run.task.configuration
+    let receipt = try historyRowsUnlocked("SELECT workspace_id,session_id FROM workspace_calendar_remote_receipts WHERE id=?", values: [receiptID]).first?.objectValue
+    if let receipt {
+      guard receipt["workspace_id"]?.stringValue?.lowercased() == workspaceID.uuidString.lowercased(),
+            receipt["session_id"]?.stringValue == run.sessionID else {
+        throw WorkspaceToolError.invalid("Remote result identity conflicts with an existing receipt.")
+      }
+    }
+    let existing = try historyRowsUnlocked("SELECT remote_workspace_id,runtime_kind,acp_session_id FROM desktop_local_acp_sessions WHERE conversation_id=?", values: [run.sessionID]).first?.objectValue
+    if let existing {
+      guard existing["remote_workspace_id"]?.stringValue?.lowercased() == workspaceID.uuidString.lowercased(),
+            existing["runtime_kind"]?.stringValue == configuration.runtimeKind.rawValue else {
+        throw WorkspaceToolError.invalid("Remote session identity conflicts with an existing session.")
+      }
+    } else {
+      try toolsExecuteUnlocked("INSERT INTO workspace_calendar_sessions(id,configuration_json) VALUES(?,?) ON CONFLICT(id) DO NOTHING", [run.sessionID,try toolsJSON(configuration)])
+      _ = try createRemoteACPSessionUnlocked(runtimeKind: configuration.runtimeKind,
+        remoteWorkspaceID: workspaceID, remoteWorkspaceName: workspaceName,
+        title: configuration.title, ownerDeviceID: ownerDeviceID, createdAt: run.scheduledAt,
+        openCodeAssociation: configuration.runtimeKind == .opencode ? nativeSessionID.map { ("remote-workspace:" + workspaceID.uuidString.lowercased(),$0) } : nil,
+        requestedConversationID: conversationID, allowMissingCalendarFolder: true)
+    }
+    guard let path = configuration.nativeWorkingDirectory, path.hasPrefix("/"), !path.contains("\0") else {
+      throw WorkspaceToolError.invalid("The scheduled session has no captured execution directory.")
+    }
+    let location = WorkspaceFolderLocation(workspaceID: "remote:" + workspaceID.uuidString.lowercased(), rootPath: path, managed: false)
+    let directory = URL(fileURLWithPath: path)
+    if configuration.folderID == nil, directory.deletingLastPathComponent().lastPathComponent == "scratch" {
+      let base = directory.deletingLastPathComponent().deletingLastPathComponent().path
+      if let scratch = try sessionScratchDirectory(id: run.sessionID) {
+        guard scratch == location else { throw WorkspaceToolError.invalid("Remote scratch directory changed.") }
+      } else {
+        try toolsExecuteUnlocked("INSERT INTO session_scratch_directories(session_id,workspace_id,workspace_root,root_path) VALUES(?,?,?,?)",
+          [run.sessionID,location.workspaceID,base,path])
+      }
+    }
+    if let saved = try sessionExecutionRoot(id: run.sessionID) {
+      guard saved.workspaceID == location.workspaceID, saved.rootPath == path else { throw WorkspaceToolError.invalid("Scheduled session execution directory changed.") }
+    } else {
+      // The remote owner's saved configuration is authoritative even when its
+      // UI folder was removed while the Mac was disconnected.
+      try toolsExecuteUnlocked("INSERT INTO session_execution_roots(conversation_id,workspace_id,root_path,folder_locked) VALUES(?,?,?,1)", [run.sessionID,location.workspaceID,path])
+    }
+    try toolsExecuteUnlocked("UPDATE session_execution_roots SET folder_locked=1 WHERE conversation_id=?", [run.sessionID])
+    if let recordedNativeID = existing?["acp_session_id"]?.stringValue,
+       let nativeSessionID, recordedNativeID != nativeSessionID {
+      throw WorkspaceToolError.invalid("Remote result belongs to a different native session.")
+    }
+    try toolsExecuteUnlocked("UPDATE desktop_local_acp_sessions SET acp_session_id=coalesce(acp_session_id,?) WHERE conversation_id=?",
+      [nativeSessionID, run.sessionID])
+    let previousSequence = try historyRowsUnlocked("SELECT coalesce(max(sequence),0) AS sequence FROM workspace_history_events", values: [])
+      .first?.objectValue?["sequence"]?.intValue ?? 0
+    try archiveRemoteCalendarUpdatesUnlocked(receiptID: receiptID, workspaceID: workspaceID,
+      conversationID: run.sessionID, nativeSessionID: nativeSessionID,
+      harness: configuration.runtimeKind.rawValue, runID: run.id, updates: updates, updateOffset: updateOffset)
+    // Observed updates belong to this result; native snapshots may also
+    // expose historical records whose run association remains unknown.
+    try toolsExecuteUnlocked("UPDATE workspace_history_events SET run_id=? WHERE sequence>? AND conversation_id=? AND source_id=? AND run_id IS NULL",
+      [run.id, String(previousSequence), run.sessionID,
+        "remote:" + workspaceID.uuidString.lowercased() + ":calendar"])
+    guard receipt == nil, complete else { return }
+    try toolsExecuteUnlocked("""
+      UPDATE desktop_local_acp_sessions SET model=?,thinking=?,permission=?,updated_at=?,revision=revision+1
+      WHERE conversation_id=?
+      """, [configuration.model,configuration.thinking,configuration.permission,Self.timestamp(completedAt),run.sessionID])
+    // OpenCode's server remains its transcript owner; attaching the native
+    // session above makes the existing synchronization path fetch its history.
+    if configuration.runtimeKind != .opencode {
+      var response = ""
+      var responseAssembly = NativeTextSnapshotAssembler()
+      try forEachRemoteCalendarUpdateUnlocked(receiptID: receiptID, workspaceID: workspaceID, conversationID: run.sessionID) { update in
+        guard update.objectValue?["sessionUpdate"]?.stringValue == "agent_message_chunk" else { return }
+        let text = update.objectValue?["content"]?.objectValue?["text"]?.stringValue ?? ""
+        let meta = update.objectValue?["_meta"]?.objectValue
+        if configuration.runtimeKind == .defaultAgent, meta?["wovenAssistantSnapshot"]?.boolValue == true {
+          if let complete = responseAssembly.receive(text,
+              starts: meta?["wovenSnapshotStart"]?.boolValue == true,
+              ends: meta?["wovenSnapshotEnd"]?.boolValue == true) { response = complete }
+        } else { response += text }
+      }
+      // The execution host already assigned the stable Woven run identity.
+      let runID = run.id
+      let userID = UUID().uuidString.lowercased(), assistantID = UUID().uuidString.lowercased()
+      let status = error == nil ? "completed" : "failed"
+      let started = Self.timestamp(run.scheduledAt), finished = Self.timestamp(completedAt)
+      for (id,role,content,stamp) in [(userID,"user",run.task.prompt,started),
+        (assistantID,"assistant",response,Self.timestamp(run.scheduledAt.addingTimeInterval(0.001)))] {
+        try toolsExecuteUnlocked("""
+          INSERT INTO dashboard_messages(id,conversation_id,run_id,role,message_source,content,status,
+            governing_plane,authority_kind,authority_device_id,authority_agent_id,created_at,updated_at,desktop_owned)
+          SELECT ?,id,?,?,'local_acp',?,?,'wovenmatter_macos','device_owned',authority_device_id,agent_id,?,?,1
+          FROM dashboard_conversations WHERE id=?
+          """, [id,runID,role,content,role == "user" ? "completed" : status,stamp,finished,run.sessionID])
+      }
+      try toolsExecuteUnlocked("""
+        INSERT INTO dashboard_runs(id,conversation_id,user_id,agent_id,agent_codename,governing_plane,authority_kind,
+          authority_device_id,authority_agent_id,openclaw_session_key,user_message_id,assistant_message_id,status,
+          started_at,created_at,updated_at,completed_at,error,desktop_owned)
+        SELECT ?,id,user_id,agent_id,agent_codename,'wovenmatter_macos','device_owned',authority_device_id,agent_id,
+          ?,?,?,?,?,?,?,?,?,1 FROM dashboard_conversations WHERE id=?
+        """, [runID,nativeSessionID ?? "",userID,assistantID,status,started,started,finished,finished,error,run.sessionID])
+      try toolsExecuteUnlocked("UPDATE dashboard_runs SET status='running' WHERE id=?", [runID])
+      var thoughtSequence = 0
+      var activeThought: String?
+      var thoughtAssemblies: [String: NativeTextSnapshotAssembler] = [:]
+      var assistantAssembly = NativeTextSnapshotAssembler()
+      var assistantPrefix = "", frozenPrefix = ""
+      var boundarySequence = 0
+      var hermesChecklistRevision: Double = 0
+      try forEachRemoteCalendarUpdateUnlocked(receiptID: receiptID, workspaceID: workspaceID, conversationID: run.sessionID) { value in
+        guard let object = value.objectValue, let kind = object["sessionUpdate"]?.stringValue else { return }
+        let raw = try toolsJSON(value)
+        var activity: AgentRunActivity?
+        var appending = false
+        let meta = object["_meta"]?.objectValue
+        if kind == "woven_hermes_tool_complete" || kind == "woven_cursor_todos" {
+          guard let nativeSessionID, !nativeSessionID.isEmpty,
+                object["nativeSessionID"]?.stringValue == nativeSessionID,
+                let payload = object["payload"] else { return }
+          if kind == "woven_hermes_tool_complete", configuration.runtimeKind == .hermes {
+            let native = try HermesValue.decode(JSONEncoder().encode(payload))
+            if let checklist = HermesSessionArchive.checklistUpdate(native),
+               let revision = native["result"]["revision"].number, revision > hermesChecklistRevision {
+              hermesChecklistRevision = revision
+              activity = checklist
+            }
+          } else if kind == "woven_cursor_todos", configuration.runtimeKind == .cursor {
+            activity = Self.remoteCursorChecklist(payload, sessionID: nativeSessionID, rawPayloadJSON: raw)
+          }
+          guard activity != nil else { return }
+        }
+        if kind == "agent_message_chunk" {
+          let text = object["content"]?.objectValue?["text"]?.stringValue ?? ""
+          if configuration.runtimeKind == .defaultAgent, meta?["wovenAssistantSnapshot"]?.boolValue == true {
+            if let complete = assistantAssembly.receive(text,
+                starts: meta?["wovenSnapshotStart"]?.boolValue == true,
+                ends: meta?["wovenSnapshotEnd"]?.boolValue == true) { assistantPrefix = complete }
+          } else { assistantPrefix += text }
+          activeThought = nil
+          return
+        }
+        if assistantPrefix != frozenPrefix, !assistantPrefix.isEmpty,
+           ["agent_thought_chunk", "tool_call", "plan", "woven_assistant_boundary", "woven_hermes_tool_complete", "woven_cursor_todos"].contains(kind) {
+          let segment = assistantPrefix.hasPrefix(frozenPrefix)
+            ? String(assistantPrefix.dropFirst(frozenPrefix.count)) : assistantPrefix
+          boundarySequence += 1
+          try upsertDeviceOwnedRunActivityUnlocked(runID: runID,
+            activity: .init(id: "calendar-assistant-\(boundarySequence)", kind: .assistant,
+              phase: "commentary", content: segment, assistantMessageID: assistantID,
+              assistantCheckpoint: AssistantTextCheckpoint(assistantPrefix)), appendingContent: false, updatedAt: completedAt)
+          frozenPrefix = assistantPrefix
+        }
+        if kind == "agent_thought_chunk" {
+          if activeThought == nil { thoughtSequence += 1; activeThought = "thought-\(thoughtSequence)" }
+          let id = object["_meta"]?.objectValue?["wovenThoughtID"]?.stringValue ?? activeThought!
+          let text = object["content"]?.objectValue?["text"]?.stringValue ?? ""
+          if configuration.runtimeKind == .defaultAgent, meta?["wovenThoughtSnapshot"]?.boolValue == true {
+            var assembly = thoughtAssemblies[id] ?? NativeTextSnapshotAssembler()
+            let complete = assembly.receive(text, starts: meta?["wovenSnapshotStart"]?.boolValue == true,
+              ends: meta?["wovenSnapshotEnd"]?.boolValue == true)
+            thoughtAssemblies[id] = assembly
+            guard let complete else { return }
+            thoughtAssemblies.removeValue(forKey: id)
+            activity = .init(id: id, kind: .thought, title: "Thinking", status: "completed",
+              content: complete, contentIsDelta: false, rawPayloadJSON: raw)
+          } else {
+            activity = .init(id: id, kind: .thought, title: "Thinking", status: "completed",
+              content: text, contentIsDelta: true, rawPayloadJSON: raw)
+            appending = true
+          }
+        } else {
+          activeThought = nil
+          if kind == "woven_subagents", configuration.runtimeKind == .defaultAgent {
+            activity = AgentRunActivity.builtInSubagentSnapshot(rawPayloadJSON: raw)
+          } else if ["tool_call", "tool_call_update"].contains(kind), let id = object["toolCallId"]?.stringValue {
+            activity = .init(id: id, kind: .tool, title: object["title"]?.stringValue,
+              status: object["status"]?.stringValue, toolName: object["kind"]?.stringValue,
+              rawInputJSON: try object["rawInput"].map(toolsJSON),
+              rawOutputJSON: try object["rawOutput"].map(toolsJSON), rawPayloadJSON: raw)
+          } else if kind == "plan" {
+            let entries = object["entries"]?.arrayValue?.compactMap { entry -> AgentRunPlanEntry? in
+              guard let fields = entry.objectValue, let content = fields["content"]?.stringValue,
+                    let status = fields["status"]?.stringValue else { return nil }
+              return .init(content: content, priority: fields["priority"]?.stringValue, status: status,
+                nativeID: fields["id"]?.stringValue)
+            } ?? []
+            activity = .init(id: "plan", kind: .plan, phase: entries.isEmpty ? "clear" : "update",
+              title: "Plan", planEntries: entries, rawPayloadJSON: raw,
+              planKind: "checklist", planOperation: entries.isEmpty ? "clear" : "replace")
+          }
+        }
+        if let activity {
+          try upsertDeviceOwnedRunActivityUnlocked(runID: runID, activity: activity,
+            appendingContent: appending, updatedAt: completedAt)
+        }
+      }
+      try toolsExecuteUnlocked("UPDATE dashboard_runs SET status=? WHERE id=?", [status,runID])
+      try toolsExecuteUnlocked("""
+        UPDATE dashboard_conversations SET last_message_preview=?,last_message_at=max(coalesce(last_message_at,''),?),updated_at=max(updated_at,?) WHERE id=?
+        """, [String((response.isEmpty ? run.task.prompt : response).prefix(200)),finished,finished,run.sessionID])
+    }
+    try toolsExecuteUnlocked("INSERT INTO workspace_calendar_remote_receipts(id,workspace_id,session_id,payload_json) VALUES(?,?,?,?)",
+      [receiptID,workspaceID.uuidString.lowercased(),run.sessionID,try toolsJSON(updates)])
   }
 
   private static func remoteCursorChecklist(_ payload: GatewayJSONValue, sessionID: String, rawPayloadJSON: String) -> AgentRunActivity? {

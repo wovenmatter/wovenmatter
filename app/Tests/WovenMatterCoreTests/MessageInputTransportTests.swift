@@ -55,7 +55,7 @@ struct MessageInputTransportTests {
       </wovenmatter-reference>
 
       <wovenmatter-reference type="conversation" id="c" revision="2" title="Chat title">
-      Read this attached session with wovenmatter history conversation c. This attachment grants read-only access to this session.
+      Read this attached session with woven_history_conversation using id c. This attachment grants read-only access to this session.
       </wovenmatter-reference>
       """
     #expect(input.transportText(deliveryText: "  delivered \n") == "delivered\n\n" + context)

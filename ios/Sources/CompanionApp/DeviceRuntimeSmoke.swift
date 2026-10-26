@@ -132,7 +132,7 @@ private actor SmokeNativeTools {
       try FileManager.default.createDirectory(at: pythonWorkspace, withIntermediateDirectories: true)
       let python = try await EmbeddedCommandExecutor().run(.init(id: UUID(), argv: [
         "python", "-c", "import sqlite3; db=sqlite3.connect(':memory:'); print(db.execute('select 6*7').fetchone()[0])"
-      ]), workspaceURL: pythonWorkspace) { _, _ in throw CocoaError(.featureUnsupported) }
+      ]), workspaceURL: pythonWorkspace) { _, _, _ in throw CocoaError(.featureUnsupported) }
       guard python.exitCode == 0, python.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == "42" else {
         throw DeviceExecutionError.unavailable("The bundled iOS Python and SQLite runtime failed: \(python.stderr)")
       }

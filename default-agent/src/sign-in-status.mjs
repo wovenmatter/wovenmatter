@@ -5,10 +5,6 @@ const checks = {
   codex: [['login', 'status']],
   claude_code: [['auth', 'status', '--json']],
   grok_build: [['models']],
-  cursor: [['status', '--format', 'json']],
-  hermes: ['openai-codex', 'anthropic', 'xai-oauth', 'xai', 'openai'].map(p => ['auth', 'status', p]),
-  pi: ['openai-codex', 'xai', 'openai', 'openrouter'].map(p => ['auth', 'check', '--provider', p, '--json', '--no-refresh']),
-  openclaw: [['models', 'status', '--json']],
   opencode: [['auth', 'list']],
 };
 // No login, model prompt, transport startup, or credential writes. Nonzero

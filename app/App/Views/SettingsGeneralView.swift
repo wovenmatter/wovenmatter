@@ -47,6 +47,7 @@ struct SettingsGeneralView: View {
                 WorkspaceToolDefaultsCard(tools: tools)
                 DisclosureGroup("Connected apps · Executor") { ExecutorConnectionsCard(model: model, tools: tools) }
             }
+            SettingsMCPAccessSection(model: sleepModel)
             dictationCard
             conversationTitlesCard
             idleSleepProtectionCard

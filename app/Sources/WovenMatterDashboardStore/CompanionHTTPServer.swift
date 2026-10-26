@@ -22,13 +22,14 @@ public struct CompanionHTTPResponse: Sendable {
   public typealias Stream = @Sendable (@escaping @Sendable (Data) async throws -> Void) async throws -> Void
   public let status: Int
   public let contentType: String
+  public let headers: [String: String]
   public let body: Data
   public let stream: Stream?
-  public init(status: Int = 200, contentType: String = "application/json", body: Data) {
-    self.status = status; self.contentType = contentType; self.body = body; self.stream = nil
+  public init(status: Int = 200, contentType: String = "application/json", headers: [String: String] = [:], body: Data) {
+    self.status = status; self.contentType = contentType; self.headers = headers; self.body = body; self.stream = nil
   }
   public init(status: Int = 200, contentType: String, stream: @escaping Stream) {
-    self.status = status; self.contentType = contentType; self.body = Data(); self.stream = stream
+    self.status = status; self.contentType = contentType; self.headers = [:]; self.body = Data(); self.stream = stream
   }
   public static func json<T: Encodable>(_ value: T, status: Int = 200) throws -> Self {
     Self(status: status, body: try JSONEncoder().encode(value))
@@ -60,7 +61,7 @@ public struct CompanionHTTPParser: Sendable {
     let lines = header.components(separatedBy: "\r\n")
     guard let first = lines.first, lines.count <= 101 else { throw malformed }
     let parts = first.split(separator: " ", omittingEmptySubsequences: false)
-    guard parts.count == 3, ["GET", "POST"].contains(parts[0]),
+    guard parts.count == 3, ["GET", "POST", "DELETE"].contains(parts[0]),
           parts[1].hasPrefix("/"), !parts[1].hasPrefix("//"),
           parts[2] == "HTTP/1.1", parts[1].utf8.count <= 8_192 else { throw malformed }
     var headers: [String: String] = [:]
@@ -238,9 +239,15 @@ private final class CompanionHTTPConnection: @unchecked Sendable {
       response.contentType.utf8.allSatisfy({ $0 >= 32 && $0 != 127 }) else {
       send(.error("invalid_response", "The server could not encode its response.", status: 500)); return
     }
-    let reason = response.status == 200 ? "OK" : "Request Error"
+    guard response.headers.allSatisfy({ name, value in
+      !name.isEmpty && name.utf8.allSatisfy({ (65...90).contains($0) || (97...122).contains($0) || (48...57).contains($0) || $0 == 45 })
+        && !["content-length", "transfer-encoding", "connection", "content-type"].contains(name.lowercased())
+        && value.utf8.allSatisfy({ $0 >= 32 && $0 != 127 })
+    }) else { send(.error("invalid_response", "Invalid response headers.", status: 500)); return }
+    let extraHeaders = response.headers.sorted { $0.key < $1.key }.map { "\($0.key): \($0.value)\r\n" }.joined()
+    let reason = response.status == 200 ? "OK" : response.status == 202 ? "Accepted" : "Request Error"
     let framing = response.stream == nil ? "Content-Length: \(response.body.count)" : "Transfer-Encoding: chunked"
-    var wire = Data("HTTP/1.1 \(response.status) \(reason)\r\nContent-Type: \(response.contentType)\r\n\(framing)\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n".utf8)
+    var wire = Data("HTTP/1.1 \(response.status) \(reason)\r\nContent-Type: \(response.contentType)\r\n\(extraHeaders)\(framing)\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n".utf8)
     guard let producer = response.stream else {
       wire.append(response.body)
       connection.send(content: wire, completion: .contentProcessed { [weak self] _ in self?.cancel() })

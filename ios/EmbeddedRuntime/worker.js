@@ -54,9 +54,9 @@ self.onmessage = async event => {
     }
     const cwd = '/workspace/' + (request.workingDirectory || '');
     fs.chdir(cwd);
-    pyodide.registerJsModule('woven_native', {command: argumentsJSON => new Promise((resolve,reject) => {
+    pyodide.registerJsModule('woven_native', {call_tool: (name,argumentsJSON) => new Promise((resolve,reject) => {
       const id = String(++nextCall); waiting.set(id,{resolve,reject});
-      nativePost({type:'cli',id,argumentsJSON});
+      nativePost({type:'mcp',id,name,argumentsJSON});
     })});
     // Byte writes include partial lines and flushes, without waiting for a newline.
     const stream = name => { const decoder = new TextDecoder(); return {write: bytes => {
@@ -69,7 +69,7 @@ self.onmessage = async event => {
     pyodide.globals.set('_woven_stdin',request.stdin || '');
     nativePost({type:'ready'});
     const exitCode = await pyodide.runPythonAsync(`import sys, json\nsys.path.insert(0, '/')\nfrom woven_commands import execute\nawait execute(json.loads(_woven_argv_json), _woven_stdin)`);
-    if (waiting.size) throw new Error('Await all native CLI calls before returning.');
+    if (waiting.size) throw new Error('Await all Woven MCP calls before returning.');
     // Export regular files only. Symlinks could redirect subsequent native writes.
     const files = [], directories = []; let total = 0;
     const walk = path => {

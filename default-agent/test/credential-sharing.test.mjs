@@ -64,6 +64,7 @@ test('status checks never start login and do not equate a timeout with sign-out'
     { id: 'pi', name: 'Pi', enabled: false },
     { id: 'opencode', executable: '/fixture/opencode' },
     { id: 'grok_build', executable: '/fixture/grok' },
+    ...['pi', 'hermes', 'openclaw', 'cursor'].map(id => ({ id, executable: '/fixture/retired-' + id })),
   ], async (file, args) => {
     calls.push(args);
     if (file.endsWith('claude')) throw { killed: true };
@@ -74,6 +75,8 @@ test('status checks never start login and do not equate a timeout with sign-out'
   assert.equal(statuses[2].state, 'not_checked');
   assert.equal(statuses[3].state, 'credentials_present');
   assert.equal(statuses[4].state, 'not_checked');
+  assert.ok(statuses.slice(5).every(status => status.state === 'not_checked'));
+  assert.equal(calls.length, 4);
   assert.deepEqual(calls[0], ['login', 'status']);
   assert.ok(!calls.some(args => args.includes('prompt')));
 });

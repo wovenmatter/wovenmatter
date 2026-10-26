@@ -1,19 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { EventEmitter, once } from 'node:events';
+import { once } from 'node:events';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { setTimeout as delay } from 'node:timers/promises';
-import { PassThrough } from 'node:stream';
-import { mkdtemp, writeFile, rm, symlink } from 'node:fs/promises';
+import { mkdtemp, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Client } from '@modelcontextprotocol/client';
-import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { WebSocket } from 'ws';
 import { browserAction, createCEFBridge } from '../src/browser-runtime.mjs';
-import { callAutomation, automationSchemas } from '../src/automation-tools.mjs';
 
 test('browser helper launches through a symlink and waits for the host to acknowledge its terminal result', { timeout: 5000 }, async t => {
   const root = await mkdtemp(join(tmpdir(), 'woven-browser-entrypoint-'));
@@ -51,26 +47,6 @@ test('browser helper launches through a symlink and waits for the host to acknow
   assert.deepEqual(await exited, [0, null]);
 });
 
-test('bundled MCP server negotiates tools and delivers inline screenshots over stdio', async t => {
-  const root = await mkdtemp(join(tmpdir(), 'woven-mcp-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
-  const cli = join(root, 'wovenmatter');
-  await writeFile(cli, `#!${process.execPath}\nlet text=''; for await(const bytes of process.stdin) text+=bytes; const input=JSON.parse(text); const content=input.action==='upload' ? [{type:'text',text:JSON.stringify({argv:process.argv.slice(2),size:input.data.length})}] : [{type:'image',mimeType:'image/jpeg',data:'ZmFrZQ=='}]; process.stdout.write(JSON.stringify({success:true,result:{content}})+'\\n');\n`, { mode: 0o700 });
-  const transport = new StdioClientTransport({ command: process.execPath, args: [fileURLToPath(new URL('../src/automation-mcp.mjs', import.meta.url))], env: { PATH: process.env.PATH, WOVENMATTER_CLI: cli, WOVENMATTER_SOCKET: '/fixture/caller.sock' } });
-  const client = new Client({ name: 'fixture', version: '1' });
-  t.after(() => client.close());
-  await client.connect(transport);
-  assert.deepEqual((await client.listTools()).tools.map(x => x.name), ['html_render', 'html_preview', 'browser', 'computer']);
-  const result = await client.callTool({ name: 'computer', arguments: { action: 'screenshot' } });
-  assert.deepEqual(result.content, [{ type: 'image', mimeType: 'image/jpeg', data: 'ZmFrZQ==' }]);
-  const data = Buffer.alloc(2 * 1024 * 1024).toString('base64');
-  const upload = await client.callTool({ name: 'browser', arguments: { action: 'upload', data } });
-  const received = JSON.parse(upload.content[0].text);
-  assert.equal(received.size, data.length);
-  assert.deepEqual(received.argv.slice(0, 4), ['browser', 'call', '--json', '-']);
-  assert.ok(received.argv.join(' ').length < 200);
-});
-
 test('private CDP bridge owns one page, rejects discovery outside it and maps native sessions', async t => {
   let receiver;
   const native = [];
@@ -101,74 +77,6 @@ test('private CDP bridge owns one page, rejects discovery outside it and maps na
   receiver({ id: native.at(-1).id, result: {} });
   await dialog;
   socket.terminate();
-});
-
-test('automation adapter uses the current scoped CLI, preserves images and cancels its own request', async () => {
-  const calls = [];
-  const run = (path, args, options) => {
-    const child = new EventEmitter(); child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.kill = signal => { child.killed = signal; }; child.unref = () => {};
-    calls.push({ path, args, options, child }); return child;
-  };
-  const environment = { WOVENMATTER_CLI: '/fixture/scoped-cli', WOVENMATTER_SOCKET: '/fixture/owner.sock' };
-  const result = callAutomation('browser', { action: 'screenshot', tabId: 'owned' }, environment, undefined, run);
-  const content = [{ type: 'image', mimeType: 'image/jpeg', data: 'ZmFrZQ==' }];
-  calls[0].child.stdout.write(JSON.stringify({ success: true, result: { content } })); calls[0].child.emit('close', 0);
-  assert.deepEqual((await result).content, content);
-  assert.equal(calls[0].path, environment.WOVENMATTER_CLI);
-  assert.equal(calls[0].options.env, environment);
-  assert.deepEqual(JSON.parse(calls[0].child.stdin.read().toString()), { action: 'screenshot', tabId: 'owned' });
-  const controller = new AbortController();
-  const interrupted = callAutomation('computer', { action: 'type', text: 'fixture' }, environment, controller.signal, run);
-  controller.abort(); calls[1].child.emit('close', 1);
-  await assert.rejects(interrupted, /interrupted/);
-  assert.equal(calls[1].child.killed, 'SIGTERM');
-  assert.deepEqual(calls[2].args, ['computer', 'cancel', '--id', calls[1].args.at(-1)]);
-  assert.equal(automationSchemas.computer.additionalProperties, false);
-  assert.ok(!('sessionId' in automationSchemas.computer.properties));
-});
-
-test('HTML tools use the caller-bound HTML route and put authored content on stdin', async () => {
-  for (const name of ['html_render', 'html_preview']) {
-    const calls = [];
-    const run = (path, args, options) => {
-      const child = new EventEmitter(); child.stdin = new PassThrough(); child.stdout = new PassThrough();
-      child.kill = () => {}; child.unref = () => {}; calls.push({ path, args, options, child }); return child;
-    };
-    const html = '<button onclick="this.textContent=42">Calculate</button>';
-    const input = name === 'html_render' ? { html, title: 'Calculator', height: 160 } : { html, width: 390 };
-    const controller = new AbortController();
-    const pending = callAutomation(name, input, { WOVENMATTER_CLI: '/bound/cli' }, controller.signal, run);
-    assert.deepEqual(calls[0].args.slice(0, 4), ['html', 'call', '--json', '-']);
-    assert.ok(!calls[0].args.join(' ').includes(html));
-    assert.deepEqual(JSON.parse(calls[0].child.stdin.read().toString()), { ...input, action: name === 'html_render' ? 'render' : 'preview' });
-    controller.abort(); calls[0].child.emit('close', 1);
-    await assert.rejects(pending, /interrupted/);
-    assert.deepEqual(calls[1].args, ['html', 'cancel', '--id', calls[0].args.at(-1)]);
-    assert.equal(automationSchemas[name].additionalProperties, false);
-    assert.ok(!('conversationID' in automationSchemas[name].properties));
-  }
-});
-
-test('automation responses preserve UTF-8 split across pipe chunks', async () => {
-  const child = new EventEmitter();
-  child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.kill = () => {};
-  const pending = callAutomation('browser', { action: 'snapshot' }, { WOVENMATTER_CLI: '/fixture/cli' }, undefined, () => child);
-  const content = [{ type: 'text', text: 'Café 日本語 🧶' }];
-  const bytes = Buffer.from(JSON.stringify({ success: true, result: { content } }));
-  for (const byte of bytes) child.stdout.write(Buffer.from([byte]));
-  child.emit('close', 0);
-  assert.deepEqual((await pending).content, content);
-});
-
-test('automation rejects oversized output even after a complete JSON response', async () => {
-  const child = new EventEmitter();
-  child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.kill = signal => { child.killed = signal; };
-  const pending = callAutomation('browser', { action: 'snapshot' }, { WOVENMATTER_CLI: '/fixture/cli' }, undefined, () => child);
-  child.stdout.write(JSON.stringify({ success: true, result: { content: [] } }));
-  child.stdout.write(Buffer.alloc(1100000, 32));
-  child.emit('close', null);
-  await assert.rejects(pending, /exceeds its size limit/);
-  assert.equal(child.killed, 'SIGKILL');
 });
 
 test('browser viewport clicks and hover stay on the page and reject invalid coordinates', async () => {

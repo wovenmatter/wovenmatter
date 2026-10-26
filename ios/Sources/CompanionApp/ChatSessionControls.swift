@@ -98,7 +98,7 @@ extension CompanionModel {
   }
   var deviceChatTools: [String] {
     let enabled = selectedConversationID.flatMap { executionRecords[$0]?.enabledTools } ?? (selectedConversationID == nil ? draftDeviceSettings.enabledTools ?? deviceAgentDefaults.enabledTools : nil)
-    return Self.deviceCLITools.compactMap { $0["name"] as? String }.filter { Self.deviceToolEnabled($0, selection: enabled) }
+    return Self.deviceToolAccessOptions.map(\.id).filter { Self.deviceToolEnabled($0, selection: enabled) }
   }
   var canConfigureDeviceChat: Bool { canConfigureDeviceChat(selectedConversationID) }
   private func canConfigureDeviceChat(_ id: String?) -> Bool {
@@ -116,7 +116,7 @@ extension CompanionModel {
     if let id { configuringDeviceSessions.insert(id) }
     defer { if let id { configuringDeviceSessions.remove(id) } }
     if let tools {
-      let available = Set(Self.deviceToolDefinitions.compactMap { $0["name"] as? String })
+      let available = Set(Self.deviceToolDefinitions.compactMap { $0["name"] as? String } + Self.deviceToolAccessOptions.map(\.id))
       guard Set(tools).isSubset(of: available) else { throw InferenceError.invalidConfiguration }
     }
     let selected: InferenceModel?

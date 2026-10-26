@@ -53,7 +53,7 @@ when an intentional design change is accepted.
 - **Usage:** account setup lives in Usage settings. Limits show each saved account
   and signed-out providers, with Go to Usage settings. Device analytics never depends
   on limits-account switches or credentials.
-- **Tool defaults:** settings say Woven Matter CLI and show effective defaults,
+- **Tool defaults:** settings say Woven MCP and show effective defaults,
   rather than an off-looking inheritance switch. Composer controls retain Tools.
 - **Keychain:** General uses Keychain access, Enable/Restore Keychain access,
   Access ready, and Access needs attention. Keep one storage sentence, a status

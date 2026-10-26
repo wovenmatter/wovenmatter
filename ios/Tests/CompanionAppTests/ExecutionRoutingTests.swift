@@ -82,9 +82,9 @@ final class ExecutionRoutingTests: XCTestCase {
     XCTAssertEqual(goal.sessionID, id)
     XCTAssertTrue(model.localRuntimes.isEmpty)
     let requestID = UUID().uuidString
-    let arguments = ["goals", "checkpoint", "--id", goal.id, "--evidence", "Verified a change", "--request-id", requestID]
-    let first = try await model.performDeviceCLI(arguments: arguments, conversationID: id, requestID: requestID)
-    let retry = try await model.performDeviceCLI(arguments: arguments, conversationID: id, requestID: requestID)
+    let arguments: [String: GatewayJSONValue] = ["id": .string(goal.id), "evidence": .string("Verified a change"), "requestID": .string(requestID)]
+    let first = try await model.performDeviceMCP(name: "woven_goals_checkpoint", arguments: arguments, conversationID: id, requestID: requestID)
+    let retry = try await model.performDeviceMCP(name: "woven_goals_checkpoint", arguments: arguments, conversationID: id, requestID: requestID)
     XCTAssertEqual(first, retry)
     XCTAssertEqual(model.executionRecords[id]?.goalLedger?.goal?.progressRevision, 1)
     XCTAssertTrue(model.localPending.isEmpty, "Goal evidence does not require approval for an external effect")
@@ -275,9 +275,9 @@ final class ExecutionRoutingTests: XCTestCase {
     let record = DeviceConversationRecord(id: "first", title: "First", connectionID: connection.id, connection: connection, modelJSON: try descriptor.descriptorJSON(), status: "ready", updatedAt: "")
     var other = record; other.id = "second"
     model.executionRecords = [record.id: record, other.id: other]; model.selectedConversationID = record.id
-    try await model.configureDeviceChat(thinking: "high", permission: .full, tools: ["read_note"])
+    try await model.configureDeviceChat(thinking: "high", permission: .full, tools: ["woven_notes_read"])
     XCTAssertEqual(model.executionRecords[record.id]?.thinkingLevel, "high")
-    XCTAssertEqual(model.executionRecords[record.id]?.enabledTools, ["read_note"])
+    XCTAssertEqual(model.executionRecords[record.id]?.enabledTools, ["woven_notes_read"])
     XCTAssertEqual(model.executionRecords[other.id], other)
     XCTAssertEqual(model.inferenceConnections, [connection])
     let saved = try JSONDecoder().decode(DeviceExecutionPreferences.self, from: Data(contentsOf: root.appendingPathComponent("execution/preferences.json")))
@@ -303,7 +303,7 @@ final class ExecutionRoutingTests: XCTestCase {
     let descriptor = InferenceModel(id: "existing-model", name: "Saved model", provider: "openai", api: "openai-responses", baseUrl: "https://api.openai.com/v1", reasoning: true)
     let connection = InferenceConnection(id: "saved", name: "Saved key", provider: "openai", route: .direct, modelID: descriptor.id, selectedModel: descriptor)
     model.inferenceConnections = [connection]
-    let record = DeviceConversationRecord(id: "existing", title: "Existing", enabledTools: ["read_note"], additionalInstructions: "Original instructions",
+    let record = DeviceConversationRecord(id: "existing", title: "Existing", enabledTools: ["woven_notes_read"], additionalInstructions: "Original instructions",
       connectionID: connection.id, connection: connection, modelJSON: "{}", status: "ready", updatedAt: "")
     model.executionRecords = [record.id: record]; model.selectedConversationID = record.id
     let defaults = DeviceAgentDefaults(thinkingLevel: "high", instructions: "New conversations only", enabledTools: [])
@@ -341,7 +341,7 @@ final class ExecutionRoutingTests: XCTestCase {
     XCTAssertEqual(explicit.thinking(for: descriptor), "off")
   }
 
-  @MainActor func testToolAccessGatesOnlyCLIAndItsLegacyNoteAliases() async throws {
+  @MainActor func testToolAccessUsesFocusedMCPAndMigratesSavedSelectionsWithoutExpansion() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
     let model = CompanionModel(store: try MobileStore(file: root.appendingPathComponent("library.json")), transport: ExecutionTestLibrary())
@@ -351,25 +351,31 @@ final class ExecutionRoutingTests: XCTestCase {
     model.executionRecords[record.id] = record
     let tools = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(model.toolsJSON(for: record).utf8)) as? [[String: Any]])
     let names = Set(tools.compactMap { $0["name"] as? String })
-    XCTAssertTrue(names.isSuperset(of: ["list_files", "read_file", "write_file", "read_image", "read_document", "fetch_url", "ask_user", "execute_command"]))
-    XCTAssertEqual(Set(names.filter { $0.hasPrefix("wovenmatter_") }), Set(["wovenmatter_goals", "wovenmatter_html"]))
+    XCTAssertTrue(names.isSuperset(of: ["list_files", "read_file", "write_file", "read_image", "read_document", "fetch_url", "ask_user", "execute_command", "woven_goals_get"]))
+    XCTAssertFalse(names.contains { $0.hasPrefix("wovenmatter_") })
     XCTAssertFalse(names.contains("read_note"))
+    XCTAssertFalse(names.contains("woven_notes_read"))
     let context = try model.deviceToolContext(conversationID: record.id)
     XCTAssertEqual(context.enabled, [.goals, .html])
-    for name in ["wovenmatter_calendar", "read_note"] {
+    for name in ["woven_calendar_list", "woven_notes_read"] {
       do {
         _ = try await model.performDeviceTool(CompanionModel.toolJSON(["name": name, "conversationID": record.id, "arguments": [:]]))
         XCTFail("Disabled app-data access was accepted")
       } catch { XCTAssertTrue(error.localizedDescription.contains("disabled")) }
     }
-    XCTAssertTrue(CompanionModel.deviceToolEnabled("read_note", selection: ["wovenmatter_notes"]))
-    XCTAssertTrue(CompanionModel.deviceToolEnabled("wovenmatter_browser", selection: nil))
-    XCTAssertFalse(CompanionModel.deviceToolEnabled("wovenmatter_computer", selection: nil))
-    XCTAssertTrue(CompanionModel.deviceToolEnabled("wovenmatter_computer", selection: ["wovenmatter_computer"]))
-    XCTAssertTrue(CompanionModel.deviceToolEnabled("read_note", selection: ["read_note"]))
-    XCTAssertFalse(CompanionModel.deviceToolEnabled("wovenmatter_notes", selection: ["read_note"]))
-    XCTAssertEqual(Set(CompanionModel.deviceToolAccessOptions.map(\.id)), Set(WorkspaceToolGroup.configurableCases.map { "wovenmatter_" + $0.rawValue }))
-    XCTAssertTrue(CompanionModel.deviceCLITools.contains { $0["name"] as? String == "wovenmatter_goals" })
+    XCTAssertTrue(CompanionModel.deviceToolEnabled("woven_notes_read", selection: ["wovenmatter_notes"]))
+    XCTAssertTrue(CompanionModel.deviceToolEnabled("woven_browser", selection: nil))
+    XCTAssertFalse(CompanionModel.deviceToolEnabled("woven_computer", selection: nil))
+    XCTAssertTrue(CompanionModel.deviceToolEnabled("woven_computer", selection: ["wovenmatter_computer"]))
+    XCTAssertTrue(CompanionModel.deviceToolEnabled("woven_notes_read", selection: ["read_note"]))
+    XCTAssertFalse(CompanionModel.deviceToolEnabled("woven_notes_create", selection: ["read_note"]))
+    XCTAssertEqual(Set(CompanionModel.deviceToolAccessOptions.map(\.id)), Set(WorkspaceToolGroup.configurableCases.map { "woven_" + $0.rawValue }))
+    XCTAssertTrue(CompanionModel.deviceMCPTools.contains { $0["name"] as? String == "woven_goals_get" })
+    for tool in CompanionModel.deviceMCPTools {
+      let schema = try XCTUnwrap(tool["parameters"] as? [String: Any])
+      let properties = try XCTUnwrap(schema["properties"] as? [String: Any])
+      XCTAssertNil(properties["arguments"], "Focused tools must not expose argv")
+    }
   }
 
   @MainActor func testDirectWorkspaceRecoversLostSendReceiptWhileCentralIsOffline() async throws {
@@ -435,7 +441,7 @@ final class ExecutionRoutingTests: XCTestCase {
     var edited = original
     edited.content = "New local text"
     XCTAssertEqual(original.revision, edited.revision)
-    XCTAssertNotEqual(try CompanionModel.noteLocalVersion(original), try CompanionModel.noteLocalVersion(edited))
+    XCTAssertNotEqual(try MobileToolSupport.fingerprint(original), try MobileToolSupport.fingerprint(edited))
   }
 
   @MainActor func testFullAccessRunsToolsWithoutPromptsAndAskModeStillRequiresApproval() async throws {

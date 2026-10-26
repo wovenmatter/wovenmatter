@@ -31,11 +31,8 @@ run_static_checks() {
   scripts/test-appearance.sh
   scripts/test-note-editor.sh
   scripts/test-note-drafts.sh
-  scripts/test-note-socket.sh
   python3 scripts/test-support/test_executor_deployment.py
-  python3 scripts/test-support/test_wovenmatter_remote_tools.py
-  node --test scripts/test-support/native-cli.test.mjs
-  PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-support/test_owner_local_databases.py
+  node --test scripts/test-support/native-mcp.test.mjs
   scripts/test-remote-workspace.sh
   PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-support/test_remote_image.py
   for file in remote/src/*.mjs remote/test/*.test.mjs; do
@@ -67,7 +64,7 @@ run_package_tests() {
   local test_command=(env
     "CLANG_MODULE_CACHE_PATH=${cache_root}/ModuleCache"
     "SWIFTPM_MODULECACHE_OVERRIDE=${cache_root}/ModuleCache"
-    swift test --force-resolved-versions --package-path app --scratch-path "$swift_scratch")
+    swift test --build-system "${WOVENMATTER_SWIFT_BUILD_SYSTEM:-swiftbuild}" --force-resolved-versions --package-path app --scratch-path "$swift_scratch")
   # Process/socket and browser-feed fixtures measure startup, leases, deadlines,
   # and reaping; the SDK suite also
   # deliberately saturates the shared dispatch pool. Large archive fixtures
@@ -109,8 +106,6 @@ run_app_build() {
     build
   scripts/validate-native-app.sh \
     "${derived_data}/Build/Products/Debug/Woven Matter Dev.app"
-  python3 scripts/test-support/test_wovenmatter_cli.py \
-    "${derived_data}/Build/Products/Debug/Woven Matter Dev.app/Contents/Resources/wovenmatter"
   env WOVENMATTER_HTML_TEST_BUNDLE="${derived_data}/Build/Products/Debug/Woven Matter Dev.app" \
     CLANG_MODULE_CACHE_PATH="${cache_root}/ModuleCache" SWIFTPM_MODULECACHE_OVERRIDE="${cache_root}/ModuleCache" \
     swift test --force-resolved-versions --package-path app --scratch-path "$swift_scratch" \
@@ -126,7 +121,7 @@ run_companion() {
   env \
     CLANG_MODULE_CACHE_PATH="${cache_root}/ModuleCache" \
     SWIFTPM_MODULECACHE_OVERRIDE="${cache_root}/ModuleCache" \
-    swift test --package-path shared --scratch-path "${cache_root}/SharedSwiftPM"
+    swift test --build-system "${WOVENMATTER_SWIFT_BUILD_SYSTEM:-swiftbuild}" --package-path shared --scratch-path "${cache_root}/SharedSwiftPM"
   if [ "$ios_mode" != --desktop-only ]; then
     env WOVENMATTER_IOS_TEST_CACHE_DIR="${cache_root}/IOS" \
       scripts/test-ios.sh "$ios_mode"

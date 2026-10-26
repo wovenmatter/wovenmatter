@@ -13,7 +13,7 @@ struct WorkspaceToolDefaultsCard: View {
     }
 
     var body: some View {
-        SettingsCard(title: "Woven Matter CLI", detail: "Defaults for new sessions. You can change enabled tools in each session.") {
+        SettingsCard(title: "Woven MCP", detail: "Defaults for new sessions. You can change enabled tools in each session.") {
             VStack(alignment: .leading, spacing: 14) {
                 ForEach(WorkspaceToolGroup.configurableCases) { group in
                     HStack(spacing: 12) {
@@ -85,7 +85,7 @@ struct WorkspaceSessionToolsMenu: View {
                     ExecutorConversationApps(tools: tools, sessionID: sessionID) { showsExecutorApps = false }
                 } else {
                 Text("Tools").font(.system(size: 13, weight: .semibold))
-                SettingsNote("Woven Matter CLI tools for this session.")
+                SettingsNote("Woven MCP tools for this session.")
                 ForEach(WorkspaceToolGroup.configurableCases) { group in
                     HStack(spacing: 12) {
                         Toggle(group.title, isOn: Binding(get: { tools.policy(for: sessionID).enabled.contains(group) }, set: { set(group, enabled: $0) }))

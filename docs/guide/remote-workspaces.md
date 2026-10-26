@@ -72,32 +72,23 @@ Images refresh while the app is active and are not saved in the library or histo
 This controls the remote webpage; OS file pickers and local-file uploads are not
 forwarded from the Mac.
 
-Agents use the shared workspace browser for tabs you can watch. For example,
-run this inside the remote workspace:
+Agents use `woven_browser` through the workspace's authenticated Woven MCP
+connection to create and control tabs you can watch. Start with an `open` call:
 
-```sh
-node <<'JS'
-const { chromium } = require('playwright');
-const { execFileSync } = require('node:child_process');
-(async () => {
-  const endpoint = execFileSync('woven-browser', ['endpoint'], { encoding: 'utf8' }).trim();
-  const browser = await chromium.connectOverCDP(endpoint);
-  try {
-    const page = await browser.contexts()[0].newPage();
-    await page.goto('https://example.com');
-    console.log(await page.title());
-  } finally {
-    await browser.close(); // Disconnect; leave the shared tab open for viewing.
-  }
-})().catch(error => { console.error(error); process.exitCode = 1; });
-JS
+```json
+{"action":"open","url":"https://example.com"}
 ```
 
-`woven-browser endpoint` starts the browser on demand or reuses the running one.
-`woven-browser tabs` lists its tabs without starting it. Use the existing default
-context (`browser.contexts()[0]`) for shared pages. Independent `chromium.launch()`
-instances and private contexts are not shown. They remain available for isolated
-automation, including `playwright screenshot URL /home/example.png`.
+Use its returned `tabId` for snapshots, screenshots, navigation, and input. A
+`tabs` call lists the shared tabs. These tools use the workspace browser's shared
+profile and default context; the same pages appear in **View browser**. The
+browser-control endpoint remains private to the execution service and is not
+exposed as a model argument or a shell helper.
+
+Agents can still use the bundled Playwright library for isolated headless
+browsing. Independent `chromium.launch()` instances and private contexts are not
+shown in the shared viewer. For example, `playwright screenshot URL
+/home/example.png` uses a separate browser instance.
 
 The shared profile, cookies, and site storage stay in the workspace's persistent
 home. Open tabs are runtime state and may close on a workspace restart or update.

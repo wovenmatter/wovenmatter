@@ -6,6 +6,13 @@ import { resolve, sep } from 'node:path'
 import { createInterface } from 'node:readline'
 import { randomUUID } from 'node:crypto'
 
+export function redactMCPTransport(value) {
+  if(Array.isArray(value))return value.map(redactMCPTransport)
+  if(!value||typeof value!=='object')return value
+  if(typeof value.name==='string'&&/^(authorization|proxy-authorization)$/i.test(value.name))return {...value,value:'[redacted]'}
+  return Object.fromEntries(Object.entries(value).filter(([key])=>!['bearerToken','wovenMCP','wovenMCPConnection'].includes(key)&&!/^(authorization|proxy-authorization)$/i.test(key)).map(([key,item])=>[key,redactMCPTransport(item)]))
+}
+
 const identifier = value => {
   if (typeof value !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(value)) throw new Error('Invalid channel identifier')
   return value
@@ -234,7 +241,7 @@ export function createDurableACP({ catalog, workspaceRoot, environment, isEnable
     }
     const wrapped = ['codex', 'claude_code', 'grok_build'].includes(selected);
     const child = spawnProcess(wrapped ? process.execPath : harness.command, wrapped
-      ? [fileURLToPath(harnessResource('cli/adapter.mjs')), selected, harness.command, ...args] : args, {
+      ? [fileURLToPath(harnessResource('mcp/adapter.mjs')), selected, harness.command, ...args] : args, {
       cwd: workingDirectory, env: environment(harness), stdio: ['pipe', 'pipe', 'pipe'],
     })
     channel.process = child
@@ -291,7 +298,7 @@ export function createDurableACP({ catalog, workspaceRoot, environment, isEnable
     const operation = path.slice('/v1/durable-acp/'.length)
     const result = await serialize(async () => {
       if (!await isEnabled()) throw new Error('Background execution is disabled')
-      if (!['attach', 'adopt', 'message', 'poll', 'recover', 'cli'].includes(operation)) throw new Error('Unknown relay operation')
+      if (!['attach', 'adopt', 'message', 'poll', 'recover', 'mcp'].includes(operation)) throw new Error('Unknown relay operation')
       const channel = await channelFor(body.channelID, body.harnessID, body.cwd, body.permission, body.nativeSessionID, operation === 'recover')
       if (operation === 'adopt' && (channel.state !== 'running' || channel.snapshot.busy || channel.snapshot.pendingRequests.length)) throw new Error('This session is not idle; client ownership was not changed')
       if (operation === 'adopt' && (typeof body.expectedNativeSessionID !== 'string' || (channel.snapshot.piState?.sessionId ?? channel.snapshot.session?.sessionId) !== body.expectedNativeSessionID)) throw new Error('The durable channel belongs to a different native session; client ownership was not changed')
@@ -300,11 +307,11 @@ export function createDurableACP({ catalog, workspaceRoot, environment, isEnable
         // accounted for, while delayed requests from the old relay cannot admit.
         channel.attachmentToken = randomUUID()
       }
-      if (operation === 'cli') {
+      if (operation === 'mcp') {
         if (!channel.attachmentToken || body.attachmentToken !== channel.attachmentToken) throw new Error('This session attachment was replaced')
         if (!channel.process || channel.state !== 'running') throw new Error('Native process is unavailable')
-        if (!body.context || typeof body.context.executablePath !== 'string' || !body.context.executablePath.startsWith('/')) throw new Error('Invalid CLI connection')
-        channel.process.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'woven/cli', params: body.context }) + '\n')
+        if (!body.context || typeof body.context.endpointURL !== 'string' || typeof body.context.bearerToken !== 'string' || body.context.bearerToken.length < 32) throw new Error('Invalid Woven MCP connection')
+        channel.process.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'woven/mcp', params: body.context }) + '\n')
         return { ready: true }
       }
       if (operation === 'message') {
@@ -329,7 +336,7 @@ export function createDurableACP({ catalog, workspaceRoot, environment, isEnable
         const outgoing = { ...body.message }
         const line = JSON.stringify(outgoing) + '\n'
         if (Buffer.byteLength(line) > 8 * 1024 * 1024) throw new Error('ACP message is too large')
-        const accepted = { type: 'accepted', deliveryID: body.deliveryID, message: body.message }
+        const accepted = { type: 'accepted', deliveryID: body.deliveryID, message: redactMCPTransport(body.message) }
         await record(channel, accepted)
         updateSnapshot(channel.snapshot, accepted)
         channel.accepted.add(body.deliveryID)

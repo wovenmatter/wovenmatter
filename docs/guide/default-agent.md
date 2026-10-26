@@ -70,7 +70,7 @@ service restart interrupts active work and requires an explicit retry.
 Pi Durable and Usage settings manage the same saved provider accounts.
 Dictation uses on-device speech and needs no account. Subscription connections remain distinct from separately billed API
 keys. Signing in here does not sign in
-Codex, Claude Code, external Pi, or the other installed harnesses, and their
+Codex, Claude Code, Grok Build, or OpenCode, and their
 credential files are not imported.
 
 API keys can be reused in remote workspaces. For shared OAuth subscriptions,

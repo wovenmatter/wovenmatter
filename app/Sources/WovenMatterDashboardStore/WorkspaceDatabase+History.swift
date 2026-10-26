@@ -479,7 +479,7 @@ extension WorkspaceDatabaseConnection {
         throw WorkspaceDatabaseError.open("conversation requires an ID")
       }
       sql =
-        "SELECT m.rowid AS sequence,m.id,m.conversation_id,m.run_id,m.role,woven_text_substr(m.content,?,?) AS content,woven_text_length(m.content) AS content_characters,? AS content_offset,CASE WHEN woven_text_length(m.content)>?+? THEN 1 ELSE 0 END AS content_has_more,m.status,m.created_at, d.source_id AS sender_session_id,d.source_agent AS sender_agent,d.source_title AS sender_session_title FROM dashboard_messages m LEFT JOIN workspace_session_deliveries d ON d.message_id=m.id WHERE m.conversation_id=? AND m.rowid>? ORDER BY m.rowid"
+        "SELECT m.rowid AS sequence,m.id,m.conversation_id,m.run_id,m.role,woven_text_substr(m.content,?,?) AS content,woven_text_length(m.content) AS content_characters,? AS content_offset,CASE WHEN woven_text_length(m.content)>?+? THEN 1 ELSE 0 END AS content_has_more,m.status,m.created_at, COALESCE(d.source_id,p.source_id) AS sender_session_id,COALESCE(d.source_agent,p.source_agent) AS sender_agent,COALESCE(d.source_title,p.source_title) AS sender_session_title FROM dashboard_messages m LEFT JOIN workspace_session_deliveries d ON d.message_id=m.id LEFT JOIN companion_message_provenance p ON p.message_id=m.id WHERE m.conversation_id=? AND m.rowid>? ORDER BY m.rowid"
       values = [String(query.offset + 1), String(query.characters), String(query.offset),
         String(query.offset), String(query.characters), id, String(query.after)]
     case "message":

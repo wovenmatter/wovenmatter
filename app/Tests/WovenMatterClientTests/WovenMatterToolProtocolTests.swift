@@ -8,21 +8,23 @@ struct WovenMatterToolProtocolTests {
   @Test func contextIsAReadWithoutCallerSelectedMessageOrNote() throws {
     let command = try WovenMatterToolCommand(["context"])
     #expect(command.action == "context" && !command.isMutation && !command.wantsHelp)
-    #expect(WovenMatterToolCommand.help(for: try .init(["context", "--help"])) == WovenMatterToolCommand.contextHelp)
+    let context = try #require(WovenMCPCatalog.tools.first(where: { $0.name == "woven_context" }))
+    #expect(context.description.contains("consumed user message"))
+    #expect(context.inputSchema.objectValue?["properties"]?.objectValue?["contextID"] == nil)
     #expect(throws: (any Error).self) { try WovenMatterToolCommand(["context", "--note-id", "other"]) }
   }
 
 
 
-  @Test func helpIsLazyForEveryGroup() throws {
-    #expect(try WovenMatterToolCommand([]).wantsHelp)
+  @Test func typedDiscoveryCoversEveryGroupWithoutCLIAliases() throws {
+    #expect(throws: (any Error).self) { try WovenMatterToolCommand([]) }
     for group in WorkspaceToolGroup.allCases {
-      #expect(try WovenMatterToolCommand([group.rawValue, "help"]).group == group)
-      #expect(WovenMatterToolCommand.help(for: group).contains("wovenmatter " + group.rawValue))
+      #expect(WovenMCPCatalog.tools.contains(where: { $0.group == group }))
+      #expect(throws: (any Error).self) { try WovenMatterToolCommand([group.rawValue, "help"]) }
     }
   }
 
-  @Test func actionSpecificOptionsContradictionsAndHelpAreExplicit() throws {
+  @Test func actionSpecificOptionsContradictionsAndSchemasAreExplicit() throws {
     for arguments in [
       ["history", "runs", "--since", "2026-01-01T00:00:00Z"],
       ["history", "conversation", "session", "--kind", "wire.in"],
@@ -35,27 +37,25 @@ struct WovenMatterToolProtocolTests {
     ] {
       #expect(throws: (any Error).self) { try WovenMatterToolCommand(arguments) }
     }
-    let apply = try WovenMatterToolCommand(["notes", "apply", "--help"])
-    #expect(WovenMatterToolCommand.help(for: apply).contains("Operations are a JSON array"))
-    let table = try WovenMatterToolCommand(["notes", "table", "set-cell", "--help"])
-    #expect(WovenMatterToolCommand.help(for: table).contains("--table-id"))
-    #expect(try WovenMatterToolCommand(["notes", "table", "help"]).wantsHelp)
-    let release = try WovenMatterToolCommand(["sessions", "release", "--help"])
-    #expect(WovenMatterToolCommand.help(for: release).contains("--epoch"))
+    let apply = try #require(WovenMCPCatalog.tools.first(where: { $0.name == "woven_notes_apply" }))
+    #expect(apply.inputSchema.objectValue?["properties"]?.objectValue?["operations"]?.objectValue?["type"] == .string("array"))
+    let table = try #require(WovenMCPCatalog.tools.first(where: { $0.name == "woven_notes_table_set_cell" }))
+    #expect(table.inputSchema.objectValue?["properties"]?.objectValue?["tableID"] != nil)
+    #expect(throws: (any Error).self) { try WovenMatterToolCommand(["notes", "table", "help"]) }
+    let release = try #require(WovenMCPCatalog.tools.first(where: { $0.name == "woven_sessions_release" }))
+    #expect(release.inputSchema.objectValue?["properties"]?.objectValue?["epoch"]?.objectValue?["type"] == .string("string"))
   }
 
-  @Test func automationJSONAndScreenshotExportKeepAuthorityOnTheCaller() throws {
+  @Test func automationJSONAndInlineImagesKeepAuthorityOnTheCaller() throws {
     let command = try WovenMatterToolCommand(["browser", "call", "--json", "--image", "--request-id", "fixture"])
     #expect(command.options["json"] == "--image")
     #expect(throws: (any Error).self) { try WovenMatterToolCommand(["computer", "call", "--json", "{}", "--session", "other"]) }
-    let file = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-    defer { try? FileManager.default.removeItem(at: file) }
     let bytes = Data("synthetic screenshot".utf8)
     let response = WovenMatterToolResponse(result: .object(["content": .array([.object(["type": .string("image"), "mimeType": .string("image/jpeg"), "data": .string(bytes.base64EncodedString())])])]))
-    let exported = try WovenAutomationOutput.exportImage(response, to: file)
-    #expect(try Data(contentsOf: file) == bytes)
-    #expect(exported.result?.objectValue?["content"]?.arrayValue?.first?.objectValue?["type"]?.stringValue == "text")
-    #expect(throws: (any Error).self) { try WovenAutomationOutput.exportImage(response, to: file) }
+    let content = try #require(WovenMCPCatalog.result(response).objectValue?["content"]?.arrayValue?.first?.objectValue)
+    #expect(content["type"] == .string("image"))
+    #expect(content["data"] == .string(bytes.base64EncodedString()))
+    #expect(throws: (any Error).self) { try WovenMatterToolCommand(["browser", "call", "--json", "{}", "--image", "/tmp/output.png"]) }
   }
 
 }

@@ -29,12 +29,12 @@ separately; compilation does not prove UI, Tailscale or real-account acceptance.
 - Add a device provider connection in Settings. Test sign-in cancellation,
   invalid/expired credentials, persistence and provider token refresh. Keys and
   tokens stay on the device and never appear in logs or synchronized data.
-- Set Pi Durable's default connection/model/think level and Woven Matter CLI
+- Set Pi Durable's default connection/model/think level and Woven MCP
   tools; new chats inherit these, while per-session changes remain independent.
 - Run on-device Pi Durable with other devices disconnected. Exercise files,
   notes, calendar, timers, history, usage, tools, Stop, children and explicit
   Resume. Model/account selection must survive catalog outages and refreshes.
-- Verify embedded Python/SQLite and native CLI effects, completed-command replay,
+- Verify embedded Python/SQLite and native MCP effects, completed-command replay,
   cancellation and interruption. See [embedded execution](IOS_EMBEDDED_EXECUTION.md)
   for the real WebKit smoke and [continued execution](IOS_CONTINUED_EXECUTION.md)
   for physical background admission, expiration and cancellation checks.

@@ -29998,10 +29998,10 @@ got     : ${o2}
       }
       const cwd = "/workspace/" + (request.workingDirectory || "");
       fs2.chdir(cwd);
-      pyodide.registerJsModule("woven_native", { command: (argumentsJSON) => new Promise((resolve, reject) => {
+      pyodide.registerJsModule("woven_native", { call_tool: (name2, argumentsJSON) => new Promise((resolve, reject) => {
         const id = String(++nextCall);
         waiting.set(id, { resolve, reject });
-        nativePost({ type: "cli", id, argumentsJSON });
+        nativePost({ type: "mcp", id, name: name2, argumentsJSON });
       }) });
       const stream = (name2) => {
         const decoder = new TextDecoder();
@@ -30021,7 +30021,7 @@ got     : ${o2}
 sys.path.insert(0, '/')
 from woven_commands import execute
 await execute(json.loads(_woven_argv_json), _woven_stdin)`);
-      if (waiting.size) throw new Error("Await all native CLI calls before returning.");
+      if (waiting.size) throw new Error("Await all Woven MCP calls before returning.");
       const files = [], directories = [];
       let total = 0;
       const walk = (path) => {

@@ -14,6 +14,7 @@ import { createDurableACP } from './durable-acp.mjs'
 import { inspectProcesses } from './runtime-inspection.mjs'
 import { createWorkspaceInstances } from './workspace-instances.mjs'
 import { createWorkspaceBrowser, streamBrowserFrames } from './workspace-browser.mjs'
+import { loadWorkspaceMCPCatalog, validateInput, maximumMCPRequestBytes } from './workspace-mcp.mjs'
 import { createServer } from 'node:http'
 import { timingSafeEqual, randomUUID, createHash } from 'node:crypto'
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
@@ -73,17 +74,23 @@ const durableACP = createDurableACP({ catalog, workspaceRoot,
 const taskGateway = runningAsService ? createTaskGateway({
   workspaceRoot,
   directory:resolve(workspaceRoot,'.wovenmatter/task-gateway'),
+  availableExecutionSlots:()=>clientExecution.mcp.settings().maximumRunningSessions-clientExecution.runningSessionCount()-taskGateway.status().activeRuns,
   execute:createTaskExecutor({catalog,workspaceRoot,
     environment: harness => harness?.id === 'codex' ? harnessRuntimeEnvironment(harness) : harnessEnvironment(),
-    defaultAgent,instances,
+    defaultAgent,instances,prepareMCP:context=>clientExecution.prepareTaskMCP(context),
     isEnabled:id => maintenance.isInstalled(id)}),
   onDisable:async () => { await Promise.all([durableACP.stopAll(), defaultAgent.cancelActive(), clientExecution?.cancelActive()]); foregroundDefaultRuns.clear() },
 }) : null
 
+const workspaceBrowser = createWorkspaceBrowser({ profile: resolve(process.env.HOME, '.local/share/wovenmatter/browser') })
+const browserMCPSchemas = new Map(loadWorkspaceMCPCatalog().filter(tool => ['woven_browser', 'woven_browser_cancel'].includes(tool.name)).map(tool => [tool.name, tool.inputSchema]))
+
 const clientExecution = runningAsService ? createClientExecution({
   directory: resolve(workspaceRoot, '.wovenmatter/client-execution'),
   publisherKey: apiToken,
+  mcpEndpointURL: () => `http://127.0.0.1:${server.address()?.port ?? listenPort}/mcp`, managedDataRoot,externalRunningSessions:()=>taskGateway.status().activeRuns,
   kind: process.platform === 'darwin' ? 'mac' : 'linux',
+  workspaceBrowser,
   runtime: createClientExecutionRuntime({defaultAgent,durableACP,catalog,workspaceRoot,harnessStatus,
     environment:harnessEnvironment,instances,isExecutionEnabled:()=>taskGateway.enabled()}),
 }) : null
@@ -94,8 +101,6 @@ const retainedExecution = runningAsService ? createRetainedExecutionCapture({
   resolveAssociation:request=>clientExecution.resolveRetainedAssociation(request),
 }) : null
 
-const workspaceBrowser = createWorkspaceBrowser({ profile: resolve(process.env.HOME, '.local/share/wovenmatter/browser') })
-
 const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
   requestTimeout: 30_000, connectionsCheckingInterval: 1_000 }, async (request, response) => {
   try {
@@ -104,6 +109,23 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
     if (!request.url?.startsWith('/') || request.url.startsWith('//')) return json(response, 400, { error: 'invalid_request_target' })
     const administrator = authorized(request)
     const url = new URL(request.url, 'http://localhost')
+    if (url.pathname === '/mcp') {
+      const principal=clientExecution?.mcp.resolvePrincipal(request.headers.authorization)
+      if(!principal){response.writeHead(401,{'content-type':'application/json','cache-control':'no-store','www-authenticate':'Bearer'});response.end(JSON.stringify({error:'invalid_mcp_credential'}));return}
+      if(request.method!=='POST'){response.writeHead(405,{allow:'POST','cache-control':'no-store'});response.end();return}
+      if(!request.headers['content-type']?.toLowerCase().startsWith('application/json'))return json(response,415,{error:'json_required'})
+      const protocol=request.headers['mcp-protocol-version']
+      if(protocol&&!['2025-11-25','2025-06-18','2025-03-26'].includes(protocol))return json(response,400,{error:'unsupported_mcp_protocol'})
+      const controller=new AbortController(),disconnected=()=>{if(!response.writableEnded)controller.abort()}
+      response.once('close',disconnected)
+      try {
+        const message=await readJSON(request,40*1024*1024)
+        if(Buffer.byteLength(JSON.stringify(message))>maximumMCPRequestBytes(message))throw httpError(413,'The MCP request is too large.')
+        const result=await clientExecution.mcp.handle(principal,message,{signal:controller.signal})
+        if(result===null){response.writeHead(202,{'cache-control':'no-store'});response.end();return}
+        return json(response,200,result)
+      } finally {response.removeListener('close',disconnected)}
+    }
     const scope = url.pathname.startsWith('/v1/inference/') ? 'inference' : 'execution'
     const device = clientExecution?.principal(request.headers.authorization, scope)
     if (!administrator && !device) return json(response, 401, { error: 'unauthorized' })
@@ -124,6 +146,27 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
     if (url.pathname === '/v1/execution/devices' && request.method === 'POST') {
       if (!administrator) return json(response,403,{error:'administrator_required'})
       return json(response,201,clientExecution.provision(await readJSON(request)))
+    }
+    if(url.pathname==='/v1/execution/mcp-settings') {
+      if(!administrator)return json(response,403,{error:'administrator_required'})
+      if(request.method==='GET')return json(response,200,clientExecution.mcp.settings())
+      if(request.method==='POST')return json(response,200,clientExecution.mcp.configureSettings(await readJSON(request)))
+    }
+    if (url.pathname === '/v1/execution/mcp-library') {
+      if(!administrator)return json(response,403,{error:'administrator_required'})
+      if(request.method==='GET')return json(response,200,clientExecution.mcp.libraryStatus())
+      if(request.method==='POST')return json(response,200,clientExecution.mcp.configureLibrary(await readJSON(request)))
+      if(request.method==='DELETE')return json(response,200,clientExecution.mcp.clearLibrary())
+    }
+    if (url.pathname === '/v1/mcp/clients') {
+      if(!administrator)return json(response,403,{error:'administrator_required'})
+      if(request.method==='GET')return json(response,200,{clients:clientExecution.mcp.clients()})
+      if(request.method==='POST')return json(response,201,clientExecution.mcp.provisionClient(await readJSON(request)))
+    }
+    const revokeMCP=url.pathname.match(/^\/v1\/mcp\/clients\/([0-9a-f-]+)$/)
+    if(revokeMCP&&request.method==='DELETE') {
+      if(!administrator)return json(response,403,{error:'administrator_required'})
+      return json(response,200,clientExecution.mcp.revokeClient(revokeMCP[1]))
     }
     if (url.pathname === '/v1/execution/publisher') {
       if (!administrator) return json(response,403,{error:'administrator_required'})
@@ -185,6 +228,27 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
     // installation, shell access, or native authentication routes.
     if (!administrator) return json(response,403,{error:'scope_not_granted'})
 
+    // A native host uses its existing administrative connection after checking
+    // its bound caller's current tools and trusted remote workspace selection.
+    // Device credentials and public MCP arguments cannot choose this principal.
+    if (['/v1/browser/mcp', '/v1/browser/mcp/cancel'].includes(url.pathname) && request.method === 'POST') {
+      const body = await readJSON(request, 4 * 1024 * 1024)
+      if (typeof body.callerID !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(body.callerID)
+        || Object.keys(body).some(key => !['callerID', 'input'].includes(key))) return json(response,400,{error:'invalid_browser_mcp_caller'})
+      const cancel = url.pathname.endsWith('/cancel'), input = body.input
+      validateInput(browserMCPSchemas.get(cancel ? 'woven_browser_cancel' : 'woven_browser'), input)
+      if (typeof input.requestID !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(input.requestID)) return json(response,400,{error:'browser_request_id_required'})
+      const controller = new AbortController(), disconnected = () => { if (!response.writableEnded) controller.abort() }
+      response.once('close', disconnected)
+      try {
+        const scope = { conversationID: body.callerID.toLowerCase() }
+        const result = cancel ? await workspaceBrowser.cancelMCP(scope,input.id) : await workspaceBrowser.executeMCP(scope,input,{signal:controller.signal})
+        const envelope = {success:true,result,requestID:input.requestID}
+        if (Buffer.byteLength(JSON.stringify(envelope)) > 1048576) throw Object.assign(new Error('The browser response exceeds 1 MiB. Request a smaller result.'),{statusCode:413})
+        return json(response,200,envelope)
+      } catch (error) { return json(response,200,{success:false,error:error.message,code:controller.signal.aborted?'cancelled':'automation_failed',requestID:input.requestID}) }
+      finally {response.off('close',disconnected)}
+    }
     if (url.pathname === '/v1/browser/stream' && request.method === 'GET') {
       await streamBrowserFrames(workspaceBrowser, url.searchParams.get('tabID'), response); return
     }

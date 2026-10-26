@@ -35,7 +35,7 @@ features using it.
 ## Executor
 
 **Settings → General → Connected apps · Executor** manages one local or remote Linux Executor runtime, shared by
-every agent through Woven’s CLI. Configure apps in its dashboard, choose defaults,
+every agent through Woven MCP. Configure apps in its dashboard, choose defaults,
 and select apps per conversation. See [Executor apps](executor.md) for setup,
 permissions and recovery.
 

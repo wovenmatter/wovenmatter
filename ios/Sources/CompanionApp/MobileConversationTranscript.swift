@@ -6,6 +6,8 @@ import WovenMatterCompanion
 struct MobileConversationTranscript: View {
   let transcript: CompanionTranscript
   let disclosureState: ConversationTranscriptState
+  var agentSourceTitle: @MainActor (String) -> String? = { _ in nil }
+  var openAgentSource: @MainActor (String) -> Void = { _ in }
   let loadDetails: @MainActor (String) async throws -> AgentRunActivity?
 
   var body: some View {
@@ -15,7 +17,19 @@ struct MobileConversationTranscript: View {
       case .message(let message):
         HStack {
           Spacer(minLength: 40)
-          ConversationUserBubble(content: message.content) { EmptyView() }
+          VStack(alignment: .trailing, spacing: 6) {
+            if message.isAgentAuthored == true || message.agentSourceID != nil {
+              if let source = message.agentSourceID, let title = agentSourceTitle(source) {
+                Button("From " + title) { openAgentSource(source) }
+                  .font(.caption).foregroundStyle(DashboardPalette.mutedForeground).buttonStyle(.plain)
+                  .accessibilityHint("Open the agent conversation that sent this message")
+              } else {
+                Text(message.senderSessionTitle.map { "From " + $0 } ?? "Agent message")
+                  .font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+              }
+            }
+            ConversationUserBubble(content: message.content) { EmptyView() }
+          }
         }
       case .turn(let turn):
         VStack(alignment: .leading, spacing: 18) {

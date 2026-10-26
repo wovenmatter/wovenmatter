@@ -1,14 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
-import { Client } from '@modelcontextprotocol/client';
-import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { ExecutorBroker } from '../src/executor/broker.mjs';
 
 async function until(predicate) {
@@ -18,39 +15,6 @@ async function until(predicate) {
     await delay(10);
   }
 }
-
-for (const stop of ['cancel', 'disconnect']) test(`MCP stdio ${stop} aborts the active scoped automation request`, { timeout: 15000 }, async t => {
-  const root = await mkdtemp(join(tmpdir(), 'woven-mcp-cancel-'));
-  const started = join(root, 'started'), cancelled = join(root, 'cancelled');
-  const cli = join(root, 'wovenmatter');
-  // This fixture never sends input to the desktop. Only its own marker files
-  // prove that the server propagated cancellation to the scoped CLI request.
-  await writeFile(cli, `#!${process.execPath}
-import { writeFile } from 'node:fs/promises';
-if (process.argv[3] === 'cancel') {
-  await writeFile(${JSON.stringify(cancelled)}, process.argv.at(-1));
-} else {
-  let input = ''; for await (const bytes of process.stdin) input += bytes;
-  await writeFile(${JSON.stringify(started)}, JSON.stringify({ input: JSON.parse(input), id: process.argv.at(-1) }));
-  setInterval(() => {}, 1000);
-}
-`, { mode: 0o700 });
-  const client = new Client({ name: 'fixture', version: '1' });
-  t.after(async () => { await client.close(); await rm(root, { recursive: true, force: true }); });
-  await client.connect(new StdioClientTransport({ command: process.execPath,
-    args: [fileURLToPath(new URL('../src/automation-mcp.mjs', import.meta.url))],
-    env: { PATH: process.env.PATH, WOVENMATTER_CLI: cli, WOVENMATTER_SOCKET: '/fixture/caller.sock' } }));
-  const controller = new AbortController();
-  const outcome = client.callTool({ name: 'computer', arguments: { action: 'type', text: 'Synthetic input' } }, { signal: controller.signal })
-    .then(() => ({ completed: true }), error => ({ error }));
-  await until(() => readFile(started).then(() => true, () => false));
-  if (stop === 'cancel') controller.abort(); else await client.close();
-  assert.ok((await outcome).error, 'Stopping an active operation must reject its result.');
-  await until(() => readFile(cancelled).then(() => true, () => false));
-  const request = JSON.parse(await readFile(started, 'utf8'));
-  assert.equal(await readFile(cancelled, 'utf8'), request.id);
-  assert.deepEqual(request.input, { action: 'type', text: 'Synthetic input' });
-});
 
 test('Executor uses the v2 HTTP client with a legacy server, scoped credentials and cancellable non-replayed calls', { timeout: 15000 }, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'woven-mcp-http-'));

@@ -52,6 +52,22 @@ final class WorkspaceJournalTests: XCTestCase {
     XCTAssertEqual(callsAfterMismatch.count, 1)
     XCTAssertEqual(recordsAfterMismatch.count, 1)
   }
+  func testAgentAuthoredProvenanceSurvivesOwnerJournalChunkingAndRestart() async throws {
+    let file = path(), journal = try WorkspaceJournal(file: file)
+    let message = CompanionMessage(id: "agent-input", conversationID: "target", role: "user",
+      content: String(repeating: "Agent assignment. ", count: 2_000), agentSourceID: "source", isAgentAuthored: true,
+      senderSessionTitle: "Research", senderHarness: "codex", senderKind: "message")
+    _ = try await journal.append(workspaceID: "linux-owner", conversation: .init(id: "target", title: "Target"),
+      transcript: .init(conversationID: "target", messages: [message]))
+    let reopened = try WorkspaceJournal(file: file)
+    let state = await reopened.snapshot()
+    let messages = try XCTUnwrap(state.transcripts["target"]).messages
+    XCTAssertGreaterThan(messages.count, 1)
+    XCTAssertEqual(messages.map(\.content).joined(), message.content)
+    XCTAssertTrue(messages.allSatisfy { $0.role == "user" && $0.isAgentAuthored == true && $0.agentSourceID == "source" && $0.senderSessionTitle == "Research" && $0.senderHarness == "codex" })
+    XCTAssertEqual(state.conversationWorkspaceIDs["target"], "linux-owner")
+  }
+
   func testNativeHistoryIsChunkedWithoutTruncationAndRetriedIdempotently() async throws {
     let file = path(); let journal = try WorkspaceJournal(file: file)
     let bytes = Data(repeating: 71, count: 150_000)

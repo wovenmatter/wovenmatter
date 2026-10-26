@@ -145,11 +145,11 @@ struct ACPSessionPermissionTests {
     }
 
 
-    @Test(arguments: [AgentRuntimeKind.codex, .claudeCode, .grokBuild], [false, true]) func nativeHarnessReceivesSessionBoundAutomationMCP(kind: AgentRuntimeKind, loading: Bool) async throws {
+    @Test(arguments: [AgentRuntimeKind.codex, .claudeCode, .grokBuild], [false, true]) func nativeHarnessReceivesSessionBoundWovenHTTPMCP(kind: AgentRuntimeKind, loading: Bool) async throws {
         let fixture = try PermissionFixture(kind: kind, state: configuration(permission: "default"), handlers: [:], sessionPrelude: "")
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         var launch = LocalACPRuntimeLaunchConfiguration(runtimeKind: kind, executableURL: fixture.executable, arguments: kind == .grokBuild ? ["agent", "stdio"] : [])
-        launch.cliConnection = .init(executablePath: "/fixture/wovenmatter", socketPath: "/fixture/caller.sock", captureID: "input")
+        launch.mcpConnection = .init(endpointURL: "http://127.0.0.1:43129/mcp", bearerToken: "fixture-session-bearer", captureID: "input")
         let client = try LocalACPClient.start(launch: launch, workingDirectory: fixture.root)
         do {
             _ = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: loading ? "existing" : nil, title: nil)
@@ -157,15 +157,12 @@ struct ACPSessionPermissionTests {
             let params = try #require(request["params"] as? [String: Any])
             let servers = try #require(params["mcpServers"] as? [[String: Any]])
             let server = try #require(servers.first)
-            #expect(servers.count == 1 && server["command"] as? String == "/fixture/wovenmatter")
-            #expect(server["args"] as? [String] == ["mcp"])
-            let env = try #require(server["env"] as? [[String: String]])
-            #expect(env.contains(["name": "WOVENMATTER_SOCKET", "value": "/fixture/caller.sock"]))
-            #expect(env.contains(["name": "WOVENMATTER_CLI", "value": "/fixture/wovenmatter"]))
-            let meta = try #require(params["_meta"] as? [String: Any])
-            let binding = try #require(meta["wovenToolsConnection"] as? [String: Any])
-            #expect(binding["captureID"] as? String == "input")
-            #expect(binding["socketPath"] as? String == "/fixture/caller.sock")
+            #expect(servers.count == 1 && server["type"] as? String == "http")
+            #expect(server["name"] as? String == "woven")
+            #expect(server["url"] as? String == "http://127.0.0.1:43129/mcp")
+            let headers = try #require(server["headers"] as? [[String: String]])
+            #expect(headers.contains(["name": "Authorization", "value": "Bearer fixture-session-bearer"]))
+            #expect(server["command"] == nil && server["args"] == nil && server["env"] == nil)
             await client.shutdown()
         } catch { await client.shutdown(); throw error }
     }

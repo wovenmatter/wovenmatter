@@ -35,6 +35,10 @@ extension WorkspaceDatabaseConnection {
       CREATE TABLE IF NOT EXISTS companion_execution_adoptions (
         conversation_id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, payload BLOB NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS companion_message_provenance (
+        message_id TEXT PRIMARY KEY, source_id TEXT NOT NULL,
+        source_title TEXT, source_agent TEXT, kind TEXT NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS companion_execution_runs (
         id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, conversation_id TEXT NOT NULL
       );

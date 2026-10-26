@@ -113,7 +113,8 @@ def disconnect_snapshot(file, *, device_id, execution_root, published_root):
                      "desktop_scheduled_result_routes", "desktop_scheduled_result_receipts"}
         retained_content = {"companion_versions", "companion_changes", "companion_execution_workspaces",
                             "companion_execution_conversations", "companion_execution_runs", "companion_native_history",
-                            "companion_native_history_parts", "companion_saved_artifacts", "companion_artifact_chunks"}
+                            "companion_native_history_parts", "companion_saved_artifacts", "companion_artifact_chunks",
+                            "companion_message_provenance"}
         for name in tables:
             if name in transient or (name.startswith("companion_") and name not in retained_content):
                 db.execute("DELETE FROM " + quote(name))

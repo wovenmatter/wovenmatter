@@ -45,7 +45,7 @@ extension MobileStore {
       var submissions = next.toolSubmissions ?? [:]
       if submissions[id] == nil {
         submissions[id] = .init(id: id, sessionID: relation.coordinatorID,
-          text: "Your managed on-device session \(sessionID) is \(outcome). Use wovenmatter sessions status or history conversation to inspect its result.", state: "queued", submittedAt: Date())
+          text: "Your managed on-device session \(sessionID) is \(outcome). Use woven_sessions_status or woven_history_conversation to inspect its result.", state: "queued", submittedAt: Date())
         next.toolSubmissions = submissions
       }
     }

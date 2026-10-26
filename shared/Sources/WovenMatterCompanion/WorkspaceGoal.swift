@@ -89,7 +89,7 @@ public struct WorkspaceGoal: Codable, Equatable, Identifiable, Sendable {
 
     public static let guidance = """
     \n<wovenmatter-goals>
-    When the user explicitly requests a goal, use `wovenmatter goals set --objective TEXT --request-id UUID`. Read `wovenmatter goals get`. Report verified completion with complete, useful unfinished progress with checkpoint, and blockers with block; supply --id, --evidence and a stable --request-id. Never complete because a turn or budget ended. Set, pause, resume and clear only when requested. Do not start a provider-native goal loop.
+    When the user explicitly requests a goal, call `woven_goals_set` with objective and a stable requestID UUID. Read `woven_goals_get`. Report verified completion with woven_goals_complete, useful unfinished progress with woven_goals_checkpoint, and blockers with woven_goals_block; supply id, evidence and a stable requestID. Never complete because a turn or budget ended. Set, pause, resume and clear only when requested. Do not start a provider-native goal loop.
     </wovenmatter-goals>
     """
 
@@ -98,7 +98,8 @@ public struct WorkspaceGoal: Codable, Equatable, Identifiable, Sendable {
         let marker = "\n<wovenmatter-goals>\n"
         guard text.hasSuffix("</wovenmatter-goals>"),
               let range = text.range(of: marker, options: .backwards),
-              text[range.upperBound...].contains("When the user explicitly requests a goal, use `wovenmatter goals set") else { return text }
+              (text[range.upperBound...].contains("When the user explicitly requests a goal, call `woven_goals_set")
+                || text[range.upperBound...].contains("When the user explicitly requests a goal, use `wovenmatter goals set")) else { return text }
         return String(text[..<range.lowerBound])
     }
 
@@ -109,14 +110,14 @@ public struct WorkspaceGoal: Codable, Equatable, Identifiable, Sendable {
         \(objective)
 
         Goal ID: \(id)
-        Read `wovenmatter goals get` before working. This goal persists across turns.
+        Call `woven_goals_get` before working. This goal persists across turns.
         Use the current model, permissions, workspace and tools. Respect new user instructions.
         Do not start a provider-native /goal or a second continuation loop.
         Before ending, audit the objective against concrete evidence. If achieved, run
-        `wovenmatter goals complete --id \(id) --evidence 'verification results' --request-id UUID`.
-        If unfinished, make useful progress and run `wovenmatter goals checkpoint --id \(id)
-        --evidence 'what changed, verification results, and next step' --request-id UUID`.
-        If no useful path remains, use `wovenmatter goals block --id \(id) --evidence 'blocker and required input' --request-id UUID`.
+        `woven_goals_complete` with id="\(id)", evidence="verification results" and a stable requestID UUID.
+        If unfinished, make useful progress and call `woven_goals_checkpoint` with id="\(id)",
+        evidence="what changed, verification results, and next step" and a stable requestID UUID.
+        If no useful path remains, call `woven_goals_block` with id="\(id)", evidence="blocker and required input" and a stable requestID UUID.
         Never mark a goal complete because a turn ended or a budget was reached.
         Pause, resume, clear and set goals only when the user explicitly requests it.
         """

@@ -5,7 +5,7 @@ import Darwin
 import Glibc
 #endif
 
-/// Preparation belongs to the invoking CLI/device, never the observing Mac.
+/// Preparation belongs to the invoking MCP adapter/device, never the observing Mac.
 /// Matches T3's authored-page, image, and prepared-page budgets.
 public enum ConversationHTMLResources {
   public static let maximumAuthoredCharacters = 512_000
