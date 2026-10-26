@@ -139,24 +139,16 @@ async function verifyMCP(serviceURL, tabId, page, url, viewerRequest) {
     assert.ok(response.ok, path + ': ' + response.status);
     return response.json();
   };
-  const deviceID = uuid();
-  await admin('/v1/execution/devices', 'POST', { libraryID: uuid(), workspaceID: uuid(), deviceID, ownerDeviceID: uuid(), scopes: ['execution'] });
-  await admin('/v1/task-gateway', 'PATCH', { enabled: true });
-  // Creating native metadata does not submit a prompt or call a provider.
-  const opened = await admin('/v1/execution/commands', 'POST', { commandID: uuid(), deviceID, kind: 'createSession' });
-  assert.equal(opened.status, 'completed', JSON.stringify(opened));
-  const client = await admin('/v1/mcp/clients', 'POST', { conversationID: opened.conversationID, label: 'Container browser smoke', readOnly: false, enabledGroups: ['browser'] });
-  const call = async (name, input) => {
-    const response = await fetch(serviceURL + '/mcp', { method: 'POST',
-      headers: { Authorization: 'Bearer ' + client.connection.bearerToken, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jsonrpc: '2.0', id: uuid(), method: 'tools/call', params: { name, arguments: input } }),
-      signal: AbortSignal.timeout(30000) });
-    assert.equal(response.status, 200);
-    return response.json();
+  const callerID = uuid();
+  const call = async (name, input, caller = callerID) => {
+    const reply = await admin(name === 'woven_browser_cancel' ? '/v1/browser/mcp/cancel' : '/v1/browser/mcp', 'POST', {
+      callerID: caller, input: { ...input, requestID: input.requestID || uuid() },
+    });
+    return reply;
   };
   const invoke = async input => {
     const response = await call('woven_browser', input);
-    assert.equal(response.result?.isError, false, JSON.stringify(response));
+    assert.equal(response.success, true, JSON.stringify(response));
     return response.result;
   };
   const snapshot = await invoke({ action: 'snapshot', tabId });
@@ -178,13 +170,12 @@ async function verifyMCP(serviceURL, tabId, page, url, viewerRequest) {
   assert.equal(Buffer.from(read.data, 'base64').toString(), 'Woven MCP download proof');
   const requestID = uuid(), pending = call('woven_browser', { action: 'click', tabId, selector: '#never-present', requestID });
   await new Promise(resolve => setTimeout(resolve, 250));
+  assert.equal((await call('woven_browser_cancel', { id: requestID }, uuid())).result.cancelled, 0);
   const cancelled = await call('woven_browser_cancel', { id: requestID });
-  assert.equal(cancelled.result.structuredContent.result.cancelled, 1);
-  assert.equal((await pending).result.isError, true);
+  assert.equal(cancelled.result.cancelled, 1);
+  assert.equal((await pending).success, false);
   assert.equal((await viewerRequest('frame', { tabID: tabId })).status, 200);
-  await admin('/v1/mcp/clients/' + client.id, 'DELETE');
-  await admin('/v1/task-gateway', 'PATCH', { enabled: false });
-  console.log('Authenticated Woven MCP: shared-tab discovery, snapshot, form input, inline screenshot, lifecycle and caller cancellation passed without a provider prompt.');
+  console.log('Authenticated remote Woven MCP forwarding: shared tabs, snapshot, form input, inline screenshot, downloads, lifecycle and caller-bound joined cancellation passed without starting a provider runtime.');
 }
 async function verifyInteraction(page, tabID, request) {
   const assert = require('node:assert/strict');

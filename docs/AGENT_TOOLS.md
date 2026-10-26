@@ -137,7 +137,9 @@ Uploads use `upload`, `selector`, `name`, `mimeType`, and base64 `data`, with a
 2 MiB file ceiling. `download` returns a native receipt; `downloads` lists receipts,
 and `read-download` reads a completed opaque `id` at a byte `offset`, at most
 384 KiB per response. Agent downloads remain temporary and never execute. They
-are limited to 16 files of 64 MiB per tab and are removed with the tab. Ordinary
+are limited to 16 files of 64 MiB per tab on Mac. Linux retains at most 16 downloads
+and 64 MiB across the workspace, evicting older receipts when needed. Downloads
+are removed with their tab. Ordinary
 user downloads retain the save dialog. Dialog handling uses `accept` on the
 triggering action or a separate `dialog` action.
 
