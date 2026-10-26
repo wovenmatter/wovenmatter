@@ -10,7 +10,7 @@ import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { getSupportedThinkingLevels } from '@earendil-works/pi-ai/models';
 import { createCodingTools, createBashTool, createGrepTool, createFindTool, createLsTool, createCodemodeExtension, DefaultResourceLoader, SettingsManager } from '@earendil-works/pi-coding-agent';
 import { AgentDoc, CompactionTask, Harness, LiveDoc, ProviderDoc, ToolTask, defineDoc, defineExtension, section, watchEvents } from '@earendil-works/pi-durable';
-import { openNodeJsonlStorage } from '@earendil-works/pi-durable/storage/jsonl/node';
+import { openWorkspacePiStorage } from './sqlite-storage.mjs';
 import { DefaultAgentError, accessFailure, operationErrorMessage, readJSON, writePrivateJSON } from './config.mjs';
 import { ProviderCompactionError } from './provider-compaction.mjs';
 import { providerFetch } from './transport.mjs';
@@ -176,7 +176,7 @@ export async function openDurableSession(engine, id, requested) {
       return typeof target[key] === 'function' ? target[key].bind(target) : target[key];
     } });
     const registry = createNativeCompactionRegistry();
-    const storage = await openNodeJsonlStorage(join(root, 'native'), context, { fsync: true });
+    const storage = await openWorkspacePiStorage({databasePath:engine.databasePath,root,manifest,context});
     if (record.lockError) throw new DefaultAgentError('The native session owner lock was lost. Reconnect before continuing.');
     const harness = await Harness.open(storage, { models, registry, settings: { retry: { enabled: false, maxRetries: 0 }, stream: { transport: 'sse', maxRetries: 0 }, toolExecution: 'sequential', compaction: { backgroundTokens: 0 } } }, context);
     record.harness = harness; record.storage = storage; record.registry = registry;

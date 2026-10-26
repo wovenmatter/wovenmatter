@@ -18,6 +18,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 export class DefaultAgentEngine {
   constructor({ cwd, directory, config = {}, credentials = {}, credentialAccounts = {}, vault, requestCredentials, claude, catalog }) {
     this.cwd = cwd; this.directory = directory; this.config = validateConfig({ ...emptyConfig, ...config }); this.supplied = credentials; this.credentialAccounts = credentialAccounts; this.vault = vault; this.requestCredentials = requestCredentials; this.sessions = new Map();
+    this.databasePath = process.env.WOVEN_DEFAULT_AGENT_DATABASE ?? join(directory, 'workspace.sqlite');
     this.providerCatalog = catalog ?? new ProviderCatalog(directory);
     this.claude = claude ?? new ClaudeRuntime(directory);
     this.programStatusContext = new AsyncLocalStorage();
