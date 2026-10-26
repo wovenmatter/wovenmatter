@@ -153,7 +153,7 @@ export class DefaultAgentEngine {
     signal?.throwIfAborted();
     const subscription = await this.claude.status((await this.credentials.read('claude-subscription'))?.accountId, { signal });
     signal?.throwIfAborted();
-    return { providers: await Promise.all([...providers, ...this.config.customServers.map(s => s.id)].map(async id => { if (id === 'claude-subscription') return { id, name: this.providerName(id), ...subscription }; const c = await this.credentials.read(id); const expired = c?.type === 'oauth' && c.expires <= Date.now(); return { id, name: this.providerName(id), connected: Boolean(c) && !expired, state: !c || expired ? 'sign_in_required' : 'credentials_present', detail: expired ? 'Access expired. Reconnect Woven Matter or sign in.' : c ? 'Credentials stored; provider access has not been verified.' : 'No credentials stored.' }; })), models: this.catalog(), searchConfigured: Boolean((await this.credentials.read('exa'))?.key) };
+    return { providers: await Promise.all([...providers, ...this.config.customServers.map(s => s.id)].map(async id => { if (id === 'claude-subscription') return { id, name: this.providerName(id), ...subscription }; const c = await this.credentials.read(id); const expired = c?.type === 'oauth' && c.expires <= Date.now(); return { id, name: this.providerName(id), connected: Boolean(c) && !expired, state: !c || expired ? 'sign_in_required' : 'credentials_present', detail: expired ? 'Access expired. Reconnect Woven Matter or sign in.' : c ? 'Credentials stored; provider access has not been verified.' : 'No credentials stored.' }; })), models: this.catalog(), searchConfigured: Boolean((await this.credentials.read(this.config.searchProvider))?.key) };
   }
 
   modelOptions() {

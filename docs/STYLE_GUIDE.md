@@ -101,7 +101,7 @@ when an intentional design change is accepted.
   defaults disclosures, workspace overrides, local model servers, fallback models,
   and workspace synchronization.
   OpenAI, Anthropic, and Grok retain separate subscription and API-key groups.
-  OpenRouter, OpenCode, and Exa show API-key controls directly when expanded.
+  OpenRouter, OpenCode, Exa, Brave, and Firecrawl show API-key controls directly when expanded.
   Keep their content and Cursor's controls at the same indentation as the content
   inside the nested credential groups.
 - **Icons:** use the existing `DashboardLucideIcon` glyphs and bundled harness

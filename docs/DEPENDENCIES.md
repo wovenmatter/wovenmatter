@@ -99,9 +99,11 @@ Agent CLIs update the same way from Settings: ACP adapters take the latest
 release at or above their catalog minimum. OpenCode and Executor stay on v2,
 because v2 is the API Woven Matter implements. Maintenance must identify a
 new upstream API major and the integration work needed to support it.
-Claude ACP 0.95 serves both stable ACP v1 and an experimental v2 wire protocol;
-Woven Matter offers v1 explicitly for its implemented session API. Check the
-adapter's router on each refresh and migrate when ACP v2 becomes stable.
+Codex ACP 2.3 and Claude ACP 0.97 serve both stable ACP v1 and an experimental
+v2 wire protocol. Woven Matter offers v1 explicitly to both adapters for its
+implemented session API. Check both routers on each refresh and migrate when
+ACP v2 becomes stable. Provider-free published-adapter handshakes and local
+client session tests validate this boundary.
 
 Updates start only from Settings or explicit workspace actions; there is no
 background updater.

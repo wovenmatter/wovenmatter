@@ -87,10 +87,21 @@ attaches to those operations. Accepted native run UUIDs make duplicate submissio
 idempotent; journals and completion snapshots recover results after disconnect.
 Snapshots reconcile only exact run/conversation identities belonging to Pi Durable. Service restarts do not replay accepted work.
 
-Search is an explicit Exa adapter, with a separate credential slot and bounded
-results. Model providers are independent of search providers. Adding a search
-provider requires its own adapter, key entry, and selection option; entering an
-arbitrary key does not imply protocol compatibility.
+Search supports Exa (the default), Brave, and Firecrawl through explicit adapters,
+separate credential slots, and a per-workspace search-provider preference. Model
+providers are independent of search providers. Existing conversations resolve the
+current provider and key on every call, including after synchronized settings or
+credential changes. Results retain source URLs and are bounded to ten results and
+16,000 text characters per result.
+
+Exa uses its search and contents endpoints. Brave uses the
+[LLM Context API](https://api-dashboard.search.brave.com/documentation/services/llm-context)
+for extracted search context; it does not provide direct `web_read` support, so
+the tool directs agents to the browser or an Exa/Firecrawl selection. Firecrawl
+uses v2 [search](https://docs.firecrawl.dev/api-reference/endpoint/search) with
+Markdown scraping and [scrape](https://docs.firecrawl.dev/api-reference/endpoint/scrape)
+for `web_read`. Requests use only the selected provider's key, with cancellation
+and a 30-second deadline; search never silently falls back to another provider.
 
 Deterministic checks: `npm test --prefix default-agent`, Swift package tests,
 remote service tests, and `scripts/test-changes.sh --all`. None consume model or

@@ -5,6 +5,27 @@ import WovenMatterCore
 
 struct ACPHarnessStreamingReviewTests {
 
+  @Test(arguments: [AgentRuntimeKind.codex, .claudeCode])
+  func updatedAdaptersNegotiateTheImplementedSessionProtocol(kind: AgentRuntimeKind) async throws {
+    let fixture = try ACPHarnessFixture(kind: kind, initialize: #"{"protocolVersion":1}"#,
+      session: #"{"sessionId":"stable-wire"}"#, extras: [:])
+    defer { fixture.remove() }
+    let client = try await fixture.client()
+    defer { Task { await client.shutdown() } }
+    _ = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: nil, title: nil)
+    #expect(try await client.prompt("Offline fixture") == .endTurn)
+    await client.shutdown()
+    let messages = try fixture.log().split(separator: "\n").map {
+      try #require(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any])
+    }
+    let initialize = try #require(messages.first { $0["method"] as? String == "initialize" })
+    // Both updated adapters route a version-2 offer to the incompatible draft
+    // wire API, even though their stable version-1 session API remains available.
+    #expect((initialize["params"] as? [String: Any])?["protocolVersion"] as? Int == 1)
+    #expect(messages.contains { $0["method"] as? String == "session/new" })
+    #expect(messages.contains { $0["method"] as? String == "session/prompt" })
+  }
+
   @Test(arguments: [false, true])
   func claudeContextVariantsSharePresentationButKeepExactSelections(legacy: Bool) async throws {
     let rows: [(String, String, String)] = [
