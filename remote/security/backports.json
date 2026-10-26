@@ -119,6 +119,18 @@
     ]
   },
   {
+    "source": "curl",
+    "version": "8.23.0-1",
+    "binaries": [
+      "curl",
+      "libcurl4t64",
+      "libcurl4-gnutls",
+      "libcurl3t64-gnutls"
+    ],
+    "patches": [],
+    "suite": "sid"
+  },
+  {
     "source": "tiff",
     "version": "4.7.2-1",
     "binaries": [

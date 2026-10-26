@@ -70,8 +70,6 @@ RUN export DEBIAN_FRONTEND=noninteractive \
     && apt-get install -y --no-install-recommends \
       bash ca-certificates chromium curl git jq libedit2 libfido2-1 \
       procps ripgrep tini util-linux $(cat /tmp/python-runtime-packages) \
-    && apt-get install -y --no-install-recommends -t trixie-backports curl libcurl4t64 libcurl3t64-gnutls \
-    && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' curl)" ge 8.21.0 \
     && mkdir -p /etc/apt/keyrings \
     && curl --proto '=https' --tlsv1.2 -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli.gpg \
     && echo '6084d5d7bd8e288441e0e94fc6275570895da18e6751f70f057485dc2d1a811b  /etc/apt/keyrings/githubcli.gpg' | sha256sum --check --status \
@@ -79,6 +77,7 @@ RUN export DEBIAN_FRONTEND=noninteractive \
     && apt-get update && apt-get install -y --no-install-recommends gh \
     && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' gh)" ge 2.103.2 \
     && apt-get install -y --no-install-recommends /tmp/security-output/*.deb \
+    && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' curl)" ge 8.23.0 \
     && mkdir -p /usr/local/share/wovenmatter/security \
     && cp -a /tmp/security-output/provenance /usr/local/share/wovenmatter/security/ \
     && rm -rf /var/lib/apt/lists/* /tmp/security-output /tmp/python-runtime-packages \

@@ -47,9 +47,12 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   Node's bundled npm may lag. Dependency maintenance reviews that Dockerfile
   floor; locked installs and the container smoke test validate CLI compatibility.
   Unused bundled Yarn is removed from the workspace image.
-- **Remote workspace tools** take curl/libcurl from signed Debian stable
-  backports (tested 8.21.0) to avoid the affected stable-distribution version.
-  The image uses the current official Python 3.15 slim runtime, with tested
+- **Remote workspace tools** rebuild curl/libcurl 8.23.0 from authenticated
+  Debian unstable source against the stable runtime ABI. This replaces the
+  older stable and stable-backports builds, including the newly disclosed
+  HTTP/2 upload use-after-free affecting curl through 8.22.0.
+  The image uses the current official Python 3.15 slim runtime (3.15.2 at the
+  October 26, 2026 review), with tested
   minimums of pip 26.2.2 and setuptools 84.2.1, instead of Debian's older
   interpreter and vulnerable bundled venv wheel. The SQLite, TLS, and isolated
   execution paths are exercised against that runtime in the container tests.

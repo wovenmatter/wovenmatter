@@ -1,4 +1,4 @@
-# Remote workspace image findings — 2026-10-25
+# Remote workspace image findings — 2026-10-26
 
 Both Linux images were rebuilt from scratch with current package indexes and
 scanned from Docker image exports with the checksum-verified official Trivy
@@ -43,7 +43,7 @@ critical record because its Debian database does not understand the local
 | ncurses CVE-2025-69720; libsndfile CVE-2026-37555; X11/Xrender/Xtst CVE-2026-88806, CVE-2026-88807, CVE-2026-94286 | Rebuilt against the stable ABI with checksum-pinned upstream or Ubuntu security patches. |
 | util-linux CVE-2026-76642, CVE-2026-78408, CVE-2026-78410 | Debian stable 2.41.5 rebuilt with the 2.41.6 fixes and the later stable-branch correction that uses the correct `RESOLVE_NO_SYMLINKS` value. Targeted libmount, mount, and nsenter integration suites pass. CVE-2026-78409 begins with the 2.42 line and does not apply to the retained 2.41.5 base. |
 | libtiff CVE-2026-36849/CVE-2026-52490; libacl CVE-2026-54369 | Rebuilt from current authenticated Debian sources, libtiff 4.7.2 and acl 2.4.0. The separately vulnerable `tiffcrop` tool is not installed. |
-| curl CVE-2026-12064/CVE-2026-8458 | Uses Debian's signed stable-backports curl/libcurl 8.21.0 line. The curl project identifies 8.20.0 as the last affected release for CVE-2026-12064; both reported issues are outside the installed release's affected range. |
+| curl advisories through CVE-2026-107929 | Rebuilt from authenticated Debian curl 8.23.0 source against the stable ABI. Upstream lists no published vulnerability affecting 8.23.0; this also removes the HTTP/2 upload use-after-free and the other advisories affecting the former 8.21.0 selection. |
 | Perl Archive::Tar CVE-2026-9538 | The affected Debian source package remains visible to the OS scanner, but runtime module resolution is replaced by checksum-pinned Archive::Tar 3.14 after its upstream tests pass. The vulnerable range ends before 3.10. |
 | systemd CVE-2026-16742 | The issue is in `systemd-homed`. No init system or `systemd-homed` service/binary runs in either container. The shared libraries remain transitive runtime dependencies. |
 | CUPS CVE-2026-34980/CVE-2026-55453 | Both issues require CUPS server/backend code. Neither `cupsd` nor the affected IPP backend is present; only the browser's client library dependency remains. |

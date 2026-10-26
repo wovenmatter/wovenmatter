@@ -182,6 +182,32 @@ jobs:
           docker run --rm --entrypoint node --volume "$PWD:/workspace:ro" \
             wovenmatter-executor:ci /workspace/scripts/test-support/test-executor-runtime.mjs \
             /opt/executor/node_modules/executor/bin.mjs
+      - name: Record complete image vulnerability inventory
+        if: matrix.platform == 'amd64'
+        env:
+          TRIVY_IMAGE: ghcr.io/aquasecurity/trivy:0.76.1@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c
+        run: |
+          mkdir -p "$RUNNER_TEMP/trivy-cache" "$RUNNER_TEMP/trivy-reports"
+          for image in workspace executor; do
+            if [ "$image" = workspace ]; then tag=wovenmatter-remote:ci; else tag=wovenmatter-executor:ci; fi
+            docker run --rm \
+              --volume /var/run/docker.sock:/var/run/docker.sock \
+              --volume "$RUNNER_TEMP/trivy-cache:/root/.cache/trivy" \
+              --volume "$RUNNER_TEMP/trivy-reports:/reports" \
+              "$TRIVY_IMAGE" image --scanners vuln --format json \
+              --output "/reports/$image.json" "$tag"
+          done
+          python3 scripts/test-support/summarize-trivy.py \
+            "$RUNNER_TEMP/trivy-reports/workspace.json" \
+            "$RUNNER_TEMP/trivy-reports/executor.json" | tee "$RUNNER_TEMP/trivy-reports/summary.jsonl"
+      - name: Preserve image vulnerability inventory
+        if: always() && matrix.platform == 'amd64'
+        uses: actions/upload-artifact@main
+        with:
+          name: remote-image-vulnerability-inventory-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/trivy-reports/*
+          if-no-files-found: warn
+          retention-days: 7
 
   gate:
     name: CI

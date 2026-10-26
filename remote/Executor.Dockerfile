@@ -19,7 +19,7 @@ RUN sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/debian.s
     && useradd --system --create-home wm-build
 COPY security /security
 RUN chmod -R a+rX /security \
-    && WM_SECURITY_PACKAGES=ncurses,acl,util-linux python3 /security/build-backports.py
+    && WM_SECURITY_PACKAGES=ncurses,acl,util-linux,curl python3 /security/build-backports.py
 
 FROM node:26-trixie-slim
 # The published runtime bundles Git/workerd, while Debian supplies their shared
@@ -29,9 +29,11 @@ RUN export DEBIAN_FRONTEND=noninteractive \
     && echo 'deb http://deb.debian.org/debian trixie-backports main' > /etc/apt/sources.list.d/wovenmatter-backports.list \
     && apt-get update && apt-get upgrade --yes \
     && apt-get install --yes --no-install-recommends ca-certificates git libatomic1 \
-    && apt-get install --yes --no-install-recommends -t trixie-backports curl libcurl4t64 libcurl3t64-gnutls \
-    && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' curl)" ge 8.21.0 \
     && apt-get install --yes --no-install-recommends \
+      /tmp/security-output/curl_*.deb \
+      /tmp/security-output/libcurl4t64_*.deb \
+      /tmp/security-output/libcurl4-gnutls_*.deb \
+      /tmp/security-output/libcurl3t64-gnutls_*.deb \
       /tmp/security-output/libacl1_*.deb \
       /tmp/security-output/ncurses-bin_*.deb \
       /tmp/security-output/ncurses-base_*.deb \
@@ -45,6 +47,7 @@ RUN export DEBIAN_FRONTEND=noninteractive \
       /tmp/security-output/login_*.deb \
       /tmp/security-output/mount_*.deb \
       /tmp/security-output/util-linux_*.deb \
+    && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' curl)" ge 8.23.0 \
     && mkdir -p /usr/local/share/wovenmatter/security \
     && cp -a /tmp/security-output/provenance /usr/local/share/wovenmatter/security/ \
     && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' libacl1)" ge 2.4.0-1+wmsecurity1 \

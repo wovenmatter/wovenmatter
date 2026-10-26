@@ -1,4 +1,4 @@
-# Remote workspace security audit — 2026-10-25
+# Remote workspace security audit — 2026-10-26
 
 ## Scope and trust model
 
@@ -44,12 +44,13 @@ graph with `npm update --package-lock-only --ignore-scripts` before hardening.
   vendored copy (CVE-2026-111997). That graph also audits clean. Actual registry
   installation and `npm ci` validate CLI compatibility. Build caches are kept
   outside the persistent home and removed after installation.
-- curl/libcurl use the signed Debian stable-backports 8.21.0 packages, including
-  all installed TLS variants. Python uses the current official 3.15 slim runtime
+- curl/libcurl 8.23.0 are rebuilt from authenticated Debian source against the
+  stable runtime ABI, including both installed TLS variants. Python uses the
+  current official 3.15.2 slim runtime
   with current pip and setuptools rather than Debian's affected 3.13 runtime.
-- Libraries that Debian stable has not repaired are rebuilt from authenticated
+- Current releases and libraries that Debian stable has not repaired are rebuilt from authenticated
   source against the stable runtime ABI. Fixed current Debian sources supply
-  tiff and acl. Util-linux is rebuilt from Debian stable with the missing 2.41.6
+  curl, tiff, and acl. Util-linux is rebuilt from Debian stable with the missing 2.41.6
   security fixes plus the stable-branch correction that makes the symlink guard
   effective on older glibc. Reviewed security patches also cover stable libxml2,
   ncurses, libsndfile, libX11, libXrender, and libXtst. Exact source versions,
@@ -149,7 +150,7 @@ either image is vulnerability-free or authorize deployment.
 
 Focused daemon-transport tests inspect OpenSSH’s effective configuration with
 conflicting SSH settings and cover peer selection, unusable daemon/peer state,
-ambiguity, IPv6 peers, and the standalone Executor deployer. Existing service and container smoke suites exercise
+ambiguity, IPv6 peers, the workspace tool relay, and the standalone Executor deployer. Existing service and container smoke suites exercise
 API authorization and scope separation, parser rejection, permissions, isolation,
 restart/update persistence and explicit deletion. LAN behavior has no
 compatibility fixture or retained implementation.

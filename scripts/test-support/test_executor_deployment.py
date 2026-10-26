@@ -19,7 +19,7 @@ EXECUTOR_RUNTIME_PACKAGE = (ROOT / 'remote/executor-runtime/package.json').read_
 EXECUTOR_RUNTIME_LOCK = (ROOT / 'remote/executor-runtime/package-lock.json').read_text()
 SECURITY_MANIFEST = json.loads((ROOT / 'remote/security/backports.json').read_text())
 SECURITY_PATHS = ['backports.json', 'build-backports.py'] + [
-    patch['file'] for record in SECURITY_MANIFEST if record['source'] in {'ncurses', 'acl', 'util-linux'}
+    patch['file'] for record in SECURITY_MANIFEST if record['source'] in {'ncurses', 'acl', 'util-linux', 'curl'}
     for patch in record['patches']]
 SECURITY_FILES = {path: base64.b64encode((ROOT / 'remote/security' / path).read_bytes()).decode() for path in SECURITY_PATHS}
 CURRENT_IMAGE = 'wovenmatter/executor:2.0.0-beta.12-' + hashlib.sha256(DOCKERFILE.encode()).hexdigest()[:16]

@@ -3,7 +3,7 @@ set -euo pipefail
 
 test -s /etc/ssl/certs/ca-certificates.crt
 test "$(id -u)" -ne 0
-dpkg --compare-versions "$(dpkg-query -W -f='${Version}' curl)" ge 8.21.0
+dpkg --compare-versions "$(dpkg-query -W -f='${Version}' curl)" ge 8.23.0
 dpkg --compare-versions "$(dpkg-query -W -f='${Version}' libacl1)" ge 2.4.0-1+wmsecurity1
 dpkg --compare-versions "$(dpkg-query -W -f='${Version}' libtinfo6)" ge 6.5+20250216-2+wmsecurity1
 dpkg --compare-versions "$(dpkg-query -W -f='${Version}' util-linux)" ge 2.41.5-0+deb13u1+wmsecurity1
