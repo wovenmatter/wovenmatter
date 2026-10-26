@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import Foundation
 import Testing
 import WovenMatterCore
@@ -114,9 +115,9 @@ struct WorkspaceAgentToolTests {
     let (db, dir, caller, _) = try await fixture()
     defer { try? FileManager.default.removeItem(at: dir) }
     let expectedFolders = [
-      try await db.createFolder(name: "Discoverable"),
-      try await db.createFolder(name: "Second folder"),
-      try await db.createFolder(name: "Third folder")
+      try await db.createFixtureFolder(name: "Discoverable"),
+      try await db.createFixtureFolder(name: "Second folder"),
+      try await db.createFixtureFolder(name: "Third folder")
     ]
     let note = try await db.createNote(folderID: nil, title: "Deep search", kind: .note,
       callerConversationID: caller, requestID: UUID().uuidString)
@@ -183,7 +184,7 @@ struct WorkspaceAgentToolTests {
     let request = UUID().uuidString.lowercased()
     let reserved = try await db.reserveToolSessionCreation(sourceID: a, requestID: request, arguments: ["sessions", "create"], purpose: "Build", managed: true)
     let target = try #require(reserved.objectValue?["target_id"]?.stringValue)
-    _ = try await db.createLocalACPSession(runtimeKind: .claudeCode, title: "Created", ownerDeviceID: UUID(), requestedConversationID: UUID(uuidString: target))
+    _ = try await db.createFixtureLocalACPSession(runtimeKind: .claudeCode, title: "Created", ownerDeviceID: UUID(), requestedConversationID: UUID(uuidString: target))
     await #expect(throws: WorkspaceToolError.accessRequired(target)) { try await db.requireTranscriptAccess(sourceID: a, targetID: target) }
     await #expect(throws: (any Error).self) { try await db.completeToolSessionCreation(requestID: request, sourceID: b) }
     try await db.completeToolSessionCreation(requestID: request, sourceID: a)
@@ -281,10 +282,10 @@ struct WorkspaceAgentToolTests {
       title: "Different", model: "new-model", thinking: "low", nativeWorkingDirectory: "/workspace/later")
     #expect(try await reopened.saveToolSessionCreationConfiguration(requestID: requestID, sourceID: source, configuration: changed) == saved)
     if let workspace = saved.workspaceID {
-      _ = try await reopened.createRemoteACPSession(runtimeKind: saved.runtimeKind, remoteWorkspaceID: workspace,
+      _ = try await reopened.createFixtureRemoteACPSession(runtimeKind: saved.runtimeKind, remoteWorkspaceID: workspace,
         remoteWorkspaceName: "Fixture remote", title: "Provider default", ownerDeviceID: UUID(), requestedConversationID: UUID(uuidString: target))
     } else {
-      _ = try await reopened.createLocalACPSession(runtimeKind: saved.runtimeKind, title: "Provider default",
+      _ = try await reopened.createFixtureLocalACPSession(runtimeKind: saved.runtimeKind, title: "Provider default",
         ownerDeviceID: UUID(), requestedConversationID: UUID(uuidString: target))
     }
     try await reopened.saveSessionExecutionRoot(id: target, folderID: folder,
@@ -454,12 +455,8 @@ struct WorkspaceAgentToolTests {
     let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     let db = try await WorkspaceDatabase(url: dir.appending(path: "workspace.sqlite"))
-    let a = try await db.createLocalACPSession(runtimeKind: .codex, title: "Coordinator", ownerDeviceID: UUID())
-    let b = try await db.createLocalACPSession(runtimeKind: .claudeCode, title: "Destination", ownerDeviceID: UUID())
-    for id in [a, b] {
-      try await db.saveSessionExecutionRoot(id: id, folderID: nil,
-        location: .init(workspaceID: "device:test", rootPath: dir.path, managed: false), defaultPath: dir.path)
-    }
+    let a = try await db.createFixtureLocalACPSession(runtimeKind: .codex, title: "Coordinator", ownerDeviceID: UUID(), fixtureLocation: .init(workspaceID: "device:test", rootPath: dir.path, managed: false))
+    let b = try await db.createFixtureLocalACPSession(runtimeKind: .claudeCode, title: "Destination", ownerDeviceID: UUID(), fixtureLocation: .init(workspaceID: "device:test", rootPath: dir.path, managed: false))
     return (db, dir, a, b)
   }
 
@@ -494,7 +491,7 @@ struct WorkspaceAgentToolTests {
     let (db, dir, a, b) = try await fixture()
     defer { try? FileManager.default.removeItem(at: dir) }
     try await db.setSessionTools(.init(enabled: [.sessions, .notes]), sessionID: a)
-    let c = try await db.createLocalACPSession(runtimeKind: .claudeCode, title: "Unattached", ownerDeviceID: UUID())
+    let c = try await db.createFixtureLocalACPSession(runtimeKind: .claudeCode, title: "Unattached", ownerDeviceID: UUID())
     await #expect(throws: WorkspaceToolError.accessRequired(b)) { try await db.requireTranscriptAccess(sourceID: a, targetID: b) }
     try await db.attachConversationReference(sourceID: a, targetID: b)
     try await db.requireTranscriptAccess(sourceID: a, targetID: b)
@@ -513,7 +510,7 @@ struct WorkspaceAgentToolTests {
     try await db.saveToolSettings(settings)
     try await db.beginCoordination(sourceID: a, targetID: b, purpose: "Manage")
     try await db.beginCoordination(sourceID: a, targetID: b, purpose: "Update intent")
-    let c = try await db.createLocalACPSession(runtimeKind: .claudeCode, title: "Other", ownerDeviceID: UUID())
+    let c = try await db.createFixtureLocalACPSession(runtimeKind: .claudeCode, title: "Other", ownerDeviceID: UUID())
     await #expect(throws: WorkspaceToolError.managedLimit(1)) { try await db.beginCoordination(sourceID: a, targetID: c, purpose: "Over limit") }
     #expect(try await db.sessionRelationship(c).coordinatorID == nil)
     await #expect(throws: (any Error).self) { try await db.beginCoordination(sourceID: b, targetID: a, purpose: "Cycle") }
@@ -540,12 +537,12 @@ extension WorkspaceAgentToolTests {
       configuration: .init(runtimeKind: .claudeCode, title: "Planned"))
     try await db.setSessionTools(.init(enabled: []), sessionID: source)
     await #expect(throws: WorkspaceToolError.disabled(.sessions)) {
-      try await db.createLocalACPSession(runtimeKind: .claudeCode, title: "Default", ownerDeviceID: UUID(), requestedConversationID: UUID(uuidString: target))
+      try await db.createFixtureLocalACPSession(runtimeKind: .claudeCode, title: "Default", ownerDeviceID: UUID(), requestedConversationID: UUID(uuidString: target))
     }
     #expect(try await !db.workspaceOverview().conversations.contains { $0.id == target })
     #expect(try await db.sessionRelationship(target).createdBy == nil)
     try await db.setSessionTools(.init(enabled: [.sessions]), sessionID: source)
-    _ = try await db.createLocalACPSession(runtimeKind: .claudeCode, title: "Default", ownerDeviceID: UUID(), requestedConversationID: UUID(uuidString: target))
+    _ = try await db.createFixtureLocalACPSession(runtimeKind: .claudeCode, title: "Default", ownerDeviceID: UUID(), requestedConversationID: UUID(uuidString: target))
     #expect(try await db.workspaceOverview().conversations.first { $0.id == target }?.title == "Planned")
   }
 }

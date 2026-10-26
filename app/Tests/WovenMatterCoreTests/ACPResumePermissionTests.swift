@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import Foundation
 import Testing
 import WovenMatterClient
@@ -15,10 +16,10 @@ struct ACPResumePermissionTests {
     for index in 0..<2 {
       let id: String
       if remote {
-        id = try await database.createRemoteACPSession(runtimeKind: runtime, remoteWorkspaceID: UUID(),
+        id = try await database.createFixtureRemoteACPSession(runtimeKind: runtime, remoteWorkspaceID: UUID(),
             remoteWorkspaceName: "Fixture", title: "Resume \(index)", ownerDeviceID: UUID())
       } else {
-        id = try await database.createLocalACPSession(runtimeKind: runtime, title: "Resume \(index)", ownerDeviceID: UUID())
+        id = try await database.createFixtureLocalACPSession(runtimeKind: runtime, title: "Resume \(index)", ownerDeviceID: UUID())
       }
       try await database.updateLocalACPSessionID(conversationID: id, sessionID: "remote-\(index)")
       conversations.append(id)

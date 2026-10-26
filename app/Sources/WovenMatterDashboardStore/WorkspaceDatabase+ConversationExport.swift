@@ -24,7 +24,7 @@ extension WorkspaceDatabaseConnection {
         SELECT * FROM dashboard_conversations WHERE id=? AND (user_id=? OR desktop_owned=1)
           AND deleted_at IS NULL
           AND (is_archived=0 OR (desktop_owned=1
-            AND NOT EXISTS (SELECT 1 FROM session_execution_roots
+            AND EXISTS (SELECT 1 FROM retained_execution_history
               WHERE conversation_id=dashboard_conversations.id)))
           AND governing_plane='wovenmatter_macos'
         """, values: [id, operatorID]).first else { throw WorkspaceConversationActionError.unavailable }
@@ -77,8 +77,8 @@ extension WorkspaceDatabaseConnection {
               SELECT id FROM dashboard_conversations WHERE id = ? AND (user_id = ? OR desktop_owned = 1)
                 AND deleted_at IS NULL
                 AND (is_archived = 0 OR (desktop_owned = 1
-                  AND NOT EXISTS (SELECT 1 FROM session_execution_roots
-                    WHERE conversation_id = dashboard_conversations.id)))
+                  AND EXISTS (SELECT 1 FROM retained_execution_history
+                    WHERE conversation_id=dashboard_conversations.id)))
                 AND governing_plane = 'wovenmatter_macos'
               """, values: [id, operatorID]).first else { throw WorkspaceConversationActionError.unavailable }
       var budget = budget

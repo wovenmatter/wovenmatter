@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import CompanionClient
 import Foundation
 import Testing
@@ -125,7 +126,7 @@ struct DevelopmentLaunchTests {
             nativeWorkingDirectory: fixture.directory.path, tools: .init(enabled: [.notes])))
         let event = try await fixture.database.saveCalendarEvent(draft: .init(title: "Copied schedule",
             startsAt: now, timeZoneID: "UTC", task: task), creating: true, now: now)
-        let localHistoryID = try await fixture.database.createLocalACPSession(
+        let localHistoryID = try await fixture.database.createFixtureLocalACPSession(
             runtimeKind: .defaultAgent, title: "Copied Pi history",
             ownerDeviceID: fixture.store.dashboardDeviceID())
         let originalIdentity = try await fixture.database.companionWorkspaceID()

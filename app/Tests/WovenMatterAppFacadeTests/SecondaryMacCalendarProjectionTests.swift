@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import CompanionClient
 import Foundation
 import Testing
@@ -65,7 +66,7 @@ struct SecondaryMacCalendarProjectionTests {
         #expect(runs.first { $0.eventID == nativeID }?.task.configuration.nativeWorkingDirectory == "/tmp/project")
         for run in runs { #expect(try await f.database.isCalendarRunActive(run.id)) }
         let selected = try #require(runs.first { $0.eventID == local.id })
-        _ = try await f.database.createLocalACPSession(runtimeKind: .codex, title: selected.title, ownerDeviceID: UUID(),
+        _ = try await f.database.createFixtureLocalACPSession(runtimeKind: .codex, title: selected.title, ownerDeviceID: UUID(),
             requestedConversationID: UUID(uuidString: selected.sessionID))
         _ = try await f.database.prepareCalendarDelivery(runID: selected.id, now: start)
         #expect(try await f.database.claimToolDelivery(id: selected.id, now: start) != nil)

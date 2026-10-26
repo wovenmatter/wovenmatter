@@ -56,8 +56,15 @@ extension WorkspaceDatabaseConnection {
         guard let title = request.title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty, title.utf8.count <= 4_096 else {
           throw CompanionAPIError(code: "invalid_replica", message: "The projected folder needs a valid name.")
         }
+        guard let binding = request.folderExecution else {
+          throw CompanionAPIError(code: "invalid_replica", message: "A projected folder must retain its execution workspace and directory.")
+        }
+        let location = WorkspaceFolderLocation(workspaceID: binding.workspaceID, rootPath: binding.rootPath, managed: false)
+        try validateExecutionLocation(location)
         try companionExecuteUnlocked("INSERT INTO folders(id,user_id,name,position,created_at,updated_at) VALUES(?,?,?,(SELECT COALESCE(MAX(position),-1)+1 FROM folders),?,?)",
           values: [request.resourceID, operatorID, title, now, now])
+        try companionExecuteUnlocked("INSERT INTO folder_execution_roots(folder_id,workspace_id,root_path,managed) VALUES(?,?,?,0)",
+          values: [request.resourceID, binding.workspaceID, binding.rootPath])
         return .init(operationID: request.operationID, status: .accepted, folder: try companionFolderUnlocked(id: request.resourceID))
       }
       if request.kind == .renameFolder || request.kind == .deleteFolder {

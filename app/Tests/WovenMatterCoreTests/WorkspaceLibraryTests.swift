@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import Foundation
 import Testing
 import WovenMatterClient
@@ -59,7 +60,7 @@ struct WorkspaceLibraryTests {
   func openCodeAttachments() async throws {
     let f = try await Fixture()
     defer { f.close() }
-    let chat = try await f.db.createLocalACPSession(
+    let chat = try await f.db.createFixtureLocalACPSession(
       runtimeKind: .opencode, title: "Native", ownerDeviceID: UUID(),
       openCodeAssociation: ("fixture", "native"))
     let file = f.root.appending(path: "report.txt")
@@ -125,7 +126,7 @@ struct WorkspaceLibraryTests {
     }
     func close() { try? FileManager.default.removeItem(at: root) }
     func session(_ name: String = "Research", _ kind: AgentRuntimeKind = .codex) async throws -> String {
-      try await db.createLocalACPSession(runtimeKind: kind, title: name, ownerDeviceID: UUID())
+      try await db.createFixtureLocalACPSession(runtimeKind: kind, title: name, ownerDeviceID: UUID())
     }
     func exchange(_ conversation: String, text: String, reply: String = "Done") async throws -> LocalACPRunIdentifiers {
       let run = try await db.beginLocalACPRun(conversationID: conversation, content: text)
@@ -223,8 +224,8 @@ struct WorkspaceLibraryTests {
     #expect(opened.pathExtension == "png")
     #expect(try Data(contentsOf: opened) == Data([1, 2, 3]))
       // Keep the workspace's inferred operator stable while this one chat changes owner.
-    _ = try await f.db.createFolder(name: "Local work")
-    _ = try await f.db.createFolder(name: "More local work")
+    _ = try await f.db.createFixtureFolder(name: "Local work")
+    _ = try await f.db.createFixtureFolder(name: "More local work")
     let visibleRevision = try await f.db.libraryRevision()
     try await f.db.write { connection in try connection.transaction {
       try connection.toolsExecuteUnlocked(

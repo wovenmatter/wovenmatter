@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import Foundation
 import SQLite3
 import Testing
@@ -14,8 +15,8 @@ struct WorkspaceDatabaseTextTests {
     let database = try await WorkspaceDatabase(url: url)
     let owner = UUID()
     try await database.bindDeviceOwnership(ownerDeviceID: owner)
-    let source = try await database.createLocalACPSession(runtimeKind: .codex, title: "Source", ownerDeviceID: owner)
-    let target = try await database.createLocalACPSession(runtimeKind: .codex, title: "Target", ownerDeviceID: owner)
+    let source = try await database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Source", ownerDeviceID: owner)
+    let target = try await database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Target", ownerDeviceID: owner)
     let requestID = UUID().uuidString
     let body = "First\0second 🪡"
     let purpose = "Purpose\0suffix"

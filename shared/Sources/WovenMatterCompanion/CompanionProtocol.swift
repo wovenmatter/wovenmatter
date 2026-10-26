@@ -9,13 +9,22 @@ public enum CompanionProtocol {
   public static let maximumReplayChanges = 10_000
 }
 
+public struct CompanionFolderExecution: Codable, Equatable, Sendable {
+  public var workspaceID: String
+  public var rootPath: String
+  public init(workspaceID: String, rootPath: String) {
+    self.workspaceID = workspaceID; self.rootPath = rootPath
+  }
+}
+
 public struct CompanionFolder: Codable, Equatable, Identifiable, Sendable {
   public var id: String
   public var name: String
   public var revision: Int64
   public var updatedAt: String
-  public init(id: String, name: String, revision: Int64 = 1, updatedAt: String = "") {
-    self.id = id; self.name = name; self.revision = revision; self.updatedAt = updatedAt
+  public var execution: CompanionFolderExecution?
+  public init(id: String, name: String, revision: Int64 = 1, updatedAt: String = "", execution: CompanionFolderExecution? = nil) {
+    self.id = id; self.name = name; self.revision = revision; self.updatedAt = updatedAt; self.execution = execution
   }
 }
 
@@ -211,9 +220,10 @@ public struct CompanionMutation: Codable, Equatable, Sendable {
   public var folderID: String?
   public var title: String?
   public var content: String?
-  public init(operationID: String = UUID().uuidString.lowercased(), deviceID: String, kind: Kind, resourceID: String, expectedRevision: Int64? = nil, folderID: String? = nil, title: String? = nil, content: String? = nil) {
+  public var folderExecution: CompanionFolderExecution?
+  public init(operationID: String = UUID().uuidString.lowercased(), deviceID: String, kind: Kind, resourceID: String, expectedRevision: Int64? = nil, folderID: String? = nil, title: String? = nil, content: String? = nil, folderExecution: CompanionFolderExecution? = nil) {
     self.operationID = operationID; self.deviceID = deviceID; self.kind = kind; self.resourceID = resourceID
-    self.expectedRevision = expectedRevision; self.folderID = folderID; self.title = title; self.content = content
+    self.expectedRevision = expectedRevision; self.folderID = folderID; self.title = title; self.content = content; self.folderExecution = folderExecution
   }
 }
 public struct CompanionMutationResult: Codable, Equatable, Sendable {

@@ -327,7 +327,7 @@ public actor DashboardStore {
   }
 
   @discardableResult
-  public func createFolder(name: String, location: WorkspaceFolderLocation? = nil) async throws -> String {
+  public func createFolder(name: String, location: WorkspaceFolderLocation) async throws -> String {
     try await database.createFolder(name: name, location: location)
   }
 
@@ -427,9 +427,12 @@ public actor DashboardStore {
     title: String,
     requestedConversationID: UUID? = nil,
     allowMissingCalendarFolder: Bool = false,
-    executionRoot: SessionCreationRoot? = nil
+    executionRoot: SessionCreationRoot
   ) async throws -> String {
     await runControls?.beforeSessionCreation()
+    guard executionRoot.location.workspaceID == "device:" + (try await deviceIdentity.id()).uuidString.lowercased() else {
+      throw WorkspaceToolError.invalid("Create this chat in its owning execution workspace.")
+    }
     return try await database.createLocalACPSession(
       runtimeKind: runtimeKind,
       title: title,
@@ -448,7 +451,7 @@ public actor DashboardStore {
     title: String,
     requestedConversationID: UUID? = nil,
     allowMissingCalendarFolder: Bool = false,
-    executionRoot: SessionCreationRoot? = nil
+    executionRoot: SessionCreationRoot
   ) async throws -> String {
     await runControls?.beforeSessionCreation()
     return try await database.createRemoteACPSession(

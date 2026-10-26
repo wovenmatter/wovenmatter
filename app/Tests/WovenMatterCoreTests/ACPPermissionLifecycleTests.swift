@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import Foundation
 import Testing
 import WovenMatterClient
@@ -31,7 +32,7 @@ struct ACPPermissionLifecycleTests {
       )
     }
     #expect(try await fixture.database.localACPSession(conversationID: fixture.id).permission == "default")
-    let other = try await fixture.database.createLocalACPSession(
+    let other = try await fixture.database.createFixtureLocalACPSession(
       runtimeKind: .grokBuild, title: "Independent", ownerDeviceID: UUID()
     )
     _ = try await fixture.coordinator.configuration(
@@ -83,7 +84,7 @@ struct ACPPermissionLifecycleTests {
     _ = try await fixture.coordinator.configuration(
       conversationID: fixture.id, launch: fixture.launch, workspace: fixture.workspace
     )
-    let other = try await fixture.database.createLocalACPSession(
+    let other = try await fixture.database.createFixtureLocalACPSession(
       runtimeKind: .grokBuild, title: "Unchanged", ownerDeviceID: UUID()
     )
     _ = try await fixture.coordinator.configuration(
@@ -267,10 +268,10 @@ private struct PermissionLifecycleFixture: Sendable {
     databaseURL = directory.appending(path: "workspace.sqlite")
     database = try await WorkspaceDatabase(url: databaseURL)
     if remote {
-      id = try await database.createRemoteACPSession(runtimeKind: runtime, remoteWorkspaceID: UUID(),
+      id = try await database.createFixtureRemoteACPSession(runtimeKind: runtime, remoteWorkspaceID: UUID(),
         remoteWorkspaceName: "Fixture remote", title: "Permission fixture", ownerDeviceID: UUID())
     } else {
-      id = try await database.createLocalACPSession(runtimeKind: runtime, title: "Permission fixture", ownerDeviceID: UUID())
+      id = try await database.createFixtureLocalACPSession(runtimeKind: runtime, title: "Permission fixture", ownerDeviceID: UUID())
     }
     launch = LocalACPRuntimeLaunchConfiguration(
       runtimeKind: runtime, executableURL: URL(filePath: "/nonexistent-permission-fixture"), arguments: [],

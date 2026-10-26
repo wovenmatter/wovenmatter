@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import Foundation
 import SQLite3
 import Testing
@@ -32,7 +33,7 @@ struct ACPSteeringLifecycleTests {
         defer { f.remove() }
         _ = try await f.start()
         await f.driver.waitForPrompt()
-        let source = try await f.database.createLocalACPSession(runtimeKind: .codex, title: "Source", ownerDeviceID: UUID())
+        let source = try await f.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Source", ownerDeviceID: UUID())
         try await f.database.setSessionTools(.init(enabled: [.sessions]), sessionID: source)
         let deliveryID = UUID().uuidString.lowercased()
         _ = try await f.database.reserveToolDelivery(sourceID: source, targetID: f.id, text: "correction", requestID: deliveryID)
@@ -65,7 +66,7 @@ private struct SteeringFixture {
         root = FileManager.default.temporaryDirectory.appending(path: "steering-\(UUID())")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
-        id = try await database.createLocalACPSession(runtimeKind: .codex, title: "Steering", ownerDeviceID: UUID())
+        id = try await database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Steering", ownerDeviceID: UUID())
         let driver = driver
         coordinator = LocalACPSessionCoordinator(database: database, clientFactory: { _, _ in driver.makeDriver() })
     }

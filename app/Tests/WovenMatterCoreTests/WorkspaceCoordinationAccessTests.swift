@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import Foundation
 import Testing
 import WovenMatterCore
@@ -23,8 +24,8 @@ struct WorkspaceCoordinationAccessTests {
     let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
-    let source = try await database.createLocalACPSession(runtimeKind: .codex, title: "Coordinator", ownerDeviceID: UUID())
-    let target = try await database.createLocalACPSession(runtimeKind: .claudeCode, title: "Worker", ownerDeviceID: UUID())
+    let source = try await database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Coordinator", ownerDeviceID: UUID())
+    let target = try await database.createFixtureLocalACPSession(runtimeKind: .claudeCode, title: "Worker", ownerDeviceID: UUID())
     try await database.setSessionTools(.init(enabled: [.sessions]), sessionID: source)
     return (database, directory, source, target)
   }
@@ -58,7 +59,7 @@ struct WorkspaceCoordinationAccessTests {
     let (db, directory, source, target) = try await fixture()
     defer { try? FileManager.default.removeItem(at: directory) }
     let pending = try await db.requestCoordinationAccess(sourceID: source, targetID: target, purpose: "Monitor", requestID: UUID().uuidString)
-    let other = try await db.createLocalACPSession(runtimeKind: .claudeCode, title: "Other", ownerDeviceID: UUID())
+    let other = try await db.createFixtureLocalACPSession(runtimeKind: .claudeCode, title: "Other", ownerDeviceID: UUID())
     try await db.beginCoordination(sourceID: other, targetID: target, purpose: "Already managing")
     let conflict = try await db.resolveCoordinationAccess(requestID: pending.id, allowed: true)
     #expect(conflict.state == "failed")

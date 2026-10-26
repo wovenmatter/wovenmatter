@@ -248,7 +248,10 @@ final class SecondaryMacExecutionWorkspace: ExecutionWorkspaceTransport {
         // Folder identities must be queued before notes that refer to them.
         for folder in execution.folders {
             if replicaState.folders[folder.id] == nil, projection.folders?[folder.id] == nil {
-                _ = try await replica.createFolder(name: folder.name, id: folder.id)
+                guard let binding = folder.execution else {
+                    throw CompanionAPIError(code: "execution_owner", message: "This folder has no captured execution workspace.")
+                }
+                _ = try await replica.createFolder(name: folder.name, id: folder.id, execution: binding)
             } else if let baseline = projection.folders?[folder.id], folder.name != baseline.name,
                       replicaState.folders[folder.id]?.name == baseline.name {
                 try await replica.renameFolder(id: folder.id, name: folder.name)
@@ -290,7 +293,7 @@ final class SecondaryMacExecutionWorkspace: ExecutionWorkspaceTransport {
             let existing = execution.folders.first { $0.id == folder.id }
             if existing?.name != folder.name {
                 let mutation = CompanionMutation(deviceID: descriptor.ownerDeviceID, kind: existing == nil ? .createFolder : .renameFolder,
-                    resourceID: folder.id, expectedRevision: existing?.revision, title: folder.name)
+                    resourceID: folder.id, expectedRevision: existing?.revision, title: folder.name, folderExecution: folder.execution)
                 try await applyProjection(mutation)
             }
         }

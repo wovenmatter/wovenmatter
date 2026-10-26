@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import CryptoKit
 import Foundation
 import Testing
@@ -13,7 +14,7 @@ struct WorkspaceNativeChunkArchiveTests {
     defer { try? FileManager.default.removeItem(at: directory) }
     let url = directory.appending(path: "workspace.sqlite")
     let db = try await WorkspaceDatabase(url: url)
-    let conversation = try await db.createLocalACPSession(runtimeKind: .defaultAgent, title: "Chunks", ownerDeviceID: UUID())
+    let conversation = try await db.createFixtureLocalACPSession(runtimeKind: .defaultAgent, title: "Chunks", ownerDeviceID: UUID())
     let run = try await db.beginLocalACPRun(conversationID: conversation, content: "Copy native output")
     let content = String(repeating: "🧵π ", count: 80_000) + " violet harbor archive sentinel"
     let native: GatewayJSONValue = .object([
@@ -67,7 +68,7 @@ struct WorkspaceNativeChunkArchiveTests {
     #expect(nativeRows.count == chunks.count + manifests.count)
     let exactQuery = WorkspaceHistoryQuery(command: "events", conversationID: conversation, harness: "defaultAgent",
       sourceID: "remote:host:store", nativeSessionID: "7", nativeRecordID: chunks[0].id)
-    let reader = try await reopened.createLocalACPSession(runtimeKind: .claudeCode, title: "Reader", ownerDeviceID: UUID())
+    let reader = try await reopened.createFixtureLocalACPSession(runtimeKind: .claudeCode, title: "Reader", ownerDeviceID: UUID())
     try await reopened.setSessionTools(.init(enabled: []), sessionID: reader)
     await #expect(throws: (any Error).self) { try await reopened.queryAgentHistory(exactQuery, callerID: reader) }
     try await reopened.setSessionTools(.init(enabled: [.history]), sessionID: reader)

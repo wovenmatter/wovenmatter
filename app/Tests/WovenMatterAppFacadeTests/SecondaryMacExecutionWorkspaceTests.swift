@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import CompanionClient
 import Foundation
 import Testing
@@ -46,7 +47,7 @@ struct SecondaryMacExecutionWorkspaceTests {
         let owner = await replica.snapshot().deviceID
         let workspace = try await SecondaryMacExecutionWorkspace(descriptor: .init(id: owner, libraryID: libraryID,
             ownerDeviceID: owner, kind: .mac, name: "Fixture"), model: fixture.model, replica: replica, directory: fixture.directory)
-        let folder = try await fixture.database.createFolder(name: "Tool folder")
+        let folder = try await fixture.database.createFixtureFolder(name: "Tool folder")
         let content = try NoteDocument(blocks: [.richText(.init(text: "Tool note"))]).encoded()
         let note = try await fixture.database.createNote(folderID: folder, title: "Tool note", content: content)
         try await workspace.capture()

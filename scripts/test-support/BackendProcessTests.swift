@@ -18,7 +18,7 @@ private actor FixtureOwner {
                 Task {
                     try? await Task.sleep(for: .milliseconds(250))
                     do {
-                        _ = try await self.database.createFolder(name: "Completed after frontend exit")
+                        _ = try await self.database.createFolder(name: "Completed after frontend exit", location: .init(workspaceID: "device:test", rootPath: "/tmp", managed: false))
                         await self.journal.publish(scopes: [.workspace])
                     } catch { fatalError("Fixture write failed: \(error)") }
                 }
@@ -80,7 +80,7 @@ private actor FixtureOwner {
             if CommandLine.arguments[1] == "frontend" {
                 let projection = try await DashboardStore(supportDirectory: root, readOnlyProjection: true)
                 var refused = false
-                do { _ = try await projection.database.createFolder(name: "Forbidden frontend write") }
+                do { _ = try await projection.database.createFolder(name: "Forbidden frontend write", location: .init(workspaceID: "device:test", rootPath: "/tmp", managed: false)) }
                 catch { refused = true }
                 try require(refused, "Read-only frontend accepted a database mutation")
                 _ = try await BackendRPCClient(socketURL: endpoint).call(method: "admit")
