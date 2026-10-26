@@ -147,7 +147,8 @@ Executor Cloud authentication and Pi Durable are outside this integration.
 `scripts/test-changes.sh --all` covers native compilation, persisted defaults,
 bound MCP identity, every harness's permission mapping, code mode's nested tool
 approvals, manager receipts, typed input, and deterministic deployment fixtures.
-CI additionally builds the standalone Linux image and runs
+The explicitly requested **Manual validation** workflow (`scope=images` or `all`)
+also builds the standalone Linux image and runs
 `scripts/test-support/test-executor-runtime.mjs` against its unchanged published
 Executor binary. The fixture uses synthetic apps and disposable accounts with no provider
 services. The same test runs on macOS with a published Executor entrypoint:

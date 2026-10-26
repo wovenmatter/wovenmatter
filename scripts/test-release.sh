@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+mode="${1:---all}"
+case "$mode" in
+  --all|--portable) ;;
+  *) echo 'usage: scripts/test-release.sh [--all|--portable]' >&2; exit 64 ;;
+esac
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$repo_root"
 
@@ -92,8 +98,10 @@ python3 scripts/test-support/test_release_compression.py
 python3 scripts/test-support/test_release_cache.py
 python3 scripts/test-support/test_tagged_release_reuse.py
 python3 scripts/test-support/test_release_code.py
-python3 scripts/test-support/test_release_metadata.py
-python3 scripts/test-support/test_updater_signing.py
 python3 scripts/test-support/test_update_request.py
-scripts/test-desktop-updater.sh
+if [ "$mode" != --portable ]; then
+  python3 scripts/test-support/test_release_metadata.py
+  python3 scripts/test-support/test_updater_signing.py
+  scripts/test-desktop-updater.sh
+fi
 printf '%s\n' 'Release contract validation passed.'
