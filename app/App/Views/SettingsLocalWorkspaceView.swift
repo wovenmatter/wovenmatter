@@ -11,7 +11,7 @@ struct SettingsLocalWorkspaceView: View {
 
     var body: some View {
         SettingsPage(
-            title: "Local Agent Workspace",
+            title: "Local Workspace",
             reservesRailControlSpace: reservesRailControlSpace,
             onBack: onBack
         ) {
@@ -62,7 +62,7 @@ struct SettingsLocalWorkspaceView: View {
             SettingsInset {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack {
-                        Text("Local agent workspace")
+                        Text("Local workspace")
                             .font(.system(size: 13, weight: .medium))
                         Spacer()
                         SettingsPill(model.localACPWorkspaceAvailability.isReady ? "Ready" : "Setup required",

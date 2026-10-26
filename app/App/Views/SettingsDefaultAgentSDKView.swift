@@ -12,7 +12,7 @@ struct SettingsDefaultAgentSDKView: View {
         let remoteID: UUID?
     }
     private var workspaces: [Workspace] {
-        let local = Workspace(id: "local", name: "Local agent workspace", remoteID: nil)
+        let local = Workspace(id: "local", name: "Local workspace", remoteID: nil)
         let remotes = remoteWorkspaces.workspaces.map {
             Workspace(id: $0.id.uuidString.lowercased(), name: $0.name, remoteID: $0.id)
         }

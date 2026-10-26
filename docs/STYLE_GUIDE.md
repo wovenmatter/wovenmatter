@@ -70,7 +70,7 @@ when an intentional design change is accepted.
   launch, including while disconnected or awaiting sign-in. Background readiness
   checks gate execution, never sidebar membership.
 - **Harness accounts:** sign-in belongs to each harness settings page, scoped to
-  Local agent workspace or a named remote workspace. Workspace inventory shows status and links
+  Local workspace or a named remote workspace. Workspace inventory shows status and links
   to that scoped page. Never label credentials present as verified sign-in.
   New remote workspaces offer skippable, reopenable setup with only Pi Durable
   selected by default; additional installations retain installer source review.
@@ -80,7 +80,7 @@ when an intentional design change is accepted.
   Use DashboardSegmentedSelector for the area control so padding, hover, press,
   and accessibility behavior match Sidebar layout. Use the quiet standard selection
   in Dark; retain the existing primary selection color in Green and Cognac.
-  Give accounts their own Local agent workspace / named remote workspace selector;
+  Give accounts their own Local workspace / named remote workspace selector;
   only Pi Durable exposes Shared Pi Durable accounts. Keep chat inheritance controls
   inside Chat settings, never above accounts or software. Changing chat inheritance
   must not change credential selection. Workspace Pi Durable accounts take priority
@@ -127,6 +127,11 @@ when an intentional design change is accepted.
   Racing Green, lighter green, royal blue, purple, red, pink, orange, yellow, and
   black. Choices persist and may be reused across categories.
 - **Sidebar foregrounds:** use `DashboardPalette.foreground` (`#0A1F16` in Green and Cognac, cream in Dark) for text and interface icons in both rails, including section headings, metadata, and pinned indicators. Keep colored agent/harness logos in their original colors; monochrome marks use a contrasting foreground in Dark. Shared controls use the sidebar foreground environment only inside the rails.
+- **Workspace naming:** use Local workspace and Remote workspaces in the sidebar,
+  and Local Workspace, Remote Workspaces, and Apple Devices for Settings pages.
+  Describe local workspaces as agents and files on this Mac, remote workspaces as
+  agents and files on remote Linux machines, and Apple devices as Macs, iPhones,
+  and iPads that share the library.
 - **Workspace sidebar:** group Agents and Folders within each owning workspace.
   Pinned agents and folders lead their respective lists without a separate Pinned
   section. Each Folders section starts with New folder, scoped to that workspace.

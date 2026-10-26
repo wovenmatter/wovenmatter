@@ -14,7 +14,7 @@ struct SettingsHarnessAccounts: View {
                 SettingsNote(sharingDetail)
             }
             if scope == "global" || scope == "local" {
-                SettingsCard(title: runtimeKind.displayName, detail: "Local agent workspace") {
+                SettingsCard(title: runtimeKind.displayName, detail: "Local workspace") {
                     SettingsHarnessSignInControl(model: model, runtimeKind: runtimeKind)
                     SettingsLocalRuntimeInventoryRow(model: model, runtimeKind: runtimeKind)
                     if model.runtimeInventories[runtimeKind]?.isInstalled == false {

@@ -4029,7 +4029,7 @@ final class ApplicationModel {
                     id: localSource,
                     name: "Local workspace",
                     kind: .local,
-                    detail: "Set up the local agent workspace in Settings.",
+                    detail: "Set up the local workspace in Settings.",
                     databases: [],
                     error: localACPWorkspaceAvailability.detail,
                     allowsCreation: false,
@@ -4115,7 +4115,7 @@ final class ApplicationModel {
     ) async -> String? {
         if isBackendFrontend { return await createDatabase(sourceID: databasesSnapshot.sources.first(where: { $0.kind == .local })?.id ?? "", name: name, preference: preference) }
         guard let root = localACPWorkspaceLaunchConfiguration?.databasesURL else {
-            databaseError = "Set up the local agent workspace before creating a database."
+            databaseError = "Set up the local workspace before creating a database."
             return nil
         }
         do {

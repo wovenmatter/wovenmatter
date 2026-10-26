@@ -114,7 +114,7 @@ reported as successful live distro, reboot or provider tests.
 ## Manual review
 
 Build an isolated Dev app with `scripts/build_and_run.sh --mode snapshot` and
-open Settings → Remote Agent Workspaces. Inspect the Linux host, choose the
+open Settings → Remote Workspaces. Inspect the Linux host, choose the
 workspace-wide access level, acknowledge the permission notice and create the
 workspace. Verify existing accounts and missing-component installation. Create
 a managed folder, link an existing host repository and start a folderless chat.

@@ -26,7 +26,7 @@ there is no fallback connection mode.
 
 ## Create a workspace
 
-1. Open **Settings → Remote Agent Workspaces** and select or enter a Linux host.
+1. Open **Settings → Remote Workspaces** and select or enter a Linux host.
    Choose Full root or Normal user permissions for the whole workspace.
 2. Selecting a discovered machine checks it automatically. For a hostname entered
    manually, choose **Inspect host**. Inspection does not install software.
@@ -61,7 +61,7 @@ to `woven_browser`. Host browsing is headless and runs directly on Linux.
 ### See the agent's tabs in Woven Matter
 
 Right-click a remote workspace heading in the sidebar and choose **View browser**,
-or open **Settings → Remote Agent Workspaces → Manage → View browser**. Select a
+or open **Settings → Remote Workspaces → Manage → View browser**. Select a
 tab to interact with its live page. Click, type, scroll, select text or drag on the
 page while the agent keeps the same tab open. Use the address field and Back,
 Forward and Reload controls to navigate. Mac shortcuts include Command-A,

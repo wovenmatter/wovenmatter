@@ -19,7 +19,7 @@ final class OpenCodeModel {
     let ownerDeviceID: UUID
     let remoteConfiguration: RemoteWorkspaceConfiguration?
     private weak var remoteWorkspaces: RemoteWorkspacesModel?
-    var workspaceName: String { remoteConfiguration?.name ?? "Local agent workspace" }
+    var workspaceName: String { remoteConfiguration?.name ?? "Local workspace" }
     var isRemote: Bool { remoteConfiguration != nil }
     private let defaults: UserDefaults
     private let sessionPreferences: SessionSelectionPreferences

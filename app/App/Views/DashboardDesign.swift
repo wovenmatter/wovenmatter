@@ -28,8 +28,8 @@ enum DashboardAgentSidebarGroup: String, CaseIterable, Identifiable, Hashable, S
     var title: String {
         switch self {
         case .pinned: "Pinned"
-        case .localWorkspace: "Local agent workspace"
-        case .remoteWorkspaces: "Remote agent workspaces"
+        case .localWorkspace: "Local workspace"
+        case .remoteWorkspaces: "Remote workspaces"
         }
     }
 

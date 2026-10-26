@@ -454,11 +454,11 @@ struct DashboardSidebarNavigationPage: View {
         VStack(alignment: .leading, spacing: 0) {
             if showsLocalWorkspace {
                 let key = DashboardAgentDisclosureKey.localWorkspace
-                agentDisclosureHeading(title: "Local agent workspace", key: key)
+                agentDisclosureHeading(title: "Local workspace", key: key)
                 if agentSectionExpanded(key) {
                     workspaceContents(
                         key: key,
-                        title: "Local agent workspace",
+                        title: "Local workspace",
                         workspaceAgents: agents.filter { $0.bucket == .localCLIAgents },
                         workspaceFolders: localExecutionWorkspaceID.map { owner in
                             folders.filter { $0.executionWorkspaceID == owner }
@@ -468,7 +468,7 @@ struct DashboardSidebarNavigationPage: View {
             }
             if showsRemoteWorkspaces {
                 let key = DashboardAgentDisclosureKey.remoteWorkspaces
-                agentDisclosureHeading(title: "Remote agent workspaces", key: key)
+                agentDisclosureHeading(title: "Remote workspaces", key: key)
                 if agentSectionExpanded(key) {
                     if remoteWorkspaceLinks.isEmpty {
                         agentEmptyLabel("No remote workspaces yet")
@@ -2087,7 +2087,7 @@ enum DashboardReadFilter: String, Hashable, Sendable {
 struct DashboardConversationListMeta: Equatable, Sendable {
     let agentLabel: String
     let folderLabel: String
-    /// Product location bucket, e.g. "Local agent workspace".
+    /// Product location bucket, e.g. "Local workspace".
     let locationLabel: String
     let locationKind: DashboardConversationLocationKind
     /// Runtime product name when known, e.g. "Codex", "Claude Code".
@@ -2120,7 +2120,7 @@ struct DashboardConversationListMeta: Equatable, Sendable {
             .trimmingCharacters(in: .whitespacesAndNewlines),
             !codename.isEmpty {
             agentLabel = codename
-            locationLabel = "Local agent workspace"
+            locationLabel = "Local workspace"
             locationKind = .workspaceAgent
             runtimeLabel = nil
             runtimeKind = nil
@@ -2168,7 +2168,7 @@ enum DashboardConversationLocationKind: Equatable, Sendable {
     var label: String {
         switch self {
         case .workspaceAgent:
-            "Local agent workspace"
+            "Local workspace"
         case .remoteWorkspace:
             "Remote workspace"
         }

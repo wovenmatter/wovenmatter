@@ -218,21 +218,21 @@ struct SettingsView: View {
                 )
                 if !executionOnly {
                 SettingsDestinationRow(
-                    title: "Devices",
-                    detail: "Connect Macs, iPhones, and iPads to one central database over Tailscale.",
+                    title: "Apple Devices",
+                    detail: "Connect Macs, iPhones, and iPads to share your library.",
                     icon: { DashboardLucideIcon(glyph: .monitor, size: 15) },
                     action: { section = .companion }
                 )
                 }
                 SettingsDestinationRow(
-                    title: "Local Agent Workspace",
+                    title: "Local Workspace",
                     detail: "Agents and files on this Mac.",
                     icon: { DashboardLucideIcon(glyph: .terminal, size: 15) },
                     action: { section = .localWorkspace }
                 )
                 if !executionOnly && clientContext == nil {
                 SettingsDestinationRow(
-                    title: "Remote Agent Workspaces",
+                    title: "Remote Workspaces",
                     detail: "Agents and files on remote Linux machines.",
                     icon: { DashboardLucideIcon(glyph: .container, size: 15) },
                     action: { section = .remoteWorkspaces }
@@ -287,7 +287,7 @@ private struct SettingsHarnessView: View {
         SettingsPage(
             title: runtimeKind.displayName,
             detail: isWorkspaceScoped
-                ? remoteWorkspace.map { "\(runtimeKind.displayName) in \($0.name)." } ?? "\(runtimeKind.displayName) in the local agent workspace."
+                ? remoteWorkspace.map { "\(runtimeKind.displayName) in \($0.name)." } ?? "\(runtimeKind.displayName) in the local workspace."
                 : "Conversation defaults and runtime settings.",
             reservesRailControlSpace: reservesRailControlSpace,
             onBack: onBack

@@ -35,10 +35,10 @@ struct SettingsRemoteWorkspacesView: View {
 
     var body: some View {
         SettingsPage(
-            title: selectedWorkspace?.name ?? "Remote Agent Workspaces",
+            title: selectedWorkspace?.name ?? "Remote Workspaces",
             detail: selectedWorkspace.map(workspaceLocation),
             reservesRailControlSpace: reservesRailControlSpace,
-            backTitle: selectedWorkspace == nil ? "Settings" : "Remote Agent Workspaces",
+            backTitle: selectedWorkspace == nil ? "Settings" : "Remote Workspaces",
             onBack: {
                 if selectedWorkspaceID == nil {
                     onBack()
