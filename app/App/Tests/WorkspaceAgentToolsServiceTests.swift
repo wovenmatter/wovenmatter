@@ -10,6 +10,36 @@ import WovenMatterDashboardStore
 @MainActor
 struct WorkspaceAgentToolsServiceTests {
 
+    @Test(arguments: AgentRuntimeKind.allCases.filter { $0 != .opencode })
+    func htmlPublicationUsesBoundConversationAndPersistsOutsideFoldedWork(runtime: AgentRuntimeKind) async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
+        let caller = try await database.createLocalACPSession(runtimeKind: runtime, title: "HTML", ownerDeviceID: UUID())
+        let run = try await database.beginLocalACPRun(conversationID: caller, content: "Visual reply")
+        let service = try await WorkspaceAgentToolsModel(database: database,
+            sessionHandler: { _, _, _ in throw CancellationError() }, noteHandler: { _, _, _ in throw CancellationError() },
+            noteRestoreHandler: { _, _, _, _, _ in throw CancellationError() }, usageHandler: { _ in throw CancellationError() }, onMutation: {})
+        defer { service.stop() }
+        let endpoint = try await service.endpoint(for: caller)
+        let html = "<button onclick='this.textContent=42'>Calculate</button>"
+        let payload: GatewayJSONValue = .object(["action": .string("render"), "html": .string(html), "title": .string("Calculator"), "height": .number(160)])
+        let json = String(decoding: try JSONEncoder().encode(payload), as: UTF8.self)
+        let request = WovenMatterToolRequest(arguments: ["html", "call", "--json", json])
+        let data = try JSONEncoder().encode(request)
+        let response = try await runBlockingToolFixture { try WovenMatterCommandLine.forward(data, to: endpoint) }
+        let result = try JSONDecoder().decode(WovenMatterToolResponse.self, from: response)
+        #expect(result.success)
+        #expect(result.result?.objectValue?["htmlRender"]?.objectValue?["title"]?.stringValue == "Calculator")
+        let history = try await database.conversationHistoryPage(id: caller, limit: 20, compactActivities: true)
+        let timeline = ConversationWorkTimeline(records: history.activities, commentaryIDs: [])
+        #expect(timeline.foldedEntries.count == 1)
+        #expect(history.activities.contains { $0.runID == run.runID && $0.activity.htmlRender?.title == "Calculator" })
+        let forged = await service.handle(.init(arguments: ["html", "call", "--json", json, "--session", "someone-else"]), callerID: caller)
+        #expect(!forged.success)
+    }
+
     @Test func executorConnectionChangeFencesAdmissionsBeforeTheirJobExists() async throws {
         let runtime = ExecutorRuntime()
         let original = runtime.fence("admitting")
@@ -373,7 +403,7 @@ extension WorkspaceAgentToolsServiceTests {
         let independent = try await database.calendarEvent(id: detachedID, callerID: caller)
         #expect(independent.calendar.recurrence == nil)
         #expect(independent.calendar.task?.prompt == "Review changes")
-        #expect(independent.calendar.task?.configuration.tools.enabled == [.notes, .goals])
+        #expect(independent.calendar.task?.configuration.tools.enabled == [.notes, .goals, .html])
         #expect(try await !request(["calendar", "remove", detachedID, "--occurrence", "1",
             "--revision", String(independent.calendar.revision)]).success)
         #expect(try await request(["calendar", "read", detachedID]).success)

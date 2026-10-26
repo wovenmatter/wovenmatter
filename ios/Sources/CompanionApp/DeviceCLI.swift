@@ -7,10 +7,10 @@ import PiDurableRuntime
 extension CompanionModel {
   static var deviceToolGroups: [WorkspaceToolGroup] { WorkspaceToolGroup.allCases }
   static var deviceToolAccessOptions: [CompanionSelection] {
-    deviceToolGroups.filter { $0 != .goals }.map { .init(id: "wovenmatter_" + $0.rawValue, label: $0.title) }
+    WorkspaceToolGroup.configurableCases.map { .init(id: "wovenmatter_" + $0.rawValue, label: $0.title) }
   }
   static func deviceToolEnabled(_ name: String, selection: [String]?) -> Bool {
-    if name == "wovenmatter_goals" { return true }
+    if name == "wovenmatter_goals" || name == "wovenmatter_html" { return true }
     let group: String
     if ["list_notes", "read_note", "save_note"].contains(name) { group = "wovenmatter_notes" }
     else if name.hasPrefix("wovenmatter_") { group = name }
@@ -22,7 +22,9 @@ extension CompanionModel {
   }
   static var deviceCLITools: [[String: Any]] {
     deviceToolGroups.map { group in
-      let description = group.isAutomation
+      let description = group == .html
+        ? "Preview or render an interactive HTML page in this conversation through the central Mac. Use arguments [\"--help\"] for the contract. Pages use inline CSS/JavaScript and data images, run offline, and support theme variables."
+        : group.isAutomation
         ? "Control the paired central Mac's \(group == .browser ? "embedded Woven Matter browser" : "desktop after Computer Use is enabled"). This capability runs on the Mac, requires its execution access, and never controls this iPhone. Arguments omit the group name. Use [\"--help\"] for commands. Input uses a stable request ID; inspect fresh state after interruption."
         : "Run Woven Matter \(group.rawValue) commands using the same contract as the desktop CLI. Arguments omit the group name. Use [\"--help\"] for available commands. Local reads and edits work without the Mac. Set target=central to access the paired Mac when reachable. Mutations use this chat's approval mode and a stable request ID."
       return ["name": "wovenmatter_" + group.rawValue,

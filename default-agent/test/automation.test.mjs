@@ -56,7 +56,7 @@ test('bundled MCP server negotiates tools and delivers inline screenshots over s
   const client = new Client({ name: 'fixture', version: '1' });
   t.after(() => client.close());
   await client.connect(transport);
-  assert.deepEqual((await client.listTools()).tools.map(x => x.name), ['browser', 'computer']);
+  assert.deepEqual((await client.listTools()).tools.map(x => x.name), ['html_render', 'html_preview', 'browser', 'computer']);
   const result = await client.callTool({ name: 'computer', arguments: { action: 'screenshot' } });
   assert.deepEqual(result.content, [{ type: 'image', mimeType: 'image/jpeg', data: 'ZmFrZQ==' }]);
   const data = Buffer.alloc(2 * 1024 * 1024).toString('base64');
@@ -121,6 +121,28 @@ test('automation adapter uses the current scoped CLI, preserves images and cance
   assert.deepEqual(calls[2].args, ['computer', 'cancel', '--id', calls[1].args.at(-1)]);
   assert.equal(automationSchemas.computer.additionalProperties, false);
   assert.ok(!('sessionId' in automationSchemas.computer.properties));
+});
+
+test('HTML tools use the caller-bound HTML route and put authored content on stdin', async () => {
+  for (const name of ['html_render', 'html_preview']) {
+    const calls = [];
+    const run = (path, args, options) => {
+      const child = new EventEmitter(); child.stdin = new PassThrough(); child.stdout = new PassThrough();
+      child.kill = () => {}; child.unref = () => {}; calls.push({ path, args, options, child }); return child;
+    };
+    const html = '<button onclick="this.textContent=42">Calculate</button>';
+    const input = name === 'html_render' ? { html, title: 'Calculator', height: 160 } : { html, width: 390 };
+    const controller = new AbortController();
+    const pending = callAutomation(name, input, { WOVENMATTER_CLI: '/bound/cli' }, controller.signal, run);
+    assert.deepEqual(calls[0].args.slice(0, 4), ['html', 'call', '--json', '-']);
+    assert.ok(!calls[0].args.join(' ').includes(html));
+    assert.deepEqual(JSON.parse(calls[0].child.stdin.read().toString()), { ...input, action: name === 'html_render' ? 'render' : 'preview' });
+    controller.abort(); calls[0].child.emit('close', 1);
+    await assert.rejects(pending, /interrupted/);
+    assert.deepEqual(calls[1].args, ['html', 'cancel', '--id', calls[0].args.at(-1)]);
+    assert.equal(automationSchemas[name].additionalProperties, false);
+    assert.ok(!('conversationID' in automationSchemas[name].properties));
+  }
 });
 
 test('automation responses preserve UTF-8 split across pipe chunks', async () => {

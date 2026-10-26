@@ -311,7 +311,7 @@ struct WorkspaceAgentToolTests {
     try await reopened.completeToolSessionCreation(requestID: requestID, sourceID: source)
     let final = try await #require(reopened.workspaceOverview().conversations.first { $0.id == target })
     #expect(final.title == "User renamed" && final.folderID == laterFolder)
-    #expect(try await reopened.sessionTools(target).enabled == [.history, .goals])
+    #expect(try await reopened.sessionTools(target).enabled == [.history, .goals, .html])
   }
 
   @Test(arguments: [1.0, 1.25, 90.0, 3_600.125])

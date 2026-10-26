@@ -57,6 +57,19 @@ disable groups without changing the General defaults. Calendar defaults to Full
 access, with Read only configurable in General; the composer indicates the mode
 but does not change it. Usage data is always read-only.
 
+## Visual replies
+
+Use `html_preview` to inspect a screenshot, content height and console output,
+then `html_render` to publish an interactive page directly in the thread.
+Native harnesses can use `wovenmatter html help` for the same CLI contract.
+Pages persist with the chat, stay visible when work history folds, and support
+automatic sizing, themes, zoom and expansion. The tools are always available.
+
+Pages use inline CSS/JavaScript and data images in an offline sandbox, with no
+app, network or local file access. Preview needs the Woven Matter app open;
+publishing does not. See [the implementation and T3 analysis](architecture/CHAT_HTML_RENDERING.md)
+for the complete contract and differences from upstream.
+
 ## Browser and computer automation
 
 Pi Durable exposes native `browser` and `computer` tools, including inline images.

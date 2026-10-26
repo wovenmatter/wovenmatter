@@ -71,6 +71,8 @@
 		ED1D376D001DA909785FDCFE /* DeviceCLI.swift in Sources */ = {isa = PBXBuildFile; fileRef = B38EEDC7D482A17856A16295 /* DeviceCLI.swift */; };
 		F040F35268BD8C5315042494 /* MobileConnectionLifecycle.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF95D1A54C91FFF900C9AE4E /* MobileConnectionLifecycle.swift */; };
 		FAED37A52B8212155F1D9233 /* DeviceBackgroundSmoke.swift in Sources */ = {isa = PBXBuildFile; fileRef = C18B4731D055435188401382 /* DeviceBackgroundSmoke.swift */; };
+		B709A8BBA553C727902EDF4A /* ConversationHTMLRenderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4FE604DEA377D7ABB44C7B4 /* ConversationHTMLRenderView.swift */; };
+		3281854FE4E1417CBC53A0FC /* ConversationHTMLRender.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10E790A2859107A82753DE78 /* ConversationHTMLRender.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -155,6 +157,8 @@
 		F3ED79A6C0DF989A50FAEA02 /* DeviceTools.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceTools.swift; sourceTree = "<group>"; };
 		B0CA92C4167E2F7EA4BDC8F2 /* LibraryArtifactPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryArtifactPreview.swift; sourceTree = "<group>"; };
 		FD6781D14083326D6B2CE4B9 /* ConversationTranscriptState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationTranscriptState.swift; sourceTree = "<group>"; };
+		D4FE604DEA377D7ABB44C7B4 /* ConversationHTMLRenderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "../app/App/Views/ConversationHTMLRenderView.swift"; sourceTree = SOURCE_ROOT; };
+		10E790A2859107A82753DE78 /* ConversationHTMLRender.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "../app/Sources/WovenMatterCore/ConversationHTMLRender.swift"; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -177,6 +181,7 @@
 			isa = PBXGroup;
 			children = (
 				CAA4202CF95204C9D4623BFD /* AgentRunActivity.swift */,
+				10E790A2859107A82753DE78 /* ConversationHTMLRender.swift */,
 				ABAAD9F7280F6177E4EA7D56 /* AssistantTranscriptProjection.swift */,
 				02557B1B114BBAF54CD648B6 /* ConversationWorkTimeline.swift */,
 				1B7B3B955033B1085B31AF16 /* ProgramStatus.swift */,
@@ -298,6 +303,7 @@
 			isa = PBXGroup;
 			children = (
 				C2CCCA8C2889FC3F586BA74E /* ConversationResponse.swift */,
+				D4FE604DEA377D7ABB44C7B4 /* ConversationHTMLRenderView.swift */,
 				2ECC4FEBD1CD261088C9D6F1 /* ConversationSubagentRow.swift */,
 				3A802C975481E5A18F1D0DBA /* ConversationWorkTranscript.swift */,
 				AAE06BB3289FEA9A4B8FBEEC /* DashboardColors.swift */,
@@ -480,6 +486,8 @@
 				57EA3EEB2F0BBDFF9ABDE830 /* ConversationMarkdownDocument.swift in Sources */,
 				2EF1FC468DE71A61AC2A99C8 /* ConversationMessageLayout.swift in Sources */,
 				21901F7A34B9503688F748AB /* ConversationResponse.swift in Sources */,
+				3281854FE4E1417CBC53A0FC /* ConversationHTMLRender.swift in Sources */,
+				B709A8BBA553C727902EDF4A /* ConversationHTMLRenderView.swift in Sources */,
 				D9BCC55AC4766B5160F1AE0C /* ConversationSubagentRow.swift in Sources */,
 				2963B85FF81DABE719336C64 /* ConversationTranscriptState.swift in Sources */,
 				D0959209BA29C0FAA922D178 /* ConversationWorkTimeline.swift in Sources */,

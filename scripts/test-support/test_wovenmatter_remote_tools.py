@@ -20,6 +20,32 @@ spec.loader.exec_module(tools)
 
 
 class RemoteToolTests(unittest.TestCase):
+    def test_html_payload_from_stdin_stays_bound_to_its_remote_input(self):
+        html = '<button onclick="this.textContent=42">Calculate</button>'
+        payload = json.dumps({"action": "render", "html": html, "title": "Calculator", "height": 160})
+        request = json.loads(tools.build_request(["html", "call", "--json", "-"],
+            {"WOVENMATTER_CONTEXT_ID": "input-binding"}, stdin=io.BytesIO(payload.encode())))
+        self.assertEqual(request["arguments"], ["html", "call", "--json", payload])
+        self.assertEqual(request["contextID"], "input-binding")
+        self.assertNotIn("callerID", request)
+
+    def test_remote_mcp_routes_html_tools_without_model_selected_authority(self):
+        class ImmediateThread:
+            def __init__(self, target, args=(), **_): self.target, self.args = target, args
+            def start(self): self.target(*self.args)
+        lines = [{"id": index, "method": "tools/call", "params": {"name": name,
+            "arguments": {"html": "<p>Page</p>", "title": "Page", "height": 120}}}
+            for index, name in enumerate(["html_render", "html_preview"], 1)]
+        with patch.object(sys, "stdin", io.StringIO("\n".join(map(json.dumps, lines)) + "\n")), contextlib.redirect_stdout(io.StringIO()), \
+                patch.object(tools.threading, "Lock", tools.threading.RLock), patch.object(tools.threading, "Thread", ImmediateThread), \
+                patch.object(tools, "forward_cli", return_value={"success": True, "result": {"htmlRender": {"title": "Page"}}}) as forward:
+            tools.run_mcp()
+        self.assertEqual(forward.call_count, 2)
+        for call, action in zip(forward.call_args_list, ["render", "preview"]):
+            arguments = call.args[0]
+            self.assertEqual(arguments[:3], ["html", "call", "--json"])
+            self.assertEqual(json.loads(arguments[3])["action"], action)
+
     def test_automation_images_are_exported_only_on_the_remote_caller(self):
         with tempfile.TemporaryDirectory() as temporary:
             image = str(Path(temporary) / "screen.jpg")
@@ -47,7 +73,10 @@ class RemoteToolTests(unittest.TestCase):
                 patch.object(tools.threading, "Lock", tools.threading.RLock), patch.object(tools.threading, "Thread", ImmediateThread), patch.object(tools, "forward_cli", return_value={"success": True, "result": {"content": [image]}}) as forward:
             tools.run_mcp()
         packets = list(map(json.loads, output.getvalue().splitlines()))
-        self.assertEqual([tool["name"] for tool in packets[1]["result"]["tools"]], ["browser", "computer"])
+        self.assertEqual([tool["name"] for tool in packets[1]["result"]["tools"]], ["html_render", "html_preview", "browser", "computer"])
+        for tool in packets[1]["result"]["tools"][:2]:
+            self.assertTrue(tool["annotations"]["readOnlyHint"])
+            self.assertFalse(tool["annotations"]["openWorldHint"])
         self.assertEqual(packets[2]["result"]["content"], [image])
         args = forward.call_args.args[0]
         self.assertEqual(args[:3], ["computer", "call", "--json"])

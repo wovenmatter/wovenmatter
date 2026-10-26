@@ -39,7 +39,7 @@ enum WovenMatterCommandLine {
                 return EXIT_SUCCESS
             }
             var args = arguments
-            if (command.group == .browser || command.group == .computer), command.action == "call",
+            if command.group?.isAutomation == true, command.action == "call",
                command.options["json"] == "-", let index = command.optionIndices["json"] {
                 var input = Data()
                 while let bytes = try FileHandle.standardInput.read(upToCount: 65_536), !bytes.isEmpty {

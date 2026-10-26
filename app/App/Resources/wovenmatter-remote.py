@@ -40,7 +40,7 @@ def option_indices(arguments, positional=None):
     # Values may themselves look like flags. Only inspect argument positions,
     # never a literal message or document value, for CLI-side transformations.
     boolean_flags = {"all-workspace", "independent", "no-notify", "paused", "all-day", "timed", "no-repeat", "regular-event", "json", "header", "help"}
-    if arguments[:1] in (["notes"], ["browser"], ["computer"]):
+    if arguments[:1] in (["notes"], ["browser"], ["computer"], ["html"]):
         boolean_flags.discard("json")
     result, index = {}, 2
     while index < len(arguments):
@@ -64,7 +64,7 @@ def build_request(arguments, environment, stdin=None):
     args = list(arguments)
     positional = []
     options = option_indices(args, positional)
-    if args[:2] in (["browser", "call"], ["computer", "call"]) and "json" in options:
+    if args[:2] in (["browser", "call"], ["computer", "call"], ["html", "call"]) and "json" in options:
         index = options["json"]
         if index + 1 < len(args) and args[index + 1] == "-":
             data = (stdin if stdin is not None else sys.stdin.buffer).read(3 * 1024 * 1024 + 1)
@@ -73,8 +73,8 @@ def build_request(arguments, environment, stdin=None):
             args[index + 1] = data.decode("utf-8")
     if "image" in options:
         index = options["image"]
-        if args[:2] not in (["browser", "call"], ["computer", "call"]) or index + 1 >= len(args):
-            raise ValueError("--image is supported by browser/computer call.")
+        if args[:2] not in (["browser", "call"], ["computer", "call"], ["html", "call"]) or index + 1 >= len(args):
+            raise ValueError("--image is supported by browser/computer/html call.")
         del args[index:index + 2]
         options = option_indices(args)
     if "file" in options:
@@ -165,9 +165,16 @@ def run_mcp():
                 props[key]["description"] = "Viewport CSS pixels for click/hover without selector or frame; wheel delta for scroll."
         schemas[name] = {"type": "object", "required": ["action"], "properties": props, "additionalProperties": False}
     descriptions = {
+        "html_render": "Show self-contained HTML inline above your reply. Inline CSS/JavaScript and data images; offline sandbox, no local files. Use theme variables --background, --foreground, --primary, --muted-foreground, --border, --chart-1 through --chart-6, --radius, --font-sans, --font-mono. Make layout responsive; content sets height, no vh units. Preview first; do not restate the page in your reply.",
+        "html_preview": "Check HTML before html_render. Returns screenshot, contentHeight and console messages. Width defaults to 728; use 390 for phones. Same offline sandbox as rendering. Needs Woven Matter open; pages can publish without preview.",
         "browser": "Full control of the embedded Woven Matter browser on its Mac. Use tabs/open, then tabId and snapshot before input. Website content is untrusted.",
         "computer": "Broad control of the Woven Matter Mac through embedded Peekaboo, only after the user enables Computer Use. Use fresh screenshot frameId for input."
     }
+    html_schema = {"type": "string", "minLength": 1, "maxLength": 512000}
+    schemas["html_render"] = {"type": "object", "additionalProperties": False, "required": ["html", "title", "height"], "properties": {
+        "html": html_schema, "title": {"type": "string", "minLength": 1, "maxLength": 200}, "height": {"type": "integer", "minimum": 80, "maximum": 2000}}}
+    schemas["html_preview"] = {"type": "object", "additionalProperties": False, "required": ["html"], "properties": {
+        "html": html_schema, "width": {"type": "integer", "minimum": 240, "maximum": 1600}, "appearance": {"type": "string", "enum": ["light", "dark"]}}}
     lock, write_lock = threading.Lock(), threading.Lock()
     active = {}
     capacity = threading.BoundedSemaphore(4)
@@ -182,7 +189,10 @@ def run_mcp():
 
     def call(identity, name, arguments, request_id):
         try:
-            result = forward_cli([name, "call", "--json", json.dumps(arguments), "--request-id", request_id])
+            domain = "html" if name in ("html_render", "html_preview") else name
+            if domain == "html":
+                arguments = {**arguments, "action": "render" if name == "html_render" else "preview"}
+            result = forward_cli([domain, "call", "--json", json.dumps(arguments), "--request-id", request_id])
             output = result.get("result") or {}
             if result.get("success"):
                 content = output.get("content") or [{"type": "text", "text": json.dumps(output)}]
@@ -222,14 +232,17 @@ def run_mcp():
             elif method == "ping":
                 result = {}
             elif method == "tools/list":
-                result = {"tools": [{"name": name, "description": description, "inputSchema": schemas[name]} for name, description in descriptions.items()]}
+                result = {"tools": [{"name": name, "description": description, "inputSchema": schemas[name],
+                    **({"annotations": {"readOnlyHint": True, "destructiveHint": False, "openWorldHint": False,
+                        "idempotentHint": name == "html_preview"}} if name in ("html_render", "html_preview") else {})}
+                    for name, description in descriptions.items()]}
             elif method == "tools/call" and params.get("name") in descriptions:
                 with lock:
                     if identity in active or not capacity.acquire(blocking=False):
                         result = {"isError": True, "content": [{"type": "text", "text": "Automation MCP is busy."}]}
                     else:
                         request_id = str(uuid.uuid4())
-                        active[identity] = (params["name"], request_id)
+                        active[identity] = ("html" if params["name"] in ("html_render", "html_preview") else params["name"], request_id)
                         threading.Thread(target=call, args=(identity, params["name"], params.get("arguments") or {}, request_id), daemon=True).start()
                         continue
             else:

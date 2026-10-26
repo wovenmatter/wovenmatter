@@ -23,7 +23,7 @@ extension AgentRunActivity {
         || title.map { String($0.prefix(280)) } != title
         || detail.map { String($0.prefix(280)) } != detail,
       detailVersion: version ?? detailVersion,
-      planKind: planKind, planOperation: planOperation)
+      planKind: planKind, planOperation: planOperation, htmlRender: htmlRender)
   }
 }
 

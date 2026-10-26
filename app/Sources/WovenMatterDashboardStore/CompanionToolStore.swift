@@ -50,7 +50,7 @@ extension WorkspaceDatabaseConnection {
     if !command.wantsHelp, command.action != "context", let group = command.group {
       // Cleanup retains device/caller ownership, including after revocation.
       if group.isAutomation, command.action == "cancel" { return }
-      guard value.enabledGroups.contains(group) else { throw WorkspaceToolError.disabled(group) }
+      guard group == .html || value.enabledGroups.contains(group) else { throw WorkspaceToolError.disabled(group) }
       // History retains the desktop's independent attachment/management checks.
       // All other groups require the persisted central session policy as well.
       if group != .history { try requireToolUnlocked(group, sessionID: value.conversationID) }

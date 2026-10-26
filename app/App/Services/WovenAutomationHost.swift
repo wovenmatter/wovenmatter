@@ -47,7 +47,7 @@ final class WovenAutomationHost {
             guard UUID(uuidString: id) != nil else { throw WorkspaceToolError.invalid("Invalid automation request ID.") }
             let command = try WovenMatterToolCommand(invocation.request.arguments)
             guard command.options["image"] == nil else { throw WorkspaceToolError.invalid("Image paths must be handled on the CLI host.") }
-            guard let group = command.group, [.browser, .computer].contains(group) else { throw WorkspaceToolError.invalid("Invalid automation group.") }
+            guard let group = command.group, group.isAutomation else { throw WorkspaceToolError.invalid("Invalid automation group.") }
             if command.action == "cancel" {
                 let target = try command.required("id")
                 if target == "all" { await cancel(callerID: invocation.callerID) }
@@ -79,9 +79,12 @@ final class WovenAutomationHost {
                         try await database.requireCompanionAutomationAccess(callerID: invocation.callerID)
                         try Task.checkCancellation()
                     }
-                    let result = group == .computer
-                        ? try await computer.execute(input, callerID: invocation.callerID, admit: admit)
-                        : try await browser(input, admit: admit)
+                    let result: GatewayJSONValue
+                    if group == .html {
+                        try await admit()
+                        result = try await ConversationHTMLPreview().capture(input)
+                    } else if group == .computer { result = try await computer.execute(input, callerID: invocation.callerID, admit: admit) }
+                    else { result = try await browser(input, admit: admit) }
                     try await admit()
                     return .init(result: result, requestID: id)
                 } catch {

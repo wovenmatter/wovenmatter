@@ -60,7 +60,7 @@ struct SecondaryMacCalendarProjectionTests {
         try await f.bridge.reconcile()
         let runs = try await f.database.dueCalendarRuns(now: start.addingTimeInterval(1))
         #expect(Set(runs.map(\.eventID)) == Set([local.id, nativeID]))
-        #expect(runs.first { $0.eventID == local.id }?.task.configuration.tools.enabled == [.calendar, .goals])
+        #expect(runs.first { $0.eventID == local.id }?.task.configuration.tools.enabled == [.calendar, .goals, .html])
         #expect(runs.first { $0.eventID == nativeID }?.task.configuration.runtimeKind == .claudeCode)
         #expect(runs.first { $0.eventID == nativeID }?.task.configuration.nativeWorkingDirectory == "/tmp/project")
         for run in runs { #expect(try await f.database.isCalendarRunActive(run.id)) }
@@ -96,7 +96,7 @@ struct SecondaryMacCalendarProjectionTests {
         try await f.bridge.reconcile()
         let owned = try #require(await f.replica.calendar.record(id: original.id))
         #expect(owned.ownerDeviceID == f.descriptor.ownerDeviceID)
-        #expect(owned.event.draft.task?.enabledTools == ["wovenmatter_calendar", "wovenmatter_goals", "wovenmatter_notes"])
+        #expect(owned.event.draft.task?.enabledTools == ["wovenmatter_calendar", "wovenmatter_goals", "wovenmatter_html", "wovenmatter_notes"])
         let claimed = try #require(try await f.database.dueCalendarRuns(now: start).first)
         // A task-only capability edit must be exported even if title and dates
         // are unchanged; the scheduled session may never gain extra groups.
@@ -104,7 +104,7 @@ struct SecondaryMacCalendarProjectionTests {
         var restricted = WorkspaceCalendarDraft(before); restricted.task?.configuration.tools.enabled = [.calendar]
         _ = try await f.database.saveCalendarEvent(id: before.id, draft: restricted, creating: false, expectedRevision: before.calendar.revision)
         try await f.bridge.reconcile()
-        #expect(await f.replica.calendar.record(id: original.id)?.event.draft.task?.enabledTools == ["wovenmatter_calendar", "wovenmatter_goals"])
+        #expect(await f.replica.calendar.record(id: original.id)?.event.draft.task?.enabledTools == ["wovenmatter_calendar", "wovenmatter_goals", "wovenmatter_html"])
         let native = try #require(try await f.database.calendarItems().first)
         let replica = try #require(await f.replica.calendar.record(id: original.id))
         var localDraft = replica.event.draft; localDraft.task?.prompt = "Replica prompt"
@@ -119,7 +119,7 @@ struct SecondaryMacCalendarProjectionTests {
         try await f.restartBridge().reconcile()
         let resumed = try #require(try await f.database.dueCalendarRuns(now: start).first)
         #expect(resumed.task.prompt == "Replica prompt")
-        #expect(resumed.task.configuration.tools.enabled == [.calendar, .goals])
+        #expect(resumed.task.configuration.tools.enabled == [.calendar, .goals, .html])
     }
 
 }

@@ -3,6 +3,45 @@ import WovenMatterCompanion
 @testable import CompanionClient
 
 final class TranscriptDetailTests: XCTestCase {
+  func testHTMLReplyRebuildsFromNativeToolResultAndSurvivesJournalReopen() async throws {
+    let html = "<button onclick='this.textContent=42'>Calculate</button>"
+    let request: [String: Any] = ["action": "render", "html": html, "title": "Calculator", "height": 160]
+    let json = String(decoding: try JSONSerialization.data(withJSONObject: request), as: UTF8.self)
+    let reference: [String: Any] = ["id": UUID().uuidString.lowercased(), "title": "Calculator", "height": 160]
+    let response = String(decoding: try JSONSerialization.data(withJSONObject: ["success": true, "result": ["htmlRender": reference]]), as: UTF8.self)
+    let snapshot: [String: Any] = ["entries": [
+      ["id": 1, "model": [["role": "user", "content": "Calculate"]]],
+      ["id": 2, "model": [["role": "assistant", "content": [["type": "toolCall", "id": "render", "name": "wovenmatter_html", "arguments": ["arguments": ["call", "--json", json]]]]]]],
+      ["id": 3, "model": [["role": "toolResult", "toolCallId": "render", "content": [["type": "text", "text": response]]]]]
+    ]]
+    let transcript = CompanionDeviceTranscript.project(snapshot: snapshot, conversationID: "c")
+    let projection = try XCTUnwrap(transcript.activities.first?.projectionJSON)
+    let value = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(projection.utf8)) as? [String: Any])
+    XCTAssertEqual(value["kind"] as? String, "activity")
+    XCTAssertEqual((value["htmlRender"] as? [String: Any])?["id"] as? String, reference["id"] as? String)
+    let path = file()
+    let journal = try WorkspaceJournal(file: path)
+    _ = try await journal.append(workspaceID: "phone", transcript: transcript)
+    let state = await journal.snapshot()
+    let summary = try XCTUnwrap(state.transcripts["c"]?.activities.first?.projectionJSON)
+    XCTAssertTrue(summary.contains("htmlRender"))
+    XCTAssertFalse(summary.contains(html))
+    let reopened = try WorkspaceJournal(file: path)
+    let detail = try await reopened.activityDetails(conversationID: "c", activityID: try XCTUnwrap(transcript.activities.first?.id))
+    XCTAssertEqual(detail?.projectionJSON, projection)
+    let replica = try WorkspaceJournal(file: file())
+    for entry in state.entries.values.sorted(by: { $0.originSequence < $1.originSequence }) { try await replica.record(entry) }
+    let replicated = try await replica.activityDetails(conversationID: "c", activityID: try XCTUnwrap(transcript.activities.first?.id))
+    XCTAssertEqual(replicated?.projectionJSON, projection)
+    let failedResponse = response.replacingOccurrences(of: "true", with: "false")
+    var failedSnapshot = snapshot
+    var entries = try XCTUnwrap(failedSnapshot["entries"] as? [[String: Any]])
+    entries[2]["model"] = [["role": "toolResult", "toolCallId": "render", "content": [["type": "text", "text": failedResponse]]]]
+    failedSnapshot["entries"] = entries
+    let failed = CompanionDeviceTranscript.project(snapshot: failedSnapshot, conversationID: "c")
+    XCTAssertFalse(failed.activities.first?.projectionJSON?.contains("htmlRender\":") ?? true)
+  }
+
   private func file() -> URL { FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("store.json") }
   private func activity(content: String) throws -> CompanionActivity {
     let object: [String: Any] = ["id":"call", "kind":"tool", "title":"read_file", "status":"completed",

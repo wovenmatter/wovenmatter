@@ -495,7 +495,7 @@ extension WorkspaceDatabaseConnection {
   public func reserveAutomationRequest(callerID: String, request: WovenMatterToolRequest) throws -> Bool {
     try transaction {
       let command = try WovenMatterToolCommand(request.arguments)
-      guard let group = command.group, [.browser, .computer].contains(group) else { throw WorkspaceToolError.invalid("Invalid automation group.") }
+      guard let group = command.group, group.isAutomation else { throw WorkspaceToolError.invalid("Invalid automation group.") }
       try requireToolUnlocked(group, sessionID: callerID, writesCalendar: false)
       let id = try canonicalToolRequestID(request.requestID)
       try requireAutomationNotCancelled(callerID: callerID, requestID: id)

@@ -56,6 +56,25 @@ public enum CompanionDeviceTranscript {
           children[0]["nativeConversationID"] = detail?["nativeConversationID"].map { String(describing: $0) }
           projection["subagents"] = children
         }
+        // Rebuild published pages from their native call/result pair. This keeps
+        // device-owned replies visible after reopening and journal replication.
+        if status == "completed", projection["toolName"] as? String == "wovenmatter_html",
+           let response = object(content), response["success"] as? Bool == true,
+           let result = response["result"] as? [String: Any], let reference = result["htmlRender"] as? [String: Any],
+           let referenceID = reference["id"] as? String, UUID(uuidString: referenceID) != nil,
+           let title = reference["title"] as? String, title.utf8.count <= 800,
+           let height = reference["height"] as? Int, (80...2000).contains(height),
+           let rawInput = projection["rawInputJSON"] as? String, let input = object(rawInput),
+           let arguments = input["arguments"] as? [String],
+           let command = try? WovenMatterToolCommand(["html"] + arguments),
+           let rawPage = command.options["json"], let page = object(rawPage),
+           page["action"] as? String == "render", let html = page["html"] as? String, html.utf8.count <= 512_000 {
+          projection["kind"] = "activity"; projection["toolName"] = "html_render"
+          projection["title"] = title; projection["content"] = nil
+          projection["htmlRender"] = reference
+          projection["rawOutputJSON"] = json(["html": html, "title": title, "height": height])
+          value.title = title
+        }
         value.status = status; value.completedAt = date; value.projectionJSON = json(projection)
         activities[index] = value
       } else {

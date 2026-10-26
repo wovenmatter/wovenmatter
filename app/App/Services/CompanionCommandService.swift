@@ -504,7 +504,9 @@ final class CompanionCommandService: CompanionCommandServing {
                 role: $0.role, content: $0.role == "user" ? ($0.senderKind == .goal ? "Continuing toward the goal." : WorkspaceGoal.displayPrompt($0.content)) : $0.content, status: $0.status, createdAt: $0.createdAt) },
             activities: page.activities.map { .init(id: $0.id, runID: $0.runID,
                 title: $0.activity.title ?? $0.activity.kind.rawValue,
-                detail: $0.activity.detail ?? $0.activity.content, status: $0.activity.status ?? "") },
+                detail: $0.activity.detail ?? $0.activity.content, status: $0.activity.status ?? "",
+                projectionJSON: $0.activity.htmlRender == nil ? nil :
+                    (try? JSONEncoder().encode($0.activity)).map { String(decoding: $0, as: UTF8.self) }) },
             activeRunID: await model.canonicalActiveRunID(conversationID: conversationID), olderCursor: olderCursor
         )
     }

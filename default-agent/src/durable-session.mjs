@@ -240,7 +240,7 @@ export async function openDurableSession(engine, id, requested) {
     let codemode;
     const tools = [...createCodingTools(cwd), createGrepTool(cwd), createFindTool(cwd), createLsTool(cwd), ...searchTools(async () => (await engine.credentials.read('exa'))?.key), checklistTool,
       ...automationTools(() => (toolScopes.getStore() ?? record).cli.environment(process.env))];
-    record.ordinaryTools.push('browser', 'computer');
+    record.ordinaryTools.push('html_render', 'html_preview', 'browser', 'computer');
     createCodemodeExtension({ models: false })( { registerTool: tool => { codemode = tool; }, getSettings: () => ({ codemode: { mode: (toolScopes.getStore() ?? record).codeModeState.value } }), getAllTools: () => tools, appendEntry: (customType, data) => { toolScopes.getStore().pendingStoreWrites.push({ customType, data }); } });
     const adapted = tools.map(tool => ({ ...tool, replay: ['read', 'grep', 'find', 'ls', 'web_search', 'web_read', checklistTool.name].includes(tool.name) ? 'safe' : 'unsafe', execute: async (args, api, ctx) => {
       const scope = await scopeFor(api.conversationId);

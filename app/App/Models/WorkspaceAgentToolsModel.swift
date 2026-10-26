@@ -428,7 +428,7 @@ final class WorkspaceAgentToolsModel {
             guard let group = command.group else { throw WorkspaceToolError.invalid("Choose a tool.") }
             // Scoped history reads have their own independent attachment/management
             // checks. All other commands require the group's current capability.
-            if group != .history && !([.browser, .computer].contains(group) && command.action == "cancel") {
+            if group != .history && !(group.isAutomation && command.action == "cancel") {
                 try await database.requireTool(group, sessionID: callerID)
             }
             let result: WovenMatterToolResponse
@@ -467,6 +467,34 @@ final class WorkspaceAgentToolsModel {
                 if command.isMutation, result.success { try await calendarProjection?() }
             case .usage: result = try await usageHandler(command)
             case .library: result = try await library(command, callerID: callerID)
+            case .html:
+                if command.action == "call" {
+                    let input = try JSONDecoder().decode(GatewayJSONValue.self, from: Data(command.required("json").utf8))
+                    guard let object = input.objectValue, let html = object["html"]?.stringValue,
+                          let action = object["action"]?.stringValue, ["preview", "render"].contains(action) else {
+                        throw WorkspaceToolError.invalid("Provide an HTML render or preview action.")
+                    }
+                    let allowed: Set<String> = action == "render" ? ["action", "html", "title", "height"] : ["action", "html", "width", "appearance"]
+                    guard Set(object.keys).isSubset(of: allowed) else { throw WorkspaceToolError.invalid("Unknown HTML parameter.") }
+                    let page = try ConversationHTMLPage(html: html, title: object["title"]?.stringValue ?? "HTML preview",
+                        height: object["height"]?.intValue ?? 400)
+                    if action == "render" {
+                        guard object["title"]?.stringValue != nil, object["height"]?.intValue != nil else {
+                            throw WorkspaceToolError.invalid("Rendering requires a title and integer height.")
+                        }
+                        let reference = try await database.publishConversationHTML(page, callerID: callerID, requestID: request.requestID)
+                        result = .init(result: .object([
+                            "htmlRender": try WovenMatterToolResponse.value(reference).result ?? .null,
+                            "message": .string("Shown above your reply. Reply with only what the page does not already say.")
+                        ]))
+                    } else {
+                        guard let automationHandler else { throw WorkspaceToolError.invalid("Open Woven Matter to preview HTML.") }
+                        result = try await automationHandler(callerID, command, request)
+                    }
+                } else {
+                    guard let automationHandler else { throw WorkspaceToolError.invalid("The HTML preview host is unavailable.") }
+                    result = try await automationHandler(callerID, command, request)
+                }
             case .executor:
                 guard let executorHandler else { throw WorkspaceToolError.invalid("Executor manager is unavailable.") }
                 result = try await executorHandler(callerID, command, request)
