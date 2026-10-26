@@ -1366,6 +1366,10 @@ public struct RemoteWorkspaceServiceClient: Sendable {
     public func configureDefaultAgent(_ payload: Data) async throws -> DefaultAgentSyncReceipt {
         try await request(path: "v1/default-agent/configuration", method: "POST", body: payload)
     }
+    public func runtimeInspection() async throws -> RuntimeInspection {
+        try await request(path: "v1/runtime/inspection", method: "GET", body: nil)
+    }
+
     public func defaultAgentStatus() async throws -> DefaultAgentStatus {
         try await request(path: "v1/default-agent/status", method: "GET", body: nil)
     }

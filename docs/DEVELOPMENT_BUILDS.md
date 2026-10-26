@@ -81,6 +81,11 @@ snapshot host.
 
 ## Snapshot mode
 
+Snapshot and live profiles launch a separate headless background server using
+the profile's own executable, socket, and execution lease. The window process is
+a frontend. Closing it leaves that profile's work running; Settings → Background
+Server can stop or restart it. Development servers never install login jobs.
+
 The first snapshot launch takes an online SQLite backup from
 `~/Library/Application Support/Woven Matter`, including committed WAL data. Use
 `--source DIRECTORY` for another local library/export directory. The source is

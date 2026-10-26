@@ -837,6 +837,19 @@ public actor LocalACPSessionCoordinator {
         }
         try ensureNoPermissionMutation(conversationID: conversationID)
         if permission != nil {
+            // Configuration reads can leave a native-idle probe holding an
+            // internal use count. Await that proof before applying new-chat
+            // defaults rather than treating housekeeping as foreground work.
+            if runIDsByConversation[conversationID] == nil,
+               !admittingConversations.contains(conversationID),
+               let observationID = activeSessions[conversationID]?.configurationObservationID,
+               let retirement = idleSessionRetirements[observationID] {
+                await retirement.value
+                try Task.checkCancellation()
+                // Revalidate after the await: sends, permission changes and
+                // execution adoption can enter while native work drains.
+                try ensureNoPermissionMutation(conversationID: conversationID)
+            }
             guard runIDsByConversation[conversationID] == nil, !admittingConversations.contains(conversationID) else {
                 throw LocalACPSessionDatabaseError.runAlreadyActive
             }
@@ -1845,6 +1858,7 @@ public actor LocalACPSessionCoordinator {
             requestedPermission: descriptor.permission,
             wrappedCommand: launch.wrappedCommand
         )
+        launch.inspectionConversationID = descriptor.conversationID
         launch.cliConnection = cliConnection
         launch.historyRecorder = database.historyWireRecorder(
             conversationID: descriptor.conversationID, harness: descriptor.runtimeKind.rawValue,

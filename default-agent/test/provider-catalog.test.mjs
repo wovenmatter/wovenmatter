@@ -16,6 +16,31 @@ async function directory(t) {
 }
 const reply = (models = [descriptor()], headers = {}) => new Response(JSON.stringify(models), { headers: { etag: '"fixture"', 'last-modified': 'Thu, 01 Oct 2026 12:00:00 GMT', ...headers } });
 
+for (const status of [200, 400]) test(`OpenCode Go Kimi uses its selected route and returns a safe HTTP ${status} outcome`, async t => {
+  const root = await directory(t), requests = [];
+  const model = descriptor({id:'kimi-k3.1-pro',provider:'opencode-go',api:'openai-completions',baseUrl:'https://opencode.ai/inference/go/v1',
+    thinkingLevelMap:{off:null,low:'low',high:'high'},compat:{supportsStore:false,supportsDeveloperRole:false,maxTokensField:'max_tokens'}});
+  t.mock.method(globalThis,'fetch',async (url, options) => {
+    assert.equal(String(url),'https://opencode.ai/inference/go/v1/chat/completions');
+    requests.push(JSON.parse(options.body));
+    if(status!==200)return new Response(JSON.stringify({error:{message:'private provider response secret-token'}}),{status});
+    const chunks = [{id:'fixture',choices:[{index:0,delta:{role:'assistant',content:'Offline reply'},finish_reason:null}]},
+      {id:'fixture',choices:[{index:0,delta:{},finish_reason:'stop'}],usage:{prompt_tokens:1,completion_tokens:1,total_tokens:2}}];
+    return new Response(chunks.map(value=>'data: '+JSON.stringify(value)+'\n\n').join('')+'data: [DONE]\n\n',{headers:{'content-type':'text/event-stream'}});
+  });
+  const engine = await new DefaultAgentEngine({cwd:root,directory:root,config:{providers:['opencode-go'],defaultModel:'opencode-go/kimi-k3.1-pro',codeMode:'off'},
+    credentials:{'opencode-go':{type:'api_key',key:'offline-placeholder'}},claude:{models:[],loadModels:async()=>{}},
+    catalog:{read:async()=>({models:[model]}),load:async()=>{throw Error('Catalog refresh forbidden');}}}).initialize();
+  const record = await engine.create();
+  t.after(()=>record.session.dispose());
+  await engine.select(record,'low','thinking');
+  const send = () => engine.handle('session/prompt',{sessionId:record.session.sessionId,prompt:[{type:'text',text:'Offline fixture'}]});
+  if(status===200)assert.equal((await send()).stopReason,'end_turn');
+  else await assert.rejects(send(),error=>/HTTP 400/.test(error.message) && !/secret-token|workspace unlock/.test(error.message));
+  assert.equal(requests.length,1,'no automatic account fallback or prompt replay');
+  assert.equal(requests[0].model,'kimi-k3.1-pro');
+});
+
 test('cold/warm/restart/stale/304 use bounded version-aware public provider shards', async t => {
   const root = await directory(t), requests = []; let now = 10000;
   const fetchCatalog = async (url, options) => { requests.push({ url, options }); return requests.length === 1 ? reply() : new Response(null, { status: 304 }); };

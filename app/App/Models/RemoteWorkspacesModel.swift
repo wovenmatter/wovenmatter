@@ -1398,6 +1398,10 @@ final class RemoteWorkspacesModel {
         await refreshService(configuration)
     }
 
+    func inspectRuntime(_ configuration: RemoteWorkspaceConfiguration) async throws -> RuntimeInspection {
+        try await databaseRequest(configuration) { try await $0.runtimeInspection() }
+    }
+
     private func serviceClient(
         for configuration: RemoteWorkspaceConfiguration
     ) async throws -> RemoteWorkspaceServiceClient {

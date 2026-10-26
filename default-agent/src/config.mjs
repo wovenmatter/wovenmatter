@@ -14,6 +14,25 @@ export function operationErrorMessage(error) {
   return error instanceof DefaultAgentError ? error.message
     : 'Pi Durable could not complete this operation. Check its connections and workspace unlock state in Settings → Pi Durable.';
 }
+
+// Only fixed, app-authored diagnostics cross the provider/native-state boundary.
+// Never include response bodies, request URLs, headers or exception text.
+export function providerFailure(statusOrMessage) {
+  const messages = {
+    400: 'The provider rejected the model request (HTTP 400).',
+    403: 'The connection does not have access to this model (HTTP 403).',
+    404: 'The provider could not find the selected model or endpoint (HTTP 404). Refresh models in Settings → Pi Durable.',
+    408: 'The provider timed out while processing the model request (HTTP 408). Try again.',
+    422: 'The provider rejected the model request (HTTP 422).',
+    429: 'The provider is rate limiting this connection (HTTP 429). Wait and try again.',
+  };
+  if (typeof statusOrMessage === 'string') {
+    return Object.values(messages).includes(statusOrMessage) || statusOrMessage === 'The provider is temporarily unavailable (HTTP 5xx). Try again.'
+      ? statusOrMessage : null;
+  }
+  return messages[statusOrMessage] ?? (Number.isInteger(statusOrMessage) && statusOrMessage >= 500 && statusOrMessage <= 599
+    ? 'The provider is temporarily unavailable (HTTP 5xx). Try again.' : null);
+}
 export async function readJSON(path, fallback = {}) {
   try { return JSON.parse(await readFile(path, 'utf8')); } catch (e) { if (e.code === 'ENOENT') return fallback; throw e; }
 }

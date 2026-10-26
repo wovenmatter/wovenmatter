@@ -11,6 +11,7 @@ import { createClientExecutionRuntime } from './client-execution-runtime.mjs'
 import { createTaskGateway } from './task-gateway.mjs'
 import { createTaskExecutor } from './task-gateway-runner.mjs'
 import { createDurableACP } from './durable-acp.mjs'
+import { inspectProcesses } from './runtime-inspection.mjs'
 import { createWorkspaceInstances } from './workspace-instances.mjs'
 import { createWorkspaceBrowser, streamBrowserFrames } from './workspace-browser.mjs'
 import { createServer } from 'node:http'
@@ -109,6 +110,16 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
     if (device) {
       const material = clientExecution.unlockMaterial(request.headers.authorization)
       if (material) await defaultAgent.unlockForClient(material)
+    }
+    if (url.pathname === '/v1/runtime/inspection' && request.method === 'GET') {
+      if (!administrator) return json(response,403,{error:'administrator_required'})
+      return json(response,200,{ownerID:'remote',observedAt:Date.now()/1000-978307200,items:await inspectProcesses([
+        {id:'server:remote',kind:'service',title:'Workspace server',state:'running',processID:process.pid,
+         startedAt:Date.now()/1000-978307200-process.uptime(),residentBytes:process.memoryUsage().rss},
+        ...await defaultAgent.inspection(),...durableACP.inspection(),
+        {id:'scheduler',parentID:'server:remote',kind:'scheduler',title:'Scheduled work',
+         state:taskGateway.status().activeRuns?'working':'idle',detail:`${taskGateway.status().activeRuns} active runs`},
+      ])})
     }
     if (url.pathname === '/v1/execution/devices' && request.method === 'POST') {
       if (!administrator) return json(response,403,{error:'administrator_required'})

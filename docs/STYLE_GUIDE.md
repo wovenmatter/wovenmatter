@@ -29,6 +29,9 @@ when an intentional design change is accepted.
   permission and tool labels inside their popouts so the model and thinking
   selection stay visible. Keep the dictation microphone beside the text entry
   area above this row.
+- **Composer setup notices:** explain missing model configuration in a full-width
+  quiet action above the input. Use regular-weight secondary text, allow wrapping,
+  and open Pi Durable settings in the relevant workspace scope.
 - **Components:** reuse the shared cards, selectors, search fields, and button
   styles in `DashboardStyle.swift` and `DashboardDesign.swift`, and the page/row
   patterns in

@@ -22,6 +22,7 @@ import { createNativeCompactionRegistry } from './native-compaction-registry.mjs
 import { createSubagentContext } from './subagent-context.mjs';
 import { ChildContext, Subagents, createSubagents } from './subagents.mjs';
 import { reportProgramStatus } from './program-status.mjs';
+import { NativeToolStream } from './native-tool-stream.mjs';
 import { automationTools } from './automation-tools.mjs';
 import { recoverNativeRuns, validateRecoveryRuns } from './native-recovery.mjs';
 
@@ -143,7 +144,7 @@ export async function openDurableSession(engine, id, requested) {
         model = scope.session.model ?? model;
         if (scope.nativeContextFailure) throw new DefaultAgentError(scope.nativeContextFailure.message);
         try {
-          const message = safeAssistantDiagnostic(await withAccount(model, await currentAccount(model, scope), () => target[key](model, input, { ...options, transport: 'sse', maxRetries: 0, fetch: providerFetch(scope) }), scope));
+          const message = safeAssistantDiagnostic(await withAccount(model, await currentAccount(model, scope), () => target[key](model, input, { ...options, transport: 'sse', maxRetries: 0, fetch: providerFetch(scope) }), scope), scope.httpFailure);
           if (message.usage) scope.reportUsage?.(message.usage);
           return message;
         }
@@ -154,7 +155,7 @@ export async function openDurableSession(engine, id, requested) {
         model = scope.session.model ?? model;
         if (scope.nativeContextFailure) throw new DefaultAgentError(scope.nativeContextFailure.message);
         const result = createAssistantMessageEventStream(), prepared = scope.nativePrepared;
-        const tag = message => ({ ...safeAssistantDiagnostic(message), ...(prepared?.route ? { wovenNativeRoute: prepared.route } : {}) });
+        const tag = message => ({ ...safeAssistantDiagnostic(message, scope.httpFailure), ...(prepared?.route ? { wovenNativeRoute: prepared.route } : {}) });
         void (async () => {
           try {
             const account = await currentAccount(model, scope);
@@ -245,6 +246,10 @@ export async function openDurableSession(engine, id, requested) {
       ...automationTools(() => (toolScopes.getStore() ?? record).cli.environment(process.env))];
     record.ordinaryTools.push('browser', 'computer');
     createCodemodeExtension({ models: false })( { registerTool: tool => { codemode = tool; }, getSettings: () => ({ codemode: { mode: (toolScopes.getStore() ?? record).codeModeState.value } }), getAllTools: () => tools, appendEntry: (customType, data) => { toolScopes.getStore().pendingStoreWrites.push({ customType, data }); } });
+    // These retained model-kind child tasks predate Durable's nested-call API.
+    // Keep their native receipts/recovery intact, and project their progress:
+    // watchEvents has no live slot for these synthetic model calls.
+    const nestedProgress = new Set();
     const adapted = tools.map(tool => ({ ...tool, replay: ['read', 'grep', 'find', 'ls', 'web_search', 'web_read', checklistTool.name].includes(tool.name) ? 'safe' : 'unsafe', execute: async (args, api, ctx) => {
       const scope = await scopeFor(api.conversationId);
       const env = scope.cli.environment(process.env);
@@ -263,6 +268,7 @@ export async function openDurableSession(engine, id, requested) {
         // exact exposed snapshot alongside truncation/full-output references;
         // only a verified suffix enters the native output accumulator.
         const details = { ...update.details, ...(update.content ? { wovenOutputSnapshot: update.content } : {}) };
+        if (nestedProgress.has(api.callId)) send(toolStream.update({ type: 'tool_execution_update', toolCallId: api.callId, details }));
         detailsQueue = detailsQueue.then(() => api.details(details, ctx)).catch(error => { if (!ctx.abortSignal.aborted) detailsError = error; });
       }));
       await detailsQueue;
@@ -284,29 +290,41 @@ export async function openDurableSession(engine, id, requested) {
           signal?.throwIfAborted(); ctx.abortSignal.throwIfAborted();
           const tool = nestedTools.find(t => t.name === name); if (!tool) throw new Error('Unknown nested tool.');
           const call = { id: `${api.callId}/nested/${++nested}`, name, arguments: input };
-          const nestedTask = await api.commit(async tx => {
-            signal?.throwIfAborted(); ctx.abortSignal.throwIfAborted();
-            const assistant = await tx.appendEntry(conversation.id, { kind: 'pi.assistant', data: { wovenNestedCall: true }, model: [{ role: 'assistant', content: [{ type: 'toolCall', ...call }], timestamp: Date.now(), api: scope.session.model?.api, provider: scope.session.model?.provider, model: scope.session.model?.id, stopReason: 'toolUse', usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } }], edits: [] });
-            const taskID = await tx.createTask(ToolTask, { kind: 'model', assistant: assistant.id, callId: call.id }, { conversationId: conversation.id, ownership: { kind: 'task', taskId: api.taskId } });
-            await tx.appendEntry(conversation.id, { kind: 'woven.codemode-context', edits: [{ target: assistant.id, action: 'omit' }] });
-            return { taskID, assistantID: assistant.id };
-          }, ctx);
-          let cancellation;
-          const cancel = () => { cancellation ??= harness.abortTask(nestedTask.taskID, context); cancellation.catch(() => {}); };
-          signal?.addEventListener('abort', cancel, { once: true });
-          if (signal?.aborted) cancel();
+          const visible = api.conversationId === record.conversation.id;
+          let nestedTask, ended = false;
+          if (visible) {
+            nestedProgress.add(call.id);
+            send(toolStream.update({ type: 'tool_execution_start', toolCallId: call.id, toolName: name, args: input }));
+          }
           try {
-            const settled = await api.waitForTask(nestedTask.taskID, ctx);
-            signal?.throwIfAborted();
-            const outcome = settled.state.outcome;
-            if (outcome.status !== 'completed') throw new Error('Nested tool interrupted.');
-            const entry = (await storage.entry(outcome.result.entryId, ctx))?.entry;
-            await api.commit(tx => tx.appendEntry(conversation.id, { kind: 'woven.codemode-context', edits: [{ target: nestedTask.assistantID, action: 'omit' }, { target: outcome.result.entryId, action: 'omit' }] }), ctx);
-            const message = entry?.model?.[0];
-            return { toolCall: call, result: { content: message?.content ?? [], details: message?.details, structuredContent: message?.details?.structuredContent }, isError: Boolean(message?.isError) };
+            nestedTask = await api.commit(async tx => {
+              signal?.throwIfAborted(); ctx.abortSignal.throwIfAborted();
+              const assistant = await tx.appendEntry(conversation.id, { kind: 'pi.assistant', data: { wovenNestedCall: true }, model: [{ role: 'assistant', content: [{ type: 'toolCall', ...call }], timestamp: Date.now(), api: scope.session.model?.api, provider: scope.session.model?.provider, model: scope.session.model?.id, stopReason: 'toolUse', usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } }], edits: [] });
+              const taskID = await tx.createTask(ToolTask, { kind: 'model', assistant: assistant.id, callId: call.id }, { conversationId: conversation.id, ownership: { kind: 'task', taskId: api.taskId } });
+              await tx.appendEntry(conversation.id, { kind: 'woven.codemode-context', edits: [{ target: assistant.id, action: 'omit' }] });
+              return { taskID, assistantID: assistant.id };
+            }, ctx);
+            let cancellation;
+            const cancel = () => { cancellation ??= harness.abortTask(nestedTask.taskID, context); cancellation.catch(() => {}); };
+            signal?.addEventListener('abort', cancel, { once: true });
+            if (signal?.aborted) cancel();
+            try {
+              const settled = await api.waitForTask(nestedTask.taskID, ctx);
+              signal?.throwIfAborted();
+              const outcome = settled.state.outcome;
+              if (outcome.status !== 'completed') throw new Error('Nested tool interrupted.');
+              const entry = (await storage.entry(outcome.result.entryId, ctx))?.entry;
+              await api.commit(tx => tx.appendEntry(conversation.id, { kind: 'woven.codemode-context', edits: [{ target: nestedTask.assistantID, action: 'omit' }, { target: outcome.result.entryId, action: 'omit' }] }), ctx);
+              const message = entry?.model?.[0];
+              if (visible) { send(toolStream.update({ type: 'tool_execution_end', toolCallId: call.id, entry })); ended = true; }
+              return { toolCall: call, result: { content: message?.content ?? [], details: message?.details, structuredContent: message?.details?.structuredContent }, isError: Boolean(message?.isError) };
+            } finally {
+              signal?.removeEventListener('abort', cancel);
+              if (cancellation) { await cancellation; await harness.waitForTask(nestedTask.taskID, context); }
+            }
           } finally {
-            signal?.removeEventListener('abort', cancel);
-            if (cancellation) { await cancellation; await harness.waitForTask(nestedTask.taskID, context); }
+            nestedProgress.delete(call.id);
+            if (visible && !ended) send(toolStream.update({ type: 'tool_execution_end', toolCallId: call.id }));
           }
       };
       let result;
@@ -443,6 +461,7 @@ export async function openDurableSession(engine, id, requested) {
     eventStream = await watchEvents(harness, conversation.id, context);
     void eventStream.closed.then(() => { record.eventClosed = true; });
     const knownEntries = new Set(eventStream.snapshot.entries.map(e => e.id));
+    const toolStream = new NativeToolStream();
     let blocks = new Map(), completedAssistantText = '', messageOpen = false, messageSequence = 0;
     const visibleText = value => [...value].sort(([a], [b]) => a - b).map(([, block]) => block.type === 'text' ? block.text : '').join('');
     const reconcileBlocks = next => {
@@ -499,10 +518,12 @@ export async function openDurableSession(engine, id, requested) {
           }
         }
         else if (event.type === 'message_end') endEntry(event.entry);
-        else if (event.type === 'snapshot') { for (const entry of event.entries) if (!knownEntries.has(entry.id)) endEntry(entry); if (event.generation?.message) reconcileMessage(event.generation.message); }
-        else if (event.type === 'tool_execution_start') send({ sessionUpdate: 'tool_call', toolCallId: event.toolCallId, title: event.toolName, kind: event.toolName === 'bash' ? 'execute' : 'other', status: 'in_progress', rawInput: event.args });
-        else if (event.type === 'tool_execution_update') send({ sessionUpdate: 'tool_call_update', toolCallId: event.toolCallId, status: 'in_progress', rawOutput: event });
-        else if (event.type === 'tool_execution_end') { const message = event.entry?.model?.[0]; send({ sessionUpdate: 'tool_call_update', toolCallId: event.toolCallId, status: !message || message.isError ? 'failed' : 'completed', content: (message?.content ?? []).map(content => ({ type: 'content', content })) }); }
+        else if (event.type === 'snapshot') {
+          for (const entry of event.entries) if (!knownEntries.has(entry.id)) endEntry(entry);
+          if (event.generation?.message) reconcileMessage(event.generation.message);
+          for (const update of toolStream.snapshot(event, nestedProgress)) send(update);
+        }
+        else if (['tool_execution_start','tool_execution_update','tool_execution_end'].includes(event.type)) send(toolStream.update(event));
       }
     });
     record.contextLeaf = async () => (await conversation.context(context)).entries.at(-1)?.id;

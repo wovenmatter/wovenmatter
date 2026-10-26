@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cpSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { cpSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -58,10 +58,12 @@ test('native hook outputs update only shell arguments and never permissions or m
   assert.deepEqual(promptCandidates('grok_build', { text: 'steer' }), ['steer']);
 });
 
-test('bundled hooks run from application paths containing spaces', t => {
+test('bundled hooks run through symlinked application paths containing spaces', t => {
   const directory = fixture(t);
-  const bundled = join(directory, 'Woven Matter Dev.app', 'cli');
-  cpSync(new URL('../../harnesses/cli/', import.meta.url), bundled, { recursive: true });
+  const actual = join(directory, 'Woven Matter Dev.app', 'cli');
+  const bundled = join(directory, 'Launch alias');
+  cpSync(new URL('../../harnesses/cli/', import.meta.url), actual, { recursive: true });
+  symlinkSync(actual, bundled, 'dir');
   enqueue(directory, context('captured'), ['hello']);
   const identity = { session_id: 'native', turn_id: 'turn' };
   const invoke = event => {
@@ -75,6 +77,29 @@ test('bundled hooks run from application paths containing spaces', t => {
   assert.deepEqual(invoke({ hook_event_name: 'UserPromptSubmit', prompt: 'hello' }), {});
   const result = invoke({ hook_event_name: 'PreToolUse', tool_name: 'exec_command', tool_input: { cmd: 'wovenmatter context' } });
   assert.match(result.hookSpecificOutput.updatedInput.cmd, /WOVENMATTER_CONTEXT_ID='captured'/);
+});
+
+for (const runtime of ['codex', 'claude_code', 'grok_build']) test(`${runtime} wrapper starts its fixture through a symlink`, t => {
+  const directory = fixture(t), alias = join(directory, 'Woven Dev.app');
+  symlinkSync(realpathSync(new URL('../../harnesses/cli/', import.meta.url)), alias, 'dir');
+  const fake = join(directory, 'fixture.mjs');
+  writeFileSync(fake, `import {readFileSync} from 'node:fs'; for(const line of readFileSync(0,'utf8').trim().split('\\n')) {const message=JSON.parse(line); console.log(JSON.stringify({id:message.id,result:{fixture:true}}));}`);
+  const result = spawnSync(process.execPath, [join(alias, 'adapter.mjs'), runtime, process.execPath, fake], {
+    env: { PATH: process.env.PATH, HOME: directory, GROK_HOME: join(directory, 'grok') },
+    input: JSON.stringify({id:1,method:'initialize',params:{}}) + '\n', encoding: 'utf8', timeout: 5000,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), {id:1,result:{fixture:true}});
+});
+
+test('OpenCode installer starts through a symlink without touching real user settings', t => {
+  const directory = fixture(t), alias = join(directory, 'Woven Dev.app');
+  symlinkSync(realpathSync(new URL('../../harnesses/cli/', import.meta.url)), alias, 'dir');
+  const result = spawnSync(process.execPath, [join(alias, 'install.mjs'), 'opencode'], {
+    env: {PATH:process.env.PATH, XDG_CONFIG_HOME:join(directory,'config')}, encoding:'utf8',timeout:5000,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(readFileSync(join(directory,'config/opencode/plugins/wovenmatter-cli.js'),'utf8'), /opencode\.mjs/);
 });
 
 test('OpenCode resolves the user before the executing assistant, not a later admitted input', async () => {

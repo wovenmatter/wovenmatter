@@ -1,18 +1,26 @@
 # Background execution
 
 Background execution moves execution ownership out of the macOS window process.
-The local preference is on by default; an explicitly saved off choice is preserved.
-Development profiles keep their foreground execution mode and never enable a
-background login job. Remote workspaces have independent
-preferences, enabled by default. The normal app remains the execution owner when
-local background execution is disabled.
+The production Mac library host always executes in the background server. Its visible app
+is a client; legacy off preferences no longer select a foreground execution owner.
+Development profiles use isolated background servers and never install login jobs.
+Remote workspaces retain their own independent execution preferences.
+
+See the [pre-change parity audit](BACKGROUND_SERVER_PARITY_AUDIT.md) for the
+ownership comparison, repaired failures, verification and remaining provider boundary.
+
+The separate paired-library-client architecture still hosts its optional secondary
+Mac execution workspace inside the client process. This change does not convert
+that federation transport into a background service. Client development profiles
+continue to use that architecture; snapshot profiles test the library host server.
+
 
 ## Local ownership
 
 The backend runs the existing application services in a headless process. It owns
 SQLite writes, session transports, remote connections, scheduled task admission,
 credential operations, library maintenance, and usage collection. An exclusive
-workspace lease prevents a standalone app and backend from owning the same
+workspace lease prevents an isolated development host and backend from owning the same
 workspace simultaneously. The frontend has a separate window-process lease.
 
 The frontend keeps the existing observable models and rendering caches. It reads
@@ -27,10 +35,30 @@ the cursor so reconnect cannot silently miss the update. OpenCode transfers
 session revisions rather than transcript bodies; visible sessions load through
 the existing database presentation path. The backend does not render chat text.
 
-Execution-mode changes require idle sessions and completed approvals. Admission
+Library-role changes require idle sessions and completed approvals. Admission
 is fenced before shutdown. Notes flush before the frontend exits or switches
-modes. Failed transitions restore the previous preference and restart its owner.
+library roles. Failed transitions restore the previous role and restart its owner.
 Quitting the frontend does not shut down backend-owned sessions.
+
+## Harness entry points and failures
+
+Local Pi Durable, Codex, Claude Code, Grok, and OpenCode transports belong to the
+execution owner. The frontend requests metadata, configuration, sends, and stops
+through the private backend protocol. Remote native transports remain owned by
+the workspace service; reconnecting its relay does not replay accepted input.
+
+Node canonicalizes a module's file URL, while its command-line path can retain
+symlinks such as macOS `/tmp` → `/private/tmp`. Executable module guards must
+compare the real command-line path to the module URL. This applies to native
+harness wrappers and hooks, the OpenCode installer, Pi browser/Executor helpers,
+and the remote stdio relay. Subprocess regressions exercise application aliases
+containing spaces rather than importing these modules alone.
+
+Pi provider failures retain fixed HTTP classifications across native storage and
+IPC. Response bodies, headers, request URLs, and arbitrary SDK exception text are
+not diagnostics. A new transport attempt clears the previous HTTP classification
+before awaiting the request, so a network failure cannot reuse a stale account or
+quota failure and select another connection.
 
 ## Active work and display sleep
 
@@ -49,7 +77,7 @@ When neither level selects the current source, the owner uses
 `.userInitiatedAllowingIdleSystemSleep`, preserving App Nap protection while allowing
 system sleep. This does not end the work or its dispatch leases.
 
-Both levels apply in standalone and backend modes; the frontend never owns an
+Both levels apply in development-host and backend modes; the frontend never owns an
 assertion. Preferences and actual protection state are published by the execution
 owner. Keeping the backend awake lets active work continue after the frontend quits.
 On a secondary Mac, General settings targets that Mac's local execution model
@@ -201,3 +229,33 @@ Repeat with background execution enabled and the frontend closed, and verify
 recovery after terminating the owner/helper. Confirm `pmset -g` and
 `pmset -g assertions` before and after each case. Do not infer hardware acceptance
 from the provider-free tests.
+
+## Server controls and inspection
+
+Settings → Background Server displays owner-reported activity for this Mac or a
+remote workspace. Stop first asks the server to check its current work. Active
+work requires an explicit confirmation; confirming fences new admissions, cancels
+owned work through its normal Stop path, flushes notes, and shuts the server down.
+Maintenance operations must finish before shutdown. Restart uses the same Stop
+confirmation and waits for the old owner to release its lease before starting.
+Closing the app leaves the production server running. Start reconnects a stopped
+server. A missing server never promotes the UI into an execution owner.
+
+Controls follow observed ownership: a responsive server offers Stop/Restart;
+Start appears only after its local execution lease is confirmed unowned. An
+unresponsive lease owner is unavailable, not stopped. The inventory has flat
+Server, Agent activity, and Device connection sections. Agent processes and
+subagents stay associated with their chat; shared workers remain separate.
+Connection supervision is registered by its launcher and shown only in optional
+process details, alongside the Tailscale transport. Details retain parent labels
+without reproducing the operating system's nested process tree.
+
+Pi permission setup awaits an existing native-idle probe before checking whether
+the session can change policy. A configuration read's internal idle lease does
+not become a user-facing busy error. Cancellation and session ownership are
+revalidated after the wait, and foreground runs still prevent permission edits.
+
+Server inspection stays in Settings and never starts Pi workers or replays agent
+input. Disconnected readings retain their observation timestamp. Live agent text,
+reasoning, tool output and subprocess progress appear in the chat transcript.
+There is no separate per-chat activity asset tab.

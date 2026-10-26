@@ -5,7 +5,7 @@ import { calculateCost } from '@earendil-works/pi-ai/models';
 import { isContextOverflow } from '@earendil-works/pi-ai/utils/overflow';
 import { defineDoc, UsageDoc } from '@earendil-works/pi-durable';
 import { getCurrentSystemMessage } from '@earendil-works/pi-ai/utils/transcript';
-import { DefaultAgentError, accessFailure, operationErrorMessage } from './config.mjs';
+import { DefaultAgentError, accessFailure, operationErrorMessage, providerFailure } from './config.mjs';
 import { providerFetch } from './transport.mjs';
 
 export const NativeContext = defineDoc({ kind: 'woven.native-context', version: 1, scope: 'conversation', checkpointWhen: () => false, history: 'rewindable', fork: 'current', initial: () => ({ covered: [] }) });
@@ -16,10 +16,11 @@ const usable = message => message.role !== 'assistant' || !['aborted', 'error', 
 // SDKs also return transport exceptions as assistant diagnostics instead of
 // throwing. Preserve exposed content and usage, and normalize only that error
 // diagnostic before it can become a native task/transcript/archive record.
-export function safeAssistantDiagnostic(message) {
+export function safeAssistantDiagnostic(message, transportFailure) {
   return message && ['error', 'aborted'].includes(message.stopReason) && typeof message.errorMessage === 'string'
     ? { ...message, errorMessage: accessFailure(message.errorMessage)
-      ?? contextOverflowDiagnostic(message.errorMessage, message.provider) ?? operationErrorMessage(undefined) } : message;
+      ?? contextOverflowDiagnostic(message.errorMessage, message.provider)
+      ?? providerFailure(transportFailure) ?? providerFailure(message.errorMessage) ?? operationErrorMessage(undefined) } : message;
 }
 
 // Keep the SDK's overflow classification without retaining an exception body,
@@ -177,7 +178,7 @@ export function nativeContextBridge(record, engine, background) {
       sessionId: record.providerSessionID ?? record.session.sessionId,
       ...(thinkingLevel && thinkingLevel !== 'off' ? { reasoning: thinkingLevel } : {}),
       wovenNativeContext: scope(route, taskID, messages),
-    })));
+    })), record.httpFailure);
     record.appendArchive([{ id: `portable-result:${taskID}:${hash(result)}`, kind: 'pi.compaction.response', payload: JSON.stringify(result), contentMode: 'event', text: result.content.flatMap(block => block.type === 'text' ? [block.text] : block.type === 'thinking' ? [block.thinking] : []).join('\n'), projectionJSON: JSON.stringify([result]), ...((record.busy || record.resuming) && record.runID ? { runID: record.runID } : {}) }]);
     await record.archiveQueue; if (record.archiveError) throw record.archiveError;
     if (result.stopReason !== 'stop' || result.content.some(block => block.type === 'toolCall')) throw new DefaultAgentError(result.errorMessage ?? 'Context summarization did not complete.');
