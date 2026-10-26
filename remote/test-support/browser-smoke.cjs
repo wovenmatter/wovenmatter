@@ -130,7 +130,7 @@ async function verifyInteraction(page, tabID, request) {
   await otherTab.goto(originalURL + '?agent=another-tab');
   const frame = async () => {
     const response = await request('frame', { tabID });
-    assert.equal(response.status, 200);
+    assert.equal(response.status, 200, response.status === 200 ? undefined : await response.text());
     return response.json();
   };
   const input = async (gesture) => {
@@ -173,10 +173,13 @@ async function verifyInteraction(page, tabID, request) {
   await page.waitForURL(originalURL + '?human=1', { waitUntil: 'commit' });
   assert.equal((await request('action', { kind: 'text', text: 'stale input must not land', tabID,
     frameID: beforeNavigation.frameID, actionID: require('node:crypto').randomUUID() })).status, 409);
-  await input({ kind: 'back' });
-  await page.waitForURL(originalURL, { waitUntil: 'commit' });
-  await input({ kind: 'forward' });
-  await page.waitForURL(originalURL + '?human=1', { waitUntil: 'commit' });
+  // Repeated history restoration exercises captures before the next renderer paint.
+  for (let visit = 0; visit < 5; visit++) {
+    await input({ kind: 'back' });
+    await page.waitForURL(originalURL, { waitUntil: 'commit' });
+    await input({ kind: 'forward' });
+    await page.waitForURL(originalURL + '?human=1', { waitUntil: 'commit' });
+  }
   await input({ kind: 'reload' });
   assert.equal(await otherTab.getByRole('textbox', { name: 'Name' }).inputValue(), '');
   await otherTab.close();

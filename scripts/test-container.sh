@@ -50,7 +50,8 @@ WOVENMATTER_API_TOKEN="$token_a" \
   scripts/remote-workspace.sh create "$workspace_a" "$port_a" '' '' "$image_id" >/dev/null
 [ "$(docker inspect --format '{{.Image}}' "$container_a")" = "$image_id" ]
 WOVENMATTER_API_TOKEN="$token_b" \
-  scripts/remote-workspace.sh create "$workspace_b" "$port_b" >/dev/null
+  scripts/remote-workspace.sh create "$workspace_b" "$port_b" '' '' "$image_id" >/dev/null
+[ "$(docker inspect --format '{{.Image}}' "$container_b")" = "$image_id" ]
 
 wait_for_health() {
   local port="$1" token="$2" deadline=$((SECONDS + 30))

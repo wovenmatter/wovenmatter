@@ -203,25 +203,37 @@ export function createWorkspaceBrowser({ profile, launch = launchBrowser }) {
         return await deadline(async () => {
           cdp = await sessionFor(page)
           if (expired) { await cdp.detach().catch(() => {}); throw failure(503, 'browser_timed_out') }
-          const { cssVisualViewport: viewport } = await cdp.send('Page.getLayoutMetrics')
-          if (!viewport || ![viewport.pageX, viewport.pageY, viewport.clientWidth, viewport.clientHeight].every(Number.isFinite)
-              || viewport.clientWidth <= 0 || viewport.clientHeight <= 0) throw failure(503, 'browser_frame_unavailable')
-          if (expired) throw failure(503, 'browser_timed_out')
-          const document = documents.get(page)
-          const { data } = await cdp.send('Page.captureScreenshot', {
-            format: 'jpeg', quality: 65, optimizeForSpeed: true, captureBeyondViewport: false,
-            clip: { x: viewport.pageX, y: viewport.pageY, width: Math.min(viewport.clientWidth, 1920),
-              height: Math.min(viewport.clientHeight, 1200), scale: 1 },
-          })
-          if (data.length > 2 * 1024 * 1024) throw failure(413, 'browser_frame_too_large')
-          if (page.isClosed() || pages.get(tabID) !== page) throw failure(410, 'browser_tab_closed')
-          if (document !== documents.get(page)) throw failure(409, 'browser_page_changed')
-          const previous = frames.get(previousFrameID)
-          const frame = recordFrame(page, document, viewport, data, Math.min(viewport.clientWidth, 1920), Math.min(viewport.clientHeight, 1200))
-          const unchanged = previous?.page === page && previous.document === document
-            && previous.digest === frames.get(frame.frameID).digest
-          succeeded = true
-          return { ...frame, imageBase64: unchanged ? '' : data }
+          for (let attempt = 0; attempt < 3; attempt++) {
+            if (expired) throw failure(503, 'browser_timed_out')
+            const { cssVisualViewport: viewport } = await cdp.send('Page.getLayoutMetrics')
+            if (!viewport || ![viewport.pageX, viewport.pageY, viewport.clientWidth, viewport.clientHeight].every(Number.isFinite)
+                || viewport.clientWidth <= 0 || viewport.clientHeight <= 0) throw failure(503, 'browser_frame_unavailable')
+            if (expired) throw failure(503, 'browser_timed_out')
+            const document = documents.get(page)
+            let data
+            try { ({ data } = await cdp.send('Page.captureScreenshot', {
+              format: 'jpeg', quality: 65, optimizeForSpeed: true, captureBeyondViewport: false,
+              clip: { x: viewport.pageX, y: viewport.pageY, width: Math.min(viewport.clientWidth, 1920),
+                height: Math.min(viewport.clientHeight, 1200), scale: 1 },
+            })) } catch (error) {
+              // Chromium can briefly lack a screenshot surface after history restoration.
+              // Retry only this read, with fresh layout metrics, within the same deadline.
+              if (!String(error?.message).includes('Protocol error (Page.captureScreenshot): Unable to capture screenshot')) throw error
+              if (attempt === 2) throw failure(503, 'browser_frame_unavailable')
+              await new Promise(resolve => setTimeout(resolve, 16 * (attempt + 1)))
+              continue
+            }
+            if (expired) throw failure(503, 'browser_timed_out')
+            if (data.length > 2 * 1024 * 1024) throw failure(413, 'browser_frame_too_large')
+            if (page.isClosed() || pages.get(tabID) !== page) throw failure(410, 'browser_tab_closed')
+            if (document !== documents.get(page)) throw failure(409, 'browser_page_changed')
+            const previous = frames.get(previousFrameID)
+            const frame = recordFrame(page, document, viewport, data, Math.min(viewport.clientWidth, 1920), Math.min(viewport.clientHeight, 1200))
+            const unchanged = previous?.page === page && previous.document === document
+              && previous.digest === frames.get(frame.frameID).digest
+            succeeded = true
+            return { ...frame, imageBase64: unchanged ? '' : data }
+          }
         })
       } finally {
         expired = true

@@ -69,6 +69,53 @@ test('frames use only known tabs, bound the current viewport, and reuse the cont
   await f.service.close()
 })
 
+test('transient history screenshot failure retries only capture with fresh layout', async () => {
+  const f = fixture(); await f.service.connect(); f.addPage()
+  const tab = (await f.service.tabs()).tabs[0]
+  const createSession = f.context.newCDPSession
+  let captures = 0
+  f.context.newCDPSession = async () => {
+    const cdp = await createSession(), send = cdp.send
+    cdp.send = async (method, params) => {
+      if (method === 'Page.captureScreenshot' && ++captures === 1) {
+        f.commands.push({ method, params })
+        throw new Error('cdpSession.send: Protocol error (Page.captureScreenshot): Unable to capture screenshot')
+      }
+      return send(method, params)
+    }
+    return cdp
+  }
+  assert.equal((await f.service.frame(tab.id)).tabID, tab.id)
+  assert.equal(captures, 2)
+  assert.equal(f.commands.filter(c => c.method === 'Page.getLayoutMetrics').length, 2)
+  assert.ok(f.commands.every(c => c.method.startsWith('Page.')))
+  assert.equal(f.sessions.length, 1)
+  await f.service.close()
+})
+
+test('persistent screenshot failure has bounded retries and releases capture ownership', async () => {
+  const f = fixture(); await f.service.connect(); f.addPage()
+  const tab = (await f.service.tabs()).tabs[0]
+  const createSession = f.context.newCDPSession
+  let captures = 0
+  f.context.newCDPSession = async () => {
+    const cdp = await createSession(), send = cdp.send
+    cdp.send = async (method, params) => {
+      if (method === 'Page.captureScreenshot') {
+        captures++
+        throw new Error('cdpSession.send: Protocol error (Page.captureScreenshot): Unable to capture screenshot')
+      }
+      return send(method, params)
+    }
+    return cdp
+  }
+  await assert.rejects(f.service.frame(tab.id), { statusCode: 503, message: 'browser_frame_unavailable' })
+  assert.equal(captures, 3)
+  f.context.newCDPSession = createSession
+  assert.equal((await f.service.frame(tab.id)).tabID, tab.id)
+  await f.service.close()
+})
+
 test('failed and overlapping frames do not wedge future viewing', async () => {
   const f = fixture(); await f.service.connect(); f.addPage()
   const tab = (await f.service.tabs()).tabs[0]
