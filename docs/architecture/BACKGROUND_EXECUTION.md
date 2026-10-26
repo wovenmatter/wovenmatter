@@ -227,6 +227,11 @@ Connection supervision is registered by its launcher and shown only in optional
 process details, alongside the Tailscale transport. Details retain parent labels
 without reproducing the operating system's nested process tree.
 
+Pi permission setup awaits an existing native-idle probe before checking whether
+the session can change policy. A configuration read's internal idle lease does
+not become a user-facing busy error. Cancellation and session ownership are
+revalidated after the wait, and foreground runs still prevent permission edits.
+
 Inspect chat activity opens a conversation-scoped tab alongside notes and browser
 tabs. Inspection is passive and does not start Pi workers or replay agent input.
 Disconnected inspectors retain their last observation with its timestamp and mark
