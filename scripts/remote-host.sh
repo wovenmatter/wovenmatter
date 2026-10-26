@@ -375,41 +375,92 @@ def safe_extract(archive_path,target,expected=None):
                 destination.chmod(0o700 if member.mode&0o111 else 0o600)
         return manifest
 
+def shell_file_state(path,ancestors=frozenset(),allow_special=False):
+    try: info=path.lstat()
+    except FileNotFoundError: return {'kind':'missing'}
+    identity=(info.st_dev,info.st_ino)
+    if identity in ancestors: return {'kind':'cycle'}
+    mode=stat.S_IMODE(info.st_mode)
+    if stat.S_ISLNK(info.st_mode):
+        target=os.readlink(path)
+        referent=Path(target) if os.path.isabs(target) else path.parent/target
+        return {'kind':'link','mode':mode,'target':target,'referent':shell_file_state(referent,ancestors|{identity},allow_special)}
+    if stat.S_ISREG(info.st_mode): return {'kind':'file','mode':mode,'bytes':path.read_bytes()}
+    if allow_special: return {'kind':'other','mode':mode,'type':stat.S_IFMT(info.st_mode)}
+    fail('unsafe_shell_configuration','Shell startup paths must be regular files or symbolic links.',78)
+
+def restore_shell_file(path,state):
+    kind=state['kind']
+    if kind=='cycle': return
+    same_link=kind=='link' and path.is_symlink() and os.readlink(path)==state['target']
+    same_file=kind=='file' and not path.is_symlink() and path.is_file()
+    if not same_link and not same_file:
+        if path.is_symlink() or (path.exists() and not path.is_dir()): path.unlink()
+        elif path.is_dir(): shutil.rmtree(path)
+    if kind=='missing': return
+    path.parent.mkdir(parents=True,exist_ok=True)
+    if kind=='link':
+        if not same_link: path.symlink_to(state['target'])
+        if hasattr(os,'lchmod'):
+            with contextlib.suppress(NotImplementedError): os.lchmod(path,state['mode'])
+        target=state['target']
+        referent=Path(target) if os.path.isabs(target) else path.parent/target
+        restore_shell_file(referent,state['referent'])
+    elif kind=='file':
+        if same_file: path.chmod(state['mode']|0o200)
+        path.write_bytes(state['bytes']); path.chmod(state['mode'])
+
 def snapshot_user_files():
-    rc={}
-    for relative in RC_FILES:
-        path=HOME/relative
-        if path.is_symlink(): rc[relative]=('link',os.readlink(path),None)
-        elif path.exists(): rc[relative]=('file',path.read_bytes(),path.stat().st_mode&0o777)
-        else: rc[relative]=('missing',None,None)
+    rc={relative:shell_file_state(HOME/relative) for relative in RC_FILES}
     def config_tree():
+        # Guard settings by content and permissions. Normal harness sessions,
+        # logs and SQLite journals can change while the service is installing;
+        # their metadata must not turn a safe update into a false failure.
         tree={}
+        def runtime_path(root,parts):
+            if not parts: return False
+            if root=='.codex':
+                if parts[0] in ('tmp','log','logs','sessions','archived_sessions'): return True
+                if len(parts)==1 and (parts[0] in ('history.jsonl','session_index.jsonl') or re.fullmatch(r'(?:state|logs)_\d+\.sqlite(?:-(?:wal|shm|journal))?',parts[0])): return True
+            return root=='.grok' and parts[0] in ('logs','sessions')
+        def visit(path,key,root,parts,ancestors):
+            if runtime_path(root,parts): return
+            try:
+                info=path.lstat()
+            except FileNotFoundError:
+                tree[key]=None; return
+            kind=stat.S_IFMT(info.st_mode); mode=stat.S_IMODE(info.st_mode)
+            identity=(info.st_dev,info.st_ino)
+            if identity in ancestors:
+                tree[key]=[kind,mode,'cycle']; return
+            following=ancestors|{identity}
+            if stat.S_ISLNK(info.st_mode):
+                target=os.readlink(path)
+                tree[key]=[kind,mode,target]
+                # Follow file and directory aliases, including a symlink at
+                # .codex itself. Apply exclusions to the logical harness path,
+                # so a config alias into a cache remains a protected config.
+                resolved=Path(target) if os.path.isabs(target) else path.parent/target
+                visit(resolved,key+'\0target',root,parts,following)
+            elif stat.S_ISDIR(info.st_mode):
+                tree[key]=[kind,mode]
+                for child in sorted(path.iterdir()):
+                    visit(child,key+'/'+child.name,root,(*parts,child.name),following)
+            elif stat.S_ISREG(info.st_mode):
+                tree[key]=[kind,mode,hashlib.sha256(path.read_bytes()).hexdigest()]
+            else: tree[key]=[kind,mode]
         for relative in HARNESS_CONFIGS:
-            path=HOME/relative
-            items=[path,*path.rglob('*')] if path.is_dir() and not path.is_symlink() else [path]
-            for item in items:
-                try:
-                    info=item.lstat(); value=[stat.S_IFMT(info.st_mode),info.st_mtime_ns,info.st_size]
-                    if item.is_file() and not item.is_symlink(): value.append(hashlib.sha256(item.read_bytes()).hexdigest())
-                    elif item.is_symlink(): value.append(os.readlink(item))
-                    tree[str(item)]=value
-                except FileNotFoundError: tree[str(item)]=None
+            visit(HOME/relative,relative,relative,(),set())
         return tree
     return rc,config_tree,config_tree()
 
 def verify_user_files(snapshot):
     rc,config_tree,before=snapshot; changed=False
-    for relative,(kind,value,mode) in rc.items():
+    for relative,state in rc.items():
         path=HOME/relative
-        same=(kind=='missing' and not path.exists() and not path.is_symlink()) or (kind=='link' and path.is_symlink() and os.readlink(path)==value)
-        if kind=='file':
-            same=not path.is_symlink() and path.is_file() and path.read_bytes()==value
-        if not same:
+        if shell_file_state(path,allow_special=True)!=state:
             changed=True
-            if path.is_symlink() or path.is_file(): path.unlink()
-            elif path.exists(): shutil.rmtree(path)
-            if kind=='link': path.parent.mkdir(parents=True,exist_ok=True); path.symlink_to(value)
-            elif kind=='file': path.parent.mkdir(parents=True,exist_ok=True); path.write_bytes(value); path.chmod(mode)
+            restore_shell_file(path,state)
     if changed: fail('installer_modified_shell_config','An installer changed shell configuration; the original files were restored.',78)
     if before!=config_tree(): fail('installer_modified_harness_config','An installer changed an existing harness configuration. Installation was rejected.',78)
 

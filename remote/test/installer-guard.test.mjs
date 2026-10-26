@@ -60,3 +60,65 @@ test('guard audits credential files behind an existing harness directory symlink
   await symlink(target, resolve(home, '.codex'))
   await assert.rejects(withInstallerGuard(home, () => writeFile(resolve(target, 'auth.json'), 'changed account!')), /installer_modified_harness_config/)
 })
+
+test('ordinary Codex and Grok runtime creation and rotation do not veto installation', async t => {
+  const home = await fixture(t)
+  for (const harness of ['.codex', '.grok']) await mkdir(resolve(home, harness))
+  await withInstallerGuard(home, async () => {
+    for (const directory of ['.codex/tmp', '.codex/log', '.codex/logs', '.codex/sessions', '.codex/archived_sessions', '.grok/logs', '.grok/sessions']) {
+      await mkdir(resolve(home, directory), { recursive: true })
+      await writeFile(resolve(home, directory, 'active-session'), 'live runtime output')
+    }
+    for (const name of ['history.jsonl', 'session_index.jsonl', 'state_5.sqlite', 'state_5.sqlite-wal', 'state_5.sqlite-shm', 'state_5.sqlite-journal', 'logs_1.sqlite']) {
+      await writeFile(resolve(home, '.codex', name), 'runtime state')
+    }
+  })
+  await withInstallerGuard(home, async () => {
+    await rm(resolve(home, '.codex/log'), { recursive: true })
+    await mkdir(resolve(home, '.codex/log'))
+    await writeFile(resolve(home, '.grok/sessions/new-session'), 'new output')
+    await writeFile(resolve(home, '.codex/state_5.sqlite-wal'), 'more runtime state')
+  })
+})
+
+test('same-byte configuration and Grok identity rewrites retain protection without timestamp false positives', async t => {
+  const home = await fixture(t)
+  for (const harness of ['.codex', '.grok']) await mkdir(resolve(home, harness))
+  const identity = resolve(home, '.grok/agent_id'), config = resolve(home, '.codex/config.toml')
+  await writeFile(identity, 'stable-identity', { mode: 0o600 })
+  await writeFile(config, 'configured = true\n', { mode: 0o600 })
+  await withInstallerGuard(home, async () => {
+    await rm(identity); await writeFile(identity, 'stable-identity', { mode: 0o600 })
+    await writeFile(config, 'configured = true\n')
+    await utimes(config, new Date(0), new Date(0))
+  })
+  await assert.rejects(withInstallerGuard(home, () => writeFile(identity, 'changed-identity')), /installer_modified_harness_config/)
+})
+
+test('runtime exclusions do not permit changed config, extensions or unknown lookalike paths', async t => {
+  for (const relative of ['.codex/auth.json', '.codex/config.toml', '.codex/skills/tmp/config.json', '.codex/state_config.sqlite', '.codex/logs-custom.json', '.claude/logs/settings.json', '.config/opencode/config.json', '.grok/agent_id', '.grok/config.json']) {
+    const home = await fixture(t), path = resolve(home, relative)
+    await mkdir(resolve(path, '..'), { recursive: true }); await writeFile(path, 'original')
+    await assert.rejects(withInstallerGuard(home, () => writeFile(path, 'modified')), /installer_modified_harness_config/, relative)
+  }
+})
+
+test('config aliases into runtime paths remain guarded and directory cycles are bounded', async t => {
+  const home = await fixture(t), codex = resolve(home, '.codex')
+  await mkdir(resolve(codex, 'tmp'), { recursive: true })
+  await writeFile(resolve(codex, 'tmp/aliased-auth.json'), 'protected account')
+  await symlink('tmp/aliased-auth.json', resolve(codex, 'auth.json'))
+  await symlink(codex, resolve(codex, 'cycle'))
+  await withInstallerGuard(home, async () => {})
+  await assert.rejects(withInstallerGuard(home, () => writeFile(resolve(codex, 'tmp/aliased-auth.json'), 'changed account!!')), /installer_modified_harness_config/)
+  await rm(resolve(codex, 'auth.json'))
+  await symlink('tmp', resolve(codex, 'settings-alias'))
+  await assert.rejects(withInstallerGuard(home, () => writeFile(resolve(codex, 'tmp/aliased-auth.json'), 'changed via directory alias')), /installer_modified_harness_config/)
+})
+
+test('protected harness directory and file permission changes are rejected', async t => {
+  const home = await fixture(t), root = resolve(home, '.codex')
+  await mkdir(root, { mode: 0o700 }); await writeFile(resolve(root, 'auth.json'), 'account', { mode: 0o600 })
+  await assert.rejects(withInstallerGuard(home, () => chmod(resolve(root, 'auth.json'), 0o644)), /installer_modified_harness_config/)
+  await assert.rejects(withInstallerGuard(home, () => chmod(root, 0o755)), /installer_modified_harness_config/)
+})
