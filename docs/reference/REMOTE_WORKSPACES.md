@@ -93,6 +93,18 @@ an explicit migration.
 The app uses [remote-workspace.sh](../../scripts/remote-workspace.sh) to manage
 several independently named workspaces.
 
+## Harness availability
+
+Installed harnesses are automatically available and shown in the local and remote
+workspace interfaces. Authentication and verified runtime components still gate
+chat readiness; there are no separate harness enable or visibility preferences.
+Old local preferences are ignored. When connecting to an older workspace image,
+the Mac app clears retired hidden/disabled flags for verified installations.
+New workspace services derive compatibility fields from installed components and
+ignore legacy preference writes; they persist diagnostic failure counts only.
+This migration does not sign in or copy credentials, start conversations, or
+change the workspace's background-execution setting.
+
 ## Maintaining runtime dependencies
 
 Dependency maintenance runs manually or through an owner-run agent task; see

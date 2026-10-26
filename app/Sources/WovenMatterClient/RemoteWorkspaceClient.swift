@@ -323,6 +323,7 @@ public struct RemoteRuntimeComponent: Codable, Equatable, Identifiable, Sendable
 public struct RemoteRuntimeMaintenance: Codable, Equatable, Identifiable, Sendable {
     public let id: AgentRuntimeKind
     public let displayName: String
+    // Decoded only for compatibility with workspaces created by older apps.
     public let enabled: Bool
     public let visible: Bool
     public let installed: Bool
@@ -1233,23 +1234,23 @@ public struct RemoteWorkspaceServiceClient: Sendable {
             path: checkLatest ? "v1/runtime-maintenance/check" : "v1/runtime-maintenance",
             method: checkLatest ? "POST" : "GET", body: nil
         )
-        return document.runtimes
+        var runtimes = document.runtimes
+        for index in runtimes.indices {
+            let runtime = runtimes[index]
+            // Existing containers may still persist the removed opt-in flags.
+            // Retire those flags on verified installations without rebuilding the workspace.
+            if runtime.installed && (!runtime.enabled || !runtime.visible) {
+                runtimes[index] = try await request(
+                    path: "v1/runtime-maintenance/\(runtime.id.rawValue)", method: "PATCH",
+                    body: JSONEncoder().encode(["enabled": true, "visible": true])
+                )
+            }
+        }
+        return runtimes
     }
 
     public func checkRuntimeUpdates(_ id: AgentRuntimeKind) async throws -> RemoteRuntimeMaintenance {
         try await request(path: "v1/runtime-maintenance/\(id.rawValue)/check", method: "POST", body: nil)
-    }
-
-    public func setRuntimePreferences(
-        _ id: AgentRuntimeKind, enabled: Bool? = nil, visible: Bool? = nil
-    ) async throws {
-        var payload: [String: Bool] = [:]
-        if let enabled { payload["enabled"] = enabled }
-        if let visible { payload["visible"] = visible }
-        let _: RemoteRuntimeMaintenance = try await request(
-            path: "v1/runtime-maintenance/\(id.rawValue)", method: "PATCH",
-            body: try JSONSerialization.data(withJSONObject: payload)
-        )
     }
 
     public func maintainRuntime(

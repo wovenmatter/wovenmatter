@@ -589,16 +589,6 @@ struct SettingsRemoteWorkspacesView: View {
             }
         }
         if let runtime {
-            SettingsHarnessControlRow(title: "Sidebar") {
-                Toggle("Show in sidebar", isOn: Binding(get: { runtime.visible }, set: {
-                    model.setRuntimePreferences(runtime, configuration: workspace, visible: $0)
-                })).disabled(busy || unavailable)
-            }
-            SettingsHarnessControlRow(title: "Availability") {
-                Toggle("Enable harness", isOn: Binding(get: { runtime.enabled }, set: {
-                    model.setRuntimePreferences(runtime, configuration: workspace, enabled: $0)
-                })).disabled(busy || unavailable)
-            }
             if runtime.installed {
                 SettingsHarnessControlRow(title: "Account") {
                     Text(HarnessAccountPresentation.remoteLabel(harness))

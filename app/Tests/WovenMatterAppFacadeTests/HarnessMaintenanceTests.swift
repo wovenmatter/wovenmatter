@@ -6,6 +6,38 @@ import WovenMatterCore
 
 @MainActor @Suite(.serialized)
 struct HarnessMaintenanceTests {
+    @Test func installedHarnessesIgnoreLegacyHidingAndDisabling() async throws {
+        let fixture = try await FacadeFixture(legacyHiddenHarnesses: true); defer { fixture.remove() }
+        let kinds = Set(fixture.model.installedOrderedLocalCLIAgents.map(\.runtimeKind))
+        #expect(kinds.contains(.codex))
+        #expect(kinds.contains(.claudeCode))
+        #expect(!kinds.contains(.opencode)) // The fixture has no local OpenCode installation.
+        let snapshot = fixture.model.backendRuntimeSnapshot()
+        #expect(snapshot.installedKinds.contains(.codex))
+        #expect(snapshot.installedKinds.contains(.claudeCode))
+        #expect(fixture.defaults.bool(forKey: "wovenmatter.credential-access.disclosure-acknowledged") == false)
+    }
+
+    @Test func remoteAvailabilityIgnoresRetiredFlagsButRequiresInstallation() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        let model = fixture.model.remoteWorkspaces
+        let workspace = fixture.remote
+        let status = try #require(model.statuses[workspace.id])
+        let harnesses = model.currentHarnesses(for: workspace)
+        let rows = try #require(model.runtimeMaintenance[workspace.id])
+        for installed in [true, false] {
+            let changed = try rows.map { row in
+                var object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(row)) as? [String: Any])
+                object["enabled"] = false; object["visible"] = false
+                object["installed"] = installed
+                return try JSONDecoder().decode(RemoteRuntimeMaintenance.self, from: JSONSerialization.data(withJSONObject: object))
+            }
+            model.configureCompanionFixture(workspace, status: status, harnesses: harnesses, maintenance: changed)
+            #expect(model.isRuntimeInstalled(.codex, in: workspace) == installed)
+            #expect(model.readyChatTargets.contains { $0.harness.id == .codex } == installed)
+        }
+    }
+
     @Test func updatesOverlapAndKeepProgressAndFailuresIndependent() async throws {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
         let operations = HeldHarnessUpdates()

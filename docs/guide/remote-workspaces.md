@@ -28,7 +28,9 @@ rather than maintaining a separate SSH key store.
 4. Once that host is ready, the workspace form appears. Give the workspace a name
    and ID, create it, then install and authenticate the harnesses you want inside
    it. Changing the hostname or SSH username requires a matching host check.
-5. Choose its agent in **New chat**.
+5. Choose its agent in **New chat**. Installed harnesses appear automatically;
+   there is no separate enable or sidebar visibility setting. Complete sign-in
+   when required before starting a chat.
 
 The first workspace on a host builds its image and shows each build phase.
 Later creations reuse a matching image built within the last 24 hours, skipping

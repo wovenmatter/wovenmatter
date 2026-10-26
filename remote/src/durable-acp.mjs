@@ -223,14 +223,14 @@ export function createDurableACP({ catalog, workspaceRoot, environment, isEnable
       if (agent >= 0) args.splice(agent + 1, 0, '--no-leader')
     }
     if (!await isEnabled()) throw new Error('Background execution is disabled')
-    if (!await isHarnessEnabled(selected)) throw new Error('This harness is disabled')
+    if (!await isHarnessEnabled(selected)) throw new Error('This harness is not installed')
     const creation = metadata ? { type: 'recovered' } : { type: 'created', harnessID: selected, permission, cwd: workingDirectory }
     await record(channel, creation)
     updateSnapshot(channel.snapshot, creation)
     channels.set(id, channel)
     if (!await isEnabled() || !await isHarnessEnabled(selected)) {
       channel.state = 'stopped'
-      throw new Error('Background execution or harness is disabled')
+      throw new Error('Background execution is disabled or the harness is not installed')
     }
     const wrapped = ['codex', 'claude_code', 'grok_build'].includes(selected);
     const child = spawnProcess(wrapped ? process.execPath : harness.command, wrapped

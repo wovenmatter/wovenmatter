@@ -1310,7 +1310,7 @@ struct DashboardNewChatDrawer: View {
                                         ),
                                         title: definition.displayName,
                                         detail: definition.runtimeKind == .opencode
-                                            ? ((model.openCode?.isEnabled == true && model.openCode?.canConnect == true) ? "Local OpenCode v2" : "Enable OpenCode in Settings")
+                                            ? ((model.openCode?.isEnabled == true && model.openCode?.canConnect == true) ? "Local OpenCode v2" : "Set up OpenCode in Settings")
                                             : isChecking || availability == nil
                                             ? "Checking…"
                                             : availability?.isReady == true

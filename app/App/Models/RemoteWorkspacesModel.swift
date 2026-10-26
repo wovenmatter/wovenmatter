@@ -220,7 +220,7 @@ final class RemoteWorkspacesModel {
                 harness.state == "ready"
                     && !isRuntimeInventoryUnavailable(harness.id, configuration: configuration)
                     && (harness.id == .defaultAgent || self.runtimeMaintenance[configuration.id]?.contains(where: {
-                        $0.id == harness.id && $0.enabled && $0.visible && $0.installed && $0.operation?.status != "running"
+                        $0.id == harness.id && $0.installed && $0.operation?.status != "running"
                     }) == true)
                     ? RemoteHarnessChatTarget(
                         configuration: configuration,
@@ -275,13 +275,13 @@ final class RemoteWorkspacesModel {
         _ runtimeKind: AgentRuntimeKind,
         in configuration: RemoteWorkspaceConfiguration
     ) -> Bool {
-        (runtimeKind == .defaultAgent || isRuntimeEnabled(runtimeKind, in: configuration))
+        (runtimeKind == .defaultAgent || isRuntimeInstalled(runtimeKind, in: configuration))
             && !isRuntimeInventoryUnavailable(runtimeKind, configuration: configuration)
             && statuses[configuration.id]?.running == true
             && currentHarnesses(for: configuration).contains {
                 $0.id == runtimeKind && $0.state == "ready"
             } && (runtimeKind == .defaultAgent || runtimeMaintenance[configuration.id]?.contains(where: {
-                $0.id == runtimeKind && $0.enabled && $0.installed && $0.operation?.status != "running"
+                $0.id == runtimeKind && $0.installed && $0.operation?.status != "running"
             }) == true)
     }
 
@@ -296,10 +296,10 @@ final class RemoteWorkspacesModel {
         for workspace in workspaces { refresh(workspace) }
     }
 
-    func isRuntimeEnabled(_ kind: AgentRuntimeKind, in configuration: RemoteWorkspaceConfiguration) -> Bool {
+    func isRuntimeInstalled(_ kind: AgentRuntimeKind, in configuration: RemoteWorkspaceConfiguration) -> Bool {
         self.configuration(id: configuration.id) == configuration
             && !invalidatingWorkspaceIDs.contains(configuration.id)
-            && runtimeMaintenance[configuration.id]?.contains { $0.id == kind && $0.enabled && $0.installed } == true
+            && runtimeMaintenance[configuration.id]?.contains { $0.id == kind && $0.installed } == true
     }
 
     func refreshRuntimeMaintenanceAtStartup() { checkRuntimeMaintenanceOnActivation() }
@@ -372,22 +372,6 @@ final class RemoteWorkspacesModel {
         }
     }
 
-    func setRuntimePreferences(
-        _ runtime: RemoteRuntimeMaintenance, configuration: RemoteWorkspaceConfiguration,
-        enabled: Bool? = nil, visible: Bool? = nil
-    ) {
-        if forwardToBackend(.setRuntimePreferences(configuration.id, runtime.id, enabled: enabled, visible: visible)) { return }
-        guard enabled != true || runtime.installed else { return }
-        performBusy(configuration) {
-            let identity = try self.requestIdentity(configuration)
-            let client = try await self.serviceClient(for: configuration)
-            try self.requireCurrent(identity)
-            try await client.setRuntimePreferences(runtime.id, enabled: enabled, visible: visible)
-            try self.requireCurrent(identity)
-            await self.refreshRuntimeMaintenance(configuration)
-        }
-    }
-
     func refreshWorkspaceInstance(_ kind: AgentRuntimeKind, configuration: RemoteWorkspaceConfiguration,
                                   action: String? = nil) {
         if forwardToBackend(.workspaceInstance(configuration.id, kind, action: action)) { return }
@@ -395,7 +379,7 @@ final class RemoteWorkspacesModel {
             let identity = try self.requestIdentity(configuration)
             let client = try await self.serviceClient(for: configuration)
             try self.requireCurrent(identity)
-            if action == "start", !self.isRuntimeEnabled(kind, in: configuration) { throw CancellationError() }
+            if action == "start", !self.isRuntimeInstalled(kind, in: configuration) { throw CancellationError() }
             let status = try await client.workspaceInstance(kind, action: action)
             try self.requireCurrent(identity)
             self.workspaceInstances[configuration.id, default: [:]][kind] = status
@@ -404,14 +388,14 @@ final class RemoteWorkspacesModel {
 
     func prepareOpenCodeConnection(for configuration: RemoteWorkspaceConfiguration, allowStart: Bool = true) async throws -> OpenCodeConnection {
         let identity = try requestIdentity(configuration)
-        guard isRuntimeEnabled(.opencode, in: configuration), runtimeMaintenance[configuration.id]?.contains(where: {
-            $0.id == .opencode && $0.installed && $0.enabled && $0.operation?.status != "running"
+        guard isRuntimeInstalled(.opencode, in: configuration), runtimeMaintenance[configuration.id]?.contains(where: {
+            $0.id == .opencode && $0.installed && $0.operation?.status != "running"
         }) == true else { throw RemoteWorkspaceClientError.harnessUnavailable }
         let client = try await serviceClient(for: configuration)
         try requireCurrent(identity)
         let health = try await client.health()
         try requireCurrent(identity)
-        guard isRuntimeEnabled(.opencode, in: configuration) else { throw CancellationError() }
+        guard isRuntimeInstalled(.opencode, in: configuration) else { throw CancellationError() }
         let status = try await client.workspaceInstance(.opencode, action: allowStart ? "start" : nil)
         try requireCurrent(identity)
         workspaceRoots[configuration.id] = health.workspaceRoot
@@ -421,7 +405,7 @@ final class RemoteWorkspacesModel {
             throw RemoteWorkspaceClientError.invalidResponse(status.lastError ?? "The workspace OpenCode server is unavailable.")
         }
         try requireCurrent(identity)
-        guard isRuntimeEnabled(.opencode, in: configuration) else { throw CancellationError() }
+        guard isRuntimeInstalled(.opencode, in: configuration) else { throw CancellationError() }
         return try OpenCodeConnection(
             identity: "remote-workspace:\(configuration.id.uuidString.lowercased())",
             url: URL(string: "http://127.0.0.1:\(port)")!, password: "",
@@ -433,7 +417,7 @@ final class RemoteWorkspacesModel {
                                           checkLatest: Bool = false) async {
         guard let identity = try? requestIdentity(configuration) else { return }
         let checking: Set<AgentRuntimeKind> = checkLatest
-            ? Set((runtimeMaintenance[configuration.id] ?? []).filter(\.enabled).map(\.id)) : []
+            ? Set((runtimeMaintenance[configuration.id] ?? []).filter(\.installed).map(\.id)) : []
         checkingRuntimeIDs[configuration.id, default: []].formUnion(checking)
         defer {
             if credentialEpoch == identity.credentialEpoch && workspaceEpochs[configuration.id] == identity.workspaceEpoch {

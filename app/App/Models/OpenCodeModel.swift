@@ -103,7 +103,7 @@ final class OpenCodeModel {
     }
     var canConnect: Bool {
         if isBackendProjection { return projectedCanConnect }
-        if let configuration = remoteConfiguration { return remoteWorkspaces?.isRuntimeEnabled(.opencode, in: configuration) == true }
+        if let configuration = remoteConfiguration { return remoteWorkspaces?.isRuntimeInstalled(.opencode, in: configuration) == true }
         return executable != nil || hasServerRegistration
     }
 
@@ -118,7 +118,7 @@ final class OpenCodeModel {
         }
         startServerOnLaunch = defaults.object(forKey: preference("start-on-launch")) as? Bool ?? true
         stopServerOnQuit = defaults.bool(forKey: preference("stop-on-quit"))
-        isEnabled = defaults.object(forKey: preference("enabled")) as? Bool ?? defaults.bool(forKey: preference("local-connected"))
+        isEnabled = defaults.bool(forKey: preference("local-connected"))
         hiddenModels = Set(defaults.stringArray(forKey: preference("hidden-models")) ?? [])
         self.store = store; self.ownerDeviceID = ownerDeviceID; self.defaults = defaults
         sessionPreferences = SessionSelectionPreferences(defaults: defaults)
@@ -177,7 +177,7 @@ final class OpenCodeModel {
         if isBackendProjection { do { _ = try await backendCommand(.restore) } catch { self.error = error.localizedDescription }; return }
         quitting = false
         if let configuration = remoteConfiguration {
-            guard remoteWorkspaces?.isRuntimeEnabled(.opencode, in: configuration) == true else {
+            guard remoteWorkspaces?.isRuntimeInstalled(.opencode, in: configuration) == true else {
                 await suspendConnection()
                 return
             }
@@ -188,7 +188,6 @@ final class OpenCodeModel {
             return
         }
         await resolveExecutable()
-        guard defaults.object(forKey: preference("enabled")) as? Bool != false else { return }
         guard defaults.bool(forKey: preference("local-connected")) || links.values.contains(where: { $0.connectionID == connectionID }) else { return }
         do { try await connectLocal(allowStart: startServerOnLaunch) } catch { self.error = startServerOnLaunch ? error.localizedDescription : nil }
     }
@@ -212,8 +211,8 @@ final class OpenCodeModel {
         if isBackendProjection { _ = try await backendCommand(.connect(allowStart)); return }
         guard !quitting else { throw CancellationError() }
         if let configuration = remoteConfiguration,
-           remoteWorkspaces?.isRuntimeEnabled(.opencode, in: configuration) != true {
-            throw OpenCodeError.message("Enable OpenCode for this remote workspace before connecting.")
+           remoteWorkspaces?.isRuntimeInstalled(.opencode, in: configuration) != true {
+            throw OpenCodeError.message("Install OpenCode in this remote workspace before connecting.")
         }
         if let connectionTask { return try await connectionTask.value }
         let generation = UUID(); connectionGeneration = generation
@@ -244,7 +243,6 @@ final class OpenCodeModel {
             guard generation == connectionGeneration, !quitting else { throw CancellationError() }
             isReady = true
             isEnabled = true
-            defaults.set(true, forKey: preference("enabled"))
             defaults.set(true, forKey: preference("local-connected"))
             resumableSessionIDs = Set((try await store.database.resumableOpenCodeLinks())
                 .filter { $0.connectionID == connectionID }.map(\.conversationID))
@@ -317,7 +315,7 @@ final class OpenCodeModel {
         isReady = false
         if stopServerOnQuit {
             if let configuration = remoteConfiguration {
-                guard remoteWorkspaces?.isRuntimeEnabled(.opencode, in: configuration) == true else { return }
+                guard remoteWorkspaces?.isRuntimeInstalled(.opencode, in: configuration) == true else { return }
                 guard let remoteWorkspaces else { throw OpenCodeError.message("The remote workspace is unavailable.") }
                 try await remoteWorkspaces.stopOpenCode(for: configuration)
             } else { try await OpenCodeServiceLauncher.stop(registration: registration) }
@@ -334,18 +332,6 @@ final class OpenCodeModel {
         isReady = false
     }
 
-    func disable() async {
-        pendingDispatches.values.forEach { $0.cancel() }
-        if isBackendProjection { do { _ = try await backendCommand(.disable) } catch { self.error = error.localizedDescription }; return }
-        guard !isRemote else { await suspendConnection(); return }
-        connectionGeneration = UUID()
-        connectionTask?.cancel(); connectionTask = nil; isConnecting = false
-        isEnabled = false
-        defaults.set(false, forKey: preference("enabled"))
-        await coordinator.disconnect(connectionID: connectionID)
-        isReady = false
-    }
-
     func browserURL() async throws -> URL {
         if isBackendProjection { guard let url = try await backendCommand(.browserURL).url else { throw OpenCodeError.message("OpenCode browser URL is unavailable.") }; return url }
         guard !isRemote else { throw OpenCodeError.message("Remote OpenCode uses the authenticated workspace connection inside Woven Matter.") }
@@ -355,7 +341,7 @@ final class OpenCodeModel {
 
     func create(workspace: URL, requestedConversationID: UUID? = nil, title: String? = nil, nativeWorkspaceID: String? = nil, allowMissingCalendarFolder: Bool = false, executionRoot: SessionCreationRoot? = nil) async throws -> String {
         if isBackendProjection { return try await backendCommand(.create(workspace, requestedConversationID, title, nativeWorkspaceID, allowMissingCalendarFolder)).createdID ?? "" }
-        guard isEnabled else { throw OpenCodeError.message("Enable OpenCode for this workspace before creating a chat.") }
+        guard isEnabled else { throw OpenCodeError.message("Install and connect OpenCode in this workspace before creating a chat.") }
         guard !serverStopped else { throw OpenCodeError.message("Start OpenCode from its settings page before creating a chat.") }
         guard !busy else { throw OpenCodeError.message("A session is already being created.") }
         busy = true; defer { busy = false }
@@ -566,7 +552,7 @@ final class OpenCodeModel {
 
     func calendarTaskMetadata(directory: String, model: String?) async throws -> LocalACPSessionMetadata {
         if isBackendProjection { guard let metadata = try await backendCommand(.calendarMetadata(directory, model)).metadata else { throw OpenCodeError.message("Model metadata is unavailable.") }; return metadata }
-        guard isEnabled else { throw OpenCodeError.message("Enable OpenCode in this workspace's settings to load its models.") }
+        guard isEnabled else { throw OpenCodeError.message("Connect OpenCode in this workspace to load its models.") }
         try await connectLocal()
         let query = ["location[directory]": directory]
         let result = try await coordinator.call(connectionID: connectionID, path: "/api/model", query: query)
@@ -741,9 +727,9 @@ final class OpenCodeModel {
             _ = try await backendCommand(.send(id, input)); return OpenCodeSubmissionReceipt()
         }
         guard let link = links[id], isLocalSession(id) else { throw OpenCodeError.message("This saved transcript is read-only. Create a new OpenCode chat.") }
-        guard isEnabled else { throw OpenCodeError.message("Enable OpenCode for this workspace before sending.") }
+        guard isEnabled else { throw OpenCodeError.message("Connect OpenCode in this workspace before sending.") }
         if let configuration = remoteConfiguration,
-           remoteWorkspaces?.isRuntimeEnabled(.opencode, in: configuration) != true {
+           remoteWorkspaces?.isRuntimeInstalled(.opencode, in: configuration) != true {
             throw OpenCodeError.message("OpenCode is disabled for this remote workspace.")
         }
         guard !serverStopped else { throw OpenCodeError.message("Start OpenCode from its settings page before sending.") }

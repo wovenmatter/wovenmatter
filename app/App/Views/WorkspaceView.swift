@@ -151,7 +151,7 @@ struct WorkspaceView: View {
     }
 
     private var sidebarAgents: [WorkspaceAgent] {
-        model.visibleOrderedLocalCLIAgents
+        model.installedOrderedLocalCLIAgents
             + model.remoteWorkspaceAgents
     }
 

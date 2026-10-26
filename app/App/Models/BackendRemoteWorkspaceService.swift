@@ -8,7 +8,6 @@ enum BackendRemoteWorkspaceCommand: Codable {
     case synchronizeDefaultAgent(UUID)
     case reconnect(UUID), refresh(UUID), refreshSignIn(UUID), refreshTaskGateway(UUID)
     case checkRuntimeUpdates(UUID, AgentRuntimeKind)
-    case setRuntimePreferences(UUID, AgentRuntimeKind, enabled: Bool?, visible: Bool?)
     case workspaceInstance(UUID, AgentRuntimeKind, action: String?)
     case backgroundExecution(UUID, Bool)
     case checkHost(hostName: String, userName: String)
@@ -69,11 +68,6 @@ struct BackendRemoteWorkspaceService {
         case .refreshSignIn(let id): await model.refreshSignInStatus(try workspace(id))
         case .refreshTaskGateway(let id): await model.refreshTaskGateway(try workspace(id))
         case .checkRuntimeUpdates(let id, let kind): model.checkRuntimeUpdates(kind, configuration: try workspace(id))
-        case .setRuntimePreferences(let id, let kind, let enabled, let visible):
-            guard let runtime = model.runtimeMaintenance[id]?.first(where: { $0.id == kind }) else {
-                throw BackendRPCError.remote("This runtime is no longer available.")
-            }
-            model.setRuntimePreferences(runtime, configuration: try workspace(id), enabled: enabled, visible: visible)
         case .workspaceInstance(let id, let kind, let action): model.refreshWorkspaceInstance(kind, configuration: try workspace(id), action: action)
         case .backgroundExecution(let id, let enabled): model.setBackgroundExecution(enabled, for: try workspace(id))
         case .checkHost(let host, let user): model.checkHost(hostName: host, userName: user)

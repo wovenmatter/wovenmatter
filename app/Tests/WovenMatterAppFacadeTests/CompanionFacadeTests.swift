@@ -95,11 +95,16 @@ struct CompanionFacadeTests {
     let usageService: LocalUsageService
     let device = UUID().uuidString.lowercased()
     let remote = RemoteWorkspaceConfiguration(name: "Fixture remote", workspaceID: "fixture", hostName: "fixture.invalid")
-    init() async throws {
+    init(legacyHiddenHarnesses: Bool = false) async throws {
         _ = NSApplication.shared
         directory = FileManager.default.temporaryDirectory.appending(path: "companion-facade-\(UUID())")
         suite = "companion.facade.\(UUID())"
         defaults = UserDefaults(suiteName: suite)!
+        if legacyHiddenHarnesses {
+            defaults.set([], forKey: "wovenmatter.local-acp.enabled-runtimes")
+            defaults.set([], forKey: "wovenmatter.local-acp.shown-runtimes")
+            defaults.set(["codex", "claude_code"], forKey: "wovenmatter.local-acp.hidden-runtimes")
+        }
         let recorder = recorder
         store = try await DashboardStore(supportDirectory: directory, runControls: .init(
             accept: { route, id, input, delivery, context in try await recorder.accept(route, id, input, delivery, context) },

@@ -52,7 +52,7 @@ const maximumInstallerRedirects = 5
 const authenticationSessionTimeoutMilliseconds = 30 * 60_000
 const instances = createWorkspaceInstances({
   workspaceRoot, environment: harnessEnvironment,
-  isEnabled: async id => await maintenance.isEnabled(id),
+  isEnabled: async id => await maintenance.isInstalled(id),
 })
 const maintenance = createRuntimeMaintenance({
   catalog, workspaceRoot, environment: harnessEnvironment, verifiedInstaller,
@@ -68,14 +68,14 @@ const releaseTaskOwner = runningAsService
   : null
 const durableACP = createDurableACP({ catalog, workspaceRoot,
   environment: harness => harness.id === 'codex' ? harnessRuntimeEnvironment(harness) : harnessEnvironment(),
-  isEnabled:async () => taskGateway?.enabled() === true, isHarnessEnabled:id => maintenance.isEnabled(id) })
+  isEnabled:async () => taskGateway?.enabled() === true, isHarnessEnabled:id => maintenance.isInstalled(id) })
 const taskGateway = runningAsService ? createTaskGateway({
   workspaceRoot,
   directory:resolve(workspaceRoot,'.wovenmatter/task-gateway'),
   execute:createTaskExecutor({catalog,workspaceRoot,
     environment: harness => harness?.id === 'codex' ? harnessRuntimeEnvironment(harness) : harnessEnvironment(),
     defaultAgent,instances,
-    isEnabled:id => maintenance.isEnabled(id)}),
+    isEnabled:id => maintenance.isInstalled(id)}),
   onDisable:async () => { await Promise.all([durableACP.stopAll(), defaultAgent.cancelActive(), clientExecution?.cancelActive()]); foregroundDefaultRuns.clear() },
 }) : null
 
@@ -257,7 +257,8 @@ const server = createServer(async (request, response) => {
     if (maintenanceMatch) {
       const harness = requireHarness(maintenanceMatch[1])
       if (request.method === 'POST' && maintenanceMatch[2] === 'check') return json(response, 200, await maintenance.inventory(harness, true))
-      if (request.method === 'PATCH' && !maintenanceMatch[2]) return json(response, 200, await maintenance.preferences(harness, await readJSON(request)))
+      // Older apps may send retired visibility/enable preferences. Ignore them.
+      if (request.method === 'PATCH' && !maintenanceMatch[2]) { await readJSON(request); return json(response, 200, await maintenance.inventory(harness)) }
       if (request.method === 'POST' && maintenanceMatch[2]) return json(response, 202, await maintenance.start(harness, maintenanceMatch[2], await readJSON(request)))
     }
 

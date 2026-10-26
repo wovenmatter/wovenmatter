@@ -85,10 +85,6 @@ struct SettingsRemoteHarnessSoftware: View {
                 HStack {
                     if runtime?.installed == true {
                         SettingsRemoteRuntimeUpdateButton(model: model, harness: harness, configuration: workspace)
-                        if let runtime, !runtime.enabled {
-                            Button("Use harness") { model.setRuntimePreferences(runtime, configuration: workspace, enabled: true) }
-                                .buttonStyle(SettingsQuietButtonStyle()).disabled(busy)
-                        }
                     } else {
                         Button(busy ? "Working…" : "Install") {
                             model.prepareHarnessAction("install", harness: harness, configuration: workspace)
