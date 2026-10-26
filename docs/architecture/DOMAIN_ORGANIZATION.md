@@ -1,5 +1,9 @@
 # Application and persistence ownership
 
+This is the historical PR56 organization audit. Retired harness names and files
+below describe that source snapshot; the current supported runtime list is in
+[Native instructions](../NATIVE_INSTRUCTIONS.md).
+
 The persistence and usage boundaries below were established in PR #63.
 The move map records that refactor; later features add methods within the same
 owners.

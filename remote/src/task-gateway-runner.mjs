@@ -38,9 +38,13 @@ export async function applyTaskConfiguration(rpc, sessionID, initial, configurat
   }
 }
 
-export function createTaskExecutor({ catalog,workspaceRoot,environment,defaultAgent,instances,launch = spawn,isEnabled = async()=>true }) {
+export function createTaskExecutor({ catalog,workspaceRoot,environment,defaultAgent,instances,launch = spawn,isEnabled = async()=>true,prepareMCP=async()=>null }) {
   const native = createNativeTaskExecutor({workspaceRoot,instances})
-  return async ({run,nativeSessionID,signal,publish,bindSession}) => {
+  return async ({run,eventRevision,nativeSessionID,signal,publish,bindSession}) => {
+    if(signal.aborted)throw before('Background execution was turned off.')
+    let mcpConnection
+    try {mcpConnection=await prepareMCP({run,eventRevision,nativeSessionID})} catch(error){error.beforePrompt=true;throw error}
+    const bindMCP=async id=>{bindSession(id);if(mcpConnection)await prepareMCP({run,eventRevision,nativeSessionID:id})}
     const config = run.task.configuration
     if (signal.aborted) throw before('Background execution was turned off.')
     if (!config.folderID && dirname(config.nativeWorkingDirectory ?? '') === join(workspaceRoot, 'scratch')) {
@@ -50,12 +54,12 @@ export function createTaskExecutor({ catalog,workspaceRoot,environment,defaultAg
     if (config.runtimeKind === 'default_agent') {
       // Hold admission through session setup and the completed run. An SDK update
       // must not rotate the worker between load/configuration/prompt requests.
-      const execute = () => runBuiltIn({run,nativeSessionID,signal,publish,bindSession,defaultAgent,workspaceRoot})
+      const execute = () => runBuiltIn({run,nativeSessionID,signal,publish,bindSession:bindMCP,defaultAgent,workspaceRoot,mcpConnection})
       return defaultAgent.withRuntimeLease ? defaultAgent.withRuntimeLease(execute) : execute()
     }
     if (config.runtimeKind === 'opencode') {
       if (!await isEnabled(config.runtimeKind)) throw before('This agent is not installed in the workspace.')
-      return native({run,nativeSessionID,signal,publish,bindSession})
+      return native({run,nativeSessionID,signal,publish,bindSession:bindMCP,mcpConnection})
     }
     const harness = catalog.get(config.runtimeKind)
     if (!harness || !['acp','agent-stdio'].includes(harness.transport)) throw before('This agent does not yet support autonomous workspace tasks. Use a connected session for this agent.')
@@ -74,7 +78,7 @@ export function createTaskExecutor({ catalog,workspaceRoot,environment,defaultAg
     const env = isolateTaskEnvironment(environment(harness))
     const wrapped = ['codex', 'claude_code', 'grok_build'].includes(harness.id)
     const child = launch(wrapped ? process.execPath : harness.command, wrapped
-      ? [fileURLToPath(harnessResource('cli/adapter.mjs')), harness.id, harness.command, ...args] : args,
+      ? [fileURLToPath(harnessResource('mcp/adapter.mjs')), harness.id, harness.command, ...args] : args,
       {cwd:directory,env,stdio:['pipe','pipe','pipe']})
     let count=0, sessionID, accepted=false, terminal=false, needsApproval=false, archive, promptCompleted=false
     const pending = new Map()
@@ -133,15 +137,15 @@ export function createTaskExecutor({ catalog,workspaceRoot,environment,defaultAg
       const initialized=await rpc('initialize',{protocolVersion:1,clientCapabilities:{fs:{readTextFile:false,writeTextFile:false},terminal:false},clientInfo:{name:'Woven Matter Task Gateway',version:'1'}})
       if (initialized.protocolVersion!==1) throw before('The scheduled agent uses an unsupported protocol.')
       if (nativeSessionID && initialized.agentCapabilities?.loadSession!==true) throw before('This agent cannot reopen the recurring task session.')
-      const opened=await rpc(nativeSessionID?'session/load':'session/new',{cwd:directory,mcpServers:[],...(nativeSessionID?{sessionId:nativeSessionID}:{}),_meta:{sessionTitle:run.title}})
+      const opened=await rpc(nativeSessionID?'session/load':'session/new',{cwd:directory,mcpServers:mcpConnection?[{type:'http',name:'woven',url:mcpConnection.endpointURL,headers:[{name:'Authorization',value:'Bearer '+mcpConnection.bearerToken}]}]:[],...(nativeSessionID?{sessionId:nativeSessionID}:{}),_meta:{sessionTitle:run.title,...(mcpConnection?{wovenMCPConnection:mcpConnection}:{})}})
       sessionID=opened.sessionId ?? nativeSessionID
       if (typeof sessionID!=='string' || !sessionID) throw before('The agent did not create a session.')
-      bindSession(sessionID)
+      await bindMCP(sessionID)
       archive = await createTaskNativeArchive({sourceID: `acp:${harness.id}:${directory}`, nativeSessionID: sessionID, runID: run.id, publish})
       await applyTaskConfiguration(rpc,sessionID,opened,config)
       if (signal.aborted) throw before('Background execution was turned off.')
       accepted=true
-      const result = await rpc('session/prompt',{sessionId:sessionID,prompt:[{type:'text',text:backgroundPrompt(run)}],_meta:{wovenRunID:run.id}})
+      const result = await rpc('session/prompt',{sessionId:sessionID,prompt:[{type:'text',text:backgroundPrompt(run)}],_meta:{wovenRunID:run.id,...(mcpConnection?{wovenMCP:mcpConnection}:{})}})
       await archive.drain()
       await archive.capture(result, {id: `run:${run.id}:result`, kind: 'run.result', contentMode: 'snapshot'})
       if (signal.aborted) throw new Error('Background execution was turned off.')
@@ -157,22 +161,22 @@ export function createTaskExecutor({ catalog,workspaceRoot,environment,defaultAg
   }
 }
 
-async function runBuiltIn({run,nativeSessionID,signal,publish,bindSession,defaultAgent,workspaceRoot}) {
+async function runBuiltIn({run,nativeSessionID,signal,publish,bindSession,defaultAgent,workspaceRoot,mcpConnection}) {
   const cwd = run.task.configuration.nativeWorkingDirectory ?? workspaceRoot
   if (!isAbsolute(cwd) || cwd.includes('\0')) throw before('The task working directory is invalid.')
   let sessionID,attachmentToken,accepted=false
   try {
     if((await defaultAgent.status()).locked) throw Object.assign(before('Waiting for Woven Matter to reconnect and unlock Pi Durable.'),{deferred:true})
-    const opened=await defaultAgent.invoke({method:nativeSessionID?'session/load':'session/new',attachmentProtocol:1,params:{cwd,...(nativeSessionID?{sessionId:nativeSessionID}:{})}})
+    const opened=await defaultAgent.invoke({method:nativeSessionID?'session/load':'session/new',attachmentProtocol:1,params:{cwd,...(nativeSessionID?{sessionId:nativeSessionID}:{}),_meta:{...(mcpConnection?{wovenMCPConnection:mcpConnection}:{})}}})
     const session=opened.result
     attachmentToken=session?._meta?.attachmentToken ?? opened.attachmentToken
     sessionID=session?.sessionId ?? nativeSessionID
     if(!sessionID) throw before('The Pi Durable task session is unavailable.')
-    bindSession(sessionID)
+    await bindSession(sessionID)
     await applyTaskConfiguration(async(method,params)=>(await defaultAgent.invoke({method,params,attachmentToken})).result,sessionID,session,run.task.configuration)
     if(signal.aborted) throw before('Background execution was turned off.')
     accepted=true
-    const {operationID}=await defaultAgent.invoke({operationID:run.id,method:'session/prompt',attachmentToken,params:{sessionId:sessionID,prompt:[{type:'text',text:backgroundPrompt(run)}],_meta:{wovenRunID:run.id}}})
+    const {operationID}=await defaultAgent.invoke({operationID:run.id,method:'session/prompt',attachmentToken,params:{sessionId:sessionID,prompt:[{type:'text',text:backgroundPrompt(run)}],_meta:{wovenRunID:run.id,...(mcpConnection?{wovenMCP:mcpConnection}:{})}}})
     let cursor=0,cancelled=false
     while(true) {
       if(signal.aborted && !cancelled) { cancelled=true;await defaultAgent.invoke({method:'session/cancel',attachmentToken,params:{sessionId:sessionID}}) }

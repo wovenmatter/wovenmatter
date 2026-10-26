@@ -4,6 +4,18 @@ import Testing
 
 @Suite("Companion wire compatibility")
 struct CompanionProtocolTests {
+  @Test func agentMessageProvenanceRoundTripsAndLegacyMessagesRemainReadable() throws {
+    let original = CompanionMessage(id: "message", conversationID: "target", role: "user", content: "Inspect the result",
+      agentSourceID: UUID().uuidString.lowercased(), isAgentAuthored: true, senderSessionTitle: "Coordinator",
+      senderHarness: "default_agent", senderKind: "notification")
+    #expect(try JSONDecoder().decode(CompanionMessage.self, from: JSONEncoder().encode(original)) == original)
+    var legacy = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(original)) as? [String: Any])
+    for field in ["agentSourceID", "isAgentAuthored", "senderSessionTitle", "senderHarness", "senderKind"] { legacy.removeValue(forKey: field) }
+    let decoded = try JSONDecoder().decode(CompanionMessage.self, from: JSONSerialization.data(withJSONObject: legacy))
+    #expect(decoded.agentSourceID == nil && decoded.isAgentAuthored == nil)
+    #expect(decoded.content == original.content)
+  }
+
   @Test("pairing and hello agree on the current format and reject older pairing codes")
   func versionNegotiation() throws {
     let endpoint = URL(string: "https://fixture.test.ts.net/wovenmatter")!

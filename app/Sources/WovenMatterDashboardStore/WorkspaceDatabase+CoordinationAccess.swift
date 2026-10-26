@@ -3,7 +3,7 @@ import WovenMatterCore
 import WovenMatterClient
 
 extension WorkspaceDatabaseConnection {
-  /// A durable intent returns immediately instead of keeping a CLI connection
+  /// A durable intent returns immediately instead of keeping an MCP request
   /// open while the user considers an access sheet. Replays never reacquire a
   /// completed or released assignment and never create a second sheet.
   public func requestCoordinationAccess(sourceID: String, targetID: String, purpose: String,

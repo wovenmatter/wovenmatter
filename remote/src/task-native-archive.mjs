@@ -64,7 +64,7 @@ export function publishNativePresentation(update, publish) {
 export function isolateTaskEnvironment(environment) {
   const isolated = {...environment}
   for (const key of Object.keys(isolated)) {
-    if (key.startsWith('WOVENMATTER_SESSION_') || key.startsWith('WOVENMATTER_TOOL_')
+    if (key.startsWith('WOVEN_MCP_') || key.startsWith('WOVENMATTER_SESSION_') || key.startsWith('WOVENMATTER_TOOL_')
       || ['WOVENMATTER_CONTEXT_ID', 'WOVENMATTER_NOTE_ID', 'WOVENMATTER_SOCKET', 'WOVENMATTER_CLI'].includes(key)) delete isolated[key]
   }
   return isolated

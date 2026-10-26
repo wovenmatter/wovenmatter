@@ -1136,6 +1136,17 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         try await request(path: "v1/execution/publisher", method: "POST", body: JSONEncoder().encode(grant))
     }
 
+    public func executionMCPLibraryStatus() async throws -> CompanionWorkspacePublisherStatus {
+        try await request(path: "v1/execution/mcp-library", method: "GET", body: nil)
+    }
+    public func configureExecutionMCPLibrary(_ grant: GatewayJSONValue) async throws -> CompanionWorkspacePublisherStatus {
+        try await request(path: "v1/execution/mcp-library", method: "POST", body: JSONEncoder().encode(grant))
+    }
+
+    public func configureExecutionMCPSettings(_ settings: GatewayJSONValue) async throws -> CompanionWorkspacePublisherStatus {
+        try await request(path: "v1/execution/mcp-settings", method: "POST", body: JSONEncoder().encode(settings))
+    }
+
     public func adoptExecutionConversation(_ adoption: CompanionExecutionAdoption) async throws -> CompanionConversation {
         try await request(path: "v1/execution/adopt", method: "POST", body: JSONEncoder().encode(adoption))
     }
@@ -1211,6 +1222,34 @@ public struct RemoteWorkspaceServiceClient: Sendable {
 
     public func browserTabs() async throws -> RemoteBrowserTabs {
         try await request(path: "v1/browser/tabs", method: "GET", body: nil)
+    }
+
+    /// The native execution owner chooses the caller and the authenticated
+    /// workspace. Neither authority is accepted from model tool arguments.
+    public func browserMCP(callerID: String, input: GatewayJSONValue, requestID: String,
+                           cancelling: Bool = false) async throws -> WovenMatterToolResponse {
+        guard let callerUUID = UUID(uuidString: callerID), let requestUUID = UUID(uuidString: requestID),
+              var arguments = input.objectValue else {
+            throw RemoteWorkspaceClientError.invalidResponse("Invalid browser operation identity.")
+        }
+        arguments["requestID"] = .string(requestUUID.uuidString.lowercased())
+        if cancelling, let target = arguments["id"]?.stringValue, let uuid = UUID(uuidString: target) {
+            arguments["id"] = .string(uuid.uuidString.lowercased())
+        }
+        let body = GatewayJSONValue.object(["callerID": .string(callerUUID.uuidString.lowercased()), "input": .object(arguments)])
+        struct Response: Decodable {
+            let success: Bool
+            let result: GatewayJSONValue?
+            let error: String?
+            let code: String?
+            let requestID: String
+        }
+        let value: Response = try await request(path: cancelling ? "v1/browser/mcp/cancel" : "v1/browser/mcp",
+            method: "POST", body: JSONEncoder().encode(body))
+        guard UUID(uuidString: value.requestID) == UUID(uuidString: requestID) else {
+            throw RemoteWorkspaceClientError.invalidResponse("The browser operation identity changed.")
+        }
+        return .init(success: value.success, result: value.result, error: value.error, code: value.code, requestID: requestID)
     }
 
     public func browserAction(_ action: RemoteBrowserAction) async throws -> RemoteBrowserActionResult {
@@ -1413,6 +1452,7 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         request.httpBody = body
         if path.hasPrefix("v1/databases") { request.timeoutInterval = 15 }
         if path.hasPrefix("v1/browser/") { request.timeoutInterval = 10 }
+        if path == "v1/browser/mcp" { request.timeoutInterval = 30 }
         if path == "v1/default-agent/sdks" { request.timeoutInterval = 900 }
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         if body != nil {

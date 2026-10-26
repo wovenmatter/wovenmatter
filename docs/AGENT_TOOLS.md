@@ -1,134 +1,164 @@
-# Woven Matter agent tools
+# Woven MCP agent tools
 
-Woven Matter exposes app data and session actions through its bundled CLI.
-Conversations remain ordinary sessions in their existing folders.
+Woven Matter exposes its app capabilities through an authenticated HTTP MCP
+endpoint. Pi Durable, Codex, Claude Code, Grok Build, and OpenCode use focused,
+structured tools rather than shell commands. The former Woven Matter CLI and
+separate automation stdio server are removed.
 
-The bundled `wovenmatter` CLI replaces `woven-note`. Every supported harness,
-locally and in managed remote workspaces, receives its CLI connection through
-native hooks or session extensions. Ordinary messages keep their authored text;
-workspace AGENTS.md points agents to CLI help. Commands call the owning app's services;
-agents do not receive unrestricted SQL or credentials. Capability checks are
-enforced at the service, not only described in prompts. Help is available without
-loading unrelated history or tool documentation into the conversation.
+The shared catalog in
+[`WovenMCPCatalog.swift`](../shared/Sources/WovenMatterCompanion/WovenMCPCatalog.swift)
+defines tool names, descriptions, input schemas, and read-only annotations for
+Mac, Linux, and device adapters. Clients discover it with MCP `tools/list` and
+invoke tools with `tools/call`. Names use the `woven_` prefix; argument names use
+camelCase, such as `noteID`, `allWorkspace`, and `requestID`.
 
-Built-in uses the Pi SDK's system prompt and workspace instruction loading.
-Its coding tools retain Woven Matter approval checks. The native `web_search`
-and `web_read` tools keep their descriptions. Code mode follows the workspace's
-configured mode; it uses the same guarded tools. App capabilities use the
-session-bound CLI and on-demand help.
+Discovery stays stable within a credential’s scope so native clients can cache
+schemas. Every call still checks current tool settings; a listed tool can be
+disabled or temporarily unavailable.
+
+The MCP adapter authenticates and resolves a caller, then invokes the same app
+services as the interface. Each call checks current user-controlled tool policy.
+Model arguments cannot choose a caller, change permissions, or supply a host
+credential. Internal operation arrays remain a service implementation detail;
+the MCP surface accepts neither arbitrary argv nor a host file path to read.
+
+Pi Durable retains its normal file, shell, search, and code-mode tools and approval
+checks. Woven app tools are registered from the same MCP catalog. External harness
+adapters use their supported MCP configuration without replacing project
+instructions or modifying a user's global harness configuration.
+
+## Connections, hosts, and outside agents
+
+A Woven-launched session receives its endpoint and opaque bearer credential from
+its execution owner. Credentials are scoped to the calling conversation and are
+not included in model messages, synchronized content, or saved tool arguments.
+The endpoint is `/mcp`; HTTP is restricted to loopback, and inter-device access
+uses the existing authenticated Tailscale HTTPS routes.
+
+Other Macs retain their own execution identity and use their paired-library
+adapters. Linux execution workspaces serve MCP themselves. They handle local
+execution and managed data locally and use a separately provisioned, revocable
+workspace grant for central-library tools. A publisher credential is not a tool
+grant. An unavailable library returns an explicit unavailable result; the
+workspace never adopts another device's execution or turns its replica into a
+replacement library.
+
+Ordinary Linux-owned sessions retain local goals and session coordination.
+Independent scheduled runs keep their scheduler as execution owner and expose
+content, data, automation and metadata tools; they omit goal, timer and session
+lifecycle mutations that would create a competing execution owner.
+
+Device-owned Pi Durable on iPhone and iPad uses the canonical tool definitions
+with native local dispatch for its downloaded/offline content and device
+workspace. Central-library and explicit remote operations use its authenticated
+paired connection. The phone does not need a persistent background HTTP listener.
+
+To connect an outside agent, open **Settings → General → Woven MCP access**,
+expand **Add outside agent**, choose an existing chat and tool groups, and keep
+**Read only** enabled unless writes are needed. Choose **Create access**, then
+**Copy MCP configuration**. Paste that configuration into the outside agent's
+MCP settings; Woven shows the raw token only through that one-time copy action.
+The grant's **Revoke** button removes access. Copying a configuration does not
+perform provider sign-in or account authorization.
+
+An outside agent can connect to a Woven MCP endpoint using a separately issued
+access grant. The user chooses the bound conversation, enabled groups, and access
+mode. Its authority is intersected with the conversation's current policy;
+revocation stops subsequent requests. Creating or steering sessions does not
+permit the outside agent to raise their permissions. Treat the bearer as a secret;
+use loopback on the same machine or the private HTTPS endpoint on another host.
 
 ## Open asset context
 
-`wovenmatter context` returns the asset ID captured when the human sent the
-message, or a null ID if no asset was open. Notes permission applies at capture
-and at query time. Automatic and agent-authored messages carry empty captures.
-Opening another asset or submitting a queued message cannot change an earlier
-input's capture. Native input consumption selects the binding; each shell call
-retains it even if another input is consumed while that call is running.
+`woven_context` returns the asset ID captured when the human sent the consumed
+message, or a null ID when no asset was open. Notes permission applies at capture
+and query time. Automatic and agent-authored messages have empty captures.
+Opening another asset or queueing a later message cannot retarget earlier work.
 
-The connection and capture travel as transport metadata, outside model messages.
-ACP hooks, Pi extensions, and the OpenCode, Hermes, and OpenClaw native plugins
-supply the CLI to shell tools. Reconnection updates the endpoint while retaining
-the originating capture. Independent remote schedules retain their existing
-execution model without a borrowed Mac CLI connection.
+The native input binding travels outside model arguments. Pi Durable snapshots
+it for each tool call and child conversation. External native consumption hooks
+bind a context request to the correct generation; the HTTP bridge forwards that
+opaque binding as transport metadata. Reconnection can update the endpoint while
+retaining the originating capture. Use the returned explicit `noteID` for later
+note operations.
 
 ## Tools and access
 
-The composer has a compact Tools dropdown with independent groups:
+The composer has a Tools menu with independent groups:
 
-| Group | Contract |
+| Group | MCP tools and contract |
 | --- | --- |
-| Notes | Discover, read, create and edit notes, spreadsheets and HTML; retained version recovery |
-| Conversation history | Search and selectively read conversations and full observed traces |
-| Session management | Discover session metadata, create sessions, message, inspect managed sessions and manage coordination |
-| Timers | Create, inspect, update, pause, resume and remove persistent session follow-ups |
-| Usage data | Read recorded usage analytics and available cached account usage limits; no mutation or credential access |
-| Calendar | Read, create, edit, copy, detach and delete events and scheduled tasks, subject to the configured access mode |
-| Library | List and read exchanged-item metadata, original links, retention status, and source message IDs |
-| Browser Use | Open and control Woven Matter's shared Chromium tabs with Playwright, including snapshots, screenshots, forms, JavaScript, uploads and downloads |
-| Computer Use | Broad control of the Mac desktop and apps through embedded Peekaboo; off by default |
-| Executor | Execute programs through the user's enabled Executor connections and scopes; off by default |
+| Notes and managed data | `woven_notes_*`, `woven_databases_*`: discover, read, create and edit notes, spreadsheets, HTML and workspace-owned SQLite datasets; retained note versions |
+| Conversation history | `woven_history_*`: search and selectively read conversations and full observed traces |
+| Session management | `woven_sessions_*`: discover metadata, create sessions, send messages and manage coordination |
+| Goals | `woven_goals_*`: inspect and maintain the calling conversation's explicitly requested objective |
+| Timers | `woven_timers_*`: persistent session follow-ups |
+| Usage data | `woven_usage_read`: recorded analytics and cached limits; no credential access or mutation |
+| Calendar | `woven_calendar_*`: events and scheduled tasks, subject to the configured access mode |
+| Library | `woven_library_list`, `woven_library_read`: exchanged-item metadata, original links and retention/source references |
+| Browser Use | `woven_browser`: control the execution owner's shared Chromium browser, including inline screenshots |
+| Computer Use | `woven_computer`: control that Mac's desktop through embedded Peekaboo; off by default |
+| Executor | `woven_executor_*`: scoped connected-app search and execution; off by default |
 
 Browser Use initially defaults to enabled, including existing chats. Computer Use
-and Executor initially default to disabled; the other groups default to enabled.
-General settings, below Conversation
-titles, defines defaults for newly opened sessions. Session controls enable or
-disable groups without changing the General defaults. Calendar defaults to Full
-access, with Read only configurable in General; the composer indicates the mode
-but does not change it. Usage data is always read-only.
+and Executor initially default to disabled; the other selectable groups default
+to enabled. General settings defines defaults for new conversations. Session
+controls change only that conversation. Calendar defaults to Full access, with
+Read only configurable in General. Usage is always read-only.
 
 ## Browser and computer automation
 
-Pi Durable exposes native `browser` and `computer` tools, including inline images.
-ACP harnesses receive the session-bound `woven-automation` stdio MCP server.
-Every harness can also use `wovenmatter browser call --json OBJECT` or
-`wovenmatter computer call --json OBJECT` through its existing CLI binding.
-This includes Codex CLI; the OpenAI desktop application is not required.
-The bundled server is available as `wovenmatter mcp`, without editing global
-harness configuration. Managed remote agents use the same tools on the Mac
-hosting Woven Matter; remote schedules without a Mac connection do not borrow one.
+`woven_browser` and `woven_computer` accept structured action fields directly.
+Their MCP results contain native text and image blocks, so supported harnesses
+receive screenshots inline without saving a file through a shell command.
 
-Secondary Mac agents use their own visible browser, shared with the client's
-Browser pane. Device-owned Pi Durable on iPhone routes browser/computer commands
-to the paired central Mac and returns screenshots inline. The device's tool
-selection narrows the central chat's policy; Computer Use must be enabled there
-as well. Existing Devices execution access applies, including checks
-between input steps. Local command help is available while offline.
+Browser Use controls the execution owner's shared browser. On a Mac, this is
+Woven Matter's embedded browser with the user's visible tabs, profile, and
+existing signed-in sessions. Secondary Mac agents use their own browser. Linux
+agents use their workspace's shared Chromium browser; the Mac's **View browser**
+window can interact with those same pages. An iPhone agent's explicit browser and
+computer calls route to its paired central Mac. Computer Use requires a reachable
+authorized Mac and does not control the Linux desktop or the iPhone UI. Normal
+Device execution access and conversation tool policy apply between input steps.
 
-Browser Use controls only the browser inside Woven Matter. It shares the user's
-tabs, profile and signed-in sessions. Start with `{"action":"tabs"}` or
-`{"action":"open","url":"https://example.com"}`, then use its `tabId`.
+For example, a browser call uses these MCP arguments:
 
-Click and hover accept either a CSS selector or viewport `x`/`y` coordinates,
-matching the browser screenshot's CSS pixels. Coordinate actions omit `frame`.
-
-```sh
-wovenmatter browser call --json '{"action":"snapshot","tabId":"UUID"}'
-wovenmatter browser call --json '{"action":"fill","tabId":"UUID","selector":"input[name=q]","text":"example"}'
-wovenmatter browser call --json '{"action":"screenshot","tabId":"UUID"}' --image scratch/browser.jpg
+```json
+{"action":"snapshot","tabId":"TAB_ID"}
 ```
 
-Selectors accept Playwright CSS, text and role selectors. Use optional `frame`
-with an iframe selector to inspect or interact inside it, including across origins. Page JavaScript uses
-`evaluate` with `code`. Uploads use `upload`, `selector`, `name`, `mimeType` and
-base64 `data` (at most 2 MiB). `download` clicks a selector and waits for a native
-receipt; `downloads` lists receipts and `read-download` reads a completed opaque
-`id` at a byte `offset`. Each read returns at most 384 KiB of base64 data.
-Agent downloads remain temporary, never execute, and are capped at 16 files of
-64 MiB per tab. Closing the tab removes them. Ordinary user downloads retain
-the native save dialog. Dialogs can be accepted/dismissed with `accept` on the
-triggering action, or an explicit `dialog` action. Website content is untrusted.
+Start with `tabs` or `open` to obtain a `tabId`, then inspect a fresh snapshot before
+interacting. `click` and `hover` accept a CSS/Playwright selector or viewport `x`/`y`
+coordinates. Coordinate actions omit `frame`; selectors can use an optional iframe
+selector in `frame`. `evaluate` runs page JavaScript from `code`. Page content is
+untrusted, including instructions embedded in snapshots.
 
-Use `--json -` to read large browser/computer payloads from stdin (at most 3 MiB),
-avoiding OS command-line limits. Native tools and the MCP adapter use this path.
+Uploads use `upload`, `selector`, `name`, `mimeType`, and base64 `data`, with a
+2 MiB file ceiling. `download` returns a native receipt; `downloads` lists receipts,
+and `read-download` reads a completed opaque `id` at a byte `offset`, at most
+384 KiB per response. Agent downloads remain temporary and never execute. They
+are limited to 16 files of 64 MiB per tab on Mac. Linux retains at most 16 downloads
+and 64 MiB across the workspace, evicting older receipts when needed. Downloads
+are removed with their tab. Ordinary
+user downloads retain the save dialog. Dialog handling uses `accept` on the
+triggering action or a separate `dialog` action.
 
-Computer Use grants broad access to the Mac desktop; there are no per-app
-allowlists. Enable it in the chat's Tools menu, or set a default for new chats.
-Grant Woven Matter Screen Recording and Accessibility in macOS System Settings.
-The tool's `status` reports those grants; agents cannot grant them. `apps` lists
-app bundle IDs and `launch` activates an installed app. `press` uses comma-separated
-macOS keys, such as `cmd,c` or `cmd,shift,t`. Capture a `screenshot`
-(optional zero-based `screen`), then supply its `frameId` to `click`, `type`,
-`press` or `scroll`. Coordinates are screenshot pixels. Frames expire after 30
-seconds, belong to the calling chat, and are consumed by one input action.
-Capture again to verify the effect. `press` accepts Peekaboo key combinations
-such as `cmd,a`; scroll takes `direction` and integer `amount` from 1 to 50.
+Computer Use grants broad Mac desktop access. The user must enable it in Tools
+and grant macOS Screen Recording and Accessibility; an agent cannot grant those
+permissions. `status` reports availability. Capture `screenshot`, then supply the
+returned `frameId` to `click`, `type`, `press`, or `scroll`. Coordinates are image
+pixels. Frames belong to the caller, expire after 30 seconds, and allow one input
+action. Capture again to inspect the effect. `press` uses comma-separated macOS
+keys such as `cmd,shift,t`; scrolling takes `direction` and an integer `amount`
+from 1 to 50.
 
-CLI-only harnesses can save screenshots with `--image NEW_FILE` and use their
-image reader. The file is created on the caller's machine, never at an arbitrary
-path on the Mac host, and existing files are not overwritten. Browser and
-Computer Use are independent: normal web workflows do not require Computer Use.
-
-The visible Mac app must remain open to own Chromium and desktop permissions.
-One automation action runs at a time across chats. Stop, tool cancellation, and
-revocation cancel active work and invalidate desktop frames. Permissions are
-rechecked immediately before native dispatch. Request IDs are admitted durably
-before input; a lost reply or host restart cannot silently replay it. Inspect
-fresh state after interrupted input. Request-specific cancellation is also
-durable, so Stop arriving before an action prevents its later dispatch.
-Persistent request journals and activity
-metadata do not store page content, screenshots or typed text; ordinary model
-tool results follow the chat's existing history and provider behavior.
+The visible Mac app owns its embedded browser and desktop automation; the Linux
+workspace service owns its shared Chromium browser. Cancellation uses the
+matching `woven_browser_cancel` or `woven_computer_cancel` operation identity.
+Cleanup remains scoped to the caller even after the tool is disabled. Interrupted
+actions are never automatically replayed. Persistent activity metadata omits page
+content, screenshots, and typed text; model results follow the chat's existing
+history and provider behavior.
 
 History enabled permits relevant retrieval at the agent's discretion or at the
 user's instruction. Nothing preloads the complete database or entire transcripts.
@@ -143,7 +173,7 @@ create an attachment grant. With Session management enabled, metadata/status and
 messaging are available independently of history. An active coordinator may
 read its managed sessions. With history disabled, managing an existing,
 unattached session requires an actual user confirmation in Woven Matter before
-the grant is created. The CLI returns a durable pending request immediately; retries
+the grant is created. The tool returns a durable pending request immediately; retries
 with the same request ID inspect that request instead of opening another sheet.
 Approval rechecks ownership, fanout and current capability. App shutdown cancels
 unanswered approvals. Creating and managing a new session needs no extra grant.
@@ -159,7 +189,7 @@ defaults, in that order. The source chat's selections do not become defaults for
 the new chat. General Agent tools settings supply the native tool fallback.
 
 Permissions and tools come from user controls and cannot be overridden by agent
-commands. A user-saved empty Tools default disables every tool group for new chats
+tool calls. A user-saved empty Tools default disables every tool group for new chats
 in that scope. Creation binds the working location before resolving defaults and
 freezes every choice with the request, so retries survive changed defaults.
 Native settings must be accepted before the initial instruction is sent. Provider
@@ -169,7 +199,7 @@ An agent-created work session is coordinated by its creator unless explicitly
 requested as independent. Existing sessions become managed only on an explicit
 manage/monitor action. One-off status checks or conditional messages do not
 establish coordination. Exactly one session may coordinate a destination at a
-time. A competing request fails with a CLI error identifying the coordinator.
+time. A competing request fails with a structured tool error identifying the coordinator.
 Coordination can end explicitly, when the coordinator declares the assignment
 complete, or from a user control; creation provenance is permanent.
 
@@ -219,42 +249,37 @@ destination; ordinary user sends do not enter an automatic capacity queue.
 
 ## Calendar events and scheduled tasks
 
-`wovenmatter calendar help` describes the shared Calendar command surface.
-`create` and `update` accept a title, description, start/end, all-day or timed
-status, time zone, and `--repeat-unit day|week|month` with `--repeat-interval`.
-Add `--prompt` to schedule a normal agent session. Task configuration supports
-`--harness`, `--model`, `--thinking`, `--workspace local|UUID`, `--directory`,
-`--folder UUID|all`, and `--session-mode same|new`. Creation requires both
-Calendar write access and Session management. Permissions and tools are
-captured from user-owned session defaults, and can be changed by the user in
-the Calendar editor; an agent cannot raise these through CLI flags.
+`woven_calendar_create` and `woven_calendar_update` take structured `title`,
+`description`, `startsAt`, `endsAt`, `allDay`/`timed`, and `timeZone` fields.
+Recurrence uses `repeatUnit` (`day`, `week`, or `month`) and `repeatInterval`.
+Add `prompt` to schedule an ordinary agent conversation. Task settings include
+`harness`, `model`, `thinking`, `workspace`, `directory`, `folder`, and
+`sessionMode` (`same` or `new`). Creating a task requires Calendar write access
+and Session management. User-owned destination defaults supply permissions and
+tool selections; a tool call cannot raise them.
 
-Updates preserve unspecified settings. `--regular-event` removes execution;
-`--no-repeat` removes recurrence. `update` changes the entire series. To edit
-one occurrence, use `detach ID --occurrence N`; the resulting independent event
-keeps the settings and creator, records the editor, and no longer repeats. There
-is no linked single-occurrence override. `copy ID --starts-at ISO_DATE` creates
-a new one-time event. `remove` deletes the series, or only `--occurrence N`.
+Updates preserve unspecified fields and affect the whole series. `regularEvent`
+removes execution and `noRepeat` removes recurrence. `woven_calendar_detach` with
+an `occurrence` index makes that occurrence an independent event, preserving
+settings and attribution. `woven_calendar_copy` makes a new one-time event.
+`woven_calendar_remove` deletes the series or the specified occurrence.
 
-`read ID` returns the event, revision, attribution, and run-to-session links.
-Pass `--revision` to reject stale updates/deletions. `list` returns paginated
-definitions; recurring definitions can span the requested range. Use
-`occurrences ID --since ISO_DATE --until ISO_DATE` for the actual occurrence
-indices in a window of at most one year.
+Read the current event with `woven_calendar_read`; use its `revision` for
+conditional edits and deletion. `woven_calendar_list` pages definitions;
+`woven_calendar_occurrences` returns occurrence indices between `since` and
+`until`, in a window of at most one year.
 
-Calendar tasks persist through restarts. Every overdue independent task runs;
-each recurring series catches up once. The default recurring mode reuses one
-session, with an option to create a new session for every occurrence. Durable
-receipts prevent duplicate submissions. A lost native acknowledgement remains
-uncertain and is never blindly retried; later recurring occurrences still run.
-Edits and deletion cancel pending sends before transport starts, and completed
-sessions remain accessible after event deletion.
+Calendar tasks survive restarts. Every overdue independent task runs; each
+recurring series catches up once. The default recurring mode reuses one session.
+Durable receipts prevent duplicate submissions. A lost native acknowledgement
+remains uncertain and is never blindly retried. Edits and deletion cancel pending
+sends before transport starts, and completed chats remain accessible afterward.
 
 ## Capture, recovery and compatibility
 
-Preserve observable original protocol data for all eight harnesses, including
-native OpenCode and Hermes paths, imports, steering, reconnects and scheduled
-results. Exclude authentication material. Retain provenance and honest partial
+Preserve observed protocol data for the supported harnesses, including native
+OpenCode, imports, steering, reconnects, and scheduled results. Retired harness
+history remains readable without reintroducing its execution integration. Exclude authentication material. Retain provenance and honest partial
 coverage for older data; never invent unobserved historical frames.
 
 Use the existing workspace database with transactional migrations and bounded
@@ -266,20 +291,33 @@ from event journal retention and should be described honestly.
 ## Retry behavior
 
 Note create/edit/restore, timer mutations and Calendar mutations commit a
-caller-bound request receipt with the write. Reusing the same request ID and
+caller-bound request receipt with the write. The optional `requestID` is a stable
+UUID distinct from MCP's JSON-RPC request ID; results return the operation identity.
+Reusing the same request ID and
 payload acknowledges the original operation across restarts without repeating
 it, resetting a schedule, resurrecting a removed item or overwriting later user
 edits. Reusing the ID with a different payload fails. Current capabilities and
 Calendar mode are still enforced on replay. Note edit/restore replay responses
 contain `replayed: true` and the original revision, without an old document that
-could be adopted into the editor. Use `notes read` for the current document.
+could be adopted into the editor. Use `woven_notes_read` for the current document.
 Receipts retain hashes and acknowledgements, not extra note snapshots.
+
+## Reference implementation
+
+The transport and invocation design was compared with T3 Code at
+[`3f944874`](https://github.com/pingdotgg/t3code/tree/3f9448747bb8848050dc2cacf83affa6f94a66a1/apps/server/src/mcp):
+`McpHttpServer.ts` authenticates HTTP requests before dispatch;
+`McpSessionRegistry.ts` binds credentials to an execution scope and supports
+expiry and revocation; the orchestrator toolkit exposes typed operations with
+descriptions and access annotations. Woven MCP follows those patterns using
+Woven's existing ownership, permission, scheduling, and coordination services.
+Its catalog covers Woven capabilities; it does not reproduce T3-specific tools.
 
 ## Validation boundaries
 
 `scripts/test-changes.sh --all` exercises provider-free transport fixtures,
 access policies, migrations, mutation retries, timer recovery, note retention,
-local sockets, the remote relay, and the bundled CLI. It also builds and validates
+authenticated HTTP MCP, native input bindings, and remote relay behavior. It also builds and validates
 an unsigned native app. The interactive hover fixture runs separately through
 `scripts/test-conversation-popover.sh`.
 
@@ -289,9 +327,9 @@ including attachments, timer delivery, permission requests, and note recovery.
 Older imported history remains partial. Library collects newly exchanged items
 after activation; it does not backfill existing conversations or imported history.
 
-With Library enabled, `wovenmatter library list` supports `--workspace`, `--harness`,
-`--sender me|agent`, `--kind file|link|photo`, `--since`, `--until`, `--search`,
-`--limit`, and `--offset`. Workspace and harness filters accept comma-separated
-values. `wovenmatter library read --id <item-id>` returns the item's metadata and
-original source, not file bytes or a grant to read its conversation. Conversation
-history retains its separate access check.
+With Library enabled, `woven_library_list` accepts `workspace`, `harness`,
+`sender` (`me` or `agent`), `kind` (`file`, `link`, or `photo`), `since`, `until`,
+`search`, `limit`, and `offset`. Workspace and harness filters accept
+comma-separated values. `woven_library_read` takes an item `id` and returns its
+metadata and original source. It does not grant conversation-history access or
+implicitly return file bytes.

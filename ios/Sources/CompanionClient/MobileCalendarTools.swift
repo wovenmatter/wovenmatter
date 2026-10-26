@@ -78,8 +78,8 @@ extension MobileStore {
       if c.options["directory"] != nil { throw WorkspaceToolError.invalid("Choose the task's files in its device workspace; host filesystem paths are not available on iOS.") }
       if c.options["harness"] != nil || existing?.event.draft.task == nil { task.runtime = "default_agent" }
       if existing?.event.draft.task == nil { task.workspaceID = context.workspaceID }
-      let nativeTools = context.nativeToolIDs ?? context.enabled.map { "wovenmatter_" + $0.rawValue }
-      task.enabledTools = task.enabledTools.map { Set($0).intersection(nativeTools).sorted() } ?? nativeTools.sorted()
+      let nativeTools = context.nativeToolIDs ?? WovenMCPCatalog.tools.filter { $0.group.map(context.enabled.contains) ?? true }.map(\.name)
+      task.enabledTools = task.enabledTools.map { MobileToolSupport.permittedMCPTools(selection: $0, available: nativeTools) } ?? nativeTools.sorted()
       if let model = c.options["model"] { task.model = model }
       if let thinking = c.options["thinking"] { task.thinking = thinking }
       if let folder = c.options["folder"] { task.folderID = folder == "all" ? nil : folder }
@@ -91,13 +91,13 @@ extension MobileStore {
     if ["copy", "detach"].contains(c.action) { draft.recurrenceUnit = nil; draft.recurrenceInterval = 1 }
     if var task = draft.task {
       guard context.enabled.contains(.sessions) else { throw WorkspaceToolError.disabled(.sessions) }
-      let nativeTools = context.nativeToolIDs ?? context.enabled.map { "wovenmatter_" + $0.rawValue }
-      task.enabledTools = task.enabledTools.map { Set($0).intersection(nativeTools).sorted() } ?? nativeTools.sorted()
+      let nativeTools = context.nativeToolIDs ?? WovenMCPCatalog.tools.filter { $0.group.map(context.enabled.contains) ?? true }.map(\.name)
+      task.enabledTools = task.enabledTools.map { MobileToolSupport.permittedMCPTools(selection: $0, available: nativeTools) } ?? nativeTools.sorted()
       draft.task = task
     }
     draft = try await calendar.prepareToolDraft(requestID: key, arguments: signature, draft: draft)
     if let task = draft.task {
-      let allowed = Set(context.nativeToolIDs ?? context.enabled.map { "wovenmatter_" + $0.rawValue })
+      let allowed = Set(context.nativeToolIDs ?? WovenMCPCatalog.tools.filter { $0.group.map(context.enabled.contains) ?? true }.map(\.name))
       guard Set(task.enabledTools ?? []).isSubset(of: allowed) else { throw WorkspaceToolError.invalid("The caller's tool selection changed. Review the pending scheduled task before retrying it.") }
     }
     let record: CompanionCalendarRecord

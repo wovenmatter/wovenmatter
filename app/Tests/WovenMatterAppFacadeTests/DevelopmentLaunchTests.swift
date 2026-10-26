@@ -137,13 +137,19 @@ struct DevelopmentLaunchTests {
             endpoint: URL(string: "https://fixture.test.ts.net:8443/wovenmatter"))
         _ = try await fixture.database.registerCompanionExecutionWorkspace(.init(workspace: owner), deviceID: identity.hostDeviceID)
         let foreignHistory = CompanionTranscript(conversationID: foreignID,
-            messages: [.init(id: "saved", conversationID: foreignID, role: "assistant", content: "Retained foreign history")])
+            messages: [.init(id: "saved", conversationID: foreignID, role: "assistant", content: "Retained foreign history"),
+                .init(id: "agent-message", conversationID: foreignID, role: "user", content: "Inspect retained history",
+                    agentSourceID: id, isAgentAuthored: true, senderSessionTitle: "Coordinator",
+                    senderHarness: "default_agent", senderKind: "notification")])
         _ = try await fixture.database.ingestCompanionJournal(.init(libraryID: originalIdentity, entries: [
             .init(workspaceID: foreignOwner, originSequence: 1, conversationID: foreignID,
                   kind: .conversation, conversation: .init(id: foreignID, title: "Foreign")),
             .init(workspaceID: foreignOwner, originSequence: 2, conversationID: foreignID,
                   kind: .transcript, transcript: foreignHistory)
         ]), deviceID: identity.hostDeviceID)
+        let originalForeignMessages = try await fixture.database.conversationContent(id: foreignID).messages
+        let agentMessage = try #require(originalForeignMessages.first { $0.id == "agent-message" })
+        #expect(agentMessage.senderSessionID == id && agentMessage.senderKind == .notification)
         let destination = fixture.directory.deletingLastPathComponent().appending(path: "snapshot-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: destination) }
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
@@ -170,7 +176,9 @@ struct DevelopmentLaunchTests {
         let snapshotOwner = try #require(try await snapshot.companionExecutionWorkspaces().first)
         #expect(snapshotOwner.endpoint == nil)
         #expect(snapshotOwner.libraryID == (try await snapshot.companionWorkspaceID()))
-        #expect(try await snapshot.companionFederatedTranscript(conversationID: foreignID)?.messages == foreignHistory.messages)
+        // Snapshot chats are archived history, so read the retained projection
+        // rather than the federation API's active conversation view.
+        #expect(try await snapshot.conversationContent(id: foreignID).messages == originalForeignMessages)
         let archived = try #require(try await snapshot.workspaceOverview().conversations.first { $0.id == id })
         #expect(archived.isArchived)
         await #expect(throws: (any Error).self) { try await snapshot.localACPSession(conversationID: id) }

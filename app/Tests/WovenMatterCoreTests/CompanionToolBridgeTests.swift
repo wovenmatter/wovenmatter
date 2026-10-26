@@ -3,9 +3,107 @@ import Testing
 import WovenMatterCore
 @testable import WovenMatterDashboardStore
 
-@Suite("Companion central CLI authority and receipts", .serialized)
+@Suite("Companion MCP authority and receipts", .serialized)
 @MainActor
 struct CompanionToolBridgeTests {
+
+  @Test func scheduledMCPCallerUsesSavedScopeAndWaitsForNativeBinding() async throws {
+    let fixture = try await Fixture(); defer { fixture.remove() }
+    let executor = UUID().uuidString.lowercased()
+    let historicalCaller = try await fixture.importSession(kind: .linux, executionDeviceID: executor)
+    let workspace = try #require(await fixture.database.companionConversationExecutionWorkspace(conversationID: historicalCaller))
+    let workspaceID = try #require(UUID(uuidString: workspace.id))
+    let identity = try await fixture.database.companionLibraryIdentity()
+    let grant = try await fixture.database.issueCompanionWorkspaceMCP(workspaceID: workspace.id,
+      endpoint: URL(string: "https://central.tail.ts.net/wovenmatter")!, deviceID: identity.hostDeviceID)
+    let principal = try await fixture.database.authenticateCompanionWorkspaceMCP(bearer: grant.bearerToken)
+    let start = Date(timeIntervalSince1970: floor(Date().timeIntervalSince1970) - 60)
+    let task = WorkspaceCalendarTask(prompt: "Read the notes", configuration: .init(runtimeKind: .codex,
+      workspaceID: workspaceID, title: "Read notes", nativeWorkingDirectory: "/home/.woven-matter", tools: .init(enabled: [.notes])))
+    let eventID = try await fixture.database.saveCalendarEvent(draft: .init(title: "Read notes", startsAt: start,
+      timeZoneID: "UTC", task: task), creating: true, now: start)
+    try await fixture.database.setRemoteCalendarExecutionOwnership(workspaceID: workspaceID, state: .pending)
+    try await fixture.database.setRemoteCalendarExecutionOwnership(workspaceID: workspaceID, state: .remote)
+    let event = try #require(await fixture.database.calendarItems().first(where: { $0.id == eventID }))
+    let savedTask = try #require(event.calendar.task)
+    let run = WorkspaceCalendarRun(id: UUID().uuidString.lowercased(), eventID: eventID, occurrenceIndex: 0,
+      scheduledAt: start, sessionID: UUID().uuidString.lowercased(), task: savedTask, status: "sending", title: event.title)
+    let scope = try await fixture.database.prepareCompanionScheduledMCP(.init(run: run,
+      eventRevision: event.calendar.revision, nativeSessionID: nil), principal: principal)
+    #expect(Set(scope) == savedTask.configuration.tools.enabled)
+    #expect(try await fixture.database.companionExecutionOwner(conversationID: run.sessionID) == nil)
+    let capturedRoot = try await fixture.database.availableSessionExecutionRoot(id: run.sessionID)
+    #expect(capturedRoot.workspaceID == "remote:" + workspace.id)
+    #expect(capturedRoot.rootPath == savedTask.configuration.nativeWorkingDirectory)
+    var call = fixture.request(["notes", "create", "--title", "Prepared"]); call.conversationID = run.sessionID
+    await #expect(throws: (any Error).self) {
+      try await fixture.database.authorizeCompanionTool(call, deviceID: executor)
+    }
+    _ = try await fixture.database.prepareCompanionScheduledMCP(.init(run: run,
+      eventRevision: event.calendar.revision, nativeSessionID: "native-scheduled-session"), principal: principal)
+    try await fixture.database.authorizeCompanionWorkspaceMCPCaller(conversationID: run.sessionID, principal: principal)
+    try await fixture.database.authorizeCompanionTool(call, deviceID: executor)
+    var forged = run; forged.task.configuration.tools = .init(enabled: [.notes, .executor])
+    await #expect(throws: (any Error).self) {
+      _ = try await fixture.database.prepareCompanionScheduledMCP(.init(run: forged,
+        eventRevision: event.calendar.revision, nativeSessionID: "native-scheduled-session"), principal: principal)
+    }
+  }
+
+  @Test func linuxLibraryMCPRequiresDedicatedGrantAndExactExecutionOwner() async throws {
+    let fixture = try await Fixture(); defer { fixture.remove() }
+    let executor = UUID().uuidString.lowercased()
+    let caller = try await fixture.importSession(kind: .linux, executionDeviceID: executor)
+    let workspace = try #require(await fixture.database.companionConversationExecutionWorkspace(conversationID: caller))
+    let identity = try await fixture.database.companionLibraryIdentity()
+    var call = fixture.request(["notes", "list"]); call.conversationID = caller
+    // Publishing execution history creates neither paired-device authority nor
+    // a general library-tools grant.
+    await #expect(throws: (any Error).self) {
+      try await fixture.database.authorizeCompanionTool(call, deviceID: executor)
+    }
+    let grant = try await fixture.database.issueCompanionWorkspaceMCP(workspaceID: workspace.id,
+      endpoint: URL(string: "https://central.tail.ts.net/wovenmatter")!, deviceID: identity.hostDeviceID)
+    let principal = try await fixture.database.authenticateCompanionWorkspaceMCP(bearer: grant.bearerToken)
+    try await fixture.database.authorizeCompanionWorkspaceMCPCaller(conversationID: caller, principal: principal)
+    try await fixture.database.authorizeCompanionTool(call, deviceID: executor)
+    await #expect(throws: (any Error).self) {
+      try await fixture.database.authorizeCompanionWorkspaceMCPCaller(conversationID: fixture.conversationID, principal: principal)
+    }
+    await #expect(throws: (any Error).self) {
+      try await fixture.database.authorizeCompanionTool(call, deviceID: workspace.ownerDeviceID)
+    }
+    let publisher = try await fixture.database.issueCompanionWorkspacePublisher(workspaceID: workspace.id,
+      endpoint: URL(string: "https://central.tail.ts.net/wovenmatter")!, deviceID: identity.hostDeviceID)
+    await #expect(throws: (any Error).self) {
+      _ = try await fixture.database.authenticateCompanionWorkspaceMCP(bearer: publisher.token)
+    }
+  }
+
+  @Test func libraryMCPRotationAndRevocationRejectOldCredentialsAndPrincipals() async throws {
+    let fixture = try await Fixture(); defer { fixture.remove() }
+    let caller = try await fixture.importSession(kind: .linux, executionDeviceID: UUID().uuidString.lowercased())
+    let workspace = try #require(await fixture.database.companionConversationExecutionWorkspace(conversationID: caller))
+    let identity = try await fixture.database.companionLibraryIdentity()
+    let endpoint = URL(string: "https://central.tail.ts.net/wovenmatter")!
+    let original = try await fixture.database.issueCompanionWorkspaceMCP(workspaceID: workspace.id,
+      endpoint: endpoint, deviceID: identity.hostDeviceID)
+    let principal = try await fixture.database.authenticateCompanionWorkspaceMCP(bearer: original.bearerToken)
+    let replacement = try await fixture.database.issueCompanionWorkspaceMCP(workspaceID: workspace.id,
+      endpoint: endpoint, deviceID: identity.hostDeviceID)
+    #expect(try await fixture.database.companionWorkspaceMCPMatches(workspaceID: workspace.id,
+      grantID: replacement.grantID, endpoint: endpoint))
+    await #expect(throws: (any Error).self) {
+      _ = try await fixture.database.authenticateCompanionWorkspaceMCP(bearer: original.bearerToken)
+    }
+    await #expect(throws: (any Error).self) {
+      try await fixture.database.authorizeCompanionWorkspaceMCPCaller(conversationID: caller, principal: principal)
+    }
+    try await fixture.database.revokeCompanionWorkspaceMCP(workspaceID: workspace.id, deviceID: identity.hostDeviceID)
+    await #expect(throws: (any Error).self) {
+      _ = try await fixture.database.authenticateCompanionWorkspaceMCP(bearer: replacement.bearerToken)
+    }
+  }
 
 
   @Test(.timeLimit(.minutes(1))) func concurrentRetryAndCallerCancellationKeepOneAcceptedExecution() async throws {

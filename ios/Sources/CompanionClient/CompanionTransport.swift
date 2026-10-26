@@ -19,7 +19,7 @@ public struct MobileCredential: Codable, Sendable, Equatable {
 }
 
 public protocol CompanionTransport: Sendable {
-  func executeTool(_ request: CompanionToolRequest) async throws -> WovenMatterToolResponse
+  func executeMCP(_ message: GatewayJSONValue, conversationID: String, enabledGroups: [WorkspaceToolGroup], contextID: String?) async throws -> GatewayJSONValue
   func readWorkspace(_ request: CompanionWorkspaceRead) async throws -> CompanionWorkspaceResult
   func workspaceIdentity() async throws -> String
   func snapshot() async throws -> CompanionSnapshot
@@ -36,7 +36,7 @@ public protocol CompanionTransport: Sendable {
 }
 
 public extension CompanionTransport {
-  func executeTool(_ request: CompanionToolRequest) async throws -> WovenMatterToolResponse { throw MobileConnectionError.offline }
+  func executeMCP(_ message: GatewayJSONValue, conversationID: String, enabledGroups: [WorkspaceToolGroup], contextID: String? = nil) async throws -> GatewayJSONValue { throw MobileConnectionError.offline }
   func readWorkspace(_ request: CompanionWorkspaceRead) async throws -> CompanionWorkspaceResult { throw MobileConnectionError.offline }
   func linkedData(_ id: String, tableID: String?) async throws -> CompanionLinkedData { throw MobileConnectionError.offline }
   func transcript(_ id: String, before: String) async throws -> CompanionTranscript { throw MobileConnectionError.http(400, "This connection does not support older transcript pages.") }
@@ -66,9 +66,23 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate, Sendable {
   }
 }
 
+private actor CompanionMCPConnections {
+  struct Session: Sendable { let protocolVersion: String; let id: String? }
+  private var sessions: [String: Task<Session, any Error>] = [:]
+  func connect(_ conversationID: String, initialize: @escaping @Sendable () async throws -> Session) async throws -> Session {
+    if let existing = sessions[conversationID] { return try await existing.value }
+    let task = Task { try await initialize() }
+    sessions[conversationID] = task
+    do { return try await task.value }
+    catch { sessions.removeValue(forKey: conversationID); throw error }
+  }
+}
+
 public final class HTTPSCompanionTransport: CompanionTransport, @unchecked Sendable {
   let credential: MobileCredential
   private let session: URLSession
+  private let mcpSession: URLSession
+  private let mcpConnections = CompanionMCPConnections()
   private let deviceMetadata: CompanionDeviceMetadata?
   public init(credential: MobileCredential, metadata: CompanionDeviceMetadata? = nil) throws {
     guard Self.validEndpoint(credential.endpoint) else { throw MobileConnectionError.insecureEndpoint }
@@ -77,6 +91,11 @@ public final class HTTPSCompanionTransport: CompanionTransport, @unchecked Senda
     configuration.httpCookieStorage = nil; configuration.urlCache = nil
     configuration.timeoutIntervalForRequest = 30; configuration.timeoutIntervalForResource = 45
     session = URLSession(configuration: configuration, delegate: NoRedirects(), delegateQueue: nil)
+    let mcpConfiguration = URLSessionConfiguration.ephemeral
+    mcpConfiguration.httpCookieStorage = nil; mcpConfiguration.urlCache = nil
+    mcpConfiguration.timeoutIntervalForRequest = 24 * 60 * 60
+    mcpConfiguration.timeoutIntervalForResource = 24 * 60 * 60
+    mcpSession = URLSession(configuration: mcpConfiguration, delegate: NoRedirects(), delegateQueue: nil)
   }
   public static func previewPairing(_ payload: CompanionPairingPayload, deviceID: String, deviceName: String,
                                     metadata: CompanionDeviceMetadata? = nil) async throws -> String {
@@ -106,7 +125,38 @@ public final class HTTPSCompanionTransport: CompanionTransport, @unchecked Senda
     return MobileCredential(endpoint: payload.endpoint, workspaceID: result.workspaceID, deviceID: result.deviceID,
       token: result.credential, confirmationPending: result.confirmationRequired)
   }
-  public func executeTool(_ value: CompanionToolRequest) async throws -> WovenMatterToolResponse { try await request("v1/tools", method: "POST", body: JSONEncoder().encode(value)) }
+  public func executeMCP(_ message: GatewayJSONValue, conversationID: String, enabledGroups: [WorkspaceToolGroup], contextID: String? = nil) async throws -> GatewayJSONValue {
+    guard UUID(uuidString: conversationID) != nil else { throw MobileConnectionError.invalidResponse }
+    var headers = ["X-Woven-Conversation-ID": conversationID,
+      "X-Woven-Enabled-Groups": Set(enabledGroups).sorted { $0.rawValue < $1.rawValue }.map(\.rawValue).joined(separator: ","),
+      "MCP-Protocol-Version": "2025-06-18"]
+    if let contextID { headers["X-Woven-Context-ID"] = contextID }
+    let initializationHeaders = headers
+    let negotiated = try await mcpConnections.connect(conversationID) { [self] in
+      let initialize: GatewayJSONValue = .object(["jsonrpc": .string("2.0"), "id": .string(UUID().uuidString.lowercased()),
+        "method": .string("initialize"), "params": .object(["protocolVersion": .string(WovenMCPServer.protocolVersion),
+          "capabilities": .object([:]), "clientInfo": .object(["name": .string("woven-ios"), "version": .string("1.0.0")])])])
+      let (bytes, response) = try await data("mcp", method: "POST", body: JSONEncoder().encode(initialize),
+        maximumBytes: 1_048_576, timeout: 30, headers: initializationHeaders)
+      let reply = try JSONDecoder().decode(GatewayJSONValue.self, from: bytes)
+      guard let version = reply.objectValue?["result"]?.objectValue?["protocolVersion"]?.stringValue,
+            WovenMCPServer.supportedProtocolVersions.contains(version) else { throw MobileConnectionError.versionMismatch }
+      let sessionID = response.value(forHTTPHeaderField: "MCP-Session-Id")
+      if let sessionID, sessionID.count > 512 || sessionID.contains("\r") || sessionID.contains("\n") { throw MobileConnectionError.invalidResponse }
+      var notificationHeaders = initializationHeaders
+      notificationHeaders["MCP-Protocol-Version"] = version
+      if let sessionID { notificationHeaders["MCP-Session-Id"] = sessionID }
+      let initialized: GatewayJSONValue = .object(["jsonrpc": .string("2.0"), "method": .string("notifications/initialized")])
+      _ = try await data("mcp", method: "POST", body: JSONEncoder().encode(initialized),
+        maximumBytes: 1_048_576, timeout: 30, headers: notificationHeaders)
+      return CompanionMCPConnections.Session(protocolVersion: version, id: sessionID)
+    }
+    headers["MCP-Protocol-Version"] = negotiated.protocolVersion
+    if let sessionID = negotiated.id { headers["MCP-Session-Id"] = sessionID }
+    let (data, _) = try await data("mcp", method: "POST", body: JSONEncoder().encode(message),
+      maximumBytes: 80 * 1_024 * 1_024, timeout: 24 * 60 * 60, headers: headers)
+    return try JSONDecoder().decode(GatewayJSONValue.self, from: data)
+  }
   public func readWorkspace(_ value: CompanionWorkspaceRead) async throws -> CompanionWorkspaceResult { try await request("v1/workspace-read", method: "POST", body: JSONEncoder().encode(value)) }
   public func workspaceIdentity() async throws -> String {
     let hello: CompanionHello = try await request("v1/hello")
@@ -136,7 +186,7 @@ public final class HTTPSCompanionTransport: CompanionTransport, @unchecked Senda
     let (data, _) = try await data(path, method: method, query: query, body: body, maximumBytes: 80 * 1_024 * 1_024, timeout: timeout)
     return try JSONDecoder().decode(Result.self, from: data)
   }
-  private func data(_ path: String, method: String = "GET", query: [URLQueryItem] = [], body: Data? = nil, maximumBytes: Int, timeout: TimeInterval? = nil) async throws -> (Data, HTTPURLResponse) {
+  private func data(_ path: String, method: String = "GET", query: [URLQueryItem] = [], body: Data? = nil, maximumBytes: Int, timeout: TimeInterval? = nil, headers: [String: String] = [:]) async throws -> (Data, HTTPURLResponse) {
     var components = URLComponents(url: credential.endpoint.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
     components.queryItems = query.isEmpty ? nil : query
     var request = URLRequest(url: components.url!)
@@ -150,12 +200,13 @@ public final class HTTPSCompanionTransport: CompanionTransport, @unchecked Senda
       if let value = deviceMetadata.appVersion { request.setValue(value, forHTTPHeaderField: "X-Woven-App-Version") }
     }
     if body != nil { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
+    for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
     if !credential.token.isEmpty {
       request.setValue("Bearer " + credential.token, forHTTPHeaderField: "Authorization")
       request.setValue(credential.workspaceID, forHTTPHeaderField: "X-Woven-Workspace")
     }
     #if !os(Linux)
-    let (bytes, response) = try await session.bytes(for: request)
+    let (bytes, response) = try await (headers["MCP-Protocol-Version"] == nil ? session : mcpSession).bytes(for: request)
     guard let response = response as? HTTPURLResponse else { throw MobileConnectionError.invalidResponse }
     guard response.expectedContentLength <= maximumBytes else { throw MobileConnectionError.responseTooLarge }
     var data = Data(); data.reserveCapacity(min(maximumBytes, max(0, Int(response.expectedContentLength))))
@@ -164,7 +215,7 @@ public final class HTTPSCompanionTransport: CompanionTransport, @unchecked Senda
       data.append(byte)
     }
     #else
-    let (data, rawResponse) = try await session.data(for: request)
+    let (data, rawResponse) = try await (headers["MCP-Protocol-Version"] == nil ? session : mcpSession).data(for: request)
     guard let response = rawResponse as? HTTPURLResponse else { throw MobileConnectionError.invalidResponse }
     guard data.count <= maximumBytes else { throw MobileConnectionError.responseTooLarge }
     #endif

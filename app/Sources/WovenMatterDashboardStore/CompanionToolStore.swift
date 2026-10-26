@@ -14,6 +14,14 @@ extension WorkspaceDatabaseConnection {
         device_id TEXT NOT NULL, request_id TEXT NOT NULL, conversation_id TEXT NOT NULL,
         fingerprint BLOB NOT NULL, response BLOB, PRIMARY KEY(device_id,request_id)
       );
+      CREATE TABLE IF NOT EXISTS companion_workspace_mcp_grants (
+        workspace_id TEXT PRIMARY KEY, digest BLOB NOT NULL UNIQUE, payload BLOB NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS companion_scheduled_mcp_callers (
+        run_id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, workspace_id TEXT NOT NULL,
+        event_id TEXT NOT NULL, scheduled_at TEXT NOT NULL, native_session_id TEXT,
+        UNIQUE(event_id,scheduled_at)
+      );
       """)
   }
 
@@ -32,15 +40,31 @@ extension WorkspaceDatabaseConnection {
           command.group?.isAutomation != true || (command.options["json"]?.utf8.count ?? 0) <= 3 * 1_024 * 1_024 else {
       throw CompanionAPIError(code: "invalid_request", message: "Tool calls require bounded requests and stable UUID identities.")
     }
-    let owners = try companionIDsUnlocked("""
+    var owners = try companionIDsUnlocked("""
       SELECT f.workspace_id FROM companion_execution_conversations f
       JOIN dashboard_conversations c ON c.id=f.id
       WHERE f.id=? AND f.deleted=0 AND c.deleted_at IS NULL AND c.is_archived=0
       """, bindings: [value.conversationID])
-    guard let workspaceID = owners.first, let workspace = try federationWorkspaceUnlocked(workspaceID),
-          !workspace.deleted, workspace.kind == .ios || workspace.kind == .mac,
-          workspace.ownerDeviceID == deviceID, (workspace.executionDeviceID ?? workspace.ownerDeviceID) == deviceID else {
+    if owners.isEmpty {
+      owners = try companionIDsUnlocked("SELECT DISTINCT f.workspace_id FROM companion_scheduled_mcp_callers f JOIN dashboard_conversations c ON c.id=f.conversation_id WHERE f.conversation_id=? AND c.deleted_at IS NULL AND c.is_archived=0", bindings: [value.conversationID])
+      if command.isMutation {
+        guard try companionIDsUnlocked("SELECT run_id FROM companion_scheduled_mcp_callers WHERE conversation_id=? AND native_session_id IS NOT NULL", bindings: [value.conversationID]).isEmpty == false else {
+          throw CompanionAPIError(code: "unavailable", message: "The scheduled agent has not bound its native session yet.")
+        }
+      }
+    }
+    guard owners.count == 1, let workspaceID = owners.first, let workspace = try federationWorkspaceUnlocked(workspaceID),
+          !workspace.deleted,
+          workspace.kind == .linux
+            ? workspace.executionDeviceID == deviceID
+            : (workspace.kind == .ios || workspace.kind == .mac) && workspace.ownerDeviceID == deviceID
+              && (workspace.executionDeviceID ?? workspace.ownerDeviceID) == deviceID else {
       throw CompanionAPIError(code: "wrong_owner", message: "Sync this device's conversation before using the central library tools.")
+    }
+    if workspace.kind == .linux {
+      guard try activeCompanionWorkspaceMCPGrantUnlocked(workspaceID: workspaceID, executionDeviceID: deviceID) else {
+        throw CompanionAPIError(code: "unauthorized", message: "This execution workspace has no current library MCP grant.")
+      }
     }
     if let supplied = command.options["request-id"] {
       guard UUID(uuidString: supplied) == UUID(uuidString: value.request.requestID) else {
@@ -61,7 +85,8 @@ extension WorkspaceDatabaseConnection {
   /// Caller ownership is derived from the journal, never automation arguments.
   public func requireCompanionAutomationAccess(callerID: String) throws {
     try withLock {
-      guard let id = try companionIDsUnlocked("SELECT workspace_id FROM companion_execution_conversations WHERE id=?", bindings: [callerID]).first else { return }
+      let owners = try companionIDsUnlocked("SELECT workspace_id FROM companion_execution_conversations WHERE id=? UNION SELECT workspace_id FROM companion_scheduled_mcp_callers WHERE conversation_id=?", bindings: [callerID, callerID])
+      guard let id = owners.first else { return }
       guard let owner = try federationWorkspaceUnlocked(id), !owner.deleted else {
         throw CompanionAPIError(code: "wrong_owner", message: "The automation caller's execution workspace is unavailable.")
       }

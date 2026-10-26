@@ -8,11 +8,17 @@ import WovenMatterDashboardStore
 import WovenMatterAutomation
 
 /// The visible app owns CEF and TCC grants. Background/remote runtimes reach
-/// this host through their already-scoped CLI service, never a raw CDP endpoint.
+/// this host through authenticated, caller-scoped Woven MCP dispatch.
 @MainActor
 final class WovenAutomationHost {
+    struct RemoteBrowserRoute {
+        let perform: @MainActor (GatewayJSONValue, String) async throws -> WovenMatterToolResponse
+        let cancel: @MainActor (String) async throws -> Void
+    }
     private let assets: WorkspaceAssetSession
     private let database: WorkspaceDatabase
+    private let remoteBrowser: @MainActor (String) async throws -> RemoteBrowserRoute?
+    private let allowsLocalSurfaces: Bool
     private let computer = WovenComputerAutomation()
     private struct Running { let caller: String; let identity: BackendRPCCommandIdentity; let task: Task<WovenMatterToolResponse, Never> }
     private var running: [String: Running] = [:]
@@ -20,7 +26,11 @@ final class WovenAutomationHost {
     private var completionOrder: [String] = []
     private var server: BackendRPCServer?
 
-    init(assets: WorkspaceAssetSession, database: WorkspaceDatabase) { self.assets = assets; self.database = database }
+    init(assets: WorkspaceAssetSession, database: WorkspaceDatabase, allowsLocalSurfaces: Bool = true,
+         remoteBrowser: @MainActor @escaping (String) async throws -> RemoteBrowserRoute? = { _ in nil }) {
+        self.assets = assets; self.database = database
+        self.allowsLocalSurfaces = allowsLocalSurfaces; self.remoteBrowser = remoteBrowser
+    }
     func start(at url: URL) throws {
         let service = BackendRPCServer(socketURL: url)
         try service.start { [weak self] request in
@@ -46,7 +56,6 @@ final class WovenAutomationHost {
         do {
             guard UUID(uuidString: id) != nil else { throw WorkspaceToolError.invalid("Invalid automation request ID.") }
             let command = try WovenMatterToolCommand(invocation.request.arguments)
-            guard command.options["image"] == nil else { throw WorkspaceToolError.invalid("Image paths must be handled on the CLI host.") }
             guard let group = command.group, [.browser, .computer].contains(group) else { throw WorkspaceToolError.invalid("Invalid automation group.") }
             if command.action == "cancel" {
                 let target = try command.required("id")
@@ -79,9 +88,32 @@ final class WovenAutomationHost {
                         try await database.requireCompanionAutomationAccess(callerID: invocation.callerID)
                         try Task.checkCancellation()
                     }
-                    let result = group == .computer
-                        ? try await computer.execute(input, callerID: invocation.callerID, admit: admit)
-                        : try await browser(input, admit: admit)
+                    try await admit()
+                    let result: GatewayJSONValue
+                    if group == .browser, let remote = try await remoteBrowser(invocation.callerID) {
+                        try await admit()
+                        do {
+                            let response = try await remote.perform(input, id)
+                            try Task.checkCancellation()
+                            guard response.success, let value = response.result else {
+                                throw WorkspaceToolError.invalid(response.error ?? "The remote browser action failed.")
+                            }
+                            result = value
+                        } catch {
+                            if Task.isCancelled {
+                                // A fresh cleanup task can finish after the HTTP
+                                // request was cancelled, using the original binding.
+                                let cleanup = Task { try? await remote.cancel(id) }
+                                await cleanup.value
+                            }
+                            throw error
+                        }
+                    } else {
+                        guard allowsLocalSurfaces else { throw WorkspaceToolError.invalid("Open Woven Matter's workspace to use Mac automation.") }
+                        result = group == .computer
+                            ? try await computer.execute(input, callerID: invocation.callerID, admit: admit)
+                            : try await browser(input, admit: admit)
+                    }
                     try await admit()
                     return .init(result: result, requestID: id)
                 } catch {

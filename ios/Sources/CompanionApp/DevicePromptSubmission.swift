@@ -65,7 +65,7 @@ extension CompanionModel {
     var activeRuntime: PiDurableRuntime?
     var attemptID: String?
     try await store.updateToolSubmission(id: job.id, state: "submitting")
-    executionRecords[id]?.runID = job.id; executionRecords[id]?.pendingInput = job.text
+    executionRecords[id]?.runID = job.id; executionRecords[id]?.pendingInput = job.text; executionRecords[id]?.inputAssetID = nil
     executionRecords[id]?.status = "running"; executionRecords[id]?.updatedAt = Self.executionTimestamp()
     do {
       try persistExecutionConfiguration()
@@ -130,7 +130,7 @@ extension CompanionModel {
         try? await store.updateToolSubmission(id: job.id, state: "interrupted")
       } else if record.runID == nil, job.state == "submitting" {
         executionRecords[job.sessionID]?.runID = job.id
-        executionRecords[job.sessionID]?.pendingInput = job.text
+        executionRecords[job.sessionID]?.pendingInput = job.text; executionRecords[job.sessionID]?.inputAssetID = nil
         executionRecords[job.sessionID]?.status = "interrupted"
         try? persistExecutionConfiguration()
         try? await store.updateToolSubmission(id: job.id, state: "interrupted")

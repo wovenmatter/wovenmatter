@@ -22,14 +22,16 @@ rows = list(csv.DictReader(io.StringIO("name,count\nA,2\nB,3\n")))
 with sqlite3.connect("report.sqlite") as db:
     db.execute("create table if not exists counts(name text, count integer)")
     db.executemany("insert into counts values (?, ?)", [(r["name"], int(r["count"])) for r in rows])
-print(await wovenmatter(["notes", "list"]))
+print(await woven_mcp("woven_notes_list", {}))
 ```
 
 Other bundled commands are implemented using those standard-library operations:
 `pwd`, `ls [-a]`, `cat`, `mkdir [-p]`, `cp [-r]`, `mv`, `rm [-rf]`, `find`,
 `grep [-in]`, and `sqlite3 DATABASE SQL`. `help` returns the exact accepted syntax.
-`wovenmatter ...` uses the same awaited native CLI bridge available to Python.
-These are useful builtins, not imported Unix binaries or aliases to a remote Mac.
+Python can await `woven_mcp(name, arguments)` to invoke a focused Woven tool.
+The tool name and structured arguments use the same shared MCP catalog as other
+harnesses; there is no `wovenmatter` command or argv tool bridge. These filesystem
+builtins are not imported Unix binaries or aliases to a remote Mac.
 
 There is no arbitrary native executable, native Python extension installation,
 package download, raw socket, browser cookie, Keychain, or host filesystem access.
@@ -42,10 +44,10 @@ CPU-specific native binary dependency.
 - A job snapshots only regular workspace files. No host filesystem mount exists.
   The worker has a separate virtual `/workspace` plus bundled Python system files.
 - CSP blocks network and frame loads. Pyodide asset requests resolve from an exact,
-  bundled byte map; there is no CDN fallback. Native CLI calls are the sole bridge.
-- CLI `--file` input for notes apply/set-html and Executor execute is read from
-  the live virtual workspace and converted to the same inline arguments as the
-  native CLI. Strict UTF-8 and the shared 4 MiB input-file ceiling apply.
+  bundled byte map; there is no CDN fallback. Focused native MCP tool calls are the sole bridge.
+- Note operations and Executor programs use typed inline arguments. Python can
+  read its own virtual files and supply that content explicitly; no tool accepts
+  a host path to read.
 - A native library read can explicitly return newly created artifact paths through
   the host's `importFiles` callback. Only those named files are loaded into Python
   and added to the original snapshot baseline; unrelated native edits still cause
@@ -63,11 +65,11 @@ CPU-specific native binary dependency.
   effects may already have committed. Inspect the saved output and intentionally
   create a new job after reviewing those effects.
 - Replaying a completed command UUID and arguments returns its receipt without
-  repeating mutations. Each nested CLI call derives a stable UUID from the job and
-  its call ordinal, so the CLI's receipt machinery can deduplicate committed work.
+  repeating mutations. Each nested MCP call derives a stable UUID from the job and
+  its call ordinal, so tool receipts can deduplicate committed work.
 - Stop/cancellation terminates the worker independently of Python's interpreter.
-  Uncommitted virtual file changes are discarded. Already committed native CLI
-  effects are governed by CLI receipts; they are not rolled back.
+  Uncommitted virtual file changes are discarded. Already committed native tool
+  effects are governed by operation receipts; they are not rolled back.
 - Execution has no blanket wall-clock deadline. A 90-second startup watchdog
   detects a runtime that fails to initialize. iOS can still interrupt WebKit or
   suspend the app; failures never imply arbitrary instruction-level resumability.
@@ -124,7 +126,7 @@ bundle includes the unchanged upstream modules and our bridge.
 ## Validation
 
 `EmbeddedExecutionTests` covers native path/resource validation, conflict rejection,
-atomic result/receipt publication, and deterministic native CLI identities.
+atomic result/receipt publication, and deterministic native MCP operation identities.
 
 The standalone simulator harness exercises the actual WebKit worker, rather than
 substituting desktop Python or a mocked interpreter:
@@ -134,9 +136,9 @@ scripts/test-ios-embedded-runtime.sh <booted-simulator-uuid>
 ```
 
 It installs a separate test bundle (`com.wovenmatter.embedded-smoke`), with synthetic
-files and an in-memory CLI stub. It does not touch the Woven Matter app or providers.
+files and an in-memory MCP stub. It does not touch the Woven Matter app or providers.
 The report covers CPython/CSV/JSON/SQLite, persistence between commands, native
 bridging, receipt replay, stopping an infinite Python loop, refusing interrupted
 script replay, concurrent edit preservation, file-backed output previews, actual
-Python unittest execution, virtual-file CLI input, library-file import into Python,
+Python unittest execution, structured tool inputs, library-file import into Python,
 continued conflict protection during imports, and symlink rejection.

@@ -29,7 +29,7 @@ report = json.loads((Path(sys.argv[2]) / "report.json").read_text())
 assert report["status"] == "passed", report
 for check in ("receiptReplay", "sqlitePersistence", "cancel", "symlinkRejected",
               "interruptedReplayRejected", "conflictPreserved", "fullOutputSaved",
-              "pythonUnitTests", "virtualCLIFile", "libraryIntoPython", "importKeepsConflict"):
+              "pythonUnitTests", "virtualMCPFile", "libraryIntoPython", "importKeepsConflict"):
     assert report.get(check) is True, (check, report)
 print(json.dumps(report, indent=2))
 print("Embedded Python/WebKit smoke passed with offline runtime resources and temporary data.")

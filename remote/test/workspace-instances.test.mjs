@@ -10,7 +10,7 @@ const info = { url: 'http://127.0.0.1:43210', pid: 1234, password: 'host-secret'
 function fixture(overrides = {}) {
   return createWorkspaceInstances({
     workspaceRoot: '/remote/project', environment: () => ({ PATH: '/host/bin', HOME: '/host/home' }), acquireLock: async () => () => {},
-    readFile: async () => JSON.stringify(info), signal: () => {}, installCLI: () => {},
+    readFile: async () => JSON.stringify(info), signal: () => {}, installMCP: () => {},
     fetch: async (_url, options) => {
       assert.equal(_url.pathname, '/api/info')
       assert.equal(options.headers.authorization, 'Basic ' + Buffer.from('opencode:host-secret').toString('base64'))

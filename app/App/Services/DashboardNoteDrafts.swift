@@ -618,7 +618,7 @@ struct DashboardNoteDraft: Equatable {
             // A pane can reopen before the post-write snapshot refresh arrives.
             // Keep both the newer draft and its current save result.
         } else {
-            // A newer local writer (including woven-note) won the revision.
+            // A newer local writer (including a Woven MCP edit) won the revision.
             adopt(note)
         }
     }

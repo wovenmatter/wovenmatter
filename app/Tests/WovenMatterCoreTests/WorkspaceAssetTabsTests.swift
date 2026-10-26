@@ -23,12 +23,12 @@ struct WorkspaceAssetTabsTests {
     #expect(context.notes[0].title.count == 160)
     #expect(context.pages[0].url == "https://example.com/page")
     #expect(WorkspaceVisibleContext.Page(title: "Local", url: "file:///private/document", active: true) == nil)
-    let cliContext = AgentCLIContext(executablePath: "/tmp/wovenmatter", socketPath: "/tmp/session.sock", captureID: "captured-input")
-    let input = AgentMessageInput(text: "hello", visibleWorkspace: context, cliContext: cliContext)
+    let mcpContext = WovenMCPConnection(endpointURL: "http://127.0.0.1:43725/mcp", bearerToken: "fixture", captureID: "captured-input")
+    let input = AgentMessageInput(text: "hello", visibleWorkspace: context, mcpContext: mcpContext)
     let transported = try JSONDecoder().decode(AgentMessageInput.self, from: JSONEncoder().encode(input))
     let staged = await transported.mappingFiles { $0 }
     #expect(staged.visibleWorkspace == context)
-    #expect(staged.cliContext == cliContext)
+    #expect(staged.mcpContext == mcpContext)
     #expect(staged.text == "hello") // Workspace metadata is not user-visible message text.
     let prompt = staged.transportText(deliveryText: "discovery\nhello")
     #expect(prompt.contains("discovery\nhello"))
@@ -39,7 +39,7 @@ struct WorkspaceAssetTabsTests {
     let oldInput = try JSONDecoder().decode(AgentMessageInput.self,
       from: Data(#"{"text":"old","attachments":[]}"#.utf8))
     #expect(oldInput.visibleWorkspace == nil)
-    #expect(oldInput.cliContext == nil)
+    #expect(oldInput.mcpContext == nil)
     #expect(oldInput.transportText() == "old")
   }
 

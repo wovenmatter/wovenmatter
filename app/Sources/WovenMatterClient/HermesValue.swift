@@ -1,7 +1,7 @@
 import Foundation
 
-/// JSON at the native Hermes protocol boundary. Unknown fields remain available for
-/// inspection and round trips; routing and mutation inputs are explicitly typed.
+/// JSON retained in historical Hermes archives. Unknown fields remain available
+/// for inspection and lossless archive reads; Hermes is no longer executable.
 public enum HermesValue: Codable, Equatable, Hashable, Sendable {
     case object([String: HermesValue]), array([HermesValue]), string(String)
     case number(Double), bool(Bool), null
@@ -49,15 +49,4 @@ extension HermesValue: ExpressibleByStringLiteral {
 }
 extension HermesValue: ExpressibleByDictionaryLiteral {
     public init(dictionaryLiteral elements: (String, HermesValue)...) { self = .object(Dictionary(uniqueKeysWithValues: elements)) }
-}
-
-public enum HermesGatewayError: LocalizedError, Sendable {
-    case message(String)
-    case rpc(code: Int, message: String)
-    public var errorDescription: String? {
-        switch self {
-        case .message(let text): return text
-        case .rpc(_, let message): return "Hermes: " + message
-        }
-    }
 }

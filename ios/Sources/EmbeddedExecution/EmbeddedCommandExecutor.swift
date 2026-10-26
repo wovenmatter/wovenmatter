@@ -50,14 +50,14 @@ private struct EmbeddedReceipt: Codable {
 }
 
 /// Real, offline CPython 3.14 in an independently terminable WebAssembly worker.
-/// Host storage and networking remain inaccessible; only explicit CLI calls cross
+/// Host storage and networking remain inaccessible; only explicit MCP calls cross
 /// into native code. Each command snapshots its workspace and commits on completion.
 @MainActor
 public final class EmbeddedCommandExecutor: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
-  public typealias CLI = @MainActor ([String], String) async throws -> String
-  /// Identify only files explicitly created by this native CLI response (for
+  public typealias MCP = @MainActor (_ name: String, _ argumentsJSON: String, _ requestID: String) async throws -> String
+  /// Identify only files explicitly created by this native MCP response (for
   /// example a library artifact), not arbitrary concurrent workspace changes.
-  public typealias FileImports = @MainActor (_ arguments: [String], _ response: String) throws -> [String]
+  public typealias FileImports = @MainActor (_ name: String, _ argumentsJSON: String, _ response: String) throws -> [String]
   public typealias Output = @MainActor (_ stream: String, _ text: String) -> Void
   private static var activeWorkspaces = Set<String>()
   private let resourceLocation: Result<URL, any Error>
@@ -68,7 +68,7 @@ public final class EmbeddedCommandExecutor: NSObject, WKScriptMessageHandler, WK
   private var request: EmbeddedCommandRequest?
   private var workspace: URL?
   private var snapshot: EmbeddedWorkspace?
-  private var cli: CLI?
+  private var mcp: MCP?
   private var output: Output?
   private var fileImports: FileImports?
   private var pending: [String: Task<Void, Never>] = [:]
@@ -109,9 +109,9 @@ public final class EmbeddedCommandExecutor: NSObject, WKScriptMessageHandler, WK
   }
 
   /// A fresh executor owns one command. Replaying the same ID returns its durable
-  /// receipt without repeating file mutations or native CLI calls.
+  /// receipt without repeating file mutations or native MCP calls.
   public func run(_ request: EmbeddedCommandRequest, workspaceURL: URL,
-                  onOutput: Output? = nil, importFiles: FileImports? = nil, cli: @escaping CLI) async throws -> EmbeddedCommandResult {
+                  onOutput: Output? = nil, importFiles: FileImports? = nil, mcp: @escaping MCP) async throws -> EmbeddedCommandResult {
     guard !started else { throw EmbeddedExecutionError.unavailable("Create a fresh executor for each command.") }
     started = true
     guard !request.argv.isEmpty, request.argv.reduce(0, { $0 + $1.utf8.count }) <= 1_048_576,
@@ -122,7 +122,7 @@ public final class EmbeddedCommandExecutor: NSObject, WKScriptMessageHandler, WK
     try Task.checkCancellation()
     Self.activeWorkspaces.insert(root.path)
     defer { Self.activeWorkspaces.remove(root.path) }
-    self.request = request; workspace = root; self.cli = cli; output = onOutput; fileImports = importFiles
+    self.request = request; workspace = root; self.mcp = mcp; output = onOutput; fileImports = importFiles
     let requestEncoder = JSONEncoder(); requestEncoder.outputFormatting = [.sortedKeys]
     requestDigest = SHA256.hash(data: try requestEncoder.encode(request)).map { String(format: "%02x", $0) }.joined()
     let job = root.appendingPathComponent(EmbeddedWorkspace.metadataDirectory).appendingPathComponent(request.id.uuidString)
@@ -142,7 +142,7 @@ public final class EmbeddedCommandExecutor: NSObject, WKScriptMessageHandler, WK
     if FileManager.default.fileExists(atPath: accepted.path) {
       let saved = try JSONDecoder().decode(EmbeddedAcceptance.self, from: Data(contentsOf: accepted))
       guard saved.requestDigest == requestDigest else { throw EmbeddedExecutionError.unavailable("The command ID was already accepted with different arguments.") }
-      throw EmbeddedExecutionError.unavailable("This command was previously accepted but has no completed receipt. Its native CLI calls may already have committed. Inspect .woven-execution/\(request.id.uuidString)/ before intentionally starting a new command; the script will not be replayed automatically.")
+      throw EmbeddedExecutionError.unavailable("This command was previously accepted but has no completed receipt. Its native MCP calls may already have committed. Inspect .woven-execution/\(request.id.uuidString)/ before intentionally starting a new command; the script will not be replayed automatically.")
     }
     _ = try resourceURL
     snapshot = try EmbeddedWorkspace.read(root, maxBytes: limits.workspaceBytes, maxFiles: limits.workspaceEntries)
@@ -218,21 +218,22 @@ public final class EmbeddedCommandExecutor: NSObject, WKScriptMessageHandler, WK
         if stream == "stdout" { try stdoutFile?.write(contentsOf: data); stdoutPreview.append(data.prefix(max(0,limits.previewBytes-stdoutPreview.count))) }
         else { try stderrFile?.write(contentsOf: data); stderrPreview.append(data.prefix(max(0,limits.previewBytes-stderrPreview.count))) }
         output?(stream,text)
-      case "cli":
-        guard let id = body["id"] as? String, let sequence = UInt64(id), let request, let cli,
+      case "mcp":
+        guard let id = body["id"] as? String, let sequence = UInt64(id), let request, let mcp,
               pending[id] == nil, pending.count < 32,
               let arguments = body["argumentsJSON"] as? String, arguments.utf8.count <= 32 * 1_048_576,
-              let argv = try JSONSerialization.jsonObject(with: Data(arguments.utf8)) as? [String] else {
-          throw EmbeddedExecutionError.unavailable("Invalid native CLI request.")
+              let name = body["name"] as? String, name.hasPrefix("woven_"),
+              (try JSONSerialization.jsonObject(with: Data(arguments.utf8))) is [String: Any] else {
+          throw EmbeddedExecutionError.unavailable("Invalid native MCP request.")
         }
         let stableID = Self.commandID(request: request.id, sequence: sequence)
         pending[id] = Task { [weak self] in
           let response: [String: Any]
           do {
-            let json = try await cli(argv, stableID)
+            let json = try await mcp(name, arguments, stableID)
             try Task.checkCancellation()
             guard let self, !self.finished else { return }
-            let paths = try self.fileImports?(argv, json) ?? []
+            let paths = try self.fileImports?(name, arguments, json) ?? []
             let files = try self.importWorkspaceFiles(paths)
             response = ["id":id,"ok":true,"value":json,"files":files]
           }
@@ -258,7 +259,7 @@ public final class EmbeddedCommandExecutor: NSObject, WKScriptMessageHandler, WK
     for path in paths {
       try EmbeddedWorkspace.validate(path)
       guard baseline.files[path] == nil, !baseline.directories.contains(path), let data = host.files[path] else {
-        throw EmbeddedExecutionError.unavailable("Native CLI imports must identify new, regular workspace files.")
+        throw EmbeddedExecutionError.unavailable("Native MCP imports must identify new, regular workspace files.")
       }
       baseline.files[path] = data
       var parent = (path as NSString).deletingLastPathComponent
@@ -300,7 +301,7 @@ public final class EmbeddedCommandExecutor: NSObject, WKScriptMessageHandler, WK
   }
 
   static func commandID(request: UUID, sequence: UInt64) -> String {
-    let bytes = Array(SHA256.hash(data: Data("\(request.uuidString):wovenmatter:\(sequence)".utf8)).prefix(16))
+    let bytes = Array(SHA256.hash(data: Data("\(request.uuidString):woven-mcp:\(sequence)".utf8)).prefix(16))
     let hex = bytes.map { String(format:"%02x",$0) }.joined()
     return [String(hex.prefix(8)),String(hex.dropFirst(8).prefix(4)),String(hex.dropFirst(12).prefix(4)),String(hex.dropFirst(16).prefix(4)),String(hex.dropFirst(20))].joined(separator:"-")
   }
@@ -322,7 +323,7 @@ public final class EmbeddedCommandExecutor: NSObject, WKScriptMessageHandler, WK
     try? stdoutFile?.close(); try? stderrFile?.close(); stdoutFile = nil; stderrFile = nil
     browser?.evaluateJavaScript("window.__wovenStop()",completionHandler:nil)
     browser?.stopLoading(); browser?.configuration.userContentController.removeScriptMessageHandler(forName:"wovenEmbedded")
-    browser?.navigationDelegate = nil; browser = nil; cli = nil; output = nil; fileImports = nil
+    browser?.navigationDelegate = nil; browser = nil; mcp = nil; output = nil; fileImports = nil
     let continuation = self.continuation; self.continuation = nil; continuation?.resume(with:result)
   }
   private static let html = #"""

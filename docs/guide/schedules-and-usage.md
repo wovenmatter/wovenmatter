@@ -11,7 +11,7 @@ the calendar by default. Use **Add to calendar**, **Remove from calendar**, or
 Scheduling belongs to the execution workspace. A remote service can continue
 while WovenMatter is closed or the Mac is disconnected; its host and container
 must keep running. Remote agents can update their managed databases through
-owner-local Woven Matter CLI tools, and the Mac displays the last complete synced data.
+owner-local Woven MCP tools, and the Mac displays the last complete synced data.
 
 ## Session timers
 

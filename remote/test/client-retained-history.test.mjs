@@ -108,7 +108,7 @@ test('legacy RPC admission saves identity without credentials and owner polling 
   }})})
   const bridge=capture(f,{defaultAgent:service,intervalMilliseconds:5})
   const message=bridge.prepareRPC({method:'session/prompt',operationID:inputID,attachmentToken:'test-private-attachment',params:{sessionId:'native-rpc',prompt:[{type:'text',text:'Hello'}],
-    _meta:{wovenConversationID:conversationID,wovenRunID:runID,wovenInputID:inputID,wovenTools:{executablePath:'/test/private/tool',captureID:'private-capability'}}}})
+    _meta:{wovenConversationID:conversationID,wovenRunID:runID,wovenInputID:inputID,wovenMCP:{endpointURL:'http://127.0.0.1:12345/mcp',bearerToken:'private-capability',captureID:'input-capture'}}}})
   bridge.prepareRPC(message)
   assert.throws(()=>bridge.prepareRPC({...message,params:{...message.params,prompt:[{type:'text',text:'Changed'}]}}),/different input/)
   assert.equal(readdirSync(f.directory).filter(name=>name.startsWith('intent-')).length,1)

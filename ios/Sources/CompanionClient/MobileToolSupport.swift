@@ -46,6 +46,32 @@ public struct MobileToolTimer: Codable, Equatable, Identifiable, Sendable {
 }
 
 public enum MobileToolSupport {
+  /// Migrate persisted capability selections, not executable legacy tool names.
+  /// Individual note grants stay individual rather than enabling the whole group.
+  public static func migratedMCPSelection(_ selection: [String]?) -> [String]? {
+    selection.map { values in
+      Set(values.flatMap { value -> [String] in
+        switch value {
+        case "list_notes": return ["woven_notes_list"]
+        case "read_note": return ["woven_notes_read"]
+        case "save_note": return ["woven_notes_create", "woven_notes_apply"]
+        default:
+          if value.hasPrefix("wovenmatter_"), let group = WorkspaceToolGroup(rawValue: String(value.dropFirst("wovenmatter_".count))) {
+            return ["woven_" + group.rawValue]
+          }
+          return [value]
+        }
+      }).sorted()
+    }
+  }
+  public static func permittedMCPTools(selection: [String], available: [String]) -> [String] {
+    let selected = Set(migratedMCPSelection(selection) ?? [])
+    return available.filter { name in
+      if selected.contains(name) { return true }
+      guard let group = WovenMCPCatalog.tools.first(where: { $0.name == name })?.group else { return false }
+      return selected.contains("woven_" + group.rawValue)
+    }.sorted()
+  }
   public static func fingerprint(_ note: CompanionNote) throws -> String {
     let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
     return SHA256.hash(data: try encoder.encode(note)).map { String(format: "%02x", $0) }.joined()

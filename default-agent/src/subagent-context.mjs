@@ -9,7 +9,7 @@ const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 // to this child conversation, never to the parent currently generating a turn.
 export function createSubagentContext(parent, engine, {
   conversation, sessionID, providerSessionID, model, accountID, thinkingLevel,
-  runID, cli, appendArchive, reportUsage,
+  runID, mcp, appendArchive, reportUsage,
 }, background) {
   if (!Number.isSafeInteger(conversation?.id) || conversation.id < 1 || !uuid.test(sessionID ?? '')
       || !isAbsolute(parent.nativeRoot ?? '') || !model?.provider || !model.id || !accountID
@@ -22,7 +22,7 @@ export function createSubagentContext(parent, engine, {
     nativeRoot: join(parent.nativeRoot, 'native-children', String(conversation.id)),
     parentSessionID: parent.manifest.sessionID,
     providerSessionID: providerSessionID ?? sessionID,
-    cli: cli ?? parent.cli.fork(), busy: true,
+    mcp: mcp ?? parent.mcp.fork(), busy: true,
     selected: `${model.provider}/${model.id}`, accountID,
     codeModeState: { value: parent.codeModeState.value },
     session: { sessionId: sessionID, model, thinkingLevel, messages: [] },

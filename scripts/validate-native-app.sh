@@ -73,9 +73,17 @@ claude_binary="${resources}/default-agent/node_modules/@anthropic-ai/claude-agen
 test -x "$claude_binary"
 codesign --verify --strict "$claude_binary"
 test -f "${resources}/harnesses/catalog.json"
-for integration in adapter.mjs hook.mjs binding.mjs instructions.mjs opencode.mjs install.mjs; do
-  test -f "${resources}/harnesses/cli/$integration"
+for integration in adapter.mjs hook.mjs binding.mjs proxy.mjs instructions.mjs opencode.mjs install.mjs; do
+  test -f "${resources}/harnesses/mcp/$integration"
 done
+test -f "${resources}/default-agent/src/woven-mcp.mjs"
+test -f "${resources}/default-agent/src/mcp-context.mjs"
+test -f "${resources}/mcp-relay.mjs"
+test ! -e "${resources}/wovenmatter"
+test ! -e "${resources}/wovenmatter-remote.py"
+test ! -e "${resources}/harnesses/cli"
+test ! -e "${resources}/default-agent/src/automation-mcp.mjs"
+test ! -e "${resources}/default-agent/src/cli-context.mjs"
 test -f "${resources}/harnesses/woven-instructions.txt"
 test -f "${resources}/remote/Dockerfile"
 test -f "${resources}/remote/Executor.Dockerfile"

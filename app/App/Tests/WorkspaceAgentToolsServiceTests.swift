@@ -1,5 +1,4 @@
 import WorkspaceFixtures
-import Darwin
 import Foundation
 import Observation
 import Testing
@@ -23,7 +22,7 @@ struct WorkspaceAgentToolsServiceTests {
 
 
     @Test(arguments: AgentRuntimeKind.allCases)
-    func executorUsesBoundCLIIdentityAndChecksMasterSwitch(runtime: AgentRuntimeKind) async throws {
+    func executorUsesBoundMCPIdentityAndChecksMasterSwitch(runtime: AgentRuntimeKind) async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -38,21 +37,19 @@ struct WorkspaceAgentToolsServiceTests {
                 return .init(result: .object(["action": .string(command.action)]))
             }, onMutation: {})
         defer { service.stop() }
-        let endpoint = try await service.endpoint(for: caller)
-        func request(_ arguments: [String]) async throws -> WovenMatterToolResponse {
-            let data = try JSONEncoder().encode(WovenMatterToolRequest(arguments: arguments))
-            let result = try await runBlockingToolFixture { try WovenMatterCommandLine.forward(data, to: endpoint) }
-            return try JSONDecoder().decode(WovenMatterToolResponse.self, from: result)
+        let connection = try await service.mcpContext(sessionID: caller, captureID: "")
+        func request(_ action: String, _ arguments: [String: GatewayJSONValue]) async throws -> WovenMatterToolResponse {
+            try await callMCPTool(service, connection: connection, name: "woven_executor_" + action, arguments: arguments)
         }
-        #expect(try await !request(["executor", "search", "--query", "fixture"]).success)
+        #expect(try await !request("search", ["query": .string("fixture")]).success)
         #expect(seen.isEmpty)
         _ = try await database.setSessionToolEnabled(.executor, enabled: true, sessionID: caller)
-        #expect(try await request(["executor", "search", "--query", "fixture"]).success)
+        #expect(try await request("search", ["query": .string("fixture")]).success)
         #expect(seen == [caller])
-        #expect(try await !request(["executor", "execute", "--code", "return 1;", "--session", "other"]).success)
+        #expect(try await !request("execute", ["code": .string("return 1;"), "session": .string("other")]).success)
         #expect(seen == [caller])
         _ = try await database.setSessionToolEnabled(.executor, enabled: false, sessionID: caller)
-        #expect(try await !request(["executor", "execute", "--code", "return 1;"]).success)
+        #expect(try await !request("execute", ["code": .string("return 1;")]).success)
         #expect(seen == [caller])
     }
 
@@ -111,7 +108,7 @@ struct WorkspaceAgentToolsServiceTests {
 extension WorkspaceAgentToolsServiceTests {
 
     @Test func mutationHistoryIsMetadataOnlyAndNoteReadsAreChunked() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: "cli-hardening-" + UUID().uuidString)
+        let root = FileManager.default.temporaryDirectory.appending(path: "mcp-hardening-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
@@ -161,13 +158,13 @@ extension WorkspaceAgentToolsServiceTests {
         #expect(read.result?.objectValue?["content"]?.stringValue?.count == 10)
         #expect(read.result?.objectValue?["hasMore"]?.boolValue == true)
         let audit = await model.handle(.init(arguments: ["history", "events", "--conversation", caller,
-            "--kind", "cli.mutation"]), callerID: historian)
+            "--kind", "mcp.mutation"]), callerID: historian)
         let payloads = audit.result?.objectValue?["rows"]?.arrayValue?.compactMap {
             $0.objectValue?["payload"]?.stringValue
         } ?? []
         #expect(!payloads.isEmpty && payloads.allSatisfy { !$0.contains(secret) })
         let oldBodies = await model.handle(.init(arguments: ["history", "events", "--conversation", caller,
-            "--kind", "cli.response"]), callerID: historian)
+            "--kind", "mcp.response"]), callerID: historian)
         #expect(oldBodies.result?.objectValue?["rows"]?.arrayValue?.isEmpty == true)
 
         let missing = await model.handle(.init(arguments: ["history", "message", UUID().uuidString]),
@@ -175,92 +172,25 @@ extension WorkspaceAgentToolsServiceTests {
         #expect(!missing.success && missing.code == "not_found")
     }
 
-    @Test(.timeLimit(.minutes(1)))
-    func relayAdmissionIsBoundedAndShutdownInterruptsBlockedSockets() async throws {
-        let fixture = try RelayForwardingFixture()
-        defer { fixture.stop() }
-        let output = RelayOutputCapture()
-        let forwarder = WovenMatterRelayForwarder(localSocket: fixture.endpoint.path, maximumConnections: 1,
-            write: { output.append($0) }, onFailure: { output.fail($0) })
-        let id = UUID().uuidString
-        try forwarder.submit(id: id, request: fixture.request(slow: true))
-        await fixture.gate.waitUntilPaused()
-        #expect(throws: (any Error).self) { try forwarder.submit(id: UUID().uuidString, request: fixture.request(slow: false)) }
-        #expect(throws: (any Error).self) { try forwarder.submit(id: id, request: fixture.request(slow: false)) }
-        forwarder.stop()
-        await forwarder.waitUntilIdle()
-        #expect(output.lines.isEmpty)
-        #expect(throws: (any Error).self) { try forwarder.submit(id: UUID().uuidString, request: fixture.request(slow: false)) }
-        await fixture.gate.release()
-    }
-
 }
 
-// Socket reads and semaphore waits must not occupy Swift's cooperative workers:
-// the server tasks being tested need those workers to produce their responses.
-private func runBlockingToolFixture<T: Sendable>(_ body: @escaping @Sendable () throws -> T) async throws -> T {
-    try await withCheckedThrowingContinuation { continuation in
-        Thread.detachNewThread {
-            do { continuation.resume(returning: try body()) }
-            catch { continuation.resume(throwing: error) }
-        }
+@MainActor
+private func callMCPTool(_ service: WorkspaceAgentToolsModel, connection: WovenMCPConnection,
+                         name: String, arguments: [String: GatewayJSONValue],
+                         requestID: String = UUID().uuidString) async throws -> WovenMatterToolResponse {
+    var arguments = arguments
+    arguments["requestID"] = .string(requestID)
+    let message: GatewayJSONValue = .object(["jsonrpc": .string("2.0"), "id": .string(UUID().uuidString),
+        "method": .string("tools/call"), "params": .object(["name": .string(name), "arguments": .object(arguments)])])
+    let response = try #require(await service.handleMCP(.init(method: "POST", target: "/mcp",
+        headers: ["authorization": "Bearer " + connection.bearerToken], body: try JSONEncoder().encode(message))))
+    #expect(response.status == 200)
+    let decoded = try JSONDecoder().decode(GatewayJSONValue.self, from: response.body)
+    if let error = decoded.objectValue?["error"]?.objectValue {
+        return .init(success: false, error: error["message"]?.stringValue, code: "invalid_request", requestID: requestID)
     }
-}
-
-private final class RelayOutputCapture: @unchecked Sendable {
-    private let lock = NSLock()
-    private var values: [Data] = []
-    private var failures: [String] = []
-    var lines: [Data] { lock.withLock { values } }
-    var errors: [String] { lock.withLock { failures } }
-    func append(_ data: Data) { lock.withLock { values.append(data) } }
-    func fail(_ error: any Error) { lock.withLock { failures.append(error.localizedDescription) } }
-}
-
-private actor RelayServiceGate {
-    private var paused = false
-    private var released = false
-    private var observers: [CheckedContinuation<Void, Never>] = []
-    private var waiters: [CheckedContinuation<Void, Never>] = []
-    func pause() async {
-        paused = true
-        observers.forEach { $0.resume() }; observers.removeAll()
-        guard !released else { return }
-        await withCheckedContinuation { waiters.append($0) }
-    }
-    func waitUntilPaused() async {
-        guard !paused else { return }
-        await withCheckedContinuation { observers.append($0) }
-    }
-    func release() {
-        released = true
-        waiters.forEach { $0.resume() }; waiters.removeAll()
-    }
-}
-
-private struct RelayForwardingFixture {
-    let root: URL
-    let endpoint: URL
-    let gate = RelayServiceGate()
-    let service: WovenMatterToolService
-    init() throws {
-        root = URL(fileURLWithPath: "/private/tmp/wmf-" + UUID().uuidString)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        endpoint = root.appending(path: "rpc.sock")
-        let gate = gate
-        service = WovenMatterToolService(socketURL: endpoint, maximumConnections: 4) { request in
-            if request.arguments.contains("slow") { await gate.pause() }
-            return WovenMatterToolResponse(result: .object(["ok": .bool(true)]), requestID: request.requestID)
-        }
-        try service.start()
-    }
-    func request(slow: Bool, requestID: String = UUID().uuidString) throws -> Data {
-        try JSONEncoder().encode(WovenMatterToolRequest(arguments: [slow ? "slow" : "fast"], requestID: requestID))
-    }
-    func stop() {
-        try? service.stop()
-        try? FileManager.default.removeItem(at: root)
-    }
+    let envelope = try #require(decoded.objectValue?["result"]?.objectValue?["structuredContent"])
+    return try JSONDecoder().decode(WovenMatterToolResponse.self, from: JSONEncoder().encode(envelope))
 }
 
 extension WorkspaceAgentToolsServiceTests {
@@ -310,7 +240,7 @@ private struct ToolSnapshotFixture {
 
 extension WorkspaceAgentToolsServiceTests {
     @Test func calendarCommandsShareNativeEventsAndKeepRetriesAndPermissions() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: "calendar-cli-" + UUID().uuidString)
+        let root = FileManager.default.temporaryDirectory.appending(path: "calendar-mcp-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
@@ -339,74 +269,71 @@ extension WorkspaceAgentToolsServiceTests {
                 return task
             }, onMutation: {})
         defer { service.stop() }
-        let endpoint = try await service.endpoint(for: caller)
-        func request(_ arguments: [String], id: String = UUID().uuidString.lowercased()) async throws -> WovenMatterToolResponse {
-            let data = try JSONEncoder().encode(WovenMatterToolRequest(arguments: arguments, requestID: id))
-            let response = try await runBlockingToolFixture { try WovenMatterCommandLine.forward(data, to: endpoint) }
-            return try JSONDecoder().decode(WovenMatterToolResponse.self, from: response)
+        let connection = try await service.mcpContext(sessionID: caller, captureID: "")
+        func request(_ action: String, _ arguments: [String: GatewayJSONValue] = [:], id: String = UUID().uuidString.lowercased()) async throws -> WovenMatterToolResponse {
+            try await callMCPTool(service, connection: connection, name: "woven_calendar_" + action, arguments: arguments, requestID: id)
         }
         let id = UUID().uuidString.lowercased()
-        let creation = ["calendar", "create", "--title", "Daily review", "--starts-at", "2026-09-01T13:00:00Z",
-                        "--time-zone", "America/New_York", "--repeat-unit", "day", "--repeat-interval", "2",
-                        "--prompt", "Review changes", "--session-mode", "new"]
-        #expect(try await request(creation, id: id).success)
+        let creation: [String: GatewayJSONValue] = ["title": .string("Daily review"), "startsAt": .string("2026-09-01T13:00:00Z"),
+            "timeZone": .string("America/New_York"), "repeatUnit": .string("day"), "repeatInterval": .number(2),
+            "prompt": .string("Review changes"), "sessionMode": .string("new")]
+        #expect(try await request("create", creation, id: id).success)
         let event = try await database.calendarEvent(id: id, callerID: caller)
         #expect(event.calendar.recurrence == .init(unit: .day, interval: 2))
         #expect(event.calendar.createdBy.agent == "codex")
         #expect(event.calendar.task?.sessionMode == .new)
-        let listing = try await request(["calendar", "list", "--since", "2026-09-15T00:00:00Z"])
+        let listing = try await request("list", ["since": .string("2026-09-15T00:00:00Z")])
         #expect(listing.result?.objectValue?["rows"]?.arrayValue?.first?.objectValue?["calendar"]?.objectValue?["task"] != nil)
-        let occurrences = try await request(["calendar", "occurrences", id, "--since", "2026-09-01T00:00:00Z", "--until", "2026-09-08T00:00:00Z"])
+        let occurrences = try await request("occurrences", ["id": .string(id), "since": .string("2026-09-01T00:00:00Z"), "until": .string("2026-09-08T00:00:00Z")])
         #expect(occurrences.result?.objectValue?["rows"]?.arrayValue?.count == 4)
-        #expect(try await request(["calendar", "update", id, "--revision", String(event.calendar.revision),
-            "--description", "Edited from a session"]).success)
+        #expect(try await request("update", ["id": .string(id), "revision": .number(Double(event.calendar.revision)),
+            "description": .string("Edited from a session")]).success)
         let updated = try await database.calendarEvent(id: id, callerID: caller)
         #expect(updated.calendar.task?.configuration.permission == "read-only")
         #expect(updated.calendar.task?.prompt == "Review changes")
         #expect(updated.calendar.recurrence == event.calendar.recurrence)
         #expect(updated.calendar.editedBy?.sessionID == caller)
-        #expect(try await !request(["calendar", "update", id, "--revision", "0", "--title", "Stale edit"]).success)
-        #expect(try await !request(["calendar", "update", id, "--occurrence", "1", "--title", "Linked exception"]).success)
-        let detached = try await request(["calendar", "detach", id, "--occurrence", "1",
-            "--revision", String(updated.calendar.revision), "--title", "Independent review"])
+        #expect(try await !request("update", ["id": .string(id), "revision": .number(0), "title": .string("Stale edit")]).success)
+        #expect(try await !request("update", ["id": .string(id), "occurrence": .number(1), "title": .string("Linked exception")]).success)
+        let detached = try await request("detach", ["id": .string(id), "occurrence": .number(1),
+            "revision": .number(Double(updated.calendar.revision)), "title": .string("Independent review")])
         #expect(detached.success)
         let detachedID = try #require(detached.result?.objectValue?["id"]?.stringValue)
         let independent = try await database.calendarEvent(id: detachedID, callerID: caller)
         #expect(independent.calendar.recurrence == nil)
         #expect(independent.calendar.task?.prompt == "Review changes")
         #expect(independent.calendar.task?.configuration.tools.enabled == [.notes, .goals])
-        #expect(try await !request(["calendar", "remove", detachedID, "--occurrence", "1",
-            "--revision", String(independent.calendar.revision)]).success)
-        #expect(try await request(["calendar", "read", detachedID]).success)
+        #expect(try await !request("remove", ["id": .string(detachedID), "occurrence": .number(1),
+            "revision": .number(Double(independent.calendar.revision))]).success)
+        #expect(try await request("read", ["id": .string(detachedID)]).success)
         #expect(try await database.calendarEvent(id: id, callerID: caller).calendar.excludedOccurrences == [1])
         let copyID = UUID().uuidString.lowercased()
-        let copy = ["calendar", "copy", detachedID, "--starts-at", "2026-09-20T13:00:00Z"]
-        #expect(try await request(copy, id: copyID).success)
+        let copy: [String: GatewayJSONValue] = ["id": .string(detachedID), "startsAt": .string("2026-09-20T13:00:00Z")]
+        #expect(try await request("copy", copy, id: copyID).success)
         let copied = try await database.calendarEvent(id: copyID, callerID: caller)
-        #expect(try await request(["calendar", "remove", copyID,
-            "--revision", String(copied.calendar.revision)]).success)
+        #expect(try await request("remove", ["id": .string(copyID), "revision": .number(Double(copied.calendar.revision))]).success)
         // Replay succeeds even after the copy was deleted, without re-resolving defaults.
         let beforeReplay = resolution.count
-        #expect(try await request(copy, id: copyID).result?.objectValue?["id"]?.stringValue == copyID)
+        #expect(try await request("copy", copy, id: copyID).result?.objectValue?["id"]?.stringValue == copyID)
         #expect(resolution.count == beforeReplay)
-        #expect(try await !request(copy + ["--title", "Different input"], id: copyID).success)
+        #expect(try await !request("copy", copy.merging(["title": .string("Different input")]) { _, new in new }, id: copyID).success)
         resolution.editsEvent = true
         let beforeRace = try await database.calendarEvent(id: id, callerID: caller)
-        #expect(try await !request(["calendar", "update", id, "--revision", String(beforeRace.calendar.revision),
-            "--description", "Stale agent edit"]).success)
+        #expect(try await !request("update", ["id": .string(id), "revision": .number(Double(beforeRace.calendar.revision)),
+            "description": .string("Stale agent edit")]).success)
         #expect(try await database.calendarEvent(id: id, callerID: caller).details == "A newer user edit")
         resolution.editsEvent = false
         var settings = try await database.toolSettings(); settings.calendarAccess = .readOnly
         try await database.saveToolSettings(settings)
-        #expect(try await request(["calendar", "read", id]).success)
-        #expect(try await !request(creation, id: id).success)
-        #expect(try await !request(["calendar", "remove", id]).success)
+        #expect(try await request("read", ["id": .string(id)]).success)
+        #expect(try await !request("create", creation, id: id).success)
+        #expect(try await !request("remove", ["id": .string(id)]).success)
         settings.calendarAccess = .full; try await database.saveToolSettings(settings)
         try await database.setSessionTools(.init(enabled: [.calendar]), sessionID: caller)
-        #expect(try await !request(creation, id: UUID().uuidString.lowercased()).success)
-        #expect(try await request(["calendar", "create", "--title", "Ordinary event", "--starts-at", "2026-09-22T13:00:00Z"]).success)
+        #expect(try await !request("create", creation, id: UUID().uuidString.lowercased()).success)
+        #expect(try await request("create", ["title": .string("Ordinary event"), "startsAt": .string("2026-09-22T13:00:00Z")]).success)
         try await database.setSessionTools(.init(enabled: []), sessionID: caller)
-        #expect(try await !request(["calendar", "list"]).success)
+        #expect(try await !request("list").success)
     }
 
 }
@@ -499,7 +426,7 @@ extension WorkspaceAgentToolsServiceTests {
 }
 
 extension WorkspaceAgentToolsServiceTests {
-    @Test func goalCommandsRunThroughTheBoundCLIAndPublishState() async throws {
+    @Test func goalToolsRunThroughBoundMCPAndPublishState() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -509,24 +436,22 @@ extension WorkspaceAgentToolsServiceTests {
             sessionHandler: { _, _, _ in throw CancellationError() }, noteHandler: { _, _, _ in throw CancellationError() },
             noteRestoreHandler: { _, _, _, _, _ in throw CancellationError() }, usageHandler: { _ in throw CancellationError() }, onMutation: {})
         defer { service.stop() }
-        let endpoint = try await service.endpoint(for: caller)
-        func request(_ arguments: [String], id: String = UUID().uuidString) async throws -> WovenMatterToolResponse {
-            let data = try JSONEncoder().encode(WovenMatterToolRequest(arguments: arguments, requestID: id))
-            let response = try await runBlockingToolFixture { try WovenMatterCommandLine.forward(data, to: endpoint) }
-            return try JSONDecoder().decode(WovenMatterToolResponse.self, from: response)
+        let connection = try await service.mcpContext(sessionID: caller, captureID: "")
+        func request(_ action: String, _ arguments: [String: GatewayJSONValue] = [:]) async throws -> WovenMatterToolResponse {
+            try await callMCPTool(service, connection: connection, name: "woven_goals_" + action, arguments: arguments)
         }
-        let first = try await request(["goals", "set", "--objective", "Produce the verified artifact", "--turn-budget", "3"])
+        let first = try await request("set", ["objective": .string("Produce the verified artifact"), "turnBudget": .number(3)])
         #expect(first.success)
         let id = try #require(first.result?.objectValue?["id"]?.stringValue)
         #expect(service.goals[caller]?.id == id)
-        let read = try await request(["goals", "get"])
+        let read = try await request("get")
         #expect(read.result?.objectValue?["objective"]?.stringValue == "Produce the verified artifact")
-        let failed = try await request(["goals", "complete", "--id", id, "--evidence", " "])
+        let failed = try await request("complete", ["id": .string(id), "evidence": .string(" ")])
         #expect(!failed.success)
-        let done = try await request(["goals", "complete", "--id", id, "--evidence", "Artifact checked against the requirements"])
+        let done = try await request("complete", ["id": .string(id), "evidence": .string("Artifact checked against the requirements")])
         #expect(done.success && service.goals[caller]?.status == .complete)
         _ = try await database.setSessionToolEnabled(.goals, enabled: false, sessionID: caller)
-        let stillEnabled = try await request(["goals", "get"])
+        let stillEnabled = try await request("get")
         #expect(stillEnabled.success)
     }
 }

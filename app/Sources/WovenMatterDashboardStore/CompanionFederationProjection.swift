@@ -84,6 +84,20 @@ extension WorkspaceDatabaseConnection {
       }
       transcript.removedMessageIDs = removed.isEmpty ? nil : removed.sorted()
       for message in incoming.messages where !removed.contains(message.id) || message.role == "user" {
+        guard message.agentSourceID == nil || (UUID(uuidString: message.agentSourceID!) != nil && message.role == "user" && message.isAgentAuthored != false),
+              message.isAgentAuthored != true || message.agentSourceID != nil,
+              (message.senderSessionTitle?.utf8.count ?? 0) <= 4_096,
+              (message.senderHarness?.utf8.count ?? 0) <= 128,
+              message.senderKind == nil || WorkspaceSessionDeliveryKind(rawValue: message.senderKind!) != nil else {
+          throw federationError("invalid_event", "Agent message provenance requires a source session and a supported delivery kind.")
+        }
+        if let prior = transcript.messages.first(where: { $0.id == message.id }), prior.agentSourceID != nil {
+          guard prior.agentSourceID == message.agentSourceID,
+                prior.isAgentAuthored != true || message.isAgentAuthored == true,
+                prior.senderKind == nil || prior.senderKind == message.senderKind else {
+            throw federationError("wrong_owner", "A message's agent provenance cannot change.")
+          }
+        }
         if let runID = message.runID { try claimFederationRunUnlocked(runID, conversationID: entry.conversationID, workspaceID: workspace.id) }
         let previous = try prepareUnlocked("SELECT conversation_id,run_id,role,origin_device_id,desktop_owned FROM dashboard_messages WHERE id=?")
         defer { sqlite3_finalize(previous) }
@@ -107,6 +121,12 @@ extension WorkspaceDatabaseConnection {
           VALUES (?,?,?,?,?,?,?,?,?,?,1) ON CONFLICT(id) DO UPDATE SET content=excluded.content,status=excluded.status,updated_at=excluded.updated_at,run_id=COALESCE(dashboard_messages.run_id,excluded.run_id)
           """, values: [message.id, entry.conversationID, message.runID, message.role, message.content, message.status ?? "completed",
                            workspace.ownerDeviceID, workspace.ownerDeviceID, message.createdAt.isEmpty ? now : message.createdAt, now])
+        if let source = message.agentSourceID {
+          try companionExecuteUnlocked("""
+            INSERT INTO companion_message_provenance(message_id,source_id,source_title,source_agent,kind)
+            VALUES (?,?,?,?,?) ON CONFLICT(message_id) DO NOTHING
+            """, values: [message.id, source, message.senderSessionTitle, message.senderHarness, message.senderKind ?? "message"])
+        }
       }
       for activity in incoming.activities {
         try claimFederationRunUnlocked(activity.runID, conversationID: entry.conversationID, workspaceID: workspace.id)

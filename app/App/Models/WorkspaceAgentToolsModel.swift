@@ -63,23 +63,20 @@ final class WorkspaceAgentToolsModel {
     private var observedSessions: [UUID: String] = [:]
     private(set) var hasOlderReceipts: Set<String> = []
     var error: String?
-    private var services: [String: WovenMatterToolService] = [:]
-    private var remoteBridges: [String: WovenMatterRemoteToolBridge] = [:]
-    private var pendingBridges: [String: Task<WovenMatterRemoteToolBridge, any Error>] = [:]
-    private let ownerID = UUID()
+    private var mcpHost: WovenMCPHost?
+    #if COMPANION_FACADE_TESTS
+    @ObservationIgnored var companionFixtureMCPConnection: ((String, WovenMCPConnection, RemoteWorkspaceConfiguration?) -> WovenMCPConnection)?
+    #endif
+    private var remoteBridges: [String: WovenMCPRemoteBridge] = [:]
+    private var remoteBridgeCredentials: [String: String] = [:]
+    private var pendingBridges: [String: Task<WovenMCPRemoteBridge, any Error>] = [:]
     private var stopped = false
     private var receiptPageRequests: [String: UUID] = [:]
-    private let endpointDirectory: URL
     private let sessionHandler: SessionHandler
     private let noteHandler: NoteHandler
     private let noteRestoreHandler: NoteRestoreHandler
     private let usageHandler: UsageHandler
     private let onMutation: @MainActor () async -> Void
-    #if COMPANION_FACADE_TESTS
-    /// Replaces only CLI placement/SSH establishment; discovery still opens its
-    /// real session-bound endpoint and renders the current persisted policy.
-    @ObservationIgnored var companionFixtureCLIPath: ((String, String, RemoteWorkspaceConfiguration?) throws -> String)?
-    #endif
 
     init(database: WorkspaceDatabase, sessionHandler: @escaping SessionHandler,
          noteHandler: @escaping NoteHandler, noteRestoreHandler: @escaping NoteRestoreHandler, usageHandler: @escaping UsageHandler,
@@ -98,11 +95,8 @@ final class WorkspaceAgentToolsModel {
         self.noteRestoreHandler = noteRestoreHandler
         self.usageHandler = usageHandler
         self.onMutation = onMutation
-        endpointDirectory = URL(fileURLWithPath: "/private/tmp/wmtools-" + UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased())
-        if !passiveProjection {
-            try FileManager.default.createDirectory(at: endpointDirectory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
-        }
         try await reload()
+        if !passiveProjection { _ = try await ensureMCPHost().start() }
     }
 
     convenience init(projection database: WorkspaceDatabase, executorControl: (@MainActor (ExecutorControl) async throws -> URL?)? = nil,
@@ -329,20 +323,58 @@ final class WorkspaceAgentToolsModel {
         try await reload()
     }
 
-    func endpoint(for sessionID: String) async throws -> String {
-        guard !passiveProjection else { throw CancellationError() }
-        guard !stopped else { throw CancellationError() }
-        _ = try await database.sessionTools(sessionID)
-        guard !stopped else { throw CancellationError() }
-        if let service = services[sessionID] { return service.socketURL.path }
-        let path = endpointDirectory.appending(path: UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased() + ".sock")
-        let service = WovenMatterToolService(socketURL: path, maximumConnections: 4) { [weak self] request in
-            guard let self else { return WovenMatterToolResponse(success: false, error: "Woven Matter closed this endpoint.") }
-            return await self.handle(request, callerID: sessionID)
+    private func ensureMCPHost() throws -> WovenMCPHost {
+        guard !passiveProjection, !stopped else { throw CancellationError() }
+        if let mcpHost { return mcpHost }
+        let host = try WovenMCPHost(database: database) { [weak self] request, callerID in
+            guard let self else { return .init(success: false, error: "Woven MCP stopped.", code: "unavailable") }
+            return await self.handle(request, callerID: callerID)
         }
-        try service.start()
-        services[sessionID] = service
-        return path.path
+        mcpHost = host
+        return host
+    }
+
+    func mcpAccess(_ action: WovenMCPAccessAction) async throws -> WovenMCPAccessSnapshot {
+        try await ensureMCPHost().access(action)
+    }
+
+    func handleMCP(_ request: CompanionHTTPRequest) async -> CompanionHTTPResponse? {
+        guard !passiveProjection, !stopped else { return nil }
+        do { return await (try ensureMCPHost()).handle(request) }
+        catch { return .error("unavailable", "Woven MCP is unavailable.", status: 503) }
+    }
+
+    func mcpContext(sessionID: String, remote: RemoteWorkspaceConfiguration? = nil, captureID: String) async throws -> WovenMCPConnection {
+        let local = try await ensureMCPHost().connection(sessionID: sessionID, captureID: captureID.isEmpty ? nil : captureID)
+        #if COMPANION_FACADE_TESTS
+        if let companionFixtureMCPConnection { return companionFixtureMCPConnection(sessionID, local, remote) }
+        #endif
+        guard let remote else { return local }
+        let bridge: WovenMCPRemoteBridge
+        if let current = remoteBridges[sessionID], current.isRunning, remoteBridgeCredentials[sessionID] == local.bearerToken { bridge = current }
+        else {
+            remoteBridges.removeValue(forKey: sessionID)?.stop()
+            let pending: Task<WovenMCPRemoteBridge, any Error>
+            if let existing = pendingBridges[sessionID] { pending = existing }
+            else {
+                pending = Task { try await WovenMCPRemoteBridge.start(configuration: remote, localConnection: local) }
+                pendingBridges[sessionID] = pending
+            }
+            defer { pendingBridges.removeValue(forKey: sessionID) }
+            bridge = try await pending.value
+            guard !stopped else { bridge.stop(); throw CancellationError() }
+            remoteBridges[sessionID] = bridge
+            remoteBridgeCredentials[sessionID] = local.bearerToken
+        }
+        let connection = try bridge.remoteConnection
+        return .init(endpointURL: connection.endpointURL, bearerToken: connection.bearerToken, captureID: local.captureID, sessionID: sessionID)
+    }
+
+    func revokeSessionMCP(_ sessionID: String) {
+        pendingBridges.removeValue(forKey: sessionID)?.cancel()
+        remoteBridges.removeValue(forKey: sessionID)?.stop()
+        remoteBridgeCredentials.removeValue(forKey: sessionID)
+        mcpHost?.revokeSession(sessionID)
     }
 
     func stop() {
@@ -352,49 +384,8 @@ final class WorkspaceAgentToolsModel {
         for pending in pendingBridges.values { pending.cancel() }
         pendingBridges.removeAll()
         for bridge in remoteBridges.values { bridge.stop() }
-        remoteBridges.removeAll()
-        for service in services.values { try? service.stop() }
-        services.removeAll()
-        if !passiveProjection { try? FileManager.default.removeItem(at: endpointDirectory) }
-    }
-
-    func cliContext(sessionID: String, remote: RemoteWorkspaceConfiguration? = nil, captureID: String) async throws -> AgentCLIContext {
-        let path = try await endpoint(for: sessionID)
-        let cliPath: String
-        #if COMPANION_FACADE_TESTS
-        let fixturePath = try companionFixtureCLIPath?(sessionID, path, remote)
-        #else
-        let fixturePath: String? = nil
-        #endif
-        if let fixturePath {
-            cliPath = fixturePath
-        } else if let remote {
-            if let bridge = remoteBridges[sessionID], bridge.isRunning {
-                cliPath = bridge.remoteCLIPath
-            } else {
-                let pending: Task<WovenMatterRemoteToolBridge, any Error>
-                if let existing = pendingBridges[sessionID] { pending = existing }
-                else {
-                    guard let sourceURL = Bundle.main.resourceURL?.appending(path: "wovenmatter-remote.py") else {
-                        throw WorkspaceToolError.invalid("The bundled remote CLI is missing.")
-                    }
-                    let source = try String(contentsOf: sourceURL, encoding: .utf8)
-                    pending = Task { try await WovenMatterRemoteToolBridge.start(configuration: remote, ownerID: ownerID, localSocket: path, source: source) }
-                    pendingBridges[sessionID] = pending
-                }
-                defer { pendingBridges.removeValue(forKey: sessionID) }
-                let bridge = try await pending.value
-                guard !stopped else { bridge.stop(); throw CancellationError() }
-                remoteBridges[sessionID] = bridge
-                cliPath = bridge.remoteCLIPath
-            }
-        } else {
-            guard let resource = Bundle.main.resourceURL?.appending(path: "wovenmatter"), FileManager.default.isExecutableFile(atPath: resource.path) else {
-                throw WorkspaceToolError.invalid("The bundled Woven Matter CLI is missing.")
-            }
-            cliPath = resource.path
-        }
-        return AgentCLIContext(executablePath: cliPath, socketPath: remote == nil ? path : nil, captureID: captureID, sessionID: sessionID)
+        remoteBridges.removeAll(); remoteBridgeCredentials.removeAll()
+        mcpHost?.stop(); mcpHost = nil
     }
 
     func handle(_ request: WovenMatterToolRequest, callerID: String) async -> WovenMatterToolResponse {
@@ -417,9 +408,6 @@ final class WorkspaceAgentToolsModel {
                       suppliedUUID.uuidString.lowercased() == request.requestID else {
                     throw WorkspaceToolError.invalid("--request-id must match the request envelope.")
                 }
-            }
-            if command.wantsHelp {
-                return .init(result: .object(["help": .string(WovenMatterToolCommand.help(for: command))]))
             }
             if command.action == "context" {
                 let id = try await database.inputContext(id: request.contextID, callerID: callerID)
@@ -476,7 +464,7 @@ final class WorkspaceAgentToolsModel {
             }
             }
             if command.isMutation {
-                try await recordCLIMutation(command: command, callerID: callerID, requestID: request.requestID,
+                try await recordMCPMutation(command: command, callerID: callerID, requestID: request.requestID,
                     success: result.success, code: result.code)
             }
             try await reload()
@@ -487,7 +475,7 @@ final class WorkspaceAgentToolsModel {
             let code = Self.errorCode(error)
             if let command = parsedCommand, command.isMutation {
                 let canonicalID = UUID(uuidString: request.requestID)?.uuidString.lowercased() ?? request.requestID
-                try? await recordCLIMutation(command: command, callerID: callerID, requestID: canonicalID,
+                try? await recordMCPMutation(command: command, callerID: callerID, requestID: canonicalID,
                     success: false, code: code)
             }
             return .init(success: false, error: error.localizedDescription, code: code,
@@ -495,7 +483,7 @@ final class WorkspaceAgentToolsModel {
         }
     }
 
-    private func recordCLIMutation(command: WovenMatterToolCommand, callerID: String,
+    private func recordMCPMutation(command: WovenMatterToolCommand, callerID: String,
                                    requestID: String, success: Bool, code: String?) async throws {
         var payload: [String: String] = [
             "group": command.group?.rawValue ?? "unknown", "action": command.action,
@@ -503,7 +491,7 @@ final class WorkspaceAgentToolsModel {
         ]
         if let code { payload["code"] = code }
         try await database.recordHistory(.init(conversationID: callerID, harness: "wovenmatter",
-            kind: "cli.mutation", payload: String(decoding: try JSONEncoder().encode(payload), as: UTF8.self)))
+            kind: "mcp.mutation", payload: String(decoding: try JSONEncoder().encode(payload), as: UTF8.self)))
     }
 
     private static func errorCode(_ error: any Error) -> String {
@@ -582,12 +570,7 @@ final class WorkspaceAgentToolsModel {
                 command.required("note-id", allowPositional: true), command.required("version"),
                 command.required("revision"), request.requestID))
         default:
-            guard command.options["file"] == nil else { throw WorkspaceToolError.invalid("Read input files on the CLI host before sending the request.") }
-            var args = Array(request.operationArguments.dropFirst())
-            if command.options["note-id"] == nil, let noteID = command.positional.first {
-                args += ["--note-id", noteID]
-            }
-            let edit = try WovenNoteCommandLine.request(arguments: args, environment: [:])
+            let edit = try NoteToolEdits.request(command)
             let response = try await noteHandler(callerID, edit, request.requestID)
             if command.action == "read" {
                 return try noteReadChunk(response,

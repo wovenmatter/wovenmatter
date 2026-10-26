@@ -15,9 +15,6 @@ private final class DeviceToolNetworkDelegate: NSObject, URLSessionTaskDelegate,
 extension CompanionModel {
   private static let deviceFileToolsJSON = #"""
   [
-    {"name":"list_notes","description":"List notes available on this device, optionally filtering titles and content. Returns note IDs and revisions.","parameters":{"type":"object","properties":{"query":{"type":"string"}}},"replay":"safe"},
-    {"name":"read_note","description":"Read a locally available Woven Matter note by ID.","parameters":{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]},"replay":"safe"},
-    {"name":"save_note","description":"Create a note or update an existing note. Updates require id and the localVersion returned by read_note. Content is plain text. Uses this chat's approval mode and queues central synchronization.","parameters":{"type":"object","properties":{"id":{"type":"string"},"revision":{"type":"integer"},"localVersion":{"type":"string"},"title":{"type":"string"},"content":{"type":"string"},"folderID":{"type":"string"}},"required":["title","content"]}},
     {"name":"list_files","description":"List files inside this conversation's device workspace. Paths are relative; no unrestricted filesystem access.","parameters":{"type":"object","properties":{"path":{"type":"string"}}},"replay":"safe"},
     {"name":"read_file","description":"Read a workspace UTF-8 file. Small files return text; large files or explicit byte offset/limit return a bounded window with nextOffset, fileSize, eof and truncated. Default large-file window is 65536 bytes; maximum limit is 1048576. When UTF-8 is split or invalid, lossyUTF8 and bytesBase64 preserve the exact bytes.","parameters":{"type":"object","properties":{"path":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":1048576}},"required":["path"]},"replay":"safe"},
     {"name":"read_document","description":"Extract text from an imported PDF or UTF-8 document in this workspace, up to 20 MiB. Scanned PDFs may have no text.","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]},"replay":"safe"},
@@ -30,7 +27,7 @@ extension CompanionModel {
 
   static var deviceToolsJSON: String {
     let fileTools = (try? JSONSerialization.jsonObject(with: Data(deviceFileToolsJSON.utf8)) as? [[String: Any]]) ?? []
-    return (try? toolJSON(fileTools + deviceCLITools + deviceEmbeddedTools)) ?? "[]"
+    return (try? toolJSON(fileTools + deviceMCPTools + deviceEmbeddedTools)) ?? "[]"
   }
 
   func performDeviceTool(_ request: String) async throws -> String {
@@ -45,51 +42,14 @@ extension CompanionModel {
     }
     let nativeCallID = object["toolCallID"] as? String ?? UUID().uuidString.lowercased()
     let toolCallID = conversationID + ":" + String(describing: object["taskID"] ?? "root") + ":" + nativeCallID
-    if name.hasPrefix("wovenmatter_"), let group = WorkspaceToolGroup(rawValue: String(name.dropFirst("wovenmatter_".count))) {
-      guard let argv = arguments["arguments"] as? [String] else { throw DeviceExecutionError.unavailable("Pass CLI arguments as an array of strings.") }
-      let output = try await performDeviceCLI(arguments: [group.rawValue] + argv, conversationID: conversationID,
-        requestID: toolCallID, target: arguments["target"] as? String ?? "local")
-      if group.isAutomation, let envelope = try JSONSerialization.jsonObject(with: Data(output.utf8)) as? [String: Any],
-         envelope["success"] as? Bool == true, let result = envelope["result"] as? [String: Any],
-         let content = result["content"] as? [[String: Any]] {
-        return try Self.toolJSON(["content": content])
-      }
-      return try Self.toolJSON(["content": [["type": "text", "text": output]]])
+    if WovenMCPCatalog.tools.contains(where: { $0.name == name }) {
+      let input = try JSONDecoder().decode(GatewayJSONValue.self, from: JSONSerialization.data(withJSONObject: arguments))
+      return try await performDeviceMCP(name: name, arguments: input.objectValue ?? [:],
+        conversationID: conversationID, requestID: toolCallID)
     }
     if name == "execute_command" { return try await performEmbeddedDeviceCommand(arguments: arguments, conversationID: conversationID, toolCallID: toolCallID) }
     var output: String
     switch name {
-    case "list_notes":
-      await reload()
-      let query = arguments["query"] as? String ?? ""
-      let matched = notes.filter { query.isEmpty || $0.title.localizedCaseInsensitiveContains(query) || $0.content.localizedCaseInsensitiveContains(query) }
-      output = try Self.toolJSON(matched.prefix(100).map { ["id": $0.id, "title": $0.title, "revision": $0.revision, "cached": !state.uncachedNoteIDs.contains($0.id)] as [String: Any] })
-    case "read_note":
-      await flushLocalWrites(); await reload()
-      let id = try string("id")
-      guard let note = state.notes[id], !state.uncachedNoteIDs.contains(id) else { throw DeviceExecutionError.unavailable("This note is not saved on this device. Connect to the central library to download it.") }
-      var value = try Self.executionObject(String(decoding: try JSONEncoder().encode(note), as: UTF8.self))
-      value["localVersion"] = try Self.noteLocalVersion(note)
-      output = try Self.toolJSON(value)
-    case "save_note":
-      let title = try string("title"), content = try string("content")
-      guard content.utf8.count <= CompanionProtocol.maximumNoteBytes else { throw DeviceExecutionError.unavailable("The note is too large.") }
-      try await requireDeviceApproval(id: toolCallID, conversationID: conversationID, title: "Save note", detail: "\(title)\n\n\(String(content.prefix(2000)))")
-      await flushLocalWrites()
-      try Task.checkCancellation()
-      guard let store else { throw CancellationError() }
-      let document = try NoteDocument(blocks: [.richText(.init(text: content))]).encoded()
-      if let id = arguments["id"] as? String {
-        let snapshot = await store.snapshot()
-        guard let note = snapshot.notes[id], arguments["localVersion"] as? String == (try Self.noteLocalVersion(note)),
-              (note.kind == nil || note.kind == .note), snapshot.conflicts[id] == nil else { throw DeviceExecutionError.unavailable("The note changed or is not an editable note. Read it again and use its current localVersion before editing.") }
-        try await store.editNoteIfUnchanged(id: id, title: title, content: document, folderID: note.folderID, expected: note)
-        output = "Saved note \(id) on this device. Central sync is queued."
-      } else {
-        let note = try await store.createNote(folderID: arguments["folderID"] as? String, title: title, content: document)
-        output = "Created note \(note.id) on this device. Central sync is queued."
-      }
-      await reload()
     case "list_files":
       let directory = try deviceWorkspaceURL(conversationID: conversationID, path: arguments["path"] as? String ?? "", directory: true)
       let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])
@@ -211,10 +171,6 @@ extension CompanionModel {
   }
   func cancelDeviceApprovals(_ conversationID: String) {
     for id in localApprovals.filter({ $0.value.conversationID == conversationID }).keys { cancelDeviceApproval(id) }
-  }
-  static func noteLocalVersion(_ note: CompanionNote) throws -> String {
-    let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
-    return SHA256.hash(data: try encoder.encode(note)).map { String(format: "%02x", $0) }.joined()
   }
   static func toolJSON(_ value: Any) throws -> String { String(decoding: try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]), as: UTF8.self) }
 }

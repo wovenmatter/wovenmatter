@@ -110,7 +110,7 @@ public struct OpenCodeHTTPClient: Sendable {
     private func record(_ direction: String, method: String, path: String,
                         query: [String: String], data: Data, status: Int? = nil) async throws {
         guard let historyRecorder else { return }
-        guard !["/api/config", "/api/provider", "/api/auth", "/api/credential", "/api/secret"].contains(where: { path == $0 || path.hasPrefix($0 + "/") }) else { return }
+        guard !["/api/config", "/api/provider", "/api/auth", "/api/credential", "/api/secret", "/api/experimental/mcp", "/api/rpc/woven-mcp"].contains(where: { path == $0 || path.hasPrefix($0 + "/") }) else { return }
         // Headers and endpoint credentials are deliberately absent. The original
         // body and SSE framing are retained verbatim, including unknown fields.
         let frame = WorkspaceHTTPObservation(method: method, path: path, query: query,

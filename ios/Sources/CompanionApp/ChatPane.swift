@@ -51,7 +51,9 @@ struct ChatPane: View {
                 .disabled(!model.executionOnline)
             }
             if let transcript = model.transcript {
-              MobileConversationTranscript(transcript: transcript, disclosureState: model.transcriptStates.state(for: transcript.conversationID)) { activityID in
+              MobileConversationTranscript(transcript: transcript, disclosureState: model.transcriptStates.state(for: transcript.conversationID),
+                agentSourceTitle: { model.state.conversations[$0]?.title },
+                openAgentSource: { id in Task { await model.selectConversation(id) } }) { activityID in
                 try await model.conversationActivityDetail(conversationID: transcript.conversationID, activityID: activityID)
               }
             }

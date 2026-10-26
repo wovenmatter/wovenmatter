@@ -31,7 +31,7 @@ for attempt in range(180):
     except (OSError, ValueError): value = {}
     if value.get('runID') == sys.argv[2] and value.get('status') in ('passed','failed'):
         print(json.dumps(value,indent=2))
-        if value['status'] != 'passed' or any(value.get(key) is not True for key in ('receiptReplay','sqlitePersistence','cancel','symlinkRejected','interruptedReplayRejected','conflictPreserved','fullOutputSaved','pythonUnitTests','virtualCLIFile','libraryIntoPython','importKeepsConflict')):
+        if value['status'] != 'passed' or any(value.get(key) is not True for key in ('receiptReplay','sqlitePersistence','cancel','symlinkRejected','interruptedReplayRejected','conflictPreserved','fullOutputSaved','pythonUnitTests','virtualMCPFile','libraryIntoPython','importKeepsConflict')):
             raise SystemExit(1)
         break
     time.sleep(1)

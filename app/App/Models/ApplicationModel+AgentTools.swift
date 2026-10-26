@@ -25,18 +25,18 @@ extension ApplicationModel {
     /// Resolves the actual native folder for local sessions, rather than assuming
     /// that an imported or tool-created chat uses the app's default working root.
     func sessionToolSelectionWorkspace(conversationID: String) async throws -> String {
-        guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
+        guard let store = dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
+        let database = store.database
         let session = try await database.localACPSession(conversationID: conversationID)
+        let root = try await database.availableSessionExecutionRoot(id: conversationID)
+        guard root.workspaceID == (try await executionWorkspaceIdentity(workspaceID: session.remoteWorkspaceID)) else {
+            throw WorkspaceToolError.invalid("This chat belongs to a different execution workspace.")
+        }
         if let remote = session.remoteWorkspaceID { return "remote:" + remote.uuidString.lowercased() }
-        let root = try await database.sessionExecutionRoot(id: conversationID)
-        if let scratch = try await database.sessionScratchDirectory(id: conversationID), scratch.rootPath == root?.rootPath {
+        if let scratch = try await database.sessionScratchDirectory(id: conversationID), scratch.rootPath == root.rootPath {
             return "local:" + (try defaultToolWorkingDirectory(workspaceID: nil))
         }
-        let directory = root?.rootPath
-            ?? openCodeModel(for: conversationID)?.snapshots[conversationID]?.info["location"]["directory"].string
-            ?? localACPSessionMetadata[conversationID]?.workingDirectory
-        let path = try directory ?? defaultToolWorkingDirectory(workspaceID: nil)
-        return "local:" + URL(fileURLWithPath: path).standardizedFileURL.path
+        return "local:" + URL(fileURLWithPath: root.rootPath).standardizedFileURL.path
     }
 
     private func captureToolSessionSelections(id: String, configuration: WorkspaceSessionCreationConfiguration,

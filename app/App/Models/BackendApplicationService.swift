@@ -29,6 +29,7 @@ enum BackendApplicationCommand: Codable, Sendable {
     case setClosedLidPolicy(WorkPowerPolicy)
     case stageAttachments(files: [BackendAttachmentSource])
     case toolsMutation(BackendToolsMutation)
+    case mcpAccess(WovenMCPAccessAction)
     case loadAgentDefaults(runtime: AgentRuntimeKind, workspace: String?)
     case saveAgentDefault(runtime: AgentRuntimeKind, workspace: String?, field: SessionSelectionField, selections: SessionSelections)
     case setAgentDefaultsSharing(runtime: AgentRuntimeKind, workspace: String, shared: Bool)
@@ -79,6 +80,7 @@ struct BackendApplicationResult: Codable, Sendable {
     var attachments: [AgentMessageAttachmentDraft]?
     var requiresTimerPauseConfirmation: Bool = false
     var history: GatewayJSONValue?
+    var mcpAccess: WovenMCPAccessSnapshot?
 }
 
 struct BackendApplicationReadiness: Codable, Sendable {
@@ -226,6 +228,8 @@ final class BackendApplicationService {
             return try await .init(attachments: model.stageMessageAttachments(files.map { (url: $0.url, mimeType: $0.mimeType) }))
         case let .toolsMutation(mutation):
             return try await executeToolsMutation(mutation)
+        case let .mcpAccess(action):
+            return try await executeMCPAccess(action)
         case let .loadAgentDefaults(runtime, workspace):
             let values = try await model.agentSelectionDefaults(runtime: runtime, workspace: workspace)
             return .init(selections: values.stored, resolvedSelections: values.resolved, usesSharedDefaults: values.usesShared)

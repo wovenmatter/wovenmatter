@@ -7,6 +7,7 @@ public final class WorkspaceDatabase: Sendable {
   private let workers: DatabaseWorkers
   private let writer: DatabaseConnectionBox<WorkspaceDatabaseConnection>?
   private let readers: [DatabaseConnectionBox<WorkspaceDatabaseConnection>]
+  public let supportDirectory: URL
   public let fileURL: URL
   public let isReadOnlyProjection: Bool
   let libraryFiles: LibraryFileStore
@@ -15,6 +16,7 @@ public final class WorkspaceDatabase: Sendable {
     self.fileURL = url.standardizedFileURL
     let workers = DatabaseWorkers.shared(url: url)
     self.workers = workers
+    supportDirectory = url.deletingLastPathComponent()
     isReadOnlyProjection = readOnlyProjection
     libraryFiles = LibraryFileStore(supportDirectory: url.deletingLastPathComponent(), readOnlyProjection: readOnlyProjection)
     if readOnlyProjection { writer = nil }

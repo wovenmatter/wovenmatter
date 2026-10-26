@@ -46,6 +46,18 @@ if [ "$build_image" = true ]; then
   docker build --pull --no-cache --tag "$WOVENMATTER_IMAGE_NAME" --file remote/Dockerfile .
 fi
 image_id="$(docker image inspect --format '{{.Id}}' "$WOVENMATTER_IMAGE_NAME")"
+# Validate the actual image build context before creating any workspace. The
+# allowlist must ship both the MCP adapters and their shared instruction source.
+docker run --rm --network none --read-only --user 10001:10001 \
+  --cap-drop ALL --security-opt no-new-privileges:true \
+  --entrypoint node "$image_id" --input-type=module -e '
+    await import("/opt/wovenmatter/src/workspace-instances.mjs");
+    await import("/opt/wovenmatter/harnesses/mcp/adapter.mjs");
+    const { wovenInstructions } = await import("/opt/wovenmatter/default-agent/src/woven-instructions.mjs");
+    const { loadWorkspaceMCPCatalog } = await import("/opt/wovenmatter/src/workspace-mcp.mjs");
+    if (!wovenInstructions || !loadWorkspaceMCPCatalog().length) process.exit(1);
+  '
+
 WOVENMATTER_API_TOKEN="$token_a" \
   scripts/remote-workspace.sh create "$workspace_a" "$port_a" '' '' "$image_id" >/dev/null
 [ "$(docker inspect --format '{{.Image}}' "$container_a")" = "$image_id" ]
