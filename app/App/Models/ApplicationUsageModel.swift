@@ -6,8 +6,6 @@ import WovenMatterDashboardStore
 
 private struct UsageAnalyticsRefreshKey: Hashable, Sendable {
     let range: String
-    let enabledProviders: [String]
-    let allowsCredentialAccess: Bool
 }
 
 private struct UsageLimitsRefreshKey: Hashable, Sendable {
@@ -300,12 +298,7 @@ final class ApplicationUsageModel {
         >.Policy
     ) async {
         let enabledProviders = Set(ProviderKind.allCases)
-        let allowsCredentialAccess = false
-        let key = UsageAnalyticsRefreshKey(
-            range: range.rawValue,
-            enabledProviders: enabledProviders.map(\.rawValue).sorted(),
-            allowsCredentialAccess: allowsCredentialAccess
-        )
+        let key = UsageAnalyticsRefreshKey(range: range.rawValue)
         let requestID = UUID()
         usageAnalyticsRequestID = requestID
         isRefreshingUsageAnalytics = true
@@ -316,9 +309,7 @@ final class ApplicationUsageModel {
             ) { [localUsageService] in
                 try await localUsageService.analyticsSnapshot(
                     range: range,
-                    refreshReason: reason,
-                    enabledProviders: enabledProviders,
-                    allowCredentialAccess: allowsCredentialAccess
+                    refreshReason: reason
                 )
             }
             guard usageAnalyticsRequestID == requestID else { return }
@@ -519,10 +510,6 @@ final class ApplicationUsageModel {
         if isOpenRouterCredentialConfigured, enabledUsageProviders.contains(.openRouter) {
             try await localUsageService.authorizeOpenRouterCredentialAccess()
         }
-    }
-
-    func isUsageProviderEnabled(_ provider: ProviderKind) -> Bool {
-        enabledUsageProviders.contains(provider)
     }
 
     func enableUsageProvider(

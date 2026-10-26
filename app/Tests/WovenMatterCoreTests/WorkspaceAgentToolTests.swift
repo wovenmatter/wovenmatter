@@ -8,15 +8,6 @@ import WovenMatterClient
 @Suite("Agent tools access, coordination and timers")
 struct WorkspaceAgentToolTests {
 
-  @Test func linkedSQLiteRejectsPragmasBeforeOpeningAnyDatabase() {
-    // Use a nonexistent path: this assertion never executes a process-wide
-    // allocator-changing pragma even if prefix validation regresses.
-    #expect(throws: DatabaseLinkedDataError.sqliteReadOnlyQueryRequired) {
-      try DatabaseLinkedData.load(from: URL(fileURLWithPath: "/nonexistent/pr85-linked-data.sqlite"),
-        preference: .sqlite, sqliteQuery: "PRAGMA hard_heap_limit=1")
-    }
-  }
-
   @Test func editBatchesCannotExceedDocumentLimitsBetweenOperations() async throws {
     let document = NoteDocument(blocks: [.richText(.init(id: "left")), .richText(.init(id: "right"))])
     var left = NoteTableBlock(rows: 100, columns: 100); left.id = "left"
@@ -56,26 +47,6 @@ struct WorkspaceAgentToolTests {
     try await reopened.setSessionTools(.init(enabled: []), sessionID: caller)
     await #expect(throws: WorkspaceToolError.disabled(.timers)) {
       try await reopened.removeSessionTimer(id: timer.id, callerID: caller, requestID: removeID)
-    }
-  }
-
-
-  @Test func sqliteResultBudgetsIncludeJSONEscaping() async throws {
-    let control = String(repeating: "\u{0001}", count: 200_000)
-    #expect(throws: DatabaseLinkedDataError.sqliteResultTooLarge) {
-      try DatabaseLinkedData.load(queryResponse: .init(columns: ["value"],
-        rows: Array(repeating: [control], count: 3)))
-    }
-    #expect(throws: DatabaseLinkedDataError.sqliteResultTooLarge) {
-      try DatabaseLinkedData.load(queryResponse: .init(columns: [String(repeating: "\u{0001}", count: 4_000)],
-        rows: Array(repeating: ["value"], count: 100)))
-    }
-    let (db, dir, _, _) = try await fixture()
-    _ = db
-    defer { try? FileManager.default.removeItem(at: dir) }
-    #expect(throws: DatabaseLinkedDataError.sqliteResultTooLarge) {
-      try DatabaseLinkedData.load(from: dir.appending(path: "workspace.sqlite"), preference: .sqlite,
-        sqliteQuery: "WITH n(x) AS (VALUES(1),(2),(3)) SELECT replace(hex(zeroblob(100000)),'0',char(1)) AS value FROM n")
     }
   }
 

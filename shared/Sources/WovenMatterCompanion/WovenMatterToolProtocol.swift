@@ -60,10 +60,6 @@ public struct WovenMatterToolResponse: Codable, Equatable, Sendable {
     return self
   }
 
-  public static func note(_ response: NoteEditingResponse) throws -> Self {
-    let encoded = try value(response)
-    return Self(success: response.success, result: encoded.result, error: response.error)
-  }
   public static func value<T: Encodable>(_ value: T) throws -> Self {
     let encoder = JSONEncoder()
     encoder.dateEncodingStrategy = .iso8601

@@ -4,12 +4,6 @@ import WovenMatterCompanion
 
 /// Explicit library saves only. Repositories and runtime checkpoint files never
 /// enter this store. A partial download is not exposed until SHA-256 verification.
-public struct SavedArtifactOfflineStatus: Codable, Equatable, Sendable {
-  public var isAvailable: Bool
-  public var isPinned: Bool
-  public var pendingUpload: Bool
-  public var pendingDownload: Bool
-}
 public actor SavedArtifactStore {
   private struct Record: Codable, Equatable {
     var manifest: CompanionArtifactManifest
@@ -55,17 +49,8 @@ public actor SavedArtifactStore {
   }
 
   public func manifests() -> [CompanionArtifactManifest] { state.records.values.map(\.manifest) }
-  public func offlineStatus(id: String) -> SavedArtifactOfflineStatus? {
-    guard let record = state.records[id] else { return nil }
-    return .init(isAvailable: localURL(id: id) != nil, isPinned: record.pinned == true,
-      pendingUpload: record.upload, pendingDownload: !record.complete && (record.pinned == true || record.requestedDownload == true))
-  }
   public func pendingUploadCount() -> Int { state.records.values.filter(\.upload).count }
   public func pendingDownloadCount() -> Int { state.records.values.filter { !$0.complete && ($0.pinned == true || $0.requestedDownload == true) }.count }
-  public func setPinned(_ id: String, _ pinned: Bool) throws {
-    guard var record = state.records[id] else { throw Failure.invalidTransfer }
-    record.pinned = pinned; try update(id, record)
-  }
   public func cancelSynchronization() {
     syncTask?.cancel()
     for task in downloadTasks.values { task.cancel() }

@@ -10,7 +10,7 @@ import WovenMatterCore
 struct DevelopmentLaunchTests {
     @Test func modesChooseDistinctRolesAndTheCorrectLibrary() {
         for mode in [DevelopmentLaunch.Mode.client, .snapshot, .live] {
-            let role = LocalExecutionRole.resolve(arguments: ["app", "--backend"], backgroundEnabled: true,
+            let role = LocalExecutionRole.resolve(arguments: ["app", "--backend"],
                 libraryClientEnabled: true, developmentMode: mode)
             #expect(role == (mode == .client ? .libraryClient : .backend))
         }
@@ -23,7 +23,7 @@ struct DevelopmentLaunchTests {
     @Test func liveHostUsesTheSameExclusiveLeaseAsProduction() throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let role = LocalExecutionRole.resolve(arguments: ["app", "--backend"], backgroundEnabled: true, developmentMode: .live)
+        let role = LocalExecutionRole.resolve(arguments: ["app", "--backend"], developmentMode: .live)
         let file = directory.appending(path: DevelopmentLaunch.Mode.live.workspaceFolder(instance: "fixture"))
             .appending(path: role.leaseFileName)
         let productionFile = directory.appending(path: "Woven Matter/workspace-owner.lock")

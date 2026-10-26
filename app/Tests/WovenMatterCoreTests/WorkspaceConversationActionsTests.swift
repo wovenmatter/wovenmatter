@@ -88,12 +88,15 @@ struct WorkspaceConversationActionsTests {
     try await f.db.replaceLocalACPAssistantMessage(runID: run.runID, content: "Oldest response")
     try await f.db.upsertDeviceOwnedRunActivity(runID: run.runID,
       activity: .init(id: "tool", kind: .tool, phase: "completed", title: "Read", content: "Tool output"))
-    try await f.db.appendDeviceOwnedGatewayTraceEvent(runID: run.runID, eventName: "agent", sequence: 1,
-      eventType: "raw", eventPhase: nil, toolName: nil, content: nil, rawEventJSON: "{\"retained\":true}")
     try await f.db.completeLocalACPRun(runID: run.runID)
     let largePayload = String(repeating: "x", count: 70_000) + " end of history"
     try await f.db.recordHistory(.init(conversationID: f.chat, runID: run.runID, harness: "codex", kind: "wire.in", payload: largePayload))
     try await f.db.write { connection in try connection.transaction {
+      // Archived gateway frames remain part of full-history exports.
+      try connection.toolsExecuteUnlocked("""
+        INSERT INTO dashboard_run_trace_events(id,run_id,conversation_id,event_source,raw_event_json)
+        VALUES(?,?,?,'openclaw_gateway','{"retained":true}')
+        """, ["archived-gateway", run.runID, f.chat])
       for index in 0..<205 {
         try connection.toolsExecuteUnlocked("""
           INSERT INTO dashboard_messages(id,conversation_id,role,content,created_at)

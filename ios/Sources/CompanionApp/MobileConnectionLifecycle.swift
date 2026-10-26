@@ -128,8 +128,4 @@ extension CompanionModel {
   }
 
   var pendingSyncCount: Int { synchronizationStatus.lanes.values.reduce(0) { $0 + $1.pendingCount } }
-  var syncConflictCount: Int { synchronizationStatus.lanes.values.reduce(0) { $0 + $1.conflictCount } }
-  var hasPendingRecovery: Bool {
-    !state.conflicts.isEmpty || syncConflictCount > 0 || !unresolvedCommands.isEmpty || state.launches.contains { !$0.accepted }
-  }
 }

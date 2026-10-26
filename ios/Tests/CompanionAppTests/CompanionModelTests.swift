@@ -150,29 +150,6 @@ final class CompanionModelTests: XCTestCase {
     XCTAssertTrue(state.outbox.isEmpty)
     XCTAssertTrue(model.draftContents.isEmpty)
   }
-  @MainActor func testContinueDoesNotStealNavigationOrClearNewReference() async throws {
-    let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("store.json")
-    let store = try MobileStore(file: file)
-    try await store.apply(CompanionSnapshot(workspaceID: "workspace", cursor: 1))
-    let mac = ModelMac(); let model = CompanionModel(store: store, transport: mac)
-    await model.reload(); model.tab = .home; model.composer = "Exact prompt"; model.providerID = "local:codex"
-    let launch = MobileLaunchRecord(create: .init(deviceID: "phone", kind: .createSession, conversationID: "created", providerID: "local:codex"),
-      initialSend: .init(deviceID: "phone", kind: .send, conversationID: "created", text: "Exact prompt"))
-    let continuing = Task { await model.continueLaunch(launch) }
-    for _ in 0..<100 { if await mac.waiting { break }; try await Task.sleep(for: .milliseconds(10)) }
-    let waiting = await mac.waiting; XCTAssertTrue(waiting)
-    model.tab = .folders; model.referencedNoteID = "new-reference"; model.providerID = "local:claude"
-    await mac.release(); await continuing.value
-    XCTAssertEqual(model.tab, .folders)
-    XCTAssertNil(model.selectedConversationID)
-    XCTAssertEqual(model.composer, "Exact prompt")
-    XCTAssertEqual(model.referencedNoteID, "new-reference")
-    await model.flushLocalWrites()
-    let reopened = try MobileStore(file: file)
-    let draft = await reopened.snapshot().chatDrafts["new-chat"]
-    XCTAssertEqual(draft?.noteID, "new-reference")
-  }
-
   @MainActor func testRenderedNotePaneAdoptsRemoteBodyWithoutSavingSyntheticEdit() async throws {
     let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("store.json")
     let store = try MobileStore(file: file)

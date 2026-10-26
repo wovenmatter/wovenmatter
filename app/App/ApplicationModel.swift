@@ -310,22 +310,13 @@ final class ApplicationModel {
     func sharedConnectionsChanged() async { await usage.sharedConnectionsChanged() }
     var localUsage: LocalUsageSnapshot? { usage.localUsage }
     var localUsageError: String? { usage.localUsageError }
-    var isRefreshingUsageAnalytics: Bool { usage.isRefreshingUsageAnalytics }
     var isRefreshingUsageLimits: Bool { usage.isRefreshingUsageLimits }
     var isAuthorizingUsageCredential: Bool { usage.isAuthorizingUsageCredential }
     private(set) var isReconnectingSavedCredentials = false
     private(set) var credentialAccessStatus: String?
     private(set) var keychainAccessReady: Bool?
     var isRefreshingLocalUsage: Bool { usage.isRefreshingLocalUsage }
-    var isOpenRouterCredentialConfigured: Bool { usage.isOpenRouterCredentialConfigured }
-    var signingInUsageProviders: Set<ProviderKind> { usage.signingInUsageProviders }
     var hasAcknowledgedCredentialAccessDisclosure: Bool { usage.hasAcknowledgedCredentialAccessDisclosure }
-    var enabledUsageProviders: Set<ProviderKind> { usage.enabledUsageProviders }
-    var usageConnectionChoices: [UsageConnectionChoice] { usage.usageConnectionChoices }
-    var selectedUsageConnections: [String: String] { usage.selectedUsageConnections }
-    func selectUsageConnection(_ id: String, provider: ProviderKind, range: UsageTimeRange) async {
-        await usage.selectUsageConnection(id, provider: provider, range: range)
-    }
     var codexUsageWorkspaces: [CodexUsageWorkspace] { usage.codexUsageWorkspaces }
     var selectedCodexUsageWorkspaceID: String? { usage.selectedCodexUsageWorkspaceID }
     private var currentUsageRange: UsageTimeRange { usage.currentUsageRange }
@@ -1827,33 +1818,6 @@ final class ApplicationModel {
         }
     }
 
-    func createCalendarItem(
-        title: String,
-        startsAt: Date,
-        endsAt: Date?,
-        allDay: Bool
-    ) async -> Bool {
-        calendarMutationError = nil
-        isCreatingCalendarItem = true
-        defer { isCreatingCalendarItem = false }
-        do {
-            guard let dashboardStore else {
-                throw ApplicationModelError.dashboardStoreUnavailable
-            }
-            try await dashboardStore.createCalendarItem(
-                title: title,
-                startsAt: startsAt,
-                endsAt: endsAt,
-                allDay: allDay
-            )
-            await refreshWorkspace()
-            return true
-        } catch {
-            calendarMutationError = error.localizedDescription
-            return false
-        }
-    }
-
     func clearCalendarMutationError() {
         calendarMutationError = nil
     }
@@ -1868,24 +1832,6 @@ final class ApplicationModel {
         // save can finish before it arrives, so reconcile from a fresh snapshot
         // instead of putting the reply's older document into the editor.
         await refreshWorkspace()
-    }
-
-    @discardableResult
-    private func adoptNoteEditingResponseDraft(_ response: NoteEditingResponse) -> Bool {
-        guard response.success, let document = response.document,
-              let content = try? document.encoded() else { return false }
-        if var draft = noteDrafts[response.noteID] {
-            draft.title = response.title ?? draft.title
-            draft.content = content
-            draft.saveState = .saved
-            draft.editRevision = 0
-            draft.persistedRevision = 0
-            draft.sourceRevision = response.revision
-            draft.sourceContent = content
-            draft.sourceTitle = response.title ?? draft.title
-            noteDrafts[response.noteID] = draft
-        }
-        return true
     }
 
     func prepareNoteDraft(_ note: WorkspaceNoteRecord) {
@@ -2160,14 +2106,6 @@ final class ApplicationModel {
         await usage.usageAnalyticsSelected(range: range)
     }
 
-    func saveOpenRouterAPIKey(_ value: String, range: UsageTimeRange) async {
-        await usage.saveOpenRouterAPIKey(value, range: range)
-    }
-
-    func deleteOpenRouterAPIKey(range: UsageTimeRange) async {
-        await usage.deleteOpenRouterAPIKey(range: range)
-    }
-
     func acknowledgeCredentialAccessDisclosure() {
         usage.acknowledgeCredentialAccessDisclosure()
     }
@@ -2256,10 +2194,6 @@ final class ApplicationModel {
 
     }
 
-    func isUsageProviderEnabled(_ provider: ProviderKind) -> Bool {
-        usage.isUsageProviderEnabled(provider)
-    }
-
     func enableUsageProvider(
         _ provider: ProviderKind,
         range: UsageTimeRange? = nil
@@ -2267,46 +2201,11 @@ final class ApplicationModel {
         await usage.enableUsageProvider(provider, range: range ?? currentUsageRange)
     }
 
-    func retryUsageProviderCredentialAccess(
-        _ provider: ProviderKind,
-        range: UsageTimeRange
-    ) async {
-        await usage.retryUsageProviderCredentialAccess(provider, range: range)
-    }
-
     func selectCodexUsageWorkspace(
         _ workspaceID: String,
         range: UsageTimeRange
     ) async {
         await usage.selectCodexUsageWorkspace(workspaceID, range: range)
-    }
-
-    func disableUsageProvider(
-        _ provider: ProviderKind,
-        range: UsageTimeRange
-    ) async {
-        await usage.disableUsageProvider(provider, range: range)
-    }
-
-    func signInUsageProvider(_ provider: ProviderKind) {
-        usage.signInUsageProvider(provider)
-    }
-
-    func reconnectSelectedCodexUsageWorkspace() {
-        usage.reconnectSelectedCodexUsageWorkspace()
-    }
-
-    @discardableResult
-    func sendAgentMessage(
-        conversation: WorkspaceConversationRecord,
-        content: String,
-        note: WorkspaceNoteRecord? = nil
-    ) async -> Bool {
-        await sendAgentMessage(
-            conversation: conversation,
-            input: AgentMessageInput(text: content),
-            note: note
-        )
     }
 
     func stageMessageAttachments(
@@ -3996,8 +3895,7 @@ final class ApplicationModel {
                         kind: .local,
                         detail: root.path,
                         rows: rows,
-                        allowsCreation: true,
-                        allowsExternalLinks: false
+                        allowsCreation: true
                     ))
                 } catch {
                     sources.append(DashboardDatabaseSource(
@@ -4007,8 +3905,7 @@ final class ApplicationModel {
                         detail: root.path,
                         databases: [],
                         error: error.localizedDescription,
-                        allowsCreation: true,
-                        allowsExternalLinks: false
+                        allowsCreation: true
                     ))
                 }
             } else {
@@ -4019,8 +3916,7 @@ final class ApplicationModel {
                     detail: "Set up the local agent workspace in Settings.",
                     databases: [],
                     error: localACPWorkspaceAvailability.detail,
-                    allowsCreation: false,
-                    allowsExternalLinks: false
+                    allowsCreation: false
                 ))
             }
 
@@ -4041,18 +3937,18 @@ final class ApplicationModel {
                         detail: "\(configuration.hostName) · Databases",
                         databases: rows.map { DashboardAgentDatabase(
                             sourceID: sourceID, databaseID: $0.id, name: $0.name,
-                            preference: .sqlite, localURL: replicaRoot.appendingPathComponent($0.id + ".sqlite"), isExternal: false, revision: $0.revision, updatedAt: $0.updatedAt
-                        ) }, error: nil, allowsCreation: true, allowsExternalLinks: false
+                            localURL: replicaRoot.appendingPathComponent($0.id + ".sqlite"), revision: $0.revision, updatedAt: $0.updatedAt
+                        ) }, error: nil, allowsCreation: true
                     ))
                 } catch {
                     sources.append(DashboardDatabaseSource(
                         id: sourceID, name: configuration.name, kind: .remote,
                         detail: configuration.hostName,
                         databases: ((try? AgentDatabaseCatalog.list(at: Self.databaseReplicaDirectory(sourceID: sourceID))) ?? []).map {
-                            DashboardAgentDatabase(sourceID: sourceID, databaseID: $0.id, name: $0.name, preference: .sqlite, localURL: $0.url, isExternal: false, revision: $0.revision, updatedAt: $0.updatedAt, offline: true)
+                            DashboardAgentDatabase(sourceID: sourceID, databaseID: $0.id, name: $0.name, localURL: $0.url, revision: $0.revision, updatedAt: $0.updatedAt, offline: true)
                         },
                         error: error is CancellationError ? "Workspace connection changed. Refresh to reconnect." : error.localizedDescription,
-                        allowsCreation: false, allowsExternalLinks: false
+                        allowsCreation: false
                     ))
                 }
             }
@@ -4073,19 +3969,19 @@ final class ApplicationModel {
     }
 
     @discardableResult
-    func createDatabase(sourceID: String, name: String, preference: AgentDatabasePreference) async -> String? {
+    func createDatabase(sourceID: String, name: String) async -> String? {
         if isBackendFrontend {
-            do { return try await sendBackendWorkspaceService(.createDatabase(sourceID: sourceID, name: name, preference: preference)).entityID }
+            do { return try await sendBackendWorkspaceService(.createDatabase(sourceID: sourceID, name: name)).entityID }
             catch { databaseError = error.localizedDescription; return nil }
         }
-        if databasesSnapshot.sources.contains(where: { $0.id == sourceID && $0.kind == .local }) { return await createLocalDatabase(name: name, preference: preference) }
+        if databasesSnapshot.sources.contains(where: { $0.id == sourceID && $0.kind == .local }) { return await createLocalDatabase(name: name) }
         guard let configuration = remoteDatabaseConfiguration(sourceID: sourceID) else {
             databaseError = "Choose an available workspace."
             return nil
         }
         do {
             let row = try await remoteWorkspaces.createDatabase(
-                name: name.trimmingCharacters(in: .whitespacesAndNewlines), preference: preference, in: configuration)
+                name: name.trimmingCharacters(in: .whitespacesAndNewlines), in: configuration)
             databaseError = nil
             await refreshDatabases()
             return "\(sourceID):\(row.id)"
@@ -4096,11 +3992,8 @@ final class ApplicationModel {
     }
 
     @discardableResult
-    func createLocalDatabase(
-        name: String,
-        preference: AgentDatabasePreference
-    ) async -> String? {
-        if isBackendFrontend { return await createDatabase(sourceID: databasesSnapshot.sources.first(where: { $0.kind == .local })?.id ?? "", name: name, preference: preference) }
+    func createLocalDatabase(name: String) async -> String? {
+        if isBackendFrontend { return await createDatabase(sourceID: databasesSnapshot.sources.first(where: { $0.kind == .local })?.id ?? "", name: name) }
         guard let root = localACPWorkspaceLaunchConfiguration?.databasesURL else {
             databaseError = "Set up the local agent workspace before creating a database."
             return nil
@@ -4110,7 +4003,6 @@ final class ApplicationModel {
             let database = try await Task.detached(priority: .userInitiated) {
                 try AgentDatabaseCatalog.create(
                     named: name,
-                    preference: preference,
                     in: root, owner: owner
                 )
             }.value
@@ -4148,7 +4040,7 @@ final class ApplicationModel {
         }
         if let databaseURL = database.localURL {
             return try await Task.detached(priority: .utility) {
-                guard let query = link.sqliteQuery else { throw DatabaseLinkedDataError.sqliteQueryRequired }
+                guard let query = link.sqliteQuery else { throw DashboardDatabaseLinkError.sqliteQueryRequired }
                 return try AgentDatabaseCatalog.query(id: database.databaseID, sql: query,
                     in: databaseURL.deletingLastPathComponent())
             }.value
@@ -4163,8 +4055,7 @@ final class ApplicationModel {
         kind: DashboardDatabaseSourceKind,
         detail: String,
         rows: [LocalAgentDatabase],
-        allowsCreation: Bool = false,
-        allowsExternalLinks: Bool = false
+        allowsCreation: Bool = false
     ) -> DashboardDatabaseSource {
         DashboardDatabaseSource(
             id: id,
@@ -4176,14 +4067,12 @@ final class ApplicationModel {
                     sourceID: id,
                     databaseID: $0.id,
                     name: $0.name,
-                    preference: $0.preference,
                     localURL: $0.url,
-                    isExternal: false, revision: $0.revision, updatedAt: $0.updatedAt
+                    revision: $0.revision, updatedAt: $0.updatedAt
                 )
             },
             error: nil,
-            allowsCreation: allowsCreation,
-            allowsExternalLinks: allowsExternalLinks
+            allowsCreation: allowsCreation
         )
     }
 
@@ -5133,9 +5022,9 @@ extension ApplicationModel {
             response.entityID = await copyDatabase(database: database, destinationSourceID: destination, name: name)
             if response.entityID == nil { throw BackendRPCError.remote(databaseError ?? "Database copy failed.") }
         case .refreshDatabases: databaseCommand = true; await refreshDatabases()
-        case let .createDatabase(sourceID, name, preference):
+        case let .createDatabase(sourceID, name):
             databaseCommand = true
-            response.entityID = await createDatabase(sourceID: sourceID, name: name, preference: preference)
+            response.entityID = await createDatabase(sourceID: sourceID, name: name)
         case let .databaseData(link): databaseCommand = true; response.data = try await linkedData(for: link)
         }
         if databaseCommand { response.databases = backendDatabasesSnapshot() }

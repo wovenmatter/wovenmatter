@@ -288,13 +288,3 @@ struct SettingsConnectionsView: View {
     }
 
 }
-
-struct ConnectionsLink: View {
-    var title = "Manage accounts"
-    var scope = "global"
-    var body: some View {
-        Button(title) {
-            NotificationCenter.default.post(name: .init("wovenmatter.open-connections"), object: scope)
-        }.buttonStyle(SettingsQuietButtonStyle())
-    }
-}

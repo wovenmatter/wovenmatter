@@ -277,10 +277,6 @@ public actor MobileSyncEngine {
     guard let federation = transport as? any FederationTransport else { throw MobileConnectionError.offline }
     return try await store.artifacts.download(id: id, using: federation)
   }
-  public func keepArtifactOffline(_ id: String) async throws {
-    try await store.artifacts.setPinned(id, true)
-    _ = try await ensureArtifactCached(id)
-  }
   public func submit(_ command: CompanionCommand) async throws -> CompanionCommandReceipt {
     guard command.workspaceID == nil else { throw MobileStore.Failure.wrongWorkspace }
     try await store.verifyWorkspace(transport.workspaceIdentity())

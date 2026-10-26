@@ -35,7 +35,6 @@ extension MobileStore {
     }
     return relation
   }
-  public func localSessionCoordination(targetID: String) -> MobileLocalSessionCoordination? { state.localToolCoordinations?[targetID] }
   public func changeLocalSessionCoordination(callerID: String, targetID: String, localExecutionIDs: Set<String>, epoch: String,
     enabled: Bool?, requestID: String) throws -> GatewayJSONValue {
     try Task.checkCancellation()

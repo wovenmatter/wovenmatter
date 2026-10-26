@@ -93,8 +93,6 @@ public actor MobileStore {
   private let budget: Budget
   var state: MobileStoreState
   private var protectedNoteID: String?
-  private var writeCount = 0
-  private var lastWriteBytes = 0
   public init(file: URL, budget: Budget = .init()) throws {
     self.file = file; self.budget = budget
     dictations = try MobileDictationStore(file: file.appendingPathExtension("dictations.sqlite"))
@@ -338,13 +336,6 @@ public actor MobileStore {
     } else {
       _ = try createNote(folderID: note.folderID, title: note.title, content: note.content, id: note.id)
     }
-  }
-  /// Agent tools compare the exact body they read, including unacknowledged
-  /// edits whose central revision has not changed. The check and write are atomic.
-  public func editNoteIfUnchanged(id: String, title: String, content: String, folderID: String?, expected: CompanionNote) throws {
-    guard state.notes[id] == expected, state.conflicts[id] == nil, !state.deletedNotes.contains(id) else { throw Failure.conflictingNote }
-    try Task.checkCancellation()
-    try editNote(id: id, title: title, content: content, folderID: folderID, base: expected)
   }
   public func editNote(id: String, title: String, content: String, folderID: String?, base: CompanionNote? = nil) throws {
     guard content.utf8.count <= CompanionProtocol.maximumNoteBytes else { throw Failure.noteTooLarge }
@@ -705,9 +696,7 @@ public actor MobileStore {
     var next = state
     try operation(&next)
     guard next != state else { return }
-    lastWriteBytes = try MobileStorePersistence.persist(next, at: file)
-    writeCount += 1
+    _ = try MobileStorePersistence.persist(next, at: file)
     state = next
   }
-  public func persistenceStatistics() -> (writes: Int, lastBytes: Int) { (writeCount, lastWriteBytes) }
 }

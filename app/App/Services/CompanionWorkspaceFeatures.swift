@@ -53,7 +53,7 @@ extension CompanionCommandService {
             await model.refreshDatabases()
             return .databases(model.databasesSnapshot.sources.map { source in
                 .init(id: source.id, name: source.name, kind: source.kind.rawValue,
-                    databases: source.databases.map { .init(id: $0.id, name: $0.name, format: $0.preference.displayName, isExternal: $0.isExternal) },
+                    databases: source.databases.map { .init(id: $0.id, name: $0.name, format: "SQLite", isExternal: false) },
                     error: source.error)
             })
         case let .usage(from, to, offset):

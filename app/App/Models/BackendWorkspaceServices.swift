@@ -6,7 +6,7 @@ enum BackendWorkspaceServiceCommand: Codable, Sendable {
     case authorizeSavedConnections
     case openCodeSettingsAgent(UUID?), renameOpenCode(UUID, String)
     case consumePrefill(String, String)
-    case refreshDatabases, createDatabase(sourceID: String, name: String, preference: AgentDatabasePreference)
+    case refreshDatabases, createDatabase(sourceID: String, name: String)
     case databaseData(DatabaseArtifactLink)
     case copyDatabase(database: DashboardAgentDatabase, destinationSourceID: String, name: String)
 }

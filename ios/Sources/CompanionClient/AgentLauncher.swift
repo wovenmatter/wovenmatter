@@ -12,7 +12,6 @@ public struct CompanionAgentLauncher: Identifiable, Equatable, Sendable {
   /// Display ownership stays stable when the usable transport route changes.
   public var groupID: String
   public var conversationRoutes: [String: Set<String>]
-  public var isLocalMac: Bool { groupID == "central" }
 
   public init(workspaceID: String, workspaceName: String, providerID: String, name: String, runtimeKind: String, isAvailable: Bool = true, groupID: String? = nil, conversationRoutes: [String: Set<String>] = [:]) {
     self.groupID = groupID ?? workspaceID; self.conversationRoutes = conversationRoutes

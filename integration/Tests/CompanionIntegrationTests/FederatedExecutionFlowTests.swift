@@ -195,7 +195,6 @@ struct FederatedExecutionFlowTests {
     #expect(await reader.store.artifacts.localURL(id: manifest.id) == nil)
     let downloaded = try await reader.store.artifacts.download(id: manifest.id, using: reader.transport)
     #expect(try Data(contentsOf: downloaded) == bytes)
-    try await reader.store.artifacts.setPinned(manifest.id, true)
     let reopenedReader = try MobileStore(file: reader.file)
     #expect(await reopenedReader.artifacts.localURL(id: manifest.id) != nil)
     #expect(await reader.store.artifacts.manifests().count == 1)

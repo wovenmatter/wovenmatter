@@ -21,8 +21,7 @@ struct UsageImportAtomicityTests {
     } }
     for await _ in entered.stream { break }
     let service = fixture.service(preparationWorker: preparation)
-    let full = try await service.analyticsSnapshot(range: .last24Hours, enabledProviders: [.openCodeGo],
-      allowCredentialAccess: false, now: now)
+    let full = try await service.analyticsSnapshot(range: .last24Hours, now: now)
     #expect(preparation.metrics.rejected == 1)
     #expect(full.samples.isEmpty)
     #expect(full.sources.first { $0.id == "wovenmatter:index" }?.status == .failed)
@@ -34,14 +33,12 @@ struct UsageImportAtomicityTests {
     // An unrelated fixture owns its lane and cannot inherit this admission failure.
     let isolated = try UsageSQLFixture()
     _ = try isolated.openCodeSource(now: now)
-    let independent = try await isolated.service().analyticsSnapshot(range: .last24Hours,
-      enabledProviders: [.openCodeGo], allowCredentialAccess: false, now: now)
+    let independent = try await isolated.service().analyticsSnapshot(range: .last24Hours, now: now)
     #expect(independent.samples.count == 1)
 
     release.signal()
     try await blocked.value
-    let recovered = try await service.analyticsSnapshot(range: .last24Hours, enabledProviders: [.openCodeGo],
-      allowCredentialAccess: false, now: now)
+    let recovered = try await service.analyticsSnapshot(range: .last24Hours, now: now)
     #expect(recovered.samples.count == 1)
     #expect(!recovered.sources.contains { $0.id == "wovenmatter:index" })
     #expect(try store.source("opencode:database") != nil)
@@ -61,8 +58,7 @@ struct UsageImportAtomicityTests {
     // Advancing on each read deterministically represents another account
     // mutation between capture and validation, without process-global changes.
     let service = fixture.service(sharedAccounts: sharedAccounts, revision: { revision.read() })
-    let result = try await service.analyticsSnapshot(range: .last24Hours, enabledProviders: [],
-      allowCredentialAccess: false, now: now)
+    let result = try await service.analyticsSnapshot(range: .last24Hours, now: now)
     #expect(result.samples.isEmpty)
     #expect(revision.reads == 1) // Initialization only; local analytics has no account ownership.
 
@@ -73,8 +69,7 @@ struct UsageImportAtomicityTests {
     let fixture = try UsageSQLFixture()
     let source = try fixture.openCodeSource(now: now)
     try fixture.execute(at: source, sql: "UPDATE message SET data = replace(data, 'opencode-go', 'openai');")
-    let result = try await fixture.service().analyticsSnapshot(range: .last24Hours,
-      enabledProviders: [], allowCredentialAccess: false, now: now)
+    let result = try await fixture.service().analyticsSnapshot(range: .last24Hours, now: now)
     #expect(result.samples.count == 1)
     #expect(result.samples.first?.provider == .codex)
     #expect(result.samples.first?.tokens.inputTokens == 8)
@@ -143,7 +138,7 @@ struct UsageImportAtomicityTests {
     // watches the app-wide account revision, including mock credential changes
     // made by other tests, even when credential reads are disabled.
     let service = fixture.service()
-    let initial = try await service.analyticsSnapshot(range: .last24Hours, enabledProviders: [.openCodeGo], allowCredentialAccess: false, now: now)
+    let initial = try await service.analyticsSnapshot(range: .last24Hours, now: now)
     try #require(initial.samples.count == 1, "Initial import coverage: \(initial.sources)")
     let store = try UsageStore(databaseURL: fixture.indexURL)
     let originalFingerprint = try #require(try store.source("opencode:database")).fingerprint
@@ -151,7 +146,7 @@ struct UsageImportAtomicityTests {
     let originalImportDate = try #require(try store.metadataDate("usage.local-import-at"))
     try fixture.execute(at: sourceURL, sql: "INSERT INTO raw_part VALUES('broken', 'session', 'message', '{}');")
     try FileManager.default.setAttributes([.modificationDate: now.addingTimeInterval(10)], ofItemAtPath: sourceURL.path)
-    let failed = try await service.analyticsSnapshot(range: .last7Days, enabledProviders: [.openCodeGo], allowCredentialAccess: false, now: now.addingTimeInterval(1))
+    let failed = try await service.analyticsSnapshot(range: .last7Days, now: now.addingTimeInterval(1))
     #expect(failed.samples == initial.samples)
     #expect(failed.sources.first { $0.id == "opencode" }?.status == .partial)
     #expect(try store.source("opencode:database")?.fingerprint == originalFingerprint)

@@ -1,48 +1,5 @@
 import Foundation
 
-public enum AgentDatabasePreference: String, Codable, CaseIterable, Sendable {
-  case none
-  case json
-  case sqlite
-
-  public var displayName: String {
-    switch self {
-    case .none: "No preference"
-    case .json: "JSON"
-    case .sqlite: "SQLite"
-    }
-  }
-}
-
-public struct AgentDatabaseManifest: Codable, Equatable, Sendable {
-  public static let currentSchema = "wovenmatter.database.v1"
-
-  public var schema: String
-  public var preference: AgentDatabasePreference
-
-  public init(
-    schema: String = Self.currentSchema,
-    preference: AgentDatabasePreference = .none
-  ) {
-    self.schema = schema
-    self.preference = preference
-  }
-
-  public var isSupported: Bool { schema == Self.currentSchema }
-}
-
-public struct AgentDatabaseQueryResponse: Codable, Equatable, Sendable {
-  public let contractVersion: Int
-  public let columns: [String]
-  public let rows: [[String]]
-
-  public init(contractVersion: Int = 1, columns: [String], rows: [[String]]) {
-    self.contractVersion = contractVersion
-    self.columns = columns
-    self.rows = rows
-  }
-}
-
 public struct DatabaseTabularData: Equatable, Codable, Sendable {
   public let columns: [String]
   public let rows: [[String]]

@@ -15,9 +15,9 @@ public struct RemoteWorkspaceRequestIdentity: Sendable, Equatable {
         self.workspaceEpoch = workspaceEpoch
     }
 
-    public func isCurrent(configuration: RemoteWorkspaceConfiguration?, credentialsEnabled: Bool,
+    public func isCurrent(configuration: RemoteWorkspaceConfiguration?,
                           credentialEpoch: UUID, workspaceEpoch: UUID) -> Bool {
-        credentialsEnabled && self.configuration == configuration
+        self.configuration == configuration
             && self.credentialEpoch == credentialEpoch && self.workspaceEpoch == workspaceEpoch
     }
 }
@@ -1188,14 +1188,8 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         return document.databases
     }
 
-    public func createDatabase(name: String, preference: AgentDatabasePreference) async throws -> RemoteAgentDatabase {
-        try await request(path: "v1/databases", method: "POST", body: JSONEncoder().encode(
-            RemoteDatabaseRequest(databaseID: name, preference: preference)))
-    }
-
-    public func databaseData(for link: DatabaseArtifactLink) async throws -> RemoteDatabaseData {
-        try await request(path: "v1/databases/data", method: "POST", body: JSONEncoder().encode(
-            RemoteDatabaseRequest(databaseID: link.databaseID, relativePath: link.relativePath, sqliteQuery: link.sqliteQuery)))
+    public func createDatabase(name: String) async throws -> RemoteAgentDatabase {
+        try await request(path: "v1/databases", method: "POST", body: JSONEncoder().encode(["databaseID": name]))
     }
 
     public func browserFrames(tabID: String) -> AsyncThrowingStream<RemoteBrowserFrame, any Error> {
@@ -1409,9 +1403,6 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         try await request(path: "v1/runtime/inspection", method: "GET", body: nil)
     }
 
-    public func defaultAgentStatus() async throws -> DefaultAgentStatus {
-        try await request(path: "v1/default-agent/status", method: "GET", body: nil)
-    }
     public func defaultAgentSDKs(_ command: DefaultAgentSDKRequest) async throws -> DefaultAgentSDKStatus {
         try await request(path: "v1/default-agent/sdks", method: command.action == .status ? "GET" : "POST",
                           body: command.action == .status ? nil : JSONEncoder().encode(command))
@@ -1538,11 +1529,6 @@ public actor RemoteWorkspaceCredentialStore {
     public func authorizeToken(for id: UUID) throws -> String? {
         if blocked[id] == nil, let token = cachedTokens[id] { return token }
         return try loadToken(for: id, allowInteraction: true)
-    }
-
-    public func clearCachedTokens() {
-        cachedTokens.removeAll()
-        blocked.removeAll()
     }
 
     private func loadToken(for id: UUID, allowInteraction: Bool) throws -> String? {

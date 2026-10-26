@@ -198,19 +198,6 @@ extension CompanionModel {
       await workspacePollTasks[workspaceID]?.value
     } catch { errorMessage = error.localizedDescription; await reload() }
   }
-  func continueWorkspaceLaunch(_ launch: MobileLaunchRecord, workspaceID: String) async {
-    guard !sending, let client = workspaceClients[workspaceID], workspaceReachable[workspaceID] == true else { return }
-    let selection = selectedConversationID, draft = currentDraft, sourceKey = draftKey
-    sending = true; defer { sending = false }
-    do {
-      let result = try await client.startConversation(launch)
-      guard result.accepted, let id = result.create.conversationID else { throw DeviceExecutionError.unavailable(result.sendReceipt?.message ?? result.createReceipt?.message ?? "The workspace has not acknowledged this request.") }
-      conversationWorkspaceIDs[id] = workspaceID
-      if selectedConversationID == selection { selectedConversationID = id; tab = .chat }
-      if (draftBuffer[sourceKey] ?? state.chatDrafts[sourceKey]) == draft, draft.text == launch.initialSend.text { updateChatDraft(key: sourceKey, draft: .init(text: "")) }
-      await reload(); await refreshExecutionWorkspaces()
-    } catch { errorMessage = error.localizedDescription; await reload() }
-  }
   func stopExecutionWorkspace() async {
     guard let id = selectedConversationID, let runID = activeRunID else { return }
     await submitExecutionCommand(.init(deviceID: state.deviceID, kind: .stop, conversationID: id, runID: runID))

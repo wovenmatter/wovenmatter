@@ -36,12 +36,6 @@ struct BackgroundServerTests {
         #expect(FileManager.default.fileExists(atPath: file.path))
     }
 
-    @Test func legacyOffPreferenceCannotMakeTheProductionUIAnExecutionOwner() {
-        #expect(LocalExecutionRole.resolve(arguments: [], backgroundEnabled: false) == .frontend)
-        #expect(!LocalExecutionRole.frontend.ownsExecution)
-        #expect(LocalExecutionRole.resolve(arguments: ["--backend"], backgroundEnabled: false) == .backend)
-    }
-
     @Test func unconfirmedStopRechecksCurrentWorkWithoutCancellingIt() async throws {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
         let id = try await fixture.createConversation()

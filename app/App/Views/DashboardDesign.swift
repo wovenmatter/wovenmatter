@@ -266,10 +266,6 @@ enum DashboardAgentOrderStore {
         return raw
     }
 
-    static func order(for group: DashboardAgentSidebarGroup, in raw: String) -> [UUID] {
-        order(forKey: group.orderKey, in: raw)
-    }
-
     static func order(forKey key: String, in raw: String) -> [UUID] {
         decode(raw)[key] ?? []
     }
@@ -286,23 +282,6 @@ enum DashboardAgentOrderStore {
             result.append(id)
         }
         return result
-    }
-
-    /// `presentIDs` must be the current on-screen order for the group.
-    static func move(
-        id: UUID,
-        direction: DashboardAgentListMoveDirection,
-        in group: DashboardAgentSidebarGroup,
-        presentIDs: [UUID],
-        raw: inout String
-    ) {
-        move(
-            id: id,
-            direction: direction,
-            inKey: group.orderKey,
-            presentIDs: presentIDs,
-            raw: &raw
-        )
     }
 
     static func move(
@@ -329,27 +308,6 @@ enum DashboardAgentOrderStore {
         raw = encode(map)
     }
 
-    /// Reorders a dragged item at the target using the current on-screen order.
-    @discardableResult
-    static func move(
-        sourceID: UUID,
-        targetID: UUID,
-        in group: DashboardAgentSidebarGroup,
-        presentIDs: [UUID],
-        raw: inout String
-    ) -> Bool {
-        guard sourceID != targetID,
-              let sourceIndex = presentIDs.firstIndex(of: sourceID),
-              let targetIndex = presentIDs.firstIndex(of: targetID) else { return false }
-        var map = decode(raw)
-        var ids = presentIDs
-        ids.remove(at: sourceIndex)
-        ids.insert(sourceID, at: min(targetIndex, ids.count))
-        map[group.orderKey] = ids
-        raw = encode(map)
-        return true
-    }
-
     static func canMove(
         id: UUID,
         direction: DashboardAgentListMoveDirection,
@@ -369,10 +327,6 @@ struct DashboardAgentPresentation: Equatable {
 }
 
 extension DashboardHarnessLogo {
-    static var displayCases: [DashboardHarnessLogo] {
-        AgentRuntimeKind.presentationOrder.map(Self.init(runtimeKind:))
-    }
-
     init(runtimeKind: AgentRuntimeKind) {
         switch runtimeKind {
         case .codex: self = .codex
@@ -385,25 +339,6 @@ extension DashboardHarnessLogo {
         case .cursor: self = .cursor
         case .opencode: self = .openCode
         }
-    }
-
-    var displayName: String {
-        switch self {
-        case .codex: "Codex"
-        case .claude: "Claude Code"
-        case .grok: "Grok Build"
-        case .openClaw: "OpenClaw"
-        case .hermes: "Hermes"
-        case .defaultAgent: AgentRuntimeKind.defaultAgent.displayName
-        case .pi: "Pi"
-        case .cursor: "Cursor"
-        case .openCode: "OpenCode"
-        }
-    }
-
-    static func resolve(harnessIdentifier: String, runtimeKind: AgentRuntimeKind?) -> Self? {
-        if let runtimeKind { return Self(runtimeKind: runtimeKind) }
-        return resolve(harnessIdentifier: harnessIdentifier)
     }
 }
 
@@ -569,17 +504,6 @@ struct DashboardRailBackground: View {
             }
             .onHover { hovered = $0 }
             .animation(reduceMotion ? nil : .easeOut(duration: 0.22), value: hovered)
-    }
-}
-
-struct DashboardSectionHeading: View {
-    let title: String
-
-    var body: some View {
-        Text(title.uppercased())
-            .font(.system(size: 10, weight: .semibold))
-            .tracking(1.8)
-            .foregroundStyle(DashboardPalette.mutedForeground)
     }
 }
 

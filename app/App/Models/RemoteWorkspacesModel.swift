@@ -9,7 +9,6 @@ struct RemoteDatabaseCatalogIdentity: Equatable {
     let configurations: [RemoteWorkspaceConfiguration]
     let credentialEpoch: UUID
     let workspaceEpochs: [UUID: UUID]
-    let credentialsEnabled: Bool
 }
 
 struct RemoteHarnessChatTarget: Equatable, Identifiable {
@@ -447,7 +446,7 @@ final class RemoteWorkspacesModel {
 
     var databaseCatalogIdentity: RemoteDatabaseCatalogIdentity {
         RemoteDatabaseCatalogIdentity(configurations: workspaces, credentialEpoch: credentialEpoch,
-                                      workspaceEpochs: workspaceEpochs, credentialsEnabled: true)
+                                      workspaceEpochs: workspaceEpochs)
     }
 
     // Validate both sides of every suspension so credentials or destination changes
@@ -552,22 +551,13 @@ final class RemoteWorkspacesModel {
         return try await databaseRequest(configuration) { try await $0.databases() }
     }
 
-    func createDatabase(name: String, preference: AgentDatabasePreference,
+    func createDatabase(name: String,
                         in configuration: RemoteWorkspaceConfiguration) async throws -> RemoteAgentDatabase {
         if isBackendProjection {
-            let response = try await requestBackend(.createDatabase(configuration.id, name: name, preference: preference))
+            let response = try await requestBackend(.createDatabase(configuration.id, name: name))
             guard let value = response.database else { throw BackendRPCError.remote("The background service returned no database result.") }; return value
         }
-        return try await databaseRequest(configuration) { try await $0.createDatabase(name: name, preference: preference) }
-    }
-
-    func databaseData(for link: DatabaseArtifactLink,
-                      in configuration: RemoteWorkspaceConfiguration) async throws -> RemoteDatabaseData {
-        if isBackendProjection {
-            let response = try await requestBackend(.databaseData(configuration.id, link))
-            guard let value = response.databaseData else { throw BackendRPCError.remote("The background service returned no database result.") }; return value
-        }
-        return try await databaseRequest(configuration) { try await $0.databaseData(for: link) }
+        return try await databaseRequest(configuration) { try await $0.createDatabase(name: name) }
     }
 
     func publishTaskGatewaySchedules(_ publication: RemoteTaskGatewayPublication,
@@ -668,7 +658,6 @@ final class RemoteWorkspacesModel {
     private func requireCurrent(_ identity: RemoteWorkspaceRequestIdentity) throws {
         guard !invalidatingWorkspaceIDs.contains(identity.configuration.id),
               identity.isCurrent(configuration: configuration(id: identity.configuration.id),
-                                 credentialsEnabled: true,
                                  credentialEpoch: credentialEpoch,
                                  workspaceEpoch: workspaceEpochs[identity.configuration.id] ?? UUID()) else {
             throw CancellationError()

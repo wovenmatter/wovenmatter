@@ -95,16 +95,11 @@ struct CompanionFacadeTests {
     let usageService: LocalUsageService
     let device = UUID().uuidString.lowercased()
     let remote = RemoteWorkspaceConfiguration(name: "Fixture remote", workspaceID: "fixture", hostName: "fixture.invalid")
-    init(legacyHiddenHarnesses: Bool = false) async throws {
+    init() async throws {
         _ = NSApplication.shared
         directory = FileManager.default.temporaryDirectory.appending(path: "companion-facade-\(UUID())")
         suite = "companion.facade.\(UUID())"
         defaults = UserDefaults(suiteName: suite)!
-        if legacyHiddenHarnesses {
-            defaults.set([], forKey: "wovenmatter.local-acp.enabled-runtimes")
-            defaults.set([], forKey: "wovenmatter.local-acp.shown-runtimes")
-            defaults.set(["codex", "claude_code"], forKey: "wovenmatter.local-acp.hidden-runtimes")
-        }
         let recorder = recorder
         store = try await DashboardStore(supportDirectory: directory, runControls: .init(
             accept: { route, id, input, delivery, context in try await recorder.accept(route, id, input, delivery, context) },
@@ -120,8 +115,7 @@ struct CompanionFacadeTests {
         usageService = LocalUsageService(homeDirectory: directory.appending(path: "ProviderFixtureHome"),
             fileManager: .default, credentialStore: FacadeNoCredentials(probe: probe),
             usageDatabaseURL: directory.appending(path: "usage.sqlite"), sharedConnectionRevision: { 0 },
-            limitCollector: { request in probe.collectLimits(request); return [] },
-            openRouterActivityFetcher: { _ in probe.record("fetch"); throw FixtureError.configurationRejected })
+            limitCollector: { request in probe.collectLimits(request); return [] })
         model = ApplicationModel(applicationDefaults: defaults, dashboardStore: store, startsAutomatically: false,
             localUsageService: usageService)
         let status: RemoteWorkspaceStatus = try decode(#"{"id":"fixture","name":"Fixture","state":"running","running":true,"startedAt":"","image":"fixture","memoryBytes":0,"swapBytes":0,"hostPort":7337,"persistentVolume":"fixture","capabilities":{"memory":false,"swap":false},"storageKind":"fixture","hostStorageLow":false,"legacyStorage":false}"#)

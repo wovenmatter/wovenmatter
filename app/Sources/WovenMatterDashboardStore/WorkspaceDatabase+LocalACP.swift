@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 import SQLite3
 import WovenMatterClient
@@ -997,9 +996,6 @@ extension WorkspaceDatabaseConnection {
       return identifiers
   }
 
-  typealias DeviceOwnedAssistantMutation = WorkspaceDatabase.DeviceOwnedAssistantMutation
-  typealias DeviceOwnedGatewayProjectionResult = WorkspaceDatabase.DeviceOwnedGatewayProjectionResult
-
   public func appendLocalACPAssistantChunk(
     runID: String,
     chunk: String,
@@ -1082,37 +1078,6 @@ extension WorkspaceDatabaseConnection {
     }
   }
 
-  public func appendLocalACPAssistantChunk(
-    runID: String,
-    assistantMessageID: String,
-    chunk: String,
-    updatedAt: Date = Date()
-  ) throws {
-    guard !chunk.isEmpty else { return }
-    try transaction {
-      try mutateLocalACPAssistantMessageUnlocked(runID: runID,
-        assistantMessageID: assistantMessageID, mutation: .append(chunk), updatedAt: updatedAt)
-    }
-  }
-
-  public func replaceLocalACPAssistantMessage(
-    runID: String,
-    assistantMessageID: String,
-    content: String,
-    preservingStreamCommentary: Bool = false,
-    updatedAt: Date = Date()
-  ) throws {
-    try transaction {
-      var content = content
-      if preservingStreamCommentary {
-        content = try assistantContentReplacingFinalSegmentUnlocked(runID: runID,
-          assistantMessageID: assistantMessageID, content: content)
-      }
-      try mutateLocalACPAssistantMessageUnlocked(runID: runID,
-        assistantMessageID: assistantMessageID, mutation: .replace(content), updatedAt: updatedAt)
-    }
-  }
-
   public func completeLocalACPAssistantMessage(
     runID: String,
     assistantMessageID: String,
@@ -1175,238 +1140,6 @@ extension WorkspaceDatabaseConnection {
         updatedAt: updatedAt
       )
     }
-  }
-
-  /// Persists the lossless Gateway frame alongside the normalized activity.
-  /// Raw frames are intentionally not visible transcript rows; they remain
-  /// available for durable inspection after app relaunch.
-  public func appendDeviceOwnedGatewayTraceEvent(
-    runID: String,
-    remoteRunID: String? = nil,
-    eventName: String,
-    eventStream: String? = nil,
-    sequence: Int,
-    eventType: String,
-    eventPhase: String?,
-    toolName: String?,
-    content: String?,
-    rawEventJSON: String,
-    createdAt: Date = Date()
-  ) throws {
-    try transaction {
-      _ = try claimDeviceOwnedGatewayTraceEventUnlocked(runID: runID,
-        remoteRunID: remoteRunID, eventName: eventName, eventStream: eventStream,
-        sequence: sequence, eventType: eventType,
-        eventPhase: eventPhase, toolName: toolName, content: content,
-        rawEventJSON: rawEventJSON, createdAt: createdAt)
-    }
-  }
-
-  @discardableResult
-  public func applyDeviceOwnedGatewayProjection(
-    runID: String, remoteRunID: String, eventName: String, eventStream: String? = nil,
-    sequence: Int, eventType: String,
-    eventPhase: String?, toolName: String?, content: String?, rawEventJSON: String,
-    assistantMessageID: String?, assistantMutation: DeviceOwnedAssistantMutation?,
-    streamBoundary: Bool = false, finalAssistantSegment: Bool = false,
-    activity: AgentRunActivity?, appendingActivity: Bool = false,
-    createdAt: Date = Date()
-  ) throws -> DeviceOwnedGatewayProjectionResult {
-    try transaction {
-      let claim = try claimDeviceOwnedGatewayTraceEventUnlocked(runID: runID,
-        remoteRunID: remoteRunID, eventName: eventName, eventStream: eventStream,
-        sequence: sequence, eventType: eventType,
-        eventPhase: eventPhase, toolName: toolName, content: content,
-        rawEventJSON: rawEventJSON, createdAt: createdAt)
-      guard claim == .applied else { return claim }
-      if let assistantMutation {
-        guard let assistantMessageID else { throw LocalACPSessionDatabaseError.runNotFound }
-        try mutateLocalACPAssistantMessageUnlocked(runID: runID,
-          assistantMessageID: assistantMessageID, mutation: assistantMutation,
-          updatedAt: createdAt)
-      }
-      if streamBoundary || finalAssistantSegment {
-        guard let assistantMessageID else { throw LocalACPSessionDatabaseError.runNotFound }
-        try recordAssistantStreamBoundaryUnlocked(runID: runID,
-          assistantMessageID: assistantMessageID,
-          finalSegment: finalAssistantSegment, updatedAt: createdAt)
-      }
-      if let activity {
-        try upsertDeviceOwnedRunActivityUnlocked(runID: runID, activity: activity,
-          appendingContent: appendingActivity, updatedAt: createdAt)
-      }
-      let applied = try prepareUnlocked("UPDATE dashboard_run_trace_events SET projection_applied = 1 WHERE id = ?")
-      defer { sqlite3_finalize(applied) }
-      try bind(gatewayTraceRecordID(runID: runID, remoteRunID: remoteRunID,
-        eventName: eventName, eventStream: eventStream, sequence: sequence), at: 1, to: applied)
-      try stepDone(applied)
-      guard changedRowCountUnlocked == 1 else { throw LocalACPSessionDatabaseError.runNotFound }
-      return .applied
-    }
-  }
-
-  public func deviceOwnedGatewayTraceEvents(
-    runID: String
-  ) throws -> [(sequence: Int, rawEventJSON: String)] {
-    try withLock {
-      let statement = try prepareUnlocked("""
-        SELECT seq, raw_event_json FROM dashboard_run_trace_events
-        WHERE run_id = ? AND event_source = 'openclaw_gateway' AND projection_applied = 1
-        ORDER BY created_at, rowid
-        """)
-      defer { sqlite3_finalize(statement) }
-      try bind(runID, at: 1, to: statement)
-      var result: [(Int, String)] = []
-      while true {
-        let code = sqlite3_step(statement)
-        if code == SQLITE_DONE { return result }
-        guard code == SQLITE_ROW else { throw stepError() }
-        result.append((Int(sqlite3_column_int64(statement, 0)), try text(statement, column: 1)))
-      }
-    }
-  }
-
-  private func claimDeviceOwnedGatewayTraceEventUnlocked(
-    runID: String, remoteRunID: String?, eventName: String, eventStream: String?,
-    sequence: Int, eventType: String,
-    eventPhase: String?, toolName: String?, content: String?, rawEventJSON: String,
-    createdAt: Date
-  ) throws -> DeviceOwnedGatewayProjectionResult {
-    let recordID = gatewayTraceRecordID(runID: runID, remoteRunID: remoteRunID,
-      eventName: eventName, eventStream: eventStream, sequence: sequence)
-    let legacyID = "\(runID):gateway:\(eventName):\(sequence)"
-    if recordID != legacyID {
-      let legacy = try prepareUnlocked("SELECT projection_applied FROM dashboard_run_trace_events WHERE id = ?")
-      defer { sqlite3_finalize(legacy) }
-      try bind(legacyID, at: 1, to: legacy)
-      if sqlite3_step(legacy) == SQLITE_ROW {
-        // The former identity omitted remote input and stream, so even a row
-        // marked applied cannot prove which scoped event it represented.
-        return .legacyUncertain
-      }
-    }
-    let statement = try prepareUnlocked("""
-      INSERT OR IGNORE INTO dashboard_run_trace_events (
-        id, run_id, conversation_id, user_id, governing_plane,
-        authority_kind, authority_device_id, authority_agent_id,
-        desktop_owned, agent_codename, openclaw_session_key, seq,
-        event_source, event_type, event_name, event_phase, tool_name,
-        content, is_visible, raw_event_json, stream_event_json, created_at
-      ) SELECT ?, run.id, run.conversation_id, run.user_id,
-          run.governing_plane, run.authority_kind, run.authority_device_id,
-          run.authority_agent_id, 1, run.agent_codename,
-          run.openclaw_session_key, ?, 'openclaw_gateway', ?, ?, ?, ?, ?,
-          0, ?, '[]', ?
-        FROM dashboard_runs AS run
-        WHERE run.id = ? AND run.desktop_owned = 1
-    """)
-    defer { sqlite3_finalize(statement) }
-    try bind(recordID, at: 1, to: statement)
-    guard sqlite3_bind_int64(statement, 2, Int64(sequence)) == SQLITE_OK else {
-      throw bindError()
-    }
-    try bind(eventType, at: 3, to: statement)
-    try bind(eventName, at: 4, to: statement)
-    try bindNullable(eventPhase, at: 5, to: statement)
-    try bindNullable(toolName, at: 6, to: statement)
-    try bindNullable(content, at: 7, to: statement)
-    try bind(rawEventJSON, at: 8, to: statement)
-    try bind(Self.timestamp(createdAt), at: 9, to: statement)
-    try bind(runID, at: 10, to: statement)
-    try stepDone(statement)
-    if changedRowCountUnlocked == 1 { return .applied }
-    let existing = try prepareUnlocked("SELECT projection_applied FROM dashboard_run_trace_events WHERE id = ?")
-    defer { sqlite3_finalize(existing) }
-    try bind(recordID, at: 1, to: existing)
-    guard sqlite3_step(existing) == SQLITE_ROW else {
-      throw LocalACPSessionDatabaseError.runNotFound
-    }
-    return sqlite3_column_int64(existing, 0) == 1 ? .duplicate : .legacyUncertain
-  }
-
-  private func gatewayTraceRecordID(
-    runID: String, remoteRunID: String?, eventName: String,
-    eventStream: String?, sequence: Int
-  ) -> String {
-    guard remoteRunID != nil || eventStream != nil else {
-      return "\(runID):gateway:\(eventName):\(sequence)"
-    }
-    let components = [runID, remoteRunID ?? runID, eventName, eventStream ?? "", String(sequence)]
-    let identity = components.map { "\($0.utf8.count):\($0)" }.joined()
-    let digest = SHA256.hash(data: Data(identity.utf8))
-      .map { String(format: "%02x", $0) }.joined()
-    return "gateway:" + digest
-  }
-
-  func assistantContentReplacingFinalSegmentUnlocked(
-    runID: String, assistantMessageID: String, content: String
-  ) throws -> String {
-    let current = try prepareUnlocked("SELECT content FROM dashboard_messages WHERE id = ? AND run_id = ? AND role = 'assistant'")
-    defer { sqlite3_finalize(current) }
-    try bind(assistantMessageID, at: 1, to: current)
-    try bind(runID, at: 2, to: current)
-    guard sqlite3_step(current) == SQLITE_ROW else { throw LocalACPSessionDatabaseError.runNotFound }
-    let text = try text(current, column: 0)
-    let segments = try runActivityRecordsUnlocked(runIDs: [runID], assistantOnly: true).map(\.activity)
-    guard let last = segments.last(where: {
-      $0.assistantMessageID == assistantMessageID
-        && $0.assistantCheckpoint?.followingText(in: text) != nil
-    }), let checkpoint = last.assistantCheckpoint else { return content }
-    let prefixBytes = checkpoint.byteCount - (last.phase == "final" ? (last.content ?? "").utf8.count : 0)
-    guard prefixBytes >= 0 else { return content }
-    return String(decoding: text.utf8.prefix(prefixBytes), as: UTF8.self) + content
-  }
-
-  private func mutateLocalACPAssistantMessageUnlocked(
-    runID: String, assistantMessageID: String,
-    mutation: DeviceOwnedAssistantMutation, updatedAt: Date
-  ) throws {
-    let authority = try localRunAuthorityUnlocked(runID: runID)
-    let timestamp = Self.timestamp(updatedAt)
-    let message = try prepareUnlocked("""
-      UPDATE dashboard_messages
-      SET content = CASE WHEN ? THEN content || ? ELSE ? END,
-          status = 'streaming', updated_at = ?
-      WHERE id = ? AND run_id = ? AND role = 'assistant'
-        AND desktop_owned = 1
-        AND EXISTS (SELECT 1 FROM dashboard_runs
-          WHERE id = ? AND desktop_owned = 1 AND status = 'running')
-      """)
-    defer { sqlite3_finalize(message) }
-    let append: Bool
-    let value: String
-    switch mutation {
-    case .append(let text): append = true; value = text
-    case .replace(let text): append = false; value = text
-    }
-    guard sqlite3_bind_int64(message, 1, append ? 1 : 0) == SQLITE_OK else {
-      throw bindError()
-    }
-    try bind(value, at: 2, to: message)
-    try bind(value, at: 3, to: message)
-    try bind(timestamp, at: 4, to: message)
-    try bind(assistantMessageID, at: 5, to: message)
-    try bind(runID, at: 6, to: message)
-    try bind(runID, at: 7, to: message)
-    try stepDone(message)
-    guard changedRowCountUnlocked == 1 else { throw LocalACPSessionDatabaseError.runNotFound }
-    let conversation = try prepareUnlocked("""
-      UPDATE dashboard_conversations
-      SET last_message_preview = ?, last_message_at = MAX(?, COALESCE(
-        (SELECT imported_at FROM desktop_session_imports WHERE conversation_id=dashboard_conversations.id), '')),
-        updated_at = ?
-      WHERE id = ? AND desktop_owned = 1
-        AND ? = (SELECT assistant_message_id FROM dashboard_runs WHERE id = ?)
-      """)
-    defer { sqlite3_finalize(conversation) }
-    try bind(try localAssistantPreviewUnlocked(runID: runID,
-      assistantMessageID: assistantMessageID), at: 1, to: conversation)
-    try bind(timestamp, at: 2, to: conversation)
-    try bind(timestamp, at: 3, to: conversation)
-    try bind(authority.conversationID, at: 4, to: conversation)
-    try bind(assistantMessageID, at: 5, to: conversation)
-    try bind(runID, at: 6, to: conversation)
-    try stepDone(conversation)
   }
 
   private func recordAssistantStreamBoundaryUnlocked(
@@ -1812,20 +1545,16 @@ extension WorkspaceDatabaseConnection {
     }
   }
 
-  private func localAssistantPreviewUnlocked(
-    runID: String,
-    assistantMessageID: String? = nil
-  ) throws -> String {
+  private func localAssistantPreviewUnlocked(runID: String) throws -> String {
     let statement = try prepareUnlocked("""
       SELECT content FROM dashboard_messages
-      WHERE id = COALESCE(?, (
+      WHERE id = (
         SELECT assistant_message_id FROM dashboard_runs WHERE id = ?
-      )) AND run_id = ? AND role = 'assistant'
+      ) AND run_id = ? AND role = 'assistant'
       """)
     defer { sqlite3_finalize(statement) }
-    try bindNullable(assistantMessageID, at: 1, to: statement)
+    try bind(runID, at: 1, to: statement)
     try bind(runID, at: 2, to: statement)
-    try bind(runID, at: 3, to: statement)
     guard sqlite3_step(statement) == SQLITE_ROW else {
       throw LocalACPSessionDatabaseError.runNotFound
     }
@@ -1845,17 +1574,6 @@ extension WorkspaceDatabaseConnection {
 // MARK: - Async worker boundary
 
 extension WorkspaceDatabase {
-  public enum DeviceOwnedAssistantMutation: Sendable {
-    case append(String)
-    case replace(String)
-  }
-
-  public enum DeviceOwnedGatewayProjectionResult: Equatable, Sendable {
-    case applied
-    case duplicate
-    case legacyUncertain
-  }
-
   @discardableResult
   public func createLocalACPSession(
     runtimeKind: AgentRuntimeKind,
@@ -1968,25 +1686,6 @@ extension WorkspaceDatabase {
     try await write { try $0.replaceLocalACPAssistantMessage(runID: runID, content: content, updatedAt: updatedAt) }
   }
 
-  public func appendLocalACPAssistantChunk(
-    runID: String,
-    assistantMessageID: String,
-    chunk: String,
-    updatedAt: Date = Date()
-  ) async throws {
-    try await write { try $0.appendLocalACPAssistantChunk(runID: runID, assistantMessageID: assistantMessageID, chunk: chunk, updatedAt: updatedAt) }
-  }
-
-  public func replaceLocalACPAssistantMessage(
-    runID: String,
-    assistantMessageID: String,
-    content: String,
-    preservingStreamCommentary: Bool = false,
-    updatedAt: Date = Date()
-  ) async throws {
-    try await write { try $0.replaceLocalACPAssistantMessage(runID: runID, assistantMessageID: assistantMessageID, content: content, preservingStreamCommentary: preservingStreamCommentary, updatedAt: updatedAt) }
-  }
-
   public func completeLocalACPAssistantMessage(
     runID: String,
     assistantMessageID: String,
@@ -2012,41 +1711,6 @@ extension WorkspaceDatabase {
     updatedAt: Date = Date()
   ) async throws {
     try await write { try $0.upsertDeviceOwnedRunActivity(runID: runID, activity: update, appendingContent: appendingContent, updatedAt: updatedAt) }
-  }
-
-  public func appendDeviceOwnedGatewayTraceEvent(
-    runID: String,
-    remoteRunID: String? = nil,
-    eventName: String,
-    eventStream: String? = nil,
-    sequence: Int,
-    eventType: String,
-    eventPhase: String?,
-    toolName: String?,
-    content: String?,
-    rawEventJSON: String,
-    createdAt: Date = Date()
-  ) async throws {
-    try await write { try $0.appendDeviceOwnedGatewayTraceEvent(runID: runID, remoteRunID: remoteRunID, eventName: eventName, eventStream: eventStream, sequence: sequence, eventType: eventType, eventPhase: eventPhase, toolName: toolName, content: content, rawEventJSON: rawEventJSON, createdAt: createdAt) }
-  }
-
-  @discardableResult
-  public func applyDeviceOwnedGatewayProjection(
-    runID: String, remoteRunID: String, eventName: String, eventStream: String? = nil,
-    sequence: Int, eventType: String,
-    eventPhase: String?, toolName: String?, content: String?, rawEventJSON: String,
-    assistantMessageID: String?, assistantMutation: DeviceOwnedAssistantMutation?,
-    streamBoundary: Bool = false, finalAssistantSegment: Bool = false,
-    activity: AgentRunActivity?, appendingActivity: Bool = false,
-    createdAt: Date = Date()
-  ) async throws -> DeviceOwnedGatewayProjectionResult {
-    try await write { try $0.applyDeviceOwnedGatewayProjection(runID: runID, remoteRunID: remoteRunID, eventName: eventName, eventStream: eventStream, sequence: sequence, eventType: eventType, eventPhase: eventPhase, toolName: toolName, content: content, rawEventJSON: rawEventJSON, assistantMessageID: assistantMessageID, assistantMutation: assistantMutation, streamBoundary: streamBoundary, finalAssistantSegment: finalAssistantSegment, activity: activity, appendingActivity: appendingActivity, createdAt: createdAt) }
-  }
-
-  public func deviceOwnedGatewayTraceEvents(
-    runID: String
-  ) async throws -> [(sequence: Int, rawEventJSON: String)] {
-    try await read { try $0.deviceOwnedGatewayTraceEvents(runID: runID) }
   }
 
   public func builtInRunRecoveryRequests(conversationID: String, sessionID: String) async throws -> [DefaultAgentRunRecoveryRequest] {

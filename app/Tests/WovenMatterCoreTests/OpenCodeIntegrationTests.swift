@@ -213,33 +213,6 @@ struct OpenCodeIntegrationTests {
         await coordinator.shutdown()
     }
 
-    @Test func creationModelSelectionRequiresServerConfirmation() async throws {
-        let fixture = OpenCodeFixture(); FixtureProtocol.fixture = fixture
-        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
-        let session = fixtureSession()
-        let coordinator = OpenCodeSessionCoordinator(database: database, clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
-        try await coordinator.connect(connection())
-        let id = try await database.createOpenCodeFixtureSession(runtimeKind: .opencode, title: "Selection", ownerDeviceID: UUID(),
-            openCodeAssociation: ("fixture", "ses_fixture"))
-        let link = OpenCodeSessionLink(conversationID: id, connectionID: "fixture", sessionID: "ses_fixture")
-        let selection: OpenCodeValue = ["model": ["providerID": "provider", "id": "chosen", "variant": "high"]]
-        let confirmed = try await coordinator.configureSelection(link, selection: selection)
-        #expect(confirmed["model"] == selection["model"])
-        #expect(fixture.modelWriteCount == 1)
-        fixture.acceptModelSelection = false
-        let changed: OpenCodeValue = ["model": ["providerID": "provider", "id": "chosen", "variant": "low"]]
-        await #expect(throws: OpenCodeError.self) { try await coordinator.configureSelection(link, selection: changed) }
-        let wrongModel: OpenCodeValue = ["model": ["providerID": "provider", "id": "different", "variant": "high"]]
-        await #expect(throws: OpenCodeError.self) { try await coordinator.configureSelection(link, selection: wrongModel) }
-        #expect(fixture.modelWriteCount == 3 && fixture.promptCount == 0)
-        fixture.sessionExists = false
-        await #expect(throws: OpenCodeError.http(404)) { try await coordinator.configureSelection(link, selection: changed) }
-        await coordinator.shutdown()
-    }
-
     @Test func formReplyRequiresExternalAcknowledgementAndPreservesCustomAnswers() throws {
         let fields: [OpenCodeValue] = [
             ["key": "verification", "type": "external", "url": "https://example.com/verify"],
@@ -557,9 +530,6 @@ private final class OpenCodeFixture: @unchecked Sendable {
     var nativeDirectory = "/original/project"
     var createCount = 0
     var lastCreate: OpenCodeValue = .null
-    var selectedModel: OpenCodeValue = .null
-    var acceptModelSelection = true
-    var modelWriteCount = 0
     var version = "2.0.22"
     var healthCount = 0
     var messages: [OpenCodeValue] = []
@@ -660,15 +630,8 @@ private final class OpenCodeFixture: @unchecked Sendable {
                 nativeDirectory = lastCreate["location"]["directory"].text
                 return (200, ["data": ["id": "ses_fixture", "title": "Created fixture"]])
             }
-            if path == "/api/session/ses_fixture/model" {
-                guard sessionExists else { return (404, [:]) }
-                modelWriteCount += 1
-                let selection = try requestBody(request)
-                if acceptModelSelection { selectedModel = selection["model"] }
-                return (204, .null)
-            }
             if path == "/api/session/ses_fixture", !sessionExists { return (404, [:]) }
-            if path == "/api/session/ses_fixture" { return (200, ["data": ["id": "ses_fixture", "title": "Shared fixture", "model": selectedModel, "location": ["directory": .string(nativeDirectory)], "time": ["updated": .number(900)]]]) }
+            if path == "/api/session/ses_fixture" { return (200, ["data": ["id": "ses_fixture", "title": "Shared fixture", "model": .null, "location": ["directory": .string(nativeDirectory)], "time": ["updated": .number(900)]]]) }
             return (404, [:])
         }
     }

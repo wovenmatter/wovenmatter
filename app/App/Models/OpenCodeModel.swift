@@ -91,7 +91,6 @@ final class OpenCodeModel {
     private func preference(_ suffix: String) -> String {
         "wovenmatter.opencode." + (remoteConfiguration.map { "remote." + $0.id.uuidString.lowercased() + "." } ?? "") + suffix
     }
-    var connected: Set<String> { isReady ? [connectionID] : [] }
     var hasServerRegistration: Bool {
         if isBackendProjection { return projectedRegistration }
         if let configuration = remoteConfiguration {
