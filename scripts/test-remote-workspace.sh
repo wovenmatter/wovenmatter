@@ -57,7 +57,8 @@ if [ "${1:-}" = context ] && [ "${2:-}" = inspect ]; then
 fi
 if [ "${1:-}" = version ]; then
   case "${3:-}" in
-    *Platform.Name*) printf '%s\n' "${WOVENMATTER_FAKE_PLATFORM:-Docker Engine - Community}" ;;
+    *Platform.Name*) printf '%s\n' "${WOVENMATTER_FAKE_PLATFORM-Docker Engine - Community}" ;;
+    *Components*) printf '%s\n' "${WOVENMATTER_FAKE_ENGINE_MODULE-}" ;;
     *APIVersion*) printf '1.55\n' ;;
     *) printf '29.7.2\n' ;;
   esac
@@ -120,6 +121,24 @@ jq -e '
   .ready == false
   and (.blockingIssues | map(select(contains("Podman"))) | length) == 1
 ' <<< "$inspection" >/dev/null
+
+inspection="$(
+  PATH="$fake_bin" \
+  WOVENMATTER_OS_RELEASE="$fixture_root/os-release" \
+  WOVENMATTER_FAKE_PLATFORM='' \
+  WOVENMATTER_FAKE_ENGINE_MODULE='github.com/moby/moby/v2' \
+  /bin/bash "$repo_root/scripts/remote-workspace.sh" inspect
+)"
+jq -e '.ready == true' <<< "$inspection" >/dev/null
+
+inspection="$(
+  PATH="$fake_bin" \
+  WOVENMATTER_OS_RELEASE="$fixture_root/os-release" \
+  WOVENMATTER_FAKE_PLATFORM='' \
+  WOVENMATTER_FAKE_ENGINE_MODULE='' \
+  /bin/bash "$repo_root/scripts/remote-workspace.sh" inspect
+)"
+jq -e '.ready == false' <<< "$inspection" >/dev/null
 
 inspection="$(
   PATH="$fake_bin" \

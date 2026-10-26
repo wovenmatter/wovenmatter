@@ -139,11 +139,17 @@ docker_info_value() {
 }
 
 docker_engine_supported() {
-  local platform api major minor
+  local platform api module major minor
   local_docker_endpoint || return 1
   platform="$(docker_exec version --format '{{.Server.Platform.Name}}' 2>/dev/null || true)"
   api="$(docker_exec version --format '{{.Server.APIVersion}}' 2>/dev/null || true)"
-  [[ "$platform" == *"Docker Engine"* ]] || return 1
+  if [[ "$platform" != *"Docker Engine"* ]]; then
+    # Distribution builds may omit the product label. The Engine component's
+    # module identifies the actual Moby daemon; an explicit shim label still fails.
+    [ -z "$platform" ] || return 1
+    module="$(docker_exec version --format '{{range .Server.Components}}{{if eq .Name "Engine"}}{{index .Details "Module"}}{{end}}{{end}}' 2>/dev/null || true)"
+    [ "$module" = 'github.com/moby/moby/v2' ] || return 1
+  fi
   [[ "$api" =~ ^[0-9]+\.[0-9]+$ ]] || return 1
   major="${api%%.*}"
   minor="${api#*.}"
