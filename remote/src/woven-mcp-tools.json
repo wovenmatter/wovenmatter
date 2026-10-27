@@ -2964,6 +2964,11 @@
           "minimum" : 0,
           "type" : "integer"
         },
+        "profile" : {
+          "maxLength" : 32,
+          "pattern" : "^[a-z0-9-]{1,32}$",
+          "type" : "string"
+        },
         "requestID" : {
           "format" : "uuid",
           "type" : "string"

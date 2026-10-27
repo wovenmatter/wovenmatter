@@ -3,7 +3,7 @@ const defaultAgentModule = new URL('../default-agent/src/managed-service.mjs', i
 const { createManagedDefaultAgentService } = await import(existsSync(defaultAgentModule) ? defaultAgentModule.href : new URL('../../default-agent/src/managed-service.mjs', import.meta.url).href)
 const { signInStatuses } = await import(new URL('./sign-in-status.mjs', existsSync(defaultAgentModule) ? defaultAgentModule : new URL('../../default-agent/src/managed-service.mjs', import.meta.url)).href)
 import { databaseOperation } from './database-catalog.mjs'
-import { createProject, deleteProject, ensureScratchDirectory } from './projects.mjs'
+import { createProject, deleteProject, ensureScratchDirectory, linkHostProject, listHostDirectories } from './projects.mjs'
 import { createRuntimeMaintenance, acquireHostLock } from './runtime-maintenance.mjs'
 import { createClientExecution } from './client-execution.mjs'
 import { createRetainedExecutionCapture } from './client-retained-history.mjs'
@@ -14,27 +14,25 @@ import { createDurableACP } from './durable-acp.mjs'
 import { inspectProcesses } from './runtime-inspection.mjs'
 import { createWorkspaceInstances } from './workspace-instances.mjs'
 import { createWorkspaceBrowser, streamBrowserFrames } from './workspace-browser.mjs'
+import { browserSelfTest } from './browser-selftest.mjs'
 import { loadWorkspaceMCPCatalog, validateInput, maximumMCPRequestBytes } from './workspace-mcp.mjs'
+import { runtimeConfiguration as configuration, runtimeHarnessEnvironment } from './config.mjs'
 import { createServer } from 'node:http'
 import { timingSafeEqual, randomUUID, createHash } from 'node:crypto'
-import { readFile, writeFile, mkdir } from 'node:fs/promises'
+import { readFile, writeFile, mkdir, realpath } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
-import { dirname, resolve } from 'node:path'
+import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const modulePath = fileURLToPath(import.meta.url)
-const runningAsService = resolve(process.argv[1] ?? '') === modulePath
-const serviceRoot = resolve(dirname(modulePath), '..')
-const catalogPath = process.env.WOVENMATTER_HARNESS_CATALOG
-  ?? resolve(serviceRoot, 'harnesses/catalog.json')
-const workspaceRoot = process.env.WOVENMATTER_WORKSPACE
-  ?? resolve(process.env.HOME, '.woven-matter')
-const managedDataRoot = process.env.WOVENMATTER_DATA_DIRECTORY ?? resolve(process.env.HOME, '.local/share/wovenmatter/databases')
-const listenHost = process.env.WOVENMATTER_LISTEN_HOST ?? '127.0.0.1'
-const listenPort = parsePositiveInteger(process.env.WOVENMATTER_LISTEN_PORT, 7337)
+// Node resolves module URLs through release symlinks, but preserves argv[1].
+// systemd deliberately launches current/src/server.mjs for atomic activation.
+const entrypointPath = process.argv[1] ? await realpath(resolve(process.argv[1])).catch(() => null) : null
+const runningAsService = entrypointPath === await realpath(modulePath)
+const { catalogPath, workspaceRoot, managedDataRoot, listenHost, listenPort } = configuration
 const apiToken = runningAsService
-  ? requiredEnvironment('WOVENMATTER_API_TOKEN')
-  : process.env.WOVENMATTER_API_TOKEN ?? ''
+  ? validatedAPIToken(configuration.apiToken)
+  : configuration.apiToken
 const apiTokenDigest = createHash('sha256').update(apiToken).digest()
 const catalogDocument = runningAsService
   ? JSON.parse(await readFile(catalogPath, 'utf8'))
@@ -57,7 +55,7 @@ const instances = createWorkspaceInstances({
   isEnabled: async id => await maintenance.isInstalled(id),
 })
 const maintenance = createRuntimeMaintenance({
-  catalog, workspaceRoot, environment: harnessEnvironment, verifiedInstaller,
+  catalog, workspaceRoot, configuration, environment: harnessEnvironment, verifiedInstaller,
   hasActiveRuntime: async id => await instances.hasActiveRuntime(id)
     || taskGateway?.hasActiveRuntime(id) || clientExecution?.hasActiveRuntime(id) || durableACP.hasActiveRuntime(id)
     || [...authenticationSessions.values()].some(s => s.harness.id === id && s.state === 'waiting_for_user'),
@@ -68,7 +66,7 @@ const maintenance = createRuntimeMaintenance({
 const releaseTaskOwner = runningAsService
   ? await acquireHostLock(resolve(workspaceRoot,'.wovenmatter/task-gateway.owner.lock'),harnessEnvironment(),workspaceRoot)
   : null
-const durableACP = createDurableACP({ catalog, workspaceRoot,
+const durableACP = createDurableACP({ catalog, workspaceRoot, runtimeKind: configuration.runtimeKind, configuration,
   environment: harness => harness.id === 'codex' ? harnessRuntimeEnvironment(harness) : harnessEnvironment(),
   isEnabled:async () => taskGateway?.enabled() === true, isHarnessEnabled:id => maintenance.isInstalled(id) })
 const taskGateway = runningAsService ? createTaskGateway({
@@ -82,7 +80,9 @@ const taskGateway = runningAsService ? createTaskGateway({
   onDisable:async () => { await Promise.all([durableACP.stopAll(), defaultAgent.cancelActive(), clientExecution?.cancelActive()]); foregroundDefaultRuns.clear() },
 }) : null
 
-const workspaceBrowser = createWorkspaceBrowser({ profile: resolve(process.env.HOME, '.local/share/wovenmatter/browser') })
+const workspaceBrowser = createWorkspaceBrowser({ profile: configuration.legacyBrowserProfile,
+  profilesRoot: configuration.browserProfilesRoot, runtimeKind: configuration.runtimeKind })
+let browserSelfTestPending
 const browserMCPSchemas = new Map(loadWorkspaceMCPCatalog().filter(tool => ['woven_browser', 'woven_browser_cancel'].includes(tool.name)).map(tool => [tool.name, tool.inputSchema]))
 
 const clientExecution = runningAsService ? createClientExecution({
@@ -249,16 +249,31 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
       } catch (error) { return json(response,200,{success:false,error:error.message,code:controller.signal.aborted?'cancelled':'automation_failed',requestID:input.requestID}) }
       finally {response.off('close',disconnected)}
     }
-    if (url.pathname === '/v1/browser/stream' && request.method === 'GET') {
-      await streamBrowserFrames(workspaceBrowser, url.searchParams.get('tabID'), response); return
+    if (url.pathname === '/v1/browser/selftest' && request.method === 'GET') {
+      browserSelfTestPending ??= browserSelfTest().finally(() => { browserSelfTestPending = undefined })
+      return json(response,200,await browserSelfTestPending)
     }
-    if (url.pathname === '/v1/browser/tabs' && request.method === 'GET') return json(response,200,await workspaceBrowser.tabs())
-    if (url.pathname === '/v1/browser/connect' && request.method === 'POST') return json(response,200,await workspaceBrowser.connect())
-    if (url.pathname === '/v1/browser/actions' && request.method === 'POST') return json(response,200,await workspaceBrowser.actions((await readJSON(request, 65536)).actions))
-    if (url.pathname === '/v1/browser/action' && request.method === 'POST') return json(response,200,await workspaceBrowser.action(await readJSON(request, 131072)))
+    if (url.pathname === '/v1/browser/stream' && request.method === 'GET') {
+      await streamBrowserFrames(workspaceBrowser.forProfile(url.searchParams.get('profile') ?? 'default'), url.searchParams.get('tabID'), response); return
+    }
+    if (url.pathname === '/v1/browser/tabs' && request.method === 'GET') {
+      const profile = url.searchParams.get('profile') ?? 'default'
+      return json(response,200,{...await workspaceBrowser.forProfile(profile).tabs(),...await workspaceBrowser.profiles(),profile})
+    }
+    if (url.pathname === '/v1/browser/connect' && request.method === 'POST') {
+      return json(response,200,await workspaceBrowser.forProfile(url.searchParams.get('profile') ?? 'default').connect())
+    }
+    if (url.pathname === '/v1/browser/actions' && request.method === 'POST') {
+      const body = await readJSON(request, 65536)
+      return json(response,200,await workspaceBrowser.forProfile(url.searchParams.get('profile') ?? body.profile ?? 'default').actions(body.actions))
+    }
+    if (url.pathname === '/v1/browser/action' && request.method === 'POST') {
+      const body = await readJSON(request, 131072)
+      return json(response,200,await workspaceBrowser.forProfile(url.searchParams.get('profile') ?? body.profile ?? 'default').action(body))
+    }
     if (url.pathname === '/v1/browser/frame' && request.method === 'POST') {
       const body = await readJSON(request, 1024)
-      return json(response,200,await workspaceBrowser.frame(body.tabID, body.previousFrameID))
+      return json(response,200,await workspaceBrowser.forProfile(url.searchParams.get('profile') ?? body.profile ?? 'default').frame(body.tabID, body.previousFrameID))
     }
 
     if (url.pathname === '/v1/task-gateway' && request.method === 'GET') return json(response,200,taskGateway.status())
@@ -305,6 +320,16 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
     }
 
 
+    if (request.method === 'GET' && url.pathname === '/v1/directories') {
+      if (!administrator) return json(response, 403, { error: 'administrator_required' })
+      if (configuration.runtimeKind !== 'host') return json(response, 409, { error: 'host_workspace_required' })
+      return json(response, 200, await listHostDirectories(url.searchParams.get('path') ?? workspaceRoot))
+    }
+    if (request.method === 'POST' && url.pathname === '/v1/projects/link') {
+      if (!administrator) return json(response, 403, { error: 'administrator_required' })
+      if (configuration.runtimeKind !== 'host') return json(response, 409, { error: 'host_workspace_required' })
+      return json(response, 200, await linkHostProject((await readJSON(request, 8192)).path))
+    }
     if (request.method === 'POST' && url.pathname === '/v1/projects') {
       const body = await readJSON(request)
       return json(response, 201, await createProject(workspaceRoot, body.name, { reuseExisting: body.reuseExisting === true }))
@@ -346,13 +371,19 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
         status: 'ready',
         version: '0.1.0',
         workspaceRoot,
+        runtimeKind: configuration.runtimeKind,
+        serviceFingerprint: configuration.serviceFingerprint,
+        databasesDirectory: managedDataRoot,
+        attachmentsDirectory: resolve(workspaceRoot, '.wovenmatter/attachments'),
+        dataRoot: configuration.dataRoot,
+        accessMode: configuration.accessMode,
         harnessCount: catalog.size,
       })
     }
 
     if (request.method === 'GET' && url.pathname === '/v1/harnesses') {
       const statuses = await Promise.all([...catalog.values()].map(harnessStatus))
-      statuses.unshift({ id: 'default_agent', displayName: 'Pi Durable', transport: 'woven-default-agent', capabilities: ['conversations', 'resume'], state: 'ready', installationStatus: 'installed', authenticationStatus: 'configured_in_settings', transportStatus: 'ready', setupMethods: [], detectedProviders: [] })
+      statuses.unshift({ id: 'default_agent', displayName: 'Pi Durable', transport: 'woven-default-agent', capabilities: ['conversations', 'resume'], state: 'ready', source: 'managed', path: process.execPath, installationStatus: 'installed', authenticationStatus: 'configured_in_settings', transportStatus: 'ready', setupMethods: [], detectedProviders: [] })
       return json(response, 200, { harnesses: statuses })
     }
 
@@ -464,11 +495,13 @@ function authorized(request) {
 }
 
 async function harnessStatus(harness) {
+  const cli = await maintenance.location(harness.cliCommand)
   if (harness.transport === 'opencode-v2') {
     const inventory = await maintenance.inventory(harness)
     const instance = await instances.status('opencode')
     return {
       id: harness.id, displayName: harness.displayName, transport: harness.transport,
+      source: cli?.source ?? 'missing', path: cli?.path ?? null,
       capabilities: harness.capabilities, state: inventory.installed ? ((instance.state === 'running') ? 'ready' : 'transport_unavailable') : 'cli_missing',
       installationStatus: inventory.installed ? 'installed' : 'cli_missing',
       authenticationStatus: 'unknown', transportStatus: (instance.state === 'running') ? 'ready' : 'unavailable',
@@ -498,6 +531,7 @@ async function harnessStatus(harness) {
   }
   return {
     id: harness.id,
+    source: cli?.source ?? 'missing', path: cli?.path ?? null,
     displayName: harness.displayName,
     transport: harness.transport,
     capabilities: harness.capabilities,
@@ -526,9 +560,9 @@ export function probeHarnessTransport(harness, timeoutMilliseconds, spawnProcess
           id: probeID,
           method: 'initialize',
           params: {
-            // Match the stable session API used by local and remote clients;
-            // Claude ACP 0.95 routes a version 2 offer to its draft v2 API.
-            protocolVersion: harness.id === 'claude_code' ? 1 : 2,
+            // Codex ACP 2.x is the adapter release, not ACP wire protocol v2.
+            // Both adapters use the stable session API implemented by clients.
+            protocolVersion: ['codex', 'claude_code'].includes(harness.id) ? 1 : 2,
             clientCapabilities: {},
             clientInfo: { name: 'Woven Matter Readiness Probe', version: '1.0' },
           },
@@ -573,7 +607,10 @@ export function probeHarnessTransport(harness, timeoutMilliseconds, spawnProcess
     // A CLI can exit before the initialize write reaches its pipe. Stream errors
     // are separate from ChildProcess errors and must not terminate the service.
     child.stdin.on('error', () => finish(false, 'The transport input failed before readiness.'))
-    child.once('spawn', () => child.stdin.end(`${JSON.stringify(request)}\n`))
+    // ACP is a bidirectional session transport. Codex closes its pending
+    // initialization when the client sends EOF, so hold stdin until readiness
+    // settles; finish() closes it and bounds the process lifetime above.
+    child.once('spawn', () => child.stdin.write(`${JSON.stringify(request)}\n`))
     child.once('error', () => finish(false, 'The transport process could not start.'))
     child.once('close', (code) => {
       if (output.trim()) inspectLine(output.trim())
@@ -894,6 +931,8 @@ function commandSucceeded(command, timeoutMilliseconds) {
 }
 
 async function installerPreview(harness) {
+  const adapter = await maintenance.hostAdapterPreview(harness)
+  if (adapter) return adapter
   if (harness.install.kind === 'npm-global') return maintenance.npmPreview(harness)
   const installer = await downloadInstaller(harness)
   return {
@@ -1068,12 +1107,7 @@ function awaitWithAbort(promise, signal) {
 }
 
 function harnessEnvironment() {
-  return {
-    ...process.env,
-    HOME: process.env.HOME,
-    PATH: `${resolve(process.env.HOME, '.local/bin')}:${resolve(process.env.HOME, '.npm-global/bin')}:${process.env.PATH}`,
-    WOVENMATTER_WORKSPACE: workspaceRoot,
-  }
+  return runtimeHarnessEnvironment(process.env, configuration)
 }
 
 async function readJSON(request, maximumBytes = 1_048_576) {
@@ -1153,17 +1187,11 @@ function json(response, statusCode, value) {
   response.end(body)
 }
 
-function requiredEnvironment(name) {
-  const value = process.env[name]
+function validatedAPIToken(value) {
   if (!value || value.length < 32 || value.length > 256 || /[^A-Za-z0-9+\/=_-]/.test(value)) {
-    throw new Error(`${name} must be a 32-256 character random credential`)
+    throw new Error('WOVENMATTER_API_TOKEN must be a 32-256 character random credential')
   }
   return value
-}
-
-function parsePositiveInteger(value, fallback) {
-  const parsed = Number.parseInt(value ?? '', 10)
-  return Number.isInteger(parsed) && parsed > 0 && parsed <= 65535 ? parsed : fallback
 }
 
 function shellQuote(value) {

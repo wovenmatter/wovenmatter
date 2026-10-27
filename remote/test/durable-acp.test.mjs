@@ -8,6 +8,7 @@ import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { EventEmitter } from 'node:events'
 import { createDurableACP } from '../src/durable-acp.mjs'
+import { loadRuntimeConfiguration } from '../src/config.mjs'
 
 test('remote stdio relay executes its fail-closed startup through a symlink', async t => {
   const root = await mkdtemp(join(tmpdir(), 'durable-relay-entrypoint-'))
@@ -380,4 +381,35 @@ test('session shutdown releases waiting polls',async t=>{
   await f.relay.stopAll()
   assert.equal(f.relay.hasActiveRuntime('test'), false)
   assert.equal((await waiting).state,'stopped')
+})
+
+test('native host durable sessions permit linked external folders while containers retain containment', async t => {
+  const external = await mkdtemp(join(tmpdir(), 'woven-linked-project-'))
+  t.after(() => rm(external, { recursive: true, force: true }))
+  for (const runtimeKind of ['container', 'host']) {
+    const f = await fixture(t)
+    const relay = createDurableACP({ ...f.options, runtimeKind })
+    const body = { channelID: 'external-project', harnessID: 'test', cwd: external }
+    const attaching = relay.handle('POST', '/v1/durable-acp/attach', body)
+    if (runtimeKind === 'container') {
+      await assert.rejects(attaching, /outside this workspace/)
+      assert.equal(f.launches(), 0)
+    } else {
+      assert.equal((await attaching).state, 'running')
+      assert.equal(f.launches(), 1)
+    }
+    await relay.stopAll()
+  }
+})
+
+test('full-root durable relay enforces its workspace permission on stale client settings', async t => {
+  const f = await fixture(t)
+  const relay = createDurableACP({ ...f.options, runtimeKind: 'host',
+    configuration: loadRuntimeConfiguration({ WOVENMATTER_RUNTIME_KIND: 'host', WOVENMATTER_ACCESS_MODE: 'fullRoot' }),
+    catalog: new Map([['codex', { transport: 'acp', command: 'codex-acp', arguments: [] }]]) })
+  await relay.handle('POST', '/v1/durable-acp/attach', { channelID: 'root-session', harnessID: 'codex', cwd: f.options.workspaceRoot })
+  await relay.handle('POST', '/v1/durable-acp/message', { channelID: 'root-session', deliveryID: 'config',
+    message: { jsonrpc: '2.0', id: 1, method: 'session/set_config_option', params: { sessionId: 'native', configId: 'mode', value: 'ask' } } })
+  assert.equal(JSON.parse(f.received()).params.value, 'agent-full-access')
+  await relay.stopAll()
 })

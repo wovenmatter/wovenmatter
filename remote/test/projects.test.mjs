@@ -1,9 +1,31 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, readdir, writeFile, readFile, rm, realpath, symlink } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, writeFile, readFile, rm, realpath, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createProject, deleteProject, ensureScratchDirectory, scratchFolderName } from '../src/projects.mjs'
+import { createProject, deleteProject, ensureScratchDirectory, scratchFolderName, linkHostProject, listHostDirectories } from '../src/projects.mjs'
+
+test('host directory discovery canonicalizes linked external projects and bounds listing results', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'woven-directory-browser-'))
+  const external = await mkdtemp(join(tmpdir(), 'woven-existing-repository-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  t.after(() => rm(external, { recursive: true, force: true }))
+  await mkdir(join(root, 'beta')); await mkdir(join(root, 'alpha'))
+  await writeFile(join(root, 'file.txt'), 'not a directory')
+  await symlink(external, join(root, 'linked'))
+  await symlink(join(root, 'missing'), join(root, 'stale'))
+  const canonical = await realpath(root)
+  const result = await listHostDirectories(root)
+  assert.equal(result.path, canonical)
+  assert.deepEqual(result.directories.map(item => item.name), ['alpha', 'beta', 'linked'])
+  assert.equal(result.directories.find(item => item.name === 'linked').path, await realpath(external))
+  assert.equal(result.truncated, false)
+  assert.deepEqual(await linkHostProject(join(root, 'linked')), { path: await realpath(external) })
+  assert.equal((await listHostDirectories(root, { limit: 2 })).truncated, true)
+  assert.equal((await listHostDirectories(root, { limit: 1, scanLimit: 1 })).truncated, true)
+  for (const path of ['relative/path', '\0', join(root, 'file.txt'), join(root, 'missing')]) await assert.rejects(linkHostProject(path), { statusCode: 400 })
+  assert.equal(await readFile(join(root, 'file.txt'), 'utf8'), 'not a directory')
+})
 
 test('physical deletion only removes a managed direct project root', async t => {
   const root = await mkdtemp(join(tmpdir(), 'managed-project-delete-'))

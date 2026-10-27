@@ -14,7 +14,7 @@ struct SettingsHarnessAccounts: View {
                 SettingsNote(sharingDetail)
             }
             if scope == "global" || scope == "local" {
-                SettingsCard(title: runtimeKind.displayName, detail: "Local agent workspace") {
+                SettingsCard(title: runtimeKind.displayName, detail: "Local workspace") {
                     SettingsHarnessSignInControl(model: model, runtimeKind: runtimeKind)
                     SettingsLocalRuntimeInventoryRow(model: model, runtimeKind: runtimeKind)
                     if model.runtimeInventories[runtimeKind]?.isInstalled == false {
@@ -80,11 +80,16 @@ struct SettingsRemoteHarnessSoftware: View {
                 if let runtime {
                     ForEach(runtime.components) { component in
                         SettingsValueRow(label: component.displayName, value: component.installedVersion ?? "Not installed")
+                        if workspace.kind == .host, component.source == "system", let path = component.path {
+                            SettingsNote("Using \(path) (installed on host)")
+                        }
                     }
                 }
                 HStack {
-                    if runtime?.installed == true {
+                    if runtime?.installed == true, runtime?.source != "system" {
                         SettingsRemoteRuntimeUpdateButton(model: model, harness: harness, configuration: workspace)
+                    } else if runtime?.installed == true {
+                        Text("Managed on host").font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
                     } else {
                         Button(busy ? "Working…" : "Install") {
                             model.prepareHarnessAction("install", harness: harness, configuration: workspace)

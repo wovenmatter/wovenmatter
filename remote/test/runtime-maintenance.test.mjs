@@ -1,9 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm, mkdir, writeFile, symlink } from 'node:fs/promises'
+import { mkdtemp, rm, mkdir, readFile, writeFile, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { createRuntimeMaintenance, sanitize } from '../src/runtime-maintenance.mjs'
+import { loadRuntimeConfiguration } from '../src/config.mjs'
 
 
 
@@ -12,6 +13,7 @@ import { createRuntimeMaintenance, sanitize } from '../src/runtime-maintenance.m
 
 
 const registryMetadata = version => ({ versions: { [version]: {} }, 'dist-tags': { latest: version } })
+const npmInvocation = (command, action) => command.startsWith('npm ' + action) || command.includes("/npm-cli.js' " + action)
 
 const opencode = {id:'opencode',displayName:'OpenCode',command:'opencode',cliCommand:'opencode',install:{kind:'npm-global',package:'@opencode/cli@2'}}
 async function fixture(t, overrides = {}) {
@@ -25,7 +27,7 @@ async function fixture(t, overrides = {}) {
       if(command==='ps -eo pid=,args=') return {code:0,output:''}
       if(command.startsWith('command -v')) return {code:installed?0:1,output:root+'/opencode'}
       if(command.endsWith('--version')) return {code:0,output:'opencode 2.1.0'}
-      if(command.startsWith('npm install')) { executions++; installed=true; return {code:0,output:'installed'} }
+      if(npmInvocation(command,'install')) { executions++; installed=true; return {code:0,output:'installed'} }
       throw Error('Unexpected command: '+command)
     },fetchImplementation:async()=>{requests++;return {ok:true,json:async()=>registryMetadata('2.1.1')}},...overrides}
   return {root,service:createRuntimeMaintenance(options),options,calls,install:()=>{installed=true},get executions(){return executions},get requests(){return requests}}
@@ -234,4 +236,124 @@ test('OpenCode updates refuse active canonical and compatibility-alias processes
     assert.equal(result.operation.error, 'runtime_active_stop_conversations_or_server_first', process)
     assert.equal(installs, 0, process)
   }
+})
+
+test('host reuses preexisting local installs as system-owned and refuses their updates', async t => {
+  const f = await fixture(t)
+  f.install()
+  const configuration = loadRuntimeConfiguration({ HOME: f.root, WOVENMATTER_RUNTIME_KIND: 'host' })
+  const service = createRuntimeMaintenance({ ...f.options, configuration })
+  const checked = await service.inventory(opencode, true)
+  assert.equal(checked.source, 'system')
+  assert.equal(checked.components[0].source, 'system')
+  assert.equal(checked.updateAvailable, false)
+  assert.equal(checked.components[0].updateAvailable, false)
+  await service.start(opencode, 'update', { confirmed: true, packageSpec: '@opencode/cli@2.1.1' })
+  const result = await finished(service)
+  assert.equal(result.operation.error, 'system_install_update_forbidden')
+  assert.equal(f.executions, 0)
+})
+
+test('host records only Woven installs as managed and uses its configured operation lock', async t => {
+  const f = await fixture(t), locks = []
+  const configuration = loadRuntimeConfiguration({ HOME: f.root, WOVENMATTER_RUNTIME_KIND: 'host', WOVENMATTER_STATE_DIRECTORY: resolve(f.root, 'run') })
+  const service = createRuntimeMaintenance({ ...f.options, configuration, acquireLock: async path => { locks.push(path); return () => {} } })
+  await service.start(opencode, 'install', { confirmed: true, packageSpec: '@opencode/cli@2.1.1' })
+  const result = await finished(service)
+  assert.equal(result.operation.status, 'succeeded')
+  assert.equal(result.source, 'managed')
+  assert.deepEqual(locks, [resolve(f.root, 'run/runtime-operation.lock')])
+  const persisted = JSON.parse(await readFile(resolve(f.root, '.wovenmatter/runtime-preferences.json'), 'utf8'))
+  assert.deepEqual(persisted.opencode.managedComponents.runtime, { path: resolve(f.root, 'opencode'), target: resolve(f.root, 'opencode') })
+  assert.equal((await createRuntimeMaintenance({ ...f.options, configuration }).inventory(opencode)).source, 'managed')
+})
+
+test('host installs a missing adapter alongside an active system CLI and blocks active managed adapter updates', async t => {
+  const root = await mkdtemp(resolve(tmpdir(), 'woven-host-adapter-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const configuration = loadRuntimeConfiguration({ HOME: root, WOVENMATTER_RUNTIME_KIND: 'host' })
+  const h = { id: 'codex', displayName: 'Codex', command: 'codex-acp', cliCommand: 'codex', adapterPackage: '@agentclientprotocol/codex-acp', minimumAdapterVersion: '2.3.0', install: { kind: 'official-script' } }
+  const adapter = resolve(root, '.local/lib/node_modules/@agentclientprotocol/codex-acp')
+  const dependency = resolve(adapter, 'node_modules/@openai/codex')
+  const bin = resolve(root, '.local/bin/codex-acp')
+  let installed = false, scripts = 0, activeAdapter = false
+  const calls = []
+  const service = createRuntimeMaintenance({ catalog: new Map([['codex', h]]), workspaceRoot: root, configuration,
+    environment: () => ({ HOME: root }), acquireLock: async () => () => {},
+    verifiedInstaller: async () => { scripts++; throw new Error('system CLI must not be reinstalled') },
+    fetchImplementation: async () => ({ ok: true, json: async () => registryMetadata('2.3.1') }),
+    execute: async command => {
+      calls.push(command)
+      if (command === 'ps -eo pid=,args=') return { code: 0, output: '5471 /usr/bin/codex resume\n' + (activeAdapter ? '6001 node ' + resolve(adapter, 'bin/cli.js') : '') }
+      if (command.startsWith('command -v')) return command.includes("'codex-acp'") ? { code: installed ? 0 : 1, output: installed ? bin : '' } : { code: 0, output: '/usr/bin/codex' }
+      if (command.endsWith('--version')) return { code: 0, output: command.includes('codex-acp') ? '2.3.1' : '0.154.0' }
+      if (npmInvocation(command, 'install')) {
+        assert.equal(command, `'${process.execPath}' '${configuration.serviceRoot}/tooling/lib/node_modules/npm/bin/npm-cli.js' install --global --prefix "$HOME/.local" '@agentclientprotocol/codex-acp@2.3.1'`)
+        await mkdir(resolve(adapter, 'bin'), { recursive: true }); await mkdir(resolve(dependency, 'bin'), { recursive: true }); await mkdir(resolve(root, '.local/bin'), { recursive: true })
+        await writeFile(resolve(adapter, 'package.json'), JSON.stringify({ name: h.adapterPackage, version: '2.3.1' }))
+        await writeFile(resolve(adapter, 'bin/cli.js'), '')
+        await writeFile(resolve(dependency, 'package.json'), JSON.stringify({ name: '@openai/codex', version: '0.154.0' }))
+        await symlink(resolve(adapter, 'bin/cli.js'), bin)
+        installed = true
+        return { code: 0, output: 'adapter installed' }
+      }
+      throw new Error('Unexpected command: ' + command)
+    },
+  })
+  const preview = await service.hostAdapterPreview(h)
+  assert.equal(preview.packageSpec, '@agentclientprotocol/codex-acp@2.3.1')
+  assert.equal(preview.verification, 'npm-registry-integrity')
+  await service.start(h, 'install', { confirmed: true, packageSpec: preview.packageSpec })
+  const result = await finished(service)
+  assert.equal(result.operation.status, 'succeeded')
+  assert.equal(result.components.find(c => c.id === 'runtime').source, 'managed')
+  assert.equal(result.components.find(c => c.id === 'signin').source, 'system')
+  assert.equal(scripts, 0)
+  assert.equal(calls.filter(command => npmInvocation(command, 'install')).length, 1)
+  activeAdapter = true
+  await service.start(h, 'update', { confirmed: true, packageSpec: preview.packageSpec })
+  const blocked = await finished(service)
+  assert.equal(blocked.operation.error, 'runtime_active_stop_conversations_or_server_first')
+  assert.equal(calls.filter(command => npmInvocation(command, 'install')).length, 1)
+})
+
+test('host keeps service-owned active sessions fenced and refuses unmanaged adapter updates', async t => {
+  const active = await fixture(t, { hasActiveRuntime: async () => true })
+  const protectedService = createRuntimeMaintenance({ ...active.options,
+    configuration: loadRuntimeConfiguration({ HOME: active.root, WOVENMATTER_RUNTIME_KIND: 'host' }) })
+  await protectedService.start(opencode, 'install', { confirmed: true, packageSpec: '@opencode/cli@2.1.1' })
+  assert.equal((await finished(protectedService)).operation.error, 'runtime_active_stop_conversations_or_server_first')
+  assert.equal(active.executions, 0)
+  const h = { id: 'codex', displayName: 'Codex', command: 'codex-acp', cliCommand: 'codex', adapterPackage: '@agentclientprotocol/codex-acp', minimumAdapterVersion: '2.3.0', install: { kind: 'official-script' } }
+  let installs = 0
+  const other = await fixture(t, { catalog: new Map([['codex', h]]), execute: async command => {
+    if (command.startsWith('command -v')) return { code: 0, output: command.includes('codex-acp') ? '/usr/bin/codex-acp' : '/usr/bin/codex' }
+    if (command.endsWith('--version')) return { code: 0, output: '2.3.1' }
+    if (command === 'ps -eo pid=,args=') return { code: 0, output: '5471 /usr/bin/codex-acp' }
+    if (command.startsWith('npm install')) { installs++; return { code: 0, output: '' } }
+    throw new Error('Unexpected command: ' + command)
+  } })
+  const unmanaged = createRuntimeMaintenance({ ...other.options,
+    configuration: loadRuntimeConfiguration({ HOME: other.root, WOVENMATTER_RUNTIME_KIND: 'host' }) })
+  await unmanaged.start(h, 'update', { confirmed: true, packageSpec: '@agentclientprotocol/codex-acp@2.3.1' })
+  assert.equal((await finished(unmanaged)).operation.error, 'system_install_update_forbidden')
+  assert.equal(installs, 0)
+})
+
+test('host installer rc writes fail the operation and restore the original shell setup', async t => {
+  const f = await fixture(t)
+  await writeFile(resolve(f.root, '.bashrc'), 'existing configuration\n')
+  const execute = f.options.execute
+  const service = createRuntimeMaintenance({ ...f.options,
+    configuration: loadRuntimeConfiguration({ HOME: f.root, WOVENMATTER_RUNTIME_KIND: 'host' }),
+    execute: async (...arguments_) => {
+      const result = await execute(...arguments_)
+      if (npmInvocation(arguments_[0], 'install')) await writeFile(resolve(f.root, '.bashrc'), 'unwanted installer changes\n')
+      return result
+    },
+  })
+  await service.start(opencode, 'install', { confirmed: true, packageSpec: '@opencode/cli@2.1.1' })
+  const result = await finished(service)
+  assert.equal(result.operation.error, 'installer_modified_shell_config')
+  assert.equal(await readFile(resolve(f.root, '.bashrc'), 'utf8'), 'existing configuration\n')
 })

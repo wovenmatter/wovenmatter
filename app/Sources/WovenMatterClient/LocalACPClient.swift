@@ -804,6 +804,7 @@ public actor LocalACPClient {
                 )
                 sessionID = existingSessionID
                 captureSessionConfiguration(from: loaded)
+                try await applyWorkspacePermission()
                 try await reconcileBuiltInNativeHistory()
                 return LocalACPInitializedSession(
                     sessionID: existingSessionID,
@@ -952,6 +953,7 @@ public actor LocalACPClient {
         }
         try await notificationTask?.value
         captureSessionConfiguration(from: response)
+        try await applyWorkspacePermission()
         try await reconcileBuiltInNativeHistory()
         return LocalACPInitializedSession(
             sessionID: created,
@@ -964,6 +966,18 @@ public actor LocalACPClient {
         configuration
     }
 
+    /// Full root is a workspace policy. Confirm its native ACP permission
+    /// before the first prompt, including when loading a persisted session.
+    /// A provider clamp or an unsupported adapter remains a visible failure.
+    private func applyWorkspacePermission() async throws {
+        guard [.codex, .claudeCode].contains(runtimeKind), let enforcedWorkspacePermission else { return }
+        _ = try await setSessionPermission(enforcedWorkspacePermission)
+    }
+
+    private var enforcedWorkspacePermission: String? {
+        process.environment?["WOVENMATTER_HOST_ACCESS_MODE"] == "fullRoot" ? requestedPermission : nil
+    }
+
     public func setResumePermissionHandler(_ handler: @escaping PermissionHandler) {
         resumePermissionHandler = handler
     }
@@ -974,6 +988,7 @@ public actor LocalACPClient {
     }
 
     public func setSessionPermission(_ permission: String) async throws -> LocalACPSessionConfiguration {
+        let permission = enforcedWorkspacePermission ?? permission
         guard let sessionID else { throw LocalACPClientError.sessionNotInitialized }
         let supportedOptions = configuration.permissionOptions
         guard !supportedOptions.isEmpty else {
@@ -1129,6 +1144,7 @@ public actor LocalACPClient {
         dispatchFence: AgentDispatchFence? = nil
     ) async throws -> LocalACPStopReason {
         try dispatchFence?.check()
+        try await applyWorkspacePermission()
         sessionCancellationRequested = false
         return try await beginPrompt(
             input,
@@ -1154,6 +1170,7 @@ public actor LocalACPClient {
         dispatchFence: AgentDispatchFence? = nil
     ) async throws -> LocalACPActiveInputReceipt {
         try dispatchFence?.check()
+        try await applyWorkspacePermission()
         guard let sessionID else {
             throw LocalACPClientError.sessionNotInitialized
         }

@@ -2,7 +2,7 @@ import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/cli
 import { randomUUID } from 'node:crypto';
 import { Type } from 'typebox';
 import { validateMCPConnection } from './mcp-context.mjs';
-import { prepareHTMLTool } from '../../harnesses/mcp/html-resources.mjs';
+import { prepareHTMLTool } from './html-resources.mjs';
 
 // App connection material is supplied by the native execution owner, never by
 // model arguments, workspace configuration, shell environment or saved history.

@@ -6,7 +6,7 @@ import { cp, mkdtemp, mkdir, readFile, readdir, realpath, rename, rm, symlink, w
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { resolveSDKRuntime, sdkStatus, checkSDKUpdates, updateSDK } from '../src/sdk-management.mjs';
 
 // Fixtures follow the bundled declarations, which are the updater's policy.
@@ -75,6 +75,42 @@ test('a nested helper fix supersedes an active SDK generation without removing t
   assert.equal(await realpath(runtime.root), await realpath(bundle));
   assert.equal(runtime.generation, 'bundled-' + runtime.base);
   assert.equal(await readFile(join(generation, 'src/executor/broker.mjs'), 'utf8'), 'export const corrected = false;');
+});
+
+test('a src-only staged SDK overlay initializes the actual engine and embeds HTML images without sibling harnesses', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'woven-sdk-real-overlay-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const stage = join(root, 'sdk-runtime/generations/.staging-' + randomUUID());
+  await mkdir(stage, { recursive: true });
+  await cp(new URL('../src/', import.meta.url), join(stage, 'src'), { recursive: true });
+  await cp(new URL('../package.json', import.meta.url), join(stage, 'package.json'));
+  await symlink(fileURLToPath(new URL('../node_modules/', import.meta.url)), join(stage, 'node_modules'), 'dir');
+  await assert.rejects(readFile(join(stage, '../../harnesses/mcp/html-resources.mjs')), { code: 'ENOENT' });
+  const source = `
+    import assert from 'node:assert/strict';
+    import { mkdir, writeFile } from 'node:fs/promises';
+    import { resolve } from 'node:path';
+    globalThis.fetch = async () => { throw Error('Unexpected network request from offline SDK verification'); };
+    const { DefaultAgentEngine } = await import('./src/engine.mjs');
+    const directory = resolve('workspace');
+    await mkdir(directory);
+    const engine = await new DefaultAgentEngine({ cwd: directory, directory,
+      claude: { models: [], loadModels: async () => {} }, config: { providers: ['openai'] } }).initialize();
+    assert.ok(engine.runtime);
+    const { prepareHTMLTool } = await import('./src/html-resources.mjs');
+    const image = resolve(directory, 'overlay image.svg');
+    await writeFile(image, '<svg xmlns="http://www.w3.org/2000/svg"/>');
+    const prepared = await prepareHTMLTool('woven_html_render', { html: '<img src="' + image + '">' });
+    assert.match(prepared.arguments.html, /data:image\\/svg\\+xml;base64,/);
+    assert.deepEqual(prepared.missingImages, []);
+    console.log(JSON.stringify({ initialized: true, embeddedImage: true }));
+  `;
+  const { stdout } = await promisify(execFile)(process.execPath, ['--input-type=module', '--eval', source], {
+    cwd: stage, timeout: 30000, killSignal: 'SIGKILL', maxBuffer: 8192,
+    env: { PATH: process.env.PATH, HOME: join(root, 'home'),
+      WOVENMATTER_INSTRUCTIONS_FILE: fileURLToPath(new URL('../../harnesses/woven-instructions.txt', import.meta.url)) },
+  });
+  assert.deepEqual(JSON.parse(stdout), { initialized: true, embeddedImage: true });
 });
 
 test('no compatible release or a cancelled update leaves the active generation unchanged', async t => {

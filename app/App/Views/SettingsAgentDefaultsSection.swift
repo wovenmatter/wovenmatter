@@ -181,7 +181,7 @@ struct SettingsAgentDefaultsSection: View {
         stored = SessionSelections(); resolved = SessionSelections()
         guard scopeAvailable else {
             defaultsReady = true
-            error = "The local agent workspace is unavailable. Connect it before editing its defaults."
+            error = "The local workspace is unavailable. Connect it before editing its defaults."
             return
         }
         do {

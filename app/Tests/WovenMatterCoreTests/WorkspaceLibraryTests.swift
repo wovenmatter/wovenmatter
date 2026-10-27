@@ -196,7 +196,8 @@ struct WorkspaceLibraryTests {
     let f = try await Fixture()
     defer { f.close() }
     let chat = try await f.session()
-    let configuration = RemoteWorkspaceConfiguration(name: "Server", workspaceID: "test", hostName: "host.invalid")
+    let configuration = RemoteWorkspaceConfiguration(name: "Server", workspaceID: "test", hostName: "host.invalid",
+      kind: .host, dataRoot: "/srv/wovenmatter-test", workspaceRoot: "/srv/wovenmatter-test/workspace")
     try await f.db.write { connection in try connection.transaction {
       try connection.toolsExecuteUnlocked(
         "UPDATE desktop_local_acp_sessions SET remote_workspace_id=? WHERE conversation_id=?",
@@ -208,7 +209,8 @@ struct WorkspaceLibraryTests {
       database: f.db,
       remoteFiles: .init(runner: { destination, command, input in
         #expect(destination == "host.invalid")
-        #expect(command.contains("wovenmatter-test"))
+        #expect(command.contains("/srv/wovenmatter-test/current/bin/wm-exec"))
+        #expect(!command.contains("docker exec"))
         #expect(input == nil)
         return bytes
       }))
@@ -217,7 +219,7 @@ struct WorkspaceLibraryTests {
     #expect(unavailable.storage == .unavailable)
     try await service.retry(id: unavailable.id)
     try await service.synchronize(
-      locations: [.init(conversationID: chat, name: "Server", root: "/home/.woven-matter")],
+      locations: [.init(conversationID: chat, name: "Server", root: "/srv/wovenmatter-test/workspace")],
       remoteWorkspace: { _ in configuration })
     let item = try await #require(f.db.libraryItems().first { $0.sender == .agent })
     #expect(item.storage == .retained)

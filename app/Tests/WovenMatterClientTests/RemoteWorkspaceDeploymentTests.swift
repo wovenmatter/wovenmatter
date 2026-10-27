@@ -5,12 +5,107 @@ import Testing
 struct RemoteWorkspaceDeploymentTests {
     private func fixture() throws -> URL {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        for file in ["remote/Dockerfile", "remote/build-image.sh", "remote/entrypoint.sh", "remote/package.json", "remote/src/service.mjs", "remote/security/backports.json", "remote/security/patches/repair.patch", "remote/npm-runtime/package.json", "remote/npm-runtime/package-lock.json", "harnesses/catalog.json", "default-agent/package.json", "default-agent/package-lock.json", "default-agent/src/agent.mjs"] {
+        for file in ["remote/Dockerfile", "remote/build-image.sh", "remote/entrypoint.sh", "remote/package.json", "remote/src/service.mjs", "remote/security/backports.json", "remote/security/patches/repair.patch", "remote/npm-runtime/package.json", "remote/npm-runtime/package-lock.json", "remote/host/runtime-versions.json", "remote/host/build-bundle.sh", "scripts/remote-host.sh", "harnesses/catalog.json", "default-agent/package.json", "default-agent/package-lock.json", "default-agent/src/agent.mjs", "default-agent/.node-version"] {
             let url = root.appending(path: file)
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             try Data(file.utf8).write(to: url)
         }
         return root
+    }
+
+    private func hostFixture() throws -> URL {
+        let root = try fixture()
+        try Data(#"{"nodeVersion":"26.12.1","playwrightVersion":"1.64.1"}"#.utf8).write(to: root.appending(path: "remote/host/runtime-versions.json"))
+        try Data("26.12.1\n".utf8).write(to: root.appending(path: "default-agent/.node-version"))
+        try Data(#"{"packages":{"node_modules/playwright-core":{"version":"1.64.1"}}}"#.utf8).write(to: root.appending(path: "default-agent/package-lock.json"))
+        return root
+    }
+
+    @Test func hostFingerprintTracksNativeInstallerRuntimeAndService() throws {
+        let root = try fixture(); defer { try? FileManager.default.removeItem(at: root) }
+        let originalContainer = try RemoteWorkspaceDeployment(root: root).fingerprint
+        for path in ["remote/host/runtime-versions.json", "remote/host/build-bundle.sh", "scripts/remote-host.sh", "default-agent/.node-version"] {
+            let before = try RemoteWorkspaceDeployment(root: root, kind: .host).fingerprint
+            try Data("updated host input".utf8).write(to: root.appending(path: path))
+            #expect(try RemoteWorkspaceDeployment(root: root, kind: .host).fingerprint != before)
+            #expect(try RemoteWorkspaceDeployment(root: root).fingerprint == originalContainer)
+        }
+    }
+
+    @Test func hostUploadCarriesTokenOnlyOnStdinAndUsesNativeScript() async throws {
+        let root = try hostFixture(); defer { try? FileManager.default.removeItem(at: root) }
+        let token = "fixture-secret-never-in-command"
+        let client = RemoteWorkspaceSSHClient(runner: { _, _, _ in
+            Issue.record("Host deployment should stream its bundle using the streaming runner")
+            return Data()
+        }, scriptLoader: { Data("container-lifecycle".utf8) }, deploymentRoot: root,
+        streamingRunner: { destination, command, input, progress in
+            #expect(destination == "alice@host.invalid")
+            #expect(command.contains("host-lifecycle"))
+            #expect(!command.contains("container-lifecycle") && !command.contains(token))
+            #expect(command.contains("'install' 'native-fixture' '7337' 'fullRoot'"))
+            let input = try #require(input)
+            #expect(input.starts(with: Data((token + "\n").utf8)))
+            let archive = Data(input.dropFirst(token.utf8.count + 1))
+            #expect(archive.starts(with: [0x1f, 0x8b]))
+            let extracted = try RemoteWorkspaceProcess.run(executable: "/usr/bin/tar",
+                arguments: ["-xzOf", "-", "manifest.json"], input: archive)
+            #expect(extracted.status == 0)
+            let manifest = try #require(JSONSerialization.jsonObject(with: extracted.data) as? [String: Any])
+            #expect(manifest["dependencyInstallation"] as? String == "target-npm-ci")
+            #expect((manifest["files"] as? [String: Any])?["host/remote-host.sh"] != nil)
+            progress(Data("WM_PROGRESS selftest\n".utf8))
+            return Data(#"{"id":"native-fixture","name":"Native","state":"running","running":true,"startedAt":"","image":"native","memoryBytes":0,"swapBytes":0,"hostPort":7337,"persistentVolume":"/home/alice/.local/share/wovenmatter","capabilities":{"memory":false,"swap":false},"storageKind":"host","hostStorageLow":false,"legacyStorage":false,"kind":"host"}"#.utf8)
+        }, hostScriptLoader: { Data("host-lifecycle".utf8) })
+        let status = try await client.deployHost(configuration: .init(name: "Native", workspaceID: "native-fixture",
+            hostName: "host.invalid", userName: "alice", kind: .host, accessMode: .fullRoot), token: token)
+        #expect(status.running && status.kind == .host)
+    }
+
+    @Test func nativeHostArchiveIsDeterministicAndRejectsSourceDrift() throws {
+        let root = try hostFixture(); defer { try? FileManager.default.removeItem(at: root) }
+        let deployment = try RemoteWorkspaceDeployment(root: root, kind: .host)
+        let first = try RemoteHostBundle.archive(root: root, deployment: deployment)
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 100)],
+            ofItemAtPath: root.appending(path: "remote/src/service.mjs").path)
+        #expect(try RemoteHostBundle.archive(root: root, deployment: deployment) == first)
+        try Data("source changed after fingerprinting".utf8).write(to: root.appending(path: "remote/src/service.mjs"))
+        #expect(throws: RemoteWorkspaceClientError.self) { try RemoteHostBundle.archive(root: root, deployment: deployment) }
+    }
+
+    @Test func hostArchiveRejectsLinksAndMismatchedRuntimePins() throws {
+        let root = try hostFixture(); defer { try? FileManager.default.removeItem(at: root) }
+        let link = root.appending(path: "remote/src/linked.mjs")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: URL(fileURLWithPath: "/etc/passwd"))
+        let linked = try RemoteWorkspaceDeployment(root: root, kind: .host)
+        #expect(throws: RemoteWorkspaceClientError.self) { try RemoteHostBundle.archive(root: root, deployment: linked) }
+        try FileManager.default.removeItem(at: link)
+        try Data("26.12.2\n".utf8).write(to: root.appending(path: "default-agent/.node-version"))
+        let mismatched = try RemoteWorkspaceDeployment(root: root, kind: .host)
+        #expect(throws: RemoteWorkspaceClientError.self) { try RemoteHostBundle.archive(root: root, deployment: mismatched) }
+    }
+
+    @Test func hostNpmSecurityGraphIsBundledAndBoundToTheSourceIdentity() throws {
+        let root = try hostFixture(); defer { try? FileManager.default.removeItem(at: root) }
+        let deployment = try RemoteWorkspaceDeployment(root: root, kind: .host)
+        let archive = try RemoteHostBundle.archive(root: root, deployment: deployment)
+        let extracted = try RemoteWorkspaceProcess.run(executable: "/usr/bin/tar",
+            arguments: ["-xzOf", "-", "manifest.json"], input: archive)
+        #expect(extracted.status == 0)
+        let manifest = try #require(JSONSerialization.jsonObject(with: extracted.data) as? [String: Any])
+        let files = try #require(manifest["files"] as? [String: [String: Any]])
+        for name in ["package.json", "package-lock.json"] {
+            let canonical = "remote/npm-runtime/" + name
+            #expect(files["npm-runtime/" + name]?["sourcePath"] as? String == canonical)
+            #expect(deployment.sourceFiles.contains(canonical))
+            let contents = try RemoteWorkspaceProcess.run(executable: "/usr/bin/tar",
+                arguments: ["-xzOf", "-", "npm-runtime/" + name], input: archive)
+            #expect(contents.status == 0)
+            #expect(contents.data == Data(canonical.utf8))
+        }
+        try Data("changed pinned npm security graph".utf8).write(to: root.appending(path: "remote/npm-runtime/package-lock.json"))
+        #expect(try RemoteWorkspaceDeployment(root: root, kind: .host).fingerprint != deployment.fingerprint)
+        #expect(throws: RemoteWorkspaceClientError.self) { try RemoteHostBundle.archive(root: root, deployment: deployment) }
     }
 
     @Test func changedImageBuildsAndExplicitUpdateSkipsReuse() async throws {

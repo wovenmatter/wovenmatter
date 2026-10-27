@@ -15,7 +15,7 @@ test('deployed service layout loads HTTP MCP integrations and shared instruction
   const service = join(root, 'service with spaces')
   cpSync(resolve(import.meta.dirname, '../src'), join(service, 'src'), { recursive: true, verbatimSymlinks: true })
   cpSync(resolve(import.meta.dirname, '../../harnesses'), join(service, 'harnesses'), { recursive: true })
-  cpSync(resolve(import.meta.dirname, '../../default-agent/src/package-versions.mjs'), join(service, 'default-agent/src/package-versions.mjs'), { recursive: true })
+  cpSync(resolve(import.meta.dirname, '../../default-agent/src'), join(service, 'default-agent/src'), { recursive: true })
   const load = name => import(pathToFileURL(join(service, 'src', name)))
   const { createWorkspaceInstances } = await load('workspace-instances.mjs')
   const home = join(root, 'home')

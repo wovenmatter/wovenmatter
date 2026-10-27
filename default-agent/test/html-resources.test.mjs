@@ -5,10 +5,15 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { prepareHTMLTool, imageMIME, HTML_IMAGE_LIMIT } from '../../harnesses/mcp/html-resources.mjs';
+import { prepareHTMLTool as overlayHTMLTool, imageMIME as overlayImageMIME } from '../src/html-resources.mjs';
 import { createMCPProxy } from '../../harnesses/mcp/proxy.mjs';
 import { wovenMCPTools } from '../src/woven-mcp.mjs';
 
 const png = Buffer.from([137,80,78,71,13,10,26,10]);
+test('native harnesses and relocated SDK clients use the same HTML image implementation', () => {
+  assert.equal(prepareHTMLTool, overlayHTMLTool);
+  assert.equal(imageMIME, overlayImageMIME);
+});
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), 'woven-html-images-'));
   t.after(() => rm(root, { recursive: true, force: true })); return root;

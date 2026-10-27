@@ -11,7 +11,7 @@ struct RemoteWorkspaceSettingsTests {
         let suite = "remote-setup-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
-        let workspace = RemoteWorkspaceConfiguration(name: "Fixture", workspaceID: "fixture", hostName: "fixture.invalid")
+        let workspace = RemoteWorkspaceConfiguration(name: "Fixture", workspaceID: "fixture", hostName: "fixture.invalid", kind: .host)
         defaults.set(try JSONEncoder().encode([workspace]), forKey: "wovenmatter.remote-workspaces.v1")
         let model = RemoteWorkspacesModel(defaults: defaults, backendProjection: false)
         #expect(model.pendingHarnessSetupIDs.isEmpty)

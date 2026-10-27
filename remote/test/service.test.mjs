@@ -24,6 +24,22 @@ import { authenticationInput, authenticationDeadline, downloadInstallerSource, p
 const repositoryRoot = resolve(import.meta.dirname, '../..')
 const catalogPath = resolve(repositoryRoot, 'harnesses/catalog.json')
 
+test('browser routes discover profiles without launching and reject unsafe profile names', async context => {
+  const root = await temporaryFixture(context, 'woven-browser-profile-routes-')
+  const token = 'browser-profiles-fixture-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+  const service = await startService({ workspace: root, home: root, catalog: catalogPath, token })
+  context.after(() => stopService(service.child))
+  const headers = { authorization: 'Bearer ' + token }
+  const tabs = await fetch(service.url + '/v1/browser/tabs?profile=project', { headers })
+  assert.equal(tabs.status, 200)
+  assert.deepEqual(await tabs.json(), { running: false, tabs: [], profiles: ['default', 'project'], profile: 'project' })
+  for (const path of ['tabs', 'connect', 'stream']) {
+    const response = await fetch(service.url + '/v1/browser/' + path + '?profile=..%2Fescape', { headers, method: path === 'connect' ? 'POST' : 'GET' })
+    assert.equal(response.status, 400)
+    assert.equal((await response.json()).error, 'invalid_browser_profile')
+  }
+})
+
 test('internal remote browser MCP permits only administrator forwarding and validates the native caller envelope', async context => {
   const root = await temporaryFixture(context, 'woven-browser-mcp-route-')
   const token = 'browser-mcp-fixture-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
@@ -426,10 +442,10 @@ async function stopService(child) {
   }
 }
 
-async function startService({ workspace, home, catalog, token }) {
+async function startService({ workspace, home, catalog, token, environmentOverrides = {}, entrypoint = resolve(repositoryRoot, 'remote/src/server.mjs') }) {
   const port = await unusedPort()
   const environment = await fixtureEnvironment(home)
-  const child = spawn(process.execPath, [resolve(repositoryRoot, 'remote/src/server.mjs')], {
+  const child = spawn(process.execPath, [entrypoint], {
     cwd: repositoryRoot,
     env: {
       ...environment,
@@ -438,6 +454,7 @@ async function startService({ workspace, home, catalog, token }) {
       WOVENMATTER_LISTEN_PORT: String(port),
       WOVENMATTER_WORKSPACE: workspace,
       WOVENMATTER_HARNESS_CATALOG: catalog,
+      ...environmentOverrides,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
@@ -559,14 +576,14 @@ function installerResponse(chunks, { status = 200, url = '', headers = {} } = {}
 
 function fakeACPExecutable() {
   return `#!/usr/bin/env node
-let input = ''
-process.stdin.on('data', (data) => { input += data.toString('utf8') })
-process.stdin.on('end', () => {
-  const request = JSON.parse(input.trim())
+const { createInterface } = require('node:readline')
+if (process.argv.includes('--version')) { console.log('2.3.0'); process.exit(0) }
+createInterface({ input: process.stdin }).on('line', line => {
+  const request = JSON.parse(line)
   process.stdout.write(JSON.stringify({
     jsonrpc: '2.0',
     id: request.id,
-    result: { protocolVersion: 2, agentInfo: { name: 'fixture' } },
+    result: { protocolVersion: 1, agentInfo: { name: 'fixture' } },
   }) + '\\n')
 })
 `
@@ -588,12 +605,12 @@ test('direct client grants expose only execution routes and enforce revocation',
   assert.equal((await fetch(service.url+'/v1/execution/events?after=0',{headers})).status,200)
   assert.equal((await fetch(service.url+'/v1/inference/catalog',{headers})).status,401)
   assert.equal((await fetch(service.url+'/v1/default-agent/status',{headers})).status,403)
-  for (const [path, method] of [['tabs', 'GET'], ['connect', 'POST'], ['frame', 'POST'], ['action', 'POST'], ['actions', 'POST'], ['stream?tabID=fixture', 'GET']]) {
+  for (const [path, method] of [['tabs', 'GET'], ['selftest', 'GET'], ['connect', 'POST'], ['frame', 'POST'], ['action', 'POST'], ['actions', 'POST'], ['stream?tabID=fixture', 'GET']]) {
     assert.equal((await fetch(service.url+'/v1/browser/'+path,{method,headers})).status,403)
     assert.equal((await fetch(service.url+'/v1/browser/'+path,{method})).status,401)
   }
   const tabs = await fetch(service.url+'/v1/browser/tabs',{headers:{authorization:'Bearer fixture-admin-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}})
-  assert.deepEqual(await tabs.json(), {running:false,tabs:[]})
+  assert.deepEqual(await tabs.json(), {running:false,tabs:[],profiles:['default'],profile:'default'})
   assert.equal(tabs.headers.get('cache-control'), 'no-store')
   assert.equal((await fetch(service.url+'/v1/execution/devices',{method:'POST',headers,body:JSON.stringify(body)})).status,403)
   const foreign=await fetch(service.url+'/v1/execution/commands',{method:'POST',headers,body:JSON.stringify({commandID:id(),deviceID:id(),kind:'createSession'})})
@@ -765,6 +782,50 @@ test('service authentication exposes the reviewed harness catalog', async (conte
   ))
 })
 
+test('host health reports native paths and source inventory without exposing its token', async context => {
+  const home = await temporaryFixture(context, 'woven-host-health-')
+  const workspace = resolve(home, 'workspace'), databases = resolve(home, 'data/databases')
+  await mkdir(workspace)
+  const token = 'native-host-fixture-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+  const service = await startService({ workspace, home, catalog: catalogPath, token, environmentOverrides: {
+    WOVENMATTER_RUNTIME_KIND: 'host', WOVENMATTER_ACCESS_MODE: 'fullRoot',
+    WOVENMATTER_DATA_DIRECTORY: databases, WOVENMATTER_STATE_DIRECTORY: resolve(home, 'data/run'),
+    WOVENMATTER_SERVICE_FINGERPRINT: 'a'.repeat(64),
+  } })
+  context.after(() => stopService(service.child))
+  const headers = { Authorization: 'Bearer ' + token }
+  const health = await (await fetch(service.url + '/v1/health', { headers })).json()
+  assert.deepEqual(health, { status: 'ready', version: '0.1.0', workspaceRoot: workspace, harnessCount: 4,
+    runtimeKind: 'host', serviceFingerprint: 'a'.repeat(64), databasesDirectory: databases,
+    attachmentsDirectory: resolve(workspace, '.wovenmatter/attachments'), dataRoot: resolve(home, 'data'), accessMode: 'fullRoot' })
+  const body = await (await fetch(service.url + '/v1/harnesses', { headers })).json()
+  assert.ok(body.harnesses.every(row => ['system', 'managed', 'missing'].includes(row.source)))
+  assert.equal(body.harnesses.find(row => row.id === 'default_agent').source, 'managed')
+  assert.ok(!JSON.stringify({ health, body }).includes(token))
+  const external = await temporaryFixture(context, 'woven-link-existing-')
+  const linked = await fetch(service.url + '/v1/projects/link', { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify({ path: external }) })
+  assert.equal(linked.status, 200)
+  assert.equal((await linked.json()).path, await (await import('node:fs/promises')).realpath(external))
+  const listed = await fetch(service.url + '/v1/directories?' + new URLSearchParams({ path: home }), { headers })
+  assert.equal(listed.status, 200)
+  assert.ok((await listed.json()).directories.some(item => item.name === 'workspace'))
+})
+
+test('native service starts through the atomic current release symlink used by systemd', async context => {
+  const home = await temporaryFixture(context, 'woven-host-current-link-')
+  const current = resolve(home, 'current')
+  await symlink(resolve(repositoryRoot, 'remote'), current, 'dir')
+  const token = 'symlink-host-fixture-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+  const service = await startService({ workspace: home, home, catalog: catalogPath, token,
+    entrypoint: resolve(current, 'src/server.mjs'),
+    environmentOverrides: { WOVENMATTER_RUNTIME_KIND: 'host' } })
+  context.after(() => stopService(service.child))
+  const response = await fetch(service.url + '/v1/health', { headers: { Authorization: 'Bearer ' + token } })
+  assert.equal(response.status, 200)
+  assert.equal((await response.json()).runtimeKind, 'host')
+  assert.equal(service.child.exitCode, null)
+})
+
 test('authorization input contains asynchronous pipe failures and observes later stream errors', async () => {
   const failure = Object.assign(new Error('write EPIPE'), { code: 'EPIPE' })
   const input = new Writable({ write(_chunk, _encoding, callback) { callback(failure) } })
@@ -813,8 +874,8 @@ test('authorization input reports acceptance only after the write completes', as
   input.destroy()
 })
 
-test('Claude readiness offers its stable session protocol rather than opting into draft v2', async () => {
-  for (const [id, version] of [['claude_code', 1], ['codex', 2]]) {
+test('Codex and Claude readiness offer their implemented stable session protocol', async () => {
+  for (const [id, version] of [['claude_code', 1], ['codex', 1]]) {
     const child = new EventEmitter()
     child.exitCode = null
     child.killed = false
@@ -835,6 +896,26 @@ test('Claude readiness offers its stable session protocol rather than opting int
     assert.deepEqual(result, { ready: true, error: null })
     assert.equal(initialize.params.protocolVersion, version)
   }
+})
+
+test('readiness keeps ACP input open until asynchronous initialize is acknowledged', async () => {
+  const child = new EventEmitter()
+  child.exitCode = null; child.killed = false; child.kill = () => { child.killed = true }
+  child.stdout = new PassThrough(); child.stderr = new PassThrough()
+  child.stdin = new Writable({ write(bytes, _encoding, callback) {
+    const request = JSON.parse(bytes)
+    callback()
+    setImmediate(() => {
+      if (child.stdin.writableEnded) child.emit('close', 0)
+      else child.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { protocolVersion: 1 } }) + '\n')
+    })
+  } })
+  const result = await probeHarnessTransport({ id: 'codex', command: 'fixture' }, 1000, () => {
+    queueMicrotask(() => child.emit('spawn')); return child
+  })
+  assert.deepEqual(result, { ready: true, error: null })
+  assert.equal(child.stdin.destroyed, true)
+  assert.equal(child.killed, true)
 })
 
 test('readiness returns unavailable when the initialize pipe closes before its write', async () => {

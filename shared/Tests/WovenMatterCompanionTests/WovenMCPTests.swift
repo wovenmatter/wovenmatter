@@ -60,4 +60,13 @@ struct WovenMCPTests {
     #expect(denied?.objectValue?["error"]?.objectValue?["code"] == .number(-32602))
   }
 
+  @Test func browserProfileIsValidatedAndForwarded() throws {
+    let request = try WovenMCPCatalog.request(name: "woven_browser", arguments: ["action": .string("tabs"), "profile": .string("work-2")])
+    #expect(request.arguments.contains(where: { $0.contains("work-2") }))
+    for profile in ["../escape", "", "MixedCase", String(repeating: "a", count: 33)] {
+      #expect(throws: (any Error).self) {
+        try WovenMCPCatalog.request(name: "woven_browser", arguments: ["action": .string("tabs"), "profile": .string(profile)])
+      }
+    }
+  }
 }

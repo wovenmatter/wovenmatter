@@ -1,0 +1,7 @@
+# Generated for one user's Woven Matter pinned Chromium downloads. The browser's
+# own namespace/seccomp sandbox remains enabled; this only permits userns creation.
+abi <abi/4.0>,
+include <tunables/global>
+profile wovenmatter-chromium-@UID@ "@HOME@/.local/share/wovenmatter/browsers/playwright-*/**/chrome{,-headless-shell}" flags=(unconfined) {
+  userns,
+}

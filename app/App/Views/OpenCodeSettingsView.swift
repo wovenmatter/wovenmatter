@@ -145,7 +145,7 @@ struct SettingsOpenCodeView: View {
             SettingsCard(title: "OpenCode service settings") {
                 if selectedScope == "global" || selectedScope == "local" {
                     if model.openCode?.isInstalled == true {
-                        agentLink("Local agent workspace", workspaceID: nil)
+                        agentLink("Local workspace", workspaceID: nil)
                     }
                 }
                 ForEach(remoteConfigurations) { workspace in

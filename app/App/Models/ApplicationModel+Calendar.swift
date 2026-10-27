@@ -111,14 +111,16 @@ extension ApplicationModel {
     func calendarTaskDefaults(runtime: AgentRuntimeKind, workspaceID: UUID?, title: String = "") -> WorkspaceCalendarTask {
         let directory = try? defaultToolWorkingDirectory(workspaceID: workspaceID)
         let scope = workspaceID.map { "remote:" + $0.uuidString.lowercased() } ?? "local:" + (directory ?? "")
-        let selections = sessionSelectionPreferences.defaults(harness: runtime.rawValue, workspace: scope)
+        let selections = selectionsApplyingWorkspaceAccess(
+            sessionSelectionPreferences.defaults(harness: runtime.rawValue, workspace: scope), runtime: runtime, workspaceID: workspaceID)
         let settings = agentTools?.settings ?? WorkspaceToolSettings()
         var tools = selections.tools.flatMap { try? WorkspaceSessionTools(identifiers: $0) }
             ?? WorkspaceSessionTools(enabled: settings.enabledByDefault)
         tools.executorProfiles = settings.executor?.defaultProfiles ?? []
         return .init(prompt: "", configuration: .init(runtimeKind: runtime, workspaceID: workspaceID, title: title,
             model: selections.model, thinking: selections.thinking, permission: selections.permission,
-            usesProductPermissionDefault: sessionSelectionPreferences.usesProductPermissionDefault(harness: runtime.rawValue, workspace: scope),
+            usesProductPermissionDefault: workspaceID.flatMap { remoteWorkspaces.configuration(id: $0)?.fullRootPermission(for: runtime) } == nil
+                && sessionSelectionPreferences.usesProductPermissionDefault(harness: runtime.rawValue, workspace: scope),
             selectionWorkspace: scope, nativeWorkingDirectory: directory, tools: tools))
     }
 
@@ -188,7 +190,7 @@ extension ApplicationModel {
         guard let store = dashboardStore, let id = UUID(uuidString: run.sessionID) else { throw ApplicationModelError.dashboardStoreUnavailable }
         let config = run.task.configuration
         if config.runtimeKind == .opencode, config.workspaceID == nil, openCode?.isEnabled != true {
-            throw WorkspaceToolError.invalid("Install and connect OpenCode in Local agent workspace before running this task.")
+            throw WorkspaceToolError.invalid("Install and connect OpenCode in Local workspace before running this task.")
         }
         guard var path = config.nativeWorkingDirectory, path.hasPrefix("/"), !path.contains("\0") else {
             throw WorkspaceToolError.invalid("The task has no captured working directory. Edit it before running.")
@@ -210,8 +212,8 @@ extension ApplicationModel {
         }
         let scope = config.selectionWorkspace ?? config.workspaceID.map { "remote:" + $0.uuidString.lowercased() }
             ?? "local:" + path
-        let selections = SessionSelections(model: config.model, thinking: config.thinking,
-            permission: config.permission, tools: config.tools.enabled.map(\.rawValue).sorted())
+        let selections = selectionsApplyingWorkspaceAccess(SessionSelections(model: config.model, thinking: config.thinking,
+            permission: config.permission, tools: config.tools.enabled.map(\.rawValue).sorted()), runtime: config.runtimeKind, workspaceID: config.workspaceID)
         sessionSelectionPreferences.stageCalendarSelections(id: run.sessionID, harness: config.runtimeKind.rawValue,
             workspace: scope, selections: selections,
             usesProductPermissionDefault: config.usesProductPermissionDefault ?? false)

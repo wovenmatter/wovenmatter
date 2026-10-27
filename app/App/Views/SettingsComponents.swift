@@ -912,7 +912,7 @@ struct SettingsAccountWorkspacePicker: View {
     var body: some View {
         Picker("Accounts for", selection: $scope) {
             if supportsSharedAccounts { Text("Shared Pi Durable accounts").tag("global") }
-            Text("Local agent workspace").tag("local")
+            Text("Local workspace").tag("local")
             ForEach(workspaces) { Text($0.name).tag($0.id.uuidString.lowercased()) }
         }.frame(maxWidth: 480, alignment: .leading)
     }
@@ -927,7 +927,7 @@ struct SettingsWorkspaceScope: View {
     var detail: String?
 
     private var label: String {
-        scope == "global" ? "Shared" : scope == "local" ? "Local agent workspace"
+        scope == "global" ? "Shared" : scope == "local" ? "Local workspace"
             : workspaces.first { $0.id.uuidString.lowercased() == scope }?.name ?? "Workspace"
     }
     var body: some View {
@@ -935,7 +935,7 @@ struct SettingsWorkspaceScope: View {
             VStack(alignment: .leading, spacing: 8) {
                 Picker("Settings for", selection: $scope) {
                     Text("Shared chat settings").tag("global")
-                    Text("Local agent workspace").tag("local")
+                    Text("Local workspace").tag("local")
                     ForEach(workspaces) { Text($0.name).tag($0.id.uuidString.lowercased()) }
                 }.frame(maxWidth: 440, alignment: .leading)
                 if scope != "global", let inherits {

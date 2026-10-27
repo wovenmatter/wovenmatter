@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# This literal parser never sources service.env or a shell startup file. Keep the
+# caller's stdin untouched: ACP and file transfers use it for their own protocol.
+exec python3 -c "$(cat <<'PY'
+import fcntl, json, os, re, resource, stat, sys
+from pathlib import Path
+
+def fail(message, code=64):
+    print(message, file=sys.stderr)
+    raise SystemExit(code)
+
+home=Path.home()
+env_file=home/'.config/wovenmatter/service.env'
+try:
+    info=env_file.lstat()
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+        fail('The host service environment must be a private file owned by this account.',78)
+    settings={}
+    for line in env_file.read_text().splitlines():
+        if not line or line.startswith('#'): continue
+        key,separator,value=line.partition('=')
+        if not separator or not re.fullmatch('[A-Z][A-Z0-9_]*',key): fail('Invalid host service environment.',78)
+        value=json.loads(value)
+        if not isinstance(value,str) or any(x in value for x in ('\0','\n','\r')): fail('Invalid host service environment.',78)
+        settings[key]=value
+except (OSError,ValueError):
+    fail('The host service environment is unavailable. Install or repair this workspace.',69)
+allow={'WOVENMATTER_API_TOKEN','WOVENMATTER_LISTEN_PORT','WOVENMATTER_WORKSPACE',
+       'WOVENMATTER_DATA_DIRECTORY','WOVENMATTER_STATE_DIRECTORY','WOVENMATTER_HARNESS_PATH',
+       'PLAYWRIGHT_BROWSERS_PATH','WOVENMATTER_RUNTIME_KIND','WOVENMATTER_ACCESS_MODE'}
+env=os.environ.copy()
+for key in tuple(env):
+    if key.startswith('WOVENMATTER_') and key!='WOVENMATTER_ADDITIONAL_INSTRUCTIONS': env.pop(key)
+for key in allow:
+    if key in settings: env[key]=settings[key]
+extra={'CODEX_CONFIG','CODEX_PATH','CLAUDE_CODE_EXECUTABLE','WOVEN_EXECUTION_SCOPE',
+       'WOVEN_DEFAULT_AGENT_SCOPE','WOVEN_DURABLE_REMOTE_ACP','WOVENMATTER_ADDITIONAL_INSTRUCTIONS'}
+args=sys.argv[1:]
+cwd=settings.get('WOVENMATTER_WORKSPACE','')
+while args and args[0] in ('--env','--cwd'):
+    if len(args)<2: fail('A host execution option is missing its value.')
+    option,value=args[:2]; args=args[2:]
+    if option=='--cwd': cwd=value
+    else:
+        key,sep,value=value.partition('=')
+        if not sep or key not in extra or '\0' in value: fail('Unsupported host harness environment override.')
+        env[key]=value
+if not args: fail('A host execution subcommand is required.')
+if not cwd.startswith('/') or '\0' in cwd: fail('The remote working directory must be an absolute path.')
+root=Path(settings['WOVENMATTER_STATE_DIRECTORY']).parent
+node=str(root/'node/current/bin/node')
+paths=[str(home/'.local/bin'),str(home/'.npm-global/bin'),str(root/'current/tooling/bin'),str(root/'node/current/bin')]
+paths.extend(settings.get('WOVENMATTER_HARNESS_PATH','').split(':'))
+paths.extend(os.environ.get('PATH','/usr/local/bin:/usr/bin:/bin').split(':'))
+env['PATH']=':'.join(dict.fromkeys(p for p in paths if p))
+env['WOVEN_DEFAULT_AGENT_DIRECTORY']=str(Path(settings['WOVENMATTER_WORKSPACE'])/'.wovenmatter/default-agent')
+resource.setrlimit(resource.RLIMIT_CORE,(0,0))
+os.umask(0o077)
+command=args.pop(0)
+if command=='durable-acp':
+    if '--' in args: args=args[:args.index('--')]
+    argv=[node,str(root/'current/src/durable-acp-stdio.mjs'),*args]
+elif command=='default-agent': argv=[node,str(root/'current/default-agent/src/main.mjs'),*([] if '--control' in args else ['--remote']),*args]
+elif command in ('harness','exec'):
+    if not args: fail('A host command is required.')
+    argv=args
+    if command=='harness':
+        runtime={'codex-acp':'codex','claude-agent-acp':'claude_code','claude-code-acp':'claude_code','grok':'grok_build'}.get(Path(args[0]).name)
+        if runtime: argv=[node,str(root/'current/harnesses/mcp/adapter.mjs'),runtime,*args]
+else: fail('Unsupported host execution subcommand.')
+lock_path=Path(settings['WOVENMATTER_STATE_DIRECTORY'])/'runtime-operation.lock'
+if lock_path.is_symlink(): fail('The runtime maintenance lock is unsafe.',78)
+fd=os.open(lock_path,os.O_WRONLY|os.O_CREAT|getattr(os,'O_NOFOLLOW',0),0o600)
+try: fcntl.flock(fd,fcntl.LOCK_SH|fcntl.LOCK_NB)
+except BlockingIOError: fail('Runtime maintenance is in progress. Retry after it finishes.',75)
+os.set_inheritable(fd,True)
+if settings.get('WOVENMATTER_ACCESS_MODE','user')=='user':
+    # This is ordinary account execution, not a same-UID containment boundary.
+    # Block direct setuid/capability elevation on this launch and its children.
+    argv=['/usr/bin/setpriv','--no-new-privs','--',*argv]
+try:
+    os.chdir(cwd)
+    os.execvpe(argv[0],argv,env)
+except OSError: fail('The host command could not be launched.',69)
+PY
+)" "$@"

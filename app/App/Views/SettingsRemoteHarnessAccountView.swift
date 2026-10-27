@@ -26,6 +26,9 @@ struct SettingsRemoteHarnessAccountView: View {
     private var accountContent: some View {
         VStack(alignment: .leading, spacing: 12) {
             if let harness = model.currentHarnesses(for: workspace).first(where: { $0.id == runtimeKind }) {
+                if workspace.kind == .host, harness.source == "system", let path = harness.path {
+                    SettingsNote("Using \(path) (installed on host)")
+                }
                 HStack {
                     SettingsHarnessAccountDetails(
                         status: model.signInStatuses[workspace.id]?.first { $0.id == runtimeKind.rawValue },

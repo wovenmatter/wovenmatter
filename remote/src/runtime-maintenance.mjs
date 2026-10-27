@@ -2,10 +2,12 @@ import { existsSync } from 'node:fs'
 const bundledVersions = new URL('../default-agent/src/package-versions.mjs', import.meta.url)
 const { latestSupportedPackage } = await import(existsSync(bundledVersions) ? bundledVersions.href : new URL('../../default-agent/src/package-versions.mjs', import.meta.url).href)
 import { spawn } from 'node:child_process'
-import { readFile, writeFile, mkdir, rename, realpath } from 'node:fs/promises'
+import { readFile, writeFile, mkdir, rename, realpath, lstat, readlink } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { supportsOpenCodeVersion, openCodeCommands } from './opencode-compatibility.mjs'
+import { loadRuntimeConfiguration, runtimeNPMCommand } from './config.mjs'
+import { withInstallerGuard } from './installer-guard.mjs'
 
 const quote = value => `'${String(value).replaceAll("'", "'\\''")}'`
 const failure = message => Object.assign(new Error(message), { statusCode: 409 })
@@ -34,7 +36,7 @@ export function validatedPackageSpec(harness, supplied) {
 }
 export function diagnosticCategory(error) {
   const text = String(error ?? '')
-  const allowed = ['runtime_active_stop_conversations_or_server_first', 'active_conversation_check_unavailable', 'runtime_active_or_operation_in_progress', 'runtime_lock_unavailable', 'source_digest_required', 'installer_digest_changed', 'installer_download_failed', 'installer_download_timed_out', 'runtime_preferences_save_failed', 'bundled_dependency_refresh_failed']
+  const allowed = ['runtime_active_stop_conversations_or_server_first', 'active_conversation_check_unavailable', 'runtime_active_or_operation_in_progress', 'runtime_lock_unavailable', 'source_digest_required', 'installer_digest_changed', 'installer_download_failed', 'installer_download_timed_out', 'runtime_preferences_save_failed', 'bundled_dependency_refresh_failed', 'system_install_update_forbidden', 'installer_modified_shell_config', 'installer_modified_harness_config']
   if (allowed.includes(text)) return text
   if (text.startsWith('Installer exited ')) return 'installer_failed'
   if (text === 'Installer finished but required components could not be verified.') return 'installation_verification_failed'
@@ -83,21 +85,23 @@ async function packageRoot(path, name, dependency = false) {
   return null
 }
 
-export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, verifiedInstaller, hasActiveRuntime = async () => false, execute = runHost, fetchImplementation = fetch, acquireLock = acquireHostLock }) {
+export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, verifiedInstaller, hasActiveRuntime = async () => false, execute = runHost, fetchImplementation = fetch, acquireLock = acquireHostLock, configuration = loadRuntimeConfiguration(environment()) }) {
   const states = new Map(), operations = new Map()
+  const npm = runtimeNPMCommand(configuration)
   const statePath = resolve(workspaceRoot, '.wovenmatter/runtime-preferences.json')
   let saveQueue = Promise.resolve(), checks = null
   const loaded = readFile(statePath, 'utf8').then(text => {
     const saved = JSON.parse(text)
     for (const h of catalog.values()) {
-      states.set(h.id, { failureCount: Number(saved[h.id]?.failureCount) || 0 })
+      states.set(h.id, { failureCount: Number(saved[h.id]?.failureCount) || 0, managedComponents: saved[h.id]?.managedComponents ?? {} })
     }
   }).catch(() => {})
   async function state(id) { await loaded; if (!states.has(id)) states.set(id, { failureCount: 0 }); return states.get(id) }
   function persist() {
     saveQueue = saveQueue.catch(() => {}).then(async () => {
       await mkdir(dirname(statePath), { recursive: true, mode: 0o700 })
-      const data = Object.fromEntries([...states].map(([id, s]) => [id, { failureCount: s.failureCount }]))
+      const data = Object.fromEntries([...states].map(([id, s]) => [id, { failureCount: s.failureCount,
+        ...(s.managedComponents && Object.keys(s.managedComponents).length ? { managedComponents: s.managedComponents } : {}) }]))
       await writeFile(statePath + '.tmp', JSON.stringify(data), { mode: 0o600 }); await rename(statePath + '.tmp', statePath)
     }); return saveQueue
   }
@@ -106,12 +110,24 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
   const run = (command, timeout) => execute(command, {
     ...environment(), npm_config_cache: resolve(workspaceRoot, '.wovenmatter/npm-cache'),
   }, workspaceRoot, timeout)
-  async function component(id, name, command, required = true) {
+  async function componentSource(path) {
+    if (!path) return 'missing'
+    if (configuration.runtimeKind !== 'host') return 'managed'
+    const target = await realpath(path).catch(() => path)
+    for (const value of states.values()) for (const owned of Object.values(value.managedComponents ?? {})) {
+      if (owned.path === path && owned.target === target) return 'managed'
+    }
+    return 'system'
+  }
+  async function commandPath(command) {
     const found = await run(`command -v ${quote(command)}`)
-    const path = found.code === 0 ? found.output.trim().split('\n')[0] : null
+    return found.code === 0 ? found.output.trim().split('\n')[0] : null
+  }
+  async function component(id, name, command, required = true) {
+    const path = await commandPath(command)
     const result = path ? await run(`${quote(path)} --version`) : null
     const version = result?.code === 0 ? normalizedVersion(result.output) : null
-    return { id, displayName: name, path, installedVersion: version, latestVersion: null, required, installed: Boolean(path && version) }
+    return { id, displayName: name, path, source: await componentSource(path), installedVersion: version, latestVersion: null, required, installed: Boolean(path && version) }
   }
   async function latest(packageName) {
     try {
@@ -136,7 +152,7 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
     let adapterRoot = null, dependencyName = null, dependencyRange = null
     if (h.transportCheckCommand && !h.adapterPackage && h.id !== 'opencode') {
       const probe = main.installed ? await run(h.transportCheckCommand) : null
-      components.push({ id: 'transport', displayName: h.transport + ' transport', path: main.path, installedVersion: main.installedVersion, latestVersion: null, required: true, installed: probe?.code === 0 })
+      components.push({ id: 'transport', displayName: h.transport + ' transport', path: main.path, source: main.source, installedVersion: main.installedVersion, latestVersion: null, required: true, installed: probe?.code === 0 })
     }
     if (h.adapterPackage) {
       components.push(await component('signin', h.cliCommand + ' (sign-in CLI)', h.cliCommand))
@@ -153,8 +169,8 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
         if (object?.optionalDependencies?.[native]) { const nativeRoot = await packageRoot(dep, native, true); engine = nativeRoot ? resolve(nativeRoot, 'claude') : null }
       }
       const result = engine ? await run(`${quote(engine)} --version`) : null
-      components.push({ id: 'bundled', displayName: 'Bundled ' + dependency, path: engine, installedVersion: normalizedVersion(object?.version), latestVersion: null, required: true, installed: Boolean(object?.version && result?.code === 0 && normalizedVersion(result.output)) })
-      if (h.id === 'claude_code') components.push({ id: 'engine', displayName: 'Bundled Claude Code', path: engine, installedVersion: normalizedVersion(result?.output), latestVersion: null, required: true, installed: result?.code === 0 && Boolean(normalizedVersion(result.output)) })
+      components.push({ id: 'bundled', displayName: 'Bundled ' + dependency, path: engine, source: main.source, installedVersion: normalizedVersion(object?.version), latestVersion: null, required: true, installed: Boolean(object?.version && result?.code === 0 && normalizedVersion(result.output)) })
+      if (h.id === 'claude_code') components.push({ id: 'engine', displayName: 'Bundled Claude Code', path: engine, source: main.source, installedVersion: normalizedVersion(result?.output), latestVersion: null, required: true, installed: result?.code === 0 && Boolean(normalizedVersion(result.output)) })
       const key = h.id === 'codex' ? 'CODEX_PATH' : 'CLAUDE_CODE_EXECUTABLE'
       if (environment()[key]) components.push(await component('override', key + ' override', environment()[key]))
     }
@@ -175,12 +191,13 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
         // npm performs the semver selection using the adapter's declared dependency
         // range. Never override a pinned/ranged adapter dependency with @latest.
         if (adapterRoot && typeof dependencyRange === 'string' && /^[0-9v^~<>=|*xX. +\-]+$/.test(dependencyRange)) {
-          const result = await run(`npm view ${quote(dependencyName + '@' + dependencyRange)} version --json --registry=https://registry.npmjs.org`, 15000)
+          const result = await run(`${npm} view ${quote(dependencyName + '@' + dependencyRange)} version --json --registry=https://registry.npmjs.org`, 15000)
           try { const versions = JSON.parse(result.output); if (result.code === 0) bundled.updateTargetVersion = normalizedVersion(Array.isArray(versions) ? versions.at(-1) : versions) } catch {}
         }
       }
     } else for (const c of components) { const cached = previous.find(p => p.id === c.id); c.latestVersion = cached?.latestVersion ?? null; if (c.id === 'bundled') c.updateTargetVersion = cached?.updateTargetVersion ?? null }
     if (checkLatest) s.versionCheckAvailable = main.latestVersion !== null
+    for (const c of components) c.updateAvailable = c.source !== 'system' && precedes(c.installedVersion, updateTarget(c))
     s.components = components
     const storedOperation = operations.get(h.id) ?? null
     const operation = storedOperation && !storedOperation.finishedAt ? { ...storedOperation, status: 'running' } : storedOperation
@@ -191,16 +208,85 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
     if (bundled?.latestVersion && bundled.latestVersion !== bundled.updateTargetVersion) notice += ' The newest bundled dependency may exceed the adapter’s declared compatibility; only compatible dependency updates are offered.'
     if (checkLatest && (main.latestVersion === null || (bundled && (!bundled.latestVersion || !bundled.updateTargetVersion)))) notice = [notice, 'Latest version information is unavailable.'].filter(Boolean).join(' ')
     s.notice = checkLatest ? notice : notice ?? s.notice ?? null
-    return { id: h.id, displayName: h.displayName, enabled: installed, visible: true, installed, components, operation, failureCount: s.failureCount, diagnosticPrompt: s.failureCount >= 2 ? `Diagnose ${h.displayName} on this remote workspace host (${process.platform}/${process.arch}). Do not modify other hosts.\n${components.map(c => `${c.displayName}: installed=${c.installedVersion ?? 'unknown'} latest=${c.latestVersion ?? 'unknown'} verified=${c.installed}`).join('\n')}\nFailure: ${diagnosticCategory(operation?.error)}` : null, notice: s.notice, versionCheckAvailable: s.versionCheckAvailable ?? null, updateAvailable: components.some(c => precedes(c.installedVersion, updateTarget(c))) }
+    return { id: h.id, displayName: h.displayName, source: main.source, path: main.path, enabled: installed, visible: true, installed, components, operation, failureCount: s.failureCount, diagnosticPrompt: s.failureCount >= 2 ? `Diagnose ${h.displayName} on this remote workspace host (${process.platform}/${process.arch}). Do not modify other hosts.\n${components.map(c => `${c.displayName}: installed=${c.installedVersion ?? 'unknown'} latest=${c.latestVersion ?? 'unknown'} verified=${c.installed}`).join('\n')}\nFailure: ${diagnosticCategory(operation?.error)}` : null, notice: s.notice, versionCheckAvailable: s.versionCheckAvailable ?? null, updateAvailable: components.some(c => c.updateAvailable) }
   }
-  async function busy(h) {
+  async function busy(h, maintainedNames) {
     if (await hasActiveRuntime(h.id)) return true
+    const names = maintainedNames ?? (h.id === 'opencode' ? openCodeCommands : [h.command, h.cliCommand])
+    if (!names.length) return false
     // Conversations run over SSH outside this service. Check the host process list,
     // without returning command lines (which can contain credentials) to the client.
     const result = await run('ps -eo pid=,args=')
     if (result.code !== 0) throw failure('active_conversation_check_unavailable')
-    const names = h.id === 'opencode' ? openCodeCommands : [h.command, h.cliCommand]
     return result.output.split('\n').some(line => !/ps -eo|\/bin\/bash -c/.test(line) && names.some(name => line.split(/\s+/).some(arg => arg === name || arg.endsWith('/' + name) || arg.endsWith('/' + name + '.js'))))
+  }
+  function hostTargets(h, action, before) {
+    const main = before.components.find(c => c.id === 'runtime')
+    const cli = before.components.find(c => c.id === 'signin') ?? main
+    return { main, cli, needsCLI: !cli.path || (action === 'update' && cli.source === 'managed'),
+      needsAdapter: Boolean(h.adapterPackage && (!main.installed || (action === 'update' && main.source === 'managed'))) }
+  }
+  async function hostMaintainedProcesses(h, action, before) {
+    const { cli, needsCLI, needsAdapter } = hostTargets(h, action, before)
+    const names = []
+    if (needsCLI) names.push(...(h.id === 'opencode' ? openCodeCommands : [h.cliCommand ?? h.command]))
+    if (needsAdapter) names.push(h.command)
+    const components = before.components.filter(c => (needsCLI && c.id === cli.id) || (needsAdapter && ['runtime', 'bundled', 'engine'].includes(c.id)))
+    for (const component of components) if (component.path) {
+      names.push(component.path, await realpath(component.path).catch(() => component.path))
+      const link = await readlink(component.path).catch(() => null)
+      if (link) names.push(resolve(dirname(component.path), link))
+    }
+    return [...new Set(names.filter(Boolean))]
+  }
+  async function adapterPackageSpec(h, supplied) {
+    const version = supplied?.startsWith(h.adapterPackage + '@') ? supplied.slice(h.adapterPackage.length + 1) : supplied ? null : await latest(h.adapterPackage)
+    if (!version || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version)) throw failure('invalid_adapter_package_spec')
+    if (precedes(version, h.minimumAdapterVersion)) throw failure('adapter_version_below_minimum')
+    return h.adapterPackage + '@' + version
+  }
+  async function protectInstallDestination(command, component) {
+    if (component?.source === 'managed') return
+    const target = resolve(configuration.home, '.local/bin', command)
+    try { await lstat(target) } catch (error) { if (error.code === 'ENOENT') return; throw error }
+    throw failure('unmanaged_install_destination')
+  }
+  async function hostInstallation(h, action, body, before) {
+    const commands = [], installedCommands = []
+    const { main, cli, needsCLI, needsAdapter } = hostTargets(h, action, before)
+    if (needsCLI) {
+      await protectInstallDestination(h.cliCommand ?? h.command, cli)
+      if (h.install?.kind === 'npm-global') {
+        const pkg = validatedPackageSpec(h, body.packageSpec ?? (await npmPreview(h)).packageSpec)
+        commands.push(`${npm} install --global --prefix "$HOME/.local" ${quote(pkg)}`)
+      } else {
+        if (typeof body.sourceSHA256 !== 'string') throw failure('source_digest_required')
+        const installer = await verifiedInstaller(h, body.sourceSHA256)
+        commands.push(`${quote(h.install.interpreter)} ${quote(installer.path)} ${(h.install.arguments ?? []).map(quote).join(' ')}`)
+      }
+      installedCommands.push(['signin', h.cliCommand ?? h.command])
+      if (!h.adapterPackage) installedCommands.push(['runtime', h.command])
+    }
+    if (needsAdapter) {
+      await protectInstallDestination(h.command, main)
+      const spec = await adapterPackageSpec(h, body.adapterPackageSpec ?? (body.packageSpec?.startsWith(h.adapterPackage + '@') ? body.packageSpec : undefined))
+      commands.push(`${npm} install --global --prefix "$HOME/.local" ${quote(spec)}`)
+      installedCommands.push(['runtime', h.command])
+    }
+    if (!commands.length && action === 'update') throw failure('system_install_update_forbidden')
+    return { command: commands.join(' && '), installedCommands }
+  }
+  async function refreshAdapterDependency(h) {
+    // System adapter directories and their bundled engines are never mutated.
+    const path = await commandPath(h.command)
+    if (configuration.runtimeKind === 'host' && await componentSource(path) !== 'managed') return
+    let root = null
+    try { root = await packageRoot(dirname(await realpath(path)), h.adapterPackage) } catch {}
+    const dependency = h.id === 'codex' ? '@openai/codex' : '@anthropic-ai/claude-agent-sdk'
+    if (root && (await packageAt(root))?.dependencies?.[dependency]) {
+      const refreshed = await run(`${npm} update --prefix ${quote(root)} --omit=dev --no-save --package-lock=false --registry=https://registry.npmjs.org ${quote(dependency)}`, 300000)
+      if (refreshed.code !== 0) throw failure('bundled_dependency_refresh_failed')
+    }
   }
   async function start(h, action, body) {
     if (body.confirmed !== true) throw failure('confirmation_required')
@@ -212,37 +298,47 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
     void (async () => {
       let unlock
       try {
-        unlock = await acquireLock(resolve(environment().HOME, '.wovenmatter/runtime-operation.lock'), environment(), workspaceRoot)
-        if (await busy(h)) throw failure('runtime_active_stop_conversations_or_server_first')
-        let command
-        const pkg = h.install?.kind === 'npm-global' ? validatedPackageSpec(h, body.packageSpec ?? (await npmPreview(h)).packageSpec) : null
-        const adapter = h.adapterPackage ? ` && npm install --global --prefix "$HOME/.local" ${quote(h.adapterPackage + '@latest')}` : ''
-        if (pkg) command = `npm install --global --prefix "$HOME/.local" ${quote(pkg)}${adapter}`
-        else {
-          if (typeof body.sourceSHA256 !== 'string') throw failure('source_digest_required')
-          const installer = await verifiedInstaller(h, body.sourceSHA256)
-          command = `${quote(h.install.interpreter)} ${quote(installer.path)} ${(h.install.arguments ?? []).map(quote).join(' ')}${adapter}`
-        }
-        if (await busy(h)) throw failure('runtime_active_stop_conversations_or_server_first')
+        unlock = await acquireLock(resolve(configuration.stateDirectory, 'runtime-operation.lock'), environment(), workspaceRoot)
+        if (await busy(h, configuration.runtimeKind === 'host' ? [] : undefined)) throw failure('runtime_active_stop_conversations_or_server_first')
         const before = await inventory(h)
-        const result = await run(command, 300000)
-        op.output = sanitize(result.output, environment())
-        if (result.code !== 0) throw failure(`Installer exited ${result.code}. ${op.output}`)
-        if (h.adapterPackage) {
-          // Re-resolve after adapter installation: npm may have changed its package
-          // root or dependency constraint. npm update respects that new declaration.
-          const installedAdapter = await component('runtime', h.command, h.command)
-          let root = null
-          try { root = await packageRoot(dirname(await realpath(installedAdapter.path)), h.adapterPackage) } catch {}
-          const dependency = h.id === 'codex' ? '@openai/codex' : '@anthropic-ai/claude-agent-sdk'
-          if (root && (await packageAt(root))?.dependencies?.[dependency]) {
-            const refreshed = await run(`npm update --prefix ${quote(root)} --omit=dev --no-save --package-lock=false --registry=https://registry.npmjs.org ${quote(dependency)}`, 300000)
-            if (refreshed.code !== 0) throw failure('bundled_dependency_refresh_failed')
+        const maintainedNames = configuration.runtimeKind === 'host' ? await hostMaintainedProcesses(h, action, before) : undefined
+        if (configuration.runtimeKind === 'host' && await busy(h, maintainedNames)) throw failure('runtime_active_stop_conversations_or_server_first')
+        let command, installedCommands = []
+        if (configuration.runtimeKind === 'host') {
+          ({ command, installedCommands } = await hostInstallation(h, action, body, before))
+        } else {
+          const pkg = h.install?.kind === 'npm-global' ? validatedPackageSpec(h, body.packageSpec ?? (await npmPreview(h)).packageSpec) : null
+          const adapter = h.adapterPackage ? ` && ${npm} install --global --prefix "$HOME/.local" ${quote(h.adapterPackage + '@latest')}` : ''
+          if (pkg) command = `${npm} install --global --prefix "$HOME/.local" ${quote(pkg)}${adapter}`
+          else {
+            if (typeof body.sourceSHA256 !== 'string') throw failure('source_digest_required')
+            const installer = await verifiedInstaller(h, body.sourceSHA256)
+            command = `${quote(h.install.interpreter)} ${quote(installer.path)} ${(h.install.arguments ?? []).map(quote).join(' ')}${adapter}`
           }
         }
+        if (await busy(h, maintainedNames)) throw failure('runtime_active_stop_conversations_or_server_first')
+        const installation = async () => {
+          if (command) {
+            const result = await run(command, 300000)
+            op.output = sanitize(result.output, environment())
+            if (result.code !== 0) throw failure(`Installer exited ${result.code}. ${op.output}`)
+          }
+          // Record only explicit Woven installations. Existing ~/.local and mise
+          // installations remain system-owned, even when sharing our PATH.
+          for (const [id, name] of installedCommands) {
+            const path = await commandPath(name)
+            if (path) {
+              s.managedComponents ??= {}
+              s.managedComponents[id] = { path, target: await realpath(path).catch(() => path) }
+            }
+          }
+          if (h.adapterPackage && (configuration.runtimeKind !== 'host' || installedCommands.some(([id]) => id === 'runtime'))) await refreshAdapterDependency(h)
+        }
+        if (configuration.runtimeKind === 'host') await withInstallerGuard(configuration.home, installation)
+        else await installation()
         const after = await inventory(h)
         if (!after.installed) throw failure('Installer finished but required components could not be verified.')
-        if (action === 'update' && before.components.some(c => precedes(c.installedVersion, updateTarget(c)) && precedes(after.components.find(a => a.id === c.id)?.installedVersion, updateTarget(c)))) throw failure('Update finished but a required component is still behind the checked version.')
+        if (action === 'update' && before.components.some(c => c.source !== 'system' && precedes(c.installedVersion, updateTarget(c)) && precedes(after.components.find(a => a.id === c.id)?.installedVersion, updateTarget(c)))) throw failure('Update finished but a required component is still behind the checked version.')
         op.status = 'succeeded'; s.failureCount = 0
       } catch (error) { op.status = 'failed'; op.error = sanitize(error.message, environment()); s.failureCount += 1 }
       await persist().catch(() => { op.status = 'failed'; op.error = 'runtime_preferences_save_failed' })
@@ -260,12 +356,27 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
     }
     packageSpec = validatedPackageSpec(h, packageSpec)
     return { harnessID: h.id, source: h.install.source, sha256: null, bytes: null,
-      packageSpec, command: `npm install --global --prefix "$HOME/.local" ${quote(packageSpec)}`,
+      packageSpec, command: `${npm} install --global --prefix "$HOME/.local" ${quote(packageSpec)}`,
       verification: 'npm-registry-integrity' }
   }
   return {
     inventory,
     npmPreview,
+    async location(command) {
+      await loaded
+      const path = await commandPath(command)
+      return { path, source: await componentSource(path) }
+    },
+    async hostAdapterPreview(h) {
+      if (configuration.runtimeKind !== 'host' || !h.adapterPackage) return null
+      const row = await inventory(h)
+      const cli = row.components.find(c => c.id === 'signin')
+      if (!cli?.path) return null
+      const spec = await adapterPackageSpec(h)
+      return { harnessID: h.id, source: 'https://registry.npmjs.org/' + h.adapterPackage,
+        sha256: null, bytes: null, packageSpec: spec,
+        command: `${npm} install --global --prefix "$HOME/.local" ${quote(spec)}`, verification: 'npm-registry-integrity' }
+    },
     async recordFailure(h, action, error) {
       const s = await state(h.id)
       if (operations.get(h.id) && !operations.get(h.id).finishedAt) return

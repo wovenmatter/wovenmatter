@@ -1,5 +1,38 @@
 # Remote workspace security audit — 2026-10-26
 
+## Native host mode extension
+
+Native Linux workspaces deliberately use the SSH account's ordinary host
+permissions. Full root makes its existing unrestricted passwordless sudo
+available to agents, with nonprompting harness defaults; Normal user enables
+no-new-privileges for direct launches. Neither mode claims isolation against
+the same account or a host administrator. The user service and Chromium stay
+non-root. The permission warning is required on creation and retained in
+settings. Access mode is fixed for each installed workspace.
+
+The host installer verifies the source manifest/fingerprint before extraction,
+checks pinned Node archive SHA-256 values, installs the locked target-native npm
+graph, and activates runtime links with health and browser checks. Failed
+activation restores the environment, unit, record and previous links. Shell
+startup files and existing harness configuration are audited around installers;
+pre-existing CLI installations are never treated as Woven-owned updates.
+Host environment parsing does not evaluate shell text. Administrative credentials
+stay in stdin and a 0600 environment file, and managed directories are private.
+Every Mac SSH path retains Tailnet peer verification and strict host keys.
+
+Native Chromium explicitly enables its sandbox. Its self-test correlates CDP
+process IDs with renderer ancestry, separate user/PID namespaces, seccomp and
+no-new-privileges evidence; unknown evidence fails closed. Profiles separate
+website state and reject unsafe IDs/symlink paths. The service does not supply
+its API credential to the browser. CDP and the control listener remain loopback.
+
+Existing container hardening and browser launch behavior are retained during
+native evaluation. Enabling the inner Chromium sandbox in those containers
+remains separate work requiring a verified seccomp/AppArmor combination; this
+change does not weaken capabilities, filesystem protection or namespace policy.
+Host mode has no Docker dependency or unsandboxed fallback. See
+[Native Linux hosts](REMOTE_HOSTS.md) for the complete operating model.
+
 ## Scope and trust model
 
 Reviewed the desktop connection, SSH provisioning/lifecycle, attachment and shared

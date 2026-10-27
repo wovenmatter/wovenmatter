@@ -61,6 +61,7 @@ if enabled scripts; then
   done
   scripts/test-dev-signing.sh
   scripts/test-remote-workspace.sh
+  scripts/test-remote-host.sh
   while IFS= read -r -d '' file; do
     [ ! -f "$file" ] || node --check "$file"
   done < <(git ls-files -z -- 'scripts/*.mjs' 'remote/src/*.mjs' 'remote/test/*.mjs')

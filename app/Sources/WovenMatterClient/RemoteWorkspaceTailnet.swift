@@ -42,6 +42,9 @@ public enum RemoteWorkspaceTailnet {
               let address = (peer["TailscaleIPs"] as? [String])?.first(where: isTailnetAddress) else {
             throw RemoteWorkspaceClientError.commandFailed("Select an online Tailscale machine by its Tailnet name or Tailscale IP address.")
         }
+        guard isLinuxPeer(peer) else {
+            throw RemoteWorkspaceClientError.commandFailed("Remote workspaces require a Linux machine. Use Apple Devices to connect Macs, iPhones, and iPads.")
+        }
         // Explicit options override ~/.ssh/config transport redirects and prevent
         // reuse of an existing multiplexed connection established outside Tailscale.
         // nc uses tailscaled's DialTCP, so losing Tailscale cannot fall back to LAN.
@@ -52,6 +55,10 @@ public enum RemoteWorkspaceTailnet {
             "-o", "ControlPersist=no", "-o", "Compression=no", "-o", "ForwardAgent=no", "-o", "ForwardX11=no",
             "-o", "PermitLocalCommand=no", "-o", "StrictHostKeyChecking=yes",
         ]
+    }
+
+    static func isLinuxPeer(_ peer: [String: Any]) -> Bool {
+        (peer["OS"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "linux"
     }
 
     private static func isTailnetAddress(_ value: String) -> Bool {

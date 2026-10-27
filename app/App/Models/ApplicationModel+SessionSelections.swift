@@ -4,6 +4,17 @@ import WovenMatterCore
 import WovenMatterDashboardStore
 
 extension ApplicationModel {
+    /// Native host access is selected once for the workspace. Captured chat and
+    /// calendar defaults cannot reintroduce approval prompts in Full root mode.
+    func selectionsApplyingWorkspaceAccess(_ selections: SessionSelections, runtime: AgentRuntimeKind,
+        workspaceID: UUID?) -> SessionSelections {
+        guard let workspaceID,
+              let permission = remoteWorkspaces.configuration(id: workspaceID)?.fullRootPermission(for: runtime) else { return selections }
+        var result = selections
+        result.permission = permission
+        return result
+    }
+
     /// Settings edits belong to the execution owner, which also captures defaults
     /// for scheduled and tool-created sessions. Conversation controls never call this.
     func agentSelectionDefaults(runtime: AgentRuntimeKind, workspace: String?) async throws
@@ -22,8 +33,9 @@ extension ApplicationModel {
                 sessionSelectionPreferences.removeDefault(.model, harness: runtime.rawValue, workspace: workspace)
             }
         }
+        let workspaceID = workspace.flatMap { $0.hasPrefix("remote:") ? UUID(uuidString: String($0.dropFirst(7))) : nil }
         return (sessionSelectionPreferences.storedDefaults(harness: runtime.rawValue, workspace: workspace),
-            sessionSelectionPreferences.defaults(harness: runtime.rawValue, workspace: workspace),
+            selectionsApplyingWorkspaceAccess(sessionSelectionPreferences.defaults(harness: runtime.rawValue, workspace: workspace), runtime: runtime, workspaceID: workspaceID),
             workspace.map { sessionSelectionPreferences.usesSharedDefaults(harness: runtime.rawValue, workspace: $0) } ?? false)
     }
 
@@ -111,12 +123,16 @@ extension ApplicationModel {
         guard let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
         let context = try await sessionSelectionContext(conversationID: conversationID)
         let native = try await dashboardStore.database.localACPSession(conversationID: conversationID)
+        let forcedPermission = native.remoteWorkspaceID.flatMap { remoteWorkspaces.configuration(id: $0)?.fullRootPermission(for: native.runtimeKind) }
+        let effectiveDefaults = selectionsApplyingWorkspaceAccess(
+            capturedDefaults ?? sessionSelectionPreferences.defaults(harness: context.harness, workspace: context.workspace),
+            runtime: native.runtimeKind, workspaceID: native.remoteWorkspaceID)
         _ = await sessionSelectionPreferences.captureConversation(
             id: conversationID, harness: context.harness, workspace: context.workspace,
             selections: SessionSelections(),
             nativeFallback: SessionSelections(model: native.model, thinking: native.thinking,
                 permission: native.permission, tools: currentSessionToolIDs?(conversationID)),
-            capturedDefaults: capturedDefaults, usesProductPermissionDefault: usesProductPermissionDefault
+            capturedDefaults: effectiveDefaults, usesProductPermissionDefault: forcedPermission == nil ? usesProductPermissionDefault : false
         )
         try await applyPendingSessionSelections(conversationID: conversationID)
     }
@@ -147,7 +163,9 @@ extension ApplicationModel {
         guard let saved = sessionSelectionPreferences.conversation(id: conversationID),
               saved.requiresApplication else { return }
         guard let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
-        var desired = saved.desiredSelections
+        let native = try await dashboardStore.database.localACPSession(conversationID: conversationID)
+        let forcedPermission = native.remoteWorkspaceID.flatMap { remoteWorkspaces.configuration(id: $0)?.fullRootPermission(for: native.runtimeKind) }
+        var desired = selectionsApplyingWorkspaceAccess(saved.desiredSelections, runtime: native.runtimeKind, workspaceID: native.remoteWorkspaceID)
         let openCode = openCodeModel(for: conversationID)
         if openCode == nil, desired.tools != nil, applyInitialSessionToolIDs == nil {
             throw ApplicationModelError.unavailableSessionTools
@@ -156,7 +174,6 @@ extension ApplicationModel {
         if let openCode {
             try await openCode.applySessionSelections(conversationID, selections: desired)
         } else {
-            let native = try await dashboardStore.database.localACPSession(conversationID: conversationID)
             let permission = desired.permission
             if desired.model != nil || desired.thinking != nil || permission != nil {
                 guard let conversation = try await dashboardStore.database.workspaceOverview().conversations
@@ -165,7 +182,7 @@ extension ApplicationModel {
                 }
                 let context = try await directACPLaunchContext(conversation: conversation,
                     runtimeKind: native.runtimeKind)
-                if saved.usesProductPermissionDefault {
+                if saved.usesProductPermissionDefault && forcedPermission == nil {
                     let available = try await dashboardStore.localACPSessionConfiguration(conversationID: conversationID,
                         launch: context.launch, workspace: context.workspace)
                     desired = sessionSelectionPreferences.reconcileProductPermissionDefault(id: conversationID,
@@ -222,7 +239,10 @@ extension ApplicationModel {
         guard !localRunningConversationIDs.contains(conversationID),
               !updatingLocalACPSessionIDs.contains(conversationID),
               applyingSessionSelectionTasks[conversationID] == nil else { return true }
-        let desired = pending.desiredSelections.applyingPendingCorrection(selections)
+        let requested = pending.desiredSelections.applyingPendingCorrection(selections)
+        let workspaceID = pending.workspace.hasPrefix("remote:") ? UUID(uuidString: String(pending.workspace.dropFirst(7))) : nil
+        let desired = selectionsApplyingWorkspaceAccess(requested,
+            runtime: AgentRuntimeKind(rawValue: pending.harness) ?? .defaultAgent, workspaceID: workspaceID)
         sessionSelectionPreferences.updateConversation(id: conversationID, selections: desired,
             permissionIsExplicit: selections.permission != nil)
         if pending.desiredSelections.thinking != nil, desired.thinking == nil {

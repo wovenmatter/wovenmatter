@@ -1,7 +1,59 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { createWorkspaceBrowser, streamBrowserFrames } from '../src/workspace-browser.mjs'
+import { createWorkspaceBrowser, streamBrowserFrames, browserLaunchOptions } from '../src/workspace-browser.mjs'
+import { mkdtemp, mkdir, writeFile, readFile, stat, symlink, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+test('native production launch explicitly enables the sandbox and keeps control on loopback', () => {
+  const options = browserLaunchOptions()
+  assert.equal(options.chromiumSandbox, true)
+  assert.equal(options.headless, true)
+  assert.ok(options.args.includes('--remote-debugging-address=127.0.0.1'))
+  assert.ok(options.args.every(argument => !/(no-sandbox|disable-setuid-sandbox|disable-namespace-sandbox)/.test(argument)))
+  assert.ok(!Object.keys(options.env).some(key => /TOKEN|SECRET|PASSWORD|API_KEY/i.test(key)))
+})
+
+test('profile identities have separate directories, browsers and lifecycle and retain legacy default bytes', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'wovenmatter-browser-profiles-')), legacy = join(root, 'browser'), profilesRoot = join(root, 'profiles')
+  t.after(() => rm(root, { recursive: true, force: true }))
+  await mkdir(legacy); await writeFile(join(legacy, 'cookies-fixture'), 'existing browser state')
+  const launches = [], contexts = []
+  const service = createWorkspaceBrowser({ profile: legacy, profilesRoot, launch: async (directory, options) => {
+    const context = Object.assign(new EventEmitter(), { pages: () => [], close: async () => { context.closed = true; context.emit('close') } })
+    contexts.push(context); launches.push({ directory, options }); return { context, endpoint: 'ws://127.0.0.1/' + contexts.length }
+  } })
+  t.after(() => service.close())
+  assert.deepEqual(await service.profiles(), { profiles: ['default'] })
+  assert.deepEqual(await service.forProfile('work').tabs(), { running: false, tabs: [] })
+  assert.equal(launches.length, 0)
+  const [one, same, two] = await Promise.all([service.connect(), service.connect(), service.forProfile('work').connect()])
+  assert.deepEqual(one, same); assert.notDeepEqual(one, two); assert.equal(launches.length, 2)
+  assert.ok(launches.some(value => value.directory === legacy))
+  assert.ok(launches.some(value => value.directory === join(profilesRoot, 'work')))
+  assert.deepEqual(await service.profiles(), { profiles: ['default', 'work'] })
+  assert.equal(await readFile(join(legacy, 'cookies-fixture'), 'utf8'), 'existing browser state')
+  for (const directory of [legacy, profilesRoot, join(profilesRoot, 'work')]) assert.equal((await stat(directory)).mode & 0o777, 0o700)
+  await service.forProfile('work').close()
+  assert.equal(contexts.filter(value => value.closed).length, 1)
+  assert.equal((await service.tabs()).running, true)
+})
+
+test('invalid and symlinked profiles never launch a browser or escape the profiles directory', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'wovenmatter-browser-profiles-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  let launches = 0
+  const service = createWorkspaceBrowser({ profilesRoot: join(root, 'profiles'), launch: async () => { launches++; throw Error('must not launch') } })
+  t.after(() => service.close())
+  for (const profile of ['../escape', '', 'Uppercase', 'a'.repeat(33), 'with space', null]) {
+    assert.throws(() => service.forProfile(profile), { statusCode: 400 })
+  }
+  await mkdir(join(root, 'profiles')); await mkdir(join(root, 'elsewhere'))
+  await symlink(join(root, 'elsewhere'), join(root, 'profiles', 'work'))
+  await assert.rejects(service.forProfile('work').connect(), { statusCode: 409 })
+  assert.equal(launches, 0)
+})
 
 function fixture() {
   const context = new EventEmitter(), pages = [], commands = []

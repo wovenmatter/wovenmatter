@@ -72,7 +72,8 @@ struct CompanionFacadeTests {
     let usageProbe = FacadeUsageProbe()
     let usageService: LocalUsageService
     let device = UUID().uuidString.lowercased()
-    let remote = RemoteWorkspaceConfiguration(name: "Fixture remote", workspaceID: "fixture", hostName: "fixture.invalid")
+    let remote = RemoteWorkspaceConfiguration(name: "Fixture remote", workspaceID: "fixture", hostName: "fixture.invalid",
+        kind: .host, dataRoot: "/home/.local/share/wovenmatter", workspaceRoot: "/home/.woven-matter")
     init() async throws {
         _ = NSApplication.shared
         directory = FileManager.default.temporaryDirectory.appending(path: "companion-facade-\(UUID())")

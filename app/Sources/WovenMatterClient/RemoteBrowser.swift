@@ -10,7 +10,22 @@ public struct RemoteBrowserTab: Codable, Equatable, Identifiable, Sendable {
 public struct RemoteBrowserTabs: Codable, Equatable, Sendable {
     public let running: Bool
     public let tabs: [RemoteBrowserTab]
-    public init(running: Bool, tabs: [RemoteBrowserTab]) { self.running = running; self.tabs = tabs }
+    public let profiles: [String]?
+    public let profile: String?
+    public init(running: Bool, tabs: [RemoteBrowserTab], profiles: [String]? = nil, profile: String? = nil) {
+        self.running = running; self.tabs = tabs; self.profiles = profiles; self.profile = profile
+    }
+}
+
+public struct RemoteBrowserSelfTest: Codable, Equatable, Sendable {
+    public let ok: Bool
+    public let reason: String?
+    public let missingLibraries: [String]?
+    public let hint: String?
+
+    public init(ok: Bool, reason: String? = nil, missingLibraries: [String]? = nil, hint: String? = nil) {
+        self.ok = ok; self.reason = reason; self.missingLibraries = missingLibraries; self.hint = hint
+    }
 }
 
 public struct RemoteBrowserFrame: Codable, Equatable, Sendable {
