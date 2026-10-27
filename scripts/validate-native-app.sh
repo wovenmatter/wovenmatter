@@ -2,6 +2,7 @@
 set -euo pipefail
 
 app="${1:?usage: validate-native-app.sh /path/to/Woven Matter.app}"
+repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 info_plist="${app}/Contents/Info.plist"
 test -f "$info_plist"
 executable_name="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$info_plist")"
@@ -37,6 +38,7 @@ done
 test -f "$app/Contents/Resources/BrowserLicenses/LICENSE.txt"
 test -f "$app/Contents/Resources/BrowserLicenses/CREDITS.html"
 resources="${app}/Contents/Resources"
+cmp "$repo_root/docs/assets/LUCIDE_LICENSE.txt" "$resources/LUCIDE_LICENSE.txt"
 test -x "${resources}/Cua/cua-driver"
 test -f "${resources}/Cua/LICENSE.txt"
 test -f "${resources}/Cua/THIRD-PARTY-NOTICES.md"
