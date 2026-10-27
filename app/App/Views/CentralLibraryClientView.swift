@@ -65,6 +65,14 @@ struct CentralLibraryClientView: View {
                 model.section = .browser
             } catch { model.errorMessage = error.localizedDescription }
         }
+        .focusedSceneValue(\.workspaceMenuActions, model.preparingTransition ? nil : WorkspaceMenuActions(
+            newChat: { Task { await model.selectConversation(nil) } },
+            newNote: { Task { await model.createNote() } },
+            newBrowserTab: {
+                if application.workspaceAssets.openBrowser() != nil { model.section = .browser }
+            },
+            refresh: { Task { await model.refresh() } }
+        ))
         .navigationSplitViewStyle(.balanced)
         .disabled(model.preparingTransition)
         .task {

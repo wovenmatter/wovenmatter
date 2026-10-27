@@ -7,6 +7,37 @@ final class WovenMatterLifecycleDelegate: NSObject, NSApplicationDelegate {
     weak var model: ApplicationModel?
     private var terminating = false
     var prepareBrowserTermination: (@MainActor () async -> Bool)?
+    func applicationDidUpdate(_ notification: Notification) {
+        // AppKit adds tabbing and Close commands outside SwiftUI's command
+        // groups, and can recreate them when scenes change. Match native actions
+        // rather than localized titles; keep window controls in Window.
+        guard let menu = NSApp.mainMenu else { return }
+        for item in menu.items {
+            guard let submenu = item.submenu else { continue }
+            if submenu.items.contains(where: {
+                $0.action == #selector(NSWindow.toggleTabBar(_:))
+                    || $0.action == #selector(NSWindow.toggleTabOverview(_:))
+            }) {
+                menu.removeItem(item)
+                continue
+            }
+            let isWindowMenu = submenu === NSApp.windowsMenu || submenu.items.contains(where: {
+                $0.action == #selector(NSWindow.performMiniaturize(_:))
+            })
+            if !isWindowMenu {
+                var removedClose = false
+                for command in submenu.items where command.action == #selector(NSWindow.performClose(_:))
+                    || command.action == NSSelectorFromString("closeAll:") {
+                    submenu.removeItem(command)
+                    removedClose = true
+                }
+                if removedClose {
+                    while let last = submenu.items.last, last.isSeparatorItem { submenu.removeItem(last) }
+                }
+            }
+        }
+    }
+
     static func requestTerminationAfterUpdate() {
         // AppKit's deferred termination enters a nested run loop. Leave the
         // initiating Swift task first so it cannot block main-actor cleanup.

@@ -3,6 +3,11 @@
 Match the existing app and reuse its shared components. Keep this guide current
 when an intentional design change is accepted.
 
+- **macOS menu bar:** keep File, Edit, Appearance, Window, and Help after the app
+  menu. File contains New Chat, New Note, New Browser Tab, Start/Stop Dictation,
+  and Refresh Workspace. Route creation through the active workspace's existing
+  flows. Preserve native Undo/Redo and clipboard commands in Edit; keep theme and
+  sidebar layout in Appearance. Do not add a separate View or Workspace menu.
 - **Colors and geometry:** use `DashboardTheme`, `DashboardPalette`,
   `DashboardMetrics` in [DashboardStyle.swift](../app/App/Views/DashboardStyle.swift),
   and desktop `DashboardShapes` in `DashboardDesign.swift`. Preserve the
