@@ -52,14 +52,29 @@ import WovenMatterCompanion
             styleMask: .borderless, backing: .buffered, defer: false)
         let secondWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 200),
             styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        secondWindow.isReleasedWhenClosed = false
+        defer {
+            window.close()
+            secondWindow.close()
+        }
         var focusedWindow: NSWindow? = window
         let (model, speech) = fixture(focusedWindow: { focusedWindow })
+        defer { model.cancel() }
         let (a, viewA) = editor("First", id: "A", selection: NSRange(location: 5, length: 0))
         let (b, viewB) = editor("Second ", id: "B", selection: NSRange(location: 7, length: 0))
         let search = NSTextView()
+        // Command targeting intentionally excludes hidden/zero-sized editors.
+        // The injected focusedWindow still controls routing independently of
+        // whichever application happens to own the system key window.
+        viewA.frame = NSRect(x: 10, y: 10, width: 280, height: 80)
+        viewB.frame = NSRect(x: 10, y: 10, width: 280, height: 80)
+        search.frame = NSRect(x: 10, y: 100, width: 280, height: 60)
         window.contentView?.addSubview(viewA)
         window.contentView?.addSubview(search)
         secondWindow.contentView?.addSubview(viewB)
+        window.orderFront(nil)
+        secondWindow.orderFront(nil)
         #expect(window.makeFirstResponder(viewA))
         model.activeEditor = a
         model.refreshShortcutEditor()
@@ -94,6 +109,5 @@ import WovenMatterCompanion
         try await settle { model.phase == .idle }
         #expect(viewA.string == "First")
         #expect(viewB.string == "Second dictated")
-        model.cancel()
     }
 }

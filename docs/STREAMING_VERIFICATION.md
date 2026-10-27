@@ -375,7 +375,7 @@ at either of the repaired integration guards. This is an admission/error-renderi
 check, not a successful live OpenCode response or family pass. No authentication
 flow or credential replacement was performed.
 
-### Final source validation
+### Source validation before integrating main
 
 - All eight native streaming contracts passed after recompilation, including the
   clean reasoning scene, OpenCode draft/RPC cases, real embedded wheel routing,
@@ -399,3 +399,22 @@ Successful OpenCode inference and multiple-family live UI acceptance in OpenCode
 and Pi remain pending usable configured accounts/models. The generic iOS SDK build
 and 98 package tests passed; simulator execution remains unpassed at the recorded
 Xcode service-hub boundary.
+
+
+### Current-main integration
+
+The branch integrates main `d3b1a821` (menu commands, Dev-launch recovery and the
+test audit) in merge `9a293e55`. The independent transcript consumer retains
+main's client replica reload/path checks and readiness fields; a read-only merge
+audit found no regression in those paths. Snapshot mode remains explicit.
+
+Main's test audit removed redundant assertions, so its counts differ from the
+pre-integration runs above. Integrated mobile package validation passed 82 tests.
+Hosted CI on `9a293e55` passed the full default-agent suite (158 passed, one
+platform skip) and remote suite (191 passed on Linux).
+
+The broad native rerun exposed a dictation fixture that no longer satisfied
+main's visible-editor contract. Its owned windows are now visible, its editors
+have positive geometry, and deferred cleanup closes both windows. The isolated
+regression passes; production dictation code is unchanged. PR #176 records the
+final integrated-head desktop validation and review-build status.
