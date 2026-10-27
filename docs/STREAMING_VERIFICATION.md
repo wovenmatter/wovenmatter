@@ -45,6 +45,7 @@ as behavioral tests. No contract suite consumes a provider service.
 | Claude native translation | `claude-native-session` | Synthetic Anthropic SSE translation and native continuation, including signed thinking and tool validation |
 | iOS inference bridge | `ios-inference-stream` | Actual bridge retains partial text/thinking/usage on disconnect, cancellation and missing terminal; ignores duplicate terminal frames |
 | Remote execution | `durable-acp`, `task-gateway`, `client-execution-publisher` | Recovery replay, assistant snapshots, lost receipts, immutable event deduplication, persistence failures, reconnect while approval is pending |
+| Background streaming | `opencode-task-stream`, `task-gateway-native`, `client-execution`, `client-retained-history` | Progress before idle, final-history reconciliation, ordered native tools, atomic snapshot framing and checkpoint recovery |
 | Swift ACP adapters | `ACPHarnessStreamingReviewTests` | Actual client fed fixture processes; reasoning phases, assistant snapshots, boundaries, model/thinking selection and tool deltas |
 | Swift OpenCode | `OpenCodeLiveProjectionTests`, `OpenCodeIntegrationTests`, `OpenCodeWireCaptureTests` | Live event reduction, message identity, durable refresh/recovery, HTTP/SSE recording without credentials |
 | Transcript persistence/presentation | `ACPAssistantStreamWriterTests`, `AssistantStreamingTextTests`, `ConversationWorkTimelineTests`, `StreamingPresentationTests` | Canonical prefixes, stable Markdown, commentary/tool order and presentation behavior |
@@ -53,6 +54,27 @@ The Pi engine cases exercise the shared Durable event contract. They must not be
 described as independent live OpenAI, Anthropic, Gemini or other family passes.
 The native suite requires macOS; the manifest does not replace required iOS or
 application build validation.
+
+## Rendered acceptance scenes
+
+`StreamingPresentationTests` renders the production shared SwiftUI transcript and
+native Markdown views in Green, Cognac and Dark, at 380- and 760-point widths.
+All 42 combinations of initial thinking, live tools, expanded mixed work, live
+reasoning, detail-only reasoning, completion and interruption pass. Assertions
+check the actual native text, including the final committed reasoning list item;
+the export captures the same views for visual inspection.
+
+```sh
+WOVENMATTER_STREAMING_SCREENSHOTS=/private/tmp/woven-streaming-views node scripts/streaming-contracts.mjs --native
+```
+
+These captures establish rendered fixture behavior; they do not establish a live
+provider-to-screen pass or automated gesture/scroll-position restoration coverage.
+The scroll policy is also covered by the native layout checks.
+
+![Live reasoning preview and current tool](screenshots/streaming-live-green.png)
+![Expanded work at a narrow width](screenshots/streaming-expanded-cognac.png)
+![Formatted live reasoning in Dark](screenshots/streaming-reasoning-dark.png)
 
 ## Manual live probes
 
@@ -107,6 +129,8 @@ application evidence must be recorded separately by the platform validation run.
 | Grok / advertised default | Passed incremental ACP wire check: 11 thought chunks (243 characters), 105 text chunks (498 characters) | 2,549 ms | 13,818 ms | `end_turn`, 14,498 ms |
 | OpenCode / `opencode/glm-5.3-flash-free` | Execution failed before any text | None | None | `session.execution.failed` |
 | OpenCode / `opencode/deepseek-v4.1-flash-free` | Execution failed before any text; native error classified as authentication | None | None | `session.execution.failed` |
+| OpenCode Go / `opencode-go/glm-5.3-flash` | Advertised as enabled/active; execution failed before any text with an authentication-category native error | None | None | `session.execution.failed`, 431 ms |
+| OpenCode Go / `opencode-go/gpt-6-luna` | Advertised as enabled/active; execution failed before any text with an authentication-category native error | None | None | `session.execution.failed`, 278 ms |
 | Claude Code / advertised default | Passed incremental ACP wire check after the user restored sign-in: 37 text chunks, 393 characters | Not exposed | 2,002 ms | `end_turn`, 3,956 ms |
 | Pi Durable live provider families | Temporary native-client probe initialized successfully, but the normal account API returned no connected providers or configured models for its global/local scopes; live inference blocked | Not run | Not run | Not run |
 
@@ -114,6 +138,13 @@ Installed command versions observed: Codex CLI 0.164.0, Claude Code 2.1.310,
 Grok 1.0.67, OpenCode CLI 2.1.2. The already-running OpenCode service registration
 reported 2.1.3, so the service schema—not the CLI version—owns those HTTP/SSE probes.
 Its public `/openapi.json` was inspected to check native event field contracts.
+
+The Go rows were probed separately at 02:36 UTC against the existing native
+service, using the advertised `opencode-go` routing and two model families.
+The model catalog marked both enabled and active, but that metadata did not
+establish usable provider authentication. Both sessions failed before text and
+were deleted after the probes. These results supplement, rather than infer from,
+the earlier free-provider failures.
 
 Claude's initial status check returned exit 1 and `loggedIn: false`, including an
 approved retry outside the sandbox. The user subsequently restored sign-in; the
