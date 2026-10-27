@@ -1,3 +1,4 @@
+import { assemblePresentationFrame } from './presentation-frames.mjs'
 import { createClientExecutionPublisher } from './client-execution-publisher.mjs'
 import { DatabaseSync } from 'node:sqlite'
 import { mkdirSync, chmodSync } from 'node:fs'
@@ -109,6 +110,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       const record = JSON.parse(row.body)
       if(record.goal?.status==='active'){setGoalStatus(record.goal,'paused');record.goal.evidence='The execution owner restarted. Resume explicitly.';delete record.goal.pendingDeliveryID;save(record)}
       if (record.conversation.activeRunID) {
+        delete record.presentationFrames
         for(const activity of record.transcript.activities)if(activity.status==='running')activity.status='interrupted'
         delete record.conversation.activeRunID; delete record.transcript.activeRunID; record.pending = record.pending.filter(item=>item.mcpManageAccessID)
         for (const message of record.transcript.messages) if (message.status === 'running') message.status = 'interrupted'
@@ -431,6 +433,9 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       if(Number.isSafeInteger(tokens)&&tokens>=0){record.runUsage??={};record.runUsage[runID]=Math.max(record.runUsage[runID]??0,tokens);save(record)}
       return
     }
+    record.presentationFrames ??= {}
+    update=assemblePresentationFrame(update,record.presentationFrames)
+    if(!update){save(record);return}
     const message = record.transcript.messages.find(item => item.id === runID)
     const changedMessages = [], changedActivities = []
     if (update.sessionUpdate === 'woven_execution_binding') { record.native = copy(update.native); save(record); return }
@@ -471,6 +476,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
     if (closed) return
     const record = getRecord(command.conversationID)
     if (record.conversation.activeRunID !== command.runID) return
+    delete record.presentationFrames
     const message = record.transcript.messages.find(item => item.id === command.runID)
     const stopped=jobs.get(command.runID)?.stopped===true
     if(stopped)error=undefined

@@ -567,3 +567,27 @@ test('a restored native child uses refreshed MCP credentials with its durable or
   await assert.rejects(tool.execute({}, api, { abortSignal: new AbortController().signal }), /originating Woven session is unavailable/);
   assert.equal(calls.length, 1);
 });
+
+test('a provider transport failure preserves exposed partial answer, reasoning and pending tool outcome', async t => {
+  const {engine} = await fixture(t), record = await engine.create(), updates = [];
+  record.streamFunction = model => ({
+    async *[Symbol.asyncIterator]() {
+      const message = await stream(model, [{type:'thinking',thinking:'Visible reasoning'}, {type:'text',text:'Partial answer'},
+        {type:'toolCall',id:'incomplete-tool',name:'bash',arguments:{command:'echo unfinished'}}]).result();
+      yield {type:'start',partial:message};
+      throw new Error('fixture transport disconnected');
+    },
+  });
+  await assert.rejects(engine.prompt(record,'Fixture partial failure', update => updates.push(update)));
+  const displayed = updates.filter(update => update.sessionUpdate === 'agent_message_chunk')
+    .reduce((text, update) => update._meta?.wovenAssistantSnapshot ? update.content.text : text+update.content.text, '');
+  assert.equal(displayed,'Partial answer');
+  assert.equal(updates.filter(update => update.sessionUpdate === 'agent_thought_chunk').map(update => update.content.text).join(''),'Visible reasoning');
+  assert.equal(updates.filter(update => update.toolCallId === 'incomplete-tool').at(-1)?.status,'failed');
+  const history = await record.history(0,200);
+  const message = history.recordBatch.records.flatMap(record => {
+    const value = JSON.parse(record.payload); return value.type === 'entry' ? value.value.model ?? [] : [];
+  }).find(message => message.role === 'assistant' && message.stopReason === 'error');
+  assert.equal(message?.stopReason,'error');
+  assert.equal(message.content.find(block => block.type === 'text').text,'Partial answer');
+});

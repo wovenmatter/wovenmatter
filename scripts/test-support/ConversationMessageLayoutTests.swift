@@ -89,6 +89,25 @@ struct ConversationMessageLayoutTests {
         scroll.conversationChanged(to: "second")
         try require(scroll.contentChanged(conversationID: "second", hasMessages: true, isPrependingHistory: false) == .jumpToBottom,
             "Switching chats retained another conversation's reading position")
-        print("PASS: response rows, anchors, spacing, failure visibility and shared transcript scroll policy")
+        var workScroll = ConversationWorkScrollState()
+        try require(workScroll.shouldFollowAppend(from: ["thought", "read"], to: ["thought", "read", "command"]),
+            "A new live work row did not follow from the live edge")
+        try require(!workScroll.shouldFollowAppend(from: ["thought", "read"], to: ["thought", "read"]),
+            "A tool status/detail update moved the work list")
+        try require(!workScroll.shouldFollowAppend(from: ["thought", "read"], to: ["thought", "replacement", "command"]),
+            "A work correction was treated as a new append")
+        workScroll.setAtBottom(false)
+        try require(!workScroll.shouldFollowTextAppend(from: "A trace.", to: "A trace.\n\nNext thought."),
+            "Growing reasoning interrupted a reader above the live edge")
+        try require(!workScroll.shouldFollowAppend(from: ["read"], to: ["read", "command"]),
+            "Streaming work interrupted a reader inspecting earlier calls")
+        workScroll.setAtBottom(true)
+        try require(workScroll.shouldFollowTextAppend(from: "A trace.", to: "A trace.\n\nNext thought."),
+            "Growing reasoning did not follow from its live edge")
+        try require(!workScroll.shouldFollowTextAppend(from: "Old trace.", to: "Corrected trace."),
+            "A reasoning replacement unexpectedly moved reading position")
+        try require(workScroll.shouldFollowAppend(from: ["read"], to: ["read", "command"]),
+            "Returning to the live edge did not resume following new work")
+        print("PASS: response rows, anchors, spacing, failure visibility and shared transcript/work scroll policy")
     }
 }

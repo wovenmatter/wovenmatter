@@ -26,6 +26,28 @@ private func groups(_ timeline: ConversationWorkTimeline) -> [ConversationWorkGr
 @Suite("Conversation work timeline")
 struct ConversationWorkTimelineTests {
 
+  @Test("completed reasoning does not hide a still-running tool label")
+  func liveActivitySelection() {
+    let command = tool("command", "bash", status: "running")
+    let thought = AgentRunActivity(id: "thought", kind: .thought, status: "completed", content: "Checking the next step.")
+    let group = ConversationWorkGroup(id: "group", activities: [command, thought], endsTimeline: true)
+    #expect(group.liveActivity?.id == "command")
+    #expect(group.liveLabel(runIsActive: true) == "Running a command")
+    #expect(group.latestThought?.id == "thought")
+    #expect(group.activeActivityIDs == ["command"])
+  }
+
+  @Test("waiting indicator covers commentary and failure without doubling active work")
+  func thinkingIndicator() {
+    #expect(ConversationWorkTimeline.empty.needsThinkingIndicator)
+    let commentary = record(AgentRunActivity(id: "c", kind: .assistant, content: "Checking."), at: "1")
+    #expect(ConversationWorkTimeline(records: [commentary], commentaryIDs: ["c"]).needsThinkingIndicator)
+    let failed = record(tool("failed", "bash", status: "failed"), at: "2")
+    #expect(ConversationWorkTimeline(records: [failed], commentaryIDs: []).needsThinkingIndicator)
+    let running = record(tool("running", "bash", status: "running"), at: "3")
+    #expect(!ConversationWorkTimeline(records: [failed, running], commentaryIDs: []).needsThinkingIndicator)
+  }
+
   @Test("mixed groups summarize two categories and count the remainder")
   func mixedSummary() {
     let activities = [

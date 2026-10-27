@@ -32,7 +32,7 @@ run_static_checks() {
   scripts/test-note-editor.sh
   scripts/test-note-drafts.sh
   python3 scripts/test-support/test_executor_deployment.py
-  node --test scripts/test-support/native-mcp.test.mjs
+  node --test scripts/test-support/native-mcp.test.mjs scripts/test-support/live-streaming-smoke.test.mjs
   scripts/test-remote-workspace.sh
   scripts/test-remote-host.sh
   PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-support/test_remote_image.py

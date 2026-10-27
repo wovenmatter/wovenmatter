@@ -5,6 +5,22 @@ import WovenMatterCore
 
 struct OpenCodeWireCaptureTests {
 
+  @Test func globalStreamCapturesOnlyTheSelectedSessionAndUsesEnvelopeIdentities() async throws {
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [CaptureFixtureProtocol.self]
+    let session = URLSession(configuration: configuration)
+    defer { session.invalidateAndCancel() }
+    let capture = OpenCodeWireCapture()
+    let client = OpenCodeHTTPClient(connection: try OpenCodeConnection(identity: "scope-test", url: URL(string: "http://fixture.invalid")!, password: "credential"), session: session)
+      .recording { capture.append($0, $1) }
+    try await client.events("/api/event", sessionID: "ses_fixture") { value in
+      #expect(value["data"]["sessionID"].text == "ses_fixture")
+    }
+    let native = try capture.values.filter { $0.0 == "native" }.flatMap { try JSONDecoder().decode(WorkspaceNativeRunRecordBatch.self, from: $0.1).records }
+    #expect(native.map(\.id) == ["event:live-1", "event:live-2"])
+    #expect(!capture.values.contains { String(decoding: $0.1, as: UTF8.self).contains("foreign-private") })
+  }
+
   @Test func preservesUnknownHTTPAndSSEFieldsWithoutCredentials() async throws {
     let configuration = URLSessionConfiguration.ephemeral
     configuration.protocolClasses = [CaptureFixtureProtocol.self]
@@ -44,12 +60,14 @@ private final class CaptureFixtureProtocol: URLProtocol, @unchecked Sendable {
   override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
   override func stopLoading() {}
   override func startLoading() {
-    let stream = request.url!.path.hasSuffix("/log")
+    let live = request.url!.path == "/api/event"
+    let stream = live || request.url!.path.hasSuffix("/log")
     let failure = request.url!.path.hasSuffix("/failure")
     let response = HTTPURLResponse(url: request.url!, statusCode: failure ? 422 : 200, httpVersion: "HTTP/1.1",
       headerFields: ["Content-Type": stream ? "text/event-stream" : "application/json"])!
     client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-    client?.urlProtocol(self, didLoad: Data((stream ? Self.stream : failure ? "{\"error\":\"fixture rejection\"}" : "{\"future_response\":true}").utf8))
+    let liveStream = ["{\"id\":\"live-1\",\"data\":{\"sessionID\":\"ses_fixture\"}}", "{\"id\":\"foreign-private\",\"data\":{\"sessionID\":\"foreign\"}}", "{\"id\":\"live-2\",\"data\":{\"sessionID\":\"ses_fixture\"}}"].map { "data: " + $0 + "\n\n" }.joined()
+    client?.urlProtocol(self, didLoad: Data((live ? liveStream : stream ? Self.stream : failure ? "{\"error\":\"fixture rejection\"}" : "{\"future_response\":true}").utf8))
     client?.urlProtocolDidFinishLoading(self)
   }
 }

@@ -90,6 +90,7 @@ private final class OpenCodeSessionDelegate: NSObject, URLSessionTaskDelegate, S
 public struct OpenCodeHTTPClient: Sendable {
     public let connection: OpenCodeConnection
     private let session: URLSession
+    private let eventSession: URLSession
     private var historyRecorder: WorkspaceWireRecorder?
     public init(connection: OpenCodeConnection, session: URLSession? = nil) {
         self.connection = connection
@@ -98,6 +99,13 @@ public struct OpenCodeHTTPClient: Sendable {
         config.timeoutIntervalForResource = 86_400
         config.httpShouldSetCookies = false
         self.session = session ?? URLSession(configuration: config, delegate: OpenCodeSessionDelegate(), delegateQueue: nil)
+        let eventConfig = URLSessionConfiguration.ephemeral
+        eventConfig.timeoutIntervalForResource = 86_400
+        eventConfig.httpShouldSetCookies = false
+        eventConfig.httpMaximumConnectionsPerHost = 64
+        // Long-lived HTTP/1.1 streams must not occupy the connections used by
+        // prompt acceptance, permissions, interrupts, and history refreshes.
+        self.eventSession = session ?? URLSession(configuration: eventConfig, delegate: OpenCodeSessionDelegate(), delegateQueue: nil)
     }
     public static func segment(_ value: String) -> String {
         value.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? ""
@@ -249,7 +257,8 @@ public struct OpenCodeHTTPClient: Sendable {
         }
         return health
     }
-    public func events(_ path: String, query: [String: String] = [:],
+    public func events(_ path: String, query: [String: String] = [:], sessionID: String? = nil,
+                       accept: (@Sendable (OpenCodeValue) async -> Bool)? = nil,
                        receive: @escaping @Sendable (OpenCodeValue) async throws -> Void) async throws {
         var request = try request("GET", path, query: query)
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
@@ -258,7 +267,7 @@ public struct OpenCodeHTTPClient: Sendable {
         // connection failure. A closed socket still triggers normal recovery.
         request.timeoutInterval = 86_400
         try await record("out", method: "GET", path: path, query: query, data: Data())
-        let (bytes, response) = try await session.bytes(for: request)
+        let (bytes, response) = try await eventSession.bytes(for: request)
         defer { bytes.task.cancel() }
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             throw OpenCodeError.http((response as? HTTPURLResponse)?.statusCode ?? 0)
@@ -275,13 +284,19 @@ public struct OpenCodeHTTPClient: Sendable {
                 try Task.checkCancellation()
                 raw.append(byte)
                 if byte == 10 || raw.count >= 16_384 {
-                    try await record("in", method: "GET", path: path, query: query, data: raw, status: http.statusCode)
+                    // The global volatile stream contains unrelated sessions.
+                    // Archive only decoded frames belonging to the subscriber.
+                    if path != "/api/event" { try await record("in", method: "GET", path: path, query: query, data: raw, status: http.statusCode) }
                     raw.removeAll(keepingCapacity: true)
                 }
                 for value in try parser.append(byte) {
+                    if let sessionID, value["data"]["sessionID"].text != sessionID { continue }
+                    if let accept, !(await accept(value)) { continue }
                     ordinal += 1
-                    if let sessionID = Self.nativeSessionID(path: path) {
-                        let identity = parser.lastEventID ?? value["seq"].number.map { String($0) }
+                    if let sessionID = sessionID ?? Self.nativeSessionID(path: path)
+                        ?? (path == "/api/event" ? value["data"]["sessionID"].string : nil) {
+                        let identity = value["id"].string ?? value["durable"]["seq"].number.map { String($0) }
+                            ?? value["seq"].number.map { String($0) } ?? parser.frameEventID
                             ?? streamID + ":" + String(ordinal)
                         let record = NativeHarnessArchive.record(id: "event:" + identity, kind: "event",
                             data: try NativeHarnessArchive.encode(value), contentMode: "event")
@@ -292,10 +307,10 @@ public struct OpenCodeHTTPClient: Sendable {
                 }
             }
         } catch {
-            if !raw.isEmpty { try await record("in", method: "GET", path: path, query: query, data: raw, status: http.statusCode) }
+            if path != "/api/event", !raw.isEmpty { try await record("in", method: "GET", path: path, query: query, data: raw, status: http.statusCode) }
             throw error
         }
-        if !raw.isEmpty { try await record("in", method: "GET", path: path, query: query, data: raw, status: http.statusCode) }
+        if path != "/api/event", !raw.isEmpty { try await record("in", method: "GET", path: path, query: query, data: raw, status: http.statusCode) }
         // A partial frame is never accepted or acknowledged at EOF.
         if parser.hasPartialFrame { throw OpenCodeError.malformedStream }
     }
@@ -307,6 +322,9 @@ public struct OpenCodeSSEParser: Sendable {
     private var carriageReturn = false
     private var failure = false
     public private(set) var lastEventID: String?
+    /// Unlike the reconnect cursor, this identity applies only to one frame.
+    public private(set) var frameEventID: String?
+    private var pendingEventID: String?
     public init() {}
     public var hasPartialFrame: Bool { !line.isEmpty || !data.isEmpty }
     public mutating func append(_ byte: UInt8) throws -> [OpenCodeValue] {
@@ -318,19 +336,23 @@ public struct OpenCodeSSEParser: Sendable {
         }
         defer { line.removeAll(keepingCapacity: true) }
         if line.isEmpty {
+            defer { pendingEventID = nil }
             guard !failure else { throw OpenCodeError.malformedStream }
             guard !data.isEmpty else { return [] }
-            defer { data.removeAll(keepingCapacity: true) }
+            frameEventID = pendingEventID
+            defer { data.removeAll(keepingCapacity: true); pendingEventID = nil }
             if data.last == 10 { data.removeLast() }
             var value = try OpenCodeValue.decode(data)
             // Effect's encoded JSON schema can itself be a JSON string.
             if let encoded = value.string { value = try OpenCodeValue.decode(Data(encoded.utf8)) }
             return [value]
         }
-        if line.starts(with: Data("event: effect/httpapi/stream/failure".utf8)) { failure = true }
+        if line.starts(with: Data("event: effect/httpapi/stream/failure".utf8))
+            || line.starts(with: Data("event: effect/http-api/stream/failure".utf8)) { failure = true }
         if line.starts(with: Data("id:".utf8)) {
             let offset = line.count > 3 && line[3] == 32 ? 4 : 3
             lastEventID = String(decoding: line.dropFirst(offset), as: UTF8.self)
+            pendingEventID = lastEventID?.isEmpty == false ? lastEventID : nil
         }
         if line.starts(with: Data("data:".utf8)) {
             let offset = line.count > 5 && line[5] == 32 ? 6 : 5

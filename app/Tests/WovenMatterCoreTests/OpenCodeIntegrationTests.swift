@@ -9,6 +9,89 @@ import WovenMatterCore
 @Suite(.serialized)
 struct OpenCodeIntegrationTests {
 
+    @Test func multipleFollowedChatsShareOneVolatileSubscription() async throws {
+        let fixture = OpenCodeFixture(); fixture.streamEvents = true; FixtureProtocol.fixture = fixture
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+        let first = try await database.createOpenCodeFixtureSession(runtimeKind: .opencode, title: "One", ownerDeviceID: UUID(), openCodeAssociation: ("fixture", "ses_fixture"))
+        let second = try await database.createOpenCodeFixtureSession(runtimeKind: .opencode, title: "Two", ownerDeviceID: UUID(), openCodeAssociation: ("fixture", "ses_second"))
+        let session = fixtureSession()
+        defer { session.invalidateAndCancel() }
+        let coordinator = OpenCodeSessionCoordinator(database: database, clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
+        try await coordinator.connect(connection())
+        await coordinator.watch(.init(conversationID: first, connectionID: "fixture", sessionID: "ses_fixture"))
+        await coordinator.watch(.init(conversationID: second, connectionID: "fixture", sessionID: "ses_second"))
+        do {
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                group.addTask {
+                    while fixture.lock.withLock({ fixture.durableRequests < 2 || fixture.liveRequests < 1 }) {
+                        try await Task.sleep(for: .milliseconds(10))
+                    }
+                }
+                group.addTask { try await Task.sleep(for: .seconds(10)); throw OpenCodeError.message("Subscriptions did not become ready") }
+                defer { group.cancelAll() }
+                _ = try await group.next()
+            }
+            #expect(fixture.lock.withLock { fixture.liveRequests } == 1)
+            _ = try await coordinator.call(connectionID: "fixture", path: "/api/info")
+        } catch {
+            await coordinator.shutdown()
+            throw error
+        }
+        await coordinator.shutdown()
+    }
+
+    @Test func volatileTextPersistsBeforeCompletionAndInterruptionReconcilesWithoutCompletedTime() async throws {
+        let fixture = OpenCodeFixture(); FixtureProtocol.fixture = fixture
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+        let id = try await database.createOpenCodeFixtureSession(runtimeKind: .opencode, title: "Live", ownerDeviceID: UUID(), openCodeAssociation: ("fixture", "ses_fixture"))
+        let link = OpenCodeSessionLink(conversationID: id, connectionID: "fixture", sessionID: "ses_fixture")
+        let session = fixtureSession()
+        defer { session.invalidateAndCancel() }
+        let coordinator = OpenCodeSessionCoordinator(database: database, clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
+        try await coordinator.connect(connection())
+        let baseline = fixture.lock.withLock { fixture.historyRequests }
+        let data: OpenCodeValue = ["sessionID": "ses_fixture", "assistantMessageID": "live-message", "ordinal": .number(0)]
+        await coordinator.receiveLiveEvent(["type": "session.text.started", "created": .number(1000), "data": data], link: link)
+        var delta = data; delta["delta"] = "Visible before completion"
+        await coordinator.receiveLiveEvent(["type": "session.text.delta", "data": delta], link: link)
+        do {
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                group.addTask {
+                    for await update in coordinator.updates {
+                        if let error = update.error { throw OpenCodeError.message(error) }
+                        if let saved = try await database.openCodeSnapshot(conversationID: id),
+                           saved.messages.last.map(OpenCodeSessionSnapshot.text) == "Visible before completion", saved.active { return }
+                    }
+                    throw CancellationError()
+                }
+                group.addTask { try await Task.sleep(for: .seconds(10)); throw OpenCodeError.message("Live text was not persisted") }
+                defer { group.cancelAll() }
+                _ = try await group.next()
+            }
+            #expect(fixture.lock.withLock { fixture.historyRequests } == baseline)
+            fixture.messages = [["id": "live-message", "type": "assistant", "time": ["created": .number(1000)],
+                "content": .array([["type": "text", "text": "Canonical interrupted text"]])]]
+            await coordinator.receiveLiveEvent(["type": "session.execution.interrupted", "data": ["sessionID": "ses_fixture"],
+                "durable": ["seq": .number(99)]], link: link)
+            // A live lifecycle signal is not a durable-log acknowledgement.
+            await coordinator.receiveLogEvent(["type": "session.execution.interrupted", "durable": ["seq": .number(1)]], link: link)
+            let settled = try await committedSnapshot(coordinator, conversationID: id, cursor: 1)
+            #expect(!settled.active)
+            #expect(settled.messages.last.map(OpenCodeSessionSnapshot.text) == "Canonical interrupted text")
+            #expect(settled.cursor == 1)
+        } catch {
+            await coordinator.shutdown()
+            throw error
+        }
+        await coordinator.shutdown()
+    }
+
     @Test func durableEventsCoalesceAndRefreshAgainAfterAnInflightSnapshot() async throws {
         let fixture = OpenCodeFixture(); FixtureProtocol.fixture = fixture
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
@@ -450,6 +533,9 @@ private final class OpenCodeFixture: @unchecked Sendable {
     var active = false
     var historyRequests = 0
     var streamTimeout: TimeInterval?
+    var streamEvents = false
+    var liveRequests = 0
+    var durableRequests = 0
     private func requestBody(_ request: URLRequest) throws -> OpenCodeValue {
         var bytes = request.httpBody ?? Data()
         if let stream = request.httpBodyStream {
@@ -468,7 +554,10 @@ private final class OpenCodeFixture: @unchecked Sendable {
             var path = request.url!.path
             let prefix = "/v1/workspace-instances/opencode"
             if path.hasPrefix(prefix) { path.removeFirst(prefix.count) }
-            if path.hasSuffix("/log") { streamTimeout = request.timeoutInterval; return (200, [:]) }
+            let sessionID = path.contains("/ses_second") ? "ses_second" : "ses_fixture"
+            if streamEvents { path = path.replacingOccurrences(of: "/ses_second", with: "/ses_fixture") }
+            if path == "/api/event" { liveRequests += 1; return (200, [:]) }
+            if path.hasSuffix("/log") { durableRequests += 1; streamTimeout = request.timeoutInterval; return (200, [:]) }
             if path == "/api/info" || path == "/api/health" {
                 healthCount += 1
                 if path == "/api/info", version.hasPrefix("0.0.0-beta-") { return (404, [:]) }
@@ -535,7 +624,7 @@ private final class OpenCodeFixture: @unchecked Sendable {
                 return (200, ["data": ["id": "ses_fixture", "title": "Created fixture"]])
             }
             if path == "/api/session/ses_fixture", !sessionExists { return (404, [:]) }
-            if path == "/api/session/ses_fixture" { return (200, ["data": ["id": "ses_fixture", "title": "Shared fixture", "model": .null, "location": ["directory": .string(nativeDirectory)], "time": ["updated": .number(900)]]]) }
+            if path == "/api/session/ses_fixture" { return (200, ["data": ["id": .string(sessionID), "title": "Shared fixture", "model": .null, "location": ["directory": .string(nativeDirectory)], "time": ["updated": .number(900)]]]) }
             return (404, [:])
         }
     }
@@ -554,6 +643,11 @@ private final class FixtureProtocol: URLProtocol, @unchecked Sendable {
     func deliver() {
         do {
             let (status, value) = try Self.fixture.respond(request)
+            if Self.fixture.streamEvents, request.url?.path == "/api/event" || request.url?.path.hasSuffix("/log") == true {
+                client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "text/event-stream"])!, cacheStoragePolicy: .notAllowed)
+                client?.urlProtocol(self, didLoad: Data(": connected\n\n".utf8))
+                return
+            }
             client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!, cacheStoragePolicy: .notAllowed)
             if status != 204 { client?.urlProtocol(self, didLoad: try JSONEncoder().encode(value)) }
             client?.urlProtocolDidFinishLoading(self)

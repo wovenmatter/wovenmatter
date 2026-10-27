@@ -32,6 +32,13 @@ public actor OpenCodeSessionCoordinator {
     private var workers: [String: Task<Void, Never>] = [:]
     private var generations: [String: UUID] = [:]
     private var snapshots: [String: OpenCodeSessionSnapshot] = [:]
+    private var liveProjections: [String: OpenCodeLiveProjection] = [:]
+    private var liveFlushes: [String: Task<Void, Never>] = [:]
+    private var liveFlushTokens: [String: UUID] = [:]
+    private var liveDirty: Set<String> = []
+    private var liveRevisions: [String: Int] = [:]
+    private var liveLinks: [String: OpenCodeSessionLink] = [:]
+    private var liveConnections: [String: (token: UUID, task: Task<Void, Never>)] = [:]
     private var pendingCursors: [String: Int64] = [:]
     private var eventRefreshes: [String: Task<Void, Never>] = [:]
     private var eventRefreshTokens: [String: UUID] = [:]
@@ -69,6 +76,7 @@ public actor OpenCodeSessionCoordinator {
         try Task.checkCancellation()
         guard connectionTokens[connection.identity] == token else { throw CancellationError() }
         clients[connection.identity] = client
+        if liveLinks.values.contains(where: { $0.connectionID == connection.identity }) { ensureLiveConnection(connection.identity) }
     }
     private func isCurrentConnection(_ id: String, token: UUID) -> Bool {
         connectionTokens[id] == token
@@ -86,6 +94,7 @@ public actor OpenCodeSessionCoordinator {
     public func disconnect(connectionID: String) async {
         for value in pendingDispatches.values where value.link.connectionID == connectionID { value.fence.cancel() }
         connectionTokens.removeValue(forKey: connectionID)
+        liveConnections.removeValue(forKey: connectionID)?.task.cancel()
         clients.removeValue(forKey: connectionID)
         let links = (try? await database.openCodeLinks()) ?? []
         // A replacement connection may have started during the database read.
@@ -97,11 +106,29 @@ public actor OpenCodeSessionCoordinator {
             eventRefreshDirty.remove(link.conversationID)
             generations.removeValue(forKey: link.conversationID)
             pendingCursors.removeValue(forKey: link.conversationID)
+            liveFlushes.removeValue(forKey: link.conversationID)?.cancel()
+            liveFlushTokens.removeValue(forKey: link.conversationID)
+            liveRevisions.removeValue(forKey: link.conversationID)
+            liveProjections.removeValue(forKey: link.conversationID)
+            liveDirty.remove(link.conversationID)
+            liveLinks.removeValue(forKey: link.conversationID)
             emit(link.conversationID, status: "Disconnected")
         }
         await pruneNativeInteractionGuards(connectionID: connectionID)
     }
-    public func shutdown() { interactionFences.values.forEach { $0.cancel() }; pendingDispatches.values.forEach { $0.fence.cancel() }; workers.values.forEach { $0.cancel() }; eventRefreshes.values.forEach { $0.cancel() }; workers.removeAll(); eventRefreshes.removeAll(); eventRefreshTokens.removeAll(); eventRefreshDirty.removeAll(); generations.removeAll(); clients.removeAll(); connectionTokens.removeAll(); pendingCursors.removeAll(); Task { await pruneNativeInteractionGuards() } }
+    public func shutdown() {
+        interactionFences.values.forEach { $0.cancel() }
+        pendingDispatches.values.forEach { $0.fence.cancel() }
+        workers.values.forEach { $0.cancel() }
+        eventRefreshes.values.forEach { $0.cancel() }
+        liveFlushes.values.forEach { $0.cancel() }
+        liveConnections.values.forEach { $0.task.cancel() }
+        liveConnections.removeAll(); liveLinks.removeAll(); liveFlushes.removeAll()
+        liveFlushTokens.removeAll(); liveRevisions.removeAll(); liveDirty.removeAll(); liveProjections.removeAll()
+        workers.removeAll(); eventRefreshes.removeAll(); eventRefreshTokens.removeAll(); eventRefreshDirty.removeAll()
+        generations.removeAll(); clients.removeAll(); connectionTokens.removeAll(); pendingCursors.removeAll()
+        Task { await pruneNativeInteractionGuards() }
+    }
     public func call(connectionID: String, method: String = "GET", path: String,
                      query: [String: String] = [:], body: OpenCodeValue? = nil,
                      dispatchFence: AgentDispatchFence? = nil) async throws -> OpenCodeValue {
@@ -293,6 +320,8 @@ public actor OpenCodeSessionCoordinator {
               clients[link.connectionID] != nil, workers[link.conversationID] == nil else { return }
         snapshots[link.conversationID] = snapshot
         let generation = UUID(); generations[link.conversationID] = generation
+        liveLinks[link.conversationID] = link
+        ensureLiveConnection(link.connectionID)
         workers[link.conversationID] = Task { await self.follow(link, generation: generation) }
     }
     private func follow(_ link: OpenCodeSessionLink, generation: UUID) async {
@@ -336,6 +365,8 @@ public actor OpenCodeSessionCoordinator {
                 }
             } catch {
                 guard !Task.isCancelled, generations[link.conversationID] == generation else { return }
+                liveProjections.removeValue(forKey: link.conversationID)
+                liveDirty.remove(link.conversationID)
                 guard (try? await database.openCodeExecutionRoot(conversationID: link.conversationID)) != nil else { break }
                 if error is CancellationError { continue }
                 if case OpenCodeError.incompatible = error { emit(link.conversationID, status: "Unsupported version", error: error.localizedDescription); break }
@@ -348,11 +379,106 @@ public actor OpenCodeSessionCoordinator {
                 catch { return }
             }
         }
-        if generations[link.conversationID] == generation { workers.removeValue(forKey: link.conversationID) }
+        if generations[link.conversationID] == generation {
+            workers.removeValue(forKey: link.conversationID)
+            liveLinks.removeValue(forKey: link.conversationID)
+            if !liveLinks.values.contains(where: { $0.connectionID == link.connectionID }) {
+                liveConnections.removeValue(forKey: link.connectionID)?.task.cancel()
+            }
+        }
     }
-    private func logEvent(_ event: OpenCodeValue, link: OpenCodeSessionLink, generation: UUID) {
+    private func acceptsLiveEvent(_ event: OpenCodeValue, connectionID: String, token: UUID) -> Bool {
+        connectionTokens[connectionID] == token && liveLinks.values.contains {
+            $0.connectionID == connectionID && $0.sessionID == event["data"]["sessionID"].text
+                && generations[$0.conversationID] != nil
+        }
+    }
+    private func broadcastLiveEvent(_ event: OpenCodeValue, connectionID: String, token: UUID) {
+        guard connectionTokens[connectionID] == token else { return }
+        for link in liveLinks.values where link.connectionID == connectionID && link.sessionID == event["data"]["sessionID"].text {
+            if let generation = generations[link.conversationID] { liveEvent(event, link: link, generation: generation) }
+        }
+    }
+    private func ensureLiveConnection(_ connectionID: String) {
+        guard let token = connectionTokens[connectionID], liveConnections[connectionID]?.token != token else { return }
+        liveConnections.removeValue(forKey: connectionID)?.task.cancel()
+        let task = Task {
+            defer { if self.liveConnections[connectionID]?.token == token { self.liveConnections[connectionID] = nil } }
+            while !Task.isCancelled, self.connectionTokens[connectionID] == token,
+                  let client = self.clients[connectionID] {
+                do {
+                    try await client.events("/api/event", accept: { event in
+                        await self.acceptsLiveEvent(event, connectionID: connectionID, token: token)
+                    }) { event in
+                        await self.broadcastLiveEvent(event, connectionID: connectionID, token: token)
+                    }
+                    throw OpenCodeError.message("OpenCode live event connection ended.")
+                } catch {
+                    guard !Task.isCancelled, self.connectionTokens[connectionID] == token else { return }
+                    for link in self.liveLinks.values where link.connectionID == connectionID {
+                        self.liveProjections.removeValue(forKey: link.conversationID)
+                        self.liveDirty.remove(link.conversationID)
+                        self.emit(link.conversationID, status: "Reconnecting", error: error.localizedDescription)
+                    }
+                    if case OpenCodeError.http(401) = error { return }
+                    do { try await Task.sleep(for: .seconds(2)) } catch { return }
+                }
+            }
+        }
+        liveConnections[connectionID] = (token, task)
+    }
+    private func liveEvent(_ event: OpenCodeValue, link: OpenCodeSessionLink, generation: UUID) {
+        guard generations[link.conversationID] == generation,
+              event["data"]["sessionID"].text == link.sessionID else { return }
+        var projection = liveProjections[link.conversationID] ?? OpenCodeLiveProjection()
+        let terminal = ["session.execution.succeeded", "session.execution.failed", "session.execution.interrupted"].contains(event["type"].text)
+        if terminal { projection.finish() }
+        guard terminal || projection.receive(event, sessionID: link.sessionID, snapshot: snapshots[link.conversationID]) else {
+            // Tool/permission/lifecycle events still reconcile their canonical
+            // native state. Volatile events never advance the durable cursor.
+            logEvent(event, link: link, generation: generation, acknowledgesCursor: false)
+            return
+        }
+        liveProjections[link.conversationID] = projection
+        liveRevisions[link.conversationID, default: 0] += 1
+        if terminal { logEvent(event, link: link, generation: generation, acknowledgesCursor: false) }
+        liveDirty.insert(link.conversationID)
+        guard liveFlushes[link.conversationID] == nil else { return }
+        let flushToken = UUID()
+        liveFlushTokens[link.conversationID] = flushToken
+        liveFlushes[link.conversationID] = Task {
+            defer {
+                if self.liveFlushTokens[link.conversationID] == flushToken {
+                    self.liveFlushes[link.conversationID] = nil
+                    self.liveFlushTokens[link.conversationID] = nil
+                }
+            }
+            do {
+                while self.liveDirty.contains(link.conversationID) {
+                    try await Task.sleep(for: .milliseconds(35))
+                    guard self.generations[link.conversationID] == generation else { return }
+                    // Desktop publication can continue while HTTP reconciliation
+                    // owns the persistence lock. The next commit includes the
+                    // same projection for remote clients and durable history.
+                    self.emit(link.conversationID, status: "Connected")
+                    guard !self.refreshing.contains(link.conversationID) else { continue }
+                    self.refreshing.insert(link.conversationID)
+                    defer { self.refreshing.remove(link.conversationID) }
+                    self.liveDirty.remove(link.conversationID)
+                    guard let base = self.snapshots[link.conversationID] else { continue }
+                    let snapshot = self.liveProjections[link.conversationID]?.applying(to: base) ?? base
+                    try await self.database.saveOpenCodeSnapshot(snapshot, conversationID: link.conversationID)
+                    guard self.generations[link.conversationID] == generation else { return }
+                    self.snapshots[link.conversationID] = snapshot
+                    self.emit(link.conversationID, status: "Connected")
+                }
+            } catch is CancellationError {
+            } catch { self.emit(link.conversationID, status: "Reconnecting", error: error.localizedDescription) }
+        }
+    }
+    private func logEvent(_ event: OpenCodeValue, link: OpenCodeSessionLink, generation: UUID, acknowledgesCursor: Bool = true) {
         guard generations[link.conversationID] == generation else { return }
-        if let seq = event["durable"]["seq"].number ?? event["seq"].number,
+        if acknowledgesCursor, let seq = event["durable"]["seq"].number ?? event["seq"].number,
            seq >= 0, seq <= 9_007_199_254_740_991, seq.rounded() == seq {
             let cursor = Int64(seq)
             guard cursor > (snapshots[link.conversationID]?.cursor ?? -1) else { return }
@@ -365,6 +491,16 @@ public actor OpenCodeSessionCoordinator {
         scheduleEventRefresh(link, generation: generation, delay: !terminal)
     }
     func receiveLogEvent(_ event: OpenCodeValue, link: OpenCodeSessionLink) async {
+        await prepareEventSession(link)
+        guard let generation = generations[link.conversationID] else { return }
+        logEvent(event, link: link, generation: generation)
+    }
+    func receiveLiveEvent(_ event: OpenCodeValue, link: OpenCodeSessionLink) async {
+        await prepareEventSession(link)
+        guard let generation = generations[link.conversationID] else { return }
+        liveEvent(event, link: link, generation: generation)
+    }
+    private func prepareEventSession(_ link: OpenCodeSessionLink) async {
         guard (try? await database.openCodeExecutionRoot(conversationID: link.conversationID)) != nil else { return }
         if generations[link.conversationID] == nil {
             let token = connectionTokens[link.connectionID]
@@ -375,8 +511,6 @@ public actor OpenCodeSessionCoordinator {
                 generations[link.conversationID] = UUID()
             }
         }
-        guard let generation = generations[link.conversationID] else { return }
-        logEvent(event, link: link, generation: generation)
     }
     private func scheduleEventRefresh(_ link: OpenCodeSessionLink, generation: UUID, delay: Bool = false) {
         guard eventRefreshes[link.conversationID] == nil else { return }
@@ -411,6 +545,7 @@ public actor OpenCodeSessionCoordinator {
         guard token != nil, token == connectionTokens[link.connectionID],
               capturedGeneration == generations[link.conversationID] else { throw CancellationError() }
         let acknowledged = pendingCursors[link.conversationID]
+        let liveRevision = liveRevisions[link.conversationID]
         let path = "/api/session/" + OpenCodeHTTPClient.segment(link.sessionID)
         async let info = client.call("GET", path)
         async let messages = client.historyPage(path + "/message")
@@ -491,6 +626,9 @@ public actor OpenCodeSessionCoordinator {
         snapshot.forms = pendingForms
         snapshot.inbox = responses.4["data"].array
         snapshot.active = !responses.5["data"][link.sessionID].isNull
+        liveProjections[link.conversationID]?.reconcile(snapshot,
+            canSettle: liveRevision == liveRevisions[link.conversationID])
+        snapshot = liveProjections[link.conversationID]?.applying(to: snapshot) ?? snapshot
         if snapshot.active, mcpConnectionTokens[link.conversationID] != token,
            let context = try await mcpConnectionProvider?(link.conversationID) {
             try await configureMCP(link, context: context, client: client)
@@ -839,6 +977,7 @@ public actor OpenCodeSessionCoordinator {
         }
     }
     private func emit(_ id: String, status: String, error: String? = nil) {
-        continuation.yield(OpenCodeSessionUpdate(conversationID: id, snapshot: snapshots[id], status: status, error: error))
+        let snapshot = snapshots[id].map { liveProjections[id]?.applying(to: $0) ?? $0 }
+        continuation.yield(OpenCodeSessionUpdate(conversationID: id, snapshot: snapshot, status: status, error: error))
     }
 }

@@ -4,6 +4,7 @@ import { resolve } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { createInterface } from 'node:readline'
 import { durableJSON } from './durable-json.mjs'
+import { assemblePresentationFrame } from './presentation-frames.mjs'
 
 const bundled = new URL('../default-agent/src/native-journal.mjs', import.meta.url)
 const { sanitizeNativeTransportBytes } = await import(existsSync(bundled) ? bundled.href : new URL('../../default-agent/src/native-journal.mjs', import.meta.url).href)
@@ -65,7 +66,9 @@ export function createRetainedExecutionCapture({directory, defaultDirectory, tas
     const entries=[]
     for(let partIndex=0;partIndex<partCount;partIndex++)entries.push(event(binding,`native-${index}-${partIndex}`,'nativeRecord',{nativeRecord:{recordID,
       format:'woven-native-update-v1',partIndex,partCount,byteCount:bytes.length,sha256,data:bytes.subarray(partIndex*131072,(partIndex+1)*131072).toString('base64')}}))
-    const next=structuredClone(state),update=JSON.parse(bytes.toString('utf8')),kind=update.sessionUpdate
+    const next=structuredClone(state)
+    next.presentationFrames??={}
+    const update=assemblePresentationFrame(JSON.parse(bytes.toString('utf8')),next.presentationFrames),kind=update?.sessionUpdate
     if(kind==='agent_message_chunk') {
       const previous=next.messages.map(item=>item.content).join(''),text=update.content?.text??''
       const content=update._meta?.wovenAssistantSnapshot===true?text:previous+text
@@ -93,6 +96,7 @@ export function createRetainedExecutionCapture({directory, defaultDirectory, tas
     if(state.finished)return
     await importEntries([event(binding,'complete','transcript',{transcript:{conversationID:binding.conversationID,messages:[],activities:[],
       runs:[{id:binding.runID,status:binding.status,startedAt:binding.startedAt,completedAt:binding.completedAt}]}})])
+    delete state.presentationFrames
     state.finished=true;writeState(binding.key,state)
   }
   async function captureTasks() {

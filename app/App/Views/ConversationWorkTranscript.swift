@@ -199,6 +199,15 @@ struct ConversationWorkTranscript: View {
                         .transition(reduceMotion ? .identity : .opacity)
                     }
                 }
+                if isRunning && timeline.needsThinkingIndicator {
+                    HStack(spacing: 9) {
+                        ProgressView().controlSize(.mini).frame(width: 17)
+                        Text("Thinking").font(.system(size: 13.5))
+                    }
+                    .foregroundStyle(DashboardPalette.mutedForeground)
+                    .padding(.top, 12)
+                    .accessibilityLabel("Thinking")
+                }
             }
         }
     }
@@ -310,13 +319,15 @@ private struct ConversationWorkGroupRow: View {
     @Environment(\.conversationTranscriptInteraction) private var transcriptInteraction
     @Environment(\.conversationTranscriptState) private var transcriptState
     @State private var localExpanded = false
+    @State private var localScrollOffset: CGFloat = 0
 
     var body: some View {
         let runIsActive = runStatus == "running"
         let liveLabel = runIsActive && ((isTail && !group.hasFailure) || group.hasActiveActivity)
             ? group.liveLabel(runIsActive: true)
             : nil
-        if liveLabel == nil, let single = group.singleActivity {
+        let wasExpanded = transcriptState?.isExpanded(scrollKey) ?? localExpanded
+        if liveLabel == nil, !wasExpanded, let single = group.singleActivity {
             ConversationActivityRow(
                 activity: single,
                 runID: runID,
@@ -331,12 +342,41 @@ private struct ConversationWorkGroupRow: View {
                 local: $localExpanded,
                 interaction: transcriptInteraction
             )
-            let showsProgress = liveLabel != nil && group.hasActiveActivity && !expanded.wrappedValue
+            // The model can keep working between a successful tool and its
+            // next visible part. Keep that live edge animated until the run ends.
+            let showsProgress = liveLabel != nil && !expanded.wrappedValue
             VStack(alignment: .leading, spacing: 0) {
                 Button {
                     expanded.wrappedValue.toggle()
                 } label: {
-                    header(liveLabel: liveLabel, expanded: expanded.wrappedValue, showsProgress: showsProgress)
+                    VStack(alignment: .leading, spacing: 5) {
+                        if liveLabel != nil, !expanded.wrappedValue,
+                           let thought = group.latestThought,
+                           let source = thought.content?.nonempty ?? thought.detail?.nonempty {
+                            let preview = AssistantStreamingText.reasoningPreview(
+                                of: RemoteNoteEditEnvelope.redactingEnvelopes(in: source))
+                            if !preview.isEmpty {
+                                HStack(alignment: .firstTextBaseline, spacing: 9) {
+                                    Image(systemName: "sparkles")
+                                        .font(.system(size: 12, weight: .medium))
+                                        .frame(width: 17)
+                                    Text(preview)
+                                        .font(.system(size: 13.5))
+                                        .lineSpacing(3)
+                                        .lineLimit(4)
+                                        .multilineTextAlignment(.leading)
+                                }
+                                .foregroundStyle(DashboardPalette.mutedForeground)
+                            }
+                        }
+                        header(liveLabel: liveLabel.map { label in
+                            if let activity = group.liveActivity, activity.kind == .thought,
+                               activity.content?.nonempty != nil || activity.detail?.nonempty != nil {
+                                return "Thinking"
+                            }
+                            return label
+                        }, expanded: expanded.wrappedValue, showsProgress: showsProgress)
+                    }
                 }
                 .buttonStyle(ConversationElapsedButtonStyle())
                 .accessibilityValue((expanded.wrappedValue ? "Expanded" : "Collapsed") + (showsProgress ? ", In progress" : ""))
@@ -348,13 +388,22 @@ private struct ConversationWorkGroupRow: View {
                         group: group,
                         runID: runID,
                         runStatus: runStatus,
-                        followsAppends: liveLabel != nil
+                        followsAppends: liveLabel != nil,
+                        initialScrollOffset: transcriptState?.workScrollOffset(scrollKey) ?? localScrollOffset,
+                        saveScrollOffset: { offset in
+                            if let transcriptState { transcriptState.setWorkScrollOffset(scrollKey, offset) }
+                            else { localScrollOffset = offset }
+                        }
                     )
                     .padding(.top, 8)
                     .padding(.leading, 26)
                 }
             }
         }
+    }
+
+    private var scrollKey: String {
+        ConversationTranscriptState.disclosureKey(runID: runID, itemID: group.id)
     }
 
     private func header(liveLabel: String?, expanded: Bool, showsProgress: Bool) -> some View {
@@ -401,19 +450,43 @@ private struct ConversationBoundedWorkList: View {
     let runID: String
     let runStatus: String
     let followsAppends: Bool
+    let initialScrollOffset: CGFloat
+    let saveScrollOffset: (CGFloat) -> Void
     @State private var contentHeight = Self.maximumHeight
+    @State private var scrollState = ConversationWorkScrollState()
+    @State private var scrollPosition = ScrollPosition(edge: .top)
+    @State private var scrollOffset: CGFloat = 0
+    @State private var reasoningText: [String: String] = [:]
 
     var body: some View {
-        ScrollView(.vertical) {
-            LazyVStack(alignment: .leading, spacing: 8) {
+        ScrollViewReader { proxy in
+            ScrollView(.vertical) {
+                LazyVStack(alignment: .leading, spacing: 8) {
                 ForEach(group.activities) { activity in
-                    ConversationActivityRow(
-                        activity: activity,
-                        runID: runID,
-                        runStatus: runStatus,
-                        showsProgress: group.showsProgress(activity)
-                    )
+                    if group.isThoughtOnly {
+                        // One disclosure opens the complete formatted trace;
+                        // reasoning-only groups need no second row disclosure.
+                        ConversationActivityDetails(
+                            activity: activity, runID: runID,
+                            isLive: runStatus == "running" && group.showsProgress(activity),
+                            summary: nil, indentation: 0)
+                    } else {
+                        ConversationActivityRow(
+                            activity: activity,
+                            runID: runID,
+                            runStatus: runStatus,
+                            showsProgress: group.showsProgress(activity)
+                        )
+                    }
                 }
+                if followsAppends && !group.hasActiveActivity {
+                    HStack(spacing: 9) {
+                        ProgressView().controlSize(.mini).frame(width: 17)
+                        Text("Thinking").font(.system(size: 13.5))
+                    }
+                    .foregroundStyle(DashboardPalette.mutedForeground)
+                }
+                Color.clear.frame(height: 1).id("work-end")
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
@@ -421,7 +494,36 @@ private struct ConversationBoundedWorkList: View {
         .scrollIndicators(.never)
         .frame(height: min(Self.maximumHeight, max(1, contentHeight)))
         .defaultScrollAnchor(.top, for: .initialOffset)
-        .defaultScrollAnchor(followsAppends ? .bottom : .top, for: .sizeChanges)
+        .scrollPosition($scrollPosition)
+        .onScrollGeometryChange(for: CGFloat.self) { max(0, $0.contentOffset.y) } action: { _, offset in
+            scrollOffset = offset
+        }
+        .onScrollGeometryChange(for: Bool.self) { geometry in
+            geometry.contentSize.height - geometry.contentOffset.y - geometry.containerSize.height <= 4
+        } action: { _, isAtBottom in
+            scrollState.setAtBottom(isAtBottom)
+        }
+        .onChange(of: group.activities.map(\.id)) { before, after in
+            if followsAppends && scrollState.shouldFollowAppend(from: before, to: after) {
+                proxy.scrollTo("work-end", anchor: .bottom)
+            }
+        }
+        .onPreferenceChange(ConversationReasoningTextKey.self) { after in
+            let before = reasoningText
+            reasoningText = after
+            if followsAppends && group.isThoughtOnly && before.keys.sorted() == after.keys.sorted(),
+               after.allSatisfy({ key, value in value.hasPrefix(before[key] ?? "") }),
+               after.contains(where: { key, value in
+                scrollState.shouldFollowTextAppend(from: before[key] ?? "", to: value)
+               }) {
+                proxy.scrollTo("work-end", anchor: .bottom)
+            }
+        }
+        .task {
+            if initialScrollOffset > 0 { scrollPosition.scrollTo(y: initialScrollOffset) }
+        }
+        .onDisappear { saveScrollOffset(scrollOffset) }
+        }
     }
 }
 
@@ -553,7 +655,7 @@ private struct ConversationActivityRow: View {
     private var secondaryLabel: String? {
         if activity.kind == .thought {
             // A thought labelled from its own text needs no preview.
-            guard ["Thinking", "Thought"].contains(primaryLabel),
+            guard ["Thinking", "Thought", "Reasoning", "Reasoning summary"].contains(primaryLabel),
                   let content = activity.content?.nonempty else { return nil }
             return Self.preview(content)
         }
@@ -643,6 +745,7 @@ private struct ConversationActivityDetails: View {
     let isLive: Bool
     /// Text already shown in the row label.
     let summary: String?
+    var indentation: CGFloat = 26
     @Environment(\.conversationActivityDetails) private var loadDetails
     @State private var loaded: AgentRunActivity?
     @State private var loadToken: UUID?
@@ -659,12 +762,13 @@ private struct ConversationActivityDetails: View {
 
     var body: some View {
         let complete = self.complete
-        let content = field(\.content)
+        let content = field(\.content)?.nonempty
+            ?? (activity.kind == .thought ? field(\.detail)?.nonempty ?? field(\.title)?.nonempty : nil)
         VStack(alignment: .leading, spacing: 8) {
-            if !isLive, let title = complete?.title, title != activity.title {
+            if activity.kind != .thought, !isLive, let title = complete?.title, title != activity.title {
                 ConversationPagedText(text: title, style: .prose)
             }
-            if !isLive, let detail = complete?.detail, detail != activity.detail {
+            if activity.kind != .thought, !isLive, let detail = complete?.detail, detail != activity.detail {
                 ConversationPagedText(text: detail, style: .prose)
             }
             if let subagents = field(\.subagents) {
@@ -673,7 +777,13 @@ private struct ConversationActivityDetails: View {
                 }
             }
             if activity.kind != .activity, let content = content?.nonempty, content != summary {
-                ConversationPagedText(text: content, style: activity.kind == .thought ? .prose : .code)
+                if activity.kind == .thought {
+                    ConversationReasoningText(
+                        activityID: activity.id,
+                        text: RemoteNoteEditEnvelope.redactingEnvelopes(in: content), isLive: isLive)
+                } else {
+                    ConversationPagedText(text: content, style: .code)
+                }
             }
             rawBlock("Input", field(\.rawInputJSON))
             rawBlock("Output", field(\.rawOutputJSON))
@@ -698,7 +808,7 @@ private struct ConversationActivityDetails: View {
             }
         }
         .padding(.top, 7)
-        .padding(.leading, 26)
+        .padding(.leading, indentation)
         .onScrollVisibilityChange(threshold: 0.01) { visible in
             isVisible = visible
             if !visible { loaded = nil }
@@ -782,6 +892,39 @@ private struct ConversationActivityDetails: View {
                 ConversationPagedText(text: value, style: .raw)
             }
         }
+    }
+}
+
+/// Reasoning uses the response's Markdown renderer, safe links, and native
+/// selection. Paging bounds layout without hiding any supplied trace text.
+private struct ConversationReasoningText: View {
+    let activityID: String
+    let text: String
+    let isLive: Bool
+    @State private var pages = 1
+
+    var body: some View {
+        let end = text.index(text.startIndex, offsetBy: pages * 20_000, limitedBy: text.endIndex) ?? text.endIndex
+        let source = String(text[..<end])
+        let shown = isLive && end == text.endIndex ? AssistantStreamingText.readyPrefix(of: source) : source
+        VStack(alignment: .leading, spacing: 6) {
+            if !shown.isEmpty {
+                ConversationResponse(content: shown, isStreaming: isLive, showsCopyButton: false)
+            }
+            if end != text.endIndex {
+                Button("Show more reasoning") { pages += 1 }
+                    .buttonStyle(DashboardQuietButtonStyle())
+                    .font(.system(size: 12))
+            }
+        }
+        .preference(key: ConversationReasoningTextKey.self, value: [activityID: shown])
+    }
+}
+
+private struct ConversationReasoningTextKey: PreferenceKey {
+    static let defaultValue: [String: String] = [:]
+    static func reduce(value: inout [String: String], nextValue: () -> [String: String]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, latest in latest })
     }
 }
 

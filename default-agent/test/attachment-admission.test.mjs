@@ -132,17 +132,23 @@ test('remote Pi relay uses the installed host port and rejects an invalid port b
   const directory = await mkdtemp('/tmp/woven-remote-port-');
   t.after(() => rm(directory, { recursive: true, force: true }));
   for (const port of ['17439', '7337/elsewhere', '0', '65536']) {
-    const mock = `globalThis.fetch = async url => { if (String(url) !== 'http://127.0.0.1:17439/v1/default-agent/rpc') throw new Error('Wrong workspace service endpoint'); return {ok:true,status:200,json:async()=>({result:{sessionId:'correct-host'}})}; };`;
+    const mock = `import {registerHooks} from 'node:module';
+      registerHooks({resolve(specifier, context, next) {
+        if (specifier.endsWith('/engine.mjs') || /^@earendil-works\\/pi-|^@anthropic-ai\\//.test(specifier)) throw new Error('Remote relay must not load local inference SDKs');
+        return next(specifier, context);
+      }});
+      globalThis.fetch = async url => { if (String(url) !== 'http://127.0.0.1:17439/v1/default-agent/rpc') throw new Error('Wrong workspace service endpoint'); return {ok:true,status:200,json:async()=>({result:{sessionId:'correct-host'}})}; };`;
     const child = spawn(process.execPath, ['--import', 'data:text/javascript,' + encodeURIComponent(mock),
       fileURLToPath(new URL('../src/main.mjs', import.meta.url)), '--remote'], {
       env: { ...process.env, WOVEN_DEFAULT_AGENT_DIRECTORY: directory, WOVENMATTER_LISTEN_PORT: port }, stdio: ['pipe', 'pipe', 'pipe'],
     });
     t.after(() => child.kill('SIGTERM'));
     const lines = createInterface({ input: child.stdout });
+    let stderr = ''; child.stderr.on('data', bytes => { stderr = (stderr + bytes).slice(-4096); });
     const result = new Promise((resolve, reject) => {
       lines.once('line', line => resolve(JSON.parse(line)));
       child.once('error', reject);
-      child.once('exit', code => { if (code) reject(new Error('Pi relay exited before responding')); });
+      child.once('exit', (code, signal) => reject(new Error(`Pi relay for port ${port} exited before responding (${code ?? signal}): ${stderr}`)));
     });
     child.stdin.write(JSON.stringify({jsonrpc:'2.0',id:1,method:'session/new',params:{}}) + '\n');
     const response = await result;

@@ -15,6 +15,7 @@ final class ConversationTranscriptState {
     private(set) var runExpansion: [String: Bool] = [:]
     /// Expanded work groups and row details, keyed by `disclosureKey`.
     private(set) var expandedItems: Set<String> = []
+    private var workScrollOffsets: [String: CGFloat] = [:]
     var tasksExpanded = false
 
     init() {}
@@ -37,6 +38,12 @@ final class ConversationTranscriptState {
         } else {
             expandedItems.remove(key)
         }
+    }
+
+    func workScrollOffset(_ key: String) -> CGFloat { workScrollOffsets[key] ?? 0 }
+
+    func setWorkScrollOffset(_ key: String, _ offset: CGFloat) {
+        workScrollOffsets[key] = max(0, offset)
     }
 
     static func disclosureKey(runID: String, itemID: String) -> String {

@@ -175,7 +175,11 @@ when an intentional design change is accepted.
   edge with the header controls using the same 12-point side inset.
 - **Conversation progress:** use the shared elapsed work header. A collapsed
   live tool group shows progress once; expanding it moves the indicator to its
-  active tool rows. Keep detail-loading text quiet and avoid a separate mobile
+  active tool rows. Keep the latest supplied reasoning preview beside the live
+  tool, and open reasoning-only groups directly into formatted traces. Preserve
+  the reader's position; follow new work or reasoning only from the live edge.
+  Between a successful tool and the next visible output, keep the live indicator
+  (or an expanded Thinking row) active. Keep detail-loading text quiet and avoid a separate mobile
   running spinner below the transcript.
 - **Scrolling:** hide scrollbars throughout the app while preserving scrolling. Set
   `.scrollIndicators(.never)` on SwiftUI scroll views and editors, including

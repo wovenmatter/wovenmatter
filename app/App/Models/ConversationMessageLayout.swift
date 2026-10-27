@@ -128,3 +128,19 @@ struct DashboardConversationScrollState: Equatable {
         isNearBottom = false
     }
 }
+
+/// Work groups follow new rows only from their existing live edge. Replacing
+/// content, settling a tool, or opening its details must preserve reading position.
+struct ConversationWorkScrollState: Equatable {
+    private(set) var isAtBottom = true
+
+    mutating func setAtBottom(_ value: Bool) { isAtBottom = value }
+
+    func shouldFollowAppend(from before: [String], to after: [String]) -> Bool {
+        isAtBottom && after.count > before.count && after.starts(with: before)
+    }
+
+    func shouldFollowTextAppend(from before: String, to after: String) -> Bool {
+        isAtBottom && after.count > before.count && after.hasPrefix(before)
+    }
+}

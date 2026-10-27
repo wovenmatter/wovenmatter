@@ -259,3 +259,28 @@ test('workspace edits and live buffered output become durable before a turn fini
   assert.equal((await f.service.command(input, f.principal)).status, 'completed')
   assert.equal(f.calls.length, 1)
 })
+
+test('direct execution assembles replacement frames atomically and preserves completed text on interruption',async t=>{
+  const f=fixture(t),opened=await f.service.command(f.command('createSession'),f.principal)
+  await f.service.command(f.command('send',{conversationID:opened.conversationID,text:'work'}),f.principal);await turn()
+  const publish=f.runs[0].publish,content=()=>f.service.transcript(opened.conversationID).messages.filter(x=>x.role==='assistant').map(x=>x.content).join('')
+  const frame=(text,start,end)=>({sessionUpdate:'agent_message_chunk',content:{text},_meta:{wovenAssistantSnapshot:true,wovenSnapshotStart:start,wovenSnapshotEnd:end}})
+  publish({sessionUpdate:'agent_message_chunk',content:{text:'previous'}})
+  publish(frame('new ',true,false));assert.equal(content(),'previous')
+  publish(frame('🧵',false,true));assert.equal(content(),'new 🧵')
+  publish({sessionUpdate:'agent_message_chunk',content:{text:' suffix'}});assert.equal(content(),'new 🧵 suffix')
+  publish(frame('',true,true));assert.equal(content(),'')
+  publish({sessionUpdate:'agent_message_chunk',content:{text:'retained'}})
+  publish(frame('unfinished',true,false));f.runs[0].done.resolve();await turn()
+  assert.equal(content(),'retained')
+})
+
+test('direct reasoning frames keep separate thought identities and publish only complete replacements',async t=>{
+  const f=fixture(t),opened=await f.service.command(f.command('createSession'),f.principal)
+  await f.service.command(f.command('send',{conversationID:opened.conversationID,text:'work'}),f.principal);await turn()
+  const publish=(id,text,start,end)=>f.runs[0].publish({sessionUpdate:'agent_thought_chunk',content:{text},_meta:{wovenThoughtID:id,wovenThoughtSnapshot:true,wovenSnapshotStart:start,wovenSnapshotEnd:end}})
+  publish('one','First ',true,false);publish('two','Second',true,true)
+  assert.deepEqual(f.service.transcript(opened.conversationID).activities.map(x=>x.detail),['Second'])
+  publish('one','thought',false,true)
+  assert.deepEqual(f.service.transcript(opened.conversationID).activities.map(x=>x.detail),['Second','First thought'])
+})

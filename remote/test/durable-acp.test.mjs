@@ -413,3 +413,27 @@ test('full-root durable relay enforces its workspace permission on stale client 
   assert.equal(JSON.parse(f.received()).params.value, 'agent-full-access')
   await relay.stopAll()
 })
+
+test('recovery replaces assistant snapshots atomically, preserves suffixes and replays the same result', async t => {
+  const snapshot = {wovenAssistantSnapshot:true}
+  const start = {...snapshot,wovenSnapshotStart:true,wovenSnapshotEnd:false}
+  const end = {...snapshot,wovenSnapshotStart:false,wovenSnapshotEnd:true}
+  for (const [frames, expected] of [
+    [[['old answer'],['Before ',start],['🧵',end],[' after']], 'Before 🧵 after'],
+    [[['old answer'],['corrected',snapshot],[' retained']], 'corrected retained'],
+    [[['complete answer'],['incomplete',start]], 'complete answer'],
+  ]) {
+    const f = await fixture(t)
+    await f.call('attach')
+    await f.call('message', {deliveryID:'run',message:{jsonrpc:'2.0',id:1,method:'session/prompt',params:{sessionId:'native',_meta:{wovenRunID:'run'}}}})
+    for (const [text, meta] of frames) f.child.stdout.write(JSON.stringify({jsonrpc:'2.0',method:'session/update',params:{sessionId:'native',update:{sessionUpdate:'agent_message_chunk',content:{type:'text',text},...(meta?{_meta:meta}:{})}}})+'\n')
+    f.child.stdout.write('{"jsonrpc":"2.0","id":1,"result":{"stopReason":"end_turn"}}\n')
+    await new Promise(resolve => setImmediate(resolve))
+    const recovered = [{runID:'run',content:expected}]
+    assert.deepEqual((await f.call('attach')).snapshot.recoveredRuns,recovered)
+    await f.relay.stopAll()
+    const restarted = createDurableACP(f.options)
+    const attached = await restarted.handle('POST','/v1/durable-acp/attach',{channelID:'session',harnessID:'test'})
+    assert.deepEqual(attached.snapshot.recoveredRuns,recovered)
+  }
+})

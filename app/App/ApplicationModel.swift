@@ -1469,15 +1469,17 @@ final class ApplicationModel {
     ) -> [String: DashboardMessagePresentation] {
         var result: [String: DashboardMessagePresentation] = [:]
         let workRunsByReply = Dictionary(runs.compactMap { run in
-            run.assistantMessageID.map { ($0, run.id) }
+            run.assistantMessageID.map { ($0, run) }
         }, uniquingKeysWith: { _, latest in latest })
         let activitiesByRun = Dictionary(grouping: activities.sorted(by: WorkspaceRunActivityRecord.precedes), by: \.runID)
         result.reserveCapacity(messages.count)
         for message in messages {
             guard !Task.isCancelled else { return result }
-            let work = workRunsByReply[message.id].map { activitiesByRun[$0] ?? [] } ?? []
+            let run = workRunsByReply[message.id]
+            let work = run.map { activitiesByRun[$0.id] ?? [] } ?? []
+            let isStreaming = AssistantStreamingText.isStreaming(messageStatus: message.status, runStatus: run?.status)
             if let existing = previous[message.id], existing.source == message.content,
-               existing.status == message.status, existing.createdAt == message.createdAt,
+               existing.status == message.status, existing.isStreaming == isStreaming, existing.createdAt == message.createdAt,
                existing.activities == work {
                 result[message.id] = existing
                 continue
@@ -1488,8 +1490,8 @@ final class ApplicationModel {
             let partition = ConversationWorkTimeline.displayPartition(
                 AssistantTranscriptProjection(messageID: message.id,
                     content: message.content, activities: workActivities),
-                activities: workActivities, isLive: message.status == "streaming")
-            let candidateBody = message.status == "streaming"
+                activities: workActivities, isLive: isStreaming)
+            let candidateBody = isStreaming
                 ? AssistantStreamingText.readyPrefix(of: partition.body) : partition.body
             let existing = previous[message.id]
             // The persistence invalidation stream already coalesces updates.
@@ -1501,6 +1503,7 @@ final class ApplicationModel {
                 source: message.content,
                 displayedBody: displayedBody,
                 status: message.status,
+                isStreaming: isStreaming,
                 createdAt: message.createdAt,
                 document: displayedBody == existing?.displayedBody ? existing?.document : message.role == "assistant"
                     ? ConversationMarkdownDocument(

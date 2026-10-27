@@ -123,3 +123,20 @@ test('legacy RPC admission saves identity without credentials and owner polling 
   assert.ok(saved.some(item=>item.transcript?.messages?.some(message=>message.id===runID&&message.content==='First answer')))
   assert.equal(saved[0].retainedExecution.status,'completed')
 })
+
+test('retained snapshot assembly survives checkpoint restart and ignores an unfinished replacement',async t=>{
+  const f=fixture(t),runID=randomUUID(),conversationID=randomUUID()
+  const frame=(text,start,end)=>({sessionUpdate:'agent_message_chunk',content:{text},_meta:{wovenAssistantSnapshot:true,wovenSnapshotStart:start,wovenSnapshotEnd:end}})
+  const updates=[{sessionUpdate:'agent_message_chunk',content:{text:'old'}},frame('new ',true,false),frame('🧵',false,true),frame('incomplete',true,false)]
+  const run={id:runID,sessionID:conversationID,title:'Frames',scheduledAt:new Date().toISOString(),status:'accepted',task:{prompt:'work',configuration:{runtimeKind:'opencode'}}}
+  let phase=0;const completedAt=new Date().toISOString()
+  const gateway={retainedRunIDs:()=>[runID],results:cursor=>phase===0&&cursor==='0'?{cursor:'1',entries:[{id:runID,run,nativeSessionID:'native',completedAt,updates:updates.slice(0,2),updateOffset:0,complete:false}]}:
+    phase===1&&cursor==='1'?{cursor:'2',entries:[{id:runID,run,nativeSessionID:'native',completedAt,updates:updates.slice(2),updateOffset:2,complete:true}]}:{cursor,entries:[]}}
+  let bridge=capture(f,{taskGateway:gateway});await bridge.pump();await bridge.close()
+  let messages=entries(f.execution).flatMap(entry=>entry.transcript?.messages??[]).filter(x=>x.role==='assistant')
+  assert.equal(messages.at(-1).content,'old')
+  await f.restart();phase=1;bridge=capture(f,{taskGateway:gateway});await bridge.pump();await bridge.close()
+  messages=entries(f.execution).flatMap(entry=>entry.transcript?.messages??[]).filter(x=>x.role==='assistant')
+  assert.equal(messages.at(-1).content,'new 🧵')
+  assert.ok(!messages.some(x=>x.content==='new '||x.content==='incomplete'))
+})

@@ -23,9 +23,9 @@ const base = runtimeKind => ({run:{id:'run-1',title:'Fixture',task:{prompt:'fixt
 const nativeRecords = updates => updates.flatMap(update => update.recordBatch?.records ?? [])
 const text = updates => updates.filter(update => update.sessionUpdate === 'agent_message_chunk').map(update => update.content.text).join('')
 
-function openCodeFixture({permissionRequests=[],forms=[],pages=[{data:[{id:'msg_answer',type:'assistant',content:[{type:'text',text:'result'}]}]}],permissions=[],ignorePolicy=false,healthPID=42}={}) {
+function openCodeFixture({permissionRequests=[],forms=[],pages=[{data:[{id:'msg_answer',type:'assistant',content:[{type:'text',text:'result'}]}]}],permissions=[],ignorePolicy=false,healthPID=42,snapshots,finalMessages}={}) {
   const calls=[],session={id:'ses_fixture',model:{providerID:'lab',id:'old'},permissions}
-  let submitted=false
+  let submitted=false,snapshotIndex=0,terminalObserved=false
   const fetchRequest=async(url,request)=>{
     assert.equal(request.headers.authorization,'Basic '+Buffer.from('opencode:fixture').toString('base64'))
     assert.equal(request.redirect,'error')
@@ -40,10 +40,10 @@ function openCodeFixture({permissionRequests=[],forms=[],pages=[{data:[{id:'msg_
       response={data:structuredClone(session)}
     } else if(url.pathname.endsWith('/message')) {
       const index=url.searchParams.has('cursor')?Number(url.searchParams.get('cursor')):0
-      response=submitted?pages[index]:{data:[]}
+      response=submitted?(terminalObserved&&finalMessages?{data:finalMessages}:(snapshots?.[snapshotIndex]??pages[index])):{data:[]}
       if(!response)assert.fail('unexpected native cursor '+index)
     } else if(url.pathname.endsWith('/prompt')){submitted=true;response={data:{id:body.id}}}
-    else if(url.pathname==='/api/session/active')response={data:{}}
+    else if(url.pathname==='/api/session/active'){const running=submitted&&snapshots&&snapshotIndex<snapshots.length-1;response={data:running?{ses_fixture:{type:'busy'}}:{}};if(running)snapshotIndex++;terminalObserved=submitted&&!running}
     else if(url.pathname.endsWith('/permission'))response={data:submitted?permissionRequests:[]}
     else if(url.pathname.endsWith('/form'))response={data:submitted?forms:[]}
     else if(url.pathname.endsWith('/interrupt'))response={}
@@ -175,8 +175,41 @@ test('direct OpenCode projects native text snapshots and tool/thinking activity 
   const updates=[];fixture.context.publish=update=>updates.push(update);fixture.context.interactive={publish:()=>{},bind:()=>{}}
   await fixture.execute(fixture.context)
   assert.equal(text(updates),'Result')
-  assert.equal(updates.find(update=>update.sessionUpdate==='agent_message_chunk')._meta.wovenAssistantSnapshot,true)
+  assert.equal(updates.find(update=>update.sessionUpdate==='agent_message_chunk')._meta?.wovenAssistantSnapshot,undefined)
   assert.equal(updates.find(update=>update.sessionUpdate==='agent_thought_chunk').content.text,'Considering the file')
-  assert.equal(updates.find(update=>update.sessionUpdate==='tool_call_update').status,'completed')
+  assert.equal(updates.find(update=>update.sessionUpdate==='tool_call').status,'completed')
   assert.ok(nativeRecords(updates).some(record=>record.id==='message:msg_answer'))
+})
+
+
+test('scheduled OpenCode publishes live progress before completion and finalizes the same tool identity',async()=>{
+  const snapshots=[
+    {data:[{id:'answer',type:'assistant',content:[{id:'thought',type:'reasoning',text:'Thinking'},{id:'tool',type:'tool',name:'bash',state:{status:'running',input:{command:'echo fixture'},output:'working'}},{id:'text',type:'text',text:'Partial'}]}]},
+    {data:[{id:'answer',type:'assistant',content:[{id:'thought',type:'reasoning',text:'Thinking done'},{id:'tool',type:'tool',name:'bash',state:{status:'completed',input:{command:'echo fixture'},output:'done'}},{id:'text',type:'text',text:'Partial answer'}]}]},
+  ]
+  const fixture=openCodeFixture({snapshots}),updates=[]
+  fixture.context.publish=update=>{
+    updates.push(update)
+    if(update.sessionUpdate==='tool_call')assert.equal(fixture.calls.filter(call=>call.path==='/api/session/active').length,1,'progress arrives before the first post-prompt idle check')
+  }
+  await fixture.execute(fixture.context)
+  assert.equal(text(updates),'Partial answer')
+  const tools=updates.filter(update=>update.toolCallId)
+  assert.deepEqual(tools.map(update=>update.status),['in_progress','completed'])
+  assert.equal(tools[0].toolCallId,tools[1].toolCallId)
+  assert.equal(tools[0].rawInput.command,'echo fixture')
+  assert.equal(updates.at(-1).sessionUpdate,'woven_assistant_boundary')
+  assert.equal(fixture.calls.filter(call=>call.path.endsWith('/prompt')).length,1)
+})
+
+
+test('OpenCode final history is refreshed after idle to capture a racing terminal suffix and tool result',async()=>{
+  const partial={id:'answer',type:'assistant',content:[{id:'text',type:'text',text:'First'},{id:'tool',type:'tool',name:'bash',state:{status:'running',output:'working'}}]}
+  const final={...partial,content:[{id:'text',type:'text',text:'First final'},{id:'tool',type:'tool',name:'bash',state:{status:'completed',output:'finished'}}]}
+  const fixture=openCodeFixture({pages:[{data:[partial]}],finalMessages:[final]}),updates=[]
+  fixture.context.publish=update=>updates.push(update)
+  await fixture.execute(fixture.context)
+  assert.equal(text(updates),'First final')
+  assert.deepEqual(updates.filter(update=>update.toolCallId).map(update=>update.status),['in_progress','completed'])
+  assert.ok(nativeRecords(updates).some(record=>record.payload?.includes('finished')))
 })

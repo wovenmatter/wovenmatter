@@ -88,6 +88,57 @@ struct ConversationResponseTests {
         let codeFont = storage.attribute(.font, at: codeRange.location, effectiveRange: nil) as! NSFont
         require(codeFont.isFixedPitch, "Code must retain a monospaced font")
 
+        // Inline formatting belongs to the whole paragraph, including hard
+        // breaks. Parsing each line independently exposes Markdown delimiters.
+        let inlineView = ConversationResponseNativeTextView()
+        let formattedLines: [(source: String, text: String, trait: NSFontTraitMask)] = [
+            ("**Bold first\nbold second**", "Bold first\nbold second", .boldFontMask),
+            ("*Italic first\nitalic second*", "Italic first\nitalic second", .italicFontMask),
+            ("**Hard first  \nhard second**", "Hard first\nhard second", .boldFontMask),
+            ("*Hard first\\\nhard second*", "Hard first\nhard second", .italicFontMask),
+        ]
+        for sample in formattedLines {
+            inlineView.apply(content: sample.source, document: nil, isStreaming: false)
+            require(inlineView.string == sample.text, "Multiline formatting or hard-break text changed: \(sample.source)")
+            let inlineStorage = inlineView.textStorage!
+            inlineStorage.enumerateAttribute(.font, in: NSRange(location: 0, length: inlineStorage.length)) { font, range, _ in
+                if inlineStorage.attributedSubstring(from: range).string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return }
+                require((font as? NSFont).map { NSFontManager.shared.traits(of: $0).contains(sample.trait) } == true,
+                    "Inline formatting stopped at a line boundary: \(sample.source)")
+            }
+        }
+        for (source, expected) in [
+            ("Soft first\nsoft second", "Soft first\nsoft second"),
+            ("Space first  \nspace second", "Space first\nspace second"),
+            ("Slash first\\\nslash second", "Slash first\nslash second"),
+            ("Escaped slash\\\\\nnext line", "Escaped slash\\\nnext line"),
+            ("Terminal slash\\", "Terminal slash\\"),
+            ("`code first\ncode second`", "code first code second"),
+            ("`a  \nb`", "a   b"),
+            ("`a `", "a "),
+        ] {
+            inlineView.apply(content: source, document: nil, isStreaming: false)
+            require(inlineView.string == expected, "Inline whitespace or literal escape changed: \(source)")
+            if source.hasPrefix("`") {
+                let font = inlineView.textStorage!.attribute(.font, at: 0, effectiveRange: nil) as! NSFont
+                require(font.isFixedPitch, "Multiline inline code lost its monospaced font")
+            }
+        }
+        for destination in ["https://example.com/path", "javascript:alert"] {
+            let source = "[Link first\nlink second](\(destination))"
+            inlineView.apply(content: source, document: nil, isStreaming: false)
+            require(inlineView.string == "Link first\nlink second", "A multiline link exposed its Markdown syntax")
+            let inlineStorage = inlineView.textStorage!
+            var linkedLength = 0
+            inlineStorage.enumerateAttribute(.link, in: NSRange(location: 0, length: inlineStorage.length)) { link, range, _ in
+                guard let url = link as? URL else { return }
+                require(url.absoluteString == "https://example.com/path", "Multiline parsing bypassed link safety")
+                linkedLength += range.length
+            }
+            require(linkedLength == (destination.hasPrefix("https:") ? inlineStorage.length : 0),
+                "A multiline safe link lost part of its target or an unsafe link became clickable")
+        }
+
         // Native selection and native copy span all block types, including cells.
         view.selectAll(nil)
         require(view.selectedRange() == NSRange(location: 0, length: storage.length), "Select All stops at a Markdown boundary")

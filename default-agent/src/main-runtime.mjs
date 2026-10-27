@@ -3,7 +3,6 @@ import { createInterface } from 'node:readline';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { DefaultAgentError, operationErrorMessage } from './config.mjs';
-import { DefaultAgentEngine } from './engine.mjs';
 import { CredentialVault, sharedCredentials } from './vault.mjs';
 import { signInStatuses } from './sign-in-status.mjs';
 import { probeServer } from './local-servers.mjs';
@@ -30,6 +29,9 @@ async function requestCredentials() {
   });
 }
 async function engine() {
+  // Remote relays forward RPCs to their owning service; importing the local
+  // provider/tool graph delays attachment and serves no purpose in that mode.
+  const { DefaultAgentEngine } = await import('./engine.mjs');
   return instance ??= new DefaultAgentEngine({ cwd: process.cwd(), directory, config: payload.config, credentials: payload.credentials, credentialAccounts: payload.credentialAccounts, vault,
     requestCredentials: !remote && !control ? requestCredentials : undefined }).initialize();
 }

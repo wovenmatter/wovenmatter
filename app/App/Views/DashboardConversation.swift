@@ -207,7 +207,8 @@ struct DashboardCloudConversation: View {
                                                 layout: fragment.layout,
                                                 displayedBody: presentation?.displayedBody,
                                                 commentaryIDs: presentation?.commentaryIDs,
-                                                workTimeline: presentation?.workTimeline
+                                                workTimeline: presentation?.workTimeline,
+                                                streaming: presentation?.isStreaming
                                             )
                                         }
                                     }
@@ -1145,15 +1146,21 @@ struct DashboardMessageRow: View {
     var displayedBody: String? = nil
     var commentaryIDs: Set<String>? = nil
     var workTimeline: ConversationWorkTimeline? = nil
+    var streaming: Bool? = nil
 
-    private var assistantBody: String { displayedBody ?? transcript.body }
+    private var isStreaming: Bool {
+        streaming ?? AssistantStreamingText.isStreaming(messageStatus: message.status, runStatus: run?.status)
+    }
+    private var assistantBody: String {
+        displayedBody ?? (isStreaming ? AssistantStreamingText.readyPrefix(of: transcript.body) : transcript.body)
+    }
 
     /// Fallback for a row without a prepared presentation.
     private var transcript: (body: String, commentaryIDs: Set<String>) {
         let work = activities.map(\.activity)
         return ConversationWorkTimeline.displayPartition(
             AssistantTranscriptProjection(messageID: message.id, content: message.content, activities: work),
-            activities: work, isLive: message.status == "streaming")
+            activities: work, isLive: isStreaming)
     }
 
     var body: some View {
@@ -1203,11 +1210,11 @@ struct DashboardMessageRow: View {
                         ConversationResponse(
                             content: RemoteNoteEditEnvelope.redactingEnvelopes(in: assistantBody),
                             document: renderedDocument,
-                            isStreaming: message.status == "streaming"
+                            isStreaming: isStreaming
                         )
                         .padding(.horizontal, 4)
                         .padding(.vertical, 2)
-                        if let resolveFile, message.status != "streaming" {
+                        if let resolveFile, !isStreaming {
                             ConversationFilePreviews(content: assistantBody, messageID: message.id, resolveFile: resolveFile)
                         }
                     }

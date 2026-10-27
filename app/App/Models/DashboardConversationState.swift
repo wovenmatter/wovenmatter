@@ -7,6 +7,7 @@ struct DashboardMessagePresentation: Sendable {
     let source: String
     let displayedBody: String
     let status: String?
+    let isStreaming: Bool
     let createdAt: String
     let document: ConversationMarkdownDocument?
     let activities: [WorkspaceRunActivityRecord]

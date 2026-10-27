@@ -18,6 +18,21 @@ public struct ConversationWorkTimeline: Equatable, Sendable {
 
   public var hasVisibleActivities: Bool { !entries.isEmpty }
 
+  /// Active work already supplies an indicator. Otherwise an empty timeline,
+  /// commentary, or failed work needs a quiet waiting state while the run lives.
+  public var needsThinkingIndicator: Bool {
+    if entries.contains(where: { entry in
+      switch entry.content {
+      case .group(let group): group.hasActiveActivity
+      case .activity(let activity): activity.workTimelineShowsProgress
+      case .commentary: false
+      }
+    }) { return false }
+    guard let last = entries.last else { return true }
+    if case .group(let group) = last.content { return group.hasFailure }
+    return true
+  }
+
   /// Merges `records` in `WorkspaceRunActivityRecord.precedes` order. Snapshot
   /// and delta updates merge by activity ID, a `clear` update removes the
   /// activity, and assistant segments appear only when their ID is in
@@ -151,17 +166,24 @@ public struct ConversationWorkTimeline: Equatable, Sendable {
     }
     let hasChecklist = activities.contains { $0.kind == .plan && $0.planKind != "proposal" }
     let followedByWork = activities[(index + 1)...].contains { activity in
-      switch activity.kind {
-      case .assistant, .fileChange: false
-      case .thought: activity.workTimelineThoughtHasText
-      case .tool: !activity.workTimelineHidesChecklistTool(hasChecklist: hasChecklist)
-      case .plan: activity.planKind == "proposal"
-      case .progress, .activity: true
-      }
+      isVisibleWork(activity, hasChecklist: hasChecklist)
     }
     guard followedByWork else { return (transcript.body, commentaryIDs) }
     commentaryIDs.insert(activities[index].id)
     return (String(transcript.body.dropFirst(segment.count)), commentaryIDs)
+  }
+
+  /// The same visibility rule governs text placement on desktop and mobile.
+  /// Background checklist revisions and file cards cannot turn a final answer
+  /// into commentary hidden inside the work disclosure.
+  public static func isVisibleWork(_ activity: AgentRunActivity, hasChecklist: Bool) -> Bool {
+    switch activity.kind {
+    case .assistant, .fileChange: false
+    case .thought: activity.workTimelineThoughtHasText
+    case .tool: !activity.workTimelineHidesChecklistTool(hasChecklist: hasChecklist)
+    case .plan: activity.planKind == "proposal"
+    case .progress, .activity: true
+    }
   }
 }
 
@@ -238,13 +260,20 @@ public struct ConversationWorkGroup: Equatable, Identifiable, Sendable {
   /// running call in the present tense, otherwise the latest call settled.
   public func liveLabel(runIsActive: Bool) -> String? {
     guard runIsActive else { return nil }
-    if let running = activities.last(where: showsProgress) {
-      return running.workTimelineLabel(active: true)
-    }
-    return activities.last?.workTimelineLabel(active: false)
+    return liveActivity.map { $0.workTimelineLabel(active: showsProgress($0)) }
+  }
+
+  public var liveActivity: AgentRunActivity? {
+    activities.last(where: showsProgress) ?? activities.last
   }
 
   public var hasActiveActivity: Bool { !activeActivityIDs.isEmpty }
+
+  /// Keep the most recent supplied reasoning visible alongside the live tool.
+  /// It remains available when the provider moves from thinking to execution.
+  public var latestThought: AgentRunActivity? {
+    activities.last { $0.kind == .thought && $0.workTimelineThoughtHasText }
+  }
 
   static func summary(activities: [AgentRunActivity], tools: [AgentRunActivity]) -> String {
     if tools.isEmpty {
