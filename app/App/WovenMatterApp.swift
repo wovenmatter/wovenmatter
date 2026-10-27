@@ -405,7 +405,8 @@ struct WorkspaceMenuCommands: Commands {
     }
 
     var body: some Commands {
-        CommandGroup(replacing: .newItem) {
+        CommandGroup(replacing: .newItem) { }
+        CommandMenu("File") {
             Button("New Chat") { actions?.newChat() }
                 .keyboardShortcut("n", modifiers: .command)
                 .disabled(actions == nil)
