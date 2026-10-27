@@ -8,8 +8,11 @@ import WovenMatterClient
 import ApplicationServices
 
 @MainActor final class Fixture: NSObject, NSApplicationDelegate {
-    let root = URL(fileURLWithPath: ProcessInfo.processInfo.environment["WM_CUA_FIXTURE_ROOT"]!)
+    // System Settings may relaunch the app without its launch environment.
+    let root = ProcessInfo.processInfo.environment["WM_CUA_FIXTURE_ROOT"].map { URL(fileURLWithPath: $0) }
+        ?? Bundle.main.bundleURL.deletingLastPathComponent()
     let target = ProcessInfo.processInfo.environment["WM_CUA_FIXTURE_ROLE"] == "target"
+        || Bundle.main.bundleIdentifier?.hasSuffix(".target") == true
     var window: NSWindow!
     var field: NSTextField!
     var timer: Timer?
@@ -63,6 +66,7 @@ import ApplicationServices
     func beginWhenPermitted() async {
         guard !started else { return }
         let permissions = WovenComputerAutomation.permissions.objectValue!
+        saveReport(["status": .string("waiting_for_permissions"), "permissions": .object(permissions)])
         guard permissions["accessibility"] == .bool(true), permissions["screenRecording"] == .bool(true) else { return }
         started = true; timer?.invalidate()
         do {
