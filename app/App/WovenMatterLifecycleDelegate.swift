@@ -35,10 +35,12 @@ final class WovenMatterLifecycleDelegate: NSObject, NSApplicationDelegate {
         // later. Remove them before export, and put our custom File menu in the
         // standard position. Its own command set stays limited to workspace actions.
         guard let menu = NSApp.mainMenu else { return }
-        for item in menu.items where item.submenu?.items.isEmpty == true {
+        let fileTitle = String(localized: "File")
+        // File can be briefly empty while SwiftUI installs its custom commands.
+        for item in menu.items where item.title != fileTitle && item.submenu?.items.isEmpty == true {
             menu.removeItem(item)
         }
-        if let file = menu.items.first(where: { $0.title == String(localized: "File") }),
+        if let file = menu.items.first(where: { $0.title == fileTitle }),
            menu.index(of: file) != 1 {
             menu.removeItem(file)
             menu.insertItem(file, at: min(1, menu.numberOfItems))
