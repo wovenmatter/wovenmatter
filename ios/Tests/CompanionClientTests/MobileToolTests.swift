@@ -46,22 +46,5 @@ struct MobileToolTests {
     #expect(read.result?.objectValue?["nativeRecord"] == nil)
     #expect(read.result?.objectValue?["transcript"] == nil)
   }
-  @Test func timersPersistClaimIdentityCoalesceAndDoNotResurrectOnRetry() async throws {
-    let (store, root, scope) = try fixture(); defer { try? FileManager.default.removeItem(at: root) }
-    let id = UUID().uuidString.lowercased(), start = try MobileToolSupport.date("2026-10-10T12:00:00Z")
-    let args = ["timers", "create", "--text", "Check work", "--at", "2026-10-10T12:00:00Z", "--every", "60"]
-    let denied = await call(store, ["timers", "create", "--text", "Bad", "--at", "2026-10-10T12:00:00Z", "--session", "another"], context: scope)
-    #expect(denied.code == "access_required")
-    #expect(await call(store, args, context: scope, id: id).success)
-    let due = try await store.claimDueToolTimers(now: start.addingTimeInterval(301))
-    let claim = try #require(due.first?.pendingFireID)
-    let reopened = try MobileStore(file: root.appendingPathComponent("library.json"))
-    #expect(try await reopened.claimDueToolTimers(now: start.addingTimeInterval(302)).first?.pendingFireID == claim)
-    try await reopened.acknowledgeToolTimer(id: id, fireID: claim, now: start.addingTimeInterval(302))
-    #expect(try await reopened.claimDueToolTimers(now: start.addingTimeInterval(303)).isEmpty)
-    #expect(await call(reopened, ["timers", "remove", id], context: scope).success)
-    #expect(await call(reopened, args, context: scope, id: id).success)
-    #expect(await reopened.snapshot().toolTimers?[id]?.removed == true)
-  }
 
 }

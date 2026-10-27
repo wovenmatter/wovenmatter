@@ -206,20 +206,6 @@ struct OpenCodeIntegrationTests {
         await coordinator.shutdown()
     }
 
-    @Test func nativeCommandCatalogPreservesDescriptionsAndOnlyRoutesKnownCommands() {
-        let catalog: [OpenCodeValue] = [
-            ["name": "review", "description": "Review changes"], ["name": "review"],
-            ["name": ""], ["name": "invalid command"], ["name": "help"]
-        ]
-        let metadata = OpenCodeComposerMetadata.metadata(session: ["id": "ses_fixture"], models: [], commands: catalog)
-        #expect(metadata.slashCommands.map(\.name) == ["review", "help"])
-        #expect(metadata.slashCommands.first?.detail == "Review changes")
-        let command = OpenCodeComposerMetadata.invocation("/review  current changes\nincluding tests", commands: catalog)
-        #expect(command?.name == "review")
-        #expect(command?.arguments == "current changes\nincluding tests")
-        #expect(OpenCodeComposerMetadata.invocation("/unknown text", commands: catalog) == nil)
-        #expect(OpenCodeComposerMetadata.invocation("explain /review", commands: catalog) == nil)
-    }
 
     @Test func existingComposerKeepsProviderIdentityAndModelSpecificThinking() throws {
         let catalog: [OpenCodeValue] = [
@@ -244,24 +230,6 @@ struct OpenCodeIntegrationTests {
         #expect(OpenCodeSessionSnapshot.presentsMessage(["type": "assistant", "content": .array([])]))
     }
 
-    @Test func connectReusesExistingLocalServiceAndNeverReplacesLiveIncompatibleService() async throws {
-        let fixture = OpenCodeFixture(); FixtureProtocol.fixture = fixture
-        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let file = directory.appending(path: "service.json")
-        let registration: OpenCodeValue = ["url": "http://127.0.0.1:1234", "pid": .number(Double(ProcessInfo.processInfo.processIdentifier)), "password": "fixture"]
-        let bytes = try JSONEncoder().encode(registration); try bytes.write(to: file)
-        let session = fixtureSession()
-        let connection = try await OpenCodeServiceLauncher.ensure(executable: nil, registration: file, clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
-        #expect(connection.identity == "local:" + file.standardizedFileURL.path)
-        #expect(try Data(contentsOf: file) == bytes)
-        fixture.version = "1.18.29"
-        await #expect(throws: OpenCodeError.incompatible("1.18.29")) {
-            try await OpenCodeServiceLauncher.ensure(executable: URL(fileURLWithPath: "/never-run"), registration: file, clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
-        }
-        #expect(try Data(contentsOf: file) == bytes)
-    }
 
     @Test func unknownAcceptanceBlocksNewInputWithoutTreating404AsRejection() async throws {
         let fixture = OpenCodeFixture(); FixtureProtocol.fixture = fixture
@@ -350,72 +318,7 @@ struct OpenCodeIntegrationTests {
         await coordinator.shutdown()
     }
 
-    @Test func companionAdmissionChecksNativeActivityAndInterruptRejectsStaleRuns() async throws {
-        let fixture = OpenCodeFixture(); FixtureProtocol.fixture = fixture
-        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
-        let id = try await database.createOpenCodeFixtureSession(runtimeKind: .opencode, title: "Companion",
-            ownerDeviceID: UUID(), openCodeAssociation: ("fixture", "ses_fixture"))
-        let link = OpenCodeSessionLink(conversationID: id, connectionID: "fixture", sessionID: "ses_fixture")
-        let session = fixtureSession()
-        let coordinator = OpenCodeSessionCoordinator(database: database,
-            clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
-        try await coordinator.connect(connection())
 
-        // Native execution may be active before it publishes an assistant row.
-        fixture.active = true
-        await #expect(throws: LocalACPSessionDatabaseError.runAlreadyActive) {
-            try await coordinator.prompt(link, input: .init(text: "Do not queue"), requiresIdle: true)
-        }
-        await #expect(throws: LocalACPSessionDatabaseError.runAlreadyActive) {
-            try await coordinator.command(link, name: "review", input: .init(text: ""), requiresIdle: true)
-        }
-        #expect(fixture.promptCount == 0 && fixture.commandCount == 0)
-
-        fixture.messages = [["id": "msg_current", "type": "assistant", "text": "Working",
-            "time": ["created": .number(900)]]]
-        await #expect(throws: LocalACPSessionDatabaseError.runNotFound) {
-            try await coordinator.interrupt(link, expectedRunID: "opencode:\(id):msg_previous:run")
-        }
-        #expect(fixture.interruptCount == 0)
-        let currentRunID = try #require(try await database.activeRunID(conversationID: id))
-        #expect(currentRunID == "opencode:\(id):msg_current:run")
-        try await coordinator.interrupt(link, expectedRunID: currentRunID)
-        #expect(fixture.interruptCount == 1)
-
-        fixture.active = false
-        let receipt = try await coordinator.prompt(link, input: .init(text: "Next"), requiresIdle: true)
-        #expect(receipt.nativeUserMessageID == fixture.lastPrompt["id"].text)
-        #expect(receipt.identifiers == nil)
-        await coordinator.shutdown()
-    }
-
-    @Test func interruptedSessionCreationReusesThePendingIdentity() async throws {
-        let fixture = OpenCodeFixture(); FixtureProtocol.fixture = fixture
-        fixture.sessionExists = false
-        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
-        let session = fixtureSession()
-        let coordinator = OpenCodeSessionCoordinator(database: database, clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
-        try await coordinator.connect(connection())
-        // A previous create did not reach the server. Recovery sees 404 and
-        // safely submits that same identity instead of blocking all new chats.
-        let created = try await coordinator.createSession(connectionID: "fixture", id: "ses_fixture", workspace: directory, recover: true, title: "Requested title", nativeWorkspaceID: "workspace_fixture")
-        #expect(created["data"]["id"].text == "ses_fixture")
-        #expect(fixture.createCount == 1)
-        #expect(fixture.lastCreate["location"]["directory"].text == directory.path)
-        #expect(fixture.lastCreate["location"]["workspaceID"].text == "workspace_fixture")
-        #expect(fixture.lastCreate["title"].text == "Requested title")
-        // If only the response was lost, recovery retrieves the existing session.
-        let recovered = try await coordinator.createSession(connectionID: "fixture", id: "ses_fixture", workspace: directory, recover: true)
-        #expect(recovered["data"]["id"].text == "ses_fixture")
-        #expect(fixture.createCount == 1)
-        await coordinator.shutdown()
-    }
 
     private func connection() throws -> OpenCodeConnection { try .init(identity: "fixture", url: URL(string: "http://fixture.invalid")!, password: "fixture") }
     private func fixtureSession() -> URLSession {

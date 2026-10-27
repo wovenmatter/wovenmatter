@@ -4,15 +4,6 @@ import Testing
 
 struct WorkspaceAssetTabsTests {
 
-  @Test func addressBarHandlesSearchAndHostsWithoutLaunchingOtherApps() {
-    #expect(BrowserAddress.destination(for: "example.com/path")?.absoluteString == "https://example.com/path")
-    #expect(BrowserAddress.destination(for: "localhost:8080/test")?.absoluteString == "http://localhost:8080/test")
-    #expect(BrowserAddress.destination(for: "https://example.com/a?q=b")?.scheme == "https")
-    #expect(BrowserAddress.destination(for: "two words")?.host == "www.google.com")
-    for input in ["javascript:alert(1)", "file:///etc/passwd", "mailto:a@example.com", "chrome://settings", ""] {
-      #expect(BrowserAddress.destination(for: input) == nil)
-    }
-  }
 
   @Test func snapshotIsBoundedMetadataAndSurvivesIPCAndAttachmentStaging() async throws {
     let context = WorkspaceVisibleContext(

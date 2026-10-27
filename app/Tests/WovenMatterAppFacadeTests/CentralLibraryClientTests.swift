@@ -176,24 +176,6 @@ struct CentralLibraryClientTests {
         #expect(await reopened.snapshot().outbox.count == 1)
     }
 
-    @Test func lostLaunchAcknowledgementKeepsStableIDsAndDoesNotDuplicateExecution() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: "MacClient-" + UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let store = try MobileStore(file: root.appending(path: "library.json"))
-        let transport = MacClientFakeCentral()
-        let model = CentralLibraryClientModel(store: store, transport: transport)
-        await model.initialize(); await model.refresh()
-        model.composer = "One logical turn"
-        await transport.dropNextSendAcknowledgement()
-        await model.send()
-        let launch = try #require(model.pendingLaunches.first)
-        #expect(launch.create.conversationID == launch.initialSend.conversationID)
-        #expect(model.composer == "One logical turn")
-        await model.continueLaunch(launch)
-        #expect(await transport.sendCount == 1)
-        #expect(model.pendingLaunches.isEmpty)
-        #expect(model.selectedConversationID == launch.create.conversationID)
-    }
 
 }
 

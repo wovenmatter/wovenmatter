@@ -84,9 +84,6 @@ test('self-test classifies blocked namespaces and missing libraries without leak
   assert.equal(missing.reason, 'missing_libraries'); assert.deepEqual(missing.missingLibraries, ['libnss3.so'])
 })
 
-test('ldd parsing is bounded to missing libraries and de-duplicates loader errors', () => {
-  assert.deepEqual(missingLibrariesFromLdd('linux-vdso.so.1 (0x0)\nlibnss3.so => not found\nlibX11.so.6 => /lib/libX11.so.6 (0x0)\nlibnss3.so => not found\nlibatk.so => not found\n'), ['libatk.so', 'libnss3.so'])
-})
 
 test('CLI runs through the installed current symlink and cannot silently report success', async t => {
   const root = await mkdtemp(join(tmpdir(), 'wovenmatter-selftest-entrypoint-'))

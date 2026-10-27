@@ -22,16 +22,6 @@ The remote ACP relay admits same-run inputs, shares their transcript accumulator
 
 Codex and Claude require an advertised capability. Woven Matter does not assume that an older adapter accepts concurrent prompts. The catalog minimums are Codex ACP 2.3.0 and Claude ACP 0.97.0; both use the stable ACP v1 session API, which retains steering and lifecycle extensions. Native command support and attachment restrictions remain the harness's responsibility. Codex ACP does not return a separate prompt response for detached continuations; Woven Matter observes the lifecycle it exposes. Provider errors that the adapter exposes only as text remain transcript text rather than a structured failure result.
 
-## Implementation research
-
-Inspected the installed Codex desktop bundle and the public sources below on September 27, 2026. Woven Matter's implementation is independent; no proprietary desktop source was copied.
-
-- [Codex App Server: steer an active turn](https://learn.chatgpt.com/docs/app-server#steer-an-active-turn): `turn/steer` targets an active turn with `expectedTurnId`, adds input without a new `turn/started`, and returns acceptance rather than completion. The installed desktop implementation waits for startup turn identity, retains an optimistic input while admission is pending, and distinguishes rejection from uncertain delivery.
-- [T3 Code](https://github.com/pingdotgg/t3code/tree/ab099178a7b7f9728843e90fc95ed90bb61d710d/apps/server/src): Claude's streaming prompt queue preserves the turn; Cursor/Grok retain pending-input ownership through overlapping submissions; Codex and OpenCode use their native delivery semantics. The transferable design is one session and logical run, native admission, and completion that accounts for all pending inputs.
-- [Codex ACP server](https://github.com/agentclientprotocol/codex-acp/blob/bf37821e8f3c1f1e9b6954171855a9e2579cd2c9/src/CodexAcpServer.ts): `performSteeringRequest`, `startNewTurnFromExternalPrompt`, and `getSteerableTurnId`. It can acknowledge a detached continuation before that continuation completes. [Event handling](https://github.com/agentclientprotocol/codex-acp/blob/bf37821e8f3c1f1e9b6954171855a9e2579cd2c9/src/CodexEventHandler.ts) forwards native thread status through ACP metadata.
-- [Claude ACP](https://github.com/zed-industries/claude-agent-acp/tree/e6681d2a5734857727352474c8c9aa848f9210ee): the steering extension injects into its live SDK input stream and supports `promptRequired` when idle.
-- The `@earendil-works/pi-coding-agent` 1.0.0 source originally audited (`dist/core/agent-session.js` and `dist/modes/rpc/rpc-mode.js`): `prompt` performs input preflight before choosing live steering or an idle start; RPC acknowledges preflight before model completion. Preflight reports `started`, `queued`, or `handled`; Built-in acknowledges only `started`/`queued` as entering the conversation.
-
 ## Validation and acceptance
 
 Provider-free regressions exercise repeated corrections, rejected/unsupported input, stop, transcript boundaries, detached Codex completion before/after acknowledgement, Claude idle fallback, Grok dispatch, Pi Durable preflight/settlement races, ordinary OpenCode delivery, storage failures before dispatch, uncertain receipts, permission revocation at admission, remote concurrent-input isolation, out-of-order completion, idempotency and recovery. Built-in tests run the actual locked Pi loop with synthetic model streams, including immediate input during startup and a preflight that overlaps the original loop ending.
@@ -53,8 +43,7 @@ Gateway admission errors use the dispatch fence to distinguish a queued request
 that never reached the socket from a lost receipt after dispatch. Recovered-run
 idle reconciliation also shares the steering admission lock and checks the input
 identity captured before fetching history, so an old snapshot cannot close a
-newly admitted continuation. Regression sources cover both boundaries; this
-audit has performed source parsing and diff checks, without executing them.
+newly admitted continuation.
 
 ## Detached remote outcomes
 
@@ -92,13 +81,3 @@ identity matches the run. Older non-Built-in remote rows do not reveal whether
 they used foreground SSH or the durable relay, so they retain the prior startup
 policy. Do not treat upgrading an already detached, unmarked remote run as proof
 of its native outcome.
-
-This audit passed all 34 durable-relay fixtures and eight new provider-free
-Built-in attachment/admission/transport fixtures. The Built-in tests used an
-exact source copy in a temporary directory with already installed dependencies;
-no provider or account operation ran. New Swift regressions cover preserved
-first-receipt identity, startup route classification, blocked admission, plain
-snapshot rejection, wrong-session/workspace rejection, and fenced terminal or
-missing-receipt recovery. Those regressions and the Gateway additions still
-require execution after the PR #86 dependency is combined. Source parsing and
-whitespace checks pass; native/provider acceptance remains separate.

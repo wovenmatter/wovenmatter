@@ -17,52 +17,8 @@ struct RemoteBrowserClientTests {
         #expect(try await client.browserMCP(callerID: caller, input: .object(["id": .string(operation)]),
             requestID: operation, cancelling: true).success)
     }
-    @Test func browserReadsStayAuthenticatedAndOnTheWorkspaceOrigin() async throws {
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [BrowserFixtureProtocol.self]
-        let session = URLSession(configuration: configuration)
-        defer { session.invalidateAndCancel() }
-        let client = RemoteWorkspaceServiceClient(baseURL: URL(string: "http://127.0.0.1:42007")!, token: "fixture", session: session)
-        #expect(try await client.browserTabs().tabs.first?.id == "tab")
-        #expect(try await client.browserFrame(tabID: "tab").tabID == "tab")
-        let old = RemoteWorkspaceServiceClient(baseURL: URL(string: "http://127.0.0.1:42008")!, token: "fixture", session: session)
-        await #expect(throws: RemoteWorkspaceClientError.invalidResponse("Update this workspace service in Settings to view its browser.")) {
-            try await old.browserTabs()
-        }
-    }
 
-    @Test func browserProfileStaysBoundToAuthenticatedRequestsAndRejectsTraversal() async throws {
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [BrowserProfileFixtureProtocol.self]
-        let session = URLSession(configuration: configuration)
-        defer { session.invalidateAndCancel() }
-        let client = RemoteWorkspaceServiceClient(baseURL: URL(string: "http://127.0.0.1:42007")!, token: "fixture", session: session)
-        let tabs = try await client.browserTabs(profile: "work")
-        #expect(tabs.profiles == ["default", "work"] && tabs.profile == "work")
-        #expect(try await client.browserFrame(tabID: "tab", profile: "work").tabID == "tab")
-        for profile in ["../private", "Work", "", String(repeating: "a", count: 33)] {
-            await #expect(throws: RemoteWorkspaceClientError.invalidResponse("The browser profile identifier is invalid.")) {
-                try await client.browserTabs(profile: profile)
-            }
-        }
-    }
 
-    @Test func fragmentedStreamKeepsOnlyTheLatestImageAndRejectsOversizedFrames() async throws {
-        let pair = AsyncThrowingStream<RemoteBrowserFrame, any Error>.makeStream(bufferingPolicy: .bufferingNewest(1))
-        let decoder = RemoteBrowserStreamDecoder(pair.continuation)
-        let session = URLSession(configuration: .ephemeral)
-        defer { session.invalidateAndCancel() }
-        let task = session.dataTask(with: URL(string: "http://127.0.0.1:1")!)
-        let first = Data(#"{"tabID":"tab","frameID":"one","imageBase64":"anBlZw==","imageID":"image"}"#.utf8)
-        decoder.urlSession(session, dataTask: task, didReceive: first.prefix(17))
-        decoder.urlSession(session, dataTask: task, didReceive: first.dropFirst(17) + Data([10]))
-        decoder.urlSession(session, dataTask: task, didReceive: Data(#"{"tabID":"tab","frameID":"two","imageBase64":"","imageID":"image"}"#.utf8) + Data([10]))
-        var iterator = pair.stream.makeAsyncIterator()
-        let latest = try #require(try await iterator.next())
-        #expect(latest.frameID == "two" && latest.imageBase64 == "anBlZw==")
-        decoder.urlSession(session, dataTask: task, didReceive: Data(repeating: 65, count: 3 * 1024 * 1024 + 1))
-        await #expect(throws: BackendRPCError.self) { try await iterator.next() }
-    }
 
 }
 

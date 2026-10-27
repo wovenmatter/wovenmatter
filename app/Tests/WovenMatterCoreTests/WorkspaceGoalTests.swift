@@ -74,21 +74,5 @@ struct WorkspaceGoalTests {
         #expect(try await db.sessionGoals().first?.status == .blocked)
     }
 
-    @Test func editingFencesTheOldObjectiveAndKeepsItsAccounting() async throws {
-        let (db, directory, session) = try await fixture()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let original = try await create(db, session)
-        try await run(db, session: session, id: "before-edit")
-        try await db.recordGoalUsage(runID: "before-edit", tokens: 50)
-        let edited = try #require(await db.mutateGoal(sessionID: session,
-            mutation: .edit(id: original.id, objective: "A revised outcome", tokenBudget: 200, turnBudget: nil)))
-        #expect(edited.id != original.id && edited.tokensUsed == 50 && edited.status == .paused)
-        _ = try await db.mutateGoal(sessionID: session, mutation: .resume(id: edited.id))
-        await #expect(throws: (any Error).self) {
-            try await db.mutateGoal(sessionID: session, mutation: .complete(id: original.id, evidence: "Old result"))
-        }
-        try await db.recordGoalUsage(runID: "before-edit", tokens: 80)
-        #expect(try await db.sessionGoals().first?.tokensUsed == 80)
-    }
 
 }

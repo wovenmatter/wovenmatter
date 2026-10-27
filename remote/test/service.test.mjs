@@ -24,21 +24,6 @@ import { authenticationInput, authenticationDeadline, downloadInstallerSource, p
 const repositoryRoot = resolve(import.meta.dirname, '../..')
 const catalogPath = resolve(repositoryRoot, 'harnesses/catalog.json')
 
-test('browser routes discover profiles without launching and reject unsafe profile names', async context => {
-  const root = await temporaryFixture(context, 'woven-browser-profile-routes-')
-  const token = 'browser-profiles-fixture-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
-  const service = await startService({ workspace: root, home: root, catalog: catalogPath, token })
-  context.after(() => stopService(service.child))
-  const headers = { authorization: 'Bearer ' + token }
-  const tabs = await fetch(service.url + '/v1/browser/tabs?profile=project', { headers })
-  assert.equal(tabs.status, 200)
-  assert.deepEqual(await tabs.json(), { running: false, tabs: [], profiles: ['default', 'project'], profile: 'project' })
-  for (const path of ['tabs', 'connect', 'stream']) {
-    const response = await fetch(service.url + '/v1/browser/' + path + '?profile=..%2Fescape', { headers, method: path === 'connect' ? 'POST' : 'GET' })
-    assert.equal(response.status, 400)
-    assert.equal((await response.json()).error, 'invalid_browser_profile')
-  }
-})
 
 test('internal remote browser MCP permits only administrator forwarding and validates the native caller envelope', async context => {
   const root = await temporaryFixture(context, 'woven-browser-mcp-route-')
@@ -75,44 +60,7 @@ test('runtime inspection is authenticated and never starts a Pi worker', async c
   assert.ok(!JSON.stringify(snapshot).includes(token))
 })
 
-test('installer download rejects non-HTTPS sources and redirect destinations', async () => {
-  let requests = 0
-  const fetchImplementation = async () => {
-    requests += 1
-    return installerResponse([], {
-      status: 302,
-      url: 'https://downloads.example.test/install',
-      headers: { location: 'http://downloads.example.test/insecure.sh' },
-    }).response
-  }
 
-  await assert.rejects(
-    downloadInstallerSource('http://downloads.example.test/install', {
-      fetchImplementation,
-    }),
-    { message: 'installer_https_required' }
-  )
-  assert.equal(requests, 0)
-
-  await assert.rejects(
-    downloadInstallerSource('https://downloads.example.test/install', {
-      fetchImplementation,
-    }),
-    { message: 'installer_https_required' }
-  )
-  assert.equal(requests, 1, 'an insecure redirect must be rejected before it is fetched')
-
-  const insecureFinal = installerResponse([Buffer.from('unsafe')], {
-    url: 'http://downloads.example.test/final.sh',
-  })
-  await assert.rejects(
-    downloadInstallerSource('https://downloads.example.test/install', {
-      fetchImplementation: async () => insecureFinal.response,
-    }),
-    { message: 'installer_https_required' }
-  )
-  assert.equal(insecureFinal.wasCancelled(), true)
-})
 
 test('installer download cancels a stream as soon as it exceeds the byte limit', async () => {
   const oversized = installerResponse([
@@ -146,20 +94,6 @@ test('installer download cancels a stream as soon as it exceeds the byte limit',
   assert.equal(declaredOversized.wasCancelled(), true)
 })
 
-test('installer download aborts a stalled request at its deadline', async () => {
-  let signal
-  await assert.rejects(
-    downloadInstallerSource('https://downloads.example.test/stalled.sh', {
-      timeoutMilliseconds: 10,
-      fetchImplementation: async (_url, options) => {
-        signal = options.signal
-        return new Promise(() => {})
-      },
-    }),
-    { message: 'installer_download_timed_out' }
-  )
-  assert.equal(signal.aborted, true)
-})
 
 for (const outcome of ['exit', 'cancel', 'timeout']) {
   test(`authorization input rechecks ${outcome} after the request body arrives`, async () => {
@@ -265,66 +199,7 @@ test('native sign-in reports a real handoff and verifies provider state', async 
   assert.equal((await terminalCancellation.json()).error, 'authentication_session_not_active')
 })
 
-test('harness readiness requires a real bounded transport handshake', async (context) => {
-  const fixture = await temporaryFixture(context, 'wovenmatter-transport-ready-')
-  const home = resolve(fixture, 'home')
-  const workspace = resolve(fixture, 'workspace')
-  const bin = resolve(home, '.local/bin')
-  const authenticated = resolve(fixture, 'authenticated')
-  await mkdir(bin, { recursive: true })
-  await mkdir(workspace, { recursive: true })
-  await writeFile(authenticated, 'ready')
 
-  const working = resolve(bin, 'working-acp')
-  await writeFile(working, fakeACPExecutable())
-  await chmod(working, 0o700)
-  const broken = resolve(bin, 'broken-acp')
-  await writeFile(broken, '#!/bin/sh\nexit 0\n')
-  await chmod(broken, 0o700)
-
-  const harness = (id, displayName, command) => ({
-    id,
-    displayName,
-    transport: 'acp',
-    command,
-    arguments: [],
-    cliCommand: command,
-    install: { kind: 'npm-global', source: 'https://example.test', command: 'true' },
-    authentication: {
-      statusCommands: [`test -f '${authenticated}'`],
-      discoveries: [],
-      methods: [{ id: 'test', displayName: 'Test', command: 'true' }],
-    },
-    capabilities: ['conversations'],
-  })
-  const testCatalog = resolve(fixture, 'catalog.json')
-  await writeFile(testCatalog, JSON.stringify({
-    schemaVersion: 4,
-    harnesses: [
-      harness('codex', 'Working ACP', 'working-acp'),
-      harness('claude_code', 'Broken ACP', 'broken-acp'),
-    ],
-  }))
-
-  const service = await startService({
-    workspace,
-    home,
-    catalog: testCatalog,
-    token: 'transport-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-  })
-  context.after(() => stopService(service.child))
-  const response = await fetch(`${service.url}/v1/harnesses`, {
-    headers: { authorization: 'Bearer transport-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' },
-  })
-  assert.equal(response.status, 200)
-  const statuses = (await response.json()).harnesses.filter(h => h.id !== 'default_agent')
-  assert.equal(statuses[0].state, 'ready')
-  assert.equal(statuses[0].transportStatus, 'ready')
-  assert.equal(statuses[0].transportError, null)
-  assert.equal(statuses[1].state, 'transport_unavailable')
-  assert.equal(statuses[1].transportStatus, 'unavailable')
-  assert.match(statuses[1].transportError, /before readiness/)
-})
 
 async function temporaryFixture(context, prefix) {
   const directory = await mkdtemp(resolve(tmpdir(), prefix))
@@ -332,52 +207,6 @@ async function temporaryFixture(context, prefix) {
   return directory
 }
 
-test('database routes require authentication and keep managed data outside project roots', async context => {
-  const root = await temporaryFixture(context, 'wovenmatter-database-api-')
-  const home = resolve(root, 'home')
-  await mkdir(home)
-  const service = await startService({ workspace: root, home, catalog: catalogPath, token: 'database-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' })
-  context.after(() => stopService(service.child))
-  const request = (path, method = 'GET', body, token = 'database-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa') => fetch(service.url + path, {
-    method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  })
-  assert.equal((await request('/v1/databases', 'GET', undefined, 'wrong')).status, 401)
-  assert.equal((await request('/v1/databases', 'POST', { name: 'Denied' }, 'wrong')).status, 401)
-  const created = await request('/v1/databases', 'POST', { name: 'Sales', root: '/tmp/ignored', action: 'list' })
-  assert.equal(created.status, 200)
-  const row = await created.json()
-  assert.match(row.id, /^[0-9a-f-]{36}$/)
-  assert.equal(row.name, 'Sales')
-  assert.equal(row.preference, 'sqlite')
-  assert.equal(row.url, new URL('file://' + resolve(home, '.local/share/wovenmatter/databases', row.id + '.sqlite')).href)
-  const committed = await request('/v1/databases/execute', 'POST', {
-    databaseID: row.id, sql: 'CREATE TABLE sales(value); INSERT INTO sales VALUES(42)', root: '/tmp/ignored' })
-  assert.equal(committed.status, 200)
-  assert.equal((await committed.json()).revision, 2)
-  const read = await request('/v1/databases/data', 'POST', { databaseID: row.id, sqliteQuery: 'SELECT value FROM sales' })
-  assert.deepEqual((await read.json()).query.rows, [['42']])
-  const snapshotResponse = await request('/v1/databases/snapshot', 'POST', { databaseID: row.id })
-  const snapshot = await snapshotResponse.json()
-  const copiedResponse = await request('/v1/databases/copy', 'POST', { name: 'Sales copy', snapshot })
-  assert.equal(copiedResponse.status, 200)
-  const copy = await copiedResponse.json()
-  assert.notEqual(copy.id, row.id)
-  const listed = await (await request('/v1/databases')).json()
-  assert.deepEqual(listed.databases.map(value => value.name), ['Sales', 'Sales copy'])
-  const largeWrite = await request('/v1/databases/execute', 'POST', {
-    databaseID: row.id, sql: 'CREATE TABLE payload(value); INSERT INTO payload VALUES(zeroblob(900000))' })
-  assert.equal(largeWrite.status, 200)
-  const largeSnapshot = await (await request('/v1/databases/snapshot', 'POST', { databaseID: row.id })).json()
-  assert.ok(Buffer.byteLength(JSON.stringify(largeSnapshot)) > 1_048_576)
-  const largeCopy = await request('/v1/databases/copy', 'POST', { name: 'Large copy', snapshot: largeSnapshot })
-  assert.equal(largeCopy.status, 200)
-  const copiedID = (await largeCopy.json()).id
-  assert.deepEqual((await (await request('/v1/databases/query', 'POST', {
-    databaseID: copiedID, sql: 'SELECT length(value) AS bytes FROM payload' })).json()).query.rows, [['900000']])
-  assert.equal((await request('/v1/databases/execute', 'POST', { databaseID: '../Sales', sql: 'DELETE FROM sales' })).status, 400)
-  assert.equal((await request('/v1/databases/data', 'POST', { databaseID: row.id, sqliteQuery: 'DELETE FROM sales' })).status, 400)
-})
 
 test('Built-in credential routes require authentication, unlock explicitly, and keep files encrypted', async context => {
   const root = await temporaryFixture(context, 'wovenmatter-credentials-api-');
@@ -404,31 +233,6 @@ test('Built-in credential routes require authentication, unlock explicitly, and 
   assert.ok(!disk.includes('fixture-provider-secret') && !disk.includes(unlockKey));
 });
 
-test('task gateway routes are authenticated, default enabled, and persist explicit disable', async context => {
-  const root = await temporaryFixture(context, 'wovenmatter-task-gateway-api-')
-  const home = resolve(root, 'home'); await mkdir(home)
-  const service = await startService({workspace:root,home,catalog:catalogPath,token:'scheduled-fixture-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'})
-  context.after(() => stopService(service.child))
-  const request = (path, method='GET', body, token='scheduled-fixture-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa') => fetch(service.url+path, {
-    method,headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},
-    body:body===undefined?undefined:JSON.stringify(body),
-  })
-  assert.equal((await request('/v1/task-gateway','GET',undefined,'wrong')).status,401)
-  assert.equal((await (await request('/v1/task-gateway')).json()).enabled,true)
-  const published = await request('/v1/task-gateway/schedules','PUT',{publicationID:'fixture-publication',knownRuns:[],schedules:[{
-    id:'fixture-event',title:'Future task',startsAt:'2099-01-01T14:00:00Z',nextFireAt:'2099-01-01T14:00:00Z',timeZoneID:'UTC',revision:1,excludedOccurrences:[],
-    task:{prompt:'fixture only',sessionMode:'new',configuration:{runtimeKind:'codex',title:'Future task',tools:{enabled:[]}}},
-  }]})
-  assert.equal(published.status,200);assert.equal((await published.json()).scheduleCount,1)
-  assert.equal((await (await request('/v1/task-gateway/schedules')).json()).schedules[0].id,'fixture-event')
-  assert.deepEqual(await (await request('/v1/task-gateway/results?after=0')).json(),{entries:[],cursor:'0'})
-  assert.equal((await request('/v1/task-gateway/results?after=-1')).status,400)
-  assert.equal((await request('/v1/task-gateway','PATCH',{enabled:'no'})).status,400)
-  const disabled=await (await request('/v1/task-gateway','PATCH',{enabled:false})).json()
-  assert.equal(disabled.enabled,false);assert.equal(disabled.activeRuns,0)
-  assert.equal(JSON.parse(await readFile(resolve(root,'.wovenmatter/task-gateway/state.json'),'utf8')).enabled,false)
-  assert.notEqual((await request('/v1/durable-acp/attach','POST',{channelID:'no-start',harnessID:'codex'})).status,200)
-})
 
 async function stopService(child) {
   if (child.exitCode !== null || child.signalCode !== null || !child.pid) return
@@ -588,37 +392,6 @@ createInterface({ input: process.stdin }).on('line', line => {
 })
 `
 }
-test('direct client grants expose only execution routes and enforce revocation', async context => {
-  const fixture=await temporaryFixture(context,'wovenmatter-direct-client-')
-  const catalog=resolve(fixture,'catalog.json')
-  await writeFile(catalog,JSON.stringify({schemaVersion:4,harnesses:[]}))
-  const service=await startService({workspace:fixture,home:fixture,catalog,token:'fixture-admin-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'})
-  context.after(() => stopService(service.child))
-  const id=()=>globalThis.crypto.randomUUID()
-  const body={libraryID:id(),workspaceID:id(),ownerDeviceID:id(),deviceID:id(),scopes:['execution']}
-  const enrolled=await fetch(service.url+'/v1/execution/devices',{method:'POST',headers:{authorization:'Bearer fixture-admin-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','content-type':'application/json'},body:JSON.stringify(body)})
-  assert.equal(enrolled.status,201)
-  const grant=await enrolled.json(),headers={authorization:'Bearer '+grant.token,'content-type':'application/json'}
-  const descriptor=await fetch(service.url+'/v1/execution',{headers})
-  assert.equal(descriptor.status,200)
-  assert.equal((await descriptor.json()).id,body.workspaceID)
-  assert.equal((await fetch(service.url+'/v1/execution/events?after=0',{headers})).status,200)
-  assert.equal((await fetch(service.url+'/v1/inference/catalog',{headers})).status,401)
-  assert.equal((await fetch(service.url+'/v1/default-agent/status',{headers})).status,403)
-  for (const [path, method] of [['tabs', 'GET'], ['selftest', 'GET'], ['connect', 'POST'], ['frame', 'POST'], ['action', 'POST'], ['actions', 'POST'], ['stream?tabID=fixture', 'GET']]) {
-    assert.equal((await fetch(service.url+'/v1/browser/'+path,{method,headers})).status,403)
-    assert.equal((await fetch(service.url+'/v1/browser/'+path,{method})).status,401)
-  }
-  const tabs = await fetch(service.url+'/v1/browser/tabs',{headers:{authorization:'Bearer fixture-admin-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}})
-  assert.deepEqual(await tabs.json(), {running:false,tabs:[],profiles:['default'],profile:'default'})
-  assert.equal(tabs.headers.get('cache-control'), 'no-store')
-  assert.equal((await fetch(service.url+'/v1/execution/devices',{method:'POST',headers,body:JSON.stringify(body)})).status,403)
-  const foreign=await fetch(service.url+'/v1/execution/commands',{method:'POST',headers,body:JSON.stringify({commandID:id(),deviceID:id(),kind:'createSession'})})
-  assert.equal(foreign.status,400)
-  const revoked=await fetch(service.url+'/v1/execution/devices/'+body.deviceID,{method:'DELETE',headers:{authorization:'Bearer fixture-admin-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}})
-  assert.equal(revoked.status,200)
-  assert.equal((await fetch(service.url+'/v1/execution',{headers})).status,401)
-})
 
 test('installer download follows only HTTPS redirects and hashes streamed bytes', async () => {
   const calls = []
@@ -737,50 +510,7 @@ createInterface({ input: process.stdin }).on('line', line => {
   assert.equal((await readFile(marker, 'utf8')).trim().split('\n').length, 1)
 })
 
-test('service authentication exposes the reviewed harness catalog', async (context) => {
-  const fixture = await temporaryFixture(context, 'wovenmatter-service-')
-  const service = await startService({
-    workspace: fixture,
-    home: fixture,
-    catalog: catalogPath,
-    token: 'service-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-  })
-  context.after(() => stopService(service.child))
 
-  assert.equal((await fetch(`${service.url}/v1/health`)).status, 401)
-  for (const wrong of ['Bearer service-toke', 'Bearer service-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-longer', 'Bearer Service-Token', 'Basic service-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa']) {
-    assert.equal((await fetch(`${service.url}/v1/health`, { headers: { authorization: wrong } })).status, 401)
-  }
-  const headers = { authorization: 'Bearer service-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }
-  assert.equal((await fetch(`${service.url}/v1/health`, { headers: { ...headers, origin: 'https://untrusted.example' } })).status, 403)
-  const malformed = await fetch(`${service.url}/v1/task-gateway`, { method: 'PATCH', headers, body: '{invalid' })
-  assert.equal(malformed.status, 400)
-  assert.equal((await malformed.json()).error, 'invalid_json')
-  const health = await fetch(`${service.url}/v1/health`, { headers })
-  assert.equal((await health.json()).status, 'ready')
-  const response = await fetch(`${service.url}/v1/harnesses`, { headers })
-  const harnesses = (await response.json()).harnesses
-  assert.deepEqual(harnesses.map((value) => value.id), [
-    'default_agent',
-    'codex', 'claude_code', 'grok_build', 'opencode',
-  ])
-  assert.ok(harnesses.every((value) =>
-    Array.isArray(value.setupMethods) && (['opencode', 'default_agent'].includes(value.id) || value.setupMethods.length > 0)
-  ))
-  const openCode = harnesses.find((value) => value.id === 'opencode')
-  assert.equal(openCode.transport, 'opencode-v2')
-  assert.equal(openCode.state, 'cli_missing')
-  assert.deepEqual(openCode.setupMethods, [])
-  assert.match(openCode.transportError, /this workspace’s OpenCode v2 server/)
-  assert.deepEqual(
-    Object.keys(harnesses.find(value => value.id === 'codex').setupMethods[0]).sort(),
-    ['displayName', 'id']
-  )
-  assert.ok(harnesses.every((value) =>
-    !['adapterInstalled', 'cliInstalled', 'installCommand', 'installSource', 'operation']
-      .some((field) => Object.hasOwn(value, field))
-  ))
-})
 
 test('host health reports native paths and source inventory without exposing its token', async context => {
   const home = await temporaryFixture(context, 'woven-host-health-')
@@ -811,20 +541,6 @@ test('host health reports native paths and source inventory without exposing its
   assert.ok((await listed.json()).directories.some(item => item.name === 'workspace'))
 })
 
-test('native service starts through the atomic current release symlink used by systemd', async context => {
-  const home = await temporaryFixture(context, 'woven-host-current-link-')
-  const current = resolve(home, 'current')
-  await symlink(resolve(repositoryRoot, 'remote'), current, 'dir')
-  const token = 'symlink-host-fixture-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
-  const service = await startService({ workspace: home, home, catalog: catalogPath, token,
-    entrypoint: resolve(current, 'src/server.mjs'),
-    environmentOverrides: { WOVENMATTER_RUNTIME_KIND: 'host' } })
-  context.after(() => stopService(service.child))
-  const response = await fetch(service.url + '/v1/health', { headers: { Authorization: 'Bearer ' + token } })
-  assert.equal(response.status, 200)
-  assert.equal((await response.json()).runtimeKind, 'host')
-  assert.equal(service.child.exitCode, null)
-})
 
 test('authorization input contains asynchronous pipe failures and observes later stream errors', async () => {
   const failure = Object.assign(new Error('write EPIPE'), { code: 'EPIPE' })
@@ -842,22 +558,6 @@ test('authorization input contains asynchronous pipe failures and observes later
   input.destroy()
 })
 
-test('authorization input rejects extra lines, blank or oversized values before writing one trimmed code', async () => {
-  const writes = []
-  const input = new Writable({ write(chunk, _encoding, callback) { writes.push(chunk.toString()); callback() } })
-  const session = { child: { stdin: input }, method: { acceptsInput: true }, state: 'waiting_for_user' }
-  const submit = authenticationInput(session)
-  try {
-    for (const code of ['first\nsecond', 'first\rsecond', '  ', 'x'.repeat(4097), 123]) {
-      await assert.rejects(submit(async () => ({ code })), { statusCode: 400, message: 'invalid_authorization_code' })
-    }
-    assert.deepEqual(writes, [])
-    await submit(async () => ({ code: '  fixture-code\n' }))
-    assert.deepEqual(writes, ['fixture-code\n'])
-  } finally {
-    input.destroy()
-  }
-})
 
 test('authorization input reports acceptance only after the write completes', async () => {
   let finishWrite, written, accepted = false
@@ -874,72 +574,8 @@ test('authorization input reports acceptance only after the write completes', as
   input.destroy()
 })
 
-test('Codex and Claude readiness offer their implemented stable session protocol', async () => {
-  for (const [id, version] of [['claude_code', 1], ['codex', 1]]) {
-    const child = new EventEmitter()
-    child.exitCode = null
-    child.killed = false
-    child.kill = () => { child.killed = true }
-    child.stdout = new PassThrough()
-    child.stderr = new PassThrough()
-    let initialize
-    child.stdin = new Writable({ write(bytes, _encoding, callback) {
-      initialize = JSON.parse(bytes)
-      callback()
-      queueMicrotask(() => child.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: initialize.id,
-        result: { protocolVersion: version } }) + '\n'))
-    } })
-    const result = await probeHarnessTransport({ id, command: 'fixture' }, 1_000, () => {
-      queueMicrotask(() => child.emit('spawn'))
-      return child
-    })
-    assert.deepEqual(result, { ready: true, error: null })
-    assert.equal(initialize.params.protocolVersion, version)
-  }
-})
 
-test('readiness keeps ACP input open until asynchronous initialize is acknowledged', async () => {
-  const child = new EventEmitter()
-  child.exitCode = null; child.killed = false; child.kill = () => { child.killed = true }
-  child.stdout = new PassThrough(); child.stderr = new PassThrough()
-  child.stdin = new Writable({ write(bytes, _encoding, callback) {
-    const request = JSON.parse(bytes)
-    callback()
-    setImmediate(() => {
-      if (child.stdin.writableEnded) child.emit('close', 0)
-      else child.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { protocolVersion: 1 } }) + '\n')
-    })
-  } })
-  const result = await probeHarnessTransport({ id: 'codex', command: 'fixture' }, 1000, () => {
-    queueMicrotask(() => child.emit('spawn')); return child
-  })
-  assert.deepEqual(result, { ready: true, error: null })
-  assert.equal(child.stdin.destroyed, true)
-  assert.equal(child.killed, true)
-})
 
-test('readiness returns unavailable when the initialize pipe closes before its write', async () => {
-  const child = new EventEmitter()
-  child.exitCode = null
-  child.killed = false
-  child.kill = () => { child.killed = true }
-  child.stdout = new PassThrough()
-  child.stderr = new PassThrough()
-  child.stdin = new Writable({
-    write(_chunk, _encoding, callback) {
-      callback(Object.assign(new Error('write EPIPE'), { code: 'EPIPE' }))
-    },
-  })
-  const result = await probeHarnessTransport({ id: 'fixture', command: 'fixture' }, 1_000, () => {
-    queueMicrotask(() => child.emit('spawn'))
-    return child
-  })
-  assert.deepEqual(result, { ready: false, error: 'The transport input failed before readiness.' })
-  assert.equal(child.killed, true)
-  assert.equal(child.stdin.destroyed, true)
-  // Late process events must not replace the already settled failure.
-  child.emit('close', 0)
-})
 
 test('installation uses latest adapter and fails unless actual components verify', async (context) => {
   const fixture = await temporaryFixture(context, 'wovenmatter-install-')

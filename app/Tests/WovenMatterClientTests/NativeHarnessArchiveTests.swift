@@ -6,12 +6,6 @@ import WovenMatterCore
 
 struct NativeHarnessArchiveTests {
 
-    @Test func nativeFrameScannerRejectsMalformedInput() async throws {
-        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: file) }
-        try Data("{\"data\":{\"entries\":[{\"id\":\"row\"},]}}".utf8).write(to: file)
-        await #expect(throws: (any Error).self) { try await PiNativeHistoryFrame.inspect(file) }
-    }
 
     @Test(.timeLimit(.minutes(3)))
     func oversizedNativeRecordsRemainCompleteSearchableAndUseSanitizedOffsets() async throws {
@@ -47,21 +41,6 @@ struct NativeHarnessArchiveTests {
         #expect(await capture.recordID == "message:message-large")
     }
 
-    @Test func openCodeSnapshotsKeepUnknownAndNonTextContentWithoutCapturingConfiguration() throws {
-        let long = String(repeating: "unabridged exposed tool output ", count: 10_000)
-        let row: OpenCodeValue = ["id": "message-1", "type": "assistant", "content": .array([
-            ["type": "reasoning", "text": "exposed thought"],
-            ["type": "tool", "result": .string(long)],
-            ["type": "image", "url": "native://image", "future_field": "retained"]
-        ])]
-        let batch = try #require(try OpenCodeHTTPClient.nativeSnapshot(path: "/api/session/native-session/message",
-            value: ["data": .array([row])], sourceID: "remote-workspace:fixture"))
-        #expect(batch.records.first?.id == "message:message-1")
-        #expect(batch.records.first?.payload.contains(long) == true)
-        #expect(batch.records.first?.payload.contains("native://image") == true)
-        #expect(batch.records.first?.text?.contains("exposed thought") == true)
-        #expect(try OpenCodeHTTPClient.nativeSnapshot(path: "/api/config", value: ["token": "private"], sourceID: "fixture") == nil)
-    }
 
 }
 

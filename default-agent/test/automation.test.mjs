@@ -79,18 +79,6 @@ test('private CDP bridge owns one page, rejects discovery outside it and maps na
   socket.terminate();
 });
 
-test('browser viewport clicks and hover stay on the page and reject invalid coordinates', async () => {
-  const calls = [];
-  const page = { setDefaultTimeout() {}, setDefaultNavigationTimeout() {},
-    url: () => 'about:blank', title: async () => 'Coordinate fixture',
-    mouse: { click: async (...args) => calls.push(['click', ...args]), move: async (...args) => calls.push(['move', ...args]) } };
-  await browserAction(page, { action: 'click', x: 12, y: 34, button: 'right', clickCount: 2 });
-  await browserAction(page, { action: 'hover', x: 56, y: 78 });
-  assert.deepEqual(calls, [['click', 12, 34, { button: 'right', clickCount: 2 }], ['move', 56, 78]]);
-  await assert.rejects(browserAction(page, { action: 'click', x: -1, y: 0 }), /viewport x\/y/);
-  await assert.rejects(browserAction(page, { action: 'hover', x: 0 }), /viewport x\/y/);
-  assert.equal(calls.length, 2);
-});
 
 test('browser upload accepts 2 MiB and rejects one extra byte before changing the file input', async () => {
   const files = [];

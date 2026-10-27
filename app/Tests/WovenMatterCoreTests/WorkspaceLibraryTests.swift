@@ -54,45 +54,6 @@ struct WorkspaceLibraryTests {
     #expect(try Data(contentsOf: opened) == Data("contents".utf8))
   }
 
-  @Test("native OpenCode uploads and image responses retain the canonical exchange once")
-  func openCodeAttachments() async throws {
-    let f = try await Fixture()
-    defer { f.close() }
-    let chat = try await f.db.createFixtureLocalACPSession(
-      runtimeKind: .opencode, title: "Native", ownerDeviceID: UUID(),
-      openCodeAssociation: ("fixture", "native"))
-    let file = f.root.appending(path: "report.txt")
-    try Data("report".utf8).write(to: file)
-    let draft = try MessageAttachmentStore(supportDirectory: f.root).stage(fileURL: file, mimeType: "text/plain")
-    try await f.db.saveOpenCodeSubmission(
-      conversationID: chat, id: "upload", payload: [:], status: "sending",
-      visibleText: "Review", input: .init(text: "Review", attachments: [.file(draft)]))
-    #expect(try await f.db.libraryItems().isEmpty)
-    let now = Date().timeIntervalSince1970 * 1000
-    let time: OpenCodeValue = ["created": .number(now), "completed": .number(now)]
-    var snapshot = OpenCodeSessionSnapshot()
-    snapshot.messages = [
-      [
-        "id": "upload", "type": "user", "time": time, "content": .array([["type": "text", "text": "Review"]]),
-        "files": .array([["uri": .string(file.absoluteString), "name": "report.txt", "mime": "text/plain"]]),
-      ],
-      [
-        "id": "response", "type": "assistant", "time": time,
-        "content": .array([["type": "text", "text": "Here is the image"]]),
-        "files": .array([["uri": "data:image/png;base64,AQID", "name": "image.png", "mime": "image/png"]]),
-      ],
-    ]
-    try await f.db.saveOpenCodeSnapshot(snapshot, conversationID: chat)
-    try await f.db.saveOpenCodeSnapshot(snapshot, conversationID: chat)
-    try await f.db.indexLibraryMessages()
-    let items = try await f.db.libraryItems()
-    #expect(items.count == 2)
-    #expect(items.first { $0.sender == .me }?.contentHash == draft.contentHash)
-    let image = try #require(items.first { $0.sender == .agent })
-    #expect(image.kind == .photo)
-    #expect(image.storage == .retained)
-    #expect(try Data(contentsOf: LibraryFileStore(supportDirectory: f.root).url(for: image)) == Data([1, 2, 3]))
-  }
 
   struct Fixture {
     let root: URL

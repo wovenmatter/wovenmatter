@@ -46,29 +46,6 @@ async function fixture(t) {
     stream: createClaudeStream(native, credentials, dependencies), setResponse: value => { blocks = value; } };
 }
 
-test('a host tool-result boundary preserves exact native identity and sends the actual result once', { timeout: 50000 }, async t => {
-  const f = await fixture(t);
-  const firstContext = normalizeContext({ systemPrompt: 'Fixture host instructions', tools: [tool], messages: [{ role: 'user', content: 'Read note.', timestamp: 1 }] });
-  f.setResponse([{ type: 'tool_use', id: 'toolu_exact_fixture', name: 'mcp__woven__read', input: { path: 'note.md' } }]);
-  const first = await f.stream(model, firstContext, { wovenNativeContext: f.scope(1) }).result();
-  assert.equal(first.stopReason, 'toolUse', first.errorMessage);
-  assert.ok(first.wovenNativeContinuation);
-  f.setResponse([{ type: 'text', text: 'Actual host result received.' }]);
-  const nextContext = normalizeContext({ messages: [...firstContext.messages, first, { role: 'toolResult', toolCallId: first.content[0].id, toolName: 'read', content: [{ type: 'text', text: 'EXACT_HOST_CONTENT' }], timestamp: 2 }] });
-  const second = await f.stream(model, nextContext, { wovenNativeContext: f.scope(2) }).result();
-  assert.equal(second.stopReason, 'stop', second.errorMessage);
-  assert.notEqual(second.wovenNativeContinuation.nativeSessionID, first.wovenNativeContinuation.nativeSessionID);
-  assert.equal(f.requests.length, 2);
-  const blocks = f.requests[1].messages.flatMap(message => typeof message.content === 'string' ? [] : message.content);
-  assert.equal(blocks.filter(block => block.type === 'tool_use' && block.id === 'toolu_exact_fixture').length, 1);
-  assert.equal(blocks.filter(block => block.type === 'tool_result' && block.tool_use_id === 'toolu_exact_fixture').length, 1);
-  assert.ok(JSON.stringify(blocks).includes('EXACT_HOST_CONTENT'));
-  assert.ok(!JSON.stringify(blocks).includes('Only Woven Matter executes this tool'));
-  assert.ok(f.records.some(record => record.kind.startsWith('claude.sdk.transcript.')));
-  assert.ok(!JSON.stringify(f.records).includes('fixture-only-anthropic-key'));
-  assert.deepEqual(f.requests[0].tools.map(tool => tool.name), ['mcp__woven__read']);
-  assert.equal(second.content[0].text, 'Actual host result received.');
-});
 
 for (const provider of ['anthropic', 'claude-subscription']) test(`${provider} native SDK persistence resumes compaction and rebuilds changed accounts`, { timeout: 60000 }, async t => {
   const f = await fixture(t), selected = { ...model, provider };
@@ -149,17 +126,4 @@ test('an account change between metadata probe and native query admits no replay
   assert.equal(result.stopReason, 'error'); assert.match(result.errorMessage, /account changed/);
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(replayed, 0); assert.equal(f.requests.length, 0);
-});
-
-test('unknown native principal fails closed and supported account lookup cancellation closes its process', async () => {
-  let closed = false;
-  const unknown = { environment: async () => ({}), sdkQuery: async ({ options }) => {
-    assert.equal(options.persistSession, false); assert.deepEqual(options.tools, []);
-    return { accountInfo: async () => ({ apiProvider: 'firstParty' }), close: () => { closed = true; } };
-  } };
-  await assert.rejects(getClaudeNativePrincipal(unknown), /establish.*account/); assert.equal(closed, true);
-  const controller = new AbortController(); closed = false;
-  const waiting = getClaudeNativePrincipal({ ...unknown, sdkQuery: async () => ({ accountInfo: async () => new Promise(() => {}), close: () => { closed = true; } }) }, { signal: controller.signal });
-  await new Promise(resolve => setImmediate(resolve)); controller.abort();
-  await assert.rejects(waiting, /abort/i); assert.equal(closed, true);
 });

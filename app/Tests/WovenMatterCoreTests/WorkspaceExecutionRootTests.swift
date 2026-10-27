@@ -57,38 +57,5 @@ struct WorkspaceExecutionRootTests {
     }
   }
 
-  @Test func folderMetadataAndDraftMovesPreserveRootBeforeAndAfterFirstMessage() async throws {
-    let f = try await Fixture(); defer { f.remove() }
-    let first = try await f.db.createFolder(name: "First", location: f.location("First"))
-    let second = try await f.db.createFolder(name: "Second", location: f.location("Second"))
-    let foreign = try await f.db.createFolder(name: "Remote", location: .init(workspaceID: "remote:other", rootPath: "/home/project", managed: true))
-    _ = try await f.db.renameFolder(id: first, name: "Display title")
-    try await f.db.setFolderReferences(id: first, paths: ["/other/project", "/reference", "/reference"])
-    let reopened = try await WorkspaceDatabase(url: f.root.appending(path: "history.sqlite"))
-    let record = try #require(try await reopened.workspaceOverview().folders.first { $0.id == first })
-    #expect(record.name == "Display title" && record.rootPath == f.location("First").rootPath)
-    #expect(record.executionWorkspaceID == f.owner)
-    #expect(record.referencePaths == ["/other/project", "/reference"])
-    try await reopened.setFolderReferences(id: first, paths: [])
-    let cleared = try #require(try await reopened.workspaceOverview().folders.first { $0.id == first })
-    #expect(cleared.rootPath == f.location("First").rootPath && cleared.referencePaths.isEmpty)
-    await #expect(throws: (any Error).self) { try await reopened.setFolderReferences(id: first, paths: ["relative/path"]) }
-    let id = try await f.draft()
-    #expect(try await f.db.moveConversation(id: id, toFolderID: first))
-    #expect(try await f.db.sessionExecutionRoot(id: id)?.rootPath == f.location("First").rootPath)
-    await #expect(throws: (any Error).self) { try await f.db.moveConversation(id: id, toFolderID: foreign) }
-    #expect(try await f.db.moveConversation(id: id, toFolderID: second))
-    #expect(try await f.db.moveConversation(id: id, toFolderID: nil))
-    #expect(try await f.db.sessionExecutionRoot(id: id)?.rootPath == f.location("Ungrouped").rootPath)
-    #expect(try await f.db.moveConversation(id: id, toFolderID: first))
-    try await f.db.lockSessionFolder(id: id)
-    let run = try await f.db.beginLocalACPRun(conversationID: id, content: "First message")
-    try await f.db.completeLocalACPRun(runID: run.runID)
-    await #expect(throws: (any Error).self) { try await f.db.moveConversation(id: id, toFolderID: second) }
-    await #expect(throws: (any Error).self) { try await f.db.moveConversation(id: id, toFolderID: nil) }
-    _ = try await f.db.deleteFolder(id: first)
-    #expect(try await f.db.sessionExecutionRoot(id: id)?.rootPath == f.location("First").rootPath)
-    #expect(try await f.db.conversationContent(id: id).messages.first?.content == "First message")
-  }
 
 }

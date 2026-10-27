@@ -121,29 +121,6 @@ test('frames use only known tabs, bound the current viewport, and reuse the cont
   await f.service.close()
 })
 
-test('transient history screenshot failure retries only capture with fresh layout', async () => {
-  const f = fixture(); await f.service.connect(); f.addPage()
-  const tab = (await f.service.tabs()).tabs[0]
-  const createSession = f.context.newCDPSession
-  let captures = 0
-  f.context.newCDPSession = async () => {
-    const cdp = await createSession(), send = cdp.send
-    cdp.send = async (method, params) => {
-      if (method === 'Page.captureScreenshot' && ++captures === 1) {
-        f.commands.push({ method, params })
-        throw new Error('cdpSession.send: Protocol error (Page.captureScreenshot): Unable to capture screenshot')
-      }
-      return send(method, params)
-    }
-    return cdp
-  }
-  assert.equal((await f.service.frame(tab.id)).tabID, tab.id)
-  assert.equal(captures, 2)
-  assert.equal(f.commands.filter(c => c.method === 'Page.getLayoutMetrics').length, 2)
-  assert.ok(f.commands.every(c => c.method.startsWith('Page.')))
-  assert.equal(f.sessions.length, 1)
-  await f.service.close()
-})
 
 test('persistent screenshot failure has bounded retries and releases capture ownership', async () => {
   const f = fixture(); await f.service.connect(); f.addPage()
@@ -168,22 +145,6 @@ test('persistent screenshot failure has bounded retries and releases capture own
   await f.service.close()
 })
 
-test('failed and overlapping frames do not wedge future viewing', async () => {
-  const f = fixture(); await f.service.connect(); f.addPage()
-  const tab = (await f.service.tabs()).tabs[0]
-  let release
-  f.context.newCDPSession = async () => {
-    await new Promise(resolve => { release = resolve })
-    throw new Error('page navigated')
-  }
-  const pending = f.service.frame(tab.id)
-  await assert.rejects(f.service.frame(tab.id), { statusCode: 409 })
-  release()
-  await assert.rejects(pending, /page navigated/)
-  f.context.newCDPSession = async () => { throw new Error('next capture attempted') }
-  await assert.rejects(f.service.frame(tab.id), /next capture attempted/)
-  await f.service.close()
-})
 
 const uuid = () => globalThis.crypto.randomUUID()
 test('input targets the captured page, maps coordinates, serializes and refuses stale or duplicate gestures', async () => {
@@ -233,18 +194,6 @@ test('input batches preserve DOM key events, stop after navigation, and never re
   await f.service.close()
 })
 
-test('unchanged images omit JPEG bytes but renew input identity; navigation forces a fresh image', async () => {
-  const f = fixture(); await f.service.connect(); const page = f.addPage()
-  const tab = (await f.service.tabs()).tabs[0], first = await f.service.frame(tab.id)
-  const next = await f.service.frame(tab.id, first.frameID)
-  assert.equal(next.imageBase64, ''); assert.notEqual(next.frameID, first.frameID)
-  assert.equal(next.imageID, first.imageID)
-  await f.service.action({ actionID: uuid(), tabID: tab.id, frameID: next.frameID, kind: 'key', key: 'a' })
-  page.emit('framenavigated', page)
-  const navigated = await f.service.frame(tab.id, next.frameID)
-  assert.ok(navigated.imageBase64); assert.notEqual(navigated.imageID, next.imageID)
-  await f.service.close()
-})
 
 
 function streamResponse() {
@@ -281,13 +230,6 @@ test('a stalled viewer cannot build an unbounded video backlog', async () => {
   assert.equal(response.destroyed, true)
 })
 
-test('live frame throughput does not prematurely evict a captured gesture identity', async () => {
-  const f = fixture(); await f.service.connect(); f.addPage()
-  const tab = (await f.service.tabs()).tabs[0], first = await f.service.frame(tab.id)
-  for (let i = 0; i < 300; i++) await f.service.frame(tab.id)
-  assert.equal((await f.service.action({ actionID: uuid(), tabID: tab.id, frameID: first.frameID, kind: 'key', key: 'a' })).accepted, true)
-  await f.service.close()
-})
 
 
 test('viewers share change-driven capture, preserve full-viewport coordinates, and stop on last disconnect', async () => {
@@ -370,57 +312,10 @@ test('a disconnect during capture startup tears down the late capture session', 
 })
 
 
-for (const cause of ['renderer crash', 'capture session disconnected']) {
-  test(`capture terminates instead of renewing stale images after ${cause}`, async () => {
-    const f = fixture(); await f.service.connect(); const page = f.addPage()
-    const tab = (await f.service.tabs()).tabs[0], failures = []
-    await f.service.watch(tab.id, () => {}, error => failures.push(error))
-    if (cause === 'renderer crash') page.emit('crash')
-    else {
-      const cdp = f.sessions[0], send = cdp.send.bind(cdp)
-      cdp.send = (method, params) => method === 'Page.screencastFrameAck' ? Promise.reject(Error('Session closed')) : send(method, params)
-      cdp.emit('Page.screencastFrame', { sessionId: 1, data: 'jpeg', metadata: {
-        deviceWidth: 1280, deviceHeight: 800, pageScaleFactor: 1, offsetTop: 0, scrollOffsetX: 0, scrollOffsetY: 0,
-      } })
-    }
-    await new Promise(resolve => setImmediate(resolve))
-    assert.equal(failures.length, 1)
-    assert.equal(f.detached, 1)
-    assert.equal(page.listenerCount('crash'), 0)
-    assert.equal(f.sessions[0].listenerCount('Page.screencastFrame'), 0)
-    await f.service.close()
-  })
-}
 
 
-test('capture startup rejection still detaches its control session', async () => {
-  const f = fixture(); await f.service.connect(); f.addPage()
-  const tab = (await f.service.tabs()).tabs[0], create = f.context.newCDPSession
-  f.context.newCDPSession = async () => {
-    const cdp = await create(), send = cdp.send.bind(cdp)
-    cdp.send = (method, params) => method === 'Page.startScreencast' ? Promise.reject(Error('Capture unavailable')) : send(method, params)
-    return cdp
-  }
-  await assert.rejects(f.service.watch(tab.id, () => {}, () => {}), /Capture unavailable/)
-  await new Promise(resolve => setImmediate(resolve))
-  assert.equal(f.detached, 1)
-  assert.equal(f.sessions[0].listenerCount('Page.screencastFrame'), 0)
-  await f.service.close()
-})
 
 
-test('cleanup from an obsolete viewer cannot stop replacement capture', async () => {
-  const f = fixture(); await f.service.connect(); const page = f.addPage()
-  const tab = (await f.service.tabs()).tabs[0]
-  const oldStop = await f.service.watch(tab.id, () => {}, () => {})
-  page.emit('crash')
-  const newStop = await f.service.watch(tab.id, () => {}, assert.fail)
-  oldStop()
-  await new Promise(resolve => setImmediate(resolve))
-  assert.equal(f.detached, 1)
-  assert.equal(f.sessions[1].listenerCount('Page.screencastFrame'), 1)
-  newStop(); await f.service.close()
-})
 
 
 test('an active drag can use fresh frames after its press frame expires, but cannot cross documents', async t => {

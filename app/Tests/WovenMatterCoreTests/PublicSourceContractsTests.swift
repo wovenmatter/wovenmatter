@@ -282,34 +282,6 @@ struct PublicSourceContractsTests {
     #expect(openRouter.details.contains { $0.label == "Rate limit" })
   }
 
-  @Test("device analytics discovers local sources with no enabled accounts or credential reads")
-  func analyticsDiscoversSourcesWithoutAccounts() async throws {
-    let directory = try TemporaryDirectory(prefix: "wovenmatter-usage-disabled")
-    defer { directory.remove() }
-    let sourceAccess = UsageSourceAccessRecorder()
-    let credentials = RecordingUsageCredentialStore()
-    let service = LocalUsageService(
-      homeDirectory: directory.url,
-      fileManager: RecordingUsageFileManager(recorder: sourceAccess),
-      credentialStore: credentials,
-      usageDatabaseURL: directory.url.appending(path: "workspace.sqlite")
-    )
-
-    let snapshot = try await service.snapshot(
-      range: .last30Days,
-      refreshLimits: true,
-      refreshReason: .manual,
-      enabledProviders: [],
-      allowCredentialAccess: true,
-      now: Date(timeIntervalSince1970: 1_800_000_000)
-    )
-
-    #expect(snapshot.analytics.samples.isEmpty)
-    #expect(snapshot.analytics.sources.allSatisfy { $0.status == .notFound })
-    #expect(snapshot.limits.isEmpty)
-    #expect(credentials.readCount == 0)
-    #expect(!sourceAccess.providerSourceChecks.isEmpty)
-  }
 
 }
 

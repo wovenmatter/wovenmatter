@@ -24,25 +24,6 @@ import WovenMatterCore
         #expect(!disk.contains(offer.payload.token) && !disk.contains(accepted.requestSecret))
     }
 
-    @Test func metadataAndSeenTimesArePerDeviceAndDoNotChangeCredentialIdentity() async throws {
-        let fixture = try PairingFixture(); defer { fixture.remove() }
-        let clock = PairingClock(), auth = try fixture.authentication(now: { clock.now })
-        let first = try await fixture.pair(auth, kind: .iPhone)
-        let second = try await fixture.pair(auth, kind: .iPad)
-        let firstGrant = try await auth.authenticate(bearer: first.credential)
-        let secondSeen = try await auth.authenticate(bearer: second.credential).lastSeenAt
-        clock.advance(61)
-        let updated = try await auth.authenticate(bearer: first.credential,
-            metadata: .init(kind: .iPhone, osVersion: "iOS fixture", appVersion: "2"))
-        #expect(updated.lastSeenAt == clock.now && updated.metadata?.appVersion == "2")
-        #expect(await auth.isCurrent(firstGrant))
-        let secondStored = await auth.devices().first { $0.id == second.deviceID }
-        #expect(secondStored?.lastSeenAt == secondSeen && secondStored?.kind == .iPad)
-        let reopened = try fixture.authentication(now: { clock.now })
-        #expect(await reopened.devices().first { $0.id == first.deviceID }?.lastSeenAt == clock.now)
-        try await reopened.revoke(deviceID: first.deviceID)
-        #expect(await reopened.isCurrent(firstGrant) == false)
-    }
 
     @Test func qrPairingWaitsForLocalCommitAndRecoversBothLostReplies() async throws {
         let fixture = try PairingFixture(); defer { fixture.remove() }

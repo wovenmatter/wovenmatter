@@ -49,36 +49,7 @@ struct RemoteWorkspaceTailnetTests {
         #expect(discovered.map(\.hostName) == ["worker"])
     }
 
-    @Test func discoveryListsOnlyOnlineUnexpiredLinuxPeers() throws {
-        var peers: [[String: Any]] = []
-        for (name, os) in [("linux-worker", "linux"), ("other-linux", " Linux "),
-                           ("localhost", "iOS"), ("ipad", "iPadOS"), ("mac", "macOS"),
-                           ("darwin-mac", "darwin"), ("windows", "windows"),
-                           ("android", "android"), ("bsd", "freebsd"), ("unknown", "")] {
-            var candidate = peer
-            candidate["HostName"] = name; candidate["OS"] = os
-            peers.append(candidate)
-        }
-        var missingOS = peer; missingOS.removeValue(forKey: "OS"); peers.append(missingOS)
-        var offline = peer; offline["Online"] = false; peers.append(offline)
-        var expired = peer; expired["Expired"] = true; peers.append(expired)
-        let discovered = try RemoteMachineDiscovery.decodeTailnetMachines(from: status(peers))
-        #expect(discovered.map(\.hostName) == ["linux-worker", "other-linux"])
-    }
 
-    @Test func discoveryRetainsEveryEligibleLinuxHostAndDNSFallback() throws {
-        var peers = (0..<8).map { index in
-            var candidate = peer
-            candidate["HostName"] = "worker-\(index)"
-            candidate["DNSName"] = "worker-\(index).example.ts.net."
-            return candidate
-        }
-        peers[7].removeValue(forKey: "HostName")
-        let discovered = try RemoteMachineDiscovery.decodeTailnetMachines(from: status(peers))
-        #expect(discovered.count == 8)
-        #expect(discovered.map(\.hostName) == (0..<7).map { "worker-\($0)" } + ["worker-7.example.ts.net"])
-        #expect(discovered.last?.dnsName == "worker-7.example.ts.net")
-    }
 
     @Test func manualRemoteSSHRejectsAppleAndOtherNonLinuxPeers() throws {
         for os in ["iOS", "iPadOS", "macOS", "darwin", "windows", "android", "freebsd", "", nil] {

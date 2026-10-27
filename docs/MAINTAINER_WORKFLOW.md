@@ -32,8 +32,7 @@ requests desktop validation. Platform validation runs without provider or
 signing credentials; it does not install, release or publish an app. Build
 intermediates use toolchain/dependency-specific caches. Release dependency/compiler
 warming is also manual through **Prepare release dependencies** on main; releases
-can build from a cache miss. See the [CI audit](CI_AUDIT.md) for measured costs and
-the automatic coverage boundary.
+can build from a cache miss.
 
 The embedded Python smoke uses the production WebKit executor with no visible
 web view. Its inactive scheduling policy must keep the worker running until

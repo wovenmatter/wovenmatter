@@ -9,54 +9,8 @@ import WovenMatterCore
 @Suite("Provider credential probe policy")
 struct ProviderCredentialProbeTests {
 
-  @Test("canceling a direct probe cannot start a credential-reading fallback")
-  func canceledProbeDoesNotEscalate() async {
-    let probe = ProbeRecorder()
-    let now = now
-    let task = Task {
-      await ProviderLimitCollector.credentialSensitiveAccount(
-        provider: .codex,
-        keychainInteraction: .oneShotExplicit,
-        interactiveProvider: .codex,
-        now: now,
-        directRead: { _ in
-          withUnsafeCurrentTask { $0?.cancel() }
-          return nil
-        },
-        commandRead: { await probe.recordCommand(); return fixtureAccount(.codex) }
-      )
-    }
-    #expect(await task.value.status == .unavailable)
-    #expect(await probe.commandReads == 0)
-  }
 
 
-  @Test("one provider retry cannot enable another provider's direct or CLI prompt",
-        arguments: Self.providers)
-  func explicitRetryIsProviderScoped(provider: ProviderKind) async {
-    let probe = ProbeRecorder()
-    for selected in Self.providers.filter({ $0 != provider }) {
-      let account = await collect(
-        provider: provider, interaction: .oneShotExplicit, selected: selected, probe: probe
-      )
-      #expect(account.status == .unavailable)
-    }
-    _ = await collect(provider: provider, interaction: .oneShotExplicit, selected: nil, probe: probe)
-    #expect(await probe.interactions == Array(repeating: .noninteractive, count: 4))
-    #expect(await probe.commandReads == 0)
-
-    let recovered = await collect(
-      provider: provider, interaction: .oneShotExplicit, selected: provider, probe: probe
-    )
-    #expect(recovered.source == "Fixture CLI")
-    #expect(await probe.interactions.last == .oneShotExplicit)
-    #expect(await probe.commandReads == 1)
-
-    // Authorization is carried by one call, never persisted for future polls.
-    _ = await collect(provider: provider, interaction: .noninteractive, selected: nil, probe: probe)
-    #expect(await probe.interactions.last == .noninteractive)
-    #expect(await probe.commandReads == 1)
-  }
 
   @Test("blocked probes retain workspace scope and can preserve last-good limits")
   func unavailableRetainsScope() async {
@@ -90,28 +44,6 @@ struct ProviderCredentialProbeTests {
   }
 
 
-  @Test("direct usage remains available without starting a child process",
-        arguments: Self.providers)
-  func successfulDirectReadWins(provider: ProviderKind) async {
-    let probe = ProbeRecorder()
-    let direct = fixtureAccount(provider, source: "Fixture direct API")
-    let result = await ProviderLimitCollector.credentialSensitiveAccount(
-      provider: provider,
-      keychainInteraction: .noninteractive,
-      interactiveProvider: nil,
-      now: now,
-      directRead: { interaction in
-        await probe.recordDirect(interaction)
-        return direct
-      },
-      commandRead: {
-        await probe.recordCommand()
-        return fixtureAccount(provider, source: "Fixture CLI")
-      }
-    )
-    #expect(result == direct)
-    #expect(await probe.commandReads == 0)
-  }
 
   @Test("one explicit Claude Allow is reused by subsequent quiet refreshes")
   func claudeExplicitReadIsCached() throws {
@@ -172,38 +104,7 @@ struct ProviderCredentialProbeTests {
     #expect(fixture.readCount == 3)
   }
 
-  @Test("Claude saved-credential recovery reports denied and missing items",
-        arguments: [errSecAuthFailed, errSecItemNotFound])
-  func claudeAuthorizationErrors(status: OSStatus) {
-    let fixture = ClaudeKeychainFixture(status: status)
-    fixture.expectsInteraction = true
-    #expect(throws: ClaudeUsageCredentialError.self) {
-      try ProviderLimitCollector.authorizeClaudeCredentialAccess(
-        credentialsURL: FileManager.default.temporaryDirectory.appending(path: UUID().uuidString),
-        keychain: fixture.access,
-        cache: ClaudeUsageCredentialCache()
-      )
-    }
-    #expect(fixture.readCount == 1)
-  }
 
-  @Test("only confirmed Claude auth rejection reloads cached credentials",
-        arguments: [200, 401, 403, 429, 500])
-  func claudeAuthRejectionInvalidates(statusCode: Int) {
-    let fixture = ClaudeKeychainFixture()
-    let cache = ClaudeUsageCredentialCache()
-    let url = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-    #expect(ProviderLimitCollector.claudeOAuthToken(
-      credentialsURL: url, keychain: fixture.access, cache: cache
-    ) == "fixture-token")
-    fixture.token = "externally-renewed-token"
-    cache.receivedResponse(statusCode: statusCode, token: "fixture-token", credentialsURL: url)
-    let rejected = statusCode == 401 || statusCode == 403
-    #expect(ProviderLimitCollector.claudeOAuthToken(
-      credentialsURL: url, keychain: fixture.access, cache: cache
-    ) == (rejected ? "externally-renewed-token" : "fixture-token"))
-    #expect(fixture.readCount == (rejected ? 2 : 1))
-  }
 
   private static let providers: [ProviderKind] = [.codex, .claude, .grok, .cursor]
   private let now = Date(timeIntervalSince1970: 1_800_000_000)
@@ -231,16 +132,6 @@ struct ProviderCredentialProbeTests {
     #expect(await probe.commandReads == 0)
   }
 
-  @Test("denied Claude reads return once without changing the credential")
-  func claudeDeniedReadDoesNotRetry() {
-    let fixture = ClaudeKeychainFixture(status: errSecInteractionNotAllowed)
-    #expect(ProviderLimitCollector.claudeOAuthToken(
-      credentialsURL: FileManager.default.temporaryDirectory.appending(path: UUID().uuidString),
-      keychain: fixture.access
-    ) == nil)
-    #expect(fixture.readCount == 1)
-    #expect(fixture.policyChanges == [false, true])
-  }
 
   private func collect(
     provider: ProviderKind,

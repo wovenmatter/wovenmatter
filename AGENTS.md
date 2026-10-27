@@ -35,6 +35,8 @@
   release skill to start the workflow.
   Tests must not consume provider services. Container lifecycle tests use
   `scripts/test-container.sh` when in scope and Docker is available.
+- Keep one-off audit reports, generated coverage inventories, and review evidence
+  out of Git. Record results in PR descriptions or external build artifacts.
 - Release, installation, publication, and delivery require an explicit request.
   Always build and verify a private draft, then present its user-facing release
   description to Trey and wait for his explicit approval before publication.

@@ -198,9 +198,7 @@ SDK settings does not update or start a workspace automatically.
 
 ## Security review
 
-See [the October 2026 remote workspace audit](REMOTE_WORKSPACE_SECURITY_AUDIT.md)
-for the reviewed trust boundaries, dependency evidence, fixes, and validation
-limits. Tailscale policy must grant only intended users/devices access to workspace
+Tailscale policy must grant only intended users/devices access to workspace
 SSH and private HTTPS ports. A Tailnet membership alone does not establish least
 privilege. Root, Docker administrators, and the workspace's SSH account remain
 trusted operators; agents inside one workspace share its credentials and files.
