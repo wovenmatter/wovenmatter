@@ -357,23 +357,6 @@ final class WorkspaceProcessLease {
     }
 }
 
-#if !COMPANION_FACADE_TESTS
-@main
-enum WovenMatterEntryPoint {
-    @MainActor static func main() {
-        // Service helpers must never initialize AppKit, SwiftUI, or a workspace.
-        if let status = CompanionServeSupervisor.dispatch(arguments: CommandLine.arguments) {
-            Darwin.exit(status)
-        }
-        // SwiftUI's delegate adaptor can initialize NSApplication before App.init.
-        // Install CEF's required AppKit subclass first, without loading Chromium.
-        if LocalExecutionRole.current != .backend {
-            WMBrowserRuntime.prepareApplication()
-        }
-        WovenMatterApp.main()
-    }
-}
-
 /// Actions belong to the active workspace window, including a Dev client's
 /// local execution surface. Settings and setup windows publish no workspace actions.
 struct WorkspaceMenuActions {
@@ -391,6 +374,23 @@ extension FocusedValues {
     var workspaceMenuActions: WorkspaceMenuActions? {
         get { self[WorkspaceMenuActionsKey.self] }
         set { self[WorkspaceMenuActionsKey.self] = newValue }
+    }
+}
+
+#if !COMPANION_FACADE_TESTS
+@main
+enum WovenMatterEntryPoint {
+    @MainActor static func main() {
+        // Service helpers must never initialize AppKit, SwiftUI, or a workspace.
+        if let status = CompanionServeSupervisor.dispatch(arguments: CommandLine.arguments) {
+            Darwin.exit(status)
+        }
+        // SwiftUI's delegate adaptor can initialize NSApplication before App.init.
+        // Install CEF's required AppKit subclass first, without loading Chromium.
+        if LocalExecutionRole.current != .backend {
+            WMBrowserRuntime.prepareApplication()
+        }
+        WovenMatterApp.main()
     }
 }
 
