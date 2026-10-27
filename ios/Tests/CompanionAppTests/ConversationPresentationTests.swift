@@ -56,7 +56,8 @@ final class ConversationPresentationTests: XCTestCase {
     XCTAssertEqual(turn.content, "## Result\n\nThe file is absent.")
     XCTAssertEqual(turn.commentaryIDs, ["comment"])
     XCTAssertEqual(turn.timeline.entries.count, 2)
-    XCTAssertEqual(turn.timeline.foldedEntries.count, 1, "Desktop failure visibility survives folding")
+    XCTAssertEqual(turn.timeline.foldedEntries.map(\.id), ["commentary:comment", "failed:group:tool"],
+      "Commentary and failed tools remain visible in the reduced tool-history projection")
   }
   func testMarkdownUsesOneSelectableNativeSurfaceAndDesktopBlocks() throws {
     let content = "# Heading\n\n- One\n  - Two\n\n> Quote\n\n```swift\nlet n = 1\n```\n\n| Name | Value |\n| --- | --- |\n| A | **B** |"
@@ -117,13 +118,15 @@ final class ConversationPresentationTests: XCTestCase {
   }
   func testDisclosuresSurviveSwitchingConversations() {
     let states = MobileConversationStates()
-    states.state(for: "first").setRunExpanded("r", true)
-    states.state(for: "first").setExpanded("tool", true)
-    states.state(for: "second").setRunExpanded("r", false)
-    XCTAssertTrue(states.state(for: "first").isRunExpanded("r", default: false))
-    XCTAssertTrue(states.state(for: "first").isExpanded("tool"))
-    XCTAssertFalse(states.state(for: "second").isRunExpanded("r", default: true))
-    XCTAssertFalse(states.state(for: "second").isExpanded("tool"))
+    let tool = ConversationTranscriptState.disclosureKey(runID: "r", itemID: "tool")
+    let otherRunTool = ConversationTranscriptState.disclosureKey(runID: "other", itemID: "tool")
+    states.state(for: "first").setExpanded(tool, true)
+    states.state(for: "second").setExpanded(tool, false)
+    states.state(for: "second").setExpanded(otherRunTool, true)
+    XCTAssertTrue(states.state(for: "first").isExpanded(tool))
+    XCTAssertFalse(states.state(for: "first").isExpanded(otherRunTool))
+    XCTAssertFalse(states.state(for: "second").isExpanded(tool))
+    XCTAssertTrue(states.state(for: "second").isExpanded(otherRunTool))
   }
   func testToolOnlyTurnAppearsBeforeAnyAssistantMessage() {
     let activity = CompanionActivity(id:"call", runID:"r", title:"list_files", status:"running", sequence:1)
@@ -184,9 +187,15 @@ final class ConversationPresentationTests: XCTestCase {
     let turn = try projectedTurn(transcript)
     XCTAssertEqual(turn.content, "Found it")
     XCTAssertEqual(turn.commentaryIDs, ["comment"])
-    XCTAssertEqual(turn.timeline.entries.map(\.id), ["commentary:comment", "group:tool"])
-    guard case .group(let group) = turn.timeline.entries.last?.content else { return XCTFail("Expected tool/reasoning group") }
-    XCTAssertEqual(group.activities.map(\.id), ["tool", "reasoning"])
+    XCTAssertEqual(turn.timeline.entries.map(\.id), ["commentary:comment", "group:tool", "activity:reasoning"])
+    guard case .group(let group) = turn.timeline.entries[1].content,
+          case .activity(let reasoning) = turn.timeline.entries.last?.content else {
+      return XCTFail("Expected a tool group followed by standalone reasoning")
+    }
+    XCTAssertEqual(group.activities.map(\.id), ["tool"])
+    XCTAssertEqual(reasoning.kind, .thought)
+    XCTAssertEqual(reasoning.content, "Checking the result")
+    XCTAssertEqual(turn.timeline.foldedEntries.map(\.id), ["commentary:comment", "activity:reasoning"])
   }
 
   func testDesktopCheckpointsPartitionCumulativeResponseWithoutDuplication() throws {

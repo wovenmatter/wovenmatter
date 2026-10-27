@@ -1202,7 +1202,7 @@ struct DashboardMessageRow: View {
                             presentation: runPresentation,
                             records: activities,
                             commentaryIDs: commentaryIDs ?? transcript.commentaryIDs,
-                            hasFinalReply: !assistantBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                            hasFollowingResponse: !assistantBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                             timeline: projectedTimeline
                         )
                     }

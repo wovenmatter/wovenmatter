@@ -4,22 +4,22 @@ import Foundation
 ///
 /// The projection is pure and `Sendable`, so a caller can build it once off the
 /// main actor from the run's activity records and pass it to the transcript
-/// view. Commentary is inline; thoughts and tool calls between commentary
-/// segments form one work group (as in T3's work log); plans, progress, and
-/// agent activity remain standalone rows. File changes are excluded and stay
-/// with the changed-files card.
+/// view. Thoughts and commentary remain standalone rows. Only consecutive
+/// visible tool calls form a work group; each nonempty thought starts a new
+/// phase. Plans, progress, and agent activity also remain standalone rows.
+/// File changes are excluded and stay with the changed-files card.
 public struct ConversationWorkTimeline: Equatable, Sendable {
   public static let empty = Self(entries: [])
 
   public let entries: [ConversationWorkTimelineEntry]
-  /// Entries that stay visible while a settled run is folded behind its
-  /// "Worked for" header: failed rows and the failed calls of each group.
+  /// Legacy reduced tool-history projection. Thoughts and commentary always
+  /// remain visible, alongside failed rows and failed calls from tool groups.
   public let foldedEntries: [ConversationWorkTimelineEntry]
 
   public var hasVisibleActivities: Bool { !entries.isEmpty }
 
   /// Active work already supplies an indicator. Otherwise an empty timeline,
-  /// commentary, or failed work needs a quiet waiting state while the run lives.
+  /// commentary, or settled tools need a quiet waiting state while the run lives.
   public var needsThinkingIndicator: Bool {
     if entries.contains(where: { entry in
       switch entry.content {
@@ -29,7 +29,8 @@ public struct ConversationWorkTimeline: Equatable, Sendable {
       }
     }) { return false }
     guard let last = entries.last else { return true }
-    if case .group(let group) = last.content { return group.liveActivity?.workTimelineIsFailure == true }
+    if case .group = last.content { return true }
+    if case .activity(let activity) = last.content, activity.kind == .thought { return false }
     return true
   }
 
@@ -49,9 +50,9 @@ public struct ConversationWorkTimeline: Equatable, Sendable {
     foldedEntries = entries.compactMap { entry in
       switch entry.content {
       case .commentary:
-        return nil
+        return entry
       case .activity(let activity):
-        return activity.htmlRender != nil || activity.workTimelineIsFailure ? entry : nil
+        return activity.kind == .thought || activity.htmlRender != nil || activity.workTimelineIsFailure ? entry : nil
       case .group(let group):
         let failed = group.activities.filter(\.workTimelineIsFailure)
         guard !failed.isEmpty else { return nil }
@@ -124,11 +125,14 @@ public struct ConversationWorkTimeline: Equatable, Sendable {
       case .tool:
         if !activity.workTimelineHidesChecklistTool(hasChecklist: hasChecklist) { pending.append(activity) }
       case .thought:
-        // Empty reasoning has nothing to disclose (T3 `workEntryIsVisibleInGroup`).
-        if activity.workTimelineThoughtHasText { pending.append(activity) }
-      case .assistant:
+        // Revisions have already merged by ID. A new supplied thought is a
+        // visible phase boundary; an empty placeholder must not split tools.
+        guard activity.workTimelineThoughtHasText else { continue }
         flush()
+        entries.append(ConversationWorkTimelineEntry(content: .activity(activity)))
+      case .assistant:
         guard activity.content?.workTimelineNonempty != nil else { continue }
+        flush()
         entries.append(ConversationWorkTimelineEntry(content: .commentary(activity)))
       case .plan where activity.planKind != "proposal":
         // Execution checklists live above the composer. Their revisions and
@@ -191,7 +195,7 @@ public struct ConversationWorkTimelineEntry: Equatable, Identifiable, Sendable {
   public enum Content: Equatable, Sendable {
     /// Frozen assistant commentary preceding later work.
     case commentary(AgentRunActivity)
-    /// Contiguous thoughts and tool calls.
+    /// Consecutive visible tool calls.
     case group(ConversationWorkGroup)
     /// A plan, progress, or agent activity row.
     case activity(AgentRunActivity)
@@ -208,9 +212,8 @@ public struct ConversationWorkTimelineEntry: Equatable, Identifiable, Sendable {
   }
 }
 
-/// Contiguous thoughts and tool calls, summarized as T3 summarizes a work
-/// group: at most two action categories, prioritizing commands and edits,
-/// with the remaining calls counted as other actions.
+/// Consecutive tool calls, summarized using at most two action categories,
+/// prioritizing commands and edits, with remaining calls counted as other actions.
 public struct ConversationWorkGroup: Equatable, Identifiable, Sendable {
   public let id: String
   public let activities: [AgentRunActivity]

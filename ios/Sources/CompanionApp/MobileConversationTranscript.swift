@@ -35,7 +35,8 @@ struct MobileConversationTranscript: View {
         VStack(alignment: .leading, spacing: 18) {
           ConversationWorkTranscript(run: turn.run, presentation: turn.presentation,
             records: turn.records, commentaryIDs: turn.commentaryIDs,
-            hasFinalReply: !turn.content.isEmpty, timeline: turn.timeline)
+            hasFollowingResponse: !turn.content.isEmpty,
+            timeline: turn.timeline)
           if !turn.content.isEmpty {
             ConversationResponse(content: turn.content, isStreaming: turn.isStreaming)
               .padding(.horizontal, 4).padding(.vertical, 2)

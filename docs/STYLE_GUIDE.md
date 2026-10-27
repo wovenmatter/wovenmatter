@@ -183,9 +183,13 @@ when an intentional design change is accepted.
   edge with the header controls using the same 12-point side inset.
 - **Conversation progress:** use the shared elapsed work header and static semantic
   icons with meaningful live text. Do not show busy spinners in tool-call rows,
-  work-group headers, reasoning indicators, or tool-detail loading. Keep the latest
-  supplied reasoning preview beside the live tool, and open reasoning-only groups
-  directly into formatted traces. Preserve the reader's position; follow new work
+  work-group headers, reasoning indicators, or tool-detail loading. Thinking and
+  assistant messages stay visible in chronological order, including after a run
+  completes. Live tool calls append as separate rows in the conversation; never
+  replace the preceding tool with the latest call. A new thinking, commentary,
+  or other standalone event condenses only the preceding tool list into a
+  reopenable disclosure. Show supplied subagent rows at their event position.
+  Preserve the reader's position; follow new work
   or reasoning only from the live edge. Between a tool and the next visible output,
   use a static Thinking label. Keep detail-loading text quiet ("Loading details…")
   and never add a separate mobile running spinner below the transcript.

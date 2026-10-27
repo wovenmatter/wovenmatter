@@ -44,36 +44,34 @@ extension EnvironmentValues {
 }
 
 /// A run's work, inline and in order: commentary, thoughts, and tool groups.
-/// While the run works the header counts elapsed time; once it settles the
-/// work folds behind "Worked for" when a final reply follows. Failures stay
-/// visible in either state.
+/// Thinking and commentary remain visible throughout the run and after it
+/// settles. Only tool lists fold at the next event boundary.
 struct ConversationWorkTranscript: View {
     let run: ConversationWorkRun
     let presentation: ConversationWorkPresentation?
     let records: [WorkspaceRunActivityRecord]
     let commentaryIDs: Set<String>
-    let hasFinalReply: Bool
+    /// The latest assistant text is rendered below this timeline. Its arrival
+    /// closes the preceding tool list even before the run finishes.
+    let hasFollowingResponse: Bool
     /// A projection precomputed from `records` and `commentaryIDs`; built in
     /// `body` when absent.
     let timeline: ConversationWorkTimeline?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.conversationTranscriptInteraction) private var transcriptInteraction
-    @Environment(\.conversationTranscriptState) private var transcriptState
-    @State private var localExpansion: Bool?
 
     init(
         run: ConversationWorkRun,
         presentation: ConversationWorkPresentation?,
         records: [WorkspaceRunActivityRecord],
         commentaryIDs: Set<String> = [],
-        hasFinalReply: Bool = false,
+        hasFollowingResponse: Bool = false,
         timeline: ConversationWorkTimeline? = nil
     ) {
         self.run = run
         self.presentation = presentation
         self.records = records
         self.commentaryIDs = commentaryIDs
-        self.hasFinalReply = hasFinalReply
+        self.hasFollowingResponse = hasFollowingResponse
         self.timeline = timeline
     }
 
@@ -83,12 +81,13 @@ struct ConversationWorkTranscript: View {
         presentation: DashboardRunPresentation?,
         records: [WorkspaceRunActivityRecord],
         commentaryIDs: Set<String> = [],
-        hasFinalReply: Bool = false,
+        hasFollowingResponse: Bool = false,
         timeline: ConversationWorkTimeline? = nil
     ) {
         self.init(run: ConversationWorkRun(id: run.id, conversationID: run.conversationID, status: run.status, error: run.error),
                   presentation: presentation.map { ConversationWorkPresentation(startedAt: $0.startedAt, completedDuration: $0.completedDuration) },
-                  records: records, commentaryIDs: commentaryIDs, hasFinalReply: hasFinalReply, timeline: timeline)
+                  records: records, commentaryIDs: commentaryIDs,
+                  hasFollowingResponse: hasFollowingResponse, timeline: timeline)
     }
 
     #endif
@@ -101,7 +100,6 @@ struct ConversationWorkTranscript: View {
             hasVisibleActivities: timeline.hasVisibleActivities
         )
         let isRunning = run.status == "running"
-        let expanded = isRunning || isExpanded
         // Lost receipts can have no assistant output or tool activity at all.
         // Keep the recovery state visible independently of the work disclosure.
         if run.status == "uncertain" {
@@ -118,23 +116,7 @@ struct ConversationWorkTranscript: View {
         }
         if content.isVisible {
             VStack(alignment: .leading, spacing: 0) {
-                if content.hasVisibleActivities, !isRunning {
-                    Button {
-                        setExpanded(!expanded)
-                    } label: {
-                        HStack(spacing: 7) {
-                            elapsedLabel
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 11, weight: .semibold))
-                                .rotationEffect(.degrees(expanded ? 90 : 0))
-                            Spacer(minLength: 0)
-                        }
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(ConversationElapsedButtonStyle())
-                    .foregroundStyle(DashboardPalette.mutedForeground)
-                    .accessibilityValue(expanded ? "Expanded" : "Collapsed")
-                } else if content.failureMessage != nil {
+                if content.failureMessage != nil {
                     HStack(spacing: 7) {
                         DashboardLucideIcon(glyph: .alertCircle, size: 13)
                         elapsedLabel
@@ -146,7 +128,7 @@ struct ConversationWorkTranscript: View {
                 }
 
                 // Failure belongs to the run, not to its optional work history.
-                // Keep it visible even when that history is empty or folded.
+                // Keep it visible even when no tool or thinking event was supplied.
                 if let failureMessage = content.failureMessage {
                     Text(RemoteNoteEditEnvelope.redactingEnvelopes(in: failureMessage))
                         .font(.system(size: 13))
@@ -161,7 +143,7 @@ struct ConversationWorkTranscript: View {
                         .overlay(DashboardPalette.foreground.opacity(0.10))
                         .padding(.top, 12)
 
-                    let entries = expanded ? timeline.entries : timeline.foldedEntries
+                    let entries = timeline.entries
                     if !entries.isEmpty {
                         let tailID = timeline.entries.last?.id
                         VStack(alignment: .leading, spacing: 12) {
@@ -178,18 +160,27 @@ struct ConversationWorkTranscript: View {
                                         group: group,
                                         runID: run.id,
                                         runStatus: run.status,
-                                        isTail: entry.id == tailID
+                                        isTail: entry.id == tailID && !hasFollowingResponse
                                     )
                                 case .activity(let activity):
-                                    if activity.htmlRender != nil {
+                                    if activity.kind == .thought {
+                                        ConversationThinkingBlock(activity: activity, runID: run.id,
+                                            isLive: isRunning && entry.id == tailID && !hasFollowingResponse)
+                                    } else if activity.htmlRender != nil {
                                         ConversationHTMLRenderView(activity: activity, runID: run.id)
+                                    } else if let children = activity.subagents, !children.isEmpty {
+                                        VStack(alignment: .leading, spacing: 8) {
+                                            ForEach(children) { child in
+                                                ConversationSubagentRow(child: child)
+                                            }
+                                        }
                                     } else {
-                                    ConversationActivityRow(
-                                        activity: activity,
-                                        runID: run.id,
-                                        runStatus: run.status,
-                                        showsProgress: activity.workTimelineShowsProgress
-                                    )
+                                        ConversationActivityRow(
+                                            activity: activity,
+                                            runID: run.id,
+                                            runStatus: run.status,
+                                            showsProgress: activity.workTimelineShowsProgress
+                                        )
                                     }
                                 }
                             }
@@ -199,7 +190,7 @@ struct ConversationWorkTranscript: View {
                         .transition(reduceMotion ? .identity : .opacity)
                     }
                 }
-                if isRunning && timeline.needsThinkingIndicator {
+                if isRunning && !hasFollowingResponse && timeline.needsThinkingIndicator {
                     HStack(spacing: 9) {
                         Image(systemName: "sparkles").frame(width: 17)
                         Text("Thinking").font(.system(size: 13.5))
@@ -209,22 +200,6 @@ struct ConversationWorkTranscript: View {
                     .accessibilityLabel("Thinking")
                 }
             }
-        }
-    }
-
-    /// A settled run folds by default once it has a final reply. An explicit
-    /// choice is kept per run in the injected transcript state.
-    private var isExpanded: Bool {
-        let defaultValue = localExpansion ?? !(run.status == "completed" && hasFinalReply)
-        return transcriptState?.isRunExpanded(run.id, default: defaultValue) ?? defaultValue
-    }
-
-    private func setExpanded(_ expanded: Bool) {
-        transcriptInteraction()
-        if let transcriptState {
-            transcriptState.setRunExpanded(run.id, expanded)
-        } else {
-            localExpansion = expanded
         }
     }
 
@@ -308,9 +283,39 @@ private func conversationDisclosure(
     )
 }
 
-/// Thoughts and tool calls between commentary. T3 keeps the trailing group
-/// of an active run, and any group with a call still running, as one live row
-/// naming the current call; settled groups summarize their calls.
+/// Supplied thinking stays in the transcript independently of tool disclosures.
+/// Long traces retain the existing bounded, selectable reasoning viewport.
+private struct ConversationThinkingBlock: View {
+    let activity: AgentRunActivity
+    let runID: String
+    let isLive: Bool
+    @Environment(\.conversationTranscriptState) private var transcriptState
+    @State private var localScrollSnapshot = ConversationWorkScrollSnapshot()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label("Thinking", systemImage: "sparkles")
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundStyle(DashboardPalette.mutedForeground)
+            ConversationBoundedWorkList(
+                group: ConversationWorkGroup(id: activity.id, activities: [activity], endsTimeline: isLive),
+                runID: runID, runStatus: isLive ? "running" : "completed", followsAppends: isLive,
+                initialScrollSnapshot: transcriptState?.workScrollSnapshot(scrollKey) ?? localScrollSnapshot,
+                saveScrollSnapshot: { snapshot in
+                    if let transcriptState { transcriptState.setWorkScrollSnapshot(scrollKey, snapshot) }
+                    else { localScrollSnapshot = snapshot }
+                })
+        }
+        .accessibilityIdentifier("work-thinking:" + activity.id)
+    }
+
+    private var scrollKey: String {
+        ConversationTranscriptState.disclosureKey(runID: runID, itemID: "thinking:" + activity.id)
+    }
+}
+
+/// Live tools append as separate rows in the outer conversation. Once another
+/// event arrives (or the run ends), only this tool list becomes a disclosure.
 private struct ConversationWorkGroupRow: View {
     let group: ConversationWorkGroup
     let runID: String
@@ -319,84 +324,57 @@ private struct ConversationWorkGroupRow: View {
     @Environment(\.conversationTranscriptInteraction) private var transcriptInteraction
     @Environment(\.conversationTranscriptState) private var transcriptState
     @State private var localExpanded = false
-    @State private var localScrollOffset: CGFloat = 0
+    @State private var localScrollSnapshot = ConversationWorkScrollSnapshot()
 
     var body: some View {
         let runIsActive = runStatus == "running"
-        let liveLabel = runIsActive && ((isTail && group.liveActivity?.workTimelineIsFailure != true) || group.hasActiveActivity)
-            ? group.liveLabel(runIsActive: true)
-            : nil
         let wasExpanded = transcriptState?.isExpanded(scrollKey) ?? localExpanded
-        if liveLabel == nil, !wasExpanded, let single = group.singleActivity {
-            ConversationActivityRow(
-                activity: single,
-                runID: runID,
-                runStatus: runStatus,
-                showsProgress: group.showsProgress(single)
-            )
+        if runIsActive && isTail {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(group.activities) { activity in
+                    ConversationActivityRow(activity: activity, runID: runID, runStatus: runStatus,
+                        showsProgress: group.showsProgress(activity))
+                }
+            }
+            .accessibilityIdentifier("work-live-group:" + group.id)
+        } else if !wasExpanded, let single = group.singleActivity {
+            ConversationActivityRow(activity: single, runID: runID, runStatus: runStatus,
+                showsProgress: group.showsProgress(single))
         } else {
-            let expanded = conversationDisclosure(
-                transcriptState,
-                runID: runID,
-                itemID: group.id,
-                local: $localExpanded,
-                interaction: transcriptInteraction
-            )
-            // The model can keep working between a successful tool and its
-            // next visible part. Keep the live status until the run ends.
-            let showsProgress = liveLabel != nil && (!expanded.wrappedValue || group.isThoughtOnly)
+            let expanded = conversationDisclosure(transcriptState, runID: runID, itemID: group.id,
+                local: $localExpanded, interaction: transcriptInteraction)
             VStack(alignment: .leading, spacing: 0) {
-                Button {
-                    expanded.wrappedValue.toggle()
-                } label: {
-                    VStack(alignment: .leading, spacing: 5) {
-                        if liveLabel != nil, !expanded.wrappedValue,
-                           let thought = group.latestThought,
-                           let source = thought.content?.nonempty ?? thought.detail?.nonempty {
-                            let preview = AssistantStreamingText.reasoningPreview(
-                                of: RemoteNoteEditEnvelope.redactingEnvelopes(in: source))
-                            if !preview.isEmpty {
-                                HStack(alignment: .firstTextBaseline, spacing: 9) {
-                                    Image(systemName: "sparkles")
-                                        .font(.system(size: 12, weight: .medium))
-                                        .frame(width: 17)
-                                    Text(ConversationMarkdownDocument.InlineText(preview).rendered)
-                                        .font(.system(size: 13.5))
-                                        .lineSpacing(3)
-                                        .lineLimit(4)
-                                        .multilineTextAlignment(.leading)
-                                }
-                                .foregroundStyle(DashboardPalette.mutedForeground)
-                            }
-                        }
-                        header(liveLabel: liveLabel.map { label in
-                            if let activity = group.liveActivity, activity.kind == .thought,
-                               activity.content?.nonempty != nil || activity.detail?.nonempty != nil {
-                                return "Thinking"
-                            }
-                            return label
-                        }, expanded: expanded.wrappedValue, showsProgress: showsProgress)
+                Button { expanded.wrappedValue.toggle() } label: {
+                    HStack(spacing: 9) {
+                        Image(systemName: group.hasFailure ? "exclamationmark.triangle"
+                            : group.action?.systemImage ?? "wrench.and.screwdriver")
+                            .font(.system(size: 12, weight: .medium))
+                            .frame(width: 17)
+                        Text(group.summary)
+                            .font(.system(size: 13.5, weight: .medium))
+                            .lineLimit(1).truncationMode(.tail)
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 10, weight: .semibold))
+                            .rotationEffect(.degrees(expanded.wrappedValue ? 90 : 0))
+                            .foregroundStyle(DashboardPalette.mutedForeground)
+                        Spacer(minLength: 0)
                     }
+                    .foregroundStyle(group.hasFailure ? Color.red.opacity(0.8)
+                        : DashboardPalette.foreground.opacity(0.72))
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(ConversationElapsedButtonStyle())
-                .accessibilityValue((expanded.wrappedValue ? "Expanded" : "Collapsed") + (showsProgress ? ", In progress" : ""))
+                .accessibilityValue(expanded.wrappedValue ? "Expanded" : "Collapsed")
                 .accessibilityIdentifier("work-group:" + group.id)
-
-                // Rows exist only while expanded; collapsed groups build nothing.
                 if expanded.wrappedValue {
-                    ConversationBoundedWorkList(
-                        group: group,
-                        runID: runID,
-                        runStatus: runStatus,
-                        followsAppends: liveLabel != nil,
-                        initialScrollOffset: transcriptState?.workScrollOffset(scrollKey) ?? localScrollOffset,
-                        saveScrollOffset: { offset in
-                            if let transcriptState { transcriptState.setWorkScrollOffset(scrollKey, offset) }
-                            else { localScrollOffset = offset }
-                        }
-                    )
-                    .padding(.top, 8)
-                    .padding(.leading, 26)
+                    ConversationBoundedWorkList(group: group, runID: runID, runStatus: runStatus,
+                        followsAppends: false,
+                        initialScrollSnapshot: transcriptState?.workScrollSnapshot(scrollKey) ?? localScrollSnapshot,
+                        saveScrollSnapshot: { snapshot in
+                            if let transcriptState { transcriptState.setWorkScrollSnapshot(scrollKey, snapshot) }
+                            else { localScrollSnapshot = snapshot }
+                        })
+                        .padding(.top, 8).padding(.leading, 26)
                 }
             }
         }
@@ -404,38 +382,6 @@ private struct ConversationWorkGroupRow: View {
 
     private var scrollKey: String {
         ConversationTranscriptState.disclosureKey(runID: runID, itemID: group.id)
-    }
-
-    private func header(liveLabel: String?, expanded: Bool, showsProgress: Bool) -> some View {
-        let isFailure = liveLabel != nil ? group.liveActivity?.workTimelineIsFailure == true : group.hasFailure
-        return HStack(spacing: 9) {
-            Group {
-                if isFailure {
-                    Image(systemName: "exclamationmark.triangle")
-                        .foregroundStyle(.red.opacity(0.8))
-                } else {
-                    Image(systemName: liveLabel != nil
-                        ? group.liveActivity.map { $0.kind == .thought ? "sparkles" : ConversationToolAction($0).systemImage }
-                            ?? "wrench.and.screwdriver"
-                        : group.isThoughtOnly ? "sparkles" : group.action?.systemImage ?? "wrench.and.screwdriver")
-                }
-            }
-            .font(.system(size: 12, weight: .medium))
-            .frame(width: 17)
-            Text(liveLabel ?? group.summary)
-                .font(.system(size: 13.5, weight: group.isThoughtOnly ? .regular : .medium))
-                .lineLimit(1)
-                .truncationMode(.tail)
-            Image(systemName: "chevron.right")
-                .font(.system(size: 10, weight: .semibold))
-                .rotationEffect(.degrees(expanded ? 90 : 0))
-                .foregroundStyle(DashboardPalette.mutedForeground)
-            Spacer(minLength: 0)
-        }
-        .foregroundStyle(isFailure
-            ? Color.red.opacity(0.8)
-            : DashboardPalette.foreground.opacity(group.isThoughtOnly ? 0.58 : 0.72))
-        .contentShape(Rectangle())
     }
 }
 
@@ -448,8 +394,8 @@ private struct ConversationBoundedWorkList: View {
     let runID: String
     let runStatus: String
     let followsAppends: Bool
-    let initialScrollOffset: CGFloat
-    let saveScrollOffset: (CGFloat) -> Void
+    let initialScrollSnapshot: ConversationWorkScrollSnapshot
+    let saveScrollSnapshot: (ConversationWorkScrollSnapshot) -> Void
     @State private var contentHeight = Self.maximumHeight
     @State private var scrollState = ConversationWorkScrollState()
     @State private var scrollPosition = ScrollPosition(edge: .top)
@@ -508,12 +454,19 @@ private struct ConversationBoundedWorkList: View {
             }
         }
         .task {
-            if initialScrollOffset > 0 { scrollPosition.scrollTo(y: initialScrollOffset) }
+            if followsAppends && initialScrollSnapshot.isAtBottom {
+                followAfterLayout()
+            } else if initialScrollSnapshot.offset > 0 {
+                scrollPosition.scrollTo(y: initialScrollSnapshot.offset)
+            }
         }
         .onScrollPhaseChange { _, phase in
             isUserScrolling = phase == .tracking || phase == .interacting || phase == .decelerating
         }
-        .onDisappear { followTask?.cancel(); saveScrollOffset(scrollOffset) }
+        .onDisappear {
+            followTask?.cancel()
+            saveScrollSnapshot(.init(offset: scrollOffset, isAtBottom: scrollState.isAtBottom))
+        }
         }
     }
 
@@ -543,13 +496,6 @@ private struct ConversationBoundedWorkList: View {
                             showsProgress: group.showsProgress(activity)
                         )
                     }
-                }
-                if followsAppends && !group.isThoughtOnly && !group.hasActiveActivity {
-                    HStack(spacing: 9) {
-                        Image(systemName: "sparkles").frame(width: 17)
-                        Text("Thinking").font(.system(size: 13.5))
-                    }
-                    .foregroundStyle(DashboardPalette.mutedForeground)
                 }
                 Color.clear.frame(height: 1).id("work-end")
     }

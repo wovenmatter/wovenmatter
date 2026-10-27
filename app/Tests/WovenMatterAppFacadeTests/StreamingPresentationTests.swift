@@ -23,8 +23,8 @@ struct StreamingPresentationTests {
         _ = NSApplication.shared
         let unique = UUID().uuidString
         let state = ConversationTranscriptState()
-        state.setExpanded(ConversationTranscriptState.disclosureKey(runID: unique, itemID: "group:thought"), true)
-        for id in ["thought", "tool"] {
+        state.setExpanded(ConversationTranscriptState.disclosureKey(runID: unique, itemID: "group:tool"), true)
+        for id in ["tool"] {
             state.setExpanded(ConversationTranscriptState.disclosureKey(runID: unique, itemID: "activity:" + id), true)
         }
         let activities = [
@@ -51,14 +51,15 @@ struct StreamingPresentationTests {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .background(Color.white)
         let host = NSHostingView(rootView: root)
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 520),
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 700),
             styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentView = host
-        host.setFrameSize(NSSize(width: 760, height: 520))
+        host.setFrameSize(NSSize(width: 760, height: 700))
         defer { window.contentView = nil; window.close() }
         let rendered = try await settle(host) { responseText(in: host).contains("SUPPLIED REASONING VISIBLE") }
         try #require(rendered)
+        try await layoutPasses(host)
         let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
         host.cacheDisplay(in: host.bounds, to: bitmap)
         let pixels = try #require(bitmap.cgImage)
@@ -79,6 +80,157 @@ struct StreamingPresentationTests {
             let png = try #require(bitmap.representation(using: .png, properties: [:]))
             try png.write(to: output.appending(path: "reasoning-without-protocol-dump.png"))
         }
+    }
+
+    @Test func eventReplayKeepsThoughtsAndAccumulatesLiveToolsBeforeFoldingOnlyPastGroups() async throws {
+        _ = NSApplication.shared
+        let fixture = EventReplayFixture()
+        let state = ConversationTranscriptState()
+        let host = NSHostingView(rootView: EventReplayFixtureView(fixture: fixture, state: state))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 1200),
+            styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        host.setFrameSize(NSSize(width: 760, height: 1200))
+        defer { window.contentView = nil; window.close() }
+
+        fixture.appendThought("first-thought", text: "**FIRST SUPPLIED THOUGHT**")
+        let firstThought = try await settle(host) { responseText(in: host).contains("FIRST SUPPLIED THOUGHT") }
+        try #require(firstThought, "Supplied thought text must appear without opening a disclosure")
+        let markers = ["ALPHA TOOL EVIDENCE", "BETA TOOL EVIDENCE", "GAMMA TOOL EVIDENCE"]
+        for (index, marker) in markers.enumerated() {
+            fixture.appendTool("tool-\(index)", marker: marker)
+            try await layoutPasses(host)
+            let visible = try recognizedText(in: host)
+            for expected in markers.prefix(index + 1) {
+                #expect(visible.contains(expected), "A new tool replaced an earlier live row: \(visible)")
+            }
+            #expect(responseText(in: host).contains("FIRST SUPPLIED THOUGHT"))
+            #expect(scrollViews(in: host).count == 1,
+                "The live tool list must grow in the outer transcript, alongside the thought's bounded viewport")
+        }
+
+        try exportReplayStage(host, name: "01-live-tools")
+        fixture.appendThought("second-thought", text: "**SECOND SUPPLIED THOUGHT**")
+        let secondThought = try await settle(host) { responseText(in: host).contains("SECOND SUPPLIED THOUGHT") }
+        try #require(secondThought)
+        var visible = try recognizedText(in: host)
+        #expect(markers.allSatisfy { !visible.contains($0) }, "The prior tool list did not fold at the thought boundary")
+        #expect(responseText(in: host).contains("FIRST SUPPLIED THOUGHT"))
+
+        try exportReplayStage(host, name: "02-thought-boundary")
+        let priorGroup = ConversationTranscriptState.disclosureKey(runID: "replay-run", itemID: "group:tool-0")
+        state.setExpanded(priorGroup, true)
+        try await layoutPasses(host)
+        visible = try recognizedText(in: host)
+        #expect(markers.allSatisfy { visible.contains($0) }, "Reopening the prior tool group lost rows: \(visible)")
+        state.setExpanded(priorGroup, false)
+
+        fixture.appendTool("later-a", marker: "DELTA TOOL EVIDENCE")
+        fixture.appendTool("later-b", marker: "EPSILON TOOL EVIDENCE")
+        try await layoutPasses(host)
+        visible = try recognizedText(in: host)
+        #expect(visible.contains("DELTA TOOL EVIDENCE") && visible.contains("EPSILON TOOL EVIDENCE"))
+        fixture.appendCommentary("COMMENTARY AFTER THE TOOLS")
+        let commentary = try await settle(host) { responseText(in: host).contains("COMMENTARY AFTER THE TOOLS") }
+        try #require(commentary)
+        visible = try recognizedText(in: host)
+        #expect(!visible.contains("DELTA TOOL EVIDENCE") && !visible.contains("EPSILON TOOL EVIDENCE"),
+            "The prior tool list did not fold at the commentary boundary")
+
+        try exportReplayStage(host, name: "03-commentary-boundary")
+        let agentTools = ["ZETA TOOL EVIDENCE", "KAPPA TOOL EVIDENCE"]
+        fixture.appendTool("agent-a", marker: agentTools[0])
+        fixture.appendTool("agent-b", marker: agentTools[1])
+        try await layoutPasses(host)
+        visible = try recognizedText(in: host)
+        #expect(agentTools.allSatisfy { visible.contains($0) })
+        try fixture.appendSubagents()
+        try await layoutPasses(host)
+        visible = try recognizedText(in: host)
+        #expect(agentTools.allSatisfy { !visible.contains($0) }, "The native subagent event did not fold the preceding tools")
+        for name in ["ORION REVIEWER", "LYRA RESEARCHER"] {
+            #expect(visible.contains(name), "The native subagent name is missing: \(visible)")
+        }
+        #expect(visible.contains("Working") && visible.contains("Done"), "Subagent statuses must remain visible: \(visible)")
+        for thought in ["FIRST SUPPLIED THOUGHT", "SECOND SUPPLIED THOUGHT"] {
+            #expect(responseText(in: host).contains(thought), "The subagent event hid a preceding thought")
+        }
+        try exportReplayStage(host, name: "04-subagent-boundary")
+
+        let finalTools = ["THETA TOOL EVIDENCE", "IOTA TOOL EVIDENCE"]
+        fixture.appendTool("final-a", marker: finalTools[0])
+        fixture.appendTool("final-b", marker: finalTools[1])
+        try await layoutPasses(host)
+        visible = try recognizedText(in: host)
+        #expect(finalTools.allSatisfy { visible.contains($0) })
+        fixture.response = "**STREAMED FOLLOWING RESPONSE**\n\n"
+        let responseAppeared = try await settle(host) { responseText(in: host).contains("STREAMED FOLLOWING RESPONSE") }
+        try #require(responseAppeared, "The actual following assistant body must render while the run is still running")
+        #expect(fixture.status == "running")
+        visible = try recognizedText(in: host)
+        #expect(finalTools.allSatisfy { !visible.contains($0) }, "The first visible assistant body did not fold tail tools before completion")
+        for thought in ["FIRST SUPPLIED THOUGHT", "SECOND SUPPLIED THOUGHT"] {
+            #expect(responseText(in: host).contains(thought), "The streamed response hid a preceding thought")
+        }
+        try exportReplayStage(host, name: "05-streaming-response")
+
+        fixture.status = "completed"
+        try await layoutPasses(host)
+        let settled = responseText(in: host)
+        for text in ["FIRST SUPPLIED THOUGHT", "SECOND SUPPLIED THOUGHT", "COMMENTARY AFTER THE TOOLS", "STREAMED FOLLOWING RESPONSE"] {
+            #expect(settled.contains(text), "Completion folded a non-tool event: \(text)")
+        }
+        #expect(settled.allSatisfy { !$0.contains("**") }, "Supplied thought Markdown was rendered literally")
+        visible = try recognizedText(in: host)
+        #expect(visible.contains("ORION REVIEWER") && visible.contains("LYRA RESEARCHER"), "Completion hid the native subagents")
+        try exportReplayStage(host, name: "06-completed")
+        let groups = [
+            ("tool-0", markers),
+            ("later-a", ["DELTA TOOL EVIDENCE", "EPSILON TOOL EVIDENCE"]),
+            ("agent-a", agentTools),
+            ("final-a", finalTools),
+        ]
+        for (index, group) in groups.enumerated() {
+            let key = ConversationTranscriptState.disclosureKey(runID: "replay-run", itemID: "group:" + group.0)
+            state.setExpanded(key, true)
+            try await layoutPasses(host)
+            visible = try recognizedText(in: host)
+            #expect(group.1.allSatisfy { visible.contains($0) }, "Completion made a prior tool list inaccessible: \(group.0): \(visible)")
+            try exportReplayStage(host, name: "07-reopened-\(index)")
+            state.setExpanded(key, false)
+        }
+    }
+
+    @Test func followingResponseReplacesGenericWaitingWithoutHidingToolHistory() async throws {
+        _ = NSApplication.shared
+        let fixture = EventReplayFixture()
+        let state = ConversationTranscriptState()
+        let host = NSHostingView(rootView: EventReplayFixtureView(fixture: fixture, state: state))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 700),
+            styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        host.setFrameSize(NSSize(width: 760, height: 700))
+        defer { window.contentView = nil; window.close() }
+        fixture.appendTool("waiting-a", marker: "WAITING FIRST TOOL")
+        fixture.appendTool("waiting-b", marker: "WAITING SECOND TOOL")
+        try await layoutPasses(host)
+        var visible = try recognizedText(in: host)
+        #expect(visible.contains("Thinking"), "Completed tail tools must retain a quiet waiting indication before the next event")
+        #expect(visible.contains("WAITING FIRST TOOL") && visible.contains("WAITING SECOND TOOL"))
+        fixture.response = "THE RESPONSE IS NOW STREAMING\n\n"
+        let appeared = try await settle(host) { responseText(in: host).contains("THE RESPONSE IS NOW STREAMING") }
+        try #require(appeared)
+        #expect(fixture.status == "running")
+        visible = try recognizedText(in: host)
+        #expect(!visible.contains("Thinking"), "A generic waiting indicator remained above the actual streamed response")
+        #expect(!visible.contains("WAITING FIRST TOOL") && !visible.contains("WAITING SECOND TOOL"))
+        state.setExpanded(ConversationTranscriptState.disclosureKey(runID: "replay-run", itemID: "group:waiting-a"), true)
+        try await layoutPasses(host)
+        visible = try recognizedText(in: host)
+        #expect(visible.contains("WAITING FIRST TOOL") && visible.contains("WAITING SECOND TOOL"))
+        #expect(!visible.contains("Thinking"))
     }
 
     @Test func boundedReasoningPagesPreserveFenceContextAtBothEdges() throws {
@@ -125,9 +277,6 @@ struct StreamingPresentationTests {
                 createdAt: "", sequence: 1),
         ]
         let state = ConversationTranscriptState()
-        state.setRunExpanded(runID, true)
-        let key = ConversationTranscriptState.disclosureKey(runID: runID, itemID: "group:" + activityID)
-        state.setExpanded(key, true)
         var requests = 0
         let root = ConversationWorkTranscript(
             run: .init(id: runID, conversationID: unique, status: "completed"),
@@ -166,11 +315,8 @@ struct StreamingPresentationTests {
         #expect(requests == 2)
         try await Task.sleep(for: .milliseconds(650))
         #expect(requests == 2, "Settled complete details continued polling")
-        state.setExpanded(key, false)
-        let closed = try await settle(host) { scrollViews(in: host).isEmpty }
-        try #require(closed)
-        try await Task.sleep(for: .milliseconds(650))
-        #expect(requests == 2, "Closed disclosure continued requesting details")
+        #expect(responseText(in: host).contains(where: { $0.contains(suffix) }),
+            "Settled reasoning must remain visible without a disclosure")
     }
 
     @Test func liveReasoningUsesLoadedDetailsWhenPreviewEndsInsideGrapheme() async throws {
@@ -190,8 +336,6 @@ struct StreamingPresentationTests {
             let full = AgentRunActivity(id: activityID, kind: .thought, status: "running",
                 content: fullText, detailsAvailable: true)
             let state = ConversationTranscriptState()
-            let key = ConversationTranscriptState.disclosureKey(runID: runID, itemID: "group:" + activityID)
-            state.setExpanded(key, true)
             var requests = 0
             let root = ConversationWorkTranscript(
                 run: .init(id: runID, conversationID: unique, status: "running"),
@@ -215,7 +359,6 @@ struct StreamingPresentationTests {
             }
             #expect(requests > 0, "The live disclosure did not load its complete record")
             #expect(delivered, "A preview ending inside a grapheme hid the complete live reasoning suffix")
-            state.setExpanded(key, false)
         }
     }
 
@@ -225,7 +368,6 @@ struct StreamingPresentationTests {
         fixture.text = (0..<500).map { "Original paragraph \($0) preserves a detailed supplied reasoning trace.\n\n" }.joined()
         try #require(fixture.text.count > 20_000)
         let state = ConversationTranscriptState()
-        state.setExpanded(ConversationTranscriptState.disclosureKey(runID: "reasoning-run", itemID: "group:thought"), true)
         let host = NSHostingView(rootView: ReasoningScrollFixtureView(fixture: fixture, state: state))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 520),
             styleMask: [.borderless], backing: .buffered, defer: false)
@@ -279,7 +421,6 @@ struct StreamingPresentationTests {
         _ = NSApplication.shared
         let fixture = ReasoningScrollFixture()
         let state = ConversationTranscriptState()
-        state.setExpanded(ConversationTranscriptState.disclosureKey(runID: "reasoning-run", itemID: "group:thought"), true)
         let host = NSHostingView(rootView: ReasoningScrollFixtureView(fixture: fixture, state: state))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 520),
             styleMask: [.borderless], backing: .buffered, defer: false)
@@ -328,7 +469,58 @@ struct StreamingPresentationTests {
             "A reasoning replacement was followed as an append: before=\(beforeCorrection), after=\(metrics(scroll))")
     }
 
-    @Test func nativeWorkScrollFollowsOnlyAtLiveEdgeAndRestoresDisclosurePosition() async throws {
+    @Test func liveReasoningRemountPreservesBottomIntentAndReadingPosition() async throws {
+        _ = NSApplication.shared
+        for wasAtBottom in [true, false] {
+            let fixture = ReasoningScrollFixture()
+            let state = ConversationTranscriptState()
+            let host = NSHostingView(rootView: ReasoningScrollFixtureView(fixture: fixture, state: state))
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 520),
+                styleMask: [.borderless], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = host
+            host.setFrameSize(NSSize(width: 600, height: 520))
+            defer { window.contentView = nil; window.close() }
+            let found = try await settle(host) { scrollViews(in: host).count == 1 }
+            try #require(found)
+            var scroll = try #require(scrollViews(in: host).first)
+            let overflowing = try await settle(host) { metrics(scroll).maximumOffset > 200 }
+            try #require(overflowing)
+            let target = wasAtBottom ? metrics(scroll).maximumOffset : 120
+            move(scroll, toOffset: target)
+            let positioned = try await settle(host) { abs(metrics(scroll).offset - target) <= 4 }
+            try #require(positioned)
+            let prior = metrics(scroll)
+            fixture.isMounted = false
+            let disappeared = try await settle(host) { scrollViews(in: host).isEmpty }
+            try #require(disappeared)
+            let key = ConversationTranscriptState.disclosureKey(runID: "reasoning-run", itemID: "thinking:thought")
+            let saved = state.workScrollSnapshot(key)
+            #expect(saved.isAtBottom == wasAtBottom)
+            #expect(abs(saved.offset - prior.offset) <= 4)
+            for _ in 0..<8 { fixture.appendParagraph() }
+            fixture.isMounted = true
+            let reappeared = try await settle(host) { scrollViews(in: host).count == 1 }
+            try #require(reappeared)
+            scroll = try #require(scrollViews(in: host).first)
+            let restored = try await settle(host) {
+                metrics(scroll).height > prior.height + 8 && (wasAtBottom
+                    ? metrics(scroll).distanceFromBottom <= 4
+                    : abs(metrics(scroll).offset - prior.offset) <= 4)
+            }
+            #expect(restored, "Remount lost the reader's bottom intent: bottom=\(wasAtBottom), before=\(prior), after=\(metrics(scroll))")
+            let beforeAppend = metrics(scroll)
+            fixture.appendParagraph()
+            let appended = try await settle(host) {
+                metrics(scroll).height > beforeAppend.height + 8 && (wasAtBottom
+                    ? metrics(scroll).distanceFromBottom <= 4
+                    : abs(metrics(scroll).offset - prior.offset) <= 4)
+            }
+            #expect(appended, "The remounted trace followed the wrong reading intent: bottom=\(wasAtBottom), actual=\(metrics(scroll))")
+        }
+    }
+
+    @Test func historicalWorkScrollPreservesReadingPositionAcrossUpdatesAndReopening() async throws {
         _ = NSApplication.shared
         let fixture = WorkScrollFixture()
         let state = ConversationTranscriptState()
@@ -353,11 +545,10 @@ struct StreamingPresentationTests {
         try #require(reachedBottom, "Could not position the owned work list at its live edge")
         let beforeAppend = metrics(scroll)
         fixture.appendTool()
-        let followed = try await settle(host) {
-            let current = metrics(scroll)
-            return current.height > beforeAppend.height + 8 && current.distanceFromBottom <= 4
-        }
-        #expect(followed, "An appended tool did not follow the real live edge: before=\(beforeAppend), after=\(metrics(scroll))")
+        let appended = try await settle(host) { metrics(scroll).height > beforeAppend.height + 8 }
+        try #require(appended)
+        #expect(abs(metrics(scroll).offset - beforeAppend.offset) <= 4,
+            "A historical tool correction moved the reader: before=\(beforeAppend), after=\(metrics(scroll))")
 
         move(scroll, toOffset: 120)
         let reading = try await settle(host) {
@@ -399,10 +590,7 @@ struct StreamingPresentationTests {
             for width: CGFloat in [380, 760] {
                 for scene in Scene.allCases {
                     let state = ConversationTranscriptState()
-                    state.setRunExpanded("run", true)
-                    state.setExpanded(ConversationTranscriptState.disclosureKey(runID: "run", itemID: "group:reasoning"),
-                        scene == .expanded || scene == .trace || scene == .detailTrace)
-                    state.setExpanded(ConversationTranscriptState.disclosureKey(runID: "run", itemID: "activity:reasoning"),
+                    state.setExpanded(ConversationTranscriptState.disclosureKey(runID: "run", itemID: "group:read"),
                         scene == .expanded)
                     let records = scene.records
                     let root = VStack(alignment: .leading, spacing: 18) {
@@ -411,7 +599,7 @@ struct StreamingPresentationTests {
                         ConversationWorkTranscript(
                             run: .init(id: "run", conversationID: "fixture", status: scene.status),
                             presentation: .init(startedAt: Date().addingTimeInterval(-12), completedDuration: "12s"),
-                            records: records, hasFinalReply: !scene.response.isEmpty)
+                            records: records, hasFollowingResponse: !scene.response.isEmpty)
                         if !scene.response.isEmpty {
                             ConversationResponse(content: scene.response, isStreaming: scene.status == "running")
                         }
@@ -443,7 +631,7 @@ struct StreamingPresentationTests {
                         fitting = host.fittingSize
                     }
                     let nativeText = responseText(in: host).joined(separator: "\n")
-                    if scene == .expanded || scene == .trace || scene == .detailTrace {
+                    if scene.records.contains(where: { $0.activity.kind == .thought }) {
                         #expect(nativeText.contains("Checking event order"))
                         #expect(!nativeText.contains("**Checking event order**"))
                         #expect(nativeText.contains("Keep the final answer after the work."))
@@ -463,6 +651,28 @@ struct StreamingPresentationTests {
                 }
             }
         }
+    }
+
+    private func exportReplayStage(_ host: NSView, name: String) throws {
+        guard let directory = ProcessInfo.processInfo.environment["WOVENMATTER_STREAMING_REPLAY_SCREENSHOTS"] else { return }
+        let output = URL(fileURLWithPath: directory, isDirectory: true)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        host.layoutSubtreeIfNeeded()
+        let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: bitmap)
+        let png = try #require(bitmap.representation(using: .png, properties: [:]))
+        try png.write(to: output.appending(path: name + ".png"))
+    }
+
+    private func recognizedText(in host: NSView) throws -> String {
+        host.layoutSubtreeIfNeeded()
+        let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: bitmap)
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        request.usesLanguageCorrection = false
+        try VNImageRequestHandler(cgImage: try #require(bitmap.cgImage)).perform([request])
+        return (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: " ")
     }
 
     private func responseText(in view: NSView) -> [String] {
@@ -523,6 +733,57 @@ struct StreamingPresentationTests {
         host.layoutSubtreeIfNeeded()
     }
 
+    @MainActor private final class EventReplayFixture: ObservableObject {
+        @Published var records: [WorkspaceRunActivityRecord] = []
+        @Published var status = "running"
+        @Published var commentaryIDs: Set<String> = []
+        @Published var response = ""
+
+        func appendThought(_ id: String, text: String) {
+            append(.init(id: id, kind: .thought, status: "completed", content: text))
+        }
+        func appendTool(_ id: String, marker: String) {
+            append(.init(id: id, kind: .tool, title: "Read fixture file", status: "completed",
+                toolName: "read", content: marker))
+        }
+        func appendCommentary(_ text: String) {
+            let id = "commentary"
+            commentaryIDs.insert(id)
+            append(.init(id: id, kind: .assistant, status: "completed", content: text))
+        }
+        func appendSubagents() throws {
+            let snapshot = Data(#"[{"id":"orion","name":"ORION REVIEWER","state":"running"},{"id":"lyra","name":"LYRA RESEARCHER","state":"completed"}]"#.utf8)
+            let children = try JSONDecoder().decode([AgentRunSubagent].self, from: snapshot)
+            append(.init(id: "native-agents", kind: .activity, status: "running", subagents: children))
+        }
+        private func append(_ activity: AgentRunActivity) {
+            records.append(.init(id: activity.id, runID: "replay-run", conversationID: "replay-chat",
+                activity: activity, createdAt: "2026-10-27T00:00:00Z", sequence: Int64(records.count)))
+        }
+    }
+
+    @MainActor private struct EventReplayFixtureView: View {
+        @ObservedObject var fixture: EventReplayFixture
+        let state: ConversationTranscriptState
+        var body: some View {
+            VStack(alignment: .leading, spacing: 18) {
+                ConversationWorkTranscript(
+                    run: .init(id: "replay-run", conversationID: "replay-chat", status: fixture.status),
+                    presentation: .init(startedAt: nil, completedDuration: "1s"), records: fixture.records,
+                    commentaryIDs: fixture.commentaryIDs, hasFollowingResponse: !fixture.response.isEmpty)
+                if !fixture.response.isEmpty {
+                    ConversationResponse(content: fixture.response, isStreaming: fixture.status == "running")
+                }
+            }
+                .environment(\.conversationTranscriptState, state)
+                .environment(\.dashboardTheme, .green)
+                .environment(\.colorScheme, .light)
+                .padding(24)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .background(Color.white)
+        }
+    }
+
     @MainActor private final class WorkScrollFixture: ObservableObject {
         @Published var records: [WorkspaceRunActivityRecord] = (0..<28).map { record($0) }
 
@@ -546,7 +807,7 @@ struct StreamingPresentationTests {
 
         var body: some View {
             ConversationWorkTranscript(
-                run: .init(id: "scroll-run", conversationID: "scroll-fixture", status: "running"),
+                run: .init(id: "scroll-run", conversationID: "scroll-fixture", status: "completed"),
                 presentation: .init(startedAt: nil, completedDuration: nil), records: fixture.records)
                 .environment(\.conversationTranscriptState, state)
                 .environment(\.dashboardTheme, DashboardTheme.dark)
@@ -557,6 +818,7 @@ struct StreamingPresentationTests {
     }
 
     @MainActor private final class ReasoningScrollFixture: ObservableObject {
+        @Published var isMounted = true
         @Published var text = (0..<28).map { "Original paragraph \($0) describes the supplied reasoning clearly.\n\n" }.joined()
         private var nextParagraph = 28
 
@@ -583,14 +845,18 @@ struct StreamingPresentationTests {
         let state: ConversationTranscriptState
 
         var body: some View {
-            ConversationWorkTranscript(
-                run: .init(id: "reasoning-run", conversationID: "reasoning-fixture", status: "running"),
-                presentation: .init(startedAt: nil, completedDuration: nil), records: fixture.records)
-                .environment(\.conversationTranscriptState, state)
-                .environment(\.dashboardTheme, DashboardTheme.dark)
-                .environment(\.colorScheme, .dark)
-                .padding(24)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            Group {
+                if fixture.isMounted {
+                    ConversationWorkTranscript(
+                        run: .init(id: "reasoning-run", conversationID: "reasoning-fixture", status: "running"),
+                        presentation: .init(startedAt: nil, completedDuration: nil), records: fixture.records)
+                        .environment(\.conversationTranscriptState, state)
+                        .environment(\.dashboardTheme, DashboardTheme.dark)
+                        .environment(\.colorScheme, .dark)
+                        .padding(24)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                }
+            }
         }
     }
 

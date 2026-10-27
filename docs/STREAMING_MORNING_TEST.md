@@ -65,9 +65,14 @@ and completed actions. Do not modify anything outside this scratch directory.
 
 Check the specific live tool label and static icon, incremental arguments/output
 when supplied, and chronological placement of progress text, tools and answer.
-Expand work during the turn and after it settles. Reasoning-only groups should
-open into formatted traces; mixed groups should keep tool details accessible.
-The supplied reasoning preview should remain useful beside the active tool.
+Each tool call should append its own row during the live tool phase. When a new
+thinking block, assistant message, or other standalone event arrives, only the
+preceding tool list should condense into a reopenable group. Thinking and agent
+messages must remain visible in order, including after the final answer arrives.
+Reopen each earlier tool group and verify that all its calls remain available.
+The final answer should close the last tool list as soon as its text appears,
+without waiting for the run to finish. Supplied subagent names and statuses
+should appear at their event position.
 There should be no tool/reasoning spinner, duplicated answer or successful-looking
 failed/cancelled call.
 

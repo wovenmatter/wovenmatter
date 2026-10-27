@@ -7,6 +7,13 @@ does not establish that an account or model is currently available.
 
 For the authenticated manual pass, use the [morning test checklist](STREAMING_MORNING_TEST.md).
 
+The current presentation contract keeps every supplied thinking block and assistant
+message visible in order. Consecutive live tools append as individual rows. The
+next visible thought, message, subagent activity, or streamed response condenses
+only the preceding tool list into its own reopenable disclosure. This supersedes
+the earlier default-collapsed work presentation shown in the historical captures
+below; it does not alter the cadence or content supplied by a harness.
+
 ## T3 comparison and upstream boundary
 
 The source audit used `pingdotgg/t3code` at commit
@@ -24,7 +31,7 @@ source comparisons at the named commits, not claims about future T3 releases.
 | [`provider-opencode/v2/adapter.ts`](https://github.com/pingdotgg/t3code/blob/68339a084644540f176ce83d97dd4c768b65b52e/packages/provider-opencode/src/server/v2/adapter.ts) consumes `session.text.*`, `session.reasoning.*` and tool input/progress events, identifying blocks by assistant message, kind and ordinal | Subscribe to OpenCode's live `/api/event` stream in addition to durable history; maintain transient block projections and reconcile them with persisted snapshots |
 | [`assistantStreaming.ts`](https://github.com/pingdotgg/t3code/blob/68339a084644540f176ce83d97dd4c768b65b52e/apps/server/src/orchestration-v2/assistantStreaming.ts) separates complete Markdown sections from an unfinished tail, respecting headings, lists and fenced code | Preserve stable rendered Markdown while showing the live tail; test partial fences, paragraph boundaries and terminal settlement |
 | [`TimelineWorkGroupRows.tsx`](https://github.com/pingdotgg/t3code/blob/68339a084644540f176ce83d97dd4c768b65b52e/apps/web/src/components/chat/TimelineWorkGroupRows.tsx) filters hidden entries, opens reasoning-only groups directly as traces, and captures the pre-layout edge before appends | Shared visibility/grouping policy, direct formatted reasoning disclosures, and native acceptance tests that distinguish append following from status changes |
-| [`presentation.ts`](https://github.com/pingdotgg/t3code/blob/68339a084644540f176ce83d97dd4c768b65b52e/packages/client-runtime/src/work-log/presentation.ts) supplies compact tool labels and a short live thought line | Show the supplied heading or sentence beside the active tool, with the complete exposed trace reachable in its disclosure |
+| [`presentation.ts`](https://github.com/pingdotgg/t3code/blob/68339a084644540f176ce83d97dd4c768b65b52e/packages/client-runtime/src/work-log/presentation.ts) supplies compact tool labels and a short live thought line | Preserve meaningful native tool labels; the confirmed Woven contract keeps supplied thinking visible independently of tool disclosures |
 | [`WorkLog.tsx`](https://github.com/pingdotgg/t3code/blob/68339a084644540f176ce83d97dd4c768b65b52e/apps/web/src/components/chat/WorkLog.tsx) keeps selectable details in a bounded scroll area and follows only within four pixels of its live edge | Bounded native work scrolling, reading-position preservation, and shared detail rendering in the app's existing themes |
 
 There is a concrete Codex ACP upstream limit. Inspection of both installed Codex
@@ -96,13 +103,15 @@ WOVENMATTER_STREAMING_SCREENSHOTS=/private/tmp/woven-streaming-views node script
 ```
 
 These captures establish rendered fixture behavior; they do not establish a live
-provider-to-screen pass. Separate native acceptance tests mount the production
-work disclosure in an owned window and move only its own `NSClipView`. They
-verify following new tools at the live edge, retaining a reader's offset above
-that edge across append/status changes, and restoring the offset after closing
-and reopening the disclosure. Thought-only tests also verify paragraph growth
-at and above the live edge and position retention after a longer replacement.
-They do not send global scroll gestures.
+provider-to-screen pass. A native event replay mounts the production transcript
+and checks cumulative live tool rows, separate thought/commentary/subagent
+boundaries, the first streamed response before run completion, and independent
+reopening of each prior tool list. Set `WOVENMATTER_STREAMING_REPLAY_SCREENSHOTS`
+to an absolute directory to export its stages. Separate scroll tests move only
+their owned `NSClipView`, preserving reader offsets through updates and disclosure
+reopening. Thought-only tests verify paragraph growth at and above the live edge,
+position retention after a longer replacement, and live-edge restoration. They
+do not send global scroll gestures.
 
 Remote reasoning uses a versioned `wovenmatter.activity.v2` envelope over the
 existing opaque native-record transport. Routine rows retain a bounded preview
