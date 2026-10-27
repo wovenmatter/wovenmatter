@@ -2512,7 +2512,6 @@ final class ApplicationModel {
         try await waitForAgentStop(conversationID: conversation.id)
         try dispatchFence.check()
         guard let dashboardStore, let agentTools else { throw ApplicationModelError.dashboardStoreUnavailable }
-        try await applyPendingSessionSelections(conversationID: conversation.id)
         try dispatchFence.check()
         guard !loadingLocalACPSessionIDs.contains(conversation.id),
               !updatingLocalACPSessionIDs.contains(conversation.id) else {
@@ -2806,23 +2805,6 @@ final class ApplicationModel {
             return
         }
 
-        var defersPendingSelectionsForRecovery = false
-        do {
-            if conversation.localRuntimeKind == .defaultAgent,
-               conversation.remoteWorkspaceID == nil,
-               sessionSelectionPreferences.conversation(id: conversation.id)?.requiresApplication == true,
-               let dashboardStore {
-                let persisted = try await dashboardStore.database.workspaceOverview().conversations
-                    .first { $0.id == conversation.id }
-                defersPendingSelectionsForRecovery = persisted?.programStatus?.executionStatus == "uncertain"
-            }
-            // An uncertain Pi run must reconnect before pending preferences can
-            // pass the active-run guard. Attachment reconciles its native outcome.
-            if !defersPendingSelectionsForRecovery {
-                try await applyPendingSessionSelections(conversationID: conversation.id)
-            }
-        }
-        catch { ensureConversationState(id: conversation.id).setError(error.localizedDescription); return }
         if conversation.localRuntimeKind == .opencode {
             if let openCode = openCodeModel(for: conversation.id), openCode.isEnabled, let link = openCode.links[conversation.id] {
                 await openCode.watch(link)
@@ -2873,15 +2855,6 @@ final class ApplicationModel {
             if let metadata = localACPSessionMetadata[conversation.id] {
                 await recordConfirmedSessionSelections(conversationID: conversation.id, metadata: metadata)
             }
-            if defersPendingSelectionsForRecovery {
-                let active = try await dashboardStore.activeAgentConversationIDs()
-                guard !Task.isCancelled,
-                      localACPSessionRefreshLifecycle.isCurrent(request) else { return }
-                if !active.contains(conversation.id) {
-                    localRunningConversationIDs.remove(conversation.id)
-                    try await applyPendingSessionSelections(conversationID: conversation.id)
-                }
-            }
             ensureConversationState(id: conversation.id).setError(nil)
         } catch {
             guard !Task.isCancelled,
@@ -2931,8 +2904,6 @@ final class ApplicationModel {
               model != nil || thinking != nil || permission != nil else { return }
         let permission = runtimeKind == .pi ? nil
             : conversation.remoteWorkspaceID.flatMap { remoteWorkspaces.configuration(id: $0)?.fullRootPermission(for: runtimeKind) } ?? permission
-        if retryPendingSessionSelections(conversationID: conversation.id,
-            selections: SessionSelections(model: model, thinking: thinking, permission: permission)) { return }
         guard !localRunningConversationIDs.contains(conversation.id),
               updatingLocalACPSessionIDs.insert(conversation.id).inserted else {
             return
@@ -2978,6 +2949,7 @@ final class ApplicationModel {
                         permissionOptionMetadata: configuration.permissionOptionMetadata,
                         workingDirectory: configuration.workingDirectory
                     )
+                sessionSelectionPreferences.markApplied(id: conversation.id)
                 if let metadata = localACPSessionMetadata[conversation.id] {
                     await recordConfirmedSessionSelections(conversationID: conversation.id, metadata: metadata)
                 }
@@ -3098,7 +3070,6 @@ final class ApplicationModel {
                 guard localACPWorkspaceLaunchConfiguration != nil else { throw ApplicationModelError.localACPRuntimeUnavailable }
                 let id = try await openCode.create(workspace: resolvedRoot, requestedConversationID: requestedConversationID, title: initialTitle, nativeWorkspaceID: nativeWorkspaceID, allowMissingCalendarFolder: calendarExecutionRoot != nil,
                     executionRoot: try await sessionCreationRoot(folderID: folderID, workspaceID: nil, root: resolvedRoot))
-                try await openCode.activateCreatedSession(id)
                 await refreshWorkspace()
                 return id
             } catch { localRunError = error.localizedDescription; return nil }
@@ -3124,9 +3095,9 @@ final class ApplicationModel {
                 allowMissingCalendarFolder: calendarExecutionRoot != nil,
                 executionRoot: try await sessionCreationRoot(folderID: folderID, workspaceID: nil, root: resolvedRoot)
             )
-            do { try await prepareNewSessionSelections(conversationID: conversationID, capturedDefaults: capturedDefaults,
+            do { try await initializeNewSessionSelections(conversationID: conversationID, capturedDefaults: capturedDefaults,
                 usesProductPermissionDefault: usesProductPermissionDefault) }
-            catch { ensureConversationState(id: conversationID).setError(error.localizedDescription) }
+            catch { NSLog("Could not read the new chat’s saved settings; opening with native defaults.") }
             localRunError = nil
             await refreshWorkspace()
             return conversationID
@@ -3185,7 +3156,6 @@ final class ApplicationModel {
                 try await instance.connectLocal()
                 let id = try await instance.create(workspace: resolvedRoot, requestedConversationID: requestedConversationID, title: initialTitle, nativeWorkspaceID: nativeWorkspaceID, allowMissingCalendarFolder: calendarExecutionRoot != nil,
                     executionRoot: try await sessionCreationRoot(folderID: folderID, workspaceID: target.configuration.id, root: resolvedRoot))
-                try await instance.activateCreatedSession(id)
                 await refreshWorkspace()
                 return id
             }
@@ -3201,9 +3171,9 @@ final class ApplicationModel {
                 allowMissingCalendarFolder: calendarExecutionRoot != nil,
                 executionRoot: try await sessionCreationRoot(folderID: folderID, workspaceID: target.configuration.id, root: resolvedRoot)
             )
-            do { try await prepareNewSessionSelections(conversationID: conversationID, capturedDefaults: capturedDefaults,
+            do { try await initializeNewSessionSelections(conversationID: conversationID, capturedDefaults: capturedDefaults,
                 usesProductPermissionDefault: usesProductPermissionDefault) }
-            catch { ensureConversationState(id: conversationID).setError(error.localizedDescription) }
+            catch { NSLog("Could not read the new chat’s saved settings; opening with native defaults.") }
             localRunError = nil
             await refreshWorkspace()
             return conversationID

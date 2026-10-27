@@ -841,14 +841,14 @@ struct SettingsHarnessSignInControl: View {
     var compact = false
 
     private var signIn: HarnessSignInModel { model.harnessSignIn }
-    private var signedIn: Bool {
-        signIn.statuses[runtimeKind]?.state == "verified"
+    private var hasCredentials: Bool {
+        ["verified", "credentials_present"].contains(signIn.statuses[runtimeKind]?.state ?? "")
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
-                if signedIn {
+                if hasCredentials {
                     if compact {
                         Text(signIn.statuses[runtimeKind]?.label ?? "Signed in")
                             .font(.system(size: 11.5)).foregroundStyle(DashboardPalette.mutedForeground)
@@ -862,10 +862,6 @@ struct SettingsHarnessSignInControl: View {
                             .disabled(model.runtimeMaintenanceBusy(runtimeKind) || signIn.opening.contains(runtimeKind))
                     }
                 } else {
-                    if compact, signIn.statuses[runtimeKind]?.state == "credentials_present" {
-                        Text("Credentials found").font(.system(size: 11.5))
-                            .foregroundStyle(DashboardPalette.mutedForeground)
-                    }
                     if !compact {
                         SettingsHarnessAccountDetails(status: signIn.statuses[runtimeKind], fallback: "Checking sign-in…")
                         Spacer()

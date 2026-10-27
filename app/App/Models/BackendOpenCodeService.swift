@@ -12,7 +12,7 @@ enum BackendOpenCodeCommand: Codable, Sendable {
     case importable(String?), importSession(OpenCodeValue)
     case sessionCall(String, String, String, OpenCodeValue?)
     case moveDraft(String, URL)
-    case activateCreated(String), validateExecutionRoot(String)
+    case validateExecutionRoot(String)
     case settingsModels(String), calendarMetadata(String, String?), catalog(String)
     case selections(String, SessionSelections), updateSelection(String, String?, String?, String?)
     case send(String, AgentMessageInput)
@@ -58,7 +58,6 @@ struct BackendOpenCodeService {
         case .importSession(let session): try await model.importSession(session)
         case .sessionCall(let id, let suffix, let method, let body): result.value = try await model.sessionCall(id, suffix, method: method, body: body)
         case .moveDraft(let id, let root): try await model.moveDraftWorkspace(conversationID: id, root: root)
-        case .activateCreated(let id): try await model.activateCreatedSession(id)
         case .validateExecutionRoot(let id): try await model.validateExecutionRoot(id)
         case .settingsModels(let workspace): try await model.refreshSettingsModels(workspace: workspace)
         case .calendarMetadata(let directory, let modelID): result.metadata = try await model.calendarTaskMetadata(directory: directory, model: modelID)
@@ -78,7 +77,7 @@ struct BackendOpenCodeService {
         }
         let catalogID: String?
         switch command {
-        case .catalog(let id), .selections(let id, _), .updateSelection(let id, _, _, _), .activateCreated(let id): catalogID = id
+        case .catalog(let id), .selections(let id, _), .updateSelection(let id, _, _, _): catalogID = id
         case .create: catalogID = result.createdID
         default: catalogID = nil
         }

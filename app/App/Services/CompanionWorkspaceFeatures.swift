@@ -149,10 +149,9 @@ extension CompanionCommandService {
             }
             let context = try await model.sessionSelectionContext(conversationID: id)
             guard !model.runningToolSessionIDs.contains(id) else { throw ApplicationModelError.steeringUnavailable }
-            let previous = model.sessionSelectionPreferences.conversation(id: id)?.desiredSelections ?? .init()
-            let next = previous.applyingPendingCorrection(SessionSelections(model: selectedModel, thinking: thinking, permission: permission))
+            let next = SessionSelections(model: selectedModel, thinking: thinking, permission: permission)
             model.sessionSelectionPreferences.stageCalendarSelections(id: id, harness: context.harness, workspace: context.workspace, selections: next)
-            try await model.applyPendingSessionSelections(conversationID: id)
+            try await model.applyStagedSessionSelections(conversationID: id)
         case let .sessionTools(id, enabled, confirmed):
             if try await store.database.companionExecutionOwner(conversationID: id) != nil {
                 _ = try await model.centralExecutionClient().perform(conversationID: id, action: action)

@@ -41,17 +41,6 @@ public struct SessionSelections: Codable, Equatable, Sendable {
     )
   }
 
-  /// Repairs an unfinished initial bundle without losing its other defaults.
-  /// A newly chosen model uses native thinking unless the correction explicitly
-  /// chooses a level; an obsolete level must not make that model impossible to use.
-  public func applyingPendingCorrection(_ correction: Self) -> Self {
-    var result = correction.overlaying(self)
-    if correction.model != nil, correction.thinking == nil {
-      result.thinking = nil
-    }
-    return result
-  }
-
   /// Replaces one field, including nil, without changing the other fields.
   public func replacing(_ field: SessionSelectionField, from selections: Self) -> Self {
     var result = self
@@ -74,7 +63,8 @@ public struct SessionSelectionSnapshot: Codable, Equatable, Sendable {
   /// Explicit choices and defaults captured for application to a new session.
   /// Native fallback metadata is excluded: observing it is not an override request.
   public var desiredSelections: SessionSelections
-  /// A new conversation retains pending application across process restarts.
+  /// A bundle explicitly staged for creation, a task, or a user edit.
+  /// Opening a chat and sending input never replay an unapplied bundle.
   public var requiresApplication: Bool
   /// Product Full Access applies only when the native adapter advertises it.
   /// Explicit Settings or conversation choices keep their confirmation barrier.

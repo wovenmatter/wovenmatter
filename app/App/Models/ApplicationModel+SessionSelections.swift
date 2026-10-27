@@ -110,16 +110,11 @@ extension ApplicationModel {
         return (session.runtimeKind.rawValue, workspace)
     }
 
-    /// Called only by explicit new-chat creation. Capturing before applying the
-    /// values makes retries independent of subsequent edits to defaults.
-    func prepareNewSessionSelections(conversationID: String, capturedDefaults: SessionSelections? = nil,
+    /// Creation owns the only application of captured defaults. A rejected or
+    /// unavailable setting leaves an ordinary, editable session, never pending work
+    /// for opening the chat or sending its first message to retry.
+    func initializeNewSessionSelections(conversationID: String, capturedDefaults: SessionSelections? = nil,
         usesProductPermissionDefault: Bool? = nil) async throws {
-        if isBackendFrontend {
-            _ = try await sendBackendCommand(.prepareSelections(conversationID: conversationID, defaults: capturedDefaults,
-                usesProductPermissionDefault: usesProductPermissionDefault))
-            return
-        }
-
         guard let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
         let context = try await sessionSelectionContext(conversationID: conversationID)
         let native = try await dashboardStore.database.localACPSession(conversationID: conversationID)
@@ -127,37 +122,49 @@ extension ApplicationModel {
         let effectiveDefaults = selectionsApplyingWorkspaceAccess(
             capturedDefaults ?? sessionSelectionPreferences.defaults(harness: context.harness, workspace: context.workspace),
             runtime: native.runtimeKind, workspaceID: native.remoteWorkspaceID)
-        _ = await sessionSelectionPreferences.captureConversation(
+        let captured = await sessionSelectionPreferences.captureConversation(
             id: conversationID, harness: context.harness, workspace: context.workspace,
             selections: SessionSelections(),
             nativeFallback: SessionSelections(model: native.model, thinking: native.thinking,
                 permission: native.permission, tools: currentSessionToolIDs?(conversationID)),
             capturedDefaults: effectiveDefaults, usesProductPermissionDefault: forcedPermission == nil ? usesProductPermissionDefault : false
         )
-        try await applyPendingSessionSelections(conversationID: conversationID)
+        guard captured.requiresApplication else { return }
+        do {
+            try await applyStagedSessionSelections(conversationID: conversationID)
+        } catch {
+            // Defaults are a starting preference, not a prerequisite for a chat.
+            // Keep the native state that was actually accepted, including a
+            // partially applied bundle, and leave its controls editable.
+            let actual = try? await dashboardStore.database.localACPSession(conversationID: conversationID)
+            let metadata = localACPSessionMetadata[conversationID]
+            sessionSelectionPreferences.replaceConfirmedSelections(id: conversationID,
+                selections: SessionSelections(model: metadata?.model ?? actual?.model,
+                    thinking: metadata?.thinking ?? actual?.thinking,
+                    permission: metadata?.permission ?? actual?.permission,
+                    tools: await currentSessionToolIDs?(conversationID)))
+            NSLog("New chat settings were unavailable; retaining native settings.")
+        }
+        sessionSelectionPreferences.markApplied(id: conversationID)
     }
 
-    /// Recovery applies an already captured snapshot, never today's defaults.
-    func applyPendingSessionSelections(conversationID: String) async throws {
-        if isBackendFrontend {
-            _ = try await sendBackendCommand(.applySelections(conversationID: conversationID))
-            return
-        }
-
+    /// Explicit application for creation, scheduled tasks, and user edits only.
+    /// Opening a chat and sending input never call this method.
+    func applyStagedSessionSelections(conversationID: String) async throws {
         if let pending = applyingSessionSelectionTasks[conversationID] {
             try await pending.value
             return
         }
         guard sessionSelectionPreferences.conversation(id: conversationID)?.requiresApplication == true else { return }
         let task = Task { @MainActor in
-            try await self.performPendingSessionSelections(conversationID: conversationID)
+            try await self.performStagedSessionSelections(conversationID: conversationID)
         }
         applyingSessionSelectionTasks[conversationID] = task
         defer { applyingSessionSelectionTasks[conversationID] = nil }
         try await task.value
     }
 
-    private func performPendingSessionSelections(conversationID: String) async throws {
+    private func performStagedSessionSelections(conversationID: String) async throws {
         try beginSessionSelectionApplication(conversationID: conversationID)
         defer { endSessionSelectionApplication(conversationID: conversationID) }
         guard let saved = sessionSelectionPreferences.conversation(id: conversationID),
@@ -169,6 +176,9 @@ extension ApplicationModel {
         let openCode = openCodeModel(for: conversationID)
         if openCode == nil, desired.tools != nil, applyInitialSessionToolIDs == nil {
             throw ApplicationModelError.unavailableSessionTools
+        }
+        if openCode == nil, let tools = desired.tools {
+            try await applyInitialSessionToolIDs?(conversationID, tools)
         }
         var confirmedMetadata: LocalACPSessionMetadata?
         if let openCode {
@@ -208,56 +218,12 @@ extension ApplicationModel {
                 confirmedMetadata = metadata
             }
         }
-        if openCode == nil, let tools = desired.tools {
-            guard let applyInitialSessionToolIDs else {
-                throw ApplicationModelError.unavailableSessionTools
-            }
-            try await applyInitialSessionToolIDs(conversationID, tools)
-        }
         if let metadata = confirmedMetadata {
             await sessionSelectionPreferences.replaceConfirmedSelections(id: conversationID,
                 selections: SessionSelections(model: metadata.model, thinking: metadata.thinking,
                     permission: metadata.permission, tools: currentSessionToolIDs?(conversationID) ?? saved.selections.tools))
         }
         sessionSelectionPreferences.markApplied(id: conversationID)
-    }
-
-    /// A manual correction replaces only the chosen fields in an unfinished
-    /// initial bundle. The remaining captured defaults still need confirmation.
-    @discardableResult
-    func retryPendingSessionSelections(conversationID: String, selections: SessionSelections) -> Bool {
-        if isBackendFrontend {
-            Task {
-                do { _ = try await sendBackendCommand(.retrySelections(conversationID: conversationID, selections: selections)) }
-                catch { ensureConversationState(id: conversationID).setError(error.localizedDescription) }
-            }
-            return true
-        }
-
-        guard let pending = sessionSelectionPreferences.conversation(id: conversationID),
-              pending.requiresApplication else { return false }
-        guard !localRunningConversationIDs.contains(conversationID),
-              !updatingLocalACPSessionIDs.contains(conversationID),
-              applyingSessionSelectionTasks[conversationID] == nil else { return true }
-        let requested = pending.desiredSelections.applyingPendingCorrection(selections)
-        let workspaceID = pending.workspace.hasPrefix("remote:") ? UUID(uuidString: String(pending.workspace.dropFirst(7))) : nil
-        let desired = selectionsApplyingWorkspaceAccess(requested,
-            runtime: AgentRuntimeKind(rawValue: pending.harness) ?? .defaultAgent, workspaceID: workspaceID)
-        sessionSelectionPreferences.updateConversation(id: conversationID, selections: desired,
-            permissionIsExplicit: selections.permission != nil)
-        if pending.desiredSelections.thinking != nil, desired.thinking == nil {
-            sessionSelectionPreferences.updateConversation(id: conversationID, field: .thinking, from: desired)
-        }
-        ensureConversationState(id: conversationID).setError(nil)
-        Task {
-            do {
-                try await applyPendingSessionSelections(conversationID: conversationID)
-                ensureConversationState(id: conversationID).setError(nil)
-            } catch {
-                ensureConversationState(id: conversationID).setError(error.localizedDescription)
-            }
-        }
-        return true
     }
 
     func recordConfirmedSessionSelections(conversationID: String, metadata: LocalACPSessionMetadata) async {

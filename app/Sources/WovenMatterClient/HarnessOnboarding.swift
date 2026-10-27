@@ -53,6 +53,9 @@ public enum HarnessOnboarding {
         func matches(_ pattern: String) -> Bool {
             text.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
         }
+        if kind == .opencode, succeeded, !openCodeStoredAccounts(text).isEmpty {
+            return status(kind, state: "credentials_present", accounts: openCodeStoredAccounts(text))
+        }
         if kind == .opencode, succeeded,
            let regex = try? NSRegularExpression(pattern: #"\b(\d+) (?:credentials?|environment variables?)\b"#) {
             let counts = regex.matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap {
@@ -104,6 +107,8 @@ public enum HarnessOnboarding {
             }
         }
         if kind == .opencode {
+            let stored = openCodeStoredAccounts(text)
+            if !stored.isEmpty { return stored }
             let pattern = #"(?m)^[│┃\s]*[●•]\s+([\p{L}0-9 ._()/-]+?)\s+(oauth|api|api_key|[A-Z][A-Z0-9_]*(?:API_KEY|TOKEN))\s*$"#
             if let regex = try? NSRegularExpression(pattern: pattern) {
                 return regex.matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap { match in
@@ -118,6 +123,26 @@ public enum HarnessOnboarding {
         if text.localizedCaseInsensitiveContains("API key") { return [.init(method: "API key", name: nil)] }
         if text.localizedCaseInsensitiveContains("OAuth") { return [.init(method: "OAuth", name: nil)] }
         return []
+    }
+
+    /// OpenCode v2 lists provider, account label, and storage state in columns.
+    /// Recognize only complete stored rows; arbitrary successful output is not
+    /// evidence of credentials, and saved credentials do not verify provider access.
+    private static func openCodeStoredAccounts(_ text: String) -> [AgentSignInStatus.Account] {
+        let pattern = #"(?m)^[\t ]*([^\r\n]+?)[\t ]{2,}([^\r\n]+?)[\t ]{2,}stored[\t ]*$"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        return regex.matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap { match in
+            guard let providerRange = Range(match.range(at: 1), in: text),
+                  let accountRange = Range(match.range(at: 2), in: text) else { return nil }
+            let provider = String(text[providerRange]).trimmingCharacters(in: .whitespaces)
+            let account = String(text[accountRange]).trimmingCharacters(in: .whitespaces)
+            let name = provider == account || account == "API key" || account == "OAuth"
+                ? provider : provider + " · " + account
+            guard !name.isEmpty, name.count <= 160,
+                  !name.contains(where: { $0.asciiValue.map { $0 < 32 || $0 == 127 } == true }),
+                  !name.contains("sk-"), !name.contains("Bearer "), !name.hasPrefix("eyJ") else { return nil }
+            return .init(method: account == "API key" ? "API key" : account == "OAuth" ? "OAuth" : "Saved credential", name: name)
+        }
     }
 
     private static func status(_ kind: AgentRuntimeKind, state: String, accounts: [AgentSignInStatus.Account] = []) -> AgentSignInStatus {

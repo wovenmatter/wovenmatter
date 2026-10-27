@@ -16,7 +16,6 @@ extension ApplicationModel {
         let fence = starts ? suppliedFence ?? beginAgentDispatch(conversationID: id) : nil
         defer { if let fence, suppliedFence == nil { finishAgentDispatch(conversationID: id, fence: fence) } }
         if starts { try await waitForAgentStop(conversationID: id); try fence?.check() }
-        if case .set = mutation { try await applyPendingSessionSelections(conversationID: id) }
         let stops: Bool
         switch mutation { case .pause, .clear, .edit: stops = true; default: stops = false }
         let result: Result<WorkspaceGoal?, any Error>

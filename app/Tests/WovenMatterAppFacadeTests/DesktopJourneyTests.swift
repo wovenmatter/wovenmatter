@@ -30,13 +30,6 @@ struct DesktopJourneyTests {
             Issue.record("SQLite fixture failed: \(String(cString: sqlite3_errmsg(handle)))"); throw JourneyError.sqlite
         }
     }
-    private func pendingConfiguration(_ f: FacadeFixture, _ id: String) {
-        let saved = f.model.sessionSelectionPreferences.conversation(id: id)
-        var desired = saved?.desiredSelections ?? SessionSelections()
-        if desired.model == nil { desired.model = "fixture-model" }
-        f.model.sessionSelectionPreferences.stageCalendarSelections(id: id, harness: "codex",
-            workspace: saved?.workspace ?? "local:" + f.directory.path, selections: desired)
-    }
     private enum JourneyError: Error { case sqlite }
 
     @Test func localChatMovesBeforeSendFreezesDefaultsSteersAndPersistsExactInput() async throws {
@@ -46,7 +39,6 @@ struct DesktopJourneyTests {
         f.model.sessionSelectionPreferences.saveDefaults(.init(model: "captured-model", permission: "agent-full-access", tools: ["notes"]), harness: "codex")
         let id = try #require(await f.model.createLocalACPSession(runtimeKind: .codex, folderID: a))
         #expect(await f.model.moveConversation(id: id, toFolderID: b))
-        pendingConfiguration(f, id)
         let record = try await conversation(f, id)
         let text = "naïve\u{0}tail 🧵"
         #expect(await f.model.sendAgentMessage(conversation: record, input: .init(text: text)))
@@ -57,37 +49,37 @@ struct DesktopJourneyTests {
         #expect(await f.recorder.deliveries.compactMap(\.delivery) == [text, "Follow-up"])
         #expect(f.model.sessionSelectionPreferences.conversation(id: id)?.desiredSelections.model == "captured-model")
         let root = try #require(try await f.database.workspaceOverview().folders.first { $0.id == b }?.rootPath)
-        #expect(await f.recorder.configurations.last?.directory == root)
+        #expect(try await f.database.sessionExecutionRoot(id: id)?.rootPath == root)
+        #expect(await f.recorder.configurations.count == 1)
         #expect(await !f.model.moveConversation(id: id, toFolderID: a))
         try await f.model.cancelCanonicalRun(conversationID: id, runID: run)
         try await f.model.waitForAgentStop(conversationID: id)
-        let blocked = try #require(await f.model.createLocalACPSession(runtimeKind: .codex))
-        pendingConfiguration(f, blocked)
         await f.recorder.rejectConfiguration(true)
-        #expect(await !f.model.sendAgentMessage(conversation: try await conversation(f, blocked), input: .init(text: "Must not send")))
-        #expect(await f.recorder.deliveries.count == 2)
+        let fallback = try #require(await f.model.createLocalACPSession(runtimeKind: .codex))
+        #expect(await f.model.sendAgentMessage(conversation: try await conversation(f, fallback), input: .init(text: "Use native settings")))
+        #expect(await f.recorder.deliveries.count == 3)
         let db = try await reopen(f)
         #expect(try await db.conversationContent(id: id).messages.filter { $0.role == "user" }.map(\.content) == [text, "Follow-up"])
         #expect(try await db.activeRunID(conversationID: id) == nil)
     }
 
-    @Test func backendStopDuringConfigurationRejectsReplayAndOldAuthority() async throws {
+    @Test func backendStopDuringPreparationRejectsReplayAndOldAuthority() async throws {
         let f = try await FacadeFixture(); defer { f.remove() }
         let id = try #require(await f.model.createLocalACPSession(runtimeKind: .codex))
         let backend = BackendApplicationService(model: f.model)
         f.model.backendApplicationService = backend
-        defer { f.model.backendApplicationService = nil; f.recorder.configurationGate.open() }
+        let preparation = FacadeGate(); preparation.hold()
+        defer { f.model.backendApplicationService = nil; preparation.open() }
+        f.model.agentTools?.companionFixtureMCPConnection = { _, local, _ in await preparation.pass(); return local }
         let client = UUID()
         let admission = AgentDispatchAdmission(instanceID: backend.instanceID, clientID: client, stopSequence: 0, observedStopRevision: 0)
         let request = try rpc(.sendMessageFenced(conversationID: id, input: .init(text: "Stopped"), noteID: nil, admission: admission))
-        pendingConfiguration(f, id)
-        await f.recorder.holdConfiguration()
         let sending = Task { await backend.handle(request) }
-        await f.recorder.waitForConfiguration()
+        await preparation.waitForArrival()
         let stop = try rpc(.cancelSessionFenced(conversationID: id, admission: .init(instanceID: backend.instanceID,
             clientID: UUID(), stopSequence: 1, observedStopRevision: 0)))
         #expect(await backend.handle(stop).error == nil)
-        f.recorder.configurationGate.open()
+        preparation.open()
         let rejected = await sending.value
         #expect(rejected.error != nil)
         #expect(await backend.handle(request).error == rejected.error)
@@ -286,12 +278,12 @@ struct DesktopJourneyTests {
         try await f.model.waitForAgentStop(conversationID: child.id)
         try await f.model.refreshClientExecutionState()
         let send = WovenMatterToolRequest(arguments: ["sessions", "send", child.id, "--text", "Revoked work"])
-        pendingConfiguration(f, child.id)
-        await f.recorder.holdConfiguration()
+        let preparation = FacadeGate(); preparation.hold(); defer { preparation.open() }
+        tools.companionFixtureMCPConnection = { _, local, _ in await preparation.pass(); return local }
         let sending = Task { await tools.handle(send, callerID: source) }
-        await f.recorder.waitForConfiguration()
+        await preparation.waitForArrival()
         _ = try await f.database.setSessionToolEnabled(.sessions, enabled: false, sessionID: source)
-        f.recorder.configurationGate.open()
+        preparation.open()
         let rejected = await sending.value
         #expect(!rejected.success)
         #expect(await f.recorder.deliveries.count == 1)

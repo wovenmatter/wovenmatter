@@ -4,7 +4,16 @@ import Testing
 import WovenMatterCore
 
 struct HarnessOnboardingTests {
-
+    @Test func openCodeStoredAccountRowsAreRecognizedWithoutVerifyingProviderAccess() {
+        let output = "OpenCode Go  OpenCode Go 2               stored\nOpenCode Go  OpenCode Go                 stored\nOpenCode Go  API key                     stored\n"
+        let status = HarnessOnboarding.parseSignIn(.opencode, output: output, succeeded: true)
+        #expect(status.state == "credentials_present")
+        #expect(status.accounts?.map(\.name) == ["OpenCode Go · OpenCode Go 2", "OpenCode Go", "OpenCode Go"])
+        #expect(status.accounts?.map(\.method) == ["Saved credential", "Saved credential", "API key"])
+        #expect(HarnessOnboarding.parseSignIn(.opencode, output: output, succeeded: false).state == "check_failed")
+        #expect(HarnessOnboarding.parseSignIn(.opencode, output: "stored\n", succeeded: true).state == "not_checked")
+        #expect(HarnessOnboarding.parseSignIn(.opencode, output: "OpenCode Go  sk-secret  stored\n", succeeded: true).accounts?.isEmpty == true)
+    }
 }
 
 extension HarnessOnboardingTests {

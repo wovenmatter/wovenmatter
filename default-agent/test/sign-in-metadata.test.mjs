@@ -5,6 +5,21 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { accountDetails, signInStatuses, readCodexAccount } from '../src/sign-in-status.mjs';
 
+test('OpenCode v2 stored account rows report credentials without verifying access', async () => {
+  const stdout = 'OpenCode Go  OpenCode Go 2               stored\nOpenCode Go  OpenCode Go                 stored\nOpenCode Go  API key                     stored\n';
+  const [status] = await signInStatuses([{ id: 'opencode', executable: '/fixture/opencode' }], async () => ({ stdout }));
+  assert.equal(status.state, 'credentials_present');
+  assert.deepEqual(status.accounts, [
+    { name: 'OpenCode Go · OpenCode Go 2', method: 'Saved credential' },
+    { name: 'OpenCode Go', method: 'Saved credential' },
+    { name: 'OpenCode Go', method: 'API key' },
+  ]);
+  const [failed] = await signInStatuses([{ id: 'opencode', executable: '/fixture/opencode' }], async () => { throw { stdout }; });
+  assert.equal(failed.state, 'check_failed');
+  assert.deepEqual(failed.accounts, []);
+  assert.deepEqual(accountDetails('opencode', 'OpenCode Go  sk-secret  stored\n'), []);
+});
+
 
 test('Codex account read never refreshes tokens and stops its process', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'woven-account-fixture-'));

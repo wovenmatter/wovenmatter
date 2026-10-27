@@ -280,7 +280,7 @@ extension ApplicationModel {
             await cancelAutomation(callerID: run.sessionID)
         }
         try dispatchFence.check()
-        try await applyPendingSessionSelections(conversationID: run.sessionID)
+        try await applyStagedSessionSelections(conversationID: run.sessionID)
         try dispatchFence.check()
         guard sessionSelectionPreferences.conversation(id: run.sessionID)?.requiresApplication == false else {
             throw WorkspaceToolError.invalid("The saved session settings could not be applied. Check the agent connection.")

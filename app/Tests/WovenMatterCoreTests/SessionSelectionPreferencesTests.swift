@@ -33,29 +33,20 @@ struct SessionSelectionPreferencesTests {
     }
   }
 
-  @Test("partial pending repairs survive another field failure and relaunch")
-  func pendingRepairsSurviveRelaunch() throws {
+  @Test("creation retains accepted native settings after defaults fail, including after reopening")
+  func completedCreationSurvivesRelaunch() throws {
     try withPreferences { preferences, defaults in
-      let original = preferences.captureConversation(id: "session", harness: "opencode", workspace: "project",
+      preferences.captureConversation(id: "session", harness: "opencode", workspace: "project",
         selections: SessionSelections(model: "obsolete", thinking: "high", permission: "invalid-mode", tools: []))
-      let firstRepair = original.desiredSelections.applyingPendingCorrection(SessionSelections(model: "available"))
-      preferences.updateConversation(id: "session", selections: firstRepair)
-      preferences.updateConversation(id: "session", field: .thinking, from: firstRepair)
-      // Native application still fails on invalid-mode; no markApplied occurs.
+      let actual = SessionSelections(model: "native-model", permission: "ask", tools: [])
+      preferences.replaceConfirmedSelections(id: "session", selections: actual)
+      preferences.markApplied(id: "session")
       preferences.saveDefaults(SessionSelections(model: "new-default", thinking: "high"), harness: "opencode")
       let reopened = SessionSelectionPreferences(defaults: defaults)
-      let pending = try #require(reopened.conversation(id: "session"))
-      #expect(pending.requiresApplication)
-      #expect(pending.desiredSelections == SessionSelections(model: "available", permission: "invalid-mode", tools: []))
-      let secondRepair = pending.desiredSelections.applyingPendingCorrection(SessionSelections(permission: "normal"))
-      reopened.updateConversation(id: "session", selections: secondRepair)
-      #expect(preferences.conversation(id: "session")?.desiredSelections
-        == SessionSelections(model: "available", permission: "normal", tools: []))
-      #expect(preferences.conversation(id: "session")?.requiresApplication == true)
-      reopened.replaceConfirmedSelections(id: "session", selections: secondRepair)
-      reopened.markApplied(id: "session")
-      #expect(preferences.conversation(id: "session")?.requiresApplication == false)
-      #expect(preferences.conversation(id: "session")?.selections.thinking == nil)
+      let completed = try #require(reopened.conversation(id: "session"))
+      #expect(!completed.requiresApplication)
+      #expect(completed.selections == actual)
+      #expect(completed.desiredSelections == actual)
     }
   }
 

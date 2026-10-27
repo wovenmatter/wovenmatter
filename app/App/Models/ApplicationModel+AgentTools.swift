@@ -349,10 +349,6 @@ extension ApplicationModel {
                     // Retrying preparation must preserve any later user edits.
                     try dispatchFence.check()
                     if !alreadyConfigured {
-                        try await self.applyPendingSessionSelections(conversationID: id)
-                        guard self.sessionSelectionPreferences.conversation(id: id)?.requiresApplication == false else {
-                            throw WorkspaceToolError.invalid("The session's initial settings are not ready. Retry after connecting its harness.")
-                        }
                         try dispatchFence.check()
                         try await store.database.markToolSessionCreationConfigured(requestID: request.requestID, sourceID: source.id)
                     }
