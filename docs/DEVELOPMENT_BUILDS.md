@@ -66,8 +66,12 @@ available through the existing Tailscale connection. It provisions an independen
 revocable Dev device identity. Credentials are saved directly to this instance's
 Keychain namespace; the launcher never reads or copies production credentials.
 
-When that local endpoint is unavailable, the app opens the existing Device
-Connections setup with the failure reason. Pairing to another Mac uses the normal
+For a fresh, unpaired client, the launcher checks that the local host endpoint
+is reachable before building or opening the app. If it is unavailable, launch
+stops with a clear error; it does not silently switch modes or open enrollment
+as if this were a working Dev app. A previously bound replica can still open
+offline. `debug` skips this preflight so connection failures can be investigated
+under LLDB. The endpoint check does not enroll a device or read credentials. Pairing to another Mac uses the normal
 approved pairing flow. An agent must not operate account authentication or
 device-authorization UI to recover access. The instance never falls back to
 opening production SQLite or starting a replacement central library.

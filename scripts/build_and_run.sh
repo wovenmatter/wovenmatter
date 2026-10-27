@@ -50,6 +50,9 @@ printf 'Development instance: %s\nData mode: %s\nLocal storage: %s\n' "$instance
 if [ "$data_mode" = live ]; then
   printf '%s\n' 'Live host: uses production data directly. Stop the current host (including background execution) before launching; the app enforces exclusive ownership.'
 fi
+if [ "$data_mode" = client ] && [ "$mode" != debug ]; then
+  python3 "$repo_root/scripts/dev-build.py" check-client --support "$support_directory"
+fi
 mkdir -p "$derived_data" "$package_cache"
 # Serialize both snapshot creation and builds of this exact profile.
 build_lock="$cache_root/build.lock"

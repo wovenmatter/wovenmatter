@@ -4,6 +4,7 @@ import os
 import plistlib
 from pathlib import Path
 import sqlite3
+import socket
 import subprocess
 import tempfile
 import unittest
@@ -57,6 +58,20 @@ class DevelopmentBuildTests(unittest.TestCase):
             path.parent.mkdir(parents=True); path.write_text("schema")
             self.assertEqual(dev.choose_mode(root), "snapshot")
             self.assertEqual(dev.profile(root, "fixture", "client")["mode"], "client")
+
+    def test_fresh_client_requires_host_but_bound_replica_can_open_offline(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            support = Path(tmp)
+            endpoint = support / "host.sock"
+            with self.assertRaisesRegex(ValueError, "normal full-app Dev build"):
+                dev.check_client(support, endpoint)
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as host:
+                host.bind(str(endpoint)); host.listen(1)
+                dev.check_client(support, endpoint)
+            replica = support / "LibraryClient/library.json"
+            replica.parent.mkdir()
+            replica.write_text(json.dumps({"workspaceID": "existing-library"}))
+            dev.check_client(support, endpoint)
 
     def test_default_launcher_plan_selects_the_standalone_snapshot(self):
         root = Path(__file__).resolve().parents[2]
