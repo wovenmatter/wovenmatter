@@ -151,6 +151,23 @@ struct CompanionHostLifecycleTests {
         #expect(fixture.host.pairingPayload == nil)
         #expect(fixture.host.pendingPairingRequests.isEmpty)
         #expect(fixture.host.pairedDevices.contains { $0.id == request.deviceID })
+        for path in ["development.connect", "v1/development/connect"] {
+            var networkRequest = URLRequest(url: try fixture.loopbackURL(path: path))
+            networkRequest.httpMethod = "POST"
+            networkRequest.setValue("Bearer " + response.pairing.credential, forHTTPHeaderField: "Authorization")
+            networkRequest.setValue(response.pairing.workspaceID, forHTTPHeaderField: "X-Woven-Workspace")
+            networkRequest.setValue(String(CompanionProtocol.version), forHTTPHeaderField: "X-Woven-Protocol")
+            networkRequest.httpBody = try JSONEncoder().encode(DevelopmentClientRequest(
+                deviceID: UUID().uuidString.lowercased(), name: "Dev · network"))
+            let (_, reply) = try await URLSession.shared.data(for: networkRequest)
+            #expect(try #require((reply as? HTTPURLResponse)?.statusCode) >= 400)
+        }
+        #expect(fixture.host.pairedDevices.count == 1)
+        let oversized = try JSONSerialization.data(withJSONObject: ["deviceID": UUID().uuidString.lowercased(),
+            "name": "Dev · oversized", "padding": String(repeating: "x", count: 4_096)])
+        await #expect(throws: BackendRPCError.self) {
+            try await BackendRPCClient(socketURL: socket).call(method: "development.connect", payload: oversized)
+        }
         await #expect(throws: BackendRPCError.self) {
             try await BackendRPCClient(socketURL: socket).call(method: "application.command")
         }
@@ -307,7 +324,7 @@ private enum HostFixtureError: Error { case timeout }
         let (_, response) = try await URLSession.shared.data(for: request)
         return try #require((response as? HTTPURLResponse)?.statusCode)
     }
-    private func loopbackURL(path: String) throws -> URL {
+    func loopbackURL(path: String) throws -> URL {
         let child = try #require(children.last { $0.isRunning })
         return try #require(URL(string: child.target)).appendingPathComponent(path)
     }

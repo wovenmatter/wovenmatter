@@ -4352,6 +4352,7 @@ extension ApplicationModel {
                 return .init(id: request.id, result: try JSONEncoder().encode(snapshot))
             }
             if request.method == "development.connect" {
+                guard request.payload.count <= 4_096 else { throw BackendRPCError.invalidFrame }
                 let value = try JSONDecoder().decode(DevelopmentClientRequest.self, from: request.payload)
                 let connection = try await companionHost.connectLocalDevelopment(value)
                 return .init(id: request.id, result: try JSONEncoder().encode(connection))

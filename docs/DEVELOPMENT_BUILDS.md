@@ -77,6 +77,14 @@ initial connection failures rather than substituting another mode or another UI.
 Credentials stay in this instance's Keychain namespace and its server process.
 The launcher never reads or copies production credentials or opens production SQLite.
 
+Automatic enrollment is not an HTTP route. The Unix socket lives in an owner-only
+0700 directory, is mode 0600, and checks kernel-reported peer user IDs on both ends.
+This trusts processes running as the same macOS user; it is not a code-signature
+sandbox against malicious software already running as that user. Existing normal
+paired-device identities cannot be claimed as Dev identities. Revoking a Dev
+identity blocks automatic reenrollment of that identity, including after restart;
+use a fresh explicitly named instance when intentionally replacing it.
+
 The foreground window reads only this server's local execution projection and
 receives shared history and artifact metadata over its private RPC connection.
 It does not create a second replica writer or execute agents in the UI process.

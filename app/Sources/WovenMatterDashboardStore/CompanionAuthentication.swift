@@ -13,6 +13,7 @@ public struct CompanionPairedDevice: Codable, Equatable, Sendable, Identifiable 
   public var lastSeenAt: Date?
   public var kind: CompanionDeviceKind { metadata?.kind ?? .unknown }
   fileprivate let credentialHash: Data
+  fileprivate var localDevelopment: Bool? = nil
 }
 
 /// App-owned credentials. Only random-token digests are written to disk; pairing
@@ -38,6 +39,7 @@ public actor CompanionAuthentication {
     var devices: [CompanionPairedDevice] = []
     var approvals: [Approval]?
     var pendingQRPairings: [PendingQRPairing]?
+    var revokedDevelopmentIDs: Set<String>?
   }
   private struct Offer { let digest: Data; let expiresAt: Date; let deviceID: String? }
   private let fileURL: URL
@@ -69,14 +71,20 @@ public actor CompanionAuthentication {
           !name.unicodeScalars.contains(where: { $0.value < 32 || $0.value == 127 }) else {
       throw Self.error("invalid_device", "Invalid development instance identity.")
     }
-    if let existing = state.devices.first(where: { $0.id == deviceID }), existing.name != name {
-      throw Self.error("invalid_device", "This device identity is already in use.")
+    guard !(state.revokedDevelopmentIDs ?? []).contains(deviceID.lowercased()) else {
+      throw Self.error("revoked_device", "This development identity was revoked. Use a new development instance.")
+    }
+    if let existing = state.devices.first(where: { $0.id.lowercased() == deviceID.lowercased() }) {
+      guard existing.id == deviceID, existing.name == name, existing.localDevelopment == true,
+            existing.revokedAt == nil else {
+        throw Self.error("invalid_device", "This device identity is already in use or was revoked.")
+      }
     }
     let token = try Self.randomToken()
     var next = state
     next.devices.removeAll { $0.id == deviceID }
     next.devices.append(.init(id: deviceID, name: name, pairedAt: now(), revokedAt: nil,
-      metadata: .init(kind: .mac), lastSeenAt: now(), credentialHash: Self.digest(token)))
+      metadata: .init(kind: .mac), lastSeenAt: now(), credentialHash: Self.digest(token), localDevelopment: true))
     try persist(next); state = next
     return .init(workspaceID: workspaceID, deviceID: deviceID, credential: token)
   }
@@ -232,7 +240,12 @@ public actor CompanionAuthentication {
   public func revoke(deviceID: String, expected: CompanionPairedDevice? = nil) throws {
     if let expected, !isCurrent(expected) { throw Self.unauthorized }
     var next = state
-    if let index = next.devices.firstIndex(where: { $0.id == deviceID }) { next.devices[index].revokedAt = now() }
+    if let index = next.devices.firstIndex(where: { $0.id == deviceID }) {
+      next.devices[index].revokedAt = now()
+      if next.devices[index].localDevelopment == true {
+        next.revokedDevelopmentIDs = (next.revokedDevelopmentIDs ?? []).union([deviceID.lowercased()])
+      }
+    }
     next.pendingQRPairings?.removeAll { $0.device.id == deviceID }
     try persist(next); state = next
     offer = nil
