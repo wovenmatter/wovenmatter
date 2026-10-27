@@ -3,6 +3,8 @@
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd -P)"
 scratch="${WOVENMATTER_CUA_TEST_DIR:-/private/tmp/wovenmatter-cua-desktop}"
+target_only=false
+case "${1:-}" in --target-only) target_only=true ;; '') ;; *) echo 'usage: test-cua-desktop.sh [--target-only]' >&2; exit 64 ;; esac
 mkdir -p "$scratch"
 swift build --force-resolved-versions --package-path "$root/app" --scratch-path "$scratch/build" --product WovenCuaDesktopFixture
 binary="$scratch/build/out/Products/Debug/WovenCuaDesktopFixture"
@@ -10,6 +12,7 @@ if [ ! -x "$binary" ]; then binary="$scratch/build/debug/WovenCuaDesktopFixture"
 identity="${WOVENMATTER_DEV_SIGNING_IDENTITY:-$(security find-identity -p codesigning -v | sed -nE '/"Apple Development:/s/^[[:space:]]*[0-9]+\) ([A-Fa-f0-9]{40}) .*/\1/p' | head -1)}"
 test -n "$identity" || { echo 'A stable Apple Development identity is required for native permission acceptance.' >&2; exit 69; }
 for role in host target; do
+  if "$target_only" && [ "$role" = host ]; then continue; fi
   if [ "$role" = host ]; then name='Woven Cua Verification'; else name='Cua Target'; fi
   bundle="$scratch/$name.app"
   if [ -x "$bundle/Contents/MacOS/$name" ]; then
@@ -28,6 +31,7 @@ PY
   codesign --force --sign "$identity" --options runtime --timestamp=none "$bundle"
   codesign --verify --deep --strict "$bundle"
 done
+if "$target_only"; then echo "Disposable target prepared: $scratch/Cua Target.app"; exit 0; fi
 rm -f "$scratch/report.json" "$scratch/target.json"
 WM_CUA_FIXTURE_ROOT="$scratch" /usr/bin/open -n "$scratch/Woven Cua Verification.app" --env "WM_CUA_FIXTURE_ROOT=$scratch"
 echo "Acceptance report: $scratch/report.json"

@@ -361,6 +361,19 @@ Its catalog covers Woven capabilities; it does not reproduce T3-specific tools.
 
 ## Validation boundaries
 
+For provider-free acceptance through a running signed snapshot Dev app, prepare
+the disposable target with `scripts/test-cua-desktop.sh --target-only`, then run
+`python3 scripts/test-cua-snapshot.py --app "/path/to/snapshot Dev.app"`.
+The check creates a temporary chat and a Computer Use-only MCP connection,
+confirms default-off denial, and then checks capture, accessibility click,
+background typing, hotkeys, stale-token rejection, and revocation against the
+target's independent state. It disables the chat's Computer Use, revokes the
+credential, and trashes its disposable chat on exit without changing global
+defaults. Missing user-controlled Accessibility or Screen Recording returns 77;
+only a completed successful live run returns zero. The report contains outcomes,
+never the MCP credential or captured images. The separate signed-host fixture
+`scripts/test-cua-desktop.sh` checks caller isolation and foreground preservation.
+
 `scripts/test-changes.sh --all` exercises provider-free transport fixtures,
 access policies, migrations, mutation retries, timer recovery, note retention,
 authenticated HTTP MCP, native input bindings, and remote relay behavior. It also builds and validates
