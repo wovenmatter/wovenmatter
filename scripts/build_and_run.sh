@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Parse the entire launcher before building: edits made during a long build must
+# not change the commands Bash reads when it resumes after xcodebuild.
+run_development_build() {
+
 mode=run
 data_mode="${WOVENMATTER_DEV_MODE:-auto}"
 instance="${WOVENMATTER_DEV_INSTANCE:-${WOVENMATTER_DEV_VARIANT:-}}"
@@ -155,3 +159,7 @@ case "$mode" in
     # Leave the verified app open for interactive testing.
     ;;
 esac
+
+}
+
+run_development_build "$@"

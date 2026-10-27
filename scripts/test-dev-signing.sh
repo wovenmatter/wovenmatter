@@ -4,6 +4,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 python3 - "$repo_root" <<'PY'
 import json
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -35,6 +36,8 @@ elif name == 'xcodebuild':
     executable.parent.mkdir(parents=True, exist_ok=True)
     executable.write_text('fixture')
     executable.chmod(0o755)
+    if os.environ.get('DEV_SIGNING_REWRITE'):
+        Path(os.environ['DEV_SIGNING_REWRITE']).write_text('#!/bin/bash\\nexit 99\\n')
 elif name == 'pgrep':
     backend = os.environ.get('DEV_SIGNING_BACKEND_PATH', '')
     sys.exit(0 if backend and re.search(args[1], backend + ' --backend') else 1)
@@ -44,12 +47,13 @@ elif name == 'pgrep':
         path.write_text(stub)
         path.chmod(0o755)
 
-    def run(cache, count, identity=None, fail=False, backend=""):
+    def run(cache, count, identity=None, fail=False, backend="", rewrite=False):
         calls.write_text('')
         env = dict(os.environ, PATH=str(binaries) + os.pathsep + os.environ['PATH'],
                    WOVENMATTER_DEV_CACHE_DIR=str(cache), DEV_SIGNING_CALLS=str(calls),
                    DEV_SIGNING_IDENTITIES=str(count), DEV_SIGNING_BUILD_FAIL='1' if fail else '0',
-                   DEV_SIGNING_BACKEND_PATH=backend)
+                   DEV_SIGNING_BACKEND_PATH=backend,
+                   DEV_SIGNING_REWRITE=str(root / "scripts/build_and_run.sh") if rewrite else "")
         env.pop('WOVENMATTER_DEV_SIGNING_IDENTITY', None)
         env.pop('WOVENMATTER_DEV_VARIANT', None)
         if identity is not None:
@@ -92,5 +96,15 @@ elif name == 'pgrep':
         result, recorded = run(cache, 1, backend=path)
         assert result.returncode == 75, result.stderr
         assert not any(name in ('xcodebuild', 'swift') for name, _ in recorded)
+    # Editing a launcher while xcodebuild is running must not replace the
+    # remaining commands or make Bash resume at a shifted byte offset.
+    original_root = root
+    root = fixture / 'frozen-launcher'
+    (root / 'scripts').mkdir(parents=True)
+    for name in ('build_and_run.sh', 'dev-build.py'):
+        shutil.copy2(original_root / 'scripts' / name, root / 'scripts' / name)
+    result, recorded = run(fixture / 'frozen-cache', 1, rewrite=True)
+    assert result.returncode == 0, result.stderr
+    assert any(name == 'lldb' for name, _ in recorded)
 print('Dev signing identity selection and rebuild persistence passed.')
 PY
