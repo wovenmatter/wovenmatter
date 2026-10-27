@@ -30,6 +30,7 @@ export async function signInStatuses(harnesses, execute = exec, readAccount = re
       output = String(output ?? '').replace(/\x1b\[[0-9;]*m/g, '');
       if (success) accounts.push(...accountDetails(harness.id, output));
       if (harness.id === 'opencode' && success) {
+        if (openCodeStoredAccounts(output).length) return 'credentials_present';
         const counts = [...output.matchAll(/\b(\d+) (?:credentials?|environment variables?)\b/g)].map(match => Number(match[1]));
         if (counts.length) return counts.some(count => count > 0) ? 'credentials_present' : 'sign_in_required';
       }
@@ -67,6 +68,8 @@ export function accountDetails(id, text) {
     } catch {}
   }
   if (id === 'opencode') {
+    const stored = openCodeStoredAccounts(text);
+    if (stored.length) return stored;
     return [...text.matchAll(/^[│┃\s]*[●•]\s+([\p{L}0-9 ._()/-]+?)\s+(oauth|api|api_key|[A-Z][A-Z0-9_]*(?:API_KEY|TOKEN))\s*$/gmu)]
       .flatMap(([, name, method]) => safeLabel(name) ? [{ name, method: method === 'oauth' ? 'OAuth'
         : /API_KEY$|TOKEN$/.test(method) ? 'Environment key · ' + method : 'API key' }] : []);
@@ -75,6 +78,16 @@ export function accountDetails(id, text) {
   if (/API key/i.test(text)) return [{ method: 'API key' }];
   if (/OAuth/i.test(text)) return [{ method: 'OAuth' }];
   return [];
+}
+
+// OpenCode v2 emits provider/account/storage columns instead of credential counts.
+function openCodeStoredAccounts(text) {
+  return [...text.matchAll(/^[\t ]*([^\r\n]+?)[\t ]{2,}([^\r\n]+?)[\t ]{2,}stored[\t ]*$/gm)]
+    .flatMap(([, provider, account]) => {
+      provider = provider.trim(); account = account.trim();
+      const name = provider === account || ['API key', 'OAuth'].includes(account) ? provider : `${provider} · ${account}`;
+      return safeLabel(name) ? [{ name, method: ['API key', 'OAuth'].includes(account) ? account : 'Saved credential' }] : [];
+    });
 }
 
 // Codex exposes the selected account's public metadata via account/read. Do not

@@ -71,6 +71,7 @@ final class OpenCodeModel {
     private(set) var hiddenModels: Set<String> = []
     private(set) var settingsModels: [OpenCodeValue] = []
     private var selectionTasks: [String: Task<Void, Error>] = [:]
+    private var applyingSelections: [String: SessionSelections] = [:]
     private var pendingDispatches: [String: AgentDispatchFence] = [:]
     private var defaultModels: [String: OpenCodeValue] = [:]
     private var models: [String: [OpenCodeValue]] = [:]
@@ -606,6 +607,7 @@ final class OpenCodeModel {
         guard updatingSessions.insert(id).inserted else { return nil }
         error = nil
         let task = Task { @MainActor in
+            defer { self.updatingSessions.remove(id) }
             let pending = self.sessionPreferences.conversation(id: id).flatMap {
                 $0.requiresApplication ? $0 : nil
             }
@@ -625,7 +627,6 @@ final class OpenCodeModel {
         }
         selectionTasks[id] = task
         Task {
-            defer { self.updatingSessions.remove(id) }
             do { try await task.value }
             catch { self.error = error.localizedDescription }
         }
@@ -634,9 +635,22 @@ final class OpenCodeModel {
 
     func applySessionSelections(_ id: String, selections: SessionSelections) async throws {
         if isBackendProjection { _ = try await backendCommand(.selections(id, selections)); return }
+        // Creation activation and opening the newly published chat can both
+        // restore the same captured settings. Share that application, including
+        // its failure, rather than rejecting the second caller as a manual edit.
+        if applyingSelections[id] == selections, let task = selectionTasks[id] {
+            try await task.value
+            return
+        }
         guard updatingSessions.insert(id).inserted else { throw OpenCodeError.message("Wait for the current session settings change to finish.") }
-        defer { updatingSessions.remove(id) }
-        let task = Task { @MainActor in try await self.performSessionSelections(id, selections: selections) }
+        applyingSelections[id] = selections
+        let task = Task { @MainActor in
+            defer {
+                self.updatingSessions.remove(id)
+                self.applyingSelections.removeValue(forKey: id)
+            }
+            try await self.performSessionSelections(id, selections: selections)
+        }
         // Keep a failed application as a send barrier, just like a manual edit.
         selectionTasks[id] = task
         try await task.value
