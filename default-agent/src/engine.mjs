@@ -1,3 +1,4 @@
+import { runtimeStageError } from './runtime-stage-error.mjs';
 import { mkdir, realpath, stat } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import { ProviderCatalog, installPublicCatalog, providerEndpoints, validatePublicModel } from './provider-catalog.mjs';
@@ -321,7 +322,8 @@ export class DefaultAgentEngine {
       controller.signal.throwIfAborted();
       if (mcpContext) await record.refreshMCPTools(mcpContext, { force: true });
       controller.signal.throwIfAborted();
-      await record.subagents.beginGroup(nextRunID);
+      try { await record.subagents.beginGroup(nextRunID); }
+      catch (error) { throw runtimeStageError('runPreparation', error); }
       record.runID = nextRunID;
       if (identity !== undefined) record.inputID = identity.inputID;
       record.emit = emit;

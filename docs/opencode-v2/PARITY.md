@@ -57,6 +57,12 @@ reconnect discards incomplete delta baselines and recovers canonical history.
 The event shapes were checked against `@opencode/protocol@2.1.3` and its public
 service schema; provider-free fixtures cover live publication and recovery.
 
+The Woven MCP plugin handshake uses `POST /api/rpc/woven-mcp/connect` with
+`{ "input": ... }` and reads `{ "output": ... }`, as specified by the running
+OpenCode 2.1.3 service's `Rpc.Input` and `Rpc.Output` OpenAPI schemas. This differs
+from session APIs' `data` envelope. Desktop and remote callers reject a missing
+or malformed connection result before registering MCP or submitting input.
+
 ## Validation boundary
 
 Automated tests cover local service reuse without a CLI, refusing to replace a live incompatible service, version-banner parsing, provider/model identity and reasoning variants, lost prompt responses, pending interactions, fragmented events, 251-message and 1,700-message history recovery, database reopen, and transcript preservation. Automated tests must not consume provider services.

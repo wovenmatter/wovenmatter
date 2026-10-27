@@ -43,6 +43,30 @@ def profile(root, instance, mode):
                 bundle=f"wovenmatter.desktop.dev.{instance}.{selected}")
 
 
+def backend_running(executable, commands=None):
+    """Compare executable identities, including macOS /tmp -> /private/tmp aliases."""
+    if commands is None:
+        found = subprocess.run(["pgrep", "-u", str(os.getuid()), "-f", " --backend$"],
+                               capture_output=True, text=True)
+        if found.returncode == 1:
+            return False
+        found.check_returncode()
+        identifiers = found.stdout.split()
+        if not identifiers or not all(value.isdigit() for value in identifiers):
+            raise ValueError("Could not inspect the development backend processes.")
+        processes = subprocess.run(["ps", "-p", ",".join(identifiers), "-o", "command="],
+                                   capture_output=True, text=True)
+        if processes.returncode == 1 and not processes.stdout.strip():
+            return False  # The matched processes exited between the two reads.
+        processes.check_returncode()
+        commands = processes.stdout.splitlines()
+    expected = executable.resolve()
+    suffix = " --backend"
+    return any(command.strip().endswith(suffix)
+               and Path(command.strip()[:-len(suffix)]).resolve() == expected
+               for command in commands)
+
+
 def backup(source, destination):
     # SQLite's online backup includes committed WAL data without stopping the host.
     with sqlite3.connect(source.as_uri() + "?mode=ro", uri=True, timeout=10) as reader:
@@ -218,11 +242,15 @@ def main():
     snap = sub.add_parser("snapshot")
     snap.add_argument("--source", type=Path, required=True)
     snap.add_argument("--destination", type=Path, required=True)
+    running = sub.add_parser("backend-running")
+    running.add_argument("--executable", type=Path, required=True)
     args = parser.parse_args()
     if args.command == "profile":
         print(json.dumps(profile(args.root, args.instance, args.mode)))
-    else:
+    elif args.command == "snapshot":
         snapshot(args.source, args.destination)
+    else:
+        print("true" if backend_running(args.executable) else "false")
 
 
 if __name__ == "__main__":

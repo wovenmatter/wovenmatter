@@ -40,6 +40,45 @@ struct ConversationWorkTimelineTests {
     #expect(ConversationToolAction.browser.summary(count: 2) == "Used the browser 2 times")
   }
 
+  @Test("Pi ACP categories retain actual tool actions and meaningful live labels")
+  func piACPToolPresentation() {
+    // Shapes observed in the first live Pi run: category in toolName, actual
+    // function in title, structured arguments in rawInputJSON. Values are synthetic.
+    let cases: [(String, String, String, ConversationToolAction, String)] = [
+      ("other", "web_search", #"{"query":"native stream ordering"}"#, .webSearch, "Searching the web: native stream ordering"),
+      ("other", "woven_browser_use", #"{"action":"open","url":"https://example.com/private?token=hidden"}"#, .browser, "Browser: open example.com"),
+      ("execute", "bash", #"{"command":"curl -H 'Authorization: hidden' https://example.com"}"#, .command, "Running curl"),
+    ]
+    for (category, title, input, expectedAction, label) in cases {
+      let activity = AgentRunActivity(id: title, kind: .tool, title: title, status: "running",
+        toolName: category, rawInputJSON: input)
+      #expect(ConversationToolAction(activity) == expectedAction)
+      #expect(activity.workTimelineLabel(active: true) == label)
+      #expect(!activity.workTimelineLabel(active: true).contains("hidden"))
+    }
+    for program in ["pwd", "ls"] {
+      let activity = AgentRunActivity(id: program, kind: .tool, title: program,
+        status: "running", toolName: "execute")
+      #expect(ConversationToolAction(activity) == .command)
+      #expect(activity.workTimelineLabel(active: true) == "Running " + program)
+      #expect(ConversationWorkGroup(id: program, activities: [activity]).summary == "Ran 1 command")
+    }
+    let failedThenThought = ConversationWorkGroup(id: "failed-then-thought", activities: [
+      AgentRunActivity(id: "failed", kind: .tool, title: "pwd", status: "failed", toolName: "execute"),
+      AgentRunActivity(id: "thought", kind: .thought, status: "completed", content: "A supplied explanation."),
+    ])
+    #expect(failedThenThought.hasFailure)
+    #expect(failedThenThought.liveActivity?.workTimelineIsFailure == false)
+    let generic = AgentRunActivity(id: "generic", kind: .tool, title: "Use tool", status: "running", toolName: "web_search")
+    #expect(generic.workTimelineLabel(active: true) == "Searching the web")
+    let snapshot = ConversationWorkGroup(id: "pi", activities: [
+      AgentRunActivity(id: "search", kind: .tool, title: "web_search", status: "failed", toolName: "other"),
+      AgentRunActivity(id: "browser", kind: .tool, title: "woven_browser_use", status: "completed", toolName: "other"),
+    ])
+    #expect(snapshot.summary == "Searched the web 1 time and used the browser 1 time")
+    #expect(!snapshot.hasFailure, "A failed search must not mark a later successful browser call failed")
+  }
+
   @Test("completed reasoning does not hide a still-running tool label")
   func liveActivitySelection() {
     let command = AgentRunActivity(id: "command", kind: .tool, title: "Run the stream check", status: "running", toolName: "bash")
@@ -58,6 +97,11 @@ struct ConversationWorkTimelineTests {
     #expect(ConversationWorkTimeline(records: [commentary], commentaryIDs: ["c"]).needsThinkingIndicator)
     let failed = record(tool("failed", "bash", status: "failed"), at: "2")
     #expect(ConversationWorkTimeline(records: [failed], commentaryIDs: []).needsThinkingIndicator)
+    let resumedThought = record(AgentRunActivity(id: "next-thought", kind: .thought,
+      status: "completed", content: "A supplied thought after the failed call."), at: "4")
+    let resumed = ConversationWorkTimeline(records: [failed, resumedThought], commentaryIDs: [])
+    #expect(!resumed.needsThinkingIndicator, "A prior tool failure must not add generic Thinking after a supplied thought")
+    #expect(groups(resumed).first?.liveActivity?.id == "next-thought")
     let running = record(tool("running", "bash", status: "running"), at: "3")
     #expect(!ConversationWorkTimeline(records: [failed, running], commentaryIDs: []).needsThinkingIndicator)
   }

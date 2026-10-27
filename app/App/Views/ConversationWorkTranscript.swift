@@ -201,7 +201,7 @@ struct ConversationWorkTranscript: View {
                 }
                 if isRunning && timeline.needsThinkingIndicator {
                     HStack(spacing: 9) {
-                        ProgressView().controlSize(.mini).frame(width: 17)
+                        Image(systemName: "sparkles").frame(width: 17)
                         Text("Thinking").font(.system(size: 13.5))
                     }
                     .foregroundStyle(DashboardPalette.mutedForeground)
@@ -323,7 +323,7 @@ private struct ConversationWorkGroupRow: View {
 
     var body: some View {
         let runIsActive = runStatus == "running"
-        let liveLabel = runIsActive && ((isTail && !group.hasFailure) || group.hasActiveActivity)
+        let liveLabel = runIsActive && ((isTail && group.liveActivity?.workTimelineIsFailure != true) || group.hasActiveActivity)
             ? group.liveLabel(runIsActive: true)
             : nil
         let wasExpanded = transcriptState?.isExpanded(scrollKey) ?? localExpanded
@@ -343,7 +343,7 @@ private struct ConversationWorkGroupRow: View {
                 interaction: transcriptInteraction
             )
             // The model can keep working between a successful tool and its
-            // next visible part. Keep that live edge animated until the run ends.
+            // next visible part. Keep the live status until the run ends.
             let showsProgress = liveLabel != nil && (!expanded.wrappedValue || group.isThoughtOnly)
             VStack(alignment: .leading, spacing: 0) {
                 Button {
@@ -360,7 +360,7 @@ private struct ConversationWorkGroupRow: View {
                                     Image(systemName: "sparkles")
                                         .font(.system(size: 12, weight: .medium))
                                         .frame(width: 17)
-                                    Text(preview)
+                                    Text(ConversationMarkdownDocument.InlineText(preview).rendered)
                                         .font(.system(size: 13.5))
                                         .lineSpacing(3)
                                         .lineLimit(4)
@@ -407,19 +407,17 @@ private struct ConversationWorkGroupRow: View {
     }
 
     private func header(liveLabel: String?, expanded: Bool, showsProgress: Bool) -> some View {
-        HStack(spacing: 9) {
+        let isFailure = liveLabel != nil ? group.liveActivity?.workTimelineIsFailure == true : group.hasFailure
+        return HStack(spacing: 9) {
             Group {
-                // Only collapsed groups with unsettled work need a summary spinner.
-                if showsProgress {
-                    ProgressView()
-                        .controlSize(.mini)
-                } else if group.hasFailure {
+                if isFailure {
                     Image(systemName: "exclamationmark.triangle")
                         .foregroundStyle(.red.opacity(0.8))
                 } else {
-                    Image(systemName: group.isThoughtOnly
-                        ? "sparkles"
-                        : group.action?.systemImage ?? "wrench.and.screwdriver")
+                    Image(systemName: liveLabel != nil
+                        ? group.liveActivity.map { $0.kind == .thought ? "sparkles" : ConversationToolAction($0).systemImage }
+                            ?? "wrench.and.screwdriver"
+                        : group.isThoughtOnly ? "sparkles" : group.action?.systemImage ?? "wrench.and.screwdriver")
                 }
             }
             .font(.system(size: 12, weight: .medium))
@@ -434,7 +432,7 @@ private struct ConversationWorkGroupRow: View {
                 .foregroundStyle(DashboardPalette.mutedForeground)
             Spacer(minLength: 0)
         }
-        .foregroundStyle(group.hasFailure && liveLabel == nil
+        .foregroundStyle(isFailure
             ? Color.red.opacity(0.8)
             : DashboardPalette.foreground.opacity(group.isThoughtOnly ? 0.58 : 0.72))
         .contentShape(Rectangle())
@@ -548,7 +546,7 @@ private struct ConversationBoundedWorkList: View {
                 }
                 if followsAppends && !group.isThoughtOnly && !group.hasActiveActivity {
                     HStack(spacing: 9) {
-                        ProgressView().controlSize(.mini).frame(width: 17)
+                        Image(systemName: "sparkles").frame(width: 17)
                         Text("Thinking").font(.system(size: 13.5))
                     }
                     .foregroundStyle(DashboardPalette.mutedForeground)
@@ -657,11 +655,6 @@ private struct ConversationActivityRow: View {
             Image(systemName: "exclamationmark.triangle")
                 .foregroundStyle(.red.opacity(0.8))
                 .frame(width: 17)
-        } else if isLive {
-            ProgressView()
-                .controlSize(.mini)
-                .frame(width: 17, height: 17)
-                .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 2 }
         } else {
             Image(systemName: systemImage)
                 .font(.system(size: 12, weight: .medium))
@@ -816,9 +809,13 @@ private struct ConversationActivityDetails: View {
                     ConversationPagedText(text: content, style: .code)
                 }
             }
-            rawBlock("Input", field(\.rawInputJSON))
-            rawBlock("Output", field(\.rawOutputJSON))
-            rawBlock("Event", field(\.rawPayloadJSON))
+            // Reasoning disclosures contain supplied reasoning, not the ACP
+            // envelope that carried it. Tool details retain their raw fields.
+            if activity.kind != .thought {
+                rawBlock("Input", field(\.rawInputJSON))
+                rawBlock("Output", field(\.rawOutputJSON))
+                rawBlock("Event", field(\.rawPayloadJSON))
+            }
             // A compact record can contain no inline fields. Keep a visible
             // placeholder so its visibility-driven detail read can start.
             if loadToken != nil || waitingForDetails || (activity.detailsAvailable == true && complete == nil && error == nil) {
@@ -1477,7 +1474,7 @@ private struct ConversationDiffSheet: View {
     }
 
     private var loading: some View {
-        ProgressView("Loading diff…")
+        Text("Loading diff…")
             .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 

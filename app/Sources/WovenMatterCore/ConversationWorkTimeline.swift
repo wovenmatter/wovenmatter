@@ -29,7 +29,7 @@ public struct ConversationWorkTimeline: Equatable, Sendable {
       }
     }) { return false }
     guard let last = entries.last else { return true }
-    if case .group(let group) = last.content { return group.hasFailure }
+    if case .group(let group) = last.content { return group.liveActivity?.workTimelineIsFailure == true }
     return true
   }
 
@@ -323,7 +323,7 @@ public enum ConversationToolAction: Hashable, Sendable {
   case other
 
   public init(_ activity: AgentRunActivity) {
-    let name = (activity.toolName ?? activity.title ?? "").lowercased()
+    let name = activity.workTimelineToolIdentity.lowercased()
     if name.contains("bash") || name.contains("shell") || name == "exec" || name == "execute"
       || name.contains("command") || name.contains("terminal") {
       self = .command
@@ -346,7 +346,9 @@ public enum ConversationToolAction: Hashable, Sendable {
     } else if name.contains("task") || name.contains("agent") {
       self = .delegate
     } else {
-      self = .other
+      // A concrete title such as pwd or ls may not name a known action,
+      // but ACP still supplies a reliable execution category.
+      self = activity.toolName?.lowercased() == "execute" ? .command : .other
     }
   }
 
@@ -433,10 +435,64 @@ public extension AgentRunActivity {
       if let heading = content.flatMap(Self.leadingBoldHeading) { return heading }
       return active ? "Thinking" : "Thought"
     case .tool:
-      if let label = (title ?? toolName)?.workTimelineSingleLine { return label }
-      return ConversationToolAction(self).liveLabel(active: active)
+      return workTimelineToolLabel(active: active)
     default:
       return title?.workTimelineSingleLine ?? toolName?.workTimelineSingleLine ?? "Agent activity"
+    }
+  }
+
+  /// ACP's toolName can be a broad category (not the called tool name).
+  /// Prefer its real title when the category would erase that identity.
+  var workTimelineToolIdentity: String {
+    let name = toolName?.workTimelineSingleLine ?? ""
+    let label = title?.workTimelineSingleLine ?? ""
+    let generic = ["", "other", "unknown", "tool", "use tool", "using a tool", "used a tool", "execute"]
+    if generic.contains(name.lowercased()), !generic.contains(label.lowercased()),
+       name.lowercased() != "execute" || !label.contains(" ") { return label }
+    return name.isEmpty ? label : name
+  }
+
+  private func workTimelineToolLabel(active: Bool) -> String {
+    let generic = ["tool", "use tool", "using a tool", "used a tool", "other", "execute"]
+    let label = title?.workTimelineSingleLine
+    // Keep a provider's descriptive title; bare function names gain readable
+    // action labels below. A generic title must not mask a real tool name.
+    if let label, label.contains(" "), !generic.contains(label.lowercased()) { return label }
+    let action = ConversationToolAction(self)
+    let input = rawInputJSON.flatMap { $0.data(using: .utf8) }
+      .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+    func argument(_ key: String) -> String? {
+      (input?[key] as? String)?.workTimelineSingleLine.map { String($0.prefix(120)) }
+    }
+    let failed = workTimelineIsFailure
+    switch action {
+    case .command:
+      // Show the program, not command arguments that can contain credentials.
+      let program = argument("command")?.split(separator: " ").first.map(String.init)
+      let name = program.flatMap { token in
+        token.contains("=") || token.contains("$") ? nil : URL(fileURLWithPath: token).lastPathComponent
+      }
+      let identity = workTimelineToolIdentity
+      let fallback = ["", "execute", "exec", "command", "tool"].contains(identity.lowercased()) ? "command" : identity
+      return "\(failed ? "Failed" : active ? "Running" : "Ran") \(name ?? fallback)"
+    case .webSearch:
+      let query = argument("query")
+      return "\(failed ? "Failed web search" : active ? "Searching the web" : "Searched the web")"
+        + (query.map { ": " + $0 } ?? "")
+    case .browser:
+      let operation = argument("action")?.replacingOccurrences(of: "_", with: " ")
+      let host = argument("url").flatMap { URL(string: $0)?.host }
+      if operation == nil && host == nil { return failed ? "Browser failed" : action.liveLabel(active: active) }
+      return (failed ? "Browser failed" : "Browser")
+        + (operation.map { ": " + $0 } ?? "") + (host.map { " " + $0 } ?? "")
+    case .other:
+      let identity = workTimelineToolIdentity
+      if !identity.isEmpty, !generic.contains(identity.lowercased()) {
+        return "\(failed ? "Failed" : active ? "Using" : "Used") \(identity)"
+      }
+      return action.liveLabel(active: active)
+    default:
+      return action.liveLabel(active: active)
     }
   }
 

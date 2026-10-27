@@ -343,6 +343,7 @@ final class ApplicationModel {
     @ObservationIgnored var backendRPCServer: BackendRPCServer?
     @ObservationIgnored var backendApplicationService: BackendApplicationService?
     @ObservationIgnored var backendClientTask: Task<Void, Never>?
+    @ObservationIgnored var backendConversationClientTask: Task<Void, Never>?
     @ObservationIgnored var backendStopping = false
     @ObservationIgnored var backgroundServerTermination: @MainActor () -> Void = { WovenMatterLifecycleDelegate.requestTerminationAfterUpdate() }
     @ObservationIgnored var backendCommandsInFlight = 0
@@ -3039,6 +3040,14 @@ final class ApplicationModel {
             && isLocalACPAgentReady(runtimeKind)
     }
 
+    func localACPLaunchUnavailableError(for runtimeKind: AgentRuntimeKind) -> ApplicationModelError {
+        if let availability = localACPRuntimeAvailability.first(where: { $0.runtimeKind == runtimeKind }),
+           !availability.isReady, !availability.detail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return .localACPRuntimeUnavailableDetail(availability.detail)
+        }
+        return .localACPRuntimeUnavailable
+    }
+
     func createLocalACPSession(
         runtimeKind: AgentRuntimeKind,
         requestedConversationID: UUID? = nil,
@@ -3076,7 +3085,7 @@ final class ApplicationModel {
         guard localACPLaunchConfigurations[runtimeKind] != nil,
               localACPWorkspaceLaunchConfiguration != nil,
               isLocalACPAgentReady(runtimeKind) else {
-            localRunError = ApplicationModelError.localACPRuntimeUnavailable.localizedDescription
+            localRunError = localACPLaunchUnavailableError(for: runtimeKind).localizedDescription
             return nil
         }
         let selectionWorkspace = "local:" + resolvedRoot.standardizedFileURL.path
@@ -3230,7 +3239,7 @@ final class ApplicationModel {
         }
         guard let launch = localACPLaunchConfigurations[runtimeKind],
               let workspace = localACPWorkspaceLaunchConfiguration else {
-            throw ApplicationModelError.localACPRuntimeUnavailable
+            throw localACPLaunchUnavailableError(for: runtimeKind)
         }
         var scopedLaunch = LocalACPRuntimeLaunchConfiguration(runtimeKind: launch.runtimeKind,
             executableURL: launch.executableURL, arguments: launch.arguments, environment: launch.environment,
@@ -3393,6 +3402,7 @@ final class ApplicationModel {
                     checkedRuntimeKinds.insert(kind)
                     failedRuntimeUpdateKinds.remove(kind)
                     runtimeFailureDetails[kind] = nil
+                    invalidateRepairedRuntimeReadiness(kind)
                     return
                 }
                 #endif
@@ -3436,8 +3446,18 @@ final class ApplicationModel {
                 }
                 runtimeFailures[kind] = 0; runtimeFailureDetails[kind] = nil
                 failedRuntimeUpdateKinds.remove(kind)
+                invalidateRepairedRuntimeReadiness(kind)
                 await refreshLocalACPRuntimes()
             } catch { recordRuntimeFailure(kind, error: error, update: update) }
+        }
+    }
+
+    private func invalidateRepairedRuntimeReadiness(_ kind: AgentRuntimeKind) {
+        // A successful managed replacement invalidates failures of the old
+        // executable even when its symlink path is unchanged. Keep account
+        // failures until an explicit account check; installation never signs in.
+        localACPRuntimeAvailability.removeAll {
+            $0.runtimeKind == kind && $0.state == .executableUnavailable
         }
     }
 
@@ -4189,10 +4209,11 @@ final class ApplicationModel {
 
 }
 
-enum ApplicationModelError: LocalizedError {
+enum ApplicationModelError: LocalizedError, Equatable {
     case applicationSupportUnavailable
     case dashboardStoreUnavailable
     case localACPRuntimeUnavailable
+    case localACPRuntimeUnavailableDetail(String)
     case remoteHarnessUnavailable
     case unavailableSessionTools
     case localSessionConfigurationInProgress
@@ -4209,6 +4230,8 @@ enum ApplicationModelError: LocalizedError {
             "The dashboard database is still starting."
         case .localACPRuntimeUnavailable:
             "This local ACP runtime is unavailable. Open Settings to install or update its CLI or adapter, then try again."
+        case .localACPRuntimeUnavailableDetail(let detail):
+            detail
         case .remoteHarnessUnavailable:
             "This remote harness is unavailable. Start and refresh its workspace in Settings, then try again."
         case .unavailableSessionTools:
@@ -4521,7 +4544,12 @@ extension ApplicationModel {
             for _ in 0..<100 {
                 try Task.checkCancellation()
                 if let data = try? await client.call(method: "application.readiness"),
-                   let status = try? JSONDecoder().decode(BackendApplicationReadiness.self, from: data), status.ready {
+                   let status = try? JSONDecoder().decode(BackendApplicationReadiness.self, from: data) {
+                    if let error = status.startupError { throw BackendRPCError.remote(error) }
+                    if !status.ready {
+                        try await Task.sleep(for: .milliseconds(100))
+                        continue
+                    }
                     guard status.protocolVersion == 1, status.capabilities.contains("session.dispatch-epochs") else { throw AgentDispatchAdmissionError.invalid }
                     guard status.completeClientRouting else {
                         throw BackendRPCError.remote("The background server is unavailable. Open Background Server in Settings to start it or try again.")
@@ -4559,43 +4587,51 @@ extension ApplicationModel {
             await usage.refreshBackendSnapshot()
             state = .ready
             backendClientTask?.cancel()
-            backendClientTask = Task { [weak self] in
-                var cursor: BackendInvalidationCursor?
-                while !Task.isCancelled {
-                    guard let self else { return }
-                    do {
-                        let data = try await client.call(method: "application.changes", payload: JSONEncoder().encode(cursor))
-                        let change = try JSONDecoder().decode(BackendInvalidations.self, from: data)
-                        if change.requiresReload || !change.scopes.isDisjoint(with: [.workspace, .calendar]) {
-                            await self.refreshWorkspaceIfChanged()
-                        }
-                        if change.requiresReload || !change.scopes.isDisjoint(with: [.runtime, .permissions]) {
-                            try await self.refreshBackendApplicationState()
-                        }
-                        if change.requiresReload || change.scopes.contains(.gatewaySettings) { try await self.refreshBackendGatewaySettingsState() }
-                        if change.requiresReload || change.scopes.contains(.databases) { try await self.refreshBackendDatabasesState() }
-                        if change.requiresReload || change.scopes.contains(.remoteWorkspaces) { try await self.refreshBackendRemoteState() }
-                        if change.requiresReload || change.scopes.contains(.openCode) { try await self.refreshBackendOpenCodeState() }
-                        if change.requiresReload || change.scopes.contains(.settings) {
-                            try await self.refreshBackendConnectionsState()
-                            try await self.refreshBackendSurfaceProfile()
-                            await self.analytics.refresh()
-                        }
-                        if change.requiresReload || change.scopes.contains(.usage) { await self.usage.refreshBackendSnapshot() }
-                        if !change.conversationIDs.isEmpty { try await Task.sleep(for: .milliseconds(16)) }
-                        if change.requiresReload || change.scopes.contains(.settings) { try await self.agentTools?.reloadInBackground() }
-                        let visible = Set(self.conversationStatesByID.keys)
-                        for id in change.requiresReload ? visible : change.conversationIDs.intersection(visible) {
-                            await self.refreshConversation(id: id)
-                        }
-                        cursor = change.cursor
-                    } catch is CancellationError { return }
-                    catch {
-                        cursor = nil
-                        self.workspaceError = "Background service disconnected. Your sessions remain owned by the backend."
-                        try? await Task.sleep(for: .seconds(2))
+            backendConversationClientTask?.cancel()
+            // The journal supports independent bounded waiters. Transcript
+            // delivery must never wait for runtime/settings/usage inventory.
+            backendConversationClientTask = Task { [weak self] in
+                await BackendInvalidationConsumer.run(receive: { cursor in
+                    let data = try await client.call(method: "application.changes", payload: JSONEncoder().encode(cursor))
+                    return try JSONDecoder().decode(BackendInvalidations.self, from: data)
+                }, apply: { [weak self] change in
+                    guard let self else { throw CancellationError() }
+                    if !change.conversationIDs.isEmpty { try await Task.sleep(for: .milliseconds(16)) }
+                    let visible = Set(self.conversationStatesByID.keys)
+                    for id in change.requiresReload ? visible : change.conversationIDs.intersection(visible) {
+                        try Task.checkCancellation()
+                        await self.refreshConversation(id: id)
                     }
-                }
+                }, failed: { [weak self] _ in
+                    self?.workspaceError = "Background service disconnected. Your sessions remain owned by the backend."
+                })
+            }
+            backendClientTask = Task { [weak self] in
+                await BackendInvalidationConsumer.run(receive: { cursor in
+                    let data = try await client.call(method: "application.changes", payload: JSONEncoder().encode(cursor))
+                    return try JSONDecoder().decode(BackendInvalidations.self, from: data)
+                }, apply: { [weak self] change in
+                    guard let self else { throw CancellationError() }
+                    if change.requiresReload || !change.scopes.isDisjoint(with: [.workspace, .calendar]) {
+                        await self.refreshWorkspaceIfChanged()
+                    }
+                    if change.requiresReload || !change.scopes.isDisjoint(with: [.runtime, .permissions]) {
+                        try await self.refreshBackendApplicationState()
+                    }
+                    if change.requiresReload || change.scopes.contains(.gatewaySettings) { try await self.refreshBackendGatewaySettingsState() }
+                    if change.requiresReload || change.scopes.contains(.databases) { try await self.refreshBackendDatabasesState() }
+                    if change.requiresReload || change.scopes.contains(.remoteWorkspaces) { try await self.refreshBackendRemoteState() }
+                    if change.requiresReload || change.scopes.contains(.openCode) { try await self.refreshBackendOpenCodeState() }
+                    if change.requiresReload || change.scopes.contains(.settings) {
+                        try await self.refreshBackendConnectionsState()
+                        try await self.refreshBackendSurfaceProfile()
+                        await self.analytics.refresh()
+                    }
+                    if change.requiresReload || change.scopes.contains(.usage) { await self.usage.refreshBackendSnapshot() }
+                    if change.requiresReload || change.scopes.contains(.settings) { try await self.agentTools?.reloadInBackground() }
+                }, failed: { [weak self] _ in
+                    self?.workspaceError = "Background service disconnected. Your sessions remain owned by the backend."
+                })
             }
         } catch { state = .failed(error.localizedDescription) }
     }

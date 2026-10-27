@@ -64,7 +64,7 @@ struct InferenceRequestBuilder {
       body["input"] = try responsesMessages(messages)
       if !inventory.isEmpty { body["tools"] = inventory.map { ["type": "function", "name": $0["name"] ?? "", "description": $0["description"] ?? "", "parameters": $0["parameters"] ?? [:], "strict": false] } }
       if codex, !inventory.isEmpty { body["tools"] = inventory.map { ["type": "function", "name": $0["name"] ?? "", "description": $0["description"] ?? "", "parameters": $0["parameters"] ?? [:], "strict": NSNull()] } }
-      if let reasoning { body["reasoning"] = ["effort": reasoning, "summary": "auto"]; body["include"] = ["reasoning.encrypted_content"] }
+      if let reasoning { body["reasoning"] = ["effort": reasoning, "summary": "detailed"]; body["include"] = ["reasoning.encrypted_content"] }
       else if codex, model.reasoning {
         if let map = model.thinkingLevelMap, map.keys.contains("off") { if let off = map["off"] ?? nil { body["reasoning"] = ["effort": off] } }
         else { body["reasoning"] = ["effort": "none"] }

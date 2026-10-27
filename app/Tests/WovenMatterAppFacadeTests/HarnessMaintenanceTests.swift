@@ -7,6 +7,52 @@ import WovenMatterDashboardStore
 
 @MainActor @Suite(.serialized)
 struct HarnessMaintenanceTests {
+    @Test(arguments: [LocalACPRuntimeAvailability.State.executableUnavailable, .authenticationRequired])
+    func successfulReplacementInvalidatesExecutableFailureWithoutErasingAccountFailure(state: LocalACPRuntimeAvailability.State) async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        var snapshot = fixture.model.backendRuntimeSnapshot()
+        let prior = LocalACPRuntimeAvailability(runtimeKind: .codex, displayName: "Codex", state: state,
+            detail: "Prior explicit check", executablePath: "/fixture/codex-acp")
+        snapshot.availability = [prior]
+        fixture.model.applyBackendRuntimeSnapshot(snapshot)
+        let operations = HeldHarnessUpdates()
+        fixture.model.runtimeMaintenanceFixture = { try await operations.run($0) }
+        fixture.model.updateRuntime(.codex)
+        try await eventually { await operations.started == [.codex] }
+        try await operations.finish(.codex)
+        try await eventually { !fixture.model.runtimeMaintenanceBusy(.codex) }
+        let latest = fixture.model.backendRuntimeSnapshot().availability.first { $0.runtimeKind == .codex }
+        #expect(latest == (state == .authenticationRequired ? prior : nil))
+        #expect(fixture.defaults.bool(forKey: "wovenmatter.credential-access.disclosure-acknowledged") == false)
+    }
+
+    @Test(arguments: [AgentRuntimeKind.codex, .claudeCode])
+    func unavailableSessionShowsItsSpecificAdapterFailure(runtime: AgentRuntimeKind) async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        let definition = try #require(LocalACPRuntimeCatalog.definition(for: runtime))
+        let detail = "\(definition.commandName) is outdated. Install the current Woven Matter-managed adapter."
+        var snapshot = fixture.model.backendRuntimeSnapshot()
+        snapshot.availability = [.init(runtimeKind: runtime, displayName: runtime.displayName,
+            state: .adapterOutdated, detail: detail, executablePath: "/fixture/\(definition.commandName)")]
+        snapshot.readyKinds.remove(runtime)
+        snapshot.launchableKinds.remove(runtime)
+        snapshot.workspace = .init(state: .ready, detail: "Fixture", rootPath: fixture.directory.path,
+            databasesPath: fixture.directory.appending(path: "datasets").path)
+        fixture.model.applyBackendRuntimeSnapshot(snapshot)
+        let id = await fixture.model.createLocalACPSession(runtimeKind: runtime, nativeWorkingDirectory: fixture.directory)
+        #expect(id == nil)
+        #expect(fixture.model.localRunError == detail)
+        #expect(try await fixture.database.workspaceOverview().conversations.isEmpty)
+        #expect(await fixture.recorder.deliveries.isEmpty)
+        // A different or ready harness must not inherit this failure text.
+        let other: AgentRuntimeKind = runtime == .codex ? .claudeCode : .codex
+        #expect(fixture.model.localACPLaunchUnavailableError(for: other).localizedDescription == ApplicationModelError.localACPRuntimeUnavailable.localizedDescription)
+        snapshot.availability = [.init(runtimeKind: runtime, displayName: runtime.displayName,
+            state: .ready, detail: "Installed", executablePath: "/fixture/\(definition.commandName)")]
+        fixture.model.applyBackendRuntimeSnapshot(snapshot)
+        #expect(fixture.model.localACPLaunchUnavailableError(for: runtime).localizedDescription == ApplicationModelError.localACPRuntimeUnavailable.localizedDescription)
+    }
+
     @Test func installedHarnessesPopulateTheRuntimeSnapshot() async throws {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
         let kinds = Set(fixture.model.installedOrderedLocalCLIAgents.map(\.runtimeKind))

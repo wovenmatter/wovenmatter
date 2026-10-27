@@ -213,7 +213,7 @@ public actor LocalACPSessionCoordinator {
         let runtimeKind: AgentRuntimeKind
         let nativeSessionID: String
         let remoteWorkspaceID: UUID?
-        // Codex and Cursor allocate IDs before creating their durable session
+        // Codex, Claude and Cursor allocate IDs before creating their durable session
         // history. Keep those draft IDs attached to this process until the
         // first prompt succeeds, so a configuration probe cannot persist an
         // identity that session/load cannot yet reopen.
@@ -546,6 +546,22 @@ public actor LocalACPSessionCoordinator {
                 systemPrompt: systemPrompt,
                 runID: run.runID
             )
+            var input = input
+            if let captured = input.mcpContext, let provider = mcpConnectionProvider {
+                guard captured.sessionID == nil || captured.sessionID == descriptor.conversationID else {
+                    throw WorkspaceToolError.invalid("The Woven MCP context belongs to a different conversation.")
+                }
+                // Metadata/permission probes can retire after input capture and
+                // revoke their transport credential. Acquire has now awaited
+                // that entire retirement; refresh transport only, retaining the
+                // immutable input context and its original conversation binding.
+                guard let current = try await provider(descriptor.conversationID) else { throw CancellationError() }
+                guard current.sessionID == nil || current.sessionID == descriptor.conversationID else {
+                    throw WorkspaceToolError.invalid("The Woven MCP connection belongs to a different conversation.")
+                }
+                input.mcpContext = .init(endpointURL: current.endpointURL, bearerToken: current.bearerToken,
+                    captureID: captured.captureID, sessionID: captured.sessionID)
+            }
             if durableRunIDs.contains(run.runID), let workspaceID = descriptor.remoteWorkspaceID {
                 let stored = try await database.localACPSession(conversationID: descriptor.conversationID)
                 guard let sessionID = activeSessions[descriptor.conversationID]?.pendingDurableSessionID ?? stored.acpSessionID else {
@@ -672,6 +688,9 @@ public actor LocalACPSessionCoordinator {
             streamWritersByRunID[run.runID] = streamWriter
             resumeStreamWriterWaiters(runID: run.runID, writer: streamWriter)
             let initialResult: Result<LocalACPStopReason, any Error>
+            // Retain this value independently of activeSessions: shutdown can
+            // remove the driver while its dispatched prompt is unwinding.
+            let pendingNativeSessionID = activeSessions[descriptor.conversationID]?.pendingDurableSessionID
             var promptDispatchAttempted = false
             do {
                 try Task.checkCancellation()
@@ -690,6 +709,18 @@ public actor LocalACPSessionCoordinator {
                     uncertainDurableInputRunIDs.insert(run.runID)
                 }
                 initialResult = .failure(error)
+            }
+            if [.codex, .claudeCode].contains(descriptor.runtimeKind),
+               let pendingNativeSessionID,
+               dispatchFence?.hasDispatched ?? promptDispatchAttempted {
+                // A failed/cancelled first response can still have created the
+                // native transcript. Save its identity before error draining or
+                // driver retirement, but never for a fenced-out input. This
+                // write must survive cancellation of the owning run task.
+                try await Task {
+                    try await self.persistSessionIdentity(pendingNativeSessionID,
+                        conversationID: descriptor.conversationID, runID: run.runID)
+                }.value
             }
             let stopReason = try await drainActiveInputs(
                 runID: run.runID,
@@ -1617,15 +1648,16 @@ public actor LocalACPSessionCoordinator {
     private func shutDownSession(_ session: ActiveSession, conversationID: String) async {
         sessionShutdownSequence &+= 1
         let id = sessionShutdownSequence
+        let releaseMCPConnection = mcpConnectionReleaser
         let task = Task {
             await session.client.shutdown()
+            await releaseMCPConnection?(conversationID)
         }
         pendingSessionShutdowns[conversationID] = PendingSessionShutdown(
             id: id,
             task: task
         )
         await task.value
-        await mcpConnectionReleaser?(conversationID)
         finishPendingSessionShutdown(
             conversationID: conversationID,
             id: id
@@ -1694,12 +1726,24 @@ public actor LocalACPSessionCoordinator {
             guard !isShutDown else {
                 throw LifecycleError.shutDown
             }
-            if let requiredSessionID,
+            var replacedUnpromptedDraft = false
+            if descriptor.runtimeKind == .claudeCode, descriptor.remoteWorkspaceID == nil,
+               let previousID = descriptor.acpSessionID, !initialized.loadedExistingSession,
+               initialized.sessionID != previousID {
+                // Older builds persisted Claude's configuration-only ID. The
+                // adapter could not reload it; atomically prove this local chat
+                // has never had a run/message before relaxing the identity fence.
+                replacedUnpromptedDraft = try await database.write {
+                    try $0.discardUnpromptedClaudeDraftSessionID(conversationID: descriptor.conversationID,
+                        expectedSessionID: previousID)
+                }
+            }
+            if let requiredSessionID, !replacedUnpromptedDraft,
                initialized.sessionID != requiredSessionID || !initialized.loadedExistingSession {
                 throw LifecycleError.sessionIdentityChanged
             }
             if initialized.sessionID != descriptor.acpSessionID {
-                // Codex, Cursor, Pi and Hermes allocate IDs before their session stores
+                // Codex, Claude, Cursor, Pi and Hermes allocate IDs before their session stores
                 // are durable. Configuration-only drafts must remain recreatable.
                 if !Self.defersNewSessionPersistence(descriptor.runtimeKind)
                     || initialized.loadedExistingSession {
@@ -1922,7 +1966,7 @@ public actor LocalACPSessionCoordinator {
     private static func defersNewSessionPersistence(
         _ runtimeKind: AgentRuntimeKind
     ) -> Bool {
-        runtimeKind == .codex || runtimeKind == .cursor || runtimeKind == .pi || runtimeKind == .hermes
+        runtimeKind == .codex || runtimeKind == .claudeCode || runtimeKind == .cursor || runtimeKind == .pi || runtimeKind == .hermes
     }
 
     private func persistConfiguration(

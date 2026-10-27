@@ -591,3 +591,24 @@ test('a provider transport failure preserves exposed partial answer, reasoning a
   assert.equal(message?.stopReason,'error');
   assert.equal(message.content.find(block => block.type === 'text').text,'Partial answer');
 });
+
+test('rejected workspace MCP grant reports discovery stage before any provider generation',async t=>{
+  const {engine}=await fixture(t),record=await engine.create();
+  const server=createServer((_request,response)=>{response.writeHead(401,{'content-type':'text/plain'});response.end('private fixture response must not escape');});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  t.after(async()=>{server.closeAllConnections();await new Promise(resolve=>server.close(resolve));});
+  record.streamFunction=()=>assert.fail('MCP discovery rejection must precede provider generation');
+  await assert.rejects(engine.prompt(record,'fixture',()=>{},{endpointURL:`http://127.0.0.1:${server.address().port}/mcp`,bearerToken:'fixture'}, {runID:randomUUID()}),error=>{
+    assert.ok(error.message.includes('discover Woven Matter tools'));assert.ok(error.message.includes('HTTP 401'));
+    assert.equal(error.message.includes('private fixture'),false);return true;
+  });
+  assert.equal(record.busy,false);assert.equal(record.session.messages.length,0);
+});
+
+test('native run group preparation has a safe distinct stage',async t=>{
+  const {engine}=await fixture(t),record=await engine.create();
+  record.subagents.beginGroup=async()=>{throw new Error('private database diagnostics');};
+  record.streamFunction=()=>assert.fail('run preparation must precede provider generation');
+  await assert.rejects(engine.prompt(record,'fixture',()=>{},undefined,{runID:randomUUID()}),{message:'Pi Durable could not prepare the native run group.'});
+  assert.equal(record.busy,false);
+});

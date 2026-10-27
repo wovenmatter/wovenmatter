@@ -4,8 +4,8 @@ Use **Woven Matter streaming-parity-review snapshot Dev** for this pass.
 It is the isolated snapshot for [PR #176](https://github.com/wovenmatter/wovenmatter/pull/176).
 The original `streaming-parity` instance contains preserved active work.
 
-The app's code checkpoint is `ec0d36db`; subsequent commits record verification
-and this checklist. No rebuild is needed for those documentation changes.
+Use the rebuilt review snapshot containing the authenticated-test follow-up
+fixes. The earlier `ec0d36db` build does not contain those fixes.
 [Verification evidence](STREAMING_VERIFICATION.md) records the T3 comparison,
 automated coverage, screenshots and remaining limits.
 
@@ -63,12 +63,12 @@ Finish with a heading and bullet list describing the observed file contents
 and completed actions. Do not modify anything outside this scratch directory.
 ```
 
-Check the live tool label and progress indicator, incremental arguments/output
+Check the specific live tool label and static icon, incremental arguments/output
 when supplied, and chronological placement of progress text, tools and answer.
 Expand work during the turn and after it settles. Reasoning-only groups should
 open into formatted traces; mixed groups should keep tool details accessible.
 The supplied reasoning preview should remain useful beside the active tool.
-There should be no duplicated answer, stranded spinner or successful-looking
+There should be no tool/reasoning spinner, duplicated answer or successful-looking
 failed/cancelled call.
 
 While expanded work overflows, scroll above the bottom and let more content
@@ -105,6 +105,15 @@ or duplicated work.
 Use Dark for the full matrix, then repeat a representative tool-heavy chat in
 Green and Cognac and at a narrow window width. Check wrapping, readable ink,
 reasoning navigation, expanded tool output and the final answer's placement.
+
+Generate an inline HTML chart, then scroll the conversation with the pointer
+over its center and beside it. Both should move the chat. Include a trackpad
+gesture with momentum. The expanded visual reply keeps its own WebKit scrolling;
+horizontal and modified chart gestures retain their normal interaction.
+
+Send a new prompt while settings/runtime inventory is refreshing. Your saved
+prompt should appear promptly and response updates should continue. If anything
+is blank, record whether your own prompt is missing too and the approximate time.
 
 For a failure, record:
 

@@ -130,7 +130,11 @@ struct DashboardCloudConversation: View {
         ZStack(alignment: .bottom) {
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(spacing: 0) {
+                    // This is the paged message window (40 messages initially),
+                    // not the full history. Native text changes height while it
+                    // streams; lazy height estimates can strand the bottom
+                    // anchor in blank space before those rows are measured.
+                    VStack(spacing: 0) {
                         if conversation == nil {
                             DashboardConversationEmptyState(
                                 icon: .messageSquare,
@@ -159,11 +163,15 @@ struct DashboardCloudConversation: View {
                                     .padding(.bottom, 32)
                                     .id(historyLoaderID(oldestMessageID: oldestMessageID))
                                     .accessibilityIdentifier("dashboard-history-loader")
-                                    .task(id: historyLoaderID(oldestMessageID: oldestMessageID)) {
-                                        await prependOlderMessages(
-                                            keeping: oldestMessageID,
-                                            using: proxy
-                                        )
+                                    .onScrollVisibilityChange(threshold: 0.01) { visible in
+                                        // Eager layout must not eagerly fetch history.
+                                        guard visible else { return }
+                                        Task { @MainActor in
+                                            await prependOlderMessages(
+                                                keeping: oldestMessageID,
+                                                using: proxy
+                                            )
+                                        }
                                     }
                             }
                             if let sessionID = conversation?.id, model.agentTools?.hasOlderReceipts.contains(sessionID) == true {

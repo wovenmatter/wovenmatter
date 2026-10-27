@@ -688,12 +688,20 @@ public actor OpenCodeSessionCoordinator {
     private func configureMCP(_ link: OpenCodeSessionLink, context: WovenMCPConnection?, client: OpenCodeHTTPClient) async throws -> [String: String] {
         guard let context else { return [:] }
         let info = try await client.call("GET", "/api/session/" + OpenCodeHTTPClient.segment(link.sessionID))
-        let query = ["location[directory]": info["data"]["location"]["directory"].text]
+        let expected = try await database.openCodeExecutionRoot(conversationID: link.conversationID)
+        guard info["data"]["id"].string == link.sessionID,
+              let directory = info["data"]["location"]["directory"].string,
+              directory.hasPrefix("/"), !directory.contains("\0"), directory == expected.rootPath else {
+            throw OpenCodeError.executionRootMismatch
+        }
+        let query = ["location[directory]": directory]
         let connected = try await client.call("POST", "/api/rpc/woven-mcp/connect", query: query, body: ["input": [
             "sessionID": .string(link.sessionID),
             "context": try JSONDecoder().decode(OpenCodeValue.self, from: JSONEncoder().encode(context))]])
-        let proxy = connected["data"]
-        guard let endpoint = proxy["endpointURL"].string, let credential = proxy["bearerToken"].string else {
+        // Plugin RPC uses Rpc.Output { output }, unlike session APIs' { data }.
+        let proxy = connected["output"]
+        guard let endpoint = proxy["endpointURL"].string, !endpoint.isEmpty,
+              let credential = proxy["bearerToken"].string, !credential.isEmpty else {
             throw OpenCodeError.message("OpenCode did not confirm the Woven MCP connection.")
         }
         let server = "woven_" + String(SHA256.hash(data: Data(link.sessionID.utf8)).map { String(format: "%02x", $0) }.joined().prefix(16))

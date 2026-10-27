@@ -14,6 +14,20 @@ spec.loader.exec_module(dev)
 
 
 class DevelopmentBuildTests(unittest.TestCase):
+    def test_backend_guard_matches_executable_aliases_without_matching_other_profiles(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            actual = root / "actual"; actual.mkdir()
+            alias = root / "alias"; alias.symlink_to(actual, target_is_directory=True)
+            executable = actual / "Review snapshot Dev.app/Contents/MacOS/Review snapshot Dev"
+            executable.parent.mkdir(parents=True); executable.touch()
+            via_alias = alias / executable.relative_to(actual)
+            self.assertTrue(dev.backend_running(executable, [str(via_alias) + " --backend"]))
+            self.assertTrue(dev.backend_running(via_alias, [str(executable) + " --backend"]))
+            self.assertFalse(dev.backend_running(executable, [str(executable)]))
+            self.assertFalse(dev.backend_running(executable, [str(root / "Other Dev") + " --backend"]))
+            self.assertFalse(dev.backend_running(executable, []))
+
     def test_power_helper_accepts_profiles_with_an_exact_client_allowlist(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

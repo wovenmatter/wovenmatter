@@ -66,7 +66,8 @@ fi
 # Replacing the executable of an active execution owner can interrupt sessions.
 # Its lifetime is independent of the UI; stop it from Background Server settings
 # before rebuilding so active work uses the normal cancellation path.
-if pgrep -f "^${executable} --backend$" >/dev/null 2>&1; then
+backend_running="$(python3 "$repo_root/scripts/dev-build.py" backend-running --executable "$executable")"
+if [ "$backend_running" = true ]; then
   printf '%s\n' 'Stop the server in this Dev app’s Background Server settings before rebuilding.' >&2
   exit 75
 fi

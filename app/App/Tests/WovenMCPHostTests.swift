@@ -1,4 +1,5 @@
 import Foundation
+import Network
 import Testing
 import WorkspaceFixtures
 import WovenMatterCore
@@ -7,6 +8,62 @@ import WovenMatterDashboardStore
 
 @MainActor @Suite(.serialized)
 struct WovenMCPHostTests {
+    @Test func sessionOnlyHostRestartsImmediatelyAfterARealHTTPConnection() async throws {
+        let fixture = try await MCPHostFixture()
+        defer { fixture.remove() }
+        let original = try await fixture.host.connection(sessionID: fixture.caller, captureID: "before-restart")
+        let session = URLSession(configuration: .ephemeral)
+        defer { session.invalidateAndCancel() }
+        let (_, response) = try await session.data(from: #require(URL(string: original.endpointURL)))
+        #expect((response as? HTTPURLResponse)?.statusCode == 401)
+        fixture.host.stop()
+        let restored = try WovenMCPHost(database: fixture.database) { _, _ in .init(success: true) }
+        defer { restored.stop() }
+        let renewed = try await restored.connection(sessionID: fixture.caller, captureID: "after-restart")
+        #expect(renewed.bearerToken != original.bearerToken)
+        #expect(renewed.captureID == "after-restart")
+        let (_, restartedResponse) = try await session.data(from: #require(URL(string: renewed.endpointURL)))
+        #expect((restartedResponse as? HTTPURLResponse)?.statusCode == 401)
+    }
+
+    @Test func occupiedSessionOnlyPortMovesWithoutSharingTheExistingListener() async throws {
+        let fixture = try await MCPHostFixture()
+        defer { fixture.remove() }
+        let original = try await fixture.host.start()
+        let restored = try WovenMCPHost(database: fixture.database) { _, _ in .init(success: true) }
+        defer { restored.stop() }
+        let replacement = try await restored.start()
+        #expect(replacement != original)
+        #expect(try await fixture.host.start() == original)
+        // The new port is persisted for the next launch, with no external grants.
+        let saved = try JSONDecoder().decode(GatewayJSONValue.self,
+            from: Data(contentsOf: fixture.directory.appending(path: "mcp-access.json")))
+        #expect(saved.objectValue?["port"]?.doubleValue == Double(try #require(URL(string: replacement)?.port)))
+        #expect(saved.objectValue?["credentials"]?.arrayValue?.isEmpty == true)
+    }
+
+    @Test func occupiedPersistentEndpointFailsWithoutMovingOrReplacingCredentials() async throws {
+        let fixture = try await MCPHostFixture()
+        defer { fixture.remove() }
+        let access = try await fixture.host.access(.create(label: "Stable external endpoint", sessionID: fixture.caller,
+            groups: [.notes], readOnly: true))
+        let connection = try #require(access.issuedConnection)
+        let accessFile = fixture.directory.appending(path: "mcp-access.json")
+        let original = try Data(contentsOf: accessFile)
+        let restored = try WovenMCPHost(database: fixture.database) { _, _ in .init(success: true) }
+        defer { restored.stop() }
+        do {
+            _ = try await restored.start()
+            Issue.record("An occupied persistent MCP endpoint must remain exclusive")
+        } catch {
+            #expect((error as? NWError) == .posix(.EADDRINUSE))
+        }
+        #expect(try Data(contentsOf: accessFile) == original)
+        #expect(try await fixture.host.start() == connection.endpointURL)
+        let result = try await fixture.call(connection, name: "woven_notes_list")
+        #expect(result.objectValue?["result"]?.objectValue?["isError"] == .bool(false))
+    }
+
     @Test func computerUseRequiresExplicitEnablementAndRevocableMcpAuthority() async throws {
         let fixture = try await MCPHostFixture()
         defer { fixture.remove() }

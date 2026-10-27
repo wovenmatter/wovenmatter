@@ -1,3 +1,5 @@
+import { runtimeStageError } from './runtime-stage-error.mjs';
+import { withReasoningSummaries } from './reasoning-stream-options.mjs';
 import { wovenInstructions } from './woven-instructions.mjs';
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
 import { createHash, randomUUID } from 'node:crypto';
@@ -42,6 +44,7 @@ export async function openDurableSession(engine, id, requested) {
   const root = join(engine.directory, 'durable', sessionID);
   await mkdir(root, { recursive: true, mode: 0o700 });
   let release, record, ownerError, eventStream;
+  let openingStage = 'nativeSession';
   try { release = await ownNativeStore(root, error => { ownerError = error; void record?.session?.abort()?.catch(() => {}); if (record) record.lockError = error; }); }
   catch { throw new DefaultAgentError('This Pi Durable session is already owned by another runtime. Reconnect to its current execution owner.'); }
   try {
@@ -163,7 +166,7 @@ export async function openDurableSession(engine, id, requested) {
             const account = await currentAccount(model, scope);
             await withAccount(model, account, async () => {
               const nativeOptions = await scope.nativeBridge.requestOptions(model, prepared, options?.signal);
-              const resolved = { ...options, ...nativeOptions, transport: 'sse', maxRetries: 0, fetch: providerFetch(scope) };
+              const resolved = withReasoningSummaries(model, { ...options, ...nativeOptions, transport: 'sse', maxRetries: 0, fetch: providerFetch(scope) });
               const native = (scope.streamFunction ?? target.streamSimple.bind(target))(model, { ...input, messages: scope.nativeBridge.filterTools(input.messages) }, resolved);
               for await (const event of native) {
                 lastMessage = event.error ?? event.message ?? event.partial ?? lastMessage;
@@ -186,10 +189,13 @@ export async function openDurableSession(engine, id, requested) {
       return typeof target[key] === 'function' ? target[key].bind(target) : target[key];
     } });
     const registry = createNativeCompactionRegistry();
+    openingStage = 'nativeStorage';
     const storage = await openWorkspacePiStorage({databasePath:engine.databasePath,root,manifest,context});
     if (record.lockError) throw new DefaultAgentError('The native session owner lock was lost. Reconnect before continuing.');
+    openingStage = 'nativeHarness';
     const harness = await Harness.open(storage, { models, registry, settings: { retry: { enabled: false, maxRetries: 0 }, stream: { transport: 'sse', maxRetries: 0 }, toolExecution: 'sequential', compaction: { backgroundTokens: 0 } } }, context);
     record.harness = harness; record.storage = storage; record.registry = registry;
+    openingStage = 'nativeSession';
     record.unsubscribeCommits = harness.subscribeCommits(publication => {
       const records = [];
       const changedGroup = publication.changes.find(change => change.type === 'document' && change.record.kind === Subagents.definition.kind && change.conversationId === record.conversation?.id);
@@ -383,19 +389,23 @@ export async function openDurableSession(engine, id, requested) {
       if (!connection) return;
       const identity = JSON.stringify([connection.endpointURL, connection.bearerToken]);
       if (!force && identity === mcpDiscoveryIdentity) return;
-      const definitions = await mcpClient.listTools(connection);
-      const discovered = wovenMCPTools(definitions, mcpClient, () => (toolScopes.getStore() ?? record).mcp.connection());
-      tools.splice(ordinaryCount, tools.length - ordinaryCount, ...discovered);
-      adapted.splice(ordinaryCount, adapted.length - ordinaryCount, ...discovered.map(adaptTool));
-      registry.install(defineExtension({ name: 'woven-mcp', tools: adapted.slice(ordinaryCount) }));
-      record.ordinaryTools.splice(ordinaryCount, record.ordinaryTools.length - ordinaryCount,
-        record.subagents.tool.name, ...discovered.map(tool => tool.name));
-      codeTool.description = 'Run sandboxed JavaScript using tools, ALL_TOOLS, text(), image(), store() and load(). Available tools: '
-        + tools.map(tool => tool.name + ': ' + tool.description).join('\n')
-        + '\nFor parent conversations only, ' + record.subagents.tool.name + ': ' + record.subagents.tool.description;
-      mcpDiscoveryIdentity = identity;
-      engine.normalizeSelection(record);
-      await record.configurationQueue;
+      let definitions;
+      try { definitions = await mcpClient.listTools(connection); }
+      catch (error) { throw runtimeStageError('mcpDiscovery', error); }
+      try {
+        const discovered = wovenMCPTools(definitions, mcpClient, () => (toolScopes.getStore() ?? record).mcp.connection());
+        tools.splice(ordinaryCount, tools.length - ordinaryCount, ...discovered);
+        adapted.splice(ordinaryCount, adapted.length - ordinaryCount, ...discovered.map(adaptTool));
+        registry.install(defineExtension({ name: 'woven-mcp', tools: adapted.slice(ordinaryCount) }));
+        record.ordinaryTools.splice(ordinaryCount, record.ordinaryTools.length - ordinaryCount,
+          record.subagents.tool.name, ...discovered.map(tool => tool.name));
+        codeTool.description = 'Run sandboxed JavaScript using tools, ALL_TOOLS, text(), image(), store() and load(). Available tools: '
+          + tools.map(tool => tool.name + ': ' + tool.description).join('\n')
+          + '\nFor parent conversations only, ' + record.subagents.tool.name + ': ' + record.subagents.tool.description;
+        mcpDiscoveryIdentity = identity;
+        engine.normalizeSelection(record);
+        await record.configurationQueue;
+      } catch (error) { throw runtimeStageError('mcpInstallation', error); }
     };
     record.subscribe = listener => { listeners.add(listener); return () => listeners.delete(listener); };
     record.reportUsage = usage => { for (const listener of listeners) listener({ usage }); };
@@ -557,6 +567,6 @@ export async function openDurableSession(engine, id, requested) {
   } catch (error) {
     if (record?.session) await record.session.dispose().catch(() => {});
     else { await record?.harness?.close(context).catch(() => {}); await release(); }
-    throw error;
+    throw runtimeStageError(openingStage, error);
   }
 }

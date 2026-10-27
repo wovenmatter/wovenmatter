@@ -39,12 +39,13 @@ async function runOpenCode({run,config,cwd,instances,read,fetchRequest,nativeSes
     sessionID??='ses_'+randomUUID().replaceAll('-','')
     let session=(await call(nativeSessionID?'GET':'POST',nativeSessionID?`/api/session/${encodeURIComponent(sessionID)}`:'/api/session',nativeSessionID?undefined:{id:sessionID,title:run.title,location:{directory:cwd,...(config.nativeWorkspaceID?{workspaceID:config.nativeWorkspaceID}:{})},metadata:{wovenmatter:{origin:'created'}}})).data
     if(session?.id!==sessionID)throw before('OpenCode did not confirm the recurring session identity.')
+    if(session.location?.directory!==cwd)throw before('OpenCode did not confirm the saved execution directory.')
     const path='/api/session/'+encodeURIComponent(sessionID)
     await bindSession(sessionID)
     if(mcpConnection) {
       const query=new URLSearchParams({'location[directory]':cwd})
-      const proxy=(await call('POST','/api/rpc/woven-mcp/connect?'+query,{input:{sessionID,context:mcpConnection}})).data
-      if(!proxy||typeof proxy.endpointURL!=='string'||typeof proxy.bearerToken!=='string')throw before('OpenCode did not confirm its Woven MCP connection.')
+      const proxy=(await call('POST','/api/rpc/woven-mcp/connect?'+query,{input:{sessionID,context:mcpConnection}})).output
+      if(!proxy||typeof proxy!=='object'||Array.isArray(proxy)||typeof proxy.endpointURL!=='string'||!proxy.endpointURL||typeof proxy.bearerToken!=='string'||!proxy.bearerToken)throw before('OpenCode did not confirm its Woven MCP connection.')
       const name='woven_'+createHash('sha256').update(sessionID).digest('hex').slice(0,16)
       await call('PUT','/api/experimental/mcp/'+name+'?'+query,{config:{type:'remote',url:proxy.endpointURL,headers:{Authorization:'Bearer '+proxy.bearerToken},oauth:false,codemode:false}})
     }

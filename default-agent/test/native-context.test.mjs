@@ -73,7 +73,7 @@ test('repeated native compaction keeps exact windows, new prefix, usage and cano
   let sent;
   record.streamFunction = (model, input, options) => { const result = stream(response(model)); sent = options.onPayload({ model: model.id, input: [{ role: 'user', content: 'new canonical input' }] }, model); return result; };
   await engine.handle('session/prompt', { sessionId: record.session.sessionId, prompt: [{ type: 'text', text: 'Continue' }] });
-  assert.deepEqual(sent.input[0], window.output[0]);
+  assert.deepEqual((await sent).input[0], window.output[0]);
   assert.equal(calls.length, 2);
   let after = 0, text = '', compactCaptured = false; do { const page = await record.history(after); text += page.recordBatch.records.map(r => r.payload).join(''); compactCaptured ||= page.recordBatch.records.some(item => item.runID === 'compact-run' && item.kind === 'woven.native-compaction'); after = page.nextAfter; if (!page.hasMore) break; } while (true);
   assert.ok(compactCaptured);
@@ -97,7 +97,7 @@ test('equal-model account and credential replacement rebuild from readable origi
   assert.ok(JSON.stringify(calls[1].body).includes('signed original input'));
   assert.ok(!JSON.stringify(calls[1].body).includes('opaque-account-a'));
   assert.ok(!JSON.stringify(calls[1].body).includes('opaque-window-1'));
-  assert.equal(native.input[0].encrypted_content, 'opaque-window-2');
+  assert.equal((await native).input[0].encrypted_content, 'opaque-window-2');
   const replacement = { ...accounts[1], credential: { type: 'api_key', key: 'new-fixture-key' } };
   await engine.apply({ credentials: { openai: replacement.credential }, credentialAccounts: { openai: [replacement, accounts[0]] } });
   await engine.handle('session/prompt', { sessionId: record.session.sessionId, prompt: [{ type: 'text', text: 'replace credential' }] });
@@ -133,15 +133,16 @@ test('automatic threshold compaction installs the native window before the curre
   engine.runtime.registerProvider('openai', { baseUrl: model.baseUrl, api: model.api, authHeader: true, models: [{ ...model, contextWindow: 80000 }] });
   await record.session.setModel(engine.runtime.getModel('openai', 'native-fixture')); await seed(record);
   await record.conversation.commit(tx => tx.appendEntry(record.conversation.id, { kind: 'pi.assistant', model: [{ ...response(record.session.model), usage: { ...usage, totalTokens: 70000 } }] }), ctx);
-  let generations = 0;
+  let generations = 0, submittedPayload;
   engine.runtime.completeSimple = async () => assert.fail('A supported native route must not use Pi summarization');
   record.streamFunction = (model, input, options) => {
     generations++; assert.equal(calls.length, 1);
-    assert.equal(options.onPayload({ model: model.id, input: [] }, model).input[0].encrypted_content, 'opaque-window-1');
+    submittedPayload = options.onPayload({ model: model.id, input: [] }, model);
     return stream(response(model));
   };
   await engine.handle('session/prompt', { sessionId: record.session.sessionId, prompt: [{ type: 'text', text: 'Continue above the blocking threshold' }] });
   assert.equal(generations, 1); assert.equal(calls.length, 1);
+  assert.equal((await submittedPayload).input[0].encrypted_content, 'opaque-window-1');
   assert.ok((await record.harness.snapshot(NativeContext, record.conversation.id, ctx)).covered.length > 0);
 });
 
@@ -226,6 +227,6 @@ test('a smaller target window recompresses original canonical turns incrementall
   assert.ok(calls.length > 2);
   assert.ok(!JSON.stringify(calls[1].body).includes('opaque-window-1'));
   for (let index = 2; index < calls.length; index++) assert.equal(calls[index].body.input[0].encrypted_content, 'small-window-' + index);
-  assert.equal(sent.input[0].encrypted_content, 'small-window-' + calls.length);
+  assert.equal((await sent).input[0].encrypted_content, 'small-window-' + calls.length);
   assert.equal((await record.harness.usage(ctx)).models['openai/smaller'].totalTokens, (calls.length - 1) * 11 + 2);
 });

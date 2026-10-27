@@ -9,6 +9,93 @@ import WovenMatterCore
 @Suite(.serialized)
 struct OpenCodeIntegrationTests {
 
+    @Test(arguments: ["missing-location", "mismatched-id", "empty-directory", "relative-directory", "nul-directory", "different-directory"])
+    func mcpConnectionRejectsChangedNativeSessionScopeBeforeSharingCredentials(shape: String) async throws {
+        let fixture = OpenCodeFixture(); FixtureProtocol.fixture = fixture
+        var data: OpenCodeValue = ["id": "ses_fixture", "location": ["directory": .string(fixture.nativeDirectory)]]
+        switch shape {
+        case "missing-location": data["location"] = .null
+        case "mismatched-id": data["id"] = "ses_unrelated"
+        case "empty-directory": data["location"]["directory"] = ""
+        case "relative-directory": data["location"]["directory"] = "relative/path"
+        case "nul-directory": data["location"]["directory"] = .string("/bad\0path")
+        default: data["location"]["directory"] = "/another/project"
+        }
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+        let id = try await database.createOpenCodeFixtureSession(runtimeKind: .opencode, title: "MCP scope",
+            ownerDeviceID: UUID(), openCodeAssociation: ("fixture", "ses_fixture"))
+        let link = OpenCodeSessionLink(conversationID: id, connectionID: "fixture", sessionID: "ses_fixture")
+        let session = fixtureSession()
+        defer { session.invalidateAndCancel() }
+        let coordinator = OpenCodeSessionCoordinator(database: database,
+            clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
+        try await coordinator.connect(connection())
+        // First GET passes dispatch's root check; the second GET, immediately
+        // before credential binding, returns a changed or malformed native scope.
+        fixture.sessionInfoReplies = [.null, ["data": data]]
+        let context = WovenMCPConnection(endpointURL: "http://127.0.0.1:1236/mcp", bearerToken: "fixture-host-token",
+            captureID: "immutable-capture", sessionID: id)
+        await #expect(throws: OpenCodeError.executionRootMismatch) {
+            try await coordinator.prompt(link, input: .init(text: "Never dispatch", mcpContext: context))
+        }
+        #expect(fixture.sessionInfoReplies.isEmpty)
+        #expect(fixture.lastMCPConnect.isNull)
+        #expect(fixture.mcpRegistrationCount == 0 && fixture.promptCount == 0)
+        await coordinator.shutdown()
+    }
+
+    @Test(arguments: ["valid", "legacy-data", "missing-output", "missing-endpoint", "empty-token"])
+    func mcpConnectUsesNativeRPCOutputAndRejectsMalformedReplies(envelope: String) async throws {
+        let fixture = OpenCodeFixture(); FixtureProtocol.fixture = fixture
+        let proxy: OpenCodeValue = ["endpointURL": "http://127.0.0.1:1235/mcp", "bearerToken": "fixture-proxy-token"]
+        // Verified against the running OpenCode 2.1.3 OpenAPI Rpc.Output schema:
+        // { type: object, properties: { output: {} }, additionalProperties: false }.
+        switch envelope {
+        case "valid": fixture.mcpConnectReply = ["output": proxy]
+        case "legacy-data": fixture.mcpConnectReply = ["data": proxy]
+        case "missing-output": fixture.mcpConnectReply = [:]
+        case "missing-endpoint": fixture.mcpConnectReply = ["output": ["bearerToken": "fixture-token"]]
+        default: fixture.mcpConnectReply = ["output": ["endpointURL": "http://127.0.0.1:1235/mcp", "bearerToken": ""]]
+        }
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+        let id = try await database.createOpenCodeFixtureSession(runtimeKind: .opencode, title: "MCP envelope",
+            ownerDeviceID: UUID(), openCodeAssociation: ("fixture", "ses_fixture"))
+        let link = OpenCodeSessionLink(conversationID: id, connectionID: "fixture", sessionID: "ses_fixture")
+        let session = fixtureSession()
+        defer { session.invalidateAndCancel() }
+        let coordinator = OpenCodeSessionCoordinator(database: database,
+            clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
+        try await coordinator.connect(connection())
+        let context = WovenMCPConnection(endpointURL: "http://127.0.0.1:1236/mcp", bearerToken: "fixture-host-token",
+            captureID: "immutable-input-capture", sessionID: id)
+        do {
+            try await coordinator.prompt(link, input: .init(text: "MCP-bound input", mcpContext: context))
+            #expect(envelope == "valid")
+        } catch {
+            #expect(envelope != "valid")
+            #expect(error.localizedDescription == "OpenCode did not confirm the Woven MCP connection.")
+        }
+        #expect(fixture.lastMCPConnect["input"]["sessionID"].text == link.sessionID)
+        #expect(fixture.lastMCPConnect["input"]["context"]["sessionID"].text == id)
+        #expect(fixture.lastMCPConnect["input"]["context"]["captureID"].text == "immutable-input-capture")
+        #expect(fixture.mcpLocation == fixture.nativeDirectory)
+        if envelope == "valid" {
+            #expect(fixture.mcpRegistrationCount == 1 && fixture.promptCount == 1)
+            #expect(fixture.lastMCPConfig["config"]["url"] == proxy["endpointURL"])
+            #expect(fixture.lastMCPConfig["config"]["headers"]["Authorization"].text == "Bearer fixture-proxy-token")
+            #expect(fixture.lastPrompt["metadata"]["wovenMCP"]["captureID"].text == "immutable-input-capture")
+        } else {
+            #expect(fixture.mcpRegistrationCount == 0 && fixture.promptCount == 0)
+        }
+        await coordinator.shutdown()
+    }
+
     @Test func multipleFollowedChatsShareOneVolatileSubscription() async throws {
         let fixture = OpenCodeFixture(); fixture.streamEvents = true; FixtureProtocol.fixture = fixture
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
@@ -515,6 +602,7 @@ private final class OpenCodeFixture: @unchecked Sendable {
     var heldPath: String?
     var sessionExists = true
     var nativeDirectory = "/original/project"
+    var sessionInfoReplies: [OpenCodeValue] = []
     var createCount = 0
     var lastCreate: OpenCodeValue = .null
     var version = "2.0.22"
@@ -526,6 +614,11 @@ private final class OpenCodeFixture: @unchecked Sendable {
     var acceptPrompt = true
     var promptCount = 0
     var lastPrompt: OpenCodeValue = .null
+    var mcpConnectReply: OpenCodeValue = .null
+    var lastMCPConnect: OpenCodeValue = .null
+    var lastMCPConfig: OpenCodeValue = .null
+    var mcpRegistrationCount = 0
+    var mcpLocation: String?
     var commandCount = 0
     var loseCommandResponse = false
     var lastCommand: OpenCodeValue = .null
@@ -567,6 +660,17 @@ private final class OpenCodeFixture: @unchecked Sendable {
                 return (200, ["data": active ? ["ses_fixture": ["status": "running"]] : [:]])
             }
             if path.hasSuffix("/interrupt") { interruptCount += 1; return (200, [:]) }
+            if path == "/api/rpc/woven-mcp/connect" {
+                lastMCPConnect = try requestBody(request)
+                mcpLocation = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?
+                    .first(where: { $0.name == "location[directory]" })?.value
+                return (200, mcpConnectReply)
+            }
+            if path.hasPrefix("/api/experimental/mcp/"), request.httpMethod == "PUT" {
+                mcpRegistrationCount += 1
+                lastMCPConfig = try requestBody(request)
+                return (200, [:])
+            }
             if path.hasSuffix("/prompt") || path.hasSuffix("/command") {
                 var bytes = request.httpBody ?? Data()
                 if let stream = request.httpBodyStream {
@@ -624,6 +728,10 @@ private final class OpenCodeFixture: @unchecked Sendable {
                 return (200, ["data": ["id": "ses_fixture", "title": "Created fixture"]])
             }
             if path == "/api/session/ses_fixture", !sessionExists { return (404, [:]) }
+            if path == "/api/session/ses_fixture", !sessionInfoReplies.isEmpty {
+                let reply = sessionInfoReplies.removeFirst()
+                if !reply.isNull { return (200, reply) }
+            }
             if path == "/api/session/ses_fixture" { return (200, ["data": ["id": .string(sessionID), "title": "Shared fixture", "model": .null, "location": ["directory": .string(nativeDirectory)], "time": ["updated": .number(900)]]]) }
             return (404, [:])
         }

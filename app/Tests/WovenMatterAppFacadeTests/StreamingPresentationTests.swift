@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import Vision
 import Testing
 import WovenMatterCore
 @testable import WovenMatterAppFacade
@@ -8,6 +9,78 @@ import WovenMatterCore
 /// to export the actual shared SwiftUI views for visual review.
 @MainActor @Suite(.serialized, .timeLimit(.minutes(2)))
 struct StreamingPresentationTests {
+    @Test func workActivityUsesStaticIconsInsteadOfBusySpinners() throws {
+        let views = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appending(path: "App/Views")
+        for file in ["ConversationWorkTranscript.swift", "ConversationSubagentRow.swift"] {
+            let source = try String(contentsOf: views.appending(path: file), encoding: .utf8)
+            #expect(!source.contains("ProgressView"), "Work and detail loading must use static icons and text")
+        }
+    }
+
+    @Test func renderedReasoningOmitsProtocolDumpAndRetainsToolDetails() async throws {
+        _ = NSApplication.shared
+        let unique = UUID().uuidString
+        let state = ConversationTranscriptState()
+        state.setExpanded(ConversationTranscriptState.disclosureKey(runID: unique, itemID: "group:thought"), true)
+        for id in ["thought", "tool"] {
+            state.setExpanded(ConversationTranscriptState.disclosureKey(runID: unique, itemID: "activity:" + id), true)
+        }
+        let activities = [
+            AgentRunActivity(id: "thought", kind: .thought, title: "Inspecting result", status: "completed",
+                content: "SUPPLIED REASONING VISIBLE", rawInputJSON: #"{"marker":"THOUGHTINPUTDUMP"}"#,
+                rawOutputJSON: #"{"marker":"THOUGHTOUTPUTDUMP"}"#,
+                rawPayloadJSON: #"{"marker":"THOUGHTEVENTDUMP"}"#),
+            AgentRunActivity(id: "empty-thought", kind: .thought, status: "completed",
+                rawPayloadJSON: #"{"marker":"EMPTYTHOUGHTDUMP"}"#),
+            AgentRunActivity(id: "tool", kind: .tool, title: "Inspect tool details", status: "completed", toolName: "read",
+                rawInputJSON: #"{"marker":"TOOLINPUTVISIBLE"}"#,
+                rawOutputJSON: #"{"marker":"TOOLOUTPUTVISIBLE"}"#),
+        ]
+        let records: [WorkspaceRunActivityRecord] = activities.enumerated().map { index, activity in
+            .init(id: activity.id, runID: unique, conversationID: unique,
+                activity: activity, createdAt: "", sequence: Int64(index))
+        }
+        let root = ConversationWorkTranscript(run: .init(id: unique, conversationID: unique, status: "running"),
+            presentation: .init(startedAt: nil, completedDuration: nil), records: records)
+            .environment(\.conversationTranscriptState, state)
+            .environment(\.dashboardTheme, .green)
+            .environment(\.colorScheme, .light)
+            .padding(24)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background(Color.white)
+        let host = NSHostingView(rootView: root)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 520),
+            styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        host.setFrameSize(NSSize(width: 760, height: 520))
+        defer { window.contentView = nil; window.close() }
+        let rendered = try await settle(host) { responseText(in: host).contains("SUPPLIED REASONING VISIBLE") }
+        try #require(rendered)
+        let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: bitmap)
+        let pixels = try #require(bitmap.cgImage)
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        request.usesLanguageCorrection = false
+        try VNImageRequestHandler(cgImage: pixels).perform([request])
+        let visible = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: " ")
+        #expect(visible.contains("SUPPLIED REASONING VISIBLE"), "The captured view must include the supplied reasoning")
+        #expect(visible.contains("TOOLINPUTVISIBLE") && visible.contains("TOOLOUTPUTVISIBLE"),
+            "Tool input/output details must remain visible: \(visible)")
+        for marker in ["THOUGHTINPUTDUMP", "THOUGHTOUTPUTDUMP", "THOUGHTEVENTDUMP", "EMPTYTHOUGHTDUMP"] {
+            #expect(!visible.contains(marker), "Protocol data leaked into the reasoning disclosure")
+        }
+        if let directory = ProcessInfo.processInfo.environment["WOVENMATTER_STREAMING_SCREENSHOTS"] {
+            let output = URL(fileURLWithPath: directory, isDirectory: true)
+            try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+            let png = try #require(bitmap.representation(using: .png, properties: [:]))
+            try png.write(to: output.appending(path: "reasoning-without-protocol-dump.png"))
+        }
+    }
+
     @Test func boundedReasoningPagesPreserveFenceContextAtBothEdges() throws {
         _ = NSApplication.shared
         for marker in ["```", "~~~~"] {
@@ -523,9 +596,10 @@ struct StreamingPresentationTests {
 
     private enum Scene: String, CaseIterable {
         case thinking, tool, expanded, trace, detailTrace, settled, interrupted
+        case piSearch, piBrowser, piCommand, piThoughtAfterFailure, piSettledThoughtAfterFailure
 
         var status: String {
-            switch self { case .settled: "completed"; case .interrupted: "cancelled"; default: "running" }
+            switch self { case .settled, .piSettledThoughtAfterFailure: "completed"; case .interrupted: "cancelled"; default: "running" }
         }
         var response: String {
             switch self {
@@ -542,7 +616,28 @@ struct StreamingPresentationTests {
                 content: self == .detailTrace ? nil : trace)
             let tool = AgentRunActivity(id: "read", kind: .tool, title: "Read streaming events", status: status == "running" ? "running" : "completed",
                 toolName: "read", content: "event-1: reasoning\nevent-2: tool\nevent-3: answer")
-            let activities = self == .thinking ? [] : (self == .trace || self == .detailTrace ? [reasoning] : [reasoning, tool])
+            let activities: [AgentRunActivity]
+            switch self {
+            case .piSearch, .piBrowser, .piCommand, .piThoughtAfterFailure, .piSettledThoughtAfterFailure:
+                // Recorded live Pi shapes, with synthetic input values. The
+                // transport category is not the actual tool identity.
+                let failed = AgentRunActivity(id: "search", kind: .tool, title: "web_search",
+                    status: "failed", toolName: "other", rawInputJSON: #"{"query":"native event ordering"}"#)
+                switch self {
+                case .piSearch:
+                    activities = [AgentRunActivity(id: "search", kind: .tool, title: "web_search",
+                        status: "running", toolName: "other", rawInputJSON: #"{"query":"native event ordering"}"#)]
+                case .piBrowser:
+                    activities = [failed, AgentRunActivity(id: "browser", kind: .tool, title: "woven_browser_use",
+                        status: "running", toolName: "other", rawInputJSON: #"{"action":"open","url":"https://example.com"}"#)]
+                case .piCommand:
+                    activities = [failed, AgentRunActivity(id: "command", kind: .tool, title: "bash",
+                        status: "running", toolName: "execute", rawInputJSON: #"{"command":"curl https://example.com"}"#)]
+                default: activities = [failed, reasoning]
+                }
+            default:
+                activities = self == .thinking ? [] : (self == .trace || self == .detailTrace ? [reasoning] : [reasoning, tool])
+            }
             return activities.enumerated().map { index, activity in
                 .init(id: activity.id, runID: "run", conversationID: "fixture", activity: activity,
                     createdAt: "2026-10-26T12:00:0\(index)Z", sequence: Int64(index))

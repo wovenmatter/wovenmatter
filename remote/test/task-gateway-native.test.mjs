@@ -23,8 +23,8 @@ const base = runtimeKind => ({run:{id:'run-1',title:'Fixture',task:{prompt:'fixt
 const nativeRecords = updates => updates.flatMap(update => update.recordBatch?.records ?? [])
 const text = updates => updates.filter(update => update.sessionUpdate === 'agent_message_chunk').map(update => update.content.text).join('')
 
-function openCodeFixture({permissionRequests=[],forms=[],pages=[{data:[{id:'msg_answer',type:'assistant',content:[{type:'text',text:'result'}]}]}],permissions=[],ignorePolicy=false,healthPID=42,snapshots,finalMessages}={}) {
-  const calls=[],session={id:'ses_fixture',model:{providerID:'lab',id:'old'},permissions}
+function openCodeFixture({permissionRequests=[],forms=[],pages=[{data:[{id:'msg_answer',type:'assistant',content:[{type:'text',text:'result'}]}]}],permissions=[],ignorePolicy=false,healthPID=42,snapshots,finalMessages,sessionLocation={directory:'/workspace'},mcpResponse={output:{endpointURL:'http://127.0.0.1:9999/mcp',bearerToken:'p'.repeat(43)}}}={}) {
+  const calls=[],session={id:'ses_fixture',model:{providerID:'lab',id:'old'},permissions,location:sessionLocation}
   let submitted=false,snapshotIndex=0,terminalObserved=false
   const fetchRequest=async(url,request)=>{
     assert.equal(request.headers.authorization,'Basic '+Buffer.from('opencode:fixture').toString('base64'))
@@ -32,8 +32,9 @@ function openCodeFixture({permissionRequests=[],forms=[],pages=[{data:[{id:'msg_
     const body=request.body&&JSON.parse(request.body);calls.push({method:request.method,path:url.pathname,query:url.searchParams.toString(),body})
     let response
     if(url.pathname==='/api/info')response={healthy:true,pid:healthPID,version:fixtureVersion}
-    else if(url.pathname==='/api/rpc/woven-mcp/connect'){assert.equal(body.input.sessionID,session.id);response={data:{endpointURL:'http://127.0.0.1:9999/mcp',bearerToken:'p'.repeat(43)}}}
+    else if(url.pathname==='/api/rpc/woven-mcp/connect'){assert.equal(body.input.sessionID,session.id);response=mcpResponse}
     else if(url.pathname.startsWith('/api/experimental/mcp/'))response={}
+    else if(url.pathname==='/api/session'&&request.method==='POST'){session.id=body.id;response={data:structuredClone(session)}}
     else if(url.pathname==='/api/session/ses_fixture/model'){session.model=body.model;response={}}
     else if(url.pathname==='/api/session/ses_fixture'){
       if(request.method==='PATCH'&&!ignorePolicy)session.permissions=body.permissions
@@ -65,6 +66,25 @@ test('unsupported native permission selections fail before spawning/submitting',
     await assert.rejects(fixture.execute(fixture.context),error=>error.beforePrompt===true)
     assert.equal(fixture.calls.length,0)
   }
+})
+
+test('OpenCode confirms the execution directory before binding new or resumed sessions and registering credentials',async()=>{
+  for(const resumed of [false,true]) for(const sessionLocation of [null,{}, {directory:'/another-workspace'}, {directory:'relative'}]) {
+    const fixture=openCodeFixture({sessionLocation})
+    if(!resumed)fixture.context.nativeSessionID=null
+    let bound=false
+    fixture.context.bindSession=()=>{bound=true}
+    fixture.context.mcpConnection={endpointURL:'http://127.0.0.1:7337/mcp',bearerToken:'fixture',captureID:'bound'}
+    await assert.rejects(fixture.execute(fixture.context),error=>error.beforePrompt===true&&error.message==='OpenCode did not confirm the saved execution directory.')
+    assert.equal(bound,false)
+    assert.equal(fixture.calls.some(call=>call.path.endsWith('/connect')||call.path.startsWith('/api/experimental/mcp/')||call.path.endsWith('/prompt')),false)
+  }
+  const fixture=openCodeFixture({sessionLocation:{directory:'/saved-execution-root'}})
+  fixture.context.run.task.configuration.nativeWorkingDirectory='/saved-execution-root'
+  fixture.context.mcpConnection={endpointURL:'http://127.0.0.1:7337/mcp',bearerToken:'fixture',captureID:'bound'}
+  await fixture.execute(fixture.context)
+  assert.equal(new URLSearchParams(fixture.calls.find(call=>call.path.endsWith('/connect')).query).get('location[directory]'),'/saved-execution-root')
+  assert.equal(fixture.calls.filter(call=>call.path.endsWith('/prompt')).length,1)
 })
 
 test('OpenCode rejects ignored policy writes and service identity mismatch before prompt',async()=>{
@@ -135,7 +155,23 @@ test('OpenCode installs a private HTTP MCP connection and persists only capture 
   fixture.context.mcpConnection=context
   await fixture.execute(fixture.context)
   assert.deepEqual(fixture.calls.find(call=>call.path.endsWith('/connect')).body.input.context,context)
+  const install=fixture.calls.find(call=>call.path.startsWith('/api/experimental/mcp/'))
+  assert.deepEqual(install.body.config,{type:'remote',url:'http://127.0.0.1:9999/mcp',headers:{Authorization:'Bearer '+'p'.repeat(43)},oauth:false,codemode:false})
+  assert.equal(new URLSearchParams(install.query).get('location[directory]'),'/workspace')
   assert.deepEqual(fixture.calls.find(call=>call.path.endsWith('/prompt')).body.metadata.wovenMCP,{captureID:context.captureID})
+})
+
+test('OpenCode rejects missing, malformed and legacy RPC connection envelopes before MCP installation or prompt',async()=>{
+  const proxy={endpointURL:'http://127.0.0.1:9999/mcp',bearerToken:'fixture-token'}
+  for(const mcpResponse of [{},{data:proxy},{output:null},{output:[]},{output:'invalid'},
+    {output:{endpointURL:proxy.endpointURL}},{output:{...proxy,endpointURL:''}},
+    {output:{...proxy,bearerToken:''}},{output:{...proxy,bearerToken:123}}]) {
+    const fixture=openCodeFixture({mcpResponse})
+    fixture.context.mcpConnection={endpointURL:'http://127.0.0.1:7337/mcp',bearerToken:'fixture',captureID:'bound'}
+    await assert.rejects(fixture.execute(fixture.context),error=>error.beforePrompt===true&&error.message==='OpenCode did not confirm its Woven MCP connection.')
+    assert.equal(fixture.calls.some(call=>call.path.startsWith('/api/experimental/mcp/')),false)
+    assert.equal(fixture.calls.some(call=>call.path.endsWith('/prompt')),false)
+  }
 })
 
 test('OpenCode confirms native rules without removing custom rules and projects the completed response',async()=>{

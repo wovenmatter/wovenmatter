@@ -81,3 +81,18 @@ test('redistributing unchanged answer text around new reasoning preserves its na
   assert.equal(updates[start]._meta.wovenAssistantSnapshot,true);
   assert.equal(rendered(updates),'abcd');
 });
+
+
+test('observed Pi Codex empty signed reasoning never invents text and preserves native tool identity',()=>{
+  const {stream,tools,updates}=fixture();
+  const tool={type:'toolCall',id:'native-call',name:'woven_browser_use',arguments:{action:'fixture'}};
+  const thinking={type:'thinking',thinking:'',thinkingSignature:'opaque-fixture-signature'};
+  stream.message(assistant([thinking,tool]));
+  stream.end(assistant([thinking,tool]));
+  assert.equal(updates.filter(item=>item.sessionUpdate==='agent_thought_chunk').length,0);
+  const start=updates.find(item=>item.sessionUpdate==='tool_call');
+  assert.equal(start.title,'woven_browser_use');assert.equal(start.kind,'other');assert.equal(start.status,'pending');
+  const running=tools.update({type:'tool_execution_start',toolCallId:'native-call',toolName:'woven_browser_use',args:tool.arguments});
+  assert.equal(running.title,'woven_browser_use');assert.equal(running.toolCallId,start.toolCallId);
+  assert.equal(JSON.stringify(updates).includes('opaque-fixture-signature'),false);
+});

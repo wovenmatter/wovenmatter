@@ -11,7 +11,12 @@ For the authenticated manual pass, use the [morning test checklist](STREAMING_MO
 
 The source audit used `pingdotgg/t3code` at commit
 [`68339a084644540f176ce83d97dd4c768b65b52e`](https://github.com/pingdotgg/t3code/tree/68339a084644540f176ce83d97dd4c768b65b52e).
-The comparison is pinned to that source, rather than a claim about a later T3 release.
+The follow-up audit also read current T3 commit
+[`36d4d711b79c73eb33131944f73ea4a8c6156484`](https://github.com/pingdotgg/t3code/tree/36d4d711b79c73eb33131944f73ea4a8c6156484).
+Its work groups default to collapsed, retain a useful supplied thought preview
+above the current activity, and open reasoning-only groups directly as traces.
+Its Codex adapter explicitly requests `summary: "detailed"` each turn. These are
+source comparisons at the named commits, not claims about future T3 releases.
 
 | T3 source finding | Woven implementation/verification consequence |
 | --- | --- |
@@ -80,8 +85,9 @@ application build validation.
 
 `StreamingPresentationTests` renders the production shared SwiftUI transcript and
 native Markdown views in Green, Cognac and Dark, at 380- and 760-point widths.
-All 42 combinations of initial thinking, live tools, expanded mixed work, live
-reasoning, detail-only reasoning, completion and interruption pass. Assertions
+All 72 combinations of initial thinking, live tools, expanded mixed work, live
+reasoning, detail-only reasoning, completion, interruption, specific tool labels
+and thinking after an earlier tool failure pass. Assertions
 check the actual native text, including the final committed reasoning list item;
 the export captures the same views for visual inspection.
 
@@ -187,7 +193,7 @@ These probes used existing sessions and scratch directories. No production SQLit
 database was opened. Raw response content and credentials were not retained in
 repository evidence.
 
-The final portable contracts passed 31 Pi/native cases, 5 Claude translation
+The initial portable contracts passed 31 Pi/native cases, 5 Claude translation
 cases, 40 remote recovery cases, 51 background streaming/detail cases,
 4 iOS inference bridge cases and 2 probe-script cases (133 total).
 The initial sandbox run blocked local fixture listeners with
@@ -264,3 +270,132 @@ config-option API and was rejected with JSON-RPC -32602 before inference. Select
 the advertised `gpt-6.1-sol` configuration value produced the successful row above.
 There is no claimed live OpenCode text, Pi family, UI, reconnect, error/abort,
 or tool-output pass from these five successful wire probes.
+
+
+## Authenticated-test follow-up: 2026-10-27
+
+The first review build did not satisfy the live presentation requirement. The
+follow-up compared T3 again and inspected the actual review snapshot captures.
+These findings supersede the earlier account/setup observations where stated.
+
+- Pi had twelve real tool identities and their specific titles, but ACP category
+  names such as `other` and `execute` became generic labels. Presentation now
+  derives search, browser and command labels from the specific native title and
+  input. Supplied thought previews remain visible after an earlier failed tool.
+  Tool, reasoning, disclosure-detail and visual-reply loading spinners are removed.
+  Formatted reasoning disclosures omit their transport Input/Output/Event JSON;
+  actual tool inputs and outputs remain available. A rendered-pixel test checks
+  both the clean reasoning and retained tool detail.
+- The inspected Pi run contained reasoning token usage and an opaque signature,
+  but no readable reasoning text. Its SDK defaulted to automatic summaries.
+  Matching T3's explicit request, Pi and the mobile Responses request builder now
+  request detailed summaries for supported reasoning-enabled Responses models.
+  Native payload tests cover continuation hooks and the actual SDK request body.
+  This cannot create a trace when the provider supplies none.
+- The installed managed adapters were below the existing catalog floors. Updating
+  through the app repaired Codex to 2.3.0 and Claude to 0.97.0. Same-path replacements
+  no longer retain obsolete installation failures. Claude configuration-only draft
+  IDs are deferred; a narrowly guarded no-history repair handles older saved drafts.
+  Dispatched first-turn IDs survive provider errors, cancellation and shutdown.
+- Pi preparation exposed a credential-retirement race: acquisition could finish
+  before the retired session released its MCP connection, and captured input could
+  override the fresh transport credential. Acquisition now waits for complete
+  retirement and refreshes only the trusted transport, preserving capture scope.
+  Provider-free tests gate the release and rotate synthetic credentials.
+- OpenCode initial model selection creates a `model-switched` native event before
+  the first prompt. Its draft guard incorrectly treated that as submitted history,
+  blocking first-send scratch-folder binding. Only known configuration events may
+  now precede that binding; actual or unknown history, paged history, active work
+  and queued input remain blocked.
+  The running service schema also exposed a second integration bug: plugin RPC
+  returns `Rpc.Output.output`, while desktop and remote code expected `data`.
+  Both paths now decode the actual envelope and reject missing or malformed
+  endpoint/credential fields before MCP registration or prompt submission.
+  Native session identity and the confirmed directory must also match the saved
+  execution root before either desktop or remote code shares tool credentials.
+- Saved transcript updates shared a consumer with slow settings/runtime inventory.
+  A separate cursor now delivers conversation invalidations independently. A real
+  facade/database regression renders prompt, incremental output and terminal state
+  while ancillary refresh is blocked. The exact historical Grok delay was not
+  instrumented; the source fix does not establish which ancillary call stalled it.
+- The loaded transcript window uses stable eager layout, with history fetching
+  gated by actual scroll visibility. Native outer-scroll tests pass, but the old
+  lazy layout also passed that fixture: this is hardening, not proof that lazy
+  layout caused the reported blank transcript.
+- Pointer-over-artifact scrolling was reproduced with a real mounted WebKit view:
+  before the fix, the conversation received zero wheel events and did not move.
+  Inline vertical gestures now reach the outer conversation. Gesture routing stays
+  fixed through axis/modifier changes and momentum, including zero-delta phases.
+  Expanded views and horizontal/modified gestures keep WebKit handling. Three
+  native regression tests pass; the HTML sandbox and resource tests also pass.
+- Restart exposed a saved MCP-port collision. A session-only endpoint can retry
+  exclusively on an OS-assigned port for `EADDRINUSE`; persistent external grants
+  keep their stable endpoint and fail rather than move. Eight real-network MCP
+  tests pass, including immediate HTTP restart and both collision policies.
+  Readiness reports the concrete startup failure instead of only timing out.
+
+The desktop validation gate passed, including the native build and
+packaged HTML tools for all five harnesses. The full Pi JavaScript suite passed
+237 tests with one intentional platform skip. Mobile package validation passed
+98 tests; the generic simulator SDK app/test build succeeded for arm64 and x86_64.
+This is compilation evidence, not a simulator execution pass. The final native
+streaming matrix and signed review-snapshot checks are recorded below.
+
+
+### Rebuilt review snapshot checks
+
+The signed snapshot reported backend `ready=true` and all five runtime kinds
+available. Through ordinary fenced application commands in disposable QA chats:
+
+| Harness/model | Actual app-path result |
+| --- | --- |
+| Codex / gpt-6.1-sol, xhigh | Expected reply completed; admission 51 ms, total 6.77 s |
+| Claude Code / Opus, high | Expected reply completed; admission 84 ms, total 6.87 s |
+| Grok / grok-4.7, high | Expected reply completed; admission 57 ms, total 3.14 s |
+| Pi / openai-codex/gpt-6.1-sol, medium | Real tool turn completed with a 407-character supplied summary and 303-character reply; summary opened and read in the actual app |
+| Pi / same model, second turn | Portable foreground command succeeded and returned all three progress lines; 252-character final reply completed in 12.42 s. This turn exposed no reasoning text |
+
+The first Pi command used unavailable `python` and failed; the transcript correctly
+showed the failed command and still rendered the subsequent supplied reasoning.
+The successful follow-up used shell builtins, without changing host tools. These
+are separate observations, not a claim that every request emits reasoning.
+
+The existing RTX chart was opened in the review app. Ordinary upward scrolling
+over HTML text and downward scrolling over the plotted chart both moved the
+conversation. Native tests separately cover phased trackpad momentum.
+
+The configured Pi session currently advertises only one enabled model, so these
+checks do not establish multiple-family acceptance.
+
+OpenCode / GLM-5.3-Flash now passes first-send scratch binding and real MCP
+registration: the same previously blocked chat was accepted in 143 ms. The native
+provider failed immediately with an **expired API key**. The actual UI displays
+both the submitted prompt and that specific provider error; it no longer fails
+at either of the repaired integration guards. This is an admission/error-rendering
+check, not a successful live OpenCode response or family pass. No authentication
+flow or credential replacement was performed.
+
+### Final source validation
+
+- All eight native streaming contracts passed after recompilation, including the
+  clean reasoning scene, OpenCode draft/RPC cases, real embedded wheel routing,
+  independent transcript refresh, MCP restart and federated detail reconstruction.
+- All six portable contracts passed through the approved localhost execution path.
+- Full default-agent suite: 237 passed, one intentional platform skip. Full remote
+  suite after the RPC correction: 239 passed, one intentional platform skip.
+- The desktop validation gate passed. Later OpenCode/UI edits were covered by the
+  recompiled native matrix, full remote suite and signed snapshot rebuild.
+- The signed review snapshot rebuilt and reported ready after normal frontend and
+  idle-backend shutdown; all snapshot data and the original instance are retained.
+- Astra review and Claude Opus 5.5 medium reviews were used. Review findings about
+  async payload hooks, command labels, first-turn identity and phased wheel
+  routing were fixed and rechecked.
+
+A sandbox-only rerun failed localhost listeners with `EPERM` and one cancellation
+fixture's two-second timing bound under contention. The approved complete portable
+matrix and isolated cancellation rerun both passed without relaxing the bound.
+
+Successful OpenCode inference and multiple-family live UI acceptance in OpenCode
+and Pi remain pending usable configured accounts/models. The generic iOS SDK build
+and 98 package tests passed; simulator execution remains unpassed at the recorded
+Xcode service-hub boundary.

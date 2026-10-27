@@ -219,6 +219,34 @@ final class ConversationPresentationTests: XCTestCase {
     XCTAssertEqual(turn.timeline.entries.map(\.id), ["group:tool"])
   }
 
+  func testMobileToolProjectionRetainsSpecificActionAndLabelBehindGenericTransportKinds() throws {
+    let fixtures: [(String, String, ConversationToolAction, String)] = [
+      ("other", "web_search", .webSearch, "Searching the web"),
+      ("execute", "web_search", .webSearch, "Searching the web"),
+      ("other", "woven_browser_use", .browser, "Using the browser"),
+      ("execute", "woven_browser_use", .browser, "Using the browser"),
+      ("other", "bash", .command, "Running bash"),
+      ("execute", "bash", .command, "Running bash")
+    ]
+    for (transportKind, title, action, label) in fixtures {
+      let activity = AgentRunActivity(id: "tool", kind: .tool, title: title,
+        status: "running", toolName: transportKind)
+      for structured in [true, false] {
+        var record = try transported(activity, sequence: 1)
+        if !structured { record.projectionJSON = nil }
+        let transcript = CompanionTranscript(conversationID: "c", activities: [record],
+          runs: [.init(id: "r", status: "running")])
+        let turn = try projectedTurn(transcript)
+        guard case .group(let group) = turn.timeline.entries.first?.content else {
+          return XCTFail("Expected shared tool presentation for \(title)")
+        }
+        XCTAssertEqual(group.action, action, "\(transportKind) must retain the \(title) semantic icon")
+        XCTAssertEqual(group.liveLabel(runIsActive: true), label)
+        XCTAssertTrue(group.hasActiveActivity, "Static tool presentation must preserve execution state")
+      }
+    }
+  }
+
   private func projectedTurn(_ transcript: CompanionTranscript) throws -> MobileConversationProjection.Turn {
     let row = try XCTUnwrap(MobileConversationProjection.rows(transcript).last)
     guard case .turn(let turn) = row.content else { throw NSError(domain: "Expected assistant turn", code: 1) }
