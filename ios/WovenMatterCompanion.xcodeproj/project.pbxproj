@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		AAE8FFD5747FD4140CE18BBB /* LUCIDE_LICENSE.txt in Resources */ = {isa = PBXBuildFile; fileRef = 73EB35C44390C66475CF51A7 /* LUCIDE_LICENSE.txt */; };
 		00E017B90F469E0FA9F262A1 /* DeviceCentralTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1911ABEE27501229078DD9BB /* DeviceCentralTools.swift */; };
 		0395C8003E69C4C6763A9F1C /* ExecutionRoutingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 332384BB7BE57DD70D3C3CCD /* ExecutionRoutingTests.swift */; };
 		0AC9BF1DE82D8FE4E01D882E /* ExecutionWorkspaces.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22CB94BB1FE76AEF28F124AF /* ExecutionWorkspaces.swift */; };
@@ -93,6 +94,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		73EB35C44390C66475CF51A7 /* LUCIDE_LICENSE.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = ../docs/assets/LUCIDE_LICENSE.txt; sourceTree = SOURCE_ROOT; };
 		02557B1B114BBAF54CD648B6 /* ConversationWorkTimeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationWorkTimeline.swift; sourceTree = "<group>"; };
 		032EBB6F955F52445FFDB1FC /* PairingPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingPane.swift; sourceTree = "<group>"; };
 		04F804868260C34CA79C726F /* shared */ = {isa = PBXFileReference; lastKnownFileType = folder; name = shared; path = ../shared; sourceTree = SOURCE_ROOT; };
@@ -316,6 +318,7 @@
 		DE7E8E23BE59E7359ED750CB = {
 			isa = PBXGroup;
 			children = (
+				73EB35C44390C66475CF51A7 /* LUCIDE_LICENSE.txt */,
 				6FE6CA0DB43AA3348A9DC94C /* App */,
 				5F9A3C3D82D1B99914622C73 /* CompanionApp */,
 				8F963B3601FCF017246994B9 /* CompanionAppTests */,
@@ -442,6 +445,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AAE8FFD5747FD4140CE18BBB /* LUCIDE_LICENSE.txt in Resources */,
 				40CCA8C001A3B732C2B4EA04 /* Assets.xcassets in Resources */,
 				DD5566D65F5CAFEF4BA3F0B9 /* SharedAssets.xcassets in Resources */,
 			);

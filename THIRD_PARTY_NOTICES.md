@@ -53,7 +53,7 @@ Bundled dependencies retain their own upstream licenses and notices.
 
 ## Lucide
 
-The dashboard icon assets are derived from `lucide-static` 1.61.0.
+The dashboard icon assets are derived from `lucide-static` 1.62.0.
 Published tarball integrity and per-asset hashes are recorded in
 `docs/assets/lucide-provenance.json`.
 
@@ -62,7 +62,7 @@ Copyright (c) 2026 Lucide Icons and Contributors
 
 The complete upstream license, including Feather-derived icons and their MIT
 notice, is preserved in [LUCIDE_LICENSE.txt](docs/assets/LUCIDE_LICENSE.txt) and
-the app’s bundled `ThirdPartyNotices.txt`.
+both apps’ bundled `LUCIDE_LICENSE.txt`.
 
 Permission to use, copy, modify, and/or distribute this software for any
 purpose with or without fee is hereby granted, provided that the above
