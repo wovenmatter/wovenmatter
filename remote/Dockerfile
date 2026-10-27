@@ -29,77 +29,10 @@ RUN export DEBIAN_FRONTEND=noninteractive \
     && install -m 0644 ssh_config /openssh-install/etc/ssh/ssh_config \
     && install -m 0644 LICENCE /openssh-install/usr/local/share/licenses/openssh/LICENCE
 
-# Build the current Python security release from the checksum recorded by the
-# official image recipe. The registry tag can lag an expedited Python release;
-# keeping the source selection here prevents that lag from weakening the floor.
-# Both runtimes use the same stable Debian ABI.
-FROM debian:trixie-slim AS workspace-python
-ARG PYTHON_VERSION=3.15.2
-ARG PYTHON_SHA256=8b5536d280142ecf6cdfe15d12a21ba1c65e300bbf7b28a8d0cdb849575797de
-ENV PATH=/usr/local/bin:$PATH \
-    LANG=C.UTF-8
-RUN export DEBIAN_FRONTEND=noninteractive \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates netbase tzdata \
-    && rm -rf /var/lib/apt/lists/*
-RUN export DEBIAN_FRONTEND=noninteractive \
-    && saved_apt_mark="$(apt-mark showmanual)" \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends \
-      dpkg-dev g++ gcc gnupg libbluetooth-dev libbz2-dev libc6-dev libdb-dev \
-      libffi-dev libgdbm-dev liblzma-dev libmpdec-dev libncursesw5-dev \
-      libreadline-dev libsqlite3-dev libssl-dev libzstd-dev make tk-dev \
-      uuid-dev wget xz-utils zlib1g-dev \
-    && wget -O /tmp/python.tar.xz "https://www.python.org/ftp/python/${PYTHON_VERSION}/Python-${PYTHON_VERSION}.tar.xz" \
-    && echo "${PYTHON_SHA256}  /tmp/python.tar.xz" | sha256sum --check --status \
-    && mkdir -p /usr/src/python \
-    && tar --extract --directory /usr/src/python --strip-components=1 --file /tmp/python.tar.xz \
-    && rm /tmp/python.tar.xz \
-    && cd /usr/src/python \
-    && gnu_arch="$(dpkg-architecture --query DEB_BUILD_GNU_TYPE)" \
-    && ./configure \
-      --build="$gnu_arch" \
-      --enable-loadable-sqlite-extensions \
-      --enable-optimizations \
-      --enable-option-checking=fatal \
-      --enable-shared \
-      $(test "${gnu_arch%%-*}" != 'riscv64' && echo '--with-lto') \
-      --with-ensurepip \
-    && extra_cflags="$(dpkg-buildflags --get CFLAGS)" \
-    && ldflags="$(dpkg-buildflags --get LDFLAGS) -Wl,--strip-all" \
-    && architecture="$(dpkg --print-architecture)" \
-    && case "$architecture" in \
-      amd64|arm64) extra_cflags="$extra_cflags -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer" ;; \
-      i386) ;; \
-      *) extra_cflags="$extra_cflags -fno-omit-frame-pointer" ;; \
-    esac \
-    && make -j "$(nproc)" "EXTRA_CFLAGS=$extra_cflags" "LDFLAGS=$ldflags" \
-    && rm python \
-    && make -j "$(nproc)" "EXTRA_CFLAGS=$extra_cflags" "LDFLAGS=$ldflags -Wl,-rpath='\$\$ORIGIN/../lib'" python \
-    && make install \
-    && cd / \
-    && rm -rf /usr/src/python \
-    && find /usr/local -depth \
-      \( \( -type d -a \( -name test -o -name tests -o -name idle_test \) \) \
-      -o \( -type f -a \( -name '*.pyc' -o -name '*.pyo' -o -name 'libpython*.a' \) \) \) \
-      -exec rm -rf '{}' + \
-    && ldconfig \
-    && apt-mark auto '.*' >/dev/null \
-    && apt-mark manual $saved_apt_mark \
-    && find /usr/local -type f -executable ! -name '*tkinter*' -exec ldd '{}' ';' 2>/dev/null \
-      | awk '/=>/ { so = $(NF-1); if (index(so, "/usr/local/") == 1) next; gsub("^/(usr/)?", "", so); printf "*%s\n", so }' \
-      | sort -u | xargs -r dpkg-query --search \
-      | awk 'sub(":$", "", $1) { print $1 }' | sort -u | xargs -r apt-mark manual \
-    && apt-get purge -y --auto-remove -o APT::AutoRemove::RecommendsImportant=false \
-    && rm -rf /var/lib/apt/lists/* \
-    && python3 --version \
-    && python3 -m pip --version
-RUN for source in idle3 pip3 pydoc3 python3 python3-config; do \
-      destination="$(echo "$source" | tr -d 3)"; \
-      test -s "/usr/local/bin/$source"; \
-      test ! -e "/usr/local/bin/$destination"; \
-      ln -s "$source" "/usr/local/bin/$destination"; \
-    done
+# The official image now publishes the required Python security release for both
+# native architectures. Record its verified manifest index; maintenance refreshes
+# this runtime selection together with docs/DEPENDENCIES.md.
+FROM python:3.15.2-slim-trixie@sha256:197f6622a70b727a4e61bdac13a73b4e2b914b896aa5a729ceb1f45a09bde5fa AS workspace-python
 RUN python3 -m pip install --no-cache-dir --upgrade 'pip>=26.2.2' 'setuptools>=84.2.1' \
     && find /usr/local -type f -executable ! -name '*tkinter*' -exec ldd '{}' ';' 2>/dev/null \
       | awk '/=>/ { so = $(NF-1); if (index(so, "/usr/local/") == 1) next; gsub("^/(usr/)?", "", so); printf "*%s\n", so }' \
@@ -143,7 +76,7 @@ RUN export DEBIAN_FRONTEND=noninteractive \
     && echo '6084d5d7bd8e288441e0e94fc6275570895da18e6751f70f057485dc2d1a811b  /etc/apt/keyrings/githubcli.gpg' | sha256sum --check --status \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list \
     && apt-get update && apt-get install -y --no-install-recommends gh \
-    && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' gh)" ge 2.103.2 \
+    && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' gh)" ge 2.103.3 \
     && apt-get install -y --target-release trixie-backports --no-install-recommends /tmp/security-output/*.deb \
     && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' curl)" ge 8.23.0 \
     && mkdir -p /usr/local/share/wovenmatter/security \

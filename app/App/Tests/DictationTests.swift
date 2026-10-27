@@ -36,6 +36,7 @@ import WovenMatterCompanion
     private func editor(_ text: String, id: String, selection: NSRange) -> (DictationEditor, UndoEditor) {
         _ = NSApplication.shared
         let view = UndoEditor()
+        view.frame = NSRect(x: 0, y: 0, width: 300, height: 200)
         view.string = text; view.allowsUndo = true; view.setSelectedRange(selection)
         let editor = DictationEditor(); editor.bind(view, identity: id)
         return (editor, view)
@@ -73,8 +74,13 @@ import WovenMatterCompanion
         window.contentView?.addSubview(viewA)
         window.contentView?.addSubview(search)
         secondWindow.contentView?.addSubview(viewB)
+        // Command routing requires a visible window and a nonempty editor.
+        // Hidden fixtures must remain ineligible, just like hidden app windows.
+        #expect(DictationEditor.commandTarget(in: window, preferred: a) == nil)
         window.orderFront(nil)
         secondWindow.orderFront(nil)
+        #expect(window.isVisible && secondWindow.isVisible)
+        #expect(!viewA.visibleRect.isEmpty && !viewB.visibleRect.isEmpty)
         #expect(window.makeFirstResponder(viewA))
         model.activeEditor = a
         model.refreshShortcutEditor()

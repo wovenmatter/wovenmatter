@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		58D2DD715AC36ACD6DF22BB2 /* LUCIDE_LICENSE.txt in Resources */ = {isa = PBXBuildFile; fileRef = 0AAFD6EAB1F3FB697B1A2D05 /* LUCIDE_LICENSE.txt */; };
 		E02200000000000000000001 /* HarnessSetupModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E02200000000000000000002; };
 		E02200000000000000000003 /* HarnessSetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E02200000000000000000004; };
         A03000000000000000000001 /* DesktopUpdater.swift in Sources */ = {isa = PBXBuildFile; fileRef = A03000000000000000000002; };
@@ -170,6 +171,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		0AAFD6EAB1F3FB697B1A2D05 /* LUCIDE_LICENSE.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = ../docs/assets/LUCIDE_LICENSE.txt; sourceTree = SOURCE_ROOT; };
 		E02200000000000000000002 /* HarnessSetupModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Models/HarnessSetupModel.swift"; sourceTree = SOURCE_ROOT; };
 		E02200000000000000000004 /* HarnessSetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Views/HarnessSetupView.swift"; sourceTree = SOURCE_ROOT; };
         A03000000000000000000002 /* DesktopUpdater.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesktopUpdater.swift; sourceTree = "<group>"; };
@@ -357,6 +359,7 @@
 		614FCD38F579029AF08B9221 = {
 			isa = PBXGroup;
 			children = (
+				0AAFD6EAB1F3FB697B1A2D05 /* LUCIDE_LICENSE.txt */,
 				A6F6CE2A68949F541CAEF102 /* RemoteBrowserCanvas.swift */,
 				8FAAD9B2BEC652A9951E07F7 /* RemoteBrowserViewerModel.swift */,
 				A524692B0EEFEF745237C8AF /* RemoteBrowserView.swift */,
@@ -637,6 +640,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				58D2DD715AC36ACD6DF22BB2 /* LUCIDE_LICENSE.txt in Resources */,
 				E07CAB6182634BC3A6D35468 /* ThirdPartyNotices.txt in Resources */,
 				A12000000000000000000005 /* remote-workspace.sh in Resources */,
 				A16800000000000000000001 /* remote-host.sh in Resources */,

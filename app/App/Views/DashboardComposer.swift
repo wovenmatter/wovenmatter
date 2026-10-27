@@ -565,7 +565,7 @@ struct DashboardComposer: View {
             }
         } label: {
             DashboardLucideIcon(glyph: .chevronDown, size: 18)
-                .rotationEffect(.degrees(isCollapsed ? 0 : 180))
+                .rotationEffect(.degrees(isCollapsed ? 180 : 0))
                 .frame(width: 36, height: 36)
                 .contentShape(Circle())
         }

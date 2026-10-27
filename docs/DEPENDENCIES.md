@@ -56,12 +56,15 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   Debian unstable source against the stable runtime ABI. This replaces the
   older stable and stable-backports builds, including the newly disclosed
   HTTP/2 upload use-after-free affecting curl through 8.22.0.
-  The image builds Python 3.15.2 from the checksum recorded by the current
-  official Python image recipe. The exact source selection is intentional: the
-  public registry tag still carried 3.15.1 during the October 26, 2026 review,
-  while 3.15.2 is an expedited security release. Maintenance compares this
-  record with the current official recipe and returns to its published image
-  once the registry contains the required security floor. Tested minimums are
+  The image copies Python 3.15.2 from the official `python:3.15.2-slim-trixie`
+  multi-architecture image, now published for amd64 and arm64. Its manifest-index
+  digest is recorded in `remote/Dockerfile` to preserve the verified interpreter,
+  native modules, and Debian ABI together. This replaces the temporary source
+  build used while the registry lagged the expedited security release.
+  Maintenance checks the current stable Python release, official image recipe,
+  both platform configurations, and image digest; refresh all records together.
+  The final image still upgrades its Debian runtime libraries at build time.
+  Tested minimums are
   pip 26.2.2 and setuptools 84.2.1, instead of Debian's older interpreter and
   vulnerable bundled venv wheel. The SQLite, TLS, and isolated execution paths
   are exercised on native amd64 and arm64 hosts in the container tests. Local
@@ -71,7 +74,7 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   the same curl and base-package refresh before installing its exact resolved
   V2 package.
   They use GitHub CLI's official signed stable APT
-  repository (tested minimum 2.103.2), with the published keyring SHA-256 checked
+  repository (tested minimum 2.103.3), with the published keyring SHA-256 checked
   before trusting it. Debian's older CLI retains CVE-2026-48501. Maintenance
   reviews both the floor and signing-key record against upstream.
   OpenSSH clients are built from the current 10.6p1 source in a separate image

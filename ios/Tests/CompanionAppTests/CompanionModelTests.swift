@@ -49,6 +49,13 @@ private actor ModelMac: CompanionTransport, CompanionCalendarTransport {
 }
 
 final class CompanionModelTests: XCTestCase {
+  func testSharedIconLicenseIsIncludedInTheAppBundle() throws {
+    let url = try XCTUnwrap(Bundle.main.url(forResource: "LUCIDE_LICENSE", withExtension: "txt"))
+    let license = try String(contentsOf: url, encoding: .utf8)
+    XCTAssertTrue(license.contains("Copyright (c) 2026 Lucide Icons and Contributors"))
+    XCTAssertTrue(license.contains("Copyright (c) 2013-present Cole Bemis"))
+  }
+
   @MainActor func testAppHostedUnitTestsOpenOnlyAnIsolatedLibraryWithoutNetworking() async throws {
     let model = CompanionModel()
     XCTAssertTrue(model.isolatedTestHost)
