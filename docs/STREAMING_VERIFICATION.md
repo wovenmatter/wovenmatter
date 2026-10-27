@@ -5,6 +5,8 @@ Woven's event projection and persistence, and the rendered desktop/mobile transc
 A passing wire probe does not establish a UI pass. A synthetic provider fixture
 does not establish that an account or model is currently available.
 
+For the authenticated manual pass, use the [morning test checklist](STREAMING_MORNING_TEST.md).
+
 ## T3 comparison and upstream boundary
 
 The source audit used `pingdotgg/t3code` at commit
