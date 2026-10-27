@@ -45,18 +45,27 @@ class DevelopmentBuildTests(unittest.TestCase):
         self.assertEqual(a, dev.profile(Path("/tmp/work-a/repo"), None, "client"))
         with self.assertRaises(ValueError): dev.profile(Path("/tmp/a"), "../production", "client")
 
-    def test_auto_selects_host_changes_but_client_for_harness_and_ui(self):
+    def test_auto_always_launches_full_app_and_client_remains_explicit(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             def git(*args): subprocess.run(["git", "-C", tmp, *args], check=True, capture_output=True)
             git("init"); git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "base")
             git("update-ref", "refs/remotes/origin/main", "HEAD")
             path = root / "app/App/Views/Fixture.swift"; path.parent.mkdir(parents=True); path.write_text("UI")
-            self.assertEqual(dev.choose_mode(root), "client")
+            self.assertEqual(dev.choose_mode(root), "snapshot")
             path = root / "app/Sources/WovenMatterDashboardStore/WorkspaceDatabase+Schema.swift"
             path.parent.mkdir(parents=True); path.write_text("schema")
             self.assertEqual(dev.choose_mode(root), "snapshot")
             self.assertEqual(dev.profile(root, "fixture", "client")["mode"], "client")
+
+    def test_default_launcher_plan_selects_the_standalone_snapshot(self):
+        root = Path(__file__).resolve().parents[2]
+        environment = dict(os.environ)
+        environment.pop("WOVENMATTER_DEV_MODE", None)
+        result = subprocess.run(["bash", str(root / "scripts/build_and_run.sh"),
+                                 "--plan", "--instance", "default-fixture"],
+                                env=environment, check=True, capture_output=True, text=True)
+        self.assertEqual(json.loads(result.stdout)["mode"], "snapshot")
 
     def test_live_host_is_explicit_and_shares_only_the_production_data_path(self):
         root = Path(__file__).resolve().parents[2]

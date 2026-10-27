@@ -55,10 +55,7 @@ struct FederatedConversationPane: View {
                                 if message.role == "assistant", message.status != "streaming" {
                                     ConversationFilePreviews(content: message.content, messageID: message.id) { source in
                                         let id = WorkspaceLibraryItem.identifier(messageID: message.id, source: source)
-                                        if let client = model.liveLibraryClient {
-                                            return try await client.exportFile(.libraryFile(id: id))
-                                        }
-                                        return try await model.library.fileURL(id: id)
+                                        return try await model.sharedLibraryFileURL(id: id)
                                     }
                                 }
                             }.frame(maxWidth: .infinity, alignment: .leading).id(message.id)

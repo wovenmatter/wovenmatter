@@ -10,6 +10,16 @@ import WovenMatterCore
 struct DevelopmentLaunchTests {
 
     @Test func liveHostUsesTheSameExclusiveLeaseAsProduction() throws {
+        for mode in [DevelopmentLaunch.Mode.client, .snapshot, .live] {
+            let frontend = LocalExecutionRole.resolve(arguments: ["app"], developmentMode: mode)
+            let backend = LocalExecutionRole.resolve(arguments: ["app", "--backend"], developmentMode: mode)
+            #expect(frontend == .frontend && !frontend.ownsExecution)
+            #expect(backend == .backend && backend.ownsExecution)
+            #expect(frontend.leaseFileName != backend.leaseFileName)
+            let isolated = URL(fileURLWithPath: "/tmp/isolated-client-test")
+            #expect(WorkspaceProcessLease.defaultFileURL(isolatedDirectory: isolated, role: frontend)
+                != WorkspaceProcessLease.defaultFileURL(isolatedDirectory: isolated, role: backend))
+        }
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let role = LocalExecutionRole.resolve(arguments: ["app", "--backend"], developmentMode: .live)

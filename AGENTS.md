@@ -13,12 +13,12 @@
   or "use a snapshot" means `--mode snapshot`. "Build the live database" or "host the
   production database directly" means `--mode live`: this Dev profile’s background server becomes the
   production library host and requires its exclusive execution lease.
-  If unspecified, choose client for UI, harness, tool, and instance-owned scheduling
-  changes; choose snapshot for library-host, persistence/schema, protocol, or
-  intentionally isolated tests. State the choice briefly and proceed without
-  asking the user to choose. `--plan` prints the resolved profile without building
-  or reading production data; `--mode auto` provides a conservative file-based
-  fallback between client and snapshot; never select live automatically. Explicit
+  If unspecified, choose snapshot: Dev must launch the actual standalone app,
+  with its normal workspace and sidebars, against isolated data. Client mode is
+  only for an explicit connected-client request; never use a separate client UI
+  as a substitute for a normal Dev build. State the choice briefly and proceed
+  without asking the user to choose. `--plan` prints the resolved profile without building
+  or reading production data; `--mode auto` selects snapshot; never select live automatically. Explicit
   user choice always wins. See [development builds](docs/DEVELOPMENT_BUILDS.md).
 - Only an explicitly requested live host may open production SQLite directly.
   Stop the existing production host, including background execution, before that

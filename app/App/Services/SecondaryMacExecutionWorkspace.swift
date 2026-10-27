@@ -37,7 +37,7 @@ final class SecondaryMacExecutionWorkspace: ExecutionWorkspaceTransport {
     private struct NoteCommand: Codable { let original: CompanionCommand; let localized: CompanionCommand }
     private var noteCommands: [String: NoteCommand] = [:]
 
-    static func create(directory: URL, replica: MobileStore, assets: WorkspaceAssetSession? = nil) async throws -> SecondaryMacExecutionWorkspace {
+    static func create(directory: URL, replica: MobileStore, assets: WorkspaceAssetSession? = nil, executionModel: ApplicationModel? = nil) async throws -> SecondaryMacExecutionWorkspace {
         let state = await replica.snapshot()
         guard let libraryID = state.workspaceID else {
             throw CompanionAPIError(code: "unpaired", message: "Connect this Mac to its central library before enabling its execution workspace.")
@@ -45,10 +45,10 @@ final class SecondaryMacExecutionWorkspace: ExecutionWorkspaceTransport {
         let defaults = UserDefaults(suiteName: "com.wovenmatter.client-execution." + state.deviceID)!
         defaults.set(false, forKey: LocalExecutionRole.libraryClientPreferenceKey)
         let store = try await DashboardStore(supportDirectory: directory)
-        let model = ApplicationModel(applicationDefaults: defaults, dashboardStore: store, startsAutomatically: false,
+        let model = executionModel ?? ApplicationModel(applicationDefaults: defaults, dashboardStore: store, startsAutomatically: false,
                                      ownsExecutionOverride: true, workspaceAssets: assets)
         guard let ownerDeviceID = UUID(uuidString: state.deviceID) else { throw MobileStore.Failure.incompatibleStore }
-        try await model.configureClientExecutionWorkspace(directory: directory, executionWorkspaceDeviceID: ownerDeviceID)
+        try await model.configureClientExecutionWorkspace(directory: directory, executionWorkspaceDeviceID: ownerDeviceID, store: store)
         let descriptor = CompanionExecutionWorkspace(id: state.deviceID, libraryID: libraryID, ownerDeviceID: state.deviceID,
             kind: .mac, name: DevelopmentLaunch.isClient ? DevelopmentLaunch.displayName : Host.current().localizedName ?? "This Mac",
             capabilities: ["execution.v1", "inference.v1", "execution.local"], executionDeviceID: state.deviceID, journalDeviceIDs: [state.deviceID])

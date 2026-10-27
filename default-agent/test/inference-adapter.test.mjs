@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { createInferenceAdapter } from '../src/inference-adapter.mjs';
 
 
@@ -114,7 +115,7 @@ test('generation-aware inference helper returns catalog without agent execution 
   const { readdir, readFile } = await import('node:fs/promises');
   const directory = await mkdtemp(join(tmpdir(), 'woven-inference-helper-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
-  const child = spawn(process.execPath, [new URL('../src/main.mjs', import.meta.url).pathname, '--inference'], {
+  const child = spawn(process.execPath, [fileURLToPath(new URL('../src/main.mjs', import.meta.url)), '--inference'], {
     cwd: directory, env: { ...process.env, WOVEN_DEFAULT_AGENT_DIRECTORY: directory, WOVEN_INFERENCE_DIRECTORY: directory },
     stdio: ['pipe', 'pipe', 'pipe'],
   });

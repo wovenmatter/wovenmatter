@@ -16,7 +16,21 @@ struct SettingsCompanionView: View {
 
     var body: some View {
         SettingsPage(title: "Apple Devices", reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
-            if model.isLibraryClient {
+            if DevelopmentLaunch.isClient {
+                SettingsCard(title: "Central database") {
+                    HStack(spacing: 12) {
+                        DeviceConnectionIcon(kind: .mac)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(model.backendReplica.endpoint?.host ?? "Live library")
+                            Text(model.backendReplica.status).font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
+                        }
+                    }
+                }
+                SettingsCard(title: "This Mac") {
+                    Text("This development instance keeps a local database synchronized with the live library. Its own background server runs its agents and scheduled work.")
+                        .font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground)
+                }
+            } else if model.isLibraryClient {
                 CentralLibraryPairingCard(client: client, application: model)
                 SettingsCard(title: "This Mac") {
                     HStack {
@@ -46,32 +60,35 @@ struct SettingsCompanionView: View {
                 if !host.pairedDevices.isEmpty { pairedDevices }
                 if !host.pendingDeviceRevocations.isEmpty { pendingRevocations }
             }
-            if !model.isLibraryClient || client.credential == nil {
-                DevicePairingDiscoveryCard(pairing: client.devicePairing, host: host, isCentral: !model.isLibraryClient, canPairWithCentral: model.isLibraryClient)
-            }
-            if !model.isLibraryClient { DevicePairingCodeCard(host: host) }
-            if !model.isLibraryClient, let message = host.errorMessage {
-                Text(message).font(.system(size: 12)).foregroundStyle(DashboardPalette.danger)
-                    .textSelection(.enabled).accessibilityIdentifier("companion.error")
-            }
-            if let error = client.deviceConnectionsError, !model.isLibraryClient {
-                Text(error).font(.system(size: 12)).foregroundStyle(DashboardPalette.danger)
-            }
-            if !model.companionRecoveredNoteDrafts.isEmpty { recoveredDrafts }
-            SettingsCard(title: "Database role", detail: model.isLibraryClient
-                ? "This Mac is a node. Pair it with a central database to share its data and workspaces."
-                : "This Mac hosts the central database. Paired devices use this database and its connected workspaces.") {
-                HStack {
-                    Text(model.isLibraryClient ? "Node" : "Central database").font(.system(size: 13, weight: .medium))
-                    Spacer()
-                    Button(model.isLibraryClient ? "Use as central database…" : "Change to node…") { confirmRoleChange = true }
-                        .buttonStyle(SettingsQuietButtonStyle()).disabled(switching)
+            if !DevelopmentLaunch.isClient {
+                if !model.isLibraryClient || client.credential == nil {
+                    DevicePairingDiscoveryCard(pairing: client.devicePairing, host: host, isCentral: !model.isLibraryClient, canPairWithCentral: model.isLibraryClient)
                 }
-                Text("Changing roles restarts Woven Matter. This Mac’s existing data stays on this Mac.")
-                    .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
+                if !model.isLibraryClient { DevicePairingCodeCard(host: host) }
+                if !model.isLibraryClient, let message = host.errorMessage {
+                    Text(message).font(.system(size: 12)).foregroundStyle(DashboardPalette.danger)
+                        .textSelection(.enabled).accessibilityIdentifier("companion.error")
+                }
+                if let error = client.deviceConnectionsError, !model.isLibraryClient {
+                    Text(error).font(.system(size: 12)).foregroundStyle(DashboardPalette.danger)
+                }
+                if !model.companionRecoveredNoteDrafts.isEmpty { recoveredDrafts }
+                SettingsCard(title: "Database role", detail: model.isLibraryClient
+                    ? "This Mac is a node. Pair it with a central database to share its data and workspaces."
+                    : "This Mac hosts the central database. Paired devices use this database and its connected workspaces.") {
+                    HStack {
+                        Text(model.isLibraryClient ? "Node" : "Central database").font(.system(size: 13, weight: .medium))
+                        Spacer()
+                        Button(model.isLibraryClient ? "Use as central database…" : "Change to node…") { confirmRoleChange = true }
+                            .buttonStyle(SettingsQuietButtonStyle()).disabled(switching)
+                    }
+                    Text("Changing roles restarts Woven Matter. This Mac’s existing data stays on this Mac.")
+                        .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
+                }
             }
         }
         .task {
+            guard !DevelopmentLaunch.isClient else { return }
             await client.initialize()
             if model.isLibraryClient { await client.devicePairing.restorePendingRequest() }
             while !Task.isCancelled {
@@ -79,7 +96,7 @@ struct SettingsCompanionView: View {
                 do { try await Task.sleep(for: .seconds(2)) } catch { return }
             }
         }
-        .onDisappear { client.devicePairing.stopPairingMode() }
+        .onDisappear { if !DevelopmentLaunch.isClient { client.devicePairing.stopPairingMode() } }
         .confirmationDialog(model.isLibraryClient ? "Use this Mac as a central database?" : "Change this Mac to a node?", isPresented: $confirmRoleChange) {
             Button("Change role and restart") {
                 switching = true

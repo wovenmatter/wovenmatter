@@ -159,10 +159,12 @@ final class WorkspaceProcessLease {
         applicationSupportDirectory: URL? = FileManager.default.urls(
             for: .applicationSupportDirectory,
             in: .userDomainMask
-        ).first
+        ).first,
+        isolatedDirectory: URL? = CompanionTestWorkspace.supportDirectory,
+        role: LocalExecutionRole = .current
     ) -> URL {
-        if let isolated = CompanionTestWorkspace.supportDirectory {
-            return isolated.appending(path: "workspace-owner.lock")
+        if let isolated = isolatedDirectory {
+            return isolated.appending(path: role.leaseFileName)
         }
         let supportDirectory = applicationSupportDirectory
             ?? FileManager.default.homeDirectoryForCurrentUser.appending(
@@ -170,7 +172,7 @@ final class WorkspaceProcessLease {
                 directoryHint: .isDirectory
             )
         return supportDirectory.appending(
-            path: WovenMatterWorkspacePaths.folderName + "/" + LocalExecutionRole.current.leaseFileName,
+            path: WovenMatterWorkspacePaths.folderName + "/" + role.leaseFileName,
             directoryHint: .notDirectory
         )
     }
@@ -396,7 +398,7 @@ struct WovenMatterApp: App {
         }
         // A leftover login job must not reopen an old central library after
         // this Mac has explicitly switched to a different library's client.
-        if !isRunningUnitTests, LocalExecutionRole.current == .backend,
+        if !isRunningUnitTests, LocalExecutionRole.current == .backend, DevelopmentLaunch.mode == nil,
            UserDefaults.standard.bool(forKey: LocalExecutionRole.libraryClientPreferenceKey) {
             Darwin.exit(EXIT_SUCCESS)
         }
@@ -407,7 +409,7 @@ struct WovenMatterApp: App {
         workspaceProcessLease = isRunningUnitTests
             ? nil
             : WorkspaceProcessLease.acquireOrExit()
-        if !isRunningUnitTests && (LocalExecutionRole.current == .backend || DevelopmentLaunch.isLiveHost) {
+        if !isRunningUnitTests && LocalExecutionRole.current == .backend {
             do {
                 try WovenMatterBackendProcess.removeStaleSocketAfterAcquiringLease(
                     LocalExecutionRole.backendSocketURL(workspaceDirectory:
@@ -543,10 +545,7 @@ struct WovenMatterApp: App {
 
         Settings {
             Group {
-                if DevelopmentLaunch.isClient, let execution = applicationModel.libraryClient.localExecution {
-                    SettingsView(model: execution.model)
-                }
-                else if applicationModel.isLibraryClient { CentralLibraryClientSettings(model: applicationModel.libraryClient, application: applicationModel) }
+                if applicationModel.isLibraryClient { CentralLibraryClientSettings(model: applicationModel.libraryClient, application: applicationModel) }
                 else { SettingsView(model: applicationModel) }
             }.scrollIndicators(.never)
         }

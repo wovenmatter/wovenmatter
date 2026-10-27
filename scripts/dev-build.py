@@ -8,25 +8,14 @@ from pathlib import Path
 import re
 import shutil
 import sqlite3
-import subprocess
 import tempfile
 import time
 import uuid
 
 
 def choose_mode(root):
-    """Conservative fallback; an agent's explicit choice always takes precedence."""
-    paths = set()
-    for args in (("diff", "--name-only", "origin/main...HEAD"),
-                 ("diff", "--name-only", "HEAD"), ("ls-files", "--others", "--exclude-standard")):
-        result = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, check=True)
-        paths.update(result.stdout.splitlines())
-    host = ("app/Sources/WovenMatterDashboardStore/WorkspaceDatabase+Schema", "app/Sources/WovenMatterDashboardStore/WorkspaceDatabaseConnection",
-            "app/Sources/WovenMatterDashboardStore/CompanionWorkspace", "app/Sources/WovenMatterDashboardStore/CompanionFederation",
-            "app/Sources/WovenMatterDashboardStore/CompanionAuthentication", "shared/", "ios/Sources/CompanionClient/",
-            "app/App/Services/CompanionHost", "app/App/Models/Backend", "scripts/dev-build.py")
-    # Hosting production is always an explicit choice, never an automatic fallback.
-    return "snapshot" if any(p.startswith(host) for p in paths) else "client"
+    """Default to the complete, independent app; clients are explicit opt-in."""
+    return "snapshot"
 
 
 def profile(root, instance, mode):
@@ -228,5 +217,5 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except (ValueError, OSError, TimeoutError, sqlite3.Error, subprocess.CalledProcessError) as error:
+    except (ValueError, OSError, TimeoutError, sqlite3.Error) as error:
         raise SystemExit(str(error))
