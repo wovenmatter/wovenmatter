@@ -11,13 +11,14 @@ import tempfile
 
 # Exercise the launcher with fake tools: no Keychain, signing key, or app access.
 root = Path(sys.argv[1])
-with tempfile.TemporaryDirectory(prefix="woven-dev-signing-") as temporary:
+with tempfile.TemporaryDirectory(prefix="woven-dev-signing-",
+                                 dir="/private/tmp" if Path("/private/tmp").exists() else None) as temporary:
     fixture = Path(temporary)
     binaries = fixture / "bin"
     binaries.mkdir()
     calls = fixture / "calls.jsonl"
     stub = '''#!/usr/bin/env python3
-import json, os, sys
+import json, os, re, sys
 from pathlib import Path
 name = Path(sys.argv[0]).name
 args = sys.argv[1:]
@@ -35,18 +36,20 @@ elif name == 'xcodebuild':
     executable.write_text('fixture')
     executable.chmod(0o755)
 elif name == 'pgrep':
-    sys.exit(1)
+    backend = os.environ.get('DEV_SIGNING_BACKEND_PATH', '')
+    sys.exit(0 if backend and re.search(args[1], backend + ' --backend') else 1)
 '''
     for name in ('security', 'xcodebuild', 'codesign', 'pkill', 'pgrep', 'lldb', 'swift'):
         path = binaries / name
         path.write_text(stub)
         path.chmod(0o755)
 
-    def run(cache, count, identity=None, fail=False):
+    def run(cache, count, identity=None, fail=False, backend=""):
         calls.write_text('')
         env = dict(os.environ, PATH=str(binaries) + os.pathsep + os.environ['PATH'],
                    WOVENMATTER_DEV_CACHE_DIR=str(cache), DEV_SIGNING_CALLS=str(calls),
-                   DEV_SIGNING_IDENTITIES=str(count), DEV_SIGNING_BUILD_FAIL='1' if fail else '0')
+                   DEV_SIGNING_IDENTITIES=str(count), DEV_SIGNING_BUILD_FAIL='1' if fail else '0',
+                   DEV_SIGNING_BACKEND_PATH=backend)
         env.pop('WOVENMATTER_DEV_SIGNING_IDENTITY', None)
         env.pop('WOVENMATTER_DEV_VARIANT', None)
         if identity is not None:
@@ -82,5 +85,12 @@ elif name == 'pgrep':
     assert result.returncode == 0 and 'ad-hoc' in result.stderr
     assert 'CODE_SIGNING_ALLOWED=NO' in next(args for name, args in recorded if name == 'xcodebuild')
     assert not any(name == 'codesign' for name, _ in recorded)
+    # A running backend may report the logical /tmp path while the build cache
+    # uses /private/tmp. Neither spelling may be overwritten by a rebuild.
+    executable = cache / 'signing-test/client/DerivedData/Build/Products/Debug/Woven Matter signing-test client Dev.app/Contents/MacOS/Woven Matter signing-test client Dev'
+    for path in (str(executable.resolve()), str(executable.resolve()).replace('/private/tmp/', '/tmp/', 1)):
+        result, recorded = run(cache, 1, backend=path)
+        assert result.returncode == 75, result.stderr
+        assert not any(name in ('xcodebuild', 'swift') for name, _ in recorded)
 print('Dev signing identity selection and rebuild persistence passed.')
 PY

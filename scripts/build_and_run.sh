@@ -9,6 +9,7 @@ plan_only=false
 while [ "$#" -gt 0 ]; do
   case "$1" in
     run|debug|logs|verify) mode="$1"; shift ;;
+    --debug|--logs|--verify) mode="${1#--}"; shift ;;
     --mode|--instance|--source)
       [ "$#" -ge 2 ] || { printf 'Missing value for %s\n' "$1" >&2; exit 64; }
       case "$1" in --mode) data_mode="$2" ;; --instance) instance="$2" ;; --source) source_directory="$2" ;; esac
@@ -66,7 +67,16 @@ fi
 # Replacing the executable of an active execution owner can interrupt sessions.
 # Its lifetime is independent of the UI; stop it from Background Server settings
 # before rebuilding so active work uses the normal cancellation path.
-if pgrep -f "^${executable} --backend$" >/dev/null 2>&1; then
+backend_pattern="$(python3 - "$executable" <<'PYTHON'
+import os, re, sys
+path = os.path.realpath(sys.argv[1])
+paths = [path]
+if path.startswith('/private/tmp/'):
+    paths.append(path[len('/private'):])
+print('^(' + '|'.join(re.escape(p) for p in paths) + ') --backend$')
+PYTHON
+)"
+if pgrep -f "$backend_pattern" >/dev/null 2>&1; then
   printf '%s\n' 'Stop the server in this Dev app’s Background Server settings before rebuilding.' >&2
   exit 75
 fi
@@ -122,6 +132,12 @@ fi
 
 launch_app() {
   /usr/bin/open -n "$app"
+  if ! swift "$repo_root/scripts/stop-development.swift" "$executable" --wait; then
+    printf 'Dev launch failed: %s\n' "$app" >&2
+    printf 'Inspect startup errors with: /usr/bin/log show --last 2m --predicate %q\n' "process == \"$product_name\"" >&2
+    return 1
+  fi
+  printf 'Dev app is running: %s\n' "$app"
 }
 
 case "$mode" in
@@ -133,8 +149,6 @@ case "$mode" in
     ;;
   verify)
     launch_app
-    sleep 1
-    swift "$repo_root/scripts/stop-development.swift" "$executable" --check
-    stop_dev_app
+    # Leave the verified app open for interactive testing.
     ;;
 esac

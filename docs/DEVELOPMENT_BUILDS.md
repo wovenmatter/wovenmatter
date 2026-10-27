@@ -8,15 +8,20 @@ independent data and process leases.
 An explicit live host uses production's data and exclusive execution lease.
 
 ```sh
-scripts/build_and_run.sh --mode client
+scripts/build_and_run.sh
 scripts/build_and_run.sh --mode snapshot
+scripts/build_and_run.sh --mode client
 scripts/build_and_run.sh --mode live
-scripts/build_and_run.sh --mode client --instance chat-ui
+scripts/build_and_run.sh --mode snapshot --instance chat-ui
 scripts/build_and_run.sh --mode snapshot --instance migration-check
 scripts/build_and_run.sh --plan
 ```
 
-`run` is implicit; `debug`, `logs`, and `verify` retain their existing meanings.
+`run` is implicit. `debug` opens LLDB; `logs` opens the app and streams its logs.
+`verify` launches and checks the exact executable, leaving it open for inspection.
+The `--debug`, `--logs`, and `--verify` aliases are also accepted. Every normal
+launch waits for the expected app to stay running; this verifies process startup,
+not library connectivity or provider readiness.
 The launcher requests a normal quit from only the exact app being rebuilt, before
 replacing its executable. Active work or unsaved writing may refuse the quit;
 finish that work before rebuilding. It never force-kills another Dev app or the
@@ -31,20 +36,15 @@ Agents understand ordinary wording: "build this as a client" means `--mode clien
 "Build the live database" or "host the production database directly" means `--mode live`.
 "Live client" or "use live data" still means client; the named `live` mode means the actual host.
 
-Honor the user's explicit choice. Otherwise, agents should choose **client** for
-desktop UI, harness adapters, tools, and scheduling assigned to the Dev execution
-workspace. Choose **snapshot** for central-library migrations, persistence,
-server/API changes, or testing that should not change shared content. State the
-choice and reason briefly; do not stop to ask the user to choose. **Live** is only
-for an explicit request to run the branch as the production database's host.
+Normal development builds use **snapshot** mode: the actual desktop app,
+including its workspace, sidebars, settings, and execution engine, backed by an
+isolated copy of the library. They do not depend on production being reachable.
+Use **client** only when explicitly testing a connected library client. Use
+**live** only when explicitly asked to host the production database.
 
-When no choice is passed, `auto` inspects committed and uncommitted changes against
-`origin/main`, including untracked files. Known library-host and protocol paths
-choose snapshot; other changes choose client. Auto never selects live.
-This is a conservative fallback,
-not semantic analysis. Agents should pass their chosen mode explicitly when a
-change's intent is clearer than its file paths. `WOVENMATTER_DEV_MODE` and
-`WOVENMATTER_DEV_INSTANCE` are equivalent environment defaults. The old
+With no mode supplied, `auto` selects snapshot. It never changes an explicit
+client request into a snapshot after a connection failure. `WOVENMATTER_DEV_MODE`
+and `WOVENMATTER_DEV_INSTANCE` are equivalent environment defaults. The old
 `WOVENMATTER_DEV_VARIANT` remains an instance-name alias.
 
 ## Client mode
