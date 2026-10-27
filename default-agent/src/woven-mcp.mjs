@@ -65,7 +65,7 @@ export class WovenMCPClient {
     try {
       return await client.callTool(params, { signal, timeout: 24 * 60 * 60 * 1000, maxTotalTimeout: 24 * 60 * 60 * 1000 });
     } catch (error) {
-      if (signal?.aborted && ['woven_browser', 'woven_computer', 'woven_html_preview'].includes(name)) {
+      if (signal?.aborted && ['woven_browser_use', 'woven_computer_use', 'woven_html_preview'].includes(name)) {
         // Cancellation is scoped to the already accepted operation and uses
         // the exact input authority captured before the original network call.
         await client.callTool({ name: name === 'woven_html_preview' ? 'woven_html_cancel' : `${name}_cancel`, arguments: { id: requestID },

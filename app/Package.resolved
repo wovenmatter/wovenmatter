@@ -1,66 +1,12 @@
 {
-  "originHash" : "f314d952830947287932461e6b7c0c00f760c4b72ef8144ba7818bb0ccf7e039",
+  "originHash" : "1145aa66352c7a2bde122a227469ea6e5eb8b655da80c5913cbf0687c66bcd01",
   "pins" : [
-    {
-      "identity" : "axorcist",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/openclaw/AXorcist.git",
-      "state" : {
-        "revision" : "6322e77a934e42f95ec912a32bdc9af014b5524e",
-        "version" : "0.2.2"
-      }
-    },
-    {
-      "identity" : "commander",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/steipete/Commander.git",
-      "state" : {
-        "revision" : "3f5a3cb1f19ce7ca79fdc2111a09dfb3da200c1c",
-        "version" : "0.3.0"
-      }
-    },
-    {
-      "identity" : "peekaboo",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/openclaw/Peekaboo.git",
-      "state" : {
-        "revision" : "5639e70501010ca9dcae5f594a0b57dd69e9b395",
-        "version" : "4.9.7"
-      }
-    },
     {
       "identity" : "sparkle",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/sparkle-project/Sparkle",
       "state" : {
         "revision" : "ab7d71291238df6e0492143b120c9b696a35f603"
-      }
-    },
-    {
-      "identity" : "swift-algorithms",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/apple/swift-algorithms",
-      "state" : {
-        "revision" : "87e50f483c54e6efd60e885f7f5aa946cee68023",
-        "version" : "1.2.1"
-      }
-    },
-    {
-      "identity" : "swift-log",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/apple/swift-log.git",
-      "state" : {
-        "revision" : "c9c6bb9d275ec0d95c3ad16391f3f045dc623104",
-        "version" : "1.16.2"
-      }
-    },
-    {
-      "identity" : "swift-numerics",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/apple/swift-numerics.git",
-      "state" : {
-        "revision" : "0c0290ff6b24942dadb83a929ffaaa1481df04a2",
-        "version" : "1.1.1"
       }
     }
   ],

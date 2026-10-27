@@ -119,7 +119,7 @@ export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localT
     const current=activeGroups(scope),hasLibrary=!!libraryGrant()
     return inventory(scope).filter(tool=>{
       const group=groupFor(tool.name)
-      const cleanup=['woven_browser_cancel','woven_computer_cancel','woven_html_cancel'].includes(tool.name)
+      const cleanup=['woven_browser_use_cancel','woven_computer_use_cancel','woven_html_cancel'].includes(tool.name)
       const scopedHistory=!scope.taskProof&&group==='history'&&scopedHistoryAccess(scope)
       const localTask=tool.name.startsWith('woven_databases_')||tool.name==='woven_context'||group==='browser'&&local.has(tool.name)
       const transport=scope.taskProof?(localTask||hasLibrary):(local.has(tool.name)||hasLibrary)

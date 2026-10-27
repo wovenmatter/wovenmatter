@@ -370,9 +370,9 @@ final class ExecutionRoutingTests: XCTestCase {
       } catch { XCTAssertTrue(error.localizedDescription.contains("disabled")) }
     }
     XCTAssertTrue(CompanionModel.deviceToolEnabled("woven_notes_read", selection: ["wovenmatter_notes"]))
-    XCTAssertTrue(CompanionModel.deviceToolEnabled("woven_browser", selection: nil))
-    XCTAssertFalse(CompanionModel.deviceToolEnabled("woven_computer", selection: nil))
-    XCTAssertTrue(CompanionModel.deviceToolEnabled("woven_computer", selection: ["wovenmatter_computer"]))
+    XCTAssertTrue(CompanionModel.deviceToolEnabled("woven_browser_use", selection: nil))
+    XCTAssertFalse(CompanionModel.deviceToolEnabled("woven_computer_use", selection: nil))
+    XCTAssertTrue(CompanionModel.deviceToolEnabled("woven_computer_use", selection: ["wovenmatter_computer"]))
     XCTAssertTrue(CompanionModel.deviceToolEnabled("woven_notes_read", selection: ["read_note"]))
     XCTAssertFalse(CompanionModel.deviceToolEnabled("woven_notes_create", selection: ["read_note"]))
     XCTAssertEqual(Set(CompanionModel.deviceToolAccessOptions.map(\.id)), Set(WorkspaceToolGroup.configurableCases.map { "woven_" + $0.rawValue }))

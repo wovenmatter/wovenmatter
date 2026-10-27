@@ -69,13 +69,13 @@ async function fixture(t, handler) {
 test('MCP discovers focused tools and preserves images, structured results, errors and per-input capture', async t => {
   const definitions = [
     { name: 'woven_notes_read', description: 'Read a note.', inputSchema: { type: 'object', properties: { noteID: { type: 'string' }, requestID: { type: 'string' } }, required: ['noteID'] }, annotations: { readOnlyHint: true } },
-    { name: 'woven_browser', inputSchema: { type: 'object' } },
+    { name: 'woven_browser_use', inputSchema: { type: 'object' } },
   ];
   const { bound, packets, authorizations } = await fixture(t, packet => packet.method === 'tools/list'
     ? { tools: definitions } : { content: [{ type: 'image', mimeType: 'image/png', data: 'ZmFrZQ==' }], structuredContent: { requestID: packet.params.arguments.requestID, value: 42 }, isError: packet.params.arguments.action === 'fail' });
   const client = new WovenMCPClient(); t.after(() => client.close());
   const tools = wovenMCPTools(await client.listTools(bound), client, () => ({ ...bound, captureID: 'native-first' }));
-  assert.deepEqual(tools.map(tool => tool.name), ['woven_notes_read', 'woven_browser']);
+  assert.deepEqual(tools.map(tool => tool.name), ['woven_notes_read', 'woven_browser_use']);
   assert.equal(tools[0].replay, 'safe'); assert.equal(tools[1].replay, 'unsafe');
   const result = await tools[0].execute('native-tool-id', { noteID: 'note' });
   assert.deepEqual(result.content, [{ type: 'image', mimeType: 'image/png', data: 'ZmFrZQ==' }]);
@@ -88,21 +88,21 @@ test('MCP discovers focused tools and preserves images, structured results, erro
 
 test('MCP cancellation aborts the active request and cancels only its own automation operation', { timeout: 10000 }, async t => {
   const { bound, packets } = await fixture(t, (packet, response) => {
-    if (packet.method === 'tools/call' && packet.params.name === 'woven_computer') {
+    if (packet.method === 'tools/call' && packet.params.name === 'woven_computer_use') {
       response.writeHead(200, { 'content-type': 'text/event-stream' }); response.write(': waiting\n\n'); return;
     }
     return { content: [] };
   });
   const client = new WovenMCPClient(); t.after(() => client.close());
   const controller = new AbortController();
-  const pending = client.callTool({ ...bound, captureID: 'native-input' }, 'woven_computer', { action: 'type', text: 'fixture' }, controller.signal);
+  const pending = client.callTool({ ...bound, captureID: 'native-input' }, 'woven_computer_use', { action: 'type', text: 'fixture' }, controller.signal);
   const outcome = pending.then(() => null, error => error);
   const deadline = Date.now() + 5000;
   while (!packets.some(packet => packet.method === 'tools/call')) { assert.ok(Date.now() < deadline); await delay(10); }
   controller.abort(); assert.ok(await outcome);
-  const original = packets.find(packet => packet.method === 'tools/call' && packet.params.name === 'woven_computer');
-  const cancellation = packets.find(packet => packet.method === 'tools/call' && packet.params.name === 'woven_computer_cancel');
+  const original = packets.find(packet => packet.method === 'tools/call' && packet.params.name === 'woven_computer_use');
+  const cancellation = packets.find(packet => packet.method === 'tools/call' && packet.params.name === 'woven_computer_use_cancel');
   assert.equal(cancellation.params.arguments.id, original.params.arguments.requestID);
   assert.equal(cancellation.params._meta.wovenContextID, 'native-input');
-  assert.equal(packets.filter(packet => packet.params?.name === 'woven_computer').length, 1);
+  assert.equal(packets.filter(packet => packet.params?.name === 'woven_computer_use').length, 1);
 });

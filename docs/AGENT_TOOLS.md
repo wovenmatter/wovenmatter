@@ -96,8 +96,8 @@ The composer has a Tools menu with independent groups:
 | Usage data | `woven_usage_read`: recorded analytics and cached limits; no credential access or mutation |
 | Calendar | `woven_calendar_*`: events and scheduled tasks, subject to the configured access mode |
 | Library | `woven_library_list`, `woven_library_read`: exchanged-item metadata, original links and retention/source references |
-| Browser Use | `woven_browser`: control the execution owner's shared Chromium browser, including inline screenshots |
-| Computer Use | `woven_computer`: control that Mac's desktop through embedded Peekaboo; off by default |
+| Browser Use | `woven_browser_use`: control the execution owner's shared Chromium browser, including inline screenshots |
+| Computer Use | `woven_computer_use`: control that Mac's desktop through bundled Cua; off by default |
 | Executor | `woven_executor_*`: scoped connected-app search and execution; off by default |
 
 Browser Use initially defaults to enabled, including existing chats. Computer Use
@@ -123,7 +123,7 @@ for the complete contract and differences from upstream.
 
 ## Browser and computer automation
 
-`woven_browser` and `woven_computer` accept structured action fields directly.
+`woven_browser_use` and `woven_computer_use` accept structured action fields directly.
 Their MCP results contain native text and image blocks, so supported harnesses
 receive screenshots inline without saving a file through a shell command.
 
@@ -158,18 +158,49 @@ are removed with their tab. Ordinary
 user downloads retain the save dialog. Dialog handling uses `accept` on the
 triggering action or a separate `dialog` action.
 
-Computer Use grants broad Mac desktop access. The user must enable it in Tools
-and grant macOS Screen Recording and Accessibility; an agent cannot grant those
-permissions. `status` reports availability. Capture `screenshot`, then supply the
-returned `frameId` to `click`, `type`, `press`, or `scroll`. Coordinates are image
-pixels. Frames belong to the caller, expire after 30 seconds, and allow one input
-action. Capture again to inspect the effect. `press` uses comma-separated macOS
-keys such as `cmd,shift,t`; scrolling takes `direction` and an integer `amount`
-from 1 to 50.
+Computer Use remains off by default. The user must enable it in Tools and grant
+Woven Matter macOS Screen Recording and Accessibility; agents cannot grant them.
+`woven_computer_use` uses only the app-bundled Cua Driver. `status` checks the
+macOS grants without starting a helper. No installer, cloud account, separate Cua
+app, or globally configured MCP server is needed.
+
+Start with `apps`, then `windows` with a `pid`. `snapshot` takes `pid` and
+`windowID`, returning that window's accessibility tree, element tokens and inline
+image. Window input defaults to `deliveryMode: background`, preserving the
+user's frontmost application and real pointer where the application supports it.
+Use an `elementToken` from the latest snapshot; pixel clicks instead require
+`x`, `y` and `captureID` from that snapshot's `capture_id`. Coordinates belong to
+the returned window image. Cua refuses stale captures and tokens. Snapshot again
+after input (`since: latest` gives a compact diff; `includeScreenshot: false`
+returns only the tree). An accepted input is not proof of a completed task.
+
+```json
+{"action":"snapshot","pid":123,"windowID":456}
+{"action":"click","pid":123,"windowID":456,"elementToken":"s00000001:7"}
+{"action":"type","pid":123,"windowID":456,"elementToken":"s00000002:8","text":"Example"}
+```
+
+`press` takes a key such as `Return` or a shortcut such as `cmd+a`; `scroll`
+takes `x`, `y`, `direction` and integer `amount` from 1 to 50. `drag` takes
+`x`, `y`, `toX`, `toY`; `move` moves the agent cursor over the named window.
+`launch` takes an installed app bundle ID in `app`. Type requests accept at most
+4096 UTF-8 bytes; split longer text and verify it. Foreground delivery must be
+explicit, used only after background input did not land, and verified before a
+retry. `screenshot` captures the primary desktop; desktop input additionally
+requires `scope: desktop` and `deliveryMode: foreground`. Other displays remain
+accessible through exact window snapshots; full-display input supports the primary
+display only. Cua reports unsupported application routes explicitly.
+
+Every conversation gets a separate private Cua MCP lifecycle session. Caller
+identity and endpoints are never model arguments. Stop/revocation retires its
+connection, while GUI shutdown also stops the embedded driver. The driver's
+state is ephemeral; recording, history, product telemetry, and self-updates are
+not exposed. It retains no independent user configuration. Existing Woven
+request admission and cancellation prevent silent replay after interruptions.
 
 The visible Mac app owns its embedded browser and desktop automation; the Linux
 workspace service owns its shared Chromium browser. Cancellation uses the
-matching `woven_browser_cancel` or `woven_computer_cancel` operation identity.
+matching `woven_browser_use_cancel` or `woven_computer_use_cancel` operation identity.
 Cleanup remains scoped to the caller even after the tool is disabled. Interrupted
 actions are never automatically replayed. Persistent activity metadata omits page
 content, screenshots, and typed text; model results follow the chat's existing

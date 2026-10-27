@@ -6,6 +6,14 @@ public enum WorkspaceToolGroup: String, CaseIterable, Codable, Identifiable, Sen
   public static var configurableCases: [Self] { allCases.filter { $0 != .goals && $0 != .html } }
   public var id: String { rawValue }
   public var isAutomation: Bool { self == .browser || self == .computer || self == .html }
+  public var automationCancelToolName: String? {
+    switch self {
+    case .browser: "woven_browser_use_cancel"
+    case .computer: "woven_computer_use_cancel"
+    case .html: "woven_html_cancel"
+    default: nil
+    }
+  }
   public var title: String {
     switch self {
     case .notes: "Notes"
