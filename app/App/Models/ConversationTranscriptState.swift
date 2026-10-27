@@ -6,6 +6,11 @@ struct ConversationWorkScrollSnapshot {
     var isAtBottom = false
 }
 
+struct ConversationReasoningPageSnapshot {
+    let displayedEnd: Int
+    let browsingHistory: Bool
+}
+
 /// Disclosure state for one conversation's work transcript and Tasks badge.
 ///
 /// The root owns one instance per conversation and injects it with
@@ -19,6 +24,7 @@ final class ConversationTranscriptState {
     private(set) var expandedItems: Set<String> = []
     // Restoration data is consumed on appearance, not during rendering.
     @ObservationIgnored private var workScrollSnapshots: [String: ConversationWorkScrollSnapshot] = [:]
+    @ObservationIgnored private var reasoningPages: [String: ConversationReasoningPageSnapshot] = [:]
     var tasksExpanded = false
 
     init() {}
@@ -41,6 +47,12 @@ final class ConversationTranscriptState {
 
     func setWorkScrollSnapshot(_ key: String, _ snapshot: ConversationWorkScrollSnapshot) {
         workScrollSnapshots[key] = .init(offset: max(0, snapshot.offset), isAtBottom: snapshot.isAtBottom)
+    }
+
+    func reasoningPageSnapshot(_ key: String) -> ConversationReasoningPageSnapshot? { reasoningPages[key] }
+
+    func setReasoningPageSnapshot(_ key: String, _ snapshot: ConversationReasoningPageSnapshot) {
+        reasoningPages[key] = snapshot
     }
 
     static func disclosureKey(runID: String, itemID: String) -> String {

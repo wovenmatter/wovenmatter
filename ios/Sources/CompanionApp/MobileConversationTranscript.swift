@@ -32,12 +32,13 @@ struct MobileConversationTranscript: View {
           }
         }
       case .turn(let turn):
+        let hasResponse = !turn.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         VStack(alignment: .leading, spacing: 18) {
           ConversationWorkTranscript(run: turn.run, presentation: turn.presentation,
             records: turn.records, commentaryIDs: turn.commentaryIDs,
-            hasFollowingResponse: !turn.content.isEmpty,
+            hasFollowingResponse: hasResponse,
             timeline: turn.timeline)
-          if !turn.content.isEmpty {
+          if hasResponse {
             ConversationResponse(content: turn.content, isStreaming: turn.isStreaming)
               .padding(.horizontal, 4).padding(.vertical, 2)
           }

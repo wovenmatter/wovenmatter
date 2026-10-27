@@ -76,12 +76,13 @@ should appear at their event position.
 There should be no tool/reasoning spinner, duplicated answer or successful-looking
 failed/cancelled call.
 
-While expanded work overflows, scroll above the bottom and let more content
-arrive: your position should hold. Return to the bottom: new content should
-follow. Collapse/reopen the group and check its reading position. For a naturally
-long trace, try Earlier/Later/Latest reasoning and verify that new live text keeps
-arriving at the latest page. Long-trace storage and Unicode boundaries also have
-automated stress coverage; do not request hidden reasoning to force this case.
+Live tools should follow only at the conversation's bottom. An expanded older
+tool group should preserve its reading position through updates and reopening.
+For a naturally long trace, try Earlier/Later/Latest reasoning. An earlier page
+must stay fixed while new text arrives; leave the chat and return to verify the
+same page and scroll position. Latest reasoning should resume following from
+its live edge. Long-trace storage and Unicode boundaries also have automated
+stress coverage; do not request hidden reasoning to force this case.
 
 ## 3. Stop, partial output and the next turn
 

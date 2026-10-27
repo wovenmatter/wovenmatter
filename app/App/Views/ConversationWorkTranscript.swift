@@ -405,6 +405,7 @@ private struct ConversationBoundedWorkList: View {
     @State private var growthStartedAtBottom = false
     @State private var isUserScrolling = false
     @State private var followTask: Task<Void, Never>?
+    @State private var restoringScroll = true
 
     var body: some View {
         ScrollViewReader { _ in
@@ -420,7 +421,7 @@ private struct ConversationBoundedWorkList: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .environment(\.conversationReasoningAtLiveEdge,
-                    !isUserScrolling && (scrollState.isAtBottom || growthStartedAtBottom))
+                    !restoringScroll && !isUserScrolling && (scrollState.isAtBottom || growthStartedAtBottom))
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
             }
         .scrollIndicators(.never)
@@ -432,6 +433,22 @@ private struct ConversationBoundedWorkList: View {
                   viewportHeight: geometry.containerSize.height)
         } action: { before, after in
             let ids = group.activities.map(\.id)
+            if restoringScroll {
+                scrollOffset = after.offset
+                scrollState.setAtBottom(after.isAtBottom)
+                laidOutActivityIDs = ids
+                // A compact preview may be at its bottom before the saved
+                // reasoning page has loaded. Wait for its original position.
+                guard after.contentHeight - after.viewportHeight + 4 >= initialScrollSnapshot.offset else { return }
+                if followsAppends && initialScrollSnapshot.isAtBottom {
+                    if after.isAtBottom { restoringScroll = false }
+                    else { followAfterLayout() }
+                } else if after.contentHeight - after.viewportHeight >= initialScrollSnapshot.offset {
+                    scrollPosition.scrollTo(y: initialScrollSnapshot.offset)
+                    restoringScroll = false
+                }
+                return
+            }
             if followsAppends, !isUserScrolling, let prior = laidOutActivityIDs,
                scrollState.shouldFollowAppend(from: prior, to: ids, wasAtBottom: before.isAtBottom) {
                 followAfterLayout()
@@ -444,7 +461,7 @@ private struct ConversationBoundedWorkList: View {
         .onPreferenceChange(ConversationReasoningTextKey.self) { after in
             let before = reasoningText
             reasoningText = after
-            if followsAppends && !isUserScrolling && group.isThoughtOnly && before.keys.sorted() == after.keys.sorted(),
+            if followsAppends && !restoringScroll && !isUserScrolling && group.isThoughtOnly && before.keys.sorted() == after.keys.sorted(),
                after.allSatisfy({ key, value in value.utf16.starts(with: (before[key] ?? "").utf16) }),
                after.contains(where: { key, value in
                 scrollState.shouldFollowTextAppend(from: before[key] ?? "", to: value,
@@ -458,10 +475,13 @@ private struct ConversationBoundedWorkList: View {
                 followAfterLayout()
             } else if initialScrollSnapshot.offset > 0 {
                 scrollPosition.scrollTo(y: initialScrollSnapshot.offset)
+            } else {
+                restoringScroll = false
             }
         }
         .onScrollPhaseChange { _, phase in
             isUserScrolling = phase == .tracking || phase == .interacting || phase == .decelerating
+            if isUserScrolling { restoringScroll = false }
         }
         .onDisappear {
             followTask?.cancel()
@@ -749,8 +769,9 @@ private struct ConversationActivityDetails: View {
             if activity.kind != .activity, let content = content?.nonempty, content != summary {
                 if activity.kind == .thought {
                     ConversationReasoningText(
-                        activityID: activity.id,
-                        text: content, isLive: isLive)
+                        activityID: activity.id, runID: runID,
+                        text: content, isLive: isLive,
+                        hasCompleteText: activity.detailsAvailable != true || complete != nil)
                 } else {
                     ConversationPagedText(text: content, style: .code)
                 }
@@ -783,7 +804,9 @@ private struct ConversationActivityDetails: View {
         }
         .padding(.top, 7)
         .padding(.leading, indentation)
-        .onScrollVisibilityChange(threshold: 0.01) { visible in
+        // A bounded viewport may expose less than one percent of a long
+        // reasoning page. Any visible portion must keep its detail load alive.
+        .onScrollVisibilityChange(threshold: 0) { visible in
             isVisible = visible
             if !visible { loaded = nil }
         }
@@ -879,12 +902,25 @@ private struct ConversationActivityDetails: View {
 private struct ConversationReasoningText: View {
     private static let pageLength = 20_000
     let activityID: String
+    let runID: String
     let text: String
     let isLive: Bool
+    let hasCompleteText: Bool
     @Environment(\.conversationReasoningAtLiveEdge) private var isAtLiveEdge
     @Environment(\.conversationTranscriptInteraction) private var transcriptInteraction
+    @Environment(\.conversationTranscriptState) private var transcriptState
     @State private var displayedEnd: Int?
     @State private var browsingHistory = false
+    @State private var awaitingRestoredText = false
+
+    private struct ContentState: Equatable {
+        let text: String
+        let isComplete: Bool
+    }
+
+    private var pageKey: String {
+        ConversationTranscriptState.disclosureKey(runID: runID, itemID: "reasoning:" + activityID)
+    }
 
     private var committedText: String {
         // Find stream boundaries and redact whole envelopes before slicing a
@@ -896,8 +932,9 @@ private struct ConversationReasoningText: View {
     var body: some View {
         let stream = committedText
         let count = stream.count
+        let saved = displayedEnd == nil ? transcriptState?.reasoningPageSnapshot(pageKey) : nil
         let endOffset = count <= Self.pageLength ? count
-            : min(displayedEnd ?? (isLive ? count : Self.pageLength), count)
+            : min(displayedEnd ?? saved?.displayedEnd ?? (isLive ? count : Self.pageLength), count)
         let page = ConversationReasoningPage(text: stream, endOffset: endOffset, maximumCharacters: Self.pageLength)
         let startOffset = page.startOffset
         let shown = page.markdown
@@ -931,21 +968,48 @@ private struct ConversationReasoningText: View {
                 ConversationResponse(content: shown, isStreaming: isLive, showsCopyButton: false)
             }
         }
-        .onAppear { if displayedEnd == nil { displayedEnd = endOffset } }
-        .onChange(of: stream) { before, after in
-            if !browsingHistory, isAtLiveEdge, after.utf16.starts(with: before.utf16) {
-                displayedEnd = after.count
-            } else if before.count <= Self.pageLength {
+        .onAppear {
+            if displayedEnd == nil {
+                displayedEnd = saved?.displayedEnd ?? endOffset
+                browsingHistory = saved?.browsingHistory ?? false
+                awaitingRestoredText = saved != nil && !hasCompleteText
+            }
+        }
+        .onDisappear {
+            transcriptState?.setReasoningPageSnapshot(pageKey,
+                .init(displayedEnd: displayedEnd ?? endOffset, browsingHistory: browsingHistory))
+        }
+        .onChange(of: ContentState(text: stream, isComplete: hasCompleteText)) { before, after in
+            guard after.isComplete else {
+                if before.isComplete { awaitingRestoredText = true }
+                return
+            }
+            if awaitingRestoredText {
+                displayedEnd = min(displayedEnd ?? after.text.count, after.text.count)
+                awaitingRestoredText = false
+                return
+            }
+            if !before.isComplete {
+                // The compact preview's end is not a chosen page boundary.
+                // Open the first complete trace at its normal live/settled page.
+                displayedEnd = isLive ? after.text.count : min(after.text.count, Self.pageLength)
+                return
+            }
+            if !browsingHistory, isAtLiveEdge, after.text.utf16.starts(with: before.text.utf16) {
+                displayedEnd = after.text.count
+            } else if before.text.count <= Self.pageLength {
                 // Below the limit the full trace was rendered, even while
                 // reading above the edge. Preserve that actual page when a
                 // new append first requires paging.
-                displayedEnd = min(before.count, after.count)
-            } else if let displayedEnd, displayedEnd > after.count {
-                self.displayedEnd = after.count
+                displayedEnd = min(before.text.count, after.text.count)
+            } else if let displayedEnd, displayedEnd > after.text.count {
+                self.displayedEnd = after.text.count
             }
         }
         .onChange(of: isAtLiveEdge) { _, atEdge in
-            if atEdge, isLive, !browsingHistory { displayedEnd = committedText.count }
+            if atEdge, isLive, !browsingHistory, hasCompleteText, !awaitingRestoredText {
+                displayedEnd = committedText.count
+            }
         }
         // Follow the supplied stream, not the current 20k rendering window:
         // its prefix necessarily changes when a long live trace advances.
