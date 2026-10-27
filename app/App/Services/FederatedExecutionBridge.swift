@@ -21,6 +21,18 @@ struct FederatedExecutionSnapshot: Codable, Sendable {
 }
 
 extension ApplicationModel {
+    func sharedLibraryFileURL(id: String) async throws -> URL {
+        if let client = liveLibraryClient { return try await client.exportFile(.libraryFile(id: id)) }
+        if DevelopmentLaunch.isClient, isBackendFrontend {
+            let bytes = try await callBackend(method: "library.command", payload: JSONEncoder().encode(BackendLibraryCommand.openShared(id: id)))
+            guard let url = try JSONDecoder().decode(BackendLibraryResult.self, from: bytes).url else {
+                throw WorkspaceToolError.invalid("The shared file is unavailable.")
+            }
+            return url
+        }
+        return try await library.fileURL(id: id)
+    }
+
     func centralExecutionClient() throws -> CentralExecutionClient {
         guard !DevelopmentLaunch.isSnapshot else {
             throw WorkspaceToolError.invalid("Snapshot history is disconnected. Start a new session to test execution.")

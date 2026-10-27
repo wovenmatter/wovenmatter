@@ -72,7 +72,19 @@ final class ApplicationModel {
 
     private(set) var state: State = .starting
     let isLibraryClient: Bool
-    @ObservationIgnored lazy var libraryClient = CentralLibraryClientModel(assets: workspaceAssets)
+    @ObservationIgnored lazy var libraryClient = makeLibraryClient()
+    private func makeLibraryClient() -> CentralLibraryClientModel {
+        guard DevelopmentLaunch.isClient, LocalExecutionRole.current == .backend else {
+            return CentralLibraryClientModel(assets: workspaceAssets)
+        }
+        return CentralLibraryClientModel(assets: workspaceAssets, makeLocalExecution: { [weak self] directory, replica in
+            guard let self else { throw CancellationError() }
+            return try await SecondaryMacExecutionWorkspace.create(directory: directory, replica: replica,
+                assets: self.workspaceAssets, executionModel: self)
+        })
+    }
+    @ObservationIgnored private var developmentReplicaTask: Task<Void, Never>?
+    private(set) var backendReplica = DevelopmentReplicaSnapshot()
     @ObservationIgnored weak var liveLibraryClient: CentralLibraryClientModel?
     private(set) var localCLIAgents: [WorkspaceAgent] = []
     private(set) var remoteWorkspaceAgents: [WorkspaceAgent] = []
@@ -411,7 +423,7 @@ final class ApplicationModel {
         self.workspaceAssets = workspaceAssets ?? WorkspaceAssetSession()
         self.applicationDefaults = applicationDefaults
         self.isLibraryClient = dashboardStore == nil && LocalExecutionRole.current != .backend
-            && (DevelopmentLaunch.isClient || (DevelopmentLaunch.mode == nil && applicationDefaults.bool(forKey: LocalExecutionRole.libraryClientPreferenceKey)))
+            && DevelopmentLaunch.mode == nil && applicationDefaults.bool(forKey: LocalExecutionRole.libraryClientPreferenceKey)
         let closedLidProtection = ClosedLidWorkProtection(
             ownsExecution: ownsExecutionOverride ?? LocalExecutionRole.current.ownsExecution, defaults: applicationDefaults)
         self.closedLidProtection = closedLidProtection
@@ -538,7 +550,8 @@ final class ApplicationModel {
 
     /// Starts only the optional execution workspace belonging to a library client.
     /// Its database stores runtime state and a replica projection, never library authority.
-    func configureClientExecutionWorkspace(directory: URL, executionWorkspaceDeviceID: UUID? = nil) async throws {
+    func configureClientExecutionWorkspace(directory: URL, executionWorkspaceDeviceID: UUID? = nil, store: DashboardStore? = nil) async throws {
+        if let store { dashboardStore = store }
         guard !isLibraryClient, !isBackendFrontend, let dashboardStore else {
             throw ApplicationModelError.dashboardStoreUnavailable
         }
@@ -634,6 +647,13 @@ final class ApplicationModel {
     private func start() async {
         if isLibraryClient { state = .ready; return }
         if isBackendFrontend { await startBackendClient(); return }
+        if DevelopmentLaunch.isClient {
+            developmentReplicaTask = Task { [weak self] in
+                guard let self else { return }
+                await self.libraryClient.run()
+            }
+            return
+        }
         remoteWorkspaces.startDefaultAgentMaintenance()
         do {
             conversationChangeTask?.cancel()
@@ -1219,6 +1239,7 @@ final class ApplicationModel {
             }
             guard self.dashboardStore === dashboardStore, generation == workspaceRefreshGeneration, !Task.isCancelled else { return }
             federatedExecutionOwners = try await dashboardStore.database.companionExecutionOwners()
+            for (id, owner) in backendReplica.owners { federatedExecutionOwners[id] = owner }
             if let client = liveLibraryClient {
                 for conversation in client.conversations where client.isForeignConversation(conversation.id) {
                     federatedExecutionOwners[conversation.id] = client.executionOwner(for: conversation.id) ?? "central"
@@ -1270,7 +1291,7 @@ final class ApplicationModel {
     }
 
     func refreshConversation(id: String) async {
-        if liveLibraryClient?.isForeignConversation(id) == true { return }
+        if liveLibraryClient?.isForeignConversation(id) == true || backendReplica.owners[id] != nil { return }
         // Presentation work belongs to the UI; execution and terminal bookkeeping stay in the backend.
         guard LocalExecutionRole.current != .backend else { return }
         let state = ensureConversationState(id: id)
@@ -4157,9 +4178,13 @@ final class ApplicationModel {
             calendarItems = snapshot.calendarItems
         }
         if calendarRuns != snapshot.calendarRuns { calendarRuns = snapshot.calendarRuns }
+        let replica = liveLibraryClient.map(DevelopmentReplicaSnapshot.init) ?? backendReplica
+        library.savedArtifacts.replicaItems = replica.artifacts.map {
+            SavedArtifactLibraryItem(manifest: $0, workspaceName: replica.workspaceNames[$0.workspaceID] ?? "Shared workspace")
+        }
         var nextOverview = DashboardWorkspaceOverview(snapshot.workspace)
-        if let client = liveLibraryClient {
-            let foreign = client.conversations.filter { client.isForeignConversation($0.id) }
+        if !replica.conversations.isEmpty {
+            let foreign = replica.conversations
                 .compactMap { try? DevelopmentLibraryProjection.conversation($0) }
             let foreignIDs = Set(foreign.map(\.id))
             nextOverview = .init(folders: nextOverview.folders,
@@ -4273,6 +4298,25 @@ extension ApplicationModel {
         backendRPCServer = server
     }
 
+    func updateDevelopmentReplica(_ snapshot: DevelopmentReplicaSnapshot) async {
+        let changed = backendReplica != snapshot
+        backendReplica = snapshot
+        await refreshWorkspace()
+        if changed { await backendApplicationService?.invalidations.publish(scopes: [.workspace, .calendar]) }
+    }
+
+    var backendStartupMessage: String? {
+        if case let .failed(message) = state { return message }
+        if DevelopmentLaunch.isClient, !readyForBackendClients {
+            return libraryClient.errorMessage ?? libraryClient.deviceConnectionsError ?? "Waiting for the live library to initialize this client's replica."
+        }
+        return nil
+    }
+
+    var readyForBackendClients: Bool {
+        state == .ready && (!DevelopmentLaunch.isClient || liveLibraryClient?.localExecution != nil)
+    }
+
     func startBackendService() async {
         do {
             let service = BackendApplicationService(model: self)
@@ -4303,6 +4347,10 @@ extension ApplicationModel {
         if isCommand { backendCommandsInFlight += 1 }
         defer { if isCommand { backendCommandsInFlight -= 1 } }
         do {
+            if request.method == "development.replica" {
+                let snapshot = liveLibraryClient.map(DevelopmentReplicaSnapshot.init) ?? DevelopmentReplicaSnapshot()
+                return .init(id: request.id, result: try JSONEncoder().encode(snapshot))
+            }
             if request.method == "development.connect" {
                 let value = try JSONDecoder().decode(DevelopmentClientRequest.self, from: request.payload)
                 let connection = try await companionHost.connectLocalDevelopment(value)
@@ -4348,6 +4396,17 @@ extension ApplicationModel {
             if request.method == "library.command" {
                 guard let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
                 let command = try JSONDecoder().decode(BackendLibraryCommand.self, from: request.payload)
+                if case let .openShared(id) = command, let client = liveLibraryClient {
+                    let url = try await client.exportFile(.libraryFile(id: id))
+                    return .init(id: request.id, result: try JSONEncoder().encode(BackendLibraryResult(url: url)))
+                }
+                if case let .openSavedArtifact(id, revision) = command,
+                   let client = liveLibraryClient,
+                   let artifact = client.artifacts.first(where: { $0.id == id && $0.revision == revision && !$0.deleted }) {
+                    let url = try await client.artifactURL(artifact)
+                    let result = BackendLibraryResult(url: url)
+                    return .init(id: request.id, result: try JSONEncoder().encode(result))
+                }
                 let result = try await BackendLibraryService(service: dashboardStore.library).execute(command)
                 return .init(id: request.id, result: try JSONEncoder().encode(result))
             }
@@ -4402,6 +4461,8 @@ extension ApplicationModel {
                     let stops = activeIDs.map { beginAgentStop(conversationID: $0) }
                     for stop in stops { try await stop.value }
                     try await prepareOpenCodeInstancesToQuit()
+                    if let client = liveLibraryClient { try await client.prepareForQuit() }
+                    developmentReplicaTask?.cancel()
                     agentTools?.stop()
                 } catch { backendStopping = false; throw error }
                 Task { @MainActor in
@@ -4515,20 +4576,35 @@ extension ApplicationModel {
                 return try await self.callBackend(method: method, payload: payload)
             }
             var ready = false
-            for _ in 0..<100 {
+            var projectionDirectory = support
+            let readyDeadline = Date().addingTimeInterval(60)
+            var startupMessage: String?
+            while Date() < readyDeadline {
                 try Task.checkCancellation()
                 if let data = try? await client.call(method: "application.readiness"),
-                   let status = try? JSONDecoder().decode(BackendApplicationReadiness.self, from: data), status.ready {
-                    guard status.protocolVersion == 1, status.capabilities.contains("session.dispatch-epochs") else { throw AgentDispatchAdmissionError.invalid }
-                    guard status.completeClientRouting else {
-                        throw BackendRPCError.remote("The background server is unavailable. Open Background Server in Settings to start it or try again.")
+                   let status = try? JSONDecoder().decode(BackendApplicationReadiness.self, from: data) {
+                    startupMessage = status.startupMessage
+                    if status.ready {
+                        guard status.protocolVersion == 1, status.capabilities.contains("session.dispatch-epochs") else { throw AgentDispatchAdmissionError.invalid }
+                        guard status.completeClientRouting else {
+                            throw BackendRPCError.remote("The background server is unavailable. Open Background Server in Settings to start it or try again.")
+                        }
+                        if DevelopmentLaunch.isClient {
+                            guard let directory = status.executionDirectory,
+                                  directory.resolvingSymlinksInPath().path.hasPrefix(support.resolvingSymlinksInPath().path + "/") else {
+                                throw BackendRPCError.remote("The client execution database is not inside this development instance.")
+                            }
+                            projectionDirectory = directory
+                            backendReplica = try JSONDecoder().decode(DevelopmentReplicaSnapshot.self,
+                                from: await client.call(method: "development.replica"))
+                        }
+                        ready = true; break
                     }
-                    ready = true; break
                 }
                 try await Task.sleep(for: .milliseconds(100))
             }
-            guard ready else { throw BackendRPCError.remote("The background service did not become ready. Try reopening Woven Matter.") }
-            let store = try await DashboardStore(supportDirectory: support, readOnlyProjection: true)
+            guard ready else { throw BackendRPCError.remote(startupMessage ?? "The background service did not become ready. Try reopening Woven Matter.") }
+            let store = try await DashboardStore(supportDirectory: projectionDirectory, readOnlyProjection: true)
             dashboardStore = store
             agentTools = try await WorkspaceAgentToolsModel(projection: store.database, executorControl: { [weak self] control in
                 guard let self else { throw CancellationError() }
@@ -4564,7 +4640,11 @@ extension ApplicationModel {
                         let data = try await client.call(method: "application.changes", payload: JSONEncoder().encode(cursor))
                         let change = try JSONDecoder().decode(BackendInvalidations.self, from: data)
                         if change.requiresReload || !change.scopes.isDisjoint(with: [.workspace, .calendar]) {
-                            await self.refreshWorkspaceIfChanged()
+                            if DevelopmentLaunch.isClient {
+                                self.backendReplica = try JSONDecoder().decode(DevelopmentReplicaSnapshot.self,
+                                    from: await client.call(method: "development.replica"))
+                            }
+                            await self.refreshWorkspace()
                         }
                         if change.requiresReload || !change.scopes.isDisjoint(with: [.runtime, .permissions]) {
                             try await self.refreshBackendApplicationState()

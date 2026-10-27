@@ -8,7 +8,6 @@ from pathlib import Path
 import re
 import shutil
 import sqlite3
-import socket
 import tempfile
 import time
 import uuid
@@ -31,27 +30,6 @@ def profile(root, instance, mode):
                 support=str(support),
                 product=f"Woven Matter {instance} {selected} Dev",
                 bundle=f"wovenmatter.desktop.dev.{instance}.{selected}")
-
-
-def check_client(support, endpoint=None):
-    """Do not launch a fresh client into enrollment when no host is available."""
-    replica = support / "LibraryClient/library.json"
-    if replica.exists():
-        state = json.loads(replica.read_text())
-        if isinstance(state, dict) and state.get("workspaceID"):
-            return  # A previously bound replica can open its real workspace offline.
-    if endpoint is None:
-        production = Path.home() / "Library/Application Support/Woven Matter"
-        digest = hashlib.sha256(str(production).encode()).hexdigest()[:16]
-        endpoint = Path(f"/private/tmp/wovenmatter-backend-{os.getuid()}-{digest}/control.sock")
-    try:
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
-            connection.settimeout(3)
-            connection.connect(str(endpoint))
-    except OSError as error:
-        raise ValueError("This client has no connected library and the local host is unavailable. "
-                         "For a normal full-app Dev build, run scripts/build_and_run.sh --mode snapshot. "
-                         "For client testing, start the production background host first, then retry --mode client.") from error
 
 
 def backup(source, destination):
@@ -226,15 +204,11 @@ def main():
     plan.add_argument("--root", type=Path, required=True)
     plan.add_argument("--instance")
     plan.add_argument("--mode", choices=("auto", "client", "snapshot", "live"), default="auto")
-    client = sub.add_parser("check-client")
-    client.add_argument("--support", type=Path, required=True)
     snap = sub.add_parser("snapshot")
     snap.add_argument("--source", type=Path, required=True)
     snap.add_argument("--destination", type=Path, required=True)
     args = parser.parse_args()
-    if args.command == "check-client":
-        check_client(args.support)
-    elif args.command == "profile":
+    if args.command == "profile":
         print(json.dumps(profile(args.root, args.instance, args.mode)))
     else:
         snapshot(args.source, args.destination)

@@ -2,6 +2,8 @@ import Foundation
 import Testing
 import CompanionClient
 import WovenMatterCompanion
+import WovenMatterCore
+import WovenMatterClient
 @testable import WovenMatterAppFacade
 
 @MainActor @Suite(.serialized)
@@ -28,10 +30,56 @@ struct CentralLibraryClientTests {
         let revision = fixture.model.workspaceListRevision
         await fixture.model.refreshWorkspace()
         #expect(fixture.model.workspaceListRevision == revision)
+        let wire = try JSONEncoder().encode(DevelopmentReplicaSnapshot(client))
+        let projection = try JSONDecoder().decode(DevelopmentReplicaSnapshot.self, from: wire)
+        #expect(projection.owners[id] == workspace.id)
+        fixture.model.liveLibraryClient = nil
+        await fixture.model.updateDevelopmentReplica(projection)
+        #expect(fixture.model.workspaceOverview?.conversations.contains { $0.id == id } == true)
+        #expect(fixture.model.federatedExecutionOwners[id] == workspace.id)
+        #expect(try await fixture.database.companionSnapshot().conversations.isEmpty)
+        fixture.model.liveLibraryClient = client
         try await client.desktopSend(id: id, text: "Fixture second message")
         #expect(await direct.sendCount == 2)
         #expect(await central.sendCount == 0)
         #expect(try await client.desktopExecution(.refresh(conversationID: id)).workspace.id == workspace.id)
+        let backend = BackendApplicationService(model: fixture.model)
+        let request = BackendRPCRequest(method: "application.command", payload: try JSONEncoder().encode(
+            BackendApplicationCommand.sendMessageFenced(conversationID: id, input: .init(text: "From the app window"), noteID: nil,
+                admission: .init(instanceID: backend.instanceID, clientID: UUID(), stopSequence: 0, observedStopRevision: 0))))
+        let response = await backend.handle(request)
+        #expect(response.error == nil, "\(response.error ?? "")")
+        #expect(await direct.sendCount == 3)
+        #expect(await central.sendCount == 0)
+    }
+
+    @Test func serverOwnedReplicaSynchronizesNativeDatabaseEditsWithoutWindowOwnership() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        let replica = try MobileStore(file: fixture.directory.appending(path: "client/library.json"))
+        try await replica.bindWorkspace("00000000-0000-4000-8000-000000000001")
+        fixture.defaults.set(false, forKey: "wovenmatter.client.share-execution")
+        let central = MacClientFakeCentral()
+        let client = CentralLibraryClientModel(store: replica, transport: central, executionDirectory: fixture.directory,
+            preferences: fixture.defaults, makeLocalExecution: { directory, store in
+                try await SecondaryMacExecutionWorkspace.create(directory: directory, replica: store,
+                    executionModel: fixture.model)
+            })
+        await client.initializeClientWorkspace()
+        let execution = try #require(client.localExecution)
+        #expect(execution.model === fixture.model)
+        let noteID = try await fixture.store.createNote(folderID: nil, kind: .note)
+        try await execution.capture()
+        await client.refresh()
+        #expect(await central.notes[noteID] != nil)
+        let local = try #require(await replica.snapshot().notes[noteID])
+        var inbound = local; inbound.title = "Changed on production"; inbound.revision += 1
+        await central.publishNote(inbound)
+        await client.refresh()
+        try await execution.capture()
+        #expect(try await fixture.database.companionNote(id: noteID)?.title == "Changed on production")
+        let restored = try MobileStore(file: fixture.directory.appending(path: "client/library.json"))
+        #expect(await restored.snapshot().notes[noteID]?.title == "Changed on production")
+        #expect(await central.sendCount == 0)
     }
 
     @Test func olderActivityStaysWithItsConversationWhenNavigationChangesDuringLoad() async throws {
@@ -141,6 +189,12 @@ private actor MacClientFakeCentral: CompanionTransport {
     }
     var notes: [String: CompanionNote] = [:]
     var folders: [String: CompanionFolder] = [:]
+    var publishedChanges: [CompanionChange] = []
+    func publishNote(_ note: CompanionNote) {
+        notes[note.id] = note
+        publishedChanges.append(.init(cursor: Int64(publishedChanges.count + 1), resourceKind: .note,
+            resourceID: note.id, operation: .upsert, revision: note.revision, note: note))
+    }
     var receipts: [String: CompanionCommandReceipt] = [:]
     var sendCount = 0
     var offline = false
@@ -150,8 +204,8 @@ private actor MacClientFakeCentral: CompanionTransport {
     func setOffline(_ value: Bool) { offline = value }
     func dropNextSendAcknowledgement() { dropSend = true }
     func workspaceIdentity() throws -> String { if offline { throw MobileConnectionError.offline }; return "00000000-0000-4000-8000-000000000001" }
-    func snapshot() -> CompanionSnapshot { .init(workspaceID: "00000000-0000-4000-8000-000000000001", cursor: 0) }
-    func changes(after: Int64) -> CompanionChangePage { .init(workspaceID: "00000000-0000-4000-8000-000000000001", cursor: after) }
+    func snapshot() -> CompanionSnapshot { .init(workspaceID: "00000000-0000-4000-8000-000000000001", cursor: Int64(publishedChanges.count), folders: Array(folders.values), notes: Array(notes.values)) }
+    func changes(after: Int64) -> CompanionChangePage { .init(workspaceID: "00000000-0000-4000-8000-000000000001", cursor: Int64(publishedChanges.count), changes: publishedChanges.filter { $0.cursor > after }) }
     func mutate(_ mutation: CompanionMutation) throws -> CompanionMutationResult {
         if mutationFailure { throw CompanionAPIError(code: "temporary", message: "Fixture mutation failed") }
         if mutation.kind == .createFolder {

@@ -147,7 +147,6 @@
 		E9602F4628690E58BDEA5ED6 /* WovenAutomationHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = 259A15701666BC22C0E6C0F1 /* WovenAutomationHost.swift */; };
 		66ACC7591FE6C79B725DD709 /* DevelopmentLaunch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51DC2E7C599A4EEF792449E4 /* DevelopmentLaunch.swift */; };
 		7CA4CD80DDEA115DE0ED5F84 /* DevelopmentLibraryProjection.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEA6CDFF1A5C68F3B64AB921 /* DevelopmentLibraryProjection.swift */; };
-		115E6225744CEB1BFF455273 /* DevelopmentClientView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D0581173AF8D128D5AED2B1 /* DevelopmentClientView.swift */; };
 		63885F9DFDCFCD1D12455E37 /* RemoteBrowserViewerModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FAAD9B2BEC652A9951E07F7 /* RemoteBrowserViewerModel.swift */; };
 		3E5461C189BF091338B7103C /* RemoteBrowserView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A524692B0EEFEF745237C8AF /* RemoteBrowserView.swift */; };
 		A6F6CE2A68949F541CAEF101 /* RemoteBrowserCanvas.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6F6CE2A68949F541CAEF102 /* RemoteBrowserCanvas.swift */; };
@@ -308,7 +307,6 @@
 		259A15701666BC22C0E6C0F1 /* WovenAutomationHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Services/WovenAutomationHost.swift"; sourceTree = SOURCE_ROOT; };
 		51DC2E7C599A4EEF792449E4 /* DevelopmentLaunch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Models/DevelopmentLaunch.swift"; sourceTree = SOURCE_ROOT; };
 		EEA6CDFF1A5C68F3B64AB921 /* DevelopmentLibraryProjection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Models/DevelopmentLibraryProjection.swift"; sourceTree = SOURCE_ROOT; };
-		4D0581173AF8D128D5AED2B1 /* DevelopmentClientView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Views/DevelopmentClientView.swift"; sourceTree = SOURCE_ROOT; };
 		8FAAD9B2BEC652A9951E07F7 /* RemoteBrowserViewerModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Models/RemoteBrowserViewerModel.swift"; sourceTree = SOURCE_ROOT; };
 		A524692B0EEFEF745237C8AF /* RemoteBrowserView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Views/RemoteBrowserView.swift"; sourceTree = SOURCE_ROOT; };
 		A6F6CE2A68949F541CAEF102 /* RemoteBrowserCanvas.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Views/RemoteBrowserCanvas.swift"; sourceTree = SOURCE_ROOT; };
@@ -392,7 +390,6 @@
 				D50000000000000000000009 /* Info.plist */,
 				624CEC46A7441DADEBBCE79E /* WovenMatterApp.swift */,
 				AA1900000000000000000002 /* WovenMatterLifecycleDelegate.swift */,
-				4D0581173AF8D128D5AED2B1 /* DevelopmentClientView.swift */,
 				EEA6CDFF1A5C68F3B64AB921 /* DevelopmentLibraryProjection.swift */,
 				51DC2E7C599A4EEF792449E4 /* DevelopmentLaunch.swift */,
 				D49100000000000000000004 /* Models */,
@@ -836,7 +833,6 @@
 				5AECF7B494583F056FBE596C /* WovenMatterApp.swift in Sources */,
 				A03000000000000000000001 /* DesktopUpdater.swift in Sources */,
 				AA1900000000000000000001 /* WovenMatterLifecycleDelegate.swift in Sources */,
-				115E6225744CEB1BFF455273 /* DevelopmentClientView.swift in Sources */,
 				7CA4CD80DDEA115DE0ED5F84 /* DevelopmentLibraryProjection.swift in Sources */,
 				66ACC7591FE6C79B725DD709 /* DevelopmentLaunch.swift in Sources */,
 			);

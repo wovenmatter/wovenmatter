@@ -22,3 +22,24 @@ enum DevelopmentLibraryProjection {
         return try JSONDecoder().decode(WorkspaceConversationRecord.self, from: JSONSerialization.data(withJSONObject: fields))
     }
 }
+
+/// A read-only window projection; authoritative replica state stays in the server.
+struct DevelopmentReplicaSnapshot: Codable, Equatable {
+    var conversations: [CompanionConversation] = []
+    var owners: [String: String] = [:]
+    var artifacts: [CompanionArtifactManifest] = []
+    var workspaceNames: [String: String] = [:]
+    var endpoint: URL?
+    var status = "Waiting for live library"
+    var sharingExecution = false
+    init() {}
+    @MainActor init(_ client: CentralLibraryClientModel) {
+        artifacts = client.artifacts
+        workspaceNames = Dictionary(uniqueKeysWithValues: client.executionWorkspaces.map { ($0.id, $0.name) })
+        endpoint = client.credential?.endpoint
+        status = client.status
+        sharingExecution = client.sharingLocalExecution
+        conversations = client.conversations.filter { client.isForeignConversation($0.id) }
+        owners = Dictionary(uniqueKeysWithValues: conversations.map { ($0.id, client.executionOwner(for: $0.id) ?? "central") })
+    }
+}

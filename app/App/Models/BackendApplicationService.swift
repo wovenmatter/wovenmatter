@@ -90,6 +90,8 @@ struct BackendApplicationReadiness: Codable, Sendable {
     /// Core command support is not proof that every frontend mutation is routed.
     let completeClientRouting: Bool
     let capabilities: [String]
+    var executionDirectory: URL? = nil
+    var startupMessage: String? = nil
 }
 
 /// Dispatches frontend commands to the backend-owned application model.
@@ -151,21 +153,21 @@ final class BackendApplicationService {
             switch request.method {
             case "application.readiness":
                 return try response(request, BackendApplicationReadiness(protocolVersion: 1,
-                    instanceID: instanceID, ready: model.state == .ready,
+                    instanceID: instanceID, ready: model.readyForBackendClients,
                     completeClientRouting: true,
                     capabilities: ["session.create", "session.send", "session.configure", "session.tools",
                                    "session.cancel", "session.permission", "session.interaction", "calendar.write",
-                                   "calendar.metadata", "session.dispatch-epochs"]))
+                                   "calendar.metadata", "session.dispatch-epochs"], executionDirectory: model.clientExecutionDirectory, startupMessage: model.backendStartupMessage))
             case "application.changes":
                 let cursor = try JSONDecoder().decode(BackendInvalidationCursor?.self, from: request.payload)
                 return try await response(request, invalidations.waitForChanges(after: cursor))
             case "remoteWorkspaces.command":
-                guard model.state == .ready else { throw BackendRPCError.remote("The background service is still starting.") }
+                guard model.readyForBackendClients else { throw BackendRPCError.remote("The background service is still starting.") }
                 let command = try JSONDecoder().decode(BackendRemoteWorkspaceCommand.self, from: request.payload)
                 let result = try await BackendRemoteWorkspaceService(model: model.remoteWorkspaces).execute(command)
                 return try response(request, result)
             case "application.command":
-                guard model.state == .ready else { throw BackendRPCError.remote("The background service is still starting.") }
+                guard model.readyForBackendClients else { throw BackendRPCError.remote("The background service is still starting.") }
                 let command = try JSONDecoder().decode(BackendApplicationCommand.self, from: request.payload)
                 let result = try await execute(command)
                 return try response(request, result)
@@ -305,11 +307,22 @@ final class BackendApplicationService {
             try dispatchAdmissions.validateSend(admission, conversationID: id)
             let dispatchFence = model.beginAgentDispatch(conversationID: id)
             defer { model.finishAgentDispatch(conversationID: id, fence: dispatchFence) }
-            let record = try await conversation(id)
+            let foreign = model.liveLibraryClient?.conversations.first { $0.id == id && model.liveLibraryClient?.isForeignConversation(id) == true }
+            let record: WorkspaceConversationRecord
+            if let foreign { record = try DevelopmentLibraryProjection.conversation(foreign) }
+            else { record = try await conversation(id) }
             try dispatchFence.check()
             try dispatchAdmissions.validateSend(admission, conversationID: id)
             let note = noteID.flatMap { id in model.workspaceOverview?.notes.first { $0.id == id } }
             guard noteID == nil || note != nil else { throw BackendRPCError.remote("The attached note is unavailable.") }
+            if foreign != nil, let client = model.liveLibraryClient {
+                guard input.files.isEmpty else { throw BackendRPCError.remote("Attach files through the owning workspace.") }
+                var text = input.text
+                for reference in input.references { text += "\n\n" + reference.titleSnapshot + "\n" + reference.contentSnapshot }
+                if let note { text += "\n\n" + note.title + "\n" + note.content }
+                try await client.desktopSend(id: id, text: text, beforeDispatch: { try dispatchFence.claimDispatch() })
+                return .init(accepted: true)
+            }
             return try await .init(accepted: model.dispatchAgentMessage(conversation: record, input: input, note: note, dispatchFence: dispatchFence))
         case let .configureSession(id, selectedModel, thinking, permission):
             await model.updateLocalACPSession(conversation: try conversation(id), model: selectedModel,

@@ -49,32 +49,32 @@ and `WOVENMATTER_DEV_INSTANCE` are equivalent environment defaults. The old
 
 ## Client mode
 
-A client instance connects to the production library host using the regular
-desktop workspace surface. It synchronizes
-shared notes, folders, calendar, library artifacts, and conversation history,
-and runs its own branch's native execution engine for its assigned sessions.
-Foreign conversations remain owned by their original execution workspace; their
-controls route to that owner. New local sessions use this instance's execution
-storage and working directories. A shared folder without a local execution root
-cannot silently become a local project: create a folder in the Dev workspace or
-use All Workspaces for a new scratch directory.
+A client launches the same full desktop app as the other modes. Its window is
+only a frontend. Its own background server owns a persistent local database,
+the synchronization journal, native execution, and scheduling. Closing the
+window leaves this server running. Background Server settings inspect, stop,
+and restart this instance's server; no development login job is installed.
 
-On the same Mac, initial connection uses production's private, same-user Unix
-socket. The production host must include the development-connect endpoint from
-this change, have background execution enabled (or be a running live Dev host), and have its central library
-available through the existing Tailscale connection. It provisions an independent,
-revocable Dev device identity. Credentials are saved directly to this instance's
-Keychain namespace; the launcher never reads or copies production credentials.
+The local database synchronizes notes, folders, calendar, saved artifacts, and
+conversation history bidirectionally with the production library through the
+library API. The client runs its own branch's agents and tools. Production is
+the shared-data authority, not the client's execution owner. Offline edits remain
+journaled locally and reconnect preserves them. Foreign conversations retain
+their execution owners and are never resumed as local sessions.
 
-For a fresh, unpaired client, the launcher checks that the local host endpoint
-is reachable before building or opening the app. If it is unavailable, launch
-stops with a clear error; it does not silently switch modes or open enrollment
-as if this were a working Dev app. A previously bound replica can still open
-offline. `debug` skips this preflight so connection failures can be investigated
-under LLDB. The endpoint check does not enroll a device or read credentials. Pairing to another Mac uses the normal
-approved pairing flow. An agent must not operate account authentication or
-device-authorization UI to recover access. The instance never falls back to
-opening production SQLite or starting a replacement central library.
+On the same Mac, first enrollment uses the library host's private same-user
+endpoint to provision an independent revocable device identity. Subsequent data
+synchronization uses its HTTPS library endpoint, as on a different Mac. The
+production library service must be available for first enrollment and ongoing
+sync; its UI does not have to be open. An already initialized client can run
+against its local database while the library is offline. The client server retries
+initial connection failures rather than substituting another mode or another UI.
+Credentials stay in this instance's Keychain namespace and its server process.
+The launcher never reads or copies production credentials or opens production SQLite.
+
+The foreground window reads only this server's local execution projection and
+receives shared history and artifact metadata over its private RPC connection.
+It does not create a second replica writer or execute agents in the UI process.
 
 Shared edits and accepted commands are real changes. A new Dev instance does
 not adopt existing production sessions or schedules. Closing an instance does
@@ -85,7 +85,7 @@ snapshot host.
 
 ## Snapshot mode
 
-Snapshot and live profiles launch a separate headless background server using
+All three profiles launch a separate headless background server using
 the profile's own executable, socket, and execution lease. The window process is
 a frontend. Closing it leaves that profile's work running; Settings → Background
 Server can stop or restart it. Development servers never install login jobs.
@@ -138,8 +138,8 @@ that lock. The launcher only requests a normal quit of the exact Dev executable
 being rebuilt, so it does not terminate production for you.
 
 The live host serves regular library clients and the same-user development
-connection endpoint while its app is running. It keeps execution in its own
-process, so quit it gracefully before returning ownership to production.
+connection endpoint from its background server. Stop that server gracefully
+before returning ownership to production.
 
 ## Validation
 

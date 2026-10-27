@@ -335,8 +335,7 @@ enum LocalExecutionRole: String {
 
     static func resolve(arguments: [String], libraryClientEnabled: Bool = false,
                         developmentMode: DevelopmentLaunch.Mode? = nil) -> Self {
-        if let developmentMode {
-            if developmentMode == .client { return .libraryClient }
+        if developmentMode != nil {
             return arguments.contains("--backend") ? .backend : .frontend
         }
         if arguments.contains("--backend") { return .backend }
@@ -432,11 +431,11 @@ enum WovenMatterBackendProcess {
 
     static func launch() async throws {
         if DevelopmentLaunch.mode != nil {
-            guard !DevelopmentLaunch.isClient, let executable = Bundle.main.executableURL else {
+            guard let executable = Bundle.main.executableURL else {
                 throw NSError(domain: "BackgroundExecution", code: 2,
-                    userInfo: [NSLocalizedDescriptionKey: "A library client does not own a local background server."])
+                    userInfo: [NSLocalizedDescriptionKey: "The development executable is unavailable."])
             }
-            // Snapshot/live profiles use the same server protocol and ownership
+            // All development profiles use the same server protocol and ownership
             // boundary, but never register a production or development login job.
             let process = Process()
             process.executableURL = executable
