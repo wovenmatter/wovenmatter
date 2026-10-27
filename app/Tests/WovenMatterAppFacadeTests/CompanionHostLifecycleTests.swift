@@ -147,6 +147,10 @@ struct CompanionHostLifecycleTests {
         let response = try JSONDecoder().decode(DevelopmentClientConnection.self, from: data)
         #expect(response.endpoint == fixture.host.endpoint)
         #expect(!response.pairing.credential.isEmpty)
+        #expect(response.pairing.deviceID == request.deviceID)
+        #expect(fixture.host.pairingPayload == nil)
+        #expect(fixture.host.pendingPairingRequests.isEmpty)
+        #expect(fixture.host.pairedDevices.contains { $0.id == request.deviceID })
         await #expect(throws: BackendRPCError.self) {
             try await BackendRPCClient(socketURL: socket).call(method: "application.command")
         }

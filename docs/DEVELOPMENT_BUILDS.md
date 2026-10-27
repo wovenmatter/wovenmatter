@@ -62,12 +62,17 @@ the shared-data authority, not the client's execution owner. Offline edits remai
 journaled locally and reconnect preserves them. Foreign conversations retain
 their execution owners and are never resumed as local sessions.
 
-On the same Mac, first enrollment uses the library host's private same-user
-endpoint to provision an independent revocable device identity. Subsequent data
-synchronization uses its HTTPS library endpoint, as on a different Mac. The
-production library service must be available for first enrollment and ongoing
-sync; its UI does not have to be open. An already initialized client can run
-against its local database while the library is offline. The client server retries
+Enrollment is automatic only with the production library host on the same Mac.
+The client uses its private same-user endpoint to provision an independent
+revocable device identity; no pairing link, approval dialog, or manual connection
+entry is required. It does not discover or automatically enroll with other Macs.
+The identity can appear in the host's device list because it is a real client.
+Subsequent data synchronization uses its HTTPS library endpoint, as on a different Mac. The
+production library service and Tailscale must be available for first enrollment
+and live sync; its UI does not have to be open. An already initialized client can run
+against its local database while the library is offline, retaining its device
+identity, executor, and pending edits. Its refresh loop resumes two-way sync when
+the library becomes reachable again without reenrollment. The client server retries
 initial connection failures rather than substituting another mode or another UI.
 Credentials stay in this instance's Keychain namespace and its server process.
 The launcher never reads or copies production credentials or opens production SQLite.
