@@ -130,7 +130,7 @@ and identical multipart replay under new event IDs have targeted regressions.
 ## Platform validation boundary
 
 The full default-agent and remote suites, Swift package suites, application usage
-and backend lifetime checks, shared/mobile package tests, and 29 companion
+and backend lifetime checks, shared/mobile package tests, and 30 companion
 integration tests passed. The native macOS application build, packaged HTML tools
 for all five harnesses and browser lifecycle fixture also passed. The isolated
 `streaming-parity` snapshot Dev app was built and launched for inspection. Its
@@ -205,6 +205,7 @@ application evidence is recorded separately in the platform validation above.
 | Claude ACP 0.94.0 / advertised default | Passed incremental ACP wire check after the user restored sign-in: 37 text chunks, 393 characters | Not exposed | 2,002 ms | `end_turn`, 3,956 ms |
 | Claude ACP 0.97.0 / advertised default | Passed current stable adapter wire check: 34 text chunks, 394 characters | Not exposed | 2,487 ms | `end_turn`, 4,199 ms |
 | Pi Durable live provider families | Temporary native-client probe initialized successfully, but the normal account API returned no connected providers or configured models for its global/local scopes; live inference blocked | Not run | Not run | Not run |
+| Pi Durable / signed review snapshot | Normal disposable-session initialization succeeded; metadata was available, but model options and thinking levels were empty and no model was selected. No prompt was sent | Not run | Not run | Not run |
 
 Installed command versions observed: Codex CLI 0.164.0, Claude Code 2.1.310,
 Grok 1.0.67, OpenCode CLI 2.1.2. The already-running OpenCode service registration
@@ -244,6 +245,17 @@ scopes returned no configured models or connected provider identifiers, and the
 session exposed no model options. This establishes an unavailable connection for
 that standard namespace, not that another installed application instance lacks
 credentials. No model request was submitted and no application database was opened.
+
+The signed `streaming-parity-review` snapshot was also checked through its normal
+same-user backend API. It reported ready, with no displayed accounts/providers,
+models, default model, local override or custom servers. A disposable Pi chat
+then initialized through the ordinary application path and still advertised
+`modelOptions=[]`, `thinkingLevels=[]`, `model=null`, without a setup error.
+No prompt was sent. This checks the actual app context as well as the temporary
+client, without explicit login, reconnect or account-refresh operations. The
+production app's expected control socket was absent; its configured accounts
+therefore remain unknown through this route. Production SQLite and credentials
+were not accessed to infer a connection.
 
 The initial Codex attempt used a legacy `gpt-6.1-sol[low]` selection against the
 config-option API and was rejected with JSON-RPC -32602 before inference. Selecting
