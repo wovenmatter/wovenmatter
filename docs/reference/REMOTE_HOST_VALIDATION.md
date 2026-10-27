@@ -70,9 +70,10 @@ the committed runtime records.
 The final remote Node suite passed all 215 tests on Linux; macOS passed 214 with
 one Linux-only skip. The default-agent suite passed 215 with one platform skip.
 The full desktop package suites, app validation, packaged tools across all five
-harnesses, host lifecycle/bundle fixtures and ShellCheck also passed. Shared protocol tests passed 40 checks and
+harnesses, host lifecycle/bundle fixtures and ShellCheck also passed. Shared protocol tests passed 16 checks and
 companion integration passed 29 complete flows. Latest main was integrated before
-these final checks.
+these final checks. The latest revalidation integrates main `4f9cfd9a`, including
+its API cleanup, consolidated tests and Claude Agent SDK 0.3.311 update.
 
 The broad local run reached iOS simulator tests, which were blocked by Xcode's
 `DTServiceHubClient failed to bless service hub` environment failure. Those
@@ -97,6 +98,8 @@ Observed checks include:
   configuration restoration includes writes through nested symlinks.
 - A real relocated SDK staging directory initializes the actual engine and
   embeds an HTML image without a sibling harnesses directory or network access.
+  On Linux, SDK 0.3.311 imports its query API and its native CLI reports its
+  version using an isolated temporary HOME, without starting a model turn.
 - Mac source compilation, signed native Dev app launch and inspection of actual
   Tailnet discovery, preflight, workspace access choices and host notice.
 - Deployment using the signed Dev app's actual packaged resources, followed by
