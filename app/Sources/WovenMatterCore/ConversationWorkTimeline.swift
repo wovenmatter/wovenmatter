@@ -317,6 +317,8 @@ public enum ConversationToolAction: Hashable, Sendable {
   case codeSearch
   case webSearch
   case webFetch
+  case browser
+  case computer
   case delegate
   case other
 
@@ -327,6 +329,10 @@ public enum ConversationToolAction: Hashable, Sendable {
       self = .command
     } else if name.contains("websearch") || name.contains("web_search") || name.contains("web search") {
       self = .webSearch
+    } else if name.contains("browser") {
+      self = .browser
+    } else if name.contains("computer") {
+      self = .computer
     } else if name.contains("web") || name.contains("fetch") || name.contains("browse") {
       self = .webFetch
     } else if name.contains("grep") || name.contains("glob")
@@ -373,6 +379,8 @@ public enum ConversationToolAction: Hashable, Sendable {
     case .codeSearch: "Searched code \(count) \(plural ? "times" : "time")"
     case .webSearch: "Searched the web \(count) \(plural ? "times" : "time")"
     case .webFetch: "Fetched \(count) web \(plural ? "pages" : "page")"
+    case .browser: "Used the browser \(count) \(plural ? "times" : "time")"
+    case .computer: "Used the computer \(count) \(plural ? "times" : "time")"
     case .delegate: "Delegated \(count) \(plural ? "tasks" : "task")"
     case .other: "Used \(count) \(plural ? "tools" : "tool")"
     }
@@ -386,6 +394,8 @@ public enum ConversationToolAction: Hashable, Sendable {
     case .codeSearch: active ? "Searching code" : "Searched code"
     case .webSearch: active ? "Searching the web" : "Searched the web"
     case .webFetch: active ? "Fetching a web page" : "Fetched a web page"
+    case .browser: active ? "Using the browser" : "Used the browser"
+    case .computer: active ? "Using the computer" : "Used the computer"
     case .delegate: active ? "Delegating a task" : "Delegated a task"
     case .other: active ? "Using a tool" : "Used a tool"
     }

@@ -26,6 +26,20 @@ private func groups(_ timeline: ConversationWorkTimeline) -> [ConversationWorkGr
 @Suite("Conversation work timeline")
 struct ConversationWorkTimelineTests {
 
+  @Test("browser and computer work retain their action category")
+  func browserAndComputerActions() {
+    for name in ["woven_browser", "woven_browser_use", "browser_navigate"] {
+      #expect(ConversationToolAction(tool("browser", name)) == .browser)
+    }
+    #expect(ConversationToolAction(tool("computer", "woven_computer_use")) == .computer)
+    #expect(ConversationToolAction(tool("fetch", "web_fetch")) == .webFetch)
+    let group = ConversationWorkGroup(id: "work", activities: [
+      tool("browser", "woven_browser_use"), tool("computer", "woven_computer_use")
+    ], endsTimeline: true)
+    #expect(group.summary == "Used the browser 1 time and used the computer 1 time")
+    #expect(ConversationToolAction.browser.summary(count: 2) == "Used the browser 2 times")
+  }
+
   @Test("completed reasoning does not hide a still-running tool label")
   func liveActivitySelection() {
     let command = AgentRunActivity(id: "command", kind: .tool, title: "Run the stream check", status: "running", toolName: "bash")

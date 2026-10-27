@@ -1141,7 +1141,8 @@ private extension ConversationToolAction {
         case .read: "doc.text"
         case .edit: "pencil.and.outline"
         case .codeSearch: "magnifyingglass"
-        case .webSearch, .webFetch: "globe"
+        case .webSearch, .webFetch, .browser: "globe"
+        case .computer: "desktopcomputer"
         case .delegate: "person.2"
         case .other: "wrench.and.screwdriver"
         }

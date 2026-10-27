@@ -65,6 +65,10 @@ as behavioral tests. No contract suite consumes a provider service.
 | Transcript persistence/presentation | `ACPAssistantStreamWriterTests`, `AssistantStreamingTextTests`, `ConversationWorkTimelineTests`, `StreamingPresentationTests`, `CompanionPublisherTests` | Canonical prefixes, stable Markdown, commentary/tool order, native scrolling and verified full reasoning disclosure after restart |
 | Cross-client reasoning details | `CompanionActivityDetailsTests`, `TranscriptDetailTests`, `CompanionFederationTests` | Shared v1/v2 reconstruction, scoped integrity, mobile duplicate-part recovery, pending chunks, restart and search isolation |
 
+Browser and computer calls retain distinct action labels/icons, including current
+`woven_browser_use`/`woven_computer_use` and legacy browser names. Browser actions
+are not counted as fetched web pages in collapsed work summaries.
+
 The Pi engine cases exercise the shared Durable event contract. They must not be
 described as independent live OpenAI, Anthropic, Gemini or other family passes.
 The native suite requires macOS; the manifest does not replace required iOS or
