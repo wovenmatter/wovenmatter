@@ -37,6 +37,17 @@ done
 test -f "$app/Contents/Resources/BrowserLicenses/LICENSE.txt"
 test -f "$app/Contents/Resources/BrowserLicenses/CREDITS.html"
 resources="${app}/Contents/Resources"
+test -x "${resources}/Cua/cua-driver"
+test -f "${resources}/Cua/LICENSE.txt"
+test -f "${resources}/Cua/THIRD-PARTY-NOTICES.md"
+python3 - "${resources}/Cua" <<'PY'
+import hashlib, json, pathlib, subprocess, sys
+root = pathlib.Path(sys.argv[1])
+record = json.loads((root / 'cua-version.json').read_text())
+assert hashlib.sha256((root / 'cua-driver').read_bytes()).hexdigest() == record['binarySHA256']
+subprocess.run(['codesign', '--verify', '--strict', str(root / 'cua-driver')], check=True)
+PY
+python3 "$(cd "$(dirname "$0")" && pwd)/validate-cua.py" "${resources}/Cua/cua-driver"
 test -x "${resources}/default-agent/bin/node"
 test -f "${resources}/default-agent/src/main.mjs"
 test -f "${resources}/default-agent/src/executor/broker.mjs"
@@ -104,7 +115,7 @@ test ! -e "${resources}/remote/.env.example"
 test ! -e "${resources}/remote/compose.yaml"
 
 if nm -j "$main_executable" | grep -Eq \
-  'MacPlatform|IsolatedAgent|ServerAgent|WovenMatterLocalService|Containerization'; then
+  'MacPlatform|IsolatedAgent|ServerAgent|WovenMatterLocalService|Containerization|Peekaboo|AXorcist'; then
   printf '%s\n' 'Removed runtime architecture symbols found in the app executable.' >&2
   exit 1
 fi

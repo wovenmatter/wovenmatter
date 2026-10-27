@@ -8,5 +8,5 @@ cd "$(dirname "$0")/.."
   xcrun clang --version
   cmake --version
   uname -m
-  git ls-files app/Browser app/Updater default-agent/package.json default-agent/package-lock.json default-agent/.node-version app/Package.resolved app/Package.swift shared/Package.swift app/WovenMatter.xcodeproj/project.pbxproj scripts/prepare-browser.sh scripts/prepare-default-agent.sh scripts/prepare-sparkle-tools.sh scripts/cached-download.py scripts/browser-build-cache.py scripts/prepare-release-cache.sh scripts/release-cache-key.sh scripts/warm-release-compiler.sh | LC_ALL=C sort | while IFS= read -r file; do shasum -a 256 "$file"; done
+  git ls-files app/Browser app/Updater app/Automation default-agent/package.json default-agent/package-lock.json default-agent/.node-version app/Package.resolved app/Package.swift shared/Package.swift app/WovenMatter.xcodeproj/project.pbxproj scripts/prepare-cua.sh scripts/prepare-cua.py scripts/prepare-browser.sh scripts/prepare-default-agent.sh scripts/prepare-sparkle-tools.sh scripts/cached-download.py scripts/browser-build-cache.py scripts/prepare-release-cache.sh scripts/release-cache-key.sh scripts/warm-release-compiler.sh | LC_ALL=C sort | while IFS= read -r file; do shasum -a 256 "$file"; done
 } | shasum -a 256 | awk '{print "key=release-inputs-v1-" $1}'

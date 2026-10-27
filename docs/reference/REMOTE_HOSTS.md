@@ -142,7 +142,7 @@ detect changes to existing harness configuration without reporting its contents.
 Host browsing uses native headless Chromium with its sandbox explicitly
 enabled. No display server or Docker container is used. Each browser profile
 has its own private persistent directory; IDs contain 1–32 lowercase letters,
-digits or hyphens. `default` is implicit. Browser APIs and the `woven_browser`
+digits or hyphens. `default` is implicit. Browser APIs and the `woven_browser_use`
 MCP tool accept an optional `profile`. Existing single-profile browser data is
 retained as `default`. The Mac shows a profile selector when multiple profiles
 exist.

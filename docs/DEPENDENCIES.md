@@ -23,10 +23,11 @@ for every package update. Three separate mechanisms do that:
 | --- | --- | --- |
 | `package.json` minimum-only ranges (`>=version`) | Declaration. The floor is the current tested release; there is no upper cap on stable releases. | Maintenance PRs raise floors, including majors |
 | `default-agent/package-lock.json`, `ios/EmbeddedRuntime/package-lock.json` | Exact tested snapshot with integrity hashes, installed with `npm ci` | The same PRs |
-| `app/Package.resolved` | Shared SwiftPM/Xcode graph: Peekaboo, Sparkle, and their transitive packages | Native package-manager tooling during maintenance |
+| `app/Package.resolved` | Shared SwiftPM/Xcode graph: Sparkle and any transitive packages | Native package-manager tooling during maintenance |
 | `default-agent/.node-version` and the Node checksums in `scripts/prepare-default-agent.sh` and `LocalACPManagedRuntime.swift` | One current stable Node release and its official archive SHA-256 values | Maintenance PR, all copies together |
 | `remote/host/runtime-versions.json` | The same Node release's Linux archive SHA-256 values and the lockfile's Playwright version | The same maintenance PR; host bundle tests reject drift |
 | `remote/npm-runtime/package-lock.json` | Locked security replacements for npm's vendored dependencies, shared by image builds and each native host release's private npm | Dependency maintenance; runtime API and installer tests validate both uses |
+| `app/Automation/cua-version.json` | Exact Cua Driver archive/executable digests, source and signing identity | Maintenance PR with desktop acceptance |
 | `app/Browser/cef-version.json` | Exact CEF build and archive SHA-1 values per architecture | Maintenance PR |
 | `app/Updater/sparkle-version.json` and the Xcode Sparkle revision | Release, exact commit, and tools archive SHA-256 for the updater | Maintenance PR, both together |
 | Generated iOS bundles and `provenance.json` | Output of the locked packages, verified by `--check` in CI | Regenerated from the updated lockfiles during maintenance |
@@ -117,14 +118,23 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
 - **Sparkle** delivers every later fix, so the Xcode project requires the exact
   release commit, and its signing tools come from the same release record.
   Major lines are proposed with the other majors and need careful review.
-- **Peekaboo** accepts compatible releases from the tested release floor. Its
-  exact build selection lives in the shared native lockfile; maintenance validates
-  automation API compatibility before changing that snapshot.
-  Peekaboo 4.9.7 requires exactly AXorcist 0.2.2, so its resolved graph cannot
-  accept AXorcist 0.2.3 independently. Retain that upstream constraint until a
-  stable Peekaboo release lifts it; check both releases during each maintenance
-  scan. Local automation tests and native compilation validate this graph;
-  Accessibility permission and real desktop input still need manual acceptance.
+- **Cua Driver** is the sole native Computer Use engine. `app/Automation/cua-version.json`
+  records the current tested release, source revision, universal archive size and
+  SHA-256, executable SHA-256, and upstream signing team. This exact selection is
+  required because it executes desktop input under the GUI's macOS permissions.
+  `scripts/prepare-cua.py` verifies the download and executable, preserves the
+  upstream signature, and bundles only the self-contained universal executable
+  and notices. Builds never run an upstream installer or update the runtime.
+  Maintenance checks Cua's non-nightly release channel, including new majors and
+  0.x minors, and refreshes every record and notice together. Upstream currently
+  marks even its numbered driver releases as GitHub prereleases; 0.38.0 is the
+  numbered published driver selection, rather than a nightly build.
+  The driver is spawned directly by the signed GUI, without a Node SDK or
+  additional native libraries. Provider-free tests cover the MCP contract,
+  authorization, lifecycle, cancellation, and packaging integrity. The opt-in
+  `scripts/test-cua-desktop.sh` verifies actual input and capture through Woven MCP
+  against a disposable native fixture, including background focus preservation.
+  Signed-app Accessibility/Screen Recording grants are required for that check.
 - **MCP TypeScript SDK** uses the current v2 client and server packages. Woven MCP and
   Executor use the supported Streamable HTTP client, with the shared native MCP
   protocol core serving the same focused schemas on Mac, Linux and iOS adapters;
@@ -244,7 +254,7 @@ refreshing it before releases would fail the currency policy.
 ## Delivery
 
 Merging source changes updates nothing that is already installed. Node, CEF,
-Sparkle, Peekaboo, and the bundled SDK snapshot reach installed Mac apps only
+Sparkle, Cua Driver, and the bundled SDK snapshot reach installed Mac apps only
 in a signed app or refresh build (`.github/release-refresh.json`). iOS bundled
 JavaScript, Python, and their provenance require an App Store build. Remote
 workspaces and Executor pick up a new image definition when the user explicitly

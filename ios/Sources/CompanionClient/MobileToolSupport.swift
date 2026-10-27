@@ -55,6 +55,8 @@ public enum MobileToolSupport {
         case "list_notes": return ["woven_notes_list"]
         case "read_note": return ["woven_notes_read"]
         case "save_note": return ["woven_notes_create", "woven_notes_apply"]
+        case "woven_browser_cancel": return ["woven_browser_use_cancel"]
+        case "woven_computer_cancel": return ["woven_computer_use_cancel"]
         default:
           if value.hasPrefix("wovenmatter_"), let group = WorkspaceToolGroup(rawValue: String(value.dropFirst("wovenmatter_".count))) {
             return ["woven_" + group.rawValue]

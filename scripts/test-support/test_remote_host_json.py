@@ -92,7 +92,8 @@ class HostFixtures(unittest.TestCase):
             if result['running']: self.assertEqual(result['state'],'running')
         self.assertNotIn(TOKEN,json.dumps(self.m.main(['logs','fixture','10'])))
         self.m.privileged_actions=lambda d:[]; self.m.os_release=lambda:{'ID':'debian','VERSION_ID':'13'}
-        self.assertTrue(self.m.main(['prepare','AUTHORIZED','user'])['prepared'])
+        with mock.patch.object(self.m.shutil,'which',return_value='/fixture/bin/tool'):
+            self.assertTrue(self.m.main(['prepare','AUTHORIZED','user'])['prepared'])
         self.assertRaises(self.m.Failure,self.m.main,['prepare','NO'])
         self.assertRaises(self.m.Failure,self.m.main,['logs','fixture','1001'])
     def test_unsupported_command_and_identity_are_rejected(self):
@@ -286,7 +287,7 @@ class HostFixtures(unittest.TestCase):
             self.assertEqual(self.m.privileged_actions(self.m.os_release()),[])
             self.assertTrue(any(call==['sudo','-n',*expected] for call in self.calls))
     def test_ubuntu_restriction_prepares_missing_apparmor_parser(self):
-        with mock.patch.object(self.m,'apparmor_restriction',return_value=1), mock.patch.object(self.m.shutil,'which',return_value=None):
+        with mock.patch.object(self.m,'apparmor_restriction',return_value=1), mock.patch.object(self.m.shutil,'which',return_value=None), mock.patch.object(self.m.Path,'is_file',return_value=False):
             packages=self.m.dependency_packages({'ID':'ubuntu','VERSION_ID':'24.04'})
         self.assertIn('apparmor',packages); self.assertIn('libasound2t64',packages)
         self.assertNotIn('apparmor',self.m.dependency_packages({'ID':'debian','VERSION_ID':'13'}))

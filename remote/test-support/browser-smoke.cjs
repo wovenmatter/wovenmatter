@@ -141,13 +141,13 @@ async function verifyMCP(serviceURL, tabId, page, url, viewerRequest) {
   };
   const callerID = uuid();
   const call = async (name, input, caller = callerID) => {
-    const reply = await admin(name === 'woven_browser_cancel' ? '/v1/browser/mcp/cancel' : '/v1/browser/mcp', 'POST', {
+    const reply = await admin(name === 'woven_browser_use_cancel' ? '/v1/browser/mcp/cancel' : '/v1/browser/mcp', 'POST', {
       callerID: caller, input: { ...input, requestID: input.requestID || uuid() },
     });
     return reply;
   };
   const invoke = async input => {
-    const response = await call('woven_browser', input);
+    const response = await call('woven_browser_use', input);
     assert.equal(response.success, true, JSON.stringify(response));
     return response.result;
   };
@@ -168,10 +168,10 @@ async function verifyMCP(serviceURL, tabId, page, url, viewerRequest) {
   assert.ok(listed.some(item => item.id === downloaded.id));
   const read = JSON.parse((await invoke({ action: 'read-download', tabId, id: downloaded.id })).content[0].text);
   assert.equal(Buffer.from(read.data, 'base64').toString(), 'Woven MCP download proof');
-  const requestID = uuid(), pending = call('woven_browser', { action: 'click', tabId, selector: '#never-present', requestID });
+  const requestID = uuid(), pending = call('woven_browser_use', { action: 'click', tabId, selector: '#never-present', requestID });
   await new Promise(resolve => setTimeout(resolve, 250));
-  assert.equal((await call('woven_browser_cancel', { id: requestID }, uuid())).result.cancelled, 0);
-  const cancelled = await call('woven_browser_cancel', { id: requestID });
+  assert.equal((await call('woven_browser_use_cancel', { id: requestID }, uuid())).result.cancelled, 0);
+  const cancelled = await call('woven_browser_use_cancel', { id: requestID });
   assert.equal(cancelled.result.cancelled, 1);
   assert.equal((await pending).success, false);
   assert.equal((await viewerRequest('frame', { tabID: tabId })).status, 200);

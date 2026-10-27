@@ -5,6 +5,12 @@ import WovenMatterCompanion
 
 @Suite("Mobile MCP durable boundaries")
 struct MobileToolBoundaryTests {
+  @Test func savedCancellationGrantsFollowRenamesWithoutEnablingComputerInput() {
+    let available = WovenMCPCatalog.tools.map(\.name)
+    let permitted = MobileToolSupport.permittedMCPTools(selection: ["woven_computer_cancel", "woven_browser_cancel"], available: available)
+    #expect(permitted == ["woven_browser_use_cancel", "woven_computer_use_cancel"])
+    #expect(!permitted.contains("woven_computer_use"))
+  }
   @Test func computerUseIsOptInButScopedCancellationSurvivesDisable() throws {
     let context = MobileToolContext(sessionID: "caller", workspaceID: "phone")
     #expect(context.enabled.contains(.browser) && !context.enabled.contains(.computer))
