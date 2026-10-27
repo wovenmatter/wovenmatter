@@ -33,7 +33,7 @@ struct SettingsRemoteWorkspacesView: View {
         .accessibilityElement(children: .combine)
     }
 
-    var body: some View {
+    private var workspacePage: some View {
         SettingsPage(
             title: selectedWorkspace?.name ?? "Remote Workspaces",
             detail: selectedWorkspace.map(workspaceLocation),
@@ -78,6 +78,10 @@ struct SettingsRemoteWorkspacesView: View {
                 for workspace in model.workspaces { model.refresh(workspace) }
             }
         }
+    }
+
+    private var workspacePresentations: some View {
+        workspacePage
         .sheet(item: $browserWorkspace) { workspace in
             RemoteBrowserView(workspaces: model, configuration: workspace)
         }
@@ -117,6 +121,10 @@ struct SettingsRemoteWorkspacesView: View {
                 setupWorkspace = nil
             }
         }
+    }
+
+    private var workspaceConfirmations: some View {
+        workspacePresentations
         .confirmationDialog(
             "Authorize remote host preparation?",
             isPresented: Binding(
@@ -163,6 +171,10 @@ struct SettingsRemoteWorkspacesView: View {
         } message: {
             Text("Uninstall stops the native service and keeps workspace files and databases. Removing data cannot be undone.")
         }
+    }
+
+    var body: some View {
+        workspaceConfirmations
         .confirmationDialog(
             "Confirm harness \(model.preparedHarnessAction?.action ?? "change")?",
             isPresented: Binding(
