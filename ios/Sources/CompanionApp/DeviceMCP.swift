@@ -102,9 +102,9 @@ extension CompanionModel {
           try await transport.executeMCP(message, conversationID: conversationID,
             enabledGroups: context.enabled.sorted { $0.rawValue < $1.rawValue }, contextID: nil)
         } onCancel: {
-          guard let group = automationGroup else { return }
+          guard let group = automationGroup, let cancelTool = group.automationCancelToolName else { return }
           let cancel: GatewayJSONValue = .object(["jsonrpc": .string("2.0"), "id": .string(UUID().uuidString.lowercased()), "method": .string("tools/call"),
-            "params": .object(["name": .string("woven_" + group.rawValue + "_cancel"), "arguments": .object(["id": .string(request.requestID)])])])
+            "params": .object(["name": .string(cancelTool), "arguments": .object(["id": .string(request.requestID)])])])
           Task { _ = try? await transport.executeMCP(cancel, conversationID: conversationID, enabledGroups: [], contextID: nil) }
         }
         guard let value = response.objectValue?["result"] else {

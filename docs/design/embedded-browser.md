@@ -47,17 +47,28 @@ retains caller ownership and works after capability or execution-access revocati
 Automation receipts retain completion metadata, without page or desktop captures;
 retries after completion inspect fresh state instead of replaying input.
 
-Linux execution workspaces expose the same `woven_browser` MCP tool against their
+Linux execution workspaces expose the same `woven_browser_use` MCP tool against their
 own shared Chromium service. Its tabs appear in the remote workspace's **View
 browser** window. The browser profile and lifecycle remain with the Linux owner;
 MCP does not redirect those calls to the Mac currently viewing the conversation.
 
-Computer Use is an independent, default-off capability. Peekaboo's Swift
-libraries, selected by the shared native lockfile within a compatible release
-range, run inside the signed GUI process, so macOS grants apply to Woven Matter.
-Woven MCP routes local and remote harnesses to this host. Screen capture returns
-a bounded image and a single-use, chat-scoped frame for coordinate input; Stop or
-capability revocation cancels work. Cua and cross-platform desktop hosts are deferred.
+Computer Use is an independent, default-off capability, exposed exclusively as
+`woven_computer_use` through Woven MCP. The GUI directly supervises the signed,
+checksummed Cua Driver executable so macOS grants remain attributed to Woven
+Matter. Each caller receives a separate internal MCP proxy and implicit driver
+session; agents receive neither a raw driver descriptor nor its private socket.
+The wrapper admits only desktop discovery, bounded observations, launch and
+input actions. It defaults to exact-window background delivery; desktop and
+foreground input require explicit fields. Cua validates snapshot element tokens
+and capture IDs; Woven retains per-call authorization, durable request admission,
+inline image limits, cancellation and device execution checks. It re-encodes
+images without resizing them, preserving the driver's coordinate mapping.
+
+The app bundles only the universal Cua executable and notices, with no Node SDK,
+perception extension, Cua Spaces, installer or runtime updater. Its isolated
+state, disabled telemetry and parent-lifetime pipe keep the helper owned by the
+GUI. Host shutdown and driver failure invalidate its generation. Native input on
+Linux and iOS remains outside this Mac desktop capability.
 
 `WorkspaceVisibleContext` captures bounded note IDs/titles/revisions and browser
 HTTP(S) URLs/titles at Send, marking the selected tab. URLs lose user information

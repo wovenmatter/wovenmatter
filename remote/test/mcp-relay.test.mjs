@@ -19,7 +19,7 @@ test('remote HTTP relay authenticates requests, preserves MCP results, and propa
   assert.equal((await fetch(ready.endpointURL,{method:'POST',headers:{...headers,authorization:'Bearer wrong'},body:'{}'})).status,401)
   assert.equal((await fetch(ready.endpointURL,{headers})).status,405)
   assert.equal((await fetch(ready.endpointURL,{method:'POST',headers:{...headers,origin:'https://unrelated.example'},body:'{}'})).status,403)
-  const message={jsonrpc:'2.0',id:7,method:'tools/call',params:{name:'woven_browser',arguments:{action:'screenshot'}}}
+  const message={jsonrpc:'2.0',id:7,method:'tools/call',params:{name:'woven_browser_use',arguments:{action:'screenshot'}}}
   const response=fetch(ready.endpointURL,{method:'POST',headers,body:JSON.stringify(message)})
   const packet=await next();assert.equal(packet.type,'request');assert.deepEqual(packet.body,message)
   const result={jsonrpc:'2.0',id:7,result:{content:[{type:'image',mimeType:'image/png',data:'cGl4ZWxz'}],structuredContent:{success:true}}}

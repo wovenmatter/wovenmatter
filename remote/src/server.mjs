@@ -83,7 +83,7 @@ const taskGateway = runningAsService ? createTaskGateway({
 const workspaceBrowser = createWorkspaceBrowser({ profile: configuration.legacyBrowserProfile,
   profilesRoot: configuration.browserProfilesRoot, runtimeKind: configuration.runtimeKind })
 let browserSelfTestPending
-const browserMCPSchemas = new Map(loadWorkspaceMCPCatalog().filter(tool => ['woven_browser', 'woven_browser_cancel'].includes(tool.name)).map(tool => [tool.name, tool.inputSchema]))
+const browserMCPSchemas = new Map(loadWorkspaceMCPCatalog().filter(tool => ['woven_browser_use', 'woven_browser_use_cancel'].includes(tool.name)).map(tool => [tool.name, tool.inputSchema]))
 
 const clientExecution = runningAsService ? createClientExecution({
   directory: resolve(workspaceRoot, '.wovenmatter/client-execution'),
@@ -236,7 +236,7 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
       if (typeof body.callerID !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(body.callerID)
         || Object.keys(body).some(key => !['callerID', 'input'].includes(key))) return json(response,400,{error:'invalid_browser_mcp_caller'})
       const cancel = url.pathname.endsWith('/cancel'), input = body.input
-      validateInput(browserMCPSchemas.get(cancel ? 'woven_browser_cancel' : 'woven_browser'), input)
+      validateInput(browserMCPSchemas.get(cancel ? 'woven_browser_use_cancel' : 'woven_browser_use'), input)
       if (typeof input.requestID !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(input.requestID)) return json(response,400,{error:'browser_request_id_required'})
       const controller = new AbortController(), disconnected = () => { if (!response.writableEnded) controller.abort() }
       response.once('close', disconnected)

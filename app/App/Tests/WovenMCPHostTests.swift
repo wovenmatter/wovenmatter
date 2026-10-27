@@ -7,6 +7,24 @@ import WovenMatterDashboardStore
 
 @MainActor @Suite(.serialized)
 struct WovenMCPHostTests {
+    @Test func computerUseRequiresExplicitEnablementAndRevocableMcpAuthority() async throws {
+        let fixture = try await MCPHostFixture()
+        defer { fixture.remove() }
+        let access = try await fixture.host.access(.create(label: "Computer acceptance", sessionID: fixture.caller,
+            groups: [.computer], readOnly: false))
+        let connection = try #require(access.issuedConnection)
+        let disabled = try await fixture.call(connection, name: "woven_computer_use", arguments: ["action": .string("apps")])
+        #expect(disabled.objectValue?["error"] != nil)
+        #expect(fixture.calls.callers.isEmpty)
+        _ = try await fixture.database.setSessionToolEnabled(.computer, enabled: true, sessionID: fixture.caller)
+        let enabled = try await fixture.call(connection, name: "woven_computer_use", arguments: ["action": .string("snapshot"), "pid": .number(7), "windowID": .number(9)])
+        #expect(enabled.objectValue?["result"]?.objectValue?["isError"] == .bool(false))
+        #expect(fixture.calls.callers == [fixture.caller])
+        _ = try await fixture.host.access(.revoke(try #require(access.clients.first?.id)))
+        #expect(try await fixture.host.handle(mcpHostRequest(token: connection.bearerToken, name: "woven_computer_use")) == nil)
+        #expect(fixture.calls.callers == [fixture.caller])
+    }
+
     @Test(.enabled(if: mcpSDKFixtureAvailable(), "Run npm ci --prefix default-agent for the native HTTP MCP SDK fixture; --all installs this dependency."), .timeLimit(.minutes(1)))
     func actualSDKInitializesDiscoversAndCallsTheNativeHTTPHost() async throws {
         let fixture = try await MCPHostFixture()
@@ -50,7 +68,7 @@ struct WovenMCPHostTests {
         #expect(fixture.calls.callers == [fixture.caller])
 
         let create = try await fixture.call(connection, name: "woven_notes_create", arguments: ["title": .string("Forbidden")])
-        let cancel = try await fixture.call(connection, name: "woven_browser_cancel", arguments: ["id": .string("all")])
+        let cancel = try await fixture.call(connection, name: "woven_browser_use_cancel", arguments: ["id": .string("all")])
         let outOfScope = try await fixture.call(connection, name: "woven_sessions_list")
         let forgedCaller = try await fixture.call(connection, name: "woven_notes_list", arguments: ["sessionID": .string(fixture.otherCaller)])
         for denied in [create, cancel, outOfScope, forgedCaller] { #expect(denied.objectValue?["error"] != nil) }

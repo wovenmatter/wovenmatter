@@ -24,15 +24,15 @@ async function fixture(t,{fetchImpl,workspaceBrowser}={}) {
 test('workspace browser runs locally without library authority and returns inline images, including scheduled callers',async t=>{
   const calls=[],workspaceBrowser={executeMCP:async(scope,input)=>{calls.push({scope,input});return {content:[{type:'image',mimeType:'image/jpeg',data:'fixture'}]}},cancelMCP:()=>({cancelled:1})}
   const f=await fixture(t,{workspaceBrowser})
-  const response=await f.call('woven_browser',{action:'screenshot',tabId:randomUUID()})
+  const response=await f.call('woven_browser_use',{action:'screenshot',tabId:randomUUID()})
   assert.equal(response.result.isError,false);assert.equal(response.result.content[0].type,'image')
   assert.equal(response.result.structuredContent.requestID,calls[0].input.requestID)
   const task=await f.service.prepareTaskMCP({run:{id:randomUUID(),sessionID:randomUUID(),task:{configuration:{tools:{enabled:['browser']}}}},eventRevision:1})
   const taskScope=f.service.mcp.resolvePrincipal('Bearer '+task.bearerToken)
-  assert.equal((await f.call('woven_browser',{action:'tabs'},taskScope)).result.isError,false)
+  assert.equal((await f.call('woven_browser_use',{action:'tabs'},taskScope)).result.isError,false)
   await f.command('workspace',{conversationID:f.id,workspaceAction:{sessionTools:{id:f.id,enabled:['goals']}}})
-  assert.equal((await f.call('woven_browser',{action:'tabs'})).error.code,-32602)
-  assert.equal((await f.call('woven_browser_cancel',{id:'all'})).result.structuredContent.result.cancelled,1)
+  assert.equal((await f.call('woven_browser_use',{action:'tabs'})).error.code,-32602)
+  assert.equal((await f.call('woven_browser_use_cancel',{id:'all'})).result.structuredContent.result.cancelled,1)
 })
 
 test('session and outside-agent MCP credentials preserve caller scope, readonly access, and current tool policy',async t=>{
@@ -50,7 +50,7 @@ test('session and outside-agent MCP credentials preserve caller scope, readonly 
   const listed=await f.service.mcp.handle(principal,{jsonrpc:'2.0',id:'discover-disabled',method:'tools/list'})
   const names=listed.result.tools.map(tool=>tool.name)
   assert.ok(names.includes('woven_databases_list'))
-  assert.ok(!names.includes('woven_databases_create')&&!names.includes('woven_computer'))
+  assert.ok(!names.includes('woven_databases_create')&&!names.includes('woven_computer_use'))
   assert.equal((await f.call('woven_databases_list',{},principal)).error.code,-32602)
   const ownHistory=await f.call('woven_history_conversations',{},principal)
   assert.deepEqual(ownHistory.result.structuredContent.result.rows.map(row=>row.id),[f.id])
@@ -133,7 +133,7 @@ test('scheduled MCP callers expose safe content tools and a null input capture w
   const scope=f.service.mcp.resolvePrincipal('Bearer '+connection.bearerToken)
   const listed=await f.service.mcp.handle(scope,{jsonrpc:'2.0',id:1,method:'tools/list'})
   const names=listed.result.tools.map(tool=>tool.name)
-  assert.ok(names.includes('woven_notes_read'));assert.ok(names.includes('woven_browser'))
+  assert.ok(names.includes('woven_notes_read'));assert.ok(names.includes('woven_browser_use'))
   assert.ok(!names.includes('woven_goals_set'));assert.ok(!names.includes('woven_sessions_create'));assert.ok(!names.includes('woven_timers_create'))
   const context=await f.call('woven_context',{},scope)
   assert.equal(context.result.structuredContent.result,null)

@@ -57,7 +57,7 @@ inspect again.
 Native hosts install matching Chromium and Playwright with a verified browser
 sandbox. Separate browser profiles keep website logins and storage apart; choose
 a profile in the viewer when more than one exists. Agents can pass `profile`
-to `woven_browser`. Host browsing is headless and runs directly on Linux.
+to `woven_browser_use`. Host browsing is headless and runs directly on Linux.
 
 ### See the agent's tabs in Woven Matter
 
@@ -77,7 +77,7 @@ Images refresh while the app is active and are not saved in the library or histo
 This controls the remote webpage; OS file pickers and local-file uploads are not
 forwarded from the Mac.
 
-Agents use `woven_browser` through the workspace's authenticated Woven MCP
+Agents use `woven_browser_use` through the workspace's authenticated Woven MCP
 connection to create and control tabs you can watch. Start with an `open` call:
 
 ```json
@@ -108,7 +108,7 @@ Each workspace has its own browser; viewing uses the existing authenticated SSH
 connection. The browser-control endpoint is execution-host-loopback-only and is never
 forwarded to the Mac or published on the host.
 
-Use `woven_browser` for the shared native browser, including local development
+Use `woven_browser_use` for the shared native browser, including local development
 servers on the host. Woven installs the matching browser runtime under its
 managed data directory; use **Update server** to refresh that installation.
 
