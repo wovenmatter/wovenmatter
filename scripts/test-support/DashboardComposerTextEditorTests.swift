@@ -88,6 +88,8 @@ struct DashboardComposerTextEditorTests {
         testTrailingNewlineMeasurementMatchesNativeLayout()
         testNativeFocusUpdatesTheBindingImmediately()
         testStaleBlurDoesNotCancelManualRefocus()
+        testDictationCommandFindsTheUnfocusedComposer()
+        testDictationCommandKeepsItsWindowAndEditorScope()
         print("Dashboard composer native text behavior passed.")
     }
 
@@ -578,5 +580,76 @@ struct DashboardComposerTextEditorTests {
             focus.value,
             "native first-responder acquisition must synchronously update the SwiftUI focus binding"
         )
+    }
+
+    private static func testDictationCommandFindsTheUnfocusedComposer() {
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 320, height: 160),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let textView = NSTextView(frame: window.contentView!.bounds)
+        textView.string = "Keep this draft"
+        textView.setSelectedRange(NSRange(location: 5, length: 4))
+        window.contentView = textView
+        let editor = DictationEditor()
+        editor.bind(textView, identity: "composer")
+        window.orderBack(nil)
+        window.makeFirstResponder(window)
+
+        expect(DictationEditor.commandTarget(in: window, preferred: nil) === editor,
+               "File dictation must find the sole visible composer before the user places a caret")
+        expect(editor.focusForCommand(), "File dictation must restore native editor focus")
+        expect(window.firstResponder === textView, "the command must target the composer text view")
+        expect(textView.selectedRange() == NSRange(location: 5, length: 4),
+               "opening the menu must preserve the insertion selection")
+
+        textView.isEditable = false
+        expect(DictationEditor.commandTarget(in: window, preferred: editor) == nil,
+               "read-only editors cannot become dictation targets")
+        textView.isEditable = true
+        window.makeFirstResponder(window)
+        textView.isHidden = true
+        expect(DictationEditor.commandTarget(in: window, preferred: editor) == nil,
+               "hidden editors cannot become dictation targets")
+        textView.isHidden = false
+        window.orderOut(nil)
+        expect(DictationEditor.commandTarget(in: window, preferred: editor) == nil,
+               "closed or hidden windows must not receive dictation")
+    }
+
+    private static func testDictationCommandKeepsItsWindowAndEditorScope() {
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 320, height: 240),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let composerView = NSTextView(frame: NSRect(x: 0, y: 0, width: 320, height: 80))
+        let noteView = NSTextView(frame: NSRect(x: 0, y: 80, width: 320, height: 80))
+        let searchView = NSTextView(frame: NSRect(x: 0, y: 160, width: 320, height: 80))
+        for view in [composerView, noteView, searchView] { window.contentView!.addSubview(view) }
+        let composer = DictationEditor(), note = DictationEditor()
+        composer.bind(composerView, identity: "composer")
+        note.bind(noteView, identity: "note")
+        window.orderBack(nil)
+        window.makeFirstResponder(window)
+        expect(DictationEditor.commandTarget(in: window, preferred: nil) == nil,
+               "multiple editors without a prior target must not be chosen arbitrarily")
+        expect(DictationEditor.commandTarget(in: window, preferred: composer) === composer,
+               "menu focus loss must preserve the active editor")
+        window.makeFirstResponder(noteView)
+        expect(DictationEditor.commandTarget(in: window, preferred: composer) === note,
+               "the current note caret must take precedence over an earlier composer target")
+        window.makeFirstResponder(searchView)
+        expect(DictationEditor.commandTarget(in: window, preferred: composer) == nil,
+               "an unsupported text field must not send dictation to the prior composer")
+        expect(DictationEditor.commandTarget(in: nil, preferred: composer) == nil,
+               "an unavailable window must not reuse a stale editor")
+
+        let other = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 120, height: 80),
+                             styleMask: [.borderless], backing: .buffered, defer: false)
+        other.isReleasedWhenClosed = false
+        defer { other.close() }
+        other.orderBack(nil)
+        expect(DictationEditor.commandTarget(in: other, preferred: composer) == nil,
+               "a Settings or another workspace window must not reuse this window's editor")
     }
 }

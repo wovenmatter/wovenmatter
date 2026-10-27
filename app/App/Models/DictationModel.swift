@@ -10,11 +10,12 @@ import WovenMatterCompanion
     weak var activeEditor: DictationEditor?
     private(set) weak var shortcutEditor: DictationEditor?
     @ObservationIgnored private let focusedWindow: () -> NSWindow?
-    init(session: DictationSession = .shared, focusedWindow: @escaping () -> NSWindow? = { NSApp.keyWindow }) {
+    init(session: DictationSession = .shared,
+         focusedWindow: @escaping () -> NSWindow? = { NSApp.keyWindow ?? NSApp.mainWindow }) {
         self.session = session; self.focusedWindow = focusedWindow
     }
     func refreshShortcutEditor() {
-        let focused = DictationEditor.focused(in: focusedWindow())
+        let focused = DictationEditor.commandTarget(in: focusedWindow(), preferred: activeEditor)
         if shortcutEditor !== focused { shortcutEditor = focused }
     }
     var languageIdentifier: String { get { session.languageIdentifier } set { session.languageIdentifier = newValue } }
@@ -35,8 +36,14 @@ import WovenMatterCompanion
         session.start()
     }
     func toggleActiveEditor() {
-        // Recheck native focus even if SwiftUI has not refreshed the menu yet.
-        guard let editor = DictationEditor.focused(in: focusedWindow()) else { return }
+        // Menu tracking can temporarily release key-window/editor focus. Resolve
+        // against the workspace window and restore its caret before recording.
+        guard let editor = DictationEditor.commandTarget(
+            in: focusedWindow(), preferred: shortcutEditor ?? activeEditor
+        ), editor.focusForCommand() else {
+            error = "Choose an editable conversation or note for dictation."
+            return
+        }
         if retainedTranscript != nil { insertRetained(into: editor) }
         else { toggle(editor: editor) }
     }
