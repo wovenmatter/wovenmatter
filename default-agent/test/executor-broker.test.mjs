@@ -30,9 +30,11 @@ test('Executor broker serves IPC when launched through an application symlink', 
 });
 async function fixture(t, run) {
   const directory = await mkdtemp(join(tmpdir(), 'woven-executor-manager-'));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  let broker;
+  // Public job status can settle before its final atomic receipt write.
+  t.after(async () => { await broker?.saveTail; await rm(directory, { recursive: true, force: true }); });
   const calls = [], scopes = new Map();
-  const broker = await new ExecutorBroker(directory, { fetcher: async (url, input) => {
+  broker = await new ExecutorBroker(directory, { fetcher: async (url, input) => {
     calls.push([url, input]);
     const id = url.split('/').at(-1);
     if (input.method === 'PUT') scopes.set(id, JSON.parse(input.body));

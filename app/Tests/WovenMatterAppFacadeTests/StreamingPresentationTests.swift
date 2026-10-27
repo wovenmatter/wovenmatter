@@ -50,14 +50,21 @@ struct StreamingPresentationTests {
                     host.layoutSubtreeIfNeeded()
                     try await Task.sleep(for: .milliseconds(25))
                     host.layoutSubtreeIfNeeded()
-                    let fitting = host.fittingSize
+                    var fitting = host.fittingSize
                     #expect(fitting.width.isFinite && fitting.height.isFinite && fitting.height > 100)
-                    window.setContentSize(NSSize(width: width, height: min(900, max(200, fitting.height))))
-                    host.layoutSubtreeIfNeeded()
+                    // Native text measurement and lazy work-list geometry can
+                    // settle on consecutive layout passes after disclosure.
+                    for _ in 0..<3 {
+                        window.setContentSize(NSSize(width: width, height: min(900, max(200, fitting.height))))
+                        host.layoutSubtreeIfNeeded()
+                        try await Task.sleep(for: .milliseconds(25))
+                        fitting = host.fittingSize
+                    }
                     let nativeText = responseText(in: host).joined(separator: "\n")
                     if scene == .expanded || scene == .trace || scene == .detailTrace {
                         #expect(nativeText.contains("Checking event order"))
                         #expect(!nativeText.contains("**Checking event order**"))
+                        #expect(nativeText.contains("Keep the final answer after the work."))
                     }
                     if scene == .settled || scene == .interrupted {
                         #expect(nativeText.contains("The supplied reasoning and tool output remain in order."))

@@ -344,7 +344,7 @@ private struct ConversationWorkGroupRow: View {
             )
             // The model can keep working between a successful tool and its
             // next visible part. Keep that live edge animated until the run ends.
-            let showsProgress = liveLabel != nil && !expanded.wrappedValue
+            let showsProgress = liveLabel != nil && (!expanded.wrappedValue || group.isThoughtOnly)
             VStack(alignment: .leading, spacing: 0) {
                 Button {
                     expanded.wrappedValue.toggle()
@@ -461,36 +461,18 @@ private struct ConversationBoundedWorkList: View {
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView(.vertical) {
-                LazyVStack(alignment: .leading, spacing: 8) {
-                ForEach(group.activities) { activity in
+                Group {
                     if group.isThoughtOnly {
-                        // One disclosure opens the complete formatted trace;
-                        // reasoning-only groups need no second row disclosure.
-                        ConversationActivityDetails(
-                            activity: activity, runID: runID,
-                            isLive: runStatus == "running" && group.showsProgress(activity),
-                            summary: nil, indentation: 0)
+                        // A reasoning-only group opens directly into formatted
+                        // text; mixed tool groups retain lazy rows.
+                        VStack(alignment: .leading, spacing: 8) { rows }
                     } else {
-                        ConversationActivityRow(
-                            activity: activity,
-                            runID: runID,
-                            runStatus: runStatus,
-                            showsProgress: group.showsProgress(activity)
-                        )
+                        LazyVStack(alignment: .leading, spacing: 8) { rows }
                     }
                 }
-                if followsAppends && !group.hasActiveActivity {
-                    HStack(spacing: 9) {
-                        ProgressView().controlSize(.mini).frame(width: 17)
-                        Text("Thinking").font(.system(size: 13.5))
-                    }
-                    .foregroundStyle(DashboardPalette.mutedForeground)
-                }
-                Color.clear.frame(height: 1).id("work-end")
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
-        }
         .scrollIndicators(.never)
         .frame(height: min(Self.maximumHeight, max(1, contentHeight)))
         .defaultScrollAnchor(.top, for: .initialOffset)
@@ -524,6 +506,34 @@ private struct ConversationBoundedWorkList: View {
         }
         .onDisappear { saveScrollOffset(scrollOffset) }
         }
+    }
+
+    @ViewBuilder private var rows: some View {
+                ForEach(group.activities) { activity in
+                    if group.isThoughtOnly {
+                        // One disclosure opens the complete formatted trace;
+                        // reasoning-only groups need no second row disclosure.
+                        ConversationActivityDetails(
+                            activity: activity, runID: runID,
+                            isLive: runStatus == "running" && group.showsProgress(activity),
+                            summary: nil, indentation: 0)
+                    } else {
+                        ConversationActivityRow(
+                            activity: activity,
+                            runID: runID,
+                            runStatus: runStatus,
+                            showsProgress: group.showsProgress(activity)
+                        )
+                    }
+                }
+                if followsAppends && !group.isThoughtOnly && !group.hasActiveActivity {
+                    HStack(spacing: 9) {
+                        ProgressView().controlSize(.mini).frame(width: 17)
+                        Text("Thinking").font(.system(size: 13.5))
+                    }
+                    .foregroundStyle(DashboardPalette.mutedForeground)
+                }
+                Color.clear.frame(height: 1).id("work-end")
     }
 }
 
@@ -780,7 +790,7 @@ private struct ConversationActivityDetails: View {
                 if activity.kind == .thought {
                     ConversationReasoningText(
                         activityID: activity.id,
-                        text: RemoteNoteEditEnvelope.redactingEnvelopes(in: content), isLive: isLive)
+                        text: content, isLive: isLive)
                 } else {
                     ConversationPagedText(text: content, style: .code)
                 }
@@ -906,7 +916,10 @@ private struct ConversationReasoningText: View {
     var body: some View {
         let end = text.index(text.startIndex, offsetBy: pages * 20_000, limitedBy: text.endIndex) ?? text.endIndex
         let source = String(text[..<end])
-        let shown = isLive && end == text.endIndex ? AssistantStreamingText.readyPrefix(of: source) : source
+        // Redaction trims whitespace. Commit boundaries from the original
+        // text first so a completed paragraph/list item is never held back.
+        let committed = isLive && end == text.endIndex ? AssistantStreamingText.readyPrefix(of: source) : source
+        let shown = RemoteNoteEditEnvelope.redactingEnvelopes(in: committed)
         VStack(alignment: .leading, spacing: 6) {
             if !shown.isEmpty {
                 ConversationResponse(content: shown, isStreaming: isLive, showsCopyButton: false)

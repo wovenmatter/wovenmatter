@@ -28,11 +28,11 @@ struct ConversationWorkTimelineTests {
 
   @Test("completed reasoning does not hide a still-running tool label")
   func liveActivitySelection() {
-    let command = tool("command", "bash", status: "running")
+    let command = AgentRunActivity(id: "command", kind: .tool, title: "Run the stream check", status: "running", toolName: "bash")
     let thought = AgentRunActivity(id: "thought", kind: .thought, status: "completed", content: "Checking the next step.")
     let group = ConversationWorkGroup(id: "group", activities: [command, thought], endsTimeline: true)
     #expect(group.liveActivity?.id == "command")
-    #expect(group.liveLabel(runIsActive: true) == "Running a command")
+    #expect(group.liveLabel(runIsActive: true) == "Run the stream check")
     #expect(group.latestThought?.id == "thought")
     #expect(group.activeActivityIDs == ["command"])
   }
