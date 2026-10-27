@@ -8,15 +8,20 @@ independent data and process leases.
 An explicit live host uses production's data and exclusive execution lease.
 
 ```sh
-scripts/build_and_run.sh --mode client
+scripts/build_and_run.sh
 scripts/build_and_run.sh --mode snapshot
+scripts/build_and_run.sh --mode client
 scripts/build_and_run.sh --mode live
-scripts/build_and_run.sh --mode client --instance chat-ui
+scripts/build_and_run.sh --mode snapshot --instance chat-ui
 scripts/build_and_run.sh --mode snapshot --instance migration-check
 scripts/build_and_run.sh --plan
 ```
 
-`run` is implicit; `debug`, `logs`, and `verify` retain their existing meanings.
+`run` is implicit. `debug` opens LLDB; `logs` opens the app and streams its logs.
+`verify` launches and checks the exact executable, leaving it open for inspection.
+The `--debug`, `--logs`, and `--verify` aliases are also accepted. Every normal
+launch waits for the expected app to stay running; this verifies process startup,
+not library connectivity or provider readiness.
 The launcher requests a normal quit from only the exact app being rebuilt, before
 replacing its executable. Active work or unsaved writing may refuse the quit;
 finish that work before rebuilding. It never force-kills another Dev app or the
@@ -31,46 +36,58 @@ Agents understand ordinary wording: "build this as a client" means `--mode clien
 "Build the live database" or "host the production database directly" means `--mode live`.
 "Live client" or "use live data" still means client; the named `live` mode means the actual host.
 
-Honor the user's explicit choice. Otherwise, agents should choose **client** for
-desktop UI, harness adapters, tools, and scheduling assigned to the Dev execution
-workspace. Choose **snapshot** for central-library migrations, persistence,
-server/API changes, or testing that should not change shared content. State the
-choice and reason briefly; do not stop to ask the user to choose. **Live** is only
-for an explicit request to run the branch as the production database's host.
+Normal development builds use **snapshot** mode: the actual desktop app,
+including its workspace, sidebars, settings, and execution engine, backed by an
+isolated copy of the library. They do not depend on production being reachable.
+Use **client** only when explicitly testing a connected library client. Use
+**live** only when explicitly asked to host the production database.
 
-When no choice is passed, `auto` inspects committed and uncommitted changes against
-`origin/main`, including untracked files. Known library-host and protocol paths
-choose snapshot; other changes choose client. Auto never selects live.
-This is a conservative fallback,
-not semantic analysis. Agents should pass their chosen mode explicitly when a
-change's intent is clearer than its file paths. `WOVENMATTER_DEV_MODE` and
-`WOVENMATTER_DEV_INSTANCE` are equivalent environment defaults. The old
+With no mode supplied, `auto` selects snapshot. It never changes an explicit
+client request into a snapshot after a connection failure. `WOVENMATTER_DEV_MODE`
+and `WOVENMATTER_DEV_INSTANCE` are equivalent environment defaults. The old
 `WOVENMATTER_DEV_VARIANT` remains an instance-name alias.
 
 ## Client mode
 
-A client instance connects to the production library host using the regular
-desktop workspace surface. It synchronizes
-shared notes, folders, calendar, library artifacts, and conversation history,
-and runs its own branch's native execution engine for its assigned sessions.
-Foreign conversations remain owned by their original execution workspace; their
-controls route to that owner. New local sessions use this instance's execution
-storage and working directories. A shared folder without a local execution root
-cannot silently become a local project: create a folder in the Dev workspace or
-use All Workspaces for a new scratch directory.
+A client launches the same full desktop app as the other modes. Its window is
+only a frontend. Its own background server owns a persistent local database,
+the synchronization journal, native execution, and scheduling. Closing the
+window leaves this server running. Background Server settings inspect, stop,
+and restart this instance's server; no development login job is installed.
 
-On the same Mac, initial connection uses production's private, same-user Unix
-socket. The production host must include the development-connect endpoint from
-this change, have background execution enabled (or be a running live Dev host), and have its central library
-available through the existing Tailscale connection. It provisions an independent,
-revocable Dev device identity. Credentials are saved directly to this instance's
-Keychain namespace; the launcher never reads or copies production credentials.
+The local database synchronizes notes, folders, calendar, saved artifacts, and
+conversation history bidirectionally with the production library through the
+library API. The client runs its own branch's agents and tools. Production is
+the shared-data authority, not the client's execution owner. Offline edits remain
+journaled locally and reconnect preserves them. Foreign conversations retain
+their execution owners and are never resumed as local sessions.
 
-When that local endpoint is unavailable, the app opens the existing Device
-Connections setup with the failure reason. Pairing to another Mac uses the normal
-approved pairing flow. An agent must not operate account authentication or
-device-authorization UI to recover access. The instance never falls back to
-opening production SQLite or starting a replacement central library.
+Enrollment is automatic only with the production library host on the same Mac.
+The client uses its private same-user endpoint to provision an independent
+revocable device identity; no pairing link, approval dialog, or manual connection
+entry is required. It does not discover or automatically enroll with other Macs.
+The identity can appear in the host's device list because it is a real client.
+Subsequent data synchronization uses its HTTPS library endpoint, as on a different Mac. The
+production library service and Tailscale must be available for first enrollment
+and live sync; its UI does not have to be open. An already initialized client can run
+against its local database while the library is offline, retaining its device
+identity, executor, and pending edits. Its refresh loop resumes two-way sync when
+the library becomes reachable again without reenrollment. The client server retries
+initial connection failures rather than substituting another mode or another UI.
+Credentials stay in this instance's Keychain namespace and its server process.
+The launcher never reads or copies production credentials or opens production SQLite.
+
+Automatic enrollment is not an HTTP route. The Unix socket lives in an owner-only
+0700 directory, is mode 0600, and checks kernel-reported peer user IDs on both ends.
+This trusts processes running as the same macOS user; it is not a code-signature
+sandbox against malicious software already running as that user. Existing normal
+paired-device identities cannot be claimed as Dev identities. Revoking a Dev
+identity blocks automatic reenrollment of that identity, including after restart;
+use a fresh explicitly named instance when intentionally replacing it.
+
+The foreground window reads only this server's local execution projection and
+receives shared history and artifact metadata over its private RPC connection.
+It does not create a second replica writer or execute agents in the UI process.
 
 Shared edits and accepted commands are real changes. A new Dev instance does
 not adopt existing production sessions or schedules. Closing an instance does
@@ -81,7 +98,7 @@ snapshot host.
 
 ## Snapshot mode
 
-Snapshot and live profiles launch a separate headless background server using
+All three profiles launch a separate headless background server using
 the profile's own executable, socket, and execution lease. The window process is
 a frontend. Closing it leaves that profile's work running; Settings → Background
 Server can stop or restart it. Development servers never install login jobs.
@@ -134,8 +151,8 @@ that lock. The launcher only requests a normal quit of the exact Dev executable
 being rebuilt, so it does not terminate production for you.
 
 The live host serves regular library clients and the same-user development
-connection endpoint while its app is running. It keeps execution in its own
-process, so quit it gracefully before returning ownership to production.
+connection endpoint from its background server. Stop that server gracefully
+before returning ownership to production.
 
 ## Validation
 

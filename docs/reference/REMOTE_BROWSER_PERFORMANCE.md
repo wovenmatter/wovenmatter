@@ -38,39 +38,6 @@ image read has a ten-second timeout. Workspace update/removal closes the owner's
 parser sizes, and no redirects or disk cache. Closing a viewer leaves agent tabs
 open. There is no Pause/Resume control.
 
-## Cost and scope
-
-There are no new GPU, video, or networking dependencies. Chromium runs in the
-remote workspace and starts when an agent connects; capture starts only when a
-viewer subscribes and stops with its last subscriber. The Mac receives JPEGs
-and sends input; it does not launch another local browser for this viewer.
-
-A five-second static-page probe on the same Apple Silicon Mac measured the
-Node service plus its Chromium descendants at **31.2% of one CPU core** with the
-previous screenshot loop and **0.6%** with change-driven capture. The no-viewer
-baseline was about 0.4%. These short process-tree samples use cumulative CPU time
-from `ps`, are noisy near zero, and are not Linux-host guarantees.
-
-The opt-in native benchmark measures the production HTTP stream, frame feed,
-off-main image decode, viewer model and AppKit canvas in a real 1280×800 window.
-A debug Swift test process used **1.0% of one core idle**, and **11.8% while drawing
-268 animated frames over five seconds** (about 54 fps). Resident memory was
-46 MiB before opening the viewer, 96 MiB idle and 96 MiB after animation. This is
-a short isolated test-process measurement, not whole-app resource usage; it
-excludes WindowServer, remote Chromium, SSH/TLS and the backend-owner RPC hop.
-Offscreen bitmap screenshots are deliberately excluded: their software drawing
-cost substantially overstates this window path. No byte-accurate app bundle size
-or deployed-workspace cost claim is made.
-
-WebGPU would not remove capture, transport, JPEG decoding or round-trip delays.
-A hardware video codec could reduce bandwidth for sustained motion, but would
-add encoder/decoder negotiation and recovery complexity. Measure real WAN input
-latency and bandwidth before adding that transport. The current ordered input
-path still waits for each batch acknowledgement, so a high-RTT drag cannot have
-local-browser response time even when incoming images remain smooth. This is
-not a claim of native latency, display-vsync performance, audio streaming or
-video-conferencing quality.
-
 ## Reproduce
 
 Install the locked dependencies and matching Playwright Chromium, then run:
@@ -86,24 +53,6 @@ schedule (tabs, screenshot, 200 ms sleep; one request per key) with the current
 batch/stream transport. Both schedules use the current Chromium implementation,
 so this comparison does not credit the optimized version for CDP-session reuse.
 Network latency is simulated, with no packet loss or bandwidth cap.
-
-Observed on an Apple Silicon Mac, October 25, 2026, locked Playwright 1.64.1:
-
-| Simulated RTT | Serial 30-key burst, median | Batched burst, median | Previous image schedule | Live stream |
-| --- | ---: | ---: | ---: | ---: |
-| 0 ms | 12 ms | 11 ms | 4.3 fps | 60.2 fps |
-| 50 ms | 1,660 ms | 68 ms | — | — |
-| 100 ms | 3,122 ms | 114 ms | 2.3 fps | 60.2 fps |
-| 200 ms | 6,162 ms | 215 ms | 1.6 fps | 60.0 fps |
-
-Each keyboard figure is the median of three 30-key bursts; the fixture verifies
-all 30 characters arrived. Frame rates are measured over approximately three
-seconds per mode. A five-second static-page stream transferred 22,139 bytes,
-including its one full initial image and heartbeat metadata. Standalone capture
-cost was 33.1 ms median / 34.2 ms p95 across 30 captures. These are transport
-measurements, not end-to-end Mac display latency or guarantees for every page,
-remote CPU, resolution or network. The initial stream handshake and SSH readiness
-are outside the steady-state frame-rate measurement.
 
 Regression coverage includes authenticated service routes, background-tab input,
 partial-batch failure/replay rejection, stale frames, bounded streaming parsing,

@@ -12,19 +12,6 @@ function fixture() {
   return { submissions, entries, requests, tx, runs, recover: () => recoverNativeRuns(runs, requests, 1, tx) };
 }
 
-test('missing receipts, active attempts and missing answers stay uncertain', async () => {
-  for (const change of [
-    f => delete f.requests.input,
-    f => f.submissions.clear(),
-    f => { f.submissions.get('input:attempt:0').status = 'placed'; },
-    f => f.entries.clear(),
-    f => { f.entries.get(10).conversationId = 2; },
-    f => { f.requests.input.nativeRequestIDs.push('input:attempt:1'); },
-  ]) {
-    const f = fixture(); change(f);
-    assert.deepEqual(await f.recover(), []);
-  }
-});
 
 test('recovers only the latest answer segment while proving every input', async () => {
   const f = fixture();

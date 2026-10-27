@@ -6,9 +6,6 @@ is a client; legacy off preferences no longer select a foreground execution owne
 Development profiles use isolated background servers and never install login jobs.
 Remote workspaces retain their own independent execution preferences.
 
-See the [pre-change parity audit](BACKGROUND_SERVER_PARITY_AUDIT.md) for the
-ownership comparison, repaired failures, verification and remaining provider boundary.
-
 The separate paired-library-client architecture still hosts its optional secondary
 Mac execution workspace inside the client process. This change does not convert
 that federation transport into a background service. Client development profiles

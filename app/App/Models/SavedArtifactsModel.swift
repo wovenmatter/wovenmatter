@@ -6,6 +6,7 @@ import WovenMatterDashboardStore
 @MainActor @Observable
 final class SavedArtifactsModel {
     private(set) var items: [SavedArtifactLibraryItem] = []
+    var replicaItems: [SavedArtifactLibraryItem] = []
     private(set) var loading = false
     private(set) var preparing: Set<String> = []
     var error: String?
@@ -27,7 +28,9 @@ final class SavedArtifactsModel {
         do {
             let items = try await service.savedArtifactItems()
             guard request == generation, !Task.isCancelled else { return }
-            self.items = items
+            let replicaIDs = Set(replicaItems.map(\.id))
+            self.items = (items.filter { !replicaIDs.contains($0.id) } + replicaItems)
+                .sorted { $0.manifest.title.localizedStandardCompare($1.manifest.title) == .orderedAscending }
         } catch {
             if request == generation, !Task.isCancelled { self.error = error.localizedDescription }
         }

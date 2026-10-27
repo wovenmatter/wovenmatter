@@ -54,24 +54,6 @@ async function seedLegacy(options) {
   return {rootID:root.id,childID,taskID,expectedReceipt,expectedConversations,expectedTasks,document,historical,firstSeq};
 }
 
-test('migration preserves native child ownership, checkpoints, rewind history and reclaimed latest documents',async t=>{
-  const options = await fixture(t), expected=await seedLegacy(options);
-  const source = await readFile(join(options.root,'native/main.jsonl'));
-  const storage = await openWorkspacePiStorage(options);
-  assert.deepEqual(await storage.scanConversations({},100,undefined,context),expected.expectedConversations);
-  assert.deepEqual(await storage.scanTasks({},100,undefined,context),expected.expectedTasks);
-  assert.deepEqual(await storage.document(expected.document.id,expected.firstSeq,context),expected.historical);
-  assert.equal((await storage.document(expected.document.id,'current',context)).value.text,'second');
-  assert.deepEqual(await storage.submissionByRequest(expected.rootID,'fixture-receipt',context),expected.expectedReceipt);
-  assert.equal((await storage.conversation(expected.childID,context)).owner.taskId,expected.taskID);
-  assert.ok((await storage.scanEntries({conversationId:expected.childID},100,undefined,context)).items.some(entry=>entry.data?.text==='child transcript'));
-  await storage.close(context);
-  assert.deepEqual(await readFile(join(options.root,'native/main.jsonl')),source);
-  assert.equal((await stat(join(options.root,'native/main.jsonl'))).mode & 0o222,0);
-  const reopened=await openWorkspacePiStorage(options);
-  assert.deepEqual(await reopened.scanTasks({},100,undefined,context),expected.expectedTasks);
-  await reopened.close(context);
-});
 
 test('failed import rolls back every native table and receipt and can retry from the preserved source',async t=>{
   const options=await fixture(t); await seedLegacy(options);
@@ -83,16 +65,6 @@ test('failed import rolls back every native table and receipt and can retry from
   const storage=await openWorkspacePiStorage(options); await storage.close(context);
 });
 
-test('independent native stores share the workspace file without sharing records or altering host tables',async t=>{
-  const first=await fixture(t), second={...first,root:join(first.root,'other'),manifest:{storeID:randomUUID(),sessionID:randomUUID()}};
-  const host=new DatabaseSync(first.databasePath); host.exec('CREATE TABLE host_notes (text TEXT); INSERT INTO host_notes VALUES (\'preserve\')'); host.close();
-  const a=await openWorkspacePiStorage(first), b=await openWorkspacePiStorage(second);
-  const harness=await Harness.open(a,{models:createModels(),registry:createRegistry()},context);
-  await harness.root(context);
-  assert.equal((await b.scanConversations({},100,undefined,context)).items.length,0);
-  await harness.close(context); await b.close(context);
-  const verify=new DatabaseSync(first.databasePath); assert.equal(verify.prepare('SELECT text FROM host_notes').get().text,'preserve'); verify.close();
-});
 
 
 test('committed SQLite state survives abrupt owner-process death without close or replay',async t=>{

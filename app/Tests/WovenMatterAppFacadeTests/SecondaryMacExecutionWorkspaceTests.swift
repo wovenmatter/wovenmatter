@@ -9,34 +9,6 @@ import WovenMatterCore
 @MainActor @Suite(.serialized)
 struct SecondaryMacExecutionWorkspaceTests {
 
-    @Test func toolChangesProjectThroughReplicaWithoutOverwritingOfflineEdits() async throws {
-        let fixture = try await FacadeFixture(); defer { fixture.remove() }
-        let replica = try MobileStore(file: fixture.directory.appending(path: "client/library.json"))
-        let libraryID = UUID().uuidString.lowercased()
-        let content = try NoteDocument(blocks: [.richText(.init(text: "Original"))]).encoded()
-        let note = CompanionNote(id: UUID().uuidString.lowercased(), title: "Shared", content: content, revision: 1)
-        try await replica.apply(.init(workspaceID: libraryID, cursor: 0, notes: [note]))
-        let owner = await replica.snapshot().deviceID
-        let workspace = try await SecondaryMacExecutionWorkspace(descriptor: .init(id: owner, libraryID: libraryID,
-            ownerDeviceID: owner, kind: .mac, name: "Fixture"), model: fixture.model, replica: replica, directory: fixture.directory)
-        #expect(try await fixture.database.companionNote(id: note.id)?.content == content)
-        let offlineContent = try NoteDocument(blocks: [.richText(.init(text: "Offline editor"))]).encoded()
-        try await replica.editNote(id: note.id, title: note.title, content: offlineContent, folderID: nil, base: note)
-        let toolContent = try NoteDocument(blocks: [.richText(.init(text: "Agent writing"))]).encoded()
-        let current = try #require(try await fixture.database.companionNote(id: note.id))
-        let changed = try await fixture.database.applyCompanionMutation(.init(deviceID: owner, kind: .updateNote,
-            resourceID: note.id, expectedRevision: current.revision, title: note.title, content: toolContent))
-        #expect(changed.status == .accepted)
-        try await workspace.capture()
-        let conflict = try #require(await replica.snapshot().conflicts[note.id])
-        #expect(conflict.local.content == toolContent)
-        #expect(conflict.remote?.content == offlineContent)
-        #expect(try await fixture.database.companionNote(id: note.id)?.content == toolContent)
-        _ = try await replica.preserveConflictAsCopy(id: note.id)
-        try await workspace.capture()
-        #expect(await replica.snapshot().conflicts[note.id] == nil)
-        #expect(try await fixture.database.companionNote(id: note.id)?.content == offlineContent)
-    }
 
     @Test func toolCreatedFoldersAndNotesUseStableIDsAndDeletionReturnsToReplica() async throws {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }

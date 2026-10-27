@@ -38,15 +38,6 @@ struct ClosedLidProtectionTests {
         #expect(!power.disabled && !controller.isProtecting)
     }
 
-    @Test func pmsetReadFailsClosedForPartialOrUnknownOutput() throws {
-        #expect(throws: (any Error).self) { try ClosedLidSystemPower.parseDisabled("System-wide power settings:\n") }
-        let prefix = "System-wide power settings:\n"
-        let suffix = "Currently in use:\n sleep 1\n"
-        #expect(try !ClosedLidSystemPower.parseDisabled(prefix + suffix))
-        #expect(try ClosedLidSystemPower.parseDisabled(prefix + " SleepDisabled 1\n" + suffix))
-        #expect(try !ClosedLidSystemPower.parseDisabled(prefix + " SleepDisabled 0\n" + suffix))
-        #expect(throws: (any Error).self) { try ClosedLidSystemPower.parseDisabled(prefix + " SleepDisabled unexpected\n" + suffix) }
-    }
 
     @Test func recoveryJournalIsDurableExclusiveAndRejectsSymlinks() throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)

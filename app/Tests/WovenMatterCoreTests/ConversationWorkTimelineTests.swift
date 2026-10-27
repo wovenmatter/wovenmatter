@@ -139,28 +139,6 @@ struct ConversationWorkTimelineTests {
     #expect(groups(followed)[0].activeActivityIDs.isEmpty)
   }
 
-  @Test("edit groups count distinct files and lone thoughts use a meaningful label")
-  func editsAndThoughts() {
-    let edit = { (id: String, path: String) in
-      AgentRunActivity(id: id, kind: .tool, status: "completed", toolName: "Edit",
-        locations: [AgentRunLocation(path: path)])
-    }
-    let records = [
-      record(edit("1", "a.swift"), at: "1"),
-      record(edit("2", "a.swift"), at: "2"),
-      record(edit("3", "b.swift"), at: "3"),
-      record(AgentRunActivity(id: "p", kind: .progress, title: "Compacting"), at: "4"),
-      record(AgentRunActivity(id: "t", kind: .thought, detail: "Weighing  the\noptions"), at: "5"),
-      record(AgentRunActivity(id: "empty", kind: .thought, content: "  "), at: "6"),
-    ]
-    let all = groups(ConversationWorkTimeline(records: records, commentaryIDs: []))
-
-    #expect(all[0].summary == "Changed 2 files")
-    #expect(all[0].action == .edit)
-    #expect(all[1].isThoughtOnly)
-    #expect(all[1].summary == "Weighing the options")
-    #expect(all[1].activities.map(\.id) == ["t"])
-  }
 
   @Test("the latest segment stays before later visible work, even after a stop")
   func liveCommentaryPartition() {

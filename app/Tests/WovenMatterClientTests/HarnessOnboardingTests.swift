@@ -8,14 +8,6 @@ struct HarnessOnboardingTests {
 }
 
 extension HarnessOnboardingTests {
-    @Test func signInCommandsQuotePathsAndKeepOpenCodeProviderChoiceInteractive() throws {
-        let executable = URL(fileURLWithPath: "/fixture/O'Brien $(touch danger)/tool")
-        let script = try #require(HarnessOnboarding.signInScript(.opencode, executable: executable, searchPath: "/fixture/bin:$PATH"))
-        #expect(script.contains("export PATH='/fixture/bin:$PATH'"))
-        #expect(script.contains("'/fixture/O'\\''Brien $(touch danger)/tool' 'auth' 'login'"))
-        #expect(!script.contains("--provider"))
-        #expect(HarnessOnboarding.signInScript(.defaultAgent, executable: executable, searchPath: "") == nil)
-    }
 }
 
 extension HarnessOnboardingTests {

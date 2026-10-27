@@ -24,6 +24,35 @@ final class DictationEditor {
               let editor = editors.object(forKey: textView), editor.textView === textView else { return nil }
         return editor
     }
+
+    static func commandTarget(in window: NSWindow?, preferred: DictationEditor?) -> DictationEditor? {
+        guard let window, window.isVisible, window.attachedSheet == nil else { return nil }
+        if let focused = focused(in: window) {
+            return focused.isAvailable(in: window) ? focused : nil
+        }
+        // An unsupported text field (for example Search) must not redirect its
+        // dictation command into a different editor.
+        guard !(window.firstResponder is NSTextView) else { return nil }
+        if let preferred, preferred.isAvailable(in: window) { return preferred }
+        let available = (editors.objectEnumerator()?.allObjects ?? [])
+            .compactMap { $0 as? DictationEditor }
+            .filter { $0.isAvailable(in: window) }
+        // The initial workspace has one composer and no caret yet. Multiple
+        // visible editors need an explicit focus or a previously active target.
+        return available.count == 1 ? available.first : nil
+    }
+
+    func focusForCommand() -> Bool {
+        guard let textView, let window = textView.window, isAvailable(in: window) else { return false }
+        return window.makeFirstResponder(textView)
+    }
+
+    private func isAvailable(in window: NSWindow) -> Bool {
+        guard let textView, textView.window === window, !textView.isHiddenOrHasHiddenAncestor,
+              !textView.visibleRect.isEmpty else { return false }
+        return ticket() != nil
+    }
+
     func ticket() -> DictationEditorTicket? {
         guard let textView, textView.isEditable, !textView.hasMarkedText() else { return nil }
         return .init(editor: self, identity: identity,

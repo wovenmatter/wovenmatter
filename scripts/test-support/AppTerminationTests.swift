@@ -305,7 +305,7 @@ private struct AppTerminationTests {
         let application = NSApplication.shared
         let probe = TerminationProbe(resultURL: resultURL)
         application.delegate = probe
-        application.setActivationPolicy(.prohibited)
+        application.setActivationPolicy(CommandLine.arguments.contains("--wait-for-stop") ? .accessory : .prohibited)
         withExtendedLifetime(probe) { application.run() }
     }
 }

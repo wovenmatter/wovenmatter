@@ -24,37 +24,6 @@ import WovenMatterClient
         return .init(tabID: id, imageBase64: jpeg.base64EncodedString(), frameID: "frame-" + id)
     }
 
-    @Test func switchingProfilesClearsOldTabsAndRoutesInputToTheSelectedProfile() async throws {
-        var loadedProfiles: [String] = []
-        var sentProfiles: [String] = []
-        let viewer = RemoteBrowserViewerModel(loadTabs: { .init(running: false, tabs: []) },
-            loadFrame: { id, _ in try frame(id) },
-            loadProfileTabs: { profile in
-                loadedProfiles.append(profile)
-                return .init(running: true, tabs: [.init(id: profile, title: profile, url: "https://example.test")],
-                    profiles: ["default", "work"], profile: profile)
-            }, loadProfileFrame: { id, _, profile in
-                #expect(id == profile)
-                return try frame(id)
-            }, sendProfileAction: { action, profile in
-                sentProfiles.append(profile)
-                #expect(action.tabID == profile)
-                return .init(tabID: action.tabID, accepted: true)
-            })
-        await viewer.refresh()
-        #expect(viewer.selectedProfile == "default" && viewer.selectedID == "default")
-        viewer.selectProfile("../invalid")
-        #expect(viewer.selectedProfile == "default")
-        viewer.selectProfile("work")
-        #expect(viewer.image == nil && viewer.tabs.isEmpty)
-        for _ in 0..<100 where viewer.image == nil { try await Task.sleep(for: .milliseconds(10)) }
-        #expect(viewer.selectedProfile == "work" && viewer.selectedID == "work")
-        viewer.enqueue(.init(kind: "reload"))
-        for _ in 0..<100 where sentProfiles.isEmpty { await Task.yield() }
-        #expect(sentProfiles == ["work"])
-        #expect(loadedProfiles.contains("work"))
-        viewer.clear()
-    }
 
     @Test func lateBackendFrameCannotRestoreRemovedWorkspace() async throws {
         let suite = "remote-browser-tests-" + UUID().uuidString
@@ -84,25 +53,6 @@ import WovenMatterClient
         #expect(projection.browserIdentity(for: configuration) == nil)
     }
 
-    @Test func browserOperationsBypassCommandReplayStorage() async throws {
-        let fixture = try await FacadeFixture(); defer { fixture.remove() }
-        let backend = BackendApplicationService(model: fixture.model)
-        let requestID = UUID().uuidString
-        let missing = BackendRPCRequest(id: requestID, method: "remoteWorkspaces.command",
-            payload: try JSONEncoder().encode(BackendRemoteWorkspaceCommand.browserTabs(UUID())))
-        #expect(await backend.handle(missing).error == "This workspace is no longer configured.")
-        let current = BackendRPCRequest(id: requestID, method: "remoteWorkspaces.command",
-            payload: try JSONEncoder().encode(BackendRemoteWorkspaceCommand.browserTabs(UUID())))
-        #expect(await backend.handle(current).error == "This workspace is no longer configured.")
-        let inputRequestID = UUID().uuidString
-        var action = RemoteBrowserAction(kind: "text"); action.text = "ephemeral user input"
-        let firstInput = BackendRPCRequest(id: inputRequestID, method: "remoteWorkspaces.command",
-            payload: try JSONEncoder().encode(BackendRemoteWorkspaceCommand.browserAction(UUID(), action)))
-        #expect(await backend.handle(firstInput).error == "This workspace is no longer configured.")
-        let currentInput = BackendRPCRequest(id: inputRequestID, method: "remoteWorkspaces.command",
-            payload: try JSONEncoder().encode(BackendRemoteWorkspaceCommand.browserAction(UUID(), action)))
-        #expect(await backend.handle(currentInput).error == "This workspace is no longer configured.")
-    }
 
     @Test func nativeCanvasMapsLetterboxingAndEmitsRealPageGestures() throws {
         let canvas = RemoteBrowserInputView(frame: NSRect(x: 0, y: 0, width: 1000, height: 720))

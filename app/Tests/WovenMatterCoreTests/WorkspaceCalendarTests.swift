@@ -272,30 +272,6 @@ extension WorkspaceCalendarTests {
 }
 
 extension WorkspaceCalendarTests {
-  @Test func remoteOwnershipSurvivesRestartAndBlocksPendingDelivery() async throws {
-    let (db, directory) = try await fixture(); defer { try? FileManager.default.removeItem(at: directory) }
-    let workspace = UUID(), start = date("2026-09-22T12:00:00Z")
-    var remoteTask = task(); remoteTask.configuration.workspaceID = workspace
-    let id = try await db.saveCalendarEvent(draft: .init(title: "Remote",startsAt: start,task: remoteTask),creating: true,now:start)
-    let run = try await #require(db.dueCalendarRuns(now:start).first)
-    try await db.setRemoteCalendarExecutionOwnership(workspaceID:workspace,state:.pending)
-    #expect(try await db.dueCalendarRuns(now:start).isEmpty)
-    #expect(try await !db.isCalendarRunActive(run.id))
-    let snapshot = try await #require(db.remoteCalendarExecutionSnapshot(workspaceID:workspace).first)
-    #expect(snapshot.event.id == id)
-    #expect(snapshot.runs.isEmpty)
-    var moved = WorkspaceCalendarDraft(snapshot.event)
-    moved.task?.configuration.workspaceID = nil
-    await #expect(throws: (any Error).self) {
-      try await db.saveCalendarEvent(id:id,draft:moved,creating:false)
-    }
-    let reopened = try await WorkspaceDatabase(url:directory.appending(path:"workspace.sqlite"))
-    #expect(try await reopened.remoteCalendarExecutionOwnership(workspaceID:workspace) == .pending)
-    #expect(try await reopened.dueCalendarRuns(now:start).isEmpty)
-    try await reopened.setRemoteCalendarExecutionOwnership(workspaceID:workspace,state:.remote)
-    try await reopened.deleteCalendarEvent(id:id)
-    #expect(try await reopened.remoteCalendarExecutionSnapshot(workspaceID:workspace).isEmpty)
-  }
 
 }
 

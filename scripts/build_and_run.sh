@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Parse the entire launcher before building: edits made during a long build must
+# not change the commands Bash reads when it resumes after xcodebuild.
+run_development_build() {
+
 mode=run
 data_mode="${WOVENMATTER_DEV_MODE:-auto}"
 instance="${WOVENMATTER_DEV_INSTANCE:-${WOVENMATTER_DEV_VARIANT:-}}"
@@ -9,6 +13,7 @@ plan_only=false
 while [ "$#" -gt 0 ]; do
   case "$1" in
     run|debug|logs|verify) mode="$1"; shift ;;
+    --debug|--logs|--verify) mode="${1#--}"; shift ;;
     --mode|--instance|--source)
       [ "$#" -ge 2 ] || { printf 'Missing value for %s\n' "$1" >&2; exit 64; }
       case "$1" in --mode) data_mode="$2" ;; --instance) instance="$2" ;; --source) source_directory="$2" ;; esac
@@ -123,6 +128,12 @@ fi
 
 launch_app() {
   /usr/bin/open -n "$app"
+  if ! swift "$repo_root/scripts/stop-development.swift" "$executable" --wait; then
+    printf 'Dev launch failed: %s\n' "$app" >&2
+    printf 'Inspect startup errors with: /usr/bin/log show --last 2m --predicate %q\n' "process == \"$product_name\"" >&2
+    return 1
+  fi
+  printf 'Dev app is running: %s\n' "$app"
 }
 
 case "$mode" in
@@ -134,8 +145,10 @@ case "$mode" in
     ;;
   verify)
     launch_app
-    sleep 1
-    swift "$repo_root/scripts/stop-development.swift" "$executable" --check
-    stop_dev_app
+    # Leave the verified app open for interactive testing.
     ;;
 esac
+
+}
+
+run_development_build "$@"

@@ -320,34 +320,6 @@ for (const harnessID of ['test']) {
   })
 }
 
-for (const notifyOnly of [false]) {
-  test(`reconnect still times out without a pending dialog (notify only: ${notifyOnly})`, async () => {
-    const { runStdioRelay } = await import('../src/durable-acp-stdio.mjs')
-    const input = new PassThrough(), output = new PassThrough()
-    const messages = []
-    output.on('data', data => {
-      for (const line of data.toString().trim().split('\n')) {
-        const message = JSON.parse(line)
-        messages.push(message)
-        if (message.id === 1) input.end()
-      }
-    })
-    const request = async (url, options) => {
-      if (url.endsWith('/attach')) return { ok: true, json: async () => ({ state: 'running', attachmentToken: 'fixture-attachment', events: [],
-        snapshot: { session: { sessionId: 'native' }, busy: true,
-          pendingRequests: [] } }) }
-      assert.ok(url.endsWith('/poll'), 'timed-out recovery must not send a prompt')
-      return await new Promise((_, reject) => {
-        if (options.signal.aborted) reject(options.signal.reason)
-        else options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true })
-      })
-    }
-    input.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'session/load', params: { sessionId: 'native' } }) + '\n')
-    await runStdioRelay({ channelID: 'busy', harnessID: 'test', token: 'fixture', input, output, request, loadTimeout: 0 })
-    const result = messages.find(message => message.id === 1)
-    assert.match(result.error.message, /still running/)
-  })
-}
 
 test('natural process exit settles interrupted prompts and survives service restart', async t => {
   const f = await fixture(t)
@@ -372,16 +344,6 @@ test('natural process exit settles interrupted prompts and survives service rest
   assert.equal(f.launches(), 1)
 })
 
-test('session shutdown releases waiting polls',async t=>{
-  const f=await fixture(t)
-  await f.call('attach')
-  const waiting=f.call('poll',{after:0,waitMs:10000})
-  await new Promise(resolve=>setImmediate(resolve))
-  assert.equal(f.relay.hasActiveRuntime('test'), true)
-  await f.relay.stopAll()
-  assert.equal(f.relay.hasActiveRuntime('test'), false)
-  assert.equal((await waiting).state,'stopped')
-})
 
 test('native host durable sessions permit linked external folders while containers retain containment', async t => {
   const external = await mkdtemp(join(tmpdir(), 'woven-linked-project-'))

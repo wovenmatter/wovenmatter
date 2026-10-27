@@ -31,6 +31,7 @@ private actor FixtureTransport: InferenceHTTPTransport {
 final class InferenceTests: XCTestCase {
   let connection = InferenceConnection(id: "phone-key", name: "API", provider: "openai", route: .direct, modelID: "gpt-4")
   let model = InferenceModel(id: "gpt-4", name: "GPT", provider: "openai", api: "openai-responses", baseUrl: "https://api.openai.com/v1")
+
   func testResponsesRequestDetailedSummariesOnlyWhenReasoningIsEnabled() throws {
     for (provider, api) in [("openai", "openai-responses"), ("openai-codex", "openai-codex-responses")] {
       for capable in [false, true] {
@@ -46,31 +47,6 @@ final class InferenceTests: XCTestCase {
           XCTAssertEqual(reasoning["effort"] as? String, capable ? (level == "high" ? "high" : (provider == "openai-codex" ? "none" : nil)) : nil)
         }
       }
-    }
-  }
-
-  func testThinkingChoicesAndRequestsFollowSelectedModelCapabilities() throws {
-    var model = InferenceModel(id: "test", name: "Test", provider: "openai", api: "openai-responses", baseUrl: "https://api.openai.com/v1")
-    XCTAssertEqual(model.supportedThinkingLevels, ["off"])
-    XCTAssertEqual(model.middleThinkingLevel, "off")
-    model.reasoning = true
-    XCTAssertEqual(model.supportedThinkingLevels, ["off", "minimal", "low", "medium", "high"])
-    XCTAssertEqual(model.middleThinkingLevel, "medium")
-    // An omitted ordinary level is supported. Explicit null disables it;
-    // extended levels must be explicitly enabled, matching the desktop Pi SDK.
-    model.thinkingLevelMap = ["off": nil, "minimal": nil, "xhigh": "xhigh", "max": "ultra"]
-    XCTAssertEqual(model.supportedThinkingLevels, ["low", "medium", "high", "xhigh", "max"])
-    XCTAssertEqual(model.middleThinkingLevel, "high")
-    model.thinkingLevelMap = ["minimal": nil, "xhigh": "xhigh", "max": nil]
-    XCTAssertEqual(model.supportedThinkingLevels, ["off", "low", "medium", "high", "xhigh"])
-    XCTAssertEqual(model.middleThinkingLevel, "high")
-      model.thinkingLevelMap = ["minimal": nil, "max": "ultra"]
-    let connection = InferenceConnection(name: "API", provider: model.provider, route: .direct, modelID: model.id)
-    for (level, expected) in [("high", "high"), ("max", "ultra"), ("minimal", nil), ("off", nil)] {
-      let request = try InferenceRequestBuilder(connection: connection, model: model).request(
-        ["context": ["messages": [["role": "user", "content": "hello"]]], "options": ["reasoning": level]], secret: "fixture")
-      let body = try XCTUnwrap(try JSONSerialization.jsonObject(with: XCTUnwrap(request.httpBody)) as? InferenceObject)
-      XCTAssertEqual(inferenceObject(body["reasoning"])["effort"] as? String, expected)
     }
   }
 

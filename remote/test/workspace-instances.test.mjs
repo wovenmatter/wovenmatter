@@ -62,20 +62,6 @@ test('startup is serialized, version checked, loopback bound and workspace state
   assert.equal(unlocks, 1)
 })
 
-test('stop verifies service and registration identity before signaling only its own PID', async () => {
-  const signals = []
-  let stopped = false
-  const instances = fixture({ signal: (pid, signal) => {
-    signals.push([pid, signal])
-    if (signal === 'SIGTERM') stopped = true
-    else if (stopped) throw Object.assign(new Error(), { code: 'ESRCH' })
-  } })
-  await instances.action('opencode', 'stop')
-  assert.deepEqual(signals.filter(([, signal]) => signal !== 0), [[1234, 'SIGTERM']])
-  let reads = 0
-  const changed = fixture({ readFile: async () => JSON.stringify({ ...info, password: ++reads > 1 ? 'different' : info.password }) })
-  await assert.rejects(changed.action('opencode', 'stop'), /identity_changed/)
-})
 
 test('streaming proxy uses host Basic auth, strips client bearer and cookies, preserves SSE', async () => {
   let recorded

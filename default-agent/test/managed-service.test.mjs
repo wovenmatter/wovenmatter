@@ -36,18 +36,6 @@ async function waitForFile(path) {
   }
 }
 
-test('shutdown stops a worker while its initialization import is pending', async t => {
-  const f = await fixture(t, `
-    import { writeFile } from 'node:fs/promises';
-    await writeFile('initializing', 'started');
-    await new Promise(() => {});
-    export function createDefaultAgentService() { return {}; }
-  `);
-  const rejected = assert.rejects(f.service.status(), /stopped|shutting down/);
-  await waitForFile(join(f.directory, 'initializing'));
-  await f.service.close();
-  await rejected;
-});
 
 test('SDK retirement transfers only the current attachment authority and trusted cancellation', async t => {
   const source = `

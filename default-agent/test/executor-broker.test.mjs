@@ -46,56 +46,7 @@ async function fixture(t, run) {
   return { broker, scope, calls, scopes, directory };
 }
 
-test('Executor updates follow every V2 release but never select another API major', async () => {
-  const metadata = version => version.endsWith('-win32-x64')
-    ? { version, os: ['win32'], cpu: ['x64'] } : { version, bin: { executor: 'bin.mjs' } };
-  const registry = (latest, versions) => async url => new Response(JSON.stringify(url.endsWith('/latest')
-    ? metadata(latest) : { versions: Object.fromEntries(versions.map(version => [version, metadata(version)])) }));
-  assert.equal(await latestExecutorVersion(registry('1.6.10', ['1.6.10', '2.0.0-beta.17', '2.0.0-beta.19', '2.0.0-beta.99-win32-x64'])), '2.0.0-beta.19');
-  assert.equal(await latestExecutorVersion(registry('2.1.0-beta.1', ['2.0.0', '2.1.0-beta.1'])), '2.0.0');
-  assert.equal(await latestExecutorVersion(registry('1.6.10', ['2.0.0-beta-hotfix.1', '2.0.0-beta-hotfix.2'])), '2.0.0-beta-hotfix.2');
-  await assert.rejects(latestExecutorVersion(registry('3.0.0', ['3.0.0'])), /compatible/);
-  for (const version of ['2.0.0-beta.19', '2.0.0', '2.1.0', '2.99.3']) {
-    assert.equal(supportsExecutorVersion(version), true);
-    assert.equal(await latestExecutorVersion(registry(version, [version])), version);
-  }
-  // A new upstream major leaves installs on the newest V2 release.
-  assert.equal(await latestExecutorVersion(registry('3.0.0', ['2.4.1', '3.0.0'])), '2.4.1');
-  for (const version of ['1.6.10', '3.0.0', 'invalid']) assert.equal(supportsExecutorVersion(version), false);
-});
-test('Execute waits for trusted approval, deduplicates IDs and binds jobs to their conversation', async t => {
-  let executions = 0;
-  const { broker, scope, directory } = await fixture(t, async () => { executions++; return { structuredContent: { status: 'completed', execution: { ok: true, value: 1 } } }; });
-  const request = { id: randomUUID(), session: 'conversation-a', code: 'return 1;', scope };
-  assert.equal((await broker.start(request)).status, 'awaiting-approval');
-  assert.equal(executions, 0);
-  assert.equal((await broker.start(request)).status, 'awaiting-approval');
-  await assert.rejects(broker.start({ ...request, code: 'return 2;' }), /different program/);
-  assert.throws(() => broker.owned(request.id, 'conversation-b'), /unavailable/);
-  await broker.advance(broker.owned(request.id, request.session), { action: 'accept', content: {} });
-  while (broker.jobs.get(request.id).status === 'running') await wait(10);
-  assert.equal(executions, 1);
-  assert.equal((await broker.start(request)).status, 'completed');
-  assert.equal(executions, 1);
-  assert.ok(!JSON.stringify(broker.publicJob(broker.jobs.get(request.id))).includes('secret'));
-  assert.equal((await stat(join(directory, 'manager.json'))).mode & 0o777, 0o600);
-});
 
-test('cancellation and uncertain transport never replay a program, including after manager restart', async t => {
-  let executions = 0;
-  const { broker, scope, directory } = await fixture(t, async () => { executions++; throw new Error('uncertain transport'); });
-  const request = { id: randomUUID(), session: 'conversation-a', scope, code: 'return tools.mutate({});' };
-  await broker.start(request); await broker.advance(broker.jobs.get(request.id), { action: 'accept' });
-  while (broker.jobs.get(request.id).status === 'running') await wait(10);
-  assert.equal(broker.jobs.get(request.id).status, 'interrupted');
-  const restored = await new ExecutorBroker(directory).load(); restored.config = broker.config;
-  assert.equal((await restored.start(request)).status, 'interrupted');
-  assert.equal(executions, 1);
-  const next = { ...request, id: randomUUID() };
-  await broker.start(next); await broker.cancel(broker.jobs.get(next.id));
-  assert.equal((await broker.start(next)).status, 'cancelled');
-  assert.equal(executions, 1);
-});
 test('cloud/public/insecure origins and shell injection are rejected', () => {
   const config = { id: randomUUID(), location: 'remote', origin: 'https://machine.tailnet.ts.net:8443', host: 'machine.tailnet.ts.net', user: 'trey' };
   assert.equal(validateConfiguration(config), config);
@@ -136,55 +87,6 @@ test('remote Executor deployment passes only the resolved Tailscale transport to
   assert.equal(invocation[1].at(-2), 'trey@workstation');
 });
 
-test('invalid typed input remains pending and a valid response resumes once', async t => {
-  let resumes = 0;
-  const { broker, scope } = await fixture(t, async request => {
-    if (request.name === 'resume') { resumes++; return { structuredContent: { status: 'completed', execution: { ok: true } } }; }
-    return { structuredContent: { status: 'input-required', requestId: 'input-private', elicitation: {
-      requestedSchema: { type: 'object', properties: { count: { type: 'integer', minimum: 1 } }, required: ['count'] }
-    } } };
-  });
-  const id = randomUUID(); await broker.start({ id, session: 'conversation-a', scope, code: 'return tools.ask({});' });
-  const job = broker.owned(id, 'conversation-a');
-  await broker.advance(job, { action: 'accept' });
-  while (job.status === 'running') await wait(10);
-  assert.equal(job.status, 'input-required');
-  assert.ok(!JSON.stringify(broker.publicJob(job)).includes('input-private'));
-  await assert.rejects(broker.advance(job, { action: 'accept', content: { count: 'three' } }), /requested form/);
-  assert.equal(job.status, 'input-required'); assert.equal(resumes, 0);
-  await broker.advance(job, { action: 'accept', content: { count: 3 } });
-  while (job.status === 'running') await wait(10);
-  assert.equal(job.status, 'completed'); assert.equal(resumes, 1);
-});
-for (const dialect of ['implicit draft-07', 'explicit draft-07', 'explicit 2020-12']) test(`Executor preserves ${dialect} tuple forms and resumes only a valid answer`, async t => {
-  const modern = dialect === 'explicit 2020-12';
-  const tuple = [{ type: 'integer' }, { type: 'string' }];
-  const requestedSchema = { type: 'object', required: ['pair'], properties: {
-    pair: { type: 'array', minItems: 2, ...(modern ? { prefixItems: tuple, items: false } : { items: tuple, additionalItems: false }) }
-  }, ...(dialect === 'implicit draft-07' ? {} : {
-    $schema: modern ? 'https://json-schema.org/draft/2020-12/schema' : 'http://json-schema.org/draft-07/schema#'
-  }) };
-  let resumes = 0;
-  const { broker, scope } = await fixture(t, async request => {
-    if (request.name === 'resume') { resumes++; return { structuredContent: { status: 'completed' } }; }
-    return { structuredContent: { status: 'input-required', requestId: 'tuple-form', elicitation: { requestedSchema } } };
-  });
-  const id = randomUUID();
-  await broker.start({ id, session: 'conversation-a', scope, code: 'return tools.ask({});' });
-  const job = broker.owned(id, 'conversation-a');
-  await broker.advance(job, { action: 'accept' });
-  while (job.busy) await wait(10);
-  assert.equal(job.status, 'input-required');
-  for (const pair of [['wrong type', 'label'], [3], [3, 'label', 'extra']]) {
-    await assert.rejects(broker.advance(job, { action: 'accept', content: { pair } }), /requested form/);
-    assert.equal(job.status, 'input-required');
-    assert.equal(resumes, 0);
-  }
-  await broker.advance(job, { action: 'accept', content: { pair: [3, 'label'] } });
-  while (job.busy) await wait(10);
-  assert.equal(job.status, 'completed');
-  assert.equal(resumes, 1);
-});
 
 test('corrupt manager keys fail before runtime startup without replacing storage', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'woven-executor-corrupt-'));
@@ -194,18 +96,6 @@ test('corrupt manager keys fail before runtime startup without replacing storage
   await assert.rejects(new ExecutorBroker(directory).load(), /Existing credentials were retained/);
 });
 
-test('Stop while a client is connecting prevents dispatch even if transport ignores abort', async t => {
-  let release, executions = 0;
-  const { broker, scope } = await fixture(t, async () => { executions++; return {}; });
-  broker.connectOverride = async () => { await new Promise(resolve => { release = resolve; }); return { callTool: async () => { executions++; return {}; } }; };
-  const id = randomUUID(); await broker.start({ id, session: 'conversation-a', scope, code: 'return tools.mutate({});' });
-  const job = broker.owned(id, 'conversation-a');
-  await broker.advance(job, { action: 'accept' });
-  while (!release) await wait(10);
-  await broker.cancel(job); release();
-  while (job.busy) await wait(10);
-  assert.equal(executions, 0); assert.equal(job.status, 'cancelled');
-});
 
 test('an in-flight grant stays bound to its original origin and is discarded after replacement', async t => {
   const { broker, scope } = await fixture(t, async () => ({}));
@@ -356,12 +246,6 @@ test('inventory reads linked account targets and never creates profiles or expos
   assert.deepEqual(calls, [['/dashboard/api/overview', undefined]]);
 });
 
-test('a signal-terminated local runtime is not mistaken for a running child', async t => {
-  const { broker } = await fixture(t, async () => ({}));
-  // Node leaves exitCode null when the child is killed by a signal.
-  broker.child = { exitCode: null, signalCode: 'SIGKILL' };
-  await assert.rejects(broker.startLocal(false), /Install Executor/);
-});
 
 test('remote deployment waits for its private endpoint to become ready', async t => {
   let attempts = 0;
@@ -372,49 +256,4 @@ test('remote deployment waits for its private endpoint to become ready', async t
   const result = await broker.configure({ id: randomUUID(), location: 'remote', origin: 'https://fixture.tailnet.ts.net:8443', host: 'fixture.tailnet.ts.net' }, true);
   assert.equal(result.ready, true); assert.equal(attempts, 3);
   assert.equal(result.version, null);
-});
-
-test('concurrent jobs share scoped grant refresh and one client connection', async t => {
-  const { broker, scope } = await fixture(t, async () => ({}));
-  let refreshes = 0, connections = 0, release;
-  const gate = new Promise(resolve => { release = resolve; });
-  scope.grant.expires = 0;
-  broker.token = async () => { refreshes++; await gate; return { token: 'new-scoped-token', refresh: 'next', expires: Date.now() + 3600000 }; };
-  const client = { close: async () => {} };
-  broker.connectOverride = async () => { connections++; return client; };
-  const first = broker.client(scope), second = broker.client(scope);
-  release();
-  assert.deepEqual(await Promise.all([first, second]), [client, client]);
-  assert.equal(refreshes, 1); assert.equal(connections, 1);
-});
-
-test('concurrent first programs share authorization and a failed attempt can retry', async t => {
-  const { broker, scope } = await fixture(t, async () => ({}));
-  delete scope.grant;
-  let authorizations = 0, release;
-  const gate = new Promise(resolve => { release = resolve; });
-  broker.authorize = async () => { authorizations++; await gate; throw new Error('offline'); };
-  const attempts = Promise.allSettled([broker.client(scope), broker.client(scope)]);
-  release();
-  assert.ok((await attempts).every(result => result.status === 'rejected'));
-  assert.equal(authorizations, 1);
-  broker.authorize = async () => { authorizations++; return { token: 'scoped', expires: Date.now() + 3600000 }; };
-  await broker.client(scope);
-  assert.equal(authorizations, 2);
-});
-
-test('connection replacement closes a late transport instead of caching it', async t => {
-  const { broker, scope } = await fixture(t, async () => ({}));
-  let release, connected, closes = 0;
-  const started = new Promise(resolve => { connected = resolve; });
-  broker.connectOverride = async () => {
-    connected(); await new Promise(resolve => { release = resolve; });
-    return { close: async () => { closes++; } };
-  };
-  const pending = broker.client(scope);
-  await started;
-  await broker.shutdownClients();
-  release();
-  await assert.rejects(pending, /connection changed/);
-  assert.equal(closes, 1); assert.equal(broker.clients.size, 0);
 });

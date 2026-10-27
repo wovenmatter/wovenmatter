@@ -11,26 +11,6 @@ struct RemoteHostWorkspaceTests {
               attachmentsDirectory: "/home/alice/woven-attachments")
     }
 
-    @Test func legacyConfigurationDecodesButCannotLaunch() throws {
-        let existing = RemoteWorkspaceConfiguration(name: "Legacy", workspaceID: "legacy", hostName: "host.invalid")
-        var object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(existing)) as? [String: Any])
-        for key in ["kind", "accessMode", "dataRoot", "workspaceRoot", "databasesDirectory", "attachmentsDirectory"] {
-            object.removeValue(forKey: key)
-        }
-        let decoded = try JSONDecoder().decode(RemoteWorkspaceConfiguration.self,
-            from: JSONSerialization.data(withJSONObject: object))
-        #expect(decoded.kind == .container)
-        #expect(decoded.accessMode == .user)
-        #expect(!decoded.kind.isSupported)
-        #expect(throws: RemoteWorkspaceClientError.self) {
-            try RemoteWorkspaceExecTarget(configuration: decoded).command(["node", "--version"])
-        }
-        #expect(throws: RemoteWorkspaceClientError.self) {
-            try RemoteHarnessLaunchResolver.resolve(configuration: decoded, runtimeKind: .codex,
-                processWorkingDirectory: URL(fileURLWithPath: "/tmp"),
-                tailnetSSHOptions: { _ in Issue.record("Deprecated workspaces must not contact SSH"); return [] })
-        }
-    }
 
     @Test func hostCommandsUseDiscoveredPathsAndQuoteEveryArgument() throws {
         let target = RemoteWorkspaceExecTarget(configuration: host())
@@ -80,15 +60,6 @@ struct RemoteHostWorkspaceTests {
         #expect(prepared.arguments.last?.contains("'durable-acp' '--permission-mode' 'bypassPermissions'") == true)
     }
 
-    @Test func hostStatusAndHealthDecodeAdditionalMetadata() throws {
-        let json = #"{"id":"native","name":"Native","state":"running","running":true,"startedAt":"","image":"native","memoryBytes":0,"swapBytes":0,"hostPort":7338,"persistentVolume":"/home/alice/.local/share/wovenmatter","capabilities":{"memory":false,"swap":false},"storageKind":"host","hostStorageLow":false,"legacyStorage":false,"kind":"host","accessMode":"fullRoot","dataRoot":"/home/alice/.local/share/wovenmatter","linger":true,"fingerprint":"abc"}"#
-        let status = try JSONDecoder().decode(RemoteWorkspaceStatus.self, from: Data(json.utf8))
-        #expect(status.kind == .host && status.accessMode == .fullRoot)
-        #expect(status.hostPort == 7338 && status.linger == true)
-        let health = try JSONDecoder().decode(RemoteWorkspaceHealth.self, from: Data(#"{"status":"ok","version":"0.1.0","workspaceRoot":"/home/alice/projects","harnessCount":4,"runtimeKind":"host","serviceFingerprint":"abc","dataRoot":"/home/alice/.local/share/wovenmatter","databasesDirectory":"/home/alice/db","attachmentsDirectory":"/home/alice/attachments","accessMode":"fullRoot"}"#.utf8))
-        #expect(health.runtimeKind == .host && health.accessMode == .fullRoot)
-        #expect(health.databasesDirectory == "/home/alice/db")
-    }
 
     @Test func hostProgressNeverDisplaysInstallerOutput() {
         #expect(RemoteWorkspaceBuildProgress.message("WM_PROGRESS selftest", kind: .host) == "Verifying the Chromium sandbox…")

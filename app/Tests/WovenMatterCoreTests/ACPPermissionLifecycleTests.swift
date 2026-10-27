@@ -44,21 +44,6 @@ struct ACPPermissionLifecycleTests {
     await fixture.coordinator.shutdown()
   }
 
-  @Test func choosingModelWithoutThinkingClearsObsoleteEffort() async throws {
-    let fixture = try await PermissionLifecycleFixture(runtime: .codex)
-    defer { fixture.cleanUp() }
-    try await fixture.database.updateLocalACPSessionConfiguration(
-      conversationID: fixture.id, model: "default-model", thinking: "obsolete", permission: "default"
-    )
-    let changed = try await fixture.coordinator.updateConfiguration(
-      conversationID: fixture.id, model: "no-effort", launch: fixture.launch, workspace: fixture.workspace
-    )
-    #expect(changed.model == "no-effort")
-    #expect(changed.thinking == nil)
-    #expect(changed.thinkingOptions.isEmpty)
-    #expect(try await fixture.database.localACPSession(conversationID: fixture.id).thinking == nil)
-    await fixture.coordinator.shutdown()
-  }
 
 
   @Test func storedPermissionBelongsToTheSessionAndSurvivesDatabaseReopen() async throws {

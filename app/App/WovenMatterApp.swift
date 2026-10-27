@@ -159,10 +159,12 @@ final class WorkspaceProcessLease {
         applicationSupportDirectory: URL? = FileManager.default.urls(
             for: .applicationSupportDirectory,
             in: .userDomainMask
-        ).first
+        ).first,
+        isolatedDirectory: URL? = CompanionTestWorkspace.supportDirectory,
+        role: LocalExecutionRole = .current
     ) -> URL {
-        if let isolated = CompanionTestWorkspace.supportDirectory {
-            return isolated.appending(path: "workspace-owner.lock")
+        if let isolated = isolatedDirectory {
+            return isolated.appending(path: role.leaseFileName)
         }
         let supportDirectory = applicationSupportDirectory
             ?? FileManager.default.homeDirectoryForCurrentUser.appending(
@@ -170,7 +172,7 @@ final class WorkspaceProcessLease {
                 directoryHint: .isDirectory
             )
         return supportDirectory.appending(
-            path: WovenMatterWorkspacePaths.folderName + "/" + LocalExecutionRole.current.leaseFileName,
+            path: WovenMatterWorkspacePaths.folderName + "/" + role.leaseFileName,
             directoryHint: .notDirectory
         )
     }
@@ -357,6 +359,26 @@ final class WorkspaceProcessLease {
     }
 }
 
+/// Actions belong to the active workspace window, including a Dev client's
+/// local execution surface. Settings and setup windows publish no workspace actions.
+struct WorkspaceMenuActions {
+    var newChat: @MainActor () -> Void
+    var newNote: @MainActor () -> Void
+    var newBrowserTab: @MainActor () -> Void
+    var refresh: @MainActor () -> Void
+}
+
+private struct WorkspaceMenuActionsKey: FocusedValueKey {
+    typealias Value = WorkspaceMenuActions
+}
+
+extension FocusedValues {
+    var workspaceMenuActions: WorkspaceMenuActions? {
+        get { self[WorkspaceMenuActionsKey.self] }
+        set { self[WorkspaceMenuActionsKey.self] = newValue }
+    }
+}
+
 #if !COMPANION_FACADE_TESTS
 @main
 enum WovenMatterEntryPoint {
@@ -374,12 +396,58 @@ enum WovenMatterEntryPoint {
     }
 }
 
+struct WorkspaceMenuCommands: Commands {
+    @FocusedValue(\.workspaceMenuActions) private var actions
+    @AppStorage(DashboardTheme.storageKey) private var themeRawValue = DashboardTheme.green.rawValue
+    @AppStorage(DashboardSidebarStyle.storageKey) private var sidebarStyleRawValue = DashboardSidebarStyle.defaultStyle.rawValue
+
+    private var dictationTitle: String {
+        if DictationModel.shared.isRecording { return "Stop Dictation" }
+        return DictationModel.shared.retainedTranscript == nil ? "Start Dictation" : "Insert Dictation"
+    }
+
+    var body: some Commands {
+        CommandGroup(replacing: .newItem) { }
+        CommandMenu("File") {
+            Button("New Chat") { actions?.newChat() }
+                .keyboardShortcut("n", modifiers: .command)
+                .disabled(actions == nil)
+            Button("New Note") { actions?.newNote() }
+                .keyboardShortcut("n", modifiers: [.command, .shift])
+                .disabled(actions == nil)
+            Button("New Browser Tab") { actions?.newBrowserTab() }
+                .keyboardShortcut("t", modifiers: .command)
+                .disabled(actions == nil)
+            Divider()
+            Button(dictationTitle) { DictationModel.shared.toggleActiveEditor() }
+                .keyboardShortcut("d", modifiers: [.command, .shift])
+                .disabled(DictationModel.shared.shortcutEditor?.ticket() == nil
+                    || DictationModel.shared.phase == .finishing)
+            Divider()
+            Button("Refresh Workspace") { actions?.refresh() }
+                .keyboardShortcut("r", modifiers: [.command, .shift])
+                .disabled(actions == nil)
+        }
+        CommandMenu("Appearance") {
+            Picker("Theme", selection: $themeRawValue) {
+                ForEach(DashboardTheme.allCases) { theme in
+                    Text(theme.title).tag(theme.rawValue)
+                }
+            }
+            Divider()
+            Picker("Sidebar Layout", selection: $sidebarStyleRawValue) {
+                ForEach(DashboardSidebarStyle.allCases) { style in
+                    Text(style.title).tag(style.rawValue)
+                }
+            }
+        }
+    }
+}
+
 struct WovenMatterApp: App {
     @NSApplicationDelegateAdaptor(WovenMatterLifecycleDelegate.self) private var lifecycleDelegate
     private let workspaceProcessLease: WorkspaceProcessLease?
     @State private var applicationModel: ApplicationModel
-    @AppStorage(DashboardTheme.storageKey) private var themeRawValue = DashboardTheme.green.rawValue
-    @AppStorage(DashboardSidebarStyle.storageKey) private var sidebarStyleRawValue = DashboardSidebarStyle.defaultStyle.rawValue
 
     init() {
 
@@ -396,7 +464,7 @@ struct WovenMatterApp: App {
         }
         // A leftover login job must not reopen an old central library after
         // this Mac has explicitly switched to a different library's client.
-        if !isRunningUnitTests, LocalExecutionRole.current == .backend,
+        if !isRunningUnitTests, LocalExecutionRole.current == .backend, DevelopmentLaunch.mode == nil,
            UserDefaults.standard.bool(forKey: LocalExecutionRole.libraryClientPreferenceKey) {
             Darwin.exit(EXIT_SUCCESS)
         }
@@ -407,7 +475,7 @@ struct WovenMatterApp: App {
         workspaceProcessLease = isRunningUnitTests
             ? nil
             : WorkspaceProcessLease.acquireOrExit()
-        if !isRunningUnitTests && (LocalExecutionRole.current == .backend || DevelopmentLaunch.isLiveHost) {
+        if !isRunningUnitTests && LocalExecutionRole.current == .backend {
             do {
                 try WovenMatterBackendProcess.removeStaleSocketAfterAcquiringLease(
                     LocalExecutionRole.backendSocketURL(workspaceDirectory:
@@ -493,36 +561,7 @@ struct WovenMatterApp: App {
         }
         .defaultSize(width: 1320, height: 860)
         .windowStyle(.hiddenTitleBar)
-        .commands {
-            CommandGroup(replacing: .newItem) { }
-            CommandGroup(after: .textEditing) {
-                Button(DictationModel.shared.isRecording ? "Stop and Insert Dictation" : "Dictate into Current Editor") {
-                    DictationModel.shared.toggleActiveEditor()
-                }
-                .keyboardShortcut("d", modifiers: [.command, .shift])
-                .disabled(DictationModel.shared.shortcutEditor?.ticket() == nil
-                    || DictationModel.shared.phase == .finishing)
-            }
-            CommandMenu("Workspace") {
-                Button("Refresh Workspace") {
-                    Task { await applicationModel.refreshWorkspace() }
-                }
-                .keyboardShortcut("r", modifiers: .command)
-            }
-            CommandMenu("Appearance") {
-                Picker("Theme", selection: $themeRawValue) {
-                    ForEach(DashboardTheme.allCases) { theme in
-                        Text(theme.title).tag(theme.rawValue)
-                    }
-                }
-                Divider()
-                Picker("Sidebar Layout", selection: $sidebarStyleRawValue) {
-                    ForEach(DashboardSidebarStyle.allCases) { style in
-                        Text(style.title).tag(style.rawValue)
-                    }
-                }
-            }
-        }
+        .commands { WorkspaceMenuCommands() }
 
         Window("Set up Woven Matter", id: HarnessSetupPresentation.windowID) {
             if applicationModel.isLibraryClient {
@@ -540,13 +579,11 @@ struct WovenMatterApp: App {
         }
         .defaultPosition(.center)
         .windowResizability(.contentSize)
+        .commandsRemoved()
 
         Settings {
             Group {
-                if DevelopmentLaunch.isClient, let execution = applicationModel.libraryClient.localExecution {
-                    SettingsView(model: execution.model)
-                }
-                else if applicationModel.isLibraryClient { CentralLibraryClientSettings(model: applicationModel.libraryClient, application: applicationModel) }
+                if applicationModel.isLibraryClient { CentralLibraryClientSettings(model: applicationModel.libraryClient, application: applicationModel) }
                 else { SettingsView(model: applicationModel) }
             }.scrollIndicators(.never)
         }

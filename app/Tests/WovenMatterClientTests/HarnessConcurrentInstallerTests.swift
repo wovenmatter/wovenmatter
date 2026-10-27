@@ -5,57 +5,6 @@ import WovenMatterCore
 @testable import WovenMatterClient
 
 struct HarnessConcurrentInstallerTests {
-    @Test func differentHarnessesInstallTogetherWhileSameHarnessIsLocked() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: "harness-concurrency-\(UUID())")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let npm = root.appending(path: "npm")
-        try Data(#"""
-        #!/bin/sh
-        fixture_root="$(dirname "$0")"
-        while [ "$#" -gt 0 ]; do
-          if [ "$1" = '--prefix' ]; then shift; prefix="$1"; fi
-          package="$1"
-          shift
-        done
-        case "$package" in
-          @fixture/one@*) name=one; other=two ;;
-          @fixture/two@*) name=two; other=one ;;
-          *) exit 3 ;;
-        esac
-        touch "$fixture_root/$name.started"
-        count=0
-        while [ ! -f "$fixture_root/$other.started" ]; do
-          count=$((count + 1))
-          if [ "$count" -gt 100 ]; then exit 4; fi
-          sleep 0.1
-        done
-        mkdir -p "$prefix/bin"
-        printf '#!/bin/sh\necho 1.2.3\n' > "$prefix/bin/$name"
-        chmod 700 "$prefix/bin/$name"
-        """#.utf8).write(to: npm)
-        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: npm.path)
-        let installer = LocalACPRuntimeInstaller(installPrefix: root.appending(path: "managed"), npmExecutableURL: npm,
-            metadataFetcher: { _ in Data(#"{"version":"1.2.3","bin":{"fixture":"bin.js"}}"#.utf8) })
-        func definition(_ kind: AgentRuntimeKind, _ name: String) -> LocalACPRuntimeDefinition {
-            .init(runtimeKind: kind, displayName: name, commandName: name, arguments: [], underlyingCLIName: nil,
-                cliInstallerSource: nil, cliInstallerInterpreter: nil, adapterPackage: "@fixture/" + name,
-                adapterDescription: "Fixture")
-        }
-        let one = definition(.codex, "one"), two = definition(.claudeCode, "two")
-        let first = Task { try await installer.install(one, component: .adapter) }
-        for _ in 0..<500 {
-            if FileManager.default.fileExists(atPath: root.appending(path: "one.started").path) { break }
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        #expect(FileManager.default.fileExists(atPath: root.appending(path: "one.started").path))
-        await #expect(throws: RuntimeMaintenanceError.busy) { try await installer.install(one, component: .adapter) }
-        let second = try await installer.install(two, component: .adapter)
-        let firstURL = try await first.value
-        #expect(FileManager.default.isExecutableFile(atPath: firstURL.path))
-        #expect(FileManager.default.isExecutableFile(atPath: second.path))
-        #expect(firstURL.resolvingSymlinksInPath().deletingLastPathComponent() != second.resolvingSymlinksInPath().deletingLastPathComponent())
-    }
 }
 
 

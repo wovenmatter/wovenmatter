@@ -82,7 +82,9 @@ final class CentralLibraryClientModel {
     private let executionDirectoryOverride: URL?
     private let preferences: UserDefaults
     var deviceConnectionsError: String?
-    private var booted = false
+    @ObservationIgnored private var initializationTask: Task<Void, Never>?
+    private var nextDevelopmentConnection = Date.distantPast
+    private var connectingDevelopment = false
     private var running = false
     private(set) var preparingTransition = false
     private(set) var localSharingBusy = false
@@ -191,7 +193,14 @@ final class CentralLibraryClientModel {
     var canAttachNote: Bool { selectedExecutionWorkspaceID == "central" || selectedExecutionWorkspaceID == localExecution?.descriptor.id }
 
     func initialize() async {
-        guard !booted else { return }; booted = true
+        if let initializationTask { await initializationTask.value; return }
+        guard !initialized else { return }
+        let task = Task { await self.initializeState() }
+        initializationTask = task
+        await task.value
+        initializationTask = nil
+    }
+    private func initializeState() async {
         if let store {
             do { try await store.restoreExecutionProjection() } catch { errorMessage = error.localizedDescription }
         }
@@ -201,19 +210,28 @@ final class CentralLibraryClientModel {
         guard engine == nil else { return }
         do {
             credential = try MobileCredentialVault.load()
-            if credential == nil, DevelopmentLaunch.isClient {
-                do {
-                    let connection = try await DevelopmentLaunch.connect(deviceID: state.deviceID)
-                    try await acceptPairing(endpoint: connection.endpoint, response: connection.pairing)
-                } catch {
-                    deviceConnectionsError = "The local production library could not connect: " + error.localizedDescription
-                        + " You can also pair this instance in Device Connections."
-                }
-            }
+            if DevelopmentLaunch.isClient { await reconnectDevelopmentLibrary() }
             try configureTransport()
             try configureDirectClients()
             if let store { await analytics.configure(store.analytics, transport: transport) }
         } catch { errorMessage = error.localizedDescription }
+    }
+    func reconnectDevelopmentLibrary(
+        connect: @MainActor (String) async throws -> DevelopmentClientConnection = { try await DevelopmentLaunch.connect(deviceID: $0) }
+    ) async {
+        guard credential == nil, !preparingTransition, !connectingDevelopment else { return }
+        connectingDevelopment = true
+        defer { connectingDevelopment = false; nextDevelopmentConnection = Date().addingTimeInterval(5) }
+        let generation = connectionGeneration
+        do {
+            let connection = try await connect(state.deviceID)
+            guard !Task.isCancelled, !preparingTransition, connectionGeneration == generation, credential == nil else { return }
+            try await acceptPairing(endpoint: connection.endpoint, response: connection.pairing)
+            deviceConnectionsError = nil
+        } catch {
+            deviceConnectionsError = "The live library is unavailable: " + error.localizedDescription
+            status = deviceConnectionsError ?? "Waiting for live library"
+        }
     }
     func run() async {
         guard !running else { return }; running = true
@@ -221,6 +239,9 @@ final class CentralLibraryClientModel {
         await initializeClientWorkspace()
         if credential == nil { section = .settings }
         while !Task.isCancelled {
+            if DevelopmentLaunch.isClient, credential == nil, nextDevelopmentConnection <= Date() {
+                await reconnectDevelopmentLibrary()
+            }
             await refresh(background: true)
             do { try await Task.sleep(for: .seconds(1)) } catch { return }
         }
@@ -304,7 +325,7 @@ final class CentralLibraryClientModel {
         }
         if DevelopmentLaunch.isClient, let model = localExecution?.model {
             model.liveLibraryClient = self
-            await model.refreshWorkspace()
+            await model.updateDevelopmentReplica(DevelopmentReplicaSnapshot(self))
         }
     }
     func attachExecutionWorkspace(_ workspace: CompanionExecutionWorkspace, transport: any ExecutionWorkspaceTransport) async throws {
@@ -339,6 +360,7 @@ final class CentralLibraryClientModel {
             let workspace = try await makeLocalExecution(executionDirectory, store)
             try await attachExecutionWorkspace(workspace.descriptor, transport: workspace)
             localExecution = workspace
+            if DevelopmentLaunch.isClient { workspace.model.liveLibraryClient = self }
             if preferences.object(forKey: Self.localSharingKey) as? Bool ?? true { await startLocalSharing() }
             await selectExecutionWorkspace(workspace.descriptor.id)
         } catch { errorMessage = error.localizedDescription }
@@ -668,10 +690,11 @@ final class CentralLibraryClientModel {
         state.conversations[id] != nil && executionOwner(for: id) != localExecution?.descriptor.id
     }
 
-    func desktopSend(id: String, text: String) async throws {
+    func desktopSend(id: String, text: String, beforeDispatch: () throws -> Void = {}) async throws {
         let snapshot = try await desktopExecution(.refresh(conversationID: id))
         let command = CompanionCommand(deviceID: state.deviceID, kind: snapshot.transcript?.activeRunID == nil ? .send : .steer,
             conversationID: id, runID: snapshot.transcript?.activeRunID, text: text)
+        try beforeDispatch()
         try requireAccepted(await submit(command, workspaceID: executionOwner(for: id) ?? "central"))
         await refresh()
     }

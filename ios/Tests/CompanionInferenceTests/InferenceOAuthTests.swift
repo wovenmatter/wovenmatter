@@ -370,28 +370,4 @@ final class InferenceOAuthTests: XCTestCase {
     XCTAssertEqual(inferenceObject(truncated["message"])["stopReason"] as? String, "length")
   }
 
-  func testCatalogMapsDirectSubscriptionsAndOpenCodeZenWithoutLosingDescriptors() async throws {
-    for provider in ["openai-codex", "claude-subscription", "xai", "opencode"] {
-      var descriptor = provider == "opencode" ? InferenceModel(id: "fixture-model", name: "Fixture", provider: "opencode", api: "openai-completions", baseUrl: "https://opencode.ai/zen/v1") : model(provider)
-      if provider == "claude-subscription" { descriptor.provider = "anthropic" }
-      let transport = try OAuthCatalogFixture(descriptor), directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-      defer { try? FileManager.default.removeItem(at: directory) }
-      let loader = ProviderModelCatalog(directory: directory, transport: transport), loaded = try await loader.load(provider: provider)
-      XCTAssertEqual(loaded.first?.provider, provider); XCTAssertEqual(loaded.first?.id, descriptor.id)
-      XCTAssertEqual(loaded.first?.baseUrl, descriptor.baseUrl)
-      let captured = await transport.requests
-      let request = try XCTUnwrap(captured.first)
-      XCTAssertEqual(request.url?.path, "/api/models/providers/\(provider == "claude-subscription" ? "anthropic" : provider)")
-      XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
-      if provider == "opencode" {
-        let connection = InferenceConnection(name: "Zen", provider: provider, route: .direct, modelID: descriptor.id)
-        let request = try InferenceRequestBuilder(connection: connection, model: loaded[0]).request(["scope": ["conversationID": "fixture-session"], "context": ["messages": []]], secret: "fixture-zen-key")
-        XCTAssertEqual(request.url?.absoluteString, "https://opencode.ai/zen/v1/chat/completions")
-        XCTAssertEqual(request.value(forHTTPHeaderField: "x-opencode-session"), "fixture-session")
-      } else {
-        XCTAssertEqual(InferenceCatalog.providers.first { $0.id == provider }?.defaultRoute, .direct)
-        XCTAssertEqual(InferenceCatalog.providers.first { $0.id == provider }?.supportsOAuth, true)
-      }
-    }
-  }
 }

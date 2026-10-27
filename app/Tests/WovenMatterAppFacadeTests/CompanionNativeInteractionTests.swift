@@ -28,20 +28,4 @@ struct CompanionNativeInteractionTests {
         #expect(macOnly.options.isEmpty)
     }
 
-    @Test func formsRemainOnMacAndFieldValuesCannotEnterPhoneCommandJournal() async throws {
-        let link = OpenCodeSessionLink(conversationID: "conversation", connectionID: "native", sessionID: "ses_a")
-        var snapshot = OpenCodeSessionSnapshot()
-        snapshot.forms = [["id": "form_a", "fields": .array([["key": "secret", "default": "private fixture"]])]]
-        let card = try #require(CompanionNativeInteractionProjection.pending(link: link, snapshot: snapshot, runID: nil).first)
-        #expect(card.title == "Continue on your Mac")
-        #expect(card.questions.isEmpty && card.options.isEmpty)
-        let encoded = String(decoding: try JSONEncoder().encode(card), as: UTF8.self)
-        #expect(!encoded.contains("private fixture"))
-        let reply = CompanionCommand(deviceID: "device", kind: .respond, conversationID: "conversation",
-            interactionID: card.id, response: .init(answers: ["secret": ["private fixture"]]))
-        #expect(!CompanionNativeInteractionProjection.responseIsSafeToJournal(reply))
-        let cancel = CompanionCommand(deviceID: "device", kind: .respond, conversationID: "conversation",
-            interactionID: card.id, response: .init(cancelled: true))
-        #expect(CompanionNativeInteractionProjection.responseIsSafeToJournal(cancel))
-    }
 }

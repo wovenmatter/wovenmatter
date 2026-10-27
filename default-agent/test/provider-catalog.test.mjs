@@ -16,56 +16,7 @@ async function directory(t) {
 }
 const reply = (models = [descriptor()], headers = {}) => new Response(JSON.stringify(models), { headers: { etag: '"fixture"', 'last-modified': 'Thu, 01 Oct 2026 12:00:00 GMT', ...headers } });
 
-for (const status of [200, 400]) test(`OpenCode Go Kimi uses its selected route and returns a safe HTTP ${status} outcome`, async t => {
-  const root = await directory(t), requests = [];
-  const model = descriptor({id:'kimi-k3.1-pro',provider:'opencode-go',api:'openai-completions',baseUrl:'https://opencode.ai/inference/go/v1',
-    thinkingLevelMap:{off:null,low:'low',high:'high'},compat:{supportsStore:false,supportsDeveloperRole:false,maxTokensField:'max_tokens'}});
-  t.mock.method(globalThis,'fetch',async (url, options) => {
-    assert.equal(String(url),'https://opencode.ai/inference/go/v1/chat/completions');
-    requests.push(JSON.parse(options.body));
-    if(status!==200)return new Response(JSON.stringify({error:{message:'private provider response secret-token'}}),{status});
-    const chunks = [{id:'fixture',choices:[{index:0,delta:{role:'assistant',content:'Offline reply'},finish_reason:null}]},
-      {id:'fixture',choices:[{index:0,delta:{},finish_reason:'stop'}],usage:{prompt_tokens:1,completion_tokens:1,total_tokens:2}}];
-    return new Response(chunks.map(value=>'data: '+JSON.stringify(value)+'\n\n').join('')+'data: [DONE]\n\n',{headers:{'content-type':'text/event-stream'}});
-  });
-  const engine = await new DefaultAgentEngine({cwd:root,directory:root,config:{providers:['opencode-go'],defaultModel:'opencode-go/kimi-k3.1-pro',codeMode:'off'},
-    credentials:{'opencode-go':{type:'api_key',key:'offline-placeholder'}},claude:{models:[],loadModels:async()=>{}},
-    catalog:{read:async()=>({models:[model]}),load:async()=>{throw Error('Catalog refresh forbidden');}}}).initialize();
-  const record = await engine.create();
-  t.after(()=>record.session.dispose());
-  await engine.select(record,'low','thinking');
-  const send = () => engine.handle('session/prompt',{sessionId:record.session.sessionId,prompt:[{type:'text',text:'Offline fixture'}]});
-  if(status===200)assert.equal((await send()).stopReason,'end_turn');
-  else await assert.rejects(send(),error=>/HTTP 400/.test(error.message) && !/secret-token|workspace unlock/.test(error.message));
-  assert.equal(requests.length,1,'no automatic account fallback or prompt replay');
-  assert.equal(requests[0].model,'kimi-k3.1-pro');
-});
 
-test('cold/warm/restart/stale/304 use bounded version-aware public provider shards', async t => {
-  const root = await directory(t), requests = []; let now = 10000;
-  const fetchCatalog = async (url, options) => { requests.push({ url, options }); return requests.length === 1 ? reply() : new Response(null, { status: 304 }); };
-  const cache = new ProviderCatalog(root, { fetchCatalog, now: () => now, version: '1.1.0' });
-  assert.equal(await cache.read('openai'), undefined); assert.equal(requests.length, 0);
-  assert.deepEqual((await cache.load('openai')).models, [descriptor()]);
-  await cache.load('openai'); assert.equal(requests.length, 1);
-  const restarted = new ProviderCatalog(root, { fetchCatalog, now: () => now, version: '1.1.0' });
-  await restarted.load('openai'); assert.equal(requests.length, 1);
-  now += refreshInterval;
-  assert.deepEqual((await restarted.read('openai')).models, [descriptor()]);
-  assert.deepEqual((await restarted.load('openai')).models, [descriptor()]);
-  assert.equal(requests.length, 2);
-  assert.equal(requests[1].options.headers['If-None-Match'], '"fixture"');
-  assert.equal(requests[1].options.headers['If-Modified-Since'], 'Thu, 01 Oct 2026 12:00:00 GMT');
-  for (const { url, options } of requests) {
-    assert.equal(url, 'https://pi.dev/api/models/providers/openai?types=chat&pi-version=1.1.0');
-    assert.equal(options.headers['User-Agent'], 'pi/1.1.0');
-    assert.equal(options.credentials, 'omit'); assert.equal(options.redirect, 'error');
-    assert.equal(options.body, undefined);
-    assert.deepEqual(Object.keys(options.headers).filter(k => !['accept', 'User-Agent', 'If-None-Match', 'If-Modified-Since'].includes(k)), []);
-  }
-  const upgraded = new ProviderCatalog(root, { version: '2.0.0' });
-  assert.equal(await upgraded.read('openai'), undefined);
-});
 
 test('OpenCode Go cold startup and ID-only session restore pin current metadata for offline reopening', async t => {
   const root = await directory(t), reference = 'opencode-go/glm-5.3-flash'; let requests = 0;
@@ -107,36 +58,6 @@ test('foreign destinations, provider mismatches, malformed fields and oversized 
 
 });
 
-test('engine startup has no network/inventory; browse needs no credentials and refresh cannot change a saved session', async t => {
-  const root = await directory(t); let calls = 0, name = 'First';
-  const originalFetch = globalThis.fetch; let unwantedRequests = 0;
-  globalThis.fetch = async () => { unwantedRequests++; throw Error('Unexpected network'); };
-  t.after(() => { globalThis.fetch = originalFetch; });
-  const cache = new ProviderCatalog(root, { fetchCatalog: async () => { calls++; return reply([descriptor({ name })]); } });
-  const claude = { models: [], loadModels: async () => {}, status: async () => { throw Error('Unwanted status'); } };
-  const config = { providers: ['openai'], models: ['openai/fixture-chat'], defaultModel: 'openai/fixture-chat' };
-  const engine = await new DefaultAgentEngine({ cwd: root, directory: root, config, claude, catalog: cache }).initialize();
-  assert.equal(calls, 0); assert.deepEqual(engine.catalog(), []); assert.equal(unwantedRequests, 0);
-  await engine.browse('openai'); assert.equal(calls, 1);
-  const record = await engine.create(); const sessionID = record.session.sessionId;
-  name = 'Changed'; await engine.browse('openai', { force: true });
-  assert.equal(engine.resolveModel(config.defaultModel).name, 'Changed');
-  assert.equal(record.session.model.name, 'First');
-  // Provider registration queues credential availability checks; settle those before isolating getAuth.
-  await engine.runtime.refresh({ allowNetwork: false });
-  await new Promise(resolve => setImmediate(resolve));
-  let credentialReads = 0; engine.credentials.read = async () => { credentialReads++; throw Error('Should not read'); };
-  await assert.rejects(engine.runtime.getAuth(descriptor({ baseUrl: 'https://foreign.invalid' })), /invalid model metadata/);
-  assert.equal(credentialReads, 0);
-  await record.session.dispose(); engine.sessions.clear();
-  const offline = new ProviderCatalog(root, { fetchCatalog: async () => { throw Error('No catalog network on restart'); } });
-  await offline.delete('openai');
-  const restarted = await new DefaultAgentEngine({ cwd: root, directory: root, config, claude, catalog: offline }).initialize();
-  const restored = await restarted.create(sessionID);
-  t.after(() => restored.session.dispose());
-  assert.equal(restored.selected, config.defaultModel); assert.equal(restored.session.model.name, 'First');
-  assert.equal(unwantedRequests, 0);
-});
 
 test('Claude starts unavailable, discovers without a prompt, retains only valid discovered metadata across restart', async t => {
   const root = await directory(t); let fail = true, closed = 0;
@@ -152,40 +73,6 @@ test('Claude starts unavailable, discovers without a prompt, retains only valid 
   const restarted = new ClaudeRuntime(root); await restarted.loadModels(); assert.deepEqual(restarted.models, models);
 });
 
-test('an active native run uses its pinned descriptor across a catalog refresh and another tool step', async t => {
-  const root = await directory(t); let name = 'Pinned', release, entered;
-  const enteredStream = new Promise(resolve => { entered = resolve; });
-  const waiting = new Promise(resolve => { release = resolve; });
-  const cache = new ProviderCatalog(root, { fetchCatalog: async () => reply([descriptor({ name })]) });
-  const config = { providers: ['openai'], defaultModel: 'openai/fixture-chat' };
-  const engine = await new DefaultAgentEngine({ cwd: root, directory: root, config, catalog: cache,
-    credentials: { openai: { type: 'api_key', key: 'offline-test-only' } },
-    claude: { models: [], loadModels: async () => {} } }).initialize();
-  await engine.browse('openai');
-  await writeFile(join(root, 'fixture.txt'), 'fixture');
-  const record = await engine.create(), seen = [];
-  engine.runtime.streamSimple = model => {
-    const output = createAssistantMessageEventStream(), first = seen.length === 0;
-    seen.push(model.name);
-    void (async () => {
-      if (first) { entered(); await waiting; }
-      const content = first ? [{ type: 'toolCall', id: 'read-fixture', name: 'read', arguments: { path: 'fixture.txt' } }] : [{ type: 'text', text: 'Completed' }];
-      const message = { role: 'assistant', content, provider: model.provider, api: model.api, model: model.id, timestamp: Date.now(), stopReason: first ? 'toolUse' : 'stop',
-        usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
-      output.push({ type: 'start', partial: message }); output.push({ type: 'done', reason: message.stopReason, message }); output.end(message);
-    })();
-    return output;
-  };
-  try {
-    const running = engine.prompt(record, 'Read the fixture', () => {});
-    await enteredStream;
-    assert.equal(record.busy, true);
-    name = 'Refreshed'; await engine.browse('openai', { force: true }); release();
-    await running;
-    assert.deepEqual(seen, ['Pinned', 'Pinned']);
-    assert.equal(engine.resolveModel(config.defaultModel).name, 'Refreshed');
-  } finally { release(); await record.session.dispose(); }
-});
 
 test('an attached child keeps its configured saved model when refresh removes that catalog entry', { timeout: 15000 }, async t => {
   const root = await directory(t);

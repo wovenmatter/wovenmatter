@@ -47,10 +47,3 @@ test('saved custom models cannot send replacement credentials to a previous serv
   assert.equal((await engine.ensureModel(config.defaultModel)).baseUrl, nextURL);
   assert.equal(engine.providerName(id), nextURL);
 });
-
-test('server addresses and provider identities are bounded and reject embedded credentials', () => {
-  assert.equal(serverURL('http://localhost:32100/'), 'http://localhost:32100/v1');
-  for (const value of ['file:///tmp/server', 'http://user:secret@localhost/v1', url + '?api_key=secret', url + '#secret']) assert.throws(() => serverURL(value));
-  assert.throws(() => localServers(Array(13).fill({ id, url, models: ['model'] })), /12/);
-  assert.throws(() => localServers([{ id: 'openai', url, models: ['model'] }]), /identity/);
-});

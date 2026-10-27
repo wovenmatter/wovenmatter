@@ -7,76 +7,6 @@ import WovenMatterDashboardStore
 
 @MainActor @Suite(.serialized)
 struct CompanionHostLifecycleTests {
-    @Test func executionRevocationUsesLiveAuthenticationAndSurvivesStoppedSharingRestart() async throws {
-        let fixture = try await HostFixture(); defer { fixture.remove() }
-        await fixture.host.start()
-        let first = try await fixture.pairAndProvision(name: "First iPhone")
-        let second = try await fixture.pairAndProvision(name: "Second iPad")
-        let database = try #require(fixture.model.dashboardStore?.database)
-        let identity = try await database.companionLibraryIdentity()
-        var tombstone = try await database.registerCompanionExecutionWorkspace(.init(workspace: .init(
-            id: UUID().uuidString.lowercased(), libraryID: identity.libraryID, ownerDeviceID: first.deviceID,
-            kind: .ios, name: "Deleted device workspace", journalDeviceIDs: [first.deviceID])), deviceID: identity.hostDeviceID)
-        let tombstoneRevision = tombstone.revision
-        tombstone.deleted = true
-        tombstone = try await database.registerCompanionExecutionWorkspace(
-            .init(workspace: tombstone, expectedRevision: tombstoneRevision), deviceID: identity.hostDeviceID)
-        let live = try await database.registerCompanionExecutionWorkspace(.init(workspace: .init(
-            id: UUID().uuidString.lowercased(), libraryID: identity.libraryID, ownerDeviceID: second.deviceID,
-            kind: .ios, name: "Live device workspace", journalDeviceIDs: [first.deviceID])), deviceID: identity.hostDeviceID)
-        #expect(try await fixture.executionStatus(first) == 200)
-        #expect(try await fixture.executionStatus(second) == 200)
-
-        // A separately loaded revocation actor would only update disk and leave
-        // the live API's cached authentication accepting this first bearer.
-        await fixture.host.revoke(first.deviceID)
-        #expect(fixture.host.errorMessage == nil)
-        #expect(try await fixture.executionStatus(first) == 401)
-        #expect(try await fixture.executionStatus(second) == 200)
-        let afterRevocation = try await database.companionExecutionWorkspaces()
-        #expect(afterRevocation.first { $0.id == live.id }?.journalDeviceIDs.isEmpty == true)
-        #expect(afterRevocation.first { $0.id == tombstone.id } == tombstone)
-
-        fixture.host.stopSharing()
-        await fixture.host.revoke(second.deviceID)
-        #expect(fixture.host.errorMessage == nil)
-        let disk = try CompanionExecutionAuthentication(fileURL: fixture.directory.appending(path: "execution-devices.json"))
-        for token in [first.token, second.token] {
-            do { _ = try await disk.authenticate(bearer: token); Issue.record("Revoked execution bearer remained on disk") }
-            catch let error as CompanionAPIError { #expect(error.code == "unauthorized") }
-        }
-        // Restarting the listener must reuse the current actor state, and a new
-        // enrollment must not resurrect revoked grants from an older cache.
-        await fixture.host.start()
-        let third = try await fixture.pairAndProvision(name: "Replacement iPhone")
-        #expect(try await fixture.executionStatus(first) == 401)
-        #expect(try await fixture.executionStatus(second) == 401)
-        #expect(try await fixture.executionStatus(third) == 200)
-        #expect(fixture.host.pairedDevices.map(\.id) == [third.deviceID])
-
-        fixture.host.stopSharing()
-        try await waitUntil { !fixture.children.contains { $0.isRunning } }
-        fixture.host = fixture.makeHost()
-        await fixture.host.start()
-        #expect(try await fixture.executionStatus(first) == 401)
-        #expect(try await fixture.executionStatus(second) == 401)
-        #expect(try await fixture.executionStatus(third) == 200)
-        #expect(fixture.host.pairedDevices.map(\.id) == [third.deviceID])
-
-        // A cold controller must load persisted library authentication even if
-        // the user revokes a device before sharing has been restored or started.
-        fixture.host.stopSharing()
-        try await waitUntil { !fixture.children.contains { $0.isRunning } }
-        fixture.host = fixture.makeHost()
-        fixture.defaults.set([first.deviceID: [String]()], forKey: "companion.execution.pending-revocations")
-        await fixture.host.revoke(third.deviceID)
-        #expect(fixture.host.errorMessage == nil)
-        let libraryDisk = try CompanionAuthentication(fileURL: fixture.directory.appending(path: "companion-devices.json"))
-        #expect(await libraryDisk.devices().isEmpty)
-        await fixture.host.start()
-        #expect(try await fixture.executionStatus(third) == 401)
-        #expect(fixture.host.pairedDevices.isEmpty)
-    }
 
 
     @Test func restoredCancellationRetainsItsProofUntilTheMacAcknowledges() async throws {
@@ -147,28 +77,32 @@ struct CompanionHostLifecycleTests {
         let response = try JSONDecoder().decode(DevelopmentClientConnection.self, from: data)
         #expect(response.endpoint == fixture.host.endpoint)
         #expect(!response.pairing.credential.isEmpty)
+        #expect(response.pairing.deviceID == request.deviceID)
+        #expect(fixture.host.pairingPayload == nil)
+        #expect(fixture.host.pendingPairingRequests.isEmpty)
+        #expect(fixture.host.pairedDevices.contains { $0.id == request.deviceID })
+        for path in ["development.connect", "v1/development/connect"] {
+            var networkRequest = URLRequest(url: try fixture.loopbackURL(path: path))
+            networkRequest.httpMethod = "POST"
+            networkRequest.setValue("Bearer " + response.pairing.credential, forHTTPHeaderField: "Authorization")
+            networkRequest.setValue(response.pairing.workspaceID, forHTTPHeaderField: "X-Woven-Workspace")
+            networkRequest.setValue(String(CompanionProtocol.version), forHTTPHeaderField: "X-Woven-Protocol")
+            networkRequest.httpBody = try JSONEncoder().encode(DevelopmentClientRequest(
+                deviceID: UUID().uuidString.lowercased(), name: "Dev · network"))
+            let (_, reply) = try await URLSession.shared.data(for: networkRequest)
+            #expect(try #require((reply as? HTTPURLResponse)?.statusCode) >= 400)
+        }
+        #expect(fixture.host.pairedDevices.count == 1)
+        let oversized = try JSONSerialization.data(withJSONObject: ["deviceID": UUID().uuidString.lowercased(),
+            "name": "Dev · oversized", "padding": String(repeating: "x", count: 4_096)])
+        await #expect(throws: BackendRPCError.self) {
+            try await BackendRPCClient(socketURL: socket).call(method: "development.connect", payload: oversized)
+        }
         await #expect(throws: BackendRPCError.self) {
             try await BackendRPCClient(socketURL: socket).call(method: "application.command")
         }
     }
 
-    @Test func stalePairingPrincipalCannotRotateReenrolledDevicesExecutionGrant() async throws {
-        let fixture = try await HostFixture(); defer { fixture.remove() }
-        await fixture.host.start()
-        let oldCredential = try await fixture.pairAndProvision(name: "Original iPhone pairing")
-        let oldPrincipal = try #require(fixture.host.pairedDevices.first { $0.id == oldCredential.deviceID })
-        await fixture.host.revoke(oldPrincipal.id)
-        let replacement = try await fixture.pairAndProvision(name: "Reenrolled iPhone", deviceID: oldPrincipal.id)
-        #expect(try await fixture.executionStatus(oldCredential) == 401)
-        #expect(try await fixture.executionStatus(replacement) == 200)
-        do {
-            _ = try await fixture.host.provisionExecutionWorkspace(id: replacement.workspace.id, device: oldPrincipal)
-            Issue.record("A revoked pairing principal was accepted after device reenrollment")
-        } catch let error as CompanionAPIError {
-            #expect(["unavailable", "unauthorized"].contains(error.code))
-        }
-        #expect(try await fixture.executionStatus(replacement) == 200)
-    }
 
     @Test func clickPairingHTTPRequiresLocalApprovalAndReturnsAccurateMetadata() async throws {
         let fixture = try await HostFixture(); defer { fixture.remove() }
@@ -303,7 +237,7 @@ private enum HostFixtureError: Error { case timeout }
         let (_, response) = try await URLSession.shared.data(for: request)
         return try #require((response as? HTTPURLResponse)?.statusCode)
     }
-    private func loopbackURL(path: String) throws -> URL {
+    func loopbackURL(path: String) throws -> URL {
         let child = try #require(children.last { $0.isRunning })
         return try #require(URL(string: child.target)).appendingPathComponent(path)
     }

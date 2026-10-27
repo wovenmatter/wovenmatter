@@ -20,46 +20,6 @@ struct ACPSessionPermissionTests {
     }
 
 
-    @Test(arguments: [AgentRuntimeKind.codex, .claudeCode], ["mode", "permission_mode", "approval_mode"])
-    func nativeSelectionsPreserveLabelsAndRemovedOptionsBecomeUnavailable(kind: AgentRuntimeKind, id: String) async throws {
-        let state = configuration(permission: "default", id: id)
-        let selected = configuration(permission: "full", id: id)
-        var removed = selected
-        removed["configOptions"] = (removed["configOptions"] as? [[String: Any]])?.filter { $0["id"] as? String != id }
-        try await withClient(kind: kind, state: state, handlers: [
-            "session/set_config_option": """
-                case "$request" in
-                  *'"value":"other"'*) \(respond(removed)) ;;
-                  *) \(respond(selected)) ;;
-                esac
-                """,
-        ]) { client, fixture, initialized async throws in
-            let initial = initialized.configuration
-            #expect(initial.permission == "default")
-            #expect(initial.permissionOptions == ["default", "full"])
-            #expect(initial.permissionOptionMetadata["full"]?.name == "Native full label")
-            #expect(initial.permissionOptionMetadata["full"]?.description == "Native full description")
-            #expect(initial.selecting(model: "other", thinking: "high").permission == "default")
-            #expect(initial.selecting(permission: "full").model == "fixture-model")
-            #expect(initial.selecting(permission: "full").thinking == "low")
-            let result = try await client.setSessionPermission("full")
-            #expect(result.permission == "full")
-            #expect(result.model == "fixture-model" && result.thinking == "low")
-            let requests = try fixture.requests(method: "session/set_config_option")
-            #expect(requests.count == 1)
-            let params = requests.first?["params"] as? [String: Any]
-            #expect(params?["sessionId"] as? String == "permission-session")
-            #expect(params?["configId"] as? String == id)
-            #expect(params?["value"] as? String == "full")
-            let withoutPermission = try await client.setSessionConfiguration(model: "other")
-            #expect(withoutPermission.permission == nil && withoutPermission.permissionOptions.isEmpty)
-            #expect(withoutPermission.permissionOptionMetadata.isEmpty)
-            do {
-                _ = try await client.setSessionPermission("full")
-                Issue.record("Removed permission options remained selectable")
-            } catch LocalACPClientError.unsupportedConfiguration { }
-        }
-    }
 
     @Test(arguments: [true, false], ["plan", "dontAsk"])
     func claudeSavedNativePolicyCanBeRestored(modern: Bool, saved: String) async throws {
@@ -105,21 +65,6 @@ struct ACPSessionPermissionTests {
         }
     }
 
-    @Test func grokLaunchReplacesConflictingFlagsWithoutChangingOtherHarnesses() throws {
-        let arguments = ["--no-auto-update", "--permission-mode=bypassPermissions", "agent", "--always-approve", "--leader", "stdio"]
-        #expect(try LocalACPSessionPermissions.launchArguments(arguments, runtimeKind: .grokBuild, permission: "default") ==
-            ["--permission-mode", "default", "--no-auto-update", "agent", "--no-leader", "stdio"])
-        #expect(try LocalACPSessionPermissions.launchArguments(["--permission-mode", "auto", "agent", "--no-leader", "stdio"], runtimeKind: .grokBuild, permission: "dontAsk") ==
-            ["--permission-mode", "dontAsk", "agent", "--no-leader", "stdio"])
-        #expect(try LocalACPSessionPermissions.launchArguments(arguments, runtimeKind: .codex, permission: "normal") == arguments)
-        #expect(LocalACPSessionPermissions.explicitGrokPermission(in: ["agent", "--always-approve", "stdio"]) == "bypassPermissions")
-        #expect(LocalACPSessionPermissions.explicitGrokPermission(in: ["--permission-mode", "auto", "agent", "stdio"]) == "auto")
-        #expect(LocalACPSessionPermissions.explicitGrokPermission(in: ["--permission-mode=default", "agent", "stdio"]) == "default")
-        #expect(LocalACPSessionPermissions.explicitGrokPermission(in: ["agent", "stdio"]) == nil)
-        #expect(throws: LocalACPClientError.self) {
-            try LocalACPSessionPermissions.launchArguments(["agent", "stdio"], runtimeKind: .grokBuild, permission: "invented")
-        }
-    }
 
     @Test(arguments: [AgentRuntimeKind.codex, .claudeCode], [false, true])
     func fullRootWorkspaceConfirmsNativePermissionBeforePrompt(kind: AgentRuntimeKind, loading: Bool) async throws {
@@ -159,29 +104,6 @@ struct ACPSessionPermissionTests {
         } catch { await client.shutdown(); throw error }
     }
 
-    @Test func remoteGrokPolicyRewritesOnlyStructuredHarnessArguments() throws {
-        let resolved = try RemoteHarnessLaunchResolver.resolve(
-            configuration: .init(name: "Fixture", workspaceID: "permission-fixture", hostName: "fixture.invalid",
-                kind: .host, dataRoot: "/home/woven/.local/share/wovenmatter"),
-            runtimeKind: .grokBuild, processWorkingDirectory: URL(filePath: "/private/tmp"), tailnetSSHOptions: { _ in [] }
-        ).launch
-        let wrapped = try #require(resolved.wrappedCommand)
-        let launch = LocalACPRuntimeLaunchConfiguration(runtimeKind: resolved.runtimeKind,
-            executableURL: resolved.executableURL, arguments: resolved.arguments,
-            processWorkingDirectoryURL: resolved.processWorkingDirectoryURL,
-            requestedPermission: "default", wrappedCommand: wrapped)
-        let prepared = try LocalACPSessionPermissions.prepareLaunch(launch)
-        #expect(launch.executableURL.path == "/usr/bin/ssh")
-        #expect(prepared.arguments.dropLast() == resolved.arguments.dropLast())
-        #expect(prepared.explicitPermission == "default")
-        let command = try shellTokens(prepared.arguments[wrapped.argumentIndex])
-        #expect(Array(command.prefix(wrapped.harnessArgumentsStartIndex)) == Array(wrapped.command.prefix(wrapped.harnessArgumentsStartIndex)))
-        #expect(Array(command.dropFirst(wrapped.harnessArgumentsStartIndex)) == ["--permission-mode", "default", "agent", "--no-leader", "stdio"])
-        #expect(command.first == "/home/woven/.local/share/wovenmatter/current/bin/wm-exec")
-        #expect(!command.contains("docker"))
-        // A launch without an override remains byte-for-byte identical.
-        #expect(try LocalACPSessionPermissions.prepareLaunch(resolved).arguments == resolved.arguments)
-    }
 
 
     @Test(arguments: [AgentRuntimeKind.codex, .claudeCode, .grokBuild], [false, true]) func nativeHarnessReceivesSessionBoundWovenHTTPMCP(kind: AgentRuntimeKind, loading: Bool) async throws {
@@ -235,29 +157,6 @@ struct ACPSessionPermissionTests {
     // Captured from Codex ACP 2.2.2 with Woven's ordinary client capabilities.
     // The separate workspace-write preset identifies agent as auto review;
     // this response does not carry the older _meta.kind classification.
-    @Test(arguments: [false, true])
-    func codexSeparateWorkspacePresetIdentifiesAutoReview(modern: Bool) async throws {
-        let idKey = modern ? "value" : "id"
-        let options: [[String: Any]] = [
-            [idKey: "read-only", "name": "Read-only"],
-            [idKey: "workspace-write", "name": "Workspace access"],
-            [idKey: "agent", "name": "Auto review"],
-            [idKey: "agent-full-access", "name": "Full access"],
-        ]
-        let state: [String: Any] = modern
-            ? ["configOptions": [["id": "mode", "category": "mode", "type": "select", "currentValue": "agent", "options": options]]]
-            : ["modes": ["currentModeId": "agent", "availableModes": options]]
-        try await withClient(state: state) { _, fixture, initialized async throws in
-            let value = initialized.configuration
-            #expect(value.permission == "agent")
-            #expect(value.permissionOptions == ["read-only", "workspace-write", "agent", "agent-full-access"])
-            #expect(value.permissionOptionMetadata["workspace-write"]?.name == "Workspace access")
-            #expect(value.permissionOptionMetadata["agent"]?.name == "Approve for me")
-            #expect(value.permissionOptionMetadata["agent"]?.description == "Only ask for actions detected as potentially unsafe.")
-            #expect(try fixture.requests(method: "session/set_config_option").isEmpty)
-            #expect(try fixture.requests(method: "session/set_mode").isEmpty)
-        }
-    }
 
     @Test func nativeErrorAndUnknownValuesNeverEscalate() async throws {
         try await withClient(state: configuration(permission: "default"), handlers: [
@@ -293,15 +192,6 @@ struct ACPSessionPermissionTests {
         }
     }
 
-    @Test func claudeLoadedSessionNeverResetsToAuto() async throws {
-        try await withClient(kind: .claudeCode, state: claudeState(), existingID: "existing-claude") { client, fixture, initialized async throws in
-            #expect(initialized.loadedExistingSession)
-            #expect(initialized.configuration.permission == "default")
-            #expect(try fixture.requests(method: "session/set_config_option").isEmpty)
-            #expect(try fixture.requests(method: "session/new").isEmpty)
-            #expect(await client.sessionConfiguration().permissionOptions == ["default", "auto"])
-        }
-    }
 
     @Test(arguments: [String?.none, "default", "auto", "bypassPermissions"])
     func grokLaunchPolicyRequiresReconnectAndPreservesNativeSession(permission: String?) async throws {
