@@ -783,7 +783,7 @@ struct WorkspaceView: View {
                             compactDrawer = .none
                         }
                     } label: {
-                        Image(systemName: assets.tabs.selected == nil ? "globe" : "rectangle.on.rectangle").font(.system(size: 16)).frame(width: 32, height: 32)
+                        Image(systemName: "rectangle.on.rectangle").font(.system(size: 16)).frame(width: 32, height: 32)
                     }
                     .buttonStyle(DashboardIconButtonStyle())
                     .help(assets.tabs.selected == nil ? "Open browser" : "Show assets")
