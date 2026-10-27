@@ -11,6 +11,8 @@ final class WovenMatterLifecycleDelegate: NSObject, NSApplicationDelegate {
 
     override init() {
         super.init()
+        // Workspace/browser tabs are app content, not macOS tabbed windows.
+        NSWindow.allowsAutomaticWindowTabbing = false
         let center = NotificationCenter.default
         for name in [NSApplication.didBecomeActiveNotification, NSMenu.didBeginTrackingNotification,
                      NSMenu.didAddItemNotification, NSMenu.didChangeItemNotification] {
@@ -31,6 +33,9 @@ final class WovenMatterLifecycleDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidUpdate(_ notification: Notification) {
+        for window in NSApp.windows where window.tabbingMode != .disallowed {
+            window.tabbingMode = .disallowed
+        }
         // SwiftUI leaves empty system-menu placeholders that macOS augments
         // later. Remove them before export, and put our custom File menu in the
         // standard position. Its own command set stays limited to workspace actions.

@@ -577,6 +577,7 @@ struct WovenMatterApp: App {
         }
         .defaultPosition(.center)
         .windowResizability(.contentSize)
+        .commandsRemoved()
 
         Settings {
             Group {
