@@ -1,40 +1,41 @@
-# Morning streaming acceptance pass
+# Streaming acceptance
 
-Use **Woven Matter streaming-parity-review snapshot Dev** for this pass.
-It is the isolated snapshot for [PR #176](https://github.com/wovenmatter/wovenmatter/pull/176).
-The original `streaming-parity` instance contains preserved active work.
+Use an isolated Dev build as described in [development builds](DEVELOPMENT_BUILDS.md).
+Record the source revision, profile, harness, model, and thinking level for each pass.
 
-Use the rebuilt review snapshot containing the authenticated-test follow-up
-fixes. The earlier `ec0d36db` build does not contain those fixes.
-[Verification evidence](STREAMING_VERIFICATION.md) records the T3 comparison,
-automated coverage, screenshots and remaining limits.
+## Offline contracts
+
+Install the committed Node graph with
+`npm ci --prefix default-agent --ignore-scripts --no-audit --no-fund`, then run
+`node scripts/streaming-contracts.mjs --all --output /absolute/report.json`.
+Use `--portable` for JavaScript contracts or `--native` for Swift contracts.
+`--skip-build` reuses compiled Swift tests. These suites do not consume provider
+services; live checks below require separately configured agent accounts.
+Keep reports and screenshots in PR descriptions or external build artifacts.
 
 ## Setup and coverage
 
-Authenticate the agents yourself in the **review snapshot's** Settings. For Pi
+Configure the agents in the Dev build's Settings. For Pi
 Durable, also enable models and choose a default; confirm the new-chat model
 selector is populated. Select models advertised by each harness's own catalog.
 
 Run the three prompts below in a new All Workspaces scratch chat for each row.
 Name chats `Streaming QA / harness / model` so comparisons are easy to find.
-Use two different model families/labs in OpenCode and Pi Durable, rather than
-only two sizes of the same model. Include exposed reasoning and summary-capable
-models where available. Record the selected thinking level.
+Cover each harness. Additional model families are useful when investigating a
+provider-specific difference; their token cadence and exposed reasoning can vary.
+Record the selected thinking level.
 
 | Harness | Model / thinking level | Text / Markdown | Tools / order | Reasoning | Stop / retry | Scroll / reopen | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Codex | | | | | | | |
 | Claude Code | | | | | | | |
 | Grok | | | | | | | |
-| OpenCode: family A | | | | | | | |
-| OpenCode: family B | | | | | | | |
-| Pi Durable: family A | | | | | | | |
-| Pi Durable: family B | | | | | | | |
+| OpenCode | | | | | | | |
+| Pi Durable | | | | | | | |
 
 Mark results Pass, Fail or N/A. For reasoning, note trace, summary or none exposed.
-Reasoning text is evaluated only when the provider supplies it. Codex ACP drops
-the distinction between summary and raw reasoning parts upstream; that documented
-limit should not be mistaken for missing text that the adapter actually supplied.
+Reasoning text is evaluated only when the harness supplies it. Record whether
+the captured stream exposes a trace, a summary, or neither.
 
 ## 1. Text, Markdown and Unicode
 
@@ -103,7 +104,7 @@ Do not use tools. Reply with one short paragraph ending exactly: Fresh turn work
 The new reply should stream normally without stale output or a stuck busy state.
 Also stop a longer text-only answer mid-paragraph and check that its partial
 text remains visible. After a settled turn, close/reopen the chat and relaunch
-the review frontend once; completed output should remain intact without replayed
+the Dev frontend once; completed output should remain intact without replayed
 or duplicated work.
 
 ## Visual pass and reporting
@@ -132,7 +133,5 @@ Relevant screenshot or short transcript excerpt:
 Does reopening the chat change it?:
 ```
 
-Post findings on PR #176 or in this chat. Live Pi/OpenCode family acceptance is
-still pending this authenticated pass. iPhone/iPad simulator execution is also
-unpassed because of the recorded Xcode service-hub failure; desktop testing does
-not mark that platform check complete.
+Record findings in the relevant PR. Report desktop and mobile runtime acceptance
+separately; compilation alone does not establish a device or simulator pass.
