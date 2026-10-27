@@ -98,7 +98,6 @@ struct DashboardAssetPane: View {
         .background(theme.palette.workspace)
         .background {
             Group {
-                Button("") { assets.openBrowser() }.keyboardShortcut("t", modifiers: .command)
                 Button("") {
                     if let selected = assets.tabs.selected { close(selected) }
                 }.keyboardShortcut("w", modifiers: .command)

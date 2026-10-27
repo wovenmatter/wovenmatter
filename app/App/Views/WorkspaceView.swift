@@ -175,6 +175,12 @@ struct WorkspaceView: View {
 
     var body: some View {
         workspaceWithAttachments
+        .focusedSceneValue(\.workspaceMenuActions, WorkspaceMenuActions(
+            newChat: createConversation,
+            newNote: openNewNoteChooser,
+            newBrowserTab: openNewBrowserTab,
+            refresh: { Task { await model.refreshWorkspace() } }
+        ))
         .environment(\.openDocumentPreview) { url, identity in
             do {
                 try assets.openDocument(url, identity: identity)
@@ -1090,6 +1096,16 @@ struct WorkspaceView: View {
                 showNotice(error.localizedDescription)
             }
         }
+    }
+
+    private func openNewBrowserTab() {
+        guard assets.openBrowser() != nil else { return }
+        closeNewChatChooser()
+        closeNewNoteChooser()
+        destination = .workspace
+        compactWorkspacePane = .note
+        compactDrawer = .none
+        chatPanels.presentAsset()
     }
 
     private func createConversation() {

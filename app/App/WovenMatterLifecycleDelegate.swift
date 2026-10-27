@@ -7,6 +7,51 @@ final class WovenMatterLifecycleDelegate: NSObject, NSApplicationDelegate {
     weak var model: ApplicationModel?
     private var terminating = false
     var prepareBrowserTermination: (@MainActor () async -> Bool)?
+    private var menuCleanupScheduled = false
+
+    override init() {
+        super.init()
+        // Workspace/browser tabs are app content, not macOS tabbed windows.
+        NSWindow.allowsAutomaticWindowTabbing = false
+        let center = NotificationCenter.default
+        for name in [NSApplication.didBecomeActiveNotification, NSMenu.didBeginTrackingNotification,
+                     NSMenu.didAddItemNotification, NSMenu.didChangeItemNotification] {
+            center.addObserver(self, selector: #selector(scheduleMenuCleanup(_:)), name: name, object: nil)
+        }
+    }
+
+    @objc private func scheduleMenuCleanup(_ notification: Notification) {
+        guard !menuCleanupScheduled else { return }
+        menuCleanupScheduled = true
+        // Finish the framework's current menu mutation before applying policy.
+        RunLoop.main.perform(inModes: [.common]) { [weak self] in
+            MainActor.assumeIsolated {
+                self?.menuCleanupScheduled = false
+                self?.applicationDidUpdate(Notification(name: NSApplication.didUpdateNotification))
+            }
+        }
+    }
+
+    func applicationDidUpdate(_ notification: Notification) {
+        for window in NSApp.windows where window.tabbingMode != .disallowed {
+            window.tabbingMode = .disallowed
+        }
+        // SwiftUI leaves empty system-menu placeholders that macOS augments
+        // later. Remove them before export, and put our custom File menu in the
+        // standard position. Its own command set stays limited to workspace actions.
+        guard let menu = NSApp.mainMenu else { return }
+        let fileTitle = String(localized: "File")
+        // File can be briefly empty while SwiftUI installs its custom commands.
+        for item in menu.items where item.title != fileTitle && item.submenu?.items.isEmpty == true {
+            menu.removeItem(item)
+        }
+        if let file = menu.items.first(where: { $0.title == fileTitle }),
+           menu.index(of: file) != 1 {
+            menu.removeItem(file)
+            menu.insertItem(file, at: min(1, menu.numberOfItems))
+        }
+    }
+
     static func requestTerminationAfterUpdate() {
         // AppKit's deferred termination enters a nested run loop. Leave the
         // initiating Swift task first so it cannot block main-actor cleanup.
