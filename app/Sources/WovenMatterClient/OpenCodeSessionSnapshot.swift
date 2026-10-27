@@ -156,16 +156,24 @@ public struct OpenCodeSessionSnapshot: Codable, Equatable, Sendable {
                                         assistantCheckpoint: AssistantTextCheckpoint(cumulativeText), position: index)
             }
             if part["type"].text == "reasoning" {
-                return AgentRunActivity(id: id, kind: .thought, title: "Reasoning", content: part["text"].text, position: index)
+                let streaming = part["_wovenStreaming"].bool || (part["_wovenStreaming"].isNull
+                    && !part["time"]["created"].isNull && part["time"]["completed"].isNull && message["time"]["completed"].isNull)
+                return AgentRunActivity(id: id, kind: .thought, phase: streaming ? "update" : "end",
+                    title: "Reasoning", status: streaming ? "running" : "completed",
+                    content: part["text"].text, contentIsDelta: false, position: index)
             }
             guard part["type"].text == "tool" else { return nil }
             let state = part["state"]
-            let output = state["output"].string ?? state["content"].array.compactMap { $0["text"].string }.joined(separator: "\n")
+            let output = state["output"].string ?? state["error"]["message"].string
+                ?? state["content"].array.compactMap { $0["text"].string }.joined(separator: "\n")
+            let nativeStatus = state["status"].string ?? state["type"].string
+            let status = nativeStatus == "streaming" ? "pending" : nativeStatus == "error" ? "failed"
+                : nativeStatus == "interrupted" ? "cancelled" : nativeStatus
             return AgentRunActivity(id: id, kind: .tool, title: state["title"].string ?? part["name"].text,
-                                    status: state["status"].string ?? state["type"].string,
+                                    status: status,
                                     toolName: part["name"].text, content: output,
                                     position: index,
-                                    rawInputJSON: state["input"].isNull ? nil : state["input"].json,
+                                    rawInputJSON: state["input"].isNull ? nil : state["input"].string ?? state["input"].json,
                                     rawOutputJSON: state.json, rawPayloadJSON: part.json)
         }
     }

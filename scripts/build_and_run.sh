@@ -71,16 +71,8 @@ fi
 # Replacing the executable of an active execution owner can interrupt sessions.
 # Its lifetime is independent of the UI; stop it from Background Server settings
 # before rebuilding so active work uses the normal cancellation path.
-backend_pattern="$(python3 - "$executable" <<'PYTHON'
-import os, re, sys
-path = os.path.realpath(sys.argv[1])
-paths = [path]
-if path.startswith('/private/tmp/'):
-    paths.append(path[len('/private'):])
-print('^(' + '|'.join(re.escape(p) for p in paths) + ') --backend$')
-PYTHON
-)"
-if pgrep -f "$backend_pattern" >/dev/null 2>&1; then
+backend_running="$(python3 "$repo_root/scripts/dev-build.py" backend-running --executable "$executable")"
+if [ "$backend_running" = true ]; then
   printf '%s\n' 'Stop the server in this Dev app’s Background Server settings before rebuilding.' >&2
   exit 75
 fi

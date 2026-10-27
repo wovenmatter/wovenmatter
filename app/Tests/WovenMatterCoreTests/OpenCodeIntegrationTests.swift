@@ -9,6 +9,176 @@ import WovenMatterCore
 @Suite(.serialized)
 struct OpenCodeIntegrationTests {
 
+    @Test(arguments: ["missing-location", "mismatched-id", "empty-directory", "relative-directory", "nul-directory", "different-directory"])
+    func mcpConnectionRejectsChangedNativeSessionScopeBeforeSharingCredentials(shape: String) async throws {
+        let fixture = OpenCodeFixture(); FixtureProtocol.fixture = fixture
+        var data: OpenCodeValue = ["id": "ses_fixture", "location": ["directory": .string(fixture.nativeDirectory)]]
+        switch shape {
+        case "missing-location": data["location"] = .null
+        case "mismatched-id": data["id"] = "ses_unrelated"
+        case "empty-directory": data["location"]["directory"] = ""
+        case "relative-directory": data["location"]["directory"] = "relative/path"
+        case "nul-directory": data["location"]["directory"] = .string("/bad\0path")
+        default: data["location"]["directory"] = "/another/project"
+        }
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+        let id = try await database.createOpenCodeFixtureSession(runtimeKind: .opencode, title: "MCP scope",
+            ownerDeviceID: UUID(), openCodeAssociation: ("fixture", "ses_fixture"))
+        let link = OpenCodeSessionLink(conversationID: id, connectionID: "fixture", sessionID: "ses_fixture")
+        let session = fixtureSession()
+        defer { session.invalidateAndCancel() }
+        let coordinator = OpenCodeSessionCoordinator(database: database,
+            clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
+        try await coordinator.connect(connection())
+        // First GET passes dispatch's root check; the second GET, immediately
+        // before credential binding, returns a changed or malformed native scope.
+        fixture.sessionInfoReplies = [.null, ["data": data]]
+        let context = WovenMCPConnection(endpointURL: "http://127.0.0.1:1236/mcp", bearerToken: "fixture-host-token",
+            captureID: "immutable-capture", sessionID: id)
+        await #expect(throws: OpenCodeError.executionRootMismatch) {
+            try await coordinator.prompt(link, input: .init(text: "Never dispatch", mcpContext: context))
+        }
+        #expect(fixture.sessionInfoReplies.isEmpty)
+        #expect(fixture.lastMCPConnect.isNull)
+        #expect(fixture.mcpRegistrationCount == 0 && fixture.promptCount == 0)
+        await coordinator.shutdown()
+    }
+
+    @Test(arguments: ["valid", "legacy-data", "missing-output", "missing-endpoint", "empty-token"])
+    func mcpConnectUsesNativeRPCOutputAndRejectsMalformedReplies(envelope: String) async throws {
+        let fixture = OpenCodeFixture(); FixtureProtocol.fixture = fixture
+        let proxy: OpenCodeValue = ["endpointURL": "http://127.0.0.1:1235/mcp", "bearerToken": "fixture-proxy-token"]
+        // Verified against the running OpenCode 2.1.3 OpenAPI Rpc.Output schema:
+        // { type: object, properties: { output: {} }, additionalProperties: false }.
+        switch envelope {
+        case "valid": fixture.mcpConnectReply = ["output": proxy]
+        case "legacy-data": fixture.mcpConnectReply = ["data": proxy]
+        case "missing-output": fixture.mcpConnectReply = [:]
+        case "missing-endpoint": fixture.mcpConnectReply = ["output": ["bearerToken": "fixture-token"]]
+        default: fixture.mcpConnectReply = ["output": ["endpointURL": "http://127.0.0.1:1235/mcp", "bearerToken": ""]]
+        }
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+        let id = try await database.createOpenCodeFixtureSession(runtimeKind: .opencode, title: "MCP envelope",
+            ownerDeviceID: UUID(), openCodeAssociation: ("fixture", "ses_fixture"))
+        let link = OpenCodeSessionLink(conversationID: id, connectionID: "fixture", sessionID: "ses_fixture")
+        let session = fixtureSession()
+        defer { session.invalidateAndCancel() }
+        let coordinator = OpenCodeSessionCoordinator(database: database,
+            clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
+        try await coordinator.connect(connection())
+        let context = WovenMCPConnection(endpointURL: "http://127.0.0.1:1236/mcp", bearerToken: "fixture-host-token",
+            captureID: "immutable-input-capture", sessionID: id)
+        do {
+            try await coordinator.prompt(link, input: .init(text: "MCP-bound input", mcpContext: context))
+            #expect(envelope == "valid")
+        } catch {
+            #expect(envelope != "valid")
+            #expect(error.localizedDescription == "OpenCode did not confirm the Woven MCP connection.")
+        }
+        #expect(fixture.lastMCPConnect["input"]["sessionID"].text == link.sessionID)
+        #expect(fixture.lastMCPConnect["input"]["context"]["sessionID"].text == id)
+        #expect(fixture.lastMCPConnect["input"]["context"]["captureID"].text == "immutable-input-capture")
+        #expect(fixture.mcpLocation == fixture.nativeDirectory)
+        if envelope == "valid" {
+            #expect(fixture.mcpRegistrationCount == 1 && fixture.promptCount == 1)
+            #expect(fixture.lastMCPConfig["config"]["url"] == proxy["endpointURL"])
+            #expect(fixture.lastMCPConfig["config"]["headers"]["Authorization"].text == "Bearer fixture-proxy-token")
+            #expect(fixture.lastPrompt["metadata"]["wovenMCP"]["captureID"].text == "immutable-input-capture")
+        } else {
+            #expect(fixture.mcpRegistrationCount == 0 && fixture.promptCount == 0)
+        }
+        await coordinator.shutdown()
+    }
+
+    @Test func multipleFollowedChatsShareOneVolatileSubscription() async throws {
+        let fixture = OpenCodeFixture(); fixture.streamEvents = true; FixtureProtocol.fixture = fixture
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+        let first = try await database.createOpenCodeFixtureSession(runtimeKind: .opencode, title: "One", ownerDeviceID: UUID(), openCodeAssociation: ("fixture", "ses_fixture"))
+        let second = try await database.createOpenCodeFixtureSession(runtimeKind: .opencode, title: "Two", ownerDeviceID: UUID(), openCodeAssociation: ("fixture", "ses_second"))
+        let session = fixtureSession()
+        defer { session.invalidateAndCancel() }
+        let coordinator = OpenCodeSessionCoordinator(database: database, clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
+        try await coordinator.connect(connection())
+        await coordinator.watch(.init(conversationID: first, connectionID: "fixture", sessionID: "ses_fixture"))
+        await coordinator.watch(.init(conversationID: second, connectionID: "fixture", sessionID: "ses_second"))
+        do {
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                group.addTask {
+                    while fixture.lock.withLock({ fixture.durableRequests < 2 || fixture.liveRequests < 1 }) {
+                        try await Task.sleep(for: .milliseconds(10))
+                    }
+                }
+                group.addTask { try await Task.sleep(for: .seconds(10)); throw OpenCodeError.message("Subscriptions did not become ready") }
+                defer { group.cancelAll() }
+                _ = try await group.next()
+            }
+            #expect(fixture.lock.withLock { fixture.liveRequests } == 1)
+            _ = try await coordinator.call(connectionID: "fixture", path: "/api/info")
+        } catch {
+            await coordinator.shutdown()
+            throw error
+        }
+        await coordinator.shutdown()
+    }
+
+    @Test func volatileTextPersistsBeforeCompletionAndInterruptionReconcilesWithoutCompletedTime() async throws {
+        let fixture = OpenCodeFixture(); FixtureProtocol.fixture = fixture
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+        let id = try await database.createOpenCodeFixtureSession(runtimeKind: .opencode, title: "Live", ownerDeviceID: UUID(), openCodeAssociation: ("fixture", "ses_fixture"))
+        let link = OpenCodeSessionLink(conversationID: id, connectionID: "fixture", sessionID: "ses_fixture")
+        let session = fixtureSession()
+        defer { session.invalidateAndCancel() }
+        let coordinator = OpenCodeSessionCoordinator(database: database, clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
+        try await coordinator.connect(connection())
+        let baseline = fixture.lock.withLock { fixture.historyRequests }
+        let data: OpenCodeValue = ["sessionID": "ses_fixture", "assistantMessageID": "live-message", "ordinal": .number(0)]
+        await coordinator.receiveLiveEvent(["type": "session.text.started", "created": .number(1000), "data": data], link: link)
+        var delta = data; delta["delta"] = "Visible before completion"
+        await coordinator.receiveLiveEvent(["type": "session.text.delta", "data": delta], link: link)
+        do {
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                group.addTask {
+                    for await update in coordinator.updates {
+                        if let error = update.error { throw OpenCodeError.message(error) }
+                        if let saved = try await database.openCodeSnapshot(conversationID: id),
+                           saved.messages.last.map(OpenCodeSessionSnapshot.text) == "Visible before completion", saved.active { return }
+                    }
+                    throw CancellationError()
+                }
+                group.addTask { try await Task.sleep(for: .seconds(10)); throw OpenCodeError.message("Live text was not persisted") }
+                defer { group.cancelAll() }
+                _ = try await group.next()
+            }
+            #expect(fixture.lock.withLock { fixture.historyRequests } == baseline)
+            fixture.messages = [["id": "live-message", "type": "assistant", "time": ["created": .number(1000)],
+                "content": .array([["type": "text", "text": "Canonical interrupted text"]])]]
+            await coordinator.receiveLiveEvent(["type": "session.execution.interrupted", "data": ["sessionID": "ses_fixture"],
+                "durable": ["seq": .number(99)]], link: link)
+            // A live lifecycle signal is not a durable-log acknowledgement.
+            await coordinator.receiveLogEvent(["type": "session.execution.interrupted", "durable": ["seq": .number(1)]], link: link)
+            let settled = try await committedSnapshot(coordinator, conversationID: id, cursor: 1)
+            #expect(!settled.active)
+            #expect(settled.messages.last.map(OpenCodeSessionSnapshot.text) == "Canonical interrupted text")
+            #expect(settled.cursor == 1)
+        } catch {
+            await coordinator.shutdown()
+            throw error
+        }
+        await coordinator.shutdown()
+    }
+
     @Test func durableEventsCoalesceAndRefreshAgainAfterAnInflightSnapshot() async throws {
         let fixture = OpenCodeFixture(); FixtureProtocol.fixture = fixture
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
@@ -335,6 +505,7 @@ private final class OpenCodeFixture: @unchecked Sendable {
     var heldPath: String?
     var sessionExists = true
     var nativeDirectory = "/original/project"
+    var sessionInfoReplies: [OpenCodeValue] = []
     var createCount = 0
     var lastCreate: OpenCodeValue = .null
     var version = "2.0.22"
@@ -346,6 +517,11 @@ private final class OpenCodeFixture: @unchecked Sendable {
     var acceptPrompt = true
     var promptCount = 0
     var lastPrompt: OpenCodeValue = .null
+    var mcpConnectReply: OpenCodeValue = .null
+    var lastMCPConnect: OpenCodeValue = .null
+    var lastMCPConfig: OpenCodeValue = .null
+    var mcpRegistrationCount = 0
+    var mcpLocation: String?
     var commandCount = 0
     var loseCommandResponse = false
     var lastCommand: OpenCodeValue = .null
@@ -353,6 +529,9 @@ private final class OpenCodeFixture: @unchecked Sendable {
     var active = false
     var historyRequests = 0
     var streamTimeout: TimeInterval?
+    var streamEvents = false
+    var liveRequests = 0
+    var durableRequests = 0
     private func requestBody(_ request: URLRequest) throws -> OpenCodeValue {
         var bytes = request.httpBody ?? Data()
         if let stream = request.httpBodyStream {
@@ -371,7 +550,10 @@ private final class OpenCodeFixture: @unchecked Sendable {
             var path = request.url!.path
             let prefix = "/v1/workspace-instances/opencode"
             if path.hasPrefix(prefix) { path.removeFirst(prefix.count) }
-            if path.hasSuffix("/log") { streamTimeout = request.timeoutInterval; return (200, [:]) }
+            let sessionID = path.contains("/ses_second") ? "ses_second" : "ses_fixture"
+            if streamEvents { path = path.replacingOccurrences(of: "/ses_second", with: "/ses_fixture") }
+            if path == "/api/event" { liveRequests += 1; return (200, [:]) }
+            if path.hasSuffix("/log") { durableRequests += 1; streamTimeout = request.timeoutInterval; return (200, [:]) }
             if path == "/api/info" || path == "/api/health" {
                 healthCount += 1
                 if path == "/api/info", version.hasPrefix("0.0.0-beta-") { return (404, [:]) }
@@ -381,6 +563,17 @@ private final class OpenCodeFixture: @unchecked Sendable {
                 return (200, ["data": active ? ["ses_fixture": ["status": "running"]] : [:]])
             }
             if path.hasSuffix("/interrupt") { interruptCount += 1; return (200, [:]) }
+            if path == "/api/rpc/woven-mcp/connect" {
+                lastMCPConnect = try requestBody(request)
+                mcpLocation = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?
+                    .first(where: { $0.name == "location[directory]" })?.value
+                return (200, mcpConnectReply)
+            }
+            if path.hasPrefix("/api/experimental/mcp/"), request.httpMethod == "PUT" {
+                mcpRegistrationCount += 1
+                lastMCPConfig = try requestBody(request)
+                return (200, [:])
+            }
             if path.hasSuffix("/prompt") || path.hasSuffix("/command") {
                 var bytes = request.httpBody ?? Data()
                 if let stream = request.httpBodyStream {
@@ -438,7 +631,11 @@ private final class OpenCodeFixture: @unchecked Sendable {
                 return (200, ["data": ["id": "ses_fixture", "title": "Created fixture"]])
             }
             if path == "/api/session/ses_fixture", !sessionExists { return (404, [:]) }
-            if path == "/api/session/ses_fixture" { return (200, ["data": ["id": "ses_fixture", "title": "Shared fixture", "model": .null, "location": ["directory": .string(nativeDirectory)], "time": ["updated": .number(900)]]]) }
+            if path == "/api/session/ses_fixture", !sessionInfoReplies.isEmpty {
+                let reply = sessionInfoReplies.removeFirst()
+                if !reply.isNull { return (200, reply) }
+            }
+            if path == "/api/session/ses_fixture" { return (200, ["data": ["id": .string(sessionID), "title": "Shared fixture", "model": .null, "location": ["directory": .string(nativeDirectory)], "time": ["updated": .number(900)]]]) }
             return (404, [:])
         }
     }
@@ -457,6 +654,11 @@ private final class FixtureProtocol: URLProtocol, @unchecked Sendable {
     func deliver() {
         do {
             let (status, value) = try Self.fixture.respond(request)
+            if Self.fixture.streamEvents, request.url?.path == "/api/event" || request.url?.path.hasSuffix("/log") == true {
+                client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "text/event-stream"])!, cacheStoragePolicy: .notAllowed)
+                client?.urlProtocol(self, didLoad: Data(": connected\n\n".utf8))
+                return
+            }
             client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!, cacheStoragePolicy: .notAllowed)
             if status != 204 { client?.urlProtocol(self, didLoad: try JSONEncoder().encode(value)) }
             client?.urlProtocolDidFinishLoading(self)

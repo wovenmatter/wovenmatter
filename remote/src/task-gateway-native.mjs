@@ -4,12 +4,12 @@ import { randomUUID, createHash } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import { supportsOpenCodeVersion } from './opencode-compatibility.mjs'
 import { createTaskNativeArchive, publishNativePresentation } from './task-native-archive.mjs'
+import { OpenCodeTaskStream } from './opencode-task-stream.mjs'
 
 const before = text => Object.assign(new Error(text), { beforePrompt: true })
 const approval = () => Object.assign(new Error('This task needs approval. Open its session to continue.'), { needsApproval: true })
 const parseRegistration = bytes => { try { return JSON.parse(String(bytes)) } catch { throw before('The native service registration is invalid.') } }
 const pause = ms => new Promise(done => setTimeout(done, ms))
-const textUpdate = text => ({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } })
 const prompt = run => run.task.prompt
 
 export function createNativeTaskExecutor({workspaceRoot, instances, fetchRequest = fetch, read = readFile}) {
@@ -27,6 +27,7 @@ async function runOpenCode({run,config,cwd,instances,read,fetchRequest,nativeSes
   const permission=config.permission
   if(permission && !['ask','allow','deny'].includes(permission))throw before('The saved OpenCode permission is unavailable.')
   let accepted=false,sessionID=nativeSessionID,call,archive
+  const presentation=new OpenCodeTaskStream(update=>publishNativePresentation(update,publish))
   try {
     await instances.action('opencode','start')
     const registration=parseRegistration(await read(instances.registrationPath,'utf8')),origin=new URL(registration.url)
@@ -38,12 +39,13 @@ async function runOpenCode({run,config,cwd,instances,read,fetchRequest,nativeSes
     sessionID??='ses_'+randomUUID().replaceAll('-','')
     let session=(await call(nativeSessionID?'GET':'POST',nativeSessionID?`/api/session/${encodeURIComponent(sessionID)}`:'/api/session',nativeSessionID?undefined:{id:sessionID,title:run.title,location:{directory:cwd,...(config.nativeWorkspaceID?{workspaceID:config.nativeWorkspaceID}:{})},metadata:{wovenmatter:{origin:'created'}}})).data
     if(session?.id!==sessionID)throw before('OpenCode did not confirm the recurring session identity.')
+    if(session.location?.directory!==cwd)throw before('OpenCode did not confirm the saved execution directory.')
     const path='/api/session/'+encodeURIComponent(sessionID)
     await bindSession(sessionID)
     if(mcpConnection) {
       const query=new URLSearchParams({'location[directory]':cwd})
-      const proxy=(await call('POST','/api/rpc/woven-mcp/connect?'+query,{input:{sessionID,context:mcpConnection}})).data
-      if(!proxy||typeof proxy.endpointURL!=='string'||typeof proxy.bearerToken!=='string')throw before('OpenCode did not confirm its Woven MCP connection.')
+      const proxy=(await call('POST','/api/rpc/woven-mcp/connect?'+query,{input:{sessionID,context:mcpConnection}})).output
+      if(!proxy||typeof proxy!=='object'||Array.isArray(proxy)||typeof proxy.endpointURL!=='string'||!proxy.endpointURL||typeof proxy.bearerToken!=='string'||!proxy.bearerToken)throw before('OpenCode did not confirm its Woven MCP connection.')
       const name='woven_'+createHash('sha256').update(sessionID).digest('hex').slice(0,16)
       await call('PUT','/api/experimental/mcp/'+name+'?'+query,{config:{type:'remote',url:proxy.endpointURL,headers:{Authorization:'Bearer '+proxy.bearerToken},oauth:false,codemode:false}})
     }
@@ -90,8 +92,7 @@ async function runOpenCode({run,config,cwd,instances,read,fetchRequest,nativeSes
     accepted=true
     const receipt=await call('POST',path+'/prompt',{id:messageID,text:prompt(run),files:[],...(mcpConnection?{metadata:{wovenMCP:{captureID:mcpConnection.captureID??''}}}:{})})
     if(receipt.data?.id!==messageID)throw new Error('OpenCode did not acknowledge the task prompt. Check its session before retrying.')
-    let observed=false, presentedText
-    const presentedActivities=new Map()
+    let observed=false
     const interactions = new Map()
     interactive?.bind({async respond(id,response) {
       if(signal.aborted)throw new Error('The run has stopped.')
@@ -138,21 +139,18 @@ async function runOpenCode({run,config,cwd,instances,read,fetchRequest,nativeSes
           interactive.publish({id,kind:'approval',title:'Complete the native form on your desktop',detail:'This form can be cancelled here.',options:[],questions:[]})
         }
       }
-      const incoming=messages.filter(x=>x.id!==messageID&&(x.type==='assistant'||x.role==='assistant'||x.info?.role==='assistant'))
+      let incoming=messages.filter(x=>x.id!==messageID&&(x.type==='assistant'||x.role==='assistant'||x.info?.role==='assistant'))
       if(incoming.length)observed=true
-      if(interactive) {
-        const chronological=[...incoming].reverse(),text=chronological.flatMap(message=>(message.content??message.parts??[]).filter(part=>part.type==='text').map(part=>part.text??'')).join('')
-        if(text!==presentedText){publishNativePresentation({...textUpdate(text),_meta:{wovenAssistantSnapshot:true}},publish);presentedText=text}
-        for(const message of chronological)for(const [index,part] of (message.content??message.parts??[]).entries()) {
-          const id=message.id+':'+(part.id??index),fingerprint=JSON.stringify(part)
-          if(presentedActivities.get(id)===fingerprint)continue
-          presentedActivities.set(id,fingerprint)
-          if(part.type==='reasoning')publishNativePresentation({sessionUpdate:'agent_thought_chunk',content:{type:'text',text:part.text??''},_meta:{wovenThoughtID:id,wovenThoughtSnapshot:true}},publish)
-          if(part.type==='tool')publishNativePresentation({sessionUpdate:'tool_call_update',toolCallId:id,title:part.state?.title??part.name,status:part.state?.status??part.state?.type??'running',content:[{type:'content',content:{type:'text',text:part.state?.output??(part.state?.content??[]).map(item=>item.text??'').join('\n')}}]},publish)
-        }
-      }
+      presentation.reconcile([...incoming].reverse())
       const running=(await call('GET','/api/session/active')).data??{}
-      if(!running[sessionID]&&observed){if(signal.aborted)throw new Error('Background execution was turned off.');if(!interactive)for(const message of incoming.reverse())for(const part of message.content??message.parts??[]){if(part.type==='text'&&part.text)publishNativePresentation(textUpdate(part.text), publish);if(part.type==='reasoning'&&part.text)publishNativePresentation({sessionUpdate:'agent_thought_chunk',content:{type:'text',text:part.text}}, publish);}if(incoming.some(message=>message.error || message.info?.error))throw new Error('OpenCode could not complete this task.');
+      if(!running[sessionID]&&observed){if(signal.aborted)throw new Error('Background execution was turned off.');
+        // Completion can race the preceding history read. Re-read after idle
+        // before committing the task result so the final suffix/tools survive.
+        const finalMessages=[]
+        for(const message of await currentMessages()) finalMessages.push(await archive.capture(message,{id:'message:'+message.id,kind:'message',contentMode:'snapshot',completeness:'native-export'}))
+        incoming=finalMessages.filter(x=>x.id!==messageID&&(x.type==='assistant'||x.role==='assistant'||x.info?.role==='assistant'))
+        presentation.reconcile([...incoming].reverse())
+        if(incoming.some(message=>message.error || message.info?.error))throw new Error('OpenCode could not complete this task.');
         const reported=incoming.flatMap(message=>(message.content??message.parts??[]).filter(part=>part.type==='step-finish'&&part.tokens).map(part=>part.tokens))
         if(reported.length) {
           const values=reported.map(tokens=>tokens.total??[tokens.input,tokens.output,tokens.cache?.read??0,tokens.cache?.write??0].reduce((sum,value)=>Number.isSafeInteger(value)&&value>=0?sum+value:NaN,0))
@@ -164,5 +162,5 @@ async function runOpenCode({run,config,cwd,instances,read,fetchRequest,nativeSes
     }
     throw new Error('OpenCode task exceeded its runtime limit.')
   } catch(error){if(accepted&&sessionID&&call)try{await call('POST','/api/session/'+encodeURIComponent(sessionID)+'/interrupt',{},true)}catch{};if(!accepted)error.beforePrompt=true;throw error}
-  finally {await archive?.close()}
+  finally {try{if(accepted)presentation.finish()}finally{await archive?.close()}}
 }

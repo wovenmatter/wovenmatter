@@ -181,10 +181,18 @@ when an intentional design change is accepted.
   24-point bottom gutter outside the scrolling text, without stacking additional
   editor or footer padding beneath the note. Align the count button's right
   edge with the header controls using the same 12-point side inset.
-- **Conversation progress:** use the shared elapsed work header. A collapsed
-  live tool group shows progress once; expanding it moves the indicator to its
-  active tool rows. Keep detail-loading text quiet and avoid a separate mobile
-  running spinner below the transcript.
+- **Conversation progress:** use the shared elapsed work header and static semantic
+  icons with meaningful live text. Do not show busy spinners in tool-call rows,
+  work-group headers, reasoning indicators, or tool-detail loading. Thinking and
+  assistant messages stay visible in chronological order, including after a run
+  completes. Live tool calls append as separate rows in the conversation; never
+  replace the preceding tool with the latest call. A new thinking, commentary,
+  or other standalone event condenses only the preceding tool list into a
+  reopenable disclosure. Show supplied subagent rows at their event position.
+  Preserve the reader's position; follow new work
+  or reasoning only from the live edge. Between a tool and the next visible output,
+  use a static Thinking label. Keep detail-loading text quiet ("Loading details…")
+  and never add a separate mobile running spinner below the transcript.
 - **Scrolling:** hide scrollbars throughout the app while preserving scrolling. Set
   `.scrollIndicators(.never)` on SwiftUI scroll views and editors, including
   sheets and popovers. Disable both scrollers on AppKit `NSScrollView` editors.

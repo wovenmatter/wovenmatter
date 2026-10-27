@@ -1,4 +1,5 @@
 import { nativeSync } from './platform.js';
+import { forwardInferenceStream } from './inference-stream.js';
 import { createSubagents } from './subagents.js';
 import { createCodeMode } from './codemode.js';
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context';
@@ -44,28 +45,14 @@ function filesystem() {
   }
   return fs;
 }
-function errorMessage(model,error,signal) {
-  return {role:'assistant',content:[],api:model.api,provider:model.provider,model:model.id,
-    usage:{input:0,output:0,cacheRead:0,cacheWrite:0,totalTokens:0,cost:{input:0,output:0,cacheRead:0,cacheWrite:0,total:0}},
-    stopReason:signal?.aborted?'aborted':'error',errorMessage:String(error?.message??error),timestamp:Date.now()};
-}
 function installModel(model) {
   const stream = (model,transcript,options = {}) => {
-    const output = new AssistantMessageEventStream(); let terminal = false;
+    const output = new AssistantMessageEventStream();
     const {signal,...serializableOptions} = options;
     // Native credentials never enter the JS heap, transcript or checkpoint files.
     delete serializableOptions.apiKey; delete serializableOptions.auth;
-    void hostCall('inference',{model,context:transcript,options:serializableOptions,
-      scope:{conversationID:`${configuration.conversationID}:${options.sessionId??'root'}`,externalConversationID:configuration.conversationID,requestID:`${configuration.conversationID}:${nativeSync('sha256',JSON.stringify({model,transcript,options:serializableOptions}))}`}},signal,event => {
-      if (event.type === 'done' || event.type === 'error') terminal = true;
-      output.push(event);
-    }).then(() => {
-      if (!terminal) throw new Error('Inference stream ended without a terminal result');
-      output.end();
-    }).catch(error => {
-      if (!terminal) output.push({type:'error',reason:signal?.aborted?'aborted':'error',error:errorMessage(model,error,signal)});
-      output.end();
-    });
+    void forwardInferenceStream(output,model,signal,onEvent => hostCall('inference',{model,context:transcript,options:serializableOptions,
+      scope:{conversationID:`${configuration.conversationID}:${options.sessionId??'root'}`,externalConversationID:configuration.conversationID,requestID:`${configuration.conversationID}:${nativeSync('sha256',JSON.stringify({model,transcript,options:serializableOptions}))}`}},signal,onEvent));
     return output;
   };
   models.setProvider(createProvider({id:model.provider,models:[model],auth:{apiKey:{name:'Native credentials',resolve:async () => ({auth:{apiKey:'native-managed'}})}},api:{stream,streamSimple:stream}}));

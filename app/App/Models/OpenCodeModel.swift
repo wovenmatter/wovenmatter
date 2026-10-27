@@ -522,7 +522,7 @@ final class OpenCodeModel {
     func moveDraftWorkspace(conversationID id: String, root: URL) async throws {
         if isBackendProjection { _ = try await backendCommand(.moveDraft(id, root)); return }
         guard let link = links[id], isLocalSession(id), let snapshot = snapshots[id],
-              snapshot.messages.isEmpty, !snapshot.active, snapshot.inbox.isEmpty,
+              Self.isUnsentDraft(snapshot),
               pendingDispatches[id] == nil else {
             throw OpenCodeError.message("Only an unsent OpenCode draft can choose a folder.")
         }
@@ -536,6 +536,14 @@ final class OpenCodeModel {
             throw OpenCodeError.message("OpenCode has not confirmed this draft's folder. Refresh and choose it again before sending.")
         }
         snapshots[id]?.info = confirmed["data"]
+    }
+
+    static func isUnsentDraft(_ snapshot: OpenCodeSessionSnapshot) -> Bool {
+        // Applying the initial model emits a native configuration message before
+        // any prompt. It must not block the first send's scratch-folder move.
+        // Unknown events and an incomplete history page remain fail-closed.
+        !snapshot.active && snapshot.inbox.isEmpty && snapshot.olderCursor == nil
+            && snapshot.messages.allSatisfy { $0["type"].text == "model-switched" }
     }
 
     func locationQuery(_ id: String) -> [String: String] {

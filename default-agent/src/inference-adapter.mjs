@@ -1,3 +1,4 @@
+import { withReasoningSummaries } from './reasoning-stream-options.mjs';
 import { createHash } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -98,7 +99,7 @@ export function createInferenceAdapter(engine) {
       let outputBytes = 0, terminal = false;
       const output = [];
       const run = async () => {
-        const response = engine.runtime.streamSimple(model, context, options);
+        const response = engine.runtime.streamSimple(model, context, withReasoningSummaries(model, options));
         for await (const raw of response) {
           controller.signal.throwIfAborted();
           const event = cleanEvent(raw);

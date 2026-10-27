@@ -257,8 +257,12 @@ public enum LocalACPRuntimeVerifier {
         guard credentialCheckRuntimeKinds.contains(definition.runtimeKind), !Task.isCancelled else {
             guard resolution.launchConfiguration != nil,
                   let previousResolution,
+                  [.ready, .authenticationRequired, .executableUnavailable].contains(previousResolution.availability.state),
                   previousResolution.availability.executablePath == resolution.availability.executablePath
             else { return resolution }
+            // Preserve explicit readiness/account checks, not stale discovery
+            // failures. Managed adapter updates replace the target behind the
+            // same executable path, so a repaired installation must become ready.
             return LocalACPRuntimeResolution(
                 availability: previousResolution.availability,
                 launchConfiguration: previousResolution.launchConfiguration == nil

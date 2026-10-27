@@ -1,7 +1,23 @@
 // Adapt Durable's live-window edits to ACP's readable tool-output snapshots.
 // Canonical native records retain the full output; this is a bounded UI view.
 export class NativeToolStream {
-  constructor() { this.outputs = new Map(); }
+  constructor() { this.outputs = new Map(); this.inputs = new Map(); }
+  input(block) {
+    if (!block.id || !block.name || this.outputs.has(block.id)) return undefined;
+    const previous = this.inputs.get(block.id), fingerprint = JSON.stringify([block.name, block.arguments]);
+    if (previous === fingerprint) return undefined;
+    this.inputs.set(block.id, fingerprint);
+    return {sessionUpdate:previous === undefined?'tool_call':'tool_call_update',toolCallId:block.id,
+      title:block.name,kind:block.name==='bash'?'execute':'other',status:'pending',rawInput:block.arguments};
+  }
+  finishPending() {
+    const updates = [];
+    for (const toolCallId of this.inputs.keys()) if (!this.outputs.has(toolCallId)) {
+      updates.push({sessionUpdate:'tool_call_update',toolCallId,status:'failed'});
+      this.inputs.delete(toolCallId);
+    }
+    return updates;
+  }
   output(event) {
     let state = this.outputs.get(event.toolCallId) ?? {text:'',omitted:0};
     const snapshot = event.details?.wovenOutputSnapshot;
@@ -20,8 +36,9 @@ export class NativeToolStream {
   update(event) {
     const toolCallId = event.toolCallId;
     if (event.type==='tool_execution_start') {
-      this.outputs.set(toolCallId,{text:'',omitted:0});
-      return {sessionUpdate:'tool_call',toolCallId,title:event.toolName,kind:event.toolName==='bash'?'execute':'other',status:'in_progress',rawInput:event.args};
+      const exists = this.inputs.has(toolCallId) || this.outputs.has(toolCallId);
+      if (!this.outputs.has(toolCallId)) this.outputs.set(toolCallId,{text:'',omitted:0});
+      return {sessionUpdate:exists?'tool_call_update':'tool_call',toolCallId,title:event.toolName,kind:event.toolName==='bash'?'execute':'other',status:'in_progress',rawInput:event.args};
     }
     if (event.type==='tool_execution_update') {
       const text = this.output(event);
@@ -37,7 +54,7 @@ export class NativeToolStream {
     }
     const previous = this.outputs.get(toolCallId)?.text;
     if (!content?.length && previous) content = [{type:'text',text:previous}];
-    this.outputs.delete(toolCallId);
+    this.outputs.delete(toolCallId); this.inputs.delete(toolCallId);
     const result = message ?? event.result;
     return {sessionUpdate:'tool_call_update',toolCallId,status:result && result.isError!==true?'completed':'failed',
       ...(content===undefined?{}:{content:content.map(content=>({type:'content',content}))})};
@@ -53,12 +70,15 @@ export class NativeToolStream {
       if (slot.status === 'running') {
         if (!this.outputs.has(slot.callId)) updates.push(this.update({type:'tool_execution_start',toolCallId:slot.callId,toolName:slot.name,args:slot.arguments}));
         updates.push(this.update({type:'tool_execution_update',toolCallId:slot.callId,output:{set:slot.output ?? ''},details:slot.details}));
-      } else if (slot.status === 'done' && this.outputs.has(slot.callId)) updates.push(end(slot));
+      } else if (slot.status === 'done' && (this.outputs.has(slot.callId) || this.inputs.has(slot.callId))) updates.push(end(slot));
     }
     // A watch overflow replaces events with a snapshot. Retire missing slots
     // using their persisted results, rather than leaving stale running rows.
     // Synthetic code-mode children have their own publisher and no live slot.
-    for (const callId of [...this.outputs.keys()]) if (!active.has(callId) && !retained.has(callId)) updates.push(end({callId}));
+    const generating = new Set((event.generation?.message?.content ?? []).filter(block => block.type === 'toolCall').map(block => block.id));
+    for (const callId of new Set([...this.outputs.keys(), ...this.inputs.keys()])) {
+      if (!active.has(callId) && !retained.has(callId) && !generating.has(callId)) updates.push(end({callId}));
+    }
     return updates;
   }
 }

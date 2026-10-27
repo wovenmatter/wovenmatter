@@ -44,36 +44,34 @@ extension EnvironmentValues {
 }
 
 /// A run's work, inline and in order: commentary, thoughts, and tool groups.
-/// While the run works the header counts elapsed time; once it settles the
-/// work folds behind "Worked for" when a final reply follows. Failures stay
-/// visible in either state.
+/// Thinking and commentary remain visible throughout the run and after it
+/// settles. Only tool lists fold at the next event boundary.
 struct ConversationWorkTranscript: View {
     let run: ConversationWorkRun
     let presentation: ConversationWorkPresentation?
     let records: [WorkspaceRunActivityRecord]
     let commentaryIDs: Set<String>
-    let hasFinalReply: Bool
+    /// The latest assistant text is rendered below this timeline. Its arrival
+    /// closes the preceding tool list even before the run finishes.
+    let hasFollowingResponse: Bool
     /// A projection precomputed from `records` and `commentaryIDs`; built in
     /// `body` when absent.
     let timeline: ConversationWorkTimeline?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.conversationTranscriptInteraction) private var transcriptInteraction
-    @Environment(\.conversationTranscriptState) private var transcriptState
-    @State private var localExpansion: Bool?
 
     init(
         run: ConversationWorkRun,
         presentation: ConversationWorkPresentation?,
         records: [WorkspaceRunActivityRecord],
         commentaryIDs: Set<String> = [],
-        hasFinalReply: Bool = false,
+        hasFollowingResponse: Bool = false,
         timeline: ConversationWorkTimeline? = nil
     ) {
         self.run = run
         self.presentation = presentation
         self.records = records
         self.commentaryIDs = commentaryIDs
-        self.hasFinalReply = hasFinalReply
+        self.hasFollowingResponse = hasFollowingResponse
         self.timeline = timeline
     }
 
@@ -83,12 +81,13 @@ struct ConversationWorkTranscript: View {
         presentation: DashboardRunPresentation?,
         records: [WorkspaceRunActivityRecord],
         commentaryIDs: Set<String> = [],
-        hasFinalReply: Bool = false,
+        hasFollowingResponse: Bool = false,
         timeline: ConversationWorkTimeline? = nil
     ) {
         self.init(run: ConversationWorkRun(id: run.id, conversationID: run.conversationID, status: run.status, error: run.error),
                   presentation: presentation.map { ConversationWorkPresentation(startedAt: $0.startedAt, completedDuration: $0.completedDuration) },
-                  records: records, commentaryIDs: commentaryIDs, hasFinalReply: hasFinalReply, timeline: timeline)
+                  records: records, commentaryIDs: commentaryIDs,
+                  hasFollowingResponse: hasFollowingResponse, timeline: timeline)
     }
 
     #endif
@@ -101,7 +100,6 @@ struct ConversationWorkTranscript: View {
             hasVisibleActivities: timeline.hasVisibleActivities
         )
         let isRunning = run.status == "running"
-        let expanded = isRunning || isExpanded
         // Lost receipts can have no assistant output or tool activity at all.
         // Keep the recovery state visible independently of the work disclosure.
         if run.status == "uncertain" {
@@ -118,23 +116,7 @@ struct ConversationWorkTranscript: View {
         }
         if content.isVisible {
             VStack(alignment: .leading, spacing: 0) {
-                if content.hasVisibleActivities, !isRunning {
-                    Button {
-                        setExpanded(!expanded)
-                    } label: {
-                        HStack(spacing: 7) {
-                            elapsedLabel
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 11, weight: .semibold))
-                                .rotationEffect(.degrees(expanded ? 90 : 0))
-                            Spacer(minLength: 0)
-                        }
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(ConversationElapsedButtonStyle())
-                    .foregroundStyle(DashboardPalette.mutedForeground)
-                    .accessibilityValue(expanded ? "Expanded" : "Collapsed")
-                } else if content.failureMessage != nil {
+                if content.failureMessage != nil {
                     HStack(spacing: 7) {
                         DashboardLucideIcon(glyph: .alertCircle, size: 13)
                         elapsedLabel
@@ -146,7 +128,7 @@ struct ConversationWorkTranscript: View {
                 }
 
                 // Failure belongs to the run, not to its optional work history.
-                // Keep it visible even when that history is empty or folded.
+                // Keep it visible even when no tool or thinking event was supplied.
                 if let failureMessage = content.failureMessage {
                     Text(RemoteNoteEditEnvelope.redactingEnvelopes(in: failureMessage))
                         .font(.system(size: 13))
@@ -161,7 +143,7 @@ struct ConversationWorkTranscript: View {
                         .overlay(DashboardPalette.foreground.opacity(0.10))
                         .padding(.top, 12)
 
-                    let entries = expanded ? timeline.entries : timeline.foldedEntries
+                    let entries = timeline.entries
                     if !entries.isEmpty {
                         let tailID = timeline.entries.last?.id
                         VStack(alignment: .leading, spacing: 12) {
@@ -178,18 +160,27 @@ struct ConversationWorkTranscript: View {
                                         group: group,
                                         runID: run.id,
                                         runStatus: run.status,
-                                        isTail: entry.id == tailID
+                                        isTail: entry.id == tailID && !hasFollowingResponse
                                     )
                                 case .activity(let activity):
-                                    if activity.htmlRender != nil {
+                                    if activity.kind == .thought {
+                                        ConversationThinkingBlock(activity: activity, runID: run.id,
+                                            isLive: isRunning && entry.id == tailID && !hasFollowingResponse)
+                                    } else if activity.htmlRender != nil {
                                         ConversationHTMLRenderView(activity: activity, runID: run.id)
+                                    } else if let children = activity.subagents, !children.isEmpty {
+                                        VStack(alignment: .leading, spacing: 8) {
+                                            ForEach(children) { child in
+                                                ConversationSubagentRow(child: child)
+                                            }
+                                        }
                                     } else {
-                                    ConversationActivityRow(
-                                        activity: activity,
-                                        runID: run.id,
-                                        runStatus: run.status,
-                                        showsProgress: activity.workTimelineShowsProgress
-                                    )
+                                        ConversationActivityRow(
+                                            activity: activity,
+                                            runID: run.id,
+                                            runStatus: run.status,
+                                            showsProgress: activity.workTimelineShowsProgress
+                                        )
                                     }
                                 }
                             }
@@ -199,23 +190,16 @@ struct ConversationWorkTranscript: View {
                         .transition(reduceMotion ? .identity : .opacity)
                     }
                 }
+                if isRunning && !hasFollowingResponse && timeline.needsThinkingIndicator {
+                    HStack(spacing: 9) {
+                        Image(systemName: "sparkles").frame(width: 17)
+                        Text("Thinking").font(.system(size: 13.5))
+                    }
+                    .foregroundStyle(DashboardPalette.mutedForeground)
+                    .padding(.top, 12)
+                    .accessibilityLabel("Thinking")
+                }
             }
-        }
-    }
-
-    /// A settled run folds by default once it has a final reply. An explicit
-    /// choice is kept per run in the injected transcript state.
-    private var isExpanded: Bool {
-        let defaultValue = localExpansion ?? !(run.status == "completed" && hasFinalReply)
-        return transcriptState?.isRunExpanded(run.id, default: defaultValue) ?? defaultValue
-    }
-
-    private func setExpanded(_ expanded: Bool) {
-        transcriptInteraction()
-        if let transcriptState {
-            transcriptState.setRunExpanded(run.id, expanded)
-        } else {
-            localExpansion = expanded
         }
     }
 
@@ -299,9 +283,39 @@ private func conversationDisclosure(
     )
 }
 
-/// Thoughts and tool calls between commentary. T3 keeps the trailing group
-/// of an active run, and any group with a call still running, as one live row
-/// naming the current call; settled groups summarize their calls.
+/// Supplied thinking stays in the transcript independently of tool disclosures.
+/// Long traces retain the existing bounded, selectable reasoning viewport.
+private struct ConversationThinkingBlock: View {
+    let activity: AgentRunActivity
+    let runID: String
+    let isLive: Bool
+    @Environment(\.conversationTranscriptState) private var transcriptState
+    @State private var localScrollSnapshot = ConversationWorkScrollSnapshot()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label("Thinking", systemImage: "sparkles")
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundStyle(DashboardPalette.mutedForeground)
+            ConversationBoundedWorkList(
+                group: ConversationWorkGroup(id: activity.id, activities: [activity], endsTimeline: isLive),
+                runID: runID, runStatus: isLive ? "running" : "completed", followsAppends: isLive,
+                initialScrollSnapshot: transcriptState?.workScrollSnapshot(scrollKey) ?? localScrollSnapshot,
+                saveScrollSnapshot: { snapshot in
+                    if let transcriptState { transcriptState.setWorkScrollSnapshot(scrollKey, snapshot) }
+                    else { localScrollSnapshot = snapshot }
+                })
+        }
+        .accessibilityIdentifier("work-thinking:" + activity.id)
+    }
+
+    private var scrollKey: String {
+        ConversationTranscriptState.disclosureKey(runID: runID, itemID: "thinking:" + activity.id)
+    }
+}
+
+/// Live tools append as separate rows in the outer conversation. Once another
+/// event arrives (or the run ends), only this tool list becomes a disclosure.
 private struct ConversationWorkGroupRow: View {
     let group: ConversationWorkGroup
     let runID: String
@@ -310,85 +324,64 @@ private struct ConversationWorkGroupRow: View {
     @Environment(\.conversationTranscriptInteraction) private var transcriptInteraction
     @Environment(\.conversationTranscriptState) private var transcriptState
     @State private var localExpanded = false
+    @State private var localScrollSnapshot = ConversationWorkScrollSnapshot()
 
     var body: some View {
         let runIsActive = runStatus == "running"
-        let liveLabel = runIsActive && ((isTail && !group.hasFailure) || group.hasActiveActivity)
-            ? group.liveLabel(runIsActive: true)
-            : nil
-        if liveLabel == nil, let single = group.singleActivity {
-            ConversationActivityRow(
-                activity: single,
-                runID: runID,
-                runStatus: runStatus,
-                showsProgress: group.showsProgress(single)
-            )
+        let wasExpanded = transcriptState?.isExpanded(scrollKey) ?? localExpanded
+        if runIsActive && isTail {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(group.activities) { activity in
+                    ConversationActivityRow(activity: activity, runID: runID, runStatus: runStatus,
+                        showsProgress: group.showsProgress(activity))
+                }
+            }
+            .accessibilityIdentifier("work-live-group:" + group.id)
+        } else if !wasExpanded, let single = group.singleActivity {
+            ConversationActivityRow(activity: single, runID: runID, runStatus: runStatus,
+                showsProgress: group.showsProgress(single))
         } else {
-            let expanded = conversationDisclosure(
-                transcriptState,
-                runID: runID,
-                itemID: group.id,
-                local: $localExpanded,
-                interaction: transcriptInteraction
-            )
-            let showsProgress = liveLabel != nil && group.hasActiveActivity && !expanded.wrappedValue
+            let expanded = conversationDisclosure(transcriptState, runID: runID, itemID: group.id,
+                local: $localExpanded, interaction: transcriptInteraction)
             VStack(alignment: .leading, spacing: 0) {
-                Button {
-                    expanded.wrappedValue.toggle()
-                } label: {
-                    header(liveLabel: liveLabel, expanded: expanded.wrappedValue, showsProgress: showsProgress)
+                Button { expanded.wrappedValue.toggle() } label: {
+                    HStack(spacing: 9) {
+                        Image(systemName: group.hasFailure ? "exclamationmark.triangle"
+                            : group.action?.systemImage ?? "wrench.and.screwdriver")
+                            .font(.system(size: 12, weight: .medium))
+                            .frame(width: 17)
+                        Text(group.summary)
+                            .font(.system(size: 13.5, weight: .medium))
+                            .lineLimit(1).truncationMode(.tail)
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 10, weight: .semibold))
+                            .rotationEffect(.degrees(expanded.wrappedValue ? 90 : 0))
+                            .foregroundStyle(DashboardPalette.mutedForeground)
+                        Spacer(minLength: 0)
+                    }
+                    .foregroundStyle(group.hasFailure ? Color.red.opacity(0.8)
+                        : DashboardPalette.foreground.opacity(0.72))
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(ConversationElapsedButtonStyle())
-                .accessibilityValue((expanded.wrappedValue ? "Expanded" : "Collapsed") + (showsProgress ? ", In progress" : ""))
+                .accessibilityValue(expanded.wrappedValue ? "Expanded" : "Collapsed")
                 .accessibilityIdentifier("work-group:" + group.id)
-
-                // Rows exist only while expanded; collapsed groups build nothing.
                 if expanded.wrappedValue {
-                    ConversationBoundedWorkList(
-                        group: group,
-                        runID: runID,
-                        runStatus: runStatus,
-                        followsAppends: liveLabel != nil
-                    )
-                    .padding(.top, 8)
-                    .padding(.leading, 26)
+                    ConversationBoundedWorkList(group: group, runID: runID, runStatus: runStatus,
+                        followsAppends: false,
+                        initialScrollSnapshot: transcriptState?.workScrollSnapshot(scrollKey) ?? localScrollSnapshot,
+                        saveScrollSnapshot: { snapshot in
+                            if let transcriptState { transcriptState.setWorkScrollSnapshot(scrollKey, snapshot) }
+                            else { localScrollSnapshot = snapshot }
+                        })
+                        .padding(.top, 8).padding(.leading, 26)
                 }
             }
         }
     }
 
-    private func header(liveLabel: String?, expanded: Bool, showsProgress: Bool) -> some View {
-        HStack(spacing: 9) {
-            Group {
-                // Only collapsed groups with unsettled work need a summary spinner.
-                if showsProgress {
-                    ProgressView()
-                        .controlSize(.mini)
-                } else if group.hasFailure {
-                    Image(systemName: "exclamationmark.triangle")
-                        .foregroundStyle(.red.opacity(0.8))
-                } else {
-                    Image(systemName: group.isThoughtOnly
-                        ? "sparkles"
-                        : group.action?.systemImage ?? "wrench.and.screwdriver")
-                }
-            }
-            .font(.system(size: 12, weight: .medium))
-            .frame(width: 17)
-            Text(liveLabel ?? group.summary)
-                .font(.system(size: 13.5, weight: group.isThoughtOnly ? .regular : .medium))
-                .lineLimit(1)
-                .truncationMode(.tail)
-            Image(systemName: "chevron.right")
-                .font(.system(size: 10, weight: .semibold))
-                .rotationEffect(.degrees(expanded ? 90 : 0))
-                .foregroundStyle(DashboardPalette.mutedForeground)
-            Spacer(minLength: 0)
-        }
-        .foregroundStyle(group.hasFailure && liveLabel == nil
-            ? Color.red.opacity(0.8)
-            : DashboardPalette.foreground.opacity(group.isThoughtOnly ? 0.58 : 0.72))
-        .contentShape(Rectangle())
+    private var scrollKey: String {
+        ConversationTranscriptState.disclosureKey(runID: runID, itemID: group.id)
     }
 }
 
@@ -401,27 +394,130 @@ private struct ConversationBoundedWorkList: View {
     let runID: String
     let runStatus: String
     let followsAppends: Bool
+    let initialScrollSnapshot: ConversationWorkScrollSnapshot
+    let saveScrollSnapshot: (ConversationWorkScrollSnapshot) -> Void
     @State private var contentHeight = Self.maximumHeight
+    @State private var scrollState = ConversationWorkScrollState()
+    @State private var scrollPosition = ScrollPosition(edge: .top)
+    @State private var scrollOffset: CGFloat = 0
+    @State private var reasoningText: [String: String] = [:]
+    @State private var laidOutActivityIDs: [String]?
+    @State private var growthStartedAtBottom = false
+    @State private var isUserScrolling = false
+    @State private var followTask: Task<Void, Never>?
+    @State private var restoringScroll = true
 
     var body: some View {
-        ScrollView(.vertical) {
-            LazyVStack(alignment: .leading, spacing: 8) {
-                ForEach(group.activities) { activity in
-                    ConversationActivityRow(
-                        activity: activity,
-                        runID: runID,
-                        runStatus: runStatus,
-                        showsProgress: group.showsProgress(activity)
-                    )
+        ScrollViewReader { _ in
+            ScrollView(.vertical) {
+                Group {
+                    if group.isThoughtOnly {
+                        // A reasoning-only group opens directly into formatted
+                        // text; mixed tool groups retain lazy rows.
+                        VStack(alignment: .leading, spacing: 8) { rows }
+                    } else {
+                        LazyVStack(alignment: .leading, spacing: 8) { rows }
+                    }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .environment(\.conversationReasoningAtLiveEdge,
+                    !restoringScroll && !isUserScrolling && (scrollState.isAtBottom || growthStartedAtBottom))
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
-        }
         .scrollIndicators(.never)
         .frame(height: min(Self.maximumHeight, max(1, contentHeight)))
         .defaultScrollAnchor(.top, for: .initialOffset)
-        .defaultScrollAnchor(followsAppends ? .bottom : .top, for: .sizeChanges)
+        .scrollPosition($scrollPosition)
+        .onScrollGeometryChange(for: ConversationWorkScrollGeometry.self) { geometry in
+            .init(contentHeight: geometry.contentSize.height, offset: max(0, geometry.contentOffset.y),
+                  viewportHeight: geometry.containerSize.height)
+        } action: { before, after in
+            let ids = group.activities.map(\.id)
+            if restoringScroll {
+                scrollOffset = after.offset
+                scrollState.setAtBottom(after.isAtBottom)
+                laidOutActivityIDs = ids
+                // A compact preview may be at its bottom before the saved
+                // reasoning page has loaded. Wait for its original position.
+                guard after.contentHeight - after.viewportHeight + 4 >= initialScrollSnapshot.offset else { return }
+                if followsAppends && initialScrollSnapshot.isAtBottom {
+                    if after.isAtBottom { restoringScroll = false }
+                    else { followAfterLayout() }
+                } else if after.contentHeight - after.viewportHeight >= initialScrollSnapshot.offset {
+                    scrollPosition.scrollTo(y: initialScrollSnapshot.offset)
+                    restoringScroll = false
+                }
+                return
+            }
+            if followsAppends, !isUserScrolling, let prior = laidOutActivityIDs,
+               scrollState.shouldFollowAppend(from: prior, to: ids, wasAtBottom: before.isAtBottom) {
+                followAfterLayout()
+            }
+            growthStartedAtBottom = after.contentHeight > before.contentHeight && before.isAtBottom
+            laidOutActivityIDs = ids
+            scrollOffset = after.offset
+            scrollState.setAtBottom(after.isAtBottom)
+        }
+        .onPreferenceChange(ConversationReasoningTextKey.self) { after in
+            let before = reasoningText
+            reasoningText = after
+            if followsAppends && !restoringScroll && !isUserScrolling && group.isThoughtOnly && before.keys.sorted() == after.keys.sorted(),
+               after.allSatisfy({ key, value in value.utf16.starts(with: (before[key] ?? "").utf16) }),
+               after.contains(where: { key, value in
+                scrollState.shouldFollowTextAppend(from: before[key] ?? "", to: value,
+                    wasAtBottom: scrollState.isAtBottom || growthStartedAtBottom)
+               }) {
+                followAfterLayout()
+            }
+        }
+        .task {
+            if followsAppends && initialScrollSnapshot.isAtBottom {
+                followAfterLayout()
+            } else if initialScrollSnapshot.offset > 0 {
+                scrollPosition.scrollTo(y: initialScrollSnapshot.offset)
+            } else {
+                restoringScroll = false
+            }
+        }
+        .onScrollPhaseChange { _, phase in
+            isUserScrolling = phase == .tracking || phase == .interacting || phase == .decelerating
+            if isUserScrolling { restoringScroll = false }
+        }
+        .onDisappear {
+            followTask?.cancel()
+            saveScrollSnapshot(.init(offset: scrollOffset, isAtBottom: scrollState.isAtBottom))
+        }
+        }
+    }
+
+    private func followAfterLayout() {
+        followTask?.cancel()
+        followTask = Task { @MainActor in
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+            scrollPosition.scrollTo(edge: .bottom)
+        }
+    }
+
+    @ViewBuilder private var rows: some View {
+                ForEach(group.activities) { activity in
+                    if group.isThoughtOnly {
+                        // One disclosure opens the complete formatted trace;
+                        // reasoning-only groups need no second row disclosure.
+                        ConversationActivityDetails(
+                            activity: activity, runID: runID,
+                            isLive: runStatus == "running" && group.showsProgress(activity),
+                            summary: nil, indentation: 0)
+                    } else {
+                        ConversationActivityRow(
+                            activity: activity,
+                            runID: runID,
+                            runStatus: runStatus,
+                            showsProgress: group.showsProgress(activity)
+                        )
+                    }
+                }
+                Color.clear.frame(height: 1).id("work-end")
     }
 }
 
@@ -525,11 +621,6 @@ private struct ConversationActivityRow: View {
             Image(systemName: "exclamationmark.triangle")
                 .foregroundStyle(.red.opacity(0.8))
                 .frame(width: 17)
-        } else if isLive {
-            ProgressView()
-                .controlSize(.mini)
-                .frame(width: 17, height: 17)
-                .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 2 }
         } else {
             Image(systemName: systemImage)
                 .font(.system(size: 12, weight: .medium))
@@ -553,7 +644,7 @@ private struct ConversationActivityRow: View {
     private var secondaryLabel: String? {
         if activity.kind == .thought {
             // A thought labelled from its own text needs no preview.
-            guard ["Thinking", "Thought"].contains(primaryLabel),
+            guard ["Thinking", "Thought", "Reasoning", "Reasoning summary"].contains(primaryLabel),
                   let content = activity.content?.nonempty else { return nil }
             return Self.preview(content)
         }
@@ -643,10 +734,12 @@ private struct ConversationActivityDetails: View {
     let isLive: Bool
     /// Text already shown in the row label.
     let summary: String?
+    var indentation: CGFloat = 26
     @Environment(\.conversationActivityDetails) private var loadDetails
     @State private var loaded: AgentRunActivity?
     @State private var loadToken: UUID?
     @State private var error: String?
+    @State private var waitingForDetails = false
     @State private var attempt = 0
     @State private var isVisible = false
 
@@ -659,12 +752,13 @@ private struct ConversationActivityDetails: View {
 
     var body: some View {
         let complete = self.complete
-        let content = field(\.content)
+        let content = field(\.content)?.nonempty
+            ?? (activity.kind == .thought ? field(\.detail)?.nonempty ?? field(\.title)?.nonempty : nil)
         VStack(alignment: .leading, spacing: 8) {
-            if !isLive, let title = complete?.title, title != activity.title {
+            if activity.kind != .thought, !isLive, let title = complete?.title, title != activity.title {
                 ConversationPagedText(text: title, style: .prose)
             }
-            if !isLive, let detail = complete?.detail, detail != activity.detail {
+            if activity.kind != .thought, !isLive, let detail = complete?.detail, detail != activity.detail {
                 ConversationPagedText(text: detail, style: .prose)
             }
             if let subagents = field(\.subagents) {
@@ -673,14 +767,25 @@ private struct ConversationActivityDetails: View {
                 }
             }
             if activity.kind != .activity, let content = content?.nonempty, content != summary {
-                ConversationPagedText(text: content, style: activity.kind == .thought ? .prose : .code)
+                if activity.kind == .thought {
+                    ConversationReasoningText(
+                        activityID: activity.id, runID: runID,
+                        text: content, isLive: isLive,
+                        hasCompleteText: activity.detailsAvailable != true || complete != nil)
+                } else {
+                    ConversationPagedText(text: content, style: .code)
+                }
             }
-            rawBlock("Input", field(\.rawInputJSON))
-            rawBlock("Output", field(\.rawOutputJSON))
-            rawBlock("Event", field(\.rawPayloadJSON))
+            // Reasoning disclosures contain supplied reasoning, not the ACP
+            // envelope that carried it. Tool details retain their raw fields.
+            if activity.kind != .thought {
+                rawBlock("Input", field(\.rawInputJSON))
+                rawBlock("Output", field(\.rawOutputJSON))
+                rawBlock("Event", field(\.rawPayloadJSON))
+            }
             // A compact record can contain no inline fields. Keep a visible
             // placeholder so its visibility-driven detail read can start.
-            if loadToken != nil || (activity.detailsAvailable == true && complete == nil && error == nil) {
+            if loadToken != nil || waitingForDetails || (activity.detailsAvailable == true && complete == nil && error == nil) {
                 Text("Loading details…")
                     .font(.system(size: 12.5))
                     .foregroundStyle(DashboardPalette.mutedForeground)
@@ -698,8 +803,10 @@ private struct ConversationActivityDetails: View {
             }
         }
         .padding(.top, 7)
-        .padding(.leading, 26)
-        .onScrollVisibilityChange(threshold: 0.01) { visible in
+        .padding(.leading, indentation)
+        // A bounded viewport may expose less than one percent of a long
+        // reasoning page. Any visible portion must keep its detail load alive.
+        .onScrollVisibilityChange(threshold: 0) { visible in
             isVisible = visible
             if !visible { loaded = nil }
         }
@@ -708,9 +815,9 @@ private struct ConversationActivityDetails: View {
             guard key.visible else { return }
             repeat {
                 await load(key)
-                guard isLive, !Task.isCancelled else { break }
-                // Only expanded, on-screen live details poll. Collapsed rows
-                // never decode payloads, and settlement delivers a final read.
+                guard isLive || waitingForDetails, !Task.isCancelled else { break }
+                // Poll only visible live details or a referenced record still
+                // arriving from sync. Collapsed rows never decode payloads.
                 do { try await Task.sleep(for: error == nil ? .milliseconds(500) : .seconds(2)) }
                 catch { break }
             } while !Task.isCancelled
@@ -735,7 +842,7 @@ private struct ConversationActivityDetails: View {
         let complete = self.complete
         if isLive, path == \AgentRunActivity.content,
            let preview = activity.content, let full = complete?.content,
-           !full.hasPrefix(preview) {
+           !full.utf16.starts(with: preview.utf16) {
             return activity[keyPath: path]
         }
         if isLive, path != \AgentRunActivity.content {
@@ -746,6 +853,7 @@ private struct ConversationActivityDetails: View {
 
     private func load(_ key: LoadKey) async {
         guard activity.detailsAvailable == true, let loadDetails else { return }
+        waitingForDetails = false
         let cacheKey = self.cacheKey
         if key.settled, let cached = ConversationActivityDetailCache[cacheKey] {
             loaded = cached
@@ -764,6 +872,10 @@ private struct ConversationActivityDetails: View {
             if key.settled { ConversationActivityDetailCache[cacheKey] = value }
             if value == nil { error = "Details for this activity are no longer available." }
         } catch is CancellationError {
+        } catch let error as CompanionAPIError where error.code == "incomplete_activity_details" {
+            guard !Task.isCancelled else { return }
+            waitingForDetails = true
+            self.error = nil
         } catch {
             guard !Task.isCancelled else { return }
             self.error = error.localizedDescription
@@ -782,6 +894,200 @@ private struct ConversationActivityDetails: View {
                 ConversationPagedText(text: value, style: .raw)
             }
         }
+    }
+}
+
+/// Reasoning uses the response's Markdown renderer, safe links, and native
+/// selection. Paging bounds layout without hiding any supplied trace text.
+private struct ConversationReasoningText: View {
+    private static let pageLength = 20_000
+    let activityID: String
+    let runID: String
+    let text: String
+    let isLive: Bool
+    let hasCompleteText: Bool
+    @Environment(\.conversationReasoningAtLiveEdge) private var isAtLiveEdge
+    @Environment(\.conversationTranscriptInteraction) private var transcriptInteraction
+    @Environment(\.conversationTranscriptState) private var transcriptState
+    @State private var displayedEnd: Int?
+    @State private var browsingHistory = false
+    @State private var awaitingRestoredText = false
+
+    private struct ContentState: Equatable {
+        let text: String
+        let isComplete: Bool
+    }
+
+    private var pageKey: String {
+        ConversationTranscriptState.disclosureKey(runID: runID, itemID: "reasoning:" + activityID)
+    }
+
+    private var committedText: String {
+        // Find stream boundaries and redact whole envelopes before slicing a
+        // page; a page beginning inside an envelope must not expose its tail.
+        RemoteNoteEditEnvelope.redactingEnvelopes(in:
+            isLive ? AssistantStreamingText.readyPrefix(of: text) : text)
+    }
+
+    var body: some View {
+        let stream = committedText
+        let count = stream.count
+        let saved = displayedEnd == nil ? transcriptState?.reasoningPageSnapshot(pageKey) : nil
+        let endOffset = count <= Self.pageLength ? count
+            : min(displayedEnd ?? saved?.displayedEnd ?? (isLive ? count : Self.pageLength), count)
+        let page = ConversationReasoningPage(text: stream, endOffset: endOffset, maximumCharacters: Self.pageLength)
+        let startOffset = page.startOffset
+        let shown = page.markdown
+        VStack(alignment: .leading, spacing: 6) {
+            if startOffset > 0 || endOffset < count {
+                HStack(spacing: 12) {
+                    if startOffset > 0 {
+                        Button("Earlier reasoning") {
+                            transcriptInteraction()
+                            browsingHistory = true
+                            displayedEnd = startOffset
+                        }
+                    }
+                    if endOffset < count {
+                        Button("Later reasoning") {
+                            transcriptInteraction()
+                            displayedEnd = min(count, endOffset + Self.pageLength)
+                            browsingHistory = displayedEnd != count
+                        }
+                        Button("Latest reasoning") {
+                            transcriptInteraction()
+                            displayedEnd = count
+                            browsingHistory = false
+                        }
+                    }
+                }
+                .buttonStyle(DashboardQuietButtonStyle())
+                .font(.system(size: 12))
+            }
+            if !shown.isEmpty {
+                ConversationResponse(content: shown, isStreaming: isLive, showsCopyButton: false)
+            }
+        }
+        .onAppear {
+            if displayedEnd == nil {
+                displayedEnd = saved?.displayedEnd ?? endOffset
+                browsingHistory = saved?.browsingHistory ?? false
+                awaitingRestoredText = saved != nil && !hasCompleteText
+            }
+        }
+        .onDisappear {
+            transcriptState?.setReasoningPageSnapshot(pageKey,
+                .init(displayedEnd: displayedEnd ?? endOffset, browsingHistory: browsingHistory))
+        }
+        .onChange(of: ContentState(text: stream, isComplete: hasCompleteText)) { before, after in
+            guard after.isComplete else {
+                if before.isComplete { awaitingRestoredText = true }
+                return
+            }
+            if awaitingRestoredText {
+                displayedEnd = min(displayedEnd ?? after.text.count, after.text.count)
+                awaitingRestoredText = false
+                return
+            }
+            if !before.isComplete {
+                // The compact preview's end is not a chosen page boundary.
+                // Open the first complete trace at its normal live/settled page.
+                displayedEnd = isLive ? after.text.count : min(after.text.count, Self.pageLength)
+                return
+            }
+            if !browsingHistory, isAtLiveEdge, after.text.utf16.starts(with: before.text.utf16) {
+                displayedEnd = after.text.count
+            } else if before.text.count <= Self.pageLength {
+                // Below the limit the full trace was rendered, even while
+                // reading above the edge. Preserve that actual page when a
+                // new append first requires paging.
+                displayedEnd = min(before.text.count, after.text.count)
+            } else if let displayedEnd, displayedEnd > after.text.count {
+                self.displayedEnd = after.text.count
+            }
+        }
+        .onChange(of: isAtLiveEdge) { _, atEdge in
+            if atEdge, isLive, !browsingHistory, hasCompleteText, !awaitingRestoredText {
+                displayedEnd = committedText.count
+            }
+        }
+        // Follow the supplied stream, not the current 20k rendering window:
+        // its prefix necessarily changes when a long live trace advances.
+        .preference(key: ConversationReasoningTextKey.self,
+                    value: isLive && !browsingHistory ? [activityID: stream] : [:])
+    }
+}
+
+/// A bounded Markdown page starts on a line boundary whenever possible. Carry
+/// only the surrounding fence delimiters, so code at either edge stays code
+/// and a later closing fence cannot accidentally consume following prose.
+struct ConversationReasoningPage {
+    let startOffset: Int
+    let markdown: String
+
+    init(text: String, endOffset: Int, maximumCharacters: Int) {
+        let end = text.index(text.startIndex, offsetBy: min(endOffset, text.count))
+        var start = text.index(end, offsetBy: -min(maximumCharacters, text.distance(from: text.startIndex, to: end)))
+        if start > text.startIndex, text[text.index(before: start)] != "\n",
+           let newline = text[start..<end].firstIndex(of: "\n"), text.index(after: newline) < end {
+            start = text.index(after: newline)
+        }
+        startOffset = text.distance(from: text.startIndex, to: start)
+        var source = String(text[start..<end])
+        if let opening = Self.fence(in: text[..<start]) {
+            source = opening.marker + opening.language + "\n" + source
+        }
+        if let closing = Self.fence(in: text[..<end]) {
+            if !source.hasSuffix("\n") { source += "\n" }
+            source += closing.marker
+        }
+        markdown = source
+    }
+
+    private struct Fence {
+        let marker: String
+        let language: String
+        let indent: Int
+    }
+
+    private static func fence(in prefix: Substring) -> Fence? {
+        var open: Fence?
+        for line in prefix.split(separator: "\n", omittingEmptySubsequences: false) {
+            let indent = line.prefix { $0 == " " }.count
+            let body = line.dropFirst(indent)
+            guard let first = body.first, first == "`" || first == "~" else { continue }
+            let marker = body.prefix { $0 == first }
+            guard marker.count >= 3 else { continue }
+            let remainder = body.dropFirst(marker.count).trimmingCharacters(in: .whitespacesAndNewlines)
+            if let prior = open {
+                if first == prior.marker.first, marker.count >= prior.marker.count,
+                   indent <= prior.indent + 3, remainder.isEmpty { open = nil }
+            } else {
+                // The native renderer displays the language, not arbitrary info
+                // metadata. Bound that context independently of a long trace.
+                let language = remainder.split(whereSeparator: \.isWhitespace).first.map { String($0.prefix(80)) } ?? ""
+                open = Fence(marker: String(marker), language: language, indent: indent)
+            }
+        }
+        return open
+    }
+}
+
+private struct ConversationReasoningAtLiveEdgeKey: EnvironmentKey {
+    static let defaultValue = true
+}
+
+private extension EnvironmentValues {
+    var conversationReasoningAtLiveEdge: Bool {
+        get { self[ConversationReasoningAtLiveEdgeKey.self] }
+        set { self[ConversationReasoningAtLiveEdgeKey.self] = newValue }
+    }
+}
+
+private struct ConversationReasoningTextKey: PreferenceKey {
+    static let defaultValue: [String: String] = [:]
+    static func reduce(value: inout [String: String], nextValue: () -> [String: String]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, latest in latest })
     }
 }
 
@@ -842,7 +1148,8 @@ private extension ConversationToolAction {
         case .read: "doc.text"
         case .edit: "pencil.and.outline"
         case .codeSearch: "magnifyingglass"
-        case .webSearch, .webFetch: "globe"
+        case .webSearch, .webFetch, .browser: "globe"
+        case .computer: "desktopcomputer"
         case .delegate: "person.2"
         case .other: "wrench.and.screwdriver"
         }
@@ -1177,7 +1484,7 @@ private struct ConversationDiffSheet: View {
     }
 
     private var loading: some View {
-        ProgressView("Loading diff…")
+        Text("Loading diff…")
             .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 

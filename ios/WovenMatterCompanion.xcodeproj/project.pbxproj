@@ -56,6 +56,7 @@
 		A92AB2463209562B4E3AA5CC /* CompanionModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9850315B032C364C200D69F /* CompanionModel.swift */; };
 		A9483CAF62A494A126BFEF2A /* ExecutionSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14486989616346BE7D7F4EF4 /* ExecutionSettings.swift */; };
 		AF2B07FD41AEE1C52E7A3E6A /* HomeDataPanes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91C5AC2A9D61EA42F4983352 /* HomeDataPanes.swift */; };
+		D44CB2EE56F6E106AD325988 /* AssistantStreamingText.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF2F13545022444562E65C91 /* AssistantStreamingText.swift */; };
 		B2F5E79D7987E93D428CFB02 /* AssistantTranscriptProjection.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABAAD9F7280F6177E4EA7D56 /* AssistantTranscriptProjection.swift */; };
 		B373A20188B94E7C850D7A29 /* DeviceMCPSessions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6795CD8E855510E270F50007 /* DeviceMCPSessions.swift */; };
 		C15CE66C5C92162C0BC80CBC /* DeviceSessionManagement.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96C40BE9C11BC9755F5A39D6 /* DeviceSessionManagement.swift */; };
@@ -134,6 +135,7 @@
 		AA61B1B790019FE4C6F795C6 /* DeviceEmbeddedExecution.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceEmbeddedExecution.swift; sourceTree = "<group>"; };
 		AAB9164DBF6568AF6EC36218 /* MobileDictationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileDictationTests.swift; sourceTree = "<group>"; };
 		AAE06BB3289FEA9A4B8FBEEC /* DashboardColors.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardColors.swift; sourceTree = "<group>"; };
+		FF2F13545022444562E65C91 /* AssistantStreamingText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantStreamingText.swift; sourceTree = "<group>"; };
 		ABAAD9F7280F6177E4EA7D56 /* AssistantTranscriptProjection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantTranscriptProjection.swift; sourceTree = "<group>"; };
 		ACE6C08436FBC343B6BE4931 /* MobileKeyboardDismissal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileKeyboardDismissal.swift; sourceTree = "<group>"; };
 		AD5CF78B55599027310424E6 /* CompanionUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionUITests.swift; sourceTree = "<group>"; };
@@ -184,6 +186,7 @@
 			children = (
 				CAA4202CF95204C9D4623BFD /* AgentRunActivity.swift */,
 				10E790A2859107A82753DE78 /* ConversationHTMLRender.swift */,
+				FF2F13545022444562E65C91 /* AssistantStreamingText.swift */,
 				ABAAD9F7280F6177E4EA7D56 /* AssistantTranscriptProjection.swift */,
 				02557B1B114BBAF54CD648B6 /* ConversationWorkTimeline.swift */,
 				1B7B3B955033B1085B31AF16 /* ProgramStatus.swift */,
@@ -480,6 +483,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				487910D1864BF3196605989A /* AgentRunActivity.swift in Sources */,
+				D44CB2EE56F6E106AD325988 /* AssistantStreamingText.swift in Sources */,
 				B2F5E79D7987E93D428CFB02 /* AssistantTranscriptProjection.swift in Sources */,
 				E7ACEC6B06676529B54BBF6B /* CalendarPane.swift in Sources */,
 				2B1DB5435AFB15771AD101BA /* ChatComposerSettings.swift in Sources */,

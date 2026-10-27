@@ -123,3 +123,71 @@ test('legacy RPC admission saves identity without credentials and owner polling 
   assert.ok(saved.some(item=>item.transcript?.messages?.some(message=>message.id===runID&&message.content==='First answer')))
   assert.equal(saved[0].retainedExecution.status,'completed')
 })
+
+test('retained snapshot assembly survives checkpoint restart and ignores an unfinished replacement',async t=>{
+  const f=fixture(t),runID=randomUUID(),conversationID=randomUUID()
+  const frame=(text,start,end)=>({sessionUpdate:'agent_message_chunk',content:{text},_meta:{wovenAssistantSnapshot:true,wovenSnapshotStart:start,wovenSnapshotEnd:end}})
+  const updates=[{sessionUpdate:'agent_message_chunk',content:{text:'old'}},frame('new ',true,false),frame('🧵',false,true),frame('incomplete',true,false)]
+  const run={id:runID,sessionID:conversationID,title:'Frames',scheduledAt:new Date().toISOString(),status:'accepted',task:{prompt:'work',configuration:{runtimeKind:'opencode'}}}
+  let phase=0;const completedAt=new Date().toISOString()
+  const gateway={retainedRunIDs:()=>[runID],results:cursor=>phase===0&&cursor==='0'?{cursor:'1',entries:[{id:runID,run,nativeSessionID:'native',completedAt,updates:updates.slice(0,2),updateOffset:0,complete:false}]}:
+    phase===1&&cursor==='1'?{cursor:'2',entries:[{id:runID,run,nativeSessionID:'native',completedAt,updates:updates.slice(2),updateOffset:2,complete:true}]}:{cursor,entries:[]}}
+  let bridge=capture(f,{taskGateway:gateway});await bridge.pump();await bridge.close()
+  let messages=entries(f.execution).flatMap(entry=>entry.transcript?.messages??[]).filter(x=>x.role==='assistant')
+  assert.equal(messages.at(-1).content,'old')
+  await f.restart();phase=1;bridge=capture(f,{taskGateway:gateway});await bridge.pump();await bridge.close()
+  messages=entries(f.execution).flatMap(entry=>entry.transcript?.messages??[]).filter(x=>x.role==='assistant')
+  assert.equal(messages.at(-1).content,'new 🧵')
+  assert.ok(!messages.some(x=>x.content==='new '||x.content==='incomplete'))
+})
+
+test('retained reasoning crosses publication pages and restart without clipping or duplicate deltas',async t=>{
+  const f=fixture(t),conversationID=randomUUID(),runID=randomUUID(),completedAt='2026-01-01T00:00:00Z'
+  const large='🧵'.repeat(80000),updates=[
+    {sessionUpdate:'agent_thought_chunk',content:{text:large},_meta:{wovenThoughtID:'trace',wovenThoughtSnapshot:true}},
+    {sessionUpdate:'agent_thought_chunk',content:{text:'corrected '+large+' suffix'},_meta:{wovenThoughtID:'trace',wovenThoughtSnapshot:true}}]
+  let offset=0,lost=true
+  const taskGateway={results:()=>({cursor:String(offset),entries:[{id:'large-reasoning',nativeSessionID:'native',completedAt,
+    run:{sessionID:conversationID,id:runID,title:'Reason',scheduledAt:completedAt,status:'accepted',task:{configuration:{runtimeKind:'default_agent'}}},
+    updateOffset:offset,updates:[updates[offset]],complete:false}]}),retainedRunIDs:()=>[]}
+  let bridge=capture(f,{taskGateway});await bridge.pump();await bridge.close();offset=1
+  bridge=capture(f,{taskGateway,execution:{descriptor:()=>f.execution.descriptor(),importRetainedEvents:batch=>{
+    f.execution.importRetainedEvents(batch)
+    if(lost&&batch.some(item=>item.nativeRecord?.format==='wovenmatter.activity.v2')){lost=false;throw new Error('lost detail ACK')}
+  }}})
+  await assert.rejects(()=>bridge.pump(),/lost detail ACK/);await bridge.close();await f.restart()
+  bridge=capture(f,{taskGateway});await bridge.pump();await bridge.close()
+  const saved=entries(f.execution),row=saved.flatMap(item=>item.transcript?.activities??[]).at(-1)
+  const chunks=saved.filter(item=>item.nativeRecord?.recordID===row.detailsRecordID).map(item=>item.nativeRecord).sort((a,b)=>a.partIndex-b.partIndex)
+  assert.ok(chunks.length>=3)
+  assert.equal(JSON.parse(Buffer.concat(chunks.map(part=>Buffer.from(part.data,'base64')))).activity.content,'corrected '+large+' suffix')
+  assert.ok(row.detail.length<=2048);assert.ok(row.projectionJSON.length<5000)
+  assert.equal(new Set(saved.map(item=>item.eventID)).size,saved.length)
+  updates[2]={sessionUpdate:'agent_thought_chunk',content:{text:''},_meta:{wovenThoughtID:'trace',wovenThoughtSnapshot:true}};offset=2
+  bridge=capture(f,{taskGateway});await bridge.pump();await bridge.close()
+  const cleared=entries(f.execution).flatMap(item=>item.transcript?.activities??[]).at(-1)
+  assert.equal(cleared.detailsRecordID,undefined);assert.equal(JSON.parse(cleared.projectionJSON).content,'')
+})
+
+test('retained terminal flush preserves coalesced suffix and replays a lost final ACK after time advances',async t=>{
+  const f=fixture(t),conversationID=randomUUID(),runID=randomUUID(),stamp='2026-01-01T00:00:00Z'
+  let clock=1000,lost=false
+  t.mock.method(Date,'now',()=>clock)
+  const large='x'.repeat(20000),updates=[large,' final suffix'].map(text=>({sessionUpdate:'agent_thought_chunk',content:{text},_meta:{wovenThoughtID:'trace'}}))
+  const taskGateway={results:()=>({cursor:'0',entries:[{id:'terminal-trace',nativeSessionID:'native',completedAt:stamp,
+    run:{sessionID:conversationID,id:runID,title:'Reason',scheduledAt:stamp,status:'accepted',task:{configuration:{runtimeKind:'default_agent'}}},
+    updateOffset:0,updates,complete:true}]}),retainedRunIDs:()=>[]}
+  let bridge=capture(f,{taskGateway,execution:{descriptor:()=>f.execution.descriptor(),importRetainedEvents:batch=>{
+    f.execution.importRetainedEvents(batch)
+    if(!lost&&batch.some(item=>item.nativeRecord?.format==='wovenmatter.activity.v2'&&Buffer.from(item.nativeRecord.data,'base64').includes(Buffer.from('final suffix')))) {
+      lost=true;throw new Error('lost terminal ACK')
+    }
+  }}})
+  await assert.rejects(()=>bridge.pump(),/lost terminal ACK/);await bridge.close();await f.restart();clock=9000
+  bridge=capture(f,{taskGateway});await bridge.pump();await bridge.close()
+  const saved=entries(f.execution),row=saved.flatMap(item=>item.transcript?.activities??[]).at(-1)
+  const parts=saved.filter(item=>item.nativeRecord?.recordID===row.detailsRecordID).map(item=>item.nativeRecord)
+  assert.equal(JSON.parse(Buffer.concat(parts.map(part=>Buffer.from(part.data,'base64')))).activity.content,large+' final suffix')
+  assert.equal(new Set(saved.map(item=>item.eventID)).size,saved.length)
+  assert.ok(saved.some(item=>item.transcript?.runs?.[0]?.status==='completed'))
+})

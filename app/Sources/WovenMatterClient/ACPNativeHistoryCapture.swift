@@ -10,16 +10,19 @@ enum ACPNativeHistoryCapture {
         let nativeEventID = update["eventId"]?.stringValue
             ?? update["_meta"]?["eventId"]?.stringValue
             ?? update["_meta"]?["eventID"]?.stringValue
-        let toolID = update["toolCallId"]?.stringValue
-        let isToolSnapshot = ["tool_call", "tool_call_update"].contains(kind) && toolID != nil
-        let isDelta = ["agent_message_chunk", "agent_thought_chunk", "user_message_chunk"].contains(kind)
+        let isToolDelta = kind == "tool_call_update"
+            && (update["_meta"]?["terminal_output_delta"]?["data"]?.stringValue != nil
+                || update["_meta"]?["mcp_output_delta"]?["data"]?.stringValue != nil)
+        let isDelta = isToolDelta || ["agent_message_chunk", "agent_thought_chunk", "user_message_chunk"].contains(kind)
         // Delta chunks without a native event ID are separate observations, even
         // when their text is identical. A content hash cannot identify a delta.
+        // Tool updates are partial patches, not complete snapshots. Replacing
+        // a record by toolCallId would discard its arguments and earlier output.
         let id = nativeEventID.map { "event:" + $0 }
-            ?? (isToolSnapshot ? "tool:\(toolID!)" : replayOrdinal.map { "replay:\($0)" }
-                ?? "observed:" + UUID().uuidString.lowercased())
+            ?? replayOrdinal.map { "replay:\($0)" }
+            ?? "observed:" + UUID().uuidString.lowercased()
         var record = NativeHarnessArchive.record(id: id, kind: "acp." + kind, data: data,
-            contentMode: isDelta ? "delta" : isToolSnapshot ? "snapshot" : "event")
+            contentMode: isDelta ? "delta" : "event")
         record.runID = runID
         record.projectionJSON = String(decoding: try NativeHarnessArchive.encode([
             "kind": ACPJSONValue.string(kind),

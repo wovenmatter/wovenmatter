@@ -567,3 +567,48 @@ test('a restored native child uses refreshed MCP credentials with its durable or
   await assert.rejects(tool.execute({}, api, { abortSignal: new AbortController().signal }), /originating Woven session is unavailable/);
   assert.equal(calls.length, 1);
 });
+
+test('a provider transport failure preserves exposed partial answer, reasoning and pending tool outcome', async t => {
+  const {engine} = await fixture(t), record = await engine.create(), updates = [];
+  record.streamFunction = model => ({
+    async *[Symbol.asyncIterator]() {
+      const message = await stream(model, [{type:'thinking',thinking:'Visible reasoning'}, {type:'text',text:'Partial answer'},
+        {type:'toolCall',id:'incomplete-tool',name:'bash',arguments:{command:'echo unfinished'}}]).result();
+      yield {type:'start',partial:message};
+      throw new Error('fixture transport disconnected');
+    },
+  });
+  await assert.rejects(engine.prompt(record,'Fixture partial failure', update => updates.push(update)));
+  const displayed = updates.filter(update => update.sessionUpdate === 'agent_message_chunk')
+    .reduce((text, update) => update._meta?.wovenAssistantSnapshot ? update.content.text : text+update.content.text, '');
+  assert.equal(displayed,'Partial answer');
+  assert.equal(updates.filter(update => update.sessionUpdate === 'agent_thought_chunk').map(update => update.content.text).join(''),'Visible reasoning');
+  assert.equal(updates.filter(update => update.toolCallId === 'incomplete-tool').at(-1)?.status,'failed');
+  const history = await record.history(0,200);
+  const message = history.recordBatch.records.flatMap(record => {
+    const value = JSON.parse(record.payload); return value.type === 'entry' ? value.value.model ?? [] : [];
+  }).find(message => message.role === 'assistant' && message.stopReason === 'error');
+  assert.equal(message?.stopReason,'error');
+  assert.equal(message.content.find(block => block.type === 'text').text,'Partial answer');
+});
+
+test('rejected workspace MCP grant reports discovery stage before any provider generation',async t=>{
+  const {engine}=await fixture(t),record=await engine.create();
+  const server=createServer((_request,response)=>{response.writeHead(401,{'content-type':'text/plain'});response.end('private fixture response must not escape');});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  t.after(async()=>{server.closeAllConnections();await new Promise(resolve=>server.close(resolve));});
+  record.streamFunction=()=>assert.fail('MCP discovery rejection must precede provider generation');
+  await assert.rejects(engine.prompt(record,'fixture',()=>{},{endpointURL:`http://127.0.0.1:${server.address().port}/mcp`,bearerToken:'fixture'}, {runID:randomUUID()}),error=>{
+    assert.ok(error.message.includes('discover Woven Matter tools'));assert.ok(error.message.includes('HTTP 401'));
+    assert.equal(error.message.includes('private fixture'),false);return true;
+  });
+  assert.equal(record.busy,false);assert.equal(record.session.messages.length,0);
+});
+
+test('native run group preparation has a safe distinct stage',async t=>{
+  const {engine}=await fixture(t),record=await engine.create();
+  record.subagents.beginGroup=async()=>{throw new Error('private database diagnostics');};
+  record.streamFunction=()=>assert.fail('run preparation must precede provider generation');
+  await assert.rejects(engine.prompt(record,'fixture',()=>{},undefined,{runID:randomUUID()}),{message:'Pi Durable could not prepare the native run group.'});
+  assert.equal(record.busy,false);
+});

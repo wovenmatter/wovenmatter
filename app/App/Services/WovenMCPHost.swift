@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import Network
 import Security
 import WovenMatterCore
 import WovenMatterDashboardStore
@@ -67,13 +68,30 @@ final class WovenMCPHost {
         let expected = generation
         let task = Task { @MainActor [weak self] () throws -> String in
             guard let self else { throw CancellationError() }
-            let listener = CompanionHTTPServer { [weak self] request in
-                guard let self else { return .error("unavailable", "Woven MCP stopped.", status: 503) }
-                return await self.handle(request) ?? Self.unauthorizedResponse()
+            func makeListener() -> CompanionHTTPServer {
+                CompanionHTTPServer { [weak self] request in
+                    guard let self else { return .error("unavailable", "Woven MCP stopped.", status: 503) }
+                    return await self.handle(request) ?? Self.unauthorizedResponse()
+                }
             }
+            var listener = makeListener()
             self.server = listener
             do {
-                let port = try await listener.start(port: self.preferredPort)
+                let port: UInt16
+                do {
+                    port = try await listener.start(port: self.preferredPort)
+                } catch NWError.posix(.EADDRINUSE) where self.preferredPort != 0
+                    && !self.credentials.values.contains(where: \.persistent) {
+                    // A recently closed TCP connection can retain the saved port.
+                    // Session-only credentials are reissued after restart, so no
+                    // external client depends on this endpoint. Keep exclusive
+                    // binding and let the OS choose a free port instead.
+                    listener.stop()
+                    guard self.generation == expected, !Task.isCancelled else { throw CancellationError() }
+                    listener = makeListener()
+                    self.server = listener
+                    port = try await listener.start()
+                }
                 guard self.generation == expected, !Task.isCancelled else { listener.stop(); throw CancellationError() }
                 let endpoint = "http://127.0.0.1:\(port)/mcp"
                 self.preferredPort = port; self.endpointURL = endpoint

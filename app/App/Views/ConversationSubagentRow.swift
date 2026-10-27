@@ -150,7 +150,7 @@ private struct ConversationSubagentHistory: View {
                                 .buttonStyle(DashboardQuietButtonStyle())
                                 .disabled(busy)
                         }
-                        if busy { ProgressView().controlSize(.small) }
+                        if busy { Text("Loading history…") }
                     }.padding(.top, 5)
                 }
             }
@@ -202,7 +202,7 @@ private struct ConversationSubagentArchiveEvent: View {
                     Button(chunks.isEmpty ? "Read native record" : "Read more") { Task { await loadNextChunk() } }
                         .buttonStyle(DashboardQuietButtonStyle()).disabled(busy)
                 }
-                if busy { ProgressView().controlSize(.small) }
+                if busy { Text("Loading record…") }
             }
             .fixedSize(horizontal: false, vertical: true)
             .padding(.top, 4)

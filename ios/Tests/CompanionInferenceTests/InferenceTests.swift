@@ -32,6 +32,24 @@ final class InferenceTests: XCTestCase {
   let connection = InferenceConnection(id: "phone-key", name: "API", provider: "openai", route: .direct, modelID: "gpt-4")
   let model = InferenceModel(id: "gpt-4", name: "GPT", provider: "openai", api: "openai-responses", baseUrl: "https://api.openai.com/v1")
 
+  func testResponsesRequestDetailedSummariesOnlyWhenReasoningIsEnabled() throws {
+    for (provider, api) in [("openai", "openai-responses"), ("openai-codex", "openai-codex-responses")] {
+      for capable in [false, true] {
+        let model = InferenceModel(id: "fixture", name: "Fixture", provider: provider, api: api,
+          baseUrl: InferenceModelPolicy.endpoints[provider]![api]!, reasoning: capable)
+        let connection = InferenceConnection(name: "Fixture", provider: provider, route: .direct, modelID: model.id)
+        for level in ["off", "high"] {
+          let request = try InferenceRequestBuilder(connection: connection, model: model).request(
+            ["context": ["messages": [["role": "user", "content": "hello"]]], "options": ["reasoning": level]], secret: "fixture", accountID: "fixture")
+          let body = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(request.httpBody)) as? InferenceObject)
+          let reasoning = inferenceObject(body["reasoning"])
+          XCTAssertEqual(reasoning["summary"] as? String, capable && level == "high" ? "detailed" : nil)
+          XCTAssertEqual(reasoning["effort"] as? String, capable ? (level == "high" ? "high" : (provider == "openai-codex" ? "none" : nil)) : nil)
+        }
+      }
+    }
+  }
+
   private func fixture(_ provider: String = "openai", api: String = "openai-responses", image: Bool = true) -> InferenceModel {
     var value = InferenceModel(id: "fixture-chat", name: "Fixture chat", provider: provider, api: api,
       baseUrl: InferenceModelPolicy.endpoints[provider]![api]!, input: image ? ["text", "image"] : ["text"])

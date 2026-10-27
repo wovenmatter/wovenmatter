@@ -46,7 +46,11 @@ struct ConversationHTMLRenderView: View {
                     .padding(.vertical, 16)
                 Button("Retry") { self.failure = nil; Task { await load() } }.buttonStyle(.plain)
             } else {
-                ProgressView().frame(maxWidth: .infinity).frame(height: CGFloat(min(2000, max(80, activity.htmlRender?.height ?? 160))))
+                Text("Loading visual reply…")
+                    .font(.system(size: 13))
+                    .foregroundStyle(DashboardPalette.mutedForeground)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: CGFloat(min(2000, max(80, activity.htmlRender?.height ?? 160))))
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -101,6 +105,7 @@ struct ConversationHTMLRenderView: View {
 
     private func web(_ page: ConversationHTMLPage, fitsHeight: Bool = true) -> some View {
         ConversationHTMLWebView(html: page.html, theme: ConversationHTMLTheme.value(theme), zoom: zoom,
+            forwardsConversationScroll: fitsHeight,
             onHeight: { value in
                 guard fitsHeight, value.isFinite else { return }
                 height = min(20_000, max(80, ceil(value)))
@@ -178,13 +183,16 @@ private struct ConversationHTMLWebView: ConversationHTMLRepresentable {
     let html: String
     let theme: [String: Any]
     let zoom: Double
+    let forwardsConversationScroll: Bool
     let onHeight: (CGFloat) -> Void
     let onLink: (URL) -> Void
     let onFailure: (any Error) -> Void
 
     func makeCoordinator() -> ConversationHTMLWebCoordinator { ConversationHTMLWebCoordinator() }
     #if os(macOS)
-    func makeNSView(context: Context) -> WKWebView { context.coordinator.makeWebView() }
+    func makeNSView(context: Context) -> WKWebView {
+        context.coordinator.makeWebView(forwardsConversationScroll: forwardsConversationScroll)
+    }
     func updateNSView(_ view: WKWebView, context: Context) { update(view, coordinator: context.coordinator) }
     static func dismantleNSView(_ view: WKWebView, coordinator: ConversationHTMLWebCoordinator) { coordinator.stop(view) }
     #else
@@ -194,6 +202,9 @@ private struct ConversationHTMLWebView: ConversationHTMLRepresentable {
     #endif
 
     private func update(_ view: WKWebView, coordinator: ConversationHTMLWebCoordinator) {
+        #if os(macOS)
+        (view as? ConversationHTMLNativeWebView)?.forwardsConversationScroll = forwardsConversationScroll
+        #endif
         coordinator.onHeight = onHeight; coordinator.onLink = onLink; coordinator.onFailure = onFailure
         coordinator.apply(html: html, theme: theme, to: view)
         if view.pageZoom != zoom { view.pageZoom = zoom }
@@ -210,12 +221,17 @@ private struct ConversationHTMLWebView: ConversationHTMLRepresentable {
     var consoleMessages: [[String: String]] = []
     private var consoleBytes = 0
 
-    func makeWebView() -> WKWebView {
+    func makeWebView(forwardsConversationScroll: Bool = false) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
         configuration.userContentController.add(self, name: "wovenHTML")
+        #if os(macOS)
+        let view = ConversationHTMLNativeWebView(frame: .zero, configuration: configuration)
+        view.forwardsConversationScroll = forwardsConversationScroll
+        #else
         let view = WKWebView(frame: .zero, configuration: configuration)
+        #endif
         view.navigationDelegate = self
         #if os(macOS)
         view.setValue(false, forKey: "drawsBackground")
@@ -283,3 +299,73 @@ private struct ConversationHTMLWebView: ConversationHTMLRepresentable {
         onFailure(NSError(domain: "WovenHTML", code: 1, userInfo: [NSLocalizedDescriptionKey: "The page stopped. Retry the preview."]))
     }
 }
+
+#if os(macOS)
+/// An inline page fits its content, so ordinary vertical scrolling belongs to
+/// the conversation. Expanded pages and modified/horizontal chart gestures
+/// retain WebKit's normal handling; links, selection and magnification do too.
+final class ConversationHTMLNativeWebView: WKWebView {
+    var forwardsConversationScroll = false
+    private var scrollGesture = ConversationHTMLScrollGesture()
+
+    override func scrollWheel(with event: NSEvent) {
+        let outer = enclosingScrollView
+        let deliveries = scrollGesture.deliveries(for: event,
+            canForward: forwardsConversationScroll && outer != nil)
+        for (event, forward) in deliveries {
+            if forward, let outer { outer.scrollWheel(with: event) }
+            else { super.scrollWheel(with: event) }
+        }
+    }
+}
+
+/// Pick a destination once per trackpad gesture, including its momentum tail.
+/// A zero-delta mayBegin/began cannot identify an axis, so retain those events
+/// until the first movement and deliver the complete phase sequence together.
+struct ConversationHTMLScrollGesture {
+    private var forward: Bool?
+    private var waitingForBegan = false
+    private var pending: [NSEvent] = []
+
+    mutating func deliveries(for event: NSEvent, canForward: Bool) -> [(NSEvent, Bool)] {
+        var result: [(NSEvent, Bool)] = []
+        let phase = event.phase
+        let momentum = event.momentumPhase
+        let discrete = phase.isEmpty && momentum.isEmpty
+        let newGesture = phase.contains(.mayBegin) || (phase.contains(.began) && !waitingForBegan)
+        if discrete || newGesture {
+            // An abandoned directionless gesture belongs to WebKit; it must
+            // not lend an unfinished begin phase to the next gesture.
+            result += pending.map { ($0, false) }
+            pending.removeAll(keepingCapacity: true)
+            forward = nil
+            waitingForBegan = phase.contains(.mayBegin)
+        }
+        if phase.contains(.began) { waitingForBegan = false }
+        if forward == nil {
+            let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
+            if !canForward || !modifiers.isEmpty {
+                forward = false
+            } else if event.scrollingDeltaX != 0 || event.scrollingDeltaY != 0 {
+                forward = abs(event.scrollingDeltaY) >= abs(event.scrollingDeltaX)
+            } else if discrete || phase.contains(.ended) || phase.contains(.cancelled)
+                        || momentum.contains(.ended) || pending.count >= 16 {
+                // Bound buffering even for a malformed stream with no motion.
+                forward = false
+            }
+        }
+        pending.append(event)
+        if let forward {
+            result += pending.map { ($0, forward) }
+            pending.removeAll(keepingCapacity: true)
+        }
+        if discrete || phase.contains(.cancelled) || momentum.contains(.ended) {
+            forward = nil
+            waitingForBegan = false
+        }
+        // A touch-ended event deliberately keeps the destination: momentum
+        // can begin in a later event with no touch phase or nonzero delta.
+        return result
+    }
+}
+#endif

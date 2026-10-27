@@ -18,15 +18,7 @@ struct ConversationMarkdownDocument: Sendable {
 
         init(_ source: String) {
             attributed = Self.render(source)
-            let lines = source
-                .split(separator: "\n", omittingEmptySubsequences: false)
-                .map { Self.renderLine(String($0)) }
-            rendered = lines.enumerated().reduce(into: AttributedString()) { result, element in
-                if element.offset > 0 {
-                    result.append(AttributedString("\n"))
-                }
-                result.append(element.element)
-            }
+            rendered = Self.trimmingLineEnds(in: attributed)
         }
 
         private static func render(_ source: String) -> AttributedString {
@@ -49,16 +41,24 @@ struct ConversationMarkdownDocument: Sendable {
             return rendered
         }
 
-        private static func renderLine(_ source: String) -> AttributedString {
-            var visibleSource = source
-            while visibleSource.last == " " || visibleSource.last == "\t" {
-                visibleSource.removeLast()
+        /// Parse the complete inline span before trimming presentation whitespace.
+        /// Per-line parsing breaks emphasis and links that cross a line boundary;
+        /// Foundation already handles hard-break backslashes and literal escapes.
+        private static func trimmingLineEnds(in attributed: AttributedString) -> AttributedString {
+            var result = attributed
+            var removals: [Range<AttributedString.Index>] = []
+            for line in result.characters.split(separator: "\n", omittingEmptySubsequences: false) {
+                var end = line.endIndex
+                while end > line.startIndex {
+                    let previous = result.characters.index(before: end)
+                    guard result.characters[previous] == " " || result.characters[previous] == "\t",
+                          result[previous..<end].inlinePresentationIntent?.contains(.code) != true else { break }
+                    end = previous
+                }
+                if end < line.endIndex { removals.append(end..<line.endIndex) }
             }
-            let trailingBackslashes = visibleSource.reversed().prefix(while: { $0 == "\\" }).count
-            if trailingBackslashes.isMultiple(of: 2) == false {
-                visibleSource.removeLast()
-            }
-            return render(visibleSource)
+            for range in removals.reversed() { result.removeSubrange(range) }
+            return result
         }
     }
 

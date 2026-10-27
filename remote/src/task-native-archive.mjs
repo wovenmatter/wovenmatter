@@ -58,7 +58,15 @@ function searchableText(value, remaining = {characters: 256 * 1024}) {
 }
 
 export function publishNativePresentation(update, publish) {
-  for (const preview of nativePresentationUpdates(update)) publish(preview)
+  let offset=0
+  for (const preview of nativePresentationUpdates(update)) {
+    if ((update._meta?.wovenAssistantSnapshot || update._meta?.wovenThoughtSnapshot) && typeof update.content?.text==='string') {
+      const start=offset===0;offset+=preview.content.text.length
+      preview._meta={...preview._meta, wovenSnapshotStart:start&&(update._meta.wovenSnapshotStart??true),
+        wovenSnapshotEnd:offset===update.content.text.length&&(update._meta.wovenSnapshotEnd??true)}
+    }
+    publish(preview)
+  }
 }
 
 export function isolateTaskEnvironment(environment) {

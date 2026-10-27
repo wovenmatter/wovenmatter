@@ -421,6 +421,33 @@ extension WorkspaceDatabaseConnection {
     )
   }
 
+  /// Repair IDs saved by older configuration-only Claude probes. A missing
+  /// native draft is replaceable only before this local chat has any history.
+  func discardUnpromptedClaudeDraftSessionID(conversationID: String, expectedSessionID: String) throws -> Bool {
+    try transaction {
+      let statement = try prepareUnlocked("""
+        UPDATE desktop_local_acp_sessions
+        SET acp_session_id=NULL, revision=revision+1, updated_at=?
+        WHERE conversation_id=? AND acp_session_id=? AND runtime_kind='claude_code'
+          AND remote_workspace_id IS NULL AND governing_plane='wovenmatter_macos' AND authority_kind='device_owned'
+          AND EXISTS (SELECT 1 FROM dashboard_conversations c WHERE c.id=desktop_local_acp_sessions.conversation_id
+            AND c.desktop_owned=1 AND c.deleted_at IS NULL AND c.governing_plane='wovenmatter_macos')
+          AND NOT EXISTS (SELECT 1 FROM dashboard_runs WHERE conversation_id=desktop_local_acp_sessions.conversation_id)
+          AND NOT EXISTS (SELECT 1 FROM dashboard_messages WHERE conversation_id=desktop_local_acp_sessions.conversation_id)
+          AND NOT EXISTS (SELECT 1 FROM dashboard_run_events WHERE conversation_id=desktop_local_acp_sessions.conversation_id)
+          AND NOT EXISTS (SELECT 1 FROM dashboard_run_trace_events WHERE conversation_id=desktop_local_acp_sessions.conversation_id)
+          AND NOT EXISTS (SELECT 1 FROM desktop_session_imports WHERE conversation_id=desktop_local_acp_sessions.conversation_id)
+          AND NOT EXISTS (SELECT 1 FROM retained_execution_history WHERE conversation_id=desktop_local_acp_sessions.conversation_id)
+        """)
+      defer { sqlite3_finalize(statement) }
+      try bind(Self.timestamp(Date()), at: 1, to: statement)
+      try bind(conversationID, at: 2, to: statement)
+      try bind(expectedSessionID, at: 3, to: statement)
+      try stepDone(statement)
+      return changedRowCountUnlocked == 1
+    }
+  }
+
   public func updateLocalACPSessionID(
     conversationID: String,
     runID: String? = nil,

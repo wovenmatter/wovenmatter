@@ -40,9 +40,14 @@ elif name == 'xcodebuild':
         Path(os.environ['DEV_SIGNING_REWRITE']).write_text('#!/bin/bash\\nexit 99\\n')
 elif name == 'pgrep':
     backend = os.environ.get('DEV_SIGNING_BACKEND_PATH', '')
-    sys.exit(0 if backend and re.search(args[1], backend + ' --backend') else 1)
+    if not backend or not re.search(args[-1], backend + ' --backend'): sys.exit(1)
+    print('424242')
+elif name == 'ps':
+    backend = os.environ.get('DEV_SIGNING_BACKEND_PATH', '')
+    if not backend: sys.exit(1)
+    print(backend + ' --backend')
 '''
-    for name in ('security', 'xcodebuild', 'codesign', 'pkill', 'pgrep', 'lldb', 'swift'):
+    for name in ('security', 'xcodebuild', 'codesign', 'pkill', 'pgrep', 'ps', 'lldb', 'swift'):
         path = binaries / name
         path.write_text(stub)
         path.chmod(0o755)

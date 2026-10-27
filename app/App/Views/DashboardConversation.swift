@@ -130,7 +130,11 @@ struct DashboardCloudConversation: View {
         ZStack(alignment: .bottom) {
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(spacing: 0) {
+                    // This is the paged message window (40 messages initially),
+                    // not the full history. Native text changes height while it
+                    // streams; lazy height estimates can strand the bottom
+                    // anchor in blank space before those rows are measured.
+                    VStack(spacing: 0) {
                         if conversation == nil {
                             DashboardConversationEmptyState(
                                 icon: .messageSquare,
@@ -159,11 +163,15 @@ struct DashboardCloudConversation: View {
                                     .padding(.bottom, 32)
                                     .id(historyLoaderID(oldestMessageID: oldestMessageID))
                                     .accessibilityIdentifier("dashboard-history-loader")
-                                    .task(id: historyLoaderID(oldestMessageID: oldestMessageID)) {
-                                        await prependOlderMessages(
-                                            keeping: oldestMessageID,
-                                            using: proxy
-                                        )
+                                    .onScrollVisibilityChange(threshold: 0.01) { visible in
+                                        // Eager layout must not eagerly fetch history.
+                                        guard visible else { return }
+                                        Task { @MainActor in
+                                            await prependOlderMessages(
+                                                keeping: oldestMessageID,
+                                                using: proxy
+                                            )
+                                        }
                                     }
                             }
                             if let sessionID = conversation?.id, model.agentTools?.hasOlderReceipts.contains(sessionID) == true {
@@ -207,7 +215,8 @@ struct DashboardCloudConversation: View {
                                                 layout: fragment.layout,
                                                 displayedBody: presentation?.displayedBody,
                                                 commentaryIDs: presentation?.commentaryIDs,
-                                                workTimeline: presentation?.workTimeline
+                                                workTimeline: presentation?.workTimeline,
+                                                streaming: presentation?.isStreaming
                                             )
                                         }
                                     }
@@ -1145,15 +1154,21 @@ struct DashboardMessageRow: View {
     var displayedBody: String? = nil
     var commentaryIDs: Set<String>? = nil
     var workTimeline: ConversationWorkTimeline? = nil
+    var streaming: Bool? = nil
 
-    private var assistantBody: String { displayedBody ?? transcript.body }
+    private var isStreaming: Bool {
+        streaming ?? AssistantStreamingText.isStreaming(messageStatus: message.status, runStatus: run?.status)
+    }
+    private var assistantBody: String {
+        displayedBody ?? (isStreaming ? AssistantStreamingText.readyPrefix(of: transcript.body) : transcript.body)
+    }
 
     /// Fallback for a row without a prepared presentation.
     private var transcript: (body: String, commentaryIDs: Set<String>) {
         let work = activities.map(\.activity)
         return ConversationWorkTimeline.displayPartition(
             AssistantTranscriptProjection(messageID: message.id, content: message.content, activities: work),
-            activities: work, isLive: message.status == "streaming")
+            activities: work, isLive: isStreaming)
     }
 
     var body: some View {
@@ -1187,7 +1202,7 @@ struct DashboardMessageRow: View {
                             presentation: runPresentation,
                             records: activities,
                             commentaryIDs: commentaryIDs ?? transcript.commentaryIDs,
-                            hasFinalReply: !assistantBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                            hasFollowingResponse: !assistantBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                             timeline: projectedTimeline
                         )
                     }
@@ -1203,11 +1218,11 @@ struct DashboardMessageRow: View {
                         ConversationResponse(
                             content: RemoteNoteEditEnvelope.redactingEnvelopes(in: assistantBody),
                             document: renderedDocument,
-                            isStreaming: message.status == "streaming"
+                            isStreaming: isStreaming
                         )
                         .padding(.horizontal, 4)
                         .padding(.vertical, 2)
-                        if let resolveFile, message.status != "streaming" {
+                        if let resolveFile, !isStreaming {
                             ConversationFilePreviews(content: assistantBody, messageID: message.id, resolveFile: resolveFile)
                         }
                     }

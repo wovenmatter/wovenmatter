@@ -1,3 +1,5 @@
+import { updateReasoningDetails, flushReasoningDetails } from './reasoning-details.mjs'
+import { assemblePresentationFrame } from './presentation-frames.mjs'
 import { createClientExecutionPublisher } from './client-execution-publisher.mjs'
 import { DatabaseSync } from 'node:sqlite'
 import { mkdirSync, chmodSync } from 'node:fs'
@@ -65,7 +67,15 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
   function save(record) {
     db.prepare('INSERT OR REPLACE INTO conversations(id,body) VALUES (?,?)').run(record.conversation.id, JSON.stringify(record))
   }
-  function publish(record, changed) {
+  function publish(record, changed, force = !changed) {
+    let pendingDetails=false
+    for(const activity of record.transcript.activities) {
+      if(changed && !changed.activities.has(activity.id))continue
+      if(!activity.projectionJSON || JSON.parse(activity.projectionJSON).kind!=='thought')continue
+      const parts=flushReasoningDetails(directory,activity,{force})
+      if(parts===null)pendingDetails=true
+      for(const nativeRecord of parts??[])event('nativeRecord',record.conversation.id,{nativeRecord},activity.runID)
+    }
     save(record)
     event('conversation', record.conversation.id, { conversation: record.conversation }, record.conversation.activeRunID)
     const messages = changed ? record.transcript.messages.filter(item => changed.messages.has(item.id)) : record.transcript.messages
@@ -77,18 +87,24 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
         messages: messages.slice(offset, offset + 4), activities: activities.slice(offset, offset + 4),
         ...(record.transcript.activeRunID ? {activeRunID: record.transcript.activeRunID} : {}) } }, record.conversation.activeRunID)
     }
+    return pendingDetails
   }
-  function flush(id) {
+  function flush(id, force = false) {
     const changes = dirty.get(id)
     if (!changes) return
-    transaction(() => publish(getRecord(id), changes)); dirty.delete(id)
+    const pending=transaction(() => publish(getRecord(id), changes, force))
+    if(!pending)dirty.delete(id)
+    else scheduleFlush()
+  }
+  function scheduleFlush() {
+    if (!flushTimer) { flushTimer = setTimeout(() => { flushTimer = undefined; for (const id of dirty.keys()) flush(id) }, 500); flushTimer.unref() }
   }
   function markDirty(record, messages = [], activities = []) {
     save(record)
     const changes = dirty.get(record.conversation.id) ?? {messages: new Set(), activities: new Set()}
     messages.forEach(id => changes.messages.add(id)); activities.forEach(id => changes.activities.add(id))
     dirty.set(record.conversation.id, changes)
-    if (!flushTimer) { flushTimer = setTimeout(() => { flushTimer = undefined; for (const id of dirty.keys()) flush(id) }, 500); flushTimer.unref() }
+    scheduleFlush()
   }
   function receipt(command, status, fields = {}) {
     const value = { commandID: command.commandID, deviceID: command.deviceID, libraryID: identity.libraryID, workspaceID: identity.id, status,
@@ -109,6 +125,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       const record = JSON.parse(row.body)
       if(record.goal?.status==='active'){setGoalStatus(record.goal,'paused');record.goal.evidence='The execution owner restarted. Resume explicitly.';delete record.goal.pendingDeliveryID;save(record)}
       if (record.conversation.activeRunID) {
+        delete record.presentationFrames
         for(const activity of record.transcript.activities)if(activity.status==='running')activity.status='interrupted'
         delete record.conversation.activeRunID; delete record.transcript.activeRunID; record.pending = record.pending.filter(item=>item.mcpManageAccessID)
         for (const message of record.transcript.messages) if (message.status === 'running') message.status = 'interrupted'
@@ -431,6 +448,9 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       if(Number.isSafeInteger(tokens)&&tokens>=0){record.runUsage??={};record.runUsage[runID]=Math.max(record.runUsage[runID]??0,tokens);save(record)}
       return
     }
+    record.presentationFrames ??= {}
+    update=assemblePresentationFrame(update,record.presentationFrames)
+    if(!update){save(record);return}
     const message = record.transcript.messages.find(item => item.id === runID)
     const changedMessages = [], changedActivities = []
     if (update.sessionUpdate === 'woven_execution_binding') { record.native = copy(update.native); save(record); return }
@@ -451,8 +471,8 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       const id=runID+':'+String(update._meta?.wovenThoughtID??'thinking')
       let activity=record.transcript.activities.find(item=>item.id===id)
       if(!activity){activity={id,runID,title:'Thinking',status:'running',detail:''};record.transcript.activities.push(activity)}
-      const value=update.content?.text??''
-      activity.detail=textParts(update._meta?.wovenThoughtSnapshot?value:(activity.detail??'')+value)[0]
+      const parts=updateReasoningDetails(directory,activity,update,randomUUID())
+      transaction(() => { for(const nativeRecord of parts)event('nativeRecord',conversationID,{nativeRecord},runID) })
       changedActivities.push(id)
     } else if (['tool_call','tool_call_update'].includes(update.sessionUpdate)) {
       const id = runID+':'+String(update.toolCallId ?? randomUUID())
@@ -471,6 +491,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
     if (closed) return
     const record = getRecord(command.conversationID)
     if (record.conversation.activeRunID !== command.runID) return
+    delete record.presentationFrames
     const message = record.transcript.messages.find(item => item.id === command.runID)
     const stopped=jobs.get(command.runID)?.stopped===true
     if(stopped)error=undefined
@@ -660,6 +681,6 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       throw fail(400,'This content belongs to the central library and is unavailable through execution transport.')
     },
     tickGoals,
-    async close() { closed=true;clearInterval(goalTimer);mcp.close();await publisher.close(); clearTimeout(flushTimer); for (const id of dirty.keys()) flush(id); unlockMaterial = undefined; await runtime.close?.(); await Promise.allSettled([...jobs.values()].map(job => job.completion)); await Promise.allSettled([...queues.values()]); db.close() },
+    async close() { closed=true;clearInterval(goalTimer);mcp.close();await publisher.close(); clearTimeout(flushTimer); for (const id of dirty.keys()) flush(id,true); unlockMaterial = undefined; await runtime.close?.(); await Promise.allSettled([...jobs.values()].map(job => job.completion)); await Promise.allSettled([...queues.values()]); db.close() },
   }
 }

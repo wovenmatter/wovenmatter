@@ -4,19 +4,35 @@ import Foundation
 ///
 /// The projection is pure and `Sendable`, so a caller can build it once off the
 /// main actor from the run's activity records and pass it to the transcript
-/// view. Commentary is inline; thoughts and tool calls between commentary
-/// segments form one work group (as in T3's work log); plans, progress, and
-/// agent activity remain standalone rows. File changes are excluded and stay
-/// with the changed-files card.
+/// view. Thoughts and commentary remain standalone rows. Only consecutive
+/// visible tool calls form a work group; each nonempty thought starts a new
+/// phase. Plans, progress, and agent activity also remain standalone rows.
+/// File changes are excluded and stay with the changed-files card.
 public struct ConversationWorkTimeline: Equatable, Sendable {
   public static let empty = Self(entries: [])
 
   public let entries: [ConversationWorkTimelineEntry]
-  /// Entries that stay visible while a settled run is folded behind its
-  /// "Worked for" header: failed rows and the failed calls of each group.
+  /// Legacy reduced tool-history projection. Thoughts and commentary always
+  /// remain visible, alongside failed rows and failed calls from tool groups.
   public let foldedEntries: [ConversationWorkTimelineEntry]
 
   public var hasVisibleActivities: Bool { !entries.isEmpty }
+
+  /// Active work already supplies an indicator. Otherwise an empty timeline,
+  /// commentary, or settled tools need a quiet waiting state while the run lives.
+  public var needsThinkingIndicator: Bool {
+    if entries.contains(where: { entry in
+      switch entry.content {
+      case .group(let group): group.hasActiveActivity
+      case .activity(let activity): activity.workTimelineShowsProgress
+      case .commentary: false
+      }
+    }) { return false }
+    guard let last = entries.last else { return true }
+    if case .group = last.content { return true }
+    if case .activity(let activity) = last.content, activity.kind == .thought { return false }
+    return true
+  }
 
   /// Merges `records` in `WorkspaceRunActivityRecord.precedes` order. Snapshot
   /// and delta updates merge by activity ID, a `clear` update removes the
@@ -34,9 +50,9 @@ public struct ConversationWorkTimeline: Equatable, Sendable {
     foldedEntries = entries.compactMap { entry in
       switch entry.content {
       case .commentary:
-        return nil
+        return entry
       case .activity(let activity):
-        return activity.htmlRender != nil || activity.workTimelineIsFailure ? entry : nil
+        return activity.kind == .thought || activity.htmlRender != nil || activity.workTimelineIsFailure ? entry : nil
       case .group(let group):
         let failed = group.activities.filter(\.workTimelineIsFailure)
         guard !failed.isEmpty else { return nil }
@@ -109,11 +125,14 @@ public struct ConversationWorkTimeline: Equatable, Sendable {
       case .tool:
         if !activity.workTimelineHidesChecklistTool(hasChecklist: hasChecklist) { pending.append(activity) }
       case .thought:
-        // Empty reasoning has nothing to disclose (T3 `workEntryIsVisibleInGroup`).
-        if activity.workTimelineThoughtHasText { pending.append(activity) }
-      case .assistant:
+        // Revisions have already merged by ID. A new supplied thought is a
+        // visible phase boundary; an empty placeholder must not split tools.
+        guard activity.workTimelineThoughtHasText else { continue }
         flush()
+        entries.append(ConversationWorkTimelineEntry(content: .activity(activity)))
+      case .assistant:
         guard activity.content?.workTimelineNonempty != nil else { continue }
+        flush()
         entries.append(ConversationWorkTimelineEntry(content: .commentary(activity)))
       case .plan where activity.planKind != "proposal":
         // Execution checklists live above the composer. Their revisions and
@@ -151,17 +170,24 @@ public struct ConversationWorkTimeline: Equatable, Sendable {
     }
     let hasChecklist = activities.contains { $0.kind == .plan && $0.planKind != "proposal" }
     let followedByWork = activities[(index + 1)...].contains { activity in
-      switch activity.kind {
-      case .assistant, .fileChange: false
-      case .thought: activity.workTimelineThoughtHasText
-      case .tool: !activity.workTimelineHidesChecklistTool(hasChecklist: hasChecklist)
-      case .plan: activity.planKind == "proposal"
-      case .progress, .activity: true
-      }
+      isVisibleWork(activity, hasChecklist: hasChecklist)
     }
     guard followedByWork else { return (transcript.body, commentaryIDs) }
     commentaryIDs.insert(activities[index].id)
     return (String(transcript.body.dropFirst(segment.count)), commentaryIDs)
+  }
+
+  /// The same visibility rule governs text placement on desktop and mobile.
+  /// Background checklist revisions and file cards cannot turn a final answer
+  /// into commentary hidden inside the work disclosure.
+  public static func isVisibleWork(_ activity: AgentRunActivity, hasChecklist: Bool) -> Bool {
+    switch activity.kind {
+    case .assistant, .fileChange: false
+    case .thought: activity.workTimelineThoughtHasText
+    case .tool: !activity.workTimelineHidesChecklistTool(hasChecklist: hasChecklist)
+    case .plan: activity.planKind == "proposal"
+    case .progress, .activity: true
+    }
   }
 }
 
@@ -169,7 +195,7 @@ public struct ConversationWorkTimelineEntry: Equatable, Identifiable, Sendable {
   public enum Content: Equatable, Sendable {
     /// Frozen assistant commentary preceding later work.
     case commentary(AgentRunActivity)
-    /// Contiguous thoughts and tool calls.
+    /// Consecutive visible tool calls.
     case group(ConversationWorkGroup)
     /// A plan, progress, or agent activity row.
     case activity(AgentRunActivity)
@@ -186,9 +212,8 @@ public struct ConversationWorkTimelineEntry: Equatable, Identifiable, Sendable {
   }
 }
 
-/// Contiguous thoughts and tool calls, summarized as T3 summarizes a work
-/// group: at most two action categories, prioritizing commands and edits,
-/// with the remaining calls counted as other actions.
+/// Consecutive tool calls, summarized using at most two action categories,
+/// prioritizing commands and edits, with remaining calls counted as other actions.
 public struct ConversationWorkGroup: Equatable, Identifiable, Sendable {
   public let id: String
   public let activities: [AgentRunActivity]
@@ -238,13 +263,20 @@ public struct ConversationWorkGroup: Equatable, Identifiable, Sendable {
   /// running call in the present tense, otherwise the latest call settled.
   public func liveLabel(runIsActive: Bool) -> String? {
     guard runIsActive else { return nil }
-    if let running = activities.last(where: showsProgress) {
-      return running.workTimelineLabel(active: true)
-    }
-    return activities.last?.workTimelineLabel(active: false)
+    return liveActivity.map { $0.workTimelineLabel(active: showsProgress($0)) }
+  }
+
+  public var liveActivity: AgentRunActivity? {
+    activities.last(where: showsProgress) ?? activities.last
   }
 
   public var hasActiveActivity: Bool { !activeActivityIDs.isEmpty }
+
+  /// Keep the most recent supplied reasoning visible alongside the live tool.
+  /// It remains available when the provider moves from thinking to execution.
+  public var latestThought: AgentRunActivity? {
+    activities.last { $0.kind == .thought && $0.workTimelineThoughtHasText }
+  }
 
   static func summary(activities: [AgentRunActivity], tools: [AgentRunActivity]) -> String {
     if tools.isEmpty {
@@ -288,16 +320,22 @@ public enum ConversationToolAction: Hashable, Sendable {
   case codeSearch
   case webSearch
   case webFetch
+  case browser
+  case computer
   case delegate
   case other
 
   public init(_ activity: AgentRunActivity) {
-    let name = (activity.toolName ?? activity.title ?? "").lowercased()
+    let name = activity.workTimelineToolIdentity.lowercased()
     if name.contains("bash") || name.contains("shell") || name == "exec" || name == "execute"
       || name.contains("command") || name.contains("terminal") {
       self = .command
     } else if name.contains("websearch") || name.contains("web_search") || name.contains("web search") {
       self = .webSearch
+    } else if name.contains("browser") {
+      self = .browser
+    } else if name.contains("computer") {
+      self = .computer
     } else if name.contains("web") || name.contains("fetch") || name.contains("browse") {
       self = .webFetch
     } else if name.contains("grep") || name.contains("glob")
@@ -311,7 +349,9 @@ public enum ConversationToolAction: Hashable, Sendable {
     } else if name.contains("task") || name.contains("agent") {
       self = .delegate
     } else {
-      self = .other
+      // A concrete title such as pwd or ls may not name a known action,
+      // but ACP still supplies a reliable execution category.
+      self = activity.toolName?.lowercased() == "execute" ? .command : .other
     }
   }
 
@@ -344,6 +384,8 @@ public enum ConversationToolAction: Hashable, Sendable {
     case .codeSearch: "Searched code \(count) \(plural ? "times" : "time")"
     case .webSearch: "Searched the web \(count) \(plural ? "times" : "time")"
     case .webFetch: "Fetched \(count) web \(plural ? "pages" : "page")"
+    case .browser: "Used the browser \(count) \(plural ? "times" : "time")"
+    case .computer: "Used the computer \(count) \(plural ? "times" : "time")"
     case .delegate: "Delegated \(count) \(plural ? "tasks" : "task")"
     case .other: "Used \(count) \(plural ? "tools" : "tool")"
     }
@@ -357,6 +399,8 @@ public enum ConversationToolAction: Hashable, Sendable {
     case .codeSearch: active ? "Searching code" : "Searched code"
     case .webSearch: active ? "Searching the web" : "Searched the web"
     case .webFetch: active ? "Fetching a web page" : "Fetched a web page"
+    case .browser: active ? "Using the browser" : "Used the browser"
+    case .computer: active ? "Using the computer" : "Used the computer"
     case .delegate: active ? "Delegating a task" : "Delegated a task"
     case .other: active ? "Using a tool" : "Used a tool"
     }
@@ -394,10 +438,64 @@ public extension AgentRunActivity {
       if let heading = content.flatMap(Self.leadingBoldHeading) { return heading }
       return active ? "Thinking" : "Thought"
     case .tool:
-      if let label = (title ?? toolName)?.workTimelineSingleLine { return label }
-      return ConversationToolAction(self).liveLabel(active: active)
+      return workTimelineToolLabel(active: active)
     default:
       return title?.workTimelineSingleLine ?? toolName?.workTimelineSingleLine ?? "Agent activity"
+    }
+  }
+
+  /// ACP's toolName can be a broad category (not the called tool name).
+  /// Prefer its real title when the category would erase that identity.
+  var workTimelineToolIdentity: String {
+    let name = toolName?.workTimelineSingleLine ?? ""
+    let label = title?.workTimelineSingleLine ?? ""
+    let generic = ["", "other", "unknown", "tool", "use tool", "using a tool", "used a tool", "execute"]
+    if generic.contains(name.lowercased()), !generic.contains(label.lowercased()),
+       name.lowercased() != "execute" || !label.contains(" ") { return label }
+    return name.isEmpty ? label : name
+  }
+
+  private func workTimelineToolLabel(active: Bool) -> String {
+    let generic = ["tool", "use tool", "using a tool", "used a tool", "other", "execute"]
+    let label = title?.workTimelineSingleLine
+    // Keep a provider's descriptive title; bare function names gain readable
+    // action labels below. A generic title must not mask a real tool name.
+    if let label, label.contains(" "), !generic.contains(label.lowercased()) { return label }
+    let action = ConversationToolAction(self)
+    let input = rawInputJSON.flatMap { $0.data(using: .utf8) }
+      .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+    func argument(_ key: String) -> String? {
+      (input?[key] as? String)?.workTimelineSingleLine.map { String($0.prefix(120)) }
+    }
+    let failed = workTimelineIsFailure
+    switch action {
+    case .command:
+      // Show the program, not command arguments that can contain credentials.
+      let program = argument("command")?.split(separator: " ").first.map(String.init)
+      let name = program.flatMap { token in
+        token.contains("=") || token.contains("$") ? nil : URL(fileURLWithPath: token).lastPathComponent
+      }
+      let identity = workTimelineToolIdentity
+      let fallback = ["", "execute", "exec", "command", "tool"].contains(identity.lowercased()) ? "command" : identity
+      return "\(failed ? "Failed" : active ? "Running" : "Ran") \(name ?? fallback)"
+    case .webSearch:
+      let query = argument("query")
+      return "\(failed ? "Failed web search" : active ? "Searching the web" : "Searched the web")"
+        + (query.map { ": " + $0 } ?? "")
+    case .browser:
+      let operation = argument("action")?.replacingOccurrences(of: "_", with: " ")
+      let host = argument("url").flatMap { URL(string: $0)?.host }
+      if operation == nil && host == nil { return failed ? "Browser failed" : action.liveLabel(active: active) }
+      return (failed ? "Browser failed" : "Browser")
+        + (operation.map { ": " + $0 } ?? "") + (host.map { " " + $0 } ?? "")
+    case .other:
+      let identity = workTimelineToolIdentity
+      if !identity.isEmpty, !generic.contains(identity.lowercased()) {
+        return "\(failed ? "Failed" : active ? "Using" : "Used") \(identity)"
+      }
+      return action.liveLabel(active: active)
+    default:
+      return action.liveLabel(active: active)
     }
   }
 

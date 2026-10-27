@@ -25,6 +25,7 @@ targets:
       - path: ../app/Sources/WovenMatterCore/ConversationHTMLRender.swift
       - path: ../app/Sources/WovenMatterCore/AgentRunActivity.swift
       - path: ../app/Sources/WovenMatterCore/AssistantTranscriptProjection.swift
+      - path: ../app/Sources/WovenMatterCore/AssistantStreamingText.swift
       - path: ../app/Sources/WovenMatterCore/ConversationWorkTimeline.swift
       - path: ../app/Sources/WovenMatterCore/ProgramStatus.swift
       - path: ../app/Sources/WovenMatterCore/WorkspaceHistory.swift

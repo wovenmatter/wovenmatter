@@ -1,3 +1,5 @@
+import { runtimeStageError } from './runtime-stage-error.mjs';
+import { withReasoningSummaries } from './reasoning-stream-options.mjs';
 import { wovenInstructions } from './woven-instructions.mjs';
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
 import { createHash, randomUUID } from 'node:crypto';
@@ -24,6 +26,7 @@ import { ChildContext, Subagents, createSubagents } from './subagents.mjs';
 import { reportProgramStatus } from './program-status.mjs';
 import { WovenMCPClient, wovenMCPTools } from './woven-mcp.mjs';
 import { NativeToolStream } from './native-tool-stream.mjs';
+import { NativeMessageStream } from './native-message-stream.mjs';
 import { recoverNativeRuns, validateRecoveryRuns } from './native-recovery.mjs';
 
 const context = BACKGROUND_CONTEXT;
@@ -41,6 +44,7 @@ export async function openDurableSession(engine, id, requested) {
   const root = join(engine.directory, 'durable', sessionID);
   await mkdir(root, { recursive: true, mode: 0o700 });
   let release, record, ownerError, eventStream;
+  let openingStage = 'nativeSession';
   try { release = await ownNativeStore(root, error => { ownerError = error; void record?.session?.abort()?.catch(() => {}); if (record) record.lockError = error; }); }
   catch { throw new DefaultAgentError('This Pi Durable session is already owned by another runtime. Reconnect to its current execution owner.'); }
   try {
@@ -155,19 +159,28 @@ export async function openDurableSession(engine, id, requested) {
         model = scope.session.model ?? model;
         if (scope.nativeContextFailure) throw new DefaultAgentError(scope.nativeContextFailure.message);
         const result = createAssistantMessageEventStream(), prepared = scope.nativePrepared;
+        let lastMessage;
         const tag = message => ({ ...safeAssistantDiagnostic(message, scope.httpFailure), ...(prepared?.route ? { wovenNativeRoute: prepared.route } : {}) });
         void (async () => {
           try {
             const account = await currentAccount(model, scope);
             await withAccount(model, account, async () => {
               const nativeOptions = await scope.nativeBridge.requestOptions(model, prepared, options?.signal);
-              const resolved = { ...options, ...nativeOptions, transport: 'sse', maxRetries: 0, fetch: providerFetch(scope) };
+              const resolved = withReasoningSummaries(model, { ...options, ...nativeOptions, transport: 'sse', maxRetries: 0, fetch: providerFetch(scope) });
               const native = (scope.streamFunction ?? target.streamSimple.bind(target))(model, { ...input, messages: scope.nativeBridge.filterTools(input.messages) }, resolved);
-              for await (const event of native) result.push({ ...event, ...(event.partial ? { partial: tag(event.partial) } : {}), ...(event.message ? { message: tag(event.message) } : {}), ...(event.error ? { error: tag(event.error) } : {}) });
+              for await (const event of native) {
+                lastMessage = event.error ?? event.message ?? event.partial ?? lastMessage;
+                result.push({ ...event, ...(event.partial ? { partial: tag(event.partial) } : {}), ...(event.message ? { message: tag(event.message) } : {}), ...(event.error ? { error: tag(event.error) } : {}) });
+              }
               result.end(tag(await native.result()));
             }, scope);
           } catch (error) {
-            const message = { role: 'assistant', ...(prepared?.route ? { wovenNativeRoute: prepared.route } : {}), provider: model.provider, api: model.api, model: model.id, timestamp: Date.now(), content: [], stopReason: options?.signal?.aborted ? 'aborted' : 'error', errorMessage: safeNativeFailure(error).message, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
+            // A transport can throw after exposing a partial. Retain that native
+            // content and usage when recording failure instead of erasing it.
+            const message = { role: 'assistant', provider: model.provider, api: model.api, model: model.id, timestamp: Date.now(), content: [],
+              usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+              ...(lastMessage ? tag(lastMessage) : {}), ...(prepared?.route ? { wovenNativeRoute: prepared.route } : {}),
+              stopReason: options?.signal?.aborted ? 'aborted' : 'error', errorMessage: safeNativeFailure(error).message };
             result.push({ type: 'error', reason: message.stopReason, error: message }); result.end(message);
           }
         })();
@@ -176,10 +189,13 @@ export async function openDurableSession(engine, id, requested) {
       return typeof target[key] === 'function' ? target[key].bind(target) : target[key];
     } });
     const registry = createNativeCompactionRegistry();
+    openingStage = 'nativeStorage';
     const storage = await openWorkspacePiStorage({databasePath:engine.databasePath,root,manifest,context});
     if (record.lockError) throw new DefaultAgentError('The native session owner lock was lost. Reconnect before continuing.');
+    openingStage = 'nativeHarness';
     const harness = await Harness.open(storage, { models, registry, settings: { retry: { enabled: false, maxRetries: 0 }, stream: { transport: 'sse', maxRetries: 0 }, toolExecution: 'sequential', compaction: { backgroundTokens: 0 } } }, context);
     record.harness = harness; record.storage = storage; record.registry = registry;
+    openingStage = 'nativeSession';
     record.unsubscribeCommits = harness.subscribeCommits(publication => {
       const records = [];
       const changedGroup = publication.changes.find(change => change.type === 'document' && change.record.kind === Subagents.definition.kind && change.conversationId === record.conversation?.id);
@@ -373,19 +389,23 @@ export async function openDurableSession(engine, id, requested) {
       if (!connection) return;
       const identity = JSON.stringify([connection.endpointURL, connection.bearerToken]);
       if (!force && identity === mcpDiscoveryIdentity) return;
-      const definitions = await mcpClient.listTools(connection);
-      const discovered = wovenMCPTools(definitions, mcpClient, () => (toolScopes.getStore() ?? record).mcp.connection());
-      tools.splice(ordinaryCount, tools.length - ordinaryCount, ...discovered);
-      adapted.splice(ordinaryCount, adapted.length - ordinaryCount, ...discovered.map(adaptTool));
-      registry.install(defineExtension({ name: 'woven-mcp', tools: adapted.slice(ordinaryCount) }));
-      record.ordinaryTools.splice(ordinaryCount, record.ordinaryTools.length - ordinaryCount,
-        record.subagents.tool.name, ...discovered.map(tool => tool.name));
-      codeTool.description = 'Run sandboxed JavaScript using tools, ALL_TOOLS, text(), image(), store() and load(). Available tools: '
-        + tools.map(tool => tool.name + ': ' + tool.description).join('\n')
-        + '\nFor parent conversations only, ' + record.subagents.tool.name + ': ' + record.subagents.tool.description;
-      mcpDiscoveryIdentity = identity;
-      engine.normalizeSelection(record);
-      await record.configurationQueue;
+      let definitions;
+      try { definitions = await mcpClient.listTools(connection); }
+      catch (error) { throw runtimeStageError('mcpDiscovery', error); }
+      try {
+        const discovered = wovenMCPTools(definitions, mcpClient, () => (toolScopes.getStore() ?? record).mcp.connection());
+        tools.splice(ordinaryCount, tools.length - ordinaryCount, ...discovered);
+        adapted.splice(ordinaryCount, adapted.length - ordinaryCount, ...discovered.map(adaptTool));
+        registry.install(defineExtension({ name: 'woven-mcp', tools: adapted.slice(ordinaryCount) }));
+        record.ordinaryTools.splice(ordinaryCount, record.ordinaryTools.length - ordinaryCount,
+          record.subagents.tool.name, ...discovered.map(tool => tool.name));
+        codeTool.description = 'Run sandboxed JavaScript using tools, ALL_TOOLS, text(), image(), store() and load(). Available tools: '
+          + tools.map(tool => tool.name + ': ' + tool.description).join('\n')
+          + '\nFor parent conversations only, ' + record.subagents.tool.name + ': ' + record.subagents.tool.description;
+        mcpDiscoveryIdentity = identity;
+        engine.normalizeSelection(record);
+        await record.configurationQueue;
+      } catch (error) { throw runtimeStageError('mcpInstallation', error); }
     };
     record.subscribe = listener => { listeners.add(listener); return () => listeners.delete(listener); };
     record.reportUsage = usage => { for (const listener of listeners) listener({ usage }); };
@@ -421,7 +441,7 @@ export async function openDurableSession(engine, id, requested) {
         engine.sessions.get(sessionID)?.promptController?.signal.throwIfAborted();
         // Steering stays in the same cumulative stream. The coordinator's
         // existing admission fence owns which reply receives its suffix.
-        if (opts.streamingBehavior !== 'steer') { completedAssistantText = ''; blocks = new Map(); messageOpen = false; }
+        if (opts.streamingBehavior !== 'steer') messageStream.reset();
         const logicalID = opts.requestId ?? record.inputID ?? randomUUID();
         record.userInstructions = [typeof content === 'string' ? content : textOf([{ content }])];
         if (opts.streamingBehavior !== 'steer') await record.subagents.beginGroup(record.runID);
@@ -475,41 +495,16 @@ export async function openDurableSession(engine, id, requested) {
     void eventStream.closed.then(() => { record.eventClosed = true; });
     const knownEntries = new Set(eventStream.snapshot.entries.map(e => e.id));
     const toolStream = new NativeToolStream();
-    let blocks = new Map(), completedAssistantText = '', messageOpen = false, messageSequence = 0;
-    const visibleText = value => [...value].sort(([a], [b]) => a - b).map(([, block]) => block.type === 'text' ? block.text : '').join('');
-    const reconcileBlocks = next => {
-      const previousText = visibleText(blocks), text = visibleText(next);
-      for (const index of new Set([...blocks.keys(), ...next.keys()])) {
-        const previous = blocks.get(index)?.type === 'thinking' ? blocks.get(index).thinking : '';
-        const value = next.get(index)?.type === 'thinking' ? next.get(index).thinking : '';
-        if (value === previous) continue;
-        const replaces = !value.startsWith(previous);
-        send({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: replaces ? value : value.slice(previous.length) },
-          _meta: { wovenThoughtID: `built-in-${messageSequence}-${index}`, ...(replaces ? { wovenThoughtSnapshot: true } : {}) } });
-      }
-      blocks = next;
-      if (text === previousText) return;
-      const replaces = !text.startsWith(previousText);
-      send({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: replaces ? completedAssistantText + text : text.slice(previousText.length) },
-        ...(replaces ? { _meta: { wovenAssistantSnapshot: true } } : {}) });
-    };
-    const reconcileBlock = (block, index) => { const next = new Map(blocks); next.set(index, block); reconcileBlocks(next); };
-    const beginMessage = () => { blocks = new Map(); messageOpen = true; messageSequence++; };
-    const reconcileMessage = message => {
-      if (message.role !== 'assistant') return;
-      if (!messageOpen) beginMessage();
-      reconcileBlocks(new Map(message.content.map((block, index) => [index, block])));
-    };
+    const messageStream = new NativeMessageStream(send, toolStream);
     const endEntry = entry => {
+      if (knownEntries.has(entry.id)) return;
       knownEntries.add(entry.id);
       for (const message of entry.model ?? []) {
-        reconcileMessage(message);
+        messageStream.end(message);
         if (message.role === 'assistant') {
           if (message.stopReason === 'error') record.lastError = message.errorMessage;
           if (message.usage) for (const listener of listeners) listener({ usage: message.usage });
-          completedAssistantText += visibleText(blocks);
-          send({ sessionUpdate: 'woven_assistant_boundary' });
-          messageOpen = false;
+          if (['error', 'aborted'].includes(message.stopReason)) for (const update of toolStream.finishPending()) send(update);
         }
         // watchEvents is scoped to the root conversation. Child results remain
         // in their native archive/subagent activity and cannot update this plan.
@@ -521,21 +516,15 @@ export async function openDurableSession(engine, id, requested) {
     };
     eventStream.start(async events => {
       for (const event of events) {
-        if (event.type === 'message_start') { if (event.message.role === 'assistant') beginMessage(); reconcileMessage(event.message); }
-        else if (event.type === 'message_update') for (const change of event.changes) {
-          if (change.type === 'message') reconcileMessage(change.message);
-          else if (change.block) reconcileBlock(change.block, change.contentIndex);
-          else if (change.type === 'text_delta' || change.type === 'thinking_delta') {
-            const type = change.type === 'text_delta' ? 'text' : 'thinking';
-            reconcileBlock({ type, [type]: (blocks.get(change.contentIndex)?.[type] ?? '') + change.delta }, change.contentIndex);
-          }
-        }
+        if (event.type === 'message_start' && event.message.role === 'assistant') { messageStream.begin(); messageStream.message(event.message); }
+        else if (event.type === 'message_update') for (const change of event.changes) messageStream.change(change);
         else if (event.type === 'message_end') endEntry(event.entry);
         else if (event.type === 'snapshot') {
           for (const entry of event.entries) if (!knownEntries.has(entry.id)) endEntry(entry);
-          if (event.generation?.message) reconcileMessage(event.generation.message);
+          if (event.generation?.message) messageStream.message(event.generation.message);
           for (const update of toolStream.snapshot(event, nestedProgress)) send(update);
         }
+        else if (event.type === 'run_end') { for (const update of toolStream.finishPending()) send(update); }
         else if (['tool_execution_start','tool_execution_update','tool_execution_end'].includes(event.type)) send(toolStream.update(event));
       }
     });
@@ -578,6 +567,6 @@ export async function openDurableSession(engine, id, requested) {
   } catch (error) {
     if (record?.session) await record.session.dispose().catch(() => {});
     else { await record?.harness?.close(context).catch(() => {}); await release(); }
-    throw error;
+    throw runtimeStageError(openingStage, error);
   }
 }

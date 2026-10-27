@@ -12,7 +12,7 @@ import { createInferenceAdapter } from '../src/inference-adapter.mjs';
 
 
 
-const model = { provider: 'openai-codex', id: 'fixture-model', name: 'Fixture', api: 'openai-codex-responses', baseUrl: 'https://fixture.invalid', contextWindow: 16000, maxTokens: 4096 };
+const model = { provider: 'openai-codex', id: 'fixture-model', name: 'Fixture', api: 'openai-codex-responses', reasoning: true, baseUrl: 'https://fixture.invalid', contextWindow: 16000, maxTokens: 4096 };
 const request = () => ({ model: { ...model }, accountID: 'second', context: { messages: [{ role: 'user', content: 'Inspect fixture' }] }, scope: { conversationID: 'conversation', requestID: 'conversation:task' }, options: { reasoning: 'low' } });
 async function setup(t, stream) {
   const directory = await mkdtemp(join(tmpdir(), 'woven-inference-test-'));
@@ -126,4 +126,14 @@ test('generation-aware inference helper returns catalog without agent execution 
   assert.equal(code, 0); assert.deepEqual(JSON.parse(output), { models: [], accounts: [] });
   assert.equal(output.includes('fixture-transient-secret'), false);
   for (const name of await readdir(directory)) if (name.endsWith('.json')) assert.equal((await readFile(join(directory, name), 'utf8')).includes('fixture-transient-secret'), false);
+});
+
+
+test('owner inference proxy requests visible summaries for reasoning-enabled device turns',async t=>{
+  const fixture=await setup(t);
+  await fixture.adapter.stream(request(),{principalID:'device'});
+  const options=fixture.calls[0].options;
+  assert.equal(options.reasoning,'low');
+  const payload=await options.onPayload({reasoning:{effort:'low',summary:'auto'}},model);
+  assert.deepEqual(payload.reasoning,{effort:'low',summary:'detailed'});
 });

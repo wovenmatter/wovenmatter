@@ -45,6 +45,24 @@ contract above does not describe that remote lifecycle.
 
 Recovery combines an exclusive durable session-log cursor with canonical HTTP snapshots. Cursor and transcript projection commit atomically in SQLite. Canonical message order wins over timestamps. Pagination follows native cursors without adding `order` to cursor requests. Catch-up preserves older loaded history and refreshes it after reconnect. The general event stream is not treated as a replay source. Refresh and older-page loads are serialized, and disconnected connection generations cannot commit stale snapshots. Interrupted session creation recovers or retries the same idempotent session ID. Conditional forms follow native multi-select and cascading visibility semantics. Suggested string choices remain available alongside custom answers; external steps require explicit acknowledgement. A complete history response replaces the cached projection, including any removed prefix, while saved transcript rows remain in SQLite.
 
+Live display shares one `/api/event` subscription per connection and routes
+only events for followed native sessions. SSE uses a separate HTTP connection
+pool so long-lived streams cannot block prompts or history requests. Text,
+reasoning, and tool argument deltas are projected as they arrive and published
+at a 35 ms cadence. Tool progress and terminal output update the same native
+tool identity. These volatile events never acknowledge the durable recovery
+cursor. Completed native messages replace the live projection; interrupted
+executions settle even when their message has no completion timestamp. A
+reconnect discards incomplete delta baselines and recovers canonical history.
+The event shapes were checked against `@opencode/protocol@2.1.3` and its public
+service schema; provider-free fixtures cover live publication and recovery.
+
+The Woven MCP plugin handshake uses `POST /api/rpc/woven-mcp/connect` with
+`{ "input": ... }` and reads `{ "output": ... }`, as specified by the running
+OpenCode 2.1.3 service's `Rpc.Input` and `Rpc.Output` OpenAPI schemas. This differs
+from session APIs' `data` envelope. Desktop and remote callers reject a missing
+or malformed connection result before registering MCP or submitting input.
+
 ## Validation boundary
 
 Automated tests cover local service reuse without a CLI, refusing to replace a live incompatible service, version-banner parsing, provider/model identity and reasoning variants, lost prompt responses, pending interactions, fragmented events, 251-message and 1,700-message history recovery, database reopen, and transcript preservation. Automated tests must not consume provider services.

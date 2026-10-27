@@ -90,6 +90,7 @@ struct BackendApplicationReadiness: Codable, Sendable {
     /// Core command support is not proof that every frontend mutation is routed.
     let completeClientRouting: Bool
     let capabilities: [String]
+    var startupError: String? = nil
     var executionDirectory: URL? = nil
     var startupMessage: String? = nil
 }
@@ -152,12 +153,16 @@ final class BackendApplicationService {
         do {
             switch request.method {
             case "application.readiness":
+                let startupError: String?
+                if case .failed(let message) = model.state { startupError = message }
+                else { startupError = nil }
                 return try response(request, BackendApplicationReadiness(protocolVersion: 1,
                     instanceID: instanceID, ready: model.readyForBackendClients,
                     completeClientRouting: true,
                     capabilities: ["session.create", "session.send", "session.configure", "session.tools",
                                    "session.cancel", "session.permission", "session.interaction", "calendar.write",
-                                   "calendar.metadata", "session.dispatch-epochs"], executionDirectory: model.clientExecutionDirectory, startupMessage: model.backendStartupMessage))
+                                   "calendar.metadata", "session.dispatch-epochs"], startupError: startupError,
+                    executionDirectory: model.clientExecutionDirectory, startupMessage: model.backendStartupMessage))
             case "application.changes":
                 let cursor = try JSONDecoder().decode(BackendInvalidationCursor?.self, from: request.payload)
                 return try await response(request, invalidations.waitForChanges(after: cursor))

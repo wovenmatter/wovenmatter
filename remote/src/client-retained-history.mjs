@@ -1,9 +1,11 @@
+import { updateReasoningDetails, flushReasoningDetails } from './reasoning-details.mjs'
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, openSync, readSync, closeSync } from 'node:fs'
 import { createReadStream } from 'node:fs'
 import { resolve } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { createInterface } from 'node:readline'
 import { durableJSON } from './durable-json.mjs'
+import { assemblePresentationFrame } from './presentation-frames.mjs'
 
 const bundled = new URL('../default-agent/src/native-journal.mjs', import.meta.url)
 const { sanitizeNativeTransportBytes } = await import(existsSync(bundled) ? bundled.href : new URL('../../default-agent/src/native-journal.mjs', import.meta.url).href)
@@ -65,7 +67,9 @@ export function createRetainedExecutionCapture({directory, defaultDirectory, tas
     const entries=[]
     for(let partIndex=0;partIndex<partCount;partIndex++)entries.push(event(binding,`native-${index}-${partIndex}`,'nativeRecord',{nativeRecord:{recordID,
       format:'woven-native-update-v1',partIndex,partCount,byteCount:bytes.length,sha256,data:bytes.subarray(partIndex*131072,(partIndex+1)*131072).toString('base64')}}))
-    const next=structuredClone(state),update=JSON.parse(bytes.toString('utf8')),kind=update.sessionUpdate
+    const next=structuredClone(state)
+    next.presentationFrames??={}
+    const update=assemblePresentationFrame(JSON.parse(bytes.toString('utf8')),next.presentationFrames),kind=update?.sessionUpdate
     if(kind==='agent_message_chunk') {
       const previous=next.messages.map(item=>item.content).join(''),text=update.content?.text??''
       const content=update._meta?.wovenAssistantSnapshot===true?text:previous+text
@@ -77,7 +81,10 @@ export function createRetainedExecutionCapture({directory, defaultDirectory, tas
       const id=binding.runID+':'+(kind==='agent_thought_chunk'?String(update._meta?.wovenThoughtID??'thinking'):String(update.toolCallId??stableID(binding.key+':tool:'+index)))
       let activity=next.activities.find(item=>item.id===id)
       if(!activity){activity={id,runID:binding.runID,title:kind==='agent_thought_chunk'?'Thinking':textParts(update.title??'Tool')[0],status:binding.status};next.activities.push(activity)}
-      if(kind==='agent_thought_chunk')activity.detail=textParts(update._meta?.wovenThoughtSnapshot?update.content?.text??'':(activity.detail??'')+(update.content?.text??''))[0]
+      if(kind==='agent_thought_chunk') {
+        const parts=updateReasoningDetails(directory,activity,update,binding.key+':'+index)
+        for(const nativeRecord of parts)entries.push(event(binding,`activity-detail-${index}-${nativeRecord.partIndex}`,'nativeRecord',{nativeRecord}))
+      }
       else {
         if(update.title)activity.title=textParts(update.title)[0]
         activity.status=update.status==='failed'?'failed':binding.status
@@ -91,8 +98,17 @@ export function createRetainedExecutionCapture({directory, defaultDirectory, tas
   }
   async function finish(binding,state) {
     if(state.finished)return
+    const details=[]
+    for(const activity of state.activities) {
+      if(!activity.projectionJSON || JSON.parse(activity.projectionJSON).kind!=='thought')continue
+      const prior=activity.projectionJSON
+      for(const nativeRecord of flushReasoningDetails(directory,activity,{force:true}))details.push(event(binding,`final-detail-${activity.id}-${nativeRecord.partIndex}`,'nativeRecord',{nativeRecord}))
+      if(activity.projectionJSON!==prior)details.push(event(binding,'final-activity-'+activity.id,'transcript',{transcript:{conversationID:binding.conversationID,messages:[],activities:[activity]}}))
+    }
+    await importEntries(details)
     await importEntries([event(binding,'complete','transcript',{transcript:{conversationID:binding.conversationID,messages:[],activities:[],
       runs:[{id:binding.runID,status:binding.status,startedAt:binding.startedAt,completedAt:binding.completedAt}]}})])
+    delete state.presentationFrames
     state.finished=true;writeState(binding.key,state)
   }
   async function captureTasks() {

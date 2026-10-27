@@ -642,6 +642,9 @@ public actor LocalACPClient {
     // separates reasoning phases so distinct commentary is not merged.
     private var reasoningPhaseSequence = 0
     private var activeReasoningPhaseID: String?
+    private var activeReasoningNativeMessageID: String?
+    private var nativeReasoningOccurrences: [String: Int] = [:]
+    private var activeAssistantNativeMessageID: String?
     private var assistantSnapshotAssembly = NativeTextSnapshotAssembler()
     private var thoughtSnapshotAssemblies: [String: NativeTextSnapshotAssembler] = [:]
     private let mcpConnection: WovenMCPConnection?
@@ -1432,6 +1435,9 @@ public actor LocalACPClient {
             try? await completeReasoningPhase(reasoningID)
         }
         activeReasoningPhaseID = nil
+        activeReasoningNativeMessageID = nil
+        nativeReasoningOccurrences.removeAll()
+        activeAssistantNativeMessageID = nil
         retainedRunHandlers = nil
         activePrompts.removeAll()
         assistantSnapshotAssembly.reset()
@@ -1866,6 +1872,13 @@ public actor LocalACPClient {
             )
             if let previousReasoningID, previousReasoningID != activeReasoningPhaseID {
                 try await completeReasoningPhase(previousReasoningID)
+            }
+            if update?["sessionUpdate"]?.stringValue == "agent_message_chunk",
+               let messageID = update?["messageId"]?.stringValue, !messageID.isEmpty {
+                if let previous = activeAssistantNativeMessageID, previous != messageID {
+                    try await activeEventHandler?(.assistantBoundary)
+                }
+                activeAssistantNativeMessageID = messageID
             }
             if let event {
                 try await activeEventHandler?(event)
@@ -2491,6 +2504,17 @@ public actor LocalACPClient {
             if runtimeKind == .defaultAgent, let blockID = update["_meta"]?["wovenThoughtID"]?.stringValue {
                 reasoningID = blockID
                 activeReasoningPhaseID = blockID
+                activeReasoningNativeMessageID = nil
+            } else if let messageID = update["messageId"]?.stringValue, !messageID.isEmpty {
+                if activeReasoningNativeMessageID == messageID, let activeReasoningPhaseID {
+                    reasoningID = activeReasoningPhaseID
+                } else {
+                    let occurrence = nativeReasoningOccurrences[messageID, default: 0] + 1
+                    nativeReasoningOccurrences[messageID] = occurrence
+                    reasoningID = "native-thought:" + messageID + (occurrence == 1 ? "" : ":phase-\(occurrence)")
+                }
+                activeReasoningPhaseID = reasoningID
+                activeReasoningNativeMessageID = messageID
             } else if let activeReasoningPhaseID {
                 reasoningID = activeReasoningPhaseID
             } else {
@@ -2597,7 +2621,8 @@ public actor LocalACPClient {
         // blocks. Preserve its exact chunks as readable output as well as in
         // the canonical wire capture. Standard content blocks remain snapshots.
         let terminalDelta = textParts.isEmpty
-            ? update["_meta"]?["terminal_output_delta"]?["data"]?.stringValue : nil
+            ? (update["_meta"]?["terminal_output_delta"]?["data"]?.stringValue
+                ?? update["_meta"]?["mcp_output_delta"]?["data"]?.stringValue) : nil
         let locations = update["locations"]?.arrayValue?.compactMap { value -> AgentRunLocation? in
             guard let path = value["path"]?.stringValue else { return nil }
             return AgentRunLocation(

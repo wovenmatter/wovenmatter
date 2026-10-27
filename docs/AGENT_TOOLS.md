@@ -68,6 +68,12 @@ revocation stops subsequent requests. Creating or steering sessions does not
 permit the outside agent to raise their permissions. Treat the bearer as a secret;
 use loopback on the same machine or the private HTTPS endpoint on another host.
 
+The Mac preserves its loopback port while outside-agent grants exist. If that
+port is unavailable, startup reports the error instead of moving those clients.
+Without outside-agent grants, startup may choose a free port when the saved port
+is still occupied after shutdown; native sessions receive the current endpoint
+and newly issued session credentials.
+
 ## Open asset context
 
 `woven_context` returns the asset ID captured when the human sent the consumed

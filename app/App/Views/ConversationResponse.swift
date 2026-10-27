@@ -26,7 +26,7 @@ struct ConversationResponse: View {
             }
             .frame(maxWidth: 680, alignment: .leading)
 
-            if showsCopyButton {
+            if showsCopyButton && !isStreaming {
                 Button {
                     #if os(macOS)
                     NSPasteboard.general.clearContents()
@@ -539,7 +539,9 @@ private enum ConversationResponseAttributedText {
     static func render(_ document: ConversationMarkdownDocument, isStreaming: Bool, width: CGFloat = 680,
                        scaleFont: (ResponseFont) -> ResponseFont = { $0 }) -> NSAttributedString {
         let output = NSMutableAttributedString(string: "")
-        let foreground = DashboardColors.foreground.withAlphaComponent(isStreaming ? 0.76 : 1)
+        // Streaming is conveyed by work activity; answer ink stays stable as
+        // paragraphs arrive and the run settles.
+        let foreground = DashboardColors.foreground
 
         func paragraphStyle(indent: CGFloat = 0) -> NSMutableParagraphStyle {
             let style = NSMutableParagraphStyle()

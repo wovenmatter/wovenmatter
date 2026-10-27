@@ -6,6 +6,7 @@ import { resolve, sep } from 'node:path'
 import { createInterface } from 'node:readline'
 import { randomUUID } from 'node:crypto'
 import { runtimeConfiguration, workspacePermission } from './config.mjs'
+import { assemblePresentationFrame } from './presentation-frames.mjs'
 
 export function redactMCPTransport(value) {
   if(Array.isArray(value))return value.map(redactMCPTransport)
@@ -95,7 +96,12 @@ function updateSnapshot(state, item) {
   if (item.type === 'output') {
     if (message.method && message.id !== undefined) state.callbacks.set(message.id, message)
     if (message.method === 'session/update' && message.params?.update?.sessionUpdate === 'agent_message_chunk') {
-      for (const run of new Set(state.runs.values())) if (run.sessionID === message.params.sessionId) run.content += message.params.update.content?.text ?? ''
+      for (const run of new Set(state.runs.values())) if (run.sessionID === message.params.sessionId) {
+        run.presentationFrames ??= {}
+        const update = assemblePresentationFrame(message.params.update, run.presentationFrames)
+        if (update) run.content = update._meta?.wovenAssistantSnapshot === true
+          ? update.content?.text ?? '' : run.content + (update.content?.text ?? '')
+      }
     }
     const status = message.params?.update?._meta?.codex?.threadStatus?.type
     if (message.method === 'session/update' && status) {

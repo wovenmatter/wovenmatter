@@ -5,6 +5,47 @@ import WovenMatterCore
 
 struct ACPHarnessStreamingReviewTests {
 
+  @Test(arguments: [AgentRuntimeKind.codex, .claudeCode, .grokBuild])
+  func nativeMessageIdentitiesSeparateAdjacentRepliesAndThoughts(kind: AgentRuntimeKind) async throws {
+    let updates = [
+      #"{"sessionUpdate":"agent_thought_chunk","messageId":"reason-one","content":{"text":"first"}}"#,
+      #"{"sessionUpdate":"agent_thought_chunk","messageId":"reason-two","content":{"text":"second"}}"#,
+      #"{"sessionUpdate":"agent_message_chunk","messageId":"commentary","content":{"text":"Checking"}}"#,
+      #"{"sessionUpdate":"agent_message_chunk","messageId":"commentary","content":{"text":" now"}}"#,
+      #"{"sessionUpdate":"agent_message_chunk","messageId":"answer","content":{"text":"Done"}}"#,
+      #"{"sessionUpdate":"tool_call","toolCallId":"tool","kind":"other","status":"pending","rawInput":{"step":1}}"#,
+      #"{"sessionUpdate":"tool_call_update","toolCallId":"tool","_meta":{"mcp_output_delta":{"data":"progress "}}}"#,
+      #"{"sessionUpdate":"tool_call_update","toolCallId":"tool","_meta":{"mcp_output_delta":{"data":"progress "}}}"#,
+      #"{"sessionUpdate":"tool_call_update","toolCallId":"tool","status":"completed"}"#,
+      #"{"sessionUpdate":"agent_thought_chunk","messageId":"reason-two","content":{"text":"a later phase"}}"#
+    ]
+    let wire = updates.map { "printf '%s\\n' '{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"update\":\($0)}}'" }.joined(separator: "\n")
+    let fixture = try ACPHarnessFixture(kind: kind, initialize: #"{"protocolVersion":2}"#,
+      session: #"{"sessionId":"native-identities"}"#, extras: [:],
+      promptOverride: wire + "\nrespond \"$id\" '{\"stopReason\":\"end_turn\"}'; continue")
+    defer { fixture.remove() }
+    let client = try await fixture.client()
+    _ = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: nil, title: nil)
+    let events = ACPReviewEvents()
+    _ = try await client.prompt("Replay") { await events.record($0) }
+    await client.finishRun()
+    await client.shutdown()
+    let values = await events.values()
+    let thoughts = values.compactMap { event -> AgentRunActivity? in
+      if case .activity(let activity, _) = event, activity.kind == .thought { return activity }; return nil
+    }
+    #expect(thoughts.map(\.id) == ["native-thought:reason-one", "native-thought:reason-one", "native-thought:reason-two", "native-thought:reason-two", "native-thought:reason-two:phase-2", "native-thought:reason-two:phase-2"])
+    #expect(thoughts.map(\.phase) == ["update", "end", "update", "end", "update", "end"])
+    #expect(values.filter { if case .assistantBoundary = $0 { return true }; return false }.count == 1)
+    let tools = values.compactMap { event -> AgentRunActivity? in
+      if case .activity(let activity, _) = event, activity.kind == .tool { return activity }; return nil
+    }
+    let merged = try #require(tools.first).merging(tools[1]).merging(tools[2]).merging(tools[3])
+    #expect(merged.content == "progress progress ")
+    #expect(merged.status == "completed")
+    #expect(merged.rawInputJSON?.contains("step") == true)
+  }
+
   @Test(arguments: [false, true])
   func claudeContextVariantsSharePresentationButKeepExactSelections(legacy: Bool) async throws {
     let rows: [(String, String, String)] = [
