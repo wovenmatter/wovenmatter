@@ -65,7 +65,7 @@ final class WorkspaceAgentToolsModel {
     var error: String?
     private var mcpHost: WovenMCPHost?
     #if COMPANION_FACADE_TESTS
-    @ObservationIgnored var companionFixtureMCPConnection: ((String, WovenMCPConnection, RemoteWorkspaceConfiguration?) -> WovenMCPConnection)?
+    @ObservationIgnored var companionFixtureMCPConnection: ((String, WovenMCPConnection, RemoteWorkspaceConfiguration?) async -> WovenMCPConnection)?
     #endif
     private var remoteBridges: [String: WovenMCPRemoteBridge] = [:]
     private var remoteBridgeCredentials: [String: String] = [:]
@@ -347,7 +347,7 @@ final class WorkspaceAgentToolsModel {
     func mcpContext(sessionID: String, remote: RemoteWorkspaceConfiguration? = nil, captureID: String) async throws -> WovenMCPConnection {
         let local = try await ensureMCPHost().connection(sessionID: sessionID, captureID: captureID.isEmpty ? nil : captureID)
         #if COMPANION_FACADE_TESTS
-        if let companionFixtureMCPConnection { return companionFixtureMCPConnection(sessionID, local, remote) }
+        if let companionFixtureMCPConnection { return await companionFixtureMCPConnection(sessionID, local, remote) }
         #endif
         guard let remote else { return local }
         let bridge: WovenMCPRemoteBridge

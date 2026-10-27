@@ -33,10 +33,7 @@ enum BackendApplicationCommand: Codable, Sendable {
     case loadAgentDefaults(runtime: AgentRuntimeKind, workspace: String?)
     case saveAgentDefault(runtime: AgentRuntimeKind, workspace: String?, field: SessionSelectionField, selections: SessionSelections)
     case setAgentDefaultsSharing(runtime: AgentRuntimeKind, workspace: String, shared: Bool)
-    case prepareSelections(conversationID: String, defaults: SessionSelections?, usesProductPermissionDefault: Bool?)
-    case applySelections(conversationID: String)
     case recordSelections(conversationID: String, metadata: LocalACPSessionMetadata)
-    case retrySelections(conversationID: String, selections: SessionSelections)
     case workspaceMutation(BackendWorkspaceMutation)
     case exportConversation(id: String, format: WorkspaceConversationExportFormat)
     case trashedConversations
@@ -242,15 +239,8 @@ final class BackendApplicationService {
         case let .setAgentDefaultsSharing(runtime, workspace, shared):
             let values = try await model.setAgentDefaultsSharing(runtime: runtime, workspace: workspace, shared: shared)
             return .init(selections: values.stored, resolvedSelections: values.resolved, usesSharedDefaults: values.usesShared)
-        case let .prepareSelections(id, defaults, usesProductPermissionDefault):
-            try await model.prepareNewSessionSelections(conversationID: id, capturedDefaults: defaults,
-                usesProductPermissionDefault: usesProductPermissionDefault)
-        case let .applySelections(id):
-            try await model.applyPendingSessionSelections(conversationID: id)
         case let .recordSelections(id, metadata):
             await model.recordConfirmedSessionSelections(conversationID: id, metadata: metadata)
-        case let .retrySelections(id, selections):
-            return .init(accepted: model.retryPendingSessionSelections(conversationID: id, selections: selections))
         case let .exportConversation(id, format):
             return try await .init(exportURL: model.exportConversation(id: id, format: format))
         case .trashedConversations:

@@ -68,7 +68,7 @@ private final class HostInspectionFixture: @unchecked Sendable {
         // workspace policy when an existing chat is recovered.
         fixture.model.sessionSelectionPreferences.stageCalendarSelections(id: folderless, harness: "codex", workspace: scope,
             selections: .init(permission: "read-only"), usesProductPermissionDefault: true)
-        try await fixture.model.applyPendingSessionSelections(conversationID: folderless)
+        try await fixture.model.applyStagedSessionSelections(conversationID: folderless)
         #expect(await fixture.recorder.configurations.last?.selections.permission == "agent-full-access")
 
         let external = "/home/trey/projects/existing-repository"
