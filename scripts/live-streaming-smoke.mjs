@@ -20,7 +20,7 @@ const executable = flag('--executable') ?? (harness === 'grok_build' ? 'grok'
 const root = await mkdtemp(join(tmpdir(), 'woven-streaming-smoke-'));
 const started = performance.now();
 const report = { schemaVersion: 1, harness, model: flag('--model') ?? 'advertised-default',
-  scope: 'installed ACP adapter wire, not Woven UI', at: new Date().toISOString(),
+  scope: 'selected ACP adapter wire, not Woven UI', at: new Date().toISOString(),
   events: [], counts: {}, firstMS: {}, terminal: null, permissionsDenied: 0, textCharacters: 0,
   reasoningCharacters: 0, textBeforeTerminal: false };
 const child = spawn(executable, harness === 'grok_build' ? ['--disable-web-search', '--no-subagents', '--permission-mode', 'default', 'agent', 'stdio'] : [], {

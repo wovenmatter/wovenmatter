@@ -284,3 +284,54 @@ test('direct reasoning frames keep separate thought identities and publish only 
   publish('one','thought',false,true)
   assert.deepEqual(f.service.transcript(opened.conversationID).activities.map(x=>x.detail),['Second','First thought'])
 })
+
+test('reasoning disclosure retains complete chunked text while snapshots stay bounded',async t=>{
+  const f=fixture(t),opened=await f.service.command(f.command('createSession'),f.principal)
+  await f.service.command(f.command('send',{conversationID:opened.conversationID,text:'reason'}),f.principal);await turn()
+  const thought=(text,snapshot=false)=>({sessionUpdate:'agent_thought_chunk',content:{text},_meta:{wovenThoughtID:'trace',wovenThoughtSnapshot:snapshot}})
+  const original=thought('🧵'.repeat(80000),true),tail=thought(' tail beyond every preview')
+  f.runs[0].publish(original);f.runs[0].publish(tail)
+  f.runs[0].done.resolve();await turn()
+  const row=()=>f.service.transcript(opened.conversationID).activities[0]
+  assert.ok(row().detail.length<=2048);assert.ok(row().projectionJSON.length<5000)
+  const recordID=row().detailsRecordID,all=[]
+  for(let after=0;;){const page=f.service.events(after);all.push(...page.entries);if(!page.hasMore)break;after=page.cursor}
+  const chunks=all.filter(item=>item.nativeRecord?.recordID===recordID).map(item=>item.nativeRecord).sort((a,b)=>a.partIndex-b.partIndex)
+  assert.ok(chunks.length>=3)
+  const complete=JSON.parse(Buffer.concat(chunks.map(item=>Buffer.from(item.data,'base64'))))
+  assert.equal(complete.activity.kind,'thought');assert.equal(complete.activity.content,original.content.text+tail.content.text)
+  const raw=all.filter(item=>item.nativeRecord?.format==='woven-native-update-v1'),groups=new Map()
+  for(const item of raw){const part=item.nativeRecord,values=groups.get(part.recordID)??[];values[part.partIndex]=Buffer.from(part.data,'base64');groups.set(part.recordID,values)}
+  assert.deepEqual([...groups.values()].map(parts=>JSON.parse(Buffer.concat(parts))),[original,tail])
+  await f.restart()
+  assert.equal(row().detailsRecordID,recordID)
+})
+
+test('reasoning corrections and empty clear retire old detail pointers',async t=>{
+  const f=fixture(t),opened=await f.service.command(f.command('createSession'),f.principal)
+  await f.service.command(f.command('send',{conversationID:opened.conversationID,text:'reason'}),f.principal);await turn()
+  const publish=(text,snapshot)=>f.runs[0].publish({sessionUpdate:'agent_thought_chunk',content:{text},_meta:{wovenThoughtID:'trace',wovenThoughtSnapshot:snapshot}})
+  const row=()=>f.service.transcript(opened.conversationID).activities[0]
+  publish('x'.repeat(20000),true);assert.ok(row().detailsRecordID)
+  publish('corrected',true);assert.equal(row().detailsRecordID,undefined);assert.equal(JSON.parse(row().projectionJSON).content,'corrected')
+  publish('',true);assert.equal(row().detail,'');assert.equal(JSON.parse(row().projectionJSON).content,'')
+  publish('new',false);assert.equal(JSON.parse(row().projectionJSON).content,'new')
+})
+
+for(const terminal of ['completed','failed','cancelled'])test(`rapid dirty flushes coalesce reasoning and ${terminal} preserves the last suffix`,async t=>{
+  const f=fixture(t),opened=await f.service.command(f.command('createSession'),f.principal)
+  await f.service.command(f.command('send',{conversationID:opened.conversationID,text:'reason'}),f.principal);await turn()
+  t.mock.method(Date,'now',()=>1000)
+  t.mock.timers.enable({apis:['setTimeout']})
+  const text='x'.repeat(20000),publish=value=>f.runs[0].publish({sessionUpdate:'agent_thought_chunk',content:{text:value},_meta:{wovenThoughtID:'trace'}})
+  publish(text)
+  for(let i=0;i<20;i++){publish(' suffix');t.mock.timers.tick(500)}
+  assert.equal(new Set(f.service.events().entries.filter(item=>item.nativeRecord?.format==='wovenmatter.activity.v2').map(item=>item.nativeRecord.recordID)).size,1)
+  if(terminal==='failed')f.runs[0].done.reject(new Error('fixture failure'))
+  else if(terminal==='cancelled')await f.service.command(f.command('stop',{conversationID:opened.conversationID,runID:f.runs[0].command.runID}),f.principal)
+  else f.runs[0].done.resolve()
+  await turn()
+  const row=f.service.transcript(opened.conversationID).activities[0],parts=f.service.events().entries.filter(item=>item.nativeRecord?.recordID===row.detailsRecordID).map(item=>item.nativeRecord)
+  assert.equal(row.status,terminal)
+  assert.equal(JSON.parse(Buffer.concat(parts.map(part=>Buffer.from(part.data,'base64')))).activity.content,text+' suffix'.repeat(20))
+})

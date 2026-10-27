@@ -136,11 +136,19 @@ struct ConversationWorkScrollState: Equatable {
 
     mutating func setAtBottom(_ value: Bool) { isAtBottom = value }
 
-    func shouldFollowAppend(from before: [String], to after: [String]) -> Bool {
-        isAtBottom && after.count > before.count && after.starts(with: before)
+    func shouldFollowAppend(from before: [String], to after: [String], wasAtBottom: Bool? = nil) -> Bool {
+        (wasAtBottom ?? isAtBottom) && after.count > before.count && after.starts(with: before)
     }
 
-    func shouldFollowTextAppend(from before: String, to after: String) -> Bool {
-        isAtBottom && after.count > before.count && after.hasPrefix(before)
+    func shouldFollowTextAppend(from before: String, to after: String, wasAtBottom: Bool? = nil) -> Bool {
+        (wasAtBottom ?? isAtBottom) && after.utf16.count > before.utf16.count && after.utf16.starts(with: before.utf16)
     }
+}
+
+struct ConversationWorkScrollGeometry: Equatable {
+    let contentHeight: CGFloat
+    let offset: CGFloat
+    let viewportHeight: CGFloat
+
+    var isAtBottom: Bool { contentHeight - offset - viewportHeight <= 4 }
 }

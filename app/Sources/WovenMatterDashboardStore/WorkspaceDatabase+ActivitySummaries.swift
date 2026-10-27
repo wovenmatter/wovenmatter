@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import SQLite3
 import WovenMatterCore
@@ -198,6 +199,65 @@ extension WorkspaceDatabaseConnection {
       .init(summaryRows: summaries.count, fullRowsDecoded: pendingEvents.count + pendingTraces.count))
   }
 
+  /// Resolve the existing federated detail pointer only on disclosure. Routine
+  /// activity pages continue to read the bounded projection and summary index.
+  private func companionActivityDetailsUnlocked(conversationID: String, runID: String,
+    activityID: String) throws -> AgentRunActivity? {
+    let lookup = try prepareUnlocked("SELECT workspace_id,transcript FROM companion_execution_conversations WHERE id=? AND deleted=0 AND transcript IS NOT NULL")
+    defer { sqlite3_finalize(lookup) }
+    try bind(conversationID, at: 1, to: lookup)
+    let lookupCode = sqlite3_step(lookup)
+    if lookupCode == SQLITE_DONE { return nil }
+    guard lookupCode == SQLITE_ROW else { throw stepError() }
+    let workspaceID = try text(lookup, column: 0)
+    let transcript = try JSONDecoder().decode(CompanionTranscript.self, from: blob(lookup, column: 1))
+    guard let row = transcript.activities.first(where: { $0.id == activityID && $0.runID == runID }) else { return nil }
+    guard let recordID = row.detailsRecordID else {
+      return row.projectionJSON.flatMap { try? JSONDecoder().decode(AgentRunActivity.self, from: Data($0.utf8)) }
+    }
+    let data = try CompanionActivityDetails.reconstruct(recordID: recordID, activityID: activityID) { pointer in
+      try companionActivityRecordUnlocked(workspaceID: workspaceID, conversationID: conversationID,
+        runID: runID, recordID: pointer)
+    }
+    return try JSONDecoder().decode(AgentRunActivity.self, from: data)
+  }
+
+  private func companionActivityRecordUnlocked(workspaceID: String, conversationID: String,
+    runID: String, recordID: String) throws -> (format: String, data: Data) {
+    // Query by immutable identity first so a cross-run/conversation reference is
+    // rejected, rather than treated as an incomplete record that could arrive.
+    let manifest = try prepareUnlocked("SELECT conversation_id,run_id,format,part_count,byte_count,sha256,complete FROM companion_native_history WHERE workspace_id=? AND record_id=?")
+    defer { sqlite3_finalize(manifest) }
+    try bind(workspaceID, at: 1, to: manifest); try bind(recordID, at: 2, to: manifest)
+    let code = sqlite3_step(manifest)
+    if code == SQLITE_DONE { throw CompanionActivityDetails.incomplete }
+    guard code == SQLITE_ROW else { throw stepError() }
+    guard try text(manifest, column: 0) == conversationID,
+      try text(manifest, column: 1) == runID else { throw CompanionActivityDetails.invalid }
+    let format = try text(manifest, column: 2)
+    let count = Int(sqlite3_column_int(manifest, 3)), size = sqlite3_column_int64(manifest, 4)
+    let digest = try text(manifest, column: 5)
+    guard count > 0, count <= 65_536, size >= 0,
+      size <= CompanionActivityDetails.maximumBytes else { throw CompanionActivityDetails.invalid }
+    guard sqlite3_column_int(manifest, 6) == 1 else { throw CompanionActivityDetails.incomplete }
+    let parts = try prepareUnlocked("SELECT part_index,bytes FROM companion_native_history_parts WHERE workspace_id=? AND record_id=? ORDER BY part_index")
+    defer { sqlite3_finalize(parts) }
+    try bind(workspaceID, at: 1, to: parts); try bind(recordID, at: 2, to: parts)
+    var data = Data(), index = 0
+    while true {
+      let code = sqlite3_step(parts)
+      if code == SQLITE_DONE { break }
+      guard code == SQLITE_ROW else { throw stepError() }
+      guard sqlite3_column_int(parts, 0) == index else { throw CompanionActivityDetails.invalid }
+      let bytes = try blob(parts, column: 1)
+      guard bytes.count <= Int(size) - data.count else { throw CompanionActivityDetails.invalid }
+      data.append(bytes); index += 1
+    }
+    guard index == count, data.count == size,
+      SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == digest else { throw CompanionActivityDetails.invalid }
+    return (format, data)
+  }
+
   public func conversationActivityDetails(conversationID: String, runID: String,
     activityID: String) throws -> AgentRunActivity? {
     try withLock {
@@ -213,6 +273,8 @@ extension WorkspaceDatabaseConnection {
       defer { sqlite3_finalize(access) }
       for (i, value) in [runID, conversationID, operatorID].enumerated() { try bind(value, at: Int32(i + 1), to: access) }
       guard sqlite3_step(access) == SQLITE_ROW else { return nil }
+      if let activity = try companionActivityDetailsUnlocked(conversationID: conversationID,
+        runID: runID, activityID: activityID) { return activity }
       // The common normalized current item is fetched directly by its stable ID.
       let directID = "\(runID):activity:\(activityID)"
       let direct = try runActivityRecordsUnlocked(runIDs: [runID], eventRecordIDs: [directID], traceRecordIDs: [])

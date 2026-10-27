@@ -457,9 +457,13 @@ private struct ConversationBoundedWorkList: View {
     @State private var scrollPosition = ScrollPosition(edge: .top)
     @State private var scrollOffset: CGFloat = 0
     @State private var reasoningText: [String: String] = [:]
+    @State private var laidOutActivityIDs: [String]?
+    @State private var growthStartedAtBottom = false
+    @State private var isUserScrolling = false
+    @State private var followTask: Task<Void, Never>?
 
     var body: some View {
-        ScrollViewReader { proxy in
+        ScrollViewReader { _ in
             ScrollView(.vertical) {
                 Group {
                     if group.isThoughtOnly {
@@ -471,40 +475,56 @@ private struct ConversationBoundedWorkList: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .environment(\.conversationReasoningAtLiveEdge,
+                    !isUserScrolling && (scrollState.isAtBottom || growthStartedAtBottom))
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
             }
         .scrollIndicators(.never)
         .frame(height: min(Self.maximumHeight, max(1, contentHeight)))
         .defaultScrollAnchor(.top, for: .initialOffset)
         .scrollPosition($scrollPosition)
-        .onScrollGeometryChange(for: CGFloat.self) { max(0, $0.contentOffset.y) } action: { _, offset in
-            scrollOffset = offset
-        }
-        .onScrollGeometryChange(for: Bool.self) { geometry in
-            geometry.contentSize.height - geometry.contentOffset.y - geometry.containerSize.height <= 4
-        } action: { _, isAtBottom in
-            scrollState.setAtBottom(isAtBottom)
-        }
-        .onChange(of: group.activities.map(\.id)) { before, after in
-            if followsAppends && scrollState.shouldFollowAppend(from: before, to: after) {
-                proxy.scrollTo("work-end", anchor: .bottom)
+        .onScrollGeometryChange(for: ConversationWorkScrollGeometry.self) { geometry in
+            .init(contentHeight: geometry.contentSize.height, offset: max(0, geometry.contentOffset.y),
+                  viewportHeight: geometry.containerSize.height)
+        } action: { before, after in
+            let ids = group.activities.map(\.id)
+            if followsAppends, !isUserScrolling, let prior = laidOutActivityIDs,
+               scrollState.shouldFollowAppend(from: prior, to: ids, wasAtBottom: before.isAtBottom) {
+                followAfterLayout()
             }
+            growthStartedAtBottom = after.contentHeight > before.contentHeight && before.isAtBottom
+            laidOutActivityIDs = ids
+            scrollOffset = after.offset
+            scrollState.setAtBottom(after.isAtBottom)
         }
         .onPreferenceChange(ConversationReasoningTextKey.self) { after in
             let before = reasoningText
             reasoningText = after
-            if followsAppends && group.isThoughtOnly && before.keys.sorted() == after.keys.sorted(),
-               after.allSatisfy({ key, value in value.hasPrefix(before[key] ?? "") }),
+            if followsAppends && !isUserScrolling && group.isThoughtOnly && before.keys.sorted() == after.keys.sorted(),
+               after.allSatisfy({ key, value in value.utf16.starts(with: (before[key] ?? "").utf16) }),
                after.contains(where: { key, value in
-                scrollState.shouldFollowTextAppend(from: before[key] ?? "", to: value)
+                scrollState.shouldFollowTextAppend(from: before[key] ?? "", to: value,
+                    wasAtBottom: scrollState.isAtBottom || growthStartedAtBottom)
                }) {
-                proxy.scrollTo("work-end", anchor: .bottom)
+                followAfterLayout()
             }
         }
         .task {
             if initialScrollOffset > 0 { scrollPosition.scrollTo(y: initialScrollOffset) }
         }
-        .onDisappear { saveScrollOffset(scrollOffset) }
+        .onScrollPhaseChange { _, phase in
+            isUserScrolling = phase == .tracking || phase == .interacting || phase == .decelerating
+        }
+        .onDisappear { followTask?.cancel(); saveScrollOffset(scrollOffset) }
+        }
+    }
+
+    private func followAfterLayout() {
+        followTask?.cancel()
+        followTask = Task { @MainActor in
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+            scrollPosition.scrollTo(edge: .bottom)
         }
     }
 
@@ -760,6 +780,7 @@ private struct ConversationActivityDetails: View {
     @State private var loaded: AgentRunActivity?
     @State private var loadToken: UUID?
     @State private var error: String?
+    @State private var waitingForDetails = false
     @State private var attempt = 0
     @State private var isVisible = false
 
@@ -800,7 +821,7 @@ private struct ConversationActivityDetails: View {
             rawBlock("Event", field(\.rawPayloadJSON))
             // A compact record can contain no inline fields. Keep a visible
             // placeholder so its visibility-driven detail read can start.
-            if loadToken != nil || (activity.detailsAvailable == true && complete == nil && error == nil) {
+            if loadToken != nil || waitingForDetails || (activity.detailsAvailable == true && complete == nil && error == nil) {
                 Text("Loading details…")
                     .font(.system(size: 12.5))
                     .foregroundStyle(DashboardPalette.mutedForeground)
@@ -828,9 +849,9 @@ private struct ConversationActivityDetails: View {
             guard key.visible else { return }
             repeat {
                 await load(key)
-                guard isLive, !Task.isCancelled else { break }
-                // Only expanded, on-screen live details poll. Collapsed rows
-                // never decode payloads, and settlement delivers a final read.
+                guard isLive || waitingForDetails, !Task.isCancelled else { break }
+                // Poll only visible live details or a referenced record still
+                // arriving from sync. Collapsed rows never decode payloads.
                 do { try await Task.sleep(for: error == nil ? .milliseconds(500) : .seconds(2)) }
                 catch { break }
             } while !Task.isCancelled
@@ -855,7 +876,7 @@ private struct ConversationActivityDetails: View {
         let complete = self.complete
         if isLive, path == \AgentRunActivity.content,
            let preview = activity.content, let full = complete?.content,
-           !full.hasPrefix(preview) {
+           !full.utf16.starts(with: preview.utf16) {
             return activity[keyPath: path]
         }
         if isLive, path != \AgentRunActivity.content {
@@ -866,6 +887,7 @@ private struct ConversationActivityDetails: View {
 
     private func load(_ key: LoadKey) async {
         guard activity.detailsAvailable == true, let loadDetails else { return }
+        waitingForDetails = false
         let cacheKey = self.cacheKey
         if key.settled, let cached = ConversationActivityDetailCache[cacheKey] {
             loaded = cached
@@ -884,6 +906,10 @@ private struct ConversationActivityDetails: View {
             if key.settled { ConversationActivityDetailCache[cacheKey] = value }
             if value == nil { error = "Details for this activity are no longer available." }
         } catch is CancellationError {
+        } catch let error as CompanionAPIError where error.code == "incomplete_activity_details" {
+            guard !Task.isCancelled else { return }
+            waitingForDetails = true
+            self.error = nil
         } catch {
             guard !Task.isCancelled else { return }
             self.error = error.localizedDescription
@@ -908,29 +934,146 @@ private struct ConversationActivityDetails: View {
 /// Reasoning uses the response's Markdown renderer, safe links, and native
 /// selection. Paging bounds layout without hiding any supplied trace text.
 private struct ConversationReasoningText: View {
+    private static let pageLength = 20_000
     let activityID: String
     let text: String
     let isLive: Bool
-    @State private var pages = 1
+    @Environment(\.conversationReasoningAtLiveEdge) private var isAtLiveEdge
+    @Environment(\.conversationTranscriptInteraction) private var transcriptInteraction
+    @State private var displayedEnd: Int?
+    @State private var browsingHistory = false
+
+    private var committedText: String {
+        // Find stream boundaries and redact whole envelopes before slicing a
+        // page; a page beginning inside an envelope must not expose its tail.
+        RemoteNoteEditEnvelope.redactingEnvelopes(in:
+            isLive ? AssistantStreamingText.readyPrefix(of: text) : text)
+    }
 
     var body: some View {
-        let end = text.index(text.startIndex, offsetBy: pages * 20_000, limitedBy: text.endIndex) ?? text.endIndex
-        let source = String(text[..<end])
-        // Redaction trims whitespace. Commit boundaries from the original
-        // text first so a completed paragraph/list item is never held back.
-        let committed = isLive && end == text.endIndex ? AssistantStreamingText.readyPrefix(of: source) : source
-        let shown = RemoteNoteEditEnvelope.redactingEnvelopes(in: committed)
+        let stream = committedText
+        let count = stream.count
+        let endOffset = count <= Self.pageLength ? count
+            : min(displayedEnd ?? (isLive ? count : Self.pageLength), count)
+        let page = ConversationReasoningPage(text: stream, endOffset: endOffset, maximumCharacters: Self.pageLength)
+        let startOffset = page.startOffset
+        let shown = page.markdown
         VStack(alignment: .leading, spacing: 6) {
+            if startOffset > 0 || endOffset < count {
+                HStack(spacing: 12) {
+                    if startOffset > 0 {
+                        Button("Earlier reasoning") {
+                            transcriptInteraction()
+                            browsingHistory = true
+                            displayedEnd = startOffset
+                        }
+                    }
+                    if endOffset < count {
+                        Button("Later reasoning") {
+                            transcriptInteraction()
+                            displayedEnd = min(count, endOffset + Self.pageLength)
+                            browsingHistory = displayedEnd != count
+                        }
+                        Button("Latest reasoning") {
+                            transcriptInteraction()
+                            displayedEnd = count
+                            browsingHistory = false
+                        }
+                    }
+                }
+                .buttonStyle(DashboardQuietButtonStyle())
+                .font(.system(size: 12))
+            }
             if !shown.isEmpty {
                 ConversationResponse(content: shown, isStreaming: isLive, showsCopyButton: false)
             }
-            if end != text.endIndex {
-                Button("Show more reasoning") { pages += 1 }
-                    .buttonStyle(DashboardQuietButtonStyle())
-                    .font(.system(size: 12))
+        }
+        .onAppear { if displayedEnd == nil { displayedEnd = endOffset } }
+        .onChange(of: stream) { before, after in
+            if !browsingHistory, isAtLiveEdge, after.utf16.starts(with: before.utf16) {
+                displayedEnd = after.count
+            } else if before.count <= Self.pageLength {
+                // Below the limit the full trace was rendered, even while
+                // reading above the edge. Preserve that actual page when a
+                // new append first requires paging.
+                displayedEnd = min(before.count, after.count)
+            } else if let displayedEnd, displayedEnd > after.count {
+                self.displayedEnd = after.count
             }
         }
-        .preference(key: ConversationReasoningTextKey.self, value: [activityID: shown])
+        .onChange(of: isAtLiveEdge) { _, atEdge in
+            if atEdge, isLive, !browsingHistory { displayedEnd = committedText.count }
+        }
+        // Follow the supplied stream, not the current 20k rendering window:
+        // its prefix necessarily changes when a long live trace advances.
+        .preference(key: ConversationReasoningTextKey.self,
+                    value: isLive && !browsingHistory ? [activityID: stream] : [:])
+    }
+}
+
+/// A bounded Markdown page starts on a line boundary whenever possible. Carry
+/// only the surrounding fence delimiters, so code at either edge stays code
+/// and a later closing fence cannot accidentally consume following prose.
+struct ConversationReasoningPage {
+    let startOffset: Int
+    let markdown: String
+
+    init(text: String, endOffset: Int, maximumCharacters: Int) {
+        let end = text.index(text.startIndex, offsetBy: min(endOffset, text.count))
+        var start = text.index(end, offsetBy: -min(maximumCharacters, text.distance(from: text.startIndex, to: end)))
+        if start > text.startIndex, text[text.index(before: start)] != "\n",
+           let newline = text[start..<end].firstIndex(of: "\n"), text.index(after: newline) < end {
+            start = text.index(after: newline)
+        }
+        startOffset = text.distance(from: text.startIndex, to: start)
+        var source = String(text[start..<end])
+        if let opening = Self.fence(in: text[..<start]) {
+            source = opening.marker + opening.language + "\n" + source
+        }
+        if let closing = Self.fence(in: text[..<end]) {
+            if !source.hasSuffix("\n") { source += "\n" }
+            source += closing.marker
+        }
+        markdown = source
+    }
+
+    private struct Fence {
+        let marker: String
+        let language: String
+        let indent: Int
+    }
+
+    private static func fence(in prefix: Substring) -> Fence? {
+        var open: Fence?
+        for line in prefix.split(separator: "\n", omittingEmptySubsequences: false) {
+            let indent = line.prefix { $0 == " " }.count
+            let body = line.dropFirst(indent)
+            guard let first = body.first, first == "`" || first == "~" else { continue }
+            let marker = body.prefix { $0 == first }
+            guard marker.count >= 3 else { continue }
+            let remainder = body.dropFirst(marker.count).trimmingCharacters(in: .whitespacesAndNewlines)
+            if let prior = open {
+                if first == prior.marker.first, marker.count >= prior.marker.count,
+                   indent <= prior.indent + 3, remainder.isEmpty { open = nil }
+            } else {
+                // The native renderer displays the language, not arbitrary info
+                // metadata. Bound that context independently of a long trace.
+                let language = remainder.split(whereSeparator: \.isWhitespace).first.map { String($0.prefix(80)) } ?? ""
+                open = Fence(marker: String(marker), language: language, indent: indent)
+            }
+        }
+        return open
+    }
+}
+
+private struct ConversationReasoningAtLiveEdgeKey: EnvironmentKey {
+    static let defaultValue = true
+}
+
+private extension EnvironmentValues {
+    var conversationReasoningAtLiveEdge: Bool {
+        get { self[ConversationReasoningAtLiveEdgeKey.self] }
+        set { self[ConversationReasoningAtLiveEdgeKey.self] = newValue }
     }
 }
 

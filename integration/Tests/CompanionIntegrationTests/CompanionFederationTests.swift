@@ -132,6 +132,34 @@ struct CompanionFederationTests {
     #expect(try await db.companionNativeHistoryPart(workspaceID: workspace.id, recordID: record, partIndex: 1) == two)
   }
 
+  @Test("derived reasoning revisions remain retrievable without multiplying native search hits")
+  func reasoningDetailSearchIsolation() async throws {
+    let directory = try fixture(); defer { try? FileManager.default.removeItem(at: directory) }
+    let db = try await WorkspaceDatabase(url: directory.appendingPathComponent("workspace.sqlite"))
+    let workspace = try await register(db), first = creation(workspace)
+    var entries = [first]
+    let marker = "reasoningsearchisolation"
+    let formats = ["woven-native-update-v1", "wovenmatter.activity.v1"] + Array(repeating: "wovenmatter.activity.v2", count: 12)
+    var parts: [CompanionNativeRecordPart] = []
+    for (index, format) in formats.enumerated() {
+      let bytes = Data("{\"text\":\"\(marker)\",\"revision\":\(index)}".utf8)
+      let part = CompanionNativeRecordPart(recordID: "record-\(index)", format: format, partIndex: 0, partCount: 1,
+        byteCount: Int64(bytes.count), sha256: digest(bytes), data: bytes)
+      parts.append(part)
+      entries.append(.init(workspaceID: workspace.id, originSequence: Int64(index + 2), conversationID: first.conversationID,
+        kind: .nativeRecord, nativeRecord: part))
+    }
+    _ = try await db.ingestCompanionJournal(.init(libraryID: workspace.libraryID, entries: entries), deviceID: owner)
+    let found = try await db.queryHistory(.init(command: "search", search: marker, conversationID: first.conversationID,
+      kind: "native.federated.record"))
+    let rows = found.objectValue?["rows"]?.arrayValue ?? []
+    #expect(rows.count == 2)
+    #expect(Set(rows.compactMap { $0.objectValue?["native_record_id"]?.stringValue }) == ["record-0", "record-1"])
+    for part in parts {
+      #expect(try await db.companionNativeHistoryPart(workspaceID: workspace.id, recordID: part.recordID, partIndex: 0) == part)
+    }
+  }
+
   @Test("only the trusted host can transfer an idle configured remote session and its existing run identities")
   func adoption() async throws {
     let directory = try fixture(); defer { try? FileManager.default.removeItem(at: directory) }

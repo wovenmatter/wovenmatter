@@ -19,13 +19,22 @@ export const contracts = [
   { id: 'remote-recovery', runtime: 'node', files: ['remote/test/durable-acp.test.mjs', 'remote/test/task-gateway.test.mjs', 'remote/test/client-execution-publisher.test.mjs'],
     coverage: 'Durable relay snapshots, recovery, lost receipts, retries, ordering and approval reconnect.' },
   { id: 'background-streaming', runtime: 'node', files: ['remote/test/opencode-task-stream.test.mjs', 'remote/test/task-gateway-native.test.mjs',
-    'remote/test/client-execution.test.mjs', 'remote/test/client-retained-history.test.mjs'],
-    coverage: 'Background OpenCode progress before idle, final history reconciliation, native tool order, atomic snapshot framing and retained execution recovery.' },
+    'remote/test/client-execution.test.mjs', 'remote/test/client-retained-history.test.mjs', 'remote/test/reasoning-details.test.mjs'],
+    coverage: 'Background OpenCode progress before idle, final history reconciliation, native tool order, atomic snapshot framing, complete coalesced reasoning and retained execution recovery.' },
   { id: 'native-projection', runtime: 'swift', files: ['app/Tests/WovenMatterClientTests/ACPHarnessStreamingReviewTests.swift', 'app/Tests/WovenMatterClientTests/OpenCodeLiveProjectionTests.swift',
     'app/Tests/WovenMatterCoreTests/ACPAssistantStreamWriterTests.swift', 'app/Tests/WovenMatterCoreTests/AssistantStreamingTextTests.swift', 'app/Tests/WovenMatterCoreTests/OpenCodeIntegrationTests.swift',
     'app/Tests/WovenMatterClientTests/OpenCodeWireCaptureTests.swift', 'app/Tests/WovenMatterCoreTests/ConversationWorkTimelineTests.swift',
-    'app/Tests/WovenMatterAppFacadeTests/StreamingPresentationTests.swift'],
+    'app/Tests/WovenMatterAppFacadeTests/StreamingPresentationTests.swift', 'app/Tests/WovenMatterCoreTests/CompanionPublisherTests.swift'],
     coverage: 'Actual Woven Swift adapter/projection code driven by offline wire fixtures; identities, snapshots, live OpenCode events and durable refresh.' },
+  { id: 'shared-detail-chain', runtime: 'swift', packagePath: 'shared', buildSystem: 'native', scratchDirectory: 'SharedSwiftPM',
+    files: ['shared/Tests/WovenMatterCompanionTests/CompanionActivityDetailsTests.swift'],
+    coverage: 'Shared v1/v2 reconstruction preserves Unicode and head metadata and rejects malformed or cyclic detail chains.' },
+  { id: 'mobile-detail-chain', runtime: 'swift', packagePath: 'ios', buildSystem: 'native', scratchDirectory: 'IOS/package', moduleDirectory: 'IOS/modules', disableSandbox: true,
+    files: ['ios/Tests/CompanionClientTests/TranscriptDetailTests.swift'],
+    coverage: 'Actual mobile journal resolves complete linked reasoning after pending chunks, restart and replication; legacy tool/HTML details remain intact.' },
+  { id: 'federated-detail-chain', runtime: 'swift', packagePath: 'integration', buildSystem: 'native', scratchDirectory: 'Integration/SwiftPM', moduleDirectory: 'Integration/ModuleCache', disableSandbox: true,
+    files: ['integration/Tests/CompanionIntegrationTests/CompanionFederationTests.swift'],
+    coverage: 'Federated source archive and legacy v1 remain searchable while derived v2 revisions retain verified retrieval without duplicate search hits.' },
 ];
 
 const args = process.argv.slice(2);
@@ -43,12 +52,14 @@ if (!args.some(value => ['--portable', '--native', '--all'].includes(value))) {
     const filters = contract.files.map(path => path.split('/').at(-1).replace('.swift', '')).join('|');
     const command = contract.runtime === 'node' ? process.execPath : 'swift';
     const argv = contract.runtime === 'node' ? ['--test', '--test-concurrency=1', ...contract.files]
-      : ['test', '--build-system', process.env.WOVENMATTER_SWIFT_BUILD_SYSTEM ?? 'swiftbuild', '--force-resolved-versions', '--package-path', 'app',
-        '--scratch-path', join(cache, 'SwiftPM'), ...(args.includes('--skip-build') ? ['--skip-build'] : []), '--filter', filters];
+      : ['test', '--build-system', contract.buildSystem ?? process.env.WOVENMATTER_SWIFT_BUILD_SYSTEM ?? 'swiftbuild', '--force-resolved-versions',
+        ...(contract.disableSandbox ? ['--disable-sandbox'] : []), '--package-path', contract.packagePath ?? 'app',
+        '--scratch-path', join(cache, contract.scratchDirectory ?? 'SwiftPM'), ...(args.includes('--skip-build') ? ['--skip-build'] : []), '--filter', filters];
     console.log(`Streaming contract: ${contract.id}`);
     const status = await new Promise(resolve => {
       const child = spawn(command, argv, { cwd: root, stdio: 'inherit', env: { ...process.env,
-        CLANG_MODULE_CACHE_PATH: join(cache, 'ModuleCache'), SWIFTPM_MODULECACHE_OVERRIDE: join(cache, 'ModuleCache') } });
+        CLANG_MODULE_CACHE_PATH: join(cache, contract.moduleDirectory ?? 'ModuleCache'),
+        SWIFTPM_MODULECACHE_OVERRIDE: join(cache, contract.moduleDirectory ?? 'ModuleCache') } });
       child.on('error', () => resolve(-1)); child.on('exit', code => resolve(code ?? -1));
     });
     results.push({ id: contract.id, status, elapsedMS: Math.round(performance.now() - start), coverage: contract.coverage });

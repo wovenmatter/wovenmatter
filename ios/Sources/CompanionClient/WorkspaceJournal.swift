@@ -86,16 +86,44 @@ public actor WorkspaceJournal {
   public func activityDetails(conversationID: String, activityID: String) throws -> CompanionActivity? {
     guard var activity = state.transcripts[conversationID]?.activities.first(where: { $0.id == activityID }) else { return nil }
     guard let recordID = activity.detailsRecordID else { return activity }
-    let parts = state.entries.values.filter { $0.conversationID == conversationID && $0.nativeRecord?.recordID == recordID }
-      .compactMap(\.nativeRecord).sorted { $0.partIndex < $1.partIndex }
-    guard let first = parts.first, parts.count == first.partCount,
-          parts.enumerated().allSatisfy({ $0.offset == $0.element.partIndex && $0.element.sha256 == first.sha256 }) else {
-      throw Failure.replayGap
+    guard let workspaceID = state.conversationWorkspaceIDs[conversationID] else { throw CompanionActivityDetails.incomplete }
+    // Build the index once, rather than scan the full journal for every suffix.
+    let records = Dictionary(grouping: state.entries.values.filter {
+      $0.workspaceID == workspaceID && $0.nativeRecord != nil
+    }, by: { $0.nativeRecord!.recordID })
+    let data = try CompanionActivityDetails.reconstruct(recordID: recordID, activityID: activityID) { pointer in
+      guard let entries = records[pointer], !entries.isEmpty else { throw CompanionActivityDetails.incomplete }
+      guard entries.allSatisfy({ $0.conversationID == conversationID && $0.runID == activity.runID }) else {
+        throw CompanionActivityDetails.invalid
+      }
+      // A publisher may retry immutable chunks under new journal event IDs
+      // after a crash. Match the central store's (recordID, partIndex) identity:
+      // identical bytes and manifests are idempotent; conflicting reuse is not.
+      var uniqueParts: [Int: CompanionNativeRecordPart] = [:]
+      for part in entries.compactMap(\.nativeRecord) {
+        if let existing = uniqueParts[part.partIndex], existing != part { throw CompanionActivityDetails.invalid }
+        uniqueParts[part.partIndex] = part
+      }
+      let parts = uniqueParts.values.sorted { $0.partIndex < $1.partIndex }
+      let first = parts[0]
+      guard first.partCount > 0, first.partCount <= 65_536, first.byteCount >= 0,
+        first.byteCount <= CompanionActivityDetails.maximumBytes,
+        parts.allSatisfy({ $0.partCount == first.partCount && $0.byteCount == first.byteCount &&
+          $0.sha256 == first.sha256 && $0.format == first.format && $0.partIndex >= 0 && $0.partIndex < first.partCount }) else {
+        throw CompanionActivityDetails.invalid
+      }
+      guard parts.count <= first.partCount else { throw CompanionActivityDetails.invalid }
+      guard parts.count == first.partCount else { throw CompanionActivityDetails.incomplete }
+      var bytes = Data()
+      for (index, part) in parts.enumerated() {
+        guard part.partIndex == index, part.data.count <= Int(first.byteCount) - bytes.count else { throw CompanionActivityDetails.invalid }
+        bytes.append(part.data)
+      }
+      guard bytes.count == first.byteCount,
+        SHA256.hash(data: bytes).map({ String(format: "%02x", $0) }).joined() == first.sha256 else { throw CompanionActivityDetails.invalid }
+      return (first.format, bytes)
     }
-    let data = parts.reduce(into: Data()) { $0.append($1.data) }
-    guard data.count == first.byteCount,
-          SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == first.sha256,
-          let text = String(data: data, encoding: .utf8) else { throw Failure.reusedIdentity }
+    guard let text = String(data: data, encoding: .utf8) else { throw CompanionActivityDetails.invalid }
     activity.projectionJSON = text
     return activity
   }
