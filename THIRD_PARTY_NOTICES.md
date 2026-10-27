@@ -143,10 +143,11 @@ SOFTWARE.
 
 ## Browser and computer automation
 
-Woven Matter embeds [Peekaboo](https://github.com/openclaw/Peekaboo) Automation Kit
-at `5639e70501010ca9dcae5f594a0b57dd69e9b395` (4.9.7), under MIT, copyright 2025 Peter
-Steinberger. AXorcist and the Swift support-library licenses are reproduced in
-`app/App/ThirdPartyNotices.txt`, which is included in the application bundle.
+Woven Matter bundles [Cua Driver](https://github.com/trycua/cua) 0.38.0
+(source `85e2b1318bd77ccf3cfa88ccdf875a4bb7eaed19`), under MIT, copyright 2025
+Cua AI, Inc. The upstream signed universal executable is retained unchanged.
+Its license and third-party notices are included in `app/Automation` and shipped
+under `Resources/Cua` in the app. No Cua Spaces or perception/model extension is bundled.
 
 Browser automation bundles `playwright-core` from
 [Microsoft Playwright](https://github.com/microsoft/playwright) under Apache-2.0

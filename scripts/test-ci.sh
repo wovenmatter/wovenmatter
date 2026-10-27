@@ -56,7 +56,7 @@ fi
 if enabled scripts; then
   # These fixtures stub external tools; native fixtures run in manual validation.
   scripts/test-release.sh --portable
-  for suite in update_refresh ios_runner dev_build executor_deployment remote_image; do
+  for suite in update_refresh ios_runner dev_build executor_deployment remote_image cua_runtime; do
     python3 "scripts/test-support/test_${suite}.py"
   done
   scripts/test-dev-signing.sh

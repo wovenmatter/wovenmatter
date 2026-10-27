@@ -11,11 +11,11 @@ let package = Package(
     .library(name: "WovenMatterCore", targets: ["WovenMatterCore"]),
     .library(name: "WovenMatterClient", targets: ["WovenMatterClient"]),
     .library(name: "WovenMatterAutomation", targets: ["WovenMatterAutomation"]),
-    .library(name: "WovenMatterDashboardStore", targets: ["WovenMatterDashboardStore"])
+    .library(name: "WovenMatterDashboardStore", targets: ["WovenMatterDashboardStore"]),
+    .executable(name: "WovenCuaDesktopFixture", targets: ["WovenCuaDesktopFixture"])
   ],
   dependencies: [
-    .package(path: "../shared"), .package(path: "../ios"),
-    .package(url: "https://github.com/openclaw/Peekaboo.git", from: "4.9.7")
+    .package(path: "../shared"), .package(path: "../ios")
   ],
   targets: [
     .target(
@@ -39,10 +39,11 @@ let package = Package(
     ),
     .target(
       name: "WovenMatterAutomation",
-      dependencies: ["WovenMatterCore", "WovenMatterClient", .product(name: "PeekabooAutomationKit", package: "Peekaboo"), .product(name: "PeekabooFoundation", package: "Peekaboo")],
+      dependencies: ["WovenMatterCore", "WovenMatterClient"],
       swiftSettings: [.enableUpcomingFeature("ExistentialAny")]
     ),
     .testTarget(name: "WovenMatterAutomationTests", dependencies: ["WovenMatterAutomation", "WovenMatterCore", "WovenMatterClient"]),
+    .executableTarget(name: "WovenCuaDesktopFixture", dependencies: ["WovenMatterAutomation", "WovenMatterCore", "WovenMatterClient"], path: "TestsSupport/CuaDesktopFixture"),
     .target(
       name: "WovenMatterDashboardStore",
       dependencies: ["WovenMatterCore", "WovenMatterClient"],

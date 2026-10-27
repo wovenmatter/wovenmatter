@@ -590,7 +590,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
   const toolLabels={notes:'Notes',history:'Conversation history',sessions:'Session management',timers:'Timers',usage:'Usage data',calendar:'Calendar',library:'Library',browser:'Browser Use',computer:'Computer Use',executor:'Executor'}
   const localMCPTools=['woven_sessions_create','woven_sessions_send','woven_sessions_manage','woven_sessions_release','woven_sessions_notifications','woven_sessions_receipts','woven_context','woven_goals_get','woven_goals_set','woven_goals_pause','woven_goals_resume','woven_goals_clear','woven_goals_complete','woven_goals_block','woven_goals_checkpoint',
     'woven_sessions_list','woven_sessions_status','woven_sessions_harnesses','woven_history_search','woven_history_conversations','woven_history_conversation','woven_history_message','woven_history_runs','woven_history_trace','woven_history_events','woven_history_event',
-    'woven_databases_list','woven_databases_create','woven_databases_query','woven_databases_execute',...(workspaceBrowser?['woven_browser','woven_browser_cancel']:[])]
+    'woven_databases_list','woven_databases_create','woven_databases_query','woven_databases_execute',...(workspaceBrowser?['woven_browser_use','woven_browser_use_cancel']:[])]
   db.exec('CREATE TABLE IF NOT EXISTS mcp_tool_receipts (caller TEXT NOT NULL, request_id TEXT NOT NULL, fingerprint TEXT NOT NULL, response TEXT, PRIMARY KEY(caller,request_id))')
   const mcp=createWorkspaceMCP({db,identity:descriptor,secret:publisherKey,endpointURL:mcpEndpointURL,
     policy:id=>getRecord(id).enabledTools??mcp.settings().enabledByDefault,localTools:localMCPTools,localCall:performMCP,fetchImpl:publisherFetch,beforeLibraryCall:()=>publisher.syncNow(),
@@ -599,11 +599,11 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
     ...(mcpCatalog?{catalog:mcpCatalog}:{})})
   const orchestration=createWorkspaceMCPOrchestration({db,identity:descriptor,getRecord,command:(body,device)=>command(body,device,{internal:true}),runtime,settings:()=>mcp.settings(),runningSessions:()=>Number(db.prepare("SELECT count(*) AS count FROM conversations WHERE json_extract(body,'$.conversation.activeRunID') IS NOT NULL").get().count)+externalRunningSessions(),policy:id=>getRecord(id).enabledTools??mcp.settings().enabledByDefault,notifyApproval:setInteraction})
   async function performMCP(scope,name,input,{signal}={}) {
-    const caller=name==='woven_context'||name.startsWith('woven_databases_')||name.startsWith('woven_browser')?null:getRecord(scope.conversationID),requestID=input.requestID
+    const caller=name==='woven_context'||name.startsWith('woven_databases_')||name.startsWith('woven_browser_use')?null:getRecord(scope.conversationID),requestID=input.requestID
     let value
     if(name==='woven_context')value=null // Device-originated inputs have no borrowed Mac asset capture.
-    else if(name==='woven_browser')value=await workspaceBrowser.executeMCP(scope,input,{signal})
-    else if(name==='woven_browser_cancel')value=await workspaceBrowser.cancelMCP(scope,input.id)
+    else if(name==='woven_browser_use')value=await workspaceBrowser.executeMCP(scope,input,{signal})
+    else if(name==='woven_browser_use_cancel')value=await workspaceBrowser.cancelMCP(scope,input.id)
     else if(name.startsWith('woven_sessions_')&&!['woven_sessions_list','woven_sessions_status','woven_sessions_harnesses'].includes(name))return orchestration.call(scope,name,input,{signal})
     else if(name.startsWith('woven_goals_')) {
       const action=name.slice('woven_goals_'.length)

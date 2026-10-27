@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SUITES = ('release_approval', 'release_notarization', 'release_parallel',
           'release_compression', 'release_cache', 'tagged_release_reuse',
           'release_code', 'release_metadata', 'update_request', 'update_refresh',
-          'ios_runner', 'dev_build', 'executor_deployment', 'remote_image')
+          'ios_runner', 'dev_build', 'executor_deployment', 'remote_image', 'cua_runtime')
 
 
 class CIRunnerTests(unittest.TestCase):

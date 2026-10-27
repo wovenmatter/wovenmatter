@@ -6,6 +6,28 @@ import Testing
 struct WovenMCPTests {
   private let requestID = "11111111-1111-4111-8111-111111111111"
 
+  @Test func computerAndBrowserUseNamesAndCuaTargetsAreCanonical() throws {
+    let names = Set(WovenMCPCatalog.tools.map(\.name))
+    #expect(names.contains("woven_browser_use") && names.contains("woven_browser_use_cancel"))
+    #expect(names.contains("woven_computer_use") && names.contains("woven_computer_use_cancel"))
+    #expect(WorkspaceToolGroup.computer.automationCancelToolName == "woven_computer_use_cancel")
+    #expect(WorkspaceToolGroup.browser.automationCancelToolName == "woven_browser_use_cancel")
+    #expect(!names.contains("woven_" + "computer") && !names.contains("woven_" + "browser"))
+    let request = try WovenMCPCatalog.request(name: "woven_computer_use", arguments: [
+      "action": .string("snapshot"), "pid": .number(7), "windowID": .number(9), "treeFormat": .string("elements")])
+    let command = try WovenMatterToolCommand(request.arguments)
+    #expect(command.group == .computer && command.action == "call")
+    let input = try JSONDecoder().decode(GatewayJSONValue.self, from: Data(command.required("json").utf8))
+    #expect(input.objectValue?["windowID"] == .number(9))
+    for key in ["session", "endpoint", "socket", "screenshot_out_file", "prompt"] {
+      #expect(throws: WorkspaceToolError.self) {
+        try WovenMCPCatalog.request(name: "woven_computer_use", arguments: ["action": .string("apps"), key: .string("forged")])
+      }
+    }
+    let cancel = try WovenMCPCatalog.request(name: "woven_computer_use_cancel", arguments: ["id": .string("all")])
+    #expect(try WovenMatterToolCommand(cancel.arguments).group == .computer)
+  }
+
   @Test func inputAuthorityAndSchemaValidation() throws {
     for extra in ["callerID", "contextID", "file", "arguments", "bearerToken"] {
       #expect(throws: WorkspaceToolError.self) {
@@ -22,7 +44,7 @@ struct WovenMCPTests {
       try WovenMCPCatalog.request(name: "woven_goals_set", arguments: ["objective": .string("goal"), "requestID": .string("not-a-uuid")])
     }
     #expect(throws: WorkspaceToolError.self) {
-      try WovenMCPCatalog.request(name: "woven_browser", arguments: ["action": .string("unknown")])
+      try WovenMCPCatalog.request(name: "woven_browser_use", arguments: ["action": .string("unknown")])
     }
     #expect(throws: WorkspaceToolError.self) {
       try WovenMCPCatalog.request(name: "woven_goals_set", arguments: [:])
@@ -53,7 +75,7 @@ struct WovenMCPTests {
   @Test func toolVisibilityAndAuthorizationPrecedeDispatch() async throws {
     let list = await WovenMCPServer.handle(.object(["jsonrpc": .string("2.0"), "id": .string("list"), "method": .string("tools/list")]), allowedTools: ["woven_goals_get"]) { _ in .init() }
     #expect(list?.objectValue?["result"]?.objectValue?["tools"]?.arrayValue?.count == 1)
-    let denied = await WovenMCPServer.handle(.object(["jsonrpc": .string("2.0"), "id": .string("call"), "method": .string("tools/call"), "params": .object(["name": .string("woven_computer"), "arguments": .object(["action": .string("screenshot")])])]), allowedTools: ["woven_goals_get"]) { _ in
+    let denied = await WovenMCPServer.handle(.object(["jsonrpc": .string("2.0"), "id": .string("call"), "method": .string("tools/call"), "params": .object(["name": .string("woven_computer_use"), "arguments": .object(["action": .string("screenshot")])])]), allowedTools: ["woven_goals_get"]) { _ in
       Issue.record("A hidden tool must not dispatch")
       return .init()
     }
@@ -61,11 +83,11 @@ struct WovenMCPTests {
   }
 
   @Test func browserProfileIsValidatedAndForwarded() throws {
-    let request = try WovenMCPCatalog.request(name: "woven_browser", arguments: ["action": .string("tabs"), "profile": .string("work-2")])
+    let request = try WovenMCPCatalog.request(name: "woven_browser_use", arguments: ["action": .string("tabs"), "profile": .string("work-2")])
     #expect(request.arguments.contains(where: { $0.contains("work-2") }))
     for profile in ["../escape", "", "MixedCase", String(repeating: "a", count: 33)] {
       #expect(throws: (any Error).self) {
-        try WovenMCPCatalog.request(name: "woven_browser", arguments: ["action": .string("tabs"), "profile": .string(profile)])
+        try WovenMCPCatalog.request(name: "woven_browser_use", arguments: ["action": .string("tabs"), "profile": .string(profile)])
       }
     }
   }
