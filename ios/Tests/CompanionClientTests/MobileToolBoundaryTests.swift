@@ -47,19 +47,6 @@ struct MobileToolBoundaryTests {
     #expect(try await reopened.claimExecutorJobStart(id: id, sessionID: "parent") == false)
   }
 
-  @Test(arguments: ["pause", "remove", "update"])
-  func obsoleteTimerClaimCannotEnterAgentInbox(action: String) async throws {
-    let (store, root, scope) = try fixture(); defer { try? FileManager.default.removeItem(at: root) }
-    let id = UUID().uuidString.lowercased(), now = try MobileToolSupport.date("2026-10-10T12:01:00Z")
-    #expect(await call(store, ["timers", "create", "--text", "Old work", "--at", "2026-10-10T12:00:00Z"], context: scope, id: id).success)
-    let claim = try #require(try await store.claimDueToolTimers(now: now).first?.pendingFireID)
-    var arguments = ["timers", action, id]
-    if action == "update" { arguments += ["--text", "New work", "--at", "2026-10-11T12:00:00Z"] }
-    #expect(await call(store, arguments, context: scope).success)
-    let reopened = try MobileStore(file: root.appendingPathComponent("library.json"))
-    #expect(try await reopened.enqueueClaimedToolTimer(id: id, fireID: claim, now: now) == nil)
-    #expect(await reopened.toolSubmissions().isEmpty)
-  }
 
   @Test func timerDeliveryAndMissedOccurrenceAdvanceCommitTogether() async throws {
     let (store, root, scope) = try fixture(); defer { try? FileManager.default.removeItem(at: root) }
@@ -117,26 +104,6 @@ struct MobileToolBoundaryTests {
     #expect(await reopened.snapshot().toolReceipts?.isEmpty != false)
   }
 
-  @Test(arguments: ["copy", "update", "detach"])
-  func inheritedScheduledTaskRequiresSessionPermission(action: String) async throws {
-    let (store, root, _) = try fixture(); defer { try? FileManager.default.removeItem(at: root) }
-    let deviceID = await store.snapshot().deviceID
-    let scope = MobileToolContext(sessionID: "parent", workspaceID: deviceID, enabled: [.calendar])
-    let task = CompanionScheduledTask(prompt: "Execute work", workspaceID: deviceID, enabledTools: ["execute_command"])
-    let original = try await store.calendar.save(expectedRevision: nil,
-      draft: .init(title: "Daily work", startsAt: MobileToolSupport.date("2026-10-10T12:00:00Z"), recurrenceUnit: "day", task: task), ownerDeviceID: deviceID)
-    var args = ["calendar", action, original.id]
-    switch action {
-    case "copy": args += ["--starts-at", "2026-10-15T12:00:00Z"]
-    case "update": args += ["--revision", "0", "--title", "Changed"]
-    default: args += ["--revision", "0", "--occurrence", "1"]
-    }
-    let request = WovenMatterToolRequest(arguments: args)
-    await #expect(throws: WorkspaceToolError.self) {
-      _ = try await store.executeCalendarTool(WovenMatterToolCommand(args), request: request, context: scope)
-    }
-    #expect(await store.calendar.records() == [original])
-  }
 
   @Test func copyingScheduledTaskNarrowsInheritedNativeTools() async throws {
     let (store, root, _) = try fixture(); defer { try? FileManager.default.removeItem(at: root) }

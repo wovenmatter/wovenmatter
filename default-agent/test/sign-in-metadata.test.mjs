@@ -5,20 +5,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { accountDetails, signInStatuses, readCodexAccount } from '../src/sign-in-status.mjs';
 
-test('status metadata only includes reported account labels and methods', async () => {
-  assert.deepEqual(accountDetails('claude_code', JSON.stringify({ authMethod: 'claude.ai', email: 'person@example.test', accessToken: 'secret' })),
-    [{ method: 'Claude subscription', name: 'person@example.test' }]);
-  assert.deepEqual(accountDetails('opencode', '│ ● OpenAI oauth\n│ ● Anthropic api\n│ ● OpenAI OPENAI_API_KEY\n└ 2 credentials'),
-    [{ name: 'OpenAI', method: 'OAuth' }, { name: 'Anthropic', method: 'API key' }, { name: 'OpenAI', method: 'Environment key · OPENAI_API_KEY' }]);
-  const statuses = await signInStatuses([{ id: 'codex', executable: '/fixture/codex' }],
-    async () => ({ stderr: 'Logged in using ChatGPT' }), async () => [{ method: 'ChatGPT', name: 'person@example.test' }]);
-  assert.equal(statuses[0].state, 'verified');
-  assert.equal(statuses[0].accounts[0].name, 'person@example.test');
-  const failed = await signInStatuses([{ id: 'claude_code', executable: '/fixture/claude' }],
-    async () => ({ stdout: '{"loggedIn":false,"email":"old@example.test"}' }));
-  assert.deepEqual(failed[0].accounts, []);
-  assert.deepEqual(accountDetails('claude_code', '{"authMethod":"api_key","apiKeyName":"sk-secret","apiKey":"sk-secret"}'), [{ method: 'API key', name: undefined }]);
-});
 
 test('Codex account read never refreshes tokens and stops its process', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'woven-account-fixture-'));

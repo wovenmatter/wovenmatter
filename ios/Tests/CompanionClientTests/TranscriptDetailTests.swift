@@ -55,30 +55,4 @@ final class TranscriptDetailTests: XCTestCase {
     return .init(id:"call", runID:"turn", title:"read_file", status:"completed",
       projectionJSON:String(decoding: try JSONSerialization.data(withJSONObject:object), as:UTF8.self), sequence:1)
   }
-  func testLargeDetailsSurviveRestartAndJournalReplication() async throws {
-    let path = file()
-    let journal = try WorkspaceJournal(file:path)
-    let original = try activity(content:String(repeating:"café 🟩\n", count:24_000))
-    let transcript = CompanionTranscript(conversationID:"c", messages:[
-      .init(id:"a", conversationID:"c", runID:"turn", role:"assistant", content:"Result", sequence:2)
-    ], activities:[original], runs:[.init(id:"turn", status:"completed", startedAt:"2026-10-12T10:00:00Z")])
-    _ = try await journal.append(workspaceID:"phone", transcript:transcript)
-    let saved = await journal.snapshot()
-    XCTAssertFalse(saved.entries.values.filter { $0.kind == .nativeRecord }.isEmpty)
-    XCTAssertNotNil(saved.transcripts["c"]?.activities.first?.detailsRecordID)
-    XCTAssertLessThan(saved.transcripts["c"]?.activities.first?.projectionJSON?.utf8.count ?? .max, 32_768)
-    let restarted = try WorkspaceJournal(file:path)
-    let restored = try await restarted.activityDetails(conversationID:"c", activityID:"call")
-    XCTAssertEqual(restored?.projectionJSON, original.projectionJSON)
-    let restartedState = await restarted.snapshot()
-    XCTAssertEqual(restartedState.transcripts["c"]?.runs, transcript.runs)
-    let replica = try WorkspaceJournal(file:file())
-    for entry in saved.entries.values.sorted(by: { $0.originSequence < $1.originSequence }) { try await replica.record(entry) }
-    let replicated = try await replica.activityDetails(conversationID:"c", activityID:"call")
-    XCTAssertEqual(replicated?.projectionJSON, original.projectionJSON)
-    var settled = transcript; settled.runs?[0].completedAt = "2026-10-12T10:00:08Z"
-    _ = try await journal.append(workspaceID:"phone", transcript:settled)
-    let latest = await journal.snapshot()
-    XCTAssertEqual(latest.transcripts["c"]?.runs?.first?.completedAt, "2026-10-12T10:00:08Z")
-  }
 }

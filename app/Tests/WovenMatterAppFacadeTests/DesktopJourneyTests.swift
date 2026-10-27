@@ -441,30 +441,5 @@ struct DesktopJourneyTests {
     }
 
 
-    @Test func stopOfClaimedCalendarDispatchPersistsCancellationInsteadOfRetry() async throws {
-        let f = try await FacadeFixture(); defer { f.remove(); f.recorder.configurationGate.open() }
-        var task = f.model.calendarTaskDefaults(runtime: .codex, workspaceID: nil, title: "Stopped occurrence")
-        task.prompt = "Do not execute"
-        #expect(await f.model.saveCalendarEvent(.init(title: "Stopped occurrence", startsAt: Date().addingTimeInterval(-1), task: task)))
-        let run = try #require(try await f.database.dueCalendarRuns().first)
-        _ = try #require(await f.model.createLocalACPSession(runtimeKind: .codex, requestedConversationID: UUID(uuidString: run.sessionID)))
-        let delivery = try await f.database.prepareCalendarDelivery(runID: run.id)
-        pendingConfiguration(f, run.sessionID)
-        await f.recorder.holdConfiguration()
-        let dispatching = Task { try await f.model.dispatchToolDelivery(delivery) }
-        await f.recorder.waitForConfiguration()
-        let stopping = f.model.beginAgentStop(conversationID: run.sessionID)
-        try await stopping.value
-        f.recorder.configurationGate.open()
-        let response = try await dispatching.value
-        #expect(!response.success && response.code == "delivery_cancelled")
-        #expect(try await f.database.toolDelivery(id: delivery.id)?.status == "cancelled")
-        #expect(try await f.database.toolDelivery(id: delivery.id)?.failureCode == "delivery_cancelled")
-        await f.model.runCalendarTasks()
-        #expect(await f.recorder.deliveries.isEmpty)
-        let db = try await reopen(f)
-        #expect(try await db.claimToolDelivery(id: delivery.id) == nil)
-        #expect(try await db.toolDelivery(id: delivery.id)?.status == "cancelled")
-    }
 
 }

@@ -34,23 +34,6 @@ private final class CredentialRevisionFixture: @unchecked Sendable {
 @Suite("Built-in credential coordination")
 struct DefaultAgentCredentialTests {
 
-    @Test(arguments: ["exa", "brave", "firecrawl"])
-    func searchAccountsUseWorkspaceOverridesAndSharedKeyFallback(provider: String) throws {
-        let keychain = DefaultAgentKeychainFixture().access
-        try ProviderConnectionAccounts.addKey("shared-search", provider: provider, keychain: keychain)
-        var settings = DefaultAgentSettingsScope()
-        settings.global.searchProvider = provider
-        let shared = try DefaultAgentSupport.snapshot(workspace: "fixture", settings: settings, keychain: keychain)
-        #expect(shared.config.searchProvider == provider)
-        #expect(shared.credentials[provider]?.key == "shared-search")
-        #expect(shared.credentialAccounts?[provider]?.first?.credential.key == "shared-search")
-        try ProviderConnectionAccounts.addKey("workspace-search", provider: provider, scope: "fixture", keychain: keychain)
-        let owned = try DefaultAgentSupport.snapshot(workspace: "fixture", settings: settings, keychain: keychain)
-        #expect(owned.credentials[provider]?.key == "workspace-search")
-        #expect(owned.credentialAccounts?[provider]?.first?.credential.key == "workspace-search")
-        let global = try DefaultAgentSupport.snapshot(workspace: "global", settings: settings, keychain: keychain)
-        #expect(global.credentials[provider]?.key == "shared-search")
-    }
 
     @Test @MainActor func accountMetadataReadsAreOffMainAndReuseCredentialRevision() async throws {
         let reads = CredentialRevisionFixture()

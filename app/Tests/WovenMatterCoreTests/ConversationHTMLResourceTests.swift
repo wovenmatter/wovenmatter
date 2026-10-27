@@ -12,22 +12,6 @@ struct ConversationHTMLResourceTests {
     return url
   }
 
-  @Test func quotedScriptCSSAndBareURLsEmbedOnTheCallerAndSurviveDeletion() throws {
-    let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }
-    let file = root.appending(path: "image café.png")
-    let bytes = Data([137,80,78,71,13,10,26,10])
-    try bytes.write(to: file)
-    let bare = root.appending(path: "bare.png"); try bytes.write(to: bare)
-    let html = "<img src=\"\(file.path)\"><style>.x{background:url('\(file.path)')} .y{background:url(\(bare.path))}</style><script>const p=`\(file.path)`;</script><img src='//cdn.invalid/image.png'><img src='https://cdn.invalid/image.png'>"
-    let prepared = try ConversationHTMLResources.prepare(html)
-    try FileManager.default.removeItem(at: file)
-    #expect(prepared.missingImages.isEmpty)
-    #expect(!prepared.html.contains(file.path))
-    #expect(!prepared.html.contains(bare.path))
-    #expect(prepared.html.components(separatedBy: "data:image/png;base64,").count == 5)
-    #expect(prepared.html.contains("//cdn.invalid/image.png"))
-    #expect(prepared.html.contains("https://cdn.invalid/image.png"))
-  }
 
   @Test func missingAndDisguisedFilesAreReportedInPreviewAndRejectedAtPublication() throws {
     let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }

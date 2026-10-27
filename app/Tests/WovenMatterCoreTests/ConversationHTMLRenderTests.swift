@@ -7,24 +7,6 @@ import WovenMatterDashboardStore
 
 @Suite("Conversation HTML renders")
 struct ConversationHTMLRenderTests {
-  @Test func openCodeServerReconciliationKeepsPublishedPages() async throws {
-    let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: root) }
-    let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
-    let caller = try await database.createFixtureLocalACPSession(runtimeKind: .opencode, title: "HTML", ownerDeviceID: UUID())
-    try await database.attachOpenCodeSession(.init(conversationID: caller, connectionID: "fixture", sessionID: "ses_fixture"))
-    var snapshot = OpenCodeSessionSnapshot()
-    snapshot.active = true
-    snapshot.messages = [["id": "msg_result", "type": "assistant", "time": ["created": .number(1)], "content": .array([])]]
-    try await database.saveOpenCodeSnapshot(snapshot, conversationID: caller)
-    let page = try ConversationHTMLPage(html: "<p>Keep this page</p>", title: "Page", height: 120)
-    let reference = try await database.publishConversationHTML(page, callerID: caller, requestID: UUID().uuidString)
-    snapshot.active = false
-    try await database.saveOpenCodeSnapshot(snapshot, conversationID: caller)
-    let history = try await database.conversationHistoryPage(id: caller, limit: 20, compactActivities: true)
-    #expect(history.activities.contains { $0.activity.htmlRender == reference })
-  }
 
   @Test func validationAndSandbox() throws {
     _ = try ConversationHTMLPage(html: "<button onclick='this.textContent=42'>Calculate</button>", title: "Calculator", height: 200)

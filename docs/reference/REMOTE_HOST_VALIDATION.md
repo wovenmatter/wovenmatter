@@ -59,61 +59,6 @@ with a temporary HOME and fake ACP harness on Linux, covering external project
 directories, idempotent delivery, disconnect continuation, reattachment,
 replacement-client fencing and restart recovery without replaying prompts.
 
-## Evidence and boundaries
-
-The development validation host is an amd64 Arch/Omarchy machine with a working
-systemd user manager. The Mac deployed the source bundle, selected an available
-non-default loopback port, connected through the production Tailnet tunnel and
-verified the installed fingerprint. Node and Playwright selections come from
-the committed runtime records.
-
-The final remote Node suite passed all 215 tests on Linux; macOS passed 214 with
-one Linux-only skip. The default-agent suite passed 215 with one platform skip.
-The full desktop package suites, app validation, packaged tools across all five
-harnesses, host lifecycle/bundle fixtures and ShellCheck also passed. Shared protocol tests passed 16 checks and
-companion integration passed 29 complete flows. Latest main was integrated before
-these final checks. The latest revalidation integrates main `4f9cfd9a`, including
-its API cleanup, consolidated tests and Claude Agent SDK 0.3.311 update.
-
-The broad local run reached iOS simulator tests, which were blocked by Xcode's
-`DTServiceHubClient failed to bless service hub` environment failure. Those
-simulator tests remain unpassed.
-
-Observed checks include:
-
-- Native headless Chromium: actual CDP renderer IDs, distinct user/PID
-  namespaces, seccomp filtering, no-new-privileges, non-root identity and
-  ancestry. Verification handles Chromium's rewritten process titles.
-- Existing signed-in CLI reuse and installation of only the missing Codex and
-  Claude ACP adapters. Codex readiness uses stable ACP v1 and retains stdin
-  until initialization completes, matching the actual installed adapter.
-- Foreground, recovered and scheduled Full root permission policy, with
-  provider-free peers proving old restrictive defaults cannot reintroduce
-  operation approvals.
-- Private source verification, archive attack rejection, target-native locked
-  dependencies, explicit private npm tooling, shell configuration protection,
-  source ownership and atomic rollback fixtures. Guards permit ordinary CLI
-  temporary/session/log activity and identical-byte rewrites while protecting
-  configuration, credentials, unknown paths, modes and symlink targets. Shell
-  configuration restoration includes writes through nested symlinks.
-- A real relocated SDK staging directory initializes the actual engine and
-  embeds an HTML image without a sibling harnesses directory or network access.
-  On Linux, SDK 0.3.311 imports its query API and its native CLI reports its
-  version using an isolated temporary HOME, without starting a model turn.
-- Mac source compilation, signed native Dev app launch and inspection of actual
-  Tailnet discovery, preflight, workspace access choices and host notice.
-- Deployment using the signed Dev app's actual packaged resources, followed by
-  attachment transfer and persistence checks. Uninstall with retained data,
-  reinstall and state recovery succeeded. Final uninstall removed the disposable
-  workspace service/data and only its private Serve route.
-
-Live model completions and fresh authentication are left to the reviewer's
-manual test. Ubuntu/Debian preparation, arm64 selection and AppArmor behavior
-have fixture/source coverage; fresh machines in those configurations were not
-used in this workstation run. Service restart and linger were verified; the
-shared development workstation was not rebooted. These boundaries must not be
-reported as successful live distro, reboot or provider tests.
-
 ## Manual review
 
 Build an isolated Dev app with `scripts/build_and_run.sh --mode snapshot` and

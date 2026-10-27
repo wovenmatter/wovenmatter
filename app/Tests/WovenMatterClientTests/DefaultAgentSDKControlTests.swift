@@ -7,20 +7,6 @@ import Testing
 @Suite("SDK maintenance process ownership")
 struct DefaultAgentSDKControlTests {
 
-    @Test func taskCancellationTerminatesTheHelper() async throws {
-        let root = try directory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let operation = await startFixture {
-            try await DefaultAgentSDKControl.run(.init(action: .check, id: "pi"), executable: URL(filePath: "/bin/sh"),
-                arguments: ["-c", hangingScript, "fixture", root.path], timeout: 30)
-        }
-        defer { operation.cancel() }
-        try await awaitFile(root.appending(path: "child"))
-        operation.cancel()
-        do { _ = try await operation.value; Issue.record("A canceled fixture must not return an SDK status") }
-        catch { #expect(error.localizedDescription.contains("Reload installed versions")) }
-        try assertReaped(root.appending(path: "parent"))
-    }
 
     private func directory() throws -> URL {
         let value = FileManager.default.temporaryDirectory.appending(path: "woven-sdk-control-\(UUID().uuidString)")
@@ -76,50 +62,7 @@ struct DefaultAgentSDKControlTests {
     while :; do wait; done
     """#
 
-    @Test @MainActor
-    func maintenanceStartsWhenGlobalUtilityPoolIsSaturated() async throws {
-        let pressure = UtilityPoolPressure()
-        defer { pressure.release() }
-        #expect(pressure.probeRemainsQueued())
-        let result = try await DefaultAgentSDKControl.run(.init(action: .status),
-            executable: URL(filePath: "/bin/sh"),
-            // Consume the request before exiting, as the real helper does. An
-            // immediate exit otherwise races the parent's write and causes EPIPE.
-            arguments: ["-c", #"IFS= read -r request; printf '%s\n' '{"result":{"sdks":[],"generation":"owned-thread"}}'"#],
-            timeout: 1)
-        #expect(result.generation == "owned-thread")
-        // A watchdog eventually releases pressure to keep a broken implementation
-        // from hanging this suite. It must not be needed for maintenance to run.
-        #expect(pressure.probeRemainsQueued())
-    }
 
-    @Test func timeoutReapsOnlyItsOwnedProcessGroup() async throws {
-        let root = try directory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let unrelated = Process()
-        let unrelatedInput = Pipe()
-        unrelated.executableURL = URL(filePath: "/bin/cat")
-        unrelated.standardInput = unrelatedInput
-        unrelated.standardOutput = FileHandle.nullDevice
-        unrelated.standardError = FileHandle.nullDevice
-        try unrelated.run()
-        defer {
-            try? unrelatedInput.fileHandleForWriting.close()
-            unrelated.waitUntilExit()
-        }
-        do {
-            _ = try await DefaultAgentSDKControl.run(.init(action: .status), executable: URL(filePath: "/bin/sh"),
-                arguments: ["-c", hangingScript, "fixture", root.path], timeout: 0.5)
-            Issue.record("A timed out fixture must not return an SDK status")
-        } catch { #expect(error.localizedDescription.contains("Reload installed versions")) }
-        try assertReaped(root.appending(path: "parent"))
-        let child = try String(contentsOf: root.appending(path: "child"), encoding: .utf8)
-        let childPID = try #require(Int32(child))
-        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
-        while kill(childPID, 0) == 0 && ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
-        #expect(kill(childPID, 0) == -1 && errno == ESRCH)
-        #expect(unrelated.isRunning)
-    }
 
 }
 

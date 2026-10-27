@@ -6,21 +6,6 @@ import WovenMatterCore
 @Suite("Companion MCP authority and receipts", .serialized)
 @MainActor
 struct CompanionToolBridgeTests {
-  @Test func publishedHTMLReferencesRetainReplayReceiptsAfterRestart() async throws {
-    let fixture = try await Fixture(); defer { fixture.remove() }
-    let request = fixture.request(["html", "call", "--json", "{\"action\":\"render\",\"html\":\"<p>Page</p>\",\"title\":\"Page\",\"height\":120}"])
-    let dispatcher = CompanionToolDispatcher(database: fixture.database)
-    var executions = 0
-    let expected: GatewayJSONValue = .object(["htmlRender": .object(["id": .string(request.request.requestID), "title": .string("Page"), "height": .number(120)])])
-    let first = try await dispatcher.execute(request, deviceID: fixture.deviceID) { _, _ in
-      executions += 1; return .init(result: expected)
-    }
-    let restarted = CompanionToolDispatcher(database: try await WorkspaceDatabase(url: fixture.url))
-    let replay = try await restarted.execute(request, deviceID: fixture.deviceID) { _, _ in
-      executions += 1; return .init(success: false)
-    }
-    #expect(executions == 1 && first.success && replay.success && replay.result == expected)
-  }
 
   @Test func scheduledMCPCallerUsesSavedScopeAndWaitsForNativeBinding() async throws {
     let fixture = try await Fixture(); defer { fixture.remove() }

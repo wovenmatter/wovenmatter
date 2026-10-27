@@ -53,8 +53,8 @@ future documentation updates:
 | Remote data limits | [database-catalog.py](../../remote/src/database-catalog.py) |
 
 User guides describe actions and outcomes. Technical references retain exact
-contracts and limits. Historical audits retain their dates, revisions, and
-validation evidence; they should not be read as current setup instructions.
+contracts and limits. Keep one-off audit reports and generated validation
+evidence outside the repository.
 Legal notices, security policies, and release instructions retain their own
 requirements rather than borrowing the README's promotional language.
 

@@ -41,7 +41,3 @@ in your installed version.
 - [Security policy](../SECURITY.md)
 - [UI style guide](STYLE_GUIDE.md) and [app icons](app-icons/README.md)
 - [Documentation style and website plan](planning/documentation-overhaul.md)
-
-The [original product interview](planning/interview.md) and
-[PR48 transcript repair audit](PR48_TRANSCRIPT_REPAIR_AUDIT.md) are background
-records for contributors, rather than user setup guides.

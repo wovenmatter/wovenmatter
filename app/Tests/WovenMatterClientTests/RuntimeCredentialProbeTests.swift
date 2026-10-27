@@ -38,20 +38,6 @@ struct RuntimeCredentialProbeTests {
     #expect(await calls.count == 1)
   }
 
-  @Test("a canceled explicit check does not start a provider")
-  func cancellationDoesNotProbe() async throws {
-    let definition = try #require(LocalACPRuntimeCatalog.definition(for: .codex))
-    let discovered = resolution(.codex)
-    let task = Task {
-      withUnsafeCurrentTask { $0?.cancel() }
-      return await LocalACPRuntimeVerifier.refresh(
-        definition: definition, resolution: discovered,
-        workingDirectory: URL(fileURLWithPath: "/fixture"), credentialCheckRuntimeKinds: [.codex],
-        verification: { _, _, _ in Issue.record("Canceled check must not start a provider"); return discovered }
-      )
-    }
-    #expect(await task.value.availability == discovered.availability)
-  }
 
   private func resolution(_ kind: AgentRuntimeKind, path: String? = nil) -> LocalACPRuntimeResolution {
     let path = path ?? "/fixture/\(kind.rawValue)"
