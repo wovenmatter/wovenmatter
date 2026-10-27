@@ -19,6 +19,7 @@ import struct
 import subprocess
 import time
 import urllib.request
+import urllib.error
 import uuid
 
 
@@ -195,8 +196,17 @@ def main():
         try:
             if enabled:
                 enable(False)
+                call({'action': 'apps'}, error=True)
+                report['revocationDeniedAtMCP'] = True
             if grant_id:
                 command({'mcpAccess': {'_0': {'revoke': {'_0': grant_id}}}})
+                try:
+                    call({'action': 'status'})
+                except urllib.error.HTTPError as error:
+                    assert error.code == 401, 'Revoked credential returned an unexpected status'
+                else:
+                    raise RuntimeError('Revoked MCP credential was still accepted')
+                report['revokedCredentialRejected'] = True
             if session_created:
                 command({'workspaceMutation': {'_0': {'conversation': dict(id=session_id, mutation={'moveToTrash': {}})}}})
             if target_started:
