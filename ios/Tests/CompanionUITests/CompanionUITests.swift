@@ -208,7 +208,8 @@ final class CompanionUITests: XCTestCase {
   }
 
   @MainActor func testNoteControlsAndCompactFooter() {
-    let app = launch(tab: "Notes")
+    let app = launch()
+    app.buttons["tab-notes"].tap()
     let undo = app.buttons["note-undo"], redo = app.buttons["note-redo"]
     XCTAssertTrue(undo.waitForExistence(timeout: 5))
     XCTAssertTrue(redo.exists)
