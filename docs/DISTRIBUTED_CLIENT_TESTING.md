@@ -4,6 +4,27 @@ Use Mac, iOS and Linux service builds from the same revision. Updating the phone
 does not update remote workspace services. Start with iPhone, then iPad layout,
 then physical devices and real network transitions.
 
+## Short physical iPhone pass
+
+1. Use matching Mac/Linux builds and keep the iPhone on the same Tailnet. In the
+   Mac's Settings → Apple Devices, obtain the pairing code; use the phone's
+   Settings → Device Connections. Let the enabled workspaces enroll once.
+2. Select each Mac/Linux owner, reopen an existing chat, create a folder and start
+   a new chat in it. Check model controls, approvals/questions and Stop.
+3. Leave Linux online and disconnect the central Mac. Create/control a Linux chat
+   directly, close the phone app, and confirm work continues. Reconnect the Mac
+   and check that the workspace's new folder and history appear there.
+4. Verify the user's existing Quick Chat provider connections, an explicit note
+   reference, a note edit, dictation and optional configured web search. Confirm
+   the modest Notes/Web tools and absence of repository or shell tools.
+5. Disconnect the network. Create/edit a note, exercise undo/redo and the
+   word/character count, then terminate/reopen. Reconnect and check moderate sync
+   and preservation of any concurrent edits. Tools belong above the title; the
+   title leads directly into the body, with save details in the footer.
+6. Check keyboard dismissal, scrolling, safe areas and the chosen light/dark
+   theme on the actual phone. This is development acceptance, before selecting
+   or validating a release candidate.
+
 ## Build and automation
 
 See [iOS setup](../ios/README.md) for build commands. User acceptance uses the
@@ -29,7 +50,7 @@ separately; compilation does not prove UI, Tailscale or real-account acceptance.
 - Add a device provider connection in Settings. Test sign-in cancellation,
   invalid/expired credentials, persistence and provider token refresh. Keys and
   tokens stay on the device and never appear in logs or synchronized data.
-- Set Pi Durable's default connection/model/think level and Woven MCP
+- Set Quick Chat's default connection/model/thinking level and Woven MCP
   tools; new chats inherit these, while per-session changes remain independent.
 - Use Quick Chat for questions, notes and explicit note references with other
   devices disconnected. Model access still needs the selected connection.
@@ -45,7 +66,7 @@ separately; compilation does not prove UI, Tailscale or real-account acceptance.
 
 ## Pairing and workspace control
 
-1. On the central database, open Settings → Devices. Tailscale sharing
+1. On the central database, open Settings → Apple Devices. Tailscale sharing
    starts automatically; QR/link controls remain visible when unavailable.
    Pair a phone/tablet with a fresh QR/link. Repeat lost confirmation, restart
    during setup, expired code, duplicate scan and pairing to a different database.
@@ -100,6 +121,6 @@ separately; compilation does not prove UI, Tailscale or real-account acceptance.
 
 Automated tests cover persistence, receipts, scoped authorization, history replay,
 conflicts, cancellation and artifact integrity. Real provider plans/sign-in,
-Tailscale ACLs, second-Mac behavior, physical iPad layout and iOS background
-scheduling require the corresponding devices and accounts. Keep those results
+Tailscale ACLs, second-Mac behavior, physical iPad layout, dictation and iOS background
+interruption require the corresponding devices and accounts. Keep those results
 separate from build/fixture success in the PR handoff.
