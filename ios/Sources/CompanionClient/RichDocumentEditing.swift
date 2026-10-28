@@ -30,7 +30,7 @@ public enum RichDocumentEditing {
   }
 
   public static func replacingText(in content: String, blockID: String, range: NSRange,
-                                    replacement: String) throws -> String {
+                                    replacement: String, attributes: NoteTextRun? = nil) throws -> String {
     try changeBlock(content, blockID: blockID) { raw, block in
       let length = (block.plainText as NSString).length
       guard range.location >= 0, range.length >= 0, NSMaxRange(range) <= length else { throw Failure.invalidRange }
@@ -57,7 +57,7 @@ public enum RichDocumentEditing {
             newRuns.append(prefix)
           }
           if !inserted {
-            var addition = run
+            var addition = attributes ?? run
             addition.text = replacement
             if !addition.text.isEmpty { newRuns.append(addition) }
             inserted = true
@@ -71,7 +71,7 @@ public enum RichDocumentEditing {
         offset = end
       }
       if !inserted, !replacement.isEmpty {
-        var addition = block.runs.last ?? NoteTextRun(text: "")
+        var addition = attributes ?? block.runs.last ?? NoteTextRun(text: "")
         addition.text = replacement
         newRuns.append(addition)
       }

@@ -128,7 +128,8 @@ struct NotePane: View {
                       dictationEditor: dictationEditor, dictationIdentity: "note:\(note.id):\(text.id)",
                       focused: { selectedBlockID = text.id; MobileDictation.shared.activeEditor = dictationEditor }) { range, replacement in
                       do {
-                        let next = try RichDocumentEditing.replacingText(in: content, blockID: text.id, range: range, replacement: replacement)
+                        let next = try RichDocumentEditing.replacingText(in: content, blockID: text.id, range: range, replacement: replacement, attributes: editorController.typingRun)
+                        editorController.expectCaret(NSRange(location: range.location + replacement.utf16.count, length: 0))
                         editorController.recordTextChange(from: content, to: next, blockID: text.id, apply: adopt)
                         content = next
                         documentGeneration += 1
@@ -205,7 +206,32 @@ struct NotePane: View {
   }
   private func format(_ format: RichDocumentEditing.TextFormat) {
     guard let id = editorController.activeBlockID ?? selectedBlockID ?? document?.blocks.first?.id else { return }
-    change { try RichDocumentEditing.formattingText(in: content, blockID: id, range: editorController.selection, format: format) }
+    if let selection = editorController.selection, selection.length == 0,
+      let block = document?.blocks.first(where: { $0.id == id }), case .richText(let text) = block {
+      var offset = 0
+      let inherited = text.runs.first { run in
+        defer { offset += run.text.utf16.count }
+        return selection.location <= offset + run.text.utf16.count
+      } ?? text.runs.last ?? NoteTextRun(text: "")
+      var run = editorController.typingRun ?? inherited
+      switch format {
+      case .bold: run.bold.toggle()
+      case .italic: run.italic.toggle()
+      case .underline: run.underline.toggle()
+      case .highlight(let hex): run.highlightHex = hex
+      case .fontFamily(let family): run.fontFamily = family
+      case .fontSize(let size): run.fontSize = size
+      case .link(let url):
+        if let url, !["https", "http", "mailto"].contains(URL(string: url)?.scheme?.lowercased() ?? "") {
+          model.errorMessage = "Enter an http, https or mailto link."; return
+        }
+        run.link = url
+      }
+      editorController.setTypingRun(run)
+    } else {
+      editorController.clearTypingRun()
+      change { try RichDocumentEditing.formattingText(in: content, blockID: id, range: editorController.selection, format: format) }
+    }
   }
   private func adopt(_ value: String) { content = value; documentGeneration += 1; persist() }
   private func change(_ operation: () throws -> String) {
@@ -226,6 +252,8 @@ struct NotePane: View {
   @ObservationIgnored private weak var activeView: UITextView?
   @ObservationIgnored private var observers: [NSObjectProtocol] = []
   @ObservationIgnored private var currentContent: String?
+  @ObservationIgnored private(set) var typingRun: NoteTextRun?
+  @ObservationIgnored private var expectedCaret: NSRange?
   @ObservationIgnored private var typingBlock: String?
   @ObservationIgnored private var lastTypedAt: ContinuousClock.Instant?
   private(set) var activeBlockID: String?
@@ -239,7 +267,7 @@ struct NotePane: View {
     for name in [Notification.Name.NSUndoManagerDidUndoChange, .NSUndoManagerDidRedoChange] {
       observers.append(NotificationCenter.default.addObserver(forName: name, object: history, queue: .main) { [weak self] _ in
         MainActor.assumeIsolated {
-          self?.typingBlock = nil; self?.lastTypedAt = nil
+          self?.typingBlock = nil; self?.lastTypedAt = nil; self?.clearTypingRun()
           self?.refreshUndoState()
         }
       })
@@ -250,13 +278,23 @@ struct NotePane: View {
     if activeView == nil { activeView = view; activeBlockID = blockID }
   }
   func activate(_ view: UITextView, blockID: String) {
-    if activeBlockID != blockID { typingBlock = nil }
+    if activeBlockID != blockID || expectedCaret.map({ $0 != view.selectedRange }) == true {
+      typingBlock = nil; clearTypingRun()
+    }
     activeView = view; activeBlockID = blockID
+    expectedCaret = view.selectedRange
+  }
+  func expectCaret(_ range: NSRange) { expectedCaret = range }
+  func clearTypingRun() { typingRun = nil }
+  func setTypingRun(_ run: NoteTextRun) {
+    typingRun = run
+    var sample = run; sample.text = " "
+    activeView?.typingAttributes = RichBlockTextView.attributed(.init(runs: [sample])).attributes(at: 0, effectiveRange: nil)
   }
   func refreshUndoState() { canUndo = history.canUndo; canRedo = history.canRedo }
   func undo() { guard history.canUndo else { return }; history.undo(); refreshUndoState() }
   func redo() { guard history.canRedo else { return }; history.redo(); refreshUndoState() }
-  func reset() { history.removeAllActions(); currentContent = nil; typingBlock = nil; lastTypedAt = nil; refreshUndoState() }
+  func reset() { history.removeAllActions(); currentContent = nil; typingBlock = nil; lastTypedAt = nil; clearTypingRun(); refreshUndoState() }
   func recordTextChange(from old: String, to new: String, blockID: String, apply: @escaping (String) -> Void) {
     guard old != new else { return }
     let now = ContinuousClock.now

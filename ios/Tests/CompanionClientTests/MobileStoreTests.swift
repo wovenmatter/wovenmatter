@@ -30,6 +30,23 @@ final class MobileStoreTests: XCTestCase {
     XCTAssertThrowsError(try RichDocumentEditing.formattingText(in: emoji, blockID: block.id, range: NSRange(location: 2, length: 1), format: .bold))
   }
 
+  func testCaretTypingAttributesApplyOnlyToInsertedTextAndPreserveNeighbors() throws {
+    let source = try content("Before after")
+    var attributes = NoteTextRun(text: "", bold: true, italic: true, highlightHex: "#FFF59D")
+    attributes.fontFamily = "Georgia"
+    let result = try RichDocumentEditing.replacingText(in: source, blockID: "stable-block", range: NSRange(location: 7, length: 0), replacement: "typed ", attributes: attributes)
+    guard case .richText(let block) = try XCTUnwrap(RichDocumentEditing.document(result)).blocks[0] else { return XCTFail("Expected rich text") }
+    XCTAssertEqual(block.runs.map(\.text), ["Before ", "typed ", "after"])
+    XCTAssertFalse(block.runs[0].bold); XCTAssertFalse(block.runs[2].bold)
+    XCTAssertTrue(block.runs[1].bold); XCTAssertTrue(block.runs[1].italic)
+    XCTAssertEqual(block.runs[1].fontFamily, "Georgia")
+    let empty = try content("")
+    let inserted = try RichDocumentEditing.replacingText(in: empty, blockID: "stable-block", range: NSRange(location: 0, length: 0), replacement: "First words", attributes: attributes)
+    guard case .richText(let first) = try XCTUnwrap(RichDocumentEditing.document(inserted)).blocks[0] else { return XCTFail("Expected rich text") }
+    XCTAssertTrue(first.runs[0].bold)
+    XCTAssertEqual(first.runs[0].highlightHex, "#FFF59D")
+  }
+
   func testTextStatisticsMatchDesktopWordsAndGraphemeCounts() {
     let document = NoteDocument(blocks: [.richText(.init(text: "Hello world")), .richText(.init(text: "One 👨‍👩‍👧‍👦"))])
     let counts = MobileNoteTextStatistics(document: document)
