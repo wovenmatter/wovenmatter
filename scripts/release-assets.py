@@ -20,13 +20,11 @@ def digest(path):
 def inventory(folder):
     return sorted(p.name for p in folder.iterdir() if p.is_file() and p.name != 'SHA256SUMS.txt')
 
-def prepare(folder, version, build, revision, history=None):
+def prepare(folder, version, build, revision):
     asset = f'WovenMatter_{version}_{build}_arm64.dmg'
-    previous = [] if history is None else [int(match[1]) for p in history.glob('*.dmg')
-        if (match := re.fullmatch(r'WovenMatter_' + re.escape(version) + r'_([1-9]\d*)_arm64\.dmg', p.name))]
+    # Releases are full-only; the schema keeps an empty delta list.
     record = dict(schema_version=1, version=version, build=build, source_revision=revision,
-                  full_asset=asset, public_ed_key=PUBLIC_KEY, supported_builds=sorted(set([*previous, build])),
-                  delta_assets=sorted(p.name for p in folder.glob('*.delta')))
+                  full_asset=asset, public_ed_key=PUBLIC_KEY, supported_builds=[build], delta_assets=[])
     (folder / 'release-build.json').write_text(json.dumps(record, indent=2) + '\n')
     (folder / 'SHA256SUMS.txt').write_text(''.join(f'{digest(folder / name)}  {name}\n' for name in inventory(folder)))
     verify(folder, version, revision)
@@ -44,10 +42,8 @@ def verify(folder, version, revision):
     asset = f'WovenMatter_{version}_{build}_arm64.dmg'
     assert record['full_asset'] == asset
     legacy = f'WovenMatter_{version}_arm64.dmg'
-    deltas = record['delta_assets']
-    assert len(deltas) == len(set(deltas))
-    assert all(re.fullmatch(r'[A-Za-z0-9_.-]+\.delta', name) for name in deltas)
-    expected = sorted([asset, legacy, 'latest-mac.json', 'appcast.xml', 'release-build.json', *deltas])
+    assert record['delta_assets'] == [], 'Full-only release must not list delta assets'
+    expected = sorted([asset, legacy, 'latest-mac.json', 'appcast.xml', 'release-build.json'])
     assert inventory(folder) == expected, 'Unexpected release asset inventory'
     checksums = {}
     for line in (folder / 'SHA256SUMS.txt').read_text().splitlines():
@@ -69,13 +65,11 @@ def verify(folder, version, revision):
     item = items[0]
     assert item.findtext(SPARKLE + 'version') == str(build)
     assert item.findtext(SPARKLE + 'shortVersionString') == version
-    enclosures = item.findall('enclosure') + item.findall(SPARKLE + 'deltas/enclosure')
-    assert sorted(e.attrib['url'].removeprefix(prefix) for e in enclosures) == sorted([asset, *deltas])
-    for enclosure in enclosures:
-        name = enclosure.attrib['url'].removeprefix(prefix)
-        assert enclosure.attrib['url'] == prefix + name
-        assert int(enclosure.attrib['length']) == (folder / name).stat().st_size
-        assert enclosure.attrib.get(SPARKLE + 'edSignature'), 'Unsigned update enclosure'
+    assert item.find(SPARKLE + 'deltas') is None, 'Full-only feed must not offer deltas'
+    enclosures = item.findall('enclosure')
+    assert len(enclosures) == 1 and enclosures[0].attrib['url'] == prefix + asset
+    assert int(enclosures[0].attrib['length']) == (folder / asset).stat().st_size
+    assert enclosures[0].attrib.get(SPARKLE + 'edSignature'), 'Unsigned update enclosure'
     print(f'Verified update inventory: v{version} build {build} at {revision}.')
     return record
 
@@ -86,11 +80,10 @@ if __name__ == '__main__':
     parser.add_argument('version')
     parser.add_argument('revision')
     parser.add_argument('--build', type=int)
-    parser.add_argument('--history', type=Path)
     args = parser.parse_args()
     if not re.fullmatch(r'\d+\.\d+\.\d+', args.version):
         parser.error('Invalid version')
     if args.mode == 'prepare':
-        prepare(args.folder, args.version, args.build, args.revision, args.history)
+        prepare(args.folder, args.version, args.build, args.revision)
     else:
         verify(args.folder, args.version, args.revision)

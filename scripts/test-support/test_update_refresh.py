@@ -1,6 +1,6 @@
 """Actual delivery orchestration against in-memory GitHub, including runner loss.
 
-Artifact authenticity is exercised separately by the real signed-delta fixture;
+Artifact authenticity is exercised separately by the real signed full-update fixture;
 these fixtures prove transaction/retry behavior without credentials or network.
 """
 import hashlib

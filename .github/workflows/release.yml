@@ -112,15 +112,13 @@ jobs:
           printf '%s' "$NOTARY_PRIVATE_KEY_BASE64" | base64 --decode > "$RUNNER_TEMP/notary-private-key.p8"
           chmod 600 "$RUNNER_TEMP/notary-private-key.p8"
 
-      - name: Prepare update signing key and published delta bases
+      - name: Prepare update signing key
         env:
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
-          GH_TOKEN: ${{ github.token }}
         run: |
           test -n "$SPARKLE_PRIVATE_KEY"
           umask 077
           printf '%s' "$SPARKLE_PRIVATE_KEY" > "$RUNNER_TEMP/sparkle-private-key"
-          python3 scripts/prepare-update-history.py "$RUNNER_TEMP/update-history"
 
       - name: Build, sign, notarize, and package
         env:
@@ -132,7 +130,6 @@ jobs:
           WOVENMATTER_RELEASE_OUTPUT_DIR: ${{ github.workspace }}/dist
           WOVENMATTER_RELEASE_ALLOW_UNTAGGED: ${{ inputs.refresh && '1' || '0' }}
           WOVENMATTER_SPARKLE_PRIVATE_KEY: ${{ runner.temp }}/sparkle-private-key
-          WOVENMATTER_UPDATE_HISTORY: ${{ runner.temp }}/update-history
           REFRESH: ${{ inputs.refresh || false }}
           GH_TOKEN: ${{ github.token }}
         run: |

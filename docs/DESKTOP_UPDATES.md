@@ -1,19 +1,21 @@
 # Desktop updates
 
-The production Mac app uses Sparkle 2.10.0. `app/Updater/sparkle-version.json`
+The production Mac app uses Sparkle 2.10.1. `app/Updater/sparkle-version.json`
 records that release, the exact commit the Xcode project requires, and the
 SHA-256 of the signing tools archive; see [the dependency policy](DEPENDENCIES.md).
 Settings > General opens its update UI,
 including download progress and cancellation. Update checks remain manual.
 
-The installed app is the local base for a binary delta: unchanged files and data
-are reused, and only the patch is downloaded. Sparkle verifies the patch and the
-resulting signed app, and falls back to a full download if the installed app does
-not match a supported base. Downloaded updates are retained when installation is
-postponed. Neither behavior requires more frequent releases.
+Releases are full-only: every client downloads the complete signed update. The
+feed offers no binary deltas, so Sparkle uses its standard full-update path for
+every installed build. Downloaded updates are retained when installation is
+postponed. Delta generation was removed after it stalled on a Chromium (CEF)
+upgrade, where diffing two large, different framework binaries per published
+base exceeded the release runner's practical limits; a full update costs only
+download size, not security.
 
-The release pipeline generates signed deltas from up to five previous published
-release builds. Both archives and the feed use a dedicated Ed25519 key. The public
+The release pipeline signs the full archive and the feed with a dedicated
+Ed25519 key. The public
 key is pinned in Info.plist; the private key is the `SPARKLE_PRIVATE_KEY` secret in
 the existing `release` environment. Keep a secure offline backup of this key.
 Never rotate it casually: installed clients trust the original public key.
@@ -52,7 +54,7 @@ The original `vVERSION` tag and approved description are preserved. The existing
 release environment remains restricted to `v*` tags; main does not gain direct
 access to its signing secrets.
 
-Immutable build DMGs and delta assets are uploaded first. The legacy DMG alias and
+Immutable build DMGs are uploaded first. The legacy DMG alias and
 JSON manifest are refreshed next; the signed Sparkle feed is published last.
 The prior full build is retained under an immutable build name. Failed promotion
 attempts restore the previous aliases/feeds; the private draft remains available
@@ -74,14 +76,14 @@ approved and `scripts/publish-release.sh --approved-notes ...` publishes them.
 
 ## One-time compatibility step
 
-Already-installed 0.2.8 and original 0.3.0 apps cannot gain delta support without
-installing the refreshed app once. The original 0.3.0 updater compares only the
+Already-installed 0.2.8 and original 0.3.0 apps cannot gain build-aware updates
+without installing the refreshed app once. The original 0.3.0 updater compares only the
 visible version, so it cannot detect a newer 0.3.0 build. Use the full DMG from the
 0.3.0 release page for this one installation. Older clients can still discover
 0.3.0 in-app, but a slow connection can exceed their already-shipped five-minute
 deadline; downloading the DMG in a browser avoids that old deadline. Replace the
 app normally; keep the existing workspace data. Subsequent updates use the new
-build-aware, signed delta path.
+build-aware, signed full-update path.
 
 ## Focused checks
 
@@ -91,9 +93,9 @@ build-aware, signed delta path.
 - `python3 scripts/test-support/test_update_refresh.py`: private verification,
   promotion ordering, immutable history, durable rollback after runner loss,
   original-byte reuse, and idempotent retries.
-- `python3 scripts/test-delta-updates.py`: actual signed DMGs, a same-version build
-  update, a binary-delta reconstruction, unchanged runtime reuse, and rejection of
-  modified archives/source provenance. Also exercises retained-artifact validation
+- `python3 scripts/test-full-updates.py`: actual signed DMGs, a same-version build
+  update generated with the production full-only flags, full reconstruction, and
+  rejection of delta assets and modified archives/source provenance. Also exercises retained-artifact validation
   and rejects a modified signed feed, using a temporary test key and substituted
   Apple notarization/Gatekeeper checks.
 - `scripts/test-app-termination.sh`: actual AppKit quit with deferred cleanup,
@@ -102,8 +104,7 @@ build-aware, signed delta path.
   integration for desktop package changes, without iOS simulator tests.
 - `scripts/test-changes.sh --desktop`: desktop source checks without simulators.
 
-References: [Sparkle delta updates](https://sparkle-project.org/documentation/delta-updates/)
-and [publishing](https://sparkle-project.org/documentation/publishing/).
+Reference: [publishing](https://sparkle-project.org/documentation/publishing/).
 
 ## Release performance and cache trust
 
@@ -132,22 +133,25 @@ artifact set after a failed workflow attempt. Source, version, build, inventory,
 Developer ID, notarization, Gatekeeper and updater signatures must still pass;
 public releases and mismatched provenance are rejected. Partial uploads rebuild.
 
-Every newly generated full update is mounted and its app verified. Each generated
-delta is applied to its published base and compared with the full app, including
-file contents, executable modes, symlinks, and bundled ticket files. Signatures,
-app stapling, and Gatekeeper checks remain required. The offline fixture covers
-a signed same-version round trip and reuse of prepared patches after the final
-archive changes. It does not substitute for offline first-launch acceptance.
+Every newly generated full update is mounted, its app verified, then copied as
+an installer would and compared with the original, including file contents,
+executable modes, symlinks, and bundled ticket files. Signatures, app stapling,
+and Gatekeeper checks remain required. A delta enclosure in the feed, a `.delta`
+asset, or a non-empty `delta_assets` record fails the release rather than being
+skipped. The offline fixture covers a signed same-version round trip. It does
+not substitute for offline first-launch acceptance.
 
 Both notarization submissions remain in place for now. Apple permits a single
-outermost-DMG submission, but our delta payload currently carries the app's own
-stapled ticket. Removing that ticket before validating offline full/delta installs
-would weaken the distribution proof. No source, notes, assets or tags belonging
-to an already-running release are changed by these optimizations.
+outermost-DMG submission, but the full update carries the app's own stapled
+ticket, which offline installs rely on. No source, notes, assets or tags
+belonging to an already-running release are changed by these optimizations.
 
-Release packaging follows the sequential v0.3.1 flow: finish signing,
-notarizing, and stapling the DMG, then invoke Sparkle's feed generator once
-with its default delta compression. No provisional feed or prepared-patch
-pass is used. Full DMGs retain ordinary zlib level 6 compression without a
-legacy size cap or maximum-compression retry. Signing, notarization, checksums,
-and full/delta reconstruction verification remain required.
+Release packaging follows the sequential flow: finish signing, notarizing, and
+stapling the DMG, then invoke Sparkle's feed generator once with only that DMG
+in its input folder and `--maximum-deltas 0`. No published build is downloaded
+as a delta base. The generator's start and elapsed time are logged, and a
+failure stops the release with its exit status; the release job's own timeout
+remains the backstop for a hang.
+Full DMGs retain ordinary zlib level 6 compression without a legacy size cap or
+maximum-compression retry. Signing, notarization, checksums, and full
+reconstruction verification remain required.

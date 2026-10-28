@@ -159,8 +159,7 @@ spctl --assess --type open --context context:primary-signature --verbose=2 "$dmg
 release_status 'Generating updater manifest and checksums'
 scripts/generate-release-manifest.sh \
   "$version" "$build_number" "$dmg" "$output_dir/latest-mac.json"
-release_status 'Generating signed delta updates from published app bundles'
-scripts/generate-update-feed.sh "$version" "$build_number" "$dmg" "$output_dir" \
-  "${WOVENMATTER_UPDATE_HISTORY:?Published update history directory is required}"
+release_status 'Generating signed full-only update feed'
+scripts/generate-update-feed.sh "$version" "$build_number" "$dmg" "$output_dir"
 release_status 'Distribution artifacts ready'
 printf 'Release artifacts ready in %s\n' "$output_dir"

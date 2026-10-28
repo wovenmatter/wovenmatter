@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify full and delta payloads reconstruct exactly the same signed app."""
+"""Verify the full-only update reconstructs exactly the same signed app."""
 import argparse
 from contextlib import contextmanager
 import hashlib
@@ -64,44 +64,32 @@ def trust(app, notarized):
         run('spctl', '--assess', '--type', 'execute', app)
 
 
-def verify(folder, history, tools, notarized=True):
+def verify(folder, notarized=True):
     items = ET.parse(folder / 'appcast.xml').findall('./channel/item')
     if len(items) != 1:
         raise ValueError('Expected one update item')
     item = items[0]
-    def asset(enclosure):
-        name = urllib.parse.unquote(urllib.parse.urlsplit(enclosure.attrib['url']).path.rsplit('/', 1)[1])
-        if Path(name).name != name or name in ('', '.', '..'):
-            raise ValueError('Invalid update filename')
-        return folder / name
-    with mounted_app(asset(item.find('enclosure'))) as full:
+    if item.find(SPARKLE + 'deltas') is not None or any(folder.glob('*.delta')):
+        raise ValueError('Full-only release must not contain delta updates')
+    name = urllib.parse.unquote(urllib.parse.urlsplit(item.find('enclosure').attrib['url']).path.rsplit('/', 1)[1])
+    if Path(name).name != name or name in ('', '.', '..'):
+        raise ValueError('Invalid update filename')
+    with mounted_app(folder / name) as full, tempfile.TemporaryDirectory(prefix='wovenmatter-reconstruction-') as temp:
         trust(full, notarized)
-        expected = tree(full)
         info = plistlib.loads((full / 'Contents/Info.plist').read_bytes())
         if info['CFBundleVersion'] != item.findtext(SPARKLE + 'version') or info['CFBundleShortVersionString'] != item.findtext(SPARKLE + 'shortVersionString'):
             raise ValueError('Full update version differs from feed')
-        count = 0
-        for enclosure in item.findall(SPARKLE + 'deltas/enclosure'):
-            old = enclosure.attrib[SPARKLE + 'deltaFrom']
-            if not old.isdigit() or int(old) <= 0:
-                raise ValueError('Invalid delta base')
-            candidates = list(history.glob(f'WovenMatter_*_{old}_arm64.dmg'))
-            if len(candidates) != 1:
-                raise ValueError(f'Missing or ambiguous delta base {old}')
-            with mounted_app(candidates[0]) as base, tempfile.TemporaryDirectory(prefix='wovenmatter-reconstruction-') as temp:
-                rebuilt = Path(temp) / full.name
-                run(tools / 'bin/BinaryDelta', 'apply', base, rebuilt, asset(enclosure))
-                trust(rebuilt, notarized)
-                if tree(rebuilt) != expected:
-                    raise ValueError(f'Delta {old} does not reconstruct the complete full-update app')
-            count += 1
-        print(f'Full update and {count} delta reconstruction(s) verified' + (' with Apple trust checks.' if notarized else ' with fixture signatures.'))
+        # Reconstruct the app as an installer would, preserving modes, links and tickets.
+        rebuilt = Path(temp) / full.name
+        run('ditto', full, rebuilt)
+        trust(rebuilt, notarized)
+        if tree(rebuilt) != tree(full):
+            raise ValueError('Full update does not reconstruct the complete signed app')
+    print('Full update reconstruction verified, with no deltas' + (', with Apple trust checks.' if notarized else ', with fixture signatures.'))
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('folder', type=Path)
-    parser.add_argument('history', type=Path)
-    parser.add_argument('tools', type=Path)
     args = parser.parse_args()
-    verify(args.folder, args.history, args.tools)
+    verify(args.folder)
