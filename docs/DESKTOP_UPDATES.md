@@ -145,15 +145,9 @@ stapled ticket. Removing that ticket before validating offline full/delta instal
 would weaken the distribution proof. No source, notes, assets or tags belonging
 to an already-running release are changed by these optimizations.
 
-Delta compression uses Sparkle's supported LZFSE format instead of its default
-LZMA mode. This preserves signed deltas and reconstruction checks while avoiding
-LZMA's high compression cost. Full DMGs use one ordinary zlib level 6 compression
-pass. There is no legacy size cap or maximum-compression retry. Signing,
-notarization, checksums, and full/delta update verification remain required.
-
-Delta generation overlaps the outer DMG notarization wait. It starts only after
-the enclosed app is signed, notarized and stapled. After the final DMG is stapled,
-the feed is regenerated and signed from its final bytes while reusing the exact
-prepared patches. Full/delta verification then proves reconstruction of that
-same app. A failed notarization or delta process stops the release and terminates
-its owned background process; no provisional feed or archive is uploaded.
+Release packaging follows the sequential v0.3.1 flow: finish signing,
+notarizing, and stapling the DMG, then invoke Sparkle's feed generator once
+with its default delta compression. No provisional feed or prepared-patch
+pass is used. Full DMGs retain ordinary zlib level 6 compression without a
+legacy size cap or maximum-compression retry. Signing, notarization, checksums,
+and full/delta reconstruction verification remain required.
