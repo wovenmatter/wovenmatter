@@ -174,9 +174,6 @@ xcrun stapler staple "$dmg"
 xcrun stapler validate "$dmg"
 spctl --assess --type open --context context:primary-signature --verbose=2 "$dmg"
 
-# Legacy clients have a fixed 512 MiB bound. Never publish an unusable bridge.
-test "$(stat -f %z "$dmg")" -le 536870912 \
-  || { printf '%s\n' 'Compatibility disk image exceeds the installed updater size limit.' >&2; exit 65; }
 release_status 'Generating updater manifest and checksums'
 scripts/generate-release-manifest.sh \
   "$version" "$build_number" "$dmg" "$output_dir/latest-mac.json"

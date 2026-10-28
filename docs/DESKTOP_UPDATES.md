@@ -18,10 +18,11 @@ key is pinned in Info.plist; the private key is the `SPARKLE_PRIVATE_KEY` secret
 the existing `release` environment. Keep a secure offline backup of this key.
 Never rotate it casually: installed clients trust the original public key.
 
-Full disk images remain available for first installs and legacy updaters. Runtime
-source maps are omitted from production packaging; executable code, licenses, and
-vendor signatures remain intact. A build fails before publication if its full
-compatibility DMG exceeds the old updater's 512 MiB limit. The bounded runtime
+Full disk images remain available for manual installation. Runtime source maps
+are omitted from production packaging; executable code, licenses, and vendor
+signatures remain intact. Releases target the current Sparkle update path and
+are not capped by the retired updater's 512 MiB download limit. Installations
+predating Sparkle can be replaced manually from the release DMG. The bounded runtime
 downloader retains its 60-second idle timeout and permits a healthy transfer to
 run for up to 24 hours, rather than stopping after five minutes. Sparkle's archive
 downloads use its own downloader and do not use that old five-minute deadline.
@@ -146,9 +147,9 @@ to an already-running release are changed by these optimizations.
 
 Delta compression uses Sparkle's supported LZFSE format instead of its default
 LZMA mode. This preserves signed deltas and reconstruction checks while avoiding
-LZMA's high compression cost. Full DMGs use zlib level 6; if the image approaches
-the legacy 512 MiB limit, packaging retries at level 9 before signing/notarizing.
-The final signed-image size limit remains enforced.
+LZMA's high compression cost. Full DMGs use one ordinary zlib level 6 compression
+pass. There is no legacy size cap or maximum-compression retry. Signing,
+notarization, checksums, and full/delta update verification remain required.
 
 Delta generation overlaps the outer DMG notarization wait. It starts only after
 the enclosed app is signed, notarized and stapled. After the final DMG is stapled,
