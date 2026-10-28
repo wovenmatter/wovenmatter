@@ -38,17 +38,17 @@ public struct LocalACPManagedNodeArtifact: Equatable, Sendable {
     public static var current: LocalACPManagedNodeArtifact {
         #if arch(arm64)
         LocalACPManagedNodeArtifact(
-            version: "v26.12.1",
+            version: "v26.13.0",
             platform: "darwin-arm64",
-            archiveFileName: "node-v26.12.1-darwin-arm64.tar.gz",
-            sha256: "1901d539912c02afa10d1cc126943a8855a7eedebe830119463470db5e6c59e8"
+            archiveFileName: "node-v26.13.0-darwin-arm64.tar.gz",
+            sha256: "d38bd5e5a2ddce6bbb5ce45e46e208337da4d51fffe611e567fd32073d6439f6"
         )
         #elseif arch(x86_64)
         LocalACPManagedNodeArtifact(
-            version: "v26.12.1",
+            version: "v26.13.0",
             platform: "darwin-x64",
-            archiveFileName: "node-v26.12.1-darwin-x64.tar.gz",
-            sha256: "b85c2ea4420ad0bc4abf2dc6cf1f55130ed681f1cabf60cf3f526e4c9e2712ff"
+            archiveFileName: "node-v26.13.0-darwin-x64.tar.gz",
+            sha256: "525c9b29bb0263d687de60a4cec0e2a6db876a8eb032369e5795eca71e7c358e"
         )
         #else
         #error("Woven Matter's managed Node runtime supports macOS arm64 and x86_64.")

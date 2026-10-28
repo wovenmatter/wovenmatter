@@ -8,8 +8,8 @@ version="$(tr -d '[:space:]' < "$agent_root/.node-version")"
 arch="${CURRENT_ARCH:-$(uname -m)}"
 if [ "$arch" = undefined_arch ]; then arch="${NATIVE_ARCH_ACTUAL:-$(uname -m)}"; fi
 case "$arch" in
-  arm64) node_arch=arm64; checksum=1901d539912c02afa10d1cc126943a8855a7eedebe830119463470db5e6c59e8 ;;
-  x86_64) node_arch=x64; checksum=b85c2ea4420ad0bc4abf2dc6cf1f55130ed681f1cabf60cf3f526e4c9e2712ff ;;
+  arm64) node_arch=arm64; checksum=d38bd5e5a2ddce6bbb5ce45e46e208337da4d51fffe611e567fd32073d6439f6 ;;
+  x86_64) node_arch=x64; checksum=525c9b29bb0263d687de60a4cec0e2a6db876a8eb032369e5795eca71e7c358e ;;
   *) printf 'Unsupported Built-in architecture: %s\n' "$arch" >&2; exit 1 ;;
 esac
 cache="${TMPDIR:-/tmp}/wovenmatter-node-$version-$node_arch"
