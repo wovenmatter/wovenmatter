@@ -149,8 +149,9 @@ belonging to an already-running release are changed by these optimizations.
 Release packaging follows the sequential flow: finish signing, notarizing, and
 stapling the DMG, then invoke Sparkle's feed generator once with only that DMG
 in its input folder and `--maximum-deltas 0`. No published build is downloaded
-as a delta base. The generator runs under a 10-minute limit; exceeding it fails
-the release with a clear message, and its elapsed time is logged either way.
+as a delta base. The generator's start and elapsed time are logged, and a
+failure stops the release with its exit status; the release job's own timeout
+remains the backstop for a hang.
 Full DMGs retain ordinary zlib level 6 compression without a legacy size cap or
 maximum-compression retry. Signing, notarization, checksums, and full
 reconstruction verification remain required.

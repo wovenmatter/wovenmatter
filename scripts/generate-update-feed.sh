@@ -13,21 +13,16 @@ trap 'rm -rf "$archives"' EXIT
 # become a delta base, and --maximum-deltas 0 states the same intent.
 asset="WovenMatter_${version}_${build}_arm64.dmg"
 cp "$dmg" "$archives/$asset"
-limit=600
+echo "Generating full-only update feed for $asset."
 started=$SECONDS
 status=0
-# alarm survives exec, so a stalled generator is killed by SIGALRM (status 142).
-perl -e 'alarm shift; exec @ARGV or die "exec failed: $!\n"' "$limit" \
-  "$tools/bin/generate_appcast" --ed-key-file "$WOVENMATTER_SPARKLE_PRIVATE_KEY" \
+"$tools/bin/generate_appcast" --ed-key-file "$WOVENMATTER_SPARKLE_PRIVATE_KEY" \
   --download-url-prefix "https://github.com/wovenmatter/wovenmatter/releases/download/v${version}/" \
   --maximum-versions 1 --maximum-deltas 0 --versions "$build" \
   --full-release-notes-url "https://github.com/wovenmatter/wovenmatter/releases/tag/v${version}" \
   -o "$archives/appcast.xml" "$archives" || status=$?
 elapsed=$((SECONDS - started))
-if [ "$status" -eq 142 ]; then
-  echo "generate_appcast exceeded ${limit}s and was stopped; no update feed was produced." >&2
-  exit 1
-elif [ "$status" -ne 0 ]; then
+if [ "$status" -ne 0 ]; then
   echo "generate_appcast failed with status $status after ${elapsed}s." >&2
   exit "$status"
 fi
