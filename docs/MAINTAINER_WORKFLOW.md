@@ -22,7 +22,7 @@ Run **Manual validation** (`validation.yml`) explicitly on the desired branch:
 
 | Scope | Validation |
 | --- | --- |
-| `desktop` | Native macOS fixtures, package tests, unsigned app build, embedded WebKit smoke, companion integration and signed delta round trip |
+| `desktop` | Native macOS fixtures, package tests, unsigned app build, embedded WebKit smoke, companion integration and signed full-only update round trip |
 | `mobile` | iPhone and iPad package/app/UI tests on disposable simulators |
 | `images` | amd64/arm64 workspace and Executor images, isolation, native helpers, permissions/cancellation and vulnerability inventory |
 | `all` (default) | All portable suites plus every platform check above |

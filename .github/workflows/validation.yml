@@ -79,8 +79,8 @@ jobs:
         run: |
           mkdir -p "$WOVENMATTER_TEST_CACHE_DIR"
           scripts/test-changes.sh --companion-desktop 2>&1 | tee "$WOVENMATTER_TEST_CACHE_DIR/companion.log"
-      - name: Verify signed delta round trip
-        run: python3 scripts/test-delta-updates.py
+      - name: Verify signed full-only update round trip
+        run: python3 scripts/test-full-updates.py
       - name: Preserve desktop failure diagnostics
         if: failure()
         uses: actions/upload-artifact@main
