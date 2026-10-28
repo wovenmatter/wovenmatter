@@ -43,10 +43,6 @@ struct NotePane: View {
   private var editable: Bool { RichDocumentEditing.canEdit(content) && !model.state.uncachedNoteIDs.contains(note.id) }
   var body: some View {
     VStack(spacing: 0) {
-      TextField("Untitled note", text: Binding(get: { title }, set: { title = $0; persist() }), axis: .vertical)
-        .font(.title.weight(.semibold)).lineLimit(1...3)
-        .accessibilityIdentifier("note-title").disabled(!editable)
-        .padding(.horizontal, 20).padding(.top, 14)
       HStack(spacing: 4) {
         Button { editorController.undo() } label: {
           Image(systemName: "arrow.uturn.backward").frame(width: 44, height: 44)
@@ -99,7 +95,11 @@ struct NotePane: View {
         Button { Task { await model.newNote() } } label: {
           DashboardLucideIcon(glyph: .plus, size: 20).frame(width: 44, height: 44)
         }.accessibilityLabel("New note").accessibilityIdentifier("action-new-note")
-      }.buttonStyle(DashboardIconButtonStyle()).padding(.horizontal, 12).padding(.bottom, 4)
+      }.buttonStyle(DashboardIconButtonStyle()).padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 4)
+      TextField("Untitled note", text: Binding(get: { title }, set: { title = $0; persist() }), axis: .vertical)
+        .font(.title.weight(.semibold)).lineLimit(1...3)
+        .accessibilityIdentifier("note-title").disabled(!editable)
+        .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 8)
       if model.state.conflicts[note.id] != nil {
         Button { conflictsPresented = true } label: { Label("Review saved conflict", systemImage: "doc.on.doc").font(.caption).frame(maxWidth: .infinity, alignment: .leading).padding(12).background(theme.palette.themeWhisper) }.padding(.horizontal, 20)
       }
