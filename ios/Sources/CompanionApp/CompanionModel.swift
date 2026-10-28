@@ -123,12 +123,9 @@ import CompanionInference
   var executionDirectory: URL?
   var executionRefreshTasks: [String: Task<Void, Never>] = [:]
   var executionCredentialStore = InferenceCredentialStore()
-  let deviceBackgroundExecution = DeviceBackgroundExecution()
   var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
   var backgroundFallbackToken: UUID?
   var calendarRevision = 0
-  var deviceScheduleTask: Task<Void, Never>?
-  var processingDeviceSchedule = false
 
   private var frame = 0
   let fixture: Bool
@@ -229,7 +226,6 @@ import CompanionInference
       }
     }
     if let store { await analytics.configure(store.analytics, transport: transport) }
-    if !fixture && UIApplication.shared.applicationState == .active { startDeviceScheduler() }
     await maintainConnections()
   }
   func reload() async {
@@ -261,12 +257,10 @@ import CompanionInference
       if let pending = try MobileCredentialVault.load(), pending.confirmationPending == true,
         pending.endpoint == payload.endpoint {
         if (current.workspaceID ?? current.detachedWorkspaceID) != pending.workspaceID,
-          !localRunTasks.isEmpty || processingDeviceSchedule {
+          !localRunTasks.isEmpty {
           throw DeviceExecutionError.unavailable("Finish the running device agents before changing the central database.")
         }
         await flushLocalWrites()
-        stopDeviceScheduler()
-        defer { if connectionForeground { startDeviceScheduler() } }
         do {
           try await acceptPairing(pending, allowingLibraryChange: true) { try MobileCredentialVault.save($0) }
           pairingText = ""
@@ -280,12 +274,10 @@ import CompanionInference
       let target = try await HTTPSCompanionTransport.previewPairing(payload, deviceID: current.deviceID,
         deviceName: UIDevice.current.name, metadata: deviceMetadata)
       if (current.workspaceID ?? current.detachedWorkspaceID) != target,
-        !localRunTasks.isEmpty || processingDeviceSchedule {
+        !localRunTasks.isEmpty {
         throw DeviceExecutionError.unavailable("Finish the running device agents before changing the central database.")
       }
       await flushLocalWrites()
-      stopDeviceScheduler()
-      defer { if connectionForeground { startDeviceScheduler() } }
       let paired = try await HTTPSCompanionTransport.pair(payload, deviceID: current.deviceID,
         deviceName: UIDevice.current.name, metadata: deviceMetadata, expectedWorkspaceID: target, requiresConfirmation: true)
       try await acceptPairing(paired, allowingLibraryChange: true) { try MobileCredentialVault.save($0) }
@@ -389,6 +381,7 @@ import CompanionInference
   }
   func showLatestMessages() { if let selectedConversationID { historyPages.removeValue(forKey: selectedConversationID) } }
   func newChat(referencing noteID: String? = nil) {
+    if tab != .folders || !folderContentsPresented { selectedFolderID = nil }
     newChatNoteID = noteID; chatSetupProblem = nil; chatChooserPresented = true
   }
   func saveNote(id: String, title: String, content: String, base: CompanionNote) {
@@ -470,7 +463,7 @@ import CompanionInference
         let launch: MobileLaunchRecord
         if let pendingLaunch {
           guard pendingLaunch.initialSend.text == text, pendingLaunch.initialSend.noteID == noteID else {
-            errorMessage = "A previous new-chat request still needs acknowledgement. Continue it in Settings → Pair to Mac → Pending changes before starting another."; return
+            errorMessage = "A previous new-chat request still needs acknowledgement. Continue it in Settings → Pending changes before starting another."; return
           }
           launch = pendingLaunch
         } else {
@@ -483,7 +476,7 @@ import CompanionInference
             updateChatDraft(key: conversationID, draft: .init(text: text, noteID: noteID))
             selectedConversationID = conversationID
           }
-          await reload(); errorMessage = result.sendReceipt?.message ?? result.createReceipt?.message ?? "The session request is saved. Continue it in Settings → Pair to Mac → Pending changes when the Mac is available."; return
+          await reload(); errorMessage = result.sendReceipt?.message ?? result.createReceipt?.message ?? "The session request is saved. Continue it in Settings → Pending changes when the Mac is available."; return
         }
         receipt = accepted
         if selectedConversationID == target { selectedConversationID = receipt.conversationID ?? conversationID }
@@ -492,7 +485,7 @@ import CompanionInference
         let command: CompanionCommand
         if let unresolved {
           guard unresolved.command.text == text, unresolved.command.noteID == noteID else {
-            errorMessage = "This conversation has an unacknowledged command. Resolve it in Settings → Pair to Mac → Pending changes before sending different input."; return
+            errorMessage = "This conversation has an unacknowledged command. Resolve it in Settings → Pending changes before sending different input."; return
           }
           command = unresolved.command
         } else {
@@ -575,7 +568,7 @@ import CompanionInference
     await reload()
     let pending = state.commands.first { $0.command.kind == .workspace && ($0.receipt == nil || $0.receipt?.status == .accepted || $0.receipt?.status == .outcomeUnknown) }
     if let pending, pending.command.workspaceAction != action {
-      errorMessage = "An earlier workspace change still needs acknowledgement. Review it in Settings → Pair to Mac → Pending changes before making another change."
+      errorMessage = "An earlier workspace change still needs acknowledgement. Review it in Settings → Pending changes before making another change."
       return false
     }
     errorMessage = nil

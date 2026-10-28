@@ -18,7 +18,7 @@ extension CompanionModel {
     guard !startingChat, !sending, !chatSettingsBusy, let store else { return }
     startingChat = true; chatSetupProblem = nil
     defer { startingChat = false }
-    let folder = selectedFolderID, reference = newChatNoteID
+    let folder = workspaceID == "local" ? nil : selectedFolderID, reference = newChatNoteID
     do {
       var conversationID: String?
       if workspaceID == "local", let connection = inferenceConnections.first(where: { $0.id == inferenceConnectionID }) {
@@ -38,6 +38,7 @@ extension CompanionModel {
               agents.contains(where: { $0.id == agentID && $0.available && $0.canStart }) else {
           throw DeviceExecutionError.unavailable("This agent is currently unavailable.")
         }
+        try await prepareExecutionFolder(folder, workspaceID: workspaceID)
         let records = workspaceID == "central" ? await store.snapshot().commands : await store.journal.commandRecords(workspaceID: workspaceID)
         let pending = records.first { $0.command.commandID == pendingChatCreation?.commandID && ($0.command.workspaceID ?? "central") == workspaceID }
           ?? records.first { $0.command.kind == .createSession && $0.receipt?.status != .completed && $0.receipt?.status != .rejected }
@@ -45,7 +46,7 @@ extension CompanionModel {
           let launches = await store.snapshot().launches
           guard pending.command.providerID == agentID, pending.command.folderID == folder,
                 !launches.contains(where: { $0.create.commandID == pending.id }) else {
-            throw DeviceExecutionError.unavailable("A previous chat is awaiting acknowledgement. Resolve it in Settings → Pair to Mac → Pending changes.")
+            throw DeviceExecutionError.unavailable("A previous chat is awaiting acknowledgement. Resolve it in Settings → Pending changes.")
           }
         }
         var command = pending?.command ?? CompanionCommand(deviceID: state.deviceID, kind: .createSession,
@@ -104,7 +105,7 @@ extension CompanionModel {
   private func canConfigureDeviceChat(_ id: String?) -> Bool {
     guard !sending, !startingChat, !fixture else { return false }
     guard let id else { return true }
-    guard let record = executionRecords[id] else { return false }
+    guard let record = executionRecords[id], record.quickChatVersion == 1 else { return false }
     return !configuringDeviceSessions.contains(id) && localRunTokens[id] == nil && !["running", "stopping", "interrupted"].contains(record.status)
   }
 
@@ -158,7 +159,7 @@ struct NewChatChooser: View {
       header
       ScrollView {
         VStack(alignment: .leading, spacing: 8) {
-          ForEach(model.launcherGroups) { workspace in workspaceSection(workspace) }
+          ForEach(model.chatLauncherGroups) { workspace in workspaceSection(workspace) }
           if let problem = model.chatSetupProblem { Text(problem).font(.caption).foregroundStyle(DashboardPalette.danger).padding(.vertical, 12) }
         }.padding(.horizontal, 20).padding(.bottom, 24)
       }.scrollIndicators(.never)

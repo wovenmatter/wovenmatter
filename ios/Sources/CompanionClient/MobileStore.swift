@@ -20,6 +20,7 @@ public struct MobileCommandRecord: Codable, Equatable, Identifiable, Sendable {
   public var receipt: CompanionCommandReceipt?
 }
 public struct MobileStoreState: Codable, Equatable, Sendable {
+  public var workspaceFolderRequests: [String: CompanionMutation]?
   public var formatVersion = 1
   public var deviceID = UUID().uuidString.lowercased()
   public var workspaceID: String?
@@ -506,6 +507,24 @@ public actor MobileStore {
   }
   /// Read-through projection for the central host's own execution API. The
   /// authoritative snapshot/change feed continues to own these conversations.
+  public func rememberWorkspaceFolder(_ mutation: CompanionMutation, workspaceID: String) throws {
+    try transaction { next in
+      if let saved = next.workspaceFolderRequests?[workspaceID], saved != mutation { throw Failure.conflictingNote }
+      if next.workspaceFolderRequests == nil { next.workspaceFolderRequests = [:] }
+      next.workspaceFolderRequests?[workspaceID] = mutation
+    }
+  }
+  public func cacheExecutionFolders(_ folders: [CompanionFolder], workspaceID: String) throws {
+    guard folders.allSatisfy({ $0.execution?.workspaceID == workspaceID }) else { throw Failure.wrongWorkspace }
+    try transaction { next in
+      for folder in folders where next.pendingFolderDeletions?[folder.id] == nil {
+        guard next.folders[folder.id]?.execution == nil || next.folders[folder.id]?.execution == folder.execution else { throw Failure.wrongWorkspace }
+        // Pending local mutations and their conflict bases remain authoritative.
+        if !next.outbox.contains(where: { $0.mutation.resourceID == folder.id }) { next.folders[folder.id] = folder }
+        if next.workspaceFolderRequests?[workspaceID]?.resourceID == folder.id { next.workspaceFolderRequests?.removeValue(forKey: workspaceID) }
+      }
+    }
+  }
   public func cacheCentralConversations(_ conversations: [CompanionConversation]) throws {
     try transaction { next in
       for conversation in conversations { next.conversations[conversation.id] = conversation }

@@ -31,13 +31,17 @@ separately; compilation does not prove UI, Tailscale or real-account acceptance.
   tokens stay on the device and never appear in logs or synchronized data.
 - Set Pi Durable's default connection/model/think level and Woven MCP
   tools; new chats inherit these, while per-session changes remain independent.
-- Run on-device Pi Durable with other devices disconnected. Exercise files,
-  notes, calendar, timers, history, usage, tools, Stop, children and explicit
-  Resume. Model/account selection must survive catalog outages and refreshes.
-- Verify embedded Python/SQLite and native MCP effects, completed-command replay,
-  cancellation and interruption. See [embedded execution](IOS_EMBEDDED_EXECUTION.md)
-  for the real WebKit smoke and [continued execution](IOS_CONTINUED_EXECUTION.md)
-  for physical background admission, expiration and cancellation checks.
+- Use Quick Chat for questions, notes and explicit note references with other
+  devices disconnected. Model access still needs the selected connection.
+  Existing provider sign-ins and selected models must survive restart.
+- Confirm code mode, subagents, shell/Python, goals, timers and local schedules
+  are unavailable even when older saved grants contained them. Earlier device
+  agents remain retained history. New chats use the Quick Chat capability profile.
+- Run the synthetic SDK/native-note smoke described in
+  [lifecycle](IOS_CONTINUED_EXECUTION.md). Check interruption, explicit Resume,
+  note conflict handling, durable receipts and no duplicated effects.
+- With an explicitly configured test Exa connection, verify search/reading,
+  cancellation and useful missing-key errors. Synthetic tests never call Exa.
 
 ## Pairing and workspace control
 
@@ -83,9 +87,10 @@ separately; compilation does not prove UI, Tailscale or real-account acceptance.
   interrupt its transfer, reconnect and verify exact bytes. Ordinary workspace
   files and runtime checkpoints stay at their owner. Cache cleanup must preserve
   pending writing, conflicts and locally originated execution history.
-- Create an offline phone calendar task, then sync it. Missed one-time phone
-  tasks run when iOS next permits; recurring misses coalesce. They never move
-  silently to another device. Calendar/task claims must not duplicate runs.
+- Create calendar edits offline and sync them. Scheduled tasks require an explicit
+  Mac/Linux owner and use the existing central scheduling path. Earlier phone
+  tasks remain retained until the user chooses another owner; no phone scheduler
+  executes them. Calendar/task claims must not duplicate runs.
 - Exercise managed datasets, linked tables/inline values and copies according to
   [the workspace data model](WORKSPACE_DATA_MODEL.md). A client must not interpret
   an owner-local file path as a path on its own device. Unsupported note features

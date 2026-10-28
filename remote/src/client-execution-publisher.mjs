@@ -12,6 +12,7 @@ export function createClientExecutionPublisher({ db, identity, secret, events, f
     CREATE TABLE IF NOT EXISTS retained_publication_receipts (event_id TEXT PRIMARY KEY);
     CREATE TABLE IF NOT EXISTS central_publication_lanes (name TEXT PRIMARY KEY, failures INTEGER NOT NULL DEFAULT 0, next_attempt INTEGER NOT NULL DEFAULT 0, last_success TEXT, last_error_code TEXT);
     INSERT OR IGNORE INTO central_publication_lanes(name) VALUES ('journal'),('artifacts');
+    CREATE TABLE IF NOT EXISTS execution_folders (id TEXT PRIMARY KEY, body TEXT NOT NULL, published INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE IF NOT EXISTS saved_execution_artifacts (id TEXT PRIMARY KEY, manifest TEXT NOT NULL, bytes BLOB NOT NULL, uploaded INTEGER NOT NULL DEFAULT 0);`)
   const key = typeof secret === 'string' && secret.length >= 16 ? createHash('sha256').update('wovenmatter-workspace-publisher-v1\0'+secret).digest() : null
   let inFlight, stopped = false, timer
@@ -85,7 +86,19 @@ export function createClientExecutionPublisher({ db, identity, secret, events, f
   }
   async function publishJournal(value) {
     flush()
-    let sent = await settleRetainedRuns(value)
+    let sent = false
+    // Publish owner folders before conversations that reference them. This outbox
+    // survives a closed phone and a central outage without relaying via iOS.
+    for (const row of db.prepare('SELECT id,body FROM execution_folders WHERE published=0 ORDER BY id').all()) {
+      const folder = JSON.parse(row.body)
+      const result = await post(value, 'folders', { operationID: folder.id, deviceID: value.workspaceID, kind: 'createFolder', resourceID: folder.id, title: folder.name, folderExecution: folder.execution })
+      if (result.operationID !== folder.id || result.status !== 'accepted' || result.folder?.id !== folder.id
+        || result.folder?.execution?.workspaceID !== value.workspaceID || result.folder?.execution?.rootPath !== folder.execution.rootPath) throw fail(409, 'The central library did not acknowledge this execution folder.')
+      if (stopped) return sent
+      db.prepare('UPDATE execution_folders SET published=1 WHERE id=? AND body=?').run(row.id, row.body)
+      sent = true
+    }
+    sent = await settleRetainedRuns(value) || sent
     let acknowledged = db.prepare('SELECT acknowledged FROM central_publication WHERE id=1').get().acknowledged
     for (;;) {
       const page = events(acknowledged)

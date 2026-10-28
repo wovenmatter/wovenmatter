@@ -66,8 +66,8 @@ extension CompanionModel {
         }
         record.updatedAt = Self.executionTimestamp(); executionRecords[id] = record
         try persistExecutionConfiguration(); try await adoptDeviceConversation(record, transcript: nil); await reload()
-      case .goal(let id, let mutation):
-        _ = try await mutateDeviceGoal(id, mutation: mutation)
+      case .goal:
+        throw DeviceExecutionError.unavailable("Goals run on Mac or Linux workspace agents. Quick Chat has no autonomous goals.")
       case .configureSession(let id, let connectionID, let thinking, let permission):
         guard let record = executionRecords[id] else { throw InferenceError.invalidConfiguration }
         let connection: InferenceConnection?

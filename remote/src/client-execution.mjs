@@ -5,6 +5,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { mkdirSync, chmodSync } from 'node:fs'
 import { mutateGoal, settleGoal, setGoalStatus, budgetReached, goalUsageUnavailable, goalPrompt, goalGuidance } from './client-goals.mjs'
 import { resolve } from 'node:path'
+import { createProject, linkHostProject } from './projects.mjs'
 import { createWorkspaceMCP } from './workspace-mcp.mjs'
 import { createWorkspaceMCPOrchestration } from './workspace-mcp-orchestration.mjs'
 import { queryWorkspaceMCPHistory } from './workspace-mcp-history.mjs'
@@ -35,7 +36,7 @@ function inputMessages(command,runID) {
 
 // This store is owned by the workspace service (the existing host lock fences
 // competing owners). Neither a phone nor an SSH attachment owns these runs.
-export function createClientExecution({ directory, runtime, kind = 'linux', name = 'Workspace', publisherKey, publisherFetch, publisherIntervalMilliseconds, goalIntervalMilliseconds = 1000, mcpEndpointURL = 'http://127.0.0.1:7337/mcp', managedDataRoot = resolve(directory, '../databases'), mcpCatalog,externalRunningSessions=()=>0,workspaceBrowser }) {
+export function createClientExecution({ directory, runtime, kind = 'linux', name = 'Workspace', publisherKey, publisherFetch, publisherIntervalMilliseconds, goalIntervalMilliseconds = 1000, mcpEndpointURL = 'http://127.0.0.1:7337/mcp', managedDataRoot = resolve(directory, '../databases'), projectsRoot = resolve(directory, 'projects'), mcpCatalog,externalRunningSessions=()=>0,workspaceBrowser }) {
   mkdirSync(directory, { recursive: true, mode: 0o700 })
   const path = resolve(directory, 'execution.sqlite')
   const db = new DatabaseSync(path)
@@ -46,7 +47,9 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
     CREATE TABLE IF NOT EXISTS commands (id TEXT PRIMARY KEY, device TEXT NOT NULL, fingerprint TEXT NOT NULL, body TEXT NOT NULL, receipt TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS conversations (id TEXT PRIMARY KEY, body TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS events (sequence INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, commandID TEXT NOT NULL);`)
+    CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, commandID TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS execution_folders (id TEXT PRIMARY KEY, body TEXT NOT NULL, published INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE IF NOT EXISTS execution_folder_commands (id TEXT PRIMARY KEY, device TEXT NOT NULL, fingerprint TEXT NOT NULL, folder_id TEXT NOT NULL);`)
   let identity = JSON.parse(db.prepare('SELECT body FROM identity WHERE id=1').get()?.body ?? 'null')
   const jobs = new Map(), queues = new Map(), dirty = new Map()
   let flushTimer
@@ -271,6 +274,44 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       catch (error) { return transaction(() => receipt(command, error.outcomeUnknown ? 'outcomeUnknown' : 'rejected', {message: error.message ?? 'The workspace command failed.'})) }
     })
   }
+  const folderQueues = new Map()
+  async function createFolder(request, device) {
+    assertIdentity()
+    if (closed || request.deviceID !== device.id || request.kind !== 'createFolder' || !identifier(request.operationID) || !identifier(request.resourceID)
+      || typeof request.title !== 'string' || !request.title.trim() || Buffer.byteLength(request.title) > 4096
+      || (request.folderExecution && request.folderExecution.workspaceID !== identity.id)) throw fail(400, 'Invalid workspace folder request.')
+    const fingerprint = digest(JSON.stringify(ordered(request)))
+    const previous = db.prepare('SELECT * FROM execution_folder_commands WHERE id=?').get(request.operationID)
+    if (previous && (previous.device !== device.id || previous.fingerprint !== fingerprint)) throw fail(409, 'Folder request identity was reused.')
+    const pending = (folderQueues.get(request.resourceID) ?? Promise.resolve()).catch(()=>{}).then(async () => {
+      const old = db.prepare('SELECT body FROM execution_folders WHERE id=?').get(request.resourceID)
+      if (old) {
+        const savedRequest = db.prepare('SELECT * FROM execution_folder_commands WHERE id=?').get(request.operationID)
+        if (savedRequest && (savedRequest.device !== device.id || savedRequest.fingerprint !== fingerprint)) throw fail(409, 'Folder request identity was reused.')
+        const folder = JSON.parse(old.body)
+        if (request.folderExecution && JSON.stringify(request.folderExecution) !== JSON.stringify(folder.execution)) throw fail(409, 'This folder already has another execution root.')
+        return folder
+      }
+      let path
+      if (request.folderExecution) {
+        path = (await linkHostProject(request.folderExecution.rootPath)).path
+        if (path !== request.folderExecution.rootPath) throw fail(400, 'Choose the canonical workspace directory.')
+      } else {
+        const root = projectsRoot
+        mkdirSync(root, { recursive: true, mode: 0o700 })
+        path = (await createProject(root, request.resourceID, { reuseExisting: true })).path
+      }
+      if (closed) throw fail(503, 'The workspace is stopping.')
+      const folder = { id: request.resourceID, name: request.title.trim(), revision: 1, updatedAt: date(), execution: { workspaceID: identity.id, rootPath: path } }
+      transaction(() => {
+        db.prepare('INSERT INTO execution_folders(id,body) VALUES (?,?)').run(folder.id, JSON.stringify(folder))
+        db.prepare('INSERT INTO execution_folder_commands VALUES (?,?,?,?)').run(request.operationID, device.id, fingerprint, folder.id)
+      })
+      return folder
+    })
+    folderQueues.set(request.resourceID, pending)
+    try { return await pending } finally { if (folderQueues.get(request.resourceID) === pending) folderQueues.delete(request.resourceID) }
+  }
   async function perform(command) {
     if(closed)throw fail(503,'The workspace is stopping.')
     if (command.kind === 'createSession') {
@@ -282,11 +323,17 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       const selected = provider.runtimeKind
       const defaults=mcp.settings().harnessDefaults?.[selected]??{},initial=command.initialConfiguration??{}
       const enabledTools=initial.enabledTools??[...new Set([...(defaults.tools??mcp.settings().enabledByDefault),'goals'])]
+      let folderDirectory
+      if (command.folderID) {
+        const saved = db.prepare('SELECT body FROM execution_folders WHERE id=?').get(command.folderID)
+        if (!saved && !command.initialConfiguration?.nativeWorkingDirectory) throw fail(409, 'Register this folder with its execution owner before starting a chat.')
+        if (saved) folderDirectory = JSON.parse(saved.body).execution.rootPath
+      }
       // The authenticated tool session exists before a native MCP client
       // discovers its catalog. No prompt has been submitted at this point.
       save({native:{},pending:[],enabledTools,conversation:{id:command.conversationID,runtimeKind:selected,workspaceID:identity.id,routeID:identity.id,...(command.folderID?{folderID:command.folderID}:{})},transcript:{conversationID:command.conversationID,messages:[],activities:[]}})
       let native
-      try {native = await runtime.create({ runtimeKind: selected, conversationID: command.conversationID, providerID: provider.id, workspaceID: identity.id, mcpConnection: mcp.sessionConnection(command.conversationID),nativeWorkingDirectory:initial.nativeWorkingDirectory,permission:initial.permission??defaults.permission })}
+      try {native = await runtime.create({ runtimeKind: selected, conversationID: command.conversationID, providerID: provider.id, workspaceID: identity.id, mcpConnection: mcp.sessionConnection(command.conversationID),nativeWorkingDirectory:initial.nativeWorkingDirectory ?? folderDirectory,permission:initial.permission??defaults.permission })}
       catch(error){db.prepare('DELETE FROM conversations WHERE id=?').run(command.conversationID);mcp.revokeSession(command.conversationID);throw error}
       const record = { native, pending: [], enabledTools, conversation: { id: command.conversationID, title:initial.title??'New conversation', preview: '', runtimeKind: selected,
         providerID: provider.id, routeID: identity.id, workspaceID: identity.id, ...(command.folderID ? {folderID: command.folderID} : {}), updatedAt: date() },
@@ -664,6 +711,8 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
         ...(start.messages || start.activities ? {olderCursor:Buffer.from(JSON.stringify(start)).toString('base64url')} : {})}
     },
     interactions: () => db.prepare('SELECT body FROM conversations').all().flatMap(row => JSON.parse(row.body).pending),
+    folders: () => db.prepare('SELECT body FROM execution_folders ORDER BY id').all().map(row => JSON.parse(row.body)),
+    createFolder,
     providers: () => runtime.providers(),
     async capabilities(id) { const record = getRecord(id); return runtime.capabilities ? runtime.capabilities({native:record.native,runtimeKind:record.conversation.runtimeKind}) : (await runtime.providers()).find(provider => provider.runtimeKind === record.conversation.runtimeKind) },
     async readWorkspace(request) {
@@ -681,6 +730,6 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       throw fail(400,'This content belongs to the central library and is unavailable through execution transport.')
     },
     tickGoals,
-    async close() { closed=true;clearInterval(goalTimer);mcp.close();await publisher.close(); clearTimeout(flushTimer); for (const id of dirty.keys()) flush(id,true); unlockMaterial = undefined; await runtime.close?.(); await Promise.allSettled([...jobs.values()].map(job => job.completion)); await Promise.allSettled([...queues.values()]); db.close() },
+    async close() { closed=true;clearInterval(goalTimer);mcp.close();await publisher.close(); clearTimeout(flushTimer); for (const id of dirty.keys()) flush(id,true); unlockMaterial = undefined; await runtime.close?.(); await Promise.allSettled([...jobs.values()].map(job => job.completion)); await Promise.allSettled([...queues.values(), ...folderQueues.values()]); db.close() },
   }
 }

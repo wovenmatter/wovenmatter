@@ -207,21 +207,18 @@ struct HomePane: View {
             VStack(spacing: 12) { quickActions }
           }.padding(.vertical, 12)
           let groups = model.launcherGroups
-          GroupLabel(text: "Agents")
+          GroupLabel(text: "Workspaces")
+          ForEach(groups.filter { $0.id != "local" }) { group in
+            GroupLabel(text: group.name)
+            workspaceAgents(group)
+          }
+          if groups.allSatisfy({ $0.id == "local" }) {
+            SettingsNavigationRow(title: "Connect your Mac", icon: .monitor) { PairingPane(model: model) }
+            Text("Pair once over Tailscale to use your Mac and Linux workspaces. Authorized Linux workspaces remain available when the Mac is offline.")
+              .font(.caption).foregroundStyle(DashboardPalette.mutedForeground).padding(.horizontal, 14).padding(.bottom, 12)
+          }
+          GroupLabel(text: "Quick Chat")
           ForEach(groups.first(where: { $0.id == "local" })?.agents ?? []) { agent in agentRow(agent) }
-          if let mac = groups.first(where: { $0.id == "central" }) {
-            GroupLabel(text: "Local agent workspace")
-            workspaceAgents(mac)
-          }
-          ForEach(groups.filter { $0.id != "central" && $0.workspace?.kind == .mac }) { mac in
-            GroupLabel(text: mac.name)
-            workspaceAgents(mac)
-          }
-          let remote = groups.filter { $0.id != "local" && $0.id != "central" && $0.workspace?.kind != .mac }
-          if !remote.isEmpty {
-            GroupLabel(text: "Remote workspaces")
-            ForEach(remote) { workspaceAgents($0) }
-          }
           Divider().padding(.horizontal, 14).padding(.vertical, 18)
           ForEach([CompanionModel.Tab.calendar, .scheduledTasks, .library, .databases, .usage], id: \.self) { tab in
             SettingsNavigationRow(title: tab.rawValue, icon: tab.icon) { destination(tab) }
@@ -278,6 +275,19 @@ struct FoldersPane: View {
   @Bindable var model: CompanionModel
   @State private var newFolderPresented = false
   @State private var folderName = ""
+  @State private var workspaceFilter: String
+  init(model: CompanionModel, workspaceID: String? = nil) {
+    self.model = model; _workspaceFilter = State(initialValue: workspaceID ?? "")
+  }
+  private var visibleFolders: [CompanionFolder] {
+    model.folders.filter { folder in
+      workspaceFilter.isEmpty || (workspaceFilter == "device" ? folder.execution?.workspaceID.hasPrefix("device:") == true : folder.execution?.workspaceID == workspaceFilter)
+    }
+  }
+  private var creationWorkspaceID: String {
+    if !workspaceFilter.isEmpty { return workspaceFilter }
+    return model.folderWorkspaces.first { model.workspaceReachable[$0.id] == true }?.id ?? "device"
+  }
   var body: some View {
     Group {
       if model.folderContentsPresented {
@@ -287,6 +297,11 @@ struct FoldersPane: View {
           PaneHeader(title: "Folders") { EmptyView() }
           ScrollView {
             VStack(spacing: 0) {
+              Picker("Workspace", selection: $workspaceFilter) {
+                Text("All workspaces").tag("")
+                ForEach(model.folderWorkspaces) { Text($0.name).tag($0.id) }
+                Text("Notes on this device").tag("device")
+              }.padding(.horizontal, 14).accessibilityIdentifier("folders-workspace")
               WorkspaceRow(icon: .squarePen, title: "New chat") { model.newChat() }
                 .accessibilityIdentifier("action-new-chat")
               WorkspaceRow(icon: .fileText, title: "New note") { Task { await model.newNote() } }
@@ -294,7 +309,7 @@ struct FoldersPane: View {
               WorkspaceRow(icon: .plus, title: "New folder") { newFolderPresented = true }
               WorkspaceRow(icon: .folder, title: "All workspace") { model.openFolder(nil) }
                 .accessibilityIdentifier("folder-all")
-              ForEach(model.folders) { folder in
+              ForEach(visibleFolders) { folder in
                 WorkspaceRow(icon: .folder, title: folder.name,
                   detail: String(model.notes.filter { $0.folderID == folder.id }.count + model.conversations.filter { $0.folderID == folder.id }.count)) { model.openFolder(folder.id) }
                   .accessibilityIdentifier("folder-" + folder.id)
@@ -308,8 +323,16 @@ struct FoldersPane: View {
     }
     .alert("New folder", isPresented: $newFolderPresented) {
       TextField("Folder name", text: $folderName)
-      Button("Create") { let name = folderName; folderName = ""; Task { await model.newFolder(name: name) } }
+      Button("Create") {
+        let name = folderName, workspace = creationWorkspaceID; folderName = ""
+        Task {
+          if workspace == "device" { await model.newFolder(name: name) }
+          else { do { try await model.newWorkspaceFolder(name: name, workspaceID: workspace) } catch { model.errorMessage = error.localizedDescription; await model.reload() } }
+        }
+      }
       Button("Cancel", role: .cancel) { folderName = "" }
+    } message: {
+      Text(creationWorkspaceID == "device" ? "Create a note folder on this device." : "Create in " + (model.folderWorkspaces.first { $0.id == creationWorkspaceID }?.name ?? "the selected workspace") + ".")
     }
   }
 }
@@ -375,9 +398,10 @@ struct CompanionSettingsPane: View {
         VStack(spacing: 2) {
           SettingsNavigationRow(title: "General", icon: .settings) { GeneralSettingsPane(model: model) }
           SettingsNavigationRow(title: "Dictation", icon: .mic) { DictationHistoryPane(model: model) }
-          SettingsNavigationRow(title: "Pi Durable", icon: .bot) { DeviceAgentSettingsPane(model: model) }
+          SettingsNavigationRow(title: "Quick Chat", icon: .bot) { DeviceAgentSettingsPane(model: model) }
           SettingsNavigationRow(title: model.deviceConnectionsTitle, icon: .plug) { ExecutionSettingsPane(model: model) }
           SettingsNavigationRow(title: "Device Connections", icon: .monitor) { PairingPane(model: model) }
+          SettingsNavigationRow(title: "Pending changes", icon: .calendarClock) { PendingWorkspaceChangesPane(model: model) }
           SettingsNavigationRow(title: "Workspaces", icon: .container) { WorkspacesSettingsPane(model: model) }
           SettingsNavigationRow(title: "Usage Settings", icon: .barChart) { UsageSettingsPane(model: model) }
         }.padding(.horizontal, 18).padding(.bottom, 24)
@@ -450,7 +474,7 @@ struct WorkspacesSettingsPane: View {
     List {
       Section {
         NavigationLink { DeviceAgentSettingsPane(model: model) } label: {
-          Label(model.deviceWorkspaceName, glyph: .terminal)
+          Label("Quick Chat", glyph: .messageSquare)
         }
         if model.credential != nil || model.state.workspaceID != nil {
           NavigationLink { CentralWorkspaceSettingsPane(model: model) } label: {
@@ -497,6 +521,7 @@ private struct WorkspaceSettingsPane: View {
         LabeledContent("Connection", value: model.workspaceReachable[workspace.id] == true ? "Connected" : "Disconnected")
         if let endpoint = workspace.endpoint { Text(endpoint.host ?? endpoint.absoluteString).textSelection(.enabled) }
       }
+      Section { NavigationLink("Folders") { FoldersPane(model: model, workspaceID: workspace.id) } }
       Section("Agents") {
         ForEach(model.launcherAgents.filter { $0.workspaceID == workspace.id }) { agent in
           Button { Task { await model.launchAgent(agent) } } label: {

@@ -492,6 +492,14 @@ public actor WorkspaceClient {
   public func pending() async throws -> [CompanionPendingInteraction] { try await transport.pending() }
   public func capabilities(_ id: String) async throws -> CompanionProvider { try await verify(); return try await transport.capabilities(id) }
   public func earlierTranscript(_ id: String, before: String) async throws -> CompanionTranscript { try await verify(); return try await transport.transcript(id, before: before) }
+  public func folders() async throws -> [CompanionFolder] { try await verify(); return try await transport.folders() }
+  public func createFolder(_ mutation: CompanionMutation) async throws -> CompanionFolder {
+    try await verify()
+    guard mutation.folderExecution == nil || mutation.folderExecution?.workspaceID == workspaceID else { throw MobileStore.Failure.wrongWorkspace }
+    let folder = try await transport.createFolder(mutation)
+    try await store.cacheExecutionFolders([folder], workspaceID: workspaceID)
+    return folder
+  }
   public func readWorkspace(_ request: CompanionWorkspaceRead) async throws -> CompanionWorkspaceResult { try await verify(); return try await transport.readWorkspace(request) }
   private func verify() async throws {
     let workspace = try await transport.identity()

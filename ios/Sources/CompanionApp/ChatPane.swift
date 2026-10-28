@@ -7,7 +7,6 @@ struct ChatPane: View {
   @Environment(\.dashboardTheme) private var theme
   @Bindable var model: CompanionModel
   @State private var referencesPresented = false
-  @State private var filesPresented = false
   @State private var detailsPresented = false
   @State private var settingsPresented = false
   @State private var pendingPresented = false
@@ -109,7 +108,7 @@ struct ChatPane: View {
           Button("Stop", role: .destructive) { Task { await model.stopOnDevice() } }.buttonStyle(DashboardQuietButtonStyle())
         }.padding(.horizontal, 18)
       }
-      if let id = model.selectedConversationID { MobileGoalControls(model: model, conversationID: id).id(id).padding(.horizontal, 18) }
+      if model.selectedExecutionWorkspaceID != "local", let id = model.selectedConversationID { MobileGoalControls(model: model, conversationID: id).id(id).padding(.horizontal, 18) }
       composer
     }
     .navigationDestination(isPresented: $pendingPresented) {
@@ -121,9 +120,6 @@ struct ChatPane: View {
           }
         }
       }.mobileNavigationPage("Pending requests")
-    }
-    .navigationDestination(isPresented: $filesPresented) {
-      if let id = model.selectedConversationID { DeviceWorkspaceFiles(model: model, conversationID: id) }
     }
     .navigationDestination(isPresented: $detailsPresented) {
       if let item = model.selectedConversation { ItemManagementSheet(model: model, id: item.id, isNote: false, title: item.title, folderID: item.folderID ?? "") }
@@ -181,6 +177,15 @@ struct ChatPane: View {
   }
   private var composer: some View {
     VStack(alignment: .leading, spacing: 9) {
+      if model.selectedExecutionWorkspaceID == "local", model.selectedInferenceConnection == nil {
+        Button { model.executionSettingsPresented = true } label: {
+          Text("Choose a connection for Quick Chat").font(.callout).frame(maxWidth: .infinity, alignment: .leading)
+        }.buttonStyle(.plain).foregroundStyle(DashboardPalette.success)
+      }
+      if let id = model.selectedConversationID, model.executionRecords[id]?.quickChatVersion == 0 {
+        Text("Earlier on-device agent chat · saved history").font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+      }
+
       if let id = model.referencedNoteID, let note = model.state.notes[id] {
         HStack { Label(note.title, glyph: .fileText).font(.caption); Spacer(); Button { model.referencedNoteID = nil } label: { DashboardLucideIcon(glyph: .close, size: 16).frame(width: 44, height: 44) }.accessibilityLabel("Remove note reference") }
       }
@@ -200,9 +205,7 @@ struct ChatPane: View {
       ChatComposerSettings(model: model) {
         Menu {
           Button("Reference a note", glyph: .fileText) { composerFocused = false; referencesPresented = true }
-          if model.selectedExecutionWorkspaceID == "local", model.selectedConversationID != nil {
-            Button("Workspace files", glyph: .folder) { composerFocused = false; filesPresented = true }
-          }
+
         } label: { DashboardLucideIcon(glyph: .plus, size: 20).frame(width: 44, height: 44) }
           .buttonStyle(DashboardIconButtonStyle()).accessibilityLabel("Add to chat")
       } submission: {

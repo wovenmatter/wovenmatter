@@ -52,6 +52,7 @@ public final class CompanionMacExecutionAPI {
       if request.method == "GET" {
         switch path {
         case "/v1/execution": return try .json(descriptor)
+        case "/v1/execution/folders": return try .json(try await database.companionSnapshot(bodyByteBudget: 0).folders.filter { $0.execution?.workspaceID == descriptor.id })
         case "/v1/execution/providers": return try .json(commands.providers().filter { $0.id.hasPrefix("local:") })
         case "/v1/execution/conversations":
           let values = try await database.companionSnapshot(bodyByteBudget: 0).conversations.filter(isLocal)
@@ -83,6 +84,35 @@ public final class CompanionMacExecutionAPI {
           if parts[4] == "capabilities" { return try .json(try await commands.sessionCapabilities(conversationID: parts[3])) }
         }
       } else if request.method == "POST" {
+        if path == "/v1/execution/folders" {
+          let value = try JSONDecoder().decode(CompanionMutation.self, from: request.body)
+          guard value.deviceID == scope.deviceID, value.kind == .createFolder,
+                let id = UUID(uuidString: value.resourceID), let name = value.title?.trimmingCharacters(in: .whitespacesAndNewlines),
+                !name.isEmpty, name.utf8.count <= 4096,
+                value.folderExecution == nil || value.folderExecution?.workspaceID == descriptor.id else { throw notLocal }
+          if let existing = try await database.companionSnapshot(bodyByteBudget: 0).folders.first(where: { $0.id == value.resourceID }) {
+            guard existing.execution?.workspaceID == descriptor.id,
+              value.folderExecution == nil || existing.execution == value.folderExecution else { throw notLocal }
+            return try .json(existing)
+          }
+          // The host allocates the directory; a phone never invents a Mac path.
+          let directory = database.supportDirectory.appendingPathComponent("Projects", isDirectory: true).appendingPathComponent(id.uuidString.lowercased(), isDirectory: true)
+          let location: WorkspaceFolderLocation
+          if let binding = value.folderExecution {
+            let url = URL(fileURLWithPath: binding.rootPath)
+            guard try url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey]).isDirectory == true,
+              url.resolvingSymlinksInPath().standardizedFileURL == url.standardizedFileURL else { throw notLocal }
+            location = .init(workspaceID: descriptor.id, rootPath: url.path, managed: false)
+          } else {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            guard directory.resolvingSymlinksInPath().standardizedFileURL == directory.standardizedFileURL else { throw notLocal }
+            location = .init(workspaceID: descriptor.id, rootPath: directory.path, managed: true)
+          }
+          _ = try await database.createFolder(id: id, name: name, location: location)
+          guard let folder = try await database.companionSnapshot(bodyByteBudget: 0).folders.first(where: { $0.id == value.resourceID }) else { throw notLocal }
+          return try .json(folder)
+        }
+
         if path == "/v1/execution/commands" {
           let command = try JSONDecoder().decode(CompanionCommand.self, from: request.body)
           guard command.deviceID == scope.deviceID, command.libraryID == scope.libraryID, command.workspaceID == scope.workspaceID else { return .error("wrong_workspace", "Command identity does not match its authenticated execution scope.", status: 403) }

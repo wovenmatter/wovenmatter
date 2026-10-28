@@ -38,6 +38,34 @@ struct CompanionMacExecutionTests {
     await #expect(throws: CompanionAPIError.self) { try await api.provision(deviceID: deviceID) }
   }
 
+  @Test("folder creation allocates a Mac-owned root and rejects cross-device and cross-workspace writes")
+  func ownedFolders() async throws {
+    let dir = try directory(); defer { try? FileManager.default.removeItem(at: dir) }
+    let db = try await WorkspaceDatabase(url: dir.appendingPathComponent("workspace.sqlite"))
+    let identity = try await db.companionLibraryIdentity()
+    let auth = try CompanionExecutionAuthentication(fileURL: dir.appendingPathComponent("tokens.json"))
+    let workspace = CompanionExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: identity.libraryID,
+      ownerDeviceID: identity.hostDeviceID, kind: .mac, name: "Mac")
+    let api = CompanionMacExecutionAPI(database: db, commands: ScopedCommands(), authentication: auth, descriptor: workspace, isActive: { true })
+    let credential = try await api.provision(deviceID: deviceID)
+    let headers = ["authorization": "Bearer " + credential.token, "x-woven-protocol": String(CompanionProtocol.version),
+      "x-woven-library": identity.libraryID, "x-woven-workspace": workspace.id, "x-woven-device": deviceID]
+    let id = UUID().uuidString.lowercased()
+    let mutation = CompanionMutation(deviceID: deviceID, kind: .createFolder, resourceID: id, title: "From iPhone")
+    let request = CompanionHTTPRequest(method: "POST", target: "/v1/execution/folders", headers: headers, body: try JSONEncoder().encode(mutation))
+    let first = await api.handle(request), retry = await api.handle(request)
+    #expect(first.status == 200 && retry.status == 200)
+    let folder = try JSONDecoder().decode(CompanionFolder.self, from: first.body)
+    #expect(folder.execution?.workspaceID == workspace.id)
+    #expect(FileManager.default.fileExists(atPath: try #require(folder.execution?.rootPath)))
+    let read = await api.handle(.init(method: "GET", target: "/v1/execution/folders", headers: headers))
+    #expect(try JSONDecoder().decode([CompanionFolder].self, from: read.body) == [folder])
+    var cross = mutation; cross.resourceID = UUID().uuidString.lowercased(); cross.folderExecution = .init(workspaceID: UUID().uuidString.lowercased(), rootPath: "/tmp")
+    #expect(await api.handle(.init(method: "POST", target: "/v1/execution/folders", headers: headers, body: try JSONEncoder().encode(cross))).status == 403)
+    var wrongDevice = headers; wrongDevice["x-woven-device"] = UUID().uuidString.lowercased()
+    #expect(await api.handle(.init(method: "POST", target: "/v1/execution/folders", headers: wrongDevice, body: try JSONEncoder().encode(mutation))).status == 403)
+  }
+
   @Test("direct Mac route never dispatches remote workspace commands or another device's receipt")
   func localRouting() async throws {
     let dir = try directory(); defer { try? FileManager.default.removeItem(at: dir) }

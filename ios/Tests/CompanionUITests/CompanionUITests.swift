@@ -142,7 +142,7 @@ final class CompanionUITests: XCTestCase {
     let permissions = app.buttons["chat-permissions"]
     XCTAssertTrue(permissions.waitForExistence(timeout: 5))
     XCTAssertTrue(permissions.isHittable)
-    XCTAssertEqual(permissions.value as? String, "Full Access")
+    XCTAssertEqual(permissions.value as? String, "Allow Note Edits")
     let controls = [app.buttons["Add to chat"], app.buttons["chat-model"], app.buttons["chat-thinking"], permissions, app.buttons["chat-tools"], app.buttons["Send message"]]
     XCTAssertEqual(controls[1].value as? String, "GPT-6.1 Sol")
     XCTAssertEqual(controls[2].value as? String, "High")
@@ -156,8 +156,8 @@ final class CompanionUITests: XCTestCase {
     XCTAssertLessThanOrEqual(controls.last!.frame.maxX, app.frame.maxX)
     permissions.tap()
     XCTAssertTrue(app.staticTexts["Permissions"].waitForExistence(timeout: 5))
-    XCTAssertTrue(app.buttons["Ask for Approval"].exists)
-    XCTAssertTrue(app.buttons["Full Access"].exists)
+    XCTAssertTrue(app.buttons["Ask Before Note Edits"].exists)
+    XCTAssertTrue(app.buttons["Allow Note Edits"].exists)
     let capture = XCTAttachment(screenshot: app.screenshot())
     capture.name = "Composer permissions"
     capture.lifetime = .keepAlways
