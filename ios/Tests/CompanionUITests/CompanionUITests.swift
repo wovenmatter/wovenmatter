@@ -262,7 +262,7 @@ final class CompanionUITests: XCTestCase {
     let writtenBody = body.value as? String
     XCTAssertEqual(writtenBody?.lowercased(), bodyText.lowercased())
     XCTAssertFalse(app.buttons["dismiss-keyboard"].exists)
-    app.buttons["note-save-state"].tap()
+    app.buttons["note-text-count"].tap()
     XCTAssertTrue(app.buttons["tab-home"].waitForExistence(timeout: 5))
     let saved = app.buttons["note-save-state"]
     let savedPredicate = NSPredicate(format: "label CONTAINS 'Saved on this device'")
