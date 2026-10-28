@@ -59,8 +59,11 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   The image copies Python 3.15.2 from the official `python:3.15.2-slim-trixie`
   multi-architecture image, now published for amd64 and arm64. Its manifest-index
   digest is recorded in `remote/Dockerfile` to preserve the verified interpreter,
-  native modules, and Debian ABI together. This replaces the temporary source
-  build used while the registry lagged the expedited security release.
+  native modules, and Debian ABI together. The current image rebuild uses the
+  October 27 Debian base refresh for both amd64 and arm64, retaining the same
+  Python source checksum, build options, and runtime entry points. This replaces
+  the temporary source build used while the registry lagged the expedited
+  security release.
   Maintenance checks the current stable Python release, official image recipe,
   both platform configurations, and image digest; refresh all records together.
   The final image still upgrades its Debian runtime libraries at build time.
