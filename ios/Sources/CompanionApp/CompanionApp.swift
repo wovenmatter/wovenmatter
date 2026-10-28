@@ -306,7 +306,11 @@ struct FoldersPane: View {
                 .accessibilityIdentifier("action-new-chat")
               WorkspaceRow(icon: .fileText, title: "New note") { Task { await model.newNote() } }
                 .accessibilityIdentifier("action-new-note")
-              WorkspaceRow(icon: .plus, title: "New folder") { newFolderPresented = true }
+              WorkspaceRow(icon: .plus, title: "New folder") {
+                if creationWorkspaceID != "device", !model.workspaceIsConnected(creationWorkspaceID) {
+                  model.errorMessage = CompanionModel.deviceConnectionMessage
+                } else { newFolderPresented = true }
+              }
               WorkspaceRow(icon: .folder, title: "All workspace") { model.openFolder(nil) }
                 .accessibilityIdentifier("folder-all")
               ForEach(visibleFolders) { folder in
@@ -327,7 +331,7 @@ struct FoldersPane: View {
         let name = folderName, workspace = creationWorkspaceID; folderName = ""
         Task {
           if workspace == "device" { await model.newFolder(name: name) }
-          else { do { try await model.newWorkspaceFolder(name: name, workspaceID: workspace) } catch { model.errorMessage = error.localizedDescription; await model.reload() } }
+          else { do { try await model.newWorkspaceFolder(name: name, workspaceID: workspace) } catch { model.errorMessage = model.workspaceActionMessage(error); await model.reload() } }
         }
       }
       .disabled(folderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || folderName.utf8.count > 4096)
@@ -402,7 +406,6 @@ struct CompanionSettingsPane: View {
           SettingsNavigationRow(title: "Quick Chat", icon: .bot) { DeviceAgentSettingsPane(model: model) }
           SettingsNavigationRow(title: model.deviceConnectionsTitle, icon: .plug) { ExecutionSettingsPane(model: model) }
           SettingsNavigationRow(title: "Device Connections", icon: .monitor) { PairingPane(model: model) }
-          SettingsNavigationRow(title: "Pending changes", icon: .calendarClock) { PendingWorkspaceChangesPane(model: model) }
           SettingsNavigationRow(title: "Workspaces", icon: .container) { WorkspacesSettingsPane(model: model) }
           SettingsNavigationRow(title: "Usage Settings", icon: .barChart) { UsageSettingsPane(model: model) }
         }.padding(.horizontal, 18).padding(.bottom, 24)

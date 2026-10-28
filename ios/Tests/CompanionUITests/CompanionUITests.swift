@@ -207,6 +207,29 @@ final class CompanionUITests: XCTestCase {
     XCTAssertTrue(composer.exists)
   }
 
+  @MainActor func testOfflineDeviceCreationExplainsConnectionAndSettingsHasNoPendingPage() {
+    let app = launch(scenario: "offline-device")
+    let message = "Can’t connect to this device. Make sure it’s online and connected to the internet."
+    app.buttons["action-new-chat"].tap()
+    let agent = app.buttons["choose-chat-agent-11111111-2222-4333-8444-555555555555:pi"]
+    XCTAssertTrue(agent.waitForExistence(timeout: 5))
+    agent.tap()
+    let chatError = app.staticTexts["chat-setup-problem"]
+    XCTAssertTrue(chatError.waitForExistence(timeout: 5))
+    XCTAssertEqual(chatError.label, message)
+    app.buttons["Close agent chooser"].tap()
+    app.buttons["folders-workspace"].tap()
+    app.buttons["Offline Linux"].firstMatch.tap()
+    app.buttons["New folder"].tap()
+    XCTAssertFalse(app.alerts["New folder"].exists)
+    let folderError = app.staticTexts["workspace-action-error"]
+    XCTAssertTrue(folderError.waitForExistence(timeout: 5))
+    XCTAssertEqual(folderError.label, message)
+    app.buttons["tab-settings"].tap()
+    XCTAssertTrue(app.buttons["General"].waitForExistence(timeout: 5))
+    XCTAssertFalse(app.buttons["Pending changes"].exists)
+  }
+
   @MainActor func testNoteControlsAndCompactFooter() {
     let app = launch()
     app.buttons["tab-notes"].tap()

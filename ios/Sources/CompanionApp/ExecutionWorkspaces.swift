@@ -168,10 +168,11 @@ extension CompanionModel {
       let conversationID: String
       let result: CompanionCommandReceipt
       if target == nil {
+        try await requireWorkspaceConnection(workspaceID)
         let pending = state.launches.first { $0.create.workspaceID == workspaceID && !$0.accepted && !$0.terminalFailure }
         if let pending {
           guard pending.initialSend.text == prompt, pending.create.providerID == route else {
-            throw DeviceExecutionError.unavailable("An earlier new conversation needs acknowledgement. Continue its saved request in Settings → Pending changes before sending different input.")
+            throw DeviceExecutionError.unavailable("The previous message hasn’t been confirmed. Retry it here when the device is connected.")
           }
         }
         conversationID = pending?.create.conversationID ?? UUID().uuidString.lowercased()
@@ -181,7 +182,7 @@ extension CompanionModel {
         create.workspaceID = workspaceID; send.workspaceID = workspaceID
         let launch = try await client.startConversation(pending ?? .init(create: create, initialSend: send))
         guard launch.accepted, let receipt = launch.sendReceipt else {
-          throw DeviceExecutionError.unavailable(launch.sendReceipt?.message ?? launch.createReceipt?.message ?? "This request is saved. Continue it in Settings → Pending changes when the workspace is available.")
+          throw DeviceExecutionError.unavailable(launch.sendReceipt?.message ?? launch.createReceipt?.message ?? "The device hasn’t confirmed this request. Try again here when it’s connected.")
         }
         result = receipt
       } else {
@@ -201,7 +202,7 @@ extension CompanionModel {
       if (draftBuffer[sourceKey] ?? state.chatDrafts[sourceKey]) == draft { updateChatDraft(key: sourceKey, draft: .init(text: "")) }
       await reload(); await refreshExecutionWorkspaces()
       await workspacePollTasks[workspaceID]?.value
-    } catch { errorMessage = error.localizedDescription; await reload() }
+    } catch { errorMessage = workspaceActionMessage(error); await reload() }
   }
   func stopExecutionWorkspace() async {
     guard let id = selectedConversationID, let runID = activeRunID else { return }

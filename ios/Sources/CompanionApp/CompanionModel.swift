@@ -467,11 +467,12 @@ import CompanionInference
     do {
       let receipt: CompanionCommandReceipt
       if target == nil {
+        try await requireWorkspaceConnection("central")
         let conversationID = pendingLaunch?.create.conversationID ?? UUID().uuidString.lowercased()
         let launch: MobileLaunchRecord
         if let pendingLaunch {
           guard pendingLaunch.initialSend.text == text, pendingLaunch.initialSend.noteID == noteID else {
-            errorMessage = "A previous new-chat request still needs acknowledgement. Continue it in Settings → Pending changes before starting another."; return
+            errorMessage = "The previous message hasn’t been confirmed. Retry it here when the device is connected."; return
           }
           launch = pendingLaunch
         } else {
@@ -484,7 +485,7 @@ import CompanionInference
             updateChatDraft(key: conversationID, draft: .init(text: text, noteID: noteID))
             selectedConversationID = conversationID
           }
-          await reload(); errorMessage = result.sendReceipt?.message ?? result.createReceipt?.message ?? "The session request is saved. Continue it in Settings → Pending changes when the Mac is available."; return
+          await reload(); errorMessage = result.sendReceipt?.message ?? result.createReceipt?.message ?? "The Mac hasn’t confirmed this request. Try again here when it’s connected."; return
         }
         receipt = accepted
         if selectedConversationID == target { selectedConversationID = receipt.conversationID ?? conversationID }
@@ -493,7 +494,7 @@ import CompanionInference
         let command: CompanionCommand
         if let unresolved {
           guard unresolved.command.text == text, unresolved.command.noteID == noteID else {
-            errorMessage = "This conversation has an unacknowledged command. Resolve it in Settings → Pending changes before sending different input."; return
+            errorMessage = "The previous message hasn’t been confirmed. Retry it here when the device is connected."; return
           }
           command = unresolved.command
         } else {
@@ -505,7 +506,7 @@ import CompanionInference
       let original = draftBuffer[sourceKey] ?? state.chatDrafts[sourceKey]
       if original == draftContext && providerID == route { updateChatDraft(key: sourceKey, draft: .init(text: "")) }
       await refresh()
-    } catch { errorMessage = error.localizedDescription; await reload() }
+    } catch { errorMessage = workspaceActionMessage(error); await reload() }
   }
   func stop() async {
     if selectedExecutionWorkspaceID == "local" { await stopOnDevice(); return }
@@ -576,7 +577,7 @@ import CompanionInference
     await reload()
     let pending = state.commands.first { $0.command.kind == .workspace && ($0.receipt == nil || $0.receipt?.status == .accepted || $0.receipt?.status == .outcomeUnknown) }
     if let pending, pending.command.workspaceAction != action {
-      errorMessage = "An earlier workspace change still needs acknowledgement. Review it in Settings → Pending changes before making another change."
+      errorMessage = "The previous change hasn’t been confirmed yet. Try again shortly."
       return false
     }
     errorMessage = nil
@@ -672,6 +673,12 @@ import CompanionInference
       if scenario == "permissions" || scenario == "tools-menu" {
         let descriptor = InferenceModel(id: "gpt-fixture", name: "GPT-6.1 Sol", provider: "openai", api: "openai-responses", baseUrl: "https://example.invalid", reasoning: true)
         executionRecords["fixture-chat"] = .init(id: "fixture-chat", title: "Launch plan", thinkingLevel: "high", connectionID: "fixture", modelJSON: try descriptor.descriptorJSON(), status: "ready", updatedAt: "")
+      }
+      if scenario == "offline-device" {
+        let workspace = CompanionExecutionWorkspace(id: "11111111-2222-4333-8444-555555555555", libraryID: "fixture", ownerDeviceID: "fixture-host", kind: .linux, name: "Offline Linux")
+        executionWorkspaces = [workspace]
+        workspaceProviders[workspace.id] = [.init(id: "pi", runtimeKind: "pi", displayName: "Pi Durable", available: true)]
+        workspaceReachable[workspace.id] = false
       }
       selectedNoteID = notes.first?.id; selectedConversationID = "fixture-chat"
       if ProcessInfo.processInfo.environment["WOVENMATTER_UI_SCENARIO"] == "pairing" { pairingPresented = true }

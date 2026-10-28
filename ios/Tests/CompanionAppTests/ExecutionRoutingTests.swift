@@ -25,7 +25,12 @@ private actor ExecutionTestWorkspace: ExecutionWorkspaceTransport {
   var dropCreateAcknowledgement = false
   func dropNextCreateAcknowledgement() { dropCreateAcknowledgement = true }
   init(_ workspace: CompanionExecutionWorkspace) { self.workspace = workspace }
-  func identity() async throws -> CompanionExecutionWorkspace { workspace }
+  var identityOffline = false
+  func setIdentityOffline(_ offline: Bool) { identityOffline = offline }
+  func identity() async throws -> CompanionExecutionWorkspace {
+    if identityOffline { throw MobileConnectionError.offline }
+    return workspace
+  }
   func providers() async throws -> [CompanionProvider] { [.init(id: "pi", runtimeKind: "pi", displayName: "Pi Durable", available: true)] }
   func pending() async throws -> [CompanionPendingInteraction] { [] }
   func capabilities(_ id: String) async throws -> CompanionProvider { .init(id: "pi", runtimeKind: "pi", displayName: "Pi Durable", available: true) }
@@ -58,6 +63,56 @@ private actor ExecutionTestWorkspace: ExecutionWorkspaceTransport {
 }
 
 final class ExecutionRoutingTests: XCTestCase {
+
+  @MainActor func testOfflineOwnersCannotCreateChatsOrFoldersAndDoNotQueueRequests() async throws {
+    for kind in [CompanionExecutionWorkspace.Kind.mac, .linux] {
+      let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+      defer { try? FileManager.default.removeItem(at: root) }
+      let store = try MobileStore(file: root.appendingPathComponent("library.json"))
+      let model = CompanionModel(store: store, transport: ExecutionTestLibrary())
+      let workspace = CompanionExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: "library", ownerDeviceID: "host", kind: kind, name: "Offline owner")
+      let endpoint = ExecutionTestWorkspace(workspace)
+      model.executionWorkspaces = [workspace]
+      model.workspaceProviders[workspace.id] = try await endpoint.providers()
+      model.workspaceClients[workspace.id] = WorkspaceClient(store: store, workspaceID: workspace.id, transport: endpoint)
+      model.workspaceReachable[workspace.id] = false
+      model.newChat()
+      let agent = try XCTUnwrap(model.launcherAgents.first { $0.workspaceID == workspace.id })
+      await model.startNewChat(with: agent)
+      XCTAssertEqual(model.chatSetupProblem, CompanionModel.deviceConnectionMessage)
+      XCTAssertNil(model.selectedConversationID)
+      do { try await model.newWorkspaceFolder(name: "Blocked", workspaceID: workspace.id); XCTFail("Offline creation must fail") }
+      catch { XCTAssertEqual(model.workspaceActionMessage(error), CompanionModel.deviceConnectionMessage) }
+      // A stale online indicator must also pass a fresh owner check before saving intent.
+      model.workspaceReachable[workspace.id] = true
+      await endpoint.setIdentityOffline(true)
+      let staleAgent = try XCTUnwrap(model.launcherAgents.first { $0.workspaceID == workspace.id })
+      await model.startNewChat(with: staleAgent)
+      XCTAssertEqual(model.chatSetupProblem, CompanionModel.deviceConnectionMessage)
+      do { try await model.newWorkspaceFolder(name: "Blocked", workspaceID: workspace.id); XCTFail("Stale reachability must not queue creation") }
+      catch { XCTAssertEqual(model.workspaceActionMessage(error), CompanionModel.deviceConnectionMessage) }
+      let state = await store.snapshot(), journal = await store.journal.snapshot()
+      XCTAssertTrue(state.commands.isEmpty); XCTAssertTrue(state.launches.isEmpty)
+      XCTAssertTrue(state.workspaceFolderRequests?.isEmpty != false)
+      XCTAssertTrue(journal.commands.isEmpty)
+      let commands = await endpoint.commands, folders = await endpoint.savedFolders
+      XCTAssertTrue(commands.isEmpty); XCTAssertTrue(folders.isEmpty)
+    }
+  }
+
+  @MainActor func testOfflineCentralMacCannotCreateChat() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = try MobileStore(file: root.appendingPathComponent("library.json"))
+    let model = CompanionModel(store: store, transport: ExecutionTestLibrary())
+    model.providers = [.init(id: "local:pi", runtimeKind: "pi", displayName: "Pi Durable", available: true)]
+    model.online = false
+    model.newChat()
+    await model.startNewChat(with: try XCTUnwrap(model.launcherAgents.first { $0.workspaceID == "central" }))
+    XCTAssertEqual(model.chatSetupProblem, CompanionModel.deviceConnectionMessage)
+    let saved = await store.snapshot()
+    XCTAssertTrue(saved.commands.isEmpty); XCTAssertTrue(saved.launches.isEmpty)
+  }
 
   @MainActor func testFolderCreationRetainsIntentAndRecoversDirectlyWithCentralOffline() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

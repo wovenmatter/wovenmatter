@@ -18,8 +18,9 @@ Notes keep their existing local-first editor and moderate coalesced sync, includ
 offline creation and editing. Workspace folder creation is performed by its owning
 Mac/Linux service. Linux publishes its new folder metadata before its conversation
 history after reconnecting with the central library. Update workspace services to
-the same revision for the new folder APIs. Settings → Pending changes offers
-explicit receipt recovery and retries for interrupted requests.
+the same revision for the new folder APIs. Creating a remote folder or chat
+requires a live connection to its owner. Interrupted replies recover in place
+using the original request identity.
 
 ## Build and development validation
 
