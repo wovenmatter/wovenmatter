@@ -6,6 +6,39 @@ final class MobileStoreTests: XCTestCase {
   func file() -> URL { FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("store.json") }
   func content(_ text: String) throws -> String { try NoteDocument(blocks: [.richText(.init(id: "stable-block", text: text))]).encoded() }
 
+  func testSelectedFormattingPreservesOtherRunsBlocksAndUnknownDocumentFields() throws {
+    var raw = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(try content("Before selected after").utf8)) as? [String: Any])
+    let source = String(decoding: try JSONSerialization.data(withJSONObject: raw), as: UTF8.self)
+    let styled = try RichDocumentEditing.formattingText(in: source, blockID: "stable-block", range: NSRange(location: 7, length: 8), format: .bold)
+    let document = try XCTUnwrap(RichDocumentEditing.document(styled))
+    guard case .richText(let block) = document.blocks[0] else { return XCTFail("Expected rich text") }
+    XCTAssertEqual(block.runs.map(\.text), ["Before ", "selected", " after"])
+    XCTAssertEqual(block.runs.map(\.bold), [false, true, false])
+    let restoredRaw = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(styled.utf8)) as? [String: Any])
+    XCTAssertNotNil(restoredRaw["blocks"])
+    raw["futureDocumentField"] = ["preserve": true]
+    let future = String(decoding: try JSONSerialization.data(withJSONObject: raw), as: UTF8.self)
+    XCTAssertThrowsError(try RichDocumentEditing.formattingText(in: future, blockID: block.id, range: nil, format: .bold), "Unfamiliar document semantics must never be flattened")
+    let italic = try RichDocumentEditing.formattingText(in: styled, blockID: block.id, range: NSRange(location: 7, length: 8), format: .italic)
+    let unbold = try RichDocumentEditing.formattingText(in: italic, blockID: block.id, range: NSRange(location: 7, length: 8), format: .bold)
+    guard case .richText(let result) = try XCTUnwrap(RichDocumentEditing.document(unbold)).blocks[0] else { return XCTFail("Expected rich text") }
+    XCTAssertTrue(result.runs[1].italic)
+    XCTAssertFalse(result.runs[1].bold)
+    XCTAssertEqual(result.plainText, "Before selected after")
+    XCTAssertThrowsError(try RichDocumentEditing.formattingText(in: source, blockID: block.id, range: NSRange(location: 100, length: 2), format: .underline))
+    let emoji = try content("A👨‍👩‍👧‍👦 B")
+    XCTAssertThrowsError(try RichDocumentEditing.formattingText(in: emoji, blockID: block.id, range: NSRange(location: 2, length: 1), format: .bold))
+  }
+
+  func testTextStatisticsMatchDesktopWordsAndGraphemeCounts() {
+    let document = NoteDocument(blocks: [.richText(.init(text: "Hello world")), .richText(.init(text: "One 👨‍👩‍👧‍👦"))])
+    let counts = MobileNoteTextStatistics(document: document)
+    XCTAssertEqual(counts.words, 3)
+    XCTAssertEqual(counts.characters, document.plainText.count)
+    XCTAssertEqual(counts.wordLabel, "3 words")
+    XCTAssertEqual(MobileNoteTextStatistics(document: NoteDocument(blocks: [.richText(.init(text: "I"))])).characterLabel, "1 character")
+  }
+
   func testOversizePasteAndBlockAdditionAreRejectedBeforeEditorAdoption() throws {
     let saved = try content("Saved writing")
     var visible = saved

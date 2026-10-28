@@ -69,6 +69,7 @@
 		E89730A170BC835A21E392C8 /* DeviceBackgroundLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B362991634DD1F6D36F91B2 /* DeviceBackgroundLifecycleTests.swift */; };
 		EBFD04D7E49C3E086FEA1059 /* DashboardStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA9A8D6024DC4BFA046AD6D7 /* DashboardStyle.swift */; };
 		F040F35268BD8C5315042494 /* MobileConnectionLifecycle.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF95D1A54C91FFF900C9AE4E /* MobileConnectionLifecycle.swift */; };
+		F161A6FA8EA4D9D13DE68BAA /* LUCIDE_LICENSE.txt in Resources */ = {isa = PBXBuildFile; fileRef = CC16312EC06B79349CD96396 /* LUCIDE_LICENSE.txt */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -140,6 +141,7 @@
 		C870EFC1CA4DE485EE0A00BE /* WovenMatterCompanion.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = WovenMatterCompanion.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		CAA4202CF95204C9D4623BFD /* AgentRunActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentRunActivity.swift; sourceTree = "<group>"; };
 		CB63DF743C225437633344F2 /* PairingSettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingSettingsTests.swift; sourceTree = "<group>"; };
+		CC16312EC06B79349CD96396 /* LUCIDE_LICENSE.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = LUCIDE_LICENSE.txt; sourceTree = "<group>"; };
 		CE576E0834D2EAC39C29E88B /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		CF95D1A54C91FFF900C9AE4E /* MobileConnectionLifecycle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileConnectionLifecycle.swift; sourceTree = "<group>"; };
 		D704AEB3649B681C8006775D /* ChatSessionControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatSessionControls.swift; sourceTree = "<group>"; };
@@ -254,6 +256,15 @@
 			name = Packages;
 			sourceTree = "<group>";
 		};
+		7D57B5A6E1EE4DE350351F9D /* assets */ = {
+			isa = PBXGroup;
+			children = (
+				CC16312EC06B79349CD96396 /* LUCIDE_LICENSE.txt */,
+			);
+			name = assets;
+			path = ../docs/assets;
+			sourceTree = "<group>";
+		};
 		8F963B3601FCF017246994B9 /* CompanionAppTests */ = {
 			isa = PBXGroup;
 			children = (
@@ -305,6 +316,7 @@
 			isa = PBXGroup;
 			children = (
 				6FE6CA0DB43AA3348A9DC94C /* App */,
+				7D57B5A6E1EE4DE350351F9D /* assets */,
 				5F9A3C3D82D1B99914622C73 /* CompanionApp */,
 				8F963B3601FCF017246994B9 /* CompanionAppTests */,
 				987BF6BF9DFAA376F46C4A69 /* CompanionUITests */,
@@ -439,6 +451,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				40CCA8C001A3B732C2B4EA04 /* Assets.xcassets in Resources */,
+				F161A6FA8EA4D9D13DE68BAA /* LUCIDE_LICENSE.txt in Resources */,
 				22CD7EF74EE6EFAB0D65A5B9 /* PrivacyInfo.xcprivacy in Resources */,
 				DD5566D65F5CAFEF4BA3F0B9 /* SharedAssets.xcassets in Resources */,
 			);
@@ -538,11 +551,11 @@
 		};
 		8B34D8412EB141465EBBC070 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			productRef = "TEMP_EB367064-EB0D-427F-872B-47E3F824DE86" /* WovenMatterCompanion */;
+			productRef = "TEMP_D3641D1A-1AAC-4476-8683-595EE6B40F9A" /* WovenMatterCompanion */;
 		};
 		970CA8BDC681306F33B0361C /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			productRef = "TEMP_38658B5E-EA6F-42B8-955A-43F3E11F32DA" /* CompanionClient */;
+			productRef = "TEMP_0F36B926-FF2C-496C-86C2-9D10D622CBEE" /* CompanionClient */;
 		};
 /* End PBXTargetDependency section */
 
@@ -851,11 +864,11 @@
 			isa = XCSwiftPackageProductDependency;
 			productName = CompanionInference;
 		};
-		"TEMP_38658B5E-EA6F-42B8-955A-43F3E11F32DA" /* CompanionClient */ = {
+		"TEMP_0F36B926-FF2C-496C-86C2-9D10D622CBEE" /* CompanionClient */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = CompanionClient;
 		};
-		"TEMP_EB367064-EB0D-427F-872B-47E3F824DE86" /* WovenMatterCompanion */ = {
+		"TEMP_D3641D1A-1AAC-4476-8683-595EE6B40F9A" /* WovenMatterCompanion */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = WovenMatterCompanion;
 		};

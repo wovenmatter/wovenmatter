@@ -66,3 +66,7 @@ Development validation does not establish release-candidate validation.
 See [architecture](../docs/DISTRIBUTED_CLIENT_ARCHITECTURE.md),
 [acceptance](../docs/DISTRIBUTED_CLIENT_TESTING.md), and
 [lifecycle](../docs/IOS_CONTINUED_EXECUTION.md).
+
+### Note editing on iPhone
+
+Notes keep the existing offline store and coalesced synchronization. The editor has a full-width title, undo/redo, selection formatting (bold, italic, underline, highlight, fonts and links), headings and lists, and dictation. A bottom-right word count toggles to characters, matching the desktop count semantics. Save/sync status is a compact bottom-left control; tap for details. There is no Add paragraph action: use the keyboard to continue writing. Existing spreadsheet, table and linked-artifact previews retain their current read-only behavior on mobile.

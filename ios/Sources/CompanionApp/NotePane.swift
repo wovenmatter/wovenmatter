@@ -27,6 +27,11 @@ struct NotePane: View {
   @State private var conflictsPresented = false
   @State private var detailsPresented = false
   @State private var dictationEditor = MobileDictationEditor()
+  @State private var editorController = MobileNoteEditorController()
+  @State private var showsCharacterCount = false
+  @State private var showsSaveDetails = false
+  @State private var showsLinkEditor = false
+  @State private var link = ""
   init(model: CompanionModel, note: CompanionNote) {
     self.model = model; self.note = note
     _title = State(initialValue: model.draftTitles[note.id] ?? note.title)
@@ -38,34 +43,63 @@ struct NotePane: View {
   private var editable: Bool { RichDocumentEditing.canEdit(content) && !model.state.uncachedNoteIDs.contains(note.id) }
   var body: some View {
     VStack(spacing: 0) {
-      HStack(alignment: .firstTextBaseline, spacing: 12) {
-        TextField("Untitled note", text: Binding(get: { title }, set: { title = $0; persist() }), axis: .vertical).font(.title.weight(.semibold)).lineLimit(1...3)
-          .accessibilityIdentifier("note-title").disabled(!editable)
-        Button { Task { await model.newNote() } } label: { DashboardLucideIcon(glyph: .plus, size: 20).frame(width: 44, height: 44) }
-          .buttonStyle(DashboardIconButtonStyle()).accessibilityLabel("New note").accessibilityIdentifier("action-new-note")
+      TextField("Untitled note", text: Binding(get: { title }, set: { title = $0; persist() }), axis: .vertical)
+        .font(.title.weight(.semibold)).lineLimit(1...3)
+        .accessibilityIdentifier("note-title").disabled(!editable)
+        .padding(.horizontal, 20).padding(.top, 14)
+      HStack(spacing: 4) {
+        Button { editorController.undo() } label: {
+          Image(systemName: "arrow.uturn.backward").frame(width: 44, height: 44)
+        }.disabled(!editable || !editorController.canUndo).accessibilityLabel("Undo").accessibilityIdentifier("note-undo")
+        Button { editorController.redo() } label: {
+          Image(systemName: "arrow.uturn.forward").frame(width: 44, height: 44)
+        }.disabled(!editable || !editorController.canRedo).accessibilityLabel("Redo").accessibilityIdentifier("note-redo")
+        Spacer(minLength: 0)
         Menu {
-          Button("Paragraph") { setStyle(.paragraph) }
-          Button("Heading") { setStyle(.heading2) }
-          Button("Bullet list") { setStyle(.bulletedList) }
-          Button("Bold paragraph") {
-            guard let id = selectedBlockID ?? document?.blocks.first?.id else { return }
-            change { try RichDocumentEditing.togglingBold(in: content, blockID: id) }
+          Menu("Heading and style") {
+            Button("Body") { setStyle(.paragraph) }
+            ForEach(1...6, id: \.self) { level in
+              Button("Heading \(level)") { setStyle(NoteParagraphStyle.allCases[level]) }
+            }
           }
-          Button("Add paragraph", glyph: .plus) { change { try RichDocumentEditing.appendingParagraph(to: content) } }
-        } label: { Image(systemName: "textformat").font(.title3.weight(.medium)).frame(width: 44, height: 44) }.buttonStyle(DashboardIconButtonStyle()).disabled(!editable).accessibilityLabel("Note formatting")
+          Button("Bulleted list", systemImage: "list.bullet") { setStyle(.bulletedList) }
+          Button("Numbered list", systemImage: "list.number") { setStyle(.numberedList) }
+          Divider()
+          Button("Bold", systemImage: "bold") { format(.bold) }
+          Button("Italic", systemImage: "italic") { format(.italic) }
+          Button("Underline", systemImage: "underline") { format(.underline) }
+          Menu("Highlight") {
+            Button("Yellow") { format(.highlight("#FFF59D")) }
+            Button("Green") { format(.highlight("#C8E6C9")) }
+            Button("Pink") { format(.highlight("#F8BBD0")) }
+            Button("Remove highlight") { format(.highlight(nil)) }
+          }
+          Button("Link", systemImage: "link") { showsLinkEditor = true }
+          Button("Remove link") { format(.link(nil)) }
+          Menu("Font") {
+            ForEach(["System", "Helvetica Neue", "Avenir Next", "Georgia", "Menlo"], id: \.self) { family in
+              Button(family) { format(.fontFamily(family == "System" ? nil : family)) }
+            }
+          }
+          Menu("Font size") {
+            ForEach([11, 12, 14, 16, 18, 21, 24, 30, 36], id: \.self) { size in
+              Button("\(size) pt") { format(.fontSize(Double(size))) }
+            }
+          }
+        } label: {
+          Image(systemName: "textformat").font(.title3.weight(.medium)).frame(width: 44, height: 44)
+        }.disabled(!editable).accessibilityLabel("Format note").accessibilityIdentifier("note-format")
         if editable, document?.kind == .note { MobileDictationMicrophone(editor: dictationEditor) }
         Menu {
           Button("Details, move and export") { detailsPresented = true }.disabled(!model.online)
           Button("Reference in new chat", glyph: .messageSquare) { model.newChat(referencing: note.id) }.disabled(!editable)
           if model.state.conflicts[note.id] != nil { Button("Review saved conflict", systemImage: "doc.on.doc") { conflictsPresented = true } }
           ShareLink(item: content) { Label("Export original document", systemImage: "square.and.arrow.up") }
-        } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44) }.buttonStyle(DashboardIconButtonStyle()).accessibilityLabel("Note actions")
-      }.padding(.horizontal, 20).padding(.top, 14)
-      HStack(spacing: 6) {
-        DashboardLucideIcon(glyph: model.state.conflicts[note.id] != nil ? .alertCircle : .check, size: 14)
-        Text(model.saveLabel(note.id)).accessibilityIdentifier("note-save-state")
-        Spacer()
-      }.font(.caption).foregroundStyle(DashboardPalette.mutedForeground).padding(.horizontal, 20).padding(.bottom, 12)
+        } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44) }.accessibilityLabel("Note actions")
+        Button { Task { await model.newNote() } } label: {
+          DashboardLucideIcon(glyph: .plus, size: 20).frame(width: 44, height: 44)
+        }.accessibilityLabel("New note").accessibilityIdentifier("action-new-note")
+      }.buttonStyle(DashboardIconButtonStyle()).padding(.horizontal, 12).padding(.bottom, 4)
       if model.state.conflicts[note.id] != nil {
         Button { conflictsPresented = true } label: { Label("Review saved conflict", systemImage: "doc.on.doc").font(.caption).frame(maxWidth: .infinity, alignment: .leading).padding(12).background(theme.palette.themeWhisper) }.padding(.horizontal, 20)
       }
@@ -90,13 +124,13 @@ struct NotePane: View {
                 switch block {
                 case .richText(let text):
                   HStack(alignment: .top, spacing: 9) {
-                    if text.style == .bulletedList { Text("•").font(.body).padding(.top, 8) }
-                    if text.style == .numberedList { Text("\((document.blocks.firstIndex(where: { $0.id == text.id }) ?? 0) + 1).").font(.body).padding(.top, 8) }
-                    RichBlockTextView(block: text, generation: documentGeneration, editable: editable,
+                    RichBlockTextView(block: text, generation: documentGeneration, editable: editable, controller: editorController,
                       dictationEditor: dictationEditor, dictationIdentity: "note:\(note.id):\(text.id)",
                       focused: { selectedBlockID = text.id; MobileDictation.shared.activeEditor = dictationEditor }) { range, replacement in
                       do {
-                        content = try RichDocumentEditing.replacingText(in: content, blockID: text.id, range: range, replacement: replacement)
+                        let next = try RichDocumentEditing.replacingText(in: content, blockID: text.id, range: range, replacement: replacement)
+                        editorController.recordTextChange(from: content, to: next, blockID: text.id, apply: adopt)
+                        content = next
                         documentGeneration += 1
                         persist()
                         guard let document = RichDocumentEditing.document(content), let new = document.blocks.first(where: { $0.id == text.id }), case .richText(let result) = new else { return nil }
@@ -110,10 +144,7 @@ struct NotePane: View {
                   } else { NativeTablePreview(table: table) }
                 }
               }
-              if editable {
-                Button { change { try RichDocumentEditing.appendingParagraph(to: content) } } label: { Label("Add paragraph", glyph: .plus).font(.caption).foregroundStyle(DashboardPalette.mutedForeground) }.frame(minHeight: 44).padding(.top, 12)
-              }
-            }.padding(.horizontal, 20).padding(.bottom, 50)
+            }.padding(.horizontal, 20).padding(.bottom, 20)
           }.scrollDismissesKeyboard(.interactively)
         }
       } else {
@@ -125,14 +156,41 @@ struct NotePane: View {
           }.padding(20)
         }
       }
-      Spacer(minLength: 0)
+      HStack(spacing: 8) {
+        Button { showsSaveDetails.toggle() } label: {
+          HStack(spacing: 4) {
+            DashboardLucideIcon(glyph: model.state.conflicts[note.id] != nil ? .alertCircle : .check, size: 11)
+            Text(model.compactSaveLabel(note.id))
+          }.frame(minHeight: 28)
+        }.accessibilityLabel(model.saveLabel(note.id)).accessibilityIdentifier("note-save-state")
+          .popover(isPresented: $showsSaveDetails) {
+            Text(model.saveLabel(note.id)).font(.callout).padding(16).presentationCompactAdaptation(.popover)
+          }
+        Spacer()
+        if let document, document.kind == .note {
+          let statistics = MobileNoteTextStatistics(document: document)
+          Button { showsCharacterCount.toggle() } label: {
+            Text(showsCharacterCount ? statistics.characterLabel : statistics.wordLabel).monospacedDigit().frame(minHeight: 28)
+          }.accessibilityLabel(showsCharacterCount ? "Note character count" : "Note word count")
+            .accessibilityValue(String(showsCharacterCount ? statistics.characters : statistics.words))
+            .accessibilityHint(showsCharacterCount ? "Show word count" : "Show character count")
+            .accessibilityIdentifier("note-text-count")
+        }
+      }.font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
+        .buttonStyle(.plain).padding(.horizontal, 20).padding(.bottom, 4)
     }
     .onChange(of: note) { _, new in
       if new == model.state.notes[note.id], model.draftContents[note.id] == nil && model.draftTitles[note.id] == nil {
-        if content != new.content { documentGeneration += 1 }
+        if content != new.content { documentGeneration += 1; editorController.reset() }
         content = new.content; title = new.title; editorBase = new
       }
     }
+    .onDisappear { editorController.reset() }
+    .alert("Link", isPresented: $showsLinkEditor) {
+      TextField("https://…", text: $link).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
+      Button("Apply") { format(.link(link.trimmingCharacters(in: .whitespacesAndNewlines))) }
+      Button("Cancel", role: .cancel) { }
+    } message: { Text("Apply a link to the selected text.") }
     .navigationDestination(isPresented: $detailsPresented) {
       ItemManagementSheet(model: model, id: note.id, isNote: true, title: title, folderID: note.folderID ?? "")
     }
@@ -145,9 +203,112 @@ struct NotePane: View {
     guard let id = selectedBlockID ?? document?.blocks.first?.id else { return }
     change { try RichDocumentEditing.settingStyle(in: content, blockID: id, style: style) }
   }
-  private func change(_ operation: () throws -> String) {
-    do { content = try operation(); documentGeneration += 1; persist() } catch { model.errorMessage = error.localizedDescription }
+  private func format(_ format: RichDocumentEditing.TextFormat) {
+    guard let id = editorController.activeBlockID ?? selectedBlockID ?? document?.blocks.first?.id else { return }
+    change { try RichDocumentEditing.formattingText(in: content, blockID: id, range: editorController.selection, format: format) }
   }
+  private func adopt(_ value: String) { content = value; documentGeneration += 1; persist() }
+  private func change(_ operation: () throws -> String) {
+    do {
+      let next = try operation()
+      guard next != content else { return }
+      editorController.recordChange(from: content, to: next, apply: adopt)
+      adopt(next)
+    } catch { model.errorMessage = error.localizedDescription }
+  }
+}
+
+/// The document owns undo across text blocks and formatting. UIKit still owns
+/// input, selection and composition, but must not register separate range-based
+/// undo operations against text storage which SwiftUI can replace on restoration.
+@MainActor @Observable final class MobileNoteEditorController {
+  @ObservationIgnored let history = MobileNoteUndoManager()
+  @ObservationIgnored private weak var activeView: UITextView?
+  @ObservationIgnored private var observers: [NSObjectProtocol] = []
+  @ObservationIgnored private var currentContent: String?
+  @ObservationIgnored private var typingBlock: String?
+  @ObservationIgnored private var lastTypedAt: ContinuousClock.Instant?
+  private(set) var activeBlockID: String?
+  private(set) var canUndo = false
+  private(set) var canRedo = false
+  var selection: NSRange? { activeView?.selectedRange }
+  init() {
+    history.levelsOfUndo = 100
+    history.groupsByEvent = false
+    history.disableUndoRegistration()
+    for name in [Notification.Name.NSUndoManagerDidUndoChange, .NSUndoManagerDidRedoChange] {
+      observers.append(NotificationCenter.default.addObserver(forName: name, object: history, queue: .main) { [weak self] _ in
+        MainActor.assumeIsolated {
+          self?.typingBlock = nil; self?.lastTypedAt = nil
+          self?.refreshUndoState()
+        }
+      })
+    }
+  }
+  isolated deinit { for observer in observers { NotificationCenter.default.removeObserver(observer) } }
+  func bind(_ view: UITextView, blockID: String) {
+    if activeView == nil { activeView = view; activeBlockID = blockID }
+  }
+  func activate(_ view: UITextView, blockID: String) {
+    if activeBlockID != blockID { typingBlock = nil }
+    activeView = view; activeBlockID = blockID
+  }
+  func refreshUndoState() { canUndo = history.canUndo; canRedo = history.canRedo }
+  func undo() { guard history.canUndo else { return }; history.undo(); refreshUndoState() }
+  func redo() { guard history.canRedo else { return }; history.redo(); refreshUndoState() }
+  func reset() { history.removeAllActions(); currentContent = nil; typingBlock = nil; lastTypedAt = nil; refreshUndoState() }
+  func recordTextChange(from old: String, to new: String, blockID: String, apply: @escaping (String) -> Void) {
+    guard old != new else { return }
+    let now = ContinuousClock.now
+    let coalesces = typingBlock == blockID && lastTypedAt.map { $0.duration(to: now) < .milliseconds(650) } == true && !history.canRedo
+    if !coalesces { registerRestoration(old, apply: apply, action: "Typing") }
+    currentContent = new; typingBlock = blockID; lastTypedAt = now
+    refreshUndoState()
+  }
+  func recordChange(from old: String, to new: String, apply: @escaping (String) -> Void) {
+    registerRestoration(old, apply: apply, action: "Format note")
+    currentContent = new; typingBlock = nil; lastTypedAt = nil
+    refreshUndoState()
+  }
+  private func registerRestoration(_ value: String, apply: @escaping (String) -> Void, action: String) {
+    let ownsGroup = !history.isUndoing && !history.isRedoing
+    let wasDisabled = !history.isUndoRegistrationEnabled
+    if wasDisabled { history.enableUndoRegistration() }
+    if ownsGroup { history.beginUndoGrouping() }
+    history.registerUndo(withTarget: self) { controller in
+      guard let inverse = controller.currentContent else { return }
+      controller.registerRestoration(inverse, apply: apply, action: action)
+      controller.currentContent = value
+      apply(value)
+    }
+    history.setActionName(action)
+    if ownsGroup { history.endUndoGrouping() }
+    if wasDisabled { history.disableUndoRegistration() }
+  }
+}
+
+/// Redo registration must be enabled before Foundation opens its inverse group.
+/// Native input remains unregistered outside the document's restoration actions.
+final class MobileNoteUndoManager: UndoManager {
+  override func undo() {
+    let wasDisabled = !isUndoRegistrationEnabled
+    if wasDisabled { enableUndoRegistration() }
+    super.undo()
+    if wasDisabled { disableUndoRegistration() }
+  }
+  override func redo() {
+    let wasDisabled = !isUndoRegistrationEnabled
+    if wasDisabled { enableUndoRegistration() }
+    super.redo()
+    if wasDisabled { disableUndoRegistration() }
+  }
+}
+
+final class MobileNoteTextView: UITextView {
+  private let history: UndoManager
+  init(history: UndoManager) { self.history = history; super.init(frame: .zero, textContainer: nil) }
+  required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+  override var undoManager: UndoManager? { history }
 }
 
 private struct ConflictPane: View {
@@ -180,18 +341,19 @@ private struct ConflictPane: View {
   }
 }
 
-private struct RichBlockTextView: UIViewRepresentable {
+struct RichBlockTextView: UIViewRepresentable {
   @Environment(\.colorScheme) private var colorScheme
   var block: NoteRichTextBlock
   var generation: Int
   var editable: Bool
+  var controller: MobileNoteEditorController
   var dictationEditor: MobileDictationEditor
   var dictationIdentity: String
   var focused: () -> Void
   var edit: (NSRange, String) -> (NoteRichTextBlock, Int)?
   func makeCoordinator() -> Coordinator { Coordinator(self) }
   func makeUIView(context: Context) -> UITextView {
-    let view = UITextView()
+    let view = MobileNoteTextView(history: controller.history)
     view.isScrollEnabled = false; view.backgroundColor = .clear
     view.textContainerInset = .init(top: 6, left: 0, bottom: 6, right: 0); view.textContainer.lineFragmentPadding = 0
     view.adjustsFontForContentSizeCategory = true
@@ -200,6 +362,7 @@ private struct RichBlockTextView: UIViewRepresentable {
     view.linkTextAttributes = [.foregroundColor: DashboardColors.success]
     view.delegate = context.coordinator; view.attributedText = Self.attributed(block)
     dictationEditor.bind(view, identity: dictationIdentity)
+    controller.bind(view, blockID: block.id)
     view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
     return view
   }
@@ -212,7 +375,8 @@ private struct RichBlockTextView: UIViewRepresentable {
     if context.coordinator.renderedBlock != block {
       let desired = Self.attributed(block)
       let selection = view.selectedRange; view.attributedText = desired
-      view.selectedRange = NSRange(location: min(selection.location, desired.length), length: 0)
+      let start = min(selection.location, desired.length)
+      view.selectedRange = NSRange(location: start, length: min(selection.length, desired.length - start))
       context.coordinator.renderedBlock = block
     }
     view.accessibilityLabel = block.plainText.isEmpty ? "Note paragraph" : nil
@@ -229,6 +393,7 @@ private struct RichBlockTextView: UIViewRepresentable {
     init(_ parent: RichBlockTextView) { self.parent = parent; latestGeneration = parent.generation; renderedBlock = parent.block }
     func textViewDidBeginEditing(_ textView: UITextView) {
       parent.dictationEditor.bind(textView, identity: parent.dictationIdentity)
+      parent.controller.activate(textView, blockID: parent.block.id)
       parent.focused()
     }
     func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
@@ -236,14 +401,14 @@ private struct RichBlockTextView: UIViewRepresentable {
       latestGeneration = generation; renderedBlock = result
       let desired = RichBlockTextView.attributed(result)
       if !text.isEmpty, desired.length > 0 { textView.typingAttributes = desired.attributes(at: min(range.location, desired.length - 1), effectiveRange: nil) }
-      // UIKit owns insertion, composition, selection and undo. Replacing the
+      // UIKit owns insertion, composition and selection. Replacing the
       // attributed string on every key races SwiftUI and resets keyboard state.
       return true
     }
     func textViewDidChange(_ textView: UITextView) {
       let actual = textView.text ?? ""
       if actual != renderedBlock.plainText {
-        // Native undo/autocorrection may alter text outside shouldChangeTextIn.
+        // Autocorrection may alter text outside shouldChangeTextIn.
         // Reconcile the smallest character-aligned edit without flattening runs.
         let old = Array(renderedBlock.plainText), new = Array(actual)
         var prefix = 0
@@ -258,11 +423,19 @@ private struct RichBlockTextView: UIViewRepresentable {
         } else { textView.attributedText = RichBlockTextView.attributed(renderedBlock) }
       }
       textView.invalidateIntrinsicContentSize()
+      parent.controller.refreshUndoState()
+    }
+    func textViewDidChangeSelection(_ textView: UITextView) {
+      if textView.isFirstResponder { parent.controller.activate(textView, blockID: parent.block.id) }
     }
   }
   static func attributed(_ block: NoteRichTextBlock) -> NSAttributedString {
     let result = NSMutableAttributedString()
     let paragraph = NSMutableParagraphStyle(); paragraph.lineSpacing = 4
+    if block.style == .bulletedList || block.style == .numberedList {
+      paragraph.textLists = [NSTextList(markerFormat: block.style == .bulletedList ? .disc : .decimal, options: 0)]
+      paragraph.headIndent = 24
+    }
     for run in block.runs.isEmpty ? [NoteTextRun(text: "")] : block.runs {
       let size: CGFloat = switch block.style { case .heading1: 29; case .heading2: 24; case .heading3, .heading4, .heading5, .heading6: 20; default: 17 }
       var font = run.fontFamily.flatMap { UIFont(name: $0, size: CGFloat(run.fontSize ?? Double(size))) } ?? UIFont.systemFont(ofSize: CGFloat(run.fontSize ?? Double(size)))

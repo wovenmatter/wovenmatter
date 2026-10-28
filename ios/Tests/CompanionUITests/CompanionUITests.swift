@@ -106,20 +106,14 @@ final class CompanionUITests: XCTestCase {
   }
   @MainActor func testRunningToolsDoNotDuplicateProgressWhenExpanded() {
     let app = launch(tab: "Chats", scenario: "running-tools")
-    let group = app.buttons["work-group:group:fixture-read"]
-    XCTAssertTrue(group.waitForExistence(timeout: 5))
-    // SwiftUI combines a button's spinner into its accessibility element.
-    // Assert the exposed progress owner across each disclosure state.
-    let busyRows = app.buttons.matching(NSPredicate(format: "value ENDSWITH %@", ", In progress"))
-    XCTAssertEqual(group.value as? String, "Collapsed, In progress")
-    XCTAssertEqual(busyRows.count, 1, "Collapsed work has one progress owner")
-    XCTAssertFalse(app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "Running on ")).firstMatch.exists)
-    group.tap()
+    // The shared desktop transcript presents the active tail inline. Only
+    // older work uses a collapsed group; the current tool owns its spinner.
     let activity = app.buttons["work-activity:fixture-current"]
     XCTAssertTrue(activity.waitForExistence(timeout: 5))
-    XCTAssertEqual(group.value as? String, "Expanded")
+    let busyRows = app.buttons.matching(NSPredicate(format: "value ENDSWITH %@", ", In progress"))
     XCTAssertEqual(activity.value as? String, "Collapsed, In progress")
-    XCTAssertEqual(busyRows.count, 1, "Expanded work moves progress to the current tool")
+    XCTAssertEqual(busyRows.count, 1, "Only the current tool owns progress")
+    XCTAssertFalse(app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "Running on ")).firstMatch.exists)
     activity.tap()
     XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label ==[c] %@", "Input")).firstMatch.waitForExistence(timeout: 5))
     XCTAssertEqual(activity.value as? String, "Expanded, In progress")
@@ -131,9 +125,9 @@ final class CompanionUITests: XCTestCase {
     app.terminate()
     app.launchEnvironment["WOVENMATTER_UI_SCENARIO"] = "running-tools-settled"
     app.launch()
-    XCTAssertTrue(app.buttons["work-group:group:fixture-read"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.buttons["work-activity:fixture-current"].waitForExistence(timeout: 5))
     XCTAssertEqual(busyRows.count, 0, "Finished tools stop spinning while the agent continues its reply")
-    XCTAssertEqual(app.buttons["work-group:group:fixture-read"].value as? String, "Collapsed")
+    XCTAssertEqual(app.buttons["work-activity:fixture-current"].value as? String, "Collapsed")
     XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "Working for ")).firstMatch.exists)
   }
 
@@ -213,6 +207,28 @@ final class CompanionUITests: XCTestCase {
     XCTAssertTrue(composer.exists)
   }
 
+  @MainActor func testNoteControlsAndCompactFooter() {
+    let app = launch(tab: "Notes")
+    let undo = app.buttons["note-undo"], redo = app.buttons["note-redo"]
+    XCTAssertTrue(undo.waitForExistence(timeout: 5))
+    XCTAssertTrue(redo.exists)
+    XCTAssertFalse(undo.isEnabled); XCTAssertFalse(redo.isEnabled)
+    XCTAssertFalse(app.buttons["Add paragraph"].exists)
+    let count = app.buttons["note-text-count"]
+    XCTAssertTrue(count.exists); XCTAssertEqual(count.label, "Note word count")
+    count.tap(); XCTAssertEqual(count.label, "Note character count")
+    count.tap(); XCTAssertEqual(count.label, "Note word count")
+    let body = app.textViews.matching(NSPredicate(format: "identifier BEGINSWITH 'note-body-editor-' ")).firstMatch
+    body.tap(); body.typeText(" undo marker")
+    XCTAssertTrue(undo.isEnabled)
+    undo.tap(); XCTAssertTrue(redo.isEnabled)
+    redo.tap()
+    XCTAssertTrue((body.value as? String ?? "").contains("marker"))
+    app.buttons["note-format"].tap()
+    XCTAssertTrue(app.buttons["Bold"].waitForExistence(timeout: 5))
+    XCTAssertFalse(app.buttons["Add paragraph"].exists)
+  }
+
   @MainActor func testOfflineWritingSurvivesTerminationAndRestart() {
     // CI stalled in XCTest's launch-rotation animation wait with Notes open.
     // Settle the Folders fixture before entering the editor.
@@ -245,9 +261,9 @@ final class CompanionUITests: XCTestCase {
     let writtenBody = body.value as? String
     XCTAssertEqual(writtenBody?.lowercased(), bodyText.lowercased())
     XCTAssertFalse(app.buttons["dismiss-keyboard"].exists)
-    app.staticTexts["note-save-state"].tap()
+    app.buttons["note-save-state"].tap()
     XCTAssertTrue(app.buttons["tab-home"].waitForExistence(timeout: 5))
-    let saved = app.staticTexts["note-save-state"]
+    let saved = app.buttons["note-save-state"]
     let savedPredicate = NSPredicate(format: "label CONTAINS 'Saved on this device'")
     expectation(for: savedPredicate, evaluatedWith: saved)
     waitForExpectations(timeout: 10)
@@ -257,7 +273,7 @@ final class CompanionUITests: XCTestCase {
     let reopened = app.descendants(matching: .any)["note-title"].firstMatch
     XCTAssertTrue(reopened.waitForExistence(timeout: 10))
     XCTAssertTrue((reopened.value as? String ?? reopened.label).contains(marker.trimmingCharacters(in: .whitespaces)))
-    XCTAssertTrue(app.staticTexts["note-save-state"].label.contains("Saved on this device"))
+    XCTAssertTrue(app.buttons["note-save-state"].label.contains("Saved on this device"))
     let restoredBody = app.textViews.matching(NSPredicate(format: "identifier BEGINSWITH 'note-body-editor-' ")).firstMatch
     XCTAssertTrue(restoredBody.waitForExistence(timeout: 5))
     XCTAssertEqual(restoredBody.value as? String, writtenBody)

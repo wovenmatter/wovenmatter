@@ -146,7 +146,7 @@ struct ChatComposerSettings<Accessory: View, Submission: View>: View {
         DashboardLucideIcon(glyph: .settings, size: 18).frame(width: 44, height: 44)
       }.buttonStyle(.plain).accessibilityLabel("Session tools").accessibilityIdentifier("chat-tools").disabled(saving)
         .popover(isPresented: $toolsOpen) {
-          popout("Tools") {
+          popout("Tools", height: local ? 200 : 380) {
             ForEach(toolOptions) { tool in
               Toggle(tool.label, isOn: Binding(get: { enabledTools.contains(tool.id) }, set: { enabled in
                 var tools = Set(enabledTools)

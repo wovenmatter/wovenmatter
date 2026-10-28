@@ -43,6 +43,10 @@ struct PendingWorkspaceChangesPane: View {
         Section(workspaceName(pending.workspaceID)) {
           Text(pending.record.command.kind == .createSession ? "Create conversation" : "Saved workspace request")
           if let text = pending.record.command.text { Text(text).font(.caption).lineLimit(5).textSelection(.enabled) }
+          if pending.record.receipt?.status == .outcomeUnknown {
+            Text(pending.record.receipt?.message ?? "The workspace may have accepted this request. Recover its acknowledgement before retrying.")
+              .font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+          }
           Button("Recover or retry") { perform {
             // These services read the original receipt first and retry only the
             // original durable payload. Navigation cannot redirect the command.

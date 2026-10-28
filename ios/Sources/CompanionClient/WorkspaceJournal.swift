@@ -497,6 +497,8 @@ public actor WorkspaceClient {
     try await verify()
     guard mutation.folderExecution == nil || mutation.folderExecution?.workspaceID == workspaceID else { throw MobileStore.Failure.wrongWorkspace }
     let folder = try await transport.createFolder(mutation)
+    guard folder.id == mutation.resourceID, folder.execution?.workspaceID == workspaceID,
+      mutation.folderExecution == nil || folder.execution == mutation.folderExecution else { throw MobileStore.Failure.wrongWorkspace }
     try await store.cacheExecutionFolders([folder], workspaceID: workspaceID)
     return folder
   }

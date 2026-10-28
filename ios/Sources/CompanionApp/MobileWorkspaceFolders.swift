@@ -20,6 +20,8 @@ extension CompanionModel {
     return binding.workspaceID == owner
   }
   func newWorkspaceFolder(name: String, workspaceID: String, id: String = UUID().uuidString.lowercased()) async throws {
+    let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !name.isEmpty, name.utf8.count <= 4096 else { throw DeviceExecutionError.unavailable("Enter a folder name of up to 4,096 bytes.") }
     guard let client = workspaceClients[workspaceID], workspaceReachable[workspaceID] == true else { throw MobileConnectionError.offline }
     guard let store else { throw MobileConnectionError.offline }
     let saved = await store.snapshot().workspaceFolderRequests?[workspaceID]

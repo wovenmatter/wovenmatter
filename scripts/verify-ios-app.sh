@@ -14,6 +14,7 @@ assert 'processing' not in info.get('UIBackgroundModes', []), 'Quick Chat must n
 assert not info.get('BGTaskSchedulerPermittedIdentifiers'), 'Retired phone scheduler is still packaged'
 assert not list(app.rglob('*.wasm')), 'Embedded Python/WASM must not ship in Quick Chat'
 assert not list(app.glob('*EmbeddedExecution*')), 'Retired embedded execution resources are still packaged'
+assert (app / 'LUCIDE_LICENSE.txt').is_file(), 'Missing bundled icon license'
 assert privacy['NSPrivacyTracking'] is False
 reasons = {row['NSPrivacyAccessedAPIType']: row['NSPrivacyAccessedAPITypeReasons'] for row in privacy['NSPrivacyAccessedAPITypes']}
 for category in ('UserDefaults', 'FileTimestamp', 'SystemBootTime'):

@@ -330,6 +330,7 @@ struct FoldersPane: View {
           else { do { try await model.newWorkspaceFolder(name: name, workspaceID: workspace) } catch { model.errorMessage = error.localizedDescription; await model.reload() } }
         }
       }
+      .disabled(folderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || folderName.utf8.count > 4096)
       Button("Cancel", role: .cancel) { folderName = "" }
     } message: {
       Text(creationWorkspaceID == "device" ? "Create a note folder on this device." : "Create in " + (model.folderWorkspaces.first { $0.id == creationWorkspaceID }?.name ?? "the selected workspace") + ".")

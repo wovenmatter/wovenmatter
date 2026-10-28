@@ -404,6 +404,14 @@ import CompanionInference
       } catch { if saveGenerations[id] == generation { saveStates[id] = "Couldn’t save · writing kept open"; errorMessage = error.localizedDescription } }
     }
   }
+  func compactSaveLabel(_ id: String) -> String {
+    if let value = saveStates[id], value != "Saved on this device" {
+      return value.hasPrefix("Saving") ? "Saving…" : "Save failed"
+    }
+    if state.conflicts[id] != nil { return "Sync conflict" }
+    if state.workspaceID != nil && state.isDirty(id) { return "Sync pending" }
+    return "Saved"
+  }
   func saveLabel(_ id: String) -> String {
     if let value = saveStates[id], value != "Saved on this device" { return value }
     if state.conflicts[id] != nil { return "Saved on this device · conflict needs attention" }

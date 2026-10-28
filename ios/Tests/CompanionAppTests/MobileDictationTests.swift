@@ -43,6 +43,26 @@ import WovenMatterCompanion
     XCTAssertEqual(view.text, "Before old after", "Dictation is one native undoable edit")
   }
 
+  func testNoteUndoHistoryCoalescesTypingAcrossBlocksAndKeepsFormatting() throws {
+    let controller = MobileNoteEditorController()
+    var applied = "First edited\nSecond edited"
+    let apply: (String) -> Void = { applied = $0 }
+    controller.recordTextChange(from: "First\nSecond", to: "First e\nSecond", blockID: "first", apply: apply)
+    controller.recordTextChange(from: "First e\nSecond", to: "First edited\nSecond", blockID: "first", apply: apply)
+    controller.recordTextChange(from: "First edited\nSecond", to: applied, blockID: "second", apply: apply)
+    XCTAssertTrue(controller.canUndo)
+    controller.undo(); XCTAssertEqual(applied, "First edited\nSecond")
+    controller.undo(); XCTAssertEqual(applied, "First\nSecond")
+    XCTAssertFalse(controller.canUndo)
+    controller.redo(); XCTAssertEqual(applied, "First edited\nSecond")
+    controller.redo(); XCTAssertEqual(applied, "First edited\nSecond edited")
+    let document = try NoteDocument(blocks: [.richText(.init(text: applied))]).encoded()
+    controller.recordChange(from: applied, to: document, apply: apply)
+    controller.undo(); XCTAssertEqual(applied, "First edited\nSecond edited")
+    controller.redo(); XCTAssertEqual(applied, document)
+    controller.reset(); XCTAssertFalse(controller.canUndo); XCTAssertFalse(controller.canRedo)
+  }
+
   func testChangedOwnerOrOverlappingEditRejectsLateResult() throws {
     let view = UITextView(); view.text = "Original"; view.selectedRange = NSRange(location: 3, length: 0)
     let editor = MobileDictationEditor(); editor.bind(view, identity: "chat:A")

@@ -290,6 +290,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
         if (savedRequest && (savedRequest.device !== device.id || savedRequest.fingerprint !== fingerprint)) throw fail(409, 'Folder request identity was reused.')
         const folder = JSON.parse(old.body)
         if (request.folderExecution && JSON.stringify(request.folderExecution) !== JSON.stringify(folder.execution)) throw fail(409, 'This folder already has another execution root.')
+        if (!savedRequest) db.prepare('INSERT INTO execution_folder_commands VALUES (?,?,?,?)').run(request.operationID, device.id, fingerprint, folder.id)
         return folder
       }
       let path

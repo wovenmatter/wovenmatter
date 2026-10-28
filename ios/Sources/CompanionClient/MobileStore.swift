@@ -518,9 +518,10 @@ public actor MobileStore {
     guard folders.allSatisfy({ $0.execution?.workspaceID == workspaceID }) else { throw Failure.wrongWorkspace }
     try transaction { next in
       for folder in folders where next.pendingFolderDeletions?[folder.id] == nil {
-        guard next.folders[folder.id]?.execution == nil || next.folders[folder.id]?.execution == folder.execution else { throw Failure.wrongWorkspace }
+        guard next.folders[folder.id] == nil || next.folders[folder.id]?.execution == folder.execution else { throw Failure.wrongWorkspace }
         // Pending local mutations and their conflict bases remain authoritative.
-        if !next.outbox.contains(where: { $0.mutation.resourceID == folder.id }) { next.folders[folder.id] = folder }
+        if !next.outbox.contains(where: { $0.mutation.resourceID == folder.id }),
+          (next.folders[folder.id]?.revision ?? -1) <= folder.revision { next.folders[folder.id] = folder }
         if next.workspaceFolderRequests?[workspaceID]?.resourceID == folder.id { next.workspaceFolderRequests?.removeValue(forKey: workspaceID) }
       }
     }

@@ -349,8 +349,12 @@ test('device-owned folder requests survive a lost reply and restart and set the 
   assert.deepEqual(f.service.folders(), [first])
   await assert.rejects(f.service.createFolder({ ...request, title: 'Changed payload' }, f.principal), { statusCode: 409 })
   await assert.rejects(f.service.createFolder({ ...request, operationID: randomUUID(), resourceID: randomUUID(), folderExecution: { workspaceID: randomUUID(), rootPath: '/tmp' } }, f.principal), { statusCode: 400 })
+  const importedRequest = { ...request, operationID: randomUUID(), folderExecution: first.execution }
+  assert.deepEqual(await f.service.createFolder(importedRequest, f.principal), first)
+  await assert.rejects(f.service.createFolder({ ...importedRequest, title: 'Reused import identity' }, f.principal), { statusCode: 409 })
   await f.restart()
   assert.deepEqual(await f.service.createFolder(request, f.principal), first)
+  await assert.rejects(f.service.createFolder({ ...importedRequest, resourceID: randomUUID() }, f.principal), { statusCode: 409 })
   const opened = await f.service.command(f.command('createSession', { folderID: id }), f.principal)
   assert.equal(opened.status, 'completed')
   assert.equal(directory, first.execution.rootPath)

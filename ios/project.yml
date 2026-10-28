@@ -35,6 +35,7 @@ targets:
       - path: ../app/App/Views/ConversationWorkTranscript.swift
       - path: ../app/App/Views/ConversationSubagentRow.swift
       - path: ../app/App/SharedAssets.xcassets
+      - path: ../docs/assets/LUCIDE_LICENSE.txt
     dependencies:
       - package: Mobile
         product: CompanionClient
