@@ -8,6 +8,7 @@ let package = Package(
     .macOS(.v26)
   ],
   products: [
+    .library(name: "WovenMatterSpreadsheetUI", targets: ["WovenMatterSpreadsheetUI"]),
     .library(name: "WovenMatterCore", targets: ["WovenMatterCore"]),
     .library(name: "WovenMatterClient", targets: ["WovenMatterClient"]),
     .library(name: "WovenMatterAutomation", targets: ["WovenMatterAutomation"]),
@@ -18,6 +19,7 @@ let package = Package(
     .package(path: "../shared"), .package(path: "../ios")
   ],
   targets: [
+    .target(name: "WovenMatterSpreadsheetUI", dependencies: ["WovenMatterCore"]),
     .target(
       name: "WovenMatterCore",
       dependencies: [.product(name: "WovenMatterCompanion", package: "shared")],
@@ -81,7 +83,7 @@ let package = Package(
     // Both test suites exercise those same services without starting providers.
     .target(
       name: "WovenMatterAppFacade",
-      dependencies: ["CompanionBrowserTestBridge", "WovenMatterCore", "WovenMatterClient", "WovenMatterDashboardStore", "WovenMatterAutomation", .product(name: "CompanionClient", package: "ios")],
+      dependencies: ["WovenMatterSpreadsheetUI", "CompanionBrowserTestBridge", "WovenMatterCore", "WovenMatterClient", "WovenMatterDashboardStore", "WovenMatterAutomation", .product(name: "CompanionClient", package: "ios")],
       path: "App",
       exclude: ["Assets.xcassets", "SharedAssets.xcassets", "Info.plist", "Tests"],
       sources: ["ApplicationModel.swift", "WovenMatterApp.swift", "WovenMatterLifecycleDelegate.swift", "Models", "Services", "Views"],

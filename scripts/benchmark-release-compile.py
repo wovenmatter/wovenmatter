@@ -1,0 +1,54 @@
+#!/usr/bin/env python3
+"""Paired whole-module comparison with identical production compiler settings."""
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import shutil
+
+base = os.environ['COMPARE_BASE']
+order = os.environ['COMPARE_ORDER']
+assert re.fullmatch('[0-9a-f]{40}', base) and order in ('baseline-first', 'candidate-first')
+subprocess.run(['git', 'merge-base', '--is-ancestor', base, 'HEAD'], check=True)
+changed = subprocess.check_output(['git', 'diff', '--name-only', base, 'HEAD', '--', 'app/'], text=True).splitlines()
+assert changed and all(p.endswith('.swift') or p == 'app/WovenMatter.xcodeproj/project.pbxproj' for p in changed)
+project = 'app/WovenMatter.xcodeproj/project.pbxproj'
+base_project = subprocess.check_output(['git','show',base+':'+project], text=True)
+settings = lambda text: sorted(re.findall(r'(?m)^\s*(SWIFT_\w+|OTHER_SWIFT_FLAGS) = (.*);$', text))
+assert settings(base_project) == settings(Path(project).read_text()), 'Compiler settings must remain identical'
+root = Path(os.environ['RUNNER_TEMP'])
+output = root / 'release-cache-evidence'
+archive = root / 'release-compile-paired'
+archive.mkdir(parents=True, exist_ok=True)
+sequence = ['warmup-baseline', 'warmup-candidate'] + (['baseline', 'candidate'] if order == 'baseline-first' else ['candidate', 'baseline'])
+for trial, variant in enumerate(sequence):
+    subprocess.run(['git', 'restore', '--source', base if variant.endswith('baseline') else 'HEAD', '--', *changed], check=True)
+    shutil.rmtree(output, ignore_errors=True)
+    output.mkdir(parents=True)
+    manifest = {p: hashlib.sha256(Path(p).read_bytes()).hexdigest() for p in changed if Path(p).is_file()}
+    (output / 'source-manifest.json').write_text(json.dumps(manifest, indent=2))
+    # A fresh release runner has only the five restored stores. Remove transient
+    # extraction/install/checkouts left by the other half of this same-runner pair.
+    for pattern in ('wovenmatter-node-*', 'wovenmatter-agent-dependencies-*'):
+        for p in Path(os.environ['TMPDIR']).glob(pattern):
+            if p.is_dir(): shutil.rmtree(p)
+    sources = Path.home() / 'Library/Caches/WovenMatter/SourcePackages'
+    for name in ('checkouts', 'artifacts'):
+        shutil.rmtree(sources / name, ignore_errors=True)
+    (sources / 'workspace-state.json').unlink(missing_ok=True)
+    cef = root / 'paired-cef'
+    shutil.rmtree(cef, ignore_errors=True)
+    env = dict(os.environ, WOVENMATTER_CEF_CACHE_DIR=str(cef),
+               WOVENMATTER_BENCHMARK_MARKER=f'Woven Matter Compile Trial {trial}')
+    subprocess.run(['python3', 'scripts/benchmark-release-cache.py', 'warm-edit'], env=env, check=True)
+    p = output / 'measurement.json'
+    d = json.loads(p.read_text())
+    d.update(variant=variant, order=order, base=base, changed=changed, warmup=variant.startswith('warmup-'), trial=trial)
+    assert d['browser_reused'] and d['replay_misses'] >= 1
+    if not variant.startswith('warmup-'):
+        assert d['replay_misses'] == 1, 'Only the app may recompile in a measured build'
+    p.write_text(json.dumps(d, indent=2) + '\n')
+    shutil.copytree(output, archive / variant)
+    print('compile-comparison',json.dumps(d),flush=True)

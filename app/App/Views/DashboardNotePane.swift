@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import WovenMatterSpreadsheetUI
 import WovenMatterCore
 
 struct DashboardNotePane: View {

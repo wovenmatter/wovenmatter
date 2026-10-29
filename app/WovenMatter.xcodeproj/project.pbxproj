@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A31800000000000000000001 /* WovenMatterSpreadsheetUI in Frameworks */ = {isa = PBXBuildFile; productRef = A31800000000000000000002 /* WovenMatterSpreadsheetUI */; };
 		58D2DD715AC36ACD6DF22BB2 /* LUCIDE_LICENSE.txt in Resources */ = {isa = PBXBuildFile; fileRef = 0AAFD6EAB1F3FB697B1A2D05 /* LUCIDE_LICENSE.txt */; };
 		E02200000000000000000001 /* HarnessSetupModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E02200000000000000000002; };
 		E02200000000000000000003 /* HarnessSetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E02200000000000000000004; };
@@ -341,6 +342,7 @@
 				1865697E240F2F2763E855ED /* CompanionClient in Frameworks */,
 				0C11E0000000000000000001 /* WovenMatterClient in Frameworks */,
 				B40A00000000000000000001 /* WovenMatterAutomation in Frameworks */,
+				A31800000000000000000001 /* WovenMatterSpreadsheetUI in Frameworks */,
 				D46000000000000000000002 /* WovenMatterDashboardStore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -587,6 +589,7 @@
 			);
 			name = WovenMatter;
 			packageProductDependencies = (
+				A31800000000000000000002 /* WovenMatterSpreadsheetUI */,
                 A03000000000000000000004 /* Sparkle */,
 				C3AE1E4D864C6AAF1D9CDFAC /* CompanionClient */,
 				0C11E0000000000000000004 /* WovenMatterClient */,
@@ -1076,6 +1079,7 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		A31800000000000000000002 /* WovenMatterSpreadsheetUI */ = {isa = XCSwiftPackageProductDependency; productName = WovenMatterSpreadsheetUI; };
         A03000000000000000000004 /* Sparkle */ = {isa = XCSwiftPackageProductDependency; package = A03000000000000000000005; productName = Sparkle; };
 		B40A00000000000000000002 /* WovenMatterAutomation */ = {isa = XCSwiftPackageProductDependency; productName = WovenMatterAutomation; };
 		0C11E0000000000000000004 /* WovenMatterClient */ = {

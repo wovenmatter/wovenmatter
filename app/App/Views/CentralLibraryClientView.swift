@@ -1,6 +1,7 @@
 import AppKit
 import CompanionClient
 import SwiftUI
+import WovenMatterSpreadsheetUI
 import WovenMatterCompanion
 import WovenMatterCore
 
