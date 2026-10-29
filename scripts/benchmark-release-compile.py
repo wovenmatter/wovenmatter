@@ -18,8 +18,9 @@ root = Path(os.environ['RUNNER_TEMP'])
 output = root / 'release-cache-evidence'
 archive = root / 'release-compile-paired'
 archive.mkdir(parents=True, exist_ok=True)
-for variant in (['baseline', 'candidate'] if order == 'baseline-first' else ['candidate', 'baseline']):
-    subprocess.run(['git', 'restore', '--source', base if variant == 'baseline' else 'HEAD', '--', *changed], check=True)
+sequence = ['warmup'] + (['baseline', 'candidate'] if order == 'baseline-first' else ['candidate', 'baseline'])
+for trial, variant in enumerate(sequence):
+    subprocess.run(['git', 'restore', '--source', base if variant in ('baseline', 'warmup') else 'HEAD', '--', *changed], check=True)
     shutil.rmtree(output, ignore_errors=True)
     output.mkdir(parents=True)
     manifest = {p: hashlib.sha256(Path(p).read_bytes()).hexdigest() for p in changed if Path(p).is_file()}
@@ -35,11 +36,12 @@ for variant in (['baseline', 'candidate'] if order == 'baseline-first' else ['ca
     (sources / 'workspace-state.json').unlink(missing_ok=True)
     cef = root / 'paired-cef'
     shutil.rmtree(cef, ignore_errors=True)
-    env = dict(os.environ, WOVENMATTER_CEF_CACHE_DIR=str(cef))
+    env = dict(os.environ, WOVENMATTER_CEF_CACHE_DIR=str(cef),
+               WOVENMATTER_BENCHMARK_MARKER=f'Woven Matter Compile Trial {trial}')
     subprocess.run(['python3', 'scripts/benchmark-release-cache.py', 'warm-edit'], env=env, check=True)
     p = output / 'measurement.json'
     d = json.loads(p.read_text())
-    d.update(variant=variant, order=order, base=base, changed=changed)
+    d.update(variant=variant, order=order, base=base, changed=changed, warmup=variant == 'warmup', trial=trial)
     assert d['replay_misses'] == 1 and d['browser_reused'], 'The app must actually recompile in each half'
     p.write_text(json.dumps(d, indent=2) + '\n')
     shutil.copytree(output, archive / variant)
