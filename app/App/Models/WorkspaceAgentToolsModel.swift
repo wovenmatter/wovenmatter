@@ -588,7 +588,7 @@ final class WorkspaceAgentToolsModel {
                 after: Int64(command.integer("after", default: 0, range: 0...Int.max)),
                 limit: command.integer("limit", default: 100, range: 1...200)))
         case "create":
-            guard let kind = NoteArtifactKind(rawValue: command.options["kind"] ?? "note") else { throw WorkspaceToolError.invalid("Choose note, spreadsheet or html.") }
+            guard let kind = NoteArtifactKind(rawValue: command.options["kind"] ?? "note") else { throw WorkspaceToolError.invalid("Choose note, spreadsheet, html or canvas.") }
             let id = try await database.createNote(folderID: command.options["folder"], title: command.required("title"), kind: kind, callerConversationID: callerID, requestID: request.requestID)
             return .init(result: .object(["id": .string(id)]))
         case "versions", "version":

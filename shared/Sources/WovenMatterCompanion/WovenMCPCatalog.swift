@@ -182,7 +182,7 @@ public enum WovenMCPCatalog {
     for action in ["query", "execute"] { add("databases " + action, fields("database-id query"), required: "databaseID query", mutation: action == "execute", description: "\(action == "query" ? "Read" : "Modify") the execution workspace's managed SQLite database. Database writes are not replayable after an uncertain outcome; query current data before another write.") }
     add("notes list", fields("search folder") + [field("sort", choices: ["newest", "oldest"])] + page)
     add("notes folders", page)
-    add("notes create", fields("title folder") + [field("kind", choices: ["note", "spreadsheet", "html"])], required: "title", mutation: true)
+    add("notes create", fields("title folder") + [field("kind", choices: ["note", "spreadsheet", "html", "canvas"])], required: "title", mutation: true)
     add("notes read", [note] + chunk, required: "noteID")
     add("notes append", [note, revision] + fields("text style"), required: "noteID text", mutation: true)
     add("notes insert", [note, revision] + fields("text after style"), required: "noteID text revision", mutation: true)

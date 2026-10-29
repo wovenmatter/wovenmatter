@@ -584,12 +584,14 @@ public extension NoteDocument {
         guard let index = blocks.firstIndex(where: { $0.id == id }) else {
           throw NoteEditError.blockNotFound(id)
         }
+        if let placement = canvas?.removeValue(forKey: id) { canvas?[block.id] = placement }
         blocks[index] = block
       case .deleteBlock(let id):
         guard let index = blocks.firstIndex(where: { $0.id == id }) else {
           throw NoteEditError.blockNotFound(id)
         }
         blocks.remove(at: index)
+        canvas?.removeValue(forKey: id)
       case .setParagraphStyle(let blockID, let style):
         guard let index = blocks.firstIndex(where: { $0.id == blockID }),
               case .richText(var block) = blocks[index] else {

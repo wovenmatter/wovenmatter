@@ -290,6 +290,7 @@ struct LibraryClientNotePane: View {
                         Button("Insert table") { editor.insertTable() }; Spacer()
                     }.buttonStyle(DashboardQuietButtonStyle()).padding(.horizontal, 22)
                     DashboardNoteEditor(document: document, controller: editor).padding(.horizontal, 22)
+                case .canvas: DashboardCanvasEditor(document: document)
                 case .spreadsheet: DashboardSpreadsheetEditor(document: document)
                 case .html:
                     VSplitView {

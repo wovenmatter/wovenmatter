@@ -42,6 +42,16 @@ extension NoteDocument {
   /// reject ragged structures instead of trimming writing or manufacturing IDs.
   public func validateEditableShape() throws {
     guard blocks.count <= 10_000 else { throw NoteDocumentSafetyError.tooLarge }
+    if kind == .canvas {
+      guard blocks.count <= Self.maximumCanvasCards else { throw NoteDocumentSafetyError.tooLarge }
+    }
+    if let canvas {
+      guard kind == .canvas, canvas.count <= Self.maximumCanvasCards,
+            canvas.values.allSatisfy(\.isValid),
+            Set(canvas.keys).isSubset(of: Set(blocks.map(\.id))) else {
+        throw NoteDocumentSafetyError.unsupportedFormat
+      }
+    }
     var totalCells = 0
     var ids = Set<String>()
     for block in blocks {

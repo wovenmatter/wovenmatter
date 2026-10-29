@@ -81,7 +81,7 @@ struct NotePane: View {
         } else {
           ScrollView {
             LazyVStack(alignment: .leading, spacing: 12) {
-              if document.kind != .note { Text("Spreadsheet · read only").font(.caption).foregroundStyle(DashboardPalette.mutedForeground) }
+              if document.kind != .note { Text(document.kind == .canvas ? "Canvas · read only · arrange cards on your Mac" : "Spreadsheet · read only").font(.caption).foregroundStyle(DashboardPalette.mutedForeground) }
               else if !editable { Text("Read only · unsupported attributes preserved").font(.caption).foregroundStyle(DashboardPalette.mutedForeground) }
               if document.kind == .spreadsheet, document.databaseLink != nil, document.blocks.isEmpty {
                 LinkedArtifactPreview(model: model, note: note, tableID: nil, html: nil)

@@ -181,6 +181,11 @@ when an intentional design change is accepted.
   24-point bottom gutter outside the scrolling text, without stacking additional
   editor or footer padding beneath the note. Align the count button's right
   edge with the header controls using the same 12-point side inset.
+- **Canvas:** use the existing workspace and theme-whisper surfaces with quiet
+  card borders. Keep Add card, Arrange, and zoom in one compact toolbar; card
+  headers own dragging and an accessible actions menu for movement, size, and
+  removal. References open the original asset. Preserve chat beside the board
+  and use the existing note title, history, and save/conflict controls.
 - **Conversation progress:** use the shared elapsed work header and static semantic
   icons with meaningful live text. Do not show busy spinners in tool-call rows,
   work-group headers, reasoning indicators, or tool-detail loading. Thinking and

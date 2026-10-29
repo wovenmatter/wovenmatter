@@ -8,6 +8,7 @@ struct DashboardNotePane: View {
     let note: WorkspaceNoteRecord
     let focusesTitleOnAppear: Bool
     let onInitialFocusHandled: () -> Void
+    let onOpenNote: (String) -> Void
     @FocusState private var titleFocused: Bool
     @State private var editorController = DashboardNoteEditorController()
     @State private var dictationEditor = DictationEditor()
@@ -177,6 +178,10 @@ struct DashboardNotePane: View {
                             DashboardNoteEditor(document: document, controller: editorController,
                                 dictationEditor: dictationEditor, dictationIdentity: note.id)
                                 .accessibilityLabel("Note body")
+                        case .canvas:
+                            DashboardCanvasEditor(document: document,
+                                assets: (model.workspaceOverview?.notes ?? []).filter { $0.id != note.id },
+                                onOpenAsset: onOpenNote)
                         case .spreadsheet:
                             DashboardSpreadsheetEditor(document: document)
                                 .accessibilityLabel("Spreadsheet")
@@ -339,7 +344,7 @@ struct DashboardNotePane: View {
                     latest.blocks[index] = .table(data.applying(to: existing))
                     if latest != currentDocument { document.wrappedValue = latest }
                 }
-            case .note:
+            case .note, .canvas:
                 var loaded: [(table: NoteTableBlock, data: DatabaseTabularData)] = []
                 for block in snapshot.blocks {
                     guard case .table(let table) = block,

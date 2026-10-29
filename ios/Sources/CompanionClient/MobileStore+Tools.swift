@@ -80,7 +80,7 @@ extension MobileStore {
     }
     let id = command.action == "create" ? requestID : try command.required("note-id", allowPositional: true)
     if command.action == "create" {
-      guard state.notes[id] == nil, !state.deletedNotes.contains(id), let kind = NoteArtifactKind(rawValue: command.options["kind"] ?? "note") else { throw WorkspaceToolError.invalid("Choose a new note, spreadsheet, or HTML artifact.") }
+      guard state.notes[id] == nil, !state.deletedNotes.contains(id), let kind = NoteArtifactKind(rawValue: command.options["kind"] ?? "note") else { throw WorkspaceToolError.invalid("Choose a new note, spreadsheet, HTML artifact, or canvas.") }
       let folder = command.options["folder"] ?? context.folderID
       if let folder, state.folders[folder] == nil { throw WorkspaceToolError.notFound("This folder is not available on this device.") }
       let content = try NoteDocument(kind: kind).encoded()
