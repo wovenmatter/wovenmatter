@@ -361,6 +361,8 @@ final class ApplicationModel {
     @ObservationIgnored var backendCommandsInFlight = 0
     @ObservationIgnored private var backendExecutionErrorIDs: Set<String> = []
     @ObservationIgnored private var backendStopRequestedForLifecycle = false
+    @ObservationIgnored private var backendReadinessTask: Task<Void, any Error>?
+    @ObservationIgnored private var localSessionShutdownTask: Task<Void, Never>?
     @ObservationIgnored var isPreparedForExecutionRestart = false
     private var startupTask: Task<Void, Never>?
     private var conversationChangeTask: Task<Void, Never>?
@@ -3558,10 +3560,10 @@ final class ApplicationModel {
     }
 
     func shutdownLocalACPSessions() {
+        guard localSessionShutdownTask == nil else { return }
         automationHost?.stop(); automationHost = nil
         executorRuntime.setupTask?.cancel()
         for session in Set(executorRuntime.sessions.values) { executorRuntime.cancel(session) }
-        Task { await executorRuntime.client?.shutdown() }
         activeWorkSleepPrevention.stop()
         closedLidProtection.stop()
         library.stop()
@@ -3569,7 +3571,6 @@ final class ApplicationModel {
         agentTools?.stop()
         for task in toolCreationTasks.values { task.cancel() }
         toolCreationTasks.removeAll()
-        Task { try? await dashboardStore?.database.cancelPendingCoordinationAccess() }
         pendingSessionAccess.removeAll()
         for task in applyingSessionSelectionTasks.values { task.cancel() }
         applyingSessionSelectionTasks.removeAll()
@@ -3583,7 +3584,20 @@ final class ApplicationModel {
             resolveLocalACPInteraction(id: interactionID, response: .cancelled)
         }
         LocalACPClient.terminateAllProcesses()
-        Task { for instance in openCodeInstances { await instance.shutdown() }; await dashboardStore?.shutdownLocalACPSessions() }
+        localSessionShutdownTask = Task {
+            await executorRuntime.client?.shutdown()
+            try? await dashboardStore?.database.cancelPendingCoordinationAccess()
+            for instance in openCodeInstances { await instance.shutdown() }
+            await dashboardStore?.shutdownLocalACPSessions()
+        }
+    }
+
+    func finishBackendShutdown() async {
+        startupTask?.cancel()
+        await startupTask?.value
+        shutdownLocalACPSessions()
+        await localSessionShutdownTask?.value
+        backendRPCServer?.stop()
     }
 
     func requestLocalACPPermission(
@@ -4310,7 +4324,7 @@ extension ApplicationModel {
     }
 
     var readyForBackendClients: Bool {
-        state == .ready && (!DevelopmentLaunch.isClient || liveLibraryClient?.localExecution != nil)
+        !backendStopping && state == .ready && (!DevelopmentLaunch.isClient || liveLibraryClient?.localExecution != nil)
     }
 
     func startBackendService() async {
@@ -4339,6 +4353,9 @@ extension ApplicationModel {
 
     func handleBackendRequest(_ request: BackendRPCRequest) async -> BackendRPCResponse {
         let isCommand = request.method.hasSuffix(".command")
+        if request.method == "application.readiness", let service = backendApplicationService {
+            return await service.handle(request)
+        }
         guard !backendStopping else { return .init(id: request.id, error: "The background service is stopping.") }
         if isCommand { backendCommandsInFlight += 1 }
         defer { if isCommand { backendCommandsInFlight -= 1 } }
@@ -4451,7 +4468,10 @@ extension ApplicationModel {
                 // enter while confirmed work is being withdrawn and drained.
                 backendStopping = true
                 do {
-                    guard await flushNoteDrafts() else { throw ApplicationModelError.noteDraftSaveFailed }
+                    // Startup must not resume services behind a stopping owner.
+                    startupTask?.cancel()
+                    await startupTask?.value
+                    guard await flushNotesBeforeBackendClientQuit() else { throw ApplicationModelError.noteDraftSaveFailed }
                     executorRuntime.cancelAll()
                     try await dashboardStore?.database.cancelPendingCoordinationAccess()
                     pendingSessionAccess.removeAll()
@@ -4549,6 +4569,9 @@ extension ApplicationModel {
     }
 
     func startBackendClient() async {
+        backendClientTask?.cancel()
+        backendConversationClientTask?.cancel()
+        let disconnectedMessage = "Background service disconnected. Your sessions remain owned by the backend."
         do {
             let support = try Self.dashboardSupportDirectory()
             let client = BackendRPCClient(socketURL: LocalExecutionRole.backendSocketURL(workspaceDirectory: support))
@@ -4556,10 +4579,7 @@ extension ApplicationModel {
             analytics.configure(rpc: client)
             // A running owner is the common path: connect directly without any
             // launchctl subprocesses or main-thread startup waits.
-            let existing = try? await client.call(method: "application.readiness", timeout: 0.5)
-            if existing.flatMap({ try? JSONDecoder().decode(BackendApplicationReadiness.self, from: $0) }) == nil {
-                try await LocalBackgroundExecution.launchBackendProcess()
-            }
+            try await ensureBackendReady()
             usage.backendRequest = { [weak self] method, payload in
                 guard let self else { throw CancellationError() }
                 return try await self.callBackend(method: method, payload: payload)
@@ -4578,7 +4598,7 @@ extension ApplicationModel {
             var startupMessage: String?
             while Date() < readyDeadline {
                 try Task.checkCancellation()
-                if let data = try? await client.call(method: "application.readiness"),
+                if let data = try? await client.call(method: "application.readiness", timeout: 0.5),
                    let status = try? JSONDecoder().decode(BackendApplicationReadiness.self, from: data) {
                     if let error = status.startupError { throw BackendRPCError.remote(error) }
                     startupMessage = status.startupMessage
@@ -4646,7 +4666,7 @@ extension ApplicationModel {
                         await self.refreshConversation(id: id)
                     }
                 }, failed: { [weak self] _ in
-                    self?.workspaceError = "Background service disconnected. Your sessions remain owned by the backend."
+                    self?.workspaceError = disconnectedMessage
                 })
             }
             backendClientTask = Task { [weak self] in
@@ -4679,8 +4699,9 @@ extension ApplicationModel {
                     }
                     if change.requiresReload || change.scopes.contains(.usage) { await self.usage.refreshBackendSnapshot() }
                     if change.requiresReload || change.scopes.contains(.settings) { try await self.agentTools?.reloadInBackground() }
+                    if self.workspaceError == disconnectedMessage { self.workspaceError = nil }
                 }, failed: { [weak self] _ in
-                    self?.workspaceError = "Background service disconnected. Your sessions remain owned by the backend."
+                    self?.workspaceError = disconnectedMessage
                 })
             }
         } catch { state = .failed(error.localizedDescription) }
@@ -4849,41 +4870,58 @@ extension ApplicationModel {
         backendStopRequestedForLifecycle = true
         try await WovenMatterBackendProcess.waitForExecutionOwnerToExit(
             leaseURL: Self.dashboardSupportDirectory().appending(path: LocalExecutionRole.backend.leaseFileName))
-        try LocalBackendSupervisor.current().suspend()
+        if DevelopmentLaunch.mode == nil {
+            try await Task.detached(priority: .userInitiated) {
+                try LocalBackendSupervisor.current().suspend()
+            }.value
+        }
         isPreparedForExecutionRestart = true
     }
 
     func recoverBackendAfterFailedUpdate() async throws {
         isPreparedForExecutionRestart = false
         defer { resumeNoteEditing() }
-        try await ensureBackendReadyForUpdate()
+        try await ensureBackendReady()
     }
 
-    /// Also used before update preparation: Sparkle can quit the background
-    /// process before asking the frontend to terminate. Never skip pending writes
-    /// or treat a missing service as an acknowledged, successful handoff.
-    func ensureBackendReadyForUpdate() async throws {
+    /// Shared by startup and update preparation/recovery. Never skip pending
+    /// writes or treat a missing service as an acknowledged, successful handoff.
+    func ensureBackendReady() async throws {
         guard isBackendFrontend else { return }
-        // A refused stop leaves the original backend in place. A successful stop
-        // releases its lease before a replacement process may take ownership.
-        if !backendStopRequestedForLifecycle,
-           let data = try? await callBackend(method: "application.readiness"),
-           let status = try? JSONDecoder().decode(BackendApplicationReadiness.self, from: data), status.ready {
-            return
-        }
-        try await WovenMatterBackendProcess.waitForExecutionOwnerToExit(
-            leaseURL: Self.dashboardSupportDirectory().appending(path: LocalExecutionRole.backend.leaseFileName))
-        try await LocalBackgroundExecution.launchBackendProcess()
-        for _ in 0..<100 {
-            if let data = try? await callBackend(method: "application.readiness"),
-               let status = try? JSONDecoder().decode(BackendApplicationReadiness.self, from: data), status.ready {
-                backendStopRequestedForLifecycle = false
-                workspaceError = nil
-                return
+        // Settings, startup and recovery share one launch and readiness barrier.
+        if let task = backendReadinessTask { return try await task.value }
+        let task = Task { @MainActor in
+            let support = try Self.dashboardSupportDirectory()
+            let lease = support.appending(path: LocalExecutionRole.backend.leaseFileName)
+            let client = self.backendRPCClient ?? BackendRPCClient(socketURL:
+                LocalExecutionRole.backendSocketURL(workspaceDirectory: support))
+            self.backendRPCClient = client
+            if self.backendStopRequestedForLifecycle {
+                try await WovenMatterBackendProcess.waitForExecutionOwnerToExit(leaseURL: lease)
             }
-            try await Task.sleep(for: .milliseconds(100))
+            try await WovenMatterBackendProcess.ensureReady(check: {
+                let data: Data
+                do { data = try await client.call(method: "application.readiness", timeout: 0.5) }
+                catch BackendRPCError.unavailable { return false }
+                catch BackendRPCError.timedOut { return false }
+                let status = try JSONDecoder().decode(BackendApplicationReadiness.self, from: data)
+                if let error = status.startupError { throw BackendRPCError.remote(error) }
+                guard status.protocolVersion == 1, status.completeClientRouting,
+                      status.capabilities.contains("session.dispatch-epochs") else {
+                    throw BackendRPCError.remote("The background service is incompatible with this app. Restart Woven Matter after finishing current work.")
+                }
+                return status.ready
+            }, ownerIsPresent: {
+                try WovenMatterBackendProcess.executionOwnerIsPresent(leaseURL: lease)
+            }, launch: {
+                try await LocalBackgroundExecution.launchBackendProcess()
+            })
+            self.backendStopRequestedForLifecycle = false
+            self.workspaceError = nil
         }
-        throw BackendRPCError.remote("The background service could not be restarted. Reopen Woven Matter to reconnect.")
+        backendReadinessTask = task
+        defer { backendReadinessTask = nil }
+        try await task.value
     }
 
 }

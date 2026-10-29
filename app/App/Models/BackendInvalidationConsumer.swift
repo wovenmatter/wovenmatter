@@ -21,6 +21,7 @@ enum BackendInvalidationConsumer {
             } catch is CancellationError {
                 return
             } catch {
+                if Task.isCancelled { return }
                 // Reconnect with a full reload after an incomplete projection.
                 // Never acknowledge an invalidation whose apply failed.
                 cursor = nil

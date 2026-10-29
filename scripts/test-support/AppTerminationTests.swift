@@ -52,7 +52,7 @@ final class ApplicationModel {
     func record(_ event: String) { events.append(event) }
     func recordWrite(_ event: String) { events.append(backendReady ? event : event + "-without-backend") }
 
-    func ensureBackendReadyForUpdate() async throws {
+    func ensureBackendReady() async throws {
         if backendReady { record("ready"); return }
         // Model the lease wait and readiness barrier; no write may overtake it.
         try await Task.sleep(for: .milliseconds(20))
@@ -77,7 +77,7 @@ final class ApplicationModel {
         record("recover")
         isPreparedForExecutionRestart = false
         defer { resumeNoteEditing() }
-        try await ensureBackendReadyForUpdate()
+        try await ensureBackendReady()
     }
     func refreshRuntimeInventory() {}
     func refreshLocalACPRuntimesNow() {}
@@ -147,6 +147,7 @@ private final class TerminationProbe: NSObject, NSApplicationDelegate {
         Task { @MainActor in
             try! await AppTerminationTests.verifyTransitionRecovery()
             try! await AppTerminationTests.verifyExecutionLeaseWait()
+            try! await AppTerminationTests.verifyReadinessBarrier()
             if DesktopUpdater.shared.hasStagedUpdate {
                 // An ordinary Cmd-Q after extraction does not call willInstallUpdate.
                 precondition(!DesktopUpdater.shared.isInstalling)
@@ -290,6 +291,43 @@ private struct AppTerminationTests {
         precondition(finished)
         child.waitUntilExit()
         precondition(child.terminationStatus == 0)
+        try await WovenMatterBackendProcess.waitForExecutionOwnerToExit(leaseURL: root.appending(path: "never-started.lock"))
+    }
+
+    @MainActor static func verifyReadinessBarrier() async throws {
+        var checks = 0
+        var launches = 0
+        // A slow but live owner must be waited for, never replaced or waited
+        // on for lease release. This used to fail recovery after 10 seconds.
+        try await WovenMatterBackendProcess.ensureReady(check: {
+            checks += 1
+            return checks == 3
+        }, ownerIsPresent: { true }, launch: { launches += 1 })
+        precondition(checks == 3 && launches == 0)
+        checks = 0
+        try await WovenMatterBackendProcess.ensureReady(check: {
+            checks += 1
+            return checks == 3
+        }, ownerIsPresent: { false }, launch: { launches += 1 })
+        precondition(checks == 3 && launches == 1)
+        checks = 0
+        launches = 0
+        // An owner that exits while starting permits exactly one launch.
+        try await WovenMatterBackendProcess.ensureReady(check: {
+            checks += 1
+            return checks == 4
+        }, ownerIsPresent: { checks < 2 }, launch: { launches += 1 })
+        precondition(launches == 1)
+        do {
+            try await WovenMatterBackendProcess.ensureReady(timeout: 0.05,
+                check: { false }, ownerIsPresent: { true }, launch: { preconditionFailure("Replaced live owner") })
+            preconditionFailure("Readiness wait did not time out")
+        } catch { precondition((error as NSError).domain == "BackgroundExecution") }
+        do {
+            try await WovenMatterBackendProcess.ensureReady(check: { throw RestartRefused() },
+                ownerIsPresent: { true }, launch: { preconditionFailure("Launched over startup failure") })
+            preconditionFailure("Startup failure was hidden")
+        } catch is RestartRefused { }
     }
 
     @MainActor static func verifyTransitionRecovery() async throws {
@@ -359,6 +397,28 @@ private struct AppTerminationTests {
     }
 
     @MainActor static func main() {
+        if CommandLine.arguments.count == 4, CommandLine.arguments[1] == "--headless-probe" {
+            let ready = URL(fileURLWithPath: CommandLine.arguments[2])
+            let stopped = URL(fileURLWithPath: CommandLine.arguments[3])
+            precondition(NSApp == nil)
+            WovenMatterBackendProcess.run(start: {
+                Task { @MainActor in
+                    // Use the same discovery API as Sparkle after async work.
+                    try! await Task.sleep(for: .milliseconds(50))
+                    precondition(NSApp == nil)
+                    let matches = NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier!)
+                    precondition(!matches.contains { $0.processIdentifier == getpid() }, "Service registered as GUI")
+                    try! String(getpid()).write(to: ready, atomically: true, encoding: .utf8)
+                }
+            }, terminate: {
+                precondition(NSApp == nil)
+                try! "PASS".write(to: stopped, atomically: true, encoding: .utf8)
+                WovenMatterBackendProcess.stop()
+                return true
+            })
+            precondition(NSApp == nil)
+            return
+        }
         if CommandLine.arguments.count == 5, CommandLine.arguments[1] == "--lease-probe" {
             let descriptor = Darwin.open(CommandLine.arguments[2], O_CREAT | O_RDWR, 0o600)
             precondition(descriptor >= 0 && Darwin.lockf(descriptor, F_TLOCK, 0) == 0)
