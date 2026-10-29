@@ -10,12 +10,11 @@ permissions:
   actions: read
 jobs:
   build:
-    name: compile-${{ matrix.variant }}-${{ matrix.repeat }}
+    name: compile-${{ matrix.order }}
     strategy:
       fail-fast: false
       matrix:
-        variant: [baseline, candidate]
-        repeat: [1, 2]
+        order: [baseline-first, candidate-first]
     runs-on: macos-26
     timeout-minutes: 60
     steps:
@@ -57,11 +56,10 @@ jobs:
       - name: Measure app-source compile
         env:
           COMPARE_BASE: ${{ inputs.base }}
-          COMPARE_VARIANT: ${{ matrix.variant }}
-          COMPARE_REPEAT: ${{ matrix.repeat }}
+          COMPARE_ORDER: ${{ matrix.order }}
         run: python3 scripts/benchmark-release-compile.py
       - uses: actions/upload-artifact@main
         if: always()
         with:
-          name: compile-${{ matrix.variant }}-${{ matrix.repeat }}
-          path: ${{ runner.temp }}/release-cache-evidence
+          name: compile-${{ matrix.order }}
+          path: ${{ runner.temp }}/release-compile-paired
