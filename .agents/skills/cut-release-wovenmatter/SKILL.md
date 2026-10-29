@@ -3,11 +3,17 @@ name: cut-release-wovenmatter
 description: Cut, prepare, verify, and publish a WovenMatter macOS release.
 ---
 
-A supplied or confirmed version authorizes building and verifying a private draft,
-not publication. If omitted, recommend an unused semantic version and wait for
-confirmation before tagging. Always pause for Trey's explicit manual approval
-of the exact release description before publishing. A release request, version
-confirmation, or approval of a previous release is not description approval.
+An explicit request to cut a release authorizes building and verifying a private
+draft, not publication. Use a supplied version as given. If none is supplied,
+choose it from the change range since the previous public release: the next
+unused patch version for a maintenance-only release, otherwise the unused
+semantic version that the new capabilities or compatibility changes call for.
+State it and start the private build after the access, dependency, and source
+checks below; do not stop to confirm it. Ask first only when a material
+version-policy or compatibility question makes the version genuinely ambiguous. Always pause for Trey's explicit manual approval of
+the exact release description, which shows the version and download badge, before
+publishing. A release request, a stated version, or approval of a previous release
+is not description approval.
 
 Before tagging or any release mutation, run `scripts/check-release-access.sh`.
 It verifies that existing GitHub API access matches the configured SSH
@@ -49,16 +55,32 @@ Always build a new production Release app; a Debug app is never a distribution
 artifact.
 
 The tag-triggered `.github/workflows/release.yml` builds a signed, notarized
-Apple Silicon app and stages a private draft. After its successful run, verify
+Apple Silicon app and stages a private draft. Its six named phase steps show live
+progress and record per-phase timings. It restores component caches produced by
+the manual, main-only `Prepare release dependencies` workflow. Release
+preparation does not dispatch that workflow. A miss, for example after a
+toolchain or browser-source change, compiles those parts in full; no release
+duration is guaranteed. After its successful run, verify
 through `scripts/publish-release.sh --verify-only vX.Y.Z EXPECTED_COMMIT_SHA`.
 The script checks source, workflow, assets, checksums, signing, notarization,
 and Gatekeeper. GitHub CLI authentication must match the repository's SSH account.
+It keeps downloaded bytes, never results, in a private local store; the later
+`--approved-notes` run rehashes them, repeats every check, and refuses a draft or
+asset changed since verification. Do not clear that store between the two runs.
 
-Then write the release description from the material changes since the previous
+Once the tag starts the hosted build, list the PRs merged since the previous public
+release and draft the release description while the build runs, so Trey can review
+it without waiting for packaging. Approval of that exact text persists for the same
+release; do not request it again merely because the build finished. Stage the
+approved file on the private draft when it exists. Publication still requires a
+successful workflow and standard artifact verification.
+
+Write the release description from the material changes since the previous
 public release. Inspect the complete commit/PR range and underlying changes;
 do not simply repeat commit titles. Use this structure for every release:
 
-1. A short opening explanation of the release and its biggest changes.
+1. A short opening explanation led by major user-facing capabilities. Put
+   individual bug fixes in **Improvements and fixes**, rather than the headline.
 2. The README-style download badge directly below the opening paragraph.
 3. **New capabilities** — bullet points describing major new features.
 4. **Improvements and fixes** — bullet points describing noticeable improvements
@@ -90,7 +112,8 @@ both with an ambiguous phrase such as "Full access."
 Save the description in a UTF-8 Markdown file and update the private draft with
 `gh release edit vX.Y.Z --notes-file /absolute/path/to/notes.md`. Present the full
 description to Trey along with the exact commit, validation result, and draft
-URL. Stop and wait for his explicit approval; leave the release private. Apply
+URL. If that exact description has not already been approved, stop and wait for
+his explicit approval; leave the release private. Apply
 requested edits and show the revised description for approval. Any later change
 to the description or release commit requires fresh approval.
 
@@ -103,6 +126,51 @@ private. Never bypass this gate with direct GitHub publication commands.
 
 Report the exact commit, validation result, and release URL with its verified
 public state after publication.
+
+
+## Full-update packaging that shipped successfully
+
+Use the current scripts and [desktop update documentation](../../../docs/DESKTOP_UPDATES.md).
+Release 0.3.2 from `fb415bf38ae575adfd46fdac1295aca363e75dfe` shipped
+through this path; Trey confirmed the installed 0.3.1 → 0.3.2 update worked.
+
+- Keep Chromium/CEF and other dependencies current. Do not downgrade the browser
+  to reduce packaging cost.
+- Ship full signed Sparkle updates. After signing, notarizing, and stapling the
+  app and DMG, generate the feed once from the final archive. Its input directory
+  contains only the new DMG; `generate_appcast` uses `--maximum-deltas 0`.
+  Do not download older DMGs as delta bases or restore background preparation
+  and feed regeneration. Feed, inventory, and update-path checks reject deltas.
+- Use ordinary zlib level 6 DMG compression. The retired 512 MiB compatibility
+  cap and compression retries are gone; do not reintroduce them.
+- Keep both notarization submissions: the app's own stapled ticket is required
+  inside the DMG. Dropping one needs a separate signed experiment first.
+- Retain feed/payload signatures, provenance, exact asset inventory, checksums,
+  notarization, Gatekeeper, and full-update reconstruction verification.
+- Keep generator start/elapsed-time logging. Do not add an arbitrary ten-minute
+  cutoff; the hosted job currently has a 120-minute timeout.
+
+Failed attempts spent a long time generating deltas across a Chromium upgrade
+against two older releases. Memory pressure was suspected, not measured. Do not
+claim a proven Sparkle runtime defect or assume compression fixes binary-diff
+cost. Keep deltas out of ordinary release preparation.
+
+## Background execution and completion
+
+Start the hosted build promptly after source selection; record its run URL and
+exact source SHA. Draft and review the description while the build runs.
+If publication is already explicitly approved, continue after workflow success
+with the standard verification and approved-notes publication commands above.
+A running build or background waiter is not proof of publication.
+
+On failure, collect diagnostics and report the actual blocker before restarting
+or changing the pipeline. Do not substitute repeated builds for diagnosis. The
+failing phase step and its `release-timing` lines identify where it stopped.
+Once the cause is understood, a new attempt reuses a complete verified private
+draft or rebuilds from compilation; it never resumes a failed phase.
+After publication, read back public state (`isDraft=false`), source provenance,
+and the exact release body against the approved UTF-8 file. Verify the download
+badge targets an existing release asset. Report success only after these checks.
 
 
 ## Explicitly requested same-version update repair

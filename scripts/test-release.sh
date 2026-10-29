@@ -92,6 +92,8 @@ for mode, expected in (("ok", 0), ("unavailable", 77), ("auth-required", 77),
 print("Release access checks passed: existing access, unavailable credentials/network, auth required, wrong account, wrong remote.")
 PYTEST
 python3 scripts/test-support/test_release_approval.py
+python3 scripts/test-support/test_release_artifacts.py
+python3 scripts/test-support/test_release_phases.py
 python3 scripts/test-support/test_release_notarization.py
 python3 scripts/test-support/test_release_cache.py
 python3 scripts/test-support/test_tagged_release_reuse.py
