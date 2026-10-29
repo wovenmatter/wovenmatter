@@ -6,7 +6,7 @@ import WovenMatterCore
 @Suite(.timeLimit(.minutes(1)))
 struct ACPActiveInputTests {
 
-    @Test(arguments: ["detached", "detached-fast", "detached-late-active", "detached-old-idle", "command-only", "fallback"])
+    @Test(arguments: ["detached", "detached-fast", "detached-late-active", "detached-old-idle", "command-only", "fallback", "fallback-codex"])
     func aSteerRacingCompletionRetainsHandlersAndWaitsForItsOwnOutput(mode: String) async throws {
         let f = try ActiveInputFixture(mode: mode)
         defer { f.remove() }
@@ -20,6 +20,15 @@ struct ACPActiveInputTests {
         #expect(try await receipt.completion.value == .endTurn)
         #expect(await events.text() == "beforecontinued")
         await client.shutdown()
+        if mode == "fallback" || mode == "fallback-codex" {
+            let requests = try f.requests()
+            let steering = try #require(requests.first { $0["method"] as? String == "_session/steering" })
+            let params = try #require(steering["params"] as? [String: Any])
+            let meta = try #require(params["_meta"] as? [String: Any])
+            #expect((meta["steering"] as? [String: Any])?["idleBehavior"] as? String == "promptRequired")
+            #expect(requests.filter { $0["method"] as? String == "session/prompt" }.count == 2)
+            #expect(!requests.contains { $0["method"] as? String == "session/cancel" })
+        }
     }
 
     @Test(arguments: [AgentRuntimeKind.codex, .claudeCode, .grokBuild])
@@ -55,10 +64,11 @@ struct ACPActiveInputTests {
         }
     }
 
-    @Test func stopDuringAdmissionDoesNotStartTheFallbackPrompt() async throws {
+    @Test(arguments: [AgentRuntimeKind.codex, .claudeCode])
+    func stopDuringAdmissionDoesNotStartTheFallbackPrompt(kind: AgentRuntimeKind) async throws {
         let f = try ActiveInputFixture(mode: "cancel-fallback")
         defer { f.remove() }
-        let client = try f.client(.claudeCode)
+        let client = try f.client(kind)
         _ = try await client.initializeSession(workingDirectory: f.root, existingSessionID: nil, title: nil)
         let prompt = Task { try await client.prompt("start") }
         try await f.waitForPrompt()
@@ -141,7 +151,7 @@ private struct ActiveInputFixture {
                     result(i,dict(outcome='startedNewTurn'))
                     if mode=='detached-late-active': time.sleep(.03); status('active')
                     if mode!='detached-fast': time.sleep(.03); text('continued'); status('idle')
-                elif mode=='fallback':
+                elif mode in ['fallback','fallback-codex']:
                     if method=='_session/steering':
                         result(original,dict(stopReason='end_turn')); result(i,dict(outcome='promptRequired'))
                     else: text('continued'); result(i,dict(stopReason='end_turn'))

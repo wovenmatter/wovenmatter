@@ -54,8 +54,8 @@ SOFTWARE.
 Cua Driver third-party notices are included in Resources/Cua/THIRD-PARTY-NOTICES.md.
 
 
-Lucide Static 1.63.0
-https://github.com/lucide-icons/lucide/tree/1.63.0
+Lucide Static 1.64.0
+https://github.com/lucide-icons/lucide/tree/1.64.0
 
 The complete upstream license, including Feather-derived icon notices, is
 included in Resources/LUCIDE_LICENSE.txt.

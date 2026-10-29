@@ -14,13 +14,13 @@ The remote ACP relay admits same-run inputs, shares their transcript accumulator
 
 | Harness | Active input | Completion ownership |
 | --- | --- | --- |
-| Codex | Advertised `_session/steering`, backed by native `turn/steer` | Injected input belongs to the original prompt. `startedNewTurn` follows buffered `_meta.codex.threadStatus` active/idle events, including completion before acknowledgement. Adapter-only commands such as `/status` complete on their receipt because they emit no native turn lifecycle. |
+| Codex | Advertised `_session/steering` with `idleBehavior: promptRequired`, backed by native `turn/steer` | Injected input belongs to the original prompt; an idle race returns `promptRequired` so Woven Matter owns the subsequent prompt. `startedNewTurn` follows buffered `_meta.codex.threadStatus` active/idle events, including completion before acknowledgement. Adapter-only commands such as `/status` complete on their receipt because they emit no native turn lifecycle. |
 | Claude Code | Advertised `_session/steering` with `idleBehavior: promptRequired` | The adapter's original prompt owns injected input; a completion race returns `promptRequired` and Woven Matter tracks the subsequent prompt. |
 | Built-in | Advertised `_session/steering` over Pi's `prompt` with `streamingBehavior: steer` | The engine keeps its subscription and selected account context through native preflight and any continuation. Idle returns `promptRequired`. |
 | Grok Build | `_x.ai/interject`; existing concurrent ACP prompt path for attachments or an unavailable extension | Native receipt or prompt completion, without cancellation. |
 | OpenCode | `delivery: steer` on ordinary prompts and commands | Native session events/history. Delivery intent is explicit even before the activity snapshot refreshes. |
 
-Codex and Claude require an advertised capability. Woven Matter does not assume that an older adapter accepts concurrent prompts. The catalog minimums are Codex ACP 2.3.0 and Claude ACP 0.97.0; both use the stable ACP v1 session API, which retains steering and lifecycle extensions. Native command support and attachment restrictions remain the harness's responsibility. Codex ACP does not return a separate prompt response for detached continuations; Woven Matter observes the lifecycle it exposes. Provider errors that the adapter exposes only as text remain transcript text rather than a structured failure result.
+Codex and Claude require an advertised capability. Woven Matter does not assume that an older adapter accepts concurrent prompts. The catalog minimums are Codex ACP 2.4.0 and Claude ACP 0.99.0; both use the stable ACP v1 session API, which retains steering and lifecycle extensions. Native command support and attachment restrictions remain the harness's responsibility. Codex ACP does not return a separate prompt response for detached continuations; Woven Matter observes the lifecycle it exposes. Provider errors that the adapter exposes only as text remain transcript text rather than a structured failure result.
 
 ## Validation and acceptance
 
