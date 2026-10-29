@@ -11,6 +11,10 @@ on:
     types: [completed]
   workflow_dispatch:
     inputs:
+      compile_compare_base:
+        description: Accepted main SHA for paired compiler build comparisons
+        type: string
+        default: ''
       compile_profile:
         description: Profile the app compiler without signing or publishing
         type: boolean
@@ -23,12 +27,12 @@ permissions:
   contents: read
   actions: read
 concurrency:
-  group: release-cache-${{ (inputs.benchmark || inputs.compile_profile) && github.run_id || 'main' }}
+  group: release-cache-${{ (inputs.benchmark || inputs.compile_profile || inputs.compile_compare_base) && github.run_id || 'main' }}
   cancel-in-progress: false
 jobs:
   prepare:
     if: >-
-      !inputs.benchmark && !inputs.compile_profile && github.ref == 'refs/heads/main' &&
+      !inputs.benchmark && !inputs.compile_profile && !inputs.compile_compare_base && github.ref == 'refs/heads/main' &&
       (github.event_name == 'workflow_dispatch' || github.event_name == 'push' ||
        (github.event.workflow_run.conclusion == 'success' &&
         startsWith(github.event.workflow_run.head_branch, 'v') &&
@@ -132,3 +136,9 @@ jobs:
   compile-profile:
     if: github.event_name == 'workflow_dispatch' && inputs.compile_profile
     uses: ./.github/workflows/release-compile-profile.yml
+
+  compile-compare:
+    if: github.event_name == 'workflow_dispatch' && inputs.compile_compare_base != ''
+    uses: ./.github/workflows/release-compile-compare.yml
+    with:
+      base: ${{ inputs.compile_compare_base }}

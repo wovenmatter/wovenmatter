@@ -13,9 +13,9 @@ p = root / 'app/WovenMatter.xcodeproj/project.pbxproj'
 original = p.read_text()
 needle = 'SWIFT_COMPILATION_MODE = wholemodule;'
 assert original.count(needle) == 1
-flags = '-Xfrontend -debug-time-function-bodies -Xfrontend -debug-time-expression-type-checking -Xfrontend -profile-stats-entities -Xfrontend -stats-output-dir -Xfrontend ' + str(output / 'stats')
+flags = '-Xfrontend -stats-output-dir -Xfrontend ' + str(output / 'stats')
 p.write_text(original.replace(needle, needle + '\n\t\t\t\tOTHER_SWIFT_FLAGS = "$(inherited) ' + flags + '";'))
-env = dict(os.environ, WOVENMATTER_COMPILER_BUILD_ROOT='/private/tmp/wovenmatter-release-build',
+env = dict(os.environ, WOVENMATTER_COMPILATION_CACHE_ENABLED='NO', WOVENMATTER_COMPILER_BUILD_ROOT='/private/tmp/wovenmatter-release-build',
            WOVENMATTER_COMPILER_CACHE=str(Path.home() / 'Library/Caches/WovenMatter/Compiler'),
            WOVENMATTER_PACKAGE_CACHE=str(Path.home() / 'Library/Caches/WovenMatter/SourcePackages'))
 started = time.monotonic()
