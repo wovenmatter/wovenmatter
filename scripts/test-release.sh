@@ -96,6 +96,7 @@ python3 scripts/test-support/test_release_artifacts.py
 python3 scripts/test-support/test_release_phases.py
 python3 scripts/test-support/test_release_notarization.py
 python3 scripts/test-support/test_release_cache.py
+python3 scripts/test-support/test_release_cache_measurement.py
 python3 scripts/test-support/test_tagged_release_reuse.py
 python3 scripts/test-support/test_release_code.py
 python3 scripts/test-support/test_update_request.py

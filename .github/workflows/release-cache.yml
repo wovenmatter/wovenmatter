@@ -1,5 +1,9 @@
 name: Prepare release dependencies
 on:
+  # Bootstrap a changed producer once; ordinary source merges do not build.
+  push:
+    branches: [main]
+    paths: [.github/workflows/release-cache.yml]
   # Default-branch caches are visible to future tags. A tag cannot save a cache
   # for the next tag, so refresh them here after a successful release instead.
   workflow_run:
@@ -13,6 +17,7 @@ on:
         default: false
 permissions:
   contents: read
+  actions: read
 concurrency:
   group: release-cache-${{ inputs.benchmark && github.run_id || 'main' }}
   cancel-in-progress: false
@@ -20,7 +25,7 @@ jobs:
   prepare:
     if: >-
       !inputs.benchmark && github.ref == 'refs/heads/main' &&
-      (github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_dispatch' || github.event_name == 'push' ||
        (github.event.workflow_run.conclusion == 'success' &&
         github.event.workflow_run.head_repository.full_name == github.repository))
     runs-on: macos-26

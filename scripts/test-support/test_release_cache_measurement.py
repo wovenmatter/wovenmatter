@@ -6,7 +6,8 @@ spec = importlib.util.spec_from_file_location('compare', Path(__file__).resolve(
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 cold = dict(label='cold', seconds=900, status=0, revision='same', replay_hits=0, replay_misses=100, browser_reused=False)
-warm = [dict(cold, label=label, seconds=300, replay_hits=80, browser_reused=True) for label in ('warm-1', 'warm-2')]
+warm = [dict(cold, label=label, seconds=300, replay_hits=80, browser_reused=True) for label in ('warm-1', 'warm-2', 'warm-edit')]
+warm[2]['source_edited'] = True
 assert '66.7% faster' in module.compare([cold, *warm])
 def rejects(records):
     try:
@@ -15,7 +16,10 @@ def rejects(records):
         return
     raise AssertionError('Invalid measurements accepted')
 rejects([cold, warm[0]])
+rejects([cold, *warm, warm[0]])
+rejects([cold, warm[0], warm[1], dict(warm[2], source_edited=False)])
 rejects([dict(cold, browser_reused=True), *warm])
 for change in (dict(seconds=850), dict(status=1), dict(revision='other'), dict(browser_reused=False), dict(replay_hits=0)):
-    rejects([cold, warm[0], dict(warm[1], **change)])
+    rejects([cold, warm[0], dict(warm[1], **change), warm[2]])
+rejects([dict(cold, runner_seconds=950), dict(warm[0], runner_seconds=900), dict(warm[1], runner_seconds=400), dict(warm[2], runner_seconds=400)])
 print('Cache measurement gates reject a slow warm build, missing reuse, failed/mismatched builds and incomplete evidence.')

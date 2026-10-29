@@ -26,6 +26,15 @@ env = dict(os.environ, WOVENMATTER_COMPILER_BUILD_ROOT=str(build_root),
 # Seed only unsigned browser products during the cold run. Consumers stay read-only.
 if args.label == 'cold':
     env['WOVENMATTER_WRITE_BROWSER_CACHE'] = '1'
+source_file = root / 'app/App/WovenMatterApp.swift'
+original = source_file.read_bytes()
+source_edited = args.label == 'warm-edit'
+if source_edited:
+    before = b'return "Woven Matter"'
+    if original.count(before) != 1:
+        raise SystemExit('Controlled source edit no longer matches exactly once')
+    source_file.write_bytes(original.replace(before, b'return "Woven Matter Cache Benchmark"'))
+    (output / 'source-edit.diff').write_bytes(subprocess.check_output(['git', 'diff', '--', str(source_file)]))
 started = time.monotonic()
 with (output / 'build.log').open('w') as log:
     proc = subprocess.Popen([str(root / 'scripts/warm-release-compiler.sh')], cwd=root,
@@ -34,9 +43,11 @@ with (output / 'build.log').open('w') as log:
         log.write(line)
         print(line, end='', flush=True)
     status = proc.wait()
+if source_edited:
+    source_file.write_bytes(original)
 seconds = round(time.monotonic() - started, 3)
 text = (output / 'build.log').read_text()
-record = dict(label=args.label, seconds=seconds, status=status,
+record = dict(label=args.label, seconds=seconds, status=status, source_edited=source_edited,
               revision=subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
               replay_hits=len(re.findall(r'Replay cache hit', text, re.I)),
               replay_misses=len(re.findall(r'Replay cache miss', text, re.I)),

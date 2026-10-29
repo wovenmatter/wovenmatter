@@ -3,6 +3,7 @@ on:
   workflow_call:
 permissions:
   contents: read
+  actions: read
 jobs:
   cold:
     runs-on: macos-26
@@ -46,7 +47,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        label: [warm-1, warm-2]
+        label: [warm-1, warm-2, warm-edit]
     runs-on: macos-26
     timeout-minutes: 60
     steps:
@@ -101,4 +102,9 @@ jobs:
           pattern: release-cache-*
           path: evidence
       - name: Require measured cache use and a repeatable speedup
-        run: python3 scripts/compare-release-cache.py evidence | tee -a "$GITHUB_STEP_SUMMARY"
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" > jobs.json
+          python3 scripts/compare-release-cache.py evidence jobs.json | tee -a "$GITHUB_STEP_SUMMARY"
