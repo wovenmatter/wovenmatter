@@ -90,6 +90,8 @@ build-aware, signed full-update path.
 - `scripts/test-release.sh`: offline release/authentication/signing gates, real
   nested Sparkle signing with a temporary ad-hoc test identity, actual-framework
   delegate checks, and refresh authorization across real Git merge histories.
+  Also release phase ordering and source binding, independent component cache
+  keys, and reuse of verified local draft bytes, including replacement detection.
 - `python3 scripts/test-support/test_update_refresh.py`: private verification,
   promotion ordering, immutable history, durable rollback after runner loss,
   original-byte reuse, and idempotent retries.
@@ -108,25 +110,61 @@ Reference: [publishing](https://sparkle-project.org/documentation/publishing/).
 
 ## Release performance and cache trust
 
-`Prepare release dependencies` runs only on trusted `main`. It saves verified
-upstream download archives, npm's integrity-checked download store, SwiftPM Git
-repositories, and unsigned browser products. Release tags only restore caches;
-they never write them. Default-branch caches are intentional: GitHub does not
-share one release tag's private cache with the next tag. A miss builds normally.
-No app bundle, signing identity, notarization key, or updater key enters a cache.
-Archive digests are checked on every restored download. Browser outputs require
-an exact source/CEF/architecture/compiler/SDK/CMake/flags key and a complete
-content manifest. Corrupt entries rebuild. Swift checkouts are recreated from
-resolved revisions, and npm still installs the locked graph with scripts disabled.
+`Prepare release dependencies` is a manual workflow that runs only on trusted
+`main`; nothing runs on merges. Release tags only restore caches; they never
+write them. Default-branch caches are intentional: GitHub does not share one
+release tag's cache with the next tag, so saving from a release would not help
+the next one. No app bundle, signing identity, notarization key, or updater key
+enters a cache, and a miss builds normally.
 
-The main workflow also prepares Xcode's native compilation cache using an
-unsigned **Release** build. A release reuses compiler results, not an old app:
+`scripts/release-cache-key.sh` gives each component its own key, so a routine
+Node, npm, or Swift package refresh no longer discards the others:
+
+| Cache | Key | Checked on every use |
+| --- | --- | --- |
+| Download archives | CEF, Node, Sparkle and Cua pins; falls back to any earlier store | Each archive's pinned digest |
+| Browser products | The exact browser key: sources, CEF, architecture, compiler, SDK, CMake, flags | Complete content manifest |
+| SwiftPM repositories | `Package.resolved`; falls back to earlier clones | Checkouts at resolved revisions |
+| npm store | `package-lock.json`; falls back to an earlier store | Lockfile integrity, scripts disabled |
+| Compiler | Exact toolchain, native graph and commit; falls back within the same toolchain | Xcode's per-compilation input keys |
+
+Corrupt entries rebuild. The producer drops archives for superseded pins and
+starts the npm and compiler stores afresh when they exceed 1.5 GB and 6 GB.
+GitHub evicts entries unused for a week. The compiler warm-up is an unsigned
+**Release** build on main. A release reuses compiler results, not an old app:
 it uses fresh DerivedData, links, stamps version/source metadata, and signs anew.
-Compiler cache keys are scoped to the exact toolchain and dependency inputs;
-Xcode checks individual compilation inputs within that cache. Only trusted main
-produces reusable entries. A failed cached compilation retries once with fresh
-intermediates and caching disabled. This moves work ahead of release time;
-it does not eliminate the main build's compute cost.
+A failed cached compilation retries once with fresh intermediates and caching
+disabled. The warm-up moves compute ahead of the release; it does not remove it.
+After a toolchain or browser-source change, the first release without a newer
+warm-up compiles those parts in full. These changes do not guarantee a release
+duration.
+
+The signed workflow runs six visible phases: compile; seal and validate; notarize
+the app; create and sign the disk image; notarize the disk image; and generate the
+manifest, checksums, signed feed, and reconstruction check. Each step shows live
+status and duration, and receives only the secrets it uses. Every phase repeats the
+source, tag, and clean-tree checks. It accepts only the work of the immediately
+preceding phase for the same version, build, commit, resolved output directory,
+and signing identity, and rejects any other or extra phase argument. A failed phase
+invalidates the work directory; a new attempt reuses a complete private draft or
+rebuilds from compilation. `build-release.sh VERSION` still runs all phases
+locally. Each phase's elapsed time appears in the step summary, as a
+`release-timing` JSON log line, and in the job's final timings step.
+
+`scripts/publish-release.sh` keeps downloaded draft bytes in a private local
+store, `~/Library/Caches/WovenMatter/ReleaseArtifacts/OWNER/REPO/RELEASE_ID-COMMIT`,
+so `--verify-only` followed by `--approved-notes` downloads each file once. The
+two identical DMG names are fetched once when GitHub reports the same SHA-256
+and size for both. Only bytes are stored, never a verification result. Every
+run reads fresh GitHub asset metadata, rehashes each copy, and discards
+corrupt, partial, or replaced bytes. A release that is not a private draft is
+refused before any download. The script then repeats every checksum,
+provenance, update-signature, Developer ID, notarization and Gatekeeper check.
+After those checks, in both modes and directly before publication, the release
+ID, draft state, and every asset ID, size, digest, and upload time must still
+match the verified snapshot. Afterward the published description must match the
+approved file exactly; only CRLF line endings are normalized. The store for that
+release is then removed. A store for an abandoned draft can be deleted at any time.
 
 Ordinary private tagged releases can restore a complete, digest-verified uploaded
 artifact set after a failed workflow attempt. Source, version, build, inventory,
@@ -141,10 +179,13 @@ asset, or a non-empty `delta_assets` record fails the release rather than being
 skipped. The offline fixture covers a signed same-version round trip. It does
 not substitute for offline first-launch acceptance.
 
-Both notarization submissions remain in place for now. Apple permits a single
-outermost-DMG submission, but the full update carries the app's own stapled
-ticket, which offline installs rely on. No source, notes, assets or tags
-belonging to an already-running release are changed by these optimizations.
+Both notarization submissions remain. Apple can notarize nested code through
+one outermost-DMG submission, but the full update must carry the app's own
+stapled ticket, which offline installs rely on. Stapling that ticket into the app
+inside an already notarized, read-only image would change the image's bytes.
+Dropping the app submission therefore needs a separate signed experiment showing
+offline ticket parity first. No source, notes, assets or tags belonging to an
+already-running release are changed by these optimizations.
 
 Release packaging follows the sequential flow: finish signing, notarizing, and
 stapling the DMG, then invoke Sparkle's feed generator once with only that DMG

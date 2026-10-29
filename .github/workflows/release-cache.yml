@@ -16,36 +16,69 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Ensure CEF build tools
         run: command -v cmake >/dev/null || brew install cmake
-      - name: Identify exact dependency and toolchain inputs
+      - name: Identify component cache keys
         id: inputs
         run: scripts/release-cache-key.sh >> "$GITHUB_OUTPUT"
+      # Components restore and save independently: a Node change keeps browser,
+      # Swift, npm and compiler entries. Release tags restore these keys only.
       - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; exact release for release caches
-        id: cache
+        id: downloads
         with:
-          path: |
-            ~/Library/Caches/WovenMatter/Downloads
-            ~/Library/Caches/WovenMatter/BrowserBuilds
-            ~/Library/Caches/WovenMatter/SourcePackages/repositories
-            ~/.npm
-          key: ${{ steps.inputs.outputs.key }}
+          path: ~/Library/Caches/WovenMatter/Downloads
+          key: ${{ steps.inputs.outputs.downloads }}
+          restore-keys: ${{ steps.inputs.outputs.downloads_fallback }}
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; exact release for release caches
+        id: browser
+        with:
+          path: ~/Library/Caches/WovenMatter/BrowserBuilds
+          key: ${{ steps.inputs.outputs.browser }}
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; exact release for release caches
+        id: swiftpm
+        with:
+          path: ~/Library/Caches/WovenMatter/SourcePackages/repositories
+          key: ${{ steps.inputs.outputs.swiftpm }}
+          restore-keys: ${{ steps.inputs.outputs.swiftpm_fallback }}
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; exact release for release caches
+        id: npm
+        with:
+          path: ~/.npm
+          key: ${{ steps.inputs.outputs.npm }}
+          restore-keys: ${{ steps.inputs.outputs.npm_fallback }}
       - name: Prepare unsigned release dependencies
-        if: steps.cache.outputs.cache-hit != 'true'
+        if: >-
+          steps.downloads.outputs.cache-hit != 'true' || steps.browser.outputs.cache-hit != 'true' ||
+          steps.swiftpm.outputs.cache-hit != 'true' || steps.npm.outputs.cache-hit != 'true'
+        env:
+          WOVENMATTER_PRUNE_DOWNLOADS: '1'
         run: scripts/prepare-release-cache.sh
       - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; exact release for release caches
-        if: steps.cache.outputs.cache-hit != 'true'
+        if: steps.downloads.outputs.cache-hit != 'true'
         with:
-          path: |
-            ~/Library/Caches/WovenMatter/Downloads
-            ~/Library/Caches/WovenMatter/BrowserBuilds
-            ~/Library/Caches/WovenMatter/SourcePackages/repositories
-            ~/.npm
-          key: ${{ steps.inputs.outputs.key }}
+          path: ~/Library/Caches/WovenMatter/Downloads
+          key: ${{ steps.inputs.outputs.downloads }}
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; exact release for release caches
+        if: steps.browser.outputs.cache-hit != 'true'
+        with:
+          path: ~/Library/Caches/WovenMatter/BrowserBuilds
+          key: ${{ steps.inputs.outputs.browser }}
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; exact release for release caches
+        if: steps.swiftpm.outputs.cache-hit != 'true'
+        with:
+          path: ~/Library/Caches/WovenMatter/SourcePackages/repositories
+          key: ${{ steps.inputs.outputs.swiftpm }}
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; exact release for release caches
+        if: steps.npm.outputs.cache-hit != 'true'
+        with:
+          path: ~/.npm
+          key: ${{ steps.inputs.outputs.npm }}
       - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; exact release for release caches
         id: compiler
         with:
           path: ~/Library/Caches/WovenMatter/Compiler
-          key: compiler-v1-${{ steps.inputs.outputs.key }}-${{ github.sha }}
-          restore-keys: compiler-v1-${{ steps.inputs.outputs.key }}-
+          key: ${{ steps.inputs.outputs.compiler }}${{ github.sha }}
+          restore-keys: |
+            ${{ steps.inputs.outputs.compiler }}
+            ${{ steps.inputs.outputs.compiler_fallback }}
       - name: Warm Release compiler cache without signing credentials
         if: steps.compiler.outputs.cache-hit != 'true'
         run: |
@@ -57,4 +90,4 @@ jobs:
         if: steps.compiler.outputs.cache-hit != 'true'
         with:
           path: ~/Library/Caches/WovenMatter/Compiler
-          key: compiler-v1-${{ steps.inputs.outputs.key }}-${{ github.sha }}
+          key: ${{ steps.inputs.outputs.compiler }}${{ github.sha }}

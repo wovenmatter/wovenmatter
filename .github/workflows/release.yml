@@ -25,6 +25,12 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 120
     environment: release
+    # Shared, non-secret phase settings.
+    env:
+      WOVENMATTER_SIGNING_IDENTITY: Developer ID Application
+      WOVENMATTER_RELEASE_WORK_DIR: /private/tmp/wovenmatter-release-build
+      WOVENMATTER_RELEASE_OUTPUT_DIR: ${{ github.workspace }}/dist
+      WOVENMATTER_RELEASE_ALLOW_UNTAGGED: ${{ inputs.refresh && '1' || '0' }}
     steps:
       # Signing secrets and release write access: exact current releases,
       # reviewed during dependency maintenance (docs/DEPENDENCIES.md).
@@ -69,25 +75,39 @@ jobs:
       - name: Ensure CEF build tools
         run: command -v cmake >/dev/null || brew install cmake
 
-      - name: Identify exact dependency and toolchain inputs
-        id: cache-inputs
+      - name: Identify component cache keys
+        id: inputs
         run: scripts/release-cache-key.sh >> "$GITHUB_OUTPUT"
 
       # Read-only: only the manual main-branch cache workflow saves release inputs.
+      # GitHub does not share a tag's caches with the next tag. Each component
+      # restores independently and is verified again by its consumer.
       - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; exact release for release caches
         with:
-          path: |
-            ~/Library/Caches/WovenMatter/Downloads
-            ~/Library/Caches/WovenMatter/BrowserBuilds
-            ~/Library/Caches/WovenMatter/SourcePackages/repositories
-            ~/.npm
-          key: ${{ steps.cache-inputs.outputs.key }}
-
+          path: ~/Library/Caches/WovenMatter/Downloads
+          key: ${{ steps.inputs.outputs.downloads }}
+          restore-keys: ${{ steps.inputs.outputs.downloads_fallback }}
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; exact release for release caches
+        with:
+          path: ~/Library/Caches/WovenMatter/BrowserBuilds
+          key: ${{ steps.inputs.outputs.browser }}
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; exact release for release caches
+        with:
+          path: ~/Library/Caches/WovenMatter/SourcePackages/repositories
+          key: ${{ steps.inputs.outputs.swiftpm }}
+          restore-keys: ${{ steps.inputs.outputs.swiftpm_fallback }}
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; exact release for release caches
+        with:
+          path: ~/.npm
+          key: ${{ steps.inputs.outputs.npm }}
+          restore-keys: ${{ steps.inputs.outputs.npm_fallback }}
       - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; exact release for release caches
         with:
           path: ~/Library/Caches/WovenMatter/Compiler
-          key: compiler-v1-${{ steps.cache-inputs.outputs.key }}-${{ github.sha }}
-          restore-keys: compiler-v1-${{ steps.cache-inputs.outputs.key }}-
+          key: ${{ steps.inputs.outputs.compiler }}${{ github.sha }}
+          restore-keys: |
+            ${{ steps.inputs.outputs.compiler }}
+            ${{ steps.inputs.outputs.compiler_fallback }}
 
       - name: Import Developer ID identity
         env:
@@ -120,31 +140,81 @@ jobs:
           umask 077
           printf '%s' "$SPARKLE_PRIVATE_KEY" > "$RUNNER_TEMP/sparkle-private-key"
 
-      - name: Build, sign, notarize, and package
+      - name: Reuse verified private artifacts from an earlier attempt
+        id: reuse
         env:
-          WOVENMATTER_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          WOVENMATTER_SIGNING_IDENTITY: Developer ID Application
-          WOVENMATTER_NOTARY_KEY: ${{ runner.temp }}/notary-private-key.p8
-          WOVENMATTER_NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
-          WOVENMATTER_NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
-          WOVENMATTER_RELEASE_OUTPUT_DIR: ${{ github.workspace }}/dist
-          WOVENMATTER_RELEASE_ALLOW_UNTAGGED: ${{ inputs.refresh && '1' || '0' }}
+          VERSION: ${{ steps.source.outputs.version }}
           WOVENMATTER_SPARKLE_PRIVATE_KEY: ${{ runner.temp }}/sparkle-private-key
           REFRESH: ${{ inputs.refresh || false }}
           GH_TOKEN: ${{ github.token }}
         run: |
           restore=--restore-tagged
           if [ "$REFRESH" = true ]; then restore=--restore-staged; fi
-          if python3 scripts/stage-update.py dist "${{ steps.source.outputs.version }}" "$restore"; then
+          if python3 scripts/stage-update.py dist "$VERSION" "$restore"; then
             echo "Reusing the original verified private artifacts for this build."
-            exit 0
+            echo reused=true >> "$GITHUB_OUTPUT"
           else
             status=$?
             test "$status" -eq 3 || exit "$status"
+            echo reused=false >> "$GITHUB_OUTPUT"
           fi
-          WOVENMATTER_RELEASE_WORK_DIR=/private/tmp/wovenmatter-release-build \
+
+      # One step per phase gives live step status and durations. Each phase
+      # rechecks source/tag/cleanliness and refuses work from any other source,
+      # version, build, failed phase or out-of-order phase. Secrets are scoped
+      # to the phases that use them.
+      - name: 'Release 1/6: compile production app'
+        if: steps.reuse.outputs.reused == 'false'
+        env:
+          VERSION: ${{ steps.source.outputs.version }}
+          WOVENMATTER_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
           WOVENMATTER_COMPILER_CACHE="$HOME/Library/Caches/WovenMatter/Compiler" \
-          WOVENMATTER_PACKAGE_CACHE="$HOME/Library/Caches/WovenMatter/SourcePackages" scripts/build-release.sh "${{ steps.source.outputs.version }}"
+          WOVENMATTER_PACKAGE_CACHE="$HOME/Library/Caches/WovenMatter/SourcePackages" \
+            scripts/build-release.sh "$VERSION" compile
+
+      - name: 'Release 2/6: sign nested helpers, seal and validate app'
+        if: steps.reuse.outputs.reused == 'false'
+        env:
+          VERSION: ${{ steps.source.outputs.version }}
+        run: scripts/build-release.sh "$VERSION" seal
+
+      - name: 'Release 3/6: notarize, staple and assess app'
+        if: steps.reuse.outputs.reused == 'false'
+        env:
+          VERSION: ${{ steps.source.outputs.version }}
+          WOVENMATTER_NOTARY_KEY: ${{ runner.temp }}/notary-private-key.p8
+          WOVENMATTER_NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          WOVENMATTER_NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+        run: scripts/build-release.sh "$VERSION" notarize-app
+
+      - name: 'Release 4/6: create and sign disk image'
+        if: steps.reuse.outputs.reused == 'false'
+        env:
+          VERSION: ${{ steps.source.outputs.version }}
+        run: scripts/build-release.sh "$VERSION" package
+
+      - name: 'Release 5/6: notarize, staple and assess disk image'
+        if: steps.reuse.outputs.reused == 'false'
+        env:
+          VERSION: ${{ steps.source.outputs.version }}
+          WOVENMATTER_NOTARY_KEY: ${{ runner.temp }}/notary-private-key.p8
+          WOVENMATTER_NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          WOVENMATTER_NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+        run: scripts/build-release.sh "$VERSION" notarize-dmg
+
+      - name: 'Release 6/6: manifest, checksums, signed full-only feed, reconstruction'
+        if: steps.reuse.outputs.reused == 'false'
+        env:
+          VERSION: ${{ steps.source.outputs.version }}
+          WOVENMATTER_SPARKLE_PRIVATE_KEY: ${{ runner.temp }}/sparkle-private-key
+        run: scripts/build-release.sh "$VERSION" feed
+
+      - name: Record release phase timings
+        if: always() && steps.reuse.outputs.reused == 'false'
+        run: |
+          timings="$WOVENMATTER_RELEASE_WORK_DIR/release-timings.jsonl"
+          if [ -f "$timings" ]; then cat "$timings"; fi
 
       - name: Verify private draft and deliver authorized update refresh
         env:
