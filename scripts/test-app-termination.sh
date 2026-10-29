@@ -10,7 +10,15 @@ fi
 cache_root="${WOVENMATTER_TEST_CACHE_DIR:-/private/tmp/wovenmatter-validation}"
 mkdir -p "$cache_root/ModuleCache"
 test_root="$(mktemp -d "${cache_root}/AppTerminationTests.XXXXXX")"
-trap 'rm -rf "$test_root"' EXIT
+headless_pid=
+cleanup() {
+  if [ -n "$headless_pid" ]; then
+    kill -TERM "$headless_pid" 2>/dev/null || true
+    wait "$headless_pid" 2>/dev/null || true
+  fi
+  rm -rf "$test_root"
+}
+trap cleanup EXIT
 app="$test_root/TerminationProbe.app"
 mkdir -p "$app/Contents/MacOS"
 cat > "$app/Contents/Info.plist" <<'PLIST'
@@ -54,6 +62,21 @@ done
 for failure in --backend-restart-fails --note-save-fails --browser-cancels; do
   run_probe --updater "$failure"
 done
+# A service in the same bundle must not become a second GUI app instance.
+"$app/Contents/MacOS/TerminationProbe" --headless-probe "$test_root/headless-ready" "$test_root/headless-stopped" &
+headless_pid=$!
+for attempt in {1..100}; do
+  [ ! -f "$test_root/headless-ready" ] || break
+  kill -0 "$headless_pid"
+  sleep 0.05
+done
+test "$(cat "$test_root/headless-ready")" = "$headless_pid"
+run_probe --normal
+kill -TERM "$headless_pid"
+wait "$headless_pid"
+headless_pid=
+test "$(cat "$test_root/headless-stopped")" = PASS
+printf '%s\n' 'Headless service: invisible to app discovery, main actor responsive, foreground opens beside it, SIGTERM drains and exits.'
 second="$test_root/OtherProbe.app"
 cp -R "$app" "$second"
 /usr/libexec/PlistBuddy -c 'Set :CFBundleIdentifier wovenmatter.tests.termination.other' "$second/Contents/Info.plist"

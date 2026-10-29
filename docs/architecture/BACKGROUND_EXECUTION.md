@@ -20,6 +20,29 @@ credential operations, library maintenance, and usage collection. An exclusive
 workspace lease prevents an isolated development host and backend from owning the same
 workspace simultaneously. The frontend has a separate window-process lease.
 
+The executable dispatches `--backend` before entering SwiftUI or creating an
+`NSApplication`. Its Foundation main run loop serves the main actor and handles
+SIGTERM/SIGINT through the same confirmed shutdown path as the control socket.
+It never registers a second GUI instance with LaunchServices. This matters both
+for Finder/Dock activation and for Sparkle, which asks all running applications
+with the host bundle identity and path to quit. A prohibited activation policy
+on an `NSApplication` does not provide this separation.
+
+Only the foreground process handles updater and window lifecycle requests.
+Update preparation flushes editors and notes, obtains an acknowledged idle stop,
+waits for the execution lease to release, and unloads the login job before
+allowing replacement. The service awaits transport cleanup before closing its
+socket and exiting. A cancelled update restores a ready owner. Ordinary frontend
+quit leaves that owner running; logout and service termination use launchd's
+60-second cleanup allowance.
+
+Startup and recovery share a bounded readiness barrier and one launch per
+attempt. A live owner that is still starting is awaited without replacing it or
+waiting for its lease to disappear. Missing services may be launched; invalid or
+foreign endpoints and reported startup errors remain errors. Frontend activation
+never counts as evidence of backend ownership, and a background application is
+never an acceptable foreground activation target.
+
 The frontend keeps the existing observable models and rendering caches. It reads
 the same SQLite database through a read-only projection and sends mutations over
 a private Unix socket. Socket permissions and peer-user checks restrict access to
