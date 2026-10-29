@@ -27,12 +27,32 @@ xcrun swiftc -parse-as-library -swift-version 6 -D COMPANION_FACADE_TESTS \
   "$repo_root/app/App/WovenMatterLifecycleDelegate.swift" \
   "$repo_root/scripts/test-support/AppTerminationTests.swift" \
   -o "$app/Contents/MacOS/TerminationProbe"
-for mode in --normal --updater --standalone-update --staged-update; do
-  open -n -W "$app" --args "$test_root/result" "$mode"
-  if [ "$(cat "$test_root/result")" != PASS ]; then
-    cat "$test_root/result" >&2
+# open -W does not report a crash, so each run gets a fresh result file and a
+# missing result fails. The probe's own watchdog bounds every run.
+run=0
+run_probe() {
+  run=$((run + 1))
+  local result="$test_root/result-$run"
+  rm -f "$result"
+  open -n -W "$app" --args "$result" "$@"
+  if [ "$(cat "$result" 2>/dev/null)" != PASS ]; then
+    printf 'AppKit termination probe (%s): %s\n' "$*" \
+      "$(cat "$result" 2>/dev/null || printf 'exited without a result')" >&2
     exit 1
   fi
+}
+for mode in --normal --updater --standalone-update --staged-update; do
+  run_probe "$mode"
+done
+# Sparkle's helper can quit the backend before the frontend, including retries
+# that skip shouldPostponeRelaunchForUpdate. Exercise the real AppKit delegate.
+for mode in --updater --staged-update; do
+  run_probe "$mode" --backend-already-stopped
+done
+# Each failure cancels the quit through AppKit; the probe then quits again, as
+# a Sparkle retry does, and that attempt must complete the handoff.
+for failure in --backend-restart-fails --note-save-fails --browser-cancels; do
+  run_probe --updater "$failure"
 done
 second="$test_root/OtherProbe.app"
 cp -R "$app" "$second"
@@ -48,4 +68,5 @@ swift "$repo_root/scripts/stop-development.swift" "$second/Contents/MacOS/Termin
 swift "$repo_root/scripts/stop-development.swift" "$second/Contents/MacOS/TerminationProbe"
 test "$(cat "$test_root/second-result")" = PASS
 printf '%s\n' 'AppKit quit: passed (ordinary, immediate update, standalone update, staged update; deferred cleanup once, app exited).'
+printf '%s\n' 'Update handoff: passed (backend already stopped; refused restart, failed note save and browser cancellation each cancel, then retry).'
 printf '%s\n' 'Development rebuild quit: exact executable only; neighboring instance remains running.'

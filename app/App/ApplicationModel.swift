@@ -4856,6 +4856,13 @@ extension ApplicationModel {
     func recoverBackendAfterFailedUpdate() async throws {
         isPreparedForExecutionRestart = false
         defer { resumeNoteEditing() }
+        try await ensureBackendReadyForUpdate()
+    }
+
+    /// Also used before update preparation: Sparkle can quit the background
+    /// process before asking the frontend to terminate. Never skip pending writes
+    /// or treat a missing service as an acknowledged, successful handoff.
+    func ensureBackendReadyForUpdate() async throws {
         guard isBackendFrontend else { return }
         // A refused stop leaves the original backend in place. A successful stop
         // releases its lease before a replacement process may take ownership.

@@ -15,11 +15,20 @@ enum DevelopmentLaunch {
     var hasStagedUpdate = false
 }
 @MainActor enum WorkspaceAssetSession {
-    static func prepareForRestart() async -> Bool { true }
-    static func cancelPreparedRestart() {}
+    static weak var model: ApplicationModel?
+    static func prepareForRestart() async -> Bool {
+        model?.recordWrite("assets")
+        return true
+    }
+    static func cancelPreparedRestart() { model?.record("assets-cancel") }
+}
+
+private struct RestartRefused: LocalizedError {
+    var errorDescription: String? { "The background service could not be restarted." }
 }
 
 // Only external application services are substituted: the test compiles the production lifecycle delegate.
+// Each failure injection is one-shot, so a retry models Sparkle resending quit.
 @MainActor
 final class ApplicationModel {
     var isPreparedForExecutionRestart = false
@@ -28,33 +37,78 @@ final class ApplicationModel {
     var noteEditingSuspended = false
     func suspendNoteEditing() { noteEditingSuspended = true }
     func resumeNoteEditing() { noteEditingSuspended = false }
-    var flushCount = 0
-    var updatePreparationCount = 0
+    /// Ordered lifecycle evidence. A write without a live backend is recorded
+    /// under a distinct name rather than crashing before a result is written.
+    var events: [String] = []
+    var backendReady = !CommandLine.arguments.contains("--backend-already-stopped")
+        && !CommandLine.arguments.contains("--backend-restart-fails")
+    // The initial restart and the recovery restart are both refused.
+    var restartRefusals = CommandLine.arguments.contains("--backend-restart-fails") ? 2 : 0
+    var noteSaveFailures = CommandLine.arguments.contains("--note-save-fails") ? 1 : 0
+    var browserCancellations = CommandLine.arguments.contains("--browser-cancels") ? 1 : 0
+    var sessionShutdownCount = 0
+    var remoteWorkspaces: ApplicationModel { self }
+
+    func record(_ event: String) { events.append(event) }
+    func recordWrite(_ event: String) { events.append(backendReady ? event : event + "-without-backend") }
+
+    func ensureBackendReadyForUpdate() async throws {
+        if backendReady { record("ready"); return }
+        // Model the lease wait and readiness barrier; no write may overtake it.
+        try await Task.sleep(for: .milliseconds(20))
+        if restartRefusals > 0 {
+            restartRefusals -= 1
+            record("restart-refused")
+            throw RestartRefused()
+        }
+        backendReady = true
+        record("restart")
+    }
     func prepareBackendForUpdate() async throws {
-        updatePreparationCount += 1
-        guard await flushNotesBeforeBackendClientQuit() else { throw CancellationError() }
-        try await prepareOpenCodeInstancesToQuit()
+        suspendNoteEditing()
+        guard await flushNotesBeforeBackendClientQuit() else { resumeNoteEditing(); throw CancellationError() }
+        // Acknowledged application.stop, lease release and supervisor suspend.
+        try await Task.sleep(for: .milliseconds(20))
+        recordWrite("stop")
+        backendReady = false
         isPreparedForExecutionRestart = true
     }
-    func recoverBackendAfterFailedUpdate() async throws { isPreparedForExecutionRestart = false }
-    var cleanupCount = 0
-    var cleanupFinished = false
-    var sessionShutdownCount = 0
-    var browserCleanupCount = 0
-    var browserCleanupFinished = false
-    var remoteWorkspaces: ApplicationModel { self }
+    func recoverBackendAfterFailedUpdate() async throws {
+        record("recover")
+        isPreparedForExecutionRestart = false
+        defer { resumeNoteEditing() }
+        try await ensureBackendReadyForUpdate()
+    }
     func refreshRuntimeInventory() {}
     func refreshLocalACPRuntimesNow() {}
     func refreshRuntimeMaintenanceAtStartup() {}
-    func flushNoteDrafts() async -> Bool { flushCount += 1; return true }
     func restoreOpenCodeInstances() async {}
     func shutdownLocalACPSessions() { sessionShutdownCount += 1 }
     func prepareLibraryClientForQuit() async throws {}
-    func flushNotesBeforeBackendClientQuit() async -> Bool { flushCount += 1; return true }
+    func flushNotesBeforeBackendClientQuit() async -> Bool {
+        if noteSaveFailures > 0 {
+            noteSaveFailures -= 1
+            recordWrite("flush-failed")
+            return false
+        }
+        recordWrite("flush")
+        return true
+    }
     func prepareOpenCodeInstancesToQuit() async throws {
-        cleanupCount += 1
         try await Task.sleep(for: .milliseconds(20))
-        cleanupFinished = true
+        record("cleanup")
+    }
+}
+
+/// Observes the delegate's real AppKit replies. A cancelled quit leaves the
+/// app running; the retry is a fresh terminate, as Sparkle sends on retry.
+private final class ProbeApplication: NSApplication {
+    var replied: (@MainActor (Bool) -> Void)?
+
+    override func reply(toApplicationShouldTerminate shouldTerminate: Bool) {
+        // Record first: an allowed reply terminates inside super.
+        replied?(shouldTerminate)
+        super.reply(toApplicationShouldTerminate: shouldTerminate)
     }
 }
 
@@ -63,7 +117,8 @@ private final class TerminationProbe: NSObject, NSApplicationDelegate {
     let model = ApplicationModel()
     let delegate = WovenMatterLifecycleDelegate()
     let resultURL: URL
-    var deferredTermination = false
+    var terminationRequests = 0
+    var everyRequestDeferred = true
 
     init(resultURL: URL) {
         self.resultURL = resultURL
@@ -71,12 +126,18 @@ private final class TerminationProbe: NSObject, NSApplicationDelegate {
         DesktopUpdater.shared.hasStagedUpdate = CommandLine.arguments.contains("--staged-update")
         super.init()
         delegate.model = model
+        WorkspaceAssetSession.model = model
         delegate.prepareBrowserTermination = { [model] in
-            model.browserCleanupCount += 1
             try? await Task.sleep(for: .milliseconds(30))
-            model.browserCleanupFinished = true
+            if model.browserCancellations > 0 {
+                model.browserCancellations -= 1
+                model.record("browser-cancelled")
+                return false
+            }
+            model.record("browser")
             return true
         }
+        delegate.presentUpdatePreparationFailure = { [model] _ in model.record("alert") }
         NotificationCenter.default.addObserver(self, selector: #selector(start),
             name: NSApplication.didFinishLaunchingNotification, object: nil)
     }
@@ -98,33 +159,71 @@ private final class TerminationProbe: NSObject, NSApplicationDelegate {
         }
     }
 
+    var isUpdateHandoff: Bool {
+        (DesktopUpdater.shared.isInstalling || DesktopUpdater.shared.hasStagedUpdate) && model.isBackendFrontend
+    }
+
+    /// The exact production choreography, including one cancelled attempt
+    /// and its retry for each injected failure.
+    var expectedEvents: [String] {
+        let arguments = CommandLine.arguments
+        guard isUpdateHandoff else { return ["flush", "cleanup", "browser", "reply-true"] }
+        let handoff = ["assets", "flush", "stop", "browser", "reply-true"]
+        if arguments.contains("--backend-already-stopped") { return ["restart"] + handoff }
+        if arguments.contains("--backend-restart-fails") {
+            // Nothing flushes to a missing owner; recovery is refused too, and
+            // the retried quit restores the owner before any write.
+            return ["restart-refused", "assets-cancel", "recover", "restart-refused", "reply-false", "alert",
+                    "restart"] + handoff
+        }
+        if arguments.contains("--note-save-fails") {
+            // The owner was never stopped, so recovery keeps the healthy backend.
+            return ["ready", "assets", "flush-failed", "assets-cancel", "recover", "ready", "reply-false", "alert",
+                    "ready"] + handoff
+        }
+        if arguments.contains("--browser-cancels") {
+            // The acknowledged stop already ran, so recovery restarts the owner.
+            return ["ready", "assets", "flush", "stop", "browser-cancelled", "assets-cancel", "recover", "restart",
+                    "reply-false", "ready"] + handoff
+        }
+        // Healthy fast path: no lease wait or restart.
+        return ["ready"] + handoff
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         delegate.applicationShouldTerminateAfterLastWindowClosed(sender)
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         delegate.applicationWillTerminate(notification)
-        let passed = deferredTermination && model.flushCount == 1 && model.cleanupCount == 1
-            && model.cleanupFinished && model.sessionShutdownCount == 1
-            && model.updatePreparationCount == ((DesktopUpdater.shared.isInstalling || DesktopUpdater.shared.hasStagedUpdate) && model.isBackendFrontend ? 1 : 0)
-            && !delegate.applicationShouldTerminateAfterLastWindowClosed(NSApplication.shared)
-        try! (passed ? "PASS\n" : "FAIL: termination cancelled, cleanup unfinished, or duplicate cleanup\n")
+        let expected = expectedEvents
+        var failures: [String] = []
+        if model.events != expected {
+            failures.append("events \(model.events), expected \(expected)")
+        }
+        if !everyRequestDeferred { failures.append("a termination request was not deferred") }
+        if !CommandLine.arguments.contains("--wait-for-stop"),
+           terminationRequests != expected.filter({ $0 == "reply-false" }).count + 1 {
+            failures.append("\(terminationRequests) termination requests")
+        }
+        if model.sessionShutdownCount != 1 { failures.append("\(model.sessionShutdownCount) session shutdowns") }
+        if !model.noteEditingSuspended { failures.append("note editing resumed during termination") }
+        if model.isPreparedForExecutionRestart != isUpdateHandoff { failures.append("unexpected execution restart state") }
+        if delegate.applicationShouldTerminateAfterLastWindowClosed(NSApplication.shared) {
+            failures.append("closing the last window terminates")
+        }
+        try! (failures.isEmpty ? "PASS\n" : "FAIL: " + failures.joined(separator: "; ") + "\n")
             .write(to: resultURL, atomically: true, encoding: .utf8)
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        terminationRequests += 1
         let reply = delegate.applicationShouldTerminate(sender)
         // macOS logout/restart requests must be deferred, never cancelled.
         // A repeated request must also defer without starting duplicate cleanup.
-        deferredTermination = reply == .terminateLater
+        everyRequestDeferred = everyRequestDeferred && reply == .terminateLater
             && delegate.applicationShouldTerminate(sender) == .terminateLater
         return reply
-    }
-
-    @objc private func finished(_ notification: Notification) {
-        let passed = deferredTermination && model.noteEditingSuspended && model.flushCount == 1 && model.cleanupCount == 1 && model.cleanupFinished && model.browserCleanupCount == 1 && model.browserCleanupFinished
-        try! (passed ? "PASS\n" : "FAIL: termination cancelled, cleanup unfinished, or duplicate cleanup\n")
-            .write(to: resultURL, atomically: true, encoding: .utf8)
     }
 }
 
@@ -200,7 +299,7 @@ private struct AppTerminationTests {
         let preparedDelegate = WovenMatterLifecycleDelegate()
         preparedDelegate.model = preparedModel
         precondition(preparedDelegate.applicationShouldTerminate(NSApplication.shared) == .terminateNow)
-        precondition(preparedModel.flushCount == 0 && preparedModel.cleanupCount == 0)
+        precondition(preparedModel.events.isEmpty)
         for failingStep in ["prepare", "commit", "relaunch"] {
             var events: [String] = []
             do {
@@ -297,13 +396,25 @@ private struct AppTerminationTests {
         precondition((job["KeepAlive"] as? [String: Bool])?["SuccessfulExit"] == false)
         precondition(job["ThrottleInterval"] as? Int == 5)
         let resultURL = URL(fileURLWithPath: CommandLine.arguments[1])
-        // A separate queue catches the original main-actor deadlock too.
+        // A separate queue catches the original main-actor deadlock and any
+        // cancelled quit that is never retried or never replies.
         DispatchQueue.global().asyncAfter(deadline: .now() + (CommandLine.arguments.contains("--wait-for-stop") ? 30 : 5)) {
             try? "FAIL: shutdown timed out\n".write(to: resultURL, atomically: true, encoding: .utf8)
             _exit(70)
         }
-        let application = NSApplication.shared
+        // Created before any other NSApplication.shared access, so AppKit uses it.
+        let application = ProbeApplication.shared as! ProbeApplication
         let probe = TerminationProbe(resultURL: resultURL)
+        application.replied = { [model = probe.model] allowed in
+            model.record("reply-\(allowed)")
+            // Default mode only: the retry waits until AppKit leaves the modal
+            // deferred-termination loop, as a later Sparkle quit would.
+            if !allowed {
+                RunLoop.main.perform(inModes: [.default]) {
+                    MainActor.assumeIsolated { NSApplication.shared.terminate(nil) }
+                }
+            }
+        }
         application.delegate = probe
         application.setActivationPolicy(CommandLine.arguments.contains("--wait-for-stop") ? .accessory : .prohibited)
         withExtendedLifetime(probe) { application.run() }
