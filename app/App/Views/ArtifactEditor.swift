@@ -138,55 +138,55 @@ private struct SpreadsheetToolbar: View {
     let removeColumn: () -> Void
 
     var body: some View {
-            HStack(spacing: 8) {
-                HStack(spacing: 4) {
-                    Button(action: addRow) label: {
-                        Image(systemName: "plus")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(.secondary)
-                    }
-                    .accessibilityLabel("Add row")
-                    .help("Add row")
-                    Button(action: removeRow) label: {
-                        Image(systemName: "minus")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(.secondary)
-                    }
-                    .accessibilityLabel("Remove last row")
-                    .help("Remove last row")
-                    .disabled(rowCount <= 1)
-                    Text("Rows")
-                        .font(.system(size: 11))
+        HStack(spacing: 8) {
+            HStack(spacing: 4) {
+                Button { addRow() } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 10, weight: .medium))
                         .foregroundStyle(.secondary)
                 }
-                HStack(spacing: 4) {
-                    Button(action: addColumn) label: {
-                        Image(systemName: "plus")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(.secondary)
-                    }
-                    .accessibilityLabel("Add column")
-                    .help("Add column")
-                    Button(action: removeColumn) label: {
-                        Image(systemName: "minus")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(.secondary)
-                    }
-                    .accessibilityLabel("Remove last column")
-                    .help("Remove last column")
-                    .disabled(columnCount <= 1)
-                    Text("Columns")
-                        .font(.system(size: 11))
+                .accessibilityLabel("Add row")
+                .help("Add row")
+                Button { removeRow() } label: {
+                    Image(systemName: "minus")
+                        .font(.system(size: 10, weight: .medium))
                         .foregroundStyle(.secondary)
                 }
-                Spacer()
-                Text("\(rowCount) rows × \(columnCount) columns")
+                .accessibilityLabel("Remove last row")
+                .help("Remove last row")
+                .disabled(rowCount <= 1)
+                Text("Rows")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
-            .buttonStyle(.borderless)
-            .padding(.horizontal, 12)
-            .frame(height: 38)
+            HStack(spacing: 4) {
+                Button { addColumn() } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
+                .accessibilityLabel("Add column")
+                .help("Add column")
+                Button { removeColumn() } label: {
+                    Image(systemName: "minus")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
+                .accessibilityLabel("Remove last column")
+                .help("Remove last column")
+                .disabled(columnCount <= 1)
+                Text("Columns")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Text("\(rowCount) rows × \(columnCount) columns")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.borderless)
+        .padding(.horizontal, 12)
+        .frame(height: 38)
     }
 }
 
