@@ -23,7 +23,7 @@ permissions:
   contents: read
   actions: read
 concurrency:
-  group: release-cache-${{ inputs.benchmark && github.run_id || 'main' }}
+  group: release-cache-${{ (inputs.benchmark || inputs.compile_profile) && github.run_id || 'main' }}
   cancel-in-progress: false
 jobs:
   prepare:
