@@ -33,9 +33,7 @@ if source_edited:
     before = b'return "Woven Matter"'
     if original.count(before) != 1:
         raise SystemExit('Controlled source edit no longer matches exactly once')
-    marker = os.environ.get('WOVENMATTER_BENCHMARK_MARKER', 'Woven Matter Cache Benchmark')
-    assert re.fullmatch(r'[A-Za-z0-9 -]+', marker)
-    source_file.write_bytes(original.replace(before, ('return ' + json.dumps(marker)).encode()))
+    source_file.write_bytes(original.replace(before, b'return "Woven Matter Cache Benchmark"'))
     (output / 'source-edit.diff').write_bytes(subprocess.check_output(['git', 'diff', '--', str(source_file)]))
 started = time.monotonic()
 with (output / 'build.log').open('w') as log:
