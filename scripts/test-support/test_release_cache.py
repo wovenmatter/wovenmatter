@@ -140,7 +140,7 @@ with tempfile.TemporaryDirectory() as temp:
 
 # The signed tag consumer restores exactly what the trusted main producer saves.
 def cache_steps(path):
-    lines, steps = path.read_text().splitlines(), []
+    lines, steps = path.read_text().split('\n  cache-benchmark:')[0].splitlines(), []
     for index, line in enumerate(lines):
         match = re.match(r'(\s*)- uses: actions/cache(/\w+)?@', line)
         if not match:

@@ -23,3 +23,11 @@ for change in (dict(seconds=850), dict(status=1), dict(revision='other'), dict(b
     rejects([cold, warm[0], dict(warm[1], **change), warm[2]])
 rejects([dict(cold, runner_seconds=950), dict(warm[0], runner_seconds=900), dict(warm[1], runner_seconds=400), dict(warm[2], runner_seconds=400)])
 print('Cache measurement gates reject a slow warm build, missing reuse, failed/mismatched builds and incomplete evidence.')
+
+workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/release.yml').read_text()
+benchmark = workflow.split('\n  cache-benchmark:', 1)[1]
+assert 'contents: read' in benchmark and 'cache/save@' not in benchmark
+assert 'notarytool' not in benchmark and 'SPARKLE_PRIVATE_KEY' not in benchmark
+assert 'gh release' not in benchmark and 'stage-update.py' not in benchmark
+assert 'scripts/build-release.sh 0.0.1 compile' in benchmark
+assert '.conclusion == "success" and .head_branch == $branch' in benchmark

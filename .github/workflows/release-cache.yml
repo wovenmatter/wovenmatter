@@ -27,6 +27,7 @@ jobs:
       !inputs.benchmark && github.ref == 'refs/heads/main' &&
       (github.event_name == 'workflow_dispatch' || github.event_name == 'push' ||
        (github.event.workflow_run.conclusion == 'success' &&
+        startsWith(github.event.workflow_run.head_branch, 'v') &&
         github.event.workflow_run.head_repository.full_name == github.repository))
     runs-on: macos-26
     timeout-minutes: 60
