@@ -7,6 +7,13 @@ final class WovenMatterLifecycleDelegate: NSObject, NSApplicationDelegate {
     weak var model: ApplicationModel?
     private var terminating = false
     var prepareBrowserTermination: (@MainActor () async -> Bool)?
+    /// Shown after the update quit has been cancelled; tests record it instead.
+    var presentUpdatePreparationFailure: @MainActor (any Error) -> Void = { error in
+        let alert = NSAlert()
+        alert.messageText = "Woven Matter could not prepare to update"
+        alert.informativeText = error.localizedDescription
+        alert.runModal()
+    }
     private var menuCleanupScheduled = false
 
     override init() {
@@ -94,12 +101,17 @@ final class WovenMatterLifecycleDelegate: NSObject, NSApplicationDelegate {
             guard !terminating else { return .terminateLater }
             terminating = true
             Task {
-                guard await WorkspaceAssetSession.prepareForRestart() else {
-                    terminating = false
-                    sender.reply(toApplicationShouldTerminate: false)
-                    return
-                }
                 do {
+                    // Sparkle sends quit to every process in the app bundle and
+                    // may stop the backend before reaching this frontend. Restore
+                    // a ready owner before browser editors or note drafts flush.
+                    // The normal handoff below still drains work and stops it.
+                    try await model.ensureBackendReadyForUpdate()
+                    guard await WorkspaceAssetSession.prepareForRestart() else {
+                        terminating = false
+                        sender.reply(toApplicationShouldTerminate: false)
+                        return
+                    }
                     try await model.prepareBackendForUpdate()
                     let allowed = await prepareBrowserTermination?() ?? true
                     if !allowed {
@@ -113,10 +125,7 @@ final class WovenMatterLifecycleDelegate: NSObject, NSApplicationDelegate {
                     try? await model.recoverBackendAfterFailedUpdate()
                     terminating = false
                     sender.reply(toApplicationShouldTerminate: false)
-                    let alert = NSAlert()
-                    alert.messageText = "Woven Matter could not prepare to update"
-                    alert.informativeText = error.localizedDescription
-                    alert.runModal()
+                    presentUpdatePreparationFailure(error)
                 }
             }
             return .terminateLater
