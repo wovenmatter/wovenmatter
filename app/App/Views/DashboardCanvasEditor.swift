@@ -255,8 +255,8 @@ private struct DashboardCanvasCard: View {
                 }.padding(16).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             } else {
                 switch block {
-                case .richText(let text):
-                    TextEditor(text: Binding(get: { text.plainText }, set: { onText($0) }))
+                case .richText:
+                    TextEditor(text: Binding(get: { tableDocument.blocks.first?.plainText ?? "" }, set: { onText($0) }))
                         .font(.system(size: 14)).scrollContentBackground(.hidden)
                         .scrollIndicators(.never).padding(10).accessibilityLabel("Canvas text card")
                 case .table:
