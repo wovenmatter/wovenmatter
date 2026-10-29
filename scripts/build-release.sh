@@ -93,7 +93,7 @@ on_exit() {
 trap on_exit EXIT
 
 compile_release() {
-  xcodebuild -quiet -showBuildTimingSummary -onlyUsePackageVersionsFromResolvedFile \
+  xcodebuild -showBuildTimingSummary -onlyUsePackageVersionsFromResolvedFile \
   -project app/WovenMatter.xcodeproj \
   -scheme WovenMatter \
   -configuration Release \

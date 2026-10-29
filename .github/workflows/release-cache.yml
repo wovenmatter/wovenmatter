@@ -1,19 +1,48 @@
 name: Prepare release dependencies
 on:
-  # Optional release acceleration, never background work on every merge.
+  # Bootstrap a changed producer once; ordinary source merges do not build.
+  push:
+    branches: [main]
+    paths: [.github/workflows/release-cache.yml]
+  # Default-branch caches are visible to future tags. A tag cannot save a cache
+  # for the next tag, so refresh them here after a successful release instead.
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
   workflow_dispatch:
+    inputs:
+      benchmark:
+        description: Measure isolated cold and fresh-runner warm Release builds without signing
+        type: boolean
+        default: false
 permissions:
   contents: read
+  actions: read
 concurrency:
-  group: release-cache-main
-  cancel-in-progress: true
+  group: release-cache-${{ inputs.benchmark && github.run_id || 'main' }}
+  cancel-in-progress: false
 jobs:
   prepare:
-    if: github.ref == 'refs/heads/main'
+    if: >-
+      !inputs.benchmark && github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' || github.event_name == 'push' ||
+       (github.event.workflow_run.conclusion == 'success' &&
+        startsWith(github.event.workflow_run.head_branch, 'v') &&
+        !startsWith(github.event.workflow_run.head_branch, 'v-cache-benchmark-') &&
+        github.event.workflow_run.head_repository.full_name == github.repository))
     runs-on: macos-26
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+      - name: Verify accepted cache source
+        env:
+          RELEASE_SOURCE: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor HEAD origin/main
+          if [ -n "$RELEASE_SOURCE" ]; then git merge-base --is-ancestor "$RELEASE_SOURCE" origin/main; fi
       - name: Ensure CEF build tools
         run: command -v cmake >/dev/null || brew install cmake
       - name: Identify component cache keys
@@ -91,3 +120,7 @@ jobs:
         with:
           path: ~/Library/Caches/WovenMatter/Compiler
           key: ${{ steps.inputs.outputs.compiler }}${{ github.sha }}
+
+  benchmark:
+    if: github.event_name == 'workflow_dispatch' && inputs.benchmark
+    uses: ./.github/workflows/release-cache-benchmark.yml

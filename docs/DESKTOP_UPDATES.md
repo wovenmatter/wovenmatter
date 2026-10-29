@@ -110,8 +110,12 @@ Reference: [publishing](https://sparkle-project.org/documentation/publishing/).
 
 ## Release performance and cache trust
 
-`Prepare release dependencies` is a manual workflow that runs only on trusted
-`main`; nothing runs on merges. Release tags only restore caches; they never
+`Prepare release dependencies` writes only default-branch caches from accepted
+`main`. It runs after a successful `Release` workflow and once when the cache
+workflow itself changes on main, bootstrapping a new cache layout. Ordinary source
+merges do not start native work. It remains available manually. The release does
+not wait for the background cache refresh; warming moves compute to that later
+run rather than eliminating it. Release tags only restore caches; they never
 write them. Default-branch caches are intentional: GitHub does not share one
 release tag's cache with the next tag, so saving from a release would not help
 the next one. No app bundle, signing identity, notarization key, or updater key
@@ -148,7 +152,9 @@ preceding phase for the same version, build, commit, resolved output directory,
 and signing identity, and rejects any other or extra phase argument. A failed phase
 invalidates the work directory; a new attempt reuses a complete private draft or
 rebuilds from compilation. `build-release.sh VERSION` still runs all phases
-locally. Each phase's elapsed time appears in the step summary, as a
+locally. The compile log includes Xcode's build timing summary; browser preparation also
+reports archive, product preparation, and bundle/signing durations. Each phase's
+elapsed time appears in the step summary, as a
 `release-timing` JSON log line, and in the job's final timings step.
 
 `scripts/publish-release.sh` keeps downloaded draft bytes in a private local
@@ -196,3 +202,36 @@ remains the backstop for a hang.
 Full DMGs retain ordinary zlib level 6 compression without a legacy size cap or
 maximum-compression retry. Signing, notarization, checksums, and full
 reconstruction verification remain required.
+
+### Measuring cache effectiveness
+
+Run `Prepare release dependencies` manually with `benchmark=true` on the branch
+being evaluated. This does not sign, notarize, create a release, install, or publish.
+Its isolated `benchmark-RUN_ID-` namespace cannot seed production default-branch
+caches. The cold job performs an unsigned production-configuration Release build
+and saves only the same five cache paths used by production. Three later jobs on
+separate fresh runners restore those exact entries, discard DerivedData, change
+the version/build metadata, and rebuild. One also makes a controlled app-source edit to expose whole-module
+cache invalidation; its diff is included with the evidence. App metadata is validated afterward.
+Logs and JSON measurements are retained as workflow artifacts, not in Git.
+
+The report requires all three consumers to demonstrate browser-product reuse and
+compiler replay hits, and each build must be at least 20% faster than the cold
+baseline at the same revision. A cache restore alone is not a performance result.
+The build timer excludes cache transfer/setup; use the full job times as well
+when assessing the practical saving. These measurements cover compilation and
+resource preparation, not Developer ID signing or Apple's variable notarization
+time. No fixed total release duration is promised.
+
+For an unsigned-to-signed and default-branch-to-tag parity check, dispatch
+`Release` from an immutable `v-cache-benchmark-*` tag with `cache_benchmark_run`
+set to a successful **main** cache-preparation run ID. This respects the release
+environment's tag-only policy. The separate read-only job checks the run's branch,
+workflow, and successful conclusion, checks out its exact accepted main source,
+restores production default-branch caches, imports only the Developer ID identity,
+and runs the real `build-release.sh` compile phase with fresh intermediates. It
+verifies the resulting signatures and metadata, then removes the temporary
+keychain. It has no notarization/updater key, cache writes, release writes,
+artifact upload, or publication step. Regular releases and their approval gates
+remain separate. These benchmark tags do not match the automatic release tag
+pattern and are excluded from automatic cache replenishment.
