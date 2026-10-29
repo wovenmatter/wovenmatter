@@ -56,9 +56,11 @@ artifact.
 
 The tag-triggered `.github/workflows/release.yml` builds a signed, notarized
 Apple Silicon app and stages a private draft. Its six named phase steps show live
-progress and record per-phase timings. It restores component caches produced by
-the manual, main-only `Prepare release dependencies` workflow. Release
-preparation does not dispatch that workflow. A miss, for example after a
+progress and record per-phase timings. It restores component caches produced on main by `Prepare release dependencies`.
+That workflow bootstraps changes to its own definition and refreshes after a
+successful release; it can also run manually. Release preparation does not
+dispatch it. Report observed cache hits and timings, rather than assuming that
+configured caches made a release faster. A miss, for example after a
 toolchain or browser-source change, compiles those parts in full; no release
 duration is guaranteed. After its successful run, verify
 through `scripts/publish-release.sh --verify-only vX.Y.Z EXPECTED_COMMIT_SHA`.

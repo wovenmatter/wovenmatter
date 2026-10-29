@@ -222,3 +222,13 @@ The build timer excludes cache transfer/setup; use the full job times as well
 when assessing the practical saving. These measurements cover compilation and
 resource preparation, not Developer ID signing or Apple's variable notarization
 time. No fixed total release duration is promised.
+
+For an unsigned-to-signed parity check, manually dispatch `Release` on the same
+benchmark branch with `cache_benchmark_run` set to a successful benchmark run ID.
+This separate read-only job checks the run's branch, workflow, and successful
+conclusion, checks out its exact source, restores its isolated caches, imports
+only the Developer ID identity, and runs the real `build-release.sh` compile
+phase with fresh intermediates. It verifies the resulting signatures and
+metadata, then removes the temporary keychain. It has no notarization/updater
+key, cache writes, release writes, artifact upload, or publication step. Regular
+release execution and its approval gates remain separate.

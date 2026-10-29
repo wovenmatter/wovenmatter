@@ -257,7 +257,7 @@ jobs:
     env:
       WOVENMATTER_RELEASE_ALLOW_UNTAGGED: '1'
       WOVENMATTER_RELEASE_WORK_DIR: /private/tmp/wovenmatter-release-build
-      WOVENMATTER_RELEASE_OUTPUT_DIR: ${{ runner.temp }}/benchmark-output
+      WOVENMATTER_RELEASE_OUTPUT_DIR: /private/tmp/wovenmatter-cache-benchmark-output
       WOVENMATTER_BUILD_NUMBER: '2'
     steps:
       - name: Identify successful benchmark source

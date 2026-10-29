@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Gate cache performance on two independent fresh-runner measurements."""
+"""Gate cache performance on independent fresh-runner and edited-source measurements."""
 import datetime
 import json
 from pathlib import Path
