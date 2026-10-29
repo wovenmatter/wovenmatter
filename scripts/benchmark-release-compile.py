@@ -22,7 +22,7 @@ root = Path(os.environ['RUNNER_TEMP'])
 output = root / 'release-cache-evidence'
 archive = root / 'release-compile-paired'
 archive.mkdir(parents=True, exist_ok=True)
-sequence = ['warmup-baseline', 'warmup-candidate'] + (['baseline', 'candidate'] if order == 'baseline-first' else ['candidate', 'baseline'])
+sequence = ['warmup-baseline', 'warmup-candidate'] + (['baseline', 'candidate', 'candidate', 'baseline'] if order == 'baseline-first' else ['candidate', 'baseline', 'baseline', 'candidate'])
 for trial, variant in enumerate(sequence):
     subprocess.run(['git', 'restore', '--source', base if variant.endswith('baseline') else 'HEAD', '--', *changed], check=True)
     shutil.rmtree(output, ignore_errors=True)
@@ -50,5 +50,5 @@ for trial, variant in enumerate(sequence):
     if not variant.startswith('warmup-'):
         assert d['replay_misses'] == 1, 'Only the app may recompile in a measured build'
     p.write_text(json.dumps(d, indent=2) + '\n')
-    shutil.copytree(output, archive / variant)
+    shutil.copytree(output, archive / f'{trial:02d}-{variant}')
     print('compile-comparison',json.dumps(d),flush=True)
