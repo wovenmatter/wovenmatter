@@ -11,6 +11,10 @@ on:
     types: [completed]
   workflow_dispatch:
     inputs:
+      compile_profile:
+        description: Profile the app compiler without signing or publishing
+        type: boolean
+        default: false
       benchmark:
         description: Measure isolated cold and fresh-runner warm Release builds without signing
         type: boolean
@@ -24,7 +28,7 @@ concurrency:
 jobs:
   prepare:
     if: >-
-      !inputs.benchmark && github.ref == 'refs/heads/main' &&
+      !inputs.benchmark && !inputs.compile_profile && github.ref == 'refs/heads/main' &&
       (github.event_name == 'workflow_dispatch' || github.event_name == 'push' ||
        (github.event.workflow_run.conclusion == 'success' &&
         startsWith(github.event.workflow_run.head_branch, 'v') &&
@@ -124,3 +128,7 @@ jobs:
   benchmark:
     if: github.event_name == 'workflow_dispatch' && inputs.benchmark
     uses: ./.github/workflows/release-cache-benchmark.yml
+
+  compile-profile:
+    if: github.event_name == 'workflow_dispatch' && inputs.compile_profile
+    uses: ./.github/workflows/release-compile-profile.yml

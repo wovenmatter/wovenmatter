@@ -1,0 +1,50 @@
+name: Profile release compiler
+on:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  profile:
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Ensure CEF build tools
+        run: command -v cmake >/dev/null || brew install cmake
+      - name: Identify component cache keys
+        id: inputs
+        run: scripts/release-cache-key.sh >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; exact release for release caches
+        with:
+          path: ~/Library/Caches/WovenMatter/Downloads
+          key: ${{ steps.inputs.outputs.downloads }}
+          restore-keys: ${{ steps.inputs.outputs.downloads_fallback }}
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; exact release for release caches
+        with:
+          path: ~/Library/Caches/WovenMatter/BrowserBuilds
+          key: ${{ steps.inputs.outputs.browser }}
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; exact release for release caches
+        with:
+          path: ~/Library/Caches/WovenMatter/SourcePackages/repositories
+          key: ${{ steps.inputs.outputs.swiftpm }}
+          restore-keys: ${{ steps.inputs.outputs.swiftpm_fallback }}
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; exact release for release caches
+        with:
+          path: ~/.npm
+          key: ${{ steps.inputs.outputs.npm }}
+          restore-keys: ${{ steps.inputs.outputs.npm_fallback }}
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; exact release for release caches
+        with:
+          path: ~/Library/Caches/WovenMatter/Compiler
+          key: ${{ steps.inputs.outputs.compiler }}${{ github.sha }}
+          restore-keys: |
+            ${{ steps.inputs.outputs.compiler }}
+            ${{ steps.inputs.outputs.compiler_fallback }}
+
+      - name: Profile the production app module
+        run: python3 scripts/profile-release-compile.py
+      - uses: actions/upload-artifact@main
+        if: always()
+        with:
+          name: release-compiler-profile
+          path: ${{ runner.temp }}/release-compiler-profile
