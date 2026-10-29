@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       cache_benchmark_run:
-        description: Completed cache benchmark run to verify with signed compilation only (no release)
+        description: Successful main cache-preparation run to verify from a benchmark tag (compile only)
         type: string
         default: ''
       refresh:
@@ -246,7 +246,7 @@ jobs:
           rm -f "$RUNNER_TEMP/developer-id.p12" "$RUNNER_TEMP/notary-private-key.p8" "$RUNNER_TEMP/sparkle-private-key"
 
   cache-benchmark:
-    if: github.event_name == 'workflow_dispatch' && inputs.cache_benchmark_run != ''
+    if: github.event_name == 'workflow_dispatch' && inputs.cache_benchmark_run != '' && startsWith(github.ref, 'refs/tags/v-cache-benchmark-')
     name: Signed cache consumer benchmark (no publication)
     runs-on: macos-26
     timeout-minutes: 45
@@ -268,8 +268,8 @@ jobs:
         run: |
           [[ "$SEED_RUN" =~ ^[0-9]+$ ]]
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SEED_RUN" > "$RUNNER_TEMP/seed.json"
-          jq -e --arg branch "$GITHUB_REF_NAME" '
-            .conclusion == "success" and .head_branch == $branch and
+          jq -e '
+            .conclusion == "success" and .head_branch == "main" and
             .path == ".github/workflows/release-cache.yml"
           ' "$RUNNER_TEMP/seed.json"
           echo "revision=$(jq -er .head_sha "$RUNNER_TEMP/seed.json")" >> "$GITHUB_OUTPUT"
@@ -277,6 +277,10 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ steps.seed.outputs.revision }}
+      - name: Verify accepted benchmark source
+        run: |
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor HEAD origin/main
       - name: Ensure CEF build tools
         run: command -v cmake >/dev/null || brew install cmake
       - name: Identify production cache keys
@@ -285,27 +289,27 @@ jobs:
       - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: ~/Library/Caches/WovenMatter/Downloads
-          key: benchmark-${{ inputs.cache_benchmark_run }}-${{ steps.inputs.outputs.downloads }}
+          key: ${{ steps.inputs.outputs.downloads }}
           fail-on-cache-miss: true
       - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: ~/Library/Caches/WovenMatter/BrowserBuilds
-          key: benchmark-${{ inputs.cache_benchmark_run }}-${{ steps.inputs.outputs.browser }}
+          key: ${{ steps.inputs.outputs.browser }}
           fail-on-cache-miss: true
       - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: ~/Library/Caches/WovenMatter/SourcePackages/repositories
-          key: benchmark-${{ inputs.cache_benchmark_run }}-${{ steps.inputs.outputs.swiftpm }}
+          key: ${{ steps.inputs.outputs.swiftpm }}
           fail-on-cache-miss: true
       - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: ~/.npm
-          key: benchmark-${{ inputs.cache_benchmark_run }}-${{ steps.inputs.outputs.npm }}
+          key: ${{ steps.inputs.outputs.npm }}
           fail-on-cache-miss: true
       - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: ~/Library/Caches/WovenMatter/Compiler
-          key: benchmark-${{ inputs.cache_benchmark_run }}-${{ steps.inputs.outputs.compiler }}${{ steps.seed.outputs.revision }}
+          key: ${{ steps.inputs.outputs.compiler }}${{ steps.seed.outputs.revision }}
           fail-on-cache-miss: true
       - name: Import Developer ID identity
         env:

@@ -223,12 +223,15 @@ when assessing the practical saving. These measurements cover compilation and
 resource preparation, not Developer ID signing or Apple's variable notarization
 time. No fixed total release duration is promised.
 
-For an unsigned-to-signed parity check, manually dispatch `Release` on the same
-benchmark branch with `cache_benchmark_run` set to a successful benchmark run ID.
-This separate read-only job checks the run's branch, workflow, and successful
-conclusion, checks out its exact source, restores its isolated caches, imports
-only the Developer ID identity, and runs the real `build-release.sh` compile
-phase with fresh intermediates. It verifies the resulting signatures and
-metadata, then removes the temporary keychain. It has no notarization/updater
-key, cache writes, release writes, artifact upload, or publication step. Regular
-release execution and its approval gates remain separate.
+For an unsigned-to-signed and default-branch-to-tag parity check, dispatch
+`Release` from an immutable `v-cache-benchmark-*` tag with `cache_benchmark_run`
+set to a successful **main** cache-preparation run ID. This respects the release
+environment's tag-only policy. The separate read-only job checks the run's branch,
+workflow, and successful conclusion, checks out its exact accepted main source,
+restores production default-branch caches, imports only the Developer ID identity,
+and runs the real `build-release.sh` compile phase with fresh intermediates. It
+verifies the resulting signatures and metadata, then removes the temporary
+keychain. It has no notarization/updater key, cache writes, release writes,
+artifact upload, or publication step. Regular releases and their approval gates
+remain separate. These benchmark tags do not match the automatic release tag
+pattern and are excluded from automatic cache replenishment.

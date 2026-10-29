@@ -30,4 +30,7 @@ assert 'contents: read' in benchmark and 'cache/save@' not in benchmark
 assert 'notarytool' not in benchmark and 'SPARKLE_PRIVATE_KEY' not in benchmark
 assert 'gh release' not in benchmark and 'stage-update.py' not in benchmark
 assert 'scripts/build-release.sh 0.0.1 compile' in benchmark
-assert '.conclusion == "success" and .head_branch == $branch' in benchmark
+assert '.conclusion == "success" and .head_branch == "main"' in benchmark
+
+assert "git merge-base --is-ancestor HEAD origin/main" in benchmark
+assert "refs/tags/v-cache-benchmark-" in benchmark
