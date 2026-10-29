@@ -13,7 +13,7 @@ p = root / 'app/WovenMatter.xcodeproj/project.pbxproj'
 original = p.read_text()
 needle = 'SWIFT_COMPILATION_MODE = wholemodule;'
 assert original.count(needle) == 1
-flags = '-Xfrontend -stats-output-dir -Xfrontend ' + str(output / 'stats')
+flags = '-Xllvm -sil-print-pass-time -Xllvm -sil-min-pass-time=100 -Xfrontend -stats-output-dir -Xfrontend ' + str(output / 'stats')
 p.write_text(original.replace(needle, needle + '\n\t\t\t\tOTHER_SWIFT_FLAGS = "$(inherited) ' + flags + '";'))
 env = dict(os.environ, WOVENMATTER_COMPILATION_CACHE_ENABLED='NO', WOVENMATTER_COMPILER_BUILD_ROOT='/private/tmp/wovenmatter-release-build',
            WOVENMATTER_COMPILER_CACHE=str(Path.home() / 'Library/Caches/WovenMatter/Compiler'),
