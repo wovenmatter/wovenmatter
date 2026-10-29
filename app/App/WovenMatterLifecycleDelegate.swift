@@ -583,7 +583,7 @@ enum WovenMatterBackendProcess {
             while running {
                 // NSApplication normally supplies the autorelease pools. A
                 // Foundation service must drain its own during a long lifetime.
-                autoreleasepool { CFRunLoopRunInMode(.defaultMode, 1, false) }
+                _ = autoreleasepool { CFRunLoopRunInMode(.defaultMode, 1, false) }
             }
         }
         for source in signals { source.cancel() }

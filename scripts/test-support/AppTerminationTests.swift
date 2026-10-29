@@ -400,6 +400,7 @@ private struct AppTerminationTests {
         if CommandLine.arguments.count == 4, CommandLine.arguments[1] == "--headless-probe" {
             let ready = URL(fileURLWithPath: CommandLine.arguments[2])
             let stopped = URL(fileURLWithPath: CommandLine.arguments[3])
+            DispatchQueue.global().asyncAfter(deadline: .now() + 10) { _exit(70) }
             precondition(NSApp == nil)
             WovenMatterBackendProcess.run(start: {
                 Task { @MainActor in

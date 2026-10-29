@@ -4580,6 +4580,7 @@ extension ApplicationModel {
             // A running owner is the common path: connect directly without any
             // launchctl subprocesses or main-thread startup waits.
             try await ensureBackendReady()
+            try Task.checkCancellation()
             usage.backendRequest = { [weak self] method, payload in
                 guard let self else { throw CancellationError() }
                 return try await self.callBackend(method: method, payload: payload)
@@ -4648,6 +4649,7 @@ extension ApplicationModel {
             try await refreshBackendConnectionsState()
             try await refreshBackendSurfaceProfile()
             await usage.refreshBackendSnapshot()
+            try Task.checkCancellation()
             state = .ready
             backendClientTask?.cancel()
             backendConversationClientTask?.cancel()
@@ -4704,7 +4706,10 @@ extension ApplicationModel {
                     self?.workspaceError = disconnectedMessage
                 })
             }
-        } catch { state = .failed(error.localizedDescription) }
+        } catch {
+            if Task.isCancelled { return }
+            state = .failed(error.localizedDescription)
+        }
     }
 
     private func refreshBackendApplicationState() async throws {
