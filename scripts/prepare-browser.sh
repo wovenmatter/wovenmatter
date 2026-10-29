@@ -15,6 +15,7 @@ pin="$repo_root/app/Browser/cef-version.json"
 version="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$pin")"
 platform="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["archives"][sys.argv[2]]["platform"])' "$pin" "$architecture")"
 expected="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["archives"][sys.argv[2]]["sha1"])' "$pin" "$architecture")"
+browser_started=$SECONDS
 cache="${WOVENMATTER_CEF_CACHE_DIR:-$HOME/Library/Caches/WovenMatter/CEF}"
 name="cef_binary_${version}_${platform}_minimal"
 mkdir -p "$cache"
@@ -35,6 +36,7 @@ if [ ! -f "$cache/$name/.verified" ]; then
   rm -rf "$staging"
   trap - EXIT
 fi
+printf 'browser-timing archive-ready %ss\n' "$((SECONDS - browser_started))"
 sdk="$cache/$name"
 build="${DERIVED_FILE_DIR:?}/cef-$architecture"
 products="${BUILT_PRODUCTS_DIR:?}"
@@ -43,6 +45,7 @@ export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
 export MACOSX_DEPLOYMENT_TARGET=26.0
 browser_key="$(python3 "$repo_root/scripts/browser-build-cache.py" key "$architecture" "$cmake")"
 browser_cache="${WOVENMATTER_BROWSER_CACHE:-$HOME/Library/Caches/WovenMatter/BrowserBuilds}/$browser_key"
+browser_products_started=$SECONDS
 if python3 "$repo_root/scripts/browser-build-cache.py" restore "$browser_cache" "$build"; then
   echo "Reused unsigned browser products: $browser_key"
 else
@@ -53,7 +56,9 @@ else
   "$cmake" --build "$build" --parallel 6 > "$build-build.log" 2>&1 || { tail -100 "$build-build.log"; exit 1; }
   python3 "$repo_root/scripts/browser-build-cache.py" save "$browser_cache" "$build"
 fi
+printf 'browser-timing products-ready %ss\n' "$((SECONDS - browser_products_started))"
 if [ "${WOVENMATTER_BROWSER_BUILD_ONLY:-0}" = 1 ]; then exit 0; fi
+browser_bundle_started=$SECONDS
 cp "$build/libWovenBrowser.a" "$products/libWovenBrowser.a"
 cp "$build/libcef_dll_wrapper/libcef_dll_wrapper.a" "$products/libcef_dll_wrapper.a"
 app="${TARGET_BUILD_DIR:?}/${WRAPPER_NAME:?}"
@@ -93,3 +98,5 @@ with open(path, 'wb') as out:
 PLIST
   codesign "${sign[@]}" --entitlements "$repo_root/app/Browser/Helper.entitlements" "$bundle"
 done
+
+printf 'browser-timing bundle-and-sign %ss\n' "$((SECONDS - browser_bundle_started))"

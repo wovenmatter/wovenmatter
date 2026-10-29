@@ -1,0 +1,104 @@
+name: Measure release cache
+on:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  cold:
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Ensure CEF build tools
+        run: command -v cmake >/dev/null || brew install cmake
+      - name: Identify production cache keys
+        id: inputs
+        run: scripts/release-cache-key.sh >> "$GITHUB_OUTPUT"
+      - name: Cold production-configuration compile
+        run: scripts/benchmark-release-cache.py cold
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ~/Library/Caches/WovenMatter/Downloads
+          key: benchmark-${{ github.run_id }}-${{ steps.inputs.outputs.downloads }}
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ~/Library/Caches/WovenMatter/BrowserBuilds
+          key: benchmark-${{ github.run_id }}-${{ steps.inputs.outputs.browser }}
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ~/Library/Caches/WovenMatter/SourcePackages/repositories
+          key: benchmark-${{ github.run_id }}-${{ steps.inputs.outputs.swiftpm }}
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ~/.npm
+          key: benchmark-${{ github.run_id }}-${{ steps.inputs.outputs.npm }}
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ~/Library/Caches/WovenMatter/Compiler
+          key: benchmark-${{ github.run_id }}-${{ steps.inputs.outputs.compiler }}${{ github.sha }}
+      - uses: actions/upload-artifact@main
+        if: always()
+        with:
+          name: release-cache-${{ matrix.label || 'cold' }}
+          path: ${{ runner.temp }}/release-cache-evidence
+  warm:
+    needs: cold
+    strategy:
+      fail-fast: false
+      matrix:
+        label: [warm-1, warm-2]
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Ensure CEF build tools
+        run: command -v cmake >/dev/null || brew install cmake
+      - name: Identify production cache keys
+        id: inputs
+        run: scripts/release-cache-key.sh >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ~/Library/Caches/WovenMatter/Downloads
+          key: benchmark-${{ github.run_id }}-${{ steps.inputs.outputs.downloads }}
+          fail-on-cache-miss: true
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ~/Library/Caches/WovenMatter/BrowserBuilds
+          key: benchmark-${{ github.run_id }}-${{ steps.inputs.outputs.browser }}
+          fail-on-cache-miss: true
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ~/Library/Caches/WovenMatter/SourcePackages/repositories
+          key: benchmark-${{ github.run_id }}-${{ steps.inputs.outputs.swiftpm }}
+          fail-on-cache-miss: true
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ~/.npm
+          key: benchmark-${{ github.run_id }}-${{ steps.inputs.outputs.npm }}
+          fail-on-cache-miss: true
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ~/Library/Caches/WovenMatter/Compiler
+          key: benchmark-${{ github.run_id }}-${{ steps.inputs.outputs.compiler }}${{ github.sha }}
+          fail-on-cache-miss: true
+      - name: Warm production-configuration compile with fresh metadata and intermediates
+        env:
+          BENCHMARK_LABEL: ${{ matrix.label }}
+        run: scripts/benchmark-release-cache.py "$BENCHMARK_LABEL"
+      - uses: actions/upload-artifact@main
+        if: always()
+        with:
+          name: release-cache-${{ matrix.label || 'cold' }}
+          path: ${{ runner.temp }}/release-cache-evidence
+
+  report:
+    needs: [cold, warm]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/download-artifact@main
+        with:
+          pattern: release-cache-*
+          path: evidence
+      - name: Require measured cache use and a repeatable speedup
+        run: python3 scripts/compare-release-cache.py evidence | tee -a "$GITHUB_STEP_SUMMARY"
