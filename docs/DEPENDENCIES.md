@@ -186,7 +186,11 @@ new upstream API major and the integration work needed to support it.
 Codex ACP 2.5 and Claude ACP 0.99 serve both stable ACP v1 and an experimental
 v2 wire protocol. Woven Matter offers v1 explicitly to both adapters for its
 implemented session API. Check both routers on each refresh and migrate when
-ACP v2 becomes stable. Provider-free published-adapter handshakes and local
+ACP v2 becomes stable. The October 29 release scan raises Claude ACP to
+0.99.1; its SDK, protocol SDK, and Node requirements match 0.99.0. This
+catalog selection has no bundled npm lockfile or generated mobile resources.
+Portable PR checks validate the catalog; authenticated provider execution is
+outside that validation boundary. Provider-free published-adapter handshakes and local
 client session tests validate this boundary.
 
 Updates start only from Settings or explicit workspace actions; there is no
