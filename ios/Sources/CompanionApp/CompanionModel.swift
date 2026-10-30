@@ -728,7 +728,14 @@ import CompanionInference
         let localNote = CompanionNote(id: "organization-local-note", title: "Unfiled phone idea", content: document, workspaceID: state.deviceID)
         let ipadNote = CompanionNote(id: "organization-ipad-note", folderID: ipadFolder.id, title: "Packing list", content: document, workspaceID: ipad)
         let chat = CompanionConversation(id: "organization-ipad-chat", title: "Weekend plans", providerID: "pi-durable-device", runtimeKind: "pi", workspaceID: ipad)
-        try await store.apply(.init(workspaceID: "fixture", cursor: 2, folders: folders + [localFolder, macFolder, ipadFolder], notes: notes + [localNote, ipadNote], conversations: conversations + [chat]))
+        let fixtureFolders = [localFolder, macFolder, ipadFolder]
+        let fixtureNotes = [localNote, ipadNote]
+        // Fixture launches can reuse a namespace to verify persistence. Replace
+        // the seeded rows instead of handing duplicate IDs to the snapshot.
+        try await store.apply(.init(workspaceID: "fixture", cursor: 2,
+          folders: folders.filter { row in !fixtureFolders.contains { $0.id == row.id } } + fixtureFolders,
+          notes: notes.filter { row in !fixtureNotes.contains { $0.id == row.id } } + fixtureNotes,
+          conversations: conversations.filter { $0.id != chat.id } + [chat]))
         try await store.cache(.init(conversationID: chat.id, messages: [
           .init(id: "organization-message", conversationID: chat.id, role: "assistant", content: "Your weekend plan, saved from the iPad.", sequence: 0)
         ]))
