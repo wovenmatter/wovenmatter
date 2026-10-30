@@ -149,10 +149,10 @@ extension WorkspaceDatabaseConnection {
     case .calendar: return try calendarRunAuthorizedUnlocked(delivery.id)
     case .message, .created: return source.enabled.contains(.sessions)
     case .timer:
-      guard target.enabled.contains(.timers) else { return false }
-      return !(try historyRowsUnlocked(
-        "SELECT 1 FROM workspace_session_timers WHERE session_id=? AND pending_delivery_id=? AND is_paused=0",
-        values: [delivery.targetID, delivery.id])).isEmpty
+      guard let timerID = try historyRowsUnlocked(
+        "SELECT id FROM workspace_session_timers WHERE session_id=? AND pending_delivery_id=? AND is_paused=0",
+        values: [delivery.targetID, delivery.id]).first?.objectValue?["id"]?.stringValue else { return false }
+      return try timerExecutionEnabledUnlocked(id: timerID, sessionID: delivery.targetID)
     case .notification:
       let relation = try relationshipUnlocked(delivery.sourceID)
       if let key = try historyRowsUnlocked("SELECT event_key FROM workspace_session_deliveries WHERE id=?", values: [delivery.id]).first?.objectValue?["event_key"]?.stringValue,

@@ -176,6 +176,10 @@ extension WorkspaceDatabaseConnection {
             VALUES(new.id,COALESCE((SELECT json_extract(value,'$.executor.defaultProfiles') FROM workspace_tool_settings WHERE id=1),'[]'));
         END;
         """)
+      let timerColumns = Set(try historyRowsUnlocked("PRAGMA table_info(workspace_session_timers)", values: []).compactMap { $0.objectValue?["name"]?.stringValue })
+      if !timerColumns.contains("outside_mcp") {
+        try executeUnlocked("ALTER TABLE workspace_session_timers ADD COLUMN outside_mcp INTEGER NOT NULL DEFAULT 0")
+      }
       try migrateMCPCallersUnlocked()
     }
   }

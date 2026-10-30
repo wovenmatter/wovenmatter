@@ -89,12 +89,12 @@ extension WorkspaceDatabaseConnection {
           throw WorkspaceToolError.invalid("A timer cannot move to another session.")
         }
         try toolsExecuteUnlocked("""
-          INSERT INTO workspace_session_timers(id,session_id,instruction,next_fire_at,interval_seconds,is_paused)
-          VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET instruction=excluded.instruction,
+          INSERT INTO workspace_session_timers(id,session_id,instruction,next_fire_at,interval_seconds,is_paused,outside_mcp)
+          VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET instruction=excluded.instruction,
             next_fire_at=excluded.next_fire_at,interval_seconds=excluded.interval_seconds,
-            is_paused=excluded.is_paused,pending_delivery_id=NULL
+            is_paused=excluded.is_paused,outside_mcp=excluded.outside_mcp,pending_delivery_id=NULL
           """, [saved.id, saved.sessionID, saved.instruction, String(saved.nextFireAt.timeIntervalSince1970),
-                 saved.intervalSeconds.map { String($0) }, saved.isPaused ? "1" : "0"])
+                 saved.intervalSeconds.map { String($0) }, saved.isPaused ? "1" : "0", callerID == WovenMCPCaller.outside ? "1" : "0"])
         return saved
       }
       try requireTimerAccessUnlocked(sourceID: callerID, targetID: outcome.result.sessionID)
@@ -111,8 +111,8 @@ extension WorkspaceDatabaseConnection {
           throw WorkspaceToolError.notFound("Timer not found.")
         }
         if let callerID { try requireTimerAccessUnlocked(sourceID: callerID, targetID: timer.sessionID) }
-        if !paused { try requireToolUnlocked(.timers, sessionID: timer.sessionID) }
-        try toolsExecuteUnlocked("UPDATE workspace_session_timers SET is_paused=?,pending_delivery_id=NULL WHERE id=?", [paused ? "1" : "0", id])
+        if !paused, callerID != WovenMCPCaller.outside { try requireToolUnlocked(.timers, sessionID: timer.sessionID) }
+        try toolsExecuteUnlocked("UPDATE workspace_session_timers SET is_paused=?,pending_delivery_id=NULL,outside_mcp=CASE WHEN ? THEN 1 ELSE outside_mcp END WHERE id=?", [paused ? "1" : "0", callerID == WovenMCPCaller.outside && !paused ? "1" : "0", id])
         return timer.sessionID
       }
       if let callerID { try requireTimerAccessUnlocked(sourceID: callerID, targetID: outcome.result) }
@@ -135,13 +135,22 @@ extension WorkspaceDatabaseConnection {
     }
   }
 
+  /// Outside timers are accepted app schedules. Their authority is independent
+  /// of the destination's agent-tool selection and subsequent MCP exposure.
+  /// Explicit pauses and removals still fence pending occurrences normally.
+  func timerExecutionEnabledUnlocked(id: String, sessionID: String) throws -> Bool {
+    let row = try historyRowsUnlocked("SELECT outside_mcp FROM workspace_session_timers WHERE id=?", values: [id]).first
+    if row?.objectValue?["outside_mcp"]?.intValue == 1 { return true }
+    return try sessionToolsUnlocked(sessionID).enabled.contains(.timers)
+  }
+
   /// An occurrence keeps the same delivery ID across retries/restarts. The dispatcher
   /// reserves that ID before sending and settles it before advancing the timer.
   public func dueSessionTimers(now: Date = Date()) throws -> [WorkspaceSessionTimer] {
     try transaction {
       var due: [WorkspaceSessionTimer] = []
       for var timer in try timersUnlocked() where !timer.isPaused && timer.nextFireAt <= now {
-        guard try sessionToolsUnlocked(timer.sessionID).enabled.contains(.timers) else { continue }
+        guard try timerExecutionEnabledUnlocked(id: timer.id, sessionID: timer.sessionID) else { continue }
         if timer.pendingDeliveryID == nil {
           timer.pendingDeliveryID = UUID().uuidString.lowercased()
           try toolsExecuteUnlocked("UPDATE workspace_session_timers SET pending_delivery_id=? WHERE id=?", [timer.pendingDeliveryID, timer.id])
@@ -152,12 +161,12 @@ extension WorkspaceDatabaseConnection {
     }
   }
 
-  /// Revalidate after an async wait: a pause, deletion or capability revocation wins.
+  /// Revalidate after an async wait: explicit timer pauses and deletions always win.
   public func isTimerOccurrenceActive(id: String, deliveryID: String) throws -> Bool {
     try withLock {
       guard let timer = try timersUnlocked().first(where: { $0.id == id }), !timer.isPaused,
             timer.pendingDeliveryID == deliveryID else { return false }
-      return try sessionToolsUnlocked(timer.sessionID).enabled.contains(.timers)
+      return try timerExecutionEnabledUnlocked(id: timer.id, sessionID: timer.sessionID)
     }
   }
 

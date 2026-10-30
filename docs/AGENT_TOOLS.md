@@ -76,8 +76,11 @@ Outside authority belongs to the instance, independently of any chat's tool
 selection. Goals, timers, and publishing visual replies take an explicit target
 `sessionID`; this chooses the operation's destination and does not enroll or grant
 access to a chat. Goals still run on that chat's execution owner; publishing a
-visual reply requires an active run in the target chat. New sessions use the
-selected destination's defaults and are independent because an outside client
+visual reply requires an active run in the target chat. Accepted outside timers
+retain their scheduling authority independently of the
+chat's internal Timers switch; disabling MCP exposure blocks new calls without
+cancelling accepted schedules. Explicit timer pauses and removals still apply.
+New sessions use the selected destination's defaults and are independent because an outside client
 has no Woven runtime to receive coordinator wakeups. Outside clients can poll
 status and receipts. Usage remains read-only; enabling Calendar grants writes
 independently of the Calendar access default for Woven chats. Goals and visual
