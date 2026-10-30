@@ -64,9 +64,9 @@ final class CentralLibraryClientModel {
     private(set) var localExecutionBusy = false
     private(set) var sharingLocalExecution = false
     private var localHost: SecondaryMacExecutionHost?
+    private let makeLocalHost: @MainActor (SecondaryMacExecutionWorkspace, URL) -> SecondaryMacExecutionHost
     private var executionPreparedForTransition = false
     private var publishedManagement: CompanionExecutionManagementGrant?
-    private static let localSharingKey = "wovenmatter.client.share-execution"
     private(set) var draftNotes: [String: CompanionNote] = [:]
     private(set) var olderTranscripts: [String: CompanionTranscript] = [:]
     private var chatDrafts: [String: MobileChatDraft] = [:]
@@ -80,7 +80,6 @@ final class CentralLibraryClientModel {
     private let clearWorkspaceCredential: @MainActor (String) throws -> Void
     private let clearCentralCredential: @MainActor () throws -> Void
     private let executionDirectoryOverride: URL?
-    private let preferences: UserDefaults
     var deviceConnectionsError: String?
     @ObservationIgnored private var initializationTask: Task<Void, Never>?
     private var nextDevelopmentConnection = Date.distantPast
@@ -96,19 +95,22 @@ final class CentralLibraryClientModel {
 
     init(store: MobileStore? = nil, transport: (any CompanionTransport)? = nil,
          assets: WorkspaceAssetSession? = nil,
-         executionDirectory: URL? = nil, preferences: UserDefaults = .standard,
+         executionDirectory: URL? = nil,
          makeLocalExecution: (@MainActor (URL, MobileStore) async throws -> SecondaryMacExecutionWorkspace)? = nil,
+         makeLocalHost: @escaping @MainActor (SecondaryMacExecutionWorkspace, URL) -> SecondaryMacExecutionHost = {
+             SecondaryMacExecutionHost(workspace: $0, directory: $1)
+         },
          saveCentralCredential: @escaping @MainActor (MobileCredential) throws -> Void = { try MobileCredentialVault.save($0) },
          clearCentralCredential: @escaping @MainActor () throws -> Void = { try MobileCredentialVault.clear() },
          clearWorkspaceCredential: @escaping @MainActor (String) throws -> Void = { try WorkspaceCredentialVault.clear(workspaceID: $0) }) {
         self.makeLocalExecution = makeLocalExecution ?? { directory, replica in
             try await SecondaryMacExecutionWorkspace.create(directory: directory, replica: replica, assets: assets)
         }
+        self.makeLocalHost = makeLocalHost
         self.clearCentralCredential = clearCentralCredential
         self.clearWorkspaceCredential = clearWorkspaceCredential
         self.saveCentralCredential = saveCentralCredential
         self.executionDirectoryOverride = executionDirectory
-        self.preferences = preferences
         if let store {
             self.store = store
             if let transport { engine = MobileSyncEngine(store: store, transport: transport) }
@@ -275,6 +277,8 @@ final class CentralLibraryClientModel {
         try saveCentralCredential(value)
         connectionGeneration = UUID(); credential = value
         try configureTransport(); pairingText = ""
+        // Re-pairing may reuse this Mac's existing executor after Unpair stopped sharing.
+        if localExecution != nil { await startLocalSharing() }
         await refresh()
     }
     func disconnectCentralLibrary() async {
@@ -354,14 +358,15 @@ final class CentralLibraryClientModel {
         return root.appending(path: "LibraryClient/Execution/" + state.deviceID)
     }
     func enableLocalExecution() async {
-        guard !preparingTransition, !localExecutionBusy, localExecution == nil, state.workspaceID != nil, let store else { return }
+        guard !preparingTransition, !localExecutionBusy, state.workspaceID != nil, let store else { return }
+        if localExecution != nil { await startLocalSharing(); return }
         localExecutionBusy = true; defer { localExecutionBusy = false }
         do {
             let workspace = try await makeLocalExecution(executionDirectory, store)
             try await attachExecutionWorkspace(workspace.descriptor, transport: workspace)
             localExecution = workspace
             if DevelopmentLaunch.isClient { workspace.model.liveLibraryClient = self }
-            if preferences.object(forKey: Self.localSharingKey) as? Bool ?? true { await startLocalSharing() }
+            await startLocalSharing()
             await selectExecutionWorkspace(workspace.descriptor.id)
         } catch { errorMessage = error.localizedDescription }
     }
@@ -370,7 +375,7 @@ final class CentralLibraryClientModel {
         localSharingBusy = true; defer { localSharingBusy = false }
         deviceConnectionsError = nil
         do {
-            let host = localHost ?? SecondaryMacExecutionHost(workspace: localExecution, directory: executionDirectory)
+            let host = localHost ?? makeLocalHost(localExecution, executionDirectory)
             localHost = host
             let previousPort = journal.workspaces[localExecution.descriptor.id]?.endpoint?.port
             try await host.start(preferredHTTPSPort: previousPort)
@@ -379,7 +384,6 @@ final class CentralLibraryClientModel {
             var descriptor = localExecution.descriptor
             descriptor.revision = journal.workspaces[descriptor.id]?.revision ?? 0
             try await store.journal.upsertWorkspace(descriptor)
-            preferences.set(true, forKey: Self.localSharingKey)
             await refresh()
         } catch {
             localHost?.stop(); try? await localHost?.waitUntilStopped()
@@ -392,7 +396,6 @@ final class CentralLibraryClientModel {
         localHost?.stop()
         do { try await localHost?.waitUntilStopped() } catch { errorMessage = error.localizedDescription; return }
         sharingLocalExecution = false; publishedManagement = nil
-        preferences.set(false, forKey: Self.localSharingKey)
         if let localExecution, let store {
             do {
                 try await localExecution.setEndpoint(nil)

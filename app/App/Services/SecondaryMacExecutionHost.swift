@@ -3,7 +3,7 @@ import Foundation
 import WovenMatterCore
 import WovenMatterDashboardStore
 
-/// Only explicitly enabled secondary workspaces expose this endpoint. Device
+/// Paired secondary workspaces automatically expose this endpoint. Device
 /// grants and the central host's management grant use separate credential stores.
 @MainActor
 final class SecondaryMacExecutionHost {

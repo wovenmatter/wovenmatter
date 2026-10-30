@@ -139,8 +139,8 @@ existing signed-in sessions. Secondary Mac agents use their own browser. Linux
 agents use their workspace's shared Chromium browser; the Mac's **View browser**
 window can interact with those same pages. An iPhone agent's explicit browser and
 computer calls route to its paired central Mac. Computer Use requires a reachable
-authorized Mac and does not control the Linux desktop or the iPhone UI. Normal
-Device execution access and conversation tool policy apply between input steps.
+authorized Mac and does not control the Linux desktop or the iPhone UI. Device
+pairing, caller ownership, and conversation tool policy apply between input steps.
 
 For example, a browser call uses these MCP arguments:
 

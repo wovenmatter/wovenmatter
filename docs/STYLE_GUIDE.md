@@ -140,6 +140,9 @@ when an intentional design change is accepted.
   Describe local workspaces as agents and files on this Mac, remote workspaces as
   agents and files on remote Linux machines, and Apple devices as Macs, iPhones,
   and iPads that share the library.
+- **Apple devices:** show the shared Workspaces inventory once in its own card,
+  separate from Paired devices. Pairing grants access to all available workspaces;
+  do not add per-device workspace permissions or execution-sharing switches.
 - **Workspace sidebar:** group Agents and Folders within each owning workspace.
   Pinned agents and folders lead their respective lists without a separate Pinned
   section. Each Folders section starts with New folder, scoped to that workspace.

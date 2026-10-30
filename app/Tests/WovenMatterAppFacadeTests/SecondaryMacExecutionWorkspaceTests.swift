@@ -163,7 +163,7 @@ struct SecondaryMacExecutionWorkspaceTests {
     func release() { waiter?.resume(); waiter = nil }
 }
 
-@MainActor private final class SecondaryServingFixture {
+@MainActor final class SecondaryServingFixture {
     var child: SecondaryServingChild?
     func exposure() -> CompanionTailscaleServe {
         CompanionTailscaleServe(executable: URL(fileURLWithPath: "/fixture/tailscale"),
@@ -184,7 +184,7 @@ struct SecondaryMacExecutionWorkspaceTests {
     }
 }
 
-@MainActor private final class SecondaryServingChild: CompanionServingProcess {
+@MainActor final class SecondaryServingChild: CompanionServingProcess {
     let port: Int
     let target: String
     var isRunning = true

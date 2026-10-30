@@ -147,25 +147,18 @@ struct CompanionHostLifecycleTests {
         #expect(fixture.host.pairedDevices.isEmpty)
     }
 
-    @Test func disablingExecutionDuringEnrollmentLeavesLibraryPairingAndDeniesOldAndNewGrants() async throws {
+    @Test func pairingGrantsExecutionWithoutWorkspacePermissionsAndUnpairRevokesIt() async throws {
         let fixture = try await HostFixture(); defer { fixture.remove() }
         await fixture.host.start()
-        let old = try await fixture.pairAndProvision(name: "Fixture Mac")
-        let device = try #require(fixture.host.pairedDevices.first { $0.id == old.deviceID })
-        let provisioning = Task { try? await fixture.host.provisionExecutionWorkspace(id: old.workspace.id, device: device) }
-        await fixture.host.setExecutionAccess(deviceID: old.deviceID, workspaceID: old.workspace.id, enabled: false)
-        let concurrent = await provisioning.value
-        #expect(try await fixture.executionStatus(old) != 200)
-        if let concurrent { #expect(try await fixture.executionStatus(concurrent) != 200) }
-        #expect(fixture.host.pairedDevices.contains { $0.id == old.deviceID })
-        #expect(fixture.host.workspaceAccessPolicies.contains { $0.deviceID == old.deviceID && $0.workspaceID == old.workspace.id && !$0.enabled })
-        await #expect(throws: CompanionAPIError.self) {
-            try await fixture.host.provisionExecutionWorkspace(id: old.workspace.id, device: device)
-        }
-        await fixture.host.setExecutionAccess(deviceID: old.deviceID, workspaceID: old.workspace.id, enabled: true)
-        let fresh = try await fixture.host.provisionExecutionWorkspace(id: old.workspace.id, device: device)
+        let credential = try await fixture.pairAndProvision(name: "Fixture Mac")
+        let device = try #require(fixture.host.pairedDevices.first { $0.id == credential.deviceID })
+        let fresh = try await fixture.host.provisionExecutionWorkspace(id: credential.workspace.id, device: device)
         #expect(try await fixture.executionStatus(fresh) == 200)
-        #expect(try await fixture.executionStatus(old) != 200)
+        await fixture.host.revoke(device.id)
+        #expect(try await fixture.executionStatus(fresh) == 401)
+        await #expect(throws: CompanionAPIError.self) {
+            try await fixture.host.provisionExecutionWorkspace(id: credential.workspace.id, device: device)
+        }
     }
 
     private func waitUntil(attempts: Int = 300, _ condition: () -> Bool) async throws {

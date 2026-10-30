@@ -51,7 +51,7 @@ separately; compilation does not prove UI, Tailscale or real-account acceptance.
    approval and link fallback. Discovery alone grants no access. The previous
    database remains preserved; the Mac has its own local execution workspace.
    Refuse role changes with active work and restore access after a failed change.
-3. Paired clients receive all enabled workspace routes. Empty workspaces have no
+3. Paired clients automatically receive all available workspace routes. Empty workspaces have no
    invented agents; central/direct routes to the same Mac appear once with its
    device name. Temporarily unavailable workspaces acquire access on reconnect.
    Linux provisioning stays on the central database.
@@ -66,8 +66,8 @@ separately; compilation does not prove UI, Tailscale or real-account acceptance.
 6. Interrupt an accepted command's reply and restart either side. Recover the
    original receipt without duplicate execution. A stale Stop or approval must
    never affect a newer run. Test provider cancellation and prompt uncertainty.
-7. Disable execution access or revoke a device centrally. Check immediate denial
-   on reachable services and queued revocation after an offline service returns.
+7. Unpair a device centrally. Check immediate denial on reachable services and
+   queued revocation after an offline service returns.
    Ordinary network loss preserves direct grants; explicit Unpair removes them.
    Restart an authorized Linux service while central is offline and verify its
    device-scoped provider grant still works without exposing administrator keys.
