@@ -3,6 +3,21 @@ import WovenMatterCore
 import WovenMatterClient
 import WovenMatterDashboardStore
 
+/// Defaults for a tool-created destination. Outside callers have no source chat.
+struct WorkspaceToolCallerSource {
+    let id: String
+    let localRuntimeKind: AgentRuntimeKind?
+    let remoteWorkspaceID: UUID?
+    let folderID: String?
+    init(_ conversation: WorkspaceConversationRecord) {
+        id = conversation.id; localRuntimeKind = conversation.localRuntimeKind
+        remoteWorkspaceID = conversation.remoteWorkspaceID; folderID = conversation.folderID
+    }
+    init() {
+        id = WovenMCPCaller.outside; localRuntimeKind = .pi; remoteWorkspaceID = nil; folderID = nil
+    }
+}
+
 extension ApplicationModel {
     func configureSessionToolSelectionAdapter() {
         sessionSelectionWorkspaceID = { [weak self] id in
@@ -184,6 +199,11 @@ extension ApplicationModel {
         return try .value(UsageResult(samples: samples, limits: localUsage?.limits ?? []))
     }
 
+    func toolCallerSource(_ callerID: String) async throws -> WorkspaceToolCallerSource {
+        if callerID == WovenMCPCaller.outside { return .init() }
+        return try await .init(toolConversation(callerID))
+    }
+
     private func toolConversation(_ id: String) async throws -> WorkspaceConversationRecord {
         guard let database = dashboardStore?.database,
               let conversation = try await database.workspaceOverview().conversations.first(where: { $0.id == id }) else {
@@ -196,7 +216,7 @@ extension ApplicationModel {
         guard let database = dashboardStore?.database else { throw CancellationError() }
         if command.isDatabaseCommand { return try await handleDatabaseTool(callerID: callerID, command: command) }
         try await database.requireTool(.sessions, sessionID: callerID)
-        let source = try await toolConversation(callerID)
+        let source = try await toolCallerSource(callerID)
         switch command.action {
         case "create":
             return try await createToolSession(source: source, command: command, request: request)
@@ -253,7 +273,7 @@ extension ApplicationModel {
         }
     }
 
-    private func createToolSession(source: WorkspaceConversationRecord, command: WovenMatterToolCommand,
+    private func createToolSession(source: WorkspaceToolCallerSource, command: WovenMatterToolCommand,
                                    request: WovenMatterToolRequest) async throws -> WovenMatterToolResponse {
         guard let store = dashboardStore else { throw CancellationError() }
         // Coalesce concurrent retries while native creation is suspended.
@@ -276,7 +296,7 @@ extension ApplicationModel {
                 throw WorkspaceToolError.invalid("A session purpose must be at most 64 KiB.")
             }
             let reservation = try await store.database.reserveToolSessionCreation(sourceID: source.id, requestID: request.requestID,
-                arguments: request.operationArguments, purpose: purpose, managed: command.options["independent"] == nil)
+                arguments: request.operationArguments, purpose: purpose, managed: source.id != WovenMCPCaller.outside && command.options["independent"] == nil)
             guard let id = reservation.objectValue?["target_id"]?.stringValue, let uuid = UUID(uuidString: id) else {
                 throw WorkspaceToolError.invalid("Unable to reserve the new session.")
             }
@@ -381,10 +401,15 @@ extension ApplicationModel {
 
     func resolveToolSessionCreation(source: WorkspaceConversationRecord, command: WovenMatterToolCommand,
                                             title: String) async throws -> WorkspaceSessionCreationConfiguration {
+        try await resolveToolSessionCreation(source: WorkspaceToolCallerSource(source), command: command, title: title)
+    }
+
+    func resolveToolSessionCreation(source: WorkspaceToolCallerSource, command: WovenMatterToolCommand,
+                                            title: String) async throws -> WorkspaceSessionCreationConfiguration {
         if let raw = command.options["harness"], AgentRuntimeKind(rawValue: raw) == nil {
             throw WorkspaceToolError.invalid("Unknown harness.")
         }
-        guard let runtime = command.options["harness"].flatMap(AgentRuntimeKind.init(rawValue:)) ?? source.localRuntimeKind else {
+        guard let runtime = command.options["harness"].flatMap(AgentRuntimeKind.init(rawValue:)) ?? source.localRuntimeKind ?? (source.id == WovenMCPCaller.outside ? .pi : nil) else {
             throw WorkspaceToolError.invalid("Choose a configured harness.")
         }
         guard AgentRuntimeKind.allCases.contains(runtime) else { throw WorkspaceToolError.invalid("This harness has been retired.") }
@@ -516,7 +541,7 @@ extension ApplicationModel {
     func handleDatabaseTool(callerID: String, command: WovenMatterToolCommand) async throws -> WovenMatterToolResponse {
         guard let store = dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
         try await store.database.requireTool(.notes, sessionID: callerID)
-        let source = try await toolConversation(callerID)
+        let source = try await toolCallerSource(callerID)
         let action = String(command.action.dropFirst("database-".count))
         if let workspaceID = source.remoteWorkspaceID {
             guard let configuration = remoteWorkspaces.configuration(id: workspaceID) else { throw ApplicationModelError.remoteHarnessUnavailable }

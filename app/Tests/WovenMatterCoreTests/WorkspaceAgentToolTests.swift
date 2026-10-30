@@ -9,6 +9,44 @@ import WovenMatterClient
 struct WorkspaceAgentToolTests {
 
 
+  @Test func outsideTimersDispatchIndependentlyOfConversationToolSelection() async throws {
+    let (db, dir, _, target) = try await fixture()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    try await db.updateExternalMCP(enabled: true)
+    try await db.setSessionTools(.init(enabled: []), sessionID: target)
+    let timer = WorkspaceSessionTimer(sessionID: target, instruction: "Outside follow-up", nextFireAt: .distantPast)
+    try await db.saveSessionTimer(timer, callerID: WovenMCPCaller.outside, requestID: UUID().uuidString, creating: true)
+    let reopened = try await WorkspaceDatabase(url: dir.appending(path: "workspace.sqlite"))
+    let due = try #require(await reopened.dueSessionTimers().first { $0.id == timer.id })
+    let occurrence = try #require(due.pendingDeliveryID)
+    #expect(try await reopened.isTimerOccurrenceActive(id: timer.id, deliveryID: occurrence))
+    let delivery = try await reopened.reserveToolDelivery(sourceID: target, targetID: target,
+        text: timer.instruction, requestID: occurrence, kind: .timer)
+    #expect(try await reopened.claimToolDelivery(id: delivery.id) != nil)
+    try await reopened.validateClaimedToolDelivery(id: delivery.id)
+    try await reopened.pauseSessionTimer(id: timer.id, paused: true, callerID: WovenMCPCaller.outside)
+    #expect(try await !reopened.isTimerOccurrenceActive(id: timer.id, deliveryID: occurrence))
+    try await reopened.pauseSessionTimer(id: timer.id, paused: false, callerID: WovenMCPCaller.outside)
+    // Exposure controls new outside calls; accepted scheduled work remains.
+    try await reopened.updateExternalMCP(enabled: false)
+    #expect(try await reopened.dueSessionTimers().contains { $0.id == timer.id })
+    #expect(try await !reopened.sessionTools(target).enabled.contains(.timers))
+    try await reopened.pauseSessionTimer(id: timer.id, paused: true)
+    #expect(try await !reopened.dueSessionTimers().contains { $0.id == timer.id })
+  }
+
+  @Test func outsideResumeCanAdoptANativeTimerWithInternalTimersDisabled() async throws {
+    let (db, dir, _, target) = try await fixture()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let timer = WorkspaceSessionTimer(sessionID: target, instruction: "Resume through outside MCP", nextFireAt: .distantPast, isPaused: true)
+    try await db.saveSessionTimer(timer, callerID: target)
+    try await db.setSessionTools(.init(enabled: []), sessionID: target)
+    try await db.updateExternalMCP(enabled: true)
+    try await db.pauseSessionTimer(id: timer.id, paused: false, callerID: WovenMCPCaller.outside)
+    #expect(try await db.dueSessionTimers().contains { $0.id == timer.id })
+    #expect(try await !db.sessionTools(target).enabled.contains(.timers))
+  }
+
   @Test func timerRetryPreservesPauseRemovalAndLaterSchedule() async throws {
     let (db, dir, caller, _) = try await fixture()
     defer { try? FileManager.default.removeItem(at: dir) }

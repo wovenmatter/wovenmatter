@@ -38,7 +38,7 @@ public enum WovenMCPServer {
   }
 
   public static func handle(_ message: GatewayJSONValue, contextID: String? = nil,
-                           allowedTools: Set<String>? = nil,
+                           allowedTools: Set<String>? = nil, outsideCaller: Bool = false,
                            perform: @Sendable (WovenMatterToolRequest) async -> WovenMatterToolResponse) async -> GatewayJSONValue? {
     guard let object = message.objectValue, object["jsonrpc"] == .string("2.0"),
           let method = object["method"]?.stringValue,
@@ -68,7 +68,20 @@ public enum WovenMCPServer {
     case "tools/list":
       guard params["cursor"] == nil else { return error(id: id, code: -32602, message: "This catalog has no pagination cursor.") }
       let tools = WovenMCPCatalog.tools.filter { allowedTools?.contains($0.name) ?? true }
-      result = .object(["tools": .array(tools.map { (try? WovenMCPCatalog.json($0)) ?? .null })])
+      result = .object(["tools": .array(tools.map { tool in
+        var json = (try? WovenMCPCatalog.json(tool)) ?? .null
+        if outsideCaller, needsOutsideTarget(tool.name), var object = json.objectValue,
+           var schema = object["inputSchema"]?.objectValue, var properties = schema["properties"]?.objectValue {
+          properties["sessionID"] = .object(["type": .string("string"), "description": .string("Target Woven chat ID.")])
+          schema["properties"] = .object(properties)
+          var required = schema["required"]?.arrayValue ?? []
+          if !required.contains(.string("sessionID")) { required.append(.string("sessionID")) }
+          schema["required"] = .array(required); object["inputSchema"] = .object(schema)
+          object["description"] = .string((tool.description) + " Outside agents must choose the target chat with sessionID.")
+          json = .object(object)
+        }
+        return json
+      })])
     case "tools/call":
       guard let name = params["name"]?.stringValue,
             params["arguments"] == nil || params["arguments"]?.objectValue != nil else {
@@ -78,7 +91,18 @@ public enum WovenMCPServer {
         return error(id: id, code: -32602, message: "This tool is unavailable for this connection.")
       }
       do {
-        let request = try WovenMCPCatalog.request(name: name, arguments: params["arguments"] ?? .object([:]), contextID: contextID, metadata: params["_meta"])
+        var arguments = params["arguments"] ?? .object([:])
+        var target: String?
+        if outsideCaller, needsOutsideTarget(name) {
+          guard var values = arguments.objectValue, let id = values["sessionID"]?.stringValue, UUID(uuidString: id) != nil else {
+            return error(id: id, code: -32602, message: "Supply the target chat's sessionID.")
+          }
+          target = id
+          values.removeValue(forKey: "sessionID")
+          arguments = .object(values)
+        }
+        var request = try WovenMCPCatalog.request(name: name, arguments: arguments, contextID: contextID, metadata: params["_meta"])
+        request.targetSessionID = target
         let response = await perform(request)
         result = WovenMCPCatalog.result(.init(success: response.success, result: response.result,
           error: response.error, code: response.code, silent: response.silent, requestID: response.requestID ?? request.requestID))
@@ -91,6 +115,9 @@ public enum WovenMCPServer {
   public static func error(id: GatewayJSONValue = .null, code: Int, message: String) -> GatewayJSONValue {
     .object(["jsonrpc": .string("2.0"), "id": id,
       "error": .object(["code": .number(Double(code)), "message": .string(message)])])
+  }
+  private static func needsOutsideTarget(_ name: String) -> Bool {
+    name.hasPrefix("woven_goals_") || name.hasPrefix("woven_timers_") || name == "woven_html_render"
   }
   private static func validID(_ value: GatewayJSONValue) -> Bool {
     switch value { case .string, .null: true; case .number(let number): number.isFinite; default: false }
