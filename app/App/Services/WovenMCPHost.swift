@@ -156,7 +156,7 @@ final class WovenMCPHost {
             outsideEndpoint = nil; exposure.stop()
             try await exposure.waitUntilStopped()
             guard generation == expected, let port else { return }
-            let address = try await exposure.start(loopbackPort: port, preferredHTTPSPort: preferredHTTPSPort)
+            let address = try await exposure.start(loopbackPort: port, preferredHTTPSPort: preferredHTTPSPort, allowPortFallback: true)
             guard generation == expected, try await database.toolSettings().externalMCP?.isEnabled == true else {
                 exposure.stop(); return
             }

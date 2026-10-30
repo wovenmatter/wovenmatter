@@ -68,7 +68,8 @@ Old manually issued outside-agent tokens are retired on upgrade.
 The displayed endpoint is the Tailnet HTTPS URL while available. If Tailscale is
 unavailable, Settings shows the local endpoint and the connection error; Woven
 retries without exposing a public listener. The host owns a separate Tailscale
-Serve route, preserving device pairing and other services. The local HTTP listener
+Serve route, preserving device pairing and other services. It reuses its saved
+HTTPS port when available and selects another free port if that address is taken. The local HTTP listener
 binds only to loopback. Browser-origin requests are rejected.
 
 Outside authority belongs to the instance, independently of any chat's tool

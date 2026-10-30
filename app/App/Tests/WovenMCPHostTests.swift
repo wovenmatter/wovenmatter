@@ -127,6 +127,27 @@ struct WovenMCPHostTests {
         #expect(try await fixture.database.sessionTools(fixture.caller).enabled.contains(.notes))
     }
 
+    @Test func restartingOutsideExposureRecoversWhenItsSavedPortIsOccupied() async throws {
+        let serving = MCPServingFixture()
+        let fixture = try await MCPHostFixture(exposure: serving.exposure())
+        defer { fixture.remove() }
+        let first = try await fixture.host.access(.setEnabled(true))
+        #expect(URL(string: first.endpointURL)?.port == 8443)
+        fixture.host.stop()
+        // Device sharing or another Dev profile can claim the old port while
+        // this instance is stopped. Preserve that route and publish a free one.
+        serving.existingPorts = [8443]
+        let restored = try WovenMCPHost(database: fixture.database, exposure: serving.exposure()) { _, _ in .init(success: true) }
+        defer { restored.stop() }
+        let restarted = try await restored.access(.status)
+        #expect(restarted.exposureError == nil)
+        #expect(URL(string: restarted.endpointURL)?.port == 10_000)
+        #expect(serving.existingPorts == [8443])
+        let saved = try JSONDecoder().decode(GatewayJSONValue.self,
+            from: Data(contentsOf: fixture.directory.appending(path: "mcp-access.json")))
+        #expect(saved.objectValue?["httpsPort"] == .number(10_000))
+    }
+
     @Test func outsideDiscoveryAndTargetsFollowOnlyTheGlobalSelection() async throws {
         let fixture = try await MCPHostFixture()
         defer { fixture.remove() }
@@ -285,6 +306,7 @@ private func mcpHostRequest(token: String?, name: String, arguments: [String: Ga
 }
 
 @MainActor private final class MCPServingFixture {
+    var existingPorts: Set<Int> = []
     var child: MCPServingChild?
     func exposure() -> CompanionTailscaleServe {
         CompanionTailscaleServe(executable: URL(fileURLWithPath: "/fixture/tailscale"),
@@ -298,8 +320,9 @@ private func mcpHostRequest(token: String?, name: String, arguments: [String: Ga
         if arguments == ["status", "--json"] {
             return Data(#"{"BackendState":"Running","Self":{"DNSName":"mcp.test.ts.net."}}"#.utf8)
         }
-        guard let child, child.isRunning else { return Data("{}".utf8) }
-        return try JSONSerialization.data(withJSONObject: ["Foreground": ["fixture": [
+        let tcp = Dictionary(uniqueKeysWithValues: existingPorts.map { (String($0), ["HTTPS": true]) })
+        guard let child, child.isRunning else { return try JSONSerialization.data(withJSONObject: ["TCP": tcp]) }
+        return try JSONSerialization.data(withJSONObject: ["TCP": tcp, "Foreground": ["fixture": [
             "TCP": [String(child.port): ["HTTPS": true]],
             "Web": ["mcp.test.ts.net:\(child.port)": ["Handlers": ["/wovenmatter": ["Proxy": child.target]]]]]]])
     }
