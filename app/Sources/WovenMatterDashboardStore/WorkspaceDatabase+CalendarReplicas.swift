@@ -61,12 +61,8 @@ extension WorkspaceDatabaseConnection {
     })
   }
   func companionCalendarMutate(_ mutation: CompanionCalendarMutation, deviceID: String) throws -> CompanionCalendarReceipt {
-    let taskWorkspace = mutation.record.event.draft.task?.workspaceID
-    let registeredOwner = try taskWorkspace.flatMap { try federationWorkspaceUnlocked($0) }
-    let exactMacOwner = registeredOwner.map { !$0.deleted && $0.kind == .mac && $0.ownerDeviceID == mutation.record.ownerDeviceID
-      && ($0.executionDeviceID ?? $0.ownerDeviceID) == mutation.record.ownerDeviceID } ?? false
     guard mutation.deviceID == deviceID, UUID(uuidString: mutation.id) != nil, UUID(uuidString: mutation.record.id) != nil,
-      mutation.record.ownerDeviceID == nil || taskWorkspace == nil || taskWorkspace == mutation.record.ownerDeviceID || exactMacOwner,
+      mutation.record.ownerDeviceID == nil || mutation.record.event.draft.task?.workspaceID == nil || mutation.record.event.draft.task?.workspaceID == mutation.record.ownerDeviceID,
       mutation.record.excludedOccurrences.allSatisfy({ $0 >= 0 }), mutation.record.excludedOccurrences.count <= 100_000 else { throw CompanionCalendarError.invalid }
     let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
     let input = String(decoding: try encoder.encode(mutation), as: UTF8.self)
@@ -92,7 +88,6 @@ extension WorkspaceDatabaseConnection {
         }
         result = .init(mutationID: mutation.id, status: .accepted, record: try companionCalendarSnapshot().records.first { $0.id == mutation.record.id })
       } else {
-        try requireCalendarExecutionAccess(mutation.record, deviceID: deviceID)
         try CompanionCalendarSchedule.validate(mutation.record.event.draft)
         let native = try Self.nativeCalendarDraft(mutation.record.event.draft)
         _ = try saveCalendarEvent(id: mutation.record.id, draft: native, creating: before == nil, expectedRevision: mutation.expectedRevision, _transaction: false)
@@ -116,24 +111,6 @@ extension WorkspaceDatabaseConnection {
       return result
     }
   }
-  /// Shared events remain editable. Scheduling work on another workspace must
-  /// obey the same central execution policy as an immediate command.
-  private func requireCalendarExecutionAccess(_ record: CompanionCalendarRecord, deviceID: String) throws {
-    guard let task = record.event.draft.task, record.ownerDeviceID != deviceID else { return }
-    let denied = Set(try companionWorkspaceAccessPolicies().filter { $0.deviceID == deviceID && !$0.enabled }.map(\.workspaceID))
-    guard !denied.isEmpty else { return }
-    let workspaces = try companionExecutionWorkspaces()
-    let identity = try companionLibraryIdentityUnlocked()
-    let target: String?
-    if let owner = record.ownerDeviceID {
-      target = workspaces.first { ($0.executionDeviceID ?? $0.ownerDeviceID) == owner && !$0.deleted }?.id
-    } else if let workspaceID = task.workspaceID { target = UUID(uuidString: workspaceID)?.uuidString.lowercased() }
-    else { target = workspaces.first { $0.kind == .mac && ($0.executionDeviceID ?? $0.ownerDeviceID) == identity.hostDeviceID && !$0.deleted }?.id }
-    if let target, denied.contains(target) {
-      throw CompanionAPIError(code: "execution_disabled", message: "Execution access for this scheduled task is disabled in Devices on the central Mac.")
-    }
-  }
-
   func companionCalendarPublishRuns(_ runs: [CompanionCalendarRun], deviceID: String) throws -> [String] {
     guard runs.count <= 200 else { throw CompanionCalendarError.invalid }
     return try transaction {

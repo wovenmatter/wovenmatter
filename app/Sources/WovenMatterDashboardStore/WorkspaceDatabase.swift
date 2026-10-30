@@ -1,6 +1,5 @@
 import Foundation
 import SQLite3
-import WovenMatterCore
 
 /// The app's internal database. No SQLite handle or synchronous operation escapes
 /// this facade. Each write is one worker job; reads use two query-only connections.
@@ -41,42 +40,7 @@ public final class WorkspaceDatabase: Sendable {
 
   func write<T: Sendable>(_ operation: @escaping @Sendable (WorkspaceDatabaseConnection) throws -> T) async throws -> T {
     guard let writer else { throw WorkspaceDatabaseError.readOnlyProjection }
-    return try await writer.worker.perform { _ in try writer.use { connection in
-      try connection.requireLibraryWritesAllowed()
-      return try operation(connection)
-    } }
-  }
-
-  /// The transfer coordinator alone can write while the ordinary mutation gate
-  /// is closed. Backups, merge activation and releasing the fence share the
-  /// existing serialized SQLite writer; readers never observe a partial merge.
-  func transferWrite<T: Sendable>(_ operation: @escaping @Sendable (WorkspaceDatabaseConnection) throws -> T) async throws -> T {
-    guard let writer else { throw WorkspaceDatabaseError.readOnlyProjection }
     return try await writer.worker.perform { _ in try writer.use(operation) }
-  }
-
-  public func fenceLibraryTransfer(_ id: String) async throws {
-    try await transferWrite { connection in
-      guard connection.libraryTransferID == nil || connection.libraryTransferID == id else {
-        throw CompanionAPIError(code: "transfer_busy", message: "Another database transfer is already in progress.")
-      }
-      connection.libraryTransferID = id
-    }
-  }
-
-  public func releaseLibraryTransfer(_ id: String) async throws {
-    try await transferWrite { connection in
-      guard connection.libraryTransferID == id else { return }
-      connection.libraryTransferID = nil
-    }
-  }
-
-  public func backupLibrary(to url: URL) async throws { try await transferWrite { try $0.backupLibrary(to: url) } }
-  public func activateTransferredLibrary(from url: URL, transferID: String) async throws {
-    try await transferWrite { connection in
-      guard connection.libraryTransferID == transferID else { throw WorkspaceDatabaseError.execute("The transfer write fence is not held") }
-      try connection.restoreLibrary(from: url)
-    }
   }
 
   /// Cleanup of accepted work must survive cancellation of the task driving it.

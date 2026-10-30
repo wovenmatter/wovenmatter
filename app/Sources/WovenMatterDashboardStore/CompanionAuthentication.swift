@@ -12,6 +12,11 @@ public struct CompanionPairedDevice: Codable, Equatable, Sendable, Identifiable 
   public var metadata: CompanionDeviceMetadata?
   public var lastSeenAt: Date?
   public var kind: CompanionDeviceKind { metadata?.kind ?? .unknown }
+  public var isDevelopment: Bool { localDevelopment == true || metadata?.developmentInstance != nil }
+  public var displayName: String {
+    if localDevelopment == true { return String(name.dropFirst("Dev · ".count)) + " (Dev)" }
+    return isDevelopment && !name.contains("(Dev)") ? name + " (Dev)" : name
+  }
   fileprivate let credentialHash: Data
   fileprivate var localDevelopment: Bool? = nil
 }
@@ -63,47 +68,15 @@ public actor CompanionAuthentication {
   }
 
   public func devices() -> [CompanionPairedDevice] {
-    var seen = Set<String>()
-    return state.devices.filter { $0.revokedAt == nil && seen.insert($0.id).inserted }
+    state.devices.filter { $0.revokedAt == nil && (!$0.isDevelopment || now().timeIntervalSince($0.lastSeenAt ?? .distantPast) < 45) }
   }
 
-  /// This is an explicit library-authority transfer, never a content-sync or
-  /// roster endpoint. Only credential digests leave the source Mac.
-  public func transferDevices() -> [CompanionPairedDevice] { state.devices }
-  public func backupForLibraryTransfer(to file: URL) throws { try LibraryTransferArchive.persist(state, to: file) }
-  static func validateTransferredDevices(_ devices: [CompanionPairedDevice]) throws {
-    guard devices.count <= 4096, devices.allSatisfy({ UUID(uuidString: $0.id) != nil && $0.credentialHash.count == 32 }) else { throw Self.unauthorized }
-  }
-
-  public func mergeTransferredDevices(_ devices: [CompanionPairedDevice]) throws {
-    try Self.validateTransferredDevices(devices)
-    var next = state
-    let revoked = Set((state.devices + devices).filter { $0.revokedAt != nil }.map(\.id))
-    for device in devices where !next.devices.contains(where: { $0.id == device.id && $0.credentialHash == device.credentialHash }) {
-      next.devices.append(device)
-    }
-    // Moving a library cannot revive an identity revoked on either side.
-    for index in next.devices.indices where revoked.contains(next.devices[index].id) { next.devices[index].revokedAt = now() }
-    try persist(next); state = next
-  }
-
-  public func transferRelocationProof(deviceID: String, challenge: Data, relocation: CompanionLibraryRelocation, credentialID: String? = nil) throws -> Data {
-    guard challenge.count == 32, let device = state.devices.first(where: { device in
-      device.id == deviceID && device.revokedAt == nil && (credentialID == nil || SHA256.hash(data: device.credentialHash).map { String(format: "%02x", $0) }.joined() == credentialID)
-    }) else { throw Self.unauthorized }
-    let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
-    return Data(HMAC<SHA256>.authenticationCode(for: challenge + (try encoder.encode(relocation)), using: SymmetricKey(data: device.credentialHash)))
-  }
-
-  public func provisionTransferredHost(deviceID: String, name: String, token: String) throws {
-    guard UUID(uuidString: deviceID) != nil, (32...256).contains(token.utf8.count) else { throw Self.unauthorized }
-    // Both Macs explicitly approved this participating source's new node grant.
-    // Historical revoked bearers for the same identity stay revoked.
-    var next = state
-    let hash = Self.digest(token)
-    next.devices.removeAll { $0.id == deviceID && $0.credentialHash == hash }
-    next.devices.append(.init(id: deviceID, name: name, pairedAt: now(), metadata: .init(kind: .mac), credentialHash: hash))
-    try persist(next); state = next
+  /// Normal Dev quit withdraws presence without making the identity permanently
+  /// revoked. Explicit Unpair continues to block automatic reenrollment.
+  public func suspendLocalDevelopment(deviceID: String, credential: String) throws {
+    guard let index = state.devices.firstIndex(where: { $0.id == deviceID && $0.isDevelopment && $0.revokedAt == nil && Self.constantTimeEqual($0.credentialHash, Self.digest(credential)) }) else { throw Self.unauthorized }
+    var next = state; next.devices[index].lastSeenAt = nil
+    try persist(next); state = next; lastSeenSaved.removeValue(forKey: deviceID)
   }
 
   /// Called only by the same-user Unix socket, never by an HTTP route. A local
@@ -131,7 +104,7 @@ public actor CompanionAuthentication {
     return .init(workspaceID: workspaceID, deviceID: deviceID, credential: token)
   }
   public func deviceConnections() -> [CompanionDeviceConnection] {
-    devices().map { .init(id: $0.id, name: $0.name, metadata: $0.metadata ?? .init(), pairedAt: $0.pairedAt, lastSeenAt: $0.lastSeenAt) }
+    devices().map { .init(id: $0.id, name: $0.displayName, metadata: $0.metadata ?? .init(), pairedAt: $0.pairedAt, lastSeenAt: $0.lastSeenAt) }
   }
   public func isCurrent(_ device: CompanionPairedDevice) -> Bool {
     state.devices.contains { $0.id == device.id && $0.revokedAt == nil && Self.constantTimeEqual($0.credentialHash, device.credentialHash) }
@@ -272,7 +245,7 @@ public actor CompanionAuthentication {
     if let metadata { next.devices[index].metadata = metadata }
     next.devices[index].lastSeenAt = instant
     let id = next.devices[index].id
-    if changedMetadata || instant.timeIntervalSince(lastSeenSaved[id] ?? .distantPast) >= 60 {
+    if changedMetadata || instant.timeIntervalSince(lastSeenSaved[id] ?? .distantPast) >= (next.devices[index].isDevelopment ? 10 : 60) {
       try persist(next); lastSeenSaved[id] = instant
     }
     state = next
@@ -282,7 +255,7 @@ public actor CompanionAuthentication {
   public func revoke(deviceID: String, expected: CompanionPairedDevice? = nil) throws {
     if let expected, !isCurrent(expected) { throw Self.unauthorized }
     var next = state
-    for index in next.devices.indices where next.devices[index].id == deviceID {
+    if let index = next.devices.firstIndex(where: { $0.id == deviceID }) {
       next.devices[index].revokedAt = now()
       if next.devices[index].localDevelopment == true {
         next.revokedDevelopmentIDs = (next.revokedDevelopmentIDs ?? []).union([deviceID.lowercased()])
@@ -407,7 +380,7 @@ public actor CompanionAuthentication {
     try validateMetadata(identity.metadata)
   }
   private static func validateMetadata(_ metadata: CompanionDeviceMetadata?) throws {
-    for value in [metadata?.osVersion, metadata?.appVersion].compactMap({ $0 }) {
+    for value in [metadata?.osVersion, metadata?.appVersion, metadata?.developmentInstance].compactMap({ $0 }) {
       guard value.utf8.count <= 120, !value.unicodeScalars.contains(where: { $0.value < 32 || (127...159).contains($0.value) }) else {
         throw error("invalid_device", "The device version information is invalid.")
       }

@@ -8,11 +8,8 @@ extension WorkspaceDatabaseConnection {
   /// may preserve registered linked documents and restore a stale local tombstone.
   func applyExecutionReplicaProjection(_ request: CompanionMutation, libraryID: String, workspaceID: String) throws -> CompanionMutationResult {
     try transaction {
-      let retiredOwner = try retiredProjectionOwner(libraryID: libraryID, workspaceID: workspaceID)
-      let ownLibraryID = try companionWorkspaceIDUnlocked()
       guard [libraryID, workspaceID, request.deviceID, request.resourceID].allSatisfy({ UUID(uuidString: $0) != nil }),
-            (request.deviceID == workspaceID && ownLibraryID != libraryID)
-              || retiredOwner == request.deviceID else {
+            request.deviceID == workspaceID, try companionWorkspaceIDUnlocked() != libraryID else {
         throw CompanionAPIError(code: "wrong_replica", message: "Replica projection requires an isolated execution database and its owning library.")
       }
       try executeUnlocked("CREATE TABLE IF NOT EXISTS companion_execution_replica_context (singleton INTEGER PRIMARY KEY CHECK(singleton = 1), library_id TEXT NOT NULL, workspace_id TEXT NOT NULL)")

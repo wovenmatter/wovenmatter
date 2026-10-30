@@ -23,12 +23,10 @@ access outside the app. The app never requests a password or starts account logi
   Open Woven Matter for manual pairing. The downloaded signed app is checked for
   that capability before replacement when a combined action was selected.
 
-When a central Mac initiates setup of a Mac that already hosts a library, setup
-asks the user to choose **Change to node…** in Apple Devices on that Mac and
-select its next central Mac. The [guided transfer](CENTRAL_LIBRARY_TRANSFER.md)
-backs up and merges both libraries after approval on both Macs. An installation
-or pairing intent cannot bypass this choice or silently demote a library host.
-An existing unpaired node requests pairing; the central Mac explicitly approves.
+When a central Mac initiates setup, the target app changes itself to Node using
+the existing guarded role transition. It flushes writing, checks running work,
+stops its own execution owner, and restarts. Its prior local library is preserved.
+The node requests pairing; the central Mac must explicitly approve that request.
 An already paired Mac cannot silently switch to a different central database.
 An unpaired node can also open an installed central Mac and request pairing there.
 

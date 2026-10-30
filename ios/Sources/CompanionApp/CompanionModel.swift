@@ -233,7 +233,6 @@ import CompanionInference
     await maintainConnections()
   }
   func reload() async {
-    if let transport { credential = transport.credential }
     await analytics.refresh()
     if let store {
       let next = await store.snapshot()

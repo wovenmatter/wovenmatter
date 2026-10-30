@@ -3,13 +3,9 @@ import SQLite3
 
 extension WorkspaceDatabaseConnection {
   func createCompanionFederationSchemaUnlocked() throws {
-    // Additive tables deliberately preserve v3 credentials, revisions and outboxes.
+    // Pairing grants access to every workspace. Discard the obsolete per-device
+    // restrictions while preserving credentials, workspace identities and history.
     try executeUnlocked("""
-      CREATE TABLE IF NOT EXISTS library_transfer_aliases(library_id TEXT PRIMARY KEY,payload BLOB NOT NULL);
-      CREATE TABLE IF NOT EXISTS library_transfer_retired(singleton INTEGER PRIMARY KEY CHECK(singleton=1), library_id TEXT NOT NULL, workspace_id TEXT NOT NULL, owner_device_id TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS library_transfer_conflicts(transfer_id TEXT NOT NULL, table_name TEXT NOT NULL, identity TEXT NOT NULL, incoming BLOB NOT NULL, PRIMARY KEY(transfer_id,table_name,identity));
-      CREATE TABLE IF NOT EXISTS library_transfer_imports(id TEXT PRIMARY KEY,result BLOB NOT NULL);
-      CREATE TABLE IF NOT EXISTS library_transfer_runtime_owners(table_name TEXT NOT NULL,record_id TEXT NOT NULL,device_id TEXT NOT NULL,PRIMARY KEY(table_name,record_id));
       CREATE TABLE IF NOT EXISTS companion_library_identity (
         singleton INTEGER PRIMARY KEY CHECK(singleton = 1), host_device_id TEXT NOT NULL
       );
@@ -17,18 +13,9 @@ extension WorkspaceDatabaseConnection {
         id TEXT PRIMARY KEY, owner_device_id TEXT NOT NULL, revision INTEGER NOT NULL,
         deleted INTEGER NOT NULL DEFAULT 0, payload BLOB NOT NULL
       );
-      CREATE TABLE IF NOT EXISTS companion_workspace_access (
-        device_id TEXT NOT NULL, workspace_id TEXT NOT NULL, enabled INTEGER NOT NULL,
-        PRIMARY KEY(device_id, workspace_id)
-      );
+      DROP TABLE IF EXISTS companion_workspace_access;
       CREATE TABLE IF NOT EXISTS companion_workspace_publishers (
         workspace_id TEXT PRIMARY KEY, digest BLOB NOT NULL UNIQUE, payload BLOB NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS companion_workspace_publisher_aliases (
-        workspace_id TEXT NOT NULL, digest BLOB PRIMARY KEY, payload BLOB NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS companion_workspace_mcp_aliases (
-        workspace_id TEXT NOT NULL, digest BLOB PRIMARY KEY, payload BLOB NOT NULL
       );
       CREATE TABLE IF NOT EXISTS companion_execution_journal (
         cursor INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT NOT NULL UNIQUE,

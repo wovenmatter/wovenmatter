@@ -1,6 +1,5 @@
 import { createHash, randomBytes, randomUUID, createCipheriv, createDecipheriv } from 'node:crypto'
 import { readFileSync } from 'node:fs'
-import { libraryRelocationEndpoint } from './library-relocation.mjs'
 
 const fail = (statusCode, message) => Object.assign(new Error(message), {statusCode})
 const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
@@ -77,11 +76,6 @@ export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localT
     return libraryStatus()
   }
   function clearLibrary() {db.prepare('DELETE FROM mcp_library_connection').run();return libraryStatus()}
-  function relocateLibrary(value) {
-    const prior=libraryGrant()
-    if(prior)configureLibrary({...prior,endpointURL:libraryRelocationEndpoint(value,prior.libraryID)+'/mcp/workspace'})
-    return libraryStatus()
-  }
   function endpoint() {const value=typeof endpointURL==='function'?endpointURL():endpointURL;if(!value)throw fail(503,'The Woven MCP listener is not ready.');return value}
   function sessionConnection(conversationID) {
     if(!uuid(conversationID)||stopped)throw fail(409,'Invalid Woven MCP session.')
@@ -147,21 +141,8 @@ export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localT
     }
     return {...connection,captureID:run.id}
   }
-  async function fetchLibrary(grant,suffix,options,relocations=0) {
-    const response=await fetchImpl(grant.endpointURL+suffix,options)
-    if(response.status===409&&relocations<8) {
-      const moved=await response.json()
-      if(moved.code==='library_moved') {
-        const endpointURL=libraryRelocationEndpoint(moved,grant.libraryID)+'/mcp/workspace'
-        if(endpointURL===grant.endpointURL)throw fail(409,'The central library relocation did not advance.')
-        configureLibrary({...grant,endpointURL})
-        return fetchLibrary({...grant,endpointURL},suffix,options,relocations+1)
-      }
-    }
-    return response
-  }
   async function prepareTaskCaller(scope,grant,signal) {
-    const response=await fetchLibrary(grant,'/prepare',{method:'POST',redirect:'error',signal:signal??AbortSignal.timeout(15000),
+    const response=await fetchImpl(grant.endpointURL+'/prepare',{method:'POST',redirect:'error',signal:signal??AbortSignal.timeout(15000),
       headers:{authorization:'Bearer '+grant.bearerToken,'content-type':'application/json','x-woven-protocol':'3','x-woven-workspace':grant.libraryID},body:JSON.stringify(scope.taskProof)})
     if(!response.ok)throw fail(response.status,'The saved schedule no longer authorizes this MCP caller.')
     const value=await response.json()
@@ -178,7 +159,7 @@ export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localT
     try {
       if(scope.taskProof)await prepareTaskCaller(scope,grant,signal)
       else await beforeLibraryCall()
-      const response=await fetchLibrary(grant,'',{method:'POST',headers,redirect:'error',body:JSON.stringify(message),signal:signal?AbortSignal.any([controller.signal,signal]):controller.signal})
+      const response=await fetchImpl(grant.endpointURL,{method:'POST',headers,redirect:'error',body:JSON.stringify(message),signal:signal?AbortSignal.any([controller.signal,signal]):controller.signal})
       if(!response.ok)throw fail(response.status,'The central library did not authorize this Woven MCP request. Refresh the workspace connection before retrying.')
       const text=await response.text()
       if(Buffer.byteLength(text)>4*1024*1024)throw fail(413,'The library MCP response is too large. Request a smaller page.')
@@ -230,7 +211,7 @@ export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localT
       return {jsonrpc:'2.0',id,result:{isError:true,content:[{type:'text',text:error.message??'The Woven MCP request failed.'}],structuredContent:{success:false,...(operationRequestID?{requestID:operationRequestID}:{}),error:error.message??'The Woven MCP request failed.',code:error.statusCode===403?'capability_denied':error.statusCode===503?'unavailable':'operation_failed'}}}
     } finally {if(requestKey&&inFlight.get(requestKey)===requestController)inFlight.delete(requestKey)}
   }
-  return {settings,configureSettings,sessionConnection,prepareTask,resolvePrincipal,handle,libraryStatus,configureLibrary,clearLibrary,relocateLibrary,provisionClient,clients,revokeClient,
+  return {settings,configureSettings,sessionConnection,prepareTask,resolvePrincipal,handle,libraryStatus,configureLibrary,clearLibrary,provisionClient,clients,revokeClient,
     revokeSession:conversationID=>sessions.delete(conversationID),close(){stopped=true;sessions.clear();taskPolicies.clear();for(const controller of inFlight.values())controller.abort();inFlight.clear();for(const controller of controllers)controller.abort();controllers.clear()}}
 }
 

@@ -137,7 +137,6 @@ public actor MobileSyncEngine {
     let identity: String
     do {
       identity = try await transport.workspaceIdentity()
-      if let relocation = await transport.libraryRelocationID() { try await store.acceptLibraryRelocation(relocation) }
       status.centralReachable = true; status.lastContactAt = Date()
       try await store.bindWorkspace(identity)
       verifiedThisPass = true
@@ -203,11 +202,6 @@ public actor MobileSyncEngine {
       for _ in 0..<100 {
         try Task.checkCancellation()
         let page = try await transport.changes(after: store.snapshot().cursor)
-        if let relocation = await transport.libraryRelocationID(), (await store.snapshot()).libraryRelocationID != relocation {
-          try await store.acceptLibraryRelocation(relocation)
-          try await store.apply(transport.snapshot())
-          setLaneHasMore(.library, false); break
-        }
         setLaneHasMore(.library, page.hasMore)
         if page.resetRequired {
           let snapshot = try await transport.snapshot(); try await store.apply(snapshot)

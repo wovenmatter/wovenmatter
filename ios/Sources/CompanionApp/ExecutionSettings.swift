@@ -457,7 +457,7 @@ private struct InferenceConnectionEditor: View {
         let credential = try await model.authorizedWorkspaceCredential(selectedHost)
         let catalog = InferenceConnection(name: "Host catalog", provider: provider, accountID: "catalog", route: .adapter,
           baseURL: credential.endpoint.absoluteString, modelID: "catalog",
-          hostScope: .init(libraryID: credential.executionLibraryID ?? credential.libraryID, workspaceID: credential.workspaceID, deviceID: credential.deviceID, protocolVersion: CompanionProtocol.version))
+          hostScope: .init(libraryID: credential.libraryID, workspaceID: credential.workspaceID, deviceID: credential.deviceID, protocolVersion: CompanionProtocol.version))
         let result = try await CompanionInferenceService(connection: catalog, credentials: InferenceSetupCredential(value: credential.token)).hostCatalog()
         guard !Task.isCancelled, state.catalogGeneration == generation else { return }
         state.endpoint = credential.endpoint.absoluteString
@@ -547,7 +547,7 @@ private struct InferenceConnectionEditor: View {
         if value.route == .adapter, !hostID.isEmpty {
           let credential = try await model.authorizedWorkspaceCredential(hostID)
           value.baseURL = credential.endpoint.absoluteString
-          value.hostScope = .init(libraryID: credential.executionLibraryID ?? credential.libraryID, workspaceID: credential.workspaceID, deviceID: credential.deviceID, protocolVersion: CompanionProtocol.version)
+          value.hostScope = .init(libraryID: credential.libraryID, workspaceID: credential.workspaceID, deviceID: credential.deviceID, protocolVersion: CompanionProtocol.version)
           secret = credential.token
         }
         try Task.checkCancellation()

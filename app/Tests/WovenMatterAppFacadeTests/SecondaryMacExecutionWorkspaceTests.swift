@@ -67,7 +67,6 @@ struct SecondaryMacExecutionWorkspaceTests {
         try await host.start()
         let originalEndpoint = host.endpoint
         let originalGrant = try #require(host.managementGrant)
-        #expect(originalGrant.executionLibraryID == libraryID)
         let oldHandler = host.requestHandler()
         let deviceID = UUID().uuidString.lowercased()
         func request(_ grant: CompanionExecutionManagementGrant, path: String) throws -> CompanionHTTPRequest {
@@ -164,7 +163,8 @@ struct SecondaryMacExecutionWorkspaceTests {
     func release() { waiter?.resume(); waiter = nil }
 }
 
-@MainActor private final class SecondaryServingFixture {
+@MainActor final class SecondaryServingFixture {
+    var failProbes = false
     var child: SecondaryServingChild?
     func exposure() -> CompanionTailscaleServe {
         CompanionTailscaleServe(executable: URL(fileURLWithPath: "/fixture/tailscale"),
@@ -175,6 +175,7 @@ struct SecondaryMacExecutionWorkspaceTests {
             })
     }
     func probe(_ arguments: [String]) throws -> Data {
+        if failProbes { throw URLError(.notConnectedToInternet) }
         if arguments == ["status", "--json"] {
             return Data(#"{"BackendState":"Running","Self":{"DNSName":"secondary.test.ts.net."}}"#.utf8)
         }
@@ -185,7 +186,7 @@ struct SecondaryMacExecutionWorkspaceTests {
     }
 }
 
-@MainActor private final class SecondaryServingChild: CompanionServingProcess {
+@MainActor final class SecondaryServingChild: CompanionServingProcess {
     let port: Int
     let target: String
     var isRunning = true

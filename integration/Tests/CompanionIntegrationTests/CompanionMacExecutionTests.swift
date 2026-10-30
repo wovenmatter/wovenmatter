@@ -12,8 +12,28 @@ struct CompanionMacExecutionTests {
     try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true); return url
   }
 
-  @Test("disabled central execution policy rejects an already-issued token without dispatch")
-  func policyRevocation() async throws {
+  @Test("a manually paired Dev can withdraw presence over its authenticated library connection")
+  func remoteDevelopmentDisconnect() async throws {
+    let dir = try directory(); defer { try? FileManager.default.removeItem(at: dir) }
+    let db = try await WorkspaceDatabase(url: dir.appendingPathComponent("workspace.sqlite"))
+    let library = try await db.companionWorkspaceID()
+    let auth = try CompanionAuthentication(fileURL: dir.appendingPathComponent("paired.json"))
+    let offer = try await auth.createOffer(endpoint: URL(string: "https://fixture.test.ts.net/wovenmatter")!)
+    let pairing = try await auth.pair(.init(token: offer.payload.token, deviceID: deviceID, deviceName: "Remote Mac",
+      metadata: .init(kind: .mac, developmentInstance: "review")), workspaceID: library)
+    #expect(await auth.deviceConnections().first?.name == "Remote Mac (Dev)")
+    let api = CompanionWorkspaceAPI(database: db, authentication: auth, commands: ScopedCommands(), isActive: { true })
+    let response = await api.handle(.init(method: "POST", target: "/v1/devices/development/disconnect",
+      headers: ["authorization": "Bearer " + pairing.credential, "x-woven-protocol": String(CompanionProtocol.version), "x-woven-workspace": library]))
+    #expect(response.status == 200)
+    #expect(await auth.devices().isEmpty)
+    // Presence withdrawal preserves pairing identity; a new request can reconnect.
+    #expect(try await auth.authenticate(bearer: pairing.credential).id == deviceID)
+    #expect(await auth.devices().count == 1)
+  }
+
+  @Test("workspace access follows enrollment while token revocation still prevents dispatch")
+  func automaticAccessAndRevocation() async throws {
     let dir = try directory(); defer { try? FileManager.default.removeItem(at: dir) }
     let db = try await WorkspaceDatabase(url: dir.appendingPathComponent("workspace.sqlite"))
     let identity = try await db.companionLibraryIdentity()
@@ -22,20 +42,16 @@ struct CompanionMacExecutionTests {
       ownerDeviceID: identity.hostDeviceID, kind: .mac, name: "Mac", executionDeviceID: identity.hostDeviceID)
     _ = try await db.registerCompanionExecutionWorkspace(.init(workspace: workspace), deviceID: identity.hostDeviceID)
     let commands = ScopedCommands()
-    let api = CompanionMacExecutionAPI(database: db, commands: commands, authentication: auth, descriptor: workspace, isActive: { true },
-      authorizeDevice: { id in
-        guard try await db.companionWorkspaceAccessAllowed(deviceID: id, workspaceID: workspace.id) else {
-          throw CompanionAPIError(code: "execution_disabled", message: "Disabled")
-        }
-      })
+    let api = CompanionMacExecutionAPI(database: db, commands: commands, authentication: auth, descriptor: workspace, isActive: { true })
     let credential = try await api.provision(deviceID: deviceID)
-    try await db.setCompanionWorkspaceAccess(deviceID: deviceID, workspaceID: workspace.id, enabled: false, authorizedBy: identity.hostDeviceID)
     let headers = ["authorization": "Bearer " + credential.token, "x-woven-protocol": String(CompanionProtocol.version),
       "x-woven-library": identity.libraryID, "x-woven-workspace": workspace.id, "x-woven-device": deviceID]
     let command = CompanionCommand(deviceID: deviceID, kind: .createSession, providerID: "local:default_agent", libraryID: identity.libraryID, workspaceID: workspace.id)
-    let denied = await api.handle(.init(method: "POST", target: "/v1/execution/commands", headers: headers, body: try JSONEncoder().encode(command)))
-    #expect(denied.status == 403 && commands.accepted.isEmpty)
-    await #expect(throws: CompanionAPIError.self) { try await api.provision(deviceID: deviceID) }
+    let accepted = await api.handle(.init(method: "POST", target: "/v1/execution/commands", headers: headers, body: try JSONEncoder().encode(command)))
+    #expect(accepted.status == 200 && commands.accepted == [command])
+    try await api.revoke(deviceID: deviceID)
+    let revoked = await api.handle(.init(method: "POST", target: "/v1/execution/commands", headers: headers, body: try JSONEncoder().encode(command)))
+    #expect(revoked.status == 401 && commands.accepted == [command])
   }
 
   @Test("direct Mac route never dispatches remote workspace commands or another device's receipt")

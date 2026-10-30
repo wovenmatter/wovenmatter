@@ -4,7 +4,6 @@ import Foundation
 import Observation
 import WovenMatterCompanion
 import WovenMatterCore
-import WovenMatterDashboardStore
 
 /// A secondary Mac owns a replica, never another copy of the authoritative database.
 /// The portable store journals edits and command identities before network submission.
@@ -65,9 +64,9 @@ final class CentralLibraryClientModel {
     private(set) var localExecutionBusy = false
     private(set) var sharingLocalExecution = false
     private var localHost: SecondaryMacExecutionHost?
+    private let makeLocalHost: @MainActor (SecondaryMacExecutionWorkspace, URL) -> SecondaryMacExecutionHost
     private var executionPreparedForTransition = false
     private var publishedManagement: CompanionExecutionManagementGrant?
-    private static let localSharingKey = "wovenmatter.client.share-execution"
     private(set) var draftNotes: [String: CompanionNote] = [:]
     private(set) var olderTranscripts: [String: CompanionTranscript] = [:]
     private var chatDrafts: [String: MobileChatDraft] = [:]
@@ -78,14 +77,12 @@ final class CentralLibraryClientModel {
     private var connectionGeneration = UUID()
     private let makeLocalExecution: @MainActor (URL, MobileStore) async throws -> SecondaryMacExecutionWorkspace
     private let saveCentralCredential: @MainActor (MobileCredential) throws -> Void
-    private let loadCentralCredential: @MainActor () throws -> MobileCredential?
-    private let makeCentralTransport: @MainActor (MobileCredential) throws -> HTTPSCompanionTransport
     private let clearWorkspaceCredential: @MainActor (String) throws -> Void
     private let clearCentralCredential: @MainActor () throws -> Void
     private let executionDirectoryOverride: URL?
-    private let preferences: UserDefaults
     var deviceConnectionsError: String?
     @ObservationIgnored private var initializationTask: Task<Void, Never>?
+    private var nextLocalSharingAttempt = Date.distantPast
     private var nextDevelopmentConnection = Date.distantPast
     private var connectingDevelopment = false
     private var running = false
@@ -96,42 +93,25 @@ final class CentralLibraryClientModel {
     private let store: MobileStore?
     private var engine: MobileSyncEngine?
     private var transport: HTTPSCompanionTransport?
-    weak var externalLibraryHost: CompanionHostController?
-    var libraryTransferHandler: (@MainActor @Sendable (CompanionHTTPRequest) async -> CompanionHTTPResponse?)?
-    private let replicaIdentity: String?
-    private let replicaLibraryID: String?
-    var localEndpoint: URL? { externalLibraryHost?.endpoint ?? localHost?.endpoint }
-    var transferStore: MobileStore? { store }
-    func retainedExecutionResponse(_ request: CompanionHTTPRequest) async -> CompanionHTTPResponse? {
-        guard let localExecution, request.headers["x-woven-workspace"] == localExecution.descriptor.id,
-              request.headers["x-woven-library"] == localExecution.descriptor.libraryID else { return nil }
-        guard let localHost else { return .error("unavailable", "This Mac’s retained workspace is starting.", status: 503) }
-        return await localHost.requestHandler()(request)
-    }
-    var mayRelocateLocalEndpoint = false
 
     init(store: MobileStore? = nil, transport: (any CompanionTransport)? = nil,
          assets: WorkspaceAssetSession? = nil,
-         executionDirectory: URL? = nil, preferences: UserDefaults = .standard,
+         executionDirectory: URL? = nil,
          makeLocalExecution: (@MainActor (URL, MobileStore) async throws -> SecondaryMacExecutionWorkspace)? = nil,
-         replicaFile: URL? = nil, replicaIdentity: String? = nil, replicaLibraryID: String? = nil,
-         loadCentralCredential: @escaping @MainActor () throws -> MobileCredential? = { try MobileCredentialVault.load() },
-         makeCentralTransport: @escaping @MainActor (MobileCredential) throws -> HTTPSCompanionTransport = { try HTTPSCompanionTransport(credential: $0) },
+         makeLocalHost: @escaping @MainActor (SecondaryMacExecutionWorkspace, URL) -> SecondaryMacExecutionHost = {
+             SecondaryMacExecutionHost(workspace: $0, directory: $1)
+         },
          saveCentralCredential: @escaping @MainActor (MobileCredential) throws -> Void = { try MobileCredentialVault.save($0) },
          clearCentralCredential: @escaping @MainActor () throws -> Void = { try MobileCredentialVault.clear() },
          clearWorkspaceCredential: @escaping @MainActor (String) throws -> Void = { try WorkspaceCredentialVault.clear(workspaceID: $0) }) {
         self.makeLocalExecution = makeLocalExecution ?? { directory, replica in
             try await SecondaryMacExecutionWorkspace.create(directory: directory, replica: replica, assets: assets)
         }
+        self.makeLocalHost = makeLocalHost
         self.clearCentralCredential = clearCentralCredential
         self.clearWorkspaceCredential = clearWorkspaceCredential
         self.saveCentralCredential = saveCentralCredential
-        self.loadCentralCredential = loadCentralCredential
-        self.makeCentralTransport = makeCentralTransport
         self.executionDirectoryOverride = executionDirectory
-        self.preferences = preferences
-        self.replicaIdentity = replicaIdentity
-        self.replicaLibraryID = replicaLibraryID
         if let store {
             self.store = store
             if let transport { engine = MobileSyncEngine(store: store, transport: transport) }
@@ -141,7 +121,7 @@ final class CentralLibraryClientModel {
             let root = CompanionTestWorkspace.supportDirectory
                 ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
                     .appending(path: WovenMatterWorkspacePaths.folderName, directoryHint: .isDirectory)
-            self.store = try MobileStore(file: replicaFile ?? root.appending(path: "LibraryClient/library.json"), deviceID: replicaIdentity)
+            self.store = try MobileStore(file: root.appending(path: "LibraryClient/library.json"))
         } catch {
             self.store = nil
             errorMessage = "The local library could not open: " + error.localizedDescription
@@ -176,9 +156,9 @@ final class CentralLibraryClientModel {
     func hasDirectAccess(_ workspaceID: String) -> Bool { directClients[workspaceID] != nil }
     @ObservationIgnored lazy var devicePairing = CompanionMacPairingController(identity: { [weak self] in
         guard let self else { return .init(deviceID: "00000000-0000-4000-8000-000000000000", deviceName: "Mac", metadata: .init(kind: .mac)) }
-        return .init(deviceID: self.state.deviceID, deviceName: Host.current().localizedName ?? "This Mac",
+        return .init(deviceID: self.state.deviceID, deviceName: DevelopmentLaunch.deviceName(),
             metadata: .init(kind: .mac, osVersion: ProcessInfo.processInfo.operatingSystemVersionString,
-                appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String))
+                appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String, developmentInstance: DevelopmentLaunch.instance))
     }, onPaired: { [weak self] endpoint, response in
         guard let self else { throw CancellationError() }
         try await self.acceptPairing(endpoint: endpoint, response: response)
@@ -224,12 +204,6 @@ final class CentralLibraryClientModel {
         initializationTask = nil
     }
     private func initializeState() async {
-        if let store, let replicaIdentity {
-            do { try await store.adoptTransferredHostIdentity(replicaIdentity) } catch { errorMessage = error.localizedDescription; return }
-        }
-        if let store, let replicaLibraryID {
-            do { try await store.bindWorkspace(replicaLibraryID) } catch { errorMessage = error.localizedDescription; return }
-        }
         if let store {
             do { try await store.restoreExecutionProjection() } catch { errorMessage = error.localizedDescription }
         }
@@ -238,7 +212,7 @@ final class CentralLibraryClientModel {
         defer { initialized = true }
         guard engine == nil else { return }
         do {
-            credential = try loadCentralCredential()
+            credential = try MobileCredentialVault.load()
             if DevelopmentLaunch.isClient { await reconnectDevelopmentLibrary() }
             try configureTransport()
             try configureDirectClients()
@@ -304,6 +278,8 @@ final class CentralLibraryClientModel {
         try saveCentralCredential(value)
         connectionGeneration = UUID(); credential = value
         try configureTransport(); pairingText = ""
+        // Re-pairing may reuse this Mac's existing executor after Unpair stopped sharing.
+        if localExecution != nil { await startLocalSharing() }
         await refresh()
     }
     func disconnectCentralLibrary() async {
@@ -335,14 +311,13 @@ final class CentralLibraryClientModel {
         guard credential.deviceID == state.deviceID else {
             throw CompanionAPIError(code: "device_identity_changed", message: "Pair this Mac with the central database again. Its local replica has a different device identity.")
         }
-        let transport = try makeCentralTransport(credential)
+        let transport = try HTTPSCompanionTransport(credential: credential, metadata: CompanionMacPairingController.metadata)
         self.transport = transport; engine = MobileSyncEngine(store: store, transport: transport)
     }
     func configureUpdateAnalytics(_ analytics: ProductAnalyticsModel) async {
         if let store { await analytics.configure(client: store.analytics) }
     }
     func reload() async {
-        if let transport { credential = transport.credential }
         await analytics.refresh()
         calendarRevision &+= 1
         if let store {
@@ -353,7 +328,7 @@ final class CentralLibraryClientModel {
             else { value = await MobileSyncEngine.localSynchronizationStatus(store: store) }
             if generation == connectionGeneration { synchronization = value }
         }
-        if DevelopmentLaunch.isClient || externalLibraryHost != nil, let model = localExecution?.model {
+        if DevelopmentLaunch.isClient, let model = localExecution?.model {
             model.liveLibraryClient = self
             await model.updateDevelopmentReplica(DevelopmentReplicaSnapshot(self))
         }
@@ -384,47 +359,44 @@ final class CentralLibraryClientModel {
         return root.appending(path: "LibraryClient/Execution/" + state.deviceID)
     }
     func enableLocalExecution() async {
-        guard !preparingTransition, !localExecutionBusy, localExecution == nil, state.workspaceID != nil, let store else { return }
+        guard !preparingTransition, !localExecutionBusy, state.workspaceID != nil, let store else { return }
+        if localExecution != nil { await startLocalSharing(); return }
         localExecutionBusy = true; defer { localExecutionBusy = false }
         do {
             let workspace = try await makeLocalExecution(executionDirectory, store)
             try await attachExecutionWorkspace(workspace.descriptor, transport: workspace)
             localExecution = workspace
-            if DevelopmentLaunch.isClient || externalLibraryHost != nil { workspace.model.liveLibraryClient = self }
-            if externalLibraryHost != nil || (preferences.object(forKey: Self.localSharingKey) as? Bool ?? true) { await startLocalSharing() }
+            if DevelopmentLaunch.isClient { workspace.model.liveLibraryClient = self }
+            await startLocalSharing()
             await selectExecutionWorkspace(workspace.descriptor.id)
         } catch { errorMessage = error.localizedDescription }
     }
     func startLocalSharing() async {
-        guard !preparingTransition, !localSharingBusy, let localExecution, !sharingLocalExecution, let store else { return }
+        // A retained replica/executor survives Unpair, but it must stay private
+        // until a central pairing configures a synchronization engine again.
+        guard !preparingTransition, !localSharingBusy, engine != nil,
+              let localExecution, !sharingLocalExecution, let store else { return }
+        let expectedConnection = connectionGeneration
         localSharingBusy = true; defer { localSharingBusy = false }
+        nextLocalSharingAttempt = Date().addingTimeInterval(5)
         deviceConnectionsError = nil
         do {
-            if let externalLibraryHost {
-                await externalLibraryHost.start()
-                guard let endpoint = externalLibraryHost.endpoint else { throw MobileConnectionError.offline }
-                try await localExecution.setEndpoint(endpoint)
-                sharingLocalExecution = true
-                var descriptor = localExecution.descriptor
-                descriptor.revision = journal.workspaces[descriptor.id]?.revision ?? 0
-                try await store.journal.upsertWorkspace(descriptor)
-                localExecution.model.startRetainedNodeWorkspaceIfNeeded()
-                return
-            }
-            let host = localHost ?? SecondaryMacExecutionHost(workspace: localExecution, directory: executionDirectory)
-            host.libraryTransferHandler = libraryTransferHandler
+            let host = localHost ?? makeLocalHost(localExecution, executionDirectory)
             localHost = host
-            let previousPort = mayRelocateLocalEndpoint ? nil : journal.workspaces[localExecution.descriptor.id]?.endpoint?.port
+            let previousPort = journal.workspaces[localExecution.descriptor.id]?.endpoint?.port
             try await host.start(preferredHTTPSPort: previousPort)
-            guard !preparingTransition else { throw CancellationError() }
+            guard !preparingTransition, engine != nil, connectionGeneration == expectedConnection else { throw CancellationError() }
             sharingLocalExecution = true
             var descriptor = localExecution.descriptor
             descriptor.revision = journal.workspaces[descriptor.id]?.revision ?? 0
             try await store.journal.upsertWorkspace(descriptor)
-            preferences.set(true, forKey: Self.localSharingKey)
+            guard !preparingTransition, engine != nil, connectionGeneration == expectedConnection else { throw CancellationError() }
+            nextLocalSharingAttempt = .distantPast
             await refresh()
         } catch {
             localHost?.stop(); try? await localHost?.waitUntilStopped()
+            sharingLocalExecution = false; publishedManagement = nil
+            try? await localExecution.setEndpoint(nil)
             deviceConnectionsError = error.localizedDescription
         }
     }
@@ -434,7 +406,7 @@ final class CentralLibraryClientModel {
         localHost?.stop()
         do { try await localHost?.waitUntilStopped() } catch { errorMessage = error.localizedDescription; return }
         sharingLocalExecution = false; publishedManagement = nil
-        preferences.set(false, forKey: Self.localSharingKey)
+        nextLocalSharingAttempt = .distantPast
         if let localExecution, let store {
             do {
                 try await localExecution.setEndpoint(nil)
@@ -468,24 +440,18 @@ final class CentralLibraryClientModel {
         localExecution = nil
         await enableLocalExecution()
     }
-    func prepareForQuit() async throws { try await prepareForRoleChange() }
-    func holdForLibraryTransferRecovery() { preparingTransition = true }
-    func requestCentralRole() async throws {
-        guard let endpoint = localEndpoint, let execution = localExecution, let transport else {
-            throw CompanionAPIError(code: "unavailable", message: "Connect to the central Mac and enable sharing on this Mac before requesting the central role.")
+    func prepareForQuit() async throws {
+        try await prepareForRoleChange()
+        if DevelopmentLaunch.mode != nil {
+            await stopLocalSharing()
+            // Withdraw the route before ending the local presence lease. Saved
+            // changes remain journaled if the central library is offline.
+            _ = try? await engine?.synchronize()
+            await engine?.cancelSynchronization()
+            try? await transport?.suspendDevelopmentConnection()
+            if DevelopmentLaunch.isClient, let credential { try? await DevelopmentLaunch.disconnect(deviceID: state.deviceID, credential: credential.token) }
         }
-        let peer = CompanionDiscoveredPeer(endpoint: endpoint,
-            advertisement: .init(role: .client, identity: .init(deviceID: execution.descriptor.ownerDeviceID,
-                deviceName: execution.descriptor.name, metadata: CompanionMacPairingController.metadata), capabilities: ["library.transfer.v1"]))
-        try await transport.requestCentralLibraryTransfer(to: peer)
     }
-    func pauseForLibraryTransfer() async throws {
-        guard !sending, !localExecutionBusy, !localSharingBusy else { throw MobileConnectionError.offline }
-        preparingTransition = true
-        do { try await flushLocalWrites(); await engine?.cancelSynchronization(); try await localExecution?.pauseForLibraryTransfer() }
-        catch { preparingTransition = false; throw error }
-    }
-    func resumeAfterLibraryTransfer() { preparingTransition = false; localExecution?.resumeAfterLibraryTransfer() }
     private func configureDirectClients() throws {
         guard credential != nil, let store else { return }
         for workspace in executionWorkspaces where directClients[workspace.id] == nil {
@@ -547,6 +513,13 @@ final class CentralLibraryClientModel {
     func refresh(background: Bool = false) async {
         guard !preparingTransition, !refreshing else { return }
         if requiresLocalExecution, localExecution == nil { await enableLocalExecution() }
+        if sharingLocalExecution, !localSharingBusy, localHost?.isRunning != true {
+            await stopLocalSharing()
+        }
+        if requiresLocalExecution, !sharingLocalExecution, !localSharingBusy, engine != nil,
+           !background || nextLocalSharingAttempt <= Date() {
+            await startLocalSharing()
+        }
         refreshing = true; defer { refreshing = false }
         async let directRefresh: Void = refreshAllExecutionWorkspaces(background: background)
         guard let engine, !background || nextCentralRefresh <= Date() else { await directRefresh; return }
@@ -577,7 +550,7 @@ final class CentralLibraryClientModel {
                 nextRosterRefresh = Date().addingTimeInterval(60)
             }
             try configureDirectClients()
-            if let grant = localHost?.managementGrant ?? localExecution?.model.transferredLibraryNode?.management, publishedManagement != grant, let transport {
+            if let grant = localHost?.managementGrant, publishedManagement != grant, let transport {
                 try await transport.registerExecutionManagement(grant); publishedManagement = grant
             }
         } catch {

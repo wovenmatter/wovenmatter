@@ -11,56 +11,6 @@ import WovenMatterDashboardStore
 @Suite("Federated execution complete flows", .serialized)
 @MainActor
 struct FederatedExecutionFlowTests {
-  @Test("both libraries keep paired clients and offline origin work after central activation")
-  func centralTransferWithOfflineClients() async throws {
-    let source = try await FederationFlowFixture(), target = try await FederationFlowFixture()
-    defer { source.remove(); target.remove() }
-    let a = try await source.client("old-library-client"), b = try await target.client("new-library-client")
-    let aID = await a.store.snapshot().deviceID, bID = await b.store.snapshot().deviceID
-    let aWorkspace = CompanionExecutionWorkspace(id: aID, libraryID: source.libraryID, ownerDeviceID: aID, kind: .mac, name: "Source node")
-    let bWorkspace = CompanionExecutionWorkspace(id: bID, libraryID: target.libraryID, ownerDeviceID: bID, kind: .mac, name: "Destination node")
-    try await a.store.journal.upsertWorkspace(aWorkspace); try await b.store.journal.upsertWorkspace(bWorkspace)
-    func content(_ text: String) throws -> String { try NoteDocument(blocks: [.richText(.init(text: text))]).encoded() }
-    let noteA = try await a.store.createNote(folderID: nil, title: "From source", content: content("Source library"))
-    let noteB = try await b.store.createNote(folderID: nil, title: "From destination", content: content("Destination library"))
-    _ = try await a.store.journal.append(workspaceID: aID, conversation: .init(id: UUID().uuidString.lowercased(), title: "Before transfer", libraryID: source.libraryID, workspaceID: aID))
-    try await MobileSyncEngine(store: a.store, transport: a.transport).synchronize()
-    try await MobileSyncEngine(store: b.store, transport: b.transport).synchronize()
-    // This device is disconnected while the two central databases are merged.
-    let offline = try await a.store.createNote(folderID: nil, title: "Offline during move", content: content("Keep this exact writing"))
-    let offlineConversation = UUID().uuidString.lowercased()
-    let pending = try await a.store.journal.append(workspaceID: aID, conversation: .init(id: offlineConversation, title: "Offline execution", libraryID: source.libraryID, workspaceID: aID))
-    let transferID = UUID().uuidString.lowercased(), incoming = source.directory.appending(path: "source-backup.sqlite"), merged = target.directory.appending(path: "merged.sqlite")
-    try await source.database.backupLibrary(to: incoming); try await target.database.backupLibrary(to: merged)
-    _ = try LibraryTransferSQLite.merge(source: incoming, into: merged, transferID: transferID, sourceLibraryID: source.libraryID, destinationLibraryID: target.libraryID)
-    let staged = try await WorkspaceDatabase(url: merged)
-    try await staged.installLibraryTransferAlias(.init(transferID: transferID, previousLibraryID: source.libraryID,
-      endpoint: URL(string: "https://mini.test-tailnet.ts.net/wovenmatter")!, libraryID: target.libraryID))
-    try await target.database.fenceLibraryTransfer(transferID)
-    try await target.authentication.mergeTransferredDevices(source.authentication.transferDevices())
-    try await target.database.activateTransferredLibrary(from: merged, transferID: transferID)
-    try await target.database.releaseLibraryTransfer(transferID)
-    a.transport.api = target.api; a.transport.canonicalLibraryID = target.libraryID; a.transport.relocationID = transferID
-    a.transport.dropNextJournalAcknowledgement = true
-    let reconnect = try MobileStore(file: a.file)
-    do { try await MobileSyncEngine(store: reconnect, transport: a.transport).synchronize(); Issue.record("Expected a lost new-central acknowledgement") }
-    catch MobileConnectionError.offline {}
-    let restarted = try MobileStore(file: a.file)
-    try await MobileSyncEngine(store: restarted, transport: a.transport).synchronize()
-    try await MobileSyncEngine(store: b.store, transport: b.transport).synchronize()
-    for note in [noteA, noteB, offline] {
-      #expect(try await target.database.companionNote(id: note.id)?.content == note.content)
-      #expect(await restarted.snapshot().notes[note.id]?.content == note.content)
-      #expect(await b.store.snapshot().notes[note.id]?.content == note.content)
-    }
-    #expect(await restarted.snapshot().outbox.isEmpty)
-    #expect(await restarted.journal.snapshot().pendingEventIDs.isEmpty)
-    let published = try await target.database.companionJournal(after: 0).entries
-    #expect(pending.allSatisfy { entry in published.filter { $0.eventID == entry.eventID }.count == 1 })
-    #expect(try await source.database.companionNote(id: noteB.id) == nil)
-    #expect(source.commands.executions == 0 && target.commands.executions == 0)
-  }
-
   @Test("offline execution survives lost central acknowledgement and restart without re-execution")
   func offlineExecutionLostAcknowledgement() async throws {
     let fixture = try await FederationFlowFixture()
@@ -294,24 +244,18 @@ private final class FederationFlowFixture {
 /// request crosses JSON encoding/decoding and the ordinary pairing credential.
 @MainActor
 private final class FederationAPITransport: CompanionTransport, FederationTransport {
-  var api: CompanionWorkspaceAPI
+  let api: CompanionWorkspaceAPI
   let credential: MobileCredential
-  var canonicalLibraryID: String?
-  var relocationID: String?
-  func libraryRelocationID() async -> String? { relocationID }
   var dropNextJournalAcknowledgement = false
   var dropNextArtifactChunkAcknowledgement = false
   var journalImports = 0
   init(api: CompanionWorkspaceAPI, credential: MobileCredential) { self.api = api; self.credential = credential }
   private func request<T: Decodable & Sendable>(_ path: String, method: String = "GET", body: Data = Data()) async throws -> T {
-    var request = CompanionHTTPRequest(method: method, target: "/wovenmatter" + path, headers: [
+    let response = await api.handle(.init(method: method, target: "/wovenmatter" + path, headers: [
       "authorization": "Bearer " + credential.token,
       "x-woven-workspace": credential.workspaceID,
       "x-woven-protocol": String(CompanionProtocol.version)
-    ], body: body)
-    if let canonicalLibraryID { request = try LibraryTransferRouting.request(request, from: credential.workspaceID, to: canonicalLibraryID) }
-    var response = await api.handle(request)
-    if let canonicalLibraryID { response = try LibraryTransferRouting.response(response, from: canonicalLibraryID, to: credential.workspaceID) }
+    ], body: body))
     guard response.status == 200 else {
       let error = try JSONDecoder().decode(CompanionAPIError.self, from: response.body)
       throw MobileConnectionError.http(response.status, error.message)

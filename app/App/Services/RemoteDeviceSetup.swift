@@ -42,17 +42,10 @@ enum RemoteDeviceSetup {
             switch request.action {
             case .pair:
                 guard let endpoint = request.endpoint else { throw MacDeviceSetupError("The central database address is missing.") }
-                if let node = model.transferredLibraryNode {
-                    guard node.relocation.endpoint == endpoint else { throw MacDeviceSetupError("This Mac is already a node of another central database. Request a database transfer in Apple Devices to change it.") }
-                    publish(request, phase: .paired, message: "This Mac is already connected to this central database.", defaults: defaults)
-                    CompanionMacSetupRequest.clearIfCurrent(raw, defaults: defaults)
-                    return
-                }
                 if !model.isLibraryClient {
-                    // An installation/pairing intent cannot bypass the local
-                    // choice of central Mac or either database's merge approval.
-                    publish(request, phase: .waiting, message: "Choose Change to node… in Apple Devices on this Mac, select the central Mac, and approve the backed-up database merge on both Macs.", defaults: defaults)
-                    CompanionMacSetupRequest.clearIfCurrent(raw, defaults: defaults)
+                    publish(request, phase: .preparing, message: "Preparing this Mac as a node…", defaults: defaults)
+                    // Retain the intent across the app's existing safe restart.
+                    try await model.activateLibraryClientMode()
                     return
                 }
                 await model.libraryClient.initialize()

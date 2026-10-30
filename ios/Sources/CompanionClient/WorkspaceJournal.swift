@@ -58,10 +58,6 @@ public actor WorkspaceJournal {
     if state.conversationOwners == nil { state.conversationOwners = state.conversationWorkspaceIDs }
   }
   public func snapshot() -> WorkspaceJournalState { state }
-  public func backupForLibraryTransfer(to file: URL) throws { try WorkspaceJournalPersistence.persist(state, at: file) }
-  public func resetCentralCursorForLibraryTransfer() throws {
-    try transaction { next in next.centralCursor = 0; next.centralWorkspaceRevisions = [:] }
-  }
   /// Cached observer history never becomes a publisher queue. Legacy relay flags
   /// are removed atomically, without deleting any origin record or projection.
   public func prepareOwnerPublication(deviceID: String) throws {

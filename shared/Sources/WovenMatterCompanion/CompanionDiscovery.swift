@@ -5,8 +5,9 @@ public struct CompanionDeviceMetadata: Codable, Equatable, Sendable {
   public let kind: CompanionDeviceKind
   public let osVersion: String?
   public let appVersion: String?
-  public init(kind: CompanionDeviceKind = .unknown, osVersion: String? = nil, appVersion: String? = nil) {
-    self.kind = kind; self.osVersion = osVersion; self.appVersion = appVersion
+  public let developmentInstance: String?
+  public init(kind: CompanionDeviceKind = .unknown, osVersion: String? = nil, appVersion: String? = nil, developmentInstance: String? = nil) {
+    self.kind = kind; self.osVersion = osVersion; self.appVersion = appVersion; self.developmentInstance = developmentInstance
   }
 }
 public struct CompanionPairingDeviceIdentity: Codable, Equatable, Sendable {
@@ -23,9 +24,8 @@ public struct CompanionDiscoveryAdvertisement: Codable, Equatable, Sendable {
   public let role: CompanionDiscoveryRole
   public let identity: CompanionPairingDeviceIdentity
   public let protocolVersion: Int
-  public let capabilities: [String]?
-  public init(role: CompanionDiscoveryRole, identity: CompanionPairingDeviceIdentity, protocolVersion: Int = CompanionProtocol.version, capabilities: [String]? = nil) {
-    self.role = role; self.identity = identity; self.protocolVersion = protocolVersion; self.capabilities = capabilities
+  public init(role: CompanionDiscoveryRole, identity: CompanionPairingDeviceIdentity, protocolVersion: Int = CompanionProtocol.version) {
+    self.role = role; self.identity = identity; self.protocolVersion = protocolVersion
   }
 }
 public struct CompanionDiscoveredPeer: Codable, Equatable, Sendable, Identifiable {

@@ -114,6 +114,8 @@ class DevelopmentBuildTests(unittest.TestCase):
               INSERT INTO dashboard_agents VALUES('remote-pi','remote_workspace','device_owned','remote',NULL,'ready');
               INSERT INTO dashboard_conversations VALUES('history','local-pi');
               CREATE TABLE companion_workspace(singleton INTEGER, workspace_id TEXT);
+              CREATE TABLE companion_execution_workspaces(id TEXT,payload BLOB);
+              INSERT INTO companion_execution_workspaces VALUES('source-mac','{"libraryID":"production-identity","name":"Mac","endpoint":"https://fixture.test.ts.net/wovenmatter"}');
               CREATE TABLE dashboard_calendar_items(id TEXT, calendar_json TEXT);
               CREATE TABLE dashboard_runs(id TEXT,status TEXT);
               CREATE TABLE workspace_session_goals(session_id TEXT,value TEXT);
@@ -129,6 +131,10 @@ class DevelopmentBuildTests(unittest.TestCase):
             asset = source / "library-files"; asset.mkdir(); (asset / "blob").write_bytes(b"saved output")
             target = root / "dev"; dev.snapshot(source, target)
             with sqlite3.connect(target / "workspace.sqlite") as copy:
+                workspace = json.loads(copy.execute("SELECT payload FROM companion_execution_workspaces").fetchone()[0])
+                self.assertTrue(workspace["retainedHistory"])
+                self.assertNotIn("endpoint", workspace)
+                self.assertEqual(workspace["name"], "Mac")
                 self.assertEqual(copy.execute("SELECT content FROM notes").fetchone()[0], "shared content")
                 self.assertEqual(copy.execute("SELECT COUNT(*) FROM desktop_local_acp_sessions").fetchone()[0], 0)
                 self.assertIsNotNone(copy.execute("SELECT deleted_at FROM dashboard_agents WHERE id='local-pi'").fetchone()[0])

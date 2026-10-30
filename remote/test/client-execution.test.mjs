@@ -36,28 +36,6 @@ test('per-device bearer grants never expose administration or another device rec
   assert.equal(f.service.principal('Bearer '+f.grant.token,'execution'),null)
 })
 
-test('transferred library management is scoped, durable and cannot execute or impersonate an administrator',async t=>{
-  const f=fixture(t),grant=f.service.provisionManagement(),authorization='Bearer '+grant.token
-  const headers={'x-woven-library':f.enrollment.libraryID,'x-woven-workspace':f.enrollment.workspaceID}
-  const deviceID=randomUUID()
-  assert.equal(f.service.principal(authorization,'execution'),null)
-  assert.equal(f.service.principal(authorization,'inference'),null)
-  assert.throws(()=>f.service.manageDevice('Bearer '+f.grant.token,headers,{deviceID}),{statusCode:403})
-  assert.throws(()=>f.service.manageDevice(authorization,{...headers,'x-woven-library':randomUUID()},{deviceID}),{statusCode:403})
-  assert.throws(()=>f.service.manageDevice(authorization,{...headers,'x-woven-workspace':randomUUID()},{deviceID}),{statusCode:403})
-  await f.restart()
-  const enrolled=f.service.manageDevice(authorization,headers,{deviceID,libraryID:randomUUID(),workspaceID:randomUUID(),scopes:['administrator']})
-  assert.equal(enrolled.workspace.libraryID,f.enrollment.libraryID)
-  assert.equal(enrolled.workspace.id,f.enrollment.workspaceID)
-  assert.equal(f.service.principal('Bearer '+enrolled.token,'execution').id,deviceID)
-  assert.equal(f.service.principal('Bearer '+enrolled.token,'administrator'),null)
-  f.service.manageDevice(authorization,headers,{deviceID},{revoke:true})
-  assert.equal(f.service.principal('Bearer '+enrolled.token,'execution'),null)
-  await f.restart()
-  assert.equal(f.service.principal('Bearer '+enrolled.token,'execution'),null)
-  assert.throws(()=>f.service.manageLibraryRelocation(authorization,headers,{transferID:randomUUID(),previousLibraryID:randomUUID(),libraryID:randomUUID(),endpoint:'https://new.tail.ts.net/wovenmatter'}))
-})
-
 test('concurrent retransmission has one execution and changed-payload retries fail',async t=>{
   const f=fixture(t),opened=await f.service.command(f.command('createSession'),f.principal)
   const input=f.command('send',{conversationID:opened.conversationID,text:'hello'})

@@ -139,7 +139,6 @@ extension WorkspaceDatabaseConnection {
   /// of the destination's agent-tool selection and subsequent MCP exposure.
   /// Explicit pauses and removals still fence pending occurrences normally.
   func timerExecutionEnabledUnlocked(id: String, sessionID: String) throws -> Bool {
-    guard try libraryTransferRuntimeOwnedHere(table: "workspace_session_timers", id: id) else { return false }
     let row = try historyRowsUnlocked("SELECT outside_mcp FROM workspace_session_timers WHERE id=?", values: [id]).first
     if row?.objectValue?["outside_mcp"]?.intValue == 1 { return true }
     return try sessionToolsUnlocked(sessionID).enabled.contains(.timers)

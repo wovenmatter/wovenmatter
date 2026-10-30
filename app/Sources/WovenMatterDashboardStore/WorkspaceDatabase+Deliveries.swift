@@ -137,7 +137,6 @@ extension WorkspaceDatabaseConnection {
   }
 
   private func toolDeliveryAuthorizedUnlocked(_ delivery: WorkspaceSessionDelivery) throws -> Bool {
-    guard try libraryTransferRuntimeOwnedHere(table: "workspace_session_deliveries", id: delivery.id) else { return false }
     for id in [delivery.sourceID, delivery.targetID] where id != WovenMCPCaller.outside {
       guard !(try historyRowsUnlocked("SELECT 1 FROM dashboard_conversations WHERE id=? AND deleted_at IS NULL", values: [id])).isEmpty else { return false }
     }

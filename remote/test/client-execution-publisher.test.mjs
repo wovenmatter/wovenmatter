@@ -16,12 +16,11 @@ const tick=()=>new Promise(resolve=>setTimeout(resolve,5))
 async function until(predicate){for(let n=0;n<200;n++){if(predicate())return;await tick()}assert.fail('owner publisher did not retry')}
 function fixture(t,{automatic=false}={}) {
   const directory=mkdtempSync(join(tmpdir(),'wm-owner-publish-')),events=new Map(),artifacts=new Map(),requests=[]
-  let online=false,loseReply=false,loseRetainedReply=false,cursor=0,rejectJournal=false,rejectArtifacts=false,relocation=null
+  let online=false,loseReply=false,loseRetainedReply=false,cursor=0,rejectJournal=false,rejectArtifacts=false
   const token='publisher-token-'+randomUUID(),secret='existing-admin-'+randomUUID()
   const fetchImpl=async(url,options)=>{
     requests.push({url,options});if(!online)throw Error('Central offline')
     assert.equal(options.redirect,'error');assert.equal(options.headers.authorization,'Bearer '+token)
-    if(relocation&&url.startsWith(grant.endpoint+'/'))return {ok:false,status:409,json:async()=>({code:'library_moved',relocation})}
     if((rejectJournal&&url.endsWith('/journal'))||(rejectArtifacts&&url.includes('/artifacts/')))return {ok:false,status:503}
     const body=JSON.parse(options.body);let result
     if(url.endsWith('/retained/settle')) {
@@ -50,27 +49,8 @@ function fixture(t,{automatic=false}={}) {
   service.configurePublisher(grant)
   const createSession=()=>service.command({commandID:randomUUID(),deviceID:enrollment.deviceID,libraryID:enrollment.libraryID,workspaceID:enrollment.workspaceID,kind:'createSession'},principal)
   t.after(async()=>{await service.close();rmSync(directory,{recursive:true,force:true})})
-  return {directory,events,artifacts,requests,grant,createSession,get service(){return service},set relocation(x){relocation=x},set online(x){online=x},set loseReply(x){loseReply=x},set loseRetainedReply(x){loseRetainedReply=x},set rejectJournal(x){rejectJournal=x},set rejectArtifacts(x){rejectArtifacts=x},async restart(){await service.close();service=create()}}
+  return {directory,events,artifacts,requests,grant,createSession,get service(){return service},set online(x){online=x},set loseReply(x){loseReply=x},set loseRetainedReply(x){loseRetainedReply=x},set rejectJournal(x){rejectJournal=x},set rejectArtifacts(x){rejectArtifacts=x},async restart(){await service.close();service=create()}}
 }
-test('authenticated central relocation preserves exact origin IDs and retries after process loss',async t=>{
-  const f=fixture(t);await f.createSession()
-  const before=f.service.events().entries,newEndpoint='https://mini.tail.ts.net/wovenmatter'
-  f.relocation={transferID:randomUUID(),previousLibraryID:f.grant.libraryID,libraryID:randomUUID(),endpoint:newEndpoint}
-  f.online=true;f.loseReply=true
-  await assert.rejects(f.service.synchronizePublisher(),/Reply lost/)
-  await f.restart();await f.service.synchronizePublisher()
-  assert.deepEqual([...f.events.values()],before)
-  assert.ok(f.requests.some(request=>request.url.startsWith(newEndpoint+'/')))
-  const start=f.requests.length;await f.createSession();await f.service.synchronizePublisher()
-  assert.ok(f.requests.slice(start).every(request=>request.url.startsWith(newEndpoint+'/')))
-})
-test('invalid relocation never forwards the workspace publisher bearer',async t=>{
-  const f=fixture(t);await f.createSession();f.online=true
-  f.relocation={transferID:randomUUID(),previousLibraryID:f.grant.libraryID,libraryID:randomUUID(),endpoint:'https://example.com/wovenmatter'}
-  await assert.rejects(f.service.synchronizePublisher(),/Invalid private/)
-  assert.ok(f.requests.every(request=>request.url.startsWith(f.grant.endpoint+'/')))
-  assert.equal(f.events.size,0)
-})
 test('owner executes offline and restart retries original immutable events without any observer',async t=>{
   const f=fixture(t,{automatic:true})
   assert.throws(()=>f.service.configurePublisher({...f.grant,workspaceID:randomUUID()}),{statusCode:400})

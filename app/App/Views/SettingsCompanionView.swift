@@ -9,16 +9,13 @@ struct SettingsCompanionView: View {
     @State private var recoveryError: String?
     @State private var switching = false
     @State private var confirmRoleChange = false
-    @State private var showTransferChooser = false
-    @State private var updatingAccess: Set<String> = []
     var reservesRailControlSpace = false
     var onBack: () -> Void
     private var client: CentralLibraryClientModel { model.libraryClient }
-    private var isNode: Bool { model.isLibraryClient || model.isTransferredLibraryNode }
 
     var body: some View {
         SettingsPage(title: "Apple Devices", reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
-            if DevelopmentLaunch.isClient || model.isTransferredLibraryNode {
+            if DevelopmentLaunch.isClient {
                 SettingsCard(title: "Central database") {
                     HStack(spacing: 12) {
                         DeviceConnectionIcon(kind: .mac)
@@ -29,7 +26,7 @@ struct SettingsCompanionView: View {
                     }
                 }
                 SettingsCard(title: "This Mac") {
-                    Text(model.isTransferredLibraryNode ? "This Mac keeps its local data synchronized with the central database. Its own background server runs its agents and scheduled work." : "This development instance keeps a local database synchronized with the live library. Its own background server runs its agents and scheduled work.")
+                    Text("This development instance keeps a local database synchronized with the live library. Its own background server runs its agents and scheduled work.")
                         .font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground)
                 }
             } else if model.isLibraryClient {
@@ -37,11 +34,10 @@ struct SettingsCompanionView: View {
                 SettingsCard(title: "This Mac") {
                     HStack {
                         DeviceConnectionIcon(kind: .mac)
-                        Text(Host.current().localizedName ?? "This Mac").font(.system(size: 13, weight: .medium))
+                        Text(DevelopmentLaunch.deviceName()).font(.system(size: 13, weight: .medium))
                         Spacer()
-                        Toggle("Available to paired devices", isOn: Binding(get: { client.sharingLocalExecution }, set: { enabled in
-                            Task { if enabled { await client.startLocalSharing() } else { await client.stopLocalSharing() } }
-                        })).toggleStyle(DashboardSwitchToggleStyle()).disabled(client.localSharingBusy || client.localExecution == nil)
+                        Text(client.sharingLocalExecution ? "Sharing workspace" : "Workspace not connected")
+                            .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
                     }
                     if let error = client.deviceConnectionsError { Text(error).font(.system(size: 12)).foregroundStyle(DashboardPalette.danger) }
                 }
@@ -51,7 +47,7 @@ struct SettingsCompanionView: View {
                     HStack(spacing: 12) {
                         DeviceConnectionIcon(kind: .mac)
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(DevelopmentLaunch.isSnapshot ? DevelopmentLaunch.displayName + " snapshot" : Host.current().localizedName ?? "This Mac").font(.system(size: 13, weight: .medium))
+                            Text(DevelopmentLaunch.deviceName()).font(.system(size: 13, weight: .medium))
                             Text(host.status)
                                 .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
                         }
@@ -62,55 +58,59 @@ struct SettingsCompanionView: View {
                 if !host.pairedDevices.isEmpty { pairedDevices }
                 if !host.pendingDeviceRevocations.isEmpty { pendingRevocations }
             }
+            SettingsDeviceWorkspaceInventory(workspaces: model.isLibraryClient ? client.executionWorkspaces : host.executionWorkspaces)
             if !DevelopmentLaunch.isClient {
-                if !isNode || (model.isLibraryClient && client.credential == nil) {
+                if !model.isLibraryClient || client.credential == nil {
                     DevicePairingDiscoveryCard(pairing: client.devicePairing, host: host, isCentral: !model.isLibraryClient, canPairWithCentral: model.isLibraryClient)
                 }
-                if !isNode { DevicePairingCodeCard(host: host) }
-                if !isNode, let message = host.errorMessage {
+                if !model.isLibraryClient { DevicePairingCodeCard(host: host) }
+                if !model.isLibraryClient, let message = host.errorMessage {
                     Text(message).font(.system(size: 12)).foregroundStyle(DashboardPalette.danger)
                         .textSelection(.enabled).accessibilityIdentifier("companion.error")
                 }
-                if !isNode, let error = client.deviceConnectionsError {
+                if let error = client.deviceConnectionsError, !model.isLibraryClient {
                     Text(error).font(.system(size: 12)).foregroundStyle(DashboardPalette.danger)
                 }
                 if !model.companionRecoveredNoteDrafts.isEmpty { recoveredDrafts }
-                LibraryTransferSettings(model: model, host: host)
-                SettingsCard(title: "Database role", detail: isNode
+                SettingsCard(title: "Database role", detail: model.isLibraryClient
                     ? "This Mac is a node. Pair it with a central database to share its data and workspaces."
                     : "This Mac hosts the central database. Paired devices use this database and its connected workspaces.") {
                     HStack {
-                        Text(isNode ? "Node" : "Central database").font(.system(size: 13, weight: .medium))
+                        Text(model.isLibraryClient ? "Node" : "Central database").font(.system(size: 13, weight: .medium))
                         Spacer()
-                        Button(isNode ? "Request central role…" : "Change to node…") {
-                            if isNode { confirmRoleChange = true } else { showTransferChooser = true }
-                        }
+                        Button(model.isLibraryClient ? "Use as central database…" : "Change to node…") { confirmRoleChange = true }
                             .buttonStyle(SettingsQuietButtonStyle()).disabled(switching)
                     }
-                    Text("Changing the central Mac backs up and merges both databases before restarting. Your workspaces keep their execution owners.")
+                    Text("Changing roles restarts Woven Matter. This Mac’s existing data stays on this Mac.")
                         .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
                 }
             }
         }
         .task {
             guard !DevelopmentLaunch.isClient else { return }
-            if !model.isTransferredLibraryNode { await client.initialize() }
+            await client.initialize()
             if model.isLibraryClient { await client.devicePairing.restorePendingRequest() }
             while !Task.isCancelled {
                 if !model.isLibraryClient { await host.refreshStatus() }
-                else { await model.libraryTransfer.refresh() }
-                if host.libraryTransfer.outgoing?.phase == .cancelled { await model.resumeAfterLibraryTransferCancellation() }
                 do { try await Task.sleep(for: .seconds(2)) } catch { return }
             }
         }
-        .onDisappear { if !DevelopmentLaunch.isClient && !model.isTransferredLibraryNode { client.devicePairing.stopPairingMode() } }
-        .sheet(isPresented: $showTransferChooser) { LibraryTransferChooser(model: model, host: host) }
-        .confirmationDialog("Make this Mac the central database?", isPresented: $confirmRoleChange) {
-            Button("Request database transfer") {
-                Task { await host.requestCentralLibraryRole() }
+        .onDisappear { if !DevelopmentLaunch.isClient { client.devicePairing.stopPairingMode() } }
+        .confirmationDialog(model.isLibraryClient ? "Use this Mac as a central database?" : "Change this Mac to a node?", isPresented: $confirmRoleChange) {
+            Button("Change role and restart") {
+                switching = true
+                Task {
+                    defer { switching = false }
+                    do {
+                        if model.isLibraryClient { try await model.returnToCentralLibraryMode() }
+                        else { try await model.activateLibraryClientMode() }
+                    } catch { client.deviceConnectionsError = error.localizedDescription }
+                }
             }
         } message: {
-            Text("Approve this request on the current central Mac. Both Macs will keep backups, merge their libraries, and retain all paired devices.")
+            Text(model.isLibraryClient
+                ? "This reopens this Mac’s own database. Its paired database and pending changes stay saved separately."
+                : "After restarting, pair this node with a central database. This Mac’s existing database stays saved separately.")
         }
     }
     private var clientDeviceRoster: some View {
@@ -149,46 +149,23 @@ struct SettingsCompanionView: View {
     private var pairedDevices: some View {
         SettingsCard(title: "Paired devices") {
             ForEach(host.pairedDevices) { device in
-                DisclosureGroup {
-                    ForEach(host.executionWorkspaces.filter { !$0.deleted && $0.kind != .ios && $0.executionDeviceID != device.id }) { workspace in
-                        let key = device.id + ":" + workspace.id
-                        Toggle(isOn: Binding(get: {
-                            host.workspaceAccessPolicies.first { $0.deviceID == device.id && $0.workspaceID == workspace.id }?.enabled ?? true
-                        }, set: { enabled in
-                            updatingAccess.insert(key)
-                            Task {
-                                await host.setExecutionAccess(deviceID: device.id, workspaceID: workspace.id, enabled: enabled)
-                                updatingAccess.remove(key)
-                            }
-                        })) {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(workspace.name).font(.system(size: 12))
-                                if host.pendingDeviceRevocations[device.id]?.contains(workspace.id) == true {
-                                    Text("Revocation waiting for this workspace").font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
-                                }
-                            }
-                        }.toggleStyle(DashboardSwitchToggleStyle()).disabled(updatingAccess.contains(key))
-                    }
-                    Text("Workspace access controls agent execution. The central database remains available.")
-                        .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
-                    Button("Unpair device", role: .destructive) { Task { await host.revoke(device.id) } }
-                        .buttonStyle(SettingsQuietButtonStyle()).accessibilityIdentifier("companion.revoke")
-                } label: {
-                    HStack(spacing: 12) {
-                        DeviceConnectionIcon(kind: device.kind)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(device.name).font(.system(size: 13, weight: .medium))
-                            Text(DeviceConnectionIcon.label(device.kind)).font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
-                            if let seen = device.lastSeenAt {
-                                Text("Last seen \(seen.formatted(date: .abbreviated, time: .shortened))")
-                                    .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
-                            } else {
-                                Text("Paired \(device.pairedAt.formatted(date: .abbreviated, time: .shortened))")
-                                    .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
-                            }
+                HStack(spacing: 12) {
+                    DeviceConnectionIcon(kind: device.kind)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(device.displayName).font(.system(size: 13, weight: .medium))
+                        Text(DeviceConnectionIcon.label(device.kind)).font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
+                        if let seen = device.lastSeenAt {
+                            Text("Last seen \(seen.formatted(date: .abbreviated, time: .shortened))")
+                                .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
+                        } else {
+                            Text("Paired \(device.pairedAt.formatted(date: .abbreviated, time: .shortened))")
+                                .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
                         }
                     }
-                }.disclosureGroupStyle(SettingsDisclosureGroupStyle())
+                    Spacer()
+                    Button("Unpair device", role: .destructive) { Task { await host.revoke(device.id) } }
+                        .buttonStyle(SettingsQuietButtonStyle()).accessibilityIdentifier("companion.revoke")
+                }
             }
         }
     }
@@ -196,7 +173,7 @@ struct SettingsCompanionView: View {
         SettingsCard(title: "Pending revocations") {
             ForEach(host.pendingDeviceRevocations.keys.sorted(), id: \.self) { id in
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(host.pairedDevices.first { $0.id == id }?.name ?? "Disconnected device")
+                    Text(host.pairedDevices.first { $0.id == id }?.displayName ?? "Disconnected device")
                         .font(.system(size: 13, weight: .medium))
                     let names = (host.pendingDeviceRevocations[id] ?? []).map { workspaceID in
                         host.executionWorkspaces.first { $0.id == workspaceID }?.name ?? "Unavailable workspace"
@@ -222,6 +199,43 @@ struct SettingsCompanionView: View {
                 }
             }
             if let recoveryError { Text(recoveryError).font(.system(size: 12)).foregroundStyle(DashboardPalette.danger) }
+        }
+    }
+}
+
+/// The shared inventory belongs to the library, independently of its paired devices.
+struct SettingsDeviceWorkspaceInventory: View {
+    let workspaces: [CompanionExecutionWorkspace]
+    private var active: [CompanionExecutionWorkspace] {
+        workspaces.filter(\.isVisibleInConnections).sorted {
+            let order = $0.name.localizedStandardCompare($1.name)
+            return order == .orderedSame ? $0.id < $1.id : order == .orderedAscending
+        }
+    }
+    var body: some View {
+        SettingsCard(title: "Workspaces", detail: "Paired devices automatically have access to all available workspaces.") {
+            if active.isEmpty {
+                Text("No workspaces connected.")
+                    .font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground)
+            }
+            ForEach(active) { workspace in
+                HStack(spacing: 12) {
+                    DeviceConnectionIcon(kind: workspace.kind == .mac ? .mac : workspace.kind == .ios ? .iPhone : .unknown)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(workspace.name).font(.system(size: 13, weight: .medium))
+                        Text(workspaceLabel(workspace.kind))
+                            .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
+                    }
+                    Spacer()
+                }
+            }
+        }.accessibilityIdentifier("companion.workspaces")
+    }
+    private func workspaceLabel(_ kind: CompanionExecutionWorkspace.Kind) -> String {
+        switch kind {
+        case .mac: "Mac workspace"
+        case .linux: "Linux workspace"
+        case .ios: "iPhone or iPad workspace"
         }
     }
 }

@@ -31,7 +31,6 @@ extension WorkspaceDatabaseConnection {
       let token = Data(bytes).base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
       let record = WorkspacePublisherRecord(grantID: UUID().uuidString.lowercased(), workspaceID: workspaceID,
         libraryID: identity.libraryID, executionDeviceID: executor, endpoint: endpoint)
-      try companionExecuteUnlocked("DELETE FROM companion_workspace_publisher_aliases WHERE workspace_id=?", values: [workspaceID])
       let statement = try prepareUnlocked("INSERT INTO companion_workspace_publishers(workspace_id,digest,payload) VALUES (?,?,?) ON CONFLICT(workspace_id) DO UPDATE SET digest=excluded.digest,payload=excluded.payload")
       defer { sqlite3_finalize(statement) }
       try bind(workspaceID, at: 1, to: statement); try bind(Data(SHA256.hash(data: Data(token.utf8))), at: 2, to: statement)
@@ -49,7 +48,7 @@ extension WorkspaceDatabaseConnection {
   public func authenticateCompanionWorkspacePublisher(bearer: String) throws -> CompanionWorkspacePublisherPrincipal {
     try withLock {
       guard (32...256).contains(bearer.utf8.count) else { throw federationError("unauthorized", "Invalid workspace publisher.") }
-      let statement = try prepareUnlocked("SELECT payload FROM companion_workspace_publishers WHERE digest=?1 UNION ALL SELECT payload FROM companion_workspace_publisher_aliases WHERE digest=?1")
+      let statement = try prepareUnlocked("SELECT payload FROM companion_workspace_publishers WHERE digest=?")
       defer { sqlite3_finalize(statement) }
       try bind(Data(SHA256.hash(data: Data(bearer.utf8))), at: 1, to: statement)
       guard sqlite3_step(statement) == SQLITE_ROW else { throw federationError("unauthorized", "Invalid workspace publisher.") }

@@ -28,9 +28,7 @@ public final class CompanionMacExecutionAPI {
   public func provision(deviceID: String) async throws -> CompanionExecutionCredential {
     try await authorizeDevice(deviceID)
     let token = try await authentication.provision(deviceID: deviceID, libraryID: descriptor.libraryID, workspaceID: descriptor.id)
-    var credential = CompanionExecutionCredential(workspace: descriptor, deviceID: deviceID, token: token)
-    credential.executionLibraryID = descriptor.libraryID
-    return credential
+    return CompanionExecutionCredential(workspace: descriptor, deviceID: deviceID, token: token)
   }
   public func revoke(deviceID: String) async throws { try await authentication.revoke(deviceID: deviceID) }
 

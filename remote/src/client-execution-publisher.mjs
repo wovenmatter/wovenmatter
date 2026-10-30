@@ -1,5 +1,4 @@
 import { createHash, randomBytes, createCipheriv, createDecipheriv, randomUUID } from 'node:crypto'
-import { libraryRelocationEndpoint } from './library-relocation.mjs'
 
 const fail = (statusCode, message) => Object.assign(new Error(message), { statusCode })
 const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value)
@@ -55,7 +54,7 @@ export function createClientExecutionPublisher({ db, identity, secret, events, f
       pendingArtifacts:db.prepare('SELECT count(*) AS count FROM saved_execution_artifacts WHERE uploaded=0').get().count,
       journal:lane('journal'),artifacts:lane('artifacts')}
   }
-  async function post(value, path, body, relocations=0) {
+  async function post(value, path, body) {
     if (stopped) throw fail(503,'The workspace publisher is stopped.')
     const controller = new AbortController();controllers.add(controller)
     const timeout = setTimeout(()=>controller.abort(),10000); timeout.unref()
@@ -63,15 +62,6 @@ export function createClientExecutionPublisher({ db, identity, secret, events, f
       const response = await fetchImpl(value.endpoint.replace(/\/$/,'')+'/v1/federation/publisher/'+path, {
         method:'POST',redirect:'error',signal:controller.signal,
         headers:{authorization:'Bearer '+value.token,'content-type':'application/json','x-woven-protocol':'3','x-woven-workspace':value.libraryID},body:JSON.stringify(body)})
-      if(response.status===409&&relocations<8) {
-        const moved=await response.json()
-        if(moved.code==='library_moved') {
-          const endpoint=libraryRelocationEndpoint(moved,value.libraryID)
-          if(endpoint===value.endpoint)throw fail(409,'The library relocation did not change the endpoint.')
-          configure({...value,endpoint})
-          return await post({...value,endpoint},path,body,relocations+1)
-        }
-      }
       if (!response.ok) throw fail(response.status,'The central library did not accept this workspace publication.')
       return await response.json()
     } finally { clearTimeout(timeout); controllers.delete(controller) }
@@ -191,6 +181,5 @@ export function createClientExecutionPublisher({ db, identity, secret, events, f
     const value=grant();if(!value||!uuid(request?.runID))return null
     try { return await post(value,'association',request) } catch(error) { if(error.statusCode===404)return null;throw error }
   }
-  function relocate(value) {const prior=grant();if(prior)configure({...prior,endpoint:libraryRelocationEndpoint(value,prior.libraryID)});return status()}
-  return {configure,status,syncNow,relocate,saveArtifact,resolveRetainedAssociation,async close(){stopped=true;clearTimeout(timer);for(const controller of controllers)controller.abort();await inFlight?.catch(()=>{})}}
+  return {configure,status,syncNow,saveArtifact,resolveRetainedAssociation,async close(){stopped=true;clearTimeout(timer);for(const controller of controllers)controller.abort();await inFlight?.catch(()=>{})}}
 }

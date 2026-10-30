@@ -34,12 +34,20 @@ public struct CompanionExecutionWorkspace: Codable, Equatable, Identifiable, Sen
   public var journalDeviceIDs: [String]
   public var revision: Int64
   public var deleted: Bool
+  /// Development routes are temporary; a missing endpoint withdraws their presence.
+  public var developmentInstance: String?
+  /// Copied snapshot owners retain history, not a live connection.
+  public var retainedHistory: Bool?
+  public var isVisibleInConnections: Bool {
+    !deleted && retainedHistory != true && (developmentInstance == nil || endpoint != nil)
+  }
   public init(id: String, libraryID: String, ownerDeviceID: String, kind: Kind, name: String,
-              endpoint: URL? = nil, capabilities: [String] = [], executionDeviceID: String? = nil, journalDeviceIDs: [String] = [], revision: Int64 = 0, deleted: Bool = false) {
+              endpoint: URL? = nil, capabilities: [String] = [], executionDeviceID: String? = nil, journalDeviceIDs: [String] = [], revision: Int64 = 0, deleted: Bool = false, developmentInstance: String? = nil, retainedHistory: Bool? = nil) {
     self.id = id; self.libraryID = libraryID; self.ownerDeviceID = ownerDeviceID; self.kind = kind; self.name = name
     self.executionDeviceID = executionDeviceID
     self.endpoint = endpoint; self.capabilities = capabilities; self.journalDeviceIDs = journalDeviceIDs
     self.revision = revision; self.deleted = deleted
+    self.developmentInstance = developmentInstance; self.retainedHistory = retainedHistory
   }
 }
 public struct CompanionWorkspaceRegistration: Codable, Equatable, Sendable {
@@ -160,9 +168,6 @@ public struct CompanionExecutionCredential: Codable, Equatable, Sendable {
   public var workspace: CompanionExecutionWorkspace
   public var deviceID: String
   public var token: String
-  /// A library merge changes the logical library, never an owner's existing
-  /// device-scoped execution grant. Clients keep these two identities separate.
-  public var executionLibraryID: String? = nil
   public init(workspace: CompanionExecutionWorkspace, deviceID: String, token: String) {
     self.workspace = workspace; self.deviceID = deviceID; self.token = token
   }
@@ -193,7 +198,6 @@ public struct CompanionExecutionManagementGrant: Codable, Equatable, Sendable {
   public var workspaceID: String
   public var endpoint: URL
   public var token: String
-  public var executionLibraryID: String? = nil
   public init(workspaceID: String, endpoint: URL, token: String) {
     self.workspaceID = workspaceID; self.endpoint = endpoint; self.token = token
   }

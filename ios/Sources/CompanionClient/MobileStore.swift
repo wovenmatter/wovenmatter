@@ -57,8 +57,6 @@ public struct MobileStoreState: Codable, Equatable, Sendable {
   public var toolNoteVersions: [MobileToolNoteVersion]?
   public var toolTimers: [String: MobileToolTimer]?
   public var pendingFolderDeletions: [String: CompanionFolder]?
-  public var libraryRelocationID: String?
-  public var pendingLibraryRelocationID: String?
   public init() {}
   public func isDirty(_ id: String) -> Bool { outbox.contains { $0.mutation.resourceID == id } || conflicts[id] != nil }
 }
@@ -95,7 +93,7 @@ public actor MobileStore {
   private let budget: Budget
   var state: MobileStoreState
   private var protectedNoteID: String?
-  public init(file: URL, budget: Budget = .init(), deviceID: String? = nil) throws {
+  public init(file: URL, budget: Budget = .init()) throws {
     self.file = file; self.budget = budget
     dictations = try MobileDictationStore(file: file.appendingPathExtension("dictations.sqlite"))
     analytics = try MobileProductAnalytics(file: file.appendingPathExtension("analytics"))
@@ -106,38 +104,11 @@ public actor MobileStore {
       guard state.formatVersion == 1 else { throw Failure.incompatibleStore }
     } else {
       state = MobileStoreState()
-      if let deviceID {
-        guard UUID(uuidString: deviceID) != nil else { throw Failure.incompatibleStore }
-        state.deviceID = deviceID
-      }
       _ = try MobileStorePersistence.persist(state, at: file)
     }
-    if let deviceID, deviceID != state.deviceID { throw Failure.wrongWorkspace }
     calendar = try MobileCalendarStore(file: file.appendingPathExtension("calendar"), deviceID: state.deviceID)
   }
   public func snapshot() -> MobileStoreState { state }
-  public func backupForLibraryTransfer(to directory: URL) async throws {
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-    // Write a self-contained snapshot from the actor's exact state. Copying the
-    // live index and then its blobs could race a later edit's blob collection.
-    _ = try MobileStorePersistence.persist(state, at: directory.appending(path: file.lastPathComponent))
-    try await journal.backupForLibraryTransfer(to: directory.appending(path: file.lastPathComponent + ".execution"))
-    try await calendar.backupForLibraryTransfer(to: directory.appending(path: file.lastPathComponent + ".calendar"))
-    try await artifacts.backupForLibraryTransfer(to: directory.appending(path: file.lastPathComponent + ".artifacts"))
-    try await dictations.backup(to: directory.appending(path: file.lastPathComponent + ".dictations.sqlite"))
-  }
-  public func acceptLibraryRelocation(_ id: String) async throws {
-    guard state.libraryRelocationID != id || state.pendingLibraryRelocationID != nil else { return }
-    try transaction { $0.pendingLibraryRelocationID = id }
-    try await journal.resetCentralCursorForLibraryTransfer()
-    try transaction { next in
-      next.cursor = 0; next.hasLibrarySnapshot = false
-      next.libraryRelocationID = id; next.pendingLibraryRelocationID = nil
-    }
-  }
-  public func adoptTransferredHostIdentity(_ id: String) throws {
-    guard UUID(uuidString: id) != nil, state.deviceID == id else { throw Failure.wrongWorkspace }
-  }
   public func protectOpenNote(_ id: String?) { protectedNoteID = id }
   public func setTranscriptPinned(_ id: String, _ pinned: Bool) throws {
     try transaction { next in

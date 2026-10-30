@@ -49,11 +49,6 @@ public actor SavedArtifactStore {
   }
 
   public func manifests() -> [CompanionArtifactManifest] { state.records.values.map(\.manifest) }
-  public func backupForLibraryTransfer(to destination: URL) throws {
-    if FileManager.default.fileExists(atPath: directory.path), !FileManager.default.fileExists(atPath: destination.path) {
-      try FileManager.default.copyItem(at: directory, to: destination)
-    }
-  }
   public func pendingUploadCount() -> Int { state.records.values.filter(\.upload).count }
   public func pendingDownloadCount() -> Int { state.records.values.filter { !$0.complete && ($0.pinned == true || $0.requestedDownload == true) }.count }
   public func cancelSynchronization() {

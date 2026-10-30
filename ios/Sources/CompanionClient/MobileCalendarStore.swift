@@ -29,7 +29,6 @@ public actor MobileCalendarStore {
     var through: [String: Date] = [:]
     var dirtyRuns: Set<String>?
     var preparedDrafts: [String: PreparedDraft]?
-    var executionOwners: [String: String]?
   }
   public nonisolated let deviceID: String
   private let file: URL
@@ -39,12 +38,6 @@ public actor MobileCalendarStore {
     state = FileManager.default.fileExists(atPath: file.path) ? try JSONDecoder().decode(State.self, from: Data(contentsOf: file)) : State()
   }
   public func allRecords() -> [CompanionCalendarRecord] { state.records.values.sorted { $0.id < $1.id } }
-  public func backupForLibraryTransfer(to file: URL) throws { try MobileStorePersistence.writeDurably(JSONEncoder().encode(state), at: file) }
-  public func updateExecutionOwners(_ workspaces: [CompanionExecutionWorkspace]) throws {
-    let owners = Dictionary(uniqueKeysWithValues: workspaces.filter { !$0.deleted && $0.kind == .mac && ($0.executionDeviceID ?? $0.ownerDeviceID) == $0.ownerDeviceID }.map { ($0.id, $0.ownerDeviceID) })
-    guard owners != state.executionOwners else { return }
-    try update { $0.executionOwners = owners }
-  }
   /// Merge native execution-database edits against the exact replica version
   /// originally projected there. Both sides survive a concurrent offline edit.
   public func importExecutionRecord(_ record: CompanionCalendarRecord, base: CompanionCalendarRecord?) throws {
@@ -85,7 +78,6 @@ public actor MobileCalendarStore {
   public func records() -> [CompanionCalendarRecord] { state.records.values.filter { !$0.deleted }.sorted { $0.id < $1.id } }
   public func conflicts() -> [String: MobileCalendarConflict] { state.conflicts }
   public func pendingCount() -> Int { state.outbox.count }
-  public func libraryTransferMutations() -> [CompanionCalendarMutation] { state.outbox.map(\.mutation) }
   public func record(id: String) -> CompanionCalendarRecord? { state.records[id].flatMap { $0.deleted ? nil : $0 } }
   public func occurrence(id: String, index: Int) -> CompanionCalendarEvent? { state.records[id].flatMap { CompanionCalendarSchedule.occurrence($0, index: index) } }
   public func events(from: Date, to: Date) throws -> [CompanionCalendarEvent] {
@@ -138,8 +130,7 @@ public actor MobileCalendarStore {
     if let result = try replay(requestID, input: input) { return result }
     let draft = try CompanionCalendarSchedule.normalized(draft)
     guard UUID(uuidString: id) != nil,
-      ownerDeviceID == nil || draft.task == nil || draft.task?.workspaceID == nil || draft.task?.workspaceID == ownerDeviceID
-        || draft.task?.workspaceID.flatMap({ state.executionOwners?[$0] }) == ownerDeviceID else { throw CompanionCalendarError.invalid }
+      ownerDeviceID == nil || draft.task == nil || draft.task?.workspaceID == nil || draft.task?.workspaceID == ownerDeviceID else { throw CompanionCalendarError.invalid }
     let current = state.records[id]
     guard current == nil || current?.deleted == false, current?.event.revision == expectedRevision, state.conflicts[id] == nil else { throw CompanionCalendarError.conflict }
     // Ownership is explicit and stable. A device cannot silently take another

@@ -203,14 +203,6 @@ final class BackendApplicationService {
     }
 
     private func execute(_ command: BackendApplicationCommand) async throws -> BackendApplicationResult {
-        if model.libraryTransferPaused {
-            if case .companion(let action) = command {
-                switch action {
-                case .status, .retryLibraryTransfer, .cancelLibraryTransfer, .approveLibraryTransfer, .declineLibraryTransfer: break
-                default: throw BackendRPCError.remote("Finish the database transfer before changing device membership or access.")
-                }
-            } else { throw BackendRPCError.remote("The database is transferring. Continue or cancel the transfer in Apple Devices settings.") }
-        }
         switch command {
         case .federatedExecution(let action):
             return try await .init(federatedExecution: model.performFederatedExecution(action))
@@ -222,14 +214,6 @@ final class BackendApplicationService {
             case .approvePairing(let id): await host.approvePairing(id: id)
             case .denyPairing(let id): await host.denyPairing(id: id)
             case .invitePairing(let peer): await host.invitePairing(peer: peer)
-            case .beginLibraryTransfer(let peer): await host.beginLibraryTransfer(peer)
-            case .approveLibraryTransfer(let id): await host.approveLibraryTransfer(id)
-            case .declineLibraryTransfer(let id): await host.declineLibraryTransfer(id)
-            case .retryLibraryTransfer: await host.retryLibraryTransfer()
-            case .cancelLibraryTransfer: await host.cancelLibraryTransfer()
-            case .requestCentralLibraryRole: await host.requestCentralLibraryRole()
-            case let .setExecutionAccess(deviceID, workspaceID, enabled):
-                await host.setExecutionAccess(deviceID: deviceID, workspaceID: workspaceID, enabled: enabled)
             case .start: await host.start()
             case .stop: host.stopSharing()
             case .createCode: await host.createPairingCode()

@@ -10,7 +10,7 @@ final class WovenMatterLifecycleDelegate: NSObject, NSApplicationDelegate {
     /// Shown after the update quit has been cancelled; tests record it instead.
     var presentUpdatePreparationFailure: @MainActor (any Error) -> Void = { error in
         let alert = NSAlert()
-        alert.messageText = "Woven Matter could not prepare to update"
+        alert.messageText = DevelopmentLaunch.mode == nil ? "Woven Matter could not prepare to update" : "Woven Matter could not stop its background server"
         alert.informativeText = error.localizedDescription
         alert.runModal()
     }
@@ -97,7 +97,7 @@ final class WovenMatterLifecycleDelegate: NSObject, NSApplicationDelegate {
             }
             return .terminateLater
         }
-        if (DesktopUpdater.shared.isInstalling || DesktopUpdater.shared.hasStagedUpdate) && model.isBackendFrontend {
+        if (DesktopUpdater.shared.isInstalling || DesktopUpdater.shared.hasStagedUpdate || model.stopsBackendOnQuit) && model.isBackendFrontend {
             guard !terminating else { return .terminateLater }
             terminating = true
             Task {

@@ -7,9 +7,6 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		AA781DEA317B47CD81000001 /* LibraryTransferController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA781DEA317B47CD81000011 /* LibraryTransferController.swift */; };
-		AA781DEA317B47CD81000002 /* LibraryTransferWritingImporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA781DEA317B47CD81000012 /* LibraryTransferWritingImporter.swift */; };
-		AA781DEA317B47CD81000003 /* LibraryTransferSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA781DEA317B47CD81000013 /* LibraryTransferSettings.swift */; };
 		58D2DD715AC36ACD6DF22BB2 /* LUCIDE_LICENSE.txt in Resources */ = {isa = PBXBuildFile; fileRef = 0AAFD6EAB1F3FB697B1A2D05 /* LUCIDE_LICENSE.txt */; };
 		E02200000000000000000001 /* HarnessSetupModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E02200000000000000000002; };
 		E02200000000000000000003 /* HarnessSetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E02200000000000000000004; };
@@ -177,9 +174,6 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		AA781DEA317B47CD81000011 /* LibraryTransferController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryTransferController.swift; sourceTree = "<group>"; };
-		AA781DEA317B47CD81000012 /* LibraryTransferWritingImporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryTransferWritingImporter.swift; sourceTree = "<group>"; };
-		AA781DEA317B47CD81000013 /* LibraryTransferSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryTransferSettings.swift; sourceTree = "<group>"; };
 		0AAFD6EAB1F3FB697B1A2D05 /* LUCIDE_LICENSE.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = ../docs/assets/LUCIDE_LICENSE.txt; sourceTree = SOURCE_ROOT; };
 		E02200000000000000000002 /* HarnessSetupModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Models/HarnessSetupModel.swift"; sourceTree = SOURCE_ROOT; };
 		E02200000000000000000004 /* HarnessSetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Views/HarnessSetupView.swift"; sourceTree = SOURCE_ROOT; };
@@ -474,7 +468,6 @@
 				11F8C8D451C08816FCB0DE57 /* LibraryClientWorkspacePanes.swift */,
 				4600175C4A71EE21F48CB6F1 /* CentralLibraryClientSettings.swift */,
 				BCA5889AC0E094CFDA6C13C3 /* CentralLibraryClientView.swift */,
-				AA781DEA317B47CD81000013 /* LibraryTransferSettings.swift */,
 				BA61B1265D88D38A1D708C78 /* LocalModelServerConnections.swift */,
 				4D25E89AA1F9ECDB61C4EDEF /* SettingsConnectionsView.swift */,
 				E8A44EB04E09581B6A85026F /* DictationControls.swift */,
@@ -559,8 +552,6 @@
 				A03000000000000000000002 /* DesktopUpdater.swift */,
 				306E57A53B3F8371623DCC8F /* FederatedExecutionBridge.swift */,
 				4C92277CA35CAFDF60ADE671 /* CentralExecutionClient.swift */,
-				AA781DEA317B47CD81000011 /* LibraryTransferController.swift */,
-				AA781DEA317B47CD81000012 /* LibraryTransferWritingImporter.swift */,
 				DDAE8827A1011FA6113C72B1 /* CompanionInferenceHost.swift */,
 				39BA0BCFBF07BFAE8B625A62 /* SecondaryMacExecutionHost.swift */,
 				A333A6EA2E03E144FC4AE5DD /* SecondaryMacExecutionWorkspace.swift */,
@@ -721,9 +712,6 @@
 				04C170D0E4FB2920E4D214EF /* FederatedConversationPane.swift in Sources */,
 				FA2F7EB3AD102A068C2F070C /* FederatedExecutionBridge.swift in Sources */,
 				D9F61698E2250BF9BFAF5A2F /* CentralExecutionClient.swift in Sources */,
-				AA781DEA317B47CD81000001 /* LibraryTransferController.swift in Sources */,
-				AA781DEA317B47CD81000002 /* LibraryTransferWritingImporter.swift in Sources */,
-				AA781DEA317B47CD81000003 /* LibraryTransferSettings.swift in Sources */,
 				3920C098CAD3AD073343D629 /* DashboardSavedArtifactsView.swift in Sources */,
 				6D31E453B9DB807ED72C7E93 /* SavedArtifactsModel.swift in Sources */,
 				97AD203F32768DAAE8E74B8A /* CompanionInferenceHost.swift in Sources */,
