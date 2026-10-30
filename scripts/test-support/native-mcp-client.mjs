@@ -8,7 +8,8 @@ assert.equal(endpoint.protocol, 'http:');
 assert.equal(endpoint.hostname, '127.0.0.1');
 assert.equal(endpoint.pathname, '/mcp');
 const token = process.env.WOVEN_MCP_TEST_TOKEN;
-assert.ok(token, 'The native fixture must supply its disposable bearer.');
+const outside = process.argv[3] === '--outside';
+if (!outside) assert.ok(token, 'The native fixture must supply its disposable bearer.');
 const deadline = setTimeout(() => {
   process.stderr.write('Native HTTP MCP interoperability fixture timed out.\n');
   process.exit(1);
@@ -19,16 +20,17 @@ const client = new Client({ name: 'woven-native-http-fixture', version: '1' }, {
 const denied = new Client({ name: 'woven-native-denied-fixture', version: '1' }, { capabilities: {} });
 try {
   await client.connect(new StreamableHTTPClientTransport(endpoint, {
-    requestInit: { headers: { authorization: `Bearer ${token}` } }
+    requestInit: { headers: outside ? {} : { authorization: `Bearer ${token}` } }
   }));
   assert.equal(client.getServerVersion()?.name, 'woven');
   const catalog = await client.listTools();
   assert.ok(catalog.tools.some(tool => tool.name === 'woven_notes_list'));
-  assert.ok(!catalog.tools.some(tool => tool.name === 'woven_notes_create'), 'Read-only grants must hide mutations.');
+  assert.ok(catalog.tools.some(tool => tool.name === 'woven_notes_create'), 'Exposed Notes includes writes.');
   const result = await client.callTool({ name: 'woven_notes_list', arguments: {} });
   assert.equal(result.isError, false);
   assert.equal(result.structuredContent.success, true);
   assert.equal(typeof result.structuredContent.result.callerID, 'string');
+  if (outside) assert.equal(result.structuredContent.result.callerID, 'woven:tailnet');
   await assert.rejects(denied.connect(new StreamableHTTPClientTransport(endpoint, {
     requestInit: { headers: { authorization: 'Bearer deliberately-invalid-fixture-bearer' } }
   })), /401|unauthoriz/i);

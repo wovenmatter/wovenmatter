@@ -124,7 +124,7 @@ extension WorkspaceDatabaseConnection {
     let predicate = """
       coordinator_id IS NOT NULL AND (? IS NULL OR session_id=?) AND (
         NOT EXISTS (SELECT 1 FROM dashboard_conversations c WHERE c.id=workspace_session_relationships.session_id AND c.deleted_at IS NULL)
-        OR NOT EXISTS (SELECT 1 FROM dashboard_conversations c WHERE c.id=workspace_session_relationships.coordinator_id AND c.deleted_at IS NULL))
+        OR (coordinator_id != 'woven:tailnet' AND NOT EXISTS (SELECT 1 FROM dashboard_conversations c WHERE c.id=workspace_session_relationships.coordinator_id AND c.deleted_at IS NULL)))
       """
     try toolsExecuteUnlocked("DELETE FROM workspace_session_grants WHERE kind='approved' AND target_id IN (SELECT session_id FROM workspace_session_relationships WHERE " + predicate + ")", [sessionID, sessionID])
     try toolsExecuteUnlocked("UPDATE workspace_session_relationships SET coordinator_id=NULL,coordination_epoch=NULL,coordination_since=NULL WHERE " + predicate, [sessionID, sessionID])

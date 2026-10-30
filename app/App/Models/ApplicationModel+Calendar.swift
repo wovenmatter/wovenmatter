@@ -6,10 +6,8 @@ import WovenMatterDashboardStore
 extension ApplicationModel {
     func resolveCalendarTask(callerID: String, command: WovenMatterToolCommand,
                              existing: WorkspaceCalendarTask?) async throws -> WorkspaceCalendarTask {
-        guard let database = dashboardStore?.database,
-              let source = try await database.workspaceOverview().conversations.first(where: { $0.id == callerID }) else {
-            throw WorkspaceToolError.invalid("The source session is unavailable.")
-        }
+        guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
+        let source = try await toolCallerSource(callerID)
         try await database.requireTool(.sessions, sessionID: callerID)
         let title = command.options["title"] ?? existing?.configuration.title ?? "Scheduled task"
         var config: WorkspaceSessionCreationConfiguration
