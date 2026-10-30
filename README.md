@@ -1,169 +1,93 @@
 # Woven Matter
 
-[![Download Woven Matter for Apple silicon](https://img.shields.io/badge/Download-Woven_Matter_for_Apple_silicon-000000?logo=apple&logoColor=white)](https://github.com/wovenmatter/wovenmatter/releases/latest)
+**One local Mac workspace for your AI agents.**
 
-**The workspace for all of your harnesses.**
+Run Pi Durable, Codex, Claude Code, Grok Build, and OpenCode side by side.
+Keep your conversations, notes, and reference material together while choosing
+the harness and model that fit each task.
 
-WovenMatter brings **Pi Durable, Codex, Claude Code, Grok Build, and OpenCode** together in one workspace. Work with all of your harnesses
-in a simple, easy-to-use interface that keeps all of your work organized in one
-place. Each project folder owns one directory in one execution workspace,
-so its agents collaborate on the files you choose. WovenMatter ships
-with a local agent workspace, which runs locally on your Mac. You can also
-launch remote agent workspaces on Linux machines in your Tailnet and work with
-those agents from the same interface.
-
-WovenMatter is essentially a user interface built on top of a SQLite database.
-This database saves all of your conversations, notes, and any other items
-created within WovenMatter. This gives you control over your data by saving all
-of your work history in one location, so you can return to earlier conversations
-and keep related work together. This, along with our user interface and
-shared workspace design, allows for seamless collaboration between your agents,
-allowing you the freedom to work across the harnesses and models of your choice.
-
-[Download](https://github.com/wovenmatter/wovenmatter/releases/latest) ·
+[**Download for Mac**](https://wovenmatter.com/download) ·
 [Getting started](docs/guide/getting-started.md) · [Documentation](docs/README.md) ·
 [Website](https://wovenmatter.com)
 
-The **Pi Durable** agent is ready in local and remote workspaces. Connect your providers,
-choose models and fallbacks, and add an Exa search key in Settings.
-See [Pi Durable](docs/guide/default-agent.md).
+**Apple silicon · macOS 26 or later · Free and MIT licensed**
 
-## Your agents, working in the same place
+No Woven Matter account required. Bring your own AI subscriptions or API keys;
+provider charges still apply. **iOS is coming soon.**
 
-WovenMatter is a lightweight macOS app designed to let you work and collaborate
-with all of your different harnesses. Each supported harness has a
-dedicated first-class integration. Use your existing installations or install
-harnesses in the settings page. Use your existing provider accounts and/or API keys.
-Models, authentication, and controls depend on the harness you use.
+![Woven Matter with Pi Durable, Claude Code, and Codex conversations open in three panels](docs/assets/screenshots/workspace.png)
 
-Each project folder has one fixed root directory and one owning **execution
-workspace**. Create a blank project on your Mac or in a connected remote
-workspace, or link an existing directory on your Mac. Agents in that workspace
-can work on the project's files using their native permissions and project
-instructions.
+*The desktop app with fictional demo conversations. Green theme, light appearance.*
 
-Choose the folder before a chat's first message. The folder and working
-directory are then fixed for that session. **Ungrouped** chats use one default
-directory per execution workspace.
+## Your work, across agents
 
-## Your conversations, saved together
+For people who already use AI agents for research, analysis, writing, and code,
+Woven Matter puts those tools in a shared desktop workspace. Work in ordinary
+project folders, compare answers in separate panels, and return to saved work
+without keeping track of which vendor's app you used.
 
-Conversations with different harnesses, on your Mac or in remote agent
-workspaces, are saved in the same local SQLite database as your notes and other
-items created while working in WovenMatter. This gives you a central work
-history alongside the histories each harness already independently maintains.
+| Harness | Getting connected |
+| --- | --- |
+| **Pi Durable** | The included default agent. Connect providers and choose models and fallbacks in [Settings](docs/guide/default-agent.md). |
+| **Codex** | Use your existing installation and account, or install from Settings. |
+| **Claude Code** | Use your existing installation and account, or install from Settings. |
+| **Grok Build** | Use your existing installation and account, or install from Settings. |
+| **OpenCode** | Connect a supported OpenCode v2 installation, or install from Settings. |
 
-Return to earlier conversations, review what an agent did, and continue
-supported sessions when the agent is connected. Organize a project's
-conversations together even when you use several harnesses to work on it.
+Models, sign-in options, and session controls depend on the harness.
+[Harnesses and accounts →](docs/guide/agents.md)
 
-Project files stay in their respective workspaces. Saving transcripts centrally
-does not automatically copy every file an agent creates or synchronize local
-and remote folders.
+## What you can do
 
-## Work on your Mac and other machines
+- **Work in parallel.** View up to five chat panels, with more sessions running in the background.
+- **Keep a shared history.** Find conversations across harnesses and return to supported sessions.
+- **Write beside your chat.** Create notes, spreadsheets, and HTML documents that agents can help edit.
+- **Collect reference material.** Library keeps exchanged files, images, and links tied to their source conversations.
+- **Work with data.** Managed databases feed live tables, values, spreadsheets, and HTML documents.
+- **Schedule work.** Calendar and Scheduled Tasks organize events and recurring agent tasks.
+- **Follow usage.** See recorded activity and the account limits your providers make available.
+- **Set a goal.** Give an agent an explicit objective and track its progress in the conversation.
+- **Browse in the workspace.** Use the embedded browser beside your work; control agent access with Browser Use.
+- **Connect other tools.** Set up Executor, then give agents access to selected apps and accounts. It starts off.
+- **Choose agent access.** Set tool defaults in Settings and adjust them for each conversation.
 
-Start with the local agent workspace on your Mac. If you have another Linux
-machine connected to your Tailnet, you can create a remote agent workspace on
-it from Woven Matter. A rented Linux host is supported after it joins the same
-Tailnet. Tailscale is required for every remote-workspace connection.
+[Conversations and panels](docs/guide/conversations.md) ·
+[Notes, Library, and Databases](docs/guide/notes-and-data.md) ·
+[Calendar, Scheduled Tasks, and Usage](docs/guide/schedules-and-usage.md) ·
+[Agent tools and permissions](docs/guide/agent-tools.md) · [Executor](docs/guide/executor.md)
 
-Each remote workspace is a container with a persistent home for its files,
-harnesses, and credentials. You can create multiple workspaces, run agents in
-parallel, and work with them from the same Mac interface. Their conversation
-transcripts are saved in Woven Matter's database alongside your local chats.
+| Notes beside your conversation | Calendar |
+| --- | --- |
+| ![A demo research conversation beside a pilot checklist](docs/assets/screenshots/notes.png) | ![Calendar with fictional pilot events](docs/assets/screenshots/calendar.png) |
 
-Woven Matter inspects the host and asks you to authorize any preparation before
-creating a workspace. Remote hosts need compatible Docker support. See
-[Remote workspaces](docs/guide/remote-workspaces.md) for setup and management.
+## Start on your Mac
 
-Whether work continues after you close the app depends on the harness, its
-service, and the machine running it. See [Scheduled work](docs/guide/schedules-and-usage.md)
-for the conditions around background jobs.
+1. [Download the latest DMG](https://wovenmatter.com/download) and move Woven Matter into Applications.
+2. Connect a provider in **Settings → Pi Durable**, or set up another harness in **Settings → Local Workspace**.
+3. Create a project folder or link an existing directory, then choose **New chat**.
 
-## Work across sessions in parallel
+Your history is stored locally. Project files stay in their workspace;
+Woven Matter does not automatically synchronize local and remote folders.
+[Getting started →](docs/guide/getting-started.md)
 
-Run multiple sessions in parallel with the same harness or across different
-harnesses. Use panels to view up to five sessions at once, while additional
-sessions can continue running in the background. Open a note beside your
-conversation to work on it with your agent. Organize your notes and
-conversations in folders to keep related work together.
+## Take work to a Linux host
 
-Agents can also read and edit a note you're working on through Woven Matter's
-note tools. This gives longer responses and reference material a place beside
-the chat, where you can keep reading without scrolling back through messages.
+Optionally run agents on your own amd64 or arm64 Linux machine over **Tailscale**,
+with SSH key access, a non-root account, **Python 3**, and a **systemd user service**.
+Agents use that account's permissions, without container isolation. Native remote
+workspaces do not need Docker; the separate remote Executor option does.
+Background work needs its host and service running.
+[Set up a remote workspace →](docs/guide/remote-workspaces.md)
 
-Woven MCP exposes focused app tools over authenticated HTTP. Supported harnesses
-receive session-scoped access automatically. You can also grant an outside agent
-access to a chosen conversation and tool groups, then revoke that access in Woven.
-The same permissions govern notes, orchestration, calendar, Executor, and embedded
-browser tools across local Macs, connected workspaces, and the iPhone app. See
-[agent tools and access](docs/AGENT_TOOLS.md).
+## Help and contribute
 
-Managed SQLite databases let agents curate data that you can revisit in live
-note tables and values, spreadsheets, and HTML artifacts. Each database has one
-writable workspace owner; the Mac keeps complete readable replicas of remote
-data. Usage, Calendar, Library, and Scheduled Tasks add other ways to organize
-and follow your work.
-
-Read more about [conversations and panels](docs/guide/conversations.md),
-[notes and data](docs/guide/notes-and-data.md), and
-[schedules and usage](docs/guide/schedules-and-usage.md).
-
-## Get started
-
-You need an **Apple silicon Mac running macOS 26 or later** for the published
-app. No Woven Matter account is required. You use your own AI subscriptions or
-API keys; model availability and costs depend on your providers.
-
-1. [Download Woven Matter](https://github.com/wovenmatter/wovenmatter/releases/latest)
-   and move it into Applications.
-2. Open **Settings → Local agent workspace** to see the harnesses discovered
-   on your Mac, or install one you want to try.
-3. Enable it and complete its sign-in or connection setup.
-4. Choose **New chat**, select your agent, and give it a task.
-
-Start with a harness you already use and have provider access for. If you're
-looking for an example, the [getting-started guide](docs/guide/getting-started.md)
-can help you choose and set one up. You don't need a remote machine to begin.
-
-Woven Matter and the harnesses you enable need access to the files and accounts
-used for your work. Review the credential-access disclosure and any macOS
-permission prompts during setup. [Agent setup](docs/guide/agents.md) explains
-the installation and connection steps.
-
-## Workspace layout
-
-Managed project directories live under `~/.woven-matter` on your Mac and
-`/home/.woven-matter` inside each remote container. A newly created project is
-blank: Woven does not add preset folders, `AGENTS.md`, or `CLAUDE.md`. Existing
-linked directories and their instructions remain yours.
-
-Renaming a folder changes its display name only. Removing it can preserve its
-files; deleting its physical root is offered only for managed project
-directories. Additional reference locations belong to the same execution
-workspace. Project files are not synchronized between devices.
-
-Named databases live in Woven's application or service storage, separate from
-project directories and the internal history/settings database. See
-[Workspaces and storage](docs/guide/workspaces.md) and
-[Notes and data](docs/guide/notes-and-data.md) for folder, replica, and copy
-behavior.
-
-## Help and feedback
-
-Browse the [documentation](docs/README.md), check
-[troubleshooting](docs/guide/troubleshooting.md), or read the
-[release notes](https://github.com/wovenmatter/wovenmatter/releases).
-Report bugs and suggest improvements through [GitHub issues](https://github.com/wovenmatter/wovenmatter/issues).
+Read the [guides](docs/README.md), check [troubleshooting](docs/guide/troubleshooting.md),
+[open an issue](https://github.com/wovenmatter/wovenmatter/issues), or email
+[support@wovenmatter.com](mailto:support@wovenmatter.com).
 For vulnerabilities, follow the [security policy](SECURITY.md).
 
-## Build and contribute
+Woven Matter is built under Trey's direction with an agent-driven workflow;
+most commits come from the project's agent account.
+See [Contributing](CONTRIBUTING.md) to build from source or help improve it.
 
-Start with [Contributing](CONTRIBUTING.md) for development requirements, build
-commands, and validation. Xcode is needed to build from source, not to use the
-published app. Integration references and maintainer procedures are listed in
-the [documentation index](docs/README.md).
-
-Woven Matter is [MIT licensed](LICENSE). See [third-party notices](THIRD_PARTY_NOTICES.md)
-and [trademarks](TRADEMARKS.md) for redistribution details.
+[MIT license](LICENSE) · [Third-party notices](THIRD_PARTY_NOTICES.md) · [Trademarks](TRADEMARKS.md)

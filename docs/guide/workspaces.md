@@ -35,7 +35,8 @@ in the selected folder. Folder plus buttons open the chooser for that folder;
 the **All Workspaces** plus starts the same flow without assigning a folder.
 
 Each chat in All Workspaces uses its own directory under `~/.woven-matter/scratch` on
-the Mac or `/home/.woven-matter/scratch` in its remote workspace. Woven creates
+the Mac or `~/.local/share/wovenmatter/workspace/scratch` under the SSH account
+on a native Linux host. Woven creates
 the directory when the chat launches, with a date, the first words of its initial
 message, and a short chat ID. The directory starts blank. Retries, resumes and
 title changes keep the same directory; deleting the chat keeps its working files.

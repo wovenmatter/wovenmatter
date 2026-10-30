@@ -41,7 +41,7 @@ permissions and recovery.
 
 ## Dictation
 
-Dictation uses Apple's native on-device speech APIs on macOS and iOS 26 or later.
+Dictation uses Apple's native on-device speech APIs on macOS 26 or later.
 No subscription, API key, or provider connection is needed. Grok connections
 continue to work for agents and Usage; dictation does not use them.
 
@@ -51,22 +51,20 @@ first time; the app shows preparation progress and lets you cancel. Once languag
 support is installed, speech recognition works offline. Audio and live previews
 are not written to files or sent to a workspace, provider, or agent.
 
-Dictation is always available. **Settings → General → Dictation** on Mac has a
-language selector. Automatic follows your preferred
-languages. On iPhone, touch and hold the microphone to choose a language. Language
+Dictation is always available. **Settings → General → Dictation** has a
+language selector. Automatic follows your preferred languages. Language
 changes apply to the next recording. Standard keyboard dictation remains available.
 
 Recording continues as you switch conversations and notes. Click the recording
 button in the destination editor to stop: the entire finalized transcript is
 inserted at that editor's caret, replacing its selection. It remains a draft for
 review and is never sent automatically. Native text editing preserves rich-text
-attributes and undo. On Mac, **⇧⌘D** starts or stops dictation in the active editor.
+attributes and undo. **⇧⌘D** starts or stops dictation in the active editor.
 
 Moving again while transcription finishes does not redirect the result. If an
 editor closes or its content conflicts with the insertion point, the transcript
 is retained for explicit insertion or discard. Cancel discards the recording.
-Leaving the workspace for another app page stops capture; backgrounding the
-iPhone app also stops capture. Interrupted recordings retain completed text where
+Leaving the workspace for another app page stops capture. Interrupted recordings retain completed text where
 possible. Unsupported languages and failed preparation have explicit errors;
 there is no cloud transcription fallback.
 
@@ -85,6 +83,6 @@ server address requires a new connection, keeping existing sessions and keys
 bound to their original server.
 
 A remote workspace must be able to reach the server address itself. `localhost`
-refers to the machine/container running that agent; use a reachable network
+refers to the machine running that agent; use a reachable network
 address to share a server across devices. Woven Matter does not install Tailscale
 or start model servers.

@@ -50,7 +50,7 @@ Independent scheduled runs keep their scheduler as execution owner and expose
 content, data, automation and metadata tools; they omit goal, timer and session
 lifecycle mutations that would create a competing execution owner.
 
-Device-owned Pi Durable on iPhone and iPad uses the canonical tool definitions
+The unreleased iOS implementation of device-owned Pi Durable uses the canonical tool definitions
 with native local dispatch for its downloaded/offline content and device
 workspace. Central-library and explicit remote operations use its authenticated
 paired connection. The phone does not need a persistent background HTTP listener.

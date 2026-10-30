@@ -139,13 +139,6 @@ concurrent commit, observed-only receipt loading, failed flush barriers, queued
 usage ownership changes, and Stop during pending Gateway admission. Admission regression sources cover delayed sends, cross-client Stops, backend restart, non-evicting capacity, native Stop wait/retry, and superseded barriers. Gateway tests overlap unsequenced events behind a blocked writer and verify
 that both deltas and their ordered trace records survive.
 
-The production audit includes source inspection, Swift syntax parsing, and diff
-checks. Its provider-free focused runs passed 75 database, ownership, admission,
-Stop, Pi, and settings tests, plus 31 Calendar and 31 OpenCode/Hermes tests. The
-final focused log is `/private/tmp/wm-pr86-adversarial-final-tests.log`. Full
-repository validation and hosted CI must still run on the integrated dependency
-head; these focused results do not validate the combined Dev app or live providers.
-
 ```sh
 swift test --package-path app --filter AsyncDatabaseWorkerTests
 scripts/test-changes.sh --all

@@ -1,12 +1,12 @@
 # Contributing
 
-Thank you for helping improve WovenMatter.
+Thank you for helping improve Woven Matter.
 
 ## Build from source
 
 Development requires macOS 26, Xcode 26, the current Node.js release recorded in
 `default-agent/.node-version`, and `jq` for the validation
-scripts. The Xcode project is `app/WovenMatter.xcodeproj`; the Swift package is
+scripts. The Xcode project is `app/Woven Matter.xcodeproj`; the Swift package is
 rooted at `app/`. No provider credentials are needed to build or test.
 
 Build and launch the development app:
@@ -25,7 +25,8 @@ for UI changes.
 Use the [README](README.md) for product priorities and voice, and the
 [documentation index](docs/README.md) to place new material. Keep user guides
 short and organized around tasks; put implementation contracts in technical
-references. Follow the [documentation style](docs/planning/documentation-overhaul.md).
+references. Use plain language, write "Woven Matter" in prose, and explain user
+benefits before implementation details.
 
 Check UI labels and behavior against the code. Keep release-specific details
 in release notes instead of versioning the README's feature list. Preserve dates
