@@ -187,7 +187,9 @@ when an intentional design change is accepted.
   editor or footer padding beneath the note. Align the count button's right
   edge with the header controls using the same 12-point side inset.
 - **Canvas:** use the existing workspace and theme-whisper surfaces with quiet
-  card borders. Keep Add card, Arrange, and zoom in one compact toolbar; card
+  card borders. Let the board fill the editor below its title without outer
+  content gutters or a separate footer. Put compact Add card, Arrange, and zoom
+  controls in the title row immediately before history and database actions; card
   headers own dragging and an accessible actions menu for movement, size, and
   removal. References open the original asset. Preserve chat beside the board
   and use the existing note title, history, and save/conflict controls.

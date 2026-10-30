@@ -13,6 +13,7 @@ struct DashboardNotePane: View {
     @State private var editorController = DashboardNoteEditorController()
     @State private var dictationEditor = DictationEditor()
     @State private var documentCache = DashboardNoteDocumentCache()
+    @State private var canvasViewState = DashboardCanvasViewState()
     @State private var showsFormatting = false
     @State private var showsVersionHistory = false
     @State private var showsCharacterCount = false
@@ -112,6 +113,12 @@ struct DashboardNotePane: View {
                     .disabled(!editorController.canRedo)
                     .help("Redo (⇧⌘Z)").accessibilityLabel("Redo")
                 }
+                if currentDocument.kind == .canvas && documentIsEditable {
+                    DashboardCanvasControls(document: document, viewState: $canvasViewState,
+                        assets: (model.workspaceOverview?.notes ?? []).filter { $0.id != note.id },
+                        canOpenAssets: true)
+                        .disabled(model.noteEditingSuspended)
+                }
                 Button { showsVersionHistory = true } label: {
                     Image(systemName: "clock.arrow.circlepath").font(.system(size: 14)).frame(width: 32, height: 32)
                 }.buttonStyle(DashboardIconButtonStyle()).help("Version history").accessibilityLabel("Version history")
@@ -181,7 +188,7 @@ struct DashboardNotePane: View {
                         case .canvas:
                             DashboardCanvasEditor(document: document,
                                 assets: (model.workspaceOverview?.notes ?? []).filter { $0.id != note.id },
-                                onOpenAsset: onOpenNote)
+                                onOpenAsset: onOpenNote, viewState: $canvasViewState)
                         case .spreadsheet:
                             DashboardSpreadsheetEditor(document: document)
                                 .accessibilityLabel("Spreadsheet")
@@ -244,8 +251,8 @@ struct DashboardNotePane: View {
                 alignment: .leading
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-            .padding(.horizontal, 32)
-            .padding(.bottom, currentDocument.kind == .note ? 0 : 24)
+            .padding(.horizontal, currentDocument.kind == .canvas ? 0 : 32)
+            .padding(.bottom, currentDocument.kind == .canvas || currentDocument.kind == .note ? 0 : 24)
 
             if currentDocument.kind == .note {
                 let statistics = DashboardNoteTextStatistics(document: currentDocument)

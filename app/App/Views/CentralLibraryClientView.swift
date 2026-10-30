@@ -237,6 +237,7 @@ struct LibraryClientNotePane: View {
     @State private var editor = DashboardNoteEditorController()
     @State private var cache = DashboardNoteDocumentCache()
     @State private var details = false
+    @State private var canvasViewState = DashboardCanvasViewState()
     private var source: CompanionNote { model.draftNotes[note.id] ?? model.state.notes[note.id] ?? note }
     private var document: Binding<NoteDocument> {
         Binding(get: { cache.value(noteID: note.id, source: source.content) }, set: { document in
@@ -273,6 +274,11 @@ struct LibraryClientNotePane: View {
                 TextField("Untitled note", text: Binding(get: { source.title }, set: { model.editNote(source, title: $0) }))
                     .textFieldStyle(.plain).font(.system(size: 21, weight: .semibold))
                 Spacer()
+                if document.wrappedValue.kind == .canvas,
+                   cache.isEditable(noteID: note.id, source: source.content),
+                   !model.state.uncachedNoteIDs.contains(note.id), !hasLinkedData {
+                    DashboardCanvasControls(document: document, viewState: $canvasViewState)
+                }
                 Text(model.state.isDirty(note.id) ? "Saved on this Mac" : "Synchronized").font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
                 Button { details = true } label: { Image(systemName: "ellipsis") }.buttonStyle(DashboardIconButtonStyle()).help("Note details")
             }.padding(22)
@@ -290,7 +296,7 @@ struct LibraryClientNotePane: View {
                         Button("Insert table") { editor.insertTable() }; Spacer()
                     }.buttonStyle(DashboardQuietButtonStyle()).padding(.horizontal, 22)
                     DashboardNoteEditor(document: document, controller: editor).padding(.horizontal, 22)
-                case .canvas: DashboardCanvasEditor(document: document)
+                case .canvas: DashboardCanvasEditor(document: document, viewState: $canvasViewState)
                 case .spreadsheet: DashboardSpreadsheetEditor(document: document)
                 case .html:
                     VSplitView {
