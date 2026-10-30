@@ -42,6 +42,8 @@ enum NoteToolEdits {
             else { operations = [.setArtifactDatabaseLink(nil)] }
         case "table":
             operations = [try tableOperation(command)]
+        case "canvas":
+            operations = try decode([CanvasEdit].self, command: command, label: "canvas edits").map(NoteEditOperation.canvas)
         case "apply":
             operations = try decode([NoteEditOperation].self, command: command, label: "operations")
         default:

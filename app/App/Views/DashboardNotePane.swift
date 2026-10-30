@@ -9,11 +9,13 @@ struct DashboardNotePane: View {
     let focusesTitleOnAppear: Bool
     let onInitialFocusHandled: () -> Void
     let onOpenNote: (String) -> Void
+    var onCanvasContext: ((CanvasViewportContext) -> Void)?
     @FocusState private var titleFocused: Bool
     @State private var editorController = DashboardNoteEditorController()
     @State private var dictationEditor = DictationEditor()
     @State private var documentCache = DashboardNoteDocumentCache()
     @State private var canvasViewState = DashboardCanvasViewState()
+    @State private var paneWidth: CGFloat = 0
     @State private var showsFormatting = false
     @State private var showsVersionHistory = false
     @State private var showsCharacterCount = false
@@ -21,6 +23,14 @@ struct DashboardNotePane: View {
     @State private var linkedDataError: String?
     @State private var isRefreshingLinkedData = false
     @State private var activeLinkedDataRefreshID: UUID?
+
+    private var canvasAssets: [WorkspaceNoteRecord] {
+        (model.workspaceOverview?.notes ?? []).filter { $0.id != note.id }.map { asset in
+            let draft = model.noteDraft(for: asset)
+            return WorkspaceNoteRecord(id: asset.id, folderID: asset.folderID, title: draft.title, content: draft.content,
+                createdAt: asset.createdAt, updatedAt: asset.updatedAt, isPinned: asset.isPinned, revision: asset.revision)
+        }
+    }
 
     private var draft: DashboardNoteDraft {
         model.noteDraft(for: note)
@@ -95,6 +105,7 @@ struct DashboardNotePane: View {
                     .lineLimit(1)
                     .focused($titleFocused)
                     .accessibilityLabel("Note title")
+                    .frame(minWidth: currentDocument.kind == .canvas ? 100 : nil)
                     .layoutPriority(1)
                 Spacer()
                 if currentDocument.kind == .note {
@@ -115,8 +126,15 @@ struct DashboardNotePane: View {
                 }
                 if currentDocument.kind == .canvas && documentIsEditable {
                     DashboardCanvasControls(document: document, viewState: $canvasViewState,
-                        assets: (model.workspaceOverview?.notes ?? []).filter { $0.id != note.id },
-                        canOpenAssets: true)
+                        assets: canvasAssets,
+                        canOpenAssets: true, compact: paneWidth < 640, onCreateAsset: { kind, title, html in
+                            guard let id = await model.createNote(folderID: note.folderID, kind: kind),
+                                  let asset = model.workspaceOverview?.notes.first(where: { $0.id == id }) else { return nil }
+                            var value = NoteDocument.decode(asset.content)
+                            if let html { value.html = html }
+                            model.updateNoteDraft(note: asset, title: title, content: try? value.encoded())
+                            return id
+                        })
                         .disabled(model.noteEditingSuspended)
                 }
                 Button { showsVersionHistory = true } label: {
@@ -187,8 +205,13 @@ struct DashboardNotePane: View {
                                 .accessibilityLabel("Note body")
                         case .canvas:
                             DashboardCanvasEditor(document: document,
-                                assets: (model.workspaceOverview?.notes ?? []).filter { $0.id != note.id },
-                                onOpenAsset: onOpenNote, viewState: $canvasViewState)
+                                assets: canvasAssets,
+                                onOpenAsset: onOpenNote, onEditAsset: { id, value in
+                                    guard let asset = model.workspaceOverview?.notes.first(where: { $0.id == id }),
+                                          (try? value.validateEditableShape()) != nil,
+                                          let content = try? value.encoded() else { return }
+                                    model.updateNoteDraft(note: asset, content: content)
+                                }, viewState: $canvasViewState, onContext: onCanvasContext)
                         case .spreadsheet:
                             DashboardSpreadsheetEditor(document: document)
                                 .accessibilityLabel("Spreadsheet")
@@ -276,6 +299,7 @@ struct DashboardNotePane: View {
                 .padding(.horizontal, 12)
             }
         }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { paneWidth = $0 }
         .disabled(model.noteActionIDs.contains(note.id))
         .background(theme.palette.workspace)
         .disabled(model.noteEditingSuspended)

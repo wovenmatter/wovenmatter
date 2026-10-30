@@ -190,6 +190,11 @@ public struct WorkspaceNoteRecord: Codable, Equatable, Identifiable, Sendable {
   public let isPinned: Bool
   public let revision: String?
 
+  public init(id: String, folderID: String?, title: String, content: String, createdAt: String?, updatedAt: String?, isPinned: Bool, revision: String?) {
+    self.id = id; self.folderID = folderID; self.title = title; self.content = content
+    self.createdAt = createdAt; self.updatedAt = updatedAt; self.isPinned = isPinned; self.revision = revision
+  }
+
   enum CodingKeys: String, CodingKey {
     case id, title, content, revision
     case folderID = "folder_id"

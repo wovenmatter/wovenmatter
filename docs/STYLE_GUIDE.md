@@ -193,7 +193,9 @@ when an intentional design change is accepted.
   and the window bottom. Put compact Add card, Arrange, and zoom
   controls in the title row immediately before history and database actions; card
   headers own dragging and an accessible actions menu for movement, size, and
-  removal. References open the original asset. Preserve chat beside the board
+  removal. Canvas uses a virtual pan/zoom viewport, quiet dots, colored sections,
+  and labeled connections; selection controls stay in the title row. References
+  preview the original asset and expand into its normal tab. Preserve chat beside the board
   and use the existing note title, history, and save/conflict controls.
 - **Conversation progress:** use the shared elapsed work header and static semantic
   icons with meaningful live text. Do not show busy spinners in tool-call rows,

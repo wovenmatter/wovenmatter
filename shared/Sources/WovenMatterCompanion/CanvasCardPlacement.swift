@@ -9,6 +9,9 @@ public struct CanvasCardPlacement: Codable, Equatable, Sendable {
   public var height: Double
   /// A library note ID, never a copied document or a machine-local path.
   public var assetID: String?
+  public var title: String?
+  public var color: String?
+  public var sectionID: String?
 
   public init(x: Double, y: Double, width: Double = 360, height: Double = 300, assetID: String? = nil) {
     self.x = x; self.y = y; self.width = width; self.height = height; self.assetID = assetID
@@ -20,14 +23,22 @@ public struct CanvasCardPlacement: Codable, Equatable, Sendable {
 
   public var isValid: Bool {
     x.isFinite && y.isFinite && width.isFinite && height.isFinite
-      && (0...20_000).contains(x) && (0...20_000).contains(y)
-      && (280...960).contains(width) && (200...960).contains(height)
+      && abs(x) <= 1_000_000_000 && abs(y) <= 1_000_000_000
+      && (200...4000).contains(width) && (120...4000).contains(height)
+      && (title?.utf8.count ?? 0) <= 1024
+      && (color.map { CanvasStyle.colors.contains($0) } ?? true)
       && (assetID.map { !$0.isEmpty && $0.utf8.count <= 1_024 } ?? true)
   }
 }
 
 public extension NoteDocument {
-  static let maximumCanvasCards = 200
+  static let maximumCanvasCards = 10_000
+
+  var canvasPlacements: [String: CanvasCardPlacement] {
+    Dictionary(uniqueKeysWithValues: blocks.enumerated().map { index, block in
+      (block.id, canvas?[block.id] ?? .automatic(index: index))
+    })
+  }
 
   func canvasPlacement(for blockID: String) -> CanvasCardPlacement {
     canvas?[blockID] ?? .automatic(index: blocks.firstIndex { $0.id == blockID } ?? 0)

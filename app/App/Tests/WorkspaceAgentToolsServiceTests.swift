@@ -233,6 +233,49 @@ extension WorkspaceAgentToolsServiceTests {
         #expect(saved.document?.plainText.contains("Agent idea") == true)
         #expect(saved.document?.plainText.contains("Comparison") == true)
         #expect(saved.document?.canvas?[card.id] == placement)
+        // Exercise the actual command parser, permissions, service and transactional store.
+        let asset = try await database.createNote(folderID: nil, title: "Independent artifact", kind: .html,
+            callerConversationID: caller, requestID: UUID().uuidString)
+        let reference = NoteRichTextBlock(text: "Artifact")
+        let section = CanvasSection(title: "Options", x: -400, y: -300)
+        var referencePlacement = CanvasCardPlacement(x: -360, y: -240, width: 500, height: 400, assetID: asset)
+        referencePlacement.sectionID = section.id
+        let connection = CanvasConnection(from: card.id, to: reference.id, label: "supports")
+        let edits: [CanvasEdit] = [
+            .init(action: .section, section: section),
+            .init(action: .add, block: .richText(reference), placement: referencePlacement),
+            .init(action: .connect, connection: connection),
+            .init(action: .arrange, ids: [card.id, reference.id], layout: "row")
+        ]
+        let json = String(decoding: try JSONEncoder().encode(edits), as: UTF8.self)
+        let arguments = ["notes", "canvas", "--note-id", note, "--revision", try #require(saved.revision), "--json", json]
+        let requestID = UUID().uuidString
+        let batch = await model.handle(.init(arguments: arguments, requestID: requestID), callerID: caller)
+        #expect(batch.success)
+        let replay = await model.handle(.init(arguments: arguments, requestID: requestID), callerID: caller)
+        #expect(replay.success)
+        #expect(replay.result?.objectValue?["replayed"]?.boolValue == true)
+        let arranged = try await database.readNoteForEditing(id: note)
+        #expect(arranged.document?.canvasConnections == [connection])
+        #expect(arranged.document?.canvas?[reference.id]?.assetID == asset)
+        #expect(arranged.document?.canvas?[reference.id]?.sectionID == section.id)
+        #expect(arranged.document?.blocks.count == 4)
+        let staleLayout = await model.handle(.init(arguments: arguments, requestID: UUID().uuidString), callerID: caller)
+        #expect(!staleLayout.success)
+        let invalid: [CanvasEdit] = [.init(action: .remove, id: reference.id), .init(action: .disconnect, id: "missing")]
+        let invalidJSON = String(decoding: try JSONEncoder().encode(invalid), as: UTF8.self)
+        let rejected = await model.handle(.init(arguments: ["notes", "canvas", "--note-id", note, "--revision", try #require(arranged.revision), "--json", invalidJSON]), callerID: caller)
+        #expect(!rejected.success)
+        #expect(try await database.readNoteForEditing(id: note).document == arranged.document)
+        let removal = String(decoding: try JSONEncoder().encode([CanvasEdit(action: .remove, id: reference.id)]), as: UTF8.self)
+        let removed = await model.handle(.init(arguments: ["notes", "canvas", "--note-id", note, "--revision", try #require(arranged.revision), "--json", removal]), callerID: caller)
+        #expect(removed.success)
+        #expect(try await database.readNoteForEditing(id: asset).success)
+        #expect(try await database.readNoteForEditing(id: note).document?.canvasConnections?.isEmpty == true)
+        try await database.setSessionTools(.init(enabled: [.history]), sessionID: caller)
+        let denied = await model.handle(.init(arguments: arguments), callerID: caller)
+        #expect(!denied.success)
+
     }
 
 

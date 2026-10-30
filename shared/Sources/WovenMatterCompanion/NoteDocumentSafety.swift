@@ -52,6 +52,7 @@ extension NoteDocument {
         throw NoteDocumentSafetyError.unsupportedFormat
       }
     }
+    try validateCanvasStructure()
     var totalCells = 0
     var ids = Set<String>()
     for block in blocks {

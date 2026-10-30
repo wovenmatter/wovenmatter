@@ -4,11 +4,13 @@ import Testing
 
 struct WorkspaceAssetTabsTests {
   @Test func canvasContextSurvivesTransportAndExplainsEditing() throws {
-    let context = WorkspaceVisibleContext(notes: [.init(id: "board", title: "Ideas", revision: "r1", active: true, kind: .canvas)], pages: [])
+    let context = WorkspaceVisibleContext(notes: [.init(id: "board", title: "Ideas", revision: "r1", active: true, kind: .canvas, canvasViewport: .init(x: -100, y: 200, width: 800, height: 600, zoom: 0.5, selectedCardIDs: ["selected"]))], pages: [])
     let restored = try JSONDecoder().decode(WorkspaceVisibleContext.self, from: JSONEncoder().encode(context))
     #expect(restored.notes.first?.kind == .canvas)
     #expect(restored.promptContext?.contains("woven_notes_table_create") == true)
-    #expect(restored.promptContext?.contains("Preserve existing block IDs") == true)
+    #expect(restored.promptContext?.contains("woven_notes_canvas") == true)
+    #expect(restored.notes.first?.canvasViewport?.selectedCardIDs == ["selected"])
+    #expect(restored.notes.first?.canvasViewport?.x == -100)
     let legacy = try JSONDecoder().decode(WorkspaceVisibleContext.self, from: Data(#"{"notes":[{"id":"old","title":"Old","revision":"r0","active":true}],"pages":[]}"#.utf8))
     #expect(legacy.notes.first?.kind == nil)
     let inactive = WorkspaceVisibleContext(notes: [.init(id: "board", title: "Ideas", revision: "r1", active: false, kind: .canvas)], pages: [])
