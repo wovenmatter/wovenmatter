@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		D20900000000000000000003 /* LegacyMacLibraryUpgrade.swift in Sources */ = {isa = PBXBuildFile; fileRef = D20900000000000000000004 /* LegacyMacLibraryUpgrade.swift */; };
+		D20900000000000000000001 /* PairedMacSyncController.swift in Sources */ = {isa = PBXBuildFile; fileRef = D20900000000000000000002 /* PairedMacSyncController.swift */; };
 		58D2DD715AC36ACD6DF22BB2 /* LUCIDE_LICENSE.txt in Resources */ = {isa = PBXBuildFile; fileRef = 0AAFD6EAB1F3FB697B1A2D05 /* LUCIDE_LICENSE.txt */; };
 		E02200000000000000000001 /* HarnessSetupModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E02200000000000000000002; };
 		E02200000000000000000003 /* HarnessSetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E02200000000000000000004; };
@@ -174,6 +176,8 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		D20900000000000000000004 /* LegacyMacLibraryUpgrade.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LegacyMacLibraryUpgrade.swift; sourceTree = "<group>"; };
+		D20900000000000000000002 /* PairedMacSyncController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairedMacSyncController.swift; sourceTree = "<group>"; };
 		0AAFD6EAB1F3FB697B1A2D05 /* LUCIDE_LICENSE.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = ../docs/assets/LUCIDE_LICENSE.txt; sourceTree = SOURCE_ROOT; };
 		E02200000000000000000002 /* HarnessSetupModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Models/HarnessSetupModel.swift"; sourceTree = SOURCE_ROOT; };
 		E02200000000000000000004 /* HarnessSetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Views/HarnessSetupView.swift"; sourceTree = SOURCE_ROOT; };
@@ -558,6 +562,8 @@
 				EEEA1BB3B12D315E777F3BDA /* SecondaryMacCalendarProjection.swift */,
 				CA98C90FF31046DFAE827B4E /* SecondaryMacReplicaTools.swift */,
 				0083907CDB98FA31255BD2C1 /* CompanionHostController.swift */,
+				D20900000000000000000002 /* PairedMacSyncController.swift */,
+				D20900000000000000000004 /* LegacyMacLibraryUpgrade.swift */,
 				0643377195E7D10D99BB22ED /* CompanionHostController+Publishing.swift */,
 				92D5260CF0515975E64CFF87 /* CompanionMacPairingController.swift */,
 				A22000000000000000000001 /* MacDeviceSetupModel.swift */,
@@ -753,6 +759,8 @@
 				3D87BAA73934F3BC92DC78F1 /* SettingsCompanionView.swift in Sources */,
 				F2B1E2E7B8F7CB91795BE7E8 /* DeviceConnectionsComponents.swift in Sources */,
 				B7937C7349692E25EE127696 /* CompanionHostController.swift in Sources */,
+				D20900000000000000000001 /* PairedMacSyncController.swift in Sources */,
+				D20900000000000000000003 /* LegacyMacLibraryUpgrade.swift in Sources */,
 				301E0D2FD0D0674DA6DF406A /* CompanionHostController+Publishing.swift in Sources */,
 				88FA3C83BF80A7BC5B0AAD17 /* CompanionMacPairingController.swift in Sources */,
 				A22000000000000000000002 /* MacDeviceSetupModel.swift in Sources */,

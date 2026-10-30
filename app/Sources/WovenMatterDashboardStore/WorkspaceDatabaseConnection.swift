@@ -52,11 +52,26 @@ final class WorkspaceDatabaseConnection {
       try migrateLibrary()
       try createNativeRunArchive()
       try createConversationActivityIndex()
+      try migratePairedLibrary()
     } catch {
       sqlite3_close(database)
       connection = nil
       throw error
     }
+  }
+
+  func backupPairedLibrary(to url: URL) throws {
+    var target: OpaquePointer?
+    guard sqlite3_open(url.path, &target) == SQLITE_OK, let target else { throw WorkspaceDatabaseError.open("Could not create the local recovery backup.") }
+    defer { sqlite3_close(target) }
+    guard let connection, let backup = sqlite3_backup_init(target, "main", connection, "main") else { throw WorkspaceDatabaseError.execute("Could not snapshot the local library.") }
+    let status = sqlite3_backup_step(backup, -1), finish = sqlite3_backup_finish(backup)
+    guard status == SQLITE_DONE, finish == SQLITE_OK,
+          sqlite3_exec(target, "PRAGMA journal_mode=DELETE", nil, nil, nil) == SQLITE_OK else { throw WorkspaceDatabaseError.execute("The local recovery backup did not complete.") }
+    var check: OpaquePointer?
+    guard sqlite3_prepare_v2(target, "PRAGMA integrity_check", -1, &check, nil) == SQLITE_OK, let check else { throw WorkspaceDatabaseError.corruptRow }
+    defer { sqlite3_finalize(check) }
+    guard sqlite3_step(check) == SQLITE_ROW, let result = sqlite3_column_text(check, 0), String(cString: result) == "ok" else { throw WorkspaceDatabaseError.corruptRow }
   }
 
   deinit {

@@ -440,7 +440,7 @@ private struct AppTerminationTests {
         precondition(LocalExecutionRole.resolve(arguments: []) == .frontend)
         precondition(!LocalExecutionRole.frontend.ownsExecution)
         precondition(LocalExecutionRole.resolve(arguments: ["--backend"]) == .backend)
-        precondition(LocalExecutionRole.resolve(arguments: [], libraryClientEnabled: true) == .libraryClient)
+        precondition(LocalExecutionRole.resolve(arguments: [], libraryClientEnabled: true) == .frontend)
         precondition(!LocalExecutionRole.libraryClient.ownsExecution)
         precondition(LocalExecutionRole.libraryClient.leaseFileName != LocalExecutionRole.developmentHost.leaseFileName)
         precondition(LocalExecutionRole.resolve(arguments: ["--backend"], libraryClientEnabled: true) == .backend)

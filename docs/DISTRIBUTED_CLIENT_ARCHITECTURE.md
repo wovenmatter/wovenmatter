@@ -1,73 +1,74 @@
-# Central library and distributed workspaces
+# Paired libraries and execution workspaces
 
-This is the storage, execution and synchronization contract for paired clients.
+This is the storage, execution and synchronization contract for Woven Matter.
 
-## Roles
+## Equal Macs
 
-One designated Mac owns the authoritative Woven Matter SQLite library. Its background service exposes the library API; closing the interface does not transfer authority. iOS, iPadOS, and other Macs use local replicas of the same library and synchronize durable changes.
+Each paired Mac owns a complete local SQLite library, runs the normal desktop
+app, and accepts local edits while disconnected. Paired Macs exchange changes in
+both directions over Tailscale. There is no designated central database, promotion,
+handoff, or replacement authority. The Mac used to pair two other Macs does not
+need to remain online for those Macs to synchronize with each other.
 
-Execution workspaces run on Macs, Linux containers, and iOS devices. A conversation has one execution workspace, and a run has one owner. A client is an interface to any authorized reachable workspace. Client disconnection does not cancel accepted execution. A central-library outage does not prevent direct workspace control after pairing/provisioning.
+A Mac can add remote workspaces and pair additional Apple devices. Workspace
+identities and connection membership propagate through the paired graph. Each
+new connection requires the existing explicit approval. Discovery does not grant
+access. A learned Mac address must prove possession of an existing device
+verifier before it receives a bearer credential. Revocation propagates when peers
+reconnect and remains effective across stale membership replay and re-pairing.
 
-Tailscale carries inter-device connections. Woven Matter additionally authenticates individual devices and scopes their access. The central service provisions credentials only for the authenticated paired device. Workspace administrator secrets and provider refresh credentials are not part of content synchronization.
+## Shared storage and local execution
 
-## Storage boundary
+The shared library includes notes and versions, folders and workspace bindings,
+conversations and complete exposed execution history, saved library files,
+artifacts, dictation history, library settings, workspace inventory and paired
+device membership. Each Mac retains those downloaded bytes locally. Large row
+values and file bytes transfer separately with content digests and resumable
+chunks; interrupted large values do not block independent writing.
 
-The central library consolidates notes, folders, conversations, complete exposed execution history, shared settings, and saved artifacts. Project roots and managed SQLite datasets follow [the workspace data model](WORKSPACE_DATA_MODEL.md): one execution owner per root/dataset, separate from the central history database. Workspace files remain in their workspace: repositories, dependencies, build outputs, caches, and native runtime checkpoints are not mirrored wholesale. Saving an output to the library creates an explicitly synchronized artifact.
+A conversation and run still have one execution workspace. Native runtime
+checkpoints, command queues, receipts, timers and active delivery state stay on
+that workspace. Replaying shared observations cannot execute a command, resume a
+foreign agent, manufacture a second native history event, or run another Mac's
+schedule. Workspace roots, repositories, dependencies, caches and ordinary working
+files follow [the workspace data model](WORKSPACE_DATA_MODEL.md), outside library
+synchronization. A local upgrade can import a former node's native database on
+the same physical Mac; that path is never available over the network.
 
-A client replica is separate from native runtime persistence. Cache eviction must never remove unsynchronized changes, active runtime state, or the only copy of locally originated history. Each execution workspace retains its own durable execution records and publishes them directly to the central library. An observing client may cache a foreign workspace journal for display, but must never publish that history or its artifacts. Linux workspace publication continues independently of any viewing client, including after the workspace service restarts. Each workspace uses its own publication identity scoped to that library and workspace; provisioning ownership does not confer execution ownership.
+Workspace administrator and provider credentials stay with their installation.
+Every requesting device receives its own scoped direct-execution credential.
+Once enrolled, it can use a reachable workspace independently of the Mac that
+added it. Initial enrollment of a newly added remote workspace still needs the
+Mac holding that workspace's management credential to be reachable. Owning that
+execution capability does not confer library authority.
 
-Library changes use conditional revisions and retained deletion/conflict state. Commands use stable IDs, immutable request identity and durable receipts. Replay imports observations; it never executes commands. Interrupted transfers resume by validated offsets and content digests. Acknowledgement is emitted only after durable acceptance. Histories exceeding a network page are paged or chunked without truncation.
+## Offline changes and reconnection
 
-## Device connections and synchronization
+A SQLite trigger records each shared edit in the same transaction as the content.
+Replica identity is a persistent device UUID. Record identities remain stable
+across reconnects, and network addresses are separate routing information.
+Causal vectors distinguish subsequent edits from concurrent edits. Concurrent
+changes converge deterministically; conflicting values remain recoverable.
+Concurrent deletion wins over an edit to the same identity, while the live
+writing gets a deterministic recovered copy. A later explicit restore can be a
+new causal edit. Tombstones and pending large records survive restart.
 
-The central Mac manages membership and access in Settings → Devices.
-Macs discover compatible Woven Matter services among peers visible through their
-existing Tailscale client. Initial pairing requires approval; discovery alone
-never grants library access. A one-time pairing link remains available. iPhone
-and iPad use Settings → Device Connections with QR scanning or a pasted pairing link.
-Each Mac defaults to **Central database**. The **Database role** section at the
-bottom switches it to **Node** through a guarded restart, preserving the existing
-database separately. An unpaired node opens setup; after pairing it starts its
-own execution workspace. Only nodes offer central-database discovery/link entry.
-Local Agent Workspace and Remote Agent Workspaces manage execution locations;
-library pairing belongs in Devices.
+Receive cursors commit with durable acceptance, including a durable pending
+record for a value whose bytes are still downloading. Push acknowledgement covers
+only the exact submitted page. Retries cannot duplicate commands or recovered
+notes. Changes are relayed with their original identity and causal context, so
+connected peers converge without choosing a central Mac. Background retries are
+bounded and ordinary disconnection is quiet.
 
-A paired client receives the registry and access to enabled execution workspaces
-from the central Mac. Previously authorized direct connections do not depend on
-the central Mac being reachable. Per-device presence describes contact by that
-device, not requests from another client. Connectivity and synchronization are
-separate states: a reachable central Mac does not mean every pending change has
-been accepted. Revocation takes effect centrally immediately and propagates to
-unreachable workspaces when they reconnect.
+Settings → Apple Devices presents this Mac, pairing, a shared device roster and
+one workspace inventory. It has no database-role selector. Notes with concurrent
+writing have visible **Recovered edit** copies. Existing pre-upgrade writing and
+original databases are preserved; see [upgrade and recovery](PAIRED_MAC_LIBRARIES.md#upgrade-and-recovery).
 
-Notes, folders and calendar edits commit locally with durable pending operations.
-Synchronization runs after edits and on foreground/reconnect opportunities, with
-retry backoff and periodic reconciliation. Independent resource streams must make
-progress even when another stream has a conflict or interrupted artifact transfer.
-Sync acknowledgements advance only the exact submitted operation; edits made
-while a request is in flight remain queued. Conflicting edits retain both versions;
-deletions retain tombstones and never resurrect an old identity during replay.
-
-Notes, calendar and the library index are available offline after download.
-Recent central transcripts are cached automatically; older transcript pages and
-large saved artifacts are downloaded on demand. The
-immutable federation journal currently retains downloaded origin events in full;
-it is not pruned or skipped to simulate lazy transcript transfer. Cache cleanup never
-removes pending edits, conflicts, pinned content, or the only copy of locally
-originated execution data. Unsynchronized data remains until acknowledged by the
-central library. Provider credentials, runtime checkpoints and ordinary workspace
-files are outside this library-content synchronization boundary.
-
-When the central Mac is offline, ordinary library edits on one client remain local
-until central synchronization resumes. Direct workspace commands and history reads
-continue against reachable owners. No client becomes a replacement central library,
-and no viewing client acts as a synchronization intermediary for another workspace.
-Sync runs automatically. Devices on Mac (Device Connections on iOS) contains pairing and device access,
-not sync-lane dashboards or optional per-chat offline toggles. Recovery for an
-actual conflict belongs with the affected item. Ordinary disconnection must not
-create intrusive banners or dialogs. Explicit **Unpair** removes central-issued
-access grants, retaining cached content, pending writing, inference sign-ins,
-and the database binding so another database cannot receive old pending writes.
+Mobile devices retain their existing offline replicas and connect to an approved
+Mac for library synchronization. Their authenticated workspace registry can contain
+execution workspaces from other paired Macs, retaining each workspace's actual
+credential namespace. Native device inference sign-ins remain device-only.
 
 ## Pi Durable on iOS and iPadOS
 
@@ -75,27 +76,24 @@ Pi Durable executes on the iOS device. Its SDK owns the agent loop, submissions,
 
 The reviewed SDK is bundled with the app and hosted through JavaScriptCore. Native bridges provide durable storage, network streams, credentials, cancellation and mobile tools. The mobile workspace exposes only supported local capabilities. Mac/Linux workspace operations require an explicit target; a suspended local run is never silently moved elsewhere.
 
-Device connections are independent of central-library pairing. ChatGPT and Grok use native device-code sign-in; Claude uses native PKCE sign-in with the provider’s returned code. API-key connections, including OpenCode Zen and Go, save their keys on the device. Access and refresh tokens stay in the device-only Keychain, and refresh calls the provider directly. Native Claude requests identify Woven Matter and retain Pi’s actual prompt and tool names; they do not claim to be Claude Code. Real provider authorization and inference acceptance require user testing. An explicitly selected hosted connection can still use an authenticated inference-only adapter. That adapter may translate model requests but cannot execute the phone's tools or own its agent loop. The selected adapter's availability is a model-connection dependency, separate from central-library availability.
+Provider connections are independent of Apple-device pairing. ChatGPT and Grok use native device-code sign-in; Claude uses native PKCE sign-in with the provider’s returned code. API-key connections, including OpenCode Zen and Go, save their keys on the device. Access and refresh tokens stay in the device-only Keychain, and refresh calls the provider directly. Native Claude requests identify Woven Matter and retain Pi’s actual prompt and tool names; they do not claim to be Claude Code. Real provider authorization and inference acceptance require user testing. An explicitly selected hosted connection can still use an authenticated inference-only adapter. That adapter may translate model requests but cannot execute the phone's tools or own its agent loop. The selected adapter's availability is a model-connection dependency, separate from library synchronization.
 
 Accepted work and tool intent are persisted before display/dispatch. iOS background execution is opportunistic: interruption recovery uses native checkpoints and tool receipts. User cancellation remains cancellation after restart. Ambiguous external effects are reconciled or surfaced rather than blindly replayed.
 
-## Client roles and compatibility
+## Compatibility and acceptance
 
-A secondary Mac switches explicitly to Node mode before pairing. The transition flushes local writing, checks active work, and restarts with a separate ownership role. Its prior library is preserved. Every Mac retains its own local execution workspace. Its execution origin is distinct from the authority for the paired library. Creating or provisioning additional Linux workspaces remains a central-Mac operation.
+Every desktop Mac runs its full local app and background server. Former node
+preferences are upgrade input, rather than a role selector. Both Macs must
+advertise `library.peers.v1` before a new Mac pairing completes. Existing mobile
+pairing and execution protocol identifiers remain compatible; a workspace keeps
+its original library namespace and execution scope when its inventory is shared.
 
-The existing companion protocol remains compatible while new federation capabilities are negotiated explicitly. Persistent identities, pairing and unsynchronized writing survive migration. Older servers/clients receive explicit unavailable or version responses for unsupported capabilities.
-
-## Required acceptance
-
-- Real Pi Durable on iOS executes tools locally with a controlled inference fixture, preserves history and resumes safely after interruption.
-- Cloud/provider and Tailscale inference routes preserve selected model/account identity; real account checks are reported separately from fixtures.
-- With the central Mac offline, clients control reachable workspaces and retain local writing and execution history.
-- Reconnection consolidates multiple clients and execution origins without duplicate sends, stale Stop/approval actions, missing output, or resurrected deletions.
-- Saved artifacts synchronize with integrity checks and resumable transfers; workspace working files remain local.
-- Secondary Mac client mode preserves both the paired replica and the prior local library, with safe failed-transition rollback.
-- iPhone and iPad support the existing shared styles and canonical green cube app icon; simulator checks precede physical-device acceptance.
-
-Implementation status and exact test evidence belong in the PR handoff; this document states the required contract and does not claim unperformed live acceptance.
+Acceptance covers independent offline edits, three-Mac synchronization with the
+joining Mac unavailable, conflict recovery, deletion races, restart/replay,
+resumable file integrity, local-only execution queues, propagated revocation, and
+new remote-workspace/device membership added on any Mac. Real-device testing is
+the final acceptance step; fixture results do not claim live Tailscale or provider
+acceptance. See [the paired Mac test plan](PAIRED_MAC_LIBRARIES.md#review-and-device-test-plan).
 
 ## Provider model metadata
 

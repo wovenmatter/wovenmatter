@@ -25,6 +25,12 @@ struct SettingsRemoteWorkspacesView: View {
     @State private var browserWorkspace: RemoteWorkspaceConfiguration?
     @State private var logsWorkspace: RemoteWorkspaceConfiguration?
 
+    private var sharedWorkspaces: [CompanionExecutionWorkspace] {
+        application.companionHost.executionWorkspaces.filter {
+            $0.kind == .linux && !$0.deleted && $0.ownerDeviceID != application.companionHost.peerIdentity?.deviceID
+        }.sorted { $0.name < $1.name }
+    }
+
     private func deploymentProgress(_ message: String) -> some View {
         HStack(spacing: 8) {
             ProgressView().controlSize(.small)
@@ -59,6 +65,18 @@ struct SettingsRemoteWorkspacesView: View {
                     }
                 } else {
                     workspacesCard
+                    if !sharedWorkspaces.isEmpty {
+                        SettingsCard(title: "Shared workspaces", detail: "Workspaces added on your paired Macs are available here after synchronization. Agents keep running on their own workspace.") {
+                            ForEach(sharedWorkspaces) { workspace in
+                                HStack {
+                                    Text(workspace.name).font(.system(size: 13, weight: .medium))
+                                    Spacer()
+                                    Text("Added on " + (application.companionHost.connectedPeerRoutes.first(where: { $0.deviceID == workspace.ownerDeviceID })?.name ?? "a paired Mac"))
+                                        .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
+                                }
+                            }
+                        }
+                    }
                     hostCard
                     if currentPreflight?.ready == true { createCard }
                     if let progress = model.progress { deploymentProgress(progress) }

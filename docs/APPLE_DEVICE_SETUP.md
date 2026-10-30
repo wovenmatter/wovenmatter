@@ -23,12 +23,12 @@ access outside the app. The app never requests a password or starts account logi
   Open Woven Matter for manual pairing. The downloaded signed app is checked for
   that capability before replacement when a combined action was selected.
 
-When a central Mac initiates setup, the target app changes itself to Node using
-the existing guarded role transition. It flushes writing, checks running work,
-stops its own execution owner, and restarts. Its prior local library is preserved.
-The node requests pairing; the central Mac must explicitly approve that request.
-An already paired Mac cannot silently switch to a different central database.
-An unpaired node can also open an installed central Mac and request pairing there.
+Either Mac can initiate pairing. Both continue running their full local desktop
+app, preserve their existing libraries, and synchronize shared data after approval
+on the other Mac. Pairing does not change a database role or restart into a node
+interface. An already paired Mac can add another Mac or an iPhone/iPad; its new
+connections and remote workspace inventory propagate to the other paired Macs.
+Both Macs must advertise the paired-library protocol; older apps need updating.
 
 Remote setup uses a short-lived, nonsecret intent in the SSH user's app preferences.
 The receiving GUI consumes it after startup; pairing credentials stay in the

@@ -55,6 +55,13 @@ final class CompanionHostController {
     private(set) var executionWorkspaces: [CompanionExecutionWorkspace] = []
     private(set) var isDiscovering = false
     private(set) var pendingDeviceRevocations: [String: [String]] = [:]
+    @ObservationIgnored lazy var peerSync = PairedMacSyncController(host: self)
+    private(set) var peerPairingStatus = ""
+    private(set) var peerSyncErrors: [String: String] = [:]
+    private(set) var peerPairingError: String?
+    private var projectedPeerRoutes: [PairedMacRoute] = []
+    var connectedPeerRoutes: [PairedMacRoute] { model?.isBackendFrontend == true ? projectedPeerRoutes : peerSync.routes }
+    var peerIdentity: CompanionPairingDeviceIdentity? { discoveryIdentity }
     private var discoveryIdentity: CompanionPairingDeviceIdentity?
     private let discovery = CompanionMacDiscovery()
     private let pairingNetwork = CompanionPairingNetwork()
@@ -143,7 +150,7 @@ final class CompanionHostController {
                         throw CompanionAPIError(code: "revocation_pending", message: "This device's pairing could not yet be cancelled.")
                     }
                 },
-                discovery: { [weak self] in self?.discoveryIdentity.map { .init(role: .central, identity: $0) } },
+                discovery: { [weak self] in self?.discoveryIdentity.map { .init(role: .central, identity: $0, capabilities: ["library.peers.v1"]) } },
                 onPair: { [weak self] in await self?.didPair() },
                 onMutation: { [weak model] in Task { await model?.refreshWorkspace() } },
                 onRequest: { [weak self] in self?.lastSeenAt = Date() },
@@ -181,11 +188,18 @@ final class CompanionHostController {
             guard generation == expectedGeneration, !Task.isCancelled else { throw CancellationError() }
             executionAPI = CompanionMacExecutionAPI(database: database, commands: model.companionCommands,
                 authentication: executionAuth, descriptor: local,
-                isActive: { [weak self] in self?.generation == expectedGeneration && self?.endpoint != nil })
+                isActive: { [weak self] in self?.generation == expectedGeneration && self?.endpoint != nil },
+                authorizeDevice: { deviceID in
+                    let active = await authentication.devices()
+                    guard deviceID == centralIdentity.hostDeviceID || active.contains(where: { $0.id == deviceID }) else {
+                        throw CompanionAPIError(code: "unauthorized", message: "This device is no longer paired.")
+                    }
+                })
             inferenceHost = CompanionInferenceHost(authentication: executionAuth, descriptor: local,
                 directory: try supportDirectory ?? ApplicationModel.dashboardSupportDirectory(),
                 isActive: { [weak self] in self?.generation == expectedGeneration && self?.endpoint != nil })
             isStarting = false; status = "Available to your paired devices"
+            try await peerSync.restore()
             // Availability alone must not hold the Mac awake. Active execution
             // continues to use the app's existing work/sleep policy.
             healthTask = Task { [weak self] in
@@ -199,6 +213,8 @@ final class CompanionHostController {
                     }
                     do { try await self.refreshExecutionRegistry() }
                     catch { self.errorMessage = error.localizedDescription }
+                    try? await LegacyMacLibraryUpgrade.reconnect(host: self, defaults: self.defaults)
+                    await self.peerSync.synchronize()
                     await self.retryPendingRevocations()
                     await self.refreshStatus()
                     if let model = self.model, let client = try? model.centralExecutionClient() {
@@ -220,6 +236,7 @@ final class CompanionHostController {
     private func handle(_ request: CompanionHTTPRequest, generation expected: UUID, libraryAPI: CompanionWorkspaceAPI) async -> CompanionHTTPResponse {
         guard generation == expected else { return .error("unavailable", "This sharing session has stopped.", status: 503) }
         let path = request.target.split(separator: "?", maxSplits: 1).first.map(String.init) ?? request.target
+        if let response = await peerSync.handle(request) { return response }
         if path == "/mcp" || path == "/wovenmatter/mcp" {
             if let response = await model?.agentTools?.handleMCP(request) { return response }
             return await libraryAPI.handle(request)
@@ -287,14 +304,16 @@ final class CompanionHostController {
                 var pending = pendingRevocations
                 let identity = try await database.companionLibraryIdentity()
                 let localID = localExecutionWorkspaceID(libraryID: identity.libraryID)
-                let targets = descriptors.filter { $0.kind != .ios && $0.id != localID && $0.journalDeviceIDs.contains(deviceID) }.map(\.id)
+                let targets = descriptors.filter { $0.kind != .ios && $0.id != localID && $0.libraryID == identity.libraryID && $0.journalDeviceIDs.contains(deviceID) }.map(\.id)
                 let workspaceIDs = Array(Set((pending[deviceID] ?? []) + targets)).sorted()
                 if workspaceIDs.isEmpty { pending.removeValue(forKey: deviceID) }
                 else { pending[deviceID] = workspaceIDs }
                 pendingRevocations = pending
             }
             try await authentication?.revoke(deviceID: deviceID, expected: expected)
+            try await model?.dashboardStore?.database.withdrawUnpairedMac(deviceID)
             try await loadExecutionAuthentication().revoke(deviceID: deviceID)
+            try peerSync.revoke(deviceID)
             pairedDevices = await authentication?.devices() ?? []
             pairingPayload = nil; pairingExpiresAt = nil; lastSeenAt = nil; errorMessage = nil
             try await removeJournalGrants(deviceID: deviceID)
@@ -319,6 +338,7 @@ final class CompanionHostController {
         let expectedGeneration = generation
         defer { registryRefreshInProgress = false }
         let identity = try await database.companionLibraryIdentity()
+        try await database.savePairedRemoteWorkspaces(model.remoteWorkspaces.workspaces)
         let existing = try await database.companionExecutionWorkspaces()
         let localID = localExecutionWorkspaceID(libraryID: identity.libraryID)
         if DevelopmentLaunch.isSnapshot {
@@ -373,6 +393,9 @@ final class CompanionHostController {
         provisioningWorkspaceIDs.insert(id)
         defer { provisioningWorkspaceIDs.remove(id) }
         let identity = try await database.companionLibraryIdentity()
+        if let workspace = try await database.companionExecutionWorkspaces().first(where: { $0.id == id && !$0.deleted }), workspace.libraryID != identity.libraryID {
+            return try await peerSync.provision(workspace: workspace, deviceID: device.id)
+        }
         if id == localExecutionWorkspaceID(libraryID: identity.libraryID) {
             guard let executionAPI else { throw CompanionAPIError(code: "unavailable", message: "The central database connection is not ready yet.") }
             let expectedGeneration = generation
@@ -444,6 +467,9 @@ final class CompanionHostController {
         provisioningWorkspaceIDs.insert(id)
         defer { provisioningWorkspaceIDs.remove(id) }
         let identity = try await database.companionLibraryIdentity()
+        if let workspace = try await database.companionExecutionWorkspaces().first(where: { $0.id == id && !$0.deleted }), workspace.libraryID != identity.libraryID {
+            return try await peerSync.provision(workspace: workspace, deviceID: identity.hostDeviceID)
+        }
         try await completePendingRevocation(workspaceID: id, deviceID: identity.hostDeviceID)
         let registered = try await database.companionExecutionWorkspaces().first { $0.id == id && !$0.deleted }
         var credential: CompanionExecutionCredential
@@ -569,7 +595,7 @@ final class CompanionHostController {
     private func removeJournalGrants(deviceID: String) async throws {
         guard let database = model?.dashboardStore?.database else { return }
         let identity = try await database.companionLibraryIdentity()
-        for var workspace in try await database.companionExecutionWorkspaces() where !workspace.deleted && workspace.journalDeviceIDs.contains(deviceID) {
+        for var workspace in try await database.companionExecutionWorkspaces() where !workspace.deleted && workspace.libraryID == identity.libraryID && workspace.journalDeviceIDs.contains(deviceID) {
             let revision = workspace.revision
             workspace.journalDeviceIDs.removeAll { $0 == deviceID }
             _ = try await database.registerCompanionExecutionWorkspace(.init(workspace: workspace, expectedRevision: revision), deviceID: identity.hostDeviceID)
@@ -620,7 +646,7 @@ final class CompanionHostController {
               errorMessage: errorMessage, pairingPayload: pairingPayload, pairingExpiresAt: pairingExpiresAt,
               pairedDevices: pairedDevices, lastSeenAt: lastSeenAt, discoveredPeers: discoveredPeers,
               pendingPairingRequests: pendingPairingRequests, isDiscovering: isDiscovering, executionWorkspaces: executionWorkspaces,
-              pendingDeviceRevocations: pendingRevocations)
+              pendingDeviceRevocations: pendingRevocations, peerPairingStatus: peerSync.pairing.status, peerPairingError: peerSync.pairing.errorMessage, peerSyncErrors: peerSync.errors, peerRoutes: peerSync.routes, peerIdentity: discoveryIdentity)
     }
 
     func refreshStatus() async {
@@ -676,7 +702,60 @@ final class CompanionHostController {
             discoveredPeers = value.discoveredPeers; pendingPairingRequests = value.pendingPairingRequests
             isDiscovering = value.isDiscovering; executionWorkspaces = value.executionWorkspaces
             pendingDeviceRevocations = value.pendingDeviceRevocations
+            peerPairingStatus = value.peerPairingStatus ?? ""; peerPairingError = value.peerPairingError
+            projectedPeerRoutes = value.peerRoutes ?? []; discoveryIdentity = value.peerIdentity
+            peerSyncErrors = value.peerSyncErrors ?? [:]
         } catch { errorMessage = error.localizedDescription }
+    }
+
+    func peerAuthentication() async throws -> CompanionAuthentication {
+        try await loadAuthentication()
+        guard let authentication else { throw CancellationError() }
+        return authentication
+    }
+    func peerRoute() async throws -> PairedMacRoute {
+        guard let endpoint, let database = model?.dashboardStore?.database else { throw CompanionAPIError(code: "unavailable", message: "Wait for this Mac to connect to Tailscale before pairing.") }
+        let identity = try await database.companionLibraryIdentity()
+        return .init(deviceID: identity.hostDeviceID, libraryID: identity.libraryID, endpoint: endpoint, name: DevelopmentLaunch.deviceName())
+    }
+    func pairWithPeer(_ peer: CompanionDiscoveredPeer) async {
+        if model?.isBackendFrontend == true { await forward(.pairWithPeer(peer)); return }
+        guard peer.advertisement.identity.deviceID != discoveryIdentity?.deviceID else { return }
+        await peerSync.pairing.requestPairing(with: peer)
+    }
+    func pairAtEndpoint(_ endpoint: URL) async {
+        if model?.isBackendFrontend == true { await forward(.pairAtEndpoint(endpoint)); return }
+        do {
+            let advertisement: CompanionDiscoveryAdvertisement = try await pairingNetwork.request(endpoint, path: "v1/discovery")
+            guard advertisement.capabilities?.contains("library.peers.v1") == true else { throw CompanionAPIError(code: "update_required", message: "Update both Macs before pairing their libraries.") }
+            await pairWithPeer(.init(endpoint: endpoint, advertisement: advertisement))
+        } catch { errorMessage = error.localizedDescription }
+    }
+    func pairUsingLink(_ link: String) async {
+        if model?.isBackendFrontend == true { await forward(.pairUsingLink(link)); return }
+        do { try await peerSync.pairUsingLink(link); errorMessage = nil; await refreshStatus() }
+        catch { errorMessage = error.localizedDescription }
+    }
+    func cancelPeerPairing() async {
+        if model?.isBackendFrontend == true { await forward(.cancelPeerPairing); return }
+        peerSync.pairing.cancelRequest()
+    }
+    func applyPeerRevocations() async throws {
+        guard let authentication else { return }
+        let devices = await authentication.peerDevices()
+        let revoked = Set(devices.filter { $0.revokedAt != nil }.map(\.id))
+            .subtracting(devices.filter { $0.revokedAt == nil }.map(\.id))
+        var processed = Set(defaults.stringArray(forKey: "companion.peers.applied-revocations") ?? [])
+        for id in revoked {
+            let stamp = devices.filter { $0.id == id }.compactMap(\.revokedAt).max()?.timeIntervalSince1970 ?? 0
+            let key = id + ":" + String(stamp)
+            if !processed.contains(key) {
+                await revoke(id)
+                processed.insert(key)
+            }
+        }
+        defaults.set(Array(processed).sorted(), forKey: "companion.peers.applied-revocations")
+        pairedDevices = await authentication.devices()
     }
 
     private func loadExecutionAuthentication() throws -> CompanionExecutionAuthentication {
@@ -717,7 +796,7 @@ final class CompanionHostController {
 enum CompanionHostAction: Codable, Sendable {
     case status, start, stop, createCode
     case revoke(String), approvePairing(String), denyPairing(String)
-    case discover, invitePairing(CompanionDiscoveredPeer)
+    case discover, invitePairing(CompanionDiscoveredPeer), pairWithPeer(CompanionDiscoveredPeer), pairAtEndpoint(URL), pairUsingLink(String), cancelPeerPairing
 }
 
 struct CompanionHostSnapshot: Codable, Sendable {
@@ -735,6 +814,11 @@ struct CompanionHostSnapshot: Codable, Sendable {
     let isDiscovering: Bool
     let executionWorkspaces: [CompanionExecutionWorkspace]
     let pendingDeviceRevocations: [String: [String]]
+    var peerPairingStatus: String? = nil
+    var peerPairingError: String? = nil
+    var peerSyncErrors: [String: String]? = nil
+    var peerRoutes: [PairedMacRoute]? = nil
+    var peerIdentity: CompanionPairingDeviceIdentity? = nil
 }
 
 private struct ExecutionManagementAcknowledgement: Decodable { let revoked: Bool }

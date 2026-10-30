@@ -113,6 +113,12 @@ class DevelopmentBuildTests(unittest.TestCase):
               INSERT INTO dashboard_agents VALUES('local-pi','wovenmatter_macos','device_owned',NULL,NULL,'ready');
               INSERT INTO dashboard_agents VALUES('remote-pi','remote_workspace','device_owned','remote',NULL,'ready');
               INSERT INTO dashboard_conversations VALUES('history','local-pi');
+              CREATE TABLE paired_mac_routes(device_id TEXT, endpoint TEXT);
+              CREATE TABLE paired_library_clock(device_id TEXT, tick INTEGER);
+              CREATE TABLE paired_library_changes(cursor INTEGER,payload TEXT);
+              INSERT INTO paired_mac_routes VALUES('source','https://production.fixture.ts.net/wovenmatter');
+              INSERT INTO paired_library_clock VALUES('source',42);
+              INSERT INTO paired_library_changes VALUES(1,'production-private-sync');
               CREATE TABLE companion_workspace(singleton INTEGER, workspace_id TEXT);
               CREATE TABLE companion_execution_workspaces(id TEXT,payload BLOB);
               INSERT INTO companion_execution_workspaces VALUES('source-mac','{"libraryID":"production-identity","name":"Mac","endpoint":"https://fixture.test.ts.net/wovenmatter"}');
@@ -131,6 +137,8 @@ class DevelopmentBuildTests(unittest.TestCase):
             asset = source / "library-files"; asset.mkdir(); (asset / "blob").write_bytes(b"saved output")
             target = root / "dev"; dev.snapshot(source, target)
             with sqlite3.connect(target / "workspace.sqlite") as copy:
+                for table in ("paired_mac_routes", "paired_library_clock", "paired_library_changes"):
+                    self.assertEqual(copy.execute("SELECT count(*) FROM " + table).fetchone()[0], 0)
                 workspace = json.loads(copy.execute("SELECT payload FROM companion_execution_workspaces").fetchone()[0])
                 self.assertTrue(workspace["retainedHistory"])
                 self.assertNotIn("endpoint", workspace)

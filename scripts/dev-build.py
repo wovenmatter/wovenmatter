@@ -130,7 +130,7 @@ def disconnect_snapshot(file, *, device_id, execution_root, published_root):
                             "companion_native_history_parts", "companion_saved_artifacts", "companion_artifact_chunks",
                             "companion_message_provenance"}
         for name in tables:
-            if name in transient or (name.startswith("companion_") and name not in retained_content):
+            if name in transient or name.startswith("paired_") or (name.startswith("companion_") and name not in retained_content):
                 db.execute("DELETE FROM " + quote(name))
         # A new device identity seeds its own local harness catalog at startup.
         # Keep copied agent rows for history references, but retire them from the

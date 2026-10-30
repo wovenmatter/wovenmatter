@@ -40,6 +40,7 @@ enum BackendApplicationCommand: Codable, Sendable {
     case trashedNotes
     case exportNote(id: String, format: WorkspaceNoteExportFormat, expectedRevision: String)
     case sessionMetadata(conversationID: String)
+    case createPeerSession(agentID: UUID, conversationID: UUID, folderID: String?)
     case createSession(runtime: AgentRuntimeKind, workspaceID: UUID?, conversationID: UUID,
                        workingDirectory: URL?, title: String?, nativeWorkspaceID: String?, folderID: String?)
     case sendMessage(conversationID: String, input: AgentMessageInput, noteID: String?)
@@ -210,6 +211,10 @@ final class BackendApplicationService {
             let host = model.companionHost
             switch action {
             case .status: await host.refreshStatus()
+            case .pairAtEndpoint(let endpoint): await host.pairAtEndpoint(endpoint)
+            case .pairWithPeer(let peer): await host.pairWithPeer(peer)
+            case .pairUsingLink(let link): await host.pairUsingLink(link)
+            case .cancelPeerPairing: await host.cancelPeerPairing()
             case .discover: await host.refreshDiscovery()
             case .approvePairing(let id): await host.approvePairing(id: id)
             case .denyPairing(let id): await host.denyPairing(id: id)
@@ -259,6 +264,8 @@ final class BackendApplicationService {
             return .init(metadata: model.localACPSessionMetadata[id])
         case let .workspaceMutation(mutation):
             return try await executeWorkspaceMutation(mutation)
+        case let .createPeerSession(agentID, conversationID, folderID):
+            return try await .init(conversationID: model.createPairedMacSession(agentID: agentID, conversationID: conversationID, folderID: folderID))
         case let .createSession(runtime, workspaceID, conversationID, directory, title, nativeWorkspaceID, folderID):
             let id: String?
             if let workspaceID {

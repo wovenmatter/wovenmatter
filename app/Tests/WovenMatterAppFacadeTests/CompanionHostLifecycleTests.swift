@@ -1,8 +1,10 @@
 import Foundation
 import Testing
 import WovenMatterClient
+import CompanionClient
+import WorkspaceFixtures
 import WovenMatterCore
-import WovenMatterDashboardStore
+@testable import WovenMatterDashboardStore
 @testable import WovenMatterAppFacade
 
 @MainActor @Suite(.serialized)
@@ -142,6 +144,7 @@ struct CompanionHostLifecycleTests {
             var request = URLRequest(url: base.appending(path: path))
             request.httpMethod = "POST"; request.httpBody = body
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             let (data, response) = try await URLSession.shared.data(for: request)
             return (data, try #require((response as? HTTPURLResponse)?.statusCode))
         }
@@ -213,6 +216,7 @@ private enum HostFixtureError: Error { case timeout }
     var exposureCount = 0
     var children: [HostServingChild] = []
     var replacementCreatedWhileStopping = false
+    var dnsName = "fixture.test.ts.net"
     var tailscaleRunning = true
     var holdFirstStatus = false
     var firstStatusArrived = false
@@ -281,13 +285,13 @@ private enum HostFixtureError: Error { case timeout }
                 await withCheckedContinuation { firstStatusWaiter = $0 }
             }
             guard tailscaleRunning else { return Data(#"{"BackendState":"Stopped"}"#.utf8) }
-            return Data(#"{"BackendState":"Running","Self":{"DNSName":"fixture.test.ts.net."}}"#.utf8)
+            return try JSONSerialization.data(withJSONObject: ["BackendState": "Running", "Self": ["DNSName": dnsName + "."]])
         }
         let tcp = Dictionary(uniqueKeysWithValues: existingPorts.map { (String($0), ["HTTPS": true]) })
         var foreground: [String: Any] = [:]
         for (index, child) in children.enumerated() where child.isRunning {
             foreground[String(index)] = ["TCP": [String(child.port): ["HTTPS": true]],
-                "Web": ["fixture.test.ts.net:\(child.port)": ["Handlers": ["/wovenmatter": ["Proxy": child.target]]]]]
+                "Web": ["\(dnsName):\(child.port)": ["Handlers": ["/wovenmatter": ["Proxy": child.target]]]]]
         }
         return try JSONSerialization.data(withJSONObject: ["TCP": tcp, "Foreground": foreground])
     }
@@ -313,4 +317,210 @@ private enum HostFixtureError: Error { case timeout }
         !forceStopped && stoppedAt.map { holdCleanup || ProcessInfo.processInfo.systemUptime - $0 < 0.4 } ?? !forceStopped
     }
     func terminate() { terminationCount += 1; stoppedAt = ProcessInfo.processInfo.systemUptime }
+}
+
+
+@MainActor private final class PeerTestMesh {
+    var hosts: [String: HostFixture] = [:]
+    var credentials: [String: [PairedMacCredential]] = [:]
+    var offline: Set<String> = []
+    var loseReplyOnce: Set<String> = []
+    func add(_ name: String) async throws -> HostFixture {
+        let fixture = try await HostFixture()
+        fixture.dnsName = name + ".fixture.ts.net"
+        let network = PairedMacNetwork(request: { [self] endpoint, path, token, libraryID, body in
+            try await request(endpoint, path: path, token: token, libraryID: libraryID, body: body)
+        })
+        fixture.host.peerSync = PairedMacSyncController(host: fixture.host, network: network, restoresPairing: false,
+            loadCredentials: { [self] in credentials[name] ?? [] },
+            saveCredentials: { [self] in credentials[name] = $0 })
+        await fixture.host.start()
+        let route = try await fixture.host.peerRoute()
+        hosts[route.endpoint.absoluteString] = fixture
+        return fixture
+    }
+    func request(_ endpoint: URL, path: String, token: String?, libraryID: String?, body: Data?) async throws -> Data {
+        guard !offline.contains(endpoint.absoluteString), let fixture = hosts[endpoint.absoluteString] else { throw URLError(.notConnectedToInternet) }
+        if path == "v1/discovery" {
+            let identity = try #require(fixture.host.peerIdentity)
+            return try JSONEncoder().encode(CompanionDiscoveryAdvertisement(role: .central, identity: identity, capabilities: ["library.peers.v1"]))
+        }
+        if ["v1/pair/preview", "v1/pair", "v1/pair/confirm"].contains(path) {
+            var request = URLRequest(url: try fixture.loopbackURL(path: path))
+            request.httpMethod = "POST"; request.httpBody = body
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.setValue(String(CompanionProtocol.version), forHTTPHeaderField: "X-Woven-Protocol")
+            if let token { request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization") }
+            if let libraryID { request.setValue(libraryID, forHTTPHeaderField: "X-Woven-Workspace") }
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw try JSONDecoder().decode(CompanionAPIError.self, from: data) }
+            if loseReplyOnce.remove(path) != nil { throw URLError(.networkConnectionLost) }
+            return data
+        }
+        var headers = ["x-woven-protocol": String(CompanionProtocol.version)]
+        if let token { headers["authorization"] = "Bearer " + token }
+        if let libraryID { headers["x-woven-workspace"] = libraryID }
+        let response = try #require(await fixture.host.peerSync.handle(.init(method: body == nil ? "GET" : "POST", target: "/" + path, headers: headers, body: body ?? Data())))
+        guard response.status == 200 else { throw try JSONDecoder().decode(CompanionAPIError.self, from: response.body) }
+        if loseReplyOnce.remove(path) != nil { throw URLError(.networkConnectionLost) }
+        return response.body
+    }
+    func pair(_ first: HostFixture, with second: HostFixture) async throws {
+        let route = try await second.host.peerRoute()
+        let own = try await first.host.peerRoute()
+        let authentication = try await second.host.peerAuthentication()
+        let offer = try await authentication.createOffer(endpoint: route.endpoint)
+        let response = try await authentication.pair(.init(token: offer.payload.token, deviceID: own.deviceID, deviceName: own.name, metadata: .init(kind: .mac)), workspaceID: route.libraryID)
+        try await first.host.peerSync.acceptPairing(endpoint: route.endpoint, response: response)
+    }
+    func remove() { for fixture in hosts.values { fixture.remove() }; hosts = [:] }
+}
+
+extension CompanionHostLifecycleTests {
+    @Test func pairedMacMeshSharesOfflineWritingNewWorkspacesAndAppleConnectionsWithoutTheJoiningMac() async throws {
+        let mesh = PeerTestMesh(); defer { mesh.remove() }
+        let air = try await mesh.add("air"), mini = try await mesh.add("mini"), third = try await mesh.add("third")
+        try await mesh.pair(air, with: mini); try await mesh.pair(third, with: mini)
+        for _ in 0..<2 {
+            await air.host.peerSync.synchronize(force: true)
+            await third.host.peerSync.synchronize(force: true)
+            await mini.host.peerSync.synchronize(force: true)
+        }
+        let airDB = try #require(air.model.dashboardStore?.database), thirdDB = try #require(third.model.dashboardStore?.database)
+        let joiningRoute = try await mini.host.peerRoute()
+        mesh.offline.insert(joiningRoute.endpoint.absoluteString)
+        let first = UUID().uuidString.lowercased(), second = UUID().uuidString.lowercased()
+        let airID = try await air.host.peerRoute().deviceID, thirdID = try await third.host.peerRoute().deviceID
+        _ = try await airDB.applyCompanionMutation(.init(deviceID: airID, kind: .createNote, resourceID: first, title: "Air offline", content: try NoteDocument(blocks: [.richText(.init(text: "Air writing"))]).encoded()))
+        _ = try await thirdDB.applyCompanionMutation(.init(deviceID: thirdID, kind: .createNote, resourceID: second, title: "Third offline", content: try NoteDocument(blocks: [.richText(.init(text: "Third writing"))]).encoded()))
+        let remote = RemoteWorkspaceConfiguration(name: "Added from third Mac", workspaceID: "new-remote", hostName: "linux.fixture.ts.net", kind: .host)
+        try await thirdDB.savePairedRemoteWorkspaces([remote])
+        let phoneID = UUID().uuidString.lowercased()
+        let authentication = try await third.host.peerAuthentication()
+        let offer = try await authentication.createOffer(endpoint: third.host.peerRoute().endpoint)
+        let phone = try await authentication.pair(.init(token: offer.payload.token, deviceID: phoneID, deviceName: "New iPhone", metadata: .init(kind: .iPhone)), workspaceID: thirdDB.companionWorkspaceID())
+        await air.host.peerSync.synchronize(force: true)
+        await third.host.peerSync.synchronize(force: true)
+        #expect(try await airDB.companionNote(id: second)?.title == "Third offline")
+        #expect(try await thirdDB.companionNote(id: first)?.title == "Air offline")
+        #expect(try await airDB.pairedRemoteWorkspaces().contains { $0.id == remote.id.uuidString.lowercased() })
+        #expect(try await air.host.peerAuthentication().authenticate(bearer: phone.credential).id == phoneID)
+        #expect(!air.model.isLibraryClient && !third.model.isLibraryClient)
+        #expect(air.host.peerSync.errors.isEmpty && third.host.peerSync.errors.isEmpty)
+    }
+
+    @Test func peerRevocationRejectsExistingExecutionBearersAndNeverReplicatesProviderSecrets() async throws {
+        let mesh = PeerTestMesh(); defer { mesh.remove() }
+        let air = try await mesh.add("revoke-air"), mini = try await mesh.add("revoke-mini")
+        try await mesh.pair(air, with: mini)
+        await air.host.peerSync.synchronize(force: true)
+        let phoneID = UUID().uuidString.lowercased()
+        let authentication = try await mini.host.peerAuthentication()
+        let own = try await mini.host.peerRoute()
+        let offer = try await authentication.createOffer(endpoint: own.endpoint)
+        let phone = try await authentication.pair(.init(token: offer.payload.token, deviceID: phoneID, deviceName: "Phone", metadata: .init(kind: .iPhone)), workspaceID: own.libraryID)
+        await air.host.peerSync.synchronize(force: true)
+        let airAuth = try await air.host.peerAuthentication()
+        let principal = try await airAuth.authenticate(bearer: phone.credential)
+        let workspace = try #require(air.host.executionWorkspaces.first { $0.ownerDeviceID == air.host.peerIdentity?.deviceID && $0.kind == .mac })
+        let execution = try await air.host.provisionExecutionWorkspace(id: workspace.id, device: principal)
+        #expect(try await air.executionStatus(execution) == 200)
+        await mini.host.revoke(phoneID)
+        await air.host.peerSync.synchronize(force: true)
+        await #expect(throws: CompanionAPIError.self) { try await airAuth.authenticate(bearer: phone.credential) }
+        #expect(try await air.executionStatus(execution) == 401)
+        let wire = String(decoding: try JSONEncoder().encode(await airAuth.peerDevices()), as: UTF8.self)
+        #expect(!wire.contains(phone.credential))
+        #expect(!wire.contains(execution.token))
+        let airRoute = try await air.host.peerRoute()
+        await mini.host.revoke(airRoute.deviceID)
+        let miniDB = try #require(mini.model.dashboardStore?.database)
+        let withdrawn = try #require(try await miniDB.companionExecutionWorkspaces().first { $0.id == workspace.id })
+        #expect(withdrawn.endpoint == nil && withdrawn.retainedHistory == true)
+        await #expect(throws: CompanionAPIError.self) { try await mini.host.provisionCentralExecutionWorkspace(id: workspace.id) }
+    }
+}
+
+
+extension CompanionHostLifecycleTests {
+    @Test func formerNodeUpgradeKeepsUnsentWritingAndOpensTheFullApp() async throws {
+        let fixture = try await HostFixture(isNode: true); defer { fixture.remove() }
+        let database = try #require(fixture.model.dashboardStore?.database)
+        let replicaURL = fixture.directory.appending(path: "LibraryClient/library.json")
+        let replica = try MobileStore(file: replicaURL)
+        try await replica.bindWorkspace(UUID().uuidString.lowercased())
+        let content = try NoteDocument(blocks: [.richText(.init(text: "Saved offline before upgrading"))]).encoded()
+        _ = try await replica.createNote(folderID: nil, title: "Unsent note", content: content)
+        try await replica.saveChatDraft(key: "new-chat", draft: .init(text: "Unsent message"))
+        let original = await replica.snapshot()
+        try await LegacyMacLibraryUpgrade.prepare(database: database, defaults: fixture.defaults)
+        let recovered = try await database.companionSnapshot().notes
+        #expect(recovered.contains { $0.content == content })
+        #expect(recovered.contains { $0.title.hasPrefix("Unsent message") })
+        #expect(try await database.companionLibraryIdentity().hostDeviceID == original.deviceID)
+        #expect(await replica.snapshot().outbox == original.outbox)
+        #expect(!fixture.model.isLibraryClient)
+        #expect(LocalExecutionRole.resolve(arguments: [], libraryClientEnabled: true) == .frontend)
+        try await LegacyMacLibraryUpgrade.prepare(database: database, defaults: fixture.defaults)
+        #expect(try await database.companionSnapshot().notes.count == recovered.count)
+    }
+
+    @Test func peerHistoryIsLocalButNativeControlStaysWithItsMac() async throws {
+        let mesh = PeerTestMesh(); defer { mesh.remove() }
+        let air = try await mesh.add("history-air"), mini = try await mesh.add("history-mini")
+        let source = try #require(air.model.dashboardStore?.database), other = try #require(mini.model.dashboardStore?.database)
+        let id = try await source.createFixtureLocalACPSession(runtimeKind: .codex, title: "Owner's conversation", ownerDeviceID: UUID())
+        let run = try await source.beginLocalACPRun(conversationID: id, content: "Saved native input")
+        try await source.completeLocalACPRun(runID: run.runID, error: nil)
+        let originalCount = try await source.read { try $0.historyRowsUnlocked("SELECT id FROM workspace_history_events WHERE conversation_id=?", values: [id]).count }
+        try await mesh.pair(air, with: mini)
+        await air.host.peerSync.synchronize(force: true)
+        #expect(air.host.peerSync.errors.isEmpty)
+        #expect(try await other.companionExecutionOwner(conversationID: id) != nil)
+        #expect(try await source.companionExecutionOwner(conversationID: id) == nil)
+        #expect(try await other.companionFederatedTranscript(conversationID: id)?.messages.contains { $0.content == "Saved native input" } == true)
+        #expect(try await other.read { try $0.historyRowsUnlocked("SELECT conversation_id FROM desktop_local_acp_sessions WHERE conversation_id=?", values: [id]).isEmpty })
+        #expect(try await other.read { try $0.historyRowsUnlocked("SELECT id FROM workspace_history_events WHERE conversation_id=?", values: [id]).count } == originalCount)
+        let sourceAgent = try #require(try await source.dashboardAgents().first)
+        #expect(mini.model.peerAgentWorkspaces[sourceAgent.id] != nil)
+        #expect(!mini.model.localCLIAgents.contains { $0.id == sourceAgent.id })
+        #expect(mini.model.remoteWorkspaceAgents.contains { $0.id == sourceAgent.id })
+        let workspace = try #require(try await other.companionConversationExecutionWorkspace(conversationID: id))
+        let own = try await mini.host.peerRoute()
+        let credential = try await mini.host.provisionCentralExecutionWorkspace(id: workspace.id)
+        #expect(credential.deviceID == own.deviceID && credential.workspace.libraryID == workspace.libraryID)
+        await mini.host.peerSync.synchronize(force: true)
+        #expect(try await source.companionExecutionOwner(conversationID: id) == nil)
+    }
+}
+
+
+extension CompanionHostLifecycleTests {
+    @Test func pairingLinkAndLostJoinReplyResumeTheSameGrantAfterControllerRestart() async throws {
+        let mesh = PeerTestMesh(); defer { mesh.remove() }
+        let air = try await mesh.add("link-air"), mini = try await mesh.add("link-mini")
+        await mini.host.createPairingCode()
+        let payload = try #require(mini.host.pairingPayload)
+        mesh.loseReplyOnce = ["v1/pair/confirm"]
+        await #expect(throws: URLError.self) { try await air.host.peerSync.pairUsingLink(payload.encodedURL.absoluteString) }
+        let pending = try #require(mesh.credentials["link-air"]?.first)
+        #expect(pending.confirmationPending == true && pending.needsJoin == true)
+        let auth = try await mini.host.peerAuthentication()
+        #expect(try await auth.authenticate(bearer: pending.token).id == pending.deviceID)
+        mesh.loseReplyOnce = ["v1/peers/join"]
+        let network = PairedMacNetwork(request: { endpoint, path, token, libraryID, body in
+            try await mesh.request(endpoint, path: path, token: token, libraryID: libraryID, body: body)
+        })
+        air.host.peerSync = PairedMacSyncController(host: air.host, network: network, restoresPairing: false,
+            loadCredentials: { mesh.credentials["link-air"] ?? [] }, saveCredentials: { mesh.credentials["link-air"] = $0 })
+        try await air.host.peerSync.restore()
+        #expect(mesh.credentials["link-air"]?.first?.needsJoin == true)
+        try await air.host.peerSync.restore()
+        let completed = try #require(mesh.credentials["link-air"]?.first)
+        #expect(completed.token == pending.token && completed.returnToken == pending.returnToken)
+        #expect(completed.needsJoin == nil && completed.confirmationPending == nil)
+        #expect(await auth.devices().filter { $0.id == pending.deviceID }.count == 1)
+        await air.host.peerSync.synchronize(force: true)
+        #expect(air.host.peerSync.errors.isEmpty)
+    }
 }

@@ -68,7 +68,8 @@ public actor CompanionAuthentication {
   }
 
   public func devices() -> [CompanionPairedDevice] {
-    state.devices.filter { $0.revokedAt == nil && (!$0.isDevelopment || now().timeIntervalSince($0.lastSeenAt ?? .distantPast) < 45) }
+    var seen = Set<String>()
+    return state.devices.filter { $0.revokedAt == nil && (!$0.isDevelopment || now().timeIntervalSince($0.lastSeenAt ?? .distantPast) < 45) && seen.insert($0.id).inserted }
   }
 
   /// Normal Dev quit withdraws presence without making the identity permanently
@@ -77,6 +78,42 @@ public actor CompanionAuthentication {
     guard let index = state.devices.firstIndex(where: { $0.id == deviceID && $0.isDevelopment && $0.revokedAt == nil && Self.constantTimeEqual($0.credentialHash, Self.digest(credential)) }) else { throw Self.unauthorized }
     var next = state; next.devices[index].lastSeenAt = nil
     try persist(next); state = next; lastSeenSaved.removeValue(forKey: deviceID)
+  }
+
+  /// Only authenticated paired Macs receive verifiers. Bearers and pending
+  /// pairing secrets stay on their originating device. Revocation is monotonic.
+  public func peerDevices() -> [CompanionPairedDevice] { state.devices.filter { !$0.isDevelopment } }
+  public func mergePeerDevices(_ devices: [CompanionPairedDevice]) throws {
+    guard devices.count <= 4096, devices.allSatisfy({ UUID(uuidString: $0.id) != nil && $0.credentialHash.count == 32 && !$0.isDevelopment }) else { throw Self.unauthorized }
+    var next = state
+    for incoming in devices {
+      if let index = next.devices.firstIndex(where: { $0.id == incoming.id && $0.credentialHash == incoming.credentialHash }) {
+        if let revoked = incoming.revokedAt { next.devices[index].revokedAt = next.devices[index].revokedAt.map { min($0, revoked) } ?? revoked }
+      } else { next.devices.append(incoming) }
+    }
+    guard next.devices.count <= 4096 else { throw Self.unauthorized }
+    try persist(next); state = next
+  }
+  /// Reciprocal enrollment is allowed only after local approval of the first
+  /// direction. Retrying the same grant cannot revive a revoked credential.
+  public func enrollPeer(deviceID: String, name: String, token: String) throws {
+    guard UUID(uuidString: deviceID) != nil, !name.isEmpty, name.utf8.count <= 256,
+          (32...256).contains(token.utf8.count) else { throw Self.unauthorized }
+    let hash = Self.digest(token)
+    if let existing = state.devices.first(where: { $0.id == deviceID && $0.credentialHash == hash }) {
+      guard existing.revokedAt == nil else { throw Self.unauthorized }; return
+    }
+    var next = state
+    next.devices.append(.init(id: deviceID, name: name, pairedAt: now(), metadata: .init(kind: .mac), credentialHash: hash))
+    try persist(next); state = next
+  }
+  public func peerProof(_ challenge: PairedMacProofChallenge, route: PairedMacRoute) throws -> PairedMacProof {
+    guard challenge.nonce.count == 32, let device = state.devices.first(where: {
+      $0.id == challenge.deviceID && $0.revokedAt == nil && $0.kind == .mac && !$0.isDevelopment
+        && SHA256.hash(data: $0.credentialHash).map { String(format: "%02x", $0) }.joined() == challenge.credentialID
+    }) else { throw Self.unauthorized }
+    let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+    return .init(route: route, signature: Data(HMAC<SHA256>.authenticationCode(for: challenge.nonce + (try encoder.encode(route)), using: SymmetricKey(data: device.credentialHash))))
   }
 
   /// Called only by the same-user Unix socket, never by an HTTP route. A local
@@ -182,7 +219,7 @@ public actor CompanionAuthentication {
     guard let entry = state.pendingQRPairings?.first(where: { $0.expiresAt > now() && $0.workspaceID == workspaceID && Self.constantTimeEqual($0.device.credentialHash, hash) }),
       !state.devices.contains(where: { $0.revokedAt == nil && $0.id.lowercased() == entry.device.id.lowercased() }) else { throw Self.unauthorized }
     var next = state
-    next.devices = next.devices.filter { $0.revokedAt == nil } + [entry.device]
+    next.devices.append(entry.device)
     next.pendingQRPairings?.removeAll { $0.device.id == entry.device.id || $0.expiresAt <= now() }
     try persist(next); state = next
   }
@@ -224,7 +261,7 @@ public actor CompanionAuthentication {
         expiresAt: instant.addingTimeInterval(300), offerProof: Self.digest(request.token), encryptedCredential: encrypted))
     } else {
       // Legacy clients retain their v3 pairing contract.
-      next.devices = state.devices.filter { $0.revokedAt == nil } + [device]
+      next.devices.append(device)
     }
     try persist(next)
     state = next
@@ -256,7 +293,7 @@ public actor CompanionAuthentication {
     if let expected, !isCurrent(expected) { throw Self.unauthorized }
     var next = state
     if let index = next.devices.firstIndex(where: { $0.id == deviceID }) {
-      next.devices[index].revokedAt = now()
+      if next.devices[index].revokedAt == nil { next.devices[index].revokedAt = now() }
       if next.devices[index].localDevelopment == true {
         next.revokedDevelopmentIDs = (next.revokedDevelopmentIDs ?? []).union([deviceID.lowercased()])
       }
@@ -306,8 +343,7 @@ public actor CompanionAuthentication {
       entries[entries.count - 1].state = .approved
       entries[entries.count - 1].workspaceID = workspaceID
       entries[entries.count - 1].encryptedCredential = encrypted
-      next.devices = next.devices.filter { $0.revokedAt == nil }
-      next.devices.append(.init(id: request.identity.deviceID, name: request.identity.deviceName, pairedAt: now(), revokedAt: nil,
+        next.devices.append(.init(id: request.identity.deviceID, name: request.identity.deviceName, pairedAt: now(), revokedAt: nil,
         metadata: request.identity.metadata, lastSeenAt: nil, credentialHash: Self.digest(credential)))
     }
     next.approvals = entries
@@ -350,7 +386,6 @@ public actor CompanionAuthentication {
     }
     let credential = try Self.randomToken()
     let encrypted = try AES.GCM.seal(Data(credential.utf8), using: key).combined!
-    next.devices = next.devices.filter { $0.revokedAt == nil }
     next.devices.append(.init(id: identity.deviceID, name: identity.deviceName, pairedAt: now(), revokedAt: nil,
       metadata: identity.metadata, lastSeenAt: nil, credentialHash: Self.digest(credential)))
     next.approvals?[index].state = .approved

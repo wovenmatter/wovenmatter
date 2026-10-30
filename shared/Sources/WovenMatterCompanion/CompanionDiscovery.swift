@@ -24,7 +24,9 @@ public struct CompanionDiscoveryAdvertisement: Codable, Equatable, Sendable {
   public let role: CompanionDiscoveryRole
   public let identity: CompanionPairingDeviceIdentity
   public let protocolVersion: Int
-  public init(role: CompanionDiscoveryRole, identity: CompanionPairingDeviceIdentity, protocolVersion: Int = CompanionProtocol.version) {
+  public let capabilities: [String]?
+  public init(role: CompanionDiscoveryRole, identity: CompanionPairingDeviceIdentity, protocolVersion: Int = CompanionProtocol.version, capabilities: [String]? = nil) {
+    self.capabilities = capabilities
     self.role = role; self.identity = identity; self.protocolVersion = protocolVersion
   }
 }
