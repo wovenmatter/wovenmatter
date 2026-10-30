@@ -16,6 +16,11 @@ public protocol FederationTransport: Sendable {
 }
 
 extension HTTPSCompanionTransport: FederationTransport {
+  public func requestCentralLibraryTransfer(to peer: CompanionDiscoveredPeer) async throws {
+    struct Acknowledgement: Decodable { let requested: Bool }
+    let result: Acknowledgement = try await request("v1/library-transfer/invite", method: "POST", body: JSONEncoder().encode(peer))
+    guard result.requested else { throw MobileConnectionError.invalidResponse }
+  }
   public func registerExecutionManagement(_ grant: CompanionExecutionManagementGrant) async throws {
     struct Acknowledgement: Decodable {}
     let _: Acknowledgement = try await request("v1/federation/workspaces/" + TailnetJSONClient.safeID(grant.workspaceID) + "/management", method: "POST", body: JSONEncoder().encode(grant))
@@ -25,7 +30,9 @@ extension HTTPSCompanionTransport: FederationTransport {
     guard value.workspace.id == workspaceID, value.deviceID == credential.deviceID, let endpoint = value.workspace.endpoint else { throw MobileConnectionError.invalidResponse }
     let identity = try await workspaceIdentity()
     guard value.workspace.libraryID == identity else { throw MobileStore.Failure.wrongWorkspace }
-    return .init(endpoint: endpoint, libraryID: identity, workspaceID: workspaceID, deviceID: value.deviceID, token: value.token)
+    var credential = DirectWorkspaceCredential(endpoint: endpoint, libraryID: identity, workspaceID: workspaceID, deviceID: value.deviceID, token: value.token)
+    credential.executionLibraryID = value.executionLibraryID
+    return credential
   }
   public func libraryIdentity() async throws -> CompanionLibraryIdentity { try await request("v1/federation/identity") }
   public func executionWorkspaces() async throws -> [CompanionExecutionWorkspace] { try await request("v1/federation/workspaces") }
@@ -58,12 +65,15 @@ extension MobileSyncEngine {
     do { identity = try await transport.libraryIdentity() }
     catch MobileConnectionError.http(404, _) { return } // Older paired Macs keep their v3 library contract.
     guard identity.protocolVersion == CompanionFederationProtocol.version else { throw MobileConnectionError.versionMismatch }
+    if let connection = transport as? any CompanionTransport, let relocation = await connection.libraryRelocationID() { try await store.acceptLibraryRelocation(relocation) }
     try await store.verifyWorkspace(identity.libraryID)
     try await store.journal.bind(libraryID: identity.libraryID)
     let deviceID = await store.snapshot().deviceID
     try await store.journal.prepareOwnerPublication(deviceID: deviceID)
     let local = await store.journal.snapshot()
     let registered = try await transport.executionWorkspaces()
+    try await store.calendar.updateExecutionOwners(registered)
+    if let connection = transport as? any CompanionTransport { try await connection.rememberLibraryCandidates(registered.filter { $0.kind == .mac }.compactMap(\.endpoint)) }
     for id in local.pendingRegistrations.sorted() {
       guard let workspace = local.workspaces[id] else { continue }
       if !WorkspaceJournal.isLocalExecutionOwner(workspace, deviceID: deviceID) {

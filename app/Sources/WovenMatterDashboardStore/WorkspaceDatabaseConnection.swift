@@ -17,6 +17,23 @@ public enum WorkspaceDatabaseError: Error, Equatable {
 final class WorkspaceDatabaseConnection {
   private let workerQueue: DispatchQueue
   private var connection: OpaquePointer?
+  var libraryTransferID: String?
+
+  func requireLibraryWritesAllowed() throws {
+    guard libraryTransferID == nil else {
+      throw CompanionAPIError(code: "library_transferring", message: "The central database is moving. Your pending changes stay on this device and will synchronize after the transfer.")
+    }
+  }
+
+  func backupLibrary(to url: URL) throws {
+    guard let connection else { throw WorkspaceDatabaseError.open("Database is closed") }
+    try LibraryTransferSQLite.backup(connection, to: url)
+  }
+
+  func restoreLibrary(from url: URL) throws {
+    guard let connection else { throw WorkspaceDatabaseError.open("Database is closed") }
+    try LibraryTransferSQLite.restore(url, into: connection)
+  }
   public let isReadOnlyProjection: Bool
   let libraryFiles: LibraryFileStore
 

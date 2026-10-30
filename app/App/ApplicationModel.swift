@@ -72,10 +72,31 @@ final class ApplicationModel {
 
     private(set) var state: State = .starting
     let isLibraryClient: Bool
+    @ObservationIgnored private(set) var transferredLibraryNode: TransferredLibraryNode?
+    var isTransferredLibraryNode: Bool { transferredLibraryNode != nil }
+    private(set) var libraryTransferPaused = false
+    @ObservationIgnored lazy var libraryTransfer = LibraryTransferController(model: self)
     @ObservationIgnored lazy var libraryClient = makeLibraryClient()
     private func makeLibraryClient() -> CentralLibraryClientModel {
+        if let node = transferredLibraryNode, !isBackendFrontend, let directory = try? Self.dashboardSupportDirectory() {
+            let client = CentralLibraryClientModel(assets: workspaceAssets, executionDirectory: directory,
+                makeLocalExecution: { [weak self] directory, replica in
+                    guard let self else { throw CancellationError() }
+                    return try await SecondaryMacExecutionWorkspace.create(directory: directory, replica: replica,
+                        assets: self.workspaceAssets, executionModel: self, existingDescriptor: node.workspace,
+                        projectionDirectory: directory.appending(path: "LibraryClient/Transferred/" + node.relocation.transferID + "/Projection"),
+                        originFile: directory.appending(path: "execution-journal.json"))
+                }, replicaFile: directory.appending(path: "LibraryClient/Transferred/" + node.relocation.transferID + "/library.json"),
+                replicaIdentity: node.workspace.ownerDeviceID, replicaLibraryID: node.workspace.libraryID)
+            client.externalLibraryHost = companionHost
+            client.libraryTransferHandler = { [weak self] request in await self?.libraryTransfer.handle(request) }
+            return client
+        }
         guard DevelopmentLaunch.isClient, LocalExecutionRole.current == .backend else {
-            return CentralLibraryClientModel(assets: workspaceAssets)
+            let client = CentralLibraryClientModel(assets: workspaceAssets)
+            if let root = try? Self.dashboardSupportDirectory() { client.mayRelocateLocalEndpoint = FileManager.default.fileExists(atPath: root.appending(path: "retained-node-workspace.json").path) }
+            client.libraryTransferHandler = { [weak self] request in await self?.libraryTransfer.handle(request) }
+            return client
         }
         return CentralLibraryClientModel(assets: workspaceAssets, makeLocalExecution: { [weak self] directory, replica in
             guard let self else { throw CancellationError() }
@@ -425,6 +446,7 @@ final class ApplicationModel {
     ) {
         self.workspaceAssets = workspaceAssets ?? WorkspaceAssetSession()
         self.applicationDefaults = applicationDefaults
+        self.transferredLibraryNode = (dashboardStore?.database.supportDirectory ?? (try? Self.dashboardSupportDirectory())).flatMap(LibraryTransferController.node)
         self.isLibraryClient = dashboardStore == nil && LocalExecutionRole.current != .backend
             && DevelopmentLaunch.mode == nil && applicationDefaults.bool(forKey: LocalExecutionRole.libraryClientPreferenceKey)
         let closedLidProtection = ClosedLidWorkProtection(
@@ -648,9 +670,13 @@ final class ApplicationModel {
     }
 
     private func start() async {
-        if isLibraryClient { state = .ready; return }
+        if isLibraryClient {
+            do { try await libraryTransfer.restore(); try await libraryTransfer.startNodeRecoveryListenerIfNeeded() }
+            catch { workspaceError = error.localizedDescription }
+            state = .ready; return
+        }
         if isBackendFrontend { await startBackendClient(); return }
-        if DevelopmentLaunch.isClient {
+        if DevelopmentLaunch.isClient || isTransferredLibraryNode {
             developmentReplicaTask = Task { [weak self] in
                 guard let self else { return }
                 await self.libraryClient.run()
@@ -674,6 +700,13 @@ final class ApplicationModel {
             )
             let dashboardStore = try await DashboardStore(supportDirectory: supportDirectory)
             self.dashboardStore = dashboardStore
+            if LibraryTransferController.requiresRecovery(in: supportDirectory) {
+                libraryTransferPaused = true; backendStopping = true; state = .ready
+                await refreshWorkspace()
+                try await libraryTransfer.restore()
+                await companionHost.startForCentralDatabase()
+                return
+            }
             analytics.configure(database: dashboardStore.database, publisher: true)
             await analytics.refresh()
             await dashboardStore.setLocalACPResumePermissionHandler { [weak self] conversationID, request in
@@ -747,6 +780,9 @@ final class ApplicationModel {
             startAgentToolRuntime()
             startDashboardStoreIfReady()
             await companionHost.startForCentralDatabase()
+            if FileManager.default.fileExists(atPath: try Self.dashboardSupportDirectory().appending(path: "retained-node-workspace.json").path) {
+                developmentReplicaTask = Task { [weak self] in await self?.libraryClient.run() }
+            }
             if DevelopmentLaunch.isLiveHost { try startDevelopmentConnectionService() }
             Task { [weak self] in
                 await self?.refreshDatabases()
@@ -4317,14 +4353,14 @@ extension ApplicationModel {
 
     var backendStartupMessage: String? {
         if case let .failed(message) = state { return message }
-        if DevelopmentLaunch.isClient, !readyForBackendClients {
+        if DevelopmentLaunch.isClient || isTransferredLibraryNode, !readyForBackendClients {
             return libraryClient.errorMessage ?? libraryClient.deviceConnectionsError ?? "Waiting for the live library to initialize this client's replica."
         }
         return nil
     }
 
     var readyForBackendClients: Bool {
-        !backendStopping && state == .ready && (!DevelopmentLaunch.isClient || liveLibraryClient?.localExecution != nil)
+        (!backendStopping || libraryTransferPaused) && state == .ready && (!(DevelopmentLaunch.isClient || isTransferredLibraryNode) || liveLibraryClient?.localExecution != nil)
     }
 
     func startBackendService() async {
@@ -4608,9 +4644,10 @@ extension ApplicationModel {
                         guard status.completeClientRouting else {
                             throw BackendRPCError.remote("The background server is unavailable. Open Background Server in Settings to start it or try again.")
                         }
-                        if DevelopmentLaunch.isClient {
+                        if DevelopmentLaunch.isClient || self.isTransferredLibraryNode {
                             guard let directory = status.executionDirectory,
-                                  directory.resolvingSymlinksInPath().path.hasPrefix(support.resolvingSymlinksInPath().path + "/") else {
+                                  directory.resolvingSymlinksInPath().path.hasPrefix(support.resolvingSymlinksInPath().path + "/")
+                                    || self.isTransferredLibraryNode && directory.resolvingSymlinksInPath() == support.resolvingSymlinksInPath() else {
                                 throw BackendRPCError.remote("The client execution database is not inside this development instance.")
                             }
                             projectionDirectory = directory
@@ -4678,7 +4715,7 @@ extension ApplicationModel {
                 }, apply: { [weak self] change in
                     guard let self else { throw CancellationError() }
                     if change.requiresReload || !change.scopes.isDisjoint(with: [.workspace, .calendar]) {
-                        if DevelopmentLaunch.isClient {
+                        if DevelopmentLaunch.isClient || self.isTransferredLibraryNode {
                             self.backendReplica = try JSONDecoder().decode(DevelopmentReplicaSnapshot.self,
                                 from: await client.call(method: "development.replica"))
                             // Replica changes can leave the local execution DB revision unchanged.
@@ -4804,6 +4841,55 @@ extension ApplicationModel {
     func activateLibraryClientMode() async throws {
         guard !isLibraryClient else { return }
         try await changeLibraryClientMode(enabled: true)
+    }
+
+    func prepareForLibraryTransfer() async throws {
+        if libraryTransferPaused { return }
+        guard !DictationModel.shared.isBusy, !executionHasPendingOperations,
+              localRunningConversationIDs.isEmpty, runningToolSessionIDs.isEmpty,
+              pendingLocalACPPermissions.isEmpty, pendingLocalACPInteractions.isEmpty,
+              pendingSessionAccess.isEmpty else {
+            throw BackendRPCError.remote("Finish running agents and pending approvals before transferring the central database.")
+        }
+        if isLibraryClient { try await libraryClient.pauseForLibraryTransfer(); return }
+        // Use the existing owner-scoped adoption path for idle remote sessions;
+        // library migration must never make this Mac a general execution broker.
+        for conversation in workspaceOverview?.conversations ?? [] where conversation.remoteWorkspaceID != nil && !conversation.isArchived {
+            try await adoptRegisteredRemoteConversationIfNeeded(conversation)
+        }
+        suspendNoteEditing()
+        backendStopping = true; libraryTransferPaused = true
+        guard await flushNotesBeforeBackendClientQuit() else {
+            backendStopping = false; libraryTransferPaused = false; resumeNoteEditing()
+            throw ApplicationModelError.noteDraftSaveFailed
+        }
+    }
+    func pauseLibraryTransferRuntimeForRecovery() { backendStopping = true; libraryTransferPaused = true; suspendNoteEditing() }
+
+    func flushFrontendLibraryTransferWriting() async throws {
+        suspendNoteEditing()
+        guard await flushNotesBeforeBackendClientQuit() else { resumeNoteEditing(); throw ApplicationModelError.noteDraftSaveFailed }
+    }
+
+    func resumeAfterLibraryTransferCancellation() async {
+        backendStopping = false; libraryTransferPaused = false
+        if isLibraryClient { libraryClient.resumeAfterLibraryTransfer() }
+        else { resumeNoteEditing() }
+    }
+
+    func commitReceivedLibraryRole() {
+        applicationDefaults.set(false, forKey: LocalExecutionRole.libraryClientPreferenceKey)
+    }
+
+    func restartAfterLibraryTransfer() async throws {
+        guard await WorkspaceAssetSession.prepareForRestart() else { throw CancellationError() }
+        if isBackendFrontend { try await prepareBackendForUpdate() }
+        else if isLibraryClient { try await libraryClient.prepareForRoleChange() }
+        else { try await prepareOpenCodeInstancesToQuit() }
+        try await libraryTransfer.stopRecoveryListener()
+        try LocalBackgroundExecution.relaunchAfterCurrentProcessExits()
+        isPreparedForExecutionRestart = true
+        WovenMatterLifecycleDelegate.requestTerminationAfterUpdate()
     }
 
     func returnToCentralLibraryMode() async throws {

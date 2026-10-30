@@ -53,9 +53,8 @@ extension WorkspaceDatabaseConnection {
             preparation.nativeSessionID?.isEmpty != true,
             let workspace = try federationWorkspaceUnlocked(principal.workspaceID), !workspace.deleted,
             workspace.executionDeviceID == principal.executionDeviceID,
-            let grant = try federationValuesUnlocked("SELECT payload FROM companion_workspace_mcp_grants WHERE workspace_id=?",
-              bindings: [principal.workspaceID], as: WorkspaceMCPRecord.self).first,
-            grant.grantID == principal.grantID,
+            try federationValuesUnlocked("SELECT payload FROM companion_workspace_mcp_grants WHERE workspace_id=?1 UNION ALL SELECT payload FROM companion_workspace_mcp_aliases WHERE workspace_id=?1",
+              bindings: [principal.workspaceID], as: WorkspaceMCPRecord.self).contains(where: { $0.grantID == principal.grantID }),
             try companionIDsUnlocked("SELECT workspace_id FROM workspace_calendar_remote_ownership WHERE workspace_id=? AND state='remote'",
               bindings: [principal.workspaceID]).isEmpty == false,
             let event = try calendarItemsUnlocked().first(where: { $0.id == incoming.eventID }),
@@ -126,6 +125,7 @@ extension WorkspaceDatabaseConnection {
       let url = endpoint.appending(path: "mcp/workspace").absoluteString
       let record = WorkspaceMCPRecord(grantID: UUID().uuidString.lowercased(), libraryID: identity.libraryID,
         workspaceID: workspaceID, executionDeviceID: executor, endpointURL: url)
+      try companionExecuteUnlocked("DELETE FROM companion_workspace_mcp_aliases WHERE workspace_id=?", values: [workspaceID])
       let statement = try prepareUnlocked("INSERT INTO companion_workspace_mcp_grants(workspace_id,digest,payload) VALUES (?,?,?) ON CONFLICT(workspace_id) DO UPDATE SET digest=excluded.digest,payload=excluded.payload")
       defer { sqlite3_finalize(statement) }
       try bind(workspaceID, at: 1, to: statement)
@@ -158,7 +158,7 @@ extension WorkspaceDatabaseConnection {
   public func authenticateCompanionWorkspaceMCP(bearer: String) throws -> CompanionWorkspaceMCPPrincipal {
     try withLock {
       guard (32...256).contains(bearer.utf8.count) else { throw federationError("unauthorized", "Invalid library MCP grant.") }
-      let statement = try prepareUnlocked("SELECT payload FROM companion_workspace_mcp_grants WHERE digest=?")
+      let statement = try prepareUnlocked("SELECT payload FROM companion_workspace_mcp_grants WHERE digest=?1 UNION ALL SELECT payload FROM companion_workspace_mcp_aliases WHERE digest=?1")
       defer { sqlite3_finalize(statement) }
       try bind(Data(SHA256.hash(data: Data(bearer.utf8))), at: 1, to: statement)
       guard sqlite3_step(statement) == SQLITE_ROW else { throw federationError("unauthorized", "Invalid library MCP grant.") }
@@ -182,6 +182,7 @@ extension WorkspaceDatabaseConnection {
       let statement = try prepareUnlocked("DELETE FROM companion_workspace_mcp_grants WHERE workspace_id=?")
       defer { sqlite3_finalize(statement) }
       try bind(workspaceID, at: 1, to: statement); try stepDone(statement)
+      try companionExecuteUnlocked("DELETE FROM companion_workspace_mcp_aliases WHERE workspace_id=?", values: [workspaceID])
     }
   }
 

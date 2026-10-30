@@ -62,7 +62,48 @@ public actor CompanionAuthentication {
     lastSeenSaved = state.devices.reduce(into: [:]) { $0[$1.id] = $1.lastSeenAt }
   }
 
-  public func devices() -> [CompanionPairedDevice] { state.devices.filter { $0.revokedAt == nil } }
+  public func devices() -> [CompanionPairedDevice] {
+    var seen = Set<String>()
+    return state.devices.filter { $0.revokedAt == nil && seen.insert($0.id).inserted }
+  }
+
+  /// This is an explicit library-authority transfer, never a content-sync or
+  /// roster endpoint. Only credential digests leave the source Mac.
+  public func transferDevices() -> [CompanionPairedDevice] { state.devices }
+  static func validateTransferredDevices(_ devices: [CompanionPairedDevice]) throws {
+    guard devices.count <= 4096, devices.allSatisfy({ UUID(uuidString: $0.id) != nil && $0.credentialHash.count == 32 }) else { throw Self.unauthorized }
+  }
+
+  public func mergeTransferredDevices(_ devices: [CompanionPairedDevice]) throws {
+    try Self.validateTransferredDevices(devices)
+    var next = state
+    let revoked = Set((state.devices + devices).filter { $0.revokedAt != nil }.map(\.id))
+    for device in devices where !next.devices.contains(where: { $0.id == device.id && $0.credentialHash == device.credentialHash }) {
+      next.devices.append(device)
+    }
+    // Moving a library cannot revive an identity revoked on either side.
+    for index in next.devices.indices where revoked.contains(next.devices[index].id) { next.devices[index].revokedAt = now() }
+    try persist(next); state = next
+  }
+
+  public func transferRelocationProof(deviceID: String, challenge: Data, relocation: CompanionLibraryRelocation, credentialID: String? = nil) throws -> Data {
+    guard challenge.count == 32, let device = state.devices.first(where: { device in
+      device.id == deviceID && device.revokedAt == nil && (credentialID == nil || SHA256.hash(data: device.credentialHash).map { String(format: "%02x", $0) }.joined() == credentialID)
+    }) else { throw Self.unauthorized }
+    let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+    return Data(HMAC<SHA256>.authenticationCode(for: challenge + (try encoder.encode(relocation)), using: SymmetricKey(data: device.credentialHash)))
+  }
+
+  public func provisionTransferredHost(deviceID: String, name: String, token: String) throws {
+    guard UUID(uuidString: deviceID) != nil, (32...256).contains(token.utf8.count) else { throw Self.unauthorized }
+    // Both Macs explicitly approved this participating source's new node grant.
+    // Historical revoked bearers for the same identity stay revoked.
+    var next = state
+    let hash = Self.digest(token)
+    next.devices.removeAll { $0.id == deviceID && $0.credentialHash == hash }
+    next.devices.append(.init(id: deviceID, name: name, pairedAt: now(), metadata: .init(kind: .mac), credentialHash: hash))
+    try persist(next); state = next
+  }
 
   /// Called only by the same-user Unix socket, never by an HTTP route. A local
   /// development instance receives its own revocable identity, not the host's.
@@ -240,7 +281,7 @@ public actor CompanionAuthentication {
   public func revoke(deviceID: String, expected: CompanionPairedDevice? = nil) throws {
     if let expected, !isCurrent(expected) { throw Self.unauthorized }
     var next = state
-    if let index = next.devices.firstIndex(where: { $0.id == deviceID }) {
+    for index in next.devices.indices where next.devices[index].id == deviceID {
       next.devices[index].revokedAt = now()
       if next.devices[index].localDevelopment == true {
         next.revokedDevelopmentIDs = (next.revokedDevelopmentIDs ?? []).union([deviceID.lowercased()])

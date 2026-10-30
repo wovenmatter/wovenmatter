@@ -127,6 +127,14 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
       } finally {response.removeListener('close',disconnected)}
     }
     const scope = url.pathname.startsWith('/v1/inference/') ? 'inference' : 'execution'
+    if(request.method==='POST'&&['/v1/execution/manage/devices','/v1/execution/manage/revoke'].includes(url.pathname)) {
+      if(request.headers['x-woven-protocol']!=='3')return json(response,426,{error:'version_mismatch'})
+      return json(response,200,clientExecution.manageDevice(request.headers.authorization,request.headers,await readJSON(request),{revoke:url.pathname.endsWith('/revoke')}))
+    }
+    if(request.method==='POST'&&url.pathname==='/v1/execution/manage/library-relocation') {
+      if(request.headers['x-woven-protocol']!=='3')return json(response,426,{error:'version_mismatch'})
+      return json(response,200,clientExecution.manageLibraryRelocation(request.headers.authorization,request.headers,await readJSON(request)))
+    }
     const device = clientExecution?.principal(request.headers.authorization, scope)
     if (!administrator && !device) return json(response, 401, { error: 'unauthorized' })
     if (device) {
@@ -146,6 +154,14 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
     if (url.pathname === '/v1/execution/devices' && request.method === 'POST') {
       if (!administrator) return json(response,403,{error:'administrator_required'})
       return json(response,201,clientExecution.provision(await readJSON(request)))
+    }
+    if(url.pathname==='/v1/execution/management-grant'&&request.method==='POST') {
+      if(!administrator)return json(response,403,{error:'administrator_required'})
+      return json(response,200,clientExecution.provisionManagement())
+    }
+    if(url.pathname==='/v1/execution/library-relocation'&&request.method==='POST') {
+      if(!administrator)return json(response,403,{error:'administrator_required'})
+      return json(response,200,clientExecution.relocateLibraryPublication(await readJSON(request)))
     }
     if(url.pathname==='/v1/execution/mcp-settings') {
       if(!administrator)return json(response,403,{error:'administrator_required'})

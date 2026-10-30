@@ -1,6 +1,7 @@
 import { updateReasoningDetails, flushReasoningDetails } from './reasoning-details.mjs'
 import { assemblePresentationFrame } from './presentation-frames.mjs'
 import { createClientExecutionPublisher } from './client-execution-publisher.mjs'
+import { libraryRelocationEndpoint } from './library-relocation.mjs'
 import { DatabaseSync } from 'node:sqlite'
 import { mkdirSync, chmodSync } from 'node:fs'
 import { mutateGoal, settleGoal, setGoalStatus, budgetReached, goalUsageUnavailable, goalPrompt, goalGuidance } from './client-goals.mjs'
@@ -43,6 +44,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
   db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
     CREATE TABLE IF NOT EXISTS identity (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS devices (id TEXT PRIMARY KEY, digest TEXT NOT NULL, body TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS library_management (id INTEGER PRIMARY KEY CHECK(id=1), digest TEXT NOT NULL, envelope TEXT);
     CREATE TABLE IF NOT EXISTS commands (id TEXT PRIMARY KEY, device TEXT NOT NULL, fingerprint TEXT NOT NULL, body TEXT NOT NULL, receipt TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS conversations (id TEXT PRIMARY KEY, body TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS events (sequence INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT NOT NULL);
@@ -175,6 +177,52 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       if (timingSafeEqual(supplied, Buffer.from(row.digest, 'hex')) && device.scopes.includes(scope)) return device
     }
     return null
+  }
+  // A host handoff delegates enrollment/revocation only, never administration.
+  function provisionManagement() {
+    assertIdentity()
+    const token=randomBytes(32).toString('base64url')
+    let envelope=null
+    if(unlockMaterial) {
+      const iv=randomBytes(12),key=createHash('sha256').update('woven-library-management-v1\0'+token).digest()
+      const cipher=createCipheriv('aes-256-gcm',key,iv)
+      cipher.setAAD(Buffer.from(JSON.stringify([identity.libraryID,identity.id])))
+      const ciphertext=Buffer.concat([cipher.update(JSON.stringify(unlockMaterial),'utf8'),cipher.final()])
+      envelope=JSON.stringify({iv:iv.toString('base64'),ciphertext:ciphertext.toString('base64'),tag:cipher.getAuthTag().toString('base64')})
+    }
+    db.prepare('INSERT OR REPLACE INTO library_management VALUES(1,?,?)').run(digest(token),envelope)
+    return {workspaceID:identity.id,endpoint:identity.endpoint,token,executionLibraryID:identity.libraryID}
+  }
+  function managementRow(authorization,headers) {
+    assertIdentity()
+    const row=db.prepare('SELECT digest,envelope FROM library_management WHERE id=1').get()
+    const token=typeof authorization==='string'&&authorization.startsWith('Bearer ')?authorization.slice(7):''
+    if(!row||!token||!timingSafeEqual(Buffer.from(digest(token),'hex'),Buffer.from(row.digest,'hex'))
+      ||headers['x-woven-library']!==identity.libraryID||headers['x-woven-workspace']!==identity.id)throw fail(403,'Invalid library management capability.')
+    return row
+  }
+  function relocateLibraryPublication(value) {
+    libraryRelocationEndpoint(value,identity.libraryID)
+    publisher.relocate(value);mcp.relocateLibrary(value)
+    return {relocated:true}
+  }
+  function manageLibraryRelocation(authorization,headers,value) {
+    managementRow(authorization,headers)
+    return relocateLibraryPublication(value)
+  }
+  function manageDevice(authorization,headers,body,{revoke:removing=false}={}) {
+    const row=managementRow(authorization,headers)
+    const token=authorization.slice(7)
+    if(!identifier(body?.deviceID))throw fail(400,'Invalid device identity.')
+    if(removing){revoke(body.deviceID);return {revoked:true}}
+    if(row.envelope) {
+      const saved=JSON.parse(row.envelope),key=createHash('sha256').update('woven-library-management-v1\0'+token).digest()
+      const decipher=createDecipheriv('aes-256-gcm',key,Buffer.from(saved.iv,'base64'))
+      decipher.setAAD(Buffer.from(JSON.stringify([identity.libraryID,identity.id])));decipher.setAuthTag(Buffer.from(saved.tag,'base64'))
+      rememberUnlockMaterial(JSON.parse(Buffer.concat([decipher.update(Buffer.from(saved.ciphertext,'base64')),decipher.final()]).toString('utf8')))
+    }
+    return provision({libraryID:identity.libraryID,workspaceID:identity.id,ownerDeviceID:identity.ownerDeviceID,
+      deviceID:body.deviceID,name:'Paired device',workspaceName:identity.name,endpoint:identity.endpoint,scopes:['execution','inference']})
   }
   function rememberUnlockMaterial(value) {
     if (typeof value?.workspace !== 'string' || typeof value?.unlockKey !== 'string' || !value.unlockKey) throw fail(400,'Invalid workspace unlock material.')
@@ -646,7 +694,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
     resolveRetainedAssociation:publisher.resolveRetainedAssociation, hasRun:runID=>!!db.prepare('SELECT id FROM runs WHERE id=?').get(runID),
     hasActiveRuntime:kind => [...jobs.values()].some(job=>job.runtimeKind===kind),
     async cancelActive(){await runtime.cancelActive?.();await Promise.allSettled([...jobs.values()].map(job=>job.completion))},
-    rememberUnlockMaterial, unlockMaterial: clientUnlockMaterial, command, receipt: getReceipt, events,
+    provisionManagement, manageDevice, manageLibraryRelocation, relocateLibraryPublication, rememberUnlockMaterial, unlockMaterial: clientUnlockMaterial, command, receipt: getReceipt, events,
     conversations: () => db.prepare('SELECT body FROM conversations').all().map(row => JSON.parse(row.body).conversation),
     transcript: (id, before) => {
       const value = getRecord(id).transcript

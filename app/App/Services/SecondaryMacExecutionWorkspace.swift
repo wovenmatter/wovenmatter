@@ -34,10 +34,12 @@ final class SecondaryMacExecutionWorkspace: ExecutionWorkspaceTransport {
     private var commandsInFlight = 0
     private var acceptsCommands = true
     private var captureTask: Task<Void, any Error>?
+    private let retainedCentralDatabase: Bool
     private struct NoteCommand: Codable { let original: CompanionCommand; let localized: CompanionCommand }
     private var noteCommands: [String: NoteCommand] = [:]
 
-    static func create(directory: URL, replica: MobileStore, assets: WorkspaceAssetSession? = nil, executionModel: ApplicationModel? = nil) async throws -> SecondaryMacExecutionWorkspace {
+    static func create(directory: URL, replica: MobileStore, assets: WorkspaceAssetSession? = nil, executionModel: ApplicationModel? = nil,
+                       existingDescriptor: CompanionExecutionWorkspace? = nil, projectionDirectory: URL? = nil, originFile: URL? = nil) async throws -> SecondaryMacExecutionWorkspace {
         let state = await replica.snapshot()
         guard let libraryID = state.workspaceID else {
             throw CompanionAPIError(code: "unpaired", message: "Connect this Mac to its central library before enabling its execution workspace.")
@@ -48,18 +50,21 @@ final class SecondaryMacExecutionWorkspace: ExecutionWorkspaceTransport {
         let model = executionModel ?? ApplicationModel(applicationDefaults: defaults, dashboardStore: store, startsAutomatically: false,
                                      ownsExecutionOverride: true, workspaceAssets: assets)
         guard let ownerDeviceID = UUID(uuidString: state.deviceID) else { throw MobileStore.Failure.incompatibleStore }
-        try await model.configureClientExecutionWorkspace(directory: directory, executionWorkspaceDeviceID: ownerDeviceID, store: store)
-        let descriptor = CompanionExecutionWorkspace(id: state.deviceID, libraryID: libraryID, ownerDeviceID: state.deviceID,
+        try await model.configureClientExecutionWorkspace(directory: directory, executionWorkspaceDeviceID: existingDescriptor == nil ? ownerDeviceID : nil, store: store)
+        var descriptor = existingDescriptor ?? CompanionExecutionWorkspace(id: state.deviceID, libraryID: libraryID, ownerDeviceID: state.deviceID,
             kind: .mac, name: DevelopmentLaunch.isClient ? DevelopmentLaunch.displayName : Host.current().localizedName ?? "This Mac",
             capabilities: ["execution.v1", "inference.v1", "execution.local"], executionDeviceID: state.deviceID, journalDeviceIDs: [state.deviceID])
-        return try await SecondaryMacExecutionWorkspace(descriptor: descriptor, model: model, replica: replica, directory: directory)
+        descriptor.libraryID = libraryID
+        descriptor.capabilities.removeAll { $0 == "history.central.v1" }
+        return try await SecondaryMacExecutionWorkspace(descriptor: descriptor, model: model, replica: replica, directory: projectionDirectory ?? directory, originFile: originFile)
     }
-    init(descriptor: CompanionExecutionWorkspace, model: ApplicationModel, replica: MobileStore, directory: URL) async throws {
+    init(descriptor: CompanionExecutionWorkspace, model: ApplicationModel, replica: MobileStore, directory: URL, originFile: URL? = nil) async throws {
         guard let database = model.dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
         self.descriptor = descriptor; self.model = model; self.database = database; self.replica = replica; self.directory = directory
+        retainedCentralDatabase = originFile != nil
         replicaTools = SecondaryMacReplicaTools(model: model, replica: replica, workspaceID: descriptor.id)
         calendarProjection = try SecondaryMacCalendarProjection(database: database, replica: replica, descriptor: descriptor, directory: directory)
-        origin = try WorkspaceJournal(file: directory.appending(path: "execution-journal.json"))
+        origin = try WorkspaceJournal(file: originFile ?? directory.appending(path: "execution-journal.json"))
         let projectionFile = directory.appending(path: "replica-projection.json")
         projection = FileManager.default.fileExists(atPath: projectionFile.path)
             ? try JSONDecoder().decode(Projection.self, from: Data(contentsOf: projectionFile)) : .init()
@@ -88,6 +93,13 @@ final class SecondaryMacExecutionWorkspace: ExecutionWorkspaceTransport {
         try await origin.upsertWorkspace(descriptor, pending: false)
     }
     var hasActiveRuns: Bool { !model.localRunningConversationIDs.isEmpty }
+    func pauseForLibraryTransfer() async throws {
+        guard commandsInFlight == 0, !hasActiveRuns, model.pendingLocalACPPermissions.isEmpty,
+              model.pendingLocalACPInteractions.isEmpty else { throw CompanionAPIError(code: "active_execution", message: "Finish running agents and pending approvals before transferring the database.") }
+        acceptsCommands = false; model.backendStopping = true
+        do { try await capture() } catch { resumeAfterLibraryTransfer(); throw error }
+    }
+    func resumeAfterLibraryTransfer() { acceptsCommands = true; model.backendStopping = false }
     func prepareToStop() async throws {
         acceptsCommands = false
         model.backendStopping = true
@@ -180,7 +192,10 @@ final class SecondaryMacExecutionWorkspace: ExecutionWorkspaceTransport {
         try await reconcileLibrary()
         let snapshot = try await database.companionSnapshot()
         let prior = await origin.snapshot()
-        for var conversation in snapshot.conversations {
+        let ownedConversations = snapshot.conversations.filter { conversation in
+            !retainedCentralDatabase || (conversation.workspaceID == nil && (conversation.routeID ?? conversation.providerID)?.hasPrefix("local:") == true)
+        }
+        for var conversation in ownedConversations {
             conversation.workspaceID = descriptor.id
             conversation.libraryID = descriptor.libraryID
             try await origin.restoreConversation(workspaceID: descriptor.id, conversation: conversation)
@@ -204,7 +219,7 @@ final class SecondaryMacExecutionWorkspace: ExecutionWorkspaceTransport {
             try await captureNativeHistory(conversationID: conversation.id)
         }
         try persistProjection()
-        let ids = Set(snapshot.conversations.map(\.id))
+        let ids = Set(ownedConversations.map(\.id))
         for id in prior.conversations.keys where !ids.contains(id) && !prior.deletedConversationIDs.contains(id) {
             // Archiving may race the last polling refresh. Retain terminal native
             // records before publishing the conversation tombstone.
@@ -246,8 +261,13 @@ final class SecondaryMacExecutionWorkspace: ExecutionWorkspaceTransport {
         var execution = try await database.companionSnapshot(bodyByteBudget: CompanionProtocol.maximumNoteBytes)
         let executionNotes = try await completeNotes(execution.notes)
         var replicaState = await replica.snapshot()
+        let nativeDeviceID = try await model.dashboardStore?.dashboardDeviceID().uuidString.lowercased()
         // Folder identities must be queued before notes that refer to them.
-        for folder in execution.folders {
+        for var folder in execution.folders {
+            if retainedCentralDatabase, var binding = folder.execution,
+               binding.workspaceID == "local" || binding.workspaceID == "device:" + descriptor.ownerDeviceID || binding.workspaceID == nativeDeviceID.map({ "device:" + $0 }) {
+                binding.workspaceID = descriptor.id; folder.execution = binding
+            }
             if replicaState.folders[folder.id] == nil, projection.folders?[folder.id] == nil {
                 guard let binding = folder.execution else {
                     throw CompanionAPIError(code: "execution_owner", message: "This folder has no captured execution workspace.")

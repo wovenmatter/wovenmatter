@@ -160,6 +160,9 @@ public struct CompanionExecutionCredential: Codable, Equatable, Sendable {
   public var workspace: CompanionExecutionWorkspace
   public var deviceID: String
   public var token: String
+  /// A library merge changes the logical library, never an owner's existing
+  /// device-scoped execution grant. Clients keep these two identities separate.
+  public var executionLibraryID: String? = nil
   public init(workspace: CompanionExecutionWorkspace, deviceID: String, token: String) {
     self.workspace = workspace; self.deviceID = deviceID; self.token = token
   }
@@ -190,6 +193,7 @@ public struct CompanionExecutionManagementGrant: Codable, Equatable, Sendable {
   public var workspaceID: String
   public var endpoint: URL
   public var token: String
+  public var executionLibraryID: String? = nil
   public init(workspaceID: String, endpoint: URL, token: String) {
     self.workspaceID = workspaceID; self.endpoint = endpoint; self.token = token
   }

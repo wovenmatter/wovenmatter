@@ -25,10 +25,13 @@ Macs discover compatible Woven Matter services among peers visible through their
 existing Tailscale client. Initial pairing requires approval; discovery alone
 never grants library access. A one-time pairing link remains available. iPhone
 and iPad use Settings → Device Connections with QR scanning or a pasted pairing link.
-Each Mac defaults to **Central database**. The **Database role** section at the
-bottom switches it to **Node** through a guarded restart, preserving the existing
-database separately. An unpaired node opens setup; after pairing it starts its
-own execution workspace. Only nodes offer central-database discovery/link entry.
+Each Mac defaults to **Central database**. The **Database role** section guides
+a [central database transfer](CENTRAL_LIBRARY_TRANSFER.md): choose the next Mac,
+approve on both devices, back up both libraries, merge and verify, then restart
+with the former central as a node. A node can request promotion from its current
+central. Its preserved former library and pending local writing participate in
+the merge. Execution workspaces keep their original owners. Only nodes offer
+central-database discovery/link entry.
 Local Agent Workspace and Remote Agent Workspaces manage execution locations;
 library pairing belongs in Devices.
 

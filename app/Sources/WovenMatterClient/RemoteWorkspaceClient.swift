@@ -1216,6 +1216,9 @@ public struct RemoteWorkspaceServiceClient: Sendable {
     public func executionPublisherStatus() async throws -> CompanionWorkspacePublisherStatus {
         try await request(path: "v1/execution/publisher", method: "GET", body: nil)
     }
+    public func prepareLibraryTransferManagement() async throws -> CompanionExecutionManagementGrant {
+        try await request(path: "v1/execution/management-grant", method: "POST", body: Data("{}".utf8))
+    }
     public func configureExecutionPublisher(_ grant: CompanionWorkspacePublisherGrant) async throws -> CompanionWorkspacePublisherStatus {
         try await request(path: "v1/execution/publisher", method: "POST", body: JSONEncoder().encode(grant))
     }

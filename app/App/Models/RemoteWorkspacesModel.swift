@@ -1350,6 +1350,17 @@ final class RemoteWorkspacesModel {
         try requireCurrent(identity)
         return value
     }
+    func prepareLibraryTransferManagement(configuration: RemoteWorkspaceConfiguration) async throws -> CompanionExecutionManagementGrant {
+        let identity = try requestIdentity(configuration)
+        let client = try await serviceClient(for: configuration)
+        try requireCurrent(identity)
+        let grant = try await client.prepareLibraryTransferManagement()
+        try requireCurrent(identity)
+        guard grant.workspaceID == configuration.id.uuidString.lowercased(), CompanionPairingPayload.isValidEndpoint(grant.endpoint) else {
+            throw RemoteWorkspaceClientError.invalidResponse("The workspace returned an invalid library-management capability.")
+        }
+        return grant
+    }
     func configureExecutionPublisher(configuration: RemoteWorkspaceConfiguration, grant: CompanionWorkspacePublisherGrant) async throws {
         let identity = try requestIdentity(configuration)
         guard grant.workspaceID == configuration.id.uuidString.lowercased() else { throw RemoteWorkspaceClientError.invalidResponse("The publisher belongs to another execution workspace.") }

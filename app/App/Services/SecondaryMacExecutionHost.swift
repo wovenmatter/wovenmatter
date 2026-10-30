@@ -7,6 +7,7 @@ import WovenMatterDashboardStore
 /// grants and the central host's management grant use separate credential stores.
 @MainActor
 final class SecondaryMacExecutionHost {
+    var libraryTransferHandler: (@MainActor @Sendable (CompanionHTTPRequest) async -> CompanionHTTPResponse?)?
     private(set) var endpoint: URL?
     private(set) var managementGrant: CompanionExecutionManagementGrant?
     private let workspace: SecondaryMacExecutionWorkspace
@@ -112,6 +113,12 @@ final class SecondaryMacExecutionHost {
         guard generation == attempt, let api, endpoint != nil else { return .error("unavailable", "Execution sharing is starting or stopped.", status: 503) }
         let target = URLComponents(string: "http://localhost" + request.target)?.path ?? ""
         let path = target.hasPrefix("/wovenmatter/") ? String(target.dropFirst("/wovenmatter".count)) : target
+        if let response = await libraryTransferHandler?(request) { return response }
+        if path == "/v1/discovery", request.method == "GET" {
+            return try! .json(CompanionDiscoveryAdvertisement(role: .client,
+                identity: .init(deviceID: workspace.descriptor.executionDeviceID ?? workspace.descriptor.ownerDeviceID,
+                    deviceName: workspace.descriptor.name, metadata: CompanionMacPairingController.metadata), capabilities: ["library.transfer.v1"]))
+        }
         if path == "/mcp", let response = await workspace.model.agentTools?.handleMCP(request) { return response }
         if path.hasPrefix("/v1/inference/"), let inference { return await inference.handle(request) }
         guard path.hasPrefix("/v1/execution/manage/") else { return await api.handle(request) }

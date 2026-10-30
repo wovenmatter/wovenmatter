@@ -13,12 +13,16 @@ public struct MobileCredential: Codable, Sendable, Equatable {
   public var deviceID: String
   public var token: String
   public var confirmationPending: Bool?
+  public var relocationID: String? = nil
+  public var migrationCandidates: [URL]? = nil
   public init(endpoint: URL, workspaceID: String, deviceID: String, token: String, confirmationPending: Bool? = nil) {
     self.endpoint = endpoint; self.workspaceID = workspaceID; self.deviceID = deviceID; self.token = token; self.confirmationPending = confirmationPending
   }
 }
 
 public protocol CompanionTransport: Sendable {
+  func libraryRelocationID() async -> String?
+  func rememberLibraryCandidates(_ candidates: [URL]) async throws
   func executeMCP(_ message: GatewayJSONValue, conversationID: String, enabledGroups: [WorkspaceToolGroup], contextID: String?) async throws -> GatewayJSONValue
   func readWorkspace(_ request: CompanionWorkspaceRead) async throws -> CompanionWorkspaceResult
   func workspaceIdentity() async throws -> String
@@ -36,6 +40,8 @@ public protocol CompanionTransport: Sendable {
 }
 
 public extension CompanionTransport {
+  func libraryRelocationID() async -> String? { nil }
+  func rememberLibraryCandidates(_ candidates: [URL]) async throws {}
   func executeMCP(_ message: GatewayJSONValue, conversationID: String, enabledGroups: [WorkspaceToolGroup], contextID: String? = nil) async throws -> GatewayJSONValue { throw MobileConnectionError.offline }
   func readWorkspace(_ request: CompanionWorkspaceRead) async throws -> CompanionWorkspaceResult { throw MobileConnectionError.offline }
   func linkedData(_ id: String, tableID: String?) async throws -> CompanionLinkedData { throw MobileConnectionError.offline }
@@ -79,14 +85,16 @@ private actor CompanionMCPConnections {
 }
 
 public final class HTTPSCompanionTransport: CompanionTransport, @unchecked Sendable {
-  let credential: MobileCredential
+  private let credentialLock = NSLock()
+  private var storedCredential: MobileCredential
+  public var credential: MobileCredential { credentialLock.withLock { storedCredential } }
   private let session: URLSession
   private let mcpSession: URLSession
   private let mcpConnections = CompanionMCPConnections()
   private let deviceMetadata: CompanionDeviceMetadata?
   public init(credential: MobileCredential, metadata: CompanionDeviceMetadata? = nil) throws {
     guard Self.validEndpoint(credential.endpoint) else { throw MobileConnectionError.insecureEndpoint }
-    self.credential = credential; self.deviceMetadata = metadata
+    self.storedCredential = credential; self.deviceMetadata = metadata
     let configuration = URLSessionConfiguration.ephemeral
     configuration.httpCookieStorage = nil; configuration.urlCache = nil
     configuration.timeoutIntervalForRequest = 30; configuration.timeoutIntervalForResource = 45
@@ -187,6 +195,45 @@ public final class HTTPSCompanionTransport: CompanionTransport, @unchecked Senda
     return try JSONDecoder().decode(Result.self, from: data)
   }
   private func data(_ path: String, method: String = "GET", query: [URLQueryItem] = [], body: Data? = nil, maximumBytes: Int, timeout: TimeInterval? = nil, headers: [String: String] = [:]) async throws -> (Data, HTTPURLResponse) {
+    for _ in 0..<8 {
+      do { return try await sendData(path, method: method, query: query, body: body, maximumBytes: maximumBytes, timeout: timeout, headers: headers) }
+      catch let moved as LibraryRelocationSignal { try acceptRelocation(moved.relocation, expectedEndpoint: moved.previousEndpoint) }
+      catch let error as URLError {
+        let previous = credential
+        guard let relocation = try? await LibraryRelocationResolver.find(credential: previous) else { throw error }
+        try acceptRelocation(relocation, expectedEndpoint: previous.endpoint)
+      }
+    }
+    throw MobileConnectionError.http(409, "The database transfer route needs attention on its central Mac. Your local work is retained.")
+  }
+  public func libraryRelocationID() async -> String? { credential.relocationID }
+  public func rememberLibraryCandidates(_ candidates: [URL]) async throws {
+    credentialLock.withLock {
+      let valid = Array(Set((storedCredential.migrationCandidates ?? []) + candidates.filter(Self.validEndpoint))).sorted { $0.absoluteString < $1.absoluteString }
+      guard valid != storedCredential.migrationCandidates else { return }
+      var next = storedCredential; next.migrationCandidates = Array(valid.prefix(64))
+      // Discovery hints are optional. A temporarily locked Keychain must not
+      // prevent publishing durable history through an already working connection.
+      try? MobileCredentialVault.save(next)
+      storedCredential = next
+    }
+  }
+  private func acceptRelocation(_ relocation: CompanionLibraryRelocation, expectedEndpoint: URL) throws {
+    try credentialLock.withLock {
+    let existing = storedCredential
+    guard existing.endpoint == expectedEndpoint else { return }
+    guard relocation.previousLibraryID == existing.workspaceID, UUID(uuidString: relocation.transferID) != nil,
+          UUID(uuidString: relocation.libraryID) != nil, Self.validEndpoint(relocation.endpoint),
+          relocation.endpoint != existing.endpoint else { throw MobileConnectionError.invalidResponse }
+    var next = existing; next.endpoint = relocation.endpoint; next.relocationID = relocation.transferID
+    // Persist the route before using it. The sync engine resets only central
+    // cursors; pending operations and direct-owner credentials keep their IDs.
+    try MobileCredentialVault.save(next)
+    storedCredential = next
+    }
+  }
+  private func sendData(_ path: String, method: String = "GET", query: [URLQueryItem] = [], body: Data? = nil, maximumBytes: Int, timeout: TimeInterval? = nil, headers: [String: String] = [:]) async throws -> (Data, HTTPURLResponse) {
+    let credential = self.credential
     var components = URLComponents(url: credential.endpoint.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
     components.queryItems = query.isEmpty ? nil : query
     var request = URLRequest(url: components.url!)
@@ -221,6 +268,12 @@ public final class HTTPSCompanionTransport: CompanionTransport, @unchecked Senda
     #endif
     switch response.statusCode {
     case 200..<300: return (data, response)
+    case 409:
+      if let moved = try? JSONDecoder().decode(CompanionLibraryMoved.self, from: data), moved.code == "library_moved" {
+        throw LibraryRelocationSignal(relocation: moved.relocation, previousEndpoint: credential.endpoint)
+      }
+      let error = try? JSONDecoder().decode(CompanionAPIError.self, from: data)
+      throw MobileConnectionError.http(409, error?.message ?? "The library could not accept this change.")
     case 401, 403: throw MobileConnectionError.revoked
     case 426: throw MobileConnectionError.versionMismatch
     default:

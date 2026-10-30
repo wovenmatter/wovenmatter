@@ -29,21 +29,26 @@ extension WorkspaceDatabase {
 extension WorkspaceDatabaseConnection {
   func calendarForeignExecutionEventIDs() throws -> Set<String> {
     let localID = try historyRowsUnlocked("SELECT workspace_id FROM companion_calendar_execution_context WHERE singleton=1", values: []).first?.objectValue?["workspace_id"]?.stringValue
+    let ownerID = try localID.flatMap { try retiredProjectionOwner(workspaceID: $0) } ?? localID
     let conflicts = try historyRowsUnlocked("SELECT event_id FROM companion_calendar_execution_conflicts", values: []).compactMap { $0.objectValue?["event_id"]?.stringValue }
-    return Set(try calendarReplicaOwners().filter { $0.value != localID }.map(\.key)).union(conflicts)
+    return Set(try calendarReplicaOwners().filter { $0.value != ownerID }.map(\.key)).union(conflicts)
   }
   func bindExecutionCalendar(libraryID: String, workspaceID: String) throws {
-    guard UUID(uuidString: workspaceID) != nil, !libraryID.isEmpty, workspaceID != (try companionWorkspaceID()), libraryID != (try companionWorkspaceID()) else { throw CompanionCalendarError.wrongWorkspace }
+    let retiredOwner = try retiredProjectionOwner(libraryID: libraryID, workspaceID: workspaceID)
+    let ownLibraryID = try companionWorkspaceID()
+    guard UUID(uuidString: workspaceID) != nil, !libraryID.isEmpty, workspaceID != ownLibraryID,
+          libraryID != ownLibraryID || retiredOwner != nil else { throw CompanionCalendarError.wrongWorkspace }
     if let context = try historyRowsUnlocked("SELECT library_id,workspace_id FROM companion_calendar_execution_context WHERE singleton=1", values: []).first?.objectValue {
       guard context["library_id"]?.stringValue == libraryID, context["workspace_id"]?.stringValue == workspaceID else { throw CompanionCalendarError.wrongWorkspace }
     } else { try toolsExecuteUnlocked("INSERT INTO companion_calendar_execution_context(singleton,library_id,workspace_id) VALUES(1,?,?)", [libraryID, workspaceID]) }
   }
   func executionCalendarSnapshot(workspaceID: String) throws -> CompanionCalendarSnapshot {
+    let ownerID = try retiredProjectionOwner(workspaceID: workspaceID) ?? workspaceID
     var snapshot = try companionCalendarSnapshot()
     let native = Dictionary(uniqueKeysWithValues: try calendarItemsUnlocked(includeDeleted: true).map { ($0.id, $0) })
     for index in snapshot.records.indices {
       let record = snapshot.records[index]
-      if record.ownerDeviceID == nil || record.ownerDeviceID == workspaceID,
+      if record.ownerDeviceID == nil || record.ownerDeviceID == ownerID,
         let tools = native[record.id]?.calendar.task?.configuration.tools {
         snapshot.records[index].event.draft.task?.enabledTools = tools.enabled.map { "wovenmatter_" + $0.rawValue }.sorted()
       }
@@ -55,7 +60,7 @@ extension WorkspaceDatabaseConnection {
       try bindExecutionCalendar(libraryID: libraryID, workspaceID: workspaceID)
       let current = try executionCalendarSnapshot(workspaceID: workspaceID).records.first { $0.id == record.id }
       var desired = record
-      let localOwner = record.ownerDeviceID == workspaceID
+      let localOwner = record.ownerDeviceID == (try retiredProjectionOwner(workspaceID: workspaceID) ?? workspaceID)
       // The native runtime executes this Mac's task as local; its replicated
       // identity still identifies the owning device on the central Mac.
       if localOwner, desired.event.draft.task?.workspaceID == workspaceID { desired.event.draft.task?.workspaceID = nil }
@@ -107,10 +112,11 @@ extension WorkspaceDatabaseConnection {
     }
   }
   func executionCalendarRuns(workspaceID: String) throws -> [CompanionCalendarRun] {
-    let foreign = Set(try calendarReplicaOwners().filter { $0.value != workspaceID }.map(\.key))
+    let ownerID = try retiredProjectionOwner(workspaceID: workspaceID) ?? workspaceID
+    let foreign = Set(try calendarReplicaOwners().filter { $0.value != ownerID }.map(\.key))
     return try calendarRunsUnlocked().filter { !foreign.contains($0.eventID) }.map { run in
       let task = run.task.configuration
-      return .init(id: run.id, eventID: run.eventID, eventRevision: 0, ownerDeviceID: workspaceID,
+      return .init(id: run.id, eventID: run.eventID, eventRevision: 0, ownerDeviceID: ownerID,
         occurrence: run.occurrenceIndex, scheduledAt: run.scheduledAt, sessionID: run.sessionID,
         task: .init(prompt: run.task.prompt, runtime: task.runtimeKind.rawValue, workspaceID: task.workspaceID?.uuidString.lowercased() ?? workspaceID,
           model: task.model, thinking: task.thinking, permission: task.permission, folderID: task.folderID,

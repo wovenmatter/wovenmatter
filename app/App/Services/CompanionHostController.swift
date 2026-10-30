@@ -65,6 +65,8 @@ final class CompanionHostController {
     private var executionAPI: CompanionMacExecutionAPI?
     private var inferenceHost: CompanionInferenceHost?
     private var executionAuthentication: CompanionExecutionAuthentication?
+    private var transferManagement: CompanionExecutionAuthentication?
+    private(set) var libraryTransfer = LibraryTransferPresentation()
     private var provisioningWorkspaceIDs: Set<String> = []
     private var revokingDeviceIDs: Set<String> = []
     var mcpSettingsFingerprints: [String: String] = [:]
@@ -126,6 +128,7 @@ final class CompanionHostController {
             }
             stoppingExposures.removeAll { previous in previousExposures.contains(where: { $0 === previous }) }
             try await loadAuthentication()
+            try await model?.libraryTransfer.restore()
             guard generation == expectedGeneration, !Task.isCancelled else { throw CancellationError() }
             guard let model, let database = model.dashboardStore?.database, let authentication else {
                 throw CompanionAPIError(code: "unavailable", message: "The Mac workspace is not ready.")
@@ -144,7 +147,7 @@ final class CompanionHostController {
                         throw CompanionAPIError(code: "revocation_pending", message: "This device's pairing could not yet be cancelled.")
                     }
                 },
-                discovery: { [weak self] in self?.discoveryIdentity.map { .init(role: .central, identity: $0) } },
+                discovery: { [weak self] in self?.discoveryIdentity.map { .init(role: self?.model?.isTransferredLibraryNode == true ? .client : .central, identity: $0, capabilities: ["library.transfer.v1"]) } },
                 onPair: { [weak self] in await self?.didPair() },
                 onMutation: { [weak model] in Task { await model?.refreshWorkspace() } },
                 onRequest: { [weak self] in self?.lastSeenAt = Date() },
@@ -175,22 +178,33 @@ final class CompanionHostController {
             try await refreshExecutionRegistry()
             let identity = try await database.companionLibraryIdentity()
             let descriptors = try await database.companionExecutionWorkspaces()
-            guard let local = descriptors.first(where: { $0.id == localExecutionWorkspaceID(libraryID: identity.libraryID) }) else {
+            guard var local = descriptors.first(where: { $0.id == localExecutionWorkspaceID(libraryID: identity.libraryID) }) else {
                 throw CompanionAPIError(code: "unavailable", message: "The local execution workspace could not be registered.")
             }
             let executionAuth = try loadExecutionAuthentication()
             guard generation == expectedGeneration, !Task.isCancelled else { throw CancellationError() }
+            if model.isTransferredLibraryNode { local.capabilities.removeAll { $0 == "history.central.v1" } }
+            let localDescriptor = local
+            let executionEvents: (@MainActor @Sendable (Int64) async throws -> CompanionJournalPage)?
+            if model.isTransferredLibraryNode {
+                executionEvents = { [weak model] after in
+                    guard let execution = model?.libraryClient.localExecution else { throw CompanionAPIError(code: "unavailable", message: "This Mac’s workspace is starting.") }
+                    return try await execution.events(after: after)
+                }
+            } else { executionEvents = nil }
             executionAPI = CompanionMacExecutionAPI(database: database, commands: model.companionCommands,
-                authentication: executionAuth, descriptor: local,
+                authentication: executionAuth, descriptor: localDescriptor,
                 isActive: { [weak self] in self?.generation == expectedGeneration && self?.endpoint != nil },
+                events: executionEvents,
                 authorizeDevice: { deviceID in
-                    guard try await database.companionWorkspaceAccessAllowed(deviceID: deviceID, workspaceID: local.id) else {
+                    guard try await database.companionWorkspaceAccessAllowed(deviceID: deviceID, workspaceID: localDescriptor.id) else {
                         throw CompanionAPIError(code: "access_disabled", message: "Execution access to this workspace is disabled for this device.")
                     }
                 })
             inferenceHost = CompanionInferenceHost(authentication: executionAuth, descriptor: local,
                 directory: try supportDirectory ?? ApplicationModel.dashboardSupportDirectory(),
                 isActive: { [weak self] in self?.generation == expectedGeneration && self?.endpoint != nil })
+            model.libraryTransfer.resumeIfNeeded()
             isStarting = false; status = "Available to your paired devices"
             // Availability alone must not hold the Mac awake. Active execution
             // continues to use the app's existing work/sleep policy.
@@ -226,11 +240,51 @@ final class CompanionHostController {
     private func handle(_ request: CompanionHTTPRequest, generation expected: UUID, libraryAPI: CompanionWorkspaceAPI) async -> CompanionHTTPResponse {
         guard generation == expected else { return .error("unavailable", "This sharing session has stopped.", status: 503) }
         let path = request.target.split(separator: "?", maxSplits: 1).first.map(String.init) ?? request.target
+        if let response = await model?.libraryTransfer.handle(request) { return response }
+        if let model, !model.isTransferredLibraryNode,
+           let directory = try? supportDirectory ?? ApplicationModel.dashboardSupportDirectory(),
+           FileManager.default.fileExists(atPath: directory.appending(path: "retained-node-workspace.json").path),
+           path.contains("/v1/execution") || path.contains("/v1/inference/") {
+            // Preserve the node's old direct address when this listener becomes
+            // central. Only the exact retained local workspace receives it; its
+            // own API still authenticates every original device-scoped grant.
+            if let response = await model.libraryClient.retainedExecutionResponse(request) { return response }
+            if model.libraryClient.localExecution == nil { return .error("unavailable", "This Mac’s retained execution workspace is starting.", status: 503) }
+        }
+        if path.hasSuffix("/v1/library-relocation/proof"), request.method == "POST", request.body.count <= 4096 {
+            do {
+                let challenge = try JSONDecoder().decode(CompanionLibraryRelocationChallenge.self, from: request.body)
+                guard let database = model?.dashboardStore?.database, let authentication else { return .error("unavailable", "Library unavailable.", status: 503) }
+                let aliases = try await database.libraryTransferAliases()
+                guard let relocation = model?.libraryTransfer.relocation(for: challenge.libraryID)
+                        ?? aliases.first(where: { $0.previousLibraryID == challenge.libraryID }) else {
+                    return .error("not_found", "This library has no transfer route.", status: 404)
+                }
+                let signature = try await authentication.transferRelocationProof(deviceID: challenge.deviceID, challenge: challenge.nonce, relocation: relocation, credentialID: challenge.credentialID)
+                return try .json(CompanionLibraryRelocationProof(relocation: relocation, signature: signature))
+            } catch { return .error("unauthorized", "This device has no transferred library grant.", status: 401) }
+        }
+        if path.contains("/v1/execution/manage/"), model?.isTransferredLibraryNode == true {
+            return await handleTransferredManagement(request)
+        }
+        if model?.libraryTransferPaused == true, request.method != "GET", !path.contains("/library-relocation/proof"),
+           !path.contains("/v1/execution/"), !path.contains("/v1/inference/") {
+            return .error("library_transferring", "The central database is transferring. Pending writing stays on its device until the handoff finishes.", status: 503)
+        }
+        if path.contains("/mcp/workspace") || path.contains("/federation/publisher/") {
+            do {
+                if let previous = request.headers["x-woven-workspace"], let moved = model?.libraryTransfer.relocation(for: previous),
+                   let bearer = request.bearer, let database = model?.dashboardStore?.database {
+                    if path.contains("/federation/publisher/") { _ = try await database.authenticateCompanionWorkspacePublisher(bearer: bearer) }
+                    else { _ = try await database.authenticateCompanionWorkspaceMCP(bearer: bearer) }
+                    return try .json(CompanionLibraryMoved(moved), status: 409)
+                }
+            } catch { return .error("unauthorized", "This library grant is unavailable.", status: 401) }
+        }
         if path == "/mcp" || path == "/wovenmatter/mcp" {
             if let response = await model?.agentTools?.handleMCP(request) { return response }
-            return await libraryAPI.handle(request)
         }
-        if path == "/mcp/workspace" || path == "/wovenmatter/mcp/workspace" { return await libraryAPI.handle(request) }
+        // Library MCP goes through the same logical-library translation below.
         if path == "/v1/execution" || path.hasPrefix("/v1/execution/") || path == "/wovenmatter/v1/execution" || path.hasPrefix("/wovenmatter/v1/execution/") {
             guard let executionAPI else { return .error("unavailable", "This execution workspace is starting.", status: 503) }
             return await executionAPI.handle(request)
@@ -239,7 +293,24 @@ final class CompanionHostController {
             guard let inferenceHost else { return .error("unavailable", "This inference host is starting.", status: 503) }
             return await inferenceHost.handle(request)
         }
-        return await libraryAPI.handle(request)
+        do {
+            guard let database = model?.dashboardStore?.database else { return await libraryAPI.handle(request) }
+            let identity = try await database.companionWorkspaceID()
+            let aliases = try await database.libraryTransferAliases()
+            if let previous = request.headers["x-woven-workspace"],
+               previous == identity || aliases.contains(where: { $0.previousLibraryID == previous }) {
+                if let moved = model?.libraryTransfer.relocation(for: previous), let authentication, let bearer = request.bearer {
+                    _ = try await authentication.authenticate(bearer: bearer)
+                    return try .json(CompanionLibraryMoved(moved), status: 409)
+                }
+                if previous != identity {
+                    let normalized = try LibraryTransferRouting.request(request, from: previous, to: identity)
+                    let response = await libraryAPI.handle(normalized)
+                    return try LibraryTransferRouting.response(response, from: identity, to: previous)
+                }
+            }
+            return await libraryAPI.handle(request)
+        } catch { return .error("unavailable", "The library transfer route is unavailable. Your local work is retained.", status: 503) }
     }
 
     /// Quit and role changes cancel recovery as well as the owned listener.
@@ -313,9 +384,66 @@ final class CompanionHostController {
     }
 
     private func localExecutionWorkspaceID(libraryID: String) -> String {
+        if let node = model?.transferredLibraryNode { return node.workspace.id }
         let key = "companion.execution.local-id." + libraryID
         if let value = defaults.string(forKey: key), UUID(uuidString: value) != nil { return value.lowercased() }
         let value = UUID().uuidString.lowercased(); defaults.set(value, forKey: key); return value
+    }
+
+    func transferLocalWorkspaceID(libraryID: String) -> String { localExecutionWorkspaceID(libraryID: libraryID) }
+    func libraryTransferAuthentication() async throws -> CompanionAuthentication {
+        try await loadAuthentication()
+        guard let authentication else { throw CompanionAPIError(code: "unavailable", message: "Device connections are unavailable.") }
+        return authentication
+    }
+    func prepareLibraryTransferAuthority() async throws -> [CompanionExecutionManagementGrant] {
+        guard let model, let database = model.dashboardStore?.database, let endpoint else { throw CompanionAPIError(code: "unavailable", message: "Enable Apple device connections before transferring the database.") }
+        let identity = try await database.companionLibraryIdentity()
+        let localID = localExecutionWorkspaceID(libraryID: identity.libraryID)
+        var result: [CompanionExecutionManagementGrant] = []
+        if let existing = try ExecutionManagementVault.load(libraryID: identity.libraryID, workspaceID: localID) { result.append(existing) }
+        else {
+            let directory = try supportDirectory ?? ApplicationModel.dashboardSupportDirectory()
+            let auth = try CompanionExecutionAuthentication(fileURL: directory.appending(path: "transfer-management.json"))
+            transferManagement = auth
+            let token = try await auth.provision(deviceID: identity.libraryID, libraryID: identity.libraryID, workspaceID: localID)
+            var grant = CompanionExecutionManagementGrant(workspaceID: localID, endpoint: endpoint, token: token)
+            grant.executionLibraryID = identity.libraryID
+            try ExecutionManagementVault.save(grant, libraryID: identity.libraryID); result.append(grant)
+        }
+        for workspace in try await database.companionExecutionWorkspaces() where workspace.id != localID && !workspace.deleted {
+            if var grant = try ExecutionManagementVault.load(libraryID: identity.libraryID, workspaceID: workspace.id) {
+                if grant.executionLibraryID == nil { grant.executionLibraryID = identity.libraryID }
+                result.append(grant)
+            } else if let config = model.remoteWorkspaces.workspaces.first(where: { $0.id.uuidString.lowercased() == workspace.id }) {
+                let grant = try await model.remoteWorkspaces.prepareLibraryTransferManagement(configuration: config)
+                try ExecutionManagementVault.save(grant, libraryID: identity.libraryID); result.append(grant)
+            }
+        }
+        return result
+    }
+    private func handleTransferredManagement(_ request: CompanionHTTPRequest) async -> CompanionHTTPResponse {
+        do {
+            guard request.method == "POST", request.headers["x-woven-protocol"] == String(CompanionProtocol.version),
+                  let node = model?.transferredLibraryNode, let bearer = request.bearer, let executionAPI else { return .error("unauthorized", "Missing workspace management grant.", status: 401) }
+            if transferManagement == nil {
+                let directory = try supportDirectory ?? ApplicationModel.dashboardSupportDirectory()
+                transferManagement = try CompanionExecutionAuthentication(fileURL: directory.appending(path: "transfer-management.json"))
+            }
+            guard let auth = transferManagement else { return .error("unauthorized", "Missing management grant.", status: 401) }
+            let scope = try await auth.authenticate(bearer: bearer)
+            guard scope.workspaceID == node.workspace.id, scope.libraryID == node.workspace.libraryID,
+                  request.headers["x-woven-library"] == scope.libraryID,
+                  request.headers["x-woven-workspace"] == scope.workspaceID else { return .error("unauthorized", "The management grant has another scope.", status: 403) }
+            struct Device: Decodable { let deviceID: String }
+            let device = try JSONDecoder().decode(Device.self, from: request.body)
+            guard UUID(uuidString: device.deviceID) != nil else { return .error("invalid_device", "A device UUID is required.", status: 400) }
+            guard request.target.hasSuffix("/manage/devices") || request.target.hasSuffix("/manage/revoke") else {
+                return .error("not_found", "Unknown workspace management operation.", status: 404)
+            }
+            if request.target.hasSuffix("/revoke") { try await executionAPI.revoke(deviceID: device.deviceID); return try .json(["revoked": true]) }
+            return try .json(try await executionAPI.provision(deviceID: device.deviceID))
+        } catch { return .error("unauthorized", "The transferred workspace rejected this management request.", status: 401) }
     }
 
     /// Registry changes do not open connections, start containers, or move workspace files.
@@ -323,6 +451,10 @@ final class CompanionHostController {
         guard !registryRefreshInProgress, let model, let database = model.dashboardStore?.database else { return }
         registryRefreshInProgress = true
         defer { registryRefreshInProgress = false }
+        if model.isTransferredLibraryNode || model.libraryTransfer.presentation.incoming.contains(where: { [.receiving, .verified].contains($0.status.phase) })
+            || model.libraryTransfer.presentation.outgoing.map({ [.receiving, .verified].contains($0.phase) }) == true {
+            executionWorkspaces = try await database.companionExecutionWorkspaces(); return
+        }
         let identity = try await database.companionLibraryIdentity()
         let existing = try await database.companionExecutionWorkspaces()
         let localID = localExecutionWorkspaceID(libraryID: identity.libraryID)
@@ -385,12 +517,18 @@ final class CompanionHostController {
         if let configuration {
             credential = try await model.remoteWorkspaces.provisionExecutionDevice(configuration: configuration,
                 libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID, deviceID: device.id, deviceName: device.name)
-        } else if let registered, registered.kind == .mac {
+        } else if let registered {
             credential = try await managedExecutionRequest(workspace: registered, deviceID: device.id, revoke: false)
         } else {
             throw CompanionAPIError(code: "unknown_workspace", message: "Enable client access on this workspace's managing device first.")
         }
         do {
+            credential.executionLibraryID = credential.executionLibraryID ?? credential.workspace.libraryID
+            if credential.workspace.libraryID != identity.libraryID {
+                guard try await database.libraryTransferAliases().contains(where: { $0.previousLibraryID == credential.workspace.libraryID }) else { throw CompanionAPIError(code: "wrong_workspace", message: "This workspace belongs to another library.") }
+                credential.executionLibraryID = credential.workspace.libraryID
+                credential.workspace.libraryID = identity.libraryID
+            }
             guard credential.deviceID == device.id, credential.workspace.id == id,
                   credential.workspace.libraryID == identity.libraryID,
                   registered.map({ original in
@@ -442,10 +580,15 @@ final class CompanionHostController {
             credential = try await model.remoteWorkspaces.provisionExecutionDevice(configuration: configuration,
                 libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID,
                 deviceID: identity.hostDeviceID, deviceName: Host.current().localizedName ?? "Central Mac")
-        } else if let registered, registered.kind == .mac {
+        } else if let registered {
             credential = try await managedExecutionRequest(workspace: registered, deviceID: identity.hostDeviceID, revoke: false)
         } else {
             throw CompanionAPIError(code: "unavailable", message: "This execution workspace must be reachable and enrolled before the central Mac can control it.")
+        }
+        credential.executionLibraryID = credential.executionLibraryID ?? credential.workspace.libraryID
+        if credential.workspace.libraryID != identity.libraryID {
+            guard try await database.libraryTransferAliases().contains(where: { $0.previousLibraryID == credential.workspace.libraryID }) else { throw CompanionAPIError(code: "wrong_workspace", message: "This workspace belongs to another library.") }
+            credential.executionLibraryID = credential.workspace.libraryID; credential.workspace.libraryID = identity.libraryID
         }
         guard credential.deviceID == identity.hostDeviceID, credential.workspace.id == id,
               credential.workspace.libraryID == identity.libraryID,
@@ -498,7 +641,7 @@ final class CompanionHostController {
         do {
             let identity = try await database.companionLibraryIdentity()
             guard let workspace = try await database.companionExecutionWorkspaces().first(where: { $0.id == workspaceID && !$0.deleted }),
-                  workspace.kind != .ios, workspace.endpoint.map(CompanionPairingPayload.isValidEndpoint) == true,
+                  workspace.kind != .ios, workspace.endpoint.map(Self.validManagementEndpoint) == true,
                   workspace.executionDeviceID != deviceID,
                   workspace.ownerDeviceID != deviceID else {
                 throw CompanionAPIError(code: "invalid_workspace", message: "Choose another Mac or Linux execution workspace with client access enabled.")
@@ -523,18 +666,32 @@ final class CompanionHostController {
         pendingDeviceRevocations = pending
     }
 
+    private static func validManagementEndpoint(_ endpoint: URL) -> Bool {
+        endpoint.scheme == "https" && endpoint.host?.lowercased().hasSuffix(".ts.net") == true
+            && endpoint.user == nil && endpoint.password == nil && endpoint.query == nil && endpoint.fragment == nil
+            && !endpoint.pathComponents.contains("..")
+    }
     private func managedExecutionRequest<Value: Decodable>(workspace: CompanionExecutionWorkspace, deviceID: String, revoke: Bool) async throws -> Value {
         guard let grant = try ExecutionManagementVault.load(libraryID: workspace.libraryID, workspaceID: workspace.id),
-              grant.endpoint == workspace.endpoint, CompanionPairingPayload.isValidEndpoint(grant.endpoint) else {
+              grant.endpoint == workspace.endpoint, Self.validManagementEndpoint(grant.endpoint) else {
             throw CompanionAPIError(code: "unavailable", message: "Reconnect this workspace's Mac and enable execution sharing before granting access.")
         }
-        var request = URLRequest(url: grant.endpoint.appendingPathComponent(revoke ? "v1/execution/manage/revoke" : "v1/execution/manage/devices"))
+        return try await sendManagement(grant, libraryID: workspace.libraryID,
+            path: revoke ? "v1/execution/manage/revoke" : "v1/execution/manage/devices", body: JSONEncoder().encode(["deviceID": deviceID]))
+    }
+    func notifyLibraryRelocation(_ relocation: CompanionLibraryRelocation, grant: CompanionExecutionManagementGrant) async throws {
+        let _: [String: Bool] = try await sendManagement(grant, libraryID: relocation.previousLibraryID,
+            path: "v1/execution/manage/library-relocation", body: JSONEncoder().encode(relocation))
+    }
+    private func sendManagement<Value: Decodable>(_ grant: CompanionExecutionManagementGrant, libraryID: String, path: String, body: Data) async throws -> Value {
+        guard Self.validManagementEndpoint(grant.endpoint) else { throw CompanionAPIError(code: "insecure_endpoint", message: "Use the registered private workspace endpoint.") }
+        var request = URLRequest(url: grant.endpoint.appendingPathComponent(path))
         request.httpMethod = "POST"
-        request.httpBody = try JSONEncoder().encode(["deviceID": deviceID])
+        request.httpBody = body
         request.setValue("Bearer " + grant.token, forHTTPHeaderField: "Authorization")
         request.setValue(String(CompanionProtocol.version), forHTTPHeaderField: "X-Woven-Protocol")
-        request.setValue(workspace.libraryID, forHTTPHeaderField: "X-Woven-Library")
-        request.setValue(workspace.id, forHTTPHeaderField: "X-Woven-Workspace")
+        request.setValue(grant.executionLibraryID ?? libraryID, forHTTPHeaderField: "X-Woven-Library")
+        request.setValue(grant.workspaceID, forHTTPHeaderField: "X-Woven-Workspace")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 15; configuration.timeoutIntervalForResource = 30
@@ -570,7 +727,7 @@ final class CompanionHostController {
         guard pendingRevocations[deviceID]?.contains(workspaceID) == true, let model else { return }
         if let configuration = model.remoteWorkspaces.workspaces.first(where: { $0.id.uuidString.lowercased() == workspaceID }) {
             try await model.remoteWorkspaces.revokeExecutionDevice(configuration: configuration, deviceID: deviceID)
-        } else if let workspace = try await model.dashboardStore?.database.companionExecutionWorkspaces().first(where: { $0.id == workspaceID && $0.kind == .mac }) {
+        } else if let workspace = try await model.dashboardStore?.database.companionExecutionWorkspaces().first(where: { $0.id == workspaceID }) {
             let acknowledgement: ExecutionManagementAcknowledgement = try await managedExecutionRequest(workspace: workspace, deviceID: deviceID, revoke: true)
             guard acknowledgement.revoked else {
                 throw CompanionAPIError(code: "revocation_pending", message: "The workspace has not yet revoked this device.")
@@ -608,12 +765,15 @@ final class CompanionHostController {
               errorMessage: errorMessage, pairingPayload: pairingPayload, pairingExpiresAt: pairingExpiresAt,
               pairedDevices: pairedDevices, lastSeenAt: lastSeenAt, discoveredPeers: discoveredPeers,
               pendingPairingRequests: pendingPairingRequests, isDiscovering: isDiscovering, executionWorkspaces: executionWorkspaces,
-              pendingDeviceRevocations: pendingRevocations, workspaceAccessPolicies: workspaceAccessPolicies)
+              pendingDeviceRevocations: pendingRevocations, workspaceAccessPolicies: workspaceAccessPolicies,
+              libraryTransfer: libraryTransfer)
     }
 
     func refreshStatus() async {
         if model?.isBackendFrontend == true { await forward(.status); return }
         do {
+            await model?.libraryTransfer.refresh()
+            libraryTransfer = model?.libraryTransfer.presentation ?? .init()
             try await loadAuthentication()
             pendingPairingRequests = await authentication?.pendingPairingRequests() ?? []
             pendingDeviceRevocations = pendingRevocations
@@ -627,6 +787,46 @@ final class CompanionHostController {
         isDiscovering = true; errorMessage = nil
         defer { isDiscovering = false }
         do { discoveredPeers = try await discovery.discover() }
+        catch { errorMessage = error.localizedDescription }
+    }
+    func beginLibraryTransfer(_ peer: CompanionDiscoveredPeer) async {
+        if model?.isBackendFrontend == true {
+            do {
+                try await model?.flushFrontendLibraryTransferWriting(); await forward(.beginLibraryTransfer(peer))
+                if libraryTransfer.outgoing == nil || libraryTransfer.outgoing?.phase == .cancelled { await model?.resumeAfterLibraryTransferCancellation() }
+            }
+            catch { errorMessage = error.localizedDescription }
+            return
+        }
+        await model?.libraryTransfer.begin(destination: peer); await refreshStatus()
+    }
+    func approveLibraryTransfer(_ id: String) async {
+        if model?.isBackendFrontend == true {
+            do {
+                try await model?.flushFrontendLibraryTransferWriting(); await forward(.approveLibraryTransfer(id))
+                if libraryTransfer.incoming.first(where: { $0.request.id == id })?.status.phase == .awaitingApproval { await model?.resumeAfterLibraryTransferCancellation() }
+            }
+            catch { errorMessage = error.localizedDescription }
+            return
+        }
+        await model?.libraryTransfer.approve(id); await refreshStatus()
+    }
+    func declineLibraryTransfer(_ id: String) async {
+        if model?.isBackendFrontend == true { await forward(.declineLibraryTransfer(id)); await model?.resumeAfterLibraryTransferCancellation(); return }
+        await model?.libraryTransfer.decline(id); await refreshStatus()
+    }
+    func retryLibraryTransfer() async {
+        if model?.isBackendFrontend == true { await forward(.retryLibraryTransfer); return }
+        model?.libraryTransfer.resume(); await refreshStatus()
+    }
+    func cancelLibraryTransfer() async {
+        if model?.isBackendFrontend == true { await forward(.cancelLibraryTransfer); await model?.resumeAfterLibraryTransferCancellation(); return }
+        do { try await model?.libraryTransfer.cancelSource() } catch { errorMessage = error.localizedDescription }
+        await refreshStatus()
+    }
+    func requestCentralLibraryRole() async {
+        if model?.isBackendFrontend == true { await forward(.requestCentralLibraryRole); return }
+        do { try await model?.libraryClient.requestCentralRole() }
         catch { errorMessage = error.localizedDescription }
     }
     func approvePairing(id: String) async {
@@ -665,6 +865,7 @@ final class CompanionHostController {
             discoveredPeers = value.discoveredPeers; pendingPairingRequests = value.pendingPairingRequests
             isDiscovering = value.isDiscovering; executionWorkspaces = value.executionWorkspaces
             pendingDeviceRevocations = value.pendingDeviceRevocations; workspaceAccessPolicies = value.workspaceAccessPolicies
+            libraryTransfer = value.libraryTransfer ?? .init()
         } catch { errorMessage = error.localizedDescription }
     }
 
@@ -708,6 +909,9 @@ enum CompanionHostAction: Codable, Sendable {
     case revoke(String), approvePairing(String), denyPairing(String)
     case discover, invitePairing(CompanionDiscoveredPeer)
     case setExecutionAccess(deviceID: String, workspaceID: String, enabled: Bool)
+    case beginLibraryTransfer(CompanionDiscoveredPeer), approveLibraryTransfer(String), declineLibraryTransfer(String)
+    case retryLibraryTransfer, cancelLibraryTransfer
+    case requestCentralLibraryRole
 }
 
 struct CompanionHostSnapshot: Codable, Sendable {
@@ -726,6 +930,7 @@ struct CompanionHostSnapshot: Codable, Sendable {
     let executionWorkspaces: [CompanionExecutionWorkspace]
     let pendingDeviceRevocations: [String: [String]]
     let workspaceAccessPolicies: [CompanionWorkspaceAccessPolicy]
+    var libraryTransfer: LibraryTransferPresentation? = nil
 }
 
 private struct ExecutionManagementAcknowledgement: Decodable { let revoked: Bool }
@@ -738,7 +943,7 @@ private final class ExecutionManagementRedirectPolicy: NSObject, URLSessionTaskD
 
 /// The central Mac holds only a workspace-scoped enrollment capability here.
 /// Tokens never enter SQLite, replicated app data, logs, or UserDefaults.
-private enum ExecutionManagementVault {
+enum ExecutionManagementVault {
     private static var service: String { (Bundle.main.bundleIdentifier ?? "com.wovenmatter") + ".execution-management" }
     private static func query(libraryID: String, workspaceID: String) -> [CFString: Any] {
         [kSecClass: kSecClassGenericPassword, kSecAttrService: service,

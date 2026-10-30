@@ -61,8 +61,12 @@ extension WorkspaceDatabaseConnection {
     })
   }
   func companionCalendarMutate(_ mutation: CompanionCalendarMutation, deviceID: String) throws -> CompanionCalendarReceipt {
+    let taskWorkspace = mutation.record.event.draft.task?.workspaceID
+    let registeredOwner = try taskWorkspace.flatMap { try federationWorkspaceUnlocked($0) }
+    let exactMacOwner = registeredOwner.map { !$0.deleted && $0.kind == .mac && $0.ownerDeviceID == mutation.record.ownerDeviceID
+      && ($0.executionDeviceID ?? $0.ownerDeviceID) == mutation.record.ownerDeviceID } ?? false
     guard mutation.deviceID == deviceID, UUID(uuidString: mutation.id) != nil, UUID(uuidString: mutation.record.id) != nil,
-      mutation.record.ownerDeviceID == nil || mutation.record.event.draft.task?.workspaceID == nil || mutation.record.event.draft.task?.workspaceID == mutation.record.ownerDeviceID,
+      mutation.record.ownerDeviceID == nil || taskWorkspace == nil || taskWorkspace == mutation.record.ownerDeviceID || exactMacOwner,
       mutation.record.excludedOccurrences.allSatisfy({ $0 >= 0 }), mutation.record.excludedOccurrences.count <= 100_000 else { throw CompanionCalendarError.invalid }
     let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
     let input = String(decoding: try encoder.encode(mutation), as: UTF8.self)

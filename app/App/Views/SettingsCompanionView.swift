@@ -9,14 +9,16 @@ struct SettingsCompanionView: View {
     @State private var recoveryError: String?
     @State private var switching = false
     @State private var confirmRoleChange = false
+    @State private var showTransferChooser = false
     @State private var updatingAccess: Set<String> = []
     var reservesRailControlSpace = false
     var onBack: () -> Void
     private var client: CentralLibraryClientModel { model.libraryClient }
+    private var isNode: Bool { model.isLibraryClient || model.isTransferredLibraryNode }
 
     var body: some View {
         SettingsPage(title: "Apple Devices", reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
-            if DevelopmentLaunch.isClient {
+            if DevelopmentLaunch.isClient || model.isTransferredLibraryNode {
                 SettingsCard(title: "Central database") {
                     HStack(spacing: 12) {
                         DeviceConnectionIcon(kind: .mac)
@@ -27,7 +29,7 @@ struct SettingsCompanionView: View {
                     }
                 }
                 SettingsCard(title: "This Mac") {
-                    Text("This development instance keeps a local database synchronized with the live library. Its own background server runs its agents and scheduled work.")
+                    Text(model.isTransferredLibraryNode ? "This Mac keeps its local data synchronized with the central database. Its own background server runs its agents and scheduled work." : "This development instance keeps a local database synchronized with the live library. Its own background server runs its agents and scheduled work.")
                         .font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground)
                 }
             } else if model.isLibraryClient {
@@ -61,57 +63,54 @@ struct SettingsCompanionView: View {
                 if !host.pendingDeviceRevocations.isEmpty { pendingRevocations }
             }
             if !DevelopmentLaunch.isClient {
-                if !model.isLibraryClient || client.credential == nil {
+                if !isNode || (model.isLibraryClient && client.credential == nil) {
                     DevicePairingDiscoveryCard(pairing: client.devicePairing, host: host, isCentral: !model.isLibraryClient, canPairWithCentral: model.isLibraryClient)
                 }
-                if !model.isLibraryClient { DevicePairingCodeCard(host: host) }
-                if !model.isLibraryClient, let message = host.errorMessage {
+                if !isNode { DevicePairingCodeCard(host: host) }
+                if !isNode, let message = host.errorMessage {
                     Text(message).font(.system(size: 12)).foregroundStyle(DashboardPalette.danger)
                         .textSelection(.enabled).accessibilityIdentifier("companion.error")
                 }
-                if let error = client.deviceConnectionsError, !model.isLibraryClient {
+                if !isNode, let error = client.deviceConnectionsError {
                     Text(error).font(.system(size: 12)).foregroundStyle(DashboardPalette.danger)
                 }
                 if !model.companionRecoveredNoteDrafts.isEmpty { recoveredDrafts }
-                SettingsCard(title: "Database role", detail: model.isLibraryClient
+                LibraryTransferSettings(model: model, host: host)
+                SettingsCard(title: "Database role", detail: isNode
                     ? "This Mac is a node. Pair it with a central database to share its data and workspaces."
                     : "This Mac hosts the central database. Paired devices use this database and its connected workspaces.") {
                     HStack {
-                        Text(model.isLibraryClient ? "Node" : "Central database").font(.system(size: 13, weight: .medium))
+                        Text(isNode ? "Node" : "Central database").font(.system(size: 13, weight: .medium))
                         Spacer()
-                        Button(model.isLibraryClient ? "Use as central database…" : "Change to node…") { confirmRoleChange = true }
+                        Button(isNode ? "Request central role…" : "Change to node…") {
+                            if isNode { confirmRoleChange = true } else { showTransferChooser = true }
+                        }
                             .buttonStyle(SettingsQuietButtonStyle()).disabled(switching)
                     }
-                    Text("Changing roles restarts Woven Matter. This Mac’s existing data stays on this Mac.")
+                    Text("Changing the central Mac backs up and merges both databases before restarting. Your workspaces keep their execution owners.")
                         .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
                 }
             }
         }
         .task {
             guard !DevelopmentLaunch.isClient else { return }
-            await client.initialize()
+            if !model.isTransferredLibraryNode { await client.initialize() }
             if model.isLibraryClient { await client.devicePairing.restorePendingRequest() }
             while !Task.isCancelled {
                 if !model.isLibraryClient { await host.refreshStatus() }
+                else { await model.libraryTransfer.refresh() }
+                if host.libraryTransfer.outgoing?.phase == .cancelled { await model.resumeAfterLibraryTransferCancellation() }
                 do { try await Task.sleep(for: .seconds(2)) } catch { return }
             }
         }
-        .onDisappear { if !DevelopmentLaunch.isClient { client.devicePairing.stopPairingMode() } }
-        .confirmationDialog(model.isLibraryClient ? "Use this Mac as a central database?" : "Change this Mac to a node?", isPresented: $confirmRoleChange) {
-            Button("Change role and restart") {
-                switching = true
-                Task {
-                    defer { switching = false }
-                    do {
-                        if model.isLibraryClient { try await model.returnToCentralLibraryMode() }
-                        else { try await model.activateLibraryClientMode() }
-                    } catch { client.deviceConnectionsError = error.localizedDescription }
-                }
+        .onDisappear { if !DevelopmentLaunch.isClient && !model.isTransferredLibraryNode { client.devicePairing.stopPairingMode() } }
+        .sheet(isPresented: $showTransferChooser) { LibraryTransferChooser(model: model, host: host) }
+        .confirmationDialog("Make this Mac the central database?", isPresented: $confirmRoleChange) {
+            Button("Request database transfer") {
+                Task { await host.requestCentralLibraryRole() }
             }
         } message: {
-            Text(model.isLibraryClient
-                ? "This reopens this Mac’s own database. Its paired database and pending changes stay saved separately."
-                : "After restarting, pair this node with a central database. This Mac’s existing database stays saved separately.")
+            Text("Approve this request on the current central Mac. Both Macs will keep backups, merge their libraries, and retain all paired devices.")
         }
     }
     private var clientDeviceRoster: some View {

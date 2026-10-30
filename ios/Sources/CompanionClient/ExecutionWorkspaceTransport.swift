@@ -13,6 +13,7 @@ public struct DirectWorkspaceCredential: Codable, Equatable, Sendable {
   public var workspaceID: String
   public var deviceID: String
   public var token: String
+  public var executionLibraryID: String? = nil
   public init(endpoint: URL, libraryID: String, workspaceID: String, deviceID: String, token: String) {
     self.endpoint = endpoint; self.libraryID = libraryID; self.workspaceID = workspaceID; self.deviceID = deviceID; self.token = token
   }
@@ -46,11 +47,13 @@ public final class HTTPSExecutionWorkspaceTransport: ExecutionWorkspaceTransport
   public init(credential: DirectWorkspaceCredential) throws {
     self.credential = credential
     client = try TailnetJSONClient(endpoint: credential.endpoint, token: credential.token,
-      headers: ["X-Woven-Library": credential.libraryID, "X-Woven-Workspace": credential.workspaceID, "X-Woven-Device": credential.deviceID])
+      headers: ["X-Woven-Library": credential.executionLibraryID ?? credential.libraryID, "X-Woven-Workspace": credential.workspaceID, "X-Woven-Device": credential.deviceID],
+      libraryAlias: credential.executionLibraryID.map { ($0, credential.libraryID) })
   }
   public func identity() async throws -> CompanionExecutionWorkspace {
-    let value: CompanionExecutionWorkspace = try await client.request("v1/execution")
+    var value: CompanionExecutionWorkspace = try await client.request("v1/execution")
     guard value.id == credential.workspaceID, value.libraryID == credential.libraryID else { throw MobileStore.Failure.wrongWorkspace }
+    value.libraryID = credential.libraryID
     return value
   }
   public func providers() async throws -> [CompanionProvider] {
@@ -63,7 +66,7 @@ public final class HTTPSExecutionWorkspaceTransport: ExecutionWorkspaceTransport
     guard command.deviceID == credential.deviceID else { throw MobileConnectionError.revoked }
     // Identity is also carried in the body for workspace services behind private Serve.
     var value = try JSONSerialization.jsonObject(with: JSONEncoder().encode(command)) as! [String: Any]
-    value["libraryID"] = credential.libraryID; value["workspaceID"] = credential.workspaceID
+    value["libraryID"] = credential.executionLibraryID ?? credential.libraryID; value["workspaceID"] = credential.workspaceID
     return try await client.request("v1/execution/commands", method: "POST", body: JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]))
   }
   public func receipt(_ id: String) async throws -> CompanionCommandReceipt? {
@@ -71,7 +74,9 @@ public final class HTTPSExecutionWorkspaceTransport: ExecutionWorkspaceTransport
     catch MobileConnectionError.http(404, _) { return nil }
   }
   public func events(after: Int64) async throws -> CompanionJournalPage {
-    try await client.request("v1/execution/events", query: [.init(name: "after", value: String(after))])
+    var value: CompanionJournalPage = try await client.request("v1/execution/events", query: [.init(name: "after", value: String(after))])
+    guard value.libraryID == credential.libraryID else { throw MobileStore.Failure.wrongWorkspace }
+    return value
   }
   public func conversations() async throws -> [CompanionConversation] {
     try await client.request("v1/execution/conversations")
@@ -100,11 +105,13 @@ final class TailnetJSONClient: @unchecked Sendable {
   private let token: String
   private let headers: [String: String]
   private let session: URLSession
-  init(endpoint: URL, token: String, headers: [String: String]) throws {
+  private let libraryAlias: (String, String)?
+  init(endpoint: URL, token: String, headers: [String: String], libraryAlias: (String, String)? = nil) throws {
     guard endpoint.scheme == "https", endpoint.host?.lowercased().hasSuffix(".ts.net") == true,
       endpoint.user == nil, endpoint.password == nil, endpoint.query == nil, endpoint.fragment == nil,
       !endpoint.pathComponents.contains("..") else { throw MobileConnectionError.insecureEndpoint }
     self.endpoint = endpoint; self.token = token; self.headers = headers
+    self.libraryAlias = libraryAlias
     let configuration = URLSessionConfiguration.ephemeral
     configuration.httpCookieStorage = nil; configuration.urlCache = nil
     configuration.timeoutIntervalForRequest = 30; configuration.timeoutIntervalForResource = 60
@@ -138,7 +145,9 @@ final class TailnetJSONClient: @unchecked Sendable {
     guard data.count <= maximum else { throw MobileConnectionError.responseTooLarge }
     #endif
     switch response.statusCode {
-    case 200..<300: return try JSONDecoder().decode(Value.self, from: data)
+    case 200..<300:
+      let decoded = try libraryAlias.map { try CompanionLibraryJSON.rewrite(data, from: $0.0, to: $0.1) } ?? data
+      return try JSONDecoder().decode(Value.self, from: decoded)
     case 401, 403: throw MobileConnectionError.revoked
     case 426: throw MobileConnectionError.versionMismatch
     default:

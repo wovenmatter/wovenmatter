@@ -149,8 +149,9 @@ final class CentralExecutionClient {
         let issued = try await provision(workspace.id)
         guard issued.workspace.id == workspace.id, issued.workspace.libraryID == identity.libraryID,
               issued.deviceID == identity.hostDeviceID, let endpoint = issued.workspace.endpoint else { throw MobileConnectionError.invalidResponse }
-        let credential = DirectWorkspaceCredential(endpoint: endpoint, libraryID: identity.libraryID,
+        var credential = DirectWorkspaceCredential(endpoint: endpoint, libraryID: identity.libraryID,
             workspaceID: workspace.id, deviceID: identity.hostDeviceID, token: issued.token)
+        credential.executionLibraryID = issued.executionLibraryID
         let transport = try makeTransport(credential)
         // Provisioning has acknowledged this scoped grant. Preserve it before
         // probing reachability so a lost probe does not rotate it on reconnect.
