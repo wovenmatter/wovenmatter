@@ -62,10 +62,10 @@ rate limits do not trigger fallback. A turn that has already produced output or
 executed tools is not automatically replayed.
 
 Remote workspaces include the same helper. Their Pi Durable runs continue
-when the Mac app disconnects, while the remote container and service remain
-running. Reopening the conversation recovers the completed response; reconnecting
-to an unfinished response waits for that remote turn to finish. A container or
-service restart interrupts active work and requires an explicit retry.
+when the Mac app disconnects, while the Linux host and its Woven Matter service
+keep running. Reopening the conversation recovers the completed response; reconnecting
+to an unfinished response waits for that remote turn to finish. A service or
+host restart interrupts active work and requires an explicit retry.
 
 Pi Durable and Usage settings manage the same saved provider accounts.
 Dictation uses on-device speech and needs no account. Subscription connections remain distinct from separately billed API
@@ -102,8 +102,8 @@ App-managed Pi Durable credentials on the Mac, including OAuth refresh tokens, a
 stored in macOS Keychain. Each remote workspace has one encrypted credential
 store using AES-256-GCM. Its separate random key is kept in the Mac's Keychain
 and delivered over the authenticated SSH connection. The remote helper keeps
-the key in memory; after a helper/container restart, reconnect Woven Matter to
-unlock it. Updates do not restart active sessions.
+the key in memory; after the workspace service or host restarts, reconnect
+Woven Matter to unlock it. Updates do not restart active sessions.
 
 If the Mac's workspace key is lost, use **Reset workspace credentials** on that
 workspace in Pi Durable settings. This removes independent ChatGPT/Grok sign-ins and
@@ -114,11 +114,11 @@ older backups may still contain previous plaintext copies.
 
 Encryption protects stored credential files and disk backups. It does not
 protect credentials from an administrator controlling an unlocked machine.
-Crash dumps are disabled for managed helpers/containers; host swap and memory
-snapshots remain host responsibilities. Removing stored credentials does not
+Crash dumps are disabled for managed helpers and the remote workspace service;
+host swap and memory snapshots remain host responsibilities. Removing stored credentials does not
 revoke copies already obtained elsewhere; revoke those through the provider.
 
-Open **Local Agent Workspace** or a specific **Remote agent workspace** in
+Open **Local Workspace** or a specific workspace under **Remote Workspaces** in
 Settings and select **Refresh sign-in status**. It checks Pi Durable and
 independent harnesses without starting login. Results distinguish stored
 credentials, a harness reporting sign-in, missing sign-in, unsupported checks,
@@ -126,7 +126,7 @@ and failures. These checks do not verify remaining usage. Local harnesses whose
 credential access is disabled stay unchecked.
 
 With remote background execution enabled, the workspace also retains supported
-ACP and Pi sessions across Mac disconnections. Service or container restarts are
+ACP and Pi sessions across Mac disconnections. Service or host restarts are
 a separate boundary: interrupted sends are not automatically repeated. See
 [Background execution](../architecture/BACKGROUND_EXECUTION.md).
 
@@ -147,9 +147,11 @@ underlying libraries as **Pi Durable SDK** and **Claude SDK**.
 
 Claude owns subscription login, storage, and refresh. On this Mac, it uses its
 native Keychain entry; plaintext fallback is blocked if Keychain is unavailable.
-In remote workspaces, sign in separately. Claude’s native state lives in a private
-memory-backed directory and disappears when the container restarts, so sign in
-again afterward. Claude subscription tokens are never copied between workspaces.
+In remote workspaces, sign in separately. On a Linux host, Claude’s native state
+lives in a private directory under `/dev/shm`, which must be memory-backed
+(tmpfs). It survives service restarts and updates but is cleared when the host
+reboots, so sign in again afterward. Claude subscription tokens are never copied
+between workspaces.
 API keys retain the existing Keychain/encrypted remote storage behavior.
 
 Subscription entitlement and any enabled extra usage are controlled by your
@@ -163,16 +165,8 @@ limits are checked in Claude; Woven Matter does not extract its token to query
 those limits. Live account acceptance and billing attribution require testing
 with your own account.
 
-## iPhone and iPad subscription accounts
+## iOS
 
-Pi Durable on iPhone and iPad supports one subscription connection per provider
-(ChatGPT, Claude, and Grok) per device, including direct and hosted inference.
-Edit the saved connection to reconnect or change its sign-in. Multiple API-key
-connections remain supported.
-
-On upgrade, the selected subscription connection is retained; if no connection for a provider is selected,
-the first saved connection for each provider is retained. Extra subscription
-connections and their device-only credentials are removed. Conversation history
-remains, but chats bound to a removed connection require an explicit connection
-change before they can run again. Reconnecting the same account keeps its chats
-usable; changing to a different subscription account retires the old binding.
+The iOS app is coming soon. When it is available, Pi Durable on iOS will support
+one subscription connection per provider (ChatGPT, Claude, and Grok) per device,
+and multiple API-key connections.

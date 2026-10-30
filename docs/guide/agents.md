@@ -1,6 +1,6 @@
 # Agent setup
 
-WovenMatter has dedicated integrations for Pi Durable, Codex, Claude Code,
+Woven Matter has dedicated integrations for Pi Durable, Codex, Claude Code,
 Grok Build, and OpenCode. Use your existing installations or
 install harnesses in the settings page. Use your existing provider accounts
 and/or API keys; models, authentication, and controls depend on the harness.
@@ -8,18 +8,23 @@ and/or API keys; models, authentication, and controls depend on the harness.
 A **harness** is the software that runs the agent. Settings also calls it a
 **runtime**. A **provider** supplies the model and account access.
 
+![The desktop Settings list with all five harnesses](../assets/screenshots/harness-settings.png)
+
+*Settings in an isolated demo workspace. iOS is coming soon.*
+
 ## Set up a harness
 
-1. Open **Settings → Local Agent Workspace**, or select a workspace under
-   **Remote Agent Workspaces**.
+1. Open **Settings → Local Workspace**, or select a workspace under
+   **Remote Workspaces**.
 2. Find the harness under **Runtimes**. If it is missing, select **Install**
    and review the installer before confirming.
-3. Installed local harnesses appear in the sidebar automatically. Choose **Sign in…** if its native account is not connected. Remote workspaces retain their own Enable controls.
+3. Installed harnesses appear automatically in that workspace. Choose
+   **Sign in…** if its native account is not connected.
 4. Choose **New chat** and select the agent in that workspace.
 
-Start with a harness you already use and have provider access for. WovenMatter
-can discover supported installations and account access. Installation, enabling,
-and authentication are separate steps; completing one does not complete the others.
+Start with a harness you already use and have provider access for. Woven Matter
+can discover supported installations and account access. Installation and
+authentication are separate steps; completing one does not complete the other.
 A remote workspace has its own installations and credentials.
 
 ## Harness settings
@@ -38,10 +43,9 @@ Use **Check for updates** or **Update** in the runtime row. A check reports
 available updates without installing them. Finish active work before updating;
 a busy runtime may block maintenance. Remote updates apply to the selected workspace.
 
-**Hide** controls sidebar visibility. **Disable** turns off the integration
-without uninstalling the software or deleting its data. For OpenCode, disabling
-disconnects WovenMatter while leaving the shared server running; use **Stop server**
-to stop it.
+**Sidebar visibility** in a workspace's settings hides or shows that workspace's
+section; its agents and chats stay active. OpenCode runs as a shared server; use
+**Stop server** in its settings to stop it.
 
 For adapter details, component versions, and update behavior, see
 [Runtime installation and updates](../RUNTIME_MAINTENANCE.md).
@@ -50,11 +54,9 @@ For adapter details, component versions, and update behavior, see
 
 Goals keep a chat working toward an outcome across turns. They are available for
 Pi Durable, Codex, Claude Code, Grok Build and OpenCode. Goals belong to the
-chat’s execution owner: the Mac, an independent Linux workspace, or on-device
-Pi Durable on iPhone/iPad. Controls on other clients route to that owner; goals
-continue there when an observing client disconnects. On iOS, continuation runs
-while the operating system grants execution time. An interrupted device goal
-pauses and requires explicit resume. Archived chats remain read-only.
+chat’s execution owner: the Mac or an independent Linux workspace. Controls on
+other clients route to that owner; goals continue there when an observing client
+disconnects. Archived chats remain read-only.
 
 Goals are always available; there is no tool toggle to enable or disable them.
 Tell the agent to set a goal, send `/goal` to ask it to establish an objective

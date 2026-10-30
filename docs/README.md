@@ -1,43 +1,43 @@
 # Woven Matter documentation
 
-WovenMatter brings Pi Durable, Codex, Claude Code, Grok Build, and OpenCode
-together in one interface, with shared agent workspaces and a central work history. Use these guides to set up your harnesses,
-work across sessions, and organize your conversations, notes, and data.
+Woven Matter is a Mac workspace for Pi Durable, Codex, Claude Code, Grok Build,
+and OpenCode. Start locally, then add a Linux host if you need one. iOS is coming soon.
 
 ## Get started
 
-1. [Getting started](guide/getting-started.md) — install WovenMatter and send your first task.
-2. [Agent setup](guide/agents.md) — use your existing installations and provider accounts, or install a harness.
-3. [Conversations](guide/conversations.md) — run sessions in parallel and return to earlier work.
+1. [Getting started](guide/getting-started.md): install the app and send your first task.
+2. [Harnesses and accounts](guide/agents.md): use existing installations and accounts, or install a harness.
+3. [Conversations and panels](guide/conversations.md): work side by side and return to saved sessions.
 
-## Work with your agents
+## Use the workspace
 
-- [Workspaces and storage](guide/workspaces.md) — shared roots, saved conversations, and where your data lives.
-- [Pi Durable](guide/default-agent.md) — built-in tools, provider connections, and fallback models.
-- [Connections and dictation](guide/connections-and-dictation.md) — shared accounts, Apple on-device dictation, and local model servers.
-- [Executor apps](guide/executor.md) — shared app capabilities, scoped Execute, approvals, and Pi code mode.
-- [Remote workspaces](guide/remote-workspaces.md) — work with agents on other Linux machines.
-- [Notes and data](guide/notes-and-data.md) — work beside a note and use spreadsheets, HTML, and database folders.
-- [Scheduled work and usage](guide/schedules-and-usage.md) — follow Calendar events, scheduled tasks, and provider usage.
-- [Troubleshooting](guide/troubleshooting.md) — resolve setup, connection, and data problems.
+- [Workspaces and storage](guide/workspaces.md): project folders, reference locations, and where your files live.
+- [Remote workspaces](guide/remote-workspaces.md): run agents on a native Linux host over Tailscale.
+- [Pi Durable](guide/default-agent.md): the included agent, provider connections, models, and fallbacks.
+- [Agent tools and permissions](guide/agent-tools.md): defaults, conversation controls, and outside-agent access.
+- [Notes, Library, and Databases](guide/notes-and-data.md): documents, exchanged files, and linked data.
+- [Calendar, Scheduled Tasks, and Usage](guide/schedules-and-usage.md): events, recurring work, and account limits.
+- [Executor](guide/executor.md): connect apps and choose which accounts agents can use.
+- [Accounts and dictation](guide/connections-and-dictation.md): shared accounts, on-device speech, and local model servers.
+- [Troubleshooting](guide/troubleshooting.md): resolve setup, connection, and data problems.
 
-These guides follow the code on `main`. See the
-[release notes](https://github.com/wovenmatter/wovenmatter/releases) for changes
-in your installed version.
+These guides describe the code on `main`. Check the
+[release notes](https://github.com/wovenmatter/wovenmatter/releases) for your installed version.
 
 ## Technical references
 
-- [Agent tools, access, and retries](AGENT_TOOLS.md)
-- [Credential access](KEYCHAIN_ACCESS.md)
-- [Remote workspace internals](reference/REMOTE_WORKSPACES.md)
-- [Remote database limits](reference/REMOTE_DATABASES.md)
+- [Woven MCP tools](AGENT_TOOLS.md) and [credential access](KEYCHAIN_ACCESS.md)
+- [Native Linux hosts](reference/REMOTE_HOSTS.md) and [remote workspace internals](reference/REMOTE_WORKSPACES.md)
+- [Managed remote databases](reference/REMOTE_DATABASES.md)
 - [Runtime installation and updates](RUNTIME_MAINTENANCE.md)
-- [OpenCode integration](opencode-v2/PARITY.md) and [testing](opencode-v2/TESTING.md)
+- [Pi Durable implementation](reference/DEFAULT_AGENT.md)
 - [Native Woven instructions](NATIVE_INSTRUCTIONS.md)
+- [Engineering notes](internals/README.md)
 
-## Build and contribute
+## Build and maintain
 
 - [Contributing](../CONTRIBUTING.md) and [maintainer workflow](MAINTAINER_WORKFLOW.md)
-- [Security policy](../SECURITY.md)
+- [Development builds](DEVELOPMENT_BUILDS.md) and [dependency policy](DEPENDENCIES.md)
+- [Desktop updates](DESKTOP_UPDATES.md) and [Apple device setup](APPLE_DEVICE_SETUP.md)
 - [UI style guide](STYLE_GUIDE.md) and [app icons](app-icons/README.md)
-- [Documentation style and website plan](planning/documentation-overhaul.md)
+- [Security policy](../SECURITY.md)

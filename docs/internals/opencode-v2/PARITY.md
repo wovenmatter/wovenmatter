@@ -2,7 +2,7 @@
 
 WovenMatter connects conversations to the standard local OpenCode v2 service.
 This reference covers its connection, session, and persistence behavior. For
-setup in the app, see [Agent setup](../guide/agents.md).
+setup in the app, see [Agent setup](../../guide/agents.md).
 
 Existing v1 transcripts remain readable in SQLite; new work uses v2 sessions.
 Other harness integrations keep their own transports.
@@ -38,7 +38,7 @@ Startup runs the installed `opencode serve --service` (`opencode2` remains a dis
 Earlier custom/remote connections are no longer opened by this local flow. Their cached transcripts remain in SQLite; session identifiers are not transplanted into the standard service.
 
 Remote workspaces now use a separate v2 service through the authenticated workspace
-proxy; see [Runtime maintenance](../RUNTIME_MAINTENANCE.md). The local service
+proxy; see [Runtime maintenance](../../RUNTIME_MAINTENANCE.md). The local service
 contract above does not describe that remote lifecycle.
 
 ## Persistence and recovery

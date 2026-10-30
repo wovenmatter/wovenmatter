@@ -86,7 +86,7 @@ The repository publisher retains deterministic snapshot IDs and acknowledgement
 checkpoints to avoid double-counting revisions. This aggregate history is separate
 from app telemetry and is intentionally preserved. Saved chart definitions live
 in `product-dashboard-insights.json` (nine product/website insights) and
-`github-dashboard-insights.json` (six GitHub insights). `dashboard-text.md` contains
+`github-dashboard-insights.json` (six GitHub insights). [`dashboard-text.md`](../internals/analytics/dashboard-text.md) contains
 the matching measurement notes. All insights include their live short IDs.
 
 The daily workflow restores the complete previous main-branch workflow artifact

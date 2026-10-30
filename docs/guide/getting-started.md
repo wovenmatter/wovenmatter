@@ -1,17 +1,23 @@
 # Getting started
 
-WovenMatter runs on Apple silicon Macs with macOS 26 or later. Download the
+Woven Matter runs on Apple silicon Macs with macOS 26 or later. An iOS app is
+coming soon. Download the
 DMG from [GitHub Releases](https://github.com/wovenmatter/wovenmatter/releases/latest),
 open it, and move the app into Applications.
 
-No WovenMatter account is required. Start with a harness you already use and
+No Woven Matter account is required. Start with a harness you already use and
 have provider access for. If you already use Codex, for example, choose it for
 your first task; the app can discover an existing installation. Otherwise,
 choose a harness supported by an account or API key you have.
 
 ## Set up your first agent
 
-1. Open **Settings → Local Agent Workspace** and check that the workspace is
+For the included default agent, open **Settings → Pi Durable** to connect a
+provider and choose a model. See [Pi Durable](default-agent.md).
+
+For another harness:
+
+1. Open **Settings → Local Workspace** and check that the workspace is
    ready; use **Retry setup** if it is unavailable.
 2. Choose **New folder** in the sidebar to create a blank project or link an
    existing directory on your Mac.

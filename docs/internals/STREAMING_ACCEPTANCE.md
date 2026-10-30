@@ -1,6 +1,6 @@
 # Streaming acceptance
 
-Use an isolated Dev build as described in [development builds](DEVELOPMENT_BUILDS.md).
+Use an isolated Dev build as described in [development builds](../DEVELOPMENT_BUILDS.md).
 Record the source revision, profile, harness, model, and thinking level for each pass.
 
 ## Offline contracts

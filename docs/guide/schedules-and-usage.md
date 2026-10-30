@@ -9,19 +9,21 @@ the calendar by default. Use **Add to calendar**, **Remove from calendar**, or
 **Show on calendar** to change where a task appears without changing its runs.
 
 Scheduling belongs to the execution workspace. A remote service can continue
-while WovenMatter is closed or the Mac is disconnected; its host and container
-must keep running. Remote agents can update their managed databases through
+while Woven Matter is closed or the Mac is disconnected; the Linux host and its
+Woven Matter service must keep running. Remote agents can update their managed databases through
 owner-local Woven MCP tools, and the Mac displays the last complete synced data.
 
 ## Session timers
 
 With **Timers** enabled, ask an agent to schedule a one-time or recurring follow-up
 in its conversation. Timers persist across app restarts, but fire only while
-WovenMatter is running. Missed recurring firings coalesce into one follow-up.
+the Woven Matter server is running. Missed recurring firings coalesce into one follow-up.
 Use the session controls to edit, pause, or remove a timer. Disabling Timers asks
 you to confirm pausing active timers.
 
 ## Calendar
+
+![Calendar with fictional demo events](../assets/screenshots/calendar.png)
 
 Use **Calendar** for ordinary events and scheduled tasks. Click **Add event**,
 choose a day and time, and optionally add a description. Ordinary events can be
@@ -31,7 +33,8 @@ independent copy.
 
 Choose **Scheduled task** to save a prompt with an agent, model, thinking level,
 access setting, and enabled tools. Choose a folder owned by the selected
-execution workspace, or use its default directory for an ungrouped session.
+execution workspace, or **All Workspaces** to give the session its own scratch
+directory.
 The folder's root supplies its working directory. Model and session options
 come from the selected agent. The agent must be connected to load its available
 options and run the task. Normal session permission requests
@@ -45,8 +48,8 @@ choices: change the **Entire series**, or **Detach this occurrence** into an
 independent one-time event. Detaching retains its settings and removes that
 occurrence from the series.
 
-Local tasks run while Woven Matter is open, or in its background service when
-**Background execution** is enabled in **Settings → Local agent workspace**.
+Local tasks run in Woven Matter's background server, which keeps running after
+you close the window. The Mac must be awake and the server running.
 Remote workspaces run their own tasks with background execution enabled by
 default; the remote host and workspace service must remain running. Pi Durable may
 wait for the Mac to reconnect and unlock credentials after a remote restart.
@@ -74,6 +77,7 @@ billing routes; account-wide API activity is excluded from device totals.
 provider makes available. Use **Go to Usage settings** to add or manage accounts
 in **Settings → Usage**. These accounts are shared with Pi Durable. Providers
 without a supported limits response link to their usage dashboard; unavailable
-data is never shown as zero usage or a full allowance.
+data is never shown as zero usage or a full allowance. Usage tracking saves
+totals and metadata, not prompts or chat contents.
 
 Saved keys use Apple Keychain. Enable or restore access in **Settings → General**.
