@@ -67,6 +67,7 @@ extension WorkspaceDatabaseConnection {
         WHEN (SELECT applying FROM paired_library_clock)=0 BEGIN
           INSERT OR IGNORE INTO paired_calendar_owners VALUES(NEW.id,(SELECT device_id FROM paired_library_clock));
         END;
+        CREATE TABLE IF NOT EXISTS paired_library_file_cursors(peer_id TEXT PRIMARY KEY,cursor TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS paired_library_pending(id TEXT PRIMARY KEY,payload TEXT NOT NULL,peer_id TEXT NOT NULL,cursor INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS paired_library_seen(id TEXT PRIMARY KEY);
         CREATE TABLE IF NOT EXISTS paired_library_seeded(table_name TEXT PRIMARY KEY);
@@ -366,6 +367,12 @@ extension WorkspaceDatabaseConnection {
 }
 
 extension WorkspaceDatabase {
+  public func pairedLibraryFileCursor(_ peer: String) async throws -> String {
+    try await read { try $0.historyRowsUnlocked("SELECT cursor FROM paired_library_file_cursors WHERE peer_id=?", values: [peer]).first?.objectValue?["cursor"]?.stringValue ?? "" }
+  }
+  public func savePairedLibraryFileCursor(_ cursor: String, peer: String) async throws {
+    try await write { try $0.toolsExecuteUnlocked("INSERT INTO paired_library_file_cursors VALUES(?,?) ON CONFLICT(peer_id) DO UPDATE SET cursor=excluded.cursor", [peer, cursor]) }
+  }
   public func materializePendingPeerRecords() async throws { try await write { try $0.materializePendingPeerRecords() } }
   public func pairedLibraryPage(after cursor: Int64) async throws -> PairedLibraryPage { try await read { try $0.pairedLibraryPage(after: cursor) } }
   public func receivePairedLibrary(_ page: PairedLibraryPage, from peer: String) async throws { try await write { try $0.receivePairedLibrary(page, from: peer) } }

@@ -228,6 +228,7 @@ final class PairedMacSyncController {
                 do {
                     try await network.verify(route, deviceID: own.deviceID, token: source.token)
                     var credential = source; credential.route = route
+                    credentials = try loadCredentials()
                     if !credentials.contains(where: { $0.route == route && $0.token == source.token }) {
                         credentials.removeAll { $0.route.deviceID == route.deviceID }; credentials.append(credential)
                         try saveCredentials(credentials)
@@ -283,8 +284,8 @@ final class PairedMacSyncController {
     }
 
     private func synchronizeFiles(route: PairedMacRoute, credential: PairedMacCredential) async throws {
-        guard let files else { return }
-        var cursor = "", chunks = 0
+        guard let files, let database = host?.model?.dashboardStore?.database else { return }
+        var cursor = try await database.pairedLibraryFileCursor(route.deviceID), chunks = 0
         for _ in 0..<8 {
             let page: PairedLibraryFilePage = try await network.request(route.endpoint, path: "v1/peers/files", token: credential.token, body: JSONEncoder().encode(cursor))
             for file in page.files {
@@ -303,7 +304,10 @@ final class PairedMacSyncController {
                     errors[errorKey] = error.localizedDescription
                 }
             }
-            cursor = page.cursor
+            // Resume beyond the per-turn page bound. Wrap after a full scan so
+            // newly added hashes before this cursor are discovered next time.
+            cursor = page.hasMore ? page.cursor : ""
+            try await database.savePairedLibraryFileCursor(cursor, peer: route.deviceID)
             if !page.hasMore { break }
         }
         errors.removeValue(forKey: "files:" + route.deviceID)

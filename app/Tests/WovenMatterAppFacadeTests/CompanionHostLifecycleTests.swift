@@ -524,3 +524,31 @@ extension CompanionHostLifecycleTests {
         #expect(air.host.peerSync.errors.isEmpty)
     }
 }
+
+
+extension CompanionHostLifecycleTests {
+    @Test func fileManifestContinuesBeyondOneBoundedSyncTurn() async throws {
+        let mesh = PeerTestMesh(); defer { mesh.remove() }
+        let air = try await mesh.add("files-air"), mini = try await mesh.add("files-mini")
+        let source = try LibraryFileStore(supportDirectory: air.directory)
+        let target = try LibraryFileStore(supportDirectory: mini.directory)
+        var contents: [(String, Data)] = []
+        for index in 0..<810 {
+            let data = Data("file-\(index)".utf8)
+            contents.append((try source.retain(data), data))
+        }
+        contents.sort { $0.0 < $1.0 }
+        for item in contents.prefix(800) { _ = try target.retain(item.1) }
+        try await mesh.pair(mini, with: air)
+        await mini.host.peerSync.synchronize(force: true)
+        let database = try #require(mini.model.dashboardStore?.database)
+        let peer = try await air.host.peerRoute()
+        #expect(try await database.pairedLibraryFileCursor(peer.deviceID) != "")
+        await mini.host.peerSync.synchronize(force: true)
+        #expect(mini.host.peerSync.errors.isEmpty)
+        #expect(try await database.pairedLibraryFileCursor(peer.deviceID) == "")
+        for item in contents.suffix(10) {
+            #expect(try Data(contentsOf: mini.directory.appending(path: "library-files/" + item.0)) == item.1)
+        }
+    }
+}
