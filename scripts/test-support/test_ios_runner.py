@@ -92,6 +92,8 @@ class IOSRunnerTests(unittest.TestCase):
         self.assertEqual([call[0] for call in calls], ['swift', 'xcodebuild'])
         self.assertIn('platform=iOS Simulator,id=user-device', calls[1])
         self.assertIn('-only-testing:CompanionAppTests', calls[1])
+        self.assertIn('CODE_SIGNING_ALLOWED=YES', calls[1])
+        self.assertIn('CODE_SIGN_IDENTITY=-', calls[1])
 
     def test_both_devices_have_separate_result_bundles(self):
         result, calls = self.run_script('--all-devices')
@@ -112,6 +114,32 @@ class IOSRunnerTests(unittest.TestCase):
         creates = [call for call in calls if call[:3] == ['xcrun', 'simctl', 'create']]
         self.assertIn('com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro', creates[0])
         self.assertIn('com.apple.CoreSimulator.SimDeviceType.iPad-Pro-11-inch-M4-8GB', creates[1])
+
+
+class IOSBuildSigningTests(unittest.TestCase):
+    def test_signing_matches_destination(self):
+        for mode, destination, allowed, identity in [
+            (None, 'generic/platform=iOS Simulator', 'YES', '-'),
+            ('--device-compile', 'generic/platform=iOS', 'NO', None),
+            ('--device', 'platform=iOS,id=test-phone', 'YES', None),
+        ]:
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary:
+                fixture = Path(temporary)
+                tool = fixture / 'xcodebuild'
+                tool.write_text(STUB)
+                tool.chmod(0o755)
+                calls = fixture / 'calls.jsonl'
+                environment = dict(os.environ, PATH=str(fixture) + os.pathsep + os.environ['PATH'],
+                    WM_RUNNER_CALLS=str(calls), WM_NO_SIMULATOR='1',
+                    WOVENMATTER_IOS_DEVICE_ID='test-phone')
+                result = subprocess.run(['bash', str(ROOT / 'scripts/build-ios.sh'),
+                    *([mode] if mode else [])], env=environment, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                call = json.loads(calls.read_text())
+                self.assertEqual(call[call.index('-destination') + 1], destination)
+                self.assertIn('CODE_SIGNING_ALLOWED=' + allowed, call)
+                identities = [arg for arg in call if arg.startswith('CODE_SIGN_IDENTITY=')]
+                self.assertEqual(identities, ['CODE_SIGN_IDENTITY=' + identity] if identity else [])
 
 
 if __name__ == '__main__':

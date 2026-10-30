@@ -33,6 +33,10 @@ scripts/test-ios.sh --all-devices
 scripts/verify-ios-app.sh /absolute/path/to/WovenMatterCompanion.app dev
 ```
 
+Simulator builds and tests use Xcode ad-hoc signing so it embeds the simulated
+application entitlement required by Keychain, including on first launch. No
+signing certificate or account login is needed. `--device-compile` stays unsigned.
+
 Open `WovenMatterCompanion.xcodeproj`, scheme `WovenMatterCompanion`, to run from
 Xcode. Device installation uses existing local signing assets. Dev builds keep
 `Woven Matter Dev` and `com.wovenmatter.companion.dev`; they support simulator and
