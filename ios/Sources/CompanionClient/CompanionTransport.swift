@@ -179,6 +179,9 @@ public final class HTTPSCompanionTransport: CompanionTransport, @unchecked Senda
     catch MobileConnectionError.http(404, _) { return nil }
   }
   public func deviceConnections() async throws -> [CompanionDeviceConnection] { try await request("v1/devices") }
+  public func suspendDevelopmentConnection() async throws {
+    let _: [String: Bool] = try await request("v1/devices/development/disconnect", method: "POST", body: Data("{}".utf8), timeout: 3)
+  }
   public func capabilities(_ id: String) async throws -> CompanionProvider { try await request("v1/sessions/\(try Self.safeID(id))/capabilities") }
   public func asset(_ id: String) async throws -> CompanionNote { try await request("v1/assets/\(try Self.safeID(id))") }
 
@@ -196,6 +199,7 @@ public final class HTTPSCompanionTransport: CompanionTransport, @unchecked Senda
     request.setValue("application/json", forHTTPHeaderField: "Accept")
     if let deviceMetadata {
       request.setValue(deviceMetadata.kind.rawValue, forHTTPHeaderField: "X-Woven-Device-Kind")
+      if let value = deviceMetadata.developmentInstance { request.setValue(value, forHTTPHeaderField: "X-Woven-Development-Instance") }
       if let value = deviceMetadata.osVersion { request.setValue(value, forHTTPHeaderField: "X-Woven-OS-Version") }
       if let value = deviceMetadata.appVersion { request.setValue(value, forHTTPHeaderField: "X-Woven-App-Version") }
     }

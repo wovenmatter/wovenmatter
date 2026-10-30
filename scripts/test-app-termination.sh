@@ -49,7 +49,7 @@ run_probe() {
     exit 1
   fi
 }
-for mode in --normal --updater --standalone-update --staged-update; do
+for mode in --normal --updater --standalone-update --staged-update --dev; do
   run_probe "$mode"
 done
 # Sparkle's helper can quit the backend before the frontend, including retries
@@ -57,6 +57,9 @@ done
 for mode in --updater --staged-update; do
   run_probe "$mode" --backend-already-stopped
 done
+# Dev Cmd-Q uses the same refusal/recovery barrier as a controlled update.
+run_probe --dev --browser-cancels
+run_probe --dev --note-save-fails
 # Each failure cancels the quit through AppKit; the probe then quits again, as
 # a Sparkle retry does, and that attempt must complete the handoff.
 for failure in --backend-restart-fails --note-save-fails --browser-cancels; do

@@ -18,6 +18,30 @@ struct CalendarReplicaTests {
         task: owner ? .init(prompt: "Run here") : nil)), ownerDeviceID: owner ? device : nil))
   }
 
+  @Test func pairingSharesScheduledExecutionAndMigrationRemovesLegacyRestrictions() async throws {
+    let (database, directory) = try await fixture(); defer { try? FileManager.default.removeItem(at: directory) }
+    let identity = try await database.companionLibraryIdentity()
+    let workspace = try await database.registerCompanionExecutionWorkspace(.init(workspace: .init(
+      id: UUID().uuidString.lowercased(), libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID,
+      kind: .mac, name: "Central Mac", executionDeviceID: identity.hostDeviceID)), deviceID: identity.hostDeviceID)
+    let device = device
+    try await database.write { connection in
+      try connection.executeUnlocked("CREATE TABLE companion_workspace_access(device_id TEXT,workspace_id TEXT,enabled INTEGER)")
+      try connection.companionExecuteUnlocked("INSERT INTO companion_workspace_access VALUES (?,?,0)", values: [device, workspace.id])
+    }
+    var request = mutation()
+    request.record.event.draft.task = .init(prompt: "Shared central task")
+    #expect(try await database.companionCalendarMutate(request, deviceID: device).status == .accepted)
+    try await database.write { connection in
+      try connection.createCompanionFederationSchemaUnlocked()
+      let remaining = try connection.companionIDsUnlocked("SELECT name FROM sqlite_master WHERE name='companion_workspace_access'", bindings: [])
+      #expect(remaining.isEmpty)
+    }
+    #expect(try await database.companionLibraryIdentity() == identity)
+    #expect(try await database.companionExecutionWorkspaces() == [workspace])
+    #expect(try await database.companionCalendarSnapshot().records.count == 1)
+  }
+
   @Test func centralRunnerCannotClaimClientOwnedTasksAndRunReceiptsRemainOwned() async throws {
     let (database, directory) = try await fixture(); defer { try? FileManager.default.removeItem(at: directory) }
     var request = mutation(owner: true); request.record.event.draft.task?.enabledTools = ["wovenmatter_calendar"]

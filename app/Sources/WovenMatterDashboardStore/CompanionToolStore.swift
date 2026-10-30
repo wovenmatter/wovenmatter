@@ -81,21 +81,14 @@ extension WorkspaceDatabaseConnection {
     }
   }
 
-  /// Recheck the existing device execution policy between native input steps.
-  /// Caller ownership is derived from the journal, never automation arguments.
+  /// Recheck caller ownership between native input steps. Workspace access
+  /// follows pairing; a retired execution owner still cannot issue automation.
   public func requireCompanionAutomationAccess(callerID: String) throws {
     try withLock {
       let owners = try companionIDsUnlocked("SELECT workspace_id FROM companion_execution_conversations WHERE id=? UNION SELECT workspace_id FROM companion_scheduled_mcp_callers WHERE conversation_id=?", bindings: [callerID, callerID])
       guard let id = owners.first else { return }
       guard let owner = try federationWorkspaceUnlocked(id), !owner.deleted else {
         throw CompanionAPIError(code: "wrong_owner", message: "The automation caller's execution workspace is unavailable.")
-      }
-      let identity = try companionLibraryIdentityUnlocked()
-      let workspaces = try federationValuesUnlocked("SELECT payload FROM companion_execution_workspaces ORDER BY id", as: CompanionExecutionWorkspace.self)
-      guard let host = workspaces.first(where: { $0.kind == .mac && !$0.deleted && ($0.executionDeviceID ?? $0.ownerDeviceID) == identity.hostDeviceID }) else { return }
-      let denied = try companionIDsUnlocked("SELECT workspace_id FROM companion_workspace_access WHERE device_id=? AND workspace_id=? AND enabled=0", bindings: [owner.executionDeviceID ?? owner.ownerDeviceID, host.id])
-      guard denied.isEmpty else {
-        throw CompanionAPIError(code: "execution_disabled", message: "Execution access for this Mac is disabled in Devices.")
       }
     }
   }

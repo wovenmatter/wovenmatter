@@ -9,6 +9,28 @@ import WovenMatterCore
 @MainActor @Suite(.serialized)
 struct DevelopmentLaunchTests {
 
+    @Test func developmentNamesAreExplicitAndDistinctAcrossInstances() {
+        #expect(DevelopmentLaunch.deviceName(host: "Mac", mode: nil, instance: nil) == "Mac")
+        for mode in [DevelopmentLaunch.Mode.client, .snapshot, .live] {
+            #expect(DevelopmentLaunch.deviceName(host: "Mac", mode: mode, instance: "review") == "Mac (Dev) · review")
+        }
+        #expect(DevelopmentLaunch.deviceName(host: "Mac", mode: .snapshot, instance: "a") !=
+                DevelopmentLaunch.deviceName(host: "Mac", mode: .snapshot, instance: "b"))
+    }
+
+    @Test func connectionInventoryHidesHistoryAndStoppedDevelopmentRoutesButKeepsOfflineRealDevices() {
+        var workspace = CompanionExecutionWorkspace(id: "id", libraryID: "library", ownerDeviceID: "owner", kind: .mac, name: "Mac")
+        #expect(workspace.isVisibleInConnections)
+        workspace.retainedHistory = true
+        #expect(!workspace.isVisibleInConnections)
+        workspace.retainedHistory = nil; workspace.developmentInstance = "review"
+        #expect(!workspace.isVisibleInConnections)
+        workspace.endpoint = URL(string: "https://fixture.test.ts.net/wovenmatter")
+        #expect(workspace.isVisibleInConnections)
+        workspace.endpoint = nil
+        #expect(!workspace.isVisibleInConnections)
+    }
+
     @Test func liveHostUsesTheSameExclusiveLeaseAsProduction() throws {
         for mode in [DevelopmentLaunch.Mode.client, .snapshot, .live] {
             let frontend = LocalExecutionRole.resolve(arguments: ["app"], developmentMode: mode)

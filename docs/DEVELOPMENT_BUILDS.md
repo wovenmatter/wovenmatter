@@ -52,8 +52,10 @@ and `WOVENMATTER_DEV_INSTANCE` are equivalent environment defaults. The old
 A client launches the same full desktop app as the other modes. Its window is
 only a frontend. Its own background server owns a persistent local database,
 the synchronization journal, native execution, and scheduling. Closing the
-window leaves this server running. Background Server settings inspect, stop,
-and restart this instance's server; no development login job is installed.
+window leaves this server running. Quitting the Dev app stops its server through
+its normal write-flush and active-work checks, and withdraws its temporary connection.
+Background Server settings inspect, stop, and restart this instance's server; no
+development login job is installed.
 
 The local database synchronizes notes, folders, calendar, saved artifacts, and
 conversation history bidirectionally with the production library through the
@@ -100,8 +102,12 @@ snapshot host.
 
 All three profiles launch a separate headless background server using
 the profile's own executable, socket, and execution lease. The window process is
-a frontend. Closing it leaves that profile's work running; Settings → Background
-Server can stop or restart it. Development servers never install login jobs.
+a frontend. Closing its window leaves that profile's work running; quitting the
+Dev app stops its background server. Settings → Background Server can also stop
+or restart it. Development servers never install login jobs. Dev connections use
+an explicit `(Dev)` label and withdraw when the instance stops. A disappeared
+local Dev client also expires from the active roster after 45 seconds; its saved
+identity can reconnect unless it was explicitly unpaired.
 
 The first snapshot launch takes an online SQLite backup from
 `~/Library/Application Support/Woven Matter`, including committed WAL data. Use
@@ -114,6 +120,8 @@ directories and a new owner inside the snapshot's isolated execution home. Produ
 reference-directory bindings are not made executable in the copy. Other workspace
 ownership is retained without copying its connection grants.
 
+Copied workspace descriptors are retained as history, not active connections.
+Existing snapshots apply the same distinction when their registry starts.
 The copy preserves content and history while removing connection grants, host
 identity, native session bindings, and pending execution. Captured chat workspace
 ownership and roots remain as history metadata; an explicit retained-history state

@@ -34,6 +34,7 @@ final class ApplicationModel {
     var isPreparedForExecutionRestart = false
     var isBackendFrontend = !CommandLine.arguments.contains("--standalone-update")
     var isLibraryClient = false
+    var stopsBackendOnQuit = CommandLine.arguments.contains("--dev")
     var noteEditingSuspended = false
     func suspendNoteEditing() { noteEditingSuspended = true }
     func resumeNoteEditing() { noteEditingSuspended = false }
@@ -161,7 +162,7 @@ private final class TerminationProbe: NSObject, NSApplicationDelegate {
     }
 
     var isUpdateHandoff: Bool {
-        (DesktopUpdater.shared.isInstalling || DesktopUpdater.shared.hasStagedUpdate) && model.isBackendFrontend
+        (DesktopUpdater.shared.isInstalling || DesktopUpdater.shared.hasStagedUpdate || model.stopsBackendOnQuit) && model.isBackendFrontend
     }
 
     /// The exact production choreography, including one cancelled attempt
