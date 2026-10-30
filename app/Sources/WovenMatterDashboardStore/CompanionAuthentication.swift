@@ -199,7 +199,7 @@ public actor CompanionAuthentication {
   public func previewPairing(_ request: CompanionPairRequest, workspaceID: String) throws -> CompanionPairingPreview {
     guard request.protocolVersion == CompanionProtocol.version else { throw Self.error("version_mismatch", "Update Woven Matter on both devices before pairing.") }
     guard request.expectedWorkspaceID == nil || request.expectedWorkspaceID == workspaceID else {
-      throw Self.error("workspace_mismatch", "The central database changed. Generate a new pairing code.")
+      throw Self.error("workspace_mismatch", "The paired library changed. Generate a new pairing code.")
     }
     let proof = Self.digest(request.token)
     let available = offer.map { $0.expiresAt > now() && Self.constantTimeEqual($0.digest, proof) && ($0.deviceID == nil || $0.deviceID == request.deviceID) } == true

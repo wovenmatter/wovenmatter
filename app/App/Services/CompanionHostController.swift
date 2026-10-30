@@ -98,7 +98,7 @@ final class CompanionHostController {
         self.retryInterval = retryInterval
     }
 
-    /// The central database is available while the app and Tailscale are running.
+    /// This Mac shares its local library while its background server and Tailscale are running.
     /// Listening does not create a pairing offer or authorize any device.
     func startForCentralDatabase() async {
         guard !DevelopmentLaunch.isClient else { return }
@@ -397,7 +397,7 @@ final class CompanionHostController {
             return try await peerSync.provision(workspace: workspace, deviceID: device.id)
         }
         if id == localExecutionWorkspaceID(libraryID: identity.libraryID) {
-            guard let executionAPI else { throw CompanionAPIError(code: "unavailable", message: "The central database connection is not ready yet.") }
+            guard let executionAPI else { throw CompanionAPIError(code: "unavailable", message: "This Mac’s workspace connection is not ready yet.") }
             let expectedGeneration = generation
             let credential = try await executionAPI.provision(device: device)
             guard generation == expectedGeneration, endpoint != nil,
@@ -456,13 +456,13 @@ final class CompanionHostController {
         }
     }
 
-    /// Internal execution-owner path for the central desktop itself. It cannot
+    /// Internal execution-owner path for this desktop itself. It cannot
     /// choose an arbitrary principal and is never exposed as a client HTTP route.
     func provisionCentralExecutionWorkspace(id: String) async throws -> CompanionExecutionCredential {
         guard let model, !model.isBackendFrontend, !model.isLibraryClient,
               let database = model.dashboardStore?.database, UUID(uuidString: id) != nil,
               !provisioningWorkspaceIDs.contains(id) else {
-            throw CompanionAPIError(code: "unavailable", message: "The central execution owner is unavailable.")
+            throw CompanionAPIError(code: "unavailable", message: "This Mac’s execution owner is unavailable.")
         }
         provisioningWorkspaceIDs.insert(id)
         defer { provisioningWorkspaceIDs.remove(id) }
@@ -476,11 +476,11 @@ final class CompanionHostController {
         if let configuration = model.remoteWorkspaces.workspaces.first(where: { $0.id.uuidString.lowercased() == id }) {
             credential = try await model.remoteWorkspaces.provisionExecutionDevice(configuration: configuration,
                 libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID,
-                deviceID: identity.hostDeviceID, deviceName: Host.current().localizedName ?? "Central Mac")
+                deviceID: identity.hostDeviceID, deviceName: Host.current().localizedName ?? "Mac")
         } else if let registered, registered.kind == .mac {
             credential = try await managedExecutionRequest(workspace: registered, deviceID: identity.hostDeviceID, revoke: false)
         } else {
-            throw CompanionAPIError(code: "unavailable", message: "This execution workspace must be reachable and enrolled before the central Mac can control it.")
+            throw CompanionAPIError(code: "unavailable", message: "This execution workspace must be reachable and enrolled before this Mac can control it.")
         }
         guard credential.deviceID == identity.hostDeviceID, credential.workspace.id == id,
               credential.workspace.libraryID == identity.libraryID,
@@ -542,7 +542,7 @@ final class CompanionHostController {
     }
 
     func disconnectLocalDevelopment(_ request: DevelopmentDisconnectRequest) async throws {
-        guard let authentication, let database = model?.dashboardStore?.database else { throw CompanionAPIError(code: "unavailable", message: "The central library is unavailable.") }
+        guard let authentication, let database = model?.dashboardStore?.database else { throw CompanionAPIError(code: "unavailable", message: "This Mac’s library is unavailable.") }
         try await authentication.suspendLocalDevelopment(deviceID: request.deviceID, credential: request.credential)
         try await database.withdrawDevelopmentWorkspaces(ownedBy: request.deviceID)
         try await refreshStatusAndDevelopmentPresence(database: database)
@@ -782,7 +782,7 @@ final class CompanionHostController {
     func connectLocalDevelopment(_ request: DevelopmentClientRequest) async throws -> DevelopmentClientConnection {
         guard DevelopmentLaunch.mode == nil || DevelopmentLaunch.isLiveHost, model?.isLibraryClient == false,
               let database = model?.dashboardStore?.database, let endpoint, let authentication else {
-            throw CompanionAPIError(code: "unavailable", message: "Run production with background execution enabled, or a live Dev host, and wait for its central library to connect.")
+            throw CompanionAPIError(code: "unavailable", message: "Run production with background execution enabled, or a live Dev host, and wait for its library to connect.")
         }
         let response = try await authentication.enrollLocalDevelopment(deviceID: request.deviceID,
             name: request.name, workspaceID: database.companionWorkspaceID())
@@ -829,7 +829,7 @@ private final class ExecutionManagementRedirectPolicy: NSObject, URLSessionTaskD
     }
 }
 
-/// The central Mac holds only a workspace-scoped enrollment capability here.
+/// The Mac that added a workspace holds its scoped enrollment capability here.
 /// Tokens never enter SQLite, replicated app data, logs, or UserDefaults.
 private enum ExecutionManagementVault {
     private static var service: String { (Bundle.main.bundleIdentifier ?? "com.wovenmatter") + ".execution-management" }
