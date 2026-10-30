@@ -10,8 +10,11 @@ enum LibraryTransferWritingImporter {
     static func merge(store: MobileStore, database: WorkspaceDatabase, transferID: String) async throws {
         let state = await store.snapshot(), history = await store.journal.snapshot()
         let identity = try await database.companionLibraryIdentity()
-        let owned = history.workspaces.values.filter { WorkspaceJournal.isLocalExecutionOwner($0, deviceID: state.deviceID) }
-        let ownedIDs = Set(owned.map(\.id))
+        // A returning former central already retains its own native sessions in
+        // this database. Their journal must not turn them into foreign sessions.
+        let allOwned = history.workspaces.values.filter { WorkspaceJournal.isLocalExecutionOwner($0, deviceID: state.deviceID) }
+        let owned = allOwned.filter { $0.ownerDeviceID != identity.hostDeviceID }
+        let ownedIDs = Set(allOwned.map(\.id)), journalOwnedIDs = Set(owned.map(\.id))
         let registered = try await database.companionExecutionWorkspaces()
         for var workspace in owned {
             workspace.libraryID = identity.libraryID
@@ -34,7 +37,7 @@ enum LibraryTransferWritingImporter {
             }
         }
         for conflict in state.conflicts.values { try await recoverNote(conflict.local, database: database, deviceID: state.deviceID, transferID: transferID) }
-        let entries = history.entries.values.filter { ownedIDs.contains($0.workspaceID) }.sorted {
+        let entries = history.entries.values.filter { journalOwnedIDs.contains($0.workspaceID) }.sorted {
             $0.workspaceID == $1.workspaceID ? $0.originSequence < $1.originSequence : $0.workspaceID < $1.workspaceID
         }
         var batch: [CompanionJournalEntry] = [], bytes = 0

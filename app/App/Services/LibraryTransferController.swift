@@ -56,6 +56,11 @@ final class LibraryTransferController {
     static func node(in directory: URL) -> TransferredLibraryNode? {
         try? JSONDecoder().decode(TransferredLibraryNode.self, from: Data(contentsOf: directory.appending(path: "library-node.json")))
     }
+    nonisolated static func nodeCredential(_ node: TransferredLibraryNode) throws -> MobileCredential? {
+        try LibraryTransferSecretVault.nodeCredential(node.relocation.transferID)
+    }
+    nonisolated static func saveNodeCredential(_ value: MobileCredential, transferID: String) throws { try LibraryTransferSecretVault.saveNodeCredential(value, id: transferID) }
+    nonisolated static func clearNodeCredential(_ id: String) throws { try LibraryTransferSecretVault.clearNodeCredential(id) }
     static func requiresRecovery(in directory: URL) -> Bool {
         let root = directory.appending(path: "Library Transfers")
         if let value = try? JSONDecoder().decode(Outgoing.self, from: Data(contentsOf: root.appending(path: "outgoing.json"))),
@@ -67,7 +72,7 @@ final class LibraryTransferController {
         }
     }
     func startNodeRecoveryListenerIfNeeded() async throws {
-        guard model?.isLibraryClient == true, recoveryServer == nil,
+        guard model?.isLibraryClient == true || model?.isTransferredLibraryNode == true, recoveryServer == nil,
               let active = presentation.incoming.first(where: { [.receiving, .verified].contains($0.status.phase) }),
               let endpoint = active.status.destinationEndpoint, let model else { return }
         model.libraryClient.holdForLibraryTransferRecovery()
@@ -212,6 +217,9 @@ final class LibraryTransferController {
             value.status = .init(id: id, phase: .receiving, backupPath: backup.path)
             try save(value)
             try await LibraryTransferArchive.backup(database: database, to: backup)
+            for (index, store) in model.libraryTransferWritingStores.enumerated() {
+                try await store.backupForLibraryTransfer(to: backup.appending(path: "Retained Node \(index + 1)"))
+            }
             let authentication = try await model.companionHost.libraryTransferAuthentication()
             let authBackup = backup.appending(path: "companion-devices.json")
             if !FileManager.default.fileExists(atPath: authBackup.path) { try await authentication.backupForLibraryTransfer(to: authBackup) }
@@ -225,6 +233,7 @@ final class LibraryTransferController {
                 if !FileManager.default.fileExists(atPath: snapshot.path) { try LibraryTransferSQLite.snapshot(backup.appending(path: "workspace.sqlite"), to: snapshot) }
                 let copied = try await WorkspaceDatabase(url: snapshot)
                 try await copied.projectLibraryTransferOrigins()
+                for store in model.libraryTransferWritingStores { try await LibraryTransferWritingImporter.merge(store: store, database: copied, transferID: id) }
                 // Checkpoint the projected export through SQLite's backup API;
                 // the source backup remains byte-for-byte untouched.
                 let projected = export.appending(path: "workspace.sqlite")
@@ -275,8 +284,8 @@ final class LibraryTransferController {
             try Task.checkCancellation()
             // Save the future node's own credential before issuing commit. A
             // Keychain failure leaves the original source authoritative and fenced.
-            try MobileCredentialVault.save(.init(endpoint: endpoint, workspaceID: value.request.sourceLibraryID,
-                deviceID: value.request.source.deviceID, token: Self.bootstrap(secret)))
+            try Self.saveNodeCredential(.init(endpoint: endpoint, workspaceID: value.request.sourceLibraryID,
+                deviceID: value.request.source.deviceID, token: Self.bootstrap(secret)), transferID: id)
             try Task.checkCancellation()
             value.commitIssued = true; try save(value)
         }
@@ -293,7 +302,7 @@ final class LibraryTransferController {
         let replica = try MobileStore(file: root.appending(path: "LibraryClient/Transferred/" + id + "/library.json"), deviceID: value.request.source.deviceID)
         try await replica.bindWorkspace(value.request.sourceLibraryID)
         let connection = try HTTPSCompanionTransport(credential: .init(endpoint: endpoint, workspaceID: value.request.sourceLibraryID,
-            deviceID: value.request.source.deviceID, token: Self.bootstrap(secret)))
+            deviceID: value.request.source.deviceID, token: Self.bootstrap(secret)), persistCredential: { try Self.saveNodeCredential($0, transferID: id) })
         try await MobileSyncEngine(store: replica, transport: connection).synchronize()
         try await database.retireLibraryAuthority(workspace: value.workspace)
         try LibraryTransferArchive.persist(TransferredLibraryNode(relocation: relocation, workspace: value.workspace, management: value.management), to: try root.appending(path: "library-node.json"))
@@ -322,9 +331,9 @@ final class LibraryTransferController {
             let database = try await receivingDatabase()
             let endpoint = model.isLibraryClient ? model.libraryClient.localEndpoint : model.companionHost.endpoint
             guard let endpoint else { throw failure("Enable this Mac’s Apple device connection before accepting the transfer.") }
-            let replica = model.isLibraryClient ? model.libraryClient.transferStore : nil
+            let replicas = model.libraryTransferWritingStores
             try await receiverStore().approve(id, database: database, endpoint: endpoint, additionalBackup: { backup in
-                try await replica?.backupForLibraryTransfer(to: backup.appending(path: "Node Replica"))
+                for (index, replica) in replicas.enumerated() { try await replica.backupForLibraryTransfer(to: backup.appending(path: "Node Replica \(index + 1)")) }
             })
             presentation.incoming = await (try receiverStore()).allSessions()
         } catch {
@@ -425,8 +434,8 @@ final class LibraryTransferController {
         }
         // A paired destination's pending local edits belong in the new central,
         // including writing created while the old central was unreachable.
-        if let store = model?.isLibraryClient == true ? model?.libraryClient.transferStore : nil {
-            try await store.backupForLibraryTransfer(to: incoming.deletingLastPathComponent().appending(path: "Replica at verification"))
+        for (index, store) in (model?.libraryTransferWritingStores ?? []).enumerated() {
+            try await store.backupForLibraryTransfer(to: incoming.deletingLastPathComponent().appending(path: "Replica \(index + 1) at verification"))
             try await LibraryTransferWritingImporter.merge(store: store, database: staged, transferID: request.id)
         }
         let grants = try JSONDecoder().decode([CompanionExecutionManagementGrant].self, from: Data(contentsOf: incoming.appending(path: "authority.json")))
@@ -458,7 +467,7 @@ final class LibraryTransferController {
         }
         return nil
     }
-    private static func bootstrap(_ secret: String) -> String { SHA256.hash(data: Data(("woven-library-node-v1\0" + secret).utf8)).map { String(format: "%02x", $0) }.joined() }
+    nonisolated private static func bootstrap(_ secret: String) -> String { SHA256.hash(data: Data(("woven-library-node-v1\0" + secret).utf8)).map { String(format: "%02x", $0) }.joined() }
     private func failure(_ message: String) -> CompanionAPIError { .init(code: "library_transfer", message: message) }
 }
 
@@ -483,5 +492,24 @@ private enum LibraryTransferSecretVault {
         let status = SecItemCopyMatching(request as CFDictionary, &value)
         guard status == errSecSuccess, let bytes = value as? Data, let secret = String(data: bytes, encoding: .utf8) else { throw NSError(domain: NSOSStatusErrorDomain, code: Int(status)) }
         return secret
+    }
+    static func nodeCredential(_ id: String) throws -> MobileCredential? {
+        var request = query("node:" + id); request[kSecReturnData] = true; request[kSecMatchLimit] = kSecMatchLimitOne
+        request[kSecUseAuthenticationUI] = kSecUseAuthenticationUIFail
+        var value: CFTypeRef?; let status = SecItemCopyMatching(request as CFDictionary, &value)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess, let data = value as? Data else { throw NSError(domain: NSOSStatusErrorDomain, code: Int(status)) }
+        return try JSONDecoder().decode(MobileCredential.self, from: data)
+    }
+    static func saveNodeCredential(_ value: MobileCredential, id: String) throws {
+        let key = query("node:" + id)
+        let attributes: [CFString: Any] = [kSecValueData: try JSONEncoder().encode(value), kSecAttrAccessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly]
+        let updated = SecItemUpdate(key as CFDictionary, attributes as CFDictionary)
+        let status = updated == errSecItemNotFound ? SecItemAdd(key.merging(attributes) { _, new in new } as CFDictionary, nil) : updated
+        guard status == errSecSuccess else { throw NSError(domain: NSOSStatusErrorDomain, code: Int(status)) }
+    }
+    static func clearNodeCredential(_ id: String) throws {
+        let status = SecItemDelete(query("node:" + id) as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else { throw NSError(domain: NSOSStatusErrorDomain, code: Int(status)) }
     }
 }

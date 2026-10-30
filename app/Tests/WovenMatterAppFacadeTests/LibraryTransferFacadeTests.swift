@@ -8,6 +8,37 @@ import WovenMatterCore
 
 @MainActor @Suite("Library transfer execution ownership", .serialized)
 struct LibraryTransferFacadeTests {
+    @Test func returningFormerCentralKeepsItsNativeSessionsAndDoesNotRefederateItsOwnJournal() async throws {
+        let f = try await FacadeFixture(); defer { f.remove() }
+        let identity = try await f.database.companionLibraryIdentity()
+        let local = try await f.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Original native chat", ownerDeviceID: UUID())
+        let native = try await f.database.localACPSession(conversationID: local)
+        let workspaceID = UUID().uuidString.lowercased()
+        let mini = try await WorkspaceDatabase(url: f.directory.appending(path: "mini.sqlite"))
+        let miniIdentity = try await mini.companionLibraryIdentity()
+        let descriptor = CompanionExecutionWorkspace(id: workspaceID, libraryID: miniIdentity.libraryID,
+            ownerDeviceID: identity.hostDeviceID, kind: .mac, name: "Former central", executionDeviceID: identity.hostDeviceID)
+        _ = try await mini.registerCompanionExecutionWorkspace(.init(workspace: descriptor), deviceID: miniIdentity.hostDeviceID)
+        let conversation = CompanionConversation(id: local, title: "Original native chat", providerID: "local:codex", libraryID: miniIdentity.libraryID, workspaceID: workspaceID)
+        let entry = CompanionJournalEntry(workspaceID: workspaceID, originSequence: 1, conversationID: local, kind: .conversation, conversation: conversation)
+        _ = try await mini.ingestCompanionJournal(.init(libraryID: miniIdentity.libraryID, entries: [entry]), deviceID: identity.hostDeviceID)
+        let incoming = f.directory.appending(path: "incoming.sqlite"), stagedFile = f.directory.appending(path: "return.sqlite")
+        try await mini.backupLibrary(to: incoming); try await f.database.backupLibrary(to: stagedFile)
+        _ = try LibraryTransferSQLite.merge(source: incoming, into: stagedFile, transferID: UUID().uuidString.lowercased(), sourceLibraryID: miniIdentity.libraryID, destinationLibraryID: identity.libraryID)
+        let staged = try await WorkspaceDatabase(url: stagedFile)
+        #expect(try await staged.companionExecutionOwner(conversationID: local) == workspaceID)
+        try await staged.prepareReceivedLibraryAuthority()
+        let replica = try MobileStore(file: f.directory.appending(path: "return-node/library.json"), deviceID: identity.hostDeviceID)
+        try await replica.bindWorkspace(miniIdentity.libraryID); try await replica.journal.bind(libraryID: miniIdentity.libraryID)
+        try await replica.journal.upsertWorkspace(descriptor)
+        try await replica.journal.record(entry)
+        try await LibraryTransferWritingImporter.merge(store: replica, database: staged, transferID: UUID().uuidString.lowercased())
+        #expect(try await staged.companionExecutionOwner(conversationID: local) == nil)
+        #expect(try await staged.companionSnapshot().conversations.first { $0.id == local }?.workspaceID == nil)
+        #expect(try await staged.localACPSession(conversationID: local) == native)
+        #expect(await replica.journal.snapshot().entries[entry.eventID] == entry)
+    }
+
     @Test func retiredCentralKeepsNativeExecutionAndPublishesOnlyItsOwnHistory() async throws {
         let f = try await FacadeFixture(); defer { f.remove() }
         let identity = try await f.database.companionLibraryIdentity()

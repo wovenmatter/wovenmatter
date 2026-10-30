@@ -241,15 +241,15 @@ final class CompanionHostController {
         guard generation == expected else { return .error("unavailable", "This sharing session has stopped.", status: 503) }
         let path = request.target.split(separator: "?", maxSplits: 1).first.map(String.init) ?? request.target
         if let response = await model?.libraryTransfer.handle(request) { return response }
-        if let model, !model.isTransferredLibraryNode,
+        if let model,
            let directory = try? supportDirectory ?? ApplicationModel.dashboardSupportDirectory(),
            FileManager.default.fileExists(atPath: directory.appending(path: "retained-node-workspace.json").path),
            path.contains("/v1/execution") || path.contains("/v1/inference/") {
             // Preserve the node's old direct address when this listener becomes
             // central. Only the exact retained local workspace receives it; its
             // own API still authenticates every original device-scoped grant.
-            if let response = await model.libraryClient.retainedExecutionResponse(request) { return response }
-            if model.libraryClient.localExecution == nil { return .error("unavailable", "This Mac’s retained execution workspace is starting.", status: 503) }
+            if let response = await model.retainedExecutionClient?.retainedExecutionResponse(request) { return response }
+            if model.retainedExecutionClient?.localExecution == nil { return .error("unavailable", "This Mac’s retained execution workspace is starting.", status: 503) }
         }
         if path.hasSuffix("/v1/library-relocation/proof"), request.method == "POST", request.body.count <= 4096 {
             do {

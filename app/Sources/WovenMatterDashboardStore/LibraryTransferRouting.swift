@@ -85,6 +85,10 @@ extension WorkspaceDatabase {
         try connection.companionExecuteUnlocked("UPDATE dashboard_calendar_items SET calendar_json=json_remove(calendar_json,'$.task.configuration.workspaceID') WHERE id IN(SELECT event_id FROM companion_calendar_owners WHERE device_id=?) AND json_extract(calendar_json,'$.task') IS NOT NULL", values: [identity.hostDeviceID])
         try connection.companionExecuteUnlocked("DELETE FROM companion_calendar_owners WHERE device_id=?", values: [identity.hostDeviceID])
         try connection.executeUnlocked("DELETE FROM library_transfer_retired")
+        let native = "SELECT conversation_id FROM desktop_local_acp_sessions UNION SELECT conversation_id FROM desktop_opencode_sessions"
+        let local = "SELECT id FROM companion_execution_workspaces WHERE owner_device_id=? AND json_extract(payload,'$.kind')='mac' AND COALESCE(json_extract(payload,'$.executionDeviceID'),owner_device_id)=?"
+        try connection.companionExecuteUnlocked("DELETE FROM companion_execution_runs WHERE conversation_id IN(\(native)) AND workspace_id IN(\(local))", values: [identity.hostDeviceID, identity.hostDeviceID])
+        try connection.companionExecuteUnlocked("DELETE FROM companion_execution_conversations WHERE id IN(\(native)) AND workspace_id IN(\(local))", values: [identity.hostDeviceID, identity.hostDeviceID])
         try connection.executeUnlocked("DELETE FROM companion_calendar_execution_context")
         if try connection.companionIDsUnlocked("SELECT name FROM sqlite_master WHERE type='table' AND name='companion_execution_replica_context'", bindings: []).isEmpty == false {
           try connection.executeUnlocked("DELETE FROM companion_execution_replica_context")

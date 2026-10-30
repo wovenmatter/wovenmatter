@@ -78,6 +78,8 @@ final class CentralLibraryClientModel {
     private var connectionGeneration = UUID()
     private let makeLocalExecution: @MainActor (URL, MobileStore) async throws -> SecondaryMacExecutionWorkspace
     private let saveCentralCredential: @MainActor (MobileCredential) throws -> Void
+    private let loadCentralCredential: @MainActor () throws -> MobileCredential?
+    private let makeCentralTransport: @MainActor (MobileCredential) throws -> HTTPSCompanionTransport
     private let clearWorkspaceCredential: @MainActor (String) throws -> Void
     private let clearCentralCredential: @MainActor () throws -> Void
     private let executionDirectoryOverride: URL?
@@ -113,6 +115,8 @@ final class CentralLibraryClientModel {
          executionDirectory: URL? = nil, preferences: UserDefaults = .standard,
          makeLocalExecution: (@MainActor (URL, MobileStore) async throws -> SecondaryMacExecutionWorkspace)? = nil,
          replicaFile: URL? = nil, replicaIdentity: String? = nil, replicaLibraryID: String? = nil,
+         loadCentralCredential: @escaping @MainActor () throws -> MobileCredential? = { try MobileCredentialVault.load() },
+         makeCentralTransport: @escaping @MainActor (MobileCredential) throws -> HTTPSCompanionTransport = { try HTTPSCompanionTransport(credential: $0) },
          saveCentralCredential: @escaping @MainActor (MobileCredential) throws -> Void = { try MobileCredentialVault.save($0) },
          clearCentralCredential: @escaping @MainActor () throws -> Void = { try MobileCredentialVault.clear() },
          clearWorkspaceCredential: @escaping @MainActor (String) throws -> Void = { try WorkspaceCredentialVault.clear(workspaceID: $0) }) {
@@ -122,6 +126,8 @@ final class CentralLibraryClientModel {
         self.clearCentralCredential = clearCentralCredential
         self.clearWorkspaceCredential = clearWorkspaceCredential
         self.saveCentralCredential = saveCentralCredential
+        self.loadCentralCredential = loadCentralCredential
+        self.makeCentralTransport = makeCentralTransport
         self.executionDirectoryOverride = executionDirectory
         self.preferences = preferences
         self.replicaIdentity = replicaIdentity
@@ -232,7 +238,7 @@ final class CentralLibraryClientModel {
         defer { initialized = true }
         guard engine == nil else { return }
         do {
-            credential = try MobileCredentialVault.load()
+            credential = try loadCentralCredential()
             if DevelopmentLaunch.isClient { await reconnectDevelopmentLibrary() }
             try configureTransport()
             try configureDirectClients()
@@ -329,7 +335,7 @@ final class CentralLibraryClientModel {
         guard credential.deviceID == state.deviceID else {
             throw CompanionAPIError(code: "device_identity_changed", message: "Pair this Mac with the central database again. Its local replica has a different device identity.")
         }
-        let transport = try HTTPSCompanionTransport(credential: credential)
+        let transport = try makeCentralTransport(credential)
         self.transport = transport; engine = MobileSyncEngine(store: store, transport: transport)
     }
     func configureUpdateAnalytics(_ analytics: ProductAnalyticsModel) async {
@@ -385,7 +391,7 @@ final class CentralLibraryClientModel {
             try await attachExecutionWorkspace(workspace.descriptor, transport: workspace)
             localExecution = workspace
             if DevelopmentLaunch.isClient || externalLibraryHost != nil { workspace.model.liveLibraryClient = self }
-            if preferences.object(forKey: Self.localSharingKey) as? Bool ?? true { await startLocalSharing() }
+            if externalLibraryHost != nil || (preferences.object(forKey: Self.localSharingKey) as? Bool ?? true) { await startLocalSharing() }
             await selectExecutionWorkspace(workspace.descriptor.id)
         } catch { errorMessage = error.localizedDescription }
     }
@@ -402,6 +408,7 @@ final class CentralLibraryClientModel {
                 var descriptor = localExecution.descriptor
                 descriptor.revision = journal.workspaces[descriptor.id]?.revision ?? 0
                 try await store.journal.upsertWorkspace(descriptor)
+                localExecution.model.startRetainedNodeWorkspaceIfNeeded()
                 return
             }
             let host = localHost ?? SecondaryMacExecutionHost(workspace: localExecution, directory: executionDirectory)

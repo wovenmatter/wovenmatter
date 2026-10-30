@@ -4,6 +4,20 @@ import XCTest
 import WovenMatterCompanion
 
 final class LibraryRelocationTests: XCTestCase {
+  func testRetainedWorkspaceAndTransferredNodePersistCredentialsSeparately() async throws {
+    let rootSink = RelocationCredentialSink(), childSink = RelocationCredentialSink()
+    let root = MobileCredential(endpoint: URL(string: "https://mini.tail.ts.net/wovenmatter")!, workspaceID: UUID().uuidString.lowercased(), deviceID: UUID().uuidString.lowercased(), token: "synthetic-root-node-credential")
+    let child = MobileCredential(endpoint: root.endpoint, workspaceID: root.workspaceID, deviceID: UUID().uuidString.lowercased(), token: "synthetic-retained-child-credential")
+    let rootTransport = try HTTPSCompanionTransport(credential: root, persistCredential: { rootSink.save($0) })
+    let childTransport = try HTTPSCompanionTransport(credential: child, persistCredential: { childSink.save($0) })
+    try await rootTransport.rememberLibraryCandidates([URL(string: "https://next.tail.ts.net/wovenmatter")!])
+    XCTAssertEqual(rootSink.values.first?.deviceID, root.deviceID)
+    XCTAssertTrue(childSink.values.isEmpty)
+    XCTAssertEqual(childTransport.credential, child)
+    try await childTransport.rememberLibraryCandidates([root.endpoint])
+    XCTAssertEqual(childSink.values.first?.token, child.token)
+    XCTAssertEqual(rootSink.values.count, 1)
+  }
   func testProofRequiresOriginalVerifierFreshNonceAndExactLibrary() throws {
     let library = UUID().uuidString.lowercased(), nonce = Data(repeating: 11, count: 32)
     var credential = MobileCredential(endpoint: URL(string: "https://old.tail.ts.net/wovenmatter")!, workspaceID: library,
@@ -61,4 +75,11 @@ final class LibraryRelocationTests: XCTestCase {
     try await reopened.acceptLibraryRelocation(transfer)
     let again = await reopened.snapshot(); XCTAssertEqual(after, again)
   }
+}
+
+private final class RelocationCredentialSink: @unchecked Sendable {
+  private let lock = NSLock()
+  private var stored: [MobileCredential] = []
+  func save(_ value: MobileCredential) { lock.withLock { stored.append(value) } }
+  var values: [MobileCredential] { lock.withLock { stored } }
 }

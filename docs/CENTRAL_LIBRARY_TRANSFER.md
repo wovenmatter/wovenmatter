@@ -25,6 +25,11 @@ checkpoints stay on their original Mac. Scheduled work keeps its execution
 owner; recovered conflicting schedules are not automatically scheduled.
 Copied timer and queued-delivery records also retain their original Mac's
 execution ownership, so the new central cannot dispatch a second copy.
+If a former node already has a separate native execution workspace, that
+workspace stays available through subsequent role changes. Its original
+replica and credentials remain separate from the former central's new node
+replica. A return transfer restores the receiving Mac's native session control
+instead of treating its own retained conversations as remote execution.
 
 ## Backups and interrupted transfers
 

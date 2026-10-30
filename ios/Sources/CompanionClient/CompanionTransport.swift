@@ -93,9 +93,12 @@ public final class HTTPSCompanionTransport: CompanionTransport, @unchecked Senda
   private let mcpSession: URLSession
   private let mcpConnections = CompanionMCPConnections()
   private let deviceMetadata: CompanionDeviceMetadata?
-  public init(credential: MobileCredential, metadata: CompanionDeviceMetadata? = nil) throws {
+  private let persistCredential: @Sendable (MobileCredential) throws -> Void
+  public init(credential: MobileCredential, metadata: CompanionDeviceMetadata? = nil,
+              persistCredential: @escaping @Sendable (MobileCredential) throws -> Void = { try MobileCredentialVault.save($0) }) throws {
     guard Self.validEndpoint(credential.endpoint) else { throw MobileConnectionError.insecureEndpoint }
     self.storedCredential = credential; self.deviceMetadata = metadata
+    self.persistCredential = persistCredential
     let configuration = URLSessionConfiguration.ephemeral
     configuration.httpCookieStorage = nil; configuration.urlCache = nil
     configuration.timeoutIntervalForRequest = 30; configuration.timeoutIntervalForResource = 45
@@ -215,7 +218,7 @@ public final class HTTPSCompanionTransport: CompanionTransport, @unchecked Senda
       var next = storedCredential; next.migrationCandidates = Array(valid.prefix(64))
       // Discovery hints are optional. A temporarily locked Keychain must not
       // prevent publishing durable history through an already working connection.
-      try? MobileCredentialVault.save(next)
+      try? persistCredential(next)
       storedCredential = next
     }
   }
@@ -229,7 +232,7 @@ public final class HTTPSCompanionTransport: CompanionTransport, @unchecked Senda
     var next = existing; next.endpoint = relocation.endpoint; next.relocationID = relocation.transferID; next.centralLibraryID = relocation.libraryID
     // Persist the route before using it. The sync engine resets only central
     // cursors; pending operations and direct-owner credentials keep their IDs.
-    try MobileCredentialVault.save(next)
+    try persistCredential(next)
     storedCredential = next
     }
   }
