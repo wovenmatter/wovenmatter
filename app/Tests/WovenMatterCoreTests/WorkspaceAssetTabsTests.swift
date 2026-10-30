@@ -11,6 +11,8 @@ struct WorkspaceAssetTabsTests {
     #expect(restored.promptContext?.contains("Preserve existing block IDs") == true)
     let legacy = try JSONDecoder().decode(WorkspaceVisibleContext.self, from: Data(#"{"notes":[{"id":"old","title":"Old","revision":"r0","active":true}],"pages":[]}"#.utf8))
     #expect(legacy.notes.first?.kind == nil)
+    let inactive = WorkspaceVisibleContext(notes: [.init(id: "board", title: "Ideas", revision: "r1", active: false, kind: .canvas)], pages: [])
+    #expect(inactive.promptContext?.contains("Canvas editing:") == false)
   }
 
 

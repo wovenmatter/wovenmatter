@@ -37,7 +37,7 @@ public struct WorkspaceVisibleContext: Codable, Equatable, Sendable {
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
     guard let data = try? encoder.encode(self), let json = String(data: data, encoding: .utf8) else { return nil }
-    let canvasGuidance = notes.contains { $0.kind == .canvas } ? """
+    let canvasGuidance = notes.contains { $0.kind == .canvas && $0.active } ? """
       Canvas editing: a canvas is a spatial note document. The active canvas ID above is the target when the user says "this canvas". Use enabled woven_notes_read to read its current document and revision, then woven_notes_append or woven_notes_table_create to add cards, woven_notes_table_set_cell to fill tables, and woven_notes_replace_block or woven_notes_delete_block to revise/remove cards. Supply the current revision for edits and reread after conflicts. Each text/table block is a card; new blocks appear on the board automatically. Preserve existing block IDs, layout, and asset references. Do not create a separate note or merely describe proposed cards when asked to edit this canvas. Card positioning and asset-reference creation are not exposed by these tools yet. This context does not enable disabled tools or authorize edits without the user's request.
       """ : ""
     return """

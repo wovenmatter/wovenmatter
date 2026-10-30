@@ -232,7 +232,7 @@ struct WorkspaceView: View {
                         desktopShell(layout: layout)
                     }
                 }
-                .background(presentsCanvas ? theme.palette.themeWhisper : theme.palette.workspace)
+                .background(theme.palette.workspace)
                 .alert("Pi Durable switched models", isPresented: Binding(get: { model.defaultAgentFallbackNotice != nil }, set: { if !$0 { model.defaultAgentFallbackNotice = nil } })) {
                     Button("OK") { model.defaultAgentFallbackNotice = nil }
                 } message: { Text(model.defaultAgentFallbackNotice ?? "") }
@@ -454,6 +454,15 @@ struct WorkspaceView: View {
 
             if layout.showsRightRail {
                 railGroup(side: .right)
+            }
+        }
+        // Only fill the tiny cutouts beneath rounded sidebar bottoms. Keep the
+        // shell and title-bar backgrounds unchanged everywhere else.
+        .background(alignment: .bottom) {
+            if presentsCanvas {
+                theme.palette.themeWhisper
+                    .frame(height: DashboardMetrics.windowAlignedSurfaceMinimumRadius)
+                    .allowsHitTesting(false)
             }
         }
         .padding(.horizontal, presentsCanvas ? 0 : DashboardMetrics.shellInset)
