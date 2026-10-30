@@ -3,9 +3,11 @@ import WovenMatterCore
 import WovenMatterClient
 
 extension WorkspaceAgentToolsModel {
-    func goal(_ command: WovenMatterToolCommand, callerID: String, requestID: String) async throws -> WovenMatterToolResponse {
+    func goal(_ command: WovenMatterToolCommand, callerID: String, requestID: String, targetID: String? = nil) async throws -> WovenMatterToolResponse {
+        let target = callerID == WovenMCPCaller.outside ? targetID ?? callerID : callerID
+        guard target != WovenMCPCaller.outside else { throw WorkspaceToolError.invalid("Outside agents must supply sessionID for goals.") }
         if command.action == "get" {
-            return try .value(await database.sessionGoals().first { $0.sessionID == callerID })
+            return try .value(await database.sessionGoals().first { $0.sessionID == target })
         }
         let mutation: WorkspaceGoalMutation
         if command.action == "set" {
@@ -24,7 +26,7 @@ extension WorkspaceAgentToolsModel {
             default: throw WorkspaceToolError.invalid("Unsupported goal operation.")
             }
         }
-        return try .value(await database.mutateGoal(sessionID: callerID, mutation: mutation,
+        return try .value(await database.mutateGoal(sessionID: target, mutation: mutation,
             callerID: callerID, requestID: requestID))
     }
 

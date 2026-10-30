@@ -53,7 +53,7 @@ Bundled dependencies retain their own upstream licenses and notices.
 
 ## Lucide
 
-The dashboard icon assets are derived from `lucide-static` 1.63.0.
+The dashboard icon assets are derived from `lucide-static` 1.65.0.
 Published tarball integrity and per-asset hashes are recorded in
 `docs/assets/lucide-provenance.json`.
 

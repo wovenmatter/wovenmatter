@@ -90,6 +90,8 @@ build-aware, signed full-update path.
 - `scripts/test-release.sh`: offline release/authentication/signing gates, real
   nested Sparkle signing with a temporary ad-hoc test identity, actual-framework
   delegate checks, and refresh authorization across real Git merge histories.
+  Also release phase ordering and source binding, independent component cache
+  keys, and reuse of verified local draft bytes, including replacement detection.
 - `python3 scripts/test-support/test_update_refresh.py`: private verification,
   promotion ordering, immutable history, durable rollback after runner loss,
   original-byte reuse, and idempotent retries.
@@ -108,25 +110,67 @@ Reference: [publishing](https://sparkle-project.org/documentation/publishing/).
 
 ## Release performance and cache trust
 
-`Prepare release dependencies` runs only on trusted `main`. It saves verified
-upstream download archives, npm's integrity-checked download store, SwiftPM Git
-repositories, and unsigned browser products. Release tags only restore caches;
-they never write them. Default-branch caches are intentional: GitHub does not
-share one release tag's private cache with the next tag. A miss builds normally.
-No app bundle, signing identity, notarization key, or updater key enters a cache.
-Archive digests are checked on every restored download. Browser outputs require
-an exact source/CEF/architecture/compiler/SDK/CMake/flags key and a complete
-content manifest. Corrupt entries rebuild. Swift checkouts are recreated from
-resolved revisions, and npm still installs the locked graph with scripts disabled.
+`Prepare release dependencies` writes only default-branch caches from accepted
+`main`. It runs after a successful `Release` workflow and once when the cache
+workflow itself changes on main, bootstrapping a new cache layout. Ordinary source
+merges do not start native work. It remains available manually. The release does
+not wait for the background cache refresh; warming moves compute to that later
+run rather than eliminating it. Release tags only restore caches; they never
+write them. Default-branch caches are intentional: GitHub does not share one
+release tag's cache with the next tag, so saving from a release would not help
+the next one. No app bundle, signing identity, notarization key, or updater key
+enters a cache, and a miss builds normally.
 
-The main workflow also prepares Xcode's native compilation cache using an
-unsigned **Release** build. A release reuses compiler results, not an old app:
+`scripts/release-cache-key.sh` gives each component its own key, so a routine
+Node, npm, or Swift package refresh no longer discards the others:
+
+| Cache | Key | Checked on every use |
+| --- | --- | --- |
+| Download archives | CEF, Node, Sparkle and Cua pins; falls back to any earlier store | Each archive's pinned digest |
+| Browser products | The exact browser key: sources, CEF, architecture, compiler, SDK, CMake, flags | Complete content manifest |
+| SwiftPM repositories | `Package.resolved`; falls back to earlier clones | Checkouts at resolved revisions |
+| npm store | `package-lock.json`; falls back to an earlier store | Lockfile integrity, scripts disabled |
+| Compiler | Exact toolchain, native graph and commit; falls back within the same toolchain | Xcode's per-compilation input keys |
+
+Corrupt entries rebuild. The producer drops archives for superseded pins and
+starts the npm and compiler stores afresh when they exceed 1.5 GB and 6 GB.
+GitHub evicts entries unused for a week. The compiler warm-up is an unsigned
+**Release** build on main. A release reuses compiler results, not an old app:
 it uses fresh DerivedData, links, stamps version/source metadata, and signs anew.
-Compiler cache keys are scoped to the exact toolchain and dependency inputs;
-Xcode checks individual compilation inputs within that cache. Only trusted main
-produces reusable entries. A failed cached compilation retries once with fresh
-intermediates and caching disabled. This moves work ahead of release time;
-it does not eliminate the main build's compute cost.
+A failed cached compilation retries once with fresh intermediates and caching
+disabled. The warm-up moves compute ahead of the release; it does not remove it.
+After a toolchain or browser-source change, the first release without a newer
+warm-up compiles those parts in full. These changes do not guarantee a release
+duration.
+
+The signed workflow runs six visible phases: compile; seal and validate; notarize
+the app; create and sign the disk image; notarize the disk image; and generate the
+manifest, checksums, signed feed, and reconstruction check. Each step shows live
+status and duration, and receives only the secrets it uses. Every phase repeats the
+source, tag, and clean-tree checks. It accepts only the work of the immediately
+preceding phase for the same version, build, commit, resolved output directory,
+and signing identity, and rejects any other or extra phase argument. A failed phase
+invalidates the work directory; a new attempt reuses a complete private draft or
+rebuilds from compilation. `build-release.sh VERSION` still runs all phases
+locally. The compile log includes Xcode's build timing summary; browser preparation also
+reports archive, product preparation, and bundle/signing durations. Each phase's
+elapsed time appears in the step summary, as a
+`release-timing` JSON log line, and in the job's final timings step.
+
+`scripts/publish-release.sh` keeps downloaded draft bytes in a private local
+store, `~/Library/Caches/WovenMatter/ReleaseArtifacts/OWNER/REPO/RELEASE_ID-COMMIT`,
+so `--verify-only` followed by `--approved-notes` downloads each file once. The
+two identical DMG names are fetched once when GitHub reports the same SHA-256
+and size for both. Only bytes are stored, never a verification result. Every
+run reads fresh GitHub asset metadata, rehashes each copy, and discards
+corrupt, partial, or replaced bytes. A release that is not a private draft is
+refused before any download. The script then repeats every checksum,
+provenance, update-signature, Developer ID, notarization and Gatekeeper check.
+After those checks, in both modes and directly before publication, the release
+ID, draft state, and every asset ID, size, digest, and upload time must still
+match the verified snapshot. Afterward the published description must match the
+approved file exactly; only CRLF line endings are normalized. The store for that
+release is then removed. A store for an abandoned draft can be deleted at any time.
 
 Ordinary private tagged releases can restore a complete, digest-verified uploaded
 artifact set after a failed workflow attempt. Source, version, build, inventory,
@@ -141,10 +185,13 @@ asset, or a non-empty `delta_assets` record fails the release rather than being
 skipped. The offline fixture covers a signed same-version round trip. It does
 not substitute for offline first-launch acceptance.
 
-Both notarization submissions remain in place for now. Apple permits a single
-outermost-DMG submission, but the full update carries the app's own stapled
-ticket, which offline installs rely on. No source, notes, assets or tags
-belonging to an already-running release are changed by these optimizations.
+Both notarization submissions remain. Apple can notarize nested code through
+one outermost-DMG submission, but the full update must carry the app's own
+stapled ticket, which offline installs rely on. Stapling that ticket into the app
+inside an already notarized, read-only image would change the image's bytes.
+Dropping the app submission therefore needs a separate signed experiment showing
+offline ticket parity first. No source, notes, assets or tags belonging to an
+already-running release are changed by these optimizations.
 
 Release packaging follows the sequential flow: finish signing, notarizing, and
 stapling the DMG, then invoke Sparkle's feed generator once with only that DMG
@@ -155,3 +202,36 @@ remains the backstop for a hang.
 Full DMGs retain ordinary zlib level 6 compression without a legacy size cap or
 maximum-compression retry. Signing, notarization, checksums, and full
 reconstruction verification remain required.
+
+### Measuring cache effectiveness
+
+Run `Prepare release dependencies` manually with `benchmark=true` on the branch
+being evaluated. This does not sign, notarize, create a release, install, or publish.
+Its isolated `benchmark-RUN_ID-` namespace cannot seed production default-branch
+caches. The cold job performs an unsigned production-configuration Release build
+and saves only the same five cache paths used by production. Three later jobs on
+separate fresh runners restore those exact entries, discard DerivedData, change
+the version/build metadata, and rebuild. One also makes a controlled app-source edit to expose whole-module
+cache invalidation; its diff is included with the evidence. App metadata is validated afterward.
+Logs and JSON measurements are retained as workflow artifacts, not in Git.
+
+The report requires all three consumers to demonstrate browser-product reuse and
+compiler replay hits, and each build must be at least 20% faster than the cold
+baseline at the same revision. A cache restore alone is not a performance result.
+The build timer excludes cache transfer/setup; use the full job times as well
+when assessing the practical saving. These measurements cover compilation and
+resource preparation, not Developer ID signing or Apple's variable notarization
+time. No fixed total release duration is promised.
+
+For an unsigned-to-signed and default-branch-to-tag parity check, dispatch
+`Release` from an immutable `v-cache-benchmark-*` tag with `cache_benchmark_run`
+set to a successful **main** cache-preparation run ID. This respects the release
+environment's tag-only policy. The separate read-only job checks the run's branch,
+workflow, and successful conclusion, checks out its exact accepted main source,
+restores production default-branch caches, imports only the Developer ID identity,
+and runs the real `build-release.sh` compile phase with fresh intermediates. It
+verifies the resulting signatures and metadata, then removes the temporary
+keychain. It has no notarization/updater key, cache writes, release writes,
+artifact upload, or publication step. Regular releases and their approval gates
+remain separate. These benchmark tags do not match the automatic release tag
+pattern and are excluded from automatic cache replenishment.

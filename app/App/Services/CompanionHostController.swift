@@ -55,7 +55,6 @@ final class CompanionHostController {
     private(set) var executionWorkspaces: [CompanionExecutionWorkspace] = []
     private(set) var isDiscovering = false
     private(set) var pendingDeviceRevocations: [String: [String]] = [:]
-    private(set) var workspaceAccessPolicies: [CompanionWorkspaceAccessPolicy] = []
     private var discoveryIdentity: CompanionPairingDeviceIdentity?
     private let discovery = CompanionMacDiscovery()
     private let pairingNetwork = CompanionPairingNetwork()
@@ -132,7 +131,7 @@ final class CompanionHostController {
             }
             let centralIdentity = try await database.companionLibraryIdentity()
             discoveryIdentity = .init(deviceID: centralIdentity.hostDeviceID,
-                deviceName: DevelopmentLaunch.isSnapshot ? DevelopmentLaunch.displayName + " snapshot" : Host.current().localizedName ?? "Central Mac",
+                deviceName: DevelopmentLaunch.deviceName(),
                 metadata: CompanionMacPairingController.metadata)
             let api = CompanionWorkspaceAPI(database: database, authentication: authentication,
                 commands: model.companionCommands,
@@ -182,12 +181,7 @@ final class CompanionHostController {
             guard generation == expectedGeneration, !Task.isCancelled else { throw CancellationError() }
             executionAPI = CompanionMacExecutionAPI(database: database, commands: model.companionCommands,
                 authentication: executionAuth, descriptor: local,
-                isActive: { [weak self] in self?.generation == expectedGeneration && self?.endpoint != nil },
-                authorizeDevice: { deviceID in
-                    guard try await database.companionWorkspaceAccessAllowed(deviceID: deviceID, workspaceID: local.id) else {
-                        throw CompanionAPIError(code: "access_disabled", message: "Execution access to this workspace is disabled for this device.")
-                    }
-                })
+                isActive: { [weak self] in self?.generation == expectedGeneration && self?.endpoint != nil })
             inferenceHost = CompanionInferenceHost(authentication: executionAuth, descriptor: local,
                 directory: try supportDirectory ?? ApplicationModel.dashboardSupportDirectory(),
                 isActive: { [weak self] in self?.generation == expectedGeneration && self?.endpoint != nil })
@@ -322,14 +316,27 @@ final class CompanionHostController {
     private func refreshExecutionRegistry() async throws {
         guard !registryRefreshInProgress, let model, let database = model.dashboardStore?.database else { return }
         registryRefreshInProgress = true
+        let expectedGeneration = generation
         defer { registryRefreshInProgress = false }
         let identity = try await database.companionLibraryIdentity()
         let existing = try await database.companionExecutionWorkspaces()
         let localID = localExecutionWorkspaceID(libraryID: identity.libraryID)
+        if DevelopmentLaunch.isSnapshot {
+            // Upgrade existing snapshots too. New paired owners remain live; copied
+            // owners retain their identity for history without becoming connections.
+            let connected = await authentication?.devices() ?? []
+            let paired = Set(connected.map(\.id))
+            for var copied in existing where !copied.deleted && copied.retainedHistory != true
+                && copied.id != localID && copied.ownerDeviceID != identity.hostDeviceID && !paired.contains(copied.ownerDeviceID) {
+                guard generation == expectedGeneration, !Task.isCancelled else { return }
+                copied.retainedHistory = true; copied.endpoint = nil
+                _ = try await database.registerCompanionExecutionWorkspace(.init(workspace: copied, expectedRevision: copied.revision), deviceID: identity.hostDeviceID)
+            }
+        }
         var desired: [CompanionExecutionWorkspace] = [
             .init(id: localID, libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID,
-                  kind: .mac, name: Host.current().localizedName ?? "Central Mac", endpoint: endpoint,
-                  capabilities: ["execution.v1", "history.central.v1", "inference.v1"], executionDeviceID: identity.hostDeviceID)
+                  kind: .mac, name: DevelopmentLaunch.deviceName(), endpoint: endpoint,
+                  capabilities: ["execution.v1", "history.central.v1", "inference.v1"], executionDeviceID: identity.hostDeviceID, developmentInstance: DevelopmentLaunch.instance)
         ]
         desired += model.remoteWorkspaces.workspaces.map { configuration in
             let id = configuration.id.uuidString.lowercased()
@@ -340,6 +347,7 @@ final class CompanionHostController {
                 executionDeviceID: prior?.executionDeviceID)
         }
         for var workspace in desired {
+            guard generation == expectedGeneration, !Task.isCancelled else { return }
             let prior = existing.first { $0.id == workspace.id }
             guard prior?.deleted != true else { continue }
             workspace.journalDeviceIDs = prior?.journalDeviceIDs ?? []
@@ -347,6 +355,7 @@ final class CompanionHostController {
             _ = try await database.registerCompanionExecutionWorkspace(
                 .init(workspace: workspace, expectedRevision: prior?.revision), deviceID: identity.hostDeviceID)
         }
+        guard generation == expectedGeneration, !Task.isCancelled else { return }
         executionWorkspaces = try await database.companionExecutionWorkspaces()
         for workspace in executionWorkspaces where workspace.kind == .linux && workspace.executionDeviceID != nil && !workspace.deleted {
             if let configuration = model.remoteWorkspaces.workspaces.first(where: { $0.id.uuidString.lowercased() == workspace.id }) {
@@ -486,34 +495,37 @@ final class CompanionHostController {
     private func deviceMayExecute(_ device: CompanionPairedDevice, workspaceID: String) async throws -> Bool {
         guard let authentication, let database = model?.dashboardStore?.database,
               !revokingDeviceIDs.contains(device.id), await authentication.isCurrent(device) else { return false }
-        guard try await database.companionWorkspaceAccessAllowed(deviceID: device.id, workspaceID: workspaceID) else { return false }
+        guard try await database.companionExecutionWorkspaces().contains(where: { $0.id == workspaceID && !$0.deleted }) else { return false }
         return await authentication.isCurrent(device)
     }
 
-    func setExecutionAccess(deviceID: String, workspaceID: String, enabled: Bool) async {
-        if model?.isBackendFrontend == true {
-            await forward(.setExecutionAccess(deviceID: deviceID, workspaceID: workspaceID, enabled: enabled)); return
-        }
-        guard let database = model?.dashboardStore?.database else { return }
+    func withdrawDevelopmentWorkspace() async throws {
+        guard DevelopmentLaunch.mode != nil, let database = model?.dashboardStore?.database else { return }
+        stop() // Cancel recovery as well as periodic registrations before withdrawal.
         do {
             let identity = try await database.companionLibraryIdentity()
-            guard let workspace = try await database.companionExecutionWorkspaces().first(where: { $0.id == workspaceID && !$0.deleted }),
-                  workspace.kind != .ios, workspace.endpoint.map(CompanionPairingPayload.isValidEndpoint) == true,
-                  workspace.executionDeviceID != deviceID,
-                  workspace.ownerDeviceID != deviceID else {
-                throw CompanionAPIError(code: "invalid_workspace", message: "Choose another Mac or Linux execution workspace with client access enabled.")
+            let id = localExecutionWorkspaceID(libraryID: identity.libraryID)
+            if var workspace = try await database.companionExecutionWorkspaces().first(where: { $0.id == id && !$0.deleted }) {
+                workspace.endpoint = nil
+                _ = try await database.registerCompanionExecutionWorkspace(.init(workspace: workspace, expectedRevision: workspace.revision), deviceID: identity.hostDeviceID)
             }
-            try await database.setCompanionWorkspaceAccess(deviceID: deviceID, workspaceID: workspaceID,
-                enabled: enabled, authorizedBy: identity.hostDeviceID)
-            if !enabled {
-                // The deny is durable before any potentially offline revoke.
-                if workspaceID == localExecutionWorkspaceID(libraryID: identity.libraryID) {
-                    try await loadExecutionAuthentication().revoke(deviceID: deviceID)
-                } else { enqueueRevocation(deviceID: deviceID, workspaceID: workspaceID) }
-            }
-            await retryPendingRevocations()
-            await refreshStatus()
-        } catch { errorMessage = error.localizedDescription; await refreshStatus() }
+        } catch {
+            await startForCentralDatabase()
+            throw error
+        }
+    }
+
+    func disconnectLocalDevelopment(_ request: DevelopmentDisconnectRequest) async throws {
+        guard let authentication, let database = model?.dashboardStore?.database else { throw CompanionAPIError(code: "unavailable", message: "The central library is unavailable.") }
+        try await authentication.suspendLocalDevelopment(deviceID: request.deviceID, credential: request.credential)
+        try await database.withdrawDevelopmentWorkspaces(ownedBy: request.deviceID)
+        try await refreshStatusAndDevelopmentPresence(database: database)
+    }
+
+    private func refreshStatusAndDevelopmentPresence(database: WorkspaceDatabase) async throws {
+        pairedDevices = await authentication?.devices() ?? []
+        let active = Set(pairedDevices.map(\.id))
+        executionWorkspaces = try await database.companionConnectionWorkspaces(activeDeviceIDs: active)
     }
 
     private func enqueueRevocation(deviceID: String, workspaceID: String) {
@@ -608,7 +620,7 @@ final class CompanionHostController {
               errorMessage: errorMessage, pairingPayload: pairingPayload, pairingExpiresAt: pairingExpiresAt,
               pairedDevices: pairedDevices, lastSeenAt: lastSeenAt, discoveredPeers: discoveredPeers,
               pendingPairingRequests: pendingPairingRequests, isDiscovering: isDiscovering, executionWorkspaces: executionWorkspaces,
-              pendingDeviceRevocations: pendingRevocations, workspaceAccessPolicies: workspaceAccessPolicies)
+              pendingDeviceRevocations: pendingRevocations)
     }
 
     func refreshStatus() async {
@@ -617,8 +629,7 @@ final class CompanionHostController {
             try await loadAuthentication()
             pendingPairingRequests = await authentication?.pendingPairingRequests() ?? []
             pendingDeviceRevocations = pendingRevocations
-            executionWorkspaces = try await model?.dashboardStore?.database.companionExecutionWorkspaces() ?? []
-            workspaceAccessPolicies = try await model?.dashboardStore?.database.companionWorkspaceAccessPolicies() ?? []
+            if let database = model?.dashboardStore?.database { try await refreshStatusAndDevelopmentPresence(database: database) }
         } catch { errorMessage = error.localizedDescription }
     }
     func refreshDiscovery() async {
@@ -664,7 +675,7 @@ final class CompanionHostController {
             pairingExpiresAt = value.pairingExpiresAt; pairedDevices = value.pairedDevices; lastSeenAt = value.lastSeenAt
             discoveredPeers = value.discoveredPeers; pendingPairingRequests = value.pendingPairingRequests
             isDiscovering = value.isDiscovering; executionWorkspaces = value.executionWorkspaces
-            pendingDeviceRevocations = value.pendingDeviceRevocations; workspaceAccessPolicies = value.workspaceAccessPolicies
+            pendingDeviceRevocations = value.pendingDeviceRevocations
         } catch { errorMessage = error.localizedDescription }
     }
 
@@ -707,7 +718,6 @@ enum CompanionHostAction: Codable, Sendable {
     case status, start, stop, createCode
     case revoke(String), approvePairing(String), denyPairing(String)
     case discover, invitePairing(CompanionDiscoveredPeer)
-    case setExecutionAccess(deviceID: String, workspaceID: String, enabled: Bool)
 }
 
 struct CompanionHostSnapshot: Codable, Sendable {
@@ -725,7 +735,6 @@ struct CompanionHostSnapshot: Codable, Sendable {
     let isDiscovering: Bool
     let executionWorkspaces: [CompanionExecutionWorkspace]
     let pendingDeviceRevocations: [String: [String]]
-    let workspaceAccessPolicies: [CompanionWorkspaceAccessPolicy]
 }
 
 private struct ExecutionManagementAcknowledgement: Decodable { let revoked: Bool }

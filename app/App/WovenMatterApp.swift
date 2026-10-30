@@ -4,6 +4,7 @@ import Foundation
 import SwiftUI
 import WovenMatterDashboardStore
 import WovenMatterClient
+import WovenMatterCore
 
 /// Client/snapshot variants are isolated; an explicit live host uses production's lease.
 /// Release builds always use the established workspace directory.
@@ -217,6 +218,15 @@ final class WorkspaceProcessLease {
 
     static func acquireOrExit() -> WorkspaceProcessLease {
         do {
+            // A service must never use GUI activation as proof of execution
+            // ownership. In particular, the frontend has a different lease.
+            if LocalExecutionRole.current == .backend {
+                do { return try WorkspaceProcessLease() }
+                catch WorkspaceProcessLeaseError.occupied {
+                    NSLog("Woven Matter backend already has an execution owner")
+                    Darwin.exit(EXIT_SUCCESS)
+                }
+            }
             switch try resolveStartup() {
             case .acquired(let lease):
                 let owner = currentOwner()
@@ -311,7 +321,8 @@ final class WorkspaceProcessLease {
         for application: NSRunningApplication
     ) -> WorkspaceProcessLeaseActivationCandidate? {
         guard let bundleIdentifier = application.bundleIdentifier,
-              let bundlePath = application.bundleURL?.standardizedFileURL.path else {
+              let bundlePath = application.bundleURL?.standardizedFileURL.path,
+              application.activationPolicy == .regular else {
             return nil
         }
         return WorkspaceProcessLeaseActivationCandidate(
@@ -321,11 +332,7 @@ final class WorkspaceProcessLease {
                 bundlePath: bundlePath
             ),
             isTerminated: { application.isTerminated },
-            activate: {
-                // A login launch must not surface an already-running interface.
-                CommandLine.arguments.contains("--backend")
-                    || application.activate(options: [.activateAllWindows])
-            }
+            activate: { application.activate(options: [.activateAllWindows]) }
         )
     }
 
@@ -387,12 +394,60 @@ enum WovenMatterEntryPoint {
         if let status = CompanionServeSupervisor.dispatch(arguments: CommandLine.arguments) {
             Darwin.exit(status)
         }
+        // Dispatch before App.main and its delegate adaptor can initialize
+        // NSApplication. A service is not a second instance of the GUI app:
+        // LaunchServices and Sparkle must only see the frontend.
+        if LocalExecutionRole.current == .backend {
+            runBackend()
+        }
         // SwiftUI's delegate adaptor can initialize NSApplication before App.init.
         // Install CEF's required AppKit subclass first, without loading Chromium.
         if LocalExecutionRole.current != .backend {
             WMBrowserRuntime.prepareApplication()
         }
         WovenMatterApp.main()
+    }
+
+    @MainActor private static func runBackend() -> Never {
+        do {
+            try DevelopmentLaunch.validate()
+            if DevelopmentLaunch.mode == nil,
+               UserDefaults.standard.bool(forKey: LocalExecutionRole.libraryClientPreferenceKey) {
+                Darwin.exit(EXIT_SUCCESS)
+            }
+            KeychainAccess.enforceCentralAuthorization()
+            let lease = WorkspaceProcessLease.acquireOrExit()
+            try WovenMatterBackendProcess.removeStaleSocketAfterAcquiringLease(
+                LocalExecutionRole.backendSocketURL(workspaceDirectory:
+                    WorkspaceProcessLease.defaultFileURL().deletingLastPathComponent()))
+            let model = ApplicationModel(startsAutomatically: false)
+            model.backgroundServerTermination = { [weak model] in
+                Task { @MainActor in
+                    await model?.finishBackendShutdown()
+                    WovenMatterBackendProcess.stop()
+                }
+            }
+            WovenMatterBackendProcess.run(start: {
+                Task {
+                    await model.startBackendService()
+                    if case .failed = model.state {
+                        // No usable endpoint: allow launchd to retry this failure.
+                        Darwin.exit(EXIT_FAILURE)
+                    }
+                    model.retry()
+                }
+            }, terminate: {
+                let response = await model.handleBackendRequest(.init(method: "server.stop",
+                    payload: (try? JSONEncoder().encode(BackgroundServerStopRequest(confirmed: true))) ?? Data()))
+                if let error = response.error { NSLog("Background shutdown deferred: %@", error) }
+                return response.error == nil
+            })
+            withExtendedLifetime((model, lease)) {}
+            Darwin.exit(EXIT_SUCCESS)
+        } catch {
+            NSLog("Woven Matter backend startup failed: %@", error.localizedDescription)
+            Darwin.exit(EXIT_FAILURE)
+        }
     }
 }
 
@@ -462,12 +517,6 @@ struct WovenMatterApp: App {
                 Darwin.exit(EXIT_FAILURE)
             }
         }
-        // A leftover login job must not reopen an old central library after
-        // this Mac has explicitly switched to a different library's client.
-        if !isRunningUnitTests, LocalExecutionRole.current == .backend, DevelopmentLaunch.mode == nil,
-           UserDefaults.standard.bool(forKey: LocalExecutionRole.libraryClientPreferenceKey) {
-            Darwin.exit(EXIT_SUCCESS)
-        }
         if !isRunningUnitTests, LocalExecutionRole.current != .backend {
             HarnessSetupPresentation.shared.prepareForLaunch()
         }
@@ -475,30 +524,6 @@ struct WovenMatterApp: App {
         workspaceProcessLease = isRunningUnitTests
             ? nil
             : WorkspaceProcessLease.acquireOrExit()
-        if !isRunningUnitTests && LocalExecutionRole.current == .backend {
-            do {
-                try WovenMatterBackendProcess.removeStaleSocketAfterAcquiringLease(
-                    LocalExecutionRole.backendSocketURL(workspaceDirectory:
-                        WorkspaceProcessLease.defaultFileURL().deletingLastPathComponent()))
-            } catch {
-                NSLog("Woven Matter backend endpoint recovery failed: %@", error.localizedDescription)
-                Darwin.exit(EXIT_FAILURE)
-            }
-        }
-        if !isRunningUnitTests && LocalExecutionRole.current == .backend {
-            let backendModel = ApplicationModel()
-            let backendDelegate = WovenMatterLifecycleDelegate()
-            backendDelegate.model = backendModel
-            do {
-                try WovenMatterBackendProcess.run(delegate: backendDelegate) {
-                    Task { await backendModel.startBackendService() }
-                }
-            } catch {
-                NSLog("Woven Matter backend startup failed: %@", error.localizedDescription)
-            }
-            withExtendedLifetime((backendModel, workspaceProcessLease)) { }
-            Darwin.exit(EXIT_SUCCESS)
-        }
         _applicationModel = State(initialValue: ApplicationModel())
         if !isRunningUnitTests {
             Self.markUpdateReadyIfRequested()
@@ -544,6 +569,12 @@ struct WovenMatterApp: App {
                     lifecycleDelegate.prepareBrowserTermination = { await WorkspaceAssetSession.shutdown() }
                 }
                 .frame(minWidth: 760, minHeight: 640)
+                .task {
+                    while !Task.isCancelled {
+                        await RemoteDeviceSetup.handle(model: applicationModel)
+                        do { try await Task.sleep(for: .seconds(2)) } catch { return }
+                    }
+                }
                 .scrollIndicators(.never)
                 .onReceive(
                     NotificationCenter.default.publisher(

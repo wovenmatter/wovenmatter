@@ -98,6 +98,9 @@
 		B7937C7349692E25EE127696 /* CompanionHostController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0083907CDB98FA31255BD2C1 /* CompanionHostController.swift */; };
 		301E0D2FD0D0674DA6DF406A /* CompanionHostController+Publishing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0643377195E7D10D99BB22ED /* CompanionHostController+Publishing.swift */; };
 		88FA3C83BF80A7BC5B0AAD17 /* CompanionMacPairingController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92D5260CF0515975E64CFF87 /* CompanionMacPairingController.swift */; };
+		A22000000000000000000002 /* MacDeviceSetupModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A22000000000000000000001 /* MacDeviceSetupModel.swift */; };
+		A22000000000000000000004 /* RemoteDeviceSetup.swift in Sources */ = {isa = PBXBuildFile; fileRef = A22000000000000000000003 /* RemoteDeviceSetup.swift */; };
+		A22000000000000000000006 /* MacTailnetDiscoveryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A22000000000000000000005 /* MacTailnetDiscoveryView.swift */; };
 		3D87BAA73934F3BC92DC78F1 /* SettingsCompanionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F0B68181C793F898EC7A4DE /* SettingsCompanionView.swift */; };
 		F2B1E2E7B8F7CB91795BE7E8 /* DeviceConnectionsComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABFE2571A50B4A65EADC9715 /* DeviceConnectionsComponents.swift */; };
 		D8ADD27CBC40434BB0183702 /* CompanionNativeInteractions.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2737F707B9A5E3A2A5A5AD8 /* CompanionNativeInteractions.swift */; };
@@ -262,6 +265,9 @@
 		0083907CDB98FA31255BD2C1 /* CompanionHostController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionHostController.swift; sourceTree = "<group>"; };
 		0643377195E7D10D99BB22ED /* CompanionHostController+Publishing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CompanionHostController+Publishing.swift"; sourceTree = "<group>"; };
 		92D5260CF0515975E64CFF87 /* CompanionMacPairingController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionMacPairingController.swift; sourceTree = "<group>"; };
+		A22000000000000000000001 /* MacDeviceSetupModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacDeviceSetupModel.swift; sourceTree = "<group>"; };
+		A22000000000000000000003 /* RemoteDeviceSetup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteDeviceSetup.swift; sourceTree = "<group>"; };
+		A22000000000000000000005 /* MacTailnetDiscoveryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacTailnetDiscoveryView.swift; sourceTree = "<group>"; };
 		8F0B68181C793F898EC7A4DE /* SettingsCompanionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsCompanionView.swift; sourceTree = "<group>"; };
 		ABFE2571A50B4A65EADC9715 /* DeviceConnectionsComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceConnectionsComponents.swift; sourceTree = "<group>"; };
 		A2737F707B9A5E3A2A5A5AD8 /* CompanionNativeInteractions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionNativeInteractions.swift; sourceTree = "<group>"; };
@@ -475,6 +481,7 @@
 				502EF864DA314DFBB322C973 /* DashboardLocalSecretCard.swift */,
 				8F0B68181C793F898EC7A4DE /* SettingsCompanionView.swift */,
 				ABFE2571A50B4A65EADC9715 /* DeviceConnectionsComponents.swift */,
+				A22000000000000000000005 /* MacTailnetDiscoveryView.swift */,
 				C131C0A00000000000000003 /* DashboardConversationActions.swift */,
 				C131C0B00000000000000003 /* DashboardNoteActions.swift */,
 				40D1B5DEF1B0023CB8C52B6D /* DashboardSharedViews.swift */,
@@ -556,6 +563,8 @@
 				0083907CDB98FA31255BD2C1 /* CompanionHostController.swift */,
 				0643377195E7D10D99BB22ED /* CompanionHostController+Publishing.swift */,
 				92D5260CF0515975E64CFF87 /* CompanionMacPairingController.swift */,
+				A22000000000000000000001 /* MacDeviceSetupModel.swift */,
+				A22000000000000000000003 /* RemoteDeviceSetup.swift */,
 				A2737F707B9A5E3A2A5A5AD8 /* CompanionNativeInteractions.swift */,
 				853617F2A39F477E947E59DA /* CompanionWorkspaceFeatures.swift */,
 				FF3D48D1E7B9587A3DF2F895 /* CompanionCommandService.swift */,
@@ -749,6 +758,9 @@
 				B7937C7349692E25EE127696 /* CompanionHostController.swift in Sources */,
 				301E0D2FD0D0674DA6DF406A /* CompanionHostController+Publishing.swift in Sources */,
 				88FA3C83BF80A7BC5B0AAD17 /* CompanionMacPairingController.swift in Sources */,
+				A22000000000000000000002 /* MacDeviceSetupModel.swift in Sources */,
+				A22000000000000000000004 /* RemoteDeviceSetup.swift in Sources */,
+				A22000000000000000000006 /* MacTailnetDiscoveryView.swift in Sources */,
 				D8ADD27CBC40434BB0183702 /* CompanionNativeInteractions.swift in Sources */,
 				77A348D5C0634041BD69B746 /* CompanionWorkspaceFeatures.swift in Sources */,
 				E678564F286E71B5FA588A5A /* CompanionCommandService.swift in Sources */,

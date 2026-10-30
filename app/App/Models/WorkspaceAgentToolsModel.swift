@@ -335,7 +335,9 @@ final class WorkspaceAgentToolsModel {
     }
 
     func mcpAccess(_ action: WovenMCPAccessAction) async throws -> WovenMCPAccessSnapshot {
-        try await ensureMCPHost().access(action)
+        let snapshot = try await ensureMCPHost().access(action)
+        try await reload()
+        return snapshot
     }
 
     func handleMCP(_ request: CompanionHTTPRequest) async -> CompanionHTTPResponse? {
@@ -406,11 +408,18 @@ final class WorkspaceAgentToolsModel {
                 throw WorkspaceToolError.invalid("This tool request exceeds its size limit.")
             }
             parsedCommand = command
+            if request.targetSessionID != nil, callerID != WovenMCPCaller.outside {
+                throw WorkspaceToolError.invalid("Conversation callers cannot choose another chat as their tool identity.")
+            }
             if let suppliedRequestID = command.options["request-id"] {
                 guard let suppliedUUID = UUID(uuidString: suppliedRequestID),
                       suppliedUUID.uuidString.lowercased() == request.requestID else {
                     throw WorkspaceToolError.invalid("--request-id must match the request envelope.")
                 }
+            }
+            if command.action == "context", callerID == WovenMCPCaller.outside {
+                try await database.requireTool(.notes, sessionID: callerID)
+                return .init(result: .null, requestID: request.requestID)
             }
             if command.action == "context" {
                 let id = try await database.inputContext(id: request.contextID, callerID: callerID)
@@ -450,8 +459,8 @@ final class WorkspaceAgentToolsModel {
                         after: Int64(command.integer("after", default: 0, range: 0...Int.max)),
                         limit: command.integer("limit", default: 100, range: 1...200)))
                 } else { result = try await sessionHandler(callerID, command, request) }
-            case .goals: result = try await goal(command, callerID: callerID, requestID: request.requestID)
-            case .timers: result = try await timer(command, callerID: callerID, requestID: request.requestID)
+            case .goals: result = try await goal(command, callerID: callerID, requestID: request.requestID, targetID: request.targetSessionID)
+            case .timers: result = try await timer(command, callerID: callerID, requestID: request.requestID, targetID: request.targetSessionID)
             case .calendar:
                 try await calendarProjection?()
                 result = try await calendar(command, callerID: callerID, requestID: request.requestID)
@@ -473,7 +482,7 @@ final class WorkspaceAgentToolsModel {
                         guard object["title"]?.stringValue != nil, object["height"]?.intValue != nil else {
                             throw WorkspaceToolError.invalid("Rendering requires a title and integer height.")
                         }
-                        let reference = try await database.publishConversationHTML(page, callerID: callerID, requestID: request.requestID)
+                        let reference = try await database.publishConversationHTML(page, callerID: callerID, requestID: request.requestID, targetID: request.targetSessionID)
                         result = .init(result: .object([
                             "htmlRender": try WovenMatterToolResponse.value(reference).result ?? .null,
                             "message": .string("Shown above your reply. Reply with only what the page does not already say.")
@@ -644,9 +653,12 @@ final class WorkspaceAgentToolsModel {
         ]))
     }
 
-    private func timer(_ command: WovenMatterToolCommand, callerID: String, requestID: String) async throws -> WovenMatterToolResponse {
-        let target = command.options["session"] ?? callerID
-        if target != callerID {
+    private func timer(_ command: WovenMatterToolCommand, callerID: String, requestID: String, targetID: String? = nil) async throws -> WovenMatterToolResponse {
+        let target = targetID ?? command.options["session"] ?? callerID
+        if callerID == WovenMCPCaller.outside, target == callerID {
+            throw WorkspaceToolError.invalid("Outside agents must supply sessionID for timers.")
+        }
+        if target != callerID && callerID != WovenMCPCaller.outside {
             try await database.requireTool(.sessions, sessionID: callerID)
             guard try await database.sessionRelationship(target).coordinatorID == callerID else { throw WorkspaceToolError.accessRequired(target) }
         }

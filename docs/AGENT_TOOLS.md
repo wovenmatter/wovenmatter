@@ -1,7 +1,8 @@
 # Woven MCP agent tools
 
-Woven Matter exposes its app capabilities through an authenticated HTTP MCP
-endpoint. Pi Durable, Codex, Claude Code, Grok Build, and OpenCode use focused,
+Woven Matter exposes its app capabilities through HTTP MCP. Woven sessions use
+authenticated conversation credentials; outside access uses an optional private
+Tailnet endpoint with instance-wide tool controls. Pi Durable, Codex, Claude Code, Grok Build, and OpenCode use focused,
 structured tools rather than shell commands. The former Woven Matter CLI and
 separate automation stdio server are removed.
 
@@ -16,7 +17,8 @@ Discovery stays stable within a credential’s scope so native clients can cache
 schemas. Every call still checks current tool settings; a listed tool can be
 disabled or temporarily unavailable.
 
-The MCP adapter authenticates and resolves a caller, then invokes the same app
+The MCP adapter resolves a caller from native credentials or the enabled private
+Tailnet transport, then invokes the same app
 services as the interface. Each call checks current user-controlled tool policy.
 Model arguments cannot choose a caller, change permissions, or supply a host
 credential. Internal operation arrays remain a service implementation detail;
@@ -53,26 +55,36 @@ with native local dispatch for its downloaded/offline content and device
 workspace. Central-library and explicit remote operations use its authenticated
 paired connection. The phone does not need a persistent background HTTP listener.
 
-To connect an outside agent, open **Settings → General → Woven MCP access**,
-expand **Add outside agent**, choose an existing chat and tool groups, and keep
-**Read only** enabled unless writes are needed. Choose **Create access**, then
-**Copy MCP configuration**. Paste that configuration into the outside agent's
-MCP settings; Woven shows the raw token only through that one-time copy action.
-The grant's **Revoke** button removes access. Copying a configuration does not
-perform provider sign-in or account authorization.
+Outside agents use **Settings → General → Outside agents · Woven MCP**. Turn
+on **Expose Woven MCP**, then choose the same optional tool groups offered to
+Woven agents. Exposure starts off. Any agent permitted by the user's Tailnet
+network policy to reach the displayed private HTTPS endpoint can discover and
+use the enabled tools, including writes. No per-agent token, enrollment, expiry,
+or existing-chat binding is required. Turning exposure off rejects subsequent
+outside requests; turning off a group removes it from discovery and blocks calls.
+Woven-launched sessions keep their conversation-bound credentials and policies.
+Old manually issued outside-agent tokens are retired on upgrade.
 
-An outside agent can connect to a Woven MCP endpoint using a separately issued
-access grant. The user chooses the bound conversation, enabled groups, and access
-mode. Its authority is intersected with the conversation's current policy;
-revocation stops subsequent requests. Creating or steering sessions does not
-permit the outside agent to raise their permissions. Treat the bearer as a secret;
-use loopback on the same machine or the private HTTPS endpoint on another host.
+The displayed endpoint is the Tailnet HTTPS URL while available. If Tailscale is
+unavailable, Settings shows the local endpoint and the connection error; Woven
+retries without exposing a public listener. The host owns a separate Tailscale
+Serve route, preserving device pairing and other services. It reuses its saved
+HTTPS port when available and selects another free port if that address is taken. The local HTTP listener
+binds only to loopback. Browser-origin requests are rejected.
 
-The Mac preserves its loopback port while outside-agent grants exist. If that
-port is unavailable, startup reports the error instead of moving those clients.
-Without outside-agent grants, startup may choose a free port when the saved port
-is still occupied after shutdown; native sessions receive the current endpoint
-and newly issued session credentials.
+Outside authority belongs to the instance, independently of any chat's tool
+selection. Goals, timers, and publishing visual replies take an explicit target
+`sessionID`; this chooses the operation's destination and does not enroll or grant
+access to a chat. Goals still run on that chat's execution owner; publishing a
+visual reply requires an active run in the target chat. Accepted outside timers
+retain their scheduling authority independently of the
+chat's internal Timers switch; disabling MCP exposure blocks new calls without
+cancelling accepted schedules. Explicit timer pauses and removals still apply.
+New sessions use the selected destination's defaults and are independent because an outside client
+has no Woven runtime to receive coordinator wakeups. Outside clients can poll
+status and receipts. Usage remains read-only; enabling Calendar grants writes
+independently of the Calendar access default for Woven chats. Goals and visual
+replies remain included with exposure, matching Woven's always-available tools.
 
 ## Open asset context
 
@@ -139,8 +151,8 @@ existing signed-in sessions. Secondary Mac agents use their own browser. Linux
 agents use their workspace's shared Chromium browser; the Mac's **View browser**
 window can interact with those same pages. An iPhone agent's explicit browser and
 computer calls route to its paired central Mac. Computer Use requires a reachable
-authorized Mac and does not control the Linux desktop or the iPhone UI. Normal
-Device execution access and conversation tool policy apply between input steps.
+authorized Mac and does not control the Linux desktop or the iPhone UI. Device
+pairing, caller ownership, and conversation tool policy apply between input steps.
 
 For example, a browser call uses these MCP arguments:
 

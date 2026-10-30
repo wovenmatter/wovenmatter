@@ -9,7 +9,7 @@
       "arguments": [],
       "cliCommand": "codex",
       "adapterPackage": "@agentclientprotocol/codex-acp",
-      "minimumAdapterVersion": "2.3.0",
+      "minimumAdapterVersion": "2.5.0",
       "install": {
         "kind": "official-script",
         "source": "https://chatgpt.com/codex/install.sh",
@@ -51,7 +51,8 @@
         "resume",
         "permissions",
         "attachments"
-      ]
+      ],
+      "minimumEngineVersion": "0.166.0"
     },
     {
       "id": "claude_code",
@@ -61,13 +62,15 @@
       "arguments": [],
       "cliCommand": "claude",
       "adapterPackage": "@agentclientprotocol/claude-agent-acp",
-      "minimumAdapterVersion": "0.99.0",
+      "minimumAdapterVersion": "0.99.1",
       "install": {
         "kind": "official-script",
         "source": "https://claude.ai/install.sh",
-        "command": "curl -fsSL https://claude.ai/install.sh | bash",
+        "command": "curl -fsSL https://claude.ai/install.sh | bash -s -- latest",
         "interpreter": "bash",
-        "arguments": []
+        "arguments": [
+          "latest"
+        ]
       },
       "authentication": {
         "statusCommands": [
@@ -103,7 +106,8 @@
         "resume",
         "permissions",
         "attachments"
-      ]
+      ],
+      "minimumEngineVersion": "0.3.314"
     },
     {
       "id": "grok_build",

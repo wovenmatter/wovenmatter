@@ -22,6 +22,7 @@ jq -e '
   and .build == 1
   and .architecture == "arm64"
   and .minimum_macos == "26.0"
+  and .device_setup_version == 1
   and .download_url == "https://github.com/wovenmatter/wovenmatter/releases/download/v0.1.0/WovenMatter_0.1.0_arm64.dmg"
   and .release_url == "https://github.com/wovenmatter/wovenmatter/releases/tag/v0.1.0"
   and (.sha256 | test("^[0-9a-f]{64}$"))
@@ -92,8 +93,11 @@ for mode, expected in (("ok", 0), ("unavailable", 77), ("auth-required", 77),
 print("Release access checks passed: existing access, unavailable credentials/network, auth required, wrong account, wrong remote.")
 PYTEST
 python3 scripts/test-support/test_release_approval.py
+python3 scripts/test-support/test_release_artifacts.py
+python3 scripts/test-support/test_release_phases.py
 python3 scripts/test-support/test_release_notarization.py
 python3 scripts/test-support/test_release_cache.py
+python3 scripts/test-support/test_release_cache_measurement.py
 python3 scripts/test-support/test_tagged_release_reuse.py
 python3 scripts/test-support/test_release_code.py
 python3 scripts/test-support/test_update_request.py

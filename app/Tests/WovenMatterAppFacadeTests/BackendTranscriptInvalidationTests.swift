@@ -7,6 +7,24 @@ import WovenMatterCore
 
 @MainActor @Suite(.serialized, .timeLimit(.minutes(1)))
 struct BackendTranscriptInvalidationTests {
+    @Test func replacedConsumerDoesNotReportALateTransportFailure() async throws {
+        var receiveStarted = false
+        var release: CheckedContinuation<BackendInvalidations, any Error>?
+        var failed = false
+        let consumer = Task {
+            await BackendInvalidationConsumer.run(receive: { _ in
+                receiveStarted = true
+                return try await withCheckedThrowingContinuation { release = $0 }
+            }, apply: { _ in Issue.record("Cancelled consumer applied state") },
+                failed: { _ in failed = true })
+        }
+        try await waitUntil { receiveStarted }
+        consumer.cancel()
+        release?.resume(throwing: BackendRPCError.unavailable)
+        await consumer.value
+        #expect(!failed, "An old connection overwrote the replacement's status")
+    }
+
     @Test func savedPromptAndStreamingAnswerRefreshWhileMetadataIsBlocked() async throws {
         let fixture = try await FacadeFixture()
         defer { fixture.remove() }

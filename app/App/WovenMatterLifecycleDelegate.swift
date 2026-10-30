@@ -7,6 +7,13 @@ final class WovenMatterLifecycleDelegate: NSObject, NSApplicationDelegate {
     weak var model: ApplicationModel?
     private var terminating = false
     var prepareBrowserTermination: (@MainActor () async -> Bool)?
+    /// Shown after the update quit has been cancelled; tests record it instead.
+    var presentUpdatePreparationFailure: @MainActor (any Error) -> Void = { error in
+        let alert = NSAlert()
+        alert.messageText = DevelopmentLaunch.mode == nil ? "Woven Matter could not prepare to update" : "Woven Matter could not stop its background server"
+        alert.informativeText = error.localizedDescription
+        alert.runModal()
+    }
     private var menuCleanupScheduled = false
 
     override init() {
@@ -90,16 +97,19 @@ final class WovenMatterLifecycleDelegate: NSObject, NSApplicationDelegate {
             }
             return .terminateLater
         }
-        if (DesktopUpdater.shared.isInstalling || DesktopUpdater.shared.hasStagedUpdate) && model.isBackendFrontend {
+        if (DesktopUpdater.shared.isInstalling || DesktopUpdater.shared.hasStagedUpdate || model.stopsBackendOnQuit) && model.isBackendFrontend {
             guard !terminating else { return .terminateLater }
             terminating = true
             Task {
-                guard await WorkspaceAssetSession.prepareForRestart() else {
-                    terminating = false
-                    sender.reply(toApplicationShouldTerminate: false)
-                    return
-                }
                 do {
+                    // Restore a ready owner before flushing editors or drafts,
+                    // including recovery from a legacy AppKit-backed service.
+                    try await model.ensureBackendReady()
+                    guard await WorkspaceAssetSession.prepareForRestart() else {
+                        terminating = false
+                        sender.reply(toApplicationShouldTerminate: false)
+                        return
+                    }
                     try await model.prepareBackendForUpdate()
                     let allowed = await prepareBrowserTermination?() ?? true
                     if !allowed {
@@ -113,10 +123,7 @@ final class WovenMatterLifecycleDelegate: NSObject, NSApplicationDelegate {
                     try? await model.recoverBackendAfterFailedUpdate()
                     terminating = false
                     sender.reply(toApplicationShouldTerminate: false)
-                    let alert = NSAlert()
-                    alert.messageText = "Woven Matter could not prepare to update"
-                    alert.informativeText = error.localizedDescription
-                    alert.runModal()
+                    presentUpdatePreparationFailure(error)
                 }
             }
             return .terminateLater
@@ -217,6 +224,7 @@ final class LocalBackgroundExecution {
          "RunAtLoad": true,
          "KeepAlive": ["SuccessfulExit": false],
          "ThrottleInterval": 5,
+         "ExitTimeOut": 60,
          "LimitLoadToSessionType": "Aqua",
          "ProcessType": "Background",
          "WorkingDirectory": bundleURL.deletingLastPathComponent().path]
@@ -410,6 +418,7 @@ enum LocalExecutionRole: String {
 /// supplied. No WindowGroup, view model mirror or frontend work is created here.
 @MainActor
 enum WovenMatterBackendProcess {
+    private static var running = false
     /// Call only after holding the execution lease. Never unlink a live socket,
     /// another user's endpoint, a symlink, or an unexpected file.
     static func removeStaleSocketAfterAcquiringLease(_ url: URL) throws {
@@ -460,7 +469,10 @@ enum WovenMatterBackendProcess {
 
     static func waitForExecutionOwnerToExit(leaseURL: URL) async throws {
         let descriptor = Darwin.open(leaseURL.path, O_RDWR | O_NOFOLLOW)
-        guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        guard descriptor >= 0 else {
+            if errno == ENOENT { return }
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
         defer { close(descriptor) }
         for _ in 0..<100 {
             try Task.checkCancellation()
@@ -472,6 +484,29 @@ enum WovenMatterBackendProcess {
         }
         throw NSError(domain: "BackgroundExecution", code: 4,
                       userInfo: [NSLocalizedDescriptionKey: "The background service is still stopping. Try again shortly."])
+    }
+
+    /// Startup and recovery share one bounded readiness barrier. An owner that
+    /// is still starting keeps its lease; waiting for that lease to disappear
+    /// would turn a slow start into a failed recovery.
+    static func ensureReady(timeout: TimeInterval = 60,
+                            check: () async throws -> Bool,
+                            ownerIsPresent: () throws -> Bool,
+                            launch: () async throws -> Void) async throws {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(timeout))
+        var launched = false
+        repeat {
+            try Task.checkCancellation()
+            if try await check() { return }
+            if !launched, try !ownerIsPresent() {
+                try await launch()
+                launched = true
+            }
+            try await Task.sleep(for: .milliseconds(100))
+        } while ContinuousClock.now < deadline
+        throw NSError(domain: "BackgroundExecution", code: 6, userInfo: [
+            NSLocalizedDescriptionKey: "The background service did not become ready. Try reopening Woven Matter."
+        ])
     }
 
     static func launch() async throws {
@@ -516,11 +551,52 @@ enum WovenMatterBackendProcess {
         try process.run()
     }
 
-    static func run(delegate: NSApplicationDelegate, start: () throws -> Void) throws {
-        let application = NSApplication.shared
-        application.setActivationPolicy(.prohibited)
-        application.delegate = delegate
-        try start()
-        withExtendedLifetime(delegate) { application.run() }
+    /// Keep the main actor and Foundation services running without registering
+    /// an NSApplication. Using even a prohibited AppKit app gives Sparkle and
+    /// LaunchServices another instance of the frontend's bundle to quit/open.
+    static func run(start: () -> Void, terminate: @escaping @MainActor () async -> Bool) {
+        precondition(!running)
+        running = true
+        var context = CFRunLoopSourceContext()
+        let keepAlive = CFRunLoopSourceCreate(nil, 0, &context)!
+        CFRunLoopAddSource(CFRunLoopGetMain(), keepAlive, .defaultMode)
+        var terminating = false
+        let signals = [SIGTERM, SIGINT].map { number in
+            signal(number, SIG_IGN)
+            let source = DispatchSource.makeSignalSource(signal: number, queue: .main)
+            source.setEventHandler {
+                guard !terminating else { return }
+                terminating = true
+                Task { @MainActor in
+                    // A maintenance operation can temporarily refuse shutdown.
+                    // Fence new requests as soon as the shared stop path admits it.
+                    while !(await terminate()) {
+                        try? await Task.sleep(for: .milliseconds(100))
+                    }
+                }
+            }
+            source.resume()
+            return source
+        }
+        start()
+        withExtendedLifetime(signals) {
+            while running {
+                // NSApplication normally supplies the autorelease pools. A
+                // Foundation service must drain its own during a long lifetime.
+                _ = autoreleasepool { CFRunLoopRunInMode(.defaultMode, 1, false) }
+            }
+        }
+        for source in signals { source.cancel() }
+        CFRunLoopRemoveSource(CFRunLoopGetMain(), keepAlive, .defaultMode)
+    }
+
+    static func stop() {
+        // Leave the initiating main-actor task before ending its run loop.
+        RunLoop.main.perform(inModes: [.common]) {
+            MainActor.assumeIsolated {
+                running = false
+                CFRunLoopStop(CFRunLoopGetMain())
+            }
+        }
     }
 }

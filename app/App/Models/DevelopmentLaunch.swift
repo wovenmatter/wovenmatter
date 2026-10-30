@@ -3,6 +3,7 @@ import WovenMatterClient
 import WovenMatterCore
 
 struct DevelopmentClientRequest: Codable { var deviceID: String; var name: String }
+struct DevelopmentDisconnectRequest: Codable { var deviceID: String; var credential: String }
 struct DevelopmentClientConnection: Codable { var endpoint: URL; var pairing: CompanionPairResponse }
 
 /// A build's data role is part of its bundle, so Finder launches and restarts use
@@ -39,6 +40,17 @@ enum DevelopmentLaunch {
     static var isLiveHost: Bool { mode == .live }
     static var isSnapshot: Bool { mode == .snapshot }
     static var displayName: String { "Dev · " + (instance ?? "") }
+    static func deviceName(host: String = Host.current().localizedName ?? "This Mac",
+                           mode: Mode? = DevelopmentLaunch.mode, instance: String? = DevelopmentLaunch.instance) -> String {
+        guard mode != nil else { return host }
+        return host + " (Dev)" + (instance.map { " · " + $0 } ?? "")
+    }
+
+    @MainActor static func disconnect(deviceID: String, credential: String) async throws {
+        let production = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appending(path: "Woven Matter")
+        _ = try await BackendRPCClient(socketURL: LocalExecutionRole.backendSocketURL(workspaceDirectory: production))
+            .call(method: "development.disconnect", payload: JSONEncoder().encode(DevelopmentDisconnectRequest(deviceID: deviceID, credential: credential)), timeout: 3)
+    }
 
     static func validate() throws {
         #if DEBUG

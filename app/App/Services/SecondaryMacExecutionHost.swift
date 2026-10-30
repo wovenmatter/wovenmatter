@@ -3,11 +3,12 @@ import Foundation
 import WovenMatterCore
 import WovenMatterDashboardStore
 
-/// Only explicitly enabled secondary workspaces expose this endpoint. Device
+/// Paired secondary workspaces automatically expose this endpoint. Device
 /// grants and the central host's management grant use separate credential stores.
 @MainActor
 final class SecondaryMacExecutionHost {
     private(set) var endpoint: URL?
+    var isRunning: Bool { endpoint != nil && exposure?.isRunning == true }
     private(set) var managementGrant: CompanionExecutionManagementGrant?
     private let workspace: SecondaryMacExecutionWorkspace
     private let directory: URL

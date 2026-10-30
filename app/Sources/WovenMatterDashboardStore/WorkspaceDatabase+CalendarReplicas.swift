@@ -88,7 +88,6 @@ extension WorkspaceDatabaseConnection {
         }
         result = .init(mutationID: mutation.id, status: .accepted, record: try companionCalendarSnapshot().records.first { $0.id == mutation.record.id })
       } else {
-        try requireCalendarExecutionAccess(mutation.record, deviceID: deviceID)
         try CompanionCalendarSchedule.validate(mutation.record.event.draft)
         let native = try Self.nativeCalendarDraft(mutation.record.event.draft)
         _ = try saveCalendarEvent(id: mutation.record.id, draft: native, creating: before == nil, expectedRevision: mutation.expectedRevision, _transaction: false)
@@ -112,24 +111,6 @@ extension WorkspaceDatabaseConnection {
       return result
     }
   }
-  /// Shared events remain editable. Scheduling work on another workspace must
-  /// obey the same central execution policy as an immediate command.
-  private func requireCalendarExecutionAccess(_ record: CompanionCalendarRecord, deviceID: String) throws {
-    guard let task = record.event.draft.task, record.ownerDeviceID != deviceID else { return }
-    let denied = Set(try companionWorkspaceAccessPolicies().filter { $0.deviceID == deviceID && !$0.enabled }.map(\.workspaceID))
-    guard !denied.isEmpty else { return }
-    let workspaces = try companionExecutionWorkspaces()
-    let identity = try companionLibraryIdentityUnlocked()
-    let target: String?
-    if let owner = record.ownerDeviceID {
-      target = workspaces.first { ($0.executionDeviceID ?? $0.ownerDeviceID) == owner && !$0.deleted }?.id
-    } else if let workspaceID = task.workspaceID { target = UUID(uuidString: workspaceID)?.uuidString.lowercased() }
-    else { target = workspaces.first { $0.kind == .mac && ($0.executionDeviceID ?? $0.ownerDeviceID) == identity.hostDeviceID && !$0.deleted }?.id }
-    if let target, denied.contains(target) {
-      throw CompanionAPIError(code: "execution_disabled", message: "Execution access for this scheduled task is disabled in Devices on the central Mac.")
-    }
-  }
-
   func companionCalendarPublishRuns(_ runs: [CompanionCalendarRun], deviceID: String) throws -> [String] {
     guard runs.count <= 200 else { throw CompanionCalendarError.invalid }
     return try transaction {

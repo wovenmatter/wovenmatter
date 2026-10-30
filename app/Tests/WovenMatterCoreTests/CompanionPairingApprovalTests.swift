@@ -118,6 +118,31 @@ import WovenMatterCore
         #expect(try await auth.preparePairingCancellation(poll) == nil)
     }
 
+    @Test func developmentPresenceDisappearsOnQuitOrExpiryAndCanReturnWithoutUndoingUnpair() async throws {
+        let fixture = try PairingFixture(); defer { fixture.remove() }
+        let clock = PairingClock()
+        let auth = try fixture.authentication(now: { clock.now })
+        let id = UUID().uuidString.lowercased(), name = "Dev · review"
+        let first = try await auth.enrollLocalDevelopment(deviceID: id, name: name, workspaceID: fixture.libraryID)
+        #expect(await auth.deviceConnections().first?.name == "review (Dev)")
+        try await auth.suspendLocalDevelopment(deviceID: id, credential: first.credential)
+        #expect(await auth.devices().isEmpty)
+        let resumed = try await auth.enrollLocalDevelopment(deviceID: id, name: name, workspaceID: fixture.libraryID)
+        await #expect(throws: CompanionAPIError.self) { try await auth.authenticate(bearer: first.credential) }
+        await #expect(throws: CompanionAPIError.self) {
+            try await auth.suspendLocalDevelopment(deviceID: id, credential: first.credential)
+        }
+        #expect(await auth.devices().count == 1)
+        clock.advance(46)
+        #expect(await auth.devices().isEmpty)
+        _ = try await auth.authenticate(bearer: resumed.credential)
+        #expect(await auth.devices().count == 1)
+        try await auth.revoke(deviceID: id)
+        await #expect(throws: CompanionAPIError.self) {
+            try await auth.enrollLocalDevelopment(deviceID: id, name: name, workspaceID: fixture.libraryID)
+        }
+    }
+
     @Test func localDevelopmentEnrollmentCannotTakeOverPairedDevicesOrUndoRevocation() async throws {
         let fixture = try PairingFixture(); defer { fixture.remove() }
         let auth = try fixture.authentication()

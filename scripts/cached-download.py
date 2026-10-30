@@ -24,6 +24,7 @@ def download(url, algorithm, expected, cache):
                 h.update(chunk)
         return h.hexdigest() == expected
     if valid(destination):
+        os.utime(destination)  # Marks a current pin for the cache producer's pruning.
         return destination
     destination.unlink(missing_ok=True)
     fd, name = tempfile.mkstemp(prefix='.download-', dir=cache)

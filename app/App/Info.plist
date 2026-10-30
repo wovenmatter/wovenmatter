@@ -2,6 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <key>WovenMatterDeviceSetupVersion</key>
+    <integer>1</integer>
     <key>WovenMatterDevelopmentMode</key>
     <string>$(WOVENMATTER_DEV_MODE)</string>
     <key>WovenMatterDevelopmentInstance</key>

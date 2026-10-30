@@ -50,8 +50,8 @@ final class SecondaryMacExecutionWorkspace: ExecutionWorkspaceTransport {
         guard let ownerDeviceID = UUID(uuidString: state.deviceID) else { throw MobileStore.Failure.incompatibleStore }
         try await model.configureClientExecutionWorkspace(directory: directory, executionWorkspaceDeviceID: ownerDeviceID, store: store)
         let descriptor = CompanionExecutionWorkspace(id: state.deviceID, libraryID: libraryID, ownerDeviceID: state.deviceID,
-            kind: .mac, name: DevelopmentLaunch.isClient ? DevelopmentLaunch.displayName : Host.current().localizedName ?? "This Mac",
-            capabilities: ["execution.v1", "inference.v1", "execution.local"], executionDeviceID: state.deviceID, journalDeviceIDs: [state.deviceID])
+            kind: .mac, name: DevelopmentLaunch.deviceName(),
+            capabilities: ["execution.v1", "inference.v1", "execution.local"], executionDeviceID: state.deviceID, journalDeviceIDs: [state.deviceID], developmentInstance: DevelopmentLaunch.instance)
         return try await SecondaryMacExecutionWorkspace(descriptor: descriptor, model: model, replica: replica, directory: directory)
     }
     init(descriptor: CompanionExecutionWorkspace, model: ApplicationModel, replica: MobileStore, directory: URL) async throws {

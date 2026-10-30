@@ -64,26 +64,6 @@ test "$remote_tag_sha" = "$expected_sha" \
 git merge-base --is-ancestor "$expected_sha" origin/main \
   || { printf '%s is not an accepted main commit.\n' "$expected_sha" >&2; exit 65; }
 
-release_json="$(gh release view "$tag" --repo "$repository" \
-  --json tagName,name,isDraft,isPrerelease,assets)"
-is_draft="$(jq -r '.isDraft' <<<"$release_json")"
-test "$is_draft" = "true" \
-  || { printf '%s is not a private draft; refusing publication.\n' "$tag" >&2; exit 65; }
-
-version="${tag#v}"
-expected_asset="WovenMatter_${version}_arm64.dmg"
-actual_assets="$(jq -r '.assets[].name' <<<"$release_json" | sort)"
-if grep -qx release-build.json <<<"$actual_assets"; then
-  # The exact signed feed, provenance, and checksum inventory are checked after download.
-  while IFS= read -r asset_name; do
-    [[ "$asset_name" =~ ^[A-Za-z0-9_.-]+$ ]] || exit 65
-  done <<<"$actual_assets"
-else
-  expected_assets="$(printf '%s\n' SHA256SUMS.txt "$expected_asset" latest-mac.json | sort)"
-  test "$actual_assets" = "$expected_assets" \
-    || { printf '%s has an unexpected release asset set.\n' "$tag" >&2; exit 65; }
-fi
-
 release_runs="$(gh run list --repo "$repository" --workflow release.yml \
   --event push --branch "$tag" --limit 20 \
   --json headSha,status,conclusion,url)"
@@ -97,22 +77,41 @@ release_run_url="$(jq -r --arg sha "$expected_sha" '
 test -n "$release_run_url" \
   || { printf 'No successful Release workflow found for %s at %s.\n' "$tag" "$expected_sha" >&2; exit 65; }
 
+version="${tag#v}"
 temporary="$(mktemp -d "${TMPDIR:-/tmp}/wovenmatter-publish-${version}.XXXXXX")"
 trap 'rm -rf "$temporary"; rm -f "$notes_snapshot"' EXIT
-gh release download "$tag" --repo "$repository" --dir "$temporary"
+# Fresh GitHub metadata selects rehashed private local bytes; each asset digest
+# is downloaded at most once. Every check below runs on every invocation.
+record="$temporary/release-record.json"
+assets="$temporary/assets"
+# fetch refuses a non-draft release before downloading anything.
+python3 scripts/release-artifacts.py fetch "$repository" "$tag" "$expected_sha" "$assets" "$record"
+
+expected_asset="WovenMatter_${version}_arm64.dmg"
+actual_assets="$(jq -r '.assets[].name' "$record" | sort)"
+if grep -qx release-build.json <<<"$actual_assets"; then
+  # The exact signed feed, provenance, and checksum inventory are checked after download.
+  while IFS= read -r asset_name; do
+    [[ "$asset_name" =~ ^[A-Za-z0-9_.-]+$ ]] || exit 65
+  done <<<"$actual_assets"
+else
+  expected_assets="$(printf '%s\n' SHA256SUMS.txt "$expected_asset" latest-mac.json | sort)"
+  test "$actual_assets" = "$expected_assets" \
+    || { printf '%s has an unexpected release asset set.\n' "$tag" >&2; exit 65; }
+fi
 
 (
-  cd "$temporary"
+  cd "$assets"
   shasum -a 256 -c SHA256SUMS.txt
 )
 
-if [ -f "$temporary/release-build.json" ]; then
-  python3 scripts/release-assets.py verify "$temporary" "$version" "$expected_sha"
-  swift scripts/verify-update-signatures.swift "$temporary"
+if [ -f "$assets/release-build.json" ]; then
+  python3 scripts/release-assets.py verify "$assets" "$version" "$expected_sha"
+  swift scripts/verify-update-signatures.swift "$assets"
 fi
 
-dmg="${temporary}/${expected_asset}"
-manifest="${temporary}/latest-mac.json"
+dmg="${assets}/${expected_asset}"
+manifest="${assets}/latest-mac.json"
 dmg_sha="$(shasum -a 256 "$dmg" | awk '{ print $1 }')"
 jq -e \
   --arg version "$version" \
@@ -135,6 +134,10 @@ gatekeeper_result="$(spctl --assess --type open --context context:primary-signat
 grep -Fq 'accepted' <<<"$gatekeeper_result"
 grep -Fq 'source=Notarized Developer ID' <<<"$gatekeeper_result"
 
+# In both modes, the verified bytes must still be the draft's current assets:
+# refuse if the draft, its ID, or any asset ID/size/digest/upload time changed
+# while downloading or verifying. This directly precedes publication.
+python3 scripts/release-artifacts.py unchanged "$record"
 printf 'Verified private release %s at %s.\n' "$tag" "$expected_sha"
 printf 'Release workflow: %s\n' "$release_run_url"
 if "$verify_only"; then
@@ -143,12 +146,5 @@ if "$verify_only"; then
 fi
 
 gh release edit "$tag" --repo "$repository" --notes-file "$notes_snapshot" --draft=false >/dev/null
-public_release="$(gh release view "$tag" --repo "$repository" \
-  --json tagName,isDraft,publishedAt,url)"
-jq -e --arg tag "$tag" '
-  .tagName == $tag
-  and .isDraft == false
-  and .publishedAt != null
-' <<<"$public_release" >/dev/null
-
-printf 'Published %s\n' "$(jq -r '.url' <<<"$public_release")"
+python3 scripts/release-artifacts.py published "$record" "$notes_snapshot"
+printf 'Published https://github.com/%s/releases/tag/%s\n' "$repository" "$tag"

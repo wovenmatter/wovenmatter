@@ -13,6 +13,11 @@ args = sys.argv[1:]
 with open(os.environ['RELEASE_CALLS'], 'a') as log:
     log.write(json.dumps([name, args]) + '\n')
 sha = 'a' * 40
+asset = 'WovenMatter_1.2.3_arm64.dmg'
+manifest = dict(schema_version=1, version='1.2.3', build=1, architecture='arm64', minimum_macos='26.0', download_url='https://github.com/wovenmatter/wovenmatter/releases/download/v1.2.3/' + asset, release_url='https://github.com/wovenmatter/wovenmatter/releases/tag/v1.2.3', sha256=hashlib.sha256(b'fixture').hexdigest())
+files = {asset: b'fixture', 'latest-mac.json': json.dumps(manifest).encode()}
+files['SHA256SUMS.txt'] = ''.join(hashlib.sha256(v).hexdigest() + '  ' + n + '\n' for n, v in files.items()).encode()
+ids = {n: i for i, n in enumerate(sorted(files), 1)}
 if name == 'git':
     if args[:2] == ['remote', 'get-url']:
         print('git@github-release-agent:wovenmatter/wovenmatter.git')
@@ -20,19 +25,21 @@ if name == 'git':
     elif args[0] == 'ls-remote': print(sha + '\trefs/tags/v1.2.3^{}')
     elif args[0] not in ('fetch', 'merge-base'): sys.exit(90)
 elif name == 'gh':
-    if args[0] == 'api': print('release-agent')
+    published = pathlib.Path(os.environ['RELEASE_PUBLISHED'])
+    if args == ['api', '--hostname', 'github.com', 'user', '--jq', '.login']: print('release-agent')
     elif args[:2] == ['run', 'list']:
         print(json.dumps([dict(headSha=sha, status='completed', conclusion='success', url='fixture')]))
     elif args[:2] == ['release', 'view']:
-        published = pathlib.Path(os.environ['RELEASE_PUBLISHED']).exists()
-        print(json.dumps(dict(tagName='v1.2.3', isDraft=not published, publishedAt='now' if published else None, url='fixture', assets=[dict(name=n) for n in ['SHA256SUMS.txt', 'WovenMatter_1.2.3_arm64.dmg', 'latest-mac.json']])))
-    elif args[:2] == ['release', 'download']:
-        dest = pathlib.Path(args[args.index('--dir') + 1])
-        asset = 'WovenMatter_1.2.3_arm64.dmg'
-        (dest / asset).write_bytes(b'fixture')
-        manifest = dict(schema_version=1, version='1.2.3', build=1, architecture='arm64', minimum_macos='26.0', download_url='https://github.com/wovenmatter/wovenmatter/releases/download/v1.2.3/' + asset, release_url='https://github.com/wovenmatter/wovenmatter/releases/tag/v1.2.3', sha256=hashlib.sha256(b'fixture').hexdigest())
-        (dest / 'latest-mac.json').write_text(json.dumps(manifest))
-        (dest / 'SHA256SUMS.txt').write_text(''.join(hashlib.sha256((dest / n).read_bytes()).hexdigest() + '  ' + n + '\n' for n in [asset, 'latest-mac.json']))
+        print(json.dumps(dict(databaseId=7, tagName='v1.2.3')))
+    elif args == ['api', 'repos/wovenmatter/wovenmatter/releases/7']:
+        print(json.dumps(dict(id=7, tag_name='v1.2.3', draft=not published.exists(), prerelease=False,
+                              published_at='now' if published.exists() else None,
+                              body=published.read_text() if published.exists() else 'placeholder',
+                              assets=[dict(id=ids[n], name=n, state='uploaded', size=len(v), updated_at='t',
+                                           digest='sha256:' + hashlib.sha256(v).hexdigest()) for n, v in files.items()])))
+    elif args[0] == 'api' and 'Accept: application/octet-stream' in args:
+        identifier = int(args[-1].rsplit('/', 1)[1])
+        sys.stdout.buffer.write(files[next(n for n, i in ids.items() if i == identifier)])
     elif args[:2] == ['release', 'edit']:
         assert '--draft=false' in args
         notes = pathlib.Path(args[args.index('--notes-file') + 1]).read_bytes()
@@ -53,7 +60,8 @@ with tempfile.TemporaryDirectory() as folder:
         tool.chmod(0o755)
     calls, published = temp / 'calls', temp / 'published'
     env = dict(os.environ, PATH=str(temp) + os.pathsep + os.environ['PATH'],
-               RELEASE_CALLS=str(calls), RELEASE_PUBLISHED=str(published))
+               RELEASE_CALLS=str(calls), RELEASE_PUBLISHED=str(published),
+               WOVENMATTER_RELEASE_ARTIFACT_CACHE=str(temp / 'artifact-cache'))
     def run(options, success):
         calls.write_text('')
         published.unlink(missing_ok=True)
@@ -83,4 +91,5 @@ with tempfile.TemporaryDirectory() as folder:
     assert published.read_text() == body
     edit_index = next(i for i, (name, args) in enumerate(recorded) if name == 'gh' and args[:2] == ['release', 'edit'])
     assert any(name == 'spctl' for name, _ in recorded[:edit_index])
+    assert not any(name == 'gh' and args[:1] == ['auth'] for name, args in recorded)
 print('Release approval checks passed: default private, explicit verification, invalid notes rejected, approved text published after verification.')

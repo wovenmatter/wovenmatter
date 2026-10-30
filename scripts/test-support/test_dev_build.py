@@ -114,6 +114,8 @@ class DevelopmentBuildTests(unittest.TestCase):
               INSERT INTO dashboard_agents VALUES('remote-pi','remote_workspace','device_owned','remote',NULL,'ready');
               INSERT INTO dashboard_conversations VALUES('history','local-pi');
               CREATE TABLE companion_workspace(singleton INTEGER, workspace_id TEXT);
+              CREATE TABLE companion_execution_workspaces(id TEXT,payload BLOB);
+              INSERT INTO companion_execution_workspaces VALUES('source-mac','{"libraryID":"production-identity","name":"Mac","endpoint":"https://fixture.test.ts.net/wovenmatter"}');
               CREATE TABLE dashboard_calendar_items(id TEXT, calendar_json TEXT);
               CREATE TABLE dashboard_runs(id TEXT,status TEXT);
               CREATE TABLE workspace_session_goals(session_id TEXT,value TEXT);
@@ -129,6 +131,10 @@ class DevelopmentBuildTests(unittest.TestCase):
             asset = source / "library-files"; asset.mkdir(); (asset / "blob").write_bytes(b"saved output")
             target = root / "dev"; dev.snapshot(source, target)
             with sqlite3.connect(target / "workspace.sqlite") as copy:
+                workspace = json.loads(copy.execute("SELECT payload FROM companion_execution_workspaces").fetchone()[0])
+                self.assertTrue(workspace["retainedHistory"])
+                self.assertNotIn("endpoint", workspace)
+                self.assertEqual(workspace["name"], "Mac")
                 self.assertEqual(copy.execute("SELECT content FROM notes").fetchone()[0], "shared content")
                 self.assertEqual(copy.execute("SELECT COUNT(*) FROM desktop_local_acp_sessions").fetchone()[0], 0)
                 self.assertIsNotNone(copy.execute("SELECT deleted_at FROM dashboard_agents WHERE id='local-pi'").fetchone()[0])
@@ -148,6 +154,22 @@ class DevelopmentBuildTests(unittest.TestCase):
             self.assertEqual(writer.execute("SELECT is_paused,pending_delivery_id FROM workspace_session_timers").fetchone(), (0, "pending"))
             self.assertEqual((target / "library-files/blob").read_bytes(), b"saved output")
             with self.assertRaises(ValueError): dev.snapshot(source, target)
+
+    def test_snapshot_keeps_outside_tool_choices_without_inheriting_network_exposure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); source = root / "production"; source.mkdir()
+            settings = {"enabledByDefault": ["notes"], "externalMCP": {"isEnabled": True, "groups": ["notes", "calendar"]}}
+            with sqlite3.connect(source / "workspace.sqlite") as db:
+                db.execute("CREATE TABLE workspace_tool_settings(id INTEGER PRIMARY KEY,value TEXT)")
+                db.execute("INSERT INTO workspace_tool_settings VALUES(1,?)", (json.dumps(settings),))
+            target = root / "snapshot"
+            dev.snapshot(source, target)
+            with sqlite3.connect(target / "workspace.sqlite") as db:
+                copied = json.loads(db.execute("SELECT value FROM workspace_tool_settings").fetchone()[0])
+            self.assertFalse(copied["externalMCP"]["isEnabled"])
+            self.assertEqual(copied["externalMCP"]["groups"], ["notes", "calendar"])
+            with sqlite3.connect(source / "workspace.sqlite") as db:
+                self.assertEqual(json.loads(db.execute("SELECT value FROM workspace_tool_settings").fetchone()[0]), settings)
 
     def test_snapshot_refuses_source_alias_and_symlinked_assets(self):
         with tempfile.TemporaryDirectory() as tmp:

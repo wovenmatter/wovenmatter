@@ -104,6 +104,34 @@ struct CompanionHostLifecycleTests {
     }
 
 
+    @Test func developmentDisconnectWithdrawsWorkspaceAndRestartReusesIdentity() async throws {
+        let fixture = try await HostFixture(); defer { fixture.remove() }
+        await fixture.host.start()
+        let database = try #require(fixture.model.dashboardStore?.database)
+        let identity = try await database.companionLibraryIdentity()
+        let request = DevelopmentClientRequest(deviceID: UUID().uuidString.lowercased(), name: "Dev · fixture")
+        let connection = try await fixture.host.connectLocalDevelopment(request)
+        let workspace = try await database.registerCompanionExecutionWorkspace(.init(workspace: .init(
+            id: request.deviceID, libraryID: identity.libraryID, ownerDeviceID: request.deviceID, kind: .mac,
+            name: "Mac (Dev) · fixture", endpoint: URL(string: "https://fixture.test.ts.net/wovenmatter"),
+            executionDeviceID: request.deviceID, developmentInstance: "fixture")), deviceID: identity.hostDeviceID)
+        let absent = try await database.companionConnectionWorkspaces(activeDeviceIDs: [])
+        #expect(absent.first { $0.id == workspace.id }?.isVisibleInConnections == false)
+        let reconnected = try await database.companionConnectionWorkspaces(activeDeviceIDs: [request.deviceID])
+        #expect(reconnected.first { $0.id == workspace.id }?.endpoint == workspace.endpoint)
+        #expect(try await database.companionExecutionWorkspaces().first { $0.id == workspace.id }?.revision == workspace.revision)
+        try await fixture.host.disconnectLocalDevelopment(.init(deviceID: request.deviceID, credential: connection.pairing.credential))
+        #expect(!fixture.host.pairedDevices.contains { $0.id == request.deviceID })
+        let retained = try #require(try await database.companionExecutionWorkspaces().first { $0.id == workspace.id })
+        #expect(!retained.deleted && retained.endpoint == nil && !retained.isVisibleInConnections)
+        _ = try await fixture.host.connectLocalDevelopment(request)
+        #expect(fixture.host.pairedDevices.contains { $0.id == request.deviceID })
+        var restarted = retained; restarted.endpoint = workspace.endpoint
+        _ = try await database.registerCompanionExecutionWorkspace(.init(workspace: restarted, expectedRevision: retained.revision), deviceID: identity.hostDeviceID)
+        await fixture.host.refreshStatus()
+        #expect(fixture.host.executionWorkspaces.first { $0.id == workspace.id }?.isVisibleInConnections == true)
+    }
+
     @Test func clickPairingHTTPRequiresLocalApprovalAndReturnsAccurateMetadata() async throws {
         let fixture = try await HostFixture(); defer { fixture.remove() }
         await fixture.host.startForCentralDatabase()
@@ -147,25 +175,18 @@ struct CompanionHostLifecycleTests {
         #expect(fixture.host.pairedDevices.isEmpty)
     }
 
-    @Test func disablingExecutionDuringEnrollmentLeavesLibraryPairingAndDeniesOldAndNewGrants() async throws {
+    @Test func pairingGrantsExecutionWithoutWorkspacePermissionsAndUnpairRevokesIt() async throws {
         let fixture = try await HostFixture(); defer { fixture.remove() }
         await fixture.host.start()
-        let old = try await fixture.pairAndProvision(name: "Fixture Mac")
-        let device = try #require(fixture.host.pairedDevices.first { $0.id == old.deviceID })
-        let provisioning = Task { try? await fixture.host.provisionExecutionWorkspace(id: old.workspace.id, device: device) }
-        await fixture.host.setExecutionAccess(deviceID: old.deviceID, workspaceID: old.workspace.id, enabled: false)
-        let concurrent = await provisioning.value
-        #expect(try await fixture.executionStatus(old) != 200)
-        if let concurrent { #expect(try await fixture.executionStatus(concurrent) != 200) }
-        #expect(fixture.host.pairedDevices.contains { $0.id == old.deviceID })
-        #expect(fixture.host.workspaceAccessPolicies.contains { $0.deviceID == old.deviceID && $0.workspaceID == old.workspace.id && !$0.enabled })
-        await #expect(throws: CompanionAPIError.self) {
-            try await fixture.host.provisionExecutionWorkspace(id: old.workspace.id, device: device)
-        }
-        await fixture.host.setExecutionAccess(deviceID: old.deviceID, workspaceID: old.workspace.id, enabled: true)
-        let fresh = try await fixture.host.provisionExecutionWorkspace(id: old.workspace.id, device: device)
+        let credential = try await fixture.pairAndProvision(name: "Fixture Mac")
+        let device = try #require(fixture.host.pairedDevices.first { $0.id == credential.deviceID })
+        let fresh = try await fixture.host.provisionExecutionWorkspace(id: credential.workspace.id, device: device)
         #expect(try await fixture.executionStatus(fresh) == 200)
-        #expect(try await fixture.executionStatus(old) != 200)
+        await fixture.host.revoke(device.id)
+        #expect(try await fixture.executionStatus(fresh) == 401)
+        await #expect(throws: CompanionAPIError.self) {
+            try await fixture.host.provisionExecutionWorkspace(id: credential.workspace.id, device: device)
+        }
     }
 
     private func waitUntil(attempts: Int = 300, _ condition: () -> Bool) async throws {
