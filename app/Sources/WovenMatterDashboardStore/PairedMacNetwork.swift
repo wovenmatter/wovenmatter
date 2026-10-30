@@ -42,19 +42,51 @@ public final class PairedMacNetwork: Sendable {
     }
     return try JSONDecoder().decode(T.self, from: data)
   }
-  public func verify(_ route: PairedMacRoute, deviceID: String, token: String) async throws {
+  /// The target must sign a fresh challenge with the key this Mac pinned for
+  /// its device UUID. The key is never taken from the route or the proof, and
+  /// there is no shared-secret fallback: a learned or poisoned address cannot
+  /// obtain this Mac's target-local bearer. Identity is the pinned device,
+  /// library and contacted endpoint; a signed display-name change is returned.
+  @discardableResult
+  public func verify(_ route: PairedMacRoute, deviceID: String, token: String, pin: PeerPin) async throws -> PairedMacRoute {
     try route.validate()
+    guard pin.libraryID == route.libraryID.lowercased(),
+          let key = try? Curve25519.Signing.PublicKey(rawRepresentation: pin.publicKey) else { throw unverified }
     let digest = Data(SHA256.hash(data: Data(token.utf8)))
     let credentialID = SHA256.hash(data: digest).map { String(format: "%02x", $0) }.joined()
-    var generator = SystemRandomNumberGenerator()
-    let nonce = Data((0..<32).map { _ in UInt8.random(in: 0...255, using: &generator) })
-    let proof: PairedMacProof = try await request(route.endpoint, path: "v1/peers/proof",
-      body: JSONEncoder().encode(PairedMacProofChallenge(deviceID: deviceID, credentialID: credentialID, nonce: nonce)))
-    let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+    let challenge = PairedMacProofChallenge(deviceID: deviceID, credentialID: credentialID, nonce: Self.nonce(),
+      targetDeviceID: route.deviceID, targetLibraryID: route.libraryID)
+    let proof: PairedMacProof = try await request(route.endpoint, path: "v1/peers/proof", body: JSONEncoder().encode(challenge))
     guard proof.route.deviceID == route.deviceID, proof.route.libraryID == route.libraryID, proof.route.endpoint == route.endpoint,
-          HMAC<SHA256>.isValidAuthenticationCode(proof.signature, authenticating: nonce + (try encoder.encode(proof.route)), using: SymmetricKey(data: digest)) else {
-      throw CompanionAPIError(code: "unverified_peer", message: "This address could not prove that it belongs to the paired Mac.")
-    }
+          (try? proof.route.validate()) != nil,
+          key.isValidSignature(proof.signature, for: PairedMacProof.statement(challenge, route: proof.route)) else { throw unverified }
+    return proof.route
   }
+
+  /// Learned-peer handshake. The target first proves its pinned key over a
+  /// one-use challenge for this exact pair; only then does this Mac sign the
+  /// challenge, and the target returns a fresh grant valid only at itself.
+  public func handshake(_ route: PairedMacRoute, own: PeerSelf, pin: PeerPin, operationID: String) async throws -> (token: String, route: PairedMacRoute) {
+    try route.validate()
+    guard pin.libraryID == route.libraryID.lowercased(),
+          let key = try? Curve25519.Signing.PublicKey(rawRepresentation: pin.publicKey) else { throw unverified }
+    let request = PairedMacChallengeRequest(requesterDeviceID: own.deviceID, requesterLibraryID: own.libraryID,
+      targetDeviceID: route.deviceID.lowercased(), targetLibraryID: route.libraryID.lowercased())
+    let challenge: PairedMacChallenge = try await self.request(route.endpoint, path: "v1/peers/challenge", body: JSONEncoder().encode(request))
+    guard challenge.route.deviceID == route.deviceID, challenge.route.libraryID == route.libraryID, challenge.route.endpoint == route.endpoint,
+          challenge.nonce.count == 32, PeerIdentifier.canonical(challenge.challengeID) != nil, PeerIdentifier.canonical(challenge.serviceID) != nil,
+          key.isValidSignature(challenge.signature, for: PairedMacChallenge.statement(challengeID: challenge.challengeID, nonce: challenge.nonce,
+            serviceID: challenge.serviceID, request: request, route: challenge.route)) else { throw unverified }
+    let signature = try own.key.signature(for: PairedMacHandshake.statement(challenge: challenge, request: request, operationID: operationID))
+    let grant: PairedMacGrant = try await self.request(route.endpoint, path: "v1/peers/handshake",
+      body: JSONEncoder().encode(PairedMacHandshake(challengeID: challenge.challengeID, request: request, operationID: operationID, signature: signature)))
+    guard (32...256).contains(grant.token.utf8.count) else { throw unverified }
+    return (grant.token, challenge.route)
+  }
+  static func nonce() -> Data {
+    var generator = SystemRandomNumberGenerator()
+    return Data((0..<32).map { _ in UInt8.random(in: 0...255, using: &generator) })
+  }
+  private var unverified: CompanionAPIError { .init(code: "unverified_peer", message: "This address could not prove that it belongs to the paired Mac.") }
   private var invalidResponse: CompanionAPIError { .init(code: "peer_unavailable", message: "The paired Mac did not return a valid synchronization response.") }
 }

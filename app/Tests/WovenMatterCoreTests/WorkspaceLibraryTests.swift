@@ -152,6 +152,43 @@ struct WorkspaceLibraryTests {
     await #expect(throws: WorkspaceToolError.self) { try await f.db.librarySourceMessage(id: file.id) }
   }
 
+  @Test("a synchronization requested during another pass runs after it rather than being dropped")
+  func concurrentSynchronizationIsSerialized() async throws {
+    let f = try await Fixture()
+    defer { f.close() }
+    // The first pass suspends while resolving a remote workspace.
+    let remoteChat = try await f.session("Remote")
+    try await f.db.write { connection in try connection.transaction {
+      try connection.toolsExecuteUnlocked(
+        "UPDATE desktop_local_acp_sessions SET remote_workspace_id=? WHERE conversation_id=?", [UUID().uuidString.lowercased(), remoteChat])
+    } }
+    _ = try await f.exchange(remoteChat, text: "Report", reply: "[Report](./report.pdf)")
+    let gate = LibraryPassGate()
+    let service = LibraryService(database: f.db)
+    let first = Task { try await service.synchronize(locations: [], remoteWorkspace: { _ in await gate.hold(); return nil }) }
+    try await gate.untilHeld()
+    // A local file arrives after the first pass indexed its messages.
+    let directory = f.root.appending(path: "local-workspace")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let bytes = Data("Category,Amount".utf8)
+    try bytes.write(to: directory.appending(path: "budget.csv"))
+    let localChat = try await f.session("Local")
+    let run = try await f.exchange(localChat, text: "Budget", reply: "[Budget](./budget.csv)")
+    let returned = LibraryPassGate()
+    let second = Task {
+      try await service.synchronize(locations: [.init(conversationID: localChat, name: "Local", root: directory.path)],
+        remoteWorkspace: { _ in nil })
+      await returned.hold(waiting: false)
+    }
+    try await Task.sleep(for: .milliseconds(100))
+    #expect(await !returned.held, "A concurrent request must wait for its own pass")
+    await gate.release()
+    try await first.value; try await second.value
+    let id = WorkspaceLibraryItem.identifier(messageID: run.assistantMessageID, source: "./budget.csv")
+    let item = try #require(try await f.db.libraryItem(id: id))
+    #expect(item.storage == .retained && item.sizeBytes == Int64(bytes.count))
+  }
+
   @Test("retained remote handback opens offline and copies deduplicate by content")
   func remoteRetention() async throws {
     let f = try await Fixture()
@@ -206,4 +243,18 @@ struct WorkspaceLibraryTests {
     #expect(try await f.db.retainedLibraryHashes().isEmpty)
   }
 
+}
+
+private actor LibraryPassGate {
+  private(set) var held = false
+  private var continuation: CheckedContinuation<Void, Never>?
+  func hold(waiting: Bool = true) async {
+    held = true
+    if waiting { await withCheckedContinuation { continuation = $0 } }
+  }
+  func release() { continuation?.resume(); continuation = nil }
+  func untilHeld() async throws {
+    for _ in 0..<2_000 where !held { try await Task.sleep(for: .milliseconds(5)) }
+    #expect(held)
+  }
 }

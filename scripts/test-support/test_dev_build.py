@@ -119,6 +119,10 @@ class DevelopmentBuildTests(unittest.TestCase):
               INSERT INTO paired_mac_routes VALUES('source','https://production.fixture.ts.net/wovenmatter');
               INSERT INTO paired_library_clock VALUES('source',42);
               INSERT INTO paired_library_changes VALUES(1,'production-private-sync');
+              CREATE TABLE paired_calendar_owners(id TEXT, device_id TEXT);
+              INSERT INTO paired_calendar_owners VALUES('schedule','other-mac');
+              CREATE TABLE paired_library_state(name TEXT, value TEXT);
+              INSERT INTO paired_library_state VALUES('owners.bootstrap','1'),('baseline.other-mac','4');
               CREATE TABLE companion_workspace(singleton INTEGER, workspace_id TEXT);
               CREATE TABLE companion_execution_workspaces(id TEXT,payload BLOB);
               INSERT INTO companion_execution_workspaces VALUES('source-mac','{"libraryID":"production-identity","name":"Mac","endpoint":"https://fixture.test.ts.net/wovenmatter"}');
@@ -139,6 +143,9 @@ class DevelopmentBuildTests(unittest.TestCase):
             with sqlite3.connect(target / "workspace.sqlite") as copy:
                 for table in ("paired_mac_routes", "paired_library_clock", "paired_library_changes"):
                     self.assertEqual(copy.execute("SELECT count(*) FROM " + table).fetchone()[0], 0)
+                # Ownership survives, so the snapshot never adopts another Mac's schedule.
+                self.assertEqual(copy.execute("SELECT device_id FROM paired_calendar_owners").fetchall(), [("other-mac",)])
+                self.assertEqual(copy.execute("SELECT name FROM paired_library_state").fetchall(), [("owners.bootstrap",)])
                 workspace = json.loads(copy.execute("SELECT payload FROM companion_execution_workspaces").fetchone()[0])
                 self.assertTrue(workspace["retainedHistory"])
                 self.assertNotIn("endpoint", workspace)

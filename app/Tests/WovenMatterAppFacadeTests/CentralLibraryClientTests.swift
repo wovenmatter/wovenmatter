@@ -227,7 +227,169 @@ struct CentralLibraryClientTests {
         #expect(await reopened.snapshot().outbox.count == 1)
     }
 
+    @Test func aRevokedDirectGrantIsClearedAndReplacedOnceThroughTheCentral() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        let replica = try MobileStore(file: fixture.directory.appending(path: "client/library.json"))
+        let library = "00000000-0000-4000-8000-000000000001"
+        try await replica.bindWorkspace(library)
+        let deviceID = await replica.snapshot().deviceID
+        fixture.defaults.set(false, forKey: "wovenmatter.client.local-execution")
+        let central = MacClientFakeCentral(); await central.setOffline(true)
+        let remote = CompanionExecutionWorkspace(id: "remote", libraryID: library, ownerDeviceID: "linux", kind: .linux, name: "Linux",
+            endpoint: URL(string: "https://linux.example.ts.net/wovenmatter"))
+        // The cached grant was retired by the upgrade; the workspace rejects it.
+        let stale = MacClientFakeExecution(workspace: remote); await stale.setRevoked(true)
+        let renewed = MacClientFakeExecution(workspace: remote)
+        let fresh = DirectWorkspaceCredential(endpoint: try #require(remote.endpoint), libraryID: library, workspaceID: remote.id,
+            deviceID: deviceID, token: "fresh-token")
+        var issue = fresh
+        var cleared: [String] = [], enrolled: [String] = [], saved: [DirectWorkspaceCredential] = [], connected: [String] = []
+        let model = CentralLibraryClientModel(store: replica, transport: central, executionDirectory: fixture.directory,
+            clearWorkspaceCredential: { cleared.append($0) },
+            enrollWorkspace: { enrolled.append($0); return issue },
+            saveWorkspaceCredential: { saved.append($0) },
+            makeWorkspaceTransport: { connected.append($0.token); return renewed })
+        try await model.attachExecutionWorkspace(remote, transport: stale)
+        await model.refresh()
+        #expect(cleared == [remote.id] && enrolled == [remote.id])
+        #expect(saved == [fresh] && connected == ["fresh-token"])
+        let staleRequests = await stale.identityRequests
+        await model.refresh()
+        // The replacement serves the workspace; the stale bearer is never presented again.
+        #expect(model.canControl(workspaceID: remote.id))
+        #expect(await stale.identityRequests == staleRequests)
+        #expect(await renewed.identityRequests > 0)
 
+        // When the replacement is rejected too, a grant for another device is
+        // refused: nothing is installed and the workspace stays unavailable.
+        await renewed.setRevoked(true)
+        issue.deviceID = "another-device"
+        await model.refresh()
+        #expect(cleared == [remote.id, remote.id] && enrolled == [remote.id, remote.id])
+        #expect(saved == [fresh] && connected == ["fresh-token"])
+        #expect(!model.canControl(workspaceID: remote.id))
+        #expect(model.deviceConnectionsError != nil)
+        let rejectedRequests = await renewed.identityRequests
+        await model.refresh()
+        #expect(await renewed.identityRequests == rejectedRequests)
+    }
+
+    @Test func aRejectedDirectGrantIsReplacedOnceTheCentralIsReachableAgain() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        let replica = try MobileStore(file: fixture.directory.appending(path: "client/library.json"))
+        let library = "00000000-0000-4000-8000-000000000001"
+        try await replica.bindWorkspace(library)
+        let deviceID = await replica.snapshot().deviceID
+        fixture.defaults.set(false, forKey: "wovenmatter.client.local-execution")
+        let central = MacClientFakeCentral(); await central.setOffline(true)
+        let remote = CompanionExecutionWorkspace(id: "remote", libraryID: library, ownerDeviceID: "linux", kind: .linux, name: "Linux",
+            endpoint: URL(string: "https://linux.example.ts.net/wovenmatter"))
+        let stale = MacClientFakeExecution(workspace: remote); await stale.setRevoked(true)
+        let renewed = MacClientFakeExecution(workspace: remote)
+        let fresh = DirectWorkspaceCredential(endpoint: try #require(remote.endpoint), libraryID: library, workspaceID: remote.id,
+            deviceID: deviceID, token: "fresh-token")
+        var reachable = false, enrollments = 0
+        var saved: [DirectWorkspaceCredential] = []
+        let model = CentralLibraryClientModel(store: replica, transport: central, executionDirectory: fixture.directory,
+            clearWorkspaceCredential: { _ in },
+            enrollWorkspace: { _ in
+                enrollments += 1
+                guard reachable else { throw MobileConnectionError.offline }
+                return fresh
+            },
+            saveWorkspaceCredential: { saved.append($0) },
+            makeWorkspaceTransport: { _ in renewed })
+        try await model.attachExecutionWorkspace(remote, transport: stale)
+        // The grant is rejected while the central is unreachable: the first
+        // replacement fails and the stale bearer is dropped.
+        await model.refresh()
+        #expect(enrollments == 1 && saved.isEmpty)
+        let staleRequests = await stale.identityRequests
+        await model.refresh()
+        #expect(enrollments == 1)
+        #expect(await stale.identityRequests == staleRequests)
+        #expect(!model.canControl(workspaceID: remote.id))
+        // Connectivity returns: the next central refresh replaces the grant
+        // without any manual action.
+        reachable = true; await central.setOffline(false)
+        await model.refresh()
+        #expect(enrollments == 2 && saved == [fresh])
+        await model.refresh()
+        #expect(enrollments == 2)
+        #expect(model.canControl(workspaceID: remote.id))
+        #expect(await renewed.identityRequests > 0)
+        #expect(await stale.identityRequests == staleRequests)
+    }
+
+    @Test func aPendingDirectReenrollmentSurvivesRestartAndNeverCrossesLibraries() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        let library = "00000000-0000-4000-8000-000000000001"
+        let replicaURL = fixture.directory.appending(path: "client/library.json")
+        let replica = try MobileStore(file: replicaURL)
+        try await replica.bindWorkspace(library)
+        let deviceID = await replica.snapshot().deviceID
+        fixture.defaults.set(false, forKey: "wovenmatter.client.local-execution")
+        let execution = fixture.directory.appending(path: "execution")
+        let pendingFile = execution.appending(path: "pending-direct-enrollment.json")
+        let remote = CompanionExecutionWorkspace(id: "remote", libraryID: library, ownerDeviceID: "linux", kind: .linux, name: "Linux",
+            endpoint: URL(string: "https://linux.example.ts.net/wovenmatter"))
+        let fresh = DirectWorkspaceCredential(endpoint: try #require(remote.endpoint), libraryID: library, workspaceID: remote.id,
+            deviceID: deviceID, token: "fresh-token")
+        var enrollments: [String] = [], saved: [DirectWorkspaceCredential] = []
+        func launch(_ store: MobileStore, central: MacClientFakeCentral, reachable: Bool, renewed: MacClientFakeExecution) -> CentralLibraryClientModel {
+            CentralLibraryClientModel(store: store, transport: central, executionDirectory: execution,
+                clearWorkspaceCredential: { _ in },
+                enrollWorkspace: { id in
+                    enrollments.append(id)
+                    guard reachable else { throw MobileConnectionError.offline }
+                    return fresh
+                },
+                saveWorkspaceCredential: { saved.append($0) }, makeWorkspaceTransport: { _ in renewed })
+        }
+        // First launch: the retired grant is rejected and the replacement
+        // fails while the central is unreachable; the app then quits.
+        do {
+            let central = MacClientFakeCentral(); await central.setOffline(true)
+            let stale = MacClientFakeExecution(workspace: remote); await stale.setRevoked(true)
+            let model = launch(replica, central: central, reachable: false, renewed: MacClientFakeExecution(workspace: remote))
+            try await model.attachExecutionWorkspace(remote, transport: stale)
+            await model.refresh()
+            #expect(enrollments == [remote.id] && saved.isEmpty)
+            let persisted = try String(contentsOf: pendingFile, encoding: .utf8)
+            #expect(persisted.contains(remote.id) && persisted.contains(library) && !persisted.contains("token"))
+        }
+        // A replica bound to another library reaches its central but never
+        // applies that intent, and discards it.
+        let leaked = fixture.directory.appending(path: "other/execution")
+        try FileManager.default.createDirectory(at: leaked, withIntermediateDirectories: true)
+        try FileManager.default.copyItem(at: pendingFile, to: leaked.appending(path: "pending-direct-enrollment.json"))
+        do {
+            let other = try MobileStore(file: fixture.directory.appending(path: "other/library.json"))
+            try await other.bindWorkspace("00000000-0000-4000-8000-000000000002")
+            try await other.journal.upsertWorkspace(.init(id: remote.id, libraryID: "00000000-0000-4000-8000-000000000002",
+                ownerDeviceID: "linux", kind: .linux, name: "Linux"))
+            let central = MacClientFakeCentral(); await central.setLibraryID("00000000-0000-4000-8000-000000000002")
+            let model = CentralLibraryClientModel(store: other, transport: central, executionDirectory: leaked,
+                clearWorkspaceCredential: { _ in }, enrollWorkspace: { enrollments.append($0); return fresh },
+                saveWorkspaceCredential: { saved.append($0) }, makeWorkspaceTransport: { _ in MacClientFakeExecution(workspace: remote) })
+            await model.reload()
+            await model.refresh()
+            #expect(enrollments == [remote.id] && saved.isEmpty)
+            #expect(!FileManager.default.fileExists(atPath: leaked.appending(path: "pending-direct-enrollment.json").path))
+        }
+        // Next launch of the same library: the first reachable central refresh
+        // replaces the grant automatically and clears the pending intent.
+        let renewed = MacClientFakeExecution(workspace: remote)
+        let model = launch(try MobileStore(file: replicaURL), central: MacClientFakeCentral(), reachable: true, renewed: renewed)
+        await model.reload()
+        await model.refresh()
+        #expect(enrollments == [remote.id, remote.id] && saved == [fresh])
+        #expect(!FileManager.default.fileExists(atPath: pendingFile.path))
+        await model.refresh()
+        #expect(model.canControl(workspaceID: remote.id))
+        #expect(await renewed.identityRequests > 0)
+        #expect(enrollments.count == 2)
+    }
 }
 
 private actor MacClientFakeCentral: CompanionTransport {
@@ -256,9 +418,11 @@ private actor MacClientFakeCentral: CompanionTransport {
     func setMutationFailure(_ value: Bool) { mutationFailure = value }
     func setOffline(_ value: Bool) { offline = value }
     func dropNextSendAcknowledgement() { dropSend = true }
-    func workspaceIdentity() throws -> String { if offline { throw MobileConnectionError.offline }; return "00000000-0000-4000-8000-000000000001" }
-    func snapshot() -> CompanionSnapshot { .init(workspaceID: "00000000-0000-4000-8000-000000000001", cursor: Int64(publishedChanges.count), folders: Array(folders.values), notes: Array(notes.values)) }
-    func changes(after: Int64) -> CompanionChangePage { .init(workspaceID: "00000000-0000-4000-8000-000000000001", cursor: Int64(publishedChanges.count), changes: publishedChanges.filter { $0.cursor > after }) }
+    var libraryID = "00000000-0000-4000-8000-000000000001"
+    func setLibraryID(_ value: String) { libraryID = value }
+    func workspaceIdentity() throws -> String { if offline { throw MobileConnectionError.offline }; return libraryID }
+    func snapshot() -> CompanionSnapshot { .init(workspaceID: libraryID, cursor: Int64(publishedChanges.count), folders: Array(folders.values), notes: Array(notes.values)) }
+    func changes(after: Int64) -> CompanionChangePage { .init(workspaceID: libraryID, cursor: Int64(publishedChanges.count), changes: publishedChanges.filter { $0.cursor > after }) }
     func mutate(_ mutation: CompanionMutation) throws -> CompanionMutationResult {
         if mutationFailure { throw CompanionAPIError(code: "temporary", message: "Fixture mutation failed") }
         if mutation.kind == .createFolder {
@@ -294,9 +458,12 @@ private actor MacClientFakeExecution: ExecutionWorkspaceTransport {
     var sendCount = 0
     init(workspace: CompanionExecutionWorkspace) { self.workspace = workspace }
     var revoked = false
+    var identityRequests = 0
     func setRevoked(_ value: Bool) { revoked = value }
     func identity() throws -> CompanionExecutionWorkspace {
-        if revoked { throw MobileConnectionError.http(401, "Revoked") }; return workspace
+        identityRequests += 1
+        // As HTTPSExecutionWorkspaceTransport reports a rejected bearer.
+        if revoked { throw MobileConnectionError.revoked }; return workspace
     }
     func providers() -> [CompanionProvider] { [.init(id: "default_agent", runtimeKind: "default_agent", displayName: "Pi Durable", routeName: "Linux", available: true)] }
     func pending() -> [CompanionPendingInteraction] { [] }

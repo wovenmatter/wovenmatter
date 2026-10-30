@@ -313,7 +313,7 @@ extension WorkspaceDatabaseConnection {
   /// Retain a pending occurrence through preparation errors and process restarts.
   public func dueCalendarRuns(now: Date = Date()) throws -> [WorkspaceCalendarRun] {
     try transaction {
-      let dueIDs = Set(try historyRowsUnlocked("SELECT id FROM dashboard_calendar_items WHERE next_fire_at<=? AND deleted_at IS NULL AND NOT EXISTS(SELECT 1 FROM paired_calendar_owners p WHERE p.id=dashboard_calendar_items.id AND p.device_id != (SELECT device_id FROM paired_library_clock))",
+      let dueIDs = Set(try historyRowsUnlocked("SELECT id FROM dashboard_calendar_items WHERE next_fire_at<=? AND deleted_at IS NULL AND \(PairedLibraryOwnership.localCalendarItem("dashboard_calendar_items.id"))",
         values: [String(now.timeIntervalSince1970)]).compactMap { $0.objectValue?["id"]?.stringValue })
       let delegated = try remoteCalendarWorkspaceIDsUnlocked()
       let clientOwned = try calendarForeignExecutionEventIDs()
@@ -374,6 +374,7 @@ extension WorkspaceDatabaseConnection {
       SELECT 1 FROM workspace_calendar_runs r JOIN dashboard_calendar_items e ON e.id=r.event_id
       WHERE r.id=? AND r.status='pending' AND e.deleted_at IS NULL AND json_extract(e.calendar_json,'$.task') IS NOT NULL
       AND NOT EXISTS(SELECT 1 FROM companion_calendar_execution_conflicts c WHERE c.event_id=e.id)
+      AND \(PairedLibraryOwnership.localCalendarItem("e.id"))
         AND NOT EXISTS(SELECT 1 FROM companion_calendar_owners c WHERE c.event_id=e.id AND c.device_id != COALESCE((SELECT workspace_id FROM companion_calendar_execution_context WHERE singleton=1), (SELECT host_device_id FROM companion_library_identity WHERE singleton=1)))
       AND NOT EXISTS(SELECT 1 FROM workspace_calendar_remote_ownership o
         WHERE o.workspace_id=lower(json_extract(e.calendar_json,'$.task.configuration.workspaceID')))

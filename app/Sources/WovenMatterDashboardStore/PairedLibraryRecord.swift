@@ -23,8 +23,25 @@ public struct PairedLibraryRecord: Codable, Equatable, Sendable {
   public func supersedes(_ other: Self) -> Bool {
     if dominates(other) { return true }
     if other.dominates(self) { return false }
+    return outranks(other)
+  }
+  /// Deterministic order among concurrent maximal versions only.
+  func outranks(_ other: Self) -> Bool {
     if deleted != other.deleted { return deleted }
     return clock == other.clock ? origin > other.origin : clock > other.clock
+  }
+  /// The causal frontier is the set of versions no other known version
+  /// dominates. It is independent of arrival order, so choosing its winner here
+  /// converges even when a later restore removes a previously winning deletion.
+  static func frontier(_ versions: [Self]) -> [Self] {
+    var result: [Self] = []
+    for version in versions where !versions.contains(where: { $0.dominates(version) }) {
+      if !result.contains(where: { $0.vector == version.vector }) { result.append(version) }
+    }
+    return result
+  }
+  static func winner(_ frontier: [Self]) -> Self? {
+    frontier.reduce(nil) { best, version in best.map { version.outranks($0) ? version : $0 } ?? version }
   }
   public func dominates(_ other: Self) -> Bool {
     other.vector.allSatisfy { vector[$0.key, default: 0] >= $0.value }

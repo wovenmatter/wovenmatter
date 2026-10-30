@@ -122,7 +122,9 @@ import CompanionInference
   var inferenceProblem: String?
   var executionDirectory: URL?
   var executionRefreshTasks: [String: Task<Void, Never>] = [:]
-  var executionCredentialStore = InferenceCredentialStore()
+  var executionCredentialStore: any InferenceCredentialUpdating = InferenceCredentialStore()
+  /// Device-only storage for direct workspace credentials; tests inject memory.
+  var workspaceCredentials = WorkspaceCredentialStorage.keychain
   let deviceBackgroundExecution = DeviceBackgroundExecution()
   var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
   var backgroundFallbackToken: UUID?

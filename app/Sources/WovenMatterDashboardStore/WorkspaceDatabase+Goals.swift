@@ -82,7 +82,7 @@ extension WorkspaceDatabaseConnection {
             SELECT s.runtime_kind FROM desktop_local_acp_sessions s
             JOIN dashboard_conversations c ON c.id=s.conversation_id
             WHERE s.conversation_id=? AND c.desktop_owned=1 AND c.is_archived=0 AND c.deleted_at IS NULL
-              AND NOT EXISTS(SELECT 1 FROM companion_execution_conversations o WHERE o.id=c.id)
+              AND \(PairedLibraryOwnership.localConversation("c.id"))
             """, values: [sessionID]).first
         guard let kind = row?.objectValue?["runtime_kind"]?.stringValue.flatMap(AgentRuntimeKind.init(rawValue:)) else {
             throw WorkspaceToolError.invalid("Goals require an active chat on its desktop execution owner.")
@@ -96,6 +96,11 @@ extension WorkspaceDatabaseConnection {
                            requestID: String? = nil, now: Date = Date()) throws -> WorkspaceGoal? {
         try transaction {
             try requireToolSessionUnlocked(sessionID)
+            // Goal accounting uses the owner's local run sequence. A paired
+            // observer cannot change it without the execution owner.
+            guard try locallyOwnsConversationUnlocked(sessionID) else {
+                throw WorkspaceToolError.invalid("Change this goal on the Mac that runs this chat.")
+            }
             switch mutation {
             case .set, .resume: try requireGoalExecutionSessionUnlocked(sessionID)
             default: break
@@ -201,8 +206,11 @@ extension WorkspaceDatabaseConnection {
 
     func recordGoalUsageUnlocked(runID: String, tokens: Int64) throws {
         guard tokens >= 0, let run = try historyRowsUnlocked("SELECT conversation_id,rowid AS sequence FROM dashboard_runs WHERE id=?", values: [runID]).first?.objectValue,
-              let sessionID = run["conversation_id"]?.stringValue, var goal = try goalUnlocked(sessionID),
-              (run["sequence"]?.goalInteger ?? 0) > goal.baselineRunSequence else { return }
+              let sessionID = run["conversation_id"]?.stringValue, try locallyOwnsConversationUnlocked(sessionID), var goal = try goalUnlocked(sessionID) else { return }
+        // Enrollment is by stable run ID: an enrolled run's late usage counts
+        // whatever its row sequence; otherwise only runs after the baseline do.
+        let enrolled = try historyRowsUnlocked("SELECT 1 AS enrolled FROM workspace_goal_runs WHERE goal_id=? AND run_id=?", values: [goal.id, runID]).isEmpty == false
+        guard enrolled || (run["sequence"]?.goalInteger ?? 0) > goal.baselineRunSequence else { return }
         try captureGoalRunsUnlocked(&goal)
         guard try historyRowsUnlocked("SELECT 1 FROM workspace_goal_runs WHERE goal_id=? AND run_id=?", values: [goal.id, runID]).isEmpty == false else { return }
         let previous = try historyRowsUnlocked("SELECT tokens FROM workspace_goal_usage WHERE goal_id=? AND run_id=?", values: [goal.id, runID]).first?.objectValue?["tokens"]?.goalInteger ?? 0
@@ -215,7 +223,10 @@ extension WorkspaceDatabaseConnection {
 
     public func pauseActiveGoals(sessionID: String? = nil, reason: String? = nil) throws {
         try transaction {
+            // A synchronized goal belongs to its execution owner. Observers
+            // read it but never pause, capture or account for it.
             for var goal in try sessionGoals() where goal.status == .active && (sessionID == nil || goal.sessionID == sessionID) {
+                guard try locallyOwnsConversationUnlocked(goal.sessionID) else { continue }
                 try captureGoalRunsUnlocked(&goal)
                 try cancelQueuedGoalDeliveryUnlocked(goal)
                 goal.status = .paused; goal.evidence = reason ?? goal.evidence; goal.updatedAt = Date()
@@ -230,6 +241,9 @@ extension WorkspaceDatabaseConnection {
         try transaction {
             var deliveries: [WorkspaceSessionDelivery] = []
             for var goal in try sessionGoals() where goal.status == .active {
+                // Unknown or foreign ownership is read-only: no pause, capture,
+                // reservation or delivery is written for another Mac's goal.
+                guard try locallyOwnsConversationUnlocked(goal.sessionID) else { continue }
                 do { try requireGoalExecutionSessionUnlocked(goal.sessionID) } catch {
                     goal.status = .paused; goal.evidence = "Execution ownership changed or this chat is archived."
                     try cancelQueuedGoalDeliveryUnlocked(goal); try saveGoalUnlocked(goal); continue

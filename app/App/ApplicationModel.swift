@@ -674,7 +674,7 @@ final class ApplicationModel {
             )
             let dashboardStore = try await DashboardStore(supportDirectory: supportDirectory)
             self.dashboardStore = dashboardStore
-            try await LegacyMacLibraryUpgrade.prepare(database: dashboardStore.database, defaults: applicationDefaults)
+            await LegacyMacLibraryUpgrade.prepareRecordingFailure(database: dashboardStore.database, defaults: applicationDefaults)
             analytics.configure(database: dashboardStore.database, publisher: true)
             await analytics.refresh()
             await dashboardStore.setLocalACPResumePermissionHandler { [weak self] conversationID, request in
@@ -1253,7 +1253,10 @@ final class ApplicationModel {
             let nativeDirectories = try await dashboardStore.sessionNativeWorkingDirectories(
                 ids: (workspaceOverview?.conversations ?? []).map(\.id))
             guard self.dashboardStore === dashboardStore, generation == workspaceRefreshGeneration, !Task.isCancelled else { return }
-            let libraryLocations = (workspaceOverview?.conversations ?? []).map { conversation in
+            // Workspace files belong to the execution owner. Observed and paired
+            // conversations download retained bytes; they never get a local root.
+            let libraryLocations = (workspaceOverview?.conversations ?? [])
+                .filter { federatedExecutionOwners[$0.id] == nil }.map { conversation in
                 let remote = conversation.remoteWorkspaceID.flatMap { remoteWorkspaces.configuration(id: $0) }
                 let nativeDirectory = openCodeModel(for: conversation.id)?.snapshots[conversation.id]?.info["location"]["directory"].string
                 let root = nativeDirectory.flatMap { $0.isEmpty ? nil : $0 }
@@ -1782,6 +1785,12 @@ final class ApplicationModel {
         }
         folderMutationError = nil
         do {
+            if !isBackendFrontend, try await pairedOwnerWorkspace(conversationID: id) != nil {
+                // A draft's folder is its execution directory on the Mac that runs it.
+                try await performOnOwner(conversationID: id, action: .conversation(id: id, action: "move", title: nil, folderID: folderID))
+                await refreshWorkspace()
+                return true
+            }
             if isBackendFrontend {
                 let result = try await sendBackendCommand(.workspaceMutation(.moveConversation(id: id, folderID: folderID)))
                 await refreshWorkspace()

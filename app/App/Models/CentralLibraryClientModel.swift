@@ -58,6 +58,39 @@ final class CentralLibraryClientModel {
     private var centralProviders: [CompanionProvider] = []
     private var centralPending: [CompanionPendingInteraction] = []
     private var directProviders: [String: [CompanionProvider]] = [:]
+    /// Workspaces whose direct grant was rejected and not yet replaced. The IDs
+    /// (no secrets) persist across launches, bound to this library and device,
+    /// bounded by the registered workspaces, and are retried on each reachable
+    /// central refresh.
+    private struct PendingReenrollment: Codable, Equatable {
+        var libraryID: String; var deviceID: String; var workspaceIDs: [String]
+    }
+    private static let pendingReenrollmentLimit = 64
+    private var pendingReenrollmentURL: URL { executionDirectory.appending(path: "pending-direct-enrollment.json") }
+    private var pendingReenrollment: Set<String> {
+        get {
+            // Before the replica's binding is known, nothing is applied or discarded.
+            guard state.workspaceID != nil, let data = try? Data(contentsOf: pendingReenrollmentURL) else { return [] }
+            guard let saved = try? JSONDecoder().decode(PendingReenrollment.self, from: data),
+                  saved.libraryID == state.workspaceID, saved.deviceID == state.deviceID else {
+                // Another library's or device's intent is never applied here.
+                try? FileManager.default.removeItem(at: pendingReenrollmentURL); return []
+            }
+            return Set(saved.workspaceIDs.prefix(Self.pendingReenrollmentLimit))
+        }
+        set {
+            let ids = Array(newValue.sorted().prefix(Self.pendingReenrollmentLimit))
+            guard !ids.isEmpty, let libraryID = state.workspaceID else {
+                try? FileManager.default.removeItem(at: pendingReenrollmentURL); return
+            }
+            let value = PendingReenrollment(libraryID: libraryID, deviceID: state.deviceID, workspaceIDs: ids)
+            guard (try? Data(contentsOf: pendingReenrollmentURL)).flatMap({ try? JSONDecoder().decode(PendingReenrollment.self, from: $0) }) != value else { return }
+            do {
+                try FileManager.default.createDirectory(at: executionDirectory, withIntermediateDirectories: true)
+                try JSONEncoder().encode(value).write(to: pendingReenrollmentURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+            } catch { deviceConnectionsError = error.localizedDescription }
+        }
+    }
     private var directPending: [String: [CompanionPendingInteraction]] = [:]
     var pairingText = ""
     private(set) var localExecution: SecondaryMacExecutionWorkspace?
@@ -78,6 +111,9 @@ final class CentralLibraryClientModel {
     private let makeLocalExecution: @MainActor (URL, MobileStore) async throws -> SecondaryMacExecutionWorkspace
     private let saveCentralCredential: @MainActor (MobileCredential) throws -> Void
     private let clearWorkspaceCredential: @MainActor (String) throws -> Void
+    private let enrollWorkspace: (@MainActor (String) async throws -> DirectWorkspaceCredential)?
+    private let saveWorkspaceCredential: @MainActor (DirectWorkspaceCredential) throws -> Void
+    private let makeWorkspaceTransport: @MainActor (DirectWorkspaceCredential) throws -> any ExecutionWorkspaceTransport
     private let clearCentralCredential: @MainActor () throws -> Void
     private let executionDirectoryOverride: URL?
     var deviceConnectionsError: String?
@@ -103,13 +139,21 @@ final class CentralLibraryClientModel {
          },
          saveCentralCredential: @escaping @MainActor (MobileCredential) throws -> Void = { try MobileCredentialVault.save($0) },
          clearCentralCredential: @escaping @MainActor () throws -> Void = { try MobileCredentialVault.clear() },
-         clearWorkspaceCredential: @escaping @MainActor (String) throws -> Void = { try WorkspaceCredentialVault.clear(workspaceID: $0) }) {
+         clearWorkspaceCredential: @escaping @MainActor (String) throws -> Void = { try WorkspaceCredentialVault.clear(workspaceID: $0) },
+         enrollWorkspace: (@MainActor (String) async throws -> DirectWorkspaceCredential)? = nil,
+         saveWorkspaceCredential: @escaping @MainActor (DirectWorkspaceCredential) throws -> Void = { try WorkspaceCredentialVault.save($0) },
+         makeWorkspaceTransport: @escaping @MainActor (DirectWorkspaceCredential) throws -> any ExecutionWorkspaceTransport = {
+             try HTTPSExecutionWorkspaceTransport(credential: $0)
+         }) {
         self.makeLocalExecution = makeLocalExecution ?? { directory, replica in
             try await SecondaryMacExecutionWorkspace.create(directory: directory, replica: replica, assets: assets)
         }
         self.makeLocalHost = makeLocalHost
         self.clearCentralCredential = clearCentralCredential
         self.clearWorkspaceCredential = clearWorkspaceCredential
+        self.enrollWorkspace = enrollWorkspace
+        self.saveWorkspaceCredential = saveWorkspaceCredential
+        self.makeWorkspaceTransport = makeWorkspaceTransport
         self.saveCentralCredential = saveCentralCredential
         self.executionDirectoryOverride = executionDirectory
         if let store {
@@ -293,6 +337,7 @@ final class CentralLibraryClientModel {
             credential = nil; engine = nil; transport = nil; connectedDevices = []
             let remoteIDs = Set(directClients.keys).union(journal.workspaces.keys)
                 .subtracting([localExecution?.descriptor.id ?? state.deviceID])
+            pendingReenrollment = []
             for id in remoteIDs {
                 directClients.removeValue(forKey: id); directOnline.remove(id)
                 directProviders.removeValue(forKey: id); directPending.removeValue(forKey: id)
@@ -457,7 +502,7 @@ final class CentralLibraryClientModel {
         for workspace in executionWorkspaces where directClients[workspace.id] == nil {
             if let credential = try WorkspaceCredentialVault.load(workspaceID: workspace.id) {
                 guard credential.deviceID == state.deviceID, credential.libraryID == state.workspaceID else { continue }
-                let connection = try HTTPSExecutionWorkspaceTransport(credential: credential)
+                let connection = try makeWorkspaceTransport(credential)
                 directClients[workspace.id] = WorkspaceClient(store: store, workspaceID: workspace.id, transport: connection)
             }
         }
@@ -494,15 +539,53 @@ final class CentralLibraryClientModel {
         } catch {
             guard directClients[workspaceID] === client else { return }
             directOnline.remove(workspaceID)
-            if case MobileConnectionError.http(let status, _) = error, status == 401 || status == 403,
-               workspaceID != localExecution?.descriptor.id {
+            if Self.revokesDirectAccess(error), workspaceID != localExecution?.descriptor.id {
                 directClients[workspaceID] = nil; directProviders[workspaceID] = nil; directPending[workspaceID] = nil
-                do { try clearWorkspaceCredential(workspaceID) } catch { deviceConnectionsError = error.localizedDescription }
+                do {
+                    try clearWorkspaceCredential(workspaceID)
+                    pendingReenrollment.insert(workspaceID)
+                    await reenrollDirectWorkspace(workspaceID)
+                } catch { deviceConnectionsError = error.localizedDescription }
             }
             let failures = min((directFailures[workspaceID] ?? 0) + 1, 5); directFailures[workspaceID] = failures
             nextDirectRefresh[workspaceID] = Date().addingTimeInterval(min(60, pow(2, Double(failures))))
         }
         await reload(); updateExecutionPresentation()
+    }
+    /// The execution transport reports a rejected bearer as `.revoked`; older
+    /// transports surfaced the raw status.
+    nonisolated static func revokesDirectAccess(_ error: any Error) -> Bool {
+        switch error as? MobileConnectionError {
+        case .revoked: true
+        case .http(let status, _): status == 401 || status == 403
+        default: false
+        }
+    }
+    /// A retired or revoked direct grant is replaced through the central
+    /// library. Until that succeeds the workspace stays pending and is retried
+    /// on each reachable central refresh; the stale token is never presented.
+    private func retryPendingReenrollments() async {
+        let pending = pendingReenrollment.intersection(executionWorkspaces.map(\.id))
+        pendingReenrollment = pending
+        for id in pending.sorted() where directClients[id] == nil { await reenrollDirectWorkspace(id) }
+    }
+    private func reenrollDirectWorkspace(_ workspaceID: String) async {
+        let transport = transport
+        guard let store, let enroll = enrollWorkspace ?? transport.map({ transport in
+            { try await transport.executionCredential(workspaceID: $0) }
+        }) else { return }
+        let generation = connectionGeneration
+        do {
+            let issued = try await enroll(workspaceID)
+            guard generation == connectionGeneration, directClients[workspaceID] == nil else { return }
+            guard issued.workspaceID == workspaceID, issued.deviceID == state.deviceID, issued.libraryID == state.workspaceID else {
+                throw MobileStore.Failure.wrongWorkspace
+            }
+            let client = WorkspaceClient(store: store, workspaceID: workspaceID, transport: try makeWorkspaceTransport(issued))
+            try saveWorkspaceCredential(issued)
+            directClients[workspaceID] = client
+            pendingReenrollment.remove(workspaceID)
+        } catch { deviceConnectionsError = error.localizedDescription }
     }
     private func refreshAllExecutionWorkspaces(background: Bool) async {
         let ids = directClients.keys.filter { !background || (nextDirectRefresh[$0] ?? .distantPast) <= Date() }
@@ -550,6 +633,8 @@ final class CentralLibraryClientModel {
                 nextRosterRefresh = Date().addingTimeInterval(60)
             }
             try configureDirectClients()
+            await retryPendingReenrollments()
+            guard connectionGeneration == expectedConnection else { await directRefresh; return }
             if let grant = localHost?.managementGrant, publishedManagement != grant, let transport {
                 try await transport.registerExecutionManagement(grant); publishedManagement = grant
             }

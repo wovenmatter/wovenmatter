@@ -70,15 +70,35 @@ public actor PairedLibraryFiles {
   public func nextOffset(_ file: PairedLibraryFile) throws -> Int64? {
     let url = try validate(file)
     if FileManager.default.fileExists(atPath: url.path) {
-      let bytes = try Data(contentsOf: url, options: .mappedIfSafe)
-      guard Int64(bytes.count) == file.byteCount, Self.hash(bytes) == file.hash else { throw invalid }
+      // Installed content-addressed files were hashed when written. Recheck the
+      // size here instead of rehashing every complete file on each sync turn.
+      let values = try url.resourceValues(forKeys: [.fileSizeKey, .isSymbolicLinkKey])
+      guard values.isSymbolicLink != true, values.fileSize.map(Int64.init) == file.byteCount else { throw invalid }
       return nil
     }
     let temp = partial(file)
     guard FileManager.default.fileExists(atPath: temp.path) else { return 0 }
     let size = try temp.resourceValues(forKeys: [.fileSizeKey, .isSymbolicLinkKey])
     guard size.isSymbolicLink != true, let count = size.fileSize, count <= file.byteCount else { throw invalid }
+    // A process can stop after the final chunk is durable but before it is
+    // installed. Finish that verified copy; discard a corrupt complete one.
+    if Int64(count) == file.byteCount, file.byteCount > 0 {
+      return try install(file, from: temp, to: url) ? nil : 0
+    }
     return Int64(count)
+  }
+  /// Verifies size and SHA-256 before installing. A mismatched download is
+  /// disposable so a healthy peer can restart the same content-addressed file.
+  private func install(_ file: PairedLibraryFile, from temp: URL, to destination: URL) throws -> Bool {
+    let bytes = try Data(contentsOf: temp, options: .mappedIfSafe)
+    guard Int64(bytes.count) == file.byteCount, Self.hash(bytes) == file.hash else {
+      try FileManager.default.removeItem(at: temp)
+      return false
+    }
+    try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+    try FileManager.default.moveItem(at: temp, to: destination)
+    try FileManager.default.setAttributes([.posixPermissions: 0o400], ofItemAtPath: destination.path)
+    return true
   }
   public func receive(_ chunk: PairedLibraryFileChunk) throws {
     let destination = try validate(chunk.file)
@@ -98,16 +118,9 @@ public actor PairedLibraryFiles {
     let handle = try FileHandle(forWritingTo: temp); defer { try? handle.close() }
     try handle.seek(toOffset: UInt64(offset)); try handle.write(contentsOf: chunk.data); try handle.synchronize()
     if offset + Int64(chunk.data.count) == chunk.file.byteCount {
-      let bytes = try Data(contentsOf: temp, options: .mappedIfSafe)
-      guard Self.hash(bytes) == chunk.file.hash else {
-        // Incomplete bytes are disposable. A bad source must not prevent a
-        // later healthy peer from restarting this same content-addressed file.
-        try FileManager.default.removeItem(at: temp)
-        throw invalid
-      }
-      try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-      try FileManager.default.moveItem(at: temp, to: destination)
-      try FileManager.default.setAttributes([.posixPermissions: 0o400], ofItemAtPath: destination.path)
+      // Incomplete bytes are disposable. A bad source must not prevent a
+      // later healthy peer from restarting this same content-addressed file.
+      guard try install(chunk.file, from: temp, to: destination) else { throw invalid }
     }
   }
   private static func hash(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }

@@ -46,8 +46,10 @@ public struct CompanionPairingApprovalRequest: Codable, Equatable, Sendable {
   public let invitationToken: String?
   public let identity: CompanionPairingDeviceIdentity
   public let protocolVersion: Int
-  public init(requestID: String, requestSecret: String, identity: CompanionPairingDeviceIdentity, protocolVersion: Int = CompanionProtocol.version, invitationToken: String? = nil) {
+  public let purpose: String?
+  public init(requestID: String, requestSecret: String, identity: CompanionPairingDeviceIdentity, protocolVersion: Int = CompanionProtocol.version, invitationToken: String? = nil, purpose: String? = nil) {
     self.requestID = requestID; self.requestSecret = requestSecret; self.identity = identity; self.protocolVersion = protocolVersion; self.invitationToken = invitationToken
+    self.purpose = purpose
   }
 }
 public struct CompanionPairingPoll: Codable, Sendable {

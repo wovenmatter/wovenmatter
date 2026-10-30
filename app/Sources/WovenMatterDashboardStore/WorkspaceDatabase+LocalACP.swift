@@ -784,6 +784,7 @@ extension WorkspaceDatabaseConnection {
         FROM dashboard_runs
         WHERE desktop_owned = 1 AND authority_kind = 'device_owned'
           AND status IN ('running', 'uncertain')
+          AND \(PairedLibraryOwnership.localConversation("dashboard_runs.conversation_id"))
         """)
       defer { sqlite3_finalize(statement) }
       var conversationIDs: Set<String> = []
@@ -1529,7 +1530,7 @@ extension WorkspaceDatabaseConnection {
       // native run. Do not manufacture terminal truth for the latter.
       let durable = try historyRowsUnlocked("""
         SELECT r.id FROM dashboard_runs r JOIN desktop_local_acp_durable_runs d ON d.run_id=r.id
-        WHERE r.desktop_owned=1 AND r.status='running'
+        WHERE r.desktop_owned=1 AND r.status='running' AND \(PairedLibraryOwnership.localConversation("r.conversation_id"))
           AND r.conversation_id NOT IN (SELECT conversation_id FROM desktop_openclaw_gateway_sessions)
           AND r.conversation_id NOT IN (SELECT conversation_id FROM desktop_opencode_sessions)
         """, values: [])
@@ -1550,6 +1551,7 @@ extension WorkspaceDatabaseConnection {
           WHERE desktop_owned = 1 AND status = 'running'
             AND conversation_id NOT IN (SELECT conversation_id FROM desktop_openclaw_gateway_sessions)
           AND conversation_id NOT IN (SELECT conversation_id FROM desktop_opencode_sessions)
+          AND \(PairedLibraryOwnership.localConversation("dashboard_runs.conversation_id"))
         )
         """)
       defer { sqlite3_finalize(message) }
@@ -1564,6 +1566,7 @@ extension WorkspaceDatabaseConnection {
         WHERE desktop_owned = 1 AND status = 'running'
           AND conversation_id NOT IN (SELECT conversation_id FROM desktop_openclaw_gateway_sessions)
           AND conversation_id NOT IN (SELECT conversation_id FROM desktop_opencode_sessions)
+          AND \(PairedLibraryOwnership.localConversation("dashboard_runs.conversation_id"))
         """)
       defer { sqlite3_finalize(run) }
       try bind(timestamp, at: 1, to: run)

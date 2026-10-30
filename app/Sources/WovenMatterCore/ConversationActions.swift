@@ -44,7 +44,7 @@ public struct WorkspaceTrashedConversation: Codable, Identifiable, Sendable {
 }
 
 public enum WorkspaceConversationActionError: LocalizedError, Equatable, Sendable {
-  case unavailable, emptyTitle, invalidTitle, running, pendingInput
+  case unavailable, emptyTitle, invalidTitle, running, pendingInput, ownedByAnotherMac
 
   public var errorDescription: String? {
     switch self {
@@ -53,6 +53,7 @@ public enum WorkspaceConversationActionError: LocalizedError, Equatable, Sendabl
     case .invalidTitle: "This name contains unsupported characters or is too long."
     case .running: "Stop this chat before moving it to Trash."
     case .pendingInput: "Resolve this chat’s pending input before moving it to Trash."
+    case .ownedByAnotherMac: "This chat runs on another Mac. Connect to it to move the chat to Trash, restore it or move it."
     }
   }
 }

@@ -267,7 +267,7 @@ final class CentralExecutionClient {
         let workspace = try await requiredWorkspace(conversationID)
         let identity = try await database.companionLibraryIdentity()
         return try await submit(.init(deviceID: identity.hostDeviceID, kind: .workspace, conversationID: conversationID,
-            workspaceAction: action, libraryID: identity.libraryID, workspaceID: workspace.id), workspace: workspace)
+            workspaceAction: action, libraryID: workspace.libraryID, workspaceID: workspace.id), workspace: workspace)
     }
     private func requiredWorkspace(_ id: String) async throws -> CompanionExecutionWorkspace {
         guard let workspace = try await workspace(conversationID: id), !workspace.deleted else {

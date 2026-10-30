@@ -63,7 +63,7 @@ struct MacTailnetDiscoveryView: View {
     private func perform(_ item: DeviceSetupConfirmation) async {
         confirmation = nil
         if item.action == .pair, let peer = peer(for: item.row) {
-            if peer.advertisement.capabilities?.contains("library.peers.v1") == true { await host.pairWithPeer(peer); return }
+            if peer.advertisement.capabilities?.contains(PairedMacSyncController.capability) == true { await host.pairWithPeer(peer); return }
             rowError(item.row); return
         }
         if isCentral {
@@ -124,7 +124,7 @@ private struct MacTailnetDeviceRow: View {
     var onInspect: () -> Void
     @State private var showConnection = false
     private var installedVersion: String? { row.installation?.version ?? peer?.advertisement.identity.metadata.appVersion }
-    private var canUseService: Bool { peer?.advertisement.capabilities?.contains("library.peers.v1") == true }
+    private var canUseService: Bool { peer?.advertisement.capabilities?.contains(PairedMacSyncController.capability) == true }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {

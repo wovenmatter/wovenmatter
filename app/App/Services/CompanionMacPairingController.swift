@@ -95,7 +95,7 @@ final class CompanionMacPairingController {
     func requestPairing(with peer: CompanionDiscoveredPeer) async {
         guard !isRequestPending, pendingClaim == nil, peer.advertisement.role == .central else { return }
         do {
-            let request = CompanionPairingApprovalRequest(requestID: UUID().uuidString.lowercased(), requestSecret: try Self.secret(), identity: identity())
+            let request = CompanionPairingApprovalRequest(requestID: UUID().uuidString.lowercased(), requestSecret: try Self.secret(), identity: identity(), purpose: CompanionPairingPurpose.peerMac)
             let claim = CompanionStoredPairingClaim(endpoint: peer.endpoint, request: request, expiresAt: Date().addingTimeInterval(600))
             // Stable, device-only Keychain storage precedes network acceptance.
             try saveClaim(claim, request.identity.deviceID)
@@ -214,7 +214,7 @@ final class CompanionMacPairingController {
         guard !isRequestPending, pendingClaim == nil, let invitation = invitations.first(where: { $0.id == id }), invitation.expiresAt > Date() else { return }
         do {
             let request = CompanionPairingApprovalRequest(requestID: UUID().uuidString.lowercased(), requestSecret: try Self.secret(),
-                identity: identity(), invitationToken: invitation.payload.token)
+                identity: identity(), invitationToken: invitation.payload.token, purpose: CompanionPairingPurpose.peerMac)
             let claim = CompanionStoredPairingClaim(endpoint: invitation.payload.endpoint, request: request,
                 expiresAt: Date().addingTimeInterval(600))
             try saveClaim(claim, request.identity.deviceID)
@@ -272,7 +272,7 @@ struct CompanionStoredPairingClaim: Codable {
 
 /// Pending claim secrets stay on this Mac and never enter defaults, app data,
 /// backend snapshots, discovery responses, or the library sync journal.
-private enum CompanionPendingPairingVault {
+enum CompanionPendingPairingVault {
     private static func query(deviceID: String) -> [CFString: Any] {
         [kSecClass: kSecClassGenericPassword,
          kSecAttrService: (Bundle.main.bundleIdentifier ?? "com.wovenmatter") + ".pending-pairing",

@@ -18,25 +18,61 @@ public struct PairedMacRoute: Codable, Equatable, Identifiable, Sendable {
     }
   }
 }
+/// The explicitly approved requester learns the issuer's identity and the
+/// revocation context it must acknowledge before signing anything.
+public struct PairedMacJoinContext: Codable, Sendable, Equatable {
+  public let route: PairedMacRoute
+  public let publicKey: Data
+  public let acknowledgedRevocations: [String]
+  public init(route: PairedMacRoute, publicKey: Data, acknowledgedRevocations: [String]) {
+    self.route = route; self.publicKey = publicKey; self.acknowledgedRevocations = acknowledgedRevocations
+  }
+}
+/// The requester proves its key for exactly that context, and supplies the
+/// bearer it issued for the responder plus the responder's revocation context
+/// it knows. The whole transcript is immutable across retries.
 public struct PairedMacJoin: Codable, Sendable {
   public let route: PairedMacRoute
   public let returnCredential: String
-  public init(route: PairedMacRoute, returnCredential: String) { self.route = route; self.returnCredential = returnCredential }
+  public let publicKey: Data
+  public let acknowledgedRevocations: [String]
+  public let subjectSignature: Data
+  public let reciprocalRevocations: [String]
+  public init(route: PairedMacRoute, returnCredential: String, publicKey: Data, acknowledgedRevocations: [String],
+              subjectSignature: Data, reciprocalRevocations: [String]) {
+    self.route = route; self.returnCredential = returnCredential; self.publicKey = publicKey
+    self.acknowledgedRevocations = acknowledgedRevocations; self.subjectSignature = subjectSignature
+    self.reciprocalRevocations = reciprocalRevocations
+  }
+}
+/// The responder's identity and its subject signature for the reciprocal grant.
+public struct PairedMacJoinReply: Codable, Sendable, Equatable {
+  public let route: PairedMacRoute
+  public let publicKey: Data
+  public let subjectSignature: Data
+  public init(route: PairedMacRoute, publicKey: Data, subjectSignature: Data) {
+    self.route = route; self.publicKey = publicKey; self.subjectSignature = subjectSignature
+  }
 }
 public struct PairedMacExchange: Codable, Sendable {
   public let deviceID: String
   public let after: Int64
   public let page: PairedLibraryPage
-  public let devices: [CompanionPairedDevice]
-  public init(deviceID: String, after: Int64, page: PairedLibraryPage, devices: [CompanionPairedDevice]) {
-    self.deviceID = deviceID; self.after = after; self.page = page; self.devices = devices
+  public let membership: PeerMembership
+  public init(deviceID: String, after: Int64, page: PairedLibraryPage, membership: PeerMembership) {
+    self.deviceID = deviceID; self.after = after; self.page = page; self.membership = membership
   }
 }
 public struct PairedMacProofChallenge: Codable, Sendable {
   public let deviceID: String
   public let credentialID: String
   public let nonce: Data
-  public init(deviceID: String, credentialID: String, nonce: Data) { self.deviceID = deviceID; self.credentialID = credentialID; self.nonce = nonce }
+  public let targetDeviceID: String
+  public let targetLibraryID: String
+  public init(deviceID: String, credentialID: String, nonce: Data, targetDeviceID: String, targetLibraryID: String) {
+    self.deviceID = deviceID; self.credentialID = credentialID; self.nonce = nonce
+    self.targetDeviceID = targetDeviceID; self.targetLibraryID = targetLibraryID
+  }
 }
 public struct PairedMacProof: Codable, Sendable {
   public let route: PairedMacRoute

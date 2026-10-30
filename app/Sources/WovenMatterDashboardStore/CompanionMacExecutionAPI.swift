@@ -12,22 +12,26 @@ public final class CompanionMacExecutionAPI {
   private let events: (@MainActor @Sendable (Int64) async throws -> CompanionJournalPage)?
   private let isActive: @MainActor @Sendable () -> Bool
   private let authorizeDevice: @MainActor @Sendable (String) async throws -> Void
+  /// Live authorization of one presented grant, by device and provenance.
+  private let authorizeGrant: (@MainActor @Sendable (String, String?) async throws -> Void)?
   public init(database: WorkspaceDatabase, commands: any CompanionCommandServing,
               authentication: CompanionExecutionAuthentication, descriptor: CompanionExecutionWorkspace,
               isActive: @escaping @MainActor @Sendable () -> Bool,
               events: (@MainActor @Sendable (Int64) async throws -> CompanionJournalPage)? = nil,
-              authorizeDevice: @escaping @MainActor @Sendable (String) async throws -> Void = { _ in }) {
+              authorizeDevice: @escaping @MainActor @Sendable (String) async throws -> Void = { _ in },
+              authorizeGrant: (@MainActor @Sendable (String, String?) async throws -> Void)? = nil) {
     self.database = database; self.commands = commands; self.authentication = authentication
     self.descriptor = descriptor; self.isActive = isActive; self.events = events; self.authorizeDevice = authorizeDevice
+    self.authorizeGrant = authorizeGrant
   }
   public func provision(device: CompanionPairedDevice) async throws -> CompanionExecutionCredential {
     try await provision(deviceID: device.id)
   }
   /// App-internal enrollment entry point. HTTP management wrappers must first
   /// authenticate their central-host grant; this method is never a public route.
-  public func provision(deviceID: String) async throws -> CompanionExecutionCredential {
+  public func provision(deviceID: String, provisionedBy: String? = nil) async throws -> CompanionExecutionCredential {
     try await authorizeDevice(deviceID)
-    let token = try await authentication.provision(deviceID: deviceID, libraryID: descriptor.libraryID, workspaceID: descriptor.id)
+    let token = try await authentication.provision(deviceID: deviceID, libraryID: descriptor.libraryID, workspaceID: descriptor.id, provisionedBy: provisionedBy)
     return CompanionExecutionCredential(workspace: descriptor, deviceID: deviceID, token: token)
   }
   public func revoke(deviceID: String) async throws { try await authentication.revoke(deviceID: deviceID) }
@@ -41,11 +45,12 @@ public final class CompanionMacExecutionAPI {
       guard path == "/v1/execution" || path.hasPrefix("/v1/execution/") else { return .error("not_found", "Unknown execution endpoint.", status: 404) }
       guard request.headers["x-woven-protocol"] == String(CompanionProtocol.version) else { return .error("version_mismatch", "Update both clients to compatible versions.", status: 426) }
       guard let bearer = request.bearer else { return .error("unauthorized", "Missing execution credential.", status: 401) }
-      let scope = try await authentication.authenticate(bearer: bearer)
+      let grant = try await authentication.authenticateGrant(bearer: bearer)
+      let scope = grant.scope
       guard scope.libraryID == descriptor.libraryID, scope.workspaceID == descriptor.id,
             request.headers["x-woven-library"] == scope.libraryID, request.headers["x-woven-workspace"] == scope.workspaceID,
             request.headers["x-woven-device"] == scope.deviceID else { return .error("wrong_workspace", "This execution credential is scoped to another device or workspace.", status: 403) }
-      try await authorizeDevice(scope.deviceID)
+      if let authorizeGrant { try await authorizeGrant(scope.deviceID, grant.provisionedBy) } else { try await authorizeDevice(scope.deviceID) }
       guard isActive() else { return .error("unavailable", "This Mac execution workspace stopped.", status: 503) }
       let parts = path.split(separator: "/").map(String.init)
       func query(_ key: String) -> String? { url.queryItems?.first(where: { $0.name == key })?.value }
@@ -101,7 +106,7 @@ public final class CompanionMacExecutionAPI {
             guard let id = command.conversationID else { throw notLocal }
             try await requireLocal(id)
           }
-          try await authorizeDevice(scope.deviceID)
+          if let authorizeGrant { try await authorizeGrant(scope.deviceID, grant.provisionedBy) } else { try await authorizeDevice(scope.deviceID) }
           return try .json(scoped(try await commands.execute(command, deviceID: scope.deviceID)))
         }
         if path == "/v1/execution/workspace-read" {

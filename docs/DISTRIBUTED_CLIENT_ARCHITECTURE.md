@@ -13,9 +13,14 @@ need to remain online for those Macs to synchronize with each other.
 A Mac can add remote workspaces and pair additional Apple devices. Workspace
 identities and connection membership propagate through the paired graph. Each
 new connection requires the existing explicit approval. Discovery does not grant
-access. A learned Mac address must prove possession of an existing device
-verifier before it receives a bearer credential. Revocation propagates when peers
-reconnect and remains effective across stale membership replay and re-pairing.
+access. Each Mac authenticates only bearers it issued itself. Each Mac has a
+device-only signing key pinned by device UUID on the Macs it pairs with;
+membership learned through another Mac carries signed admissions, and a Mac
+introduced that way obtains its own grant from each Mac through a pinned
+challenge handshake. A Mac address must sign a fresh challenge with its pinned
+key before it receives a bearer credential. Unpairs are distinct signed events;
+revocation propagates when peers reconnect and remains effective across stale
+membership replay, concurrent unpairs and re-pairing.
 
 ## Shared storage and local execution
 
@@ -53,15 +58,16 @@ Concurrent deletion wins over an edit to the same identity, while the live
 writing gets a deterministic recovered copy. A later explicit restore can be a
 new causal edit. Tombstones and pending large records survive restart.
 
-Receive cursors commit with durable acceptance, including a durable pending
-record for a value whose bytes are still downloading. Push acknowledgement covers
+Each identity keeps its causal frontier, so every Mac chooses the same winner
+regardless of arrival order. Receive cursors commit with durable acceptance,
+including a durable pending record for a value whose bytes are still downloading. Push acknowledgement covers
 only the exact submitted page. Retries cannot duplicate commands or recovered
 notes. Changes are relayed with their original identity and causal context, so
 connected peers converge without choosing a central Mac. Background retries are
 bounded and ordinary disconnection is quiet.
 
-Settings → Apple Devices presents this Mac, pairing, a shared device roster and
-one workspace inventory. It has no database-role selector. Notes with concurrent
+Settings → Apple Devices presents this Mac, pairing, the devices paired with
+this Mac and one workspace inventory. It has no database-role selector. Notes with concurrent
 writing have visible **Recovered edit** copies. Existing pre-upgrade writing and
 original databases are preserved; see [upgrade and recovery](PAIRED_MAC_LIBRARIES.md#upgrade-and-recovery).
 
@@ -84,7 +90,7 @@ Accepted work and tool intent are persisted before display/dispatch. iOS backgro
 
 Every desktop Mac runs its full local app and background server. Former node
 preferences are upgrade input, rather than a role selector. Both Macs must
-advertise `library.peers.v1` before a new Mac pairing completes. Existing mobile
+advertise `library.peers.v2` before a new Mac pairing completes. Existing mobile
 pairing and execution protocol identifiers remain compatible; a workspace keeps
 its original library namespace and execution scope when its inventory is shared.
 
