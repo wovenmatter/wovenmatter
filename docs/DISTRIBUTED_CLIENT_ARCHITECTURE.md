@@ -34,6 +34,10 @@ workspace association for older filed notes. Existing unfiled notes without
 reliable ownership evidence remain shared/unassigned instead of being attributed
 to whichever client first downloads them. All Workspace keeps those items visible.
 
+Workspace registrations expose an optional `contentWorkspaceID` for the native
+content/root identity, separate from the registry routing ID and execution
+publisher device ID. Display grouping resolves these registered aliases; command
+authentication continues to use the exact registry and device identities.
 Workspace comparisons normalize legacy device/remote ID prefixes without
 rewriting execution roots or moving runtime data. New-item actions use their
 workspace context, never the first reachable remote host. Connectivity affects

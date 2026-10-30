@@ -18,7 +18,13 @@ extension CompanionModel {
     guard !isViewingRemoteQuickChat else { return }
     guard workspaceIsConnected(selectedExecutionWorkspaceID) else { errorMessage = Self.deviceConnectionMessage; return }
     guard let agent = activeProvider else { newChat(); return }
-    await startNewChat(workspaceID: selectedExecutionWorkspaceID, agentID: agent.id)
+    let workspaceID = selectedExecutionWorkspaceID
+    // The toolbar belongs to the displayed conversation, not the folder most
+    // recently browsed in another tab.
+    selectedFolderID = selectedConversation?.folderID
+    selectedFolderWorkspaceID = canonicalWorkspaceID(workspaceID)
+    newChatNoteID = nil
+    await startNewChat(workspaceID: workspaceID, agentID: agent.id)
   }
 
   private func startNewChat(workspaceID: String, agentID: String) async {
@@ -26,7 +32,11 @@ extension CompanionModel {
     startingChat = true; chatSetupProblem = nil
     defer { startingChat = false }
     let folder = selectedFolderID, reference = newChatNoteID
-    guard routeOwnsFolder(workspaceID: workspaceID, folderID: folder) else { chatSetupProblem = "Choose an agent in this folder’s owning workspace."; return }
+    guard routeOwnsFolder(workspaceID: workspaceID, folderID: folder) else {
+      chatSetupProblem = "Choose an agent in this folder’s owning workspace."
+      if !chatChooserPresented { errorMessage = chatSetupProblem }
+      return
+    }
     do {
       var conversationID: String?
       if workspaceID == "local", let connection = inferenceConnections.first(where: { $0.id == inferenceConnectionID }) {

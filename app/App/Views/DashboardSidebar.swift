@@ -122,6 +122,7 @@ struct DashboardSidebarRail: View {
     let localExecutionWorkspaceID: String?
     let registeredWorkspaces: [CompanionExecutionWorkspace]
     let conversationOwners: [String: String]
+    let conversationProviders: [String: String]
     let workspaceProviders: [String: [CompanionProvider]]
     let folders: [WorkspaceFolderRecord]
     let conversations: [WorkspaceConversationRecord]
@@ -162,6 +163,7 @@ struct DashboardSidebarRail: View {
             localExecutionWorkspaceID: localExecutionWorkspaceID,
             registeredWorkspaces: registeredWorkspaces,
             conversationOwners: conversationOwners,
+            conversationProviders: conversationProviders,
             workspaceProviders: workspaceProviders,
             folders: folders,
             conversations: conversations,
@@ -250,6 +252,7 @@ struct DashboardSidebarNavigationPage: View {
     let localExecutionWorkspaceID: String?
     let registeredWorkspaces: [CompanionExecutionWorkspace]
     let conversationOwners: [String: String]
+    let conversationProviders: [String: String]
     let workspaceProviders: [String: [CompanionProvider]]
     let folders: [WorkspaceFolderRecord]
     let conversations: [WorkspaceConversationRecord]
@@ -308,6 +311,10 @@ struct DashboardSidebarNavigationPage: View {
 
     private var pinnedAgentIDs: Set<UUID> {
         Set(pinnedAgentOrder)
+    }
+
+    private func contentOwner(_ id: String) -> String {
+        CompanionWorkspaceIdentity.canonicalID(id, workspaces: registeredWorkspaces)
     }
 
     private var pairedWorkspaceLinks: [CompanionExecutionWorkspace] {
@@ -475,12 +482,12 @@ struct DashboardSidebarNavigationPage: View {
                         title: "Local workspace",
                         workspaceAgents: agents.filter { $0.bucket == .localCLIAgents },
                         workspaceFolders: localExecutionWorkspaceID.map { owner in
-                            folders.filter { $0.executionWorkspaceID == owner }
+                            folders.filter { $0.executionWorkspaceID.map(contentOwner) == contentOwner(owner) }
                         } ?? []
                     )
                     ForEach(notes.filter { note in
                         guard let localExecutionWorkspaceID, let owner = note.workspaceID else { return false }
-                        return note.folderID == nil && CompanionWorkspaceIdentity.canonicalID(owner) == CompanionWorkspaceIdentity.canonicalID(localExecutionWorkspaceID)
+                        return note.folderID == nil && contentOwner(owner) == contentOwner(localExecutionWorkspaceID)
                     }) { note in
                         Button(note.title) { onSelectNote(note.id) }.buttonStyle(.plain).padding(.leading, 16)
                     }
@@ -520,16 +527,16 @@ struct DashboardSidebarNavigationPage: View {
 
     private var unavailableFolderOwnerIDs: [String] {
         let known = Set((remoteWorkspaceLinks.map { $0.id.uuidString } + registeredWorkspaces.filter { !$0.deleted }.map(\.id)
-            + [localExecutionWorkspaceID].compactMap { $0 }).map(CompanionWorkspaceIdentity.canonicalID))
-        return Set(folders.compactMap { $0.executionWorkspaceID }.filter { !$0.isEmpty && !known.contains(CompanionWorkspaceIdentity.canonicalID($0)) }).sorted()
+            + [localExecutionWorkspaceID].compactMap { $0 }).map(contentOwner))
+        return Set(folders.compactMap { $0.executionWorkspaceID }.filter { !$0.isEmpty && !known.contains(contentOwner($0)) }).sorted()
     }
 
     private func pairedWorkspaceSection(_ workspace: CompanionExecutionWorkspace) -> some View {
         let key = "paired-workspace:" + workspace.id
-        let owner = CompanionWorkspaceIdentity.canonicalID(workspace.id)
-        let ownedFolders = folders.filter { $0.executionWorkspaceID.map(CompanionWorkspaceIdentity.canonicalID) == owner }
-        let history = conversations.filter { conversationOwners[$0.id].map(CompanionWorkspaceIdentity.canonicalID) == owner }
-        let looseNotes = notes.filter { $0.folderID == nil && $0.workspaceID.map(CompanionWorkspaceIdentity.canonicalID) == owner }
+        let owner = contentOwner(workspace.id)
+        let ownedFolders = folders.filter { $0.executionWorkspaceID.map(contentOwner) == owner }
+        let history = conversations.filter { conversationOwners[$0.id].map(contentOwner) == owner }
+        let looseNotes = notes.filter { $0.folderID == nil && $0.workspaceID.map(contentOwner) == owner }
         return VStack(alignment: .leading, spacing: 0) {
             agentDisclosureHeading(title: workspace.name, key: key)
             if agentSectionExpanded(key) {
@@ -546,9 +553,21 @@ struct DashboardSidebarNavigationPage: View {
                     }
                 } else {
                     ForEach(workspaceProviders[workspace.id] ?? []) { provider in
-                        Text(provider.displayName).font(.subheadline).padding(.leading, 20).padding(.vertical, 5)
+                        let agentKey = key + ":agent:" + provider.id
+                        let agentHistory = history.filter { conversationProviders[$0.id] == provider.id }
+                        agentDisclosureHeading(title: provider.displayName, key: agentKey, level: 1)
+                        if agentSectionExpanded(agentKey) {
+                            if agentHistory.isEmpty { agentEmptyLabel("No synced chats yet") }
+                            ForEach(agentHistory) { conversation in
+                                Button { onSelectConversation(conversation.id) } label: {
+                                    Text(conversation.title).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
+                                }.buttonStyle(.plain).padding(.leading, 24)
+                            }
+                        }
                     }
-                    ForEach(history.filter { $0.folderID == nil }) { conversation in
+                    ForEach(history.filter { conversation in
+                        conversation.folderID == nil && !(workspaceProviders[workspace.id] ?? []).contains { $0.id == conversationProviders[conversation.id] }
+                    }) { conversation in
                         Button { onSelectConversation(conversation.id) } label: {
                             Text(conversation.title).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
                         }.buttonStyle(.plain).padding(.leading, 20)

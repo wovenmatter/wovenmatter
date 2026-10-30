@@ -148,14 +148,6 @@ private final class CreationProtocol: URLProtocol, @unchecked Sendable {
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
-        // Real sessions keep both event feeds open. A 404 here triggers the
-        // production reconnect fence and cancels unrelated fixture requests.
-        if request.url?.path == "/api/event" || (request.url?.path.hasPrefix("/api/experimental/session/") == true && request.url?.path.hasSuffix("/log") == true) {
-            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
-                headerFields: ["Content-Type": "text/event-stream"])!
-            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-            return
-        }
         do {
             let path = request.url!.path
             if path == "/api/event" || (path.hasPrefix("/api/experimental/session/") && path.hasSuffix("/log")) {

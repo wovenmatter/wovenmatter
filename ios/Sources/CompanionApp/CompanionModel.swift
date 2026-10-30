@@ -331,7 +331,7 @@ import CompanionInference
   }
   func openFolder(_ id: String?, workspaceID: String? = nil, unfiled: Bool = false) {
     selectedFolderID = id
-    selectedFolderWorkspaceID = workspaceID ?? id.flatMap { state.folders[$0]?.execution?.workspaceID }.map(CompanionWorkspaceIdentity.canonicalID)
+    selectedFolderWorkspaceID = (workspaceID ?? id.flatMap { state.folders[$0]?.execution?.workspaceID }).map(canonicalWorkspaceID)
     folderContentsUnfiled = unfiled; folderContentsPresented = true; tab = .folders
   }
   func closeFolder() { selectedFolderID = nil; selectedFolderWorkspaceID = nil; folderContentsUnfiled = false; folderContentsPresented = false }
@@ -601,6 +601,30 @@ import CompanionInference
       await refresh()
       return true
     } catch { errorMessage = error.localizedDescription; await reload(); return false }
+  }
+  func canEditNoteDetails(_ id: String) -> Bool {
+    store != nil && state.notes[id]?.contentIncluded == true && !state.uncachedNoteIDs.contains(id) && state.conflicts[id] == nil
+  }
+  /// Rename and move use the same durable local edits as the note editor. They
+  /// must work before a new phone note has ever reached the central library.
+  func editNoteDetails(_ id: String, action: String, title: String, folderID: String?) async -> Bool {
+    guard ["rename", "move"].contains(action), let store else { return false }
+    await flushLocalWrites()
+    await reload()
+    guard canEditNoteDetails(id), let note = state.notes[id] else {
+      errorMessage = "Download this note and resolve any saved conflict before changing its details."
+      return false
+    }
+    let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard action != "rename" || !name.isEmpty else { errorMessage = "Enter a note title."; return false }
+    guard action != "move" || folderID == nil || state.folders[folderID!] != nil else {
+      errorMessage = "This folder is no longer available."; return false
+    }
+    do {
+      try await store.editNote(id: id, title: action == "rename" ? name : note.title, content: note.content,
+        folderID: action == "move" ? folderID : note.folderID, base: note)
+      await reload(); return true
+    } catch { errorMessage = error.localizedDescription; return false }
   }
   func canonicalNoteForAction(_ id: String) async throws -> CompanionNote {
     guard online, let engine, let store else { throw MobileConnectionError.offline }

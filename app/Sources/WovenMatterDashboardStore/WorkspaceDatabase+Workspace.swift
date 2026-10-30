@@ -788,12 +788,13 @@ extension WorkspaceDatabaseConnection {
     // A scheduled session keeps its captured root after its UI folder is removed.
     // Reuse is valid only when the saved owner and directory still match.
     if let existing = try sessionExecutionRoot(id: id) {
-      guard existing.workspaceID == location.workspaceID, existing.rootPath == location.rootPath else { throw WorkspaceToolError.invalid("This session's execution root is fixed.") }
+      guard try executionWorkspaceMatchesUnlocked(captured: existing.workspaceID, expected: location.workspaceID), existing.rootPath == location.rootPath else { throw WorkspaceToolError.invalid("This session's execution root is fixed.") }
       return
     }
     if let folderID {
       guard let row = try historyRowsUnlocked("SELECT workspace_id,root_path FROM folder_execution_roots WHERE folder_id=?", values: [folderID]).first?.objectValue,
-            row["workspace_id"]?.stringValue == location.workspaceID,
+            let capturedOwner = row["workspace_id"]?.stringValue,
+            try executionWorkspaceMatchesUnlocked(captured: capturedOwner, expected: location.workspaceID),
             row["root_path"]?.stringValue == location.rootPath else {
         throw WorkspaceToolError.invalid("Choose a folder in the agent's execution workspace.")
       }

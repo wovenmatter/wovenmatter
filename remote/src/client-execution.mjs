@@ -328,7 +328,12 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       if (command.folderID) {
         const saved = db.prepare('SELECT body FROM execution_folders WHERE id=?').get(command.folderID)
         if (!saved && !command.initialConfiguration?.nativeWorkingDirectory) throw fail(409, 'Register this folder with its execution owner before starting a chat.')
-        if (saved) folderDirectory = JSON.parse(saved.body).execution.rootPath
+        if (saved) {
+          folderDirectory = JSON.parse(saved.body).execution.rootPath
+          if (initial.nativeWorkingDirectory != null && initial.nativeWorkingDirectory !== folderDirectory) {
+            throw fail(409, 'The conversation must use its folder’s registered execution root.')
+          }
+        }
       }
       // The authenticated tool session exists before a native MCP client
       // discovers its catalog. No prompt has been submitted at this point.

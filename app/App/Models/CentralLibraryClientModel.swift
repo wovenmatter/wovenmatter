@@ -164,7 +164,7 @@ final class CentralLibraryClientModel {
         try await self.acceptPairing(endpoint: endpoint, response: response)
     })
     func isPhoneWorkspace(_ owner: String) -> Bool {
-        executionWorkspaces.contains { CompanionWorkspaceIdentity.canonicalID($0.id) == CompanionWorkspaceIdentity.canonicalID(owner) && $0.kind == .ios }
+        executionWorkspaces.contains { CompanionWorkspaceIdentity.canonicalID($0.id, workspaces: executionWorkspaces) == CompanionWorkspaceIdentity.canonicalID(owner, workspaces: executionWorkspaces) && $0.kind == .ios }
     }
     func isPhoneHistory(_ conversationID: String) -> Bool {
         if state.conversations[conversationID]?.providerID == "pi-durable-device" { return true }
@@ -627,7 +627,12 @@ final class CentralLibraryClientModel {
     }
     func selectConversation(_ id: String?) async {
         selectedConversationID = id; section = .chats
-        guard let id else { return }
+        guard let id else {
+            if isPhoneWorkspace(selectedExecutionWorkspaceID) {
+                await selectExecutionWorkspace(localExecution?.descriptor.id ?? "central")
+            }
+            return
+        }
         selectedExecutionWorkspaceID = executionOwner(for: id) ?? "central"
         updateExecutionPresentation()
         do {

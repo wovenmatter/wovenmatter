@@ -8,6 +8,36 @@ import WovenMatterClient
 
 @MainActor @Suite(.serialized)
 struct CentralExecutionClientTests {
+    @Test(.timeLimit(.minutes(1))) func registryStatusDoesNotWaitForAgentDiscoveryAndCachesTheResult() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        let identity = try await fixture.database.companionLibraryIdentity()
+        let id = UUID().uuidString.lowercased()
+        let workspace = try await fixture.database.registerCompanionExecutionWorkspace(.init(workspace: .init(
+            id: id, libraryID: identity.libraryID, ownerDeviceID: id, kind: .mac, name: "Other Mac",
+            endpoint: URL(string: "https://fixture.ts.net/wovenmatter"))), deviceID: identity.hostDeviceID)
+        let remote = CentralExecutionFixtureTransport(workspace: workspace,
+            conversation: .init(id: UUID().uuidString.lowercased(), title: "Fixture"), entries: [])
+        remote.providerGate.hold(); defer { remote.providerGate.open() }
+        fixture.model.federatedExecutionClient = try CentralExecutionClient(database: fixture.database,
+            commandJournalURL: fixture.directory.appending(path: "catalog-commands.json"),
+            provision: { _ in .init(workspace: workspace, deviceID: identity.hostDeviceID, token: "fixture-only") },
+            makeTransport: { _ in remote }, loadCredential: { _ in nil }, saveCredential: { _ in })
+        let host = CompanionHostController(model: fixture.model, defaults: fixture.defaults, supportDirectory: fixture.directory)
+        defer { host.stop() }
+        await host.refreshStatus()
+        #expect(host.snapshot.executionWorkspaces.contains { $0.id == id })
+        await remote.providerGate.waitForArrival()
+        #expect(host.workspaceProviders[id] == nil)
+        remote.providerGate.open()
+        for _ in 0..<100 {
+            if host.workspaceProviders[id] != nil { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(host.workspaceProviders[id]?.map(\.id) == ["pi-durable"])
+        await host.refreshStatus()
+        #expect(await remote.providerRequests == 1)
+    }
+
     @Test func phoneHistoryRejectsCommandsBeforeJournalingOrTransport() async throws {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
         let identity = try await fixture.database.companionLibraryIdentity()
@@ -156,6 +186,8 @@ private actor CentralExecutionFixtureTransport: ExecutionWorkspaceTransport {
     var receivedCommands: [CompanionCommand] = []
     var executions = 0
     var eventRequests = 0
+    var providerRequests = 0
+    nonisolated let providerGate = FacadeGate()
     var requestedCursors: [Int64] = []
     var offline = false
     func setOffline(_ value: Bool) { offline = value }
@@ -165,7 +197,12 @@ private actor CentralExecutionFixtureTransport: ExecutionWorkspaceTransport {
         self.workspace = workspace; self.conversation = conversation; self.entries = entries
     }
     func identity() throws -> CompanionExecutionWorkspace { if offline { throw MobileConnectionError.offline }; return workspace }
-    func providers() -> [CompanionProvider] { [] }
+    func providers() async throws -> [CompanionProvider] {
+        providerRequests += 1
+        await providerGate.pass()
+        if offline { throw MobileConnectionError.offline }
+        return [.init(id: "pi-durable", runtimeKind: "defaultAgent", displayName: "Pi Durable", available: true)]
+    }
     func pending() -> [CompanionPendingInteraction] { [] }
     func receipt(_ id: String) -> CompanionCommandReceipt? { receipts[id] }
     func conversations() -> [CompanionConversation] { [conversation] }

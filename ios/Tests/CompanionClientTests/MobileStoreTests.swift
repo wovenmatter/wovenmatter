@@ -27,6 +27,22 @@ final class MobileStoreTests: XCTestCase {
     XCTAssertEqual(saved.outbox.first { $0.mutation.resourceID == filed.id }?.mutation.noteWorkspaceID, remote)
   }
 
+  func testMoveAndUnfileWhileCreateIsInFlightPreservesNewOwner() async throws {
+    let store = try MobileStore(file: file())
+    let note = try await store.createNote(folderID: nil, title: "Note", content: content("text"))
+    let submitted = try await store.nextMutation()!
+    let other = UUID().uuidString.lowercased()
+    let folder = try await store.createFolder(name: "Other", execution: .init(workspaceID: "remote:" + other, rootPath: "/project"))
+    try await store.editNote(id: note.id, title: note.title, content: note.content, folderID: folder.id)
+    try await store.editNote(id: note.id, title: note.title, content: note.content, folderID: nil)
+    var accepted = note; accepted.revision = 1
+    try await store.acknowledge(.init(operationID: submitted.operationID, status: .accepted, note: accepted))
+    let state = await store.snapshot()
+    XCTAssertEqual(state.notes[note.id]?.workspaceID, other)
+    XCTAssertEqual(state.outbox.first { $0.mutation.resourceID == note.id }?.mutation.noteWorkspaceID, other)
+    XCTAssertEqual(state.outbox.first { $0.mutation.resourceID == note.id }?.mutation.expectedRevision, 1)
+  }
+
   func testLegacyNoteMigrationUsesEvidenceAndDoesNotGuessSyncedUnfiledOwner() async throws {
     let path = file()
     var state = MobileStoreState()

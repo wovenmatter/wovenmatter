@@ -424,7 +424,7 @@ public actor MobileStore {
           guard let remote = result.note, let local = next.notes[mutation.resourceID] else { throw Failure.malformedAcknowledgement }
           next.localRevisionParents[remote.id, default: [:]][String(remote.revision)] = mutation.expectedRevision ?? 0
           next.bases[remote.id] = remote
-          if local.content == mutation.content && local.title == mutation.title && local.folderID == mutation.folderID {
+          if local.content == mutation.content && local.title == mutation.title && local.folderID == mutation.folderID && (mutation.noteWorkspaceID == nil || local.workspaceID == mutation.noteWorkspaceID) {
             next.notes[remote.id] = remote
           } else {
             var newer = local; newer.revision = remote.revision; next.notes[remote.id] = newer
@@ -541,8 +541,10 @@ public actor MobileStore {
       next.workspaceFolderRequests?[workspaceID] = mutation
     }
   }
-  public func cacheExecutionFolders(_ folders: [CompanionFolder], workspaceID: String) throws {
-    guard folders.allSatisfy({ $0.execution?.workspaceID == workspaceID }) else { throw Failure.wrongWorkspace }
+  public func cacheExecutionFolders(_ folders: [CompanionFolder], workspaceID: String) async throws {
+    let registered = await journal.snapshot().workspaces[workspaceID].map { [$0] } ?? []
+    let owner = CompanionWorkspaceIdentity.canonicalID(workspaceID, workspaces: registered)
+    guard folders.allSatisfy({ $0.execution.map { CompanionWorkspaceIdentity.canonicalID($0.workspaceID, workspaces: registered) } == owner }) else { throw Failure.wrongWorkspace }
     try transaction { next in
       for folder in folders where next.pendingFolderDeletions?[folder.id] == nil {
         guard next.folders[folder.id] == nil || next.folders[folder.id]?.execution == folder.execution else { throw Failure.wrongWorkspace }

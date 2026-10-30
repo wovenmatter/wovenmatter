@@ -4,9 +4,9 @@ import WovenMatterCompanion
 
 extension CompanionModel {
   func canonicalWorkspaceID(_ id: String) -> String {
-    if id == "local" || id == "device" { return CompanionWorkspaceIdentity.canonicalID(deviceWorkspaceID) }
-    if id == "central", let central = executionWorkspaces.first(where: { $0.capabilities.contains("history.central.v1") }) { return CompanionWorkspaceIdentity.canonicalID(central.id) }
-    return CompanionWorkspaceIdentity.canonicalID(id)
+    if id == "local" || id == "device" { return CompanionWorkspaceIdentity.canonicalID(deviceWorkspaceID, workspaces: executionWorkspaces) }
+    if id == "central", let central = executionWorkspaces.first(where: { $0.capabilities.contains("history.central.v1") }) { return CompanionWorkspaceIdentity.canonicalID(central.id, workspaces: executionWorkspaces) }
+    return CompanionWorkspaceIdentity.canonicalID(id, workspaces: executionWorkspaces)
   }
   func folderOwner(_ folder: CompanionFolder) -> String? { folder.execution.map { canonicalWorkspaceID($0.workspaceID) } }
   func noteOwner(_ note: CompanionNote) -> String? {
@@ -133,7 +133,8 @@ extension CompanionModel {
     }
     if workspaceID != "central", let client = workspaceClients[workspaceID] {
       if let existing = try await client.folders().first(where: { $0.id == folderID }) {
-        guard existing.execution == folder.execution else { throw MobileStore.Failure.wrongWorkspace }
+        guard existing.execution?.rootPath == folder.execution?.rootPath,
+              existing.execution.map({ canonicalWorkspaceID($0.workspaceID) }) == folder.execution.map({ canonicalWorkspaceID($0.workspaceID) }) else { throw MobileStore.Failure.wrongWorkspace }
         return
       }
       _ = try await client.createFolder(.init(operationID: folder.id, deviceID: state.deviceID, kind: .createFolder, resourceID: folder.id, title: folder.name, folderExecution: folder.execution))
@@ -162,8 +163,16 @@ enum MobileFolderRecentItem: Identifiable {
 }
 extension CompanionModel {
   var folderRecentItems: [MobileFolderRecentItem] {
-    Array((notes.map(MobileFolderRecentItem.note) + conversations.map(MobileFolderRecentItem.conversation)).sorted {
-      $0.activityTimestamp == $1.activityTimestamp ? $0.id > $1.id : $0.activityTimestamp > $1.activityTimestamp
-    }.prefix(14))
+    let formatter = ISO8601DateFormatter()
+    func date(_ timestamp: String) -> Date {
+      formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+      if let value = formatter.date(from: timestamp) { return value }
+      formatter.formatOptions = [.withInternetDateTime]
+      return formatter.date(from: timestamp) ?? .distantPast
+    }
+    let items = (notes.map(MobileFolderRecentItem.note) + conversations.map(MobileFolderRecentItem.conversation)).map { ($0, date($0.activityTimestamp)) }
+    return Array(items.sorted {
+      $0.1 == $1.1 ? $0.0.id > $1.0.id : $0.1 > $1.1
+    }.prefix(14).map(\.0))
   }
 }

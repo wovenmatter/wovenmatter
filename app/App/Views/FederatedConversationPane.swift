@@ -22,7 +22,7 @@ struct FederatedConversationPane: View {
         if snapshot?.workspace.kind == .ios { return true }
         guard let owner = model.federatedExecutionOwners[conversation.id] else { return false }
         let registrations = model.liveLibraryClient?.executionWorkspaces ?? model.backendReplica.workspaces ?? model.companionHost.executionWorkspaces
-        return registrations.contains { CompanionWorkspaceIdentity.canonicalID($0.id) == CompanionWorkspaceIdentity.canonicalID(owner) && $0.kind == .ios }
+        return registrations.contains { CompanionWorkspaceIdentity.canonicalID($0.id, workspaces: registrations) == CompanionWorkspaceIdentity.canonicalID(owner, workspaces: registrations) && $0.kind == .ios }
     }
     private var runID: String? { snapshot?.transcript?.activeRunID }
     private var messages: [CompanionMessage] {

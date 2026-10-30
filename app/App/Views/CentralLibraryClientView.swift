@@ -13,6 +13,10 @@ struct CentralLibraryClientView: View {
     @State private var search = ""
     @State private var selectedWorkspaceID: String?
 
+    private func contentOwner(_ id: String) -> String {
+        CompanionWorkspaceIdentity.canonicalID(id, workspaces: model.executionWorkspaces)
+    }
+
     var body: some View {
         NavigationSplitView {
             VStack(alignment: .leading, spacing: 8) {
@@ -40,7 +44,7 @@ struct CentralLibraryClientView: View {
                         clientWorkspace(model.localExecution?.descriptor, fallbackName: "This Mac", local: true)
                         Text("Remote workspaces").font(.headline).padding(.top, 10)
                         ForEach(model.executionWorkspaces.filter {
-                            CompanionWorkspaceIdentity.canonicalID($0.id) != CompanionWorkspaceIdentity.canonicalID(model.localExecution?.descriptor.id ?? model.state.deviceID)
+                            contentOwner($0.id) != contentOwner(model.localExecution?.descriptor.id ?? model.state.deviceID)
                         }) { workspace in
                             DisclosureGroup(workspace.name) { clientWorkspace(workspace, fallbackName: workspace.name, local: false) }
                         }
@@ -159,7 +163,7 @@ struct CentralLibraryClientView: View {
         }.scrollIndicators(.never)
     }
     private func clientWorkspace(_ workspace: CompanionExecutionWorkspace?, fallbackName: String, local: Bool) -> some View {
-        let owner = CompanionWorkspaceIdentity.canonicalID(workspace?.id ?? model.state.deviceID)
+        let owner = contentOwner(workspace?.id ?? model.state.deviceID)
         return VStack(alignment: .leading, spacing: 6) {
             Button("All items") { selectedWorkspaceID = owner; model.selectedFolderID = nil; model.section = .folders }
             if workspace?.kind == .ios {
@@ -175,15 +179,15 @@ struct CentralLibraryClientView: View {
                 }
             }
             if local { Button("New folder") { newFolderPresented = true } }
-            ForEach(model.folders.filter { $0.execution.map { CompanionWorkspaceIdentity.canonicalID($0.workspaceID) } == owner }) { folder in
+            ForEach(model.folders.filter { $0.execution.map { contentOwner($0.workspaceID) } == owner }) { folder in
                 Button(folder.name) { selectedWorkspaceID = owner; model.selectedFolderID = folder.id; model.section = .folders }
             }
         }.buttonStyle(.plain).padding(.leading, 8)
     }
     private var folderContents: some View {
         VStack(spacing: 0) {
-            LibraryClientPaneHeader(title: model.selectedFolderID.flatMap { model.state.folders[$0]?.name } ?? selectedWorkspaceID.flatMap { owner in model.executionWorkspaces.first { CompanionWorkspaceIdentity.canonicalID($0.id) == owner }?.name } ?? "All Workspace") {
-                if selectedWorkspaceID == nil || selectedWorkspaceID == CompanionWorkspaceIdentity.canonicalID(model.localExecution?.descriptor.id ?? model.state.deviceID) {
+            LibraryClientPaneHeader(title: model.selectedFolderID.flatMap { model.state.folders[$0]?.name } ?? selectedWorkspaceID.flatMap { owner in model.executionWorkspaces.first { contentOwner($0.id) == owner }?.name } ?? "All Workspace") {
+                if selectedWorkspaceID == nil || selectedWorkspaceID == contentOwner(model.localExecution?.descriptor.id ?? model.state.deviceID) {
                     Button("New folder") { newFolderPresented = true }
                 }
                 Button("New note") { Task { await model.createNote(workspaceID: selectedWorkspaceID) } }
@@ -191,7 +195,7 @@ struct CentralLibraryClientView: View {
             List {
                 if model.selectedFolderID == nil {
                     ForEach(model.folders.filter { folder in
-                        selectedWorkspaceID == nil || folder.execution.map { CompanionWorkspaceIdentity.canonicalID($0.workspaceID) } == selectedWorkspaceID
+                        selectedWorkspaceID == nil || folder.execution.map { contentOwner($0.workspaceID) } == selectedWorkspaceID
                     }) { folder in
                         Button { model.selectedFolderID = folder.id } label: {
                             HStack { DashboardLucideIcon(glyph: .folder, size: 16); Text(folder.name); Spacer() }
@@ -202,11 +206,11 @@ struct CentralLibraryClientView: View {
                 }
                 ForEach(model.notes.filter { note in
                     if let folder = model.selectedFolderID { return note.folderID == folder }
-                    return selectedWorkspaceID == nil || note.workspaceID.map(CompanionWorkspaceIdentity.canonicalID) == selectedWorkspaceID
+                    return selectedWorkspaceID == nil || note.workspaceID.map(contentOwner) == selectedWorkspaceID
                 }) { note in noteRow(note) }
                 ForEach(model.conversations.filter { conversation in
                     if let folder = model.selectedFolderID { return conversation.folderID == folder }
-                    return selectedWorkspaceID == nil || model.executionOwner(for: conversation.id).map(CompanionWorkspaceIdentity.canonicalID) == selectedWorkspaceID
+                    return selectedWorkspaceID == nil || model.executionOwner(for: conversation.id).map(contentOwner) == selectedWorkspaceID
                 }) { conversation in conversationRow(conversation) }
             }.listStyle(.plain).scrollContentBackground(.hidden)
         }

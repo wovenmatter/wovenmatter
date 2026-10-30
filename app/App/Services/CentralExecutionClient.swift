@@ -125,12 +125,13 @@ final class CentralExecutionClient {
     }
 
     func providerCatalog(for workspaces: [CompanionExecutionWorkspace]) async -> [String: [CompanionProvider]] {
-        for workspace in workspaces where workspace.kind == .mac && !workspace.deleted && workspace.endpoint != nil && !workspace.capabilities.contains("history.central.v1") {
+        for workspace in workspaces where workspace.kind == .mac && workspace.isVisibleInConnections && workspace.endpoint != nil && !workspace.capabilities.contains("history.central.v1") {
+            guard !Task.isCancelled else { break }
             guard providerRefreshAfter[workspace.id].map({ $0 <= Date() }) ?? true else { continue }
             providerRefreshAfter[workspace.id] = Date().addingTimeInterval(30)
             if let providers = try? await transport(for: workspace).providers() { workspaceProviders[workspace.id] = providers }
         }
-        let known = Set(workspaces.filter { !$0.deleted }.map(\.id))
+        let known = Set(workspaces.filter { !$0.deleted && $0.retainedHistory != true }.map(\.id))
         workspaceProviders = workspaceProviders.filter { known.contains($0.key) }
         return workspaceProviders
     }

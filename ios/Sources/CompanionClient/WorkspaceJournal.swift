@@ -495,24 +495,27 @@ public actor WorkspaceClient {
   public func earlierTranscript(_ id: String, before: String) async throws -> CompanionTranscript { try await verify(); return try await transport.transcript(id, before: before) }
   public func folders() async throws -> [CompanionFolder] { try await verify(); return try await transport.folders() }
   public func createFolder(_ mutation: CompanionMutation) async throws -> CompanionFolder {
-    try await verify()
-    guard mutation.folderExecution == nil || mutation.folderExecution?.workspaceID == workspaceID else { throw MobileStore.Failure.wrongWorkspace }
+    let workspace = try await verify()
+    let owner = CompanionWorkspaceIdentity.canonicalID(workspaceID, workspaces: [workspace])
+    guard mutation.folderExecution == nil || mutation.folderExecution.map({ CompanionWorkspaceIdentity.canonicalID($0.workspaceID, workspaces: [workspace]) }) == owner else { throw MobileStore.Failure.wrongWorkspace }
     let folder = try await transport.createFolder(mutation)
-    guard folder.id == mutation.resourceID, folder.execution?.workspaceID == workspaceID,
+    guard folder.id == mutation.resourceID, folder.execution.map({ CompanionWorkspaceIdentity.canonicalID($0.workspaceID, workspaces: [workspace]) }) == owner,
       mutation.folderExecution == nil || folder.execution == mutation.folderExecution else { throw MobileStore.Failure.wrongWorkspace }
     try await store.cacheExecutionFolders([folder], workspaceID: workspaceID)
     return folder
   }
   public func readWorkspace(_ request: CompanionWorkspaceRead) async throws -> CompanionWorkspaceResult { try await verify(); return try await transport.readWorkspace(request) }
-  private func verify() async throws {
+  @discardableResult private func verify() async throws -> CompanionExecutionWorkspace {
     let workspace = try await transport.identity()
     guard workspace.id == workspaceID, !workspace.deleted else { throw MobileStore.Failure.wrongWorkspace }
     centralHistory = workspace.capabilities.contains("history.central.v1")
     if let libraryID = await store.snapshot().workspaceID, libraryID != workspace.libraryID { throw WorkspaceJournal.Failure.wrongLibrary }
-    if await store.journal.snapshot().workspaces[workspaceID] == nil {
+    let saved = await store.journal.snapshot()
+    if saved.workspaces[workspaceID] == nil || (!saved.pendingRegistrations.contains(workspaceID) && (saved.workspaces[workspaceID]?.revision ?? -1) <= workspace.revision && saved.workspaces[workspaceID] != workspace) {
       let deviceID = await store.snapshot().deviceID
       try await store.journal.upsertWorkspace(workspace, pending: !centralHistory && WorkspaceJournal.isLocalExecutionOwner(workspace, deviceID: deviceID))
     }
+    return workspace
   }
   public func startConversation(_ requested: MobileLaunchRecord) async throws -> MobileLaunchRecord {
     if let task = launchTasks[requested.id] { return try await task.value }

@@ -49,6 +49,52 @@ private actor ModelMac: CompanionTransport, CompanionCalendarTransport {
 }
 
 final class CompanionModelTests: XCTestCase {
+  @MainActor func testWorkspaceGroupingResolvesRegisteredMacContentIdentityWithoutChangingRoute() {
+    let model = CompanionModel()
+    let registryID = UUID().uuidString.lowercased(), hostID = UUID().uuidString.lowercased(), contentID = UUID().uuidString.lowercased()
+    var mac = CompanionExecutionWorkspace(id: registryID, libraryID: "library", ownerDeviceID: hostID, kind: .mac, name: "Mac", capabilities: ["history.central.v1"], executionDeviceID: hostID)
+    mac.contentWorkspaceID = "device:" + contentID
+    model.executionWorkspaces = [mac]
+    let folder = CompanionFolder(id: "project", name: "Project", execution: .init(workspaceID: "device:" + contentID, rootPath: "/project"))
+    let chat = CompanionConversation(id: "chat", title: "Chat", providerID: "pi", workspaceID: registryID)
+    model.state.folders[folder.id] = folder; model.state.conversations[chat.id] = chat
+    XCTAssertEqual(model.folderWorkspaceGroups.count, 2)
+    XCTAssertEqual(model.folderOwner(folder), contentID)
+    XCTAssertEqual(model.conversationOwner(chat), contentID)
+    XCTAssertEqual(model.executionOwner(of: chat.id), registryID, "Execution requests must retain the registered route identity")
+    XCTAssertTrue(model.routeOwnsFolder(workspaceID: "central", folderID: folder.id))
+    model.openFolder(folder.id)
+    XCTAssertEqual(model.selectedFolderWorkspaceID, contentID)
+  }
+
+  @MainActor func testRecentsCompareActualTimesAcrossFractionalSecondsAndOffsets() {
+    let model = CompanionModel()
+    model.state.notes["fraction"] = .init(id: "fraction", title: "Fraction", content: "", updatedAt: "2026-10-30T10:00:00.500Z")
+    model.state.notes["whole"] = .init(id: "whole", title: "Whole", content: "", updatedAt: "2026-10-30T10:00:00Z")
+    model.state.conversations["offset"] = .init(id: "offset", title: "Offset", updatedAt: "2026-10-30T07:00:01-03:00")
+    XCTAssertEqual(model.folderRecentItems.map(\.resourceID), ["offset", "fraction", "whole"])
+  }
+
+  @MainActor func testUnpairedNoteRenameAndMovePersistWithoutCentralRequests() async throws {
+    let model = CompanionModel()
+    let store = try XCTUnwrap(model.store)
+    let note = try await store.createNote(folderID: nil, title: "Before", content: NoteDocument().encoded())
+    let folder = try await store.createFolder(name: "Phone ideas")
+    await model.reload()
+    XCTAssertFalse(model.online)
+    XCTAssertTrue(model.canEditNoteDetails(note.id))
+    let renamed = await model.editNoteDetails(note.id, action: "rename", title: "After", folderID: nil)
+    let moved = await model.editNoteDetails(note.id, action: "move", title: "Stale title", folderID: folder.id)
+    XCTAssertTrue(renamed); XCTAssertTrue(moved)
+    let saved = await store.snapshot()
+    XCTAssertEqual(saved.notes[note.id]?.title, "After")
+    XCTAssertEqual(saved.notes[note.id]?.folderID, folder.id)
+    XCTAssertEqual(saved.notes[note.id]?.workspaceID, saved.deviceID)
+    XCTAssertTrue(saved.commands.isEmpty)
+    XCTAssertEqual(saved.outbox.filter { $0.mutation.resourceID == note.id }.count, 1)
+    XCTAssertEqual(saved.outbox.first { $0.mutation.resourceID == note.id }?.mutation.kind, .createNote)
+  }
+
   @MainActor func testFolderRecentsMixNotesAndChatsByLatestActivityWithFourteenItemLimit() {
     let model = CompanionModel()
     for index in 0..<20 {

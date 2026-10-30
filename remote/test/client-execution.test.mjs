@@ -358,7 +358,19 @@ test('device-owned folder requests survive a lost reply and restart and set the 
   const opened = await f.service.command(f.command('createSession', { folderID: id }), f.principal)
   assert.equal(opened.status, 'completed')
   assert.equal(directory, first.execution.rootPath)
+  const conflictingCommand = f.command('createSession', {
+    folderID: id, initialConfiguration: { nativeWorkingDirectory: f.directory }
+  })
+  await assert.rejects(f.service.command(conflictingCommand, f.principal), { statusCode: 400 })
+  const conflictingRoot = await f.service.command(conflictingCommand, f.principal, { internal: true })
+  assert.equal(conflictingRoot.status, 'rejected')
+  assert.equal(directory, first.execution.rootPath, 'A rejected folder-root override must not reach the runtime')
+  const matchingRoot = await f.service.command(f.command('createSession', {
+    folderID: id, initialConfiguration: { nativeWorkingDirectory: first.execution.rootPath }
+  }), f.principal, { internal: true })
+  assert.equal(matchingRoot.status, 'completed')
+  assert.equal(directory, first.execution.rootPath)
   const missing = await f.service.command(f.command('createSession', { folderID: randomUUID() }), f.principal)
   assert.equal(missing.status, 'rejected')
-  assert.equal(f.service.conversations().length, 1)
+  assert.equal(f.service.conversations().length, 2)
 })

@@ -212,7 +212,9 @@ extension CompanionModel {
   }
   func executionOwner(of conversationID: String) -> String {
     if executionRecords[conversationID] != nil { return "local" }
-    if let workspaceID = conversationWorkspaceIDs[conversationID] ?? state.conversations[conversationID]?.workspaceID { return canonicalWorkspaceID(workspaceID) == canonicalWorkspaceID(deviceWorkspaceID) ? "local" : canonicalWorkspaceID(workspaceID) }
+    if let workspaceID = conversationWorkspaceIDs[conversationID] ?? state.conversations[conversationID]?.workspaceID {
+      return canonicalWorkspaceID(workspaceID) == canonicalWorkspaceID(deviceWorkspaceID) ? "local" : workspaceRoute(for: workspaceID)
+    }
     return "central"
   }
   var isViewingRemoteQuickChat: Bool {

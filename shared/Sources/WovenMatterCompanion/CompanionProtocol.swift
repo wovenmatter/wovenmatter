@@ -12,6 +12,18 @@ public enum CompanionProtocol {
 /// Stable display/content identity across legacy execution-root prefixes.
 /// Root bindings retain their original identifier; this never transfers execution ownership.
 public enum CompanionWorkspaceIdentity {
+  /// Resolve registered routing aliases for content grouping only. Never use this
+  /// to authenticate a publisher or rewrite a persisted execution directory.
+  public static func canonicalID(_ value: String, workspaces: [CompanionExecutionWorkspace]) -> String {
+    let candidate = canonicalID(value)
+    for workspace in workspaces {
+      let content = canonicalID(workspace.contentWorkspaceID ?? workspace.id)
+      if candidate == canonicalID(workspace.id) || candidate == content { return content }
+      if workspace.kind == .mac, workspace.contentWorkspaceID != nil,
+         workspace.executionDeviceID.map(canonicalID) == candidate { return content }
+    }
+    return candidate
+  }
   public static func canonicalID(_ value: String) -> String {
     for prefix in ["device:", "remote:"] where value.hasPrefix(prefix) {
       if let id = UUID(uuidString: String(value.dropFirst(prefix.count))) { return id.uuidString.lowercased() }

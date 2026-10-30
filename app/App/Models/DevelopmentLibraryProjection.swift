@@ -30,12 +30,16 @@ struct DevelopmentReplicaSnapshot: Codable, Equatable {
     var artifacts: [CompanionArtifactManifest] = []
     var workspaceNames: [String: String] = [:]
     var workspaces: [CompanionExecutionWorkspace]?
+    var workspaceProviders: [String: [CompanionProvider]]?
+    var localWorkspaceID: String?
     var endpoint: URL?
     var status = "Waiting for live library"
     var sharingExecution = false
     init() {}
     @MainActor init(_ client: CentralLibraryClientModel) {
         workspaces = client.executionWorkspaces
+        workspaceProviders = client.directProviders
+        localWorkspaceID = client.localExecution?.descriptor.id
         artifacts = client.artifacts
         workspaceNames = Dictionary(uniqueKeysWithValues: client.executionWorkspaces.map { ($0.id, $0.name) })
         endpoint = client.credential?.endpoint

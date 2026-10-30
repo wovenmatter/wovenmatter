@@ -267,6 +267,40 @@ final class ExecutionRoutingTests: XCTestCase {
     XCTAssertEqual(model.launcherAgents.filter { $0.workspaceID == connected.id }.count, 1)
   }
 
+  @MainActor func testNewChatWithCurrentAgentDoesNotInheritUnrelatedBrowsedFolder() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = try MobileStore(file: root.appendingPathComponent("library.json"))
+    let workspace = CompanionExecutionWorkspace(id: "direct", libraryID: "library", ownerDeviceID: "owner", kind: .linux, name: "Linux")
+    let endpoint = ExecutionTestWorkspace(workspace)
+    let model = CompanionModel(store: store, transport: ExecutionTestLibrary())
+    model.executionDirectory = root.appendingPathComponent("execution")
+    model.executionWorkspaces = [workspace]; model.workspaceReachable[workspace.id] = true
+    model.workspaceProviders[workspace.id] = try await endpoint.providers()
+    model.workspaceClients[workspace.id] = WorkspaceClient(store: store, workspaceID: workspace.id, transport: endpoint)
+    model.state.conversations["current"] = .init(id: "current", title: "Current", providerID: "pi", workspaceID: workspace.id)
+    model.selectedConversationID = "current"
+    model.selectedFolderID = "unrelated"
+    model.state.folders["unrelated"] = .init(id: "unrelated", name: "Other device", execution: .init(workspaceID: "foreign", rootPath: "/foreign"))
+    model.newChatNoteID = "stale-reference"
+    await model.newChatWithCurrentAgent()
+    let commands = await endpoint.commands
+    XCTAssertEqual(commands.filter { $0.kind == .createSession }.count, 1)
+    XCTAssertNil(commands.first?.folderID)
+    XCTAssertNil(model.newChatNoteID)
+  }
+
+  @MainActor func testQuickChatCannotMoveIntoAnotherDevicesFolder() async throws {
+    let model = CompanionModel()
+    let id = UUID().uuidString.lowercased()
+    model.executionRecords[id] = .init(id: id, title: "Quick Chat", connectionID: "fixture", modelJSON: "{}", status: "ready", updatedAt: "")
+    model.state.folders["foreign"] = .init(id: "foreign", name: "Other phone", execution: .init(workspaceID: "device:" + UUID().uuidString.lowercased(), rootPath: "/other"))
+    let moved = await model.performDeviceAction(.conversation(id: id, action: "move", title: nil, folderID: "foreign"))
+    XCTAssertFalse(moved)
+    XCTAssertNil(model.executionRecords[id]?.folderID)
+    XCTAssertEqual(model.errorMessage, "Choose a folder on this device for Quick Chat.")
+  }
+
   @MainActor func testNewChatChooserPreservesCurrentConversationUntilAgentSelection() throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }

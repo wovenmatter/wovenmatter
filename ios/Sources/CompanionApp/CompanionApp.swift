@@ -85,7 +85,14 @@ struct CompanionShell: View {
               Button { selectTab(tab) } label: {
                 VStack(spacing: 5) {
                   DashboardLucideIcon(glyph: tab.icon, size: 22).frame(height: 26)
-                  Text(tab.rawValue).font(.caption2.weight(isSelected(tab) ? .semibold : .regular))
+                  ZStack {
+                    // Every highlight uses the widest tab label, including its
+                    // selected weight, without hard-coding a Dynamic Type width.
+                    ForEach(Array(CompanionModel.Tab.allCases.prefix(5)), id: \.self) { label in
+                      Text(label.rawValue).font(.caption2.weight(.semibold)).hidden().accessibilityHidden(true)
+                    }
+                    Text(tab.rawValue).font(.caption2.weight(isSelected(tab) ? .semibold : .regular))
+                  }
                 }.padding(9)
                   .foregroundStyle(isSelected(tab) ? DashboardPalette.foreground : DashboardPalette.mutedForeground)
                   .background(isSelected(tab) || hoveredTab == tab ? theme.palette.themeSoft : .clear,

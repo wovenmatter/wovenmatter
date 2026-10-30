@@ -371,7 +371,7 @@ extension WorkspaceDatabaseConnection {
         try bind(timestamp, at: 8, to: note)
         try bind(timestamp, at: 9, to: note)
         let folderOwner = try folderID.flatMap { try companionFolderUnlocked(id: $0)?.execution?.workspaceID }
-        let owner = folderOwner ?? workspaceID ?? (try? companionLibraryIdentityUnlocked().hostDeviceID)
+        let owner = try folderOwner ?? workspaceID ?? localNoteWorkspaceIDUnlocked()
         try bindNullable(owner.map(CompanionWorkspaceIdentity.canonicalID), at: 10, to: note)
         try stepDone(note)
 
@@ -379,6 +379,15 @@ extension WorkspaceDatabaseConnection {
         return noteID
       }.result
     }
+  }
+
+  /// Native content belongs to this execution device, independently of the
+  /// central library's publishing identity. Isolated node replicas retain theirs.
+  func localNoteWorkspaceIDUnlocked() throws -> String? {
+    if try !companionIDsUnlocked("SELECT name FROM sqlite_master WHERE type='table' AND name='companion_execution_replica_context'", bindings: []).isEmpty,
+       let replica = try companionIDsUnlocked("SELECT workspace_id FROM companion_execution_replica_context WHERE singleton=1", bindings: []).first { return replica }
+    return try companionIDsUnlocked("SELECT device_id FROM desktop_local_identity WHERE singleton=1", bindings: []).first
+      ?? companionLibraryIdentityUnlocked().hostDeviceID
   }
 
   @discardableResult

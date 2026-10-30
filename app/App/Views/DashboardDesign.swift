@@ -609,10 +609,12 @@ struct DashboardSwitchToggleStyle: ToggleStyle {
 /// Registrations remain visible when their execution endpoint is offline or absent.
 enum DashboardPairedWorkspaceSidebarModel {
     static func workspaces(_ registrations: [CompanionExecutionWorkspace], localID: String?, configuredRemoteIDs: [String]) -> [CompanionExecutionWorkspace] {
-        let excluded = Set((configuredRemoteIDs + [localID].compactMap { $0 }).map(CompanionWorkspaceIdentity.canonicalID))
+        let excluded = Set((configuredRemoteIDs + [localID].compactMap { $0 }).map {
+            CompanionWorkspaceIdentity.canonicalID($0, workspaces: registrations)
+        })
         var seen = Set<String>()
         return registrations.filter {
-            let id = CompanionWorkspaceIdentity.canonicalID($0.id)
+            let id = CompanionWorkspaceIdentity.canonicalID($0.id, workspaces: registrations)
             return !$0.deleted && !excluded.contains(id) && seen.insert(id).inserted
         }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }

@@ -43,6 +43,7 @@ extension WorkspaceDatabaseConnection {
     guard UUID(uuidString: request.operationID) != nil, UUID(uuidString: request.deviceID) != nil,
           let resourceID = UUID(uuidString: request.resourceID), resourceID.uuidString.lowercased() == request.resourceID,
           request.folderID.map({ UUID(uuidString: $0) != nil }) ?? true,
+          request.noteWorkspaceID.map({ $0.utf8.count <= 64 && UUID(uuidString: CompanionWorkspaceIdentity.canonicalID($0)) != nil }) ?? true,
           (request.title?.utf8.count ?? 0) <= 4_096 else {
       return result(.invalid, "Use stable UUID identities and a title shorter than 4 KiB.")
     }
@@ -119,7 +120,7 @@ extension WorkspaceDatabaseConnection {
       try checkpointNoteUnlocked(id: request.resourceID, source: "before-companion-edit", force: true)
       let updatedAt = try nextNoteUpdatedAtUnlocked(id: request.resourceID)
       let movedOwner = try request.folderID.flatMap { try companionFolderUnlocked(id: $0)?.execution?.workspaceID }
-      try companionExecuteUnlocked("UPDATE notes SET title = ?, content = ?, snippet = ?, folder_id = ?, updated_at = ?, workspace_id = COALESCE(?,workspace_id) WHERE id = ? AND user_id = ? AND deleted_at IS NULL", values: [title, content, Self.noteSnippet(content), request.folderID, updatedAt, movedOwner.map(CompanionWorkspaceIdentity.canonicalID), request.resourceID, operatorID])
+      try companionExecuteUnlocked("UPDATE notes SET title = ?, content = ?, snippet = ?, folder_id = ?, updated_at = ?, workspace_id = COALESCE(?,workspace_id) WHERE id = ? AND user_id = ? AND deleted_at IS NULL", values: [title, content, Self.noteSnippet(content), request.folderID, updatedAt, (movedOwner ?? request.noteWorkspaceID).map(CompanionWorkspaceIdentity.canonicalID), request.resourceID, operatorID])
       try checkpointNoteUnlocked(id: request.resourceID, source: "companion", force: true)
       return try result(.accepted, note: companionNoteUnlocked(id: request.resourceID))
     }

@@ -55,6 +55,7 @@ run_package_tests() {
     RemoteBrowserViewerTests
     WorkspaceAgentToolsServiceTests
     ConversationHTMLWebKitTests
+    ConversationHTMLScrollTests
     NativeHarnessArchiveTests
     NativeFramePrivacyTests
     NativeJSONSearchProjectionTests

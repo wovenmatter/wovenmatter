@@ -50,7 +50,13 @@ extension CompanionModel {
         case "rename":
           guard let title, !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw DeviceExecutionError.unavailable("Enter a conversation title.") }
           record.title = title
-        case "move": record.folderID = folderID
+        case "move":
+          if let folderID {
+            guard let folder = state.folders[folderID], folderOwner(folder) == canonicalWorkspaceID(deviceWorkspaceID) else {
+              throw DeviceExecutionError.unavailable("Choose a folder on this device for Quick Chat.")
+            }
+          }
+          record.folderID = folderID
         case "pin": record.isPinned = true
         case "unpin": record.isPinned = false
         case "trash":
