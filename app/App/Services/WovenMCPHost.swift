@@ -7,39 +7,35 @@ import WovenMatterDashboardStore
 
 enum WovenMCPAccessAction: Codable, Sendable {
     case status
-    case create(label: String, sessionID: String, groups: Set<WorkspaceToolGroup>, readOnly: Bool)
-    case revoke(String)
-}
-
-struct WovenMCPClientGrant: Codable, Sendable, Identifiable {
-    let id: String
-    let label: String
-    let sessionID: String
-    let groups: Set<WorkspaceToolGroup>
-    let readOnly: Bool
-    let createdAt: Date
+    case setEnabled(Bool)
+    case setGroup(WorkspaceToolGroup, enabled: Bool)
 }
 
 struct WovenMCPAccessSnapshot: Codable, Sendable {
     var endpointURL: String
-    var clients: [WovenMCPClientGrant]
-    var issuedConnection: WovenMCPConnection?
+    var settings: WorkspaceExternalMCPSettings
+    var exposureError: String?
 }
 
-/// The bearer identifies the caller. Neither MCP arguments nor an MCP transport
-/// session ID can choose a Woven conversation or increase its capabilities.
+/// Native bearers identify conversation callers. The optional private Tailnet
+/// endpoint resolves unauthenticated outside clients to the instance-wide policy.
+/// Model arguments never choose the caller or change exposure settings.
 @MainActor
 final class WovenMCPHost {
     private struct Credential: Codable, Sendable {
-        let grant: WovenMCPClientGrant
+        let sessionID: String
         let tokenHash: String
-        let persistent: Bool
         var lastAliveAt: Date
     }
     private struct SavedAccess: Codable {
         var port: UInt16
-        var credentials: [Credential]
+        var httpsPort: Int?
     }
+    private let exposure: CompanionTailscaleServe
+    private var outsideEndpoint: String?
+    private var exposureError: String?
+    private var exposureTask: Task<Void, Never>?
+    private var port: UInt16?
     private let database: WorkspaceDatabase
     private let accessFile: URL
     private let perform: @MainActor @Sendable (WovenMatterToolRequest, String) async -> WovenMatterToolResponse
@@ -49,16 +45,16 @@ final class WovenMCPHost {
     private var startTask: Task<String, any Error>?
     private var endpointURL: String?
     private var preferredPort: UInt16 = 0
+    private var preferredHTTPSPort: Int?
     private var generation = UUID()
 
-    init(database: WorkspaceDatabase,
+    init(database: WorkspaceDatabase, exposure: CompanionTailscaleServe = CompanionTailscaleServe(),
          perform: @escaping @MainActor @Sendable (WovenMatterToolRequest, String) async -> WovenMatterToolResponse) throws {
-        self.database = database; self.perform = perform
+        self.database = database; self.perform = perform; self.exposure = exposure
         accessFile = database.supportDirectory.appending(path: "mcp-access.json")
         if FileManager.default.fileExists(atPath: accessFile.path) {
             let saved = try JSONDecoder().decode(SavedAccess.self, from: Data(contentsOf: accessFile))
-            preferredPort = saved.port
-            credentials = Dictionary(uniqueKeysWithValues: saved.credentials.filter(\.persistent).map { ($0.tokenHash, $0) })
+            preferredPort = saved.port; preferredHTTPSPort = saved.httpsPort
         }
     }
 
@@ -71,7 +67,7 @@ final class WovenMCPHost {
             func makeListener() -> CompanionHTTPServer {
                 CompanionHTTPServer { [weak self] request in
                     guard let self else { return .error("unavailable", "Woven MCP stopped.", status: 503) }
-                    return await self.handle(request) ?? Self.unauthorizedResponse()
+                    return await self.handle(request, allowOutside: self.outsideEndpoint != nil) ?? Self.unauthorizedResponse()
                 }
             }
             var listener = makeListener()
@@ -80,11 +76,10 @@ final class WovenMCPHost {
                 let port: UInt16
                 do {
                     port = try await listener.start(port: self.preferredPort)
-                } catch NWError.posix(.EADDRINUSE) where self.preferredPort != 0
-                    && !self.credentials.values.contains(where: \.persistent) {
+                } catch NWError.posix(.EADDRINUSE) where self.preferredPort != 0 {
                     // A recently closed TCP connection can retain the saved port.
-                    // Session-only credentials are reissued after restart, so no
-                    // external client depends on this endpoint. Keep exclusive
+                    // Native credentials are reissued after restart. Outside
+                    // clients use the separately advertised Tailnet endpoint. Keep exclusive
                     // binding and let the OS choose a free port instead.
                     listener.stop()
                     guard self.generation == expected, !Task.isCancelled else { throw CancellationError() }
@@ -94,8 +89,9 @@ final class WovenMCPHost {
                 }
                 guard self.generation == expected, !Task.isCancelled else { listener.stop(); throw CancellationError() }
                 let endpoint = "http://127.0.0.1:\(port)/mcp"
-                self.preferredPort = port; self.endpointURL = endpoint
+                self.preferredPort = port; self.port = port; self.endpointURL = endpoint
                 try self.save()
+                self.startExposureMonitor()
                 return endpoint
             } catch { listener.stop(); self.server = nil; self.endpointURL = nil; throw error }
         }
@@ -114,58 +110,83 @@ final class WovenMCPHost {
             return .init(endpointURL: endpoint, bearerToken: current.bearerToken, captureID: captureID, sessionID: sessionID)
         }
         revokeSession(sessionID)
-        let grant = WovenMCPClientGrant(id: UUID().uuidString.lowercased(), label: "Woven session", sessionID: sessionID,
-            groups: Set(WorkspaceToolGroup.allCases), readOnly: false, createdAt: Date())
-        let connection = try issue(grant, endpoint: endpoint, persistent: false)
+        let connection = try issue(sessionID: sessionID, endpoint: endpoint)
         sessionConnections[sessionID] = connection
         return .init(endpointURL: endpoint, bearerToken: connection.bearerToken, captureID: captureID, sessionID: sessionID)
     }
 
-    func access(_ action: WovenMCPAccessAction, advertisedEndpoint: String? = nil) async throws -> WovenMCPAccessSnapshot {
+    func access(_ action: WovenMCPAccessAction) async throws -> WovenMCPAccessSnapshot {
         let localEndpoint = try await start()
-        let endpoint = advertisedEndpoint ?? localEndpoint
-        var issued: WovenMCPConnection?
         switch action {
         case .status: break
-        case let .create(label, sessionID, groups, readOnly):
-            let label = label.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !label.isEmpty, label.utf8.count <= 200, UUID(uuidString: sessionID) != nil, !groups.isEmpty else {
-                throw WorkspaceToolError.invalid("Choose a label, an existing conversation and at least one tool group.")
-            }
-            let snapshot = try await database.companionSnapshot()
-            guard snapshot.conversations.contains(where: { $0.id == sessionID }) else {
-                throw WorkspaceToolError.notFound("The selected conversation is no longer available.")
-            }
-            try await database.requireMCPCaller(sessionID)
-            let native = try await database.localACPSession(conversationID: sessionID)
-            guard AgentRuntimeKind.allCases.contains(native.runtimeKind) else { throw WorkspaceToolError.invalid("Choose a currently supported harness conversation.") }
-            _ = try await database.sessionTools(sessionID)
-            let grant = WovenMCPClientGrant(id: UUID().uuidString.lowercased(), label: label, sessionID: sessionID,
-                groups: groups, readOnly: readOnly, createdAt: Date())
-            issued = try issue(grant, endpoint: endpoint, persistent: true)
-            do { try save() } catch {
-                credentials = credentials.filter { $0.value.grant.id != grant.id }; throw error
-            }
-        case .revoke(let id):
-            let previous = credentials
-            credentials = credentials.filter { $0.value.grant.id != id || !$0.value.persistent }
-            do { try save() } catch { credentials = previous; throw error }
+        case .setEnabled(let enabled): try await database.updateExternalMCP(enabled: enabled)
+        case let .setGroup(group, enabled): try await database.updateExternalMCP(group: group, groupEnabled: enabled)
         }
-        return .init(endpointURL: endpoint,
-            clients: credentials.values.filter(\.persistent).map(\.grant).sorted { $0.createdAt < $1.createdAt },
-            issuedConnection: issued)
+        let outside = try await database.toolSettings().externalMCP ?? .init()
+        await refreshExposure()
+        return .init(endpointURL: outsideEndpoint ?? localEndpoint, settings: outside, exposureError: exposureError)
+    }
+
+    private func startExposureMonitor() {
+        guard exposureTask == nil else { return }
+        exposureTask = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.refreshExposure()
+                do { try await Task.sleep(for: .seconds(5)) } catch { return }
+            }
+        }
+    }
+
+    private var refreshingExposure = false
+    private func refreshExposure() async {
+        while refreshingExposure {
+            do { try await Task.sleep(for: .milliseconds(10)) } catch { return }
+        }
+        refreshingExposure = true
+        defer { refreshingExposure = false }
+        let expected = generation
+        do {
+            let enabled = try await database.toolSettings().externalMCP?.isEnabled == true
+            guard generation == expected else { return }
+            if !enabled {
+                outsideEndpoint = nil; exposureError = nil; exposure.stop()
+                return
+            }
+            guard outsideEndpoint == nil || !exposure.isRunning else { return }
+            outsideEndpoint = nil; exposure.stop()
+            try await exposure.waitUntilStopped()
+            guard generation == expected, let port else { return }
+            let address = try await exposure.start(loopbackPort: port, preferredHTTPSPort: preferredHTTPSPort, allowPortFallback: true)
+            guard generation == expected, try await database.toolSettings().externalMCP?.isEnabled == true else {
+                exposure.stop(); return
+            }
+            preferredHTTPSPort = address.port
+            try save()
+            outsideEndpoint = address.appending(path: "mcp").absoluteString
+            exposureError = nil
+        } catch {
+            guard generation == expected else { return }
+            exposure.stop(); outsideEndpoint = nil; exposureError = error.localizedDescription
+        }
     }
 
     /// nil allows the paired-device API to authenticate its separate credentials
     /// when both transports share the existing Tailscale HTTP listener.
-    func handle(_ request: CompanionHTTPRequest) async -> CompanionHTTPResponse? {
+    func handle(_ request: CompanionHTTPRequest, allowOutside: Bool = false) async -> CompanionHTTPResponse? {
         let path = URLComponents(string: "http://localhost" + request.target)?.path
         guard path == "/mcp" || path == "/wovenmatter/mcp" else { return nil }
-        guard let token = request.bearer, var credential = credentials[Self.hash(token)] else { return nil }
-        guard credential.persistent || Date().timeIntervalSince(credential.lastAliveAt) <= 24 * 60 * 60 else { return nil }
-        credential.lastAliveAt = Date(); credentials[credential.tokenHash] = credential
-        guard !credential.persistent || Date().timeIntervalSince(credential.grant.createdAt) < 30 * 24 * 60 * 60 else {
-            return .error("credential_expired", "Create a new Woven MCP credential in Settings.", status: 401)
+        let credential: Credential?
+        let callerID: String
+        if let token = request.bearer {
+            guard var native = credentials[Self.hash(token)], Date().timeIntervalSince(native.lastAliveAt) <= 24 * 60 * 60 else { return nil }
+            native.lastAliveAt = Date(); credentials[native.tokenHash] = native
+            credential = native; callerID = native.sessionID
+        } else {
+            guard allowOutside else { return nil }
+            guard (try? await database.toolSettings().externalMCP?.isEnabled) == true else {
+                return .error("access_disabled", "Outside MCP access is disabled.", status: 403)
+            }
+            credential = nil; callerID = WovenMCPCaller.outside
         }
         guard request.method == "POST" else {
             return .error("method_not_allowed", "Woven MCP accepts stateless JSON-RPC POST requests.", status: 405)
@@ -189,26 +210,29 @@ final class WovenMCPHost {
             rpcID = message.objectValue?["id"] ?? .null
             decodedMessage = true
             let authorizedCredential = credential
-            let grant = credential.grant
-            try await database.requireMCPCaller(grant.sessionID)
-            let current = try await database.sessionTools(grant.sessionID)
+            if credential != nil { try await database.requireMCPCaller(callerID) }
+            let current = try await database.sessionTools(callerID)
             let discovering = message.objectValue?["method"] == .string("tools/list")
+            let outside = callerID == WovenMCPCaller.outside
             let allowed = Set(WovenMCPCatalog.tools.filter { tool in
-                guard let group = tool.group, grant.groups.contains(group), !grant.readOnly || !tool.isMutation else { return false }
-                // Native clients may cache discovery for their process lifetime.
-                // Schema visibility follows the immutable credential ceiling;
-                // current user policy still gates every tools/call below.
-                if discovering { return true }
-                // Explicit history attachments retain their own narrower checks.
-                return current.enabled.contains(group) || group == .history || tool.name.hasSuffix("_cancel")
+                guard let group = tool.group else { return false }
+                if outside { return current.enabled.contains(group) }
+                return discovering || current.enabled.contains(group) || group == .history || tool.name.hasSuffix("_cancel")
             }.map(\.name))
             let metadata = message.objectValue?["params"]?.objectValue?["_meta"]?.objectValue
-            let contextID = credential.persistent ? nil : metadata?["wovenContextID"]?.stringValue ?? request.headers["x-woven-context-id"]
+            let contextID = outside ? nil : metadata?["wovenContextID"]?.stringValue ?? request.headers["x-woven-context-id"]
             if message.objectValue?["params"]?.objectValue?["name"] == .string("woven_context"),
-               let contextID, !contextID.isEmpty { _ = try await database.inputContext(id: contextID, callerID: grant.sessionID) }
-            let result = await WovenMCPServer.handle(message, contextID: contextID, allowedTools: allowed) { [weak self] call in
+               let contextID, !contextID.isEmpty { _ = try await database.inputContext(id: contextID, callerID: callerID) }
+            let result = await WovenMCPServer.handle(message, contextID: contextID, allowedTools: allowed, outsideCaller: outside) { [weak self] call in
                 guard let self else { return .init(success: false, error: "Woven MCP stopped.", code: "unavailable", requestID: call.requestID) }
-                return await self.authorizedPerform(call, credential: authorizedCredential)
+                if let authorizedCredential { return await self.authorizedPerform(call, credential: authorizedCredential) }
+                // Recheck settings after suspension and before service dispatch.
+                do {
+                    let command = try WovenMatterToolCommand(call.arguments)
+                    let group = command.group ?? .notes
+                    try await self.database.requireTool(group, sessionID: WovenMCPCaller.outside)
+                    return await self.perform(call, WovenMCPCaller.outside)
+                } catch { return .init(success: false, error: error.localizedDescription, code: "tool_disabled", requestID: call.requestID) }
             }
             guard let result else { return .init(status: 202, body: Data()) }
             return try .json(result)
@@ -222,26 +246,22 @@ final class WovenMCPHost {
         guard credentials[credential.tokenHash] != nil else {
             return .init(success: false, error: "This Woven MCP credential was revoked.", code: "unauthorized", requestID: call.requestID)
         }
-        if credential.persistent, call.arguments == ["context"] {
-            do { try await database.requireTool(.notes, sessionID: credential.grant.sessionID) }
-            catch { return .init(success: false, error: error.localizedDescription, code: "tool_disabled", requestID: call.requestID) }
-            return .init(result: .null, requestID: call.requestID)
-        }
-        return await perform(call, credential.grant.sessionID)
+        return await perform(call, credential.sessionID)
     }
 
     func revokeSession(_ sessionID: String) {
         sessionConnections.removeValue(forKey: sessionID)
-        credentials = credentials.filter { $0.value.persistent || $0.value.grant.sessionID != sessionID }
+        credentials = credentials.filter { $0.value.sessionID != sessionID }
     }
 
     func stop() {
         generation = UUID(); startTask?.cancel(); startTask = nil
         server?.stop(); server = nil; endpointURL = nil
-        sessionConnections.removeAll(); credentials = credentials.filter { $0.value.persistent }
+        exposureTask?.cancel(); exposureTask = nil; exposure.stop(); outsideEndpoint = nil; port = nil
+        sessionConnections.removeAll(); credentials.removeAll()
     }
 
-    private func issue(_ grant: WovenMCPClientGrant, endpoint: String, persistent: Bool) throws -> WovenMCPConnection {
+    private func issue(sessionID: String, endpoint: String) throws -> WovenMCPConnection {
         var bytes = [UInt8](repeating: 0, count: 32)
         guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else {
             throw WorkspaceToolError.invalid("Woven could not create an MCP credential.")
@@ -249,12 +269,12 @@ final class WovenMCPHost {
         let token = Data(bytes).base64EncodedString().replacingOccurrences(of: "+", with: "-")
             .replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
         let hash = Self.hash(token)
-        credentials[hash] = .init(grant: grant, tokenHash: hash, persistent: persistent, lastAliveAt: Date())
+        credentials[hash] = .init(sessionID: sessionID, tokenHash: hash, lastAliveAt: Date())
         return .init(endpointURL: endpoint, bearerToken: token)
     }
 
     private func save() throws {
-        let saved = SavedAccess(port: preferredPort, credentials: credentials.values.filter(\.persistent))
+        let saved = SavedAccess(port: preferredPort, httpsPort: preferredHTTPSPort)
         try JSONEncoder().encode(saved).write(to: accessFile, options: [.atomic])
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: accessFile.path)
     }

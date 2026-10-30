@@ -3,9 +3,11 @@ import SQLite3
 import WovenMatterCore
 
 extension WorkspaceDatabaseConnection {
-  func publishConversationHTML(_ page: ConversationHTMLPage, callerID: String, requestID: String) throws -> ConversationHTMLRenderReference {
+  func publishConversationHTML(_ page: ConversationHTMLPage, callerID: String, requestID: String, targetID: String? = nil) throws -> ConversationHTMLRenderReference {
     try transaction {
       try requireToolUnlocked(.html, sessionID: callerID)
+      let target = callerID == WovenMCPCaller.outside ? targetID ?? callerID : callerID
+      try requireToolSessionUnlocked(target)
       let requestID = try canonicalToolRequestID(requestID)
       try requireAutomationNotCancelled(callerID: callerID, requestID: requestID)
       let activityID = "html-render:" + requestID
@@ -13,7 +15,7 @@ extension WorkspaceDatabaseConnection {
       let prior = try historyRowsUnlocked("""
         SELECT content FROM dashboard_run_events
         WHERE conversation_id=? AND id LIKE ?
-        """, values: [callerID, "%:activity:" + activityID]).first?.objectValue?["content"]?.stringValue
+        """, values: [target, "%:activity:" + activityID]).first?.objectValue?["content"]?.stringValue
       if let prior {
         let saved = try JSONDecoder().decode(AgentRunActivity.self, from: Data(prior.utf8))
         guard let raw = saved.rawOutputJSON,
@@ -26,7 +28,7 @@ extension WorkspaceDatabaseConnection {
       guard let runID = try historyRowsUnlocked("""
         SELECT id FROM dashboard_runs WHERE conversation_id=? AND status='running'
           AND authority_kind='device_owned' ORDER BY created_at DESC LIMIT 1
-        """, values: [callerID]).first?.objectValue?["id"]?.stringValue else {
+        """, values: [target]).first?.objectValue?["id"]?.stringValue else {
         throw WorkspaceToolError.invalid("HTML pages can only be published by an active run in this conversation.")
       }
       let reference = ConversationHTMLRenderReference(id: requestID, title: page.title, height: page.height)
@@ -40,7 +42,7 @@ extension WorkspaceDatabaseConnection {
 }
 
 extension WorkspaceDatabase {
-  public func publishConversationHTML(_ page: ConversationHTMLPage, callerID: String, requestID: String) async throws -> ConversationHTMLRenderReference {
-    try await write { try $0.publishConversationHTML(page, callerID: callerID, requestID: requestID) }
+  public func publishConversationHTML(_ page: ConversationHTMLPage, callerID: String, requestID: String, targetID: String? = nil) async throws -> ConversationHTMLRenderReference {
+    try await write { try $0.publishConversationHTML(page, callerID: callerID, requestID: requestID, targetID: targetID) }
   }
 }
