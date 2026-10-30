@@ -1,0 +1,70 @@
+name: Compare release runner hardware
+on:
+  workflow_call:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  build:
+    name: ${{ matrix.runner }}-${{ matrix.replica }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-26, macos-26-xlarge]
+        replica: [1, 2]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+      - name: Record runner and exact release toolchain
+        run: |
+          test -x "$DEVELOPER_DIR/usr/bin/xcodebuild"
+          xcodebuild -version
+          sw_vers
+          sysctl machdep.cpu.brand_string hw.logicalcpu hw.memsize
+      - name: Ensure CEF build tools
+        run: command -v cmake >/dev/null || brew install cmake
+      - name: Identify component cache keys
+        id: inputs
+        run: scripts/release-cache-key.sh >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; exact release for release caches
+        with:
+          path: ~/Library/Caches/WovenMatter/Downloads
+          key: ${{ steps.inputs.outputs.downloads }}
+          restore-keys: ${{ steps.inputs.outputs.downloads_fallback }}
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; exact release for release caches
+        with:
+          path: ~/Library/Caches/WovenMatter/BrowserBuilds
+          key: ${{ steps.inputs.outputs.browser }}
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; exact release for release caches
+        with:
+          path: ~/Library/Caches/WovenMatter/SourcePackages/repositories
+          key: ${{ steps.inputs.outputs.swiftpm }}
+          restore-keys: ${{ steps.inputs.outputs.swiftpm_fallback }}
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; exact release for release caches
+        with:
+          path: ~/.npm
+          key: ${{ steps.inputs.outputs.npm }}
+          restore-keys: ${{ steps.inputs.outputs.npm_fallback }}
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0; exact release for release caches
+        with:
+          path: ~/Library/Caches/WovenMatter/Compiler
+          key: ${{ steps.inputs.outputs.compiler }}${{ github.sha }}
+          restore-keys: |
+            ${{ steps.inputs.outputs.compiler }}
+            ${{ steps.inputs.outputs.compiler_fallback }}
+
+      - name: Measure edited-source production builds
+        env:
+          BENCHMARK_RUNNER: ${{ matrix.runner }}
+          BENCHMARK_REPLICA: ${{ matrix.replica }}
+        run: python3 scripts/benchmark-release-runner.py
+      - uses: actions/upload-artifact@main
+        if: always()
+        with:
+          name: runner-${{ matrix.runner }}-${{ matrix.replica }}
+          path: ${{ runner.temp }}/release-runner-evidence
