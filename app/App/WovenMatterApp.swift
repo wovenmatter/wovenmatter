@@ -569,6 +569,12 @@ struct WovenMatterApp: App {
                     lifecycleDelegate.prepareBrowserTermination = { await WorkspaceAssetSession.shutdown() }
                 }
                 .frame(minWidth: 760, minHeight: 640)
+                .task {
+                    while !Task.isCancelled {
+                        await RemoteDeviceSetup.handle(model: applicationModel)
+                        do { try await Task.sleep(for: .seconds(2)) } catch { return }
+                    }
+                }
                 .scrollIndicators(.never)
                 .onReceive(
                     NotificationCenter.default.publisher(
