@@ -22,6 +22,16 @@ enum CompanionWorkspacePublisherAPI {
         return .error("wrong_owner", "A publisher may settle only exact retained runs from its workspace.", status: 403)
       }
       return try .json(try await database.settleCompanionRetainedRuns(batch, deviceID: principal.executionDeviceID))
+    case "/v1/federation/publisher/folders":
+      let value = try JSONDecoder().decode(CompanionMutation.self, from: request.body)
+      guard value.kind == .createFolder, value.folderExecution?.workspaceID == principal.workspaceID else {
+        return .error("wrong_owner", "A publisher may project only its own folders.", status: 403)
+      }
+      if let existing = try await database.companionSnapshot(bodyByteBudget: 0).folders.first(where: { $0.id == value.resourceID }) {
+        guard existing.execution == value.folderExecution else { return .error("wrong_owner", "This folder already belongs to another workspace.", status: 403) }
+        return try .json(CompanionMutationResult(operationID: value.operationID, status: .accepted, folder: existing))
+      }
+      return try .json(CompanionMutationResult(operationID: value.operationID, status: .accepted, folder: try await database.projectPublishedExecutionFolder(value, libraryID: principal.libraryID, workspaceID: principal.workspaceID)))
     case "/v1/federation/publisher/journal":
       let batch = try JSONDecoder().decode(CompanionJournalBatch.self, from: request.body)
       guard batch.libraryID == principal.libraryID, batch.entries.allSatisfy({ $0.workspaceID == principal.workspaceID }) else {

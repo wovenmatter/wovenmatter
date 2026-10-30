@@ -36,6 +36,8 @@ import CompanionInference
   @ObservationIgnored let transcriptStates = MobileConversationStates()
   var loadingHistory = false
   var selectedFolderID: String?
+  var selectedFolderWorkspaceID: String?
+  var folderContentsUnfiled = false
   var folderContentsPresented = false
   var selectedNoteID: String?
   var selectedConversationID: String?
@@ -123,12 +125,9 @@ import CompanionInference
   var executionDirectory: URL?
   var executionRefreshTasks: [String: Task<Void, Never>] = [:]
   var executionCredentialStore = InferenceCredentialStore()
-  let deviceBackgroundExecution = DeviceBackgroundExecution()
   var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
   var backgroundFallbackToken: UUID?
   var calendarRevision = 0
-  var deviceScheduleTask: Task<Void, Never>?
-  var processingDeviceSchedule = false
 
   private var frame = 0
   let fixture: Bool
@@ -229,7 +228,6 @@ import CompanionInference
       }
     }
     if let store { await analytics.configure(store.analytics, transport: transport) }
-    if !fixture && UIApplication.shared.applicationState == .active { startDeviceScheduler() }
     await maintainConnections()
   }
   func reload() async {
@@ -261,12 +259,10 @@ import CompanionInference
       if let pending = try MobileCredentialVault.load(), pending.confirmationPending == true,
         pending.endpoint == payload.endpoint {
         if (current.workspaceID ?? current.detachedWorkspaceID) != pending.workspaceID,
-          !localRunTasks.isEmpty || processingDeviceSchedule {
+          !localRunTasks.isEmpty {
           throw DeviceExecutionError.unavailable("Finish the running device agents before changing the central database.")
         }
         await flushLocalWrites()
-        stopDeviceScheduler()
-        defer { if connectionForeground { startDeviceScheduler() } }
         do {
           try await acceptPairing(pending, allowingLibraryChange: true) { try MobileCredentialVault.save($0) }
           pairingText = ""
@@ -280,12 +276,10 @@ import CompanionInference
       let target = try await HTTPSCompanionTransport.previewPairing(payload, deviceID: current.deviceID,
         deviceName: UIDevice.current.name, metadata: deviceMetadata)
       if (current.workspaceID ?? current.detachedWorkspaceID) != target,
-        !localRunTasks.isEmpty || processingDeviceSchedule {
+        !localRunTasks.isEmpty {
         throw DeviceExecutionError.unavailable("Finish the running device agents before changing the central database.")
       }
       await flushLocalWrites()
-      stopDeviceScheduler()
-      defer { if connectionForeground { startDeviceScheduler() } }
       let paired = try await HTTPSCompanionTransport.pair(payload, deviceID: current.deviceID,
         deviceName: UIDevice.current.name, metadata: deviceMetadata, expectedWorkspaceID: target, requiresConfirmation: true)
       try await acceptPairing(paired, allowingLibraryChange: true) { try MobileCredentialVault.save($0) }
@@ -335,19 +329,22 @@ import CompanionInference
       await reload()
     }
   }
-  func openFolder(_ id: String?) {
-    selectedFolderID = id; folderContentsPresented = true; tab = .folders
+  func openFolder(_ id: String?, workspaceID: String? = nil, unfiled: Bool = false) {
+    selectedFolderID = id
+    selectedFolderWorkspaceID = (workspaceID ?? id.flatMap { state.folders[$0]?.execution?.workspaceID }).map(canonicalWorkspaceID)
+    folderContentsUnfiled = unfiled; folderContentsPresented = true; tab = .folders
   }
-  func closeFolder() { selectedFolderID = nil; folderContentsPresented = false }
+  func closeFolder() { selectedFolderID = nil; selectedFolderWorkspaceID = nil; folderContentsUnfiled = false; folderContentsPresented = false }
   func newFolder(name: String) async {
     guard let store, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
     do { let folder = try await store.createFolder(name: name); await analytics.record(.active); await reload(); openFolder(folder.id) }
     catch { errorMessage = error.localizedDescription }
   }
-  func newNote() async {
+  func newNote(workspaceID: String? = nil) async {
     guard let store else { return }
     do {
-      let note = try await store.createNote(folderID: selectedFolderID, title: "Untitled note", content: NoteDocument().encoded())
+      let scoped = tab == .folders && folderContentsPresented
+      let note = try await store.createNote(folderID: scoped ? selectedFolderID : nil, title: "Untitled note", content: NoteDocument().encoded(), workspaceID: workspaceID ?? (scoped ? selectedFolderWorkspaceID : nil))
       await analytics.record(.active)
       selectedNoteID = note.id; tab = .note; await reload()
     } catch { errorMessage = error.localizedDescription }
@@ -363,13 +360,15 @@ import CompanionInference
   func selectConversation(_ id: String, workspaceID: String? = nil) async {
     selectedConversationRoute = (id, workspaceID ?? preferredExecutionRoute(for: id))
     selectedConversationID = id; tab = .chat
-    if selectedExecutionWorkspaceID == "local" { await openDeviceConversation(id) }
+    if isViewingRemoteQuickChat { await refreshRemoteQuickChatHistory() }
+    else if selectedExecutionWorkspaceID == "local" { await openDeviceConversation(id) }
     else if selectedExecutionWorkspaceID == "central" { await refresh() }
     else { await refreshExecutionWorkspaces(force: true) }
   }
   func refreshConversation() async {
     let owner = selectedExecutionWorkspaceID
-    if owner == "local", let id = selectedConversationID { await openDeviceConversation(id) }
+    if isViewingRemoteQuickChat { await refreshRemoteQuickChatHistory() }
+    else if owner == "local", let id = selectedConversationID { await openDeviceConversation(id) }
     else if owner == "central" { await refresh() }
     else { await refreshDirectWorkspace(owner) }
   }
@@ -388,7 +387,9 @@ import CompanionInference
     catch { errorMessage = error.localizedDescription }
   }
   func showLatestMessages() { if let selectedConversationID { historyPages.removeValue(forKey: selectedConversationID) } }
-  func newChat(referencing noteID: String? = nil) {
+  func newChat(referencing noteID: String? = nil, workspaceID: String? = nil) {
+    if tab != .folders || !folderContentsPresented { selectedFolderID = nil; selectedFolderWorkspaceID = nil }
+    if let workspaceID { selectedFolderWorkspaceID = workspaceID }
     newChatNoteID = noteID; chatSetupProblem = nil; chatChooserPresented = true
   }
   func saveNote(id: String, title: String, content: String, base: CompanionNote) {
@@ -410,6 +411,14 @@ import CompanionInference
         }
       } catch { if saveGenerations[id] == generation { saveStates[id] = "Couldn’t save · writing kept open"; errorMessage = error.localizedDescription } }
     }
+  }
+  func compactSaveLabel(_ id: String) -> String {
+    if let value = saveStates[id], value != "Saved on this device" {
+      return value.hasPrefix("Saving") ? "Saving…" : "Save failed"
+    }
+    if state.conflicts[id] != nil { return "Sync conflict" }
+    if state.workspaceID != nil && state.isDirty(id) { return "Sync pending" }
+    return "Saved"
   }
   func saveLabel(_ id: String) -> String {
     if let value = saveStates[id], value != "Saved on this device" { return value }
@@ -466,11 +475,12 @@ import CompanionInference
     do {
       let receipt: CompanionCommandReceipt
       if target == nil {
+        try await requireWorkspaceConnection("central")
         let conversationID = pendingLaunch?.create.conversationID ?? UUID().uuidString.lowercased()
         let launch: MobileLaunchRecord
         if let pendingLaunch {
           guard pendingLaunch.initialSend.text == text, pendingLaunch.initialSend.noteID == noteID else {
-            errorMessage = "A previous new-chat request still needs acknowledgement. Continue it in Settings → Pair to Mac → Pending changes before starting another."; return
+            errorMessage = "The previous message hasn’t been confirmed. Retry it here when the device is connected."; return
           }
           launch = pendingLaunch
         } else {
@@ -483,7 +493,7 @@ import CompanionInference
             updateChatDraft(key: conversationID, draft: .init(text: text, noteID: noteID))
             selectedConversationID = conversationID
           }
-          await reload(); errorMessage = result.sendReceipt?.message ?? result.createReceipt?.message ?? "The session request is saved. Continue it in Settings → Pair to Mac → Pending changes when the Mac is available."; return
+          await reload(); errorMessage = result.sendReceipt?.message ?? result.createReceipt?.message ?? "The Mac hasn’t confirmed this request. Try again here when it’s connected."; return
         }
         receipt = accepted
         if selectedConversationID == target { selectedConversationID = receipt.conversationID ?? conversationID }
@@ -492,7 +502,7 @@ import CompanionInference
         let command: CompanionCommand
         if let unresolved {
           guard unresolved.command.text == text, unresolved.command.noteID == noteID else {
-            errorMessage = "This conversation has an unacknowledged command. Resolve it in Settings → Pair to Mac → Pending changes before sending different input."; return
+            errorMessage = "The previous message hasn’t been confirmed. Retry it here when the device is connected."; return
           }
           command = unresolved.command
         } else {
@@ -504,7 +514,7 @@ import CompanionInference
       let original = draftBuffer[sourceKey] ?? state.chatDrafts[sourceKey]
       if original == draftContext && providerID == route { updateChatDraft(key: sourceKey, draft: .init(text: "")) }
       await refresh()
-    } catch { errorMessage = error.localizedDescription; await reload() }
+    } catch { errorMessage = workspaceActionMessage(error); await reload() }
   }
   func stop() async {
     if selectedExecutionWorkspaceID == "local" { await stopOnDevice(); return }
@@ -575,7 +585,7 @@ import CompanionInference
     await reload()
     let pending = state.commands.first { $0.command.kind == .workspace && ($0.receipt == nil || $0.receipt?.status == .accepted || $0.receipt?.status == .outcomeUnknown) }
     if let pending, pending.command.workspaceAction != action {
-      errorMessage = "An earlier workspace change still needs acknowledgement. Review it in Settings → Pair to Mac → Pending changes before making another change."
+      errorMessage = "The previous change hasn’t been confirmed yet. Try again shortly."
       return false
     }
     errorMessage = nil
@@ -591,6 +601,30 @@ import CompanionInference
       await refresh()
       return true
     } catch { errorMessage = error.localizedDescription; await reload(); return false }
+  }
+  func canEditNoteDetails(_ id: String) -> Bool {
+    store != nil && state.notes[id]?.contentIncluded == true && !state.uncachedNoteIDs.contains(id) && state.conflicts[id] == nil
+  }
+  /// Rename and move use the same durable local edits as the note editor. They
+  /// must work before a new phone note has ever reached the central library.
+  func editNoteDetails(_ id: String, action: String, title: String, folderID: String?) async -> Bool {
+    guard ["rename", "move"].contains(action), let store else { return false }
+    await flushLocalWrites()
+    await reload()
+    guard canEditNoteDetails(id), let note = state.notes[id] else {
+      errorMessage = "Download this note and resolve any saved conflict before changing its details."
+      return false
+    }
+    let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard action != "rename" || !name.isEmpty else { errorMessage = "Enter a note title."; return false }
+    guard action != "move" || folderID == nil || state.folders[folderID!] != nil else {
+      errorMessage = "This folder is no longer available."; return false
+    }
+    do {
+      try await store.editNote(id: id, title: action == "rename" ? name : note.title, content: note.content,
+        folderID: action == "move" ? folderID : note.folderID, base: note)
+      await reload(); return true
+    } catch { errorMessage = error.localizedDescription; return false }
   }
   func canonicalNoteForAction(_ id: String) async throws -> CompanionNote {
     guard online, let engine, let store else { throw MobileConnectionError.offline }
@@ -671,6 +705,41 @@ import CompanionInference
       if scenario == "permissions" || scenario == "tools-menu" {
         let descriptor = InferenceModel(id: "gpt-fixture", name: "GPT-6.1 Sol", provider: "openai", api: "openai-responses", baseUrl: "https://example.invalid", reasoning: true)
         executionRecords["fixture-chat"] = .init(id: "fixture-chat", title: "Launch plan", thinkingLevel: "high", connectionID: "fixture", modelJSON: try descriptor.descriptorJSON(), status: "ready", updatedAt: "")
+      }
+      if scenario == "offline-device" {
+        let workspace = CompanionExecutionWorkspace(id: "11111111-2222-4333-8444-555555555555", libraryID: "fixture", ownerDeviceID: "fixture-host", kind: .linux, name: "Offline Linux")
+        executionWorkspaces = [workspace]
+        workspaceProviders[workspace.id] = [.init(id: "pi", runtimeKind: "pi", displayName: "Pi Durable", available: true)]
+        workspaceReachable[workspace.id] = false
+      }
+      if scenario == "workspace-organization" {
+        let mac = "aaaaaaaa-1111-4111-8111-111111111111", linux = "bbbbbbbb-2222-4222-8222-222222222222", ipad = "cccccccc-3333-4333-8333-333333333333"
+        executionWorkspaces = [
+          .init(id: mac, libraryID: "fixture", ownerDeviceID: mac, kind: .mac, name: "Studio Mac", capabilities: ["history.central.v1"]),
+          .init(id: linux, libraryID: "fixture", ownerDeviceID: mac, kind: .linux, name: "Linux workspace"),
+          .init(id: ipad, libraryID: "fixture", ownerDeviceID: ipad, kind: .ios, name: "Travel iPad", capabilities: ["quick-chat", "notes"])
+        ]
+        providers = [.init(id: "pi", runtimeKind: "pi", displayName: "Pi Durable", available: true)]
+        workspaceProviders[mac] = providers; workspaceProviders[linux] = providers
+        let localFolder = CompanionFolder(id: "dddddddd-4444-4444-8444-444444444444", name: "Phone ideas", execution: .init(workspaceID: "device:" + state.deviceID, rootPath: "/fixture/phone"))
+        let macFolder = CompanionFolder(id: "eeeeeeee-5555-4555-8555-555555555555", name: "Mac projects", execution: .init(workspaceID: "device:" + mac, rootPath: "/fixture/mac"))
+        let ipadFolder = CompanionFolder(id: "ffffffff-6666-4666-8666-666666666666", name: "Travel notes", execution: .init(workspaceID: "device:" + ipad, rootPath: "/fixture/ipad"))
+        let document = try NoteDocument().encoded()
+        let localNote = CompanionNote(id: "organization-local-note", title: "Unfiled phone idea", content: document, workspaceID: state.deviceID)
+        let ipadNote = CompanionNote(id: "organization-ipad-note", folderID: ipadFolder.id, title: "Packing list", content: document, workspaceID: ipad)
+        let chat = CompanionConversation(id: "organization-ipad-chat", title: "Weekend plans", providerID: "pi-durable-device", runtimeKind: "pi", workspaceID: ipad)
+        let fixtureFolders = [localFolder, macFolder, ipadFolder]
+        let fixtureNotes = [localNote, ipadNote]
+        // Fixture launches can reuse a namespace to verify persistence. Replace
+        // the seeded rows instead of handing duplicate IDs to the snapshot.
+        try await store.apply(.init(workspaceID: "fixture", cursor: 2,
+          folders: folders.filter { row in !fixtureFolders.contains { $0.id == row.id } } + fixtureFolders,
+          notes: notes.filter { row in !fixtureNotes.contains { $0.id == row.id } } + fixtureNotes,
+          conversations: conversations.filter { $0.id != chat.id } + [chat]))
+        try await store.cache(.init(conversationID: chat.id, messages: [
+          .init(id: "organization-message", conversationID: chat.id, role: "assistant", content: "Your weekend plan, saved from the iPad.", sequence: 0)
+        ]))
+        await reload()
       }
       selectedNoteID = notes.first?.id; selectedConversationID = "fixture-chat"
       if ProcessInfo.processInfo.environment["WOVENMATTER_UI_SCENARIO"] == "pairing" { pairingPresented = true }

@@ -52,6 +52,7 @@ final class CompanionHostController {
     private(set) var pairingExpiresAt: Date?
     private(set) var discoveredPeers: [CompanionDiscoveredPeer] = []
     private(set) var pendingPairingRequests: [CompanionPendingPairingRequest] = []
+    private(set) var workspaceProviders: [String: [CompanionProvider]] = [:]
     private(set) var executionWorkspaces: [CompanionExecutionWorkspace] = []
     private(set) var isDiscovering = false
     private(set) var pendingDeviceRevocations: [String: [String]] = [:]
@@ -78,6 +79,7 @@ final class CompanionHostController {
     private let makeExposure: @MainActor () -> CompanionTailscaleServe
     private var generation = UUID()
     private var healthTask: Task<Void, Never>?
+    private var providerCatalogTask: Task<Void, Never>?
     private var availabilityTask: Task<Void, Never>?
     private let retryInterval: Duration
 
@@ -246,6 +248,7 @@ final class CompanionHostController {
 
     private func stopService() {
         generation = UUID(); healthTask?.cancel(); healthTask = nil
+        providerCatalogTask?.cancel(); providerCatalogTask = nil
         server?.stop(); server = nil; executionAPI = nil; inferenceHost = nil
         if let serve {
             serve.stop()
@@ -336,7 +339,8 @@ final class CompanionHostController {
         var desired: [CompanionExecutionWorkspace] = [
             .init(id: localID, libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID,
                   kind: .mac, name: DevelopmentLaunch.deviceName(), endpoint: endpoint,
-                  capabilities: ["execution.v1", "history.central.v1", "inference.v1"], executionDeviceID: identity.hostDeviceID, developmentInstance: DevelopmentLaunch.instance)
+                  capabilities: ["execution.v1", "history.central.v1", "inference.v1"], executionDeviceID: identity.hostDeviceID, developmentInstance: DevelopmentLaunch.instance,
+                  contentWorkspaceID: try await model.executionWorkspaceIdentity(workspaceID: nil))
         ]
         desired += model.remoteWorkspaces.workspaces.map { configuration in
             let id = configuration.id.uuidString.lowercased()
@@ -620,7 +624,7 @@ final class CompanionHostController {
               errorMessage: errorMessage, pairingPayload: pairingPayload, pairingExpiresAt: pairingExpiresAt,
               pairedDevices: pairedDevices, lastSeenAt: lastSeenAt, discoveredPeers: discoveredPeers,
               pendingPairingRequests: pendingPairingRequests, isDiscovering: isDiscovering, executionWorkspaces: executionWorkspaces,
-              pendingDeviceRevocations: pendingRevocations)
+              pendingDeviceRevocations: pendingRevocations, workspaceProviders: workspaceProviders)
     }
 
     func refreshStatus() async {
@@ -630,6 +634,20 @@ final class CompanionHostController {
             pendingPairingRequests = await authentication?.pendingPairingRequests() ?? []
             pendingDeviceRevocations = pendingRevocations
             if let database = model?.dashboardStore?.database { try await refreshStatusAndDevelopmentPresence(database: database) }
+            if let client = try? model?.centralExecutionClient() {
+                let known = Set(executionWorkspaces.filter { !$0.deleted && $0.retainedHistory != true }.map(\.id))
+                workspaceProviders = client.workspaceProviders.filter { known.contains($0.key) }
+                if providerCatalogTask == nil {
+                    let expectedGeneration = generation, workspaces = executionWorkspaces
+                    providerCatalogTask = Task { [weak self] in
+                        let providers = await client.providerCatalog(for: workspaces)
+                        guard let self, !Task.isCancelled, self.generation == expectedGeneration else { return }
+                        let active = Set(self.executionWorkspaces.filter { !$0.deleted && $0.retainedHistory != true }.map(\.id))
+                        self.workspaceProviders = providers.filter { active.contains($0.key) }
+                        self.providerCatalogTask = nil
+                    }
+                }
+            }
         } catch { errorMessage = error.localizedDescription }
     }
     func refreshDiscovery() async {
@@ -675,6 +693,7 @@ final class CompanionHostController {
             pairingExpiresAt = value.pairingExpiresAt; pairedDevices = value.pairedDevices; lastSeenAt = value.lastSeenAt
             discoveredPeers = value.discoveredPeers; pendingPairingRequests = value.pendingPairingRequests
             isDiscovering = value.isDiscovering; executionWorkspaces = value.executionWorkspaces
+            workspaceProviders = value.workspaceProviders ?? [:]
             pendingDeviceRevocations = value.pendingDeviceRevocations
         } catch { errorMessage = error.localizedDescription }
     }
@@ -735,6 +754,7 @@ struct CompanionHostSnapshot: Codable, Sendable {
     let isDiscovering: Bool
     let executionWorkspaces: [CompanionExecutionWorkspace]
     let pendingDeviceRevocations: [String: [String]]
+    var workspaceProviders: [String: [CompanionProvider]]? = nil
 }
 
 private struct ExecutionManagementAcknowledgement: Decodable { let revoked: Bool }

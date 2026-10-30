@@ -23,7 +23,9 @@ function fixture(t,{automatic=false}={}) {
     assert.equal(options.redirect,'error');assert.equal(options.headers.authorization,'Bearer '+token)
     if((rejectJournal&&url.endsWith('/journal'))||(rejectArtifacts&&url.includes('/artifacts/')))return {ok:false,status:503}
     const body=JSON.parse(options.body);let result
-    if(url.endsWith('/retained/settle')) {
+    if(url.endsWith('/folders')) {
+      result={operationID:body.operationID,status:'accepted',folder:{id:body.resourceID,name:body.title,execution:body.folderExecution}}
+    } else if(url.endsWith('/retained/settle')) {
       result={libraryID:body.libraryID,acceptedEventIDs:body.entries.map(entry=>entry.eventID),cursor:0}
       if(loseRetainedReply){loseRetainedReply=false;throw Error('Retained receipt lost')}
     } else if(url.endsWith('/journal')) {
@@ -49,7 +51,7 @@ function fixture(t,{automatic=false}={}) {
   service.configurePublisher(grant)
   const createSession=()=>service.command({commandID:randomUUID(),deviceID:enrollment.deviceID,libraryID:enrollment.libraryID,workspaceID:enrollment.workspaceID,kind:'createSession'},principal)
   t.after(async()=>{await service.close();rmSync(directory,{recursive:true,force:true})})
-  return {directory,events,artifacts,requests,grant,createSession,get service(){return service},set online(x){online=x},set loseReply(x){loseReply=x},set loseRetainedReply(x){loseRetainedReply=x},set rejectJournal(x){rejectJournal=x},set rejectArtifacts(x){rejectArtifacts=x},async restart(){await service.close();service=create()}}
+  return {directory,events,artifacts,requests,grant,createSession,enrollment,principal,get service(){return service},set online(x){online=x},set loseReply(x){loseReply=x},set loseRetainedReply(x){loseRetainedReply=x},set rejectJournal(x){rejectJournal=x},set rejectArtifacts(x){rejectArtifacts=x},async restart(){await service.close();service=create()}}
 }
 test('owner executes offline and restart retries original immutable events without any observer',async t=>{
   const f=fixture(t,{automatic:true})
@@ -120,4 +122,20 @@ test('retained terminal preflight retries exact proofs before chronological jour
   assert.equal(proofs.length,2);assert.deepEqual(JSON.parse(proofs[1].options.body),first)
   assert.deepEqual([...f.events.keys()],entries.map(entry=>entry.eventID))
   const count=f.requests.length;await f.restart();await f.service.synchronizePublisher();assert.equal(f.requests.length,count)
+})
+
+
+test('Linux publishes its own offline folder before its conversation after the phone closes', async t => {
+  const f = fixture(t), id = randomUUID()
+  const folder = await f.service.createFolder({ operationID: randomUUID(), deviceID: f.enrollment.deviceID, kind: 'createFolder', resourceID: id, title: 'Offline folder' }, f.principal)
+  const opened = await f.service.command({ commandID: randomUUID(), deviceID: f.enrollment.deviceID, libraryID: f.enrollment.libraryID, workspaceID: f.enrollment.workspaceID, kind: 'createSession', folderID: id }, f.principal)
+  assert.equal(opened.status, 'completed')
+  await assert.rejects(f.service.synchronizePublisher())
+  await f.restart(); f.online = true
+  await f.service.synchronizePublisher()
+  const accepted = f.requests.filter(request => request.url.endsWith('/folders') || request.url.endsWith('/journal')).slice(-2)
+  assert.ok(accepted[0].url.endsWith('/folders'))
+  assert.equal(JSON.parse(accepted[0].options.body).folderExecution.rootPath, folder.execution.rootPath)
+  assert.ok(accepted[1].url.endsWith('/journal'))
+  assert.ok([...f.events.values()].some(entry => entry.conversation?.folderID === id))
 })

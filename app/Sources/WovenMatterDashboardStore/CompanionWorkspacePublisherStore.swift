@@ -72,3 +72,29 @@ extension WorkspaceDatabase {
     try await read { try $0.authenticateCompanionWorkspacePublisher(bearer: bearer) }
   }
 }
+
+
+extension WorkspaceDatabase {
+  /// Metadata from an authenticated execution owner. This never opens or creates
+  /// a remote path on the central Mac.
+  public func projectPublishedExecutionFolder(_ value: CompanionMutation, libraryID: String, workspaceID: String) async throws -> CompanionFolder {
+    try await write { connection in
+      guard try connection.companionWorkspaceIDUnlocked() == libraryID,
+        value.kind == .createFolder, let id = UUID(uuidString: value.resourceID),
+        let binding = value.folderExecution, binding.workspaceID == workspaceID,
+        let name = value.title, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, name.utf8.count <= 4096 else {
+        throw CompanionAPIError(code: "wrong_owner", message: "The folder must belong to the authenticated execution workspace.")
+      }
+      if let existing = try connection.companionFolderUnlocked(id: value.resourceID) {
+        guard existing.execution == binding else { throw CompanionAPIError(code: "wrong_owner", message: "This folder belongs to another workspace.") }
+        return existing
+      }
+      guard try connection.companionVersionUnlocked(kind: "folder", id: value.resourceID) == nil else {
+        throw CompanionAPIError(code: "folder_deleted", message: "This folder was deleted from the central library.")
+      }
+      _ = try connection.createFolder(id: id, name: name, location: .init(workspaceID: workspaceID, rootPath: binding.rootPath, managed: false))
+      guard let folder = try connection.companionFolderUnlocked(id: value.resourceID) else { throw WorkspaceDatabaseError.corruptRow }
+      return folder
+    }
+  }
+}

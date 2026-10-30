@@ -336,7 +336,7 @@ private struct ConversationWorkGroupRow: View {
                         showsProgress: group.showsProgress(activity))
                 }
             }
-            .accessibilityIdentifier("work-live-group:" + group.id)
+            .accessibilityElement(children: .contain)
         } else if !wasExpanded, let single = group.singleActivity {
             ConversationActivityRow(activity: single, runID: runID, runStatus: runStatus,
                 showsProgress: group.showsProgress(single))

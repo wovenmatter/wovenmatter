@@ -51,6 +51,91 @@ final class CompanionUITests: XCTestCase {
     }
     return app
   }
+  @MainActor func reveal(_ element: XCUIElement, in app: XCUIApplication, scrollingDown: Bool = true) {
+    for _ in 0..<6 {
+      if element.isHittable { return }
+      if scrollingDown { app.swipeUp() } else { app.swipeDown() }
+    }
+    XCTAssertTrue(element.isHittable, "The requested folder navigation row must be reachable by scrolling")
+  }
+
+  @MainActor func testFolderHierarchyOrderTogglesAndMixedRecents() {
+    let app = launch(scenario: "workspace-organization")
+    let local = app.buttons["folders-local"], remote = app.buttons["folders-remote"]
+    let localAgent = app.buttons["folder-agent-local:pi-durable-device"]
+    let localFolder = app.buttons["folder-dddddddd-4444-4444-8444-444444444444"]
+    XCTAssertTrue(localAgent.waitForExistence(timeout: 5))
+    XCTAssertEqual(local.label, "Local Agent Workspace")
+    XCTAssertEqual(remote.label, "Remote Workspaces")
+    XCTAssertEqual(app.buttons["folder-all"].label, "All Workspaces")
+    XCTAssertFalse(app.staticTexts["This iPhone"].exists)
+    XCTAssertFalse(app.staticTexts["This iPad"].exists)
+    XCTAssertFalse(app.buttons["All items"].exists)
+    XCTAssertFalse(app.buttons["Unfiled items"].exists)
+    XCTAssertFalse(app.buttons["folders-workspace"].exists)
+    XCTAssertTrue(localFolder.exists)
+    XCTAssertEqual(app.buttons["action-new-chat"].frame.minX, localAgent.frame.minX, accuracy: 1,
+      "Workspace children must stay aligned with root rows")
+    let localFolders = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "workspace-folders-")).firstMatch
+    XCTAssertTrue(localFolders.exists)
+    localFolders.tap()
+    XCTAssertFalse(localFolder.exists)
+    XCTAssertTrue(localAgent.exists, "Collapsing Folders must leave its agent visible")
+    localFolders.tap()
+    XCTAssertTrue(localFolder.exists)
+    local.tap()
+    XCTAssertFalse(localAgent.exists)
+    XCTAssertFalse(localFolder.exists)
+    remote.tap()
+    XCTAssertFalse(app.buttons["folder-workspace-cccccccc-3333-4333-8333-333333333333"].exists)
+    let rows = [app.buttons["action-new-chat"], app.buttons["action-new-note"], app.buttons["folder-all"],
+      local, remote, app.buttons["folders-trash"], app.buttons["folders-recents"]]
+    for (above, below) in zip(rows, rows.dropFirst()) {
+      XCTAssertTrue(above.exists); XCTAssertTrue(below.exists)
+      XCTAssertLessThan(above.frame.minY, below.frame.minY)
+    }
+    let note = app.buttons["recent-note-organization-local-note"]
+    let chat = app.buttons["recent-conversation-organization-ipad-chat"]
+    XCTAssertTrue(note.exists); XCTAssertTrue(chat.exists)
+    let recents = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ OR identifier BEGINSWITH %@", "recent-note-", "recent-conversation-"))
+    XCTAssertLessThanOrEqual(recents.count, 14)
+    app.buttons["folders-recents"].tap()
+    XCTAssertFalse(note.exists); XCTAssertFalse(chat.exists)
+    app.buttons["folders-recents"].tap()
+    XCTAssertTrue(note.exists); XCTAssertTrue(chat.exists)
+    local.tap(); remote.tap()
+    XCTAssertTrue(localAgent.exists)
+    XCTAssertTrue(app.buttons["folder-workspace-cccccccc-3333-4333-8333-333333333333"].exists)
+  }
+
+  @MainActor func testWorkspaceOrganizationAndForeignQuickChatHistory() {
+    let app = launch(scenario: "workspace-organization")
+    XCTAssertTrue(app.buttons["folders-local"].exists)
+    XCTAssertTrue(app.buttons["folders-remote"].exists)
+    XCTAssertTrue(app.buttons["folder-dddddddd-4444-4444-8444-444444444444"].exists)
+    XCTAssertTrue(app.buttons["folder-agent-local:pi-durable-device"].exists)
+    let ipad = "cccccccc-3333-4333-8333-333333333333"
+    reveal(app.buttons["folder-workspace-" + ipad], in: app)
+    app.buttons["folder-workspace-" + ipad].tap()
+    let folders = app.buttons["workspace-folders-" + ipad]
+    XCTAssertTrue(folders.exists)
+    XCTAssertTrue(app.buttons["folder-ffffffff-6666-4666-8666-666666666666"].exists)
+    XCTAssertFalse(app.buttons["action-new-folder-" + ipad].exists)
+    XCTAssertFalse(app.buttons["action-new-note-" + ipad].exists)
+    reveal(folders, in: app)
+    folders.tap()
+    XCTAssertFalse(app.buttons["folder-ffffffff-6666-4666-8666-666666666666"].exists)
+    folders.tap()
+    XCTAssertTrue(app.buttons["folder-ffffffff-6666-4666-8666-666666666666"].exists)
+    reveal(app.buttons["folder-all"], in: app, scrollingDown: false)
+    app.buttons["folder-all"].tap()
+    reveal(app.buttons["folder-chat-organization-ipad-chat"], in: app)
+    app.buttons["folder-chat-organization-ipad-chat"].tap()
+    XCTAssertTrue(app.staticTexts["Your weekend plan, saved from the iPad."].waitForExistence(timeout: 5))
+    XCTAssertFalse(app.buttons["chat-new-session"].exists)
+    XCTAssertFalse(app.descendants(matching: .any)["chat-composer"].exists)
+  }
+
   @MainActor func testDarkThemeSelectionPersistsAcrossLaunch() {
     let app = launch(tab: "Settings")
     app.buttons["General"].tap()
@@ -75,11 +160,15 @@ final class CompanionUITests: XCTestCase {
   @MainActor func testFiveNativeTabsAndFocusedSurfaces() {
     let app = launch()
     XCTAssertTrue(app.staticTexts["Folders"].exists)
+    XCTAssertTrue(app.buttons["folders-local"].exists)
+    XCTAssertTrue(app.buttons["folder-all"].exists)
+    XCTAssertFalse(app.buttons["folders-workspace"].exists)
     app.buttons["tab-home"].tap()
     XCTAssertTrue(app.staticTexts["pane-heading-woven matter"].waitForExistence(timeout: 5))
     XCTAssertTrue(app.buttons["launch-agent-local:pi-durable-device"].waitForExistence(timeout: 5))
     XCTAssertFalse(app.buttons["tab-content"].exists)
     app.buttons["tab-folders"].tap()
+    app.buttons["folder-all"].tap()
     app.buttons["folder-inbox"].tap()
     XCTAssertTrue(app.staticTexts["pane-heading-inbox"].waitForExistence(timeout: 5))
     XCTAssertTrue(app.textFields["Search notes and conversations"].exists)
@@ -94,7 +183,8 @@ final class CompanionUITests: XCTestCase {
     app.buttons["tab-folders"].tap()
     XCTAssertTrue(app.staticTexts["pane-heading-inbox"].waitForExistence(timeout: 5))
     app.buttons["back-folders"].tap()
-    XCTAssertTrue(app.buttons["folder-inbox"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.buttons["folder-all"].waitForExistence(timeout: 5))
+    XCTAssertFalse(app.buttons["folder-inbox"].exists, "Unassigned folders stay in All Workspaces")
     app.buttons["tab-chats"].tap()
     XCTAssertTrue(app.staticTexts["Summarize the launch plan."].waitForExistence(timeout: 5))
     XCTAssertFalse(app.buttons["Send message"].isEnabled)
@@ -106,20 +196,14 @@ final class CompanionUITests: XCTestCase {
   }
   @MainActor func testRunningToolsDoNotDuplicateProgressWhenExpanded() {
     let app = launch(tab: "Chats", scenario: "running-tools")
-    let group = app.buttons["work-group:group:fixture-read"]
-    XCTAssertTrue(group.waitForExistence(timeout: 5))
-    // SwiftUI combines a button's spinner into its accessibility element.
-    // Assert the exposed progress owner across each disclosure state.
-    let busyRows = app.buttons.matching(NSPredicate(format: "value ENDSWITH %@", ", In progress"))
-    XCTAssertEqual(group.value as? String, "Collapsed, In progress")
-    XCTAssertEqual(busyRows.count, 1, "Collapsed work has one progress owner")
-    XCTAssertFalse(app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "Running on ")).firstMatch.exists)
-    group.tap()
+    // The shared desktop transcript presents the active tail inline. Only
+    // older work uses a collapsed group; the current tool owns its spinner.
     let activity = app.buttons["work-activity:fixture-current"]
     XCTAssertTrue(activity.waitForExistence(timeout: 5))
-    XCTAssertEqual(group.value as? String, "Expanded")
+    let busyRows = app.buttons.matching(NSPredicate(format: "value ENDSWITH %@", ", In progress"))
     XCTAssertEqual(activity.value as? String, "Collapsed, In progress")
-    XCTAssertEqual(busyRows.count, 1, "Expanded work moves progress to the current tool")
+    XCTAssertEqual(busyRows.count, 1, "Only the current tool owns progress")
+    XCTAssertFalse(app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "Running on ")).firstMatch.exists)
     activity.tap()
     XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label ==[c] %@", "Input")).firstMatch.waitForExistence(timeout: 5))
     XCTAssertEqual(activity.value as? String, "Expanded, In progress")
@@ -131,9 +215,9 @@ final class CompanionUITests: XCTestCase {
     app.terminate()
     app.launchEnvironment["WOVENMATTER_UI_SCENARIO"] = "running-tools-settled"
     app.launch()
-    XCTAssertTrue(app.buttons["work-group:group:fixture-read"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.buttons["work-activity:fixture-current"].waitForExistence(timeout: 5))
     XCTAssertEqual(busyRows.count, 0, "Finished tools stop spinning while the agent continues its reply")
-    XCTAssertEqual(app.buttons["work-group:group:fixture-read"].value as? String, "Collapsed")
+    XCTAssertEqual(app.buttons["work-activity:fixture-current"].value as? String, "Collapsed")
     XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "Working for ")).firstMatch.exists)
   }
 
@@ -142,7 +226,7 @@ final class CompanionUITests: XCTestCase {
     let permissions = app.buttons["chat-permissions"]
     XCTAssertTrue(permissions.waitForExistence(timeout: 5))
     XCTAssertTrue(permissions.isHittable)
-    XCTAssertEqual(permissions.value as? String, "Full Access")
+    XCTAssertEqual(permissions.value as? String, "Allow Note Edits")
     let controls = [app.buttons["Add to chat"], app.buttons["chat-model"], app.buttons["chat-thinking"], permissions, app.buttons["chat-tools"], app.buttons["Send message"]]
     XCTAssertEqual(controls[1].value as? String, "GPT-6.1 Sol")
     XCTAssertEqual(controls[2].value as? String, "High")
@@ -156,8 +240,8 @@ final class CompanionUITests: XCTestCase {
     XCTAssertLessThanOrEqual(controls.last!.frame.maxX, app.frame.maxX)
     permissions.tap()
     XCTAssertTrue(app.staticTexts["Permissions"].waitForExistence(timeout: 5))
-    XCTAssertTrue(app.buttons["Ask for Approval"].exists)
-    XCTAssertTrue(app.buttons["Full Access"].exists)
+    XCTAssertTrue(app.buttons["Ask Before Note Edits"].exists)
+    XCTAssertTrue(app.buttons["Allow Note Edits"].exists)
     let capture = XCTAttachment(screenshot: app.screenshot())
     capture.name = "Composer permissions"
     capture.lifetime = .keepAlways
@@ -213,6 +297,54 @@ final class CompanionUITests: XCTestCase {
     XCTAssertTrue(composer.exists)
   }
 
+  @MainActor func testOfflineDeviceCreationExplainsConnectionAndSettingsHasNoPendingPage() {
+    let app = launch(tab: "Home", scenario: "offline-device")
+    let message = "Can’t connect to this device. Make sure it’s online and connected to the internet."
+    app.buttons["action-new-chat"].tap()
+    let agent = app.buttons["choose-chat-agent-11111111-2222-4333-8444-555555555555:pi"]
+    XCTAssertTrue(agent.waitForExistence(timeout: 5))
+    agent.tap()
+    let chatError = app.staticTexts["chat-setup-problem"]
+    XCTAssertTrue(chatError.waitForExistence(timeout: 5))
+    XCTAssertEqual(chatError.label, message)
+    app.buttons["Close agent chooser"].tap()
+    app.buttons["tab-folders"].tap()
+    reveal(app.buttons["folder-workspace-11111111-2222-4333-8444-555555555555"], in: app)
+    app.buttons["folder-workspace-11111111-2222-4333-8444-555555555555"].tap()
+    reveal(app.buttons["action-new-folder-11111111-2222-4333-8444-555555555555"], in: app)
+    app.buttons["action-new-folder-11111111-2222-4333-8444-555555555555"].tap()
+    XCTAssertFalse(app.alerts["New folder"].exists)
+    let folderError = app.staticTexts["workspace-action-error"]
+    XCTAssertTrue(folderError.waitForExistence(timeout: 5))
+    XCTAssertEqual(folderError.label, message)
+    app.buttons["tab-settings"].tap()
+    XCTAssertTrue(app.buttons["General"].waitForExistence(timeout: 5))
+    XCTAssertFalse(app.buttons["Pending changes"].exists)
+  }
+
+  @MainActor func testNoteControlsAndCompactFooter() {
+    let app = launch()
+    app.buttons["tab-notes"].tap()
+    let undo = app.buttons["note-undo"], redo = app.buttons["note-redo"]
+    XCTAssertTrue(undo.waitForExistence(timeout: 5))
+    XCTAssertTrue(redo.exists)
+    XCTAssertFalse(undo.isEnabled); XCTAssertFalse(redo.isEnabled)
+    XCTAssertFalse(app.buttons["Add paragraph"].exists)
+    let count = app.buttons["note-text-count"]
+    XCTAssertTrue(count.exists); XCTAssertEqual(count.label, "Note word count")
+    count.tap(); XCTAssertEqual(count.label, "Note character count")
+    count.tap(); XCTAssertEqual(count.label, "Note word count")
+    let body = app.textViews.matching(NSPredicate(format: "identifier BEGINSWITH 'note-body-editor-' ")).firstMatch
+    body.tap(); body.typeText(" undo marker")
+    XCTAssertTrue(undo.isEnabled)
+    undo.tap(); XCTAssertTrue(redo.isEnabled)
+    redo.tap()
+    XCTAssertTrue((body.value as? String ?? "").contains("marker"))
+    app.buttons["note-format"].tap()
+    XCTAssertTrue(app.buttons["Bold"].waitForExistence(timeout: 5))
+    XCTAssertFalse(app.buttons["Add paragraph"].exists)
+  }
+
   @MainActor func testOfflineWritingSurvivesTerminationAndRestart() {
     // CI stalled in XCTest's launch-rotation animation wait with Notes open.
     // Settle the Folders fixture before entering the editor.
@@ -245,9 +377,9 @@ final class CompanionUITests: XCTestCase {
     let writtenBody = body.value as? String
     XCTAssertEqual(writtenBody?.lowercased(), bodyText.lowercased())
     XCTAssertFalse(app.buttons["dismiss-keyboard"].exists)
-    app.staticTexts["note-save-state"].tap()
+    app.buttons["note-text-count"].tap()
     XCTAssertTrue(app.buttons["tab-home"].waitForExistence(timeout: 5))
-    let saved = app.staticTexts["note-save-state"]
+    let saved = app.buttons["note-save-state"]
     let savedPredicate = NSPredicate(format: "label CONTAINS 'Saved on this device'")
     expectation(for: savedPredicate, evaluatedWith: saved)
     waitForExpectations(timeout: 10)
@@ -257,7 +389,7 @@ final class CompanionUITests: XCTestCase {
     let reopened = app.descendants(matching: .any)["note-title"].firstMatch
     XCTAssertTrue(reopened.waitForExistence(timeout: 10))
     XCTAssertTrue((reopened.value as? String ?? reopened.label).contains(marker.trimmingCharacters(in: .whitespaces)))
-    XCTAssertTrue(app.staticTexts["note-save-state"].label.contains("Saved on this device"))
+    XCTAssertTrue(app.buttons["note-save-state"].label.contains("Saved on this device"))
     let restoredBody = app.textViews.matching(NSPredicate(format: "identifier BEGINSWITH 'note-body-editor-' ")).firstMatch
     XCTAssertTrue(restoredBody.waitForExistence(timeout: 5))
     XCTAssertEqual(restoredBody.value as? String, writtenBody)

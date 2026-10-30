@@ -129,6 +129,12 @@ struct ItemManagementSheet: View {
   @State private var confirmTrash = false
   @State private var preview: URL?
   @Environment(\.dismiss) private var dismiss
+  private var canEditDetails: Bool { isNote ? model.canEditNoteDetails(id) : model.executionAvailable(for: id) }
+  private var destinationFolders: [CompanionFolder] {
+    if isNote { return model.folders }
+    let owner = model.canonicalWorkspaceID(model.executionOwner(of: id))
+    return model.folders.filter { model.folderOwner($0) == owner }
+  }
   var body: some View {
     Group {
       Form {
@@ -138,14 +144,15 @@ struct ItemManagementSheet: View {
         Section("Title") {
           TextField("Title", text: $title)
           Button("Rename") { Task { await perform("rename") } }
-        }
+        }.disabled(busy || !canEditDetails)
         Section("Folder") {
           Picker("Folder", selection: $folderID) {
             Text("No folder").tag("")
-            ForEach(model.folders) { Text($0.name).tag($0.id) }
+            ForEach(destinationFolders) { Text($0.name).tag($0.id) }
           }
           Button("Move") { Task { await perform("move") } }
-        }
+        }.disabled(busy || !canEditDetails)
+        Group {
         Section {
           Button("Pin") { Task { await perform("pin") } }
           Button("Unpin") { Task { await perform("unpin") } }
@@ -154,6 +161,7 @@ struct ItemManagementSheet: View {
         }
         Section { Button("Move to Trash", role: .destructive) { confirmTrash = true } }
         }.disabled(busy || !(isNote ? model.online : model.executionAvailable(for: id)))
+        }
       }
         .navigationTitle(isNote ? "Note details" : "Conversation details")
         .navigationBarTitleDisplayMode(.inline).mobilePageSurface().toolbar(.visible, for: .navigationBar)
@@ -166,6 +174,10 @@ struct ItemManagementSheet: View {
   private func perform(_ action: String) async {
     guard !busy else { return }; busy = true; defer { busy = false }
     do {
+      if isNote, action == "rename" || action == "move" {
+        if await model.editNoteDetails(id, action: action, title: title, folderID: folderID.isEmpty ? nil : folderID) { dismiss() }
+        return
+      }
       let request: CompanionWorkspaceAction
       if isNote {
         let note = try await model.canonicalNoteForAction(id)

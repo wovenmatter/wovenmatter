@@ -343,6 +343,7 @@ final class ApplicationModel {
     @ObservationIgnored var adoptedExecutionConversations: Set<String> = []
     var federatedExecutionSnapshots: [String: FederatedExecutionSnapshot] = [:]
     var federatedExecutionOwners: [String: String] = [:]
+    var federatedExecutionProviders: [String: String] = [:]
     @ObservationIgnored
     lazy var companionCommands = CompanionCommandService(model: self)
     @ObservationIgnored
@@ -1242,10 +1243,13 @@ final class ApplicationModel {
             }
             guard self.dashboardStore === dashboardStore, generation == workspaceRefreshGeneration, !Task.isCancelled else { return }
             federatedExecutionOwners = try await dashboardStore.database.companionExecutionOwners()
+            federatedExecutionProviders = try await dashboardStore.database.companionExecutionProviders()
+            for conversation in backendReplica.conversations { federatedExecutionProviders[conversation.id] = conversation.providerID }
             for (id, owner) in backendReplica.owners { federatedExecutionOwners[id] = owner }
             if let client = liveLibraryClient {
                 for conversation in client.conversations where client.isForeignConversation(conversation.id) {
                     federatedExecutionOwners[conversation.id] = client.executionOwner(for: conversation.id) ?? "central"
+                    federatedExecutionProviders[conversation.id] = conversation.providerID
                 }
             }
             let nativeDirectories = try await dashboardStore.sessionNativeWorkingDirectories(
@@ -3189,7 +3193,7 @@ final class ApplicationModel {
         guard let agentTools, let database = dashboardStore?.database else { return nil }
         let session = try await database.localACPSession(conversationID: conversationID)
         let root = try await database.availableSessionExecutionRoot(id: conversationID)
-        guard root.workspaceID == (try await executionWorkspaceIdentity(workspaceID: session.remoteWorkspaceID)) else {
+        guard try await executionWorkspaceMatches(root.workspaceID, workspaceID: session.remoteWorkspaceID) else {
             throw WorkspaceToolError.invalid("This chat belongs to a different execution workspace.")
         }
         let remote = session.remoteWorkspaceID.flatMap { remoteWorkspaces.configuration(id: $0) }
@@ -3203,7 +3207,7 @@ final class ApplicationModel {
     ) async throws -> RemoteHarnessLaunchContext {
         guard !conversation.isArchived,
               let savedRoot = try await dashboardStore?.database.availableSessionExecutionRoot(id: conversation.id),
-              savedRoot.workspaceID == (try await executionWorkspaceIdentity(workspaceID: conversation.remoteWorkspaceID)) else {
+              try await executionWorkspaceMatches(savedRoot.workspaceID, workspaceID: conversation.remoteWorkspaceID) else {
             throw WorkspaceToolError.invalid("This chat has no available execution workspace. Start a new chat.")
         }
         let inheritedRoot = URL(fileURLWithPath: savedRoot.rootPath)
@@ -5243,6 +5247,11 @@ extension ApplicationModel {
 
 
 extension ApplicationModel {
+    func executionWorkspaceMatches(_ captured: String?, workspaceID: UUID?) async throws -> Bool {
+        guard let captured, let database = dashboardStore?.database else { return false }
+        return try await database.executionWorkspaceMatches(captured: captured, expected: executionWorkspaceIdentity(workspaceID: workspaceID))
+    }
+
     func executionWorkspaceIdentity(workspaceID: UUID?) async throws -> String {
         if let workspaceID { return "remote:" + workspaceID.uuidString.lowercased() }
         guard let store = dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
@@ -5251,9 +5260,8 @@ extension ApplicationModel {
 
     func folderWorkingDirectory(folderID: String?, workspaceID: UUID?, explicit: URL? = nil,
                                 calendarExecutionRoot: WorkspaceFolderLocation? = nil) async throws -> URL {
-        let owner = try await executionWorkspaceIdentity(workspaceID: workspaceID)
         if let captured = calendarExecutionRoot {
-            guard !isBackendFrontend, captured.workspaceID == owner, captured.rootPath.hasPrefix("/"),
+            guard !isBackendFrontend, try await executionWorkspaceMatches(captured.workspaceID, workspaceID: workspaceID), captured.rootPath.hasPrefix("/"),
                   !captured.rootPath.contains("\0"), explicit?.path == captured.rootPath else {
                 throw WorkspaceToolError.invalid("The scheduled task's execution directory does not belong to this workspace.")
             }
@@ -5269,7 +5277,7 @@ extension ApplicationModel {
                   let folder = snapshot.folders.first(where: { $0.id == folderID }) else {
                 throw WorkspaceToolError.invalid("This folder is no longer available.")
             }
-            guard folder.executionWorkspaceID == owner, let path = folder.rootPath else {
+            guard try await executionWorkspaceMatches(folder.executionWorkspaceID, workspaceID: workspaceID), let path = folder.rootPath else {
                 throw WorkspaceToolError.invalid("Select a folder owned by this agent's workspace, or All Workspaces.")
             }
             if let explicit, explicit.path != path { throw WorkspaceToolError.invalid("The folder's root directory is fixed.") }
@@ -5359,7 +5367,7 @@ extension ApplicationModel {
     func prepareUngroupedLaunch(conversation: WorkspaceConversationRecord, firstMessage: String) async throws {
         guard conversation.folderID == nil, let store = dashboardStore,
               let current = try await store.database.sessionExecutionRoot(id: conversation.id) else { return }
-        guard current.workspaceID == (try await executionWorkspaceIdentity(workspaceID: conversation.remoteWorkspaceID)) else {
+        guard try await executionWorkspaceMatches(current.workspaceID, workspaceID: conversation.remoteWorkspaceID) else {
             throw WorkspaceToolError.invalid("This chat belongs to another execution workspace.")
         }
         let existing = try await store.database.sessionScratchDirectory(id: conversation.id)

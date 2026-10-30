@@ -70,6 +70,9 @@ struct DeviceAgentSettingsPane: View {
   }
   var body: some View {
     Form {
+      Section {
+        Text("Quick questions, web search and notes. Powered by Pi Durable. Use a Mac or Linux agent for repositories, shell commands and longer work.").font(.callout).foregroundStyle(.secondary)
+      }
       Section("New conversations") {
         Picker("Connection", selection: $connectionID) {
           Text("Choose a connection").tag("")
@@ -87,11 +90,9 @@ struct DeviceAgentSettingsPane: View {
           if loading { ProgressView() }
         }
         NavigationLink(model.deviceConnectionsTitle) { ExecutionSettingsPane(model: model) }
+        NavigationLink("Web search") { QuickChatSearchSettingsPane(model: model) }
       }
       Section("Instructions") { TextEditor(text: $defaults.instructions).frame(minHeight: 130).accessibilityLabel("Pi Durable instructions") }
-      Section("Execution") {
-        Stepper("Concurrent subagents: \(policy.concurrentSubagents)", value: policyBinding(\.concurrentSubagents), in: 1...16)
-      }
 
       Section {
         ForEach(toolDefinitions, id: \.id) { tool in
@@ -114,7 +115,7 @@ struct DeviceAgentSettingsPane: View {
         }.textCase(nil)
       }
       if let failure { Section { Text(failure).foregroundStyle(DashboardPalette.danger); Button("Retry") { loadModels() } } }
-    }.disabled(saving).scrollIndicators(.never).mobileNavigationPage("Pi Durable")
+    }.disabled(saving).scrollIndicators(.never).mobileNavigationPage("Quick Chat")
       .toolbar { ToolbarItem(placement: .confirmationAction) { Button(saving ? "Saving…" : "Save") { save() }.disabled(saving || loading) } }
       .onAppear {
         if !loaded {

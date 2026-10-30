@@ -17,6 +17,7 @@ targets:
     platform: iOS
     sources:
       - path: Sources/CompanionApp
+      - path: Config/PrivacyInfo.xcprivacy
       - path: ../app/App/Views/DashboardStyle.swift
       - path: ../app/App/Views/DashboardColors.swift
       - path: ../app/App/Models/ConversationMarkdownDocument.swift
@@ -34,6 +35,7 @@ targets:
       - path: ../app/App/Views/ConversationWorkTranscript.swift
       - path: ../app/App/Views/ConversationSubagentRow.swift
       - path: ../app/App/SharedAssets.xcassets
+      - path: ../docs/assets/LUCIDE_LICENSE.txt
     dependencies:
       - package: Mobile
         product: CompanionClient
@@ -41,11 +43,16 @@ targets:
         product: PiDurableRuntime
       - package: Mobile
         product: CompanionInference
-      - package: Mobile
-        product: EmbeddedExecution
       - package: Shared
         product: WovenMatterCompanion
     settings:
+      configs:
+        Debug:
+          PRODUCT_BUNDLE_IDENTIFIER: com.wovenmatter.companion.dev
+          WOVENMATTER_DISPLAY_NAME: Woven Matter Dev
+        Release:
+          PRODUCT_BUNDLE_IDENTIFIER: com.wovenmatter.companion
+          WOVENMATTER_DISPLAY_NAME: Woven Matter
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.wovenmatter.companion.dev
         PRODUCT_NAME: WovenMatterCompanion

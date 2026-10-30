@@ -44,7 +44,7 @@ extension ApplicationModel {
         let database = store.database
         let session = try await database.localACPSession(conversationID: conversationID)
         let root = try await database.availableSessionExecutionRoot(id: conversationID)
-        guard root.workspaceID == (try await executionWorkspaceIdentity(workspaceID: session.remoteWorkspaceID)) else {
+        guard try await executionWorkspaceMatches(root.workspaceID, workspaceID: session.remoteWorkspaceID) else {
             throw WorkspaceToolError.invalid("This chat belongs to a different execution workspace.")
         }
         if let remote = session.remoteWorkspaceID { return "remote:" + remote.uuidString.lowercased() }

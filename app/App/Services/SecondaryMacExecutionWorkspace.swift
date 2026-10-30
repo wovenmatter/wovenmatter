@@ -51,7 +51,7 @@ final class SecondaryMacExecutionWorkspace: ExecutionWorkspaceTransport {
         try await model.configureClientExecutionWorkspace(directory: directory, executionWorkspaceDeviceID: ownerDeviceID, store: store)
         let descriptor = CompanionExecutionWorkspace(id: state.deviceID, libraryID: libraryID, ownerDeviceID: state.deviceID,
             kind: .mac, name: DevelopmentLaunch.deviceName(),
-            capabilities: ["execution.v1", "inference.v1", "execution.local"], executionDeviceID: state.deviceID, journalDeviceIDs: [state.deviceID], developmentInstance: DevelopmentLaunch.instance)
+            capabilities: ["execution.v1", "inference.v1", "execution.local"], executionDeviceID: state.deviceID, journalDeviceIDs: [state.deviceID], developmentInstance: DevelopmentLaunch.instance, contentWorkspaceID: "device:" + state.deviceID)
         return try await SecondaryMacExecutionWorkspace(descriptor: descriptor, model: model, replica: replica, directory: directory)
     }
     init(descriptor: CompanionExecutionWorkspace, model: ApplicationModel, replica: MobileStore, directory: URL) async throws {
@@ -302,9 +302,9 @@ final class SecondaryMacExecutionWorkspace: ExecutionWorkspaceTransport {
         for note in replicaState.notes.values where note.contentIncluded {
             let existing = try await database.companionNote(id: note.id)
             if replicaState.conflicts[note.id] != nil { continue }
-            if existing?.title != note.title || existing?.content != note.content || existing?.folderID != note.folderID {
+            if existing?.title != note.title || existing?.content != note.content || existing?.folderID != note.folderID || existing?.workspaceID != note.workspaceID {
                 try await applyProjection(.init(deviceID: descriptor.ownerDeviceID, kind: existing == nil ? .createNote : .updateNote,
-                    resourceID: note.id, expectedRevision: existing?.revision, folderID: note.folderID, title: note.title, content: note.content))
+                    resourceID: note.id, expectedRevision: existing?.revision, folderID: note.folderID, title: note.title, content: note.content, noteWorkspaceID: note.workspaceID))
             }
             if let imported = try await database.companionNote(id: note.id) {
                 projection.notes[note.id] = .init(replica: note, executionRevision: imported.revision)

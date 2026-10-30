@@ -1,46 +1,77 @@
 # Woven Matter for iPhone and iPad
 
-Native clients share a central Woven Matter database while Pi Durable executes
-on the device. Inference uses provider connections signed in on that device or
-an explicitly selected Tailscale host. Mac pairing is optional for local work.
+Use the phone to create and control conversations on Mac and Linux workspaces.
+On iPhone, open Settings → Device Connections and pair with the QR code or link
+from Settings → Apple Devices on the central Mac. All library/workspace endpoints use authenticated HTTPS over
+Tailscale; the iPhone must be on the user's Tailnet. After grants are provisioned,
+Linux agents, folders and conversations remain directly controllable while the
+Mac is offline. Accepted work keeps running when the phone closes.
 
-## Build and validate
+Quick Chat is powered by the bundled Pi Durable SDK and retains existing
+on-device provider sign-ins, streaming, history, dictation and note references.
+Its tools are limited to notes and public web search/reading. Add an optional
+Exa API key in Settings → Quick Chat → Web search. Keys remain in the device-only
+Keychain. Quick Chat has no shell, repository tools, Python, code mode, subagents,
+goals or local scheduling. Previous device-agent chats remain retained history.
+
+Notes keep their existing local-first editor and moderate coalesced sync, including
+offline creation and editing. Workspace folder creation is performed by its owning
+Mac/Linux service. Linux publishes its new folder metadata before its conversation
+history after reconnecting with the central library. Update workspace services to
+the same revision for the new folder APIs. Creating a remote folder or chat
+requires a live connection to its owner. Interrupted replies recover in place
+using the original request identity.
+
+## Build and development validation
 
 ```sh
 scripts/build-ios.sh
 scripts/build-ios.sh --device-compile
 scripts/test-ios.sh --package
+scripts/test-ios.sh --ui
 scripts/test-ios.sh --all-devices
+scripts/verify-ios-app.sh /absolute/path/to/WovenMatterCompanion.app dev
 ```
 
+Simulator builds and tests use Xcode ad-hoc signing so it embeds the simulated
+application entitlement required by Keychain, including on first launch. No
+signing certificate or account login is needed. `--device-compile` stays unsigned.
+
 Open `WovenMatterCompanion.xcodeproj`, scheme `WovenMatterCompanion`, to run from
-Xcode. Device installation uses existing local signing assets. The generated
-project comes from `project.yml`; keep both in sync. Tests use synthetic stores
-and provider fixtures, never personal accounts or inference services.
+Xcode. Device installation uses existing local signing assets. Dev builds keep
+`Woven Matter Dev` and `com.wovenmatter.companion.dev`; they support simulator and
+direct-to-phone iteration independently of the distribution app.
 
-For the user's Mac acceptance build, use `scripts/build_and_run.sh` with its
-existing data. For a disposable Mac database, that same launcher accepts
-`WOVENMATTER_DEV_VARIANT=Companion` and a separate `WOVENMATTER_DEV_CACHE_DIR`.
-Do not substitute an empty variant for a requested personal dev build.
-Build/install does not authorize pairing, unpairing, or account sign-in.
+UI fixtures use `WOVENMATTER_UI_FIXTURE=1` with a separate namespace. They disable
+real pairing/execution. The dedicated Quick Chat smoke uses synthetic inference
+and an isolated note store. Tests never consume provider services or sign in.
 
-UI-only simulator fixtures use `WOVENMATTER_UI_FIXTURE=1` and a stable
-`WOVENMATTER_UI_FIXTURE_NAMESPACE`. Pairing and agent execution are disabled in
-that mode. Use a separate simulator without fixture variables for real pairing.
+## Distribution preparation
 
-## Source layout
+Release uses `Woven Matter` and `com.wovenmatter.companion`, preserving Dev builds.
+The app bundles a privacy manifest declaring app preferences, private file timing,
+and elapsed-time APIs. It declares user content and searches for the selected providers’ app functionality.
+Its analytics declarations cover the independent random
+library analytics ID and generic product interaction events, with no tracking or
+personal-identity linkage; see [analytics](../docs/analytics/README.md).
 
-- `CompanionApp`: SwiftUI/UIKit navigation, device execution and lifecycle.
-- `CompanionClient`: durable local data, offline mutations and owner journal.
-- `CompanionInference`: provider connections, credentials and streaming.
-- `PiDurableRuntime`: bundled SDK hosted by JavaScriptCore; see [runtime](Runtime/README.md).
-- `EmbeddedExecution`: confined Python/WASM commands; see [execution](../docs/IOS_EMBEDDED_EXECUTION.md).
-- `../shared`: portable note types and versioned wire contracts.
+```sh
+scripts/prepare-ios-testflight.sh --plan
+# Later, after development testing and explicit archive approval:
+scripts/prepare-ios-testflight.sh --archive /absolute/path/to/new-output-directory
+```
 
-Both apps compile the desktop's `DashboardStyle.swift` and bundle the same
-`SharedAssets.xcassets`. Follow [the style guide](../docs/STYLE_GUIDE.md).
+The archive helper uses existing signing assets, verifies the product profile,
+privacy manifest and absence of Python resources, then creates a private export.
+It never initiates account authentication or uploads/publishes a build. App Store
+Connect app records/access, distribution signing/provisioning, export compliance,
+beta metadata and physical iPhone acceptance must be verified before delivery.
+Development validation does not establish release-candidate validation.
 
-See [distributed architecture](../docs/DISTRIBUTED_CLIENT_ARCHITECTURE.md),
-[device acceptance](../docs/DISTRIBUTED_CLIENT_TESTING.md), and
-[background execution](../docs/IOS_CONTINUED_EXECUTION.md) for the shared contracts
-and remaining hardware/provider checks.
+See [architecture](../docs/DISTRIBUTED_CLIENT_ARCHITECTURE.md),
+[acceptance](../docs/DISTRIBUTED_CLIENT_TESTING.md), and
+[lifecycle](../docs/IOS_CONTINUED_EXECUTION.md).
+
+### Note editing on iPhone
+
+Notes keep the existing offline store and coalesced synchronization. The toolbar sits above the full-width title, followed directly by the note body. It provides undo/redo, selection formatting (bold, italic, underline, highlight, fonts and links), headings and lists, and dictation. A bottom-right word count toggles to characters, matching the desktop count semantics. Save/sync status is a compact bottom-left control; tap for details. There is no Add paragraph action: use the keyboard to continue writing. Existing spreadsheet, table and linked-artifact previews retain their current read-only behavior on mobile.

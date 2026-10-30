@@ -10,14 +10,16 @@ public struct PiDurableConfiguration: Codable, Sendable {
   public var instructions: String
   public var thinkingLevel: String
   public var executionPolicy: PiExecutionPolicy
+  public var quickChat: Bool?
 
-  public init(conversationID: String, modelJSON: String, toolsJSON: String = "[]", instructions: String = "", thinkingLevel: String = "off", executionPolicy: PiExecutionPolicy = .init()) {
+  public init(conversationID: String, modelJSON: String, toolsJSON: String = "[]", instructions: String = "", thinkingLevel: String = "off", executionPolicy: PiExecutionPolicy = .init(), quickChat: Bool = false) {
     self.conversationID = conversationID
     self.modelJSON = modelJSON
     self.toolsJSON = toolsJSON
     self.instructions = instructions
     self.thinkingLevel = thinkingLevel
     self.executionPolicy = executionPolicy
+    self.quickChat = quickChat
   }
 }
 
@@ -278,6 +280,7 @@ public final class PiDurableRuntime {
           envelope = try Self.success(NSNull())
         case "codemode":
           guard let self else { throw CancellationError() }
+          guard self.configuration.quickChat != true else { throw PiDurableRuntimeError.unavailable("Code execution is unavailable in Quick Chat.") }
           let executor = PiCodeModeExecutor()
           guard let request = try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any],
                 let invocationID = request["invocationID"] as? String else {

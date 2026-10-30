@@ -23,6 +23,8 @@ public struct DirectWorkspaceCredential: Codable, Equatable, Sendable {
 public protocol ExecutionWorkspaceTransport: Sendable {
   func identity() async throws -> CompanionExecutionWorkspace
   func providers() async throws -> [CompanionProvider]
+  func folders() async throws -> [CompanionFolder]
+  func createFolder(_ mutation: CompanionMutation) async throws -> CompanionFolder
   func pending() async throws -> [CompanionPendingInteraction]
   func command(_ command: CompanionCommand) async throws -> CompanionCommandReceipt
   func receipt(_ id: String) async throws -> CompanionCommandReceipt?
@@ -35,6 +37,9 @@ public protocol ExecutionWorkspaceTransport: Sendable {
 }
 
 public extension ExecutionWorkspaceTransport {
+  func folders() async throws -> [CompanionFolder] { [] }
+  func createFolder(_ mutation: CompanionMutation) async throws -> CompanionFolder { throw MobileConnectionError.http(400, "Update this workspace service to create folders from your phone.") }
+
   func transcript(_ id: String, before: String) async throws -> CompanionTranscript { throw MobileConnectionError.http(400, "Older history is unavailable for this workspace.") }
   func capabilities(_ id: String) async throws -> CompanionProvider { throw MobileConnectionError.http(400, "Session capabilities are unavailable for this workspace.") }
   func readWorkspace(_ request: CompanionWorkspaceRead) async throws -> CompanionWorkspaceResult { throw MobileConnectionError.http(400, "This action is unavailable for this execution workspace.") }
@@ -52,6 +57,11 @@ public final class HTTPSExecutionWorkspaceTransport: ExecutionWorkspaceTransport
     let value: CompanionExecutionWorkspace = try await client.request("v1/execution")
     guard value.id == credential.workspaceID, value.libraryID == credential.libraryID else { throw MobileStore.Failure.wrongWorkspace }
     return value
+  }
+  public func folders() async throws -> [CompanionFolder] { try await client.request("v1/execution/folders") }
+  public func createFolder(_ mutation: CompanionMutation) async throws -> CompanionFolder {
+    guard mutation.deviceID == credential.deviceID else { throw MobileConnectionError.revoked }
+    return try await client.request("v1/execution/folders", method: "POST", body: JSONEncoder().encode(mutation))
   }
   public func providers() async throws -> [CompanionProvider] {
     try await client.request("v1/execution/providers")

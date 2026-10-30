@@ -4,6 +4,27 @@ Use Mac, iOS and Linux service builds from the same revision. Updating the phone
 does not update remote workspace services. Start with iPhone, then iPad layout,
 then physical devices and real network transitions.
 
+## Short physical iPhone pass
+
+1. Use matching Mac/Linux builds and keep the iPhone on the same Tailnet. In the
+   Mac's Settings → Apple Devices, obtain the pairing code; use the phone's
+   Settings → Device Connections. Let the enabled workspaces enroll once.
+2. Select each Mac/Linux owner, reopen an existing chat, create a folder and start
+   a new chat in it. Check model controls, approvals/questions and Stop.
+3. Leave Linux online and disconnect the central Mac. Create/control a Linux chat
+   directly, close the phone app, and confirm work continues. Reconnect the Mac
+   and check that the workspace's new folder and history appear there.
+4. Verify the user's existing Quick Chat provider connections, an explicit note
+   reference, a note edit, dictation and optional configured web search. Confirm
+   the modest Notes/Web tools and absence of repository or shell tools.
+5. Disconnect the network. Create/edit a note, exercise undo/redo and the
+   word/character count, then terminate/reopen. Reconnect and check moderate sync
+   and preservation of any concurrent edits. Tools belong above the title; the
+   title leads directly into the body, with save details in the footer.
+6. Check keyboard dismissal, scrolling, safe areas and the chosen light/dark
+   theme on the actual phone. This is development acceptance, before selecting
+   or validating a release candidate.
+
 ## Build and automation
 
 See [iOS setup](../ios/README.md) for build commands. User acceptance uses the
@@ -29,19 +50,23 @@ separately; compilation does not prove UI, Tailscale or real-account acceptance.
 - Add a device provider connection in Settings. Test sign-in cancellation,
   invalid/expired credentials, persistence and provider token refresh. Keys and
   tokens stay on the device and never appear in logs or synchronized data.
-- Set Pi Durable's default connection/model/think level and Woven MCP
+- Set Quick Chat's default connection/model/thinking level and Woven MCP
   tools; new chats inherit these, while per-session changes remain independent.
-- Run on-device Pi Durable with other devices disconnected. Exercise files,
-  notes, calendar, timers, history, usage, tools, Stop, children and explicit
-  Resume. Model/account selection must survive catalog outages and refreshes.
-- Verify embedded Python/SQLite and native MCP effects, completed-command replay,
-  cancellation and interruption. See [embedded execution](IOS_EMBEDDED_EXECUTION.md)
-  for the real WebKit smoke and [continued execution](IOS_CONTINUED_EXECUTION.md)
-  for physical background admission, expiration and cancellation checks.
+- Use Quick Chat for questions, notes and explicit note references with other
+  devices disconnected. Model access still needs the selected connection.
+  Existing provider sign-ins and selected models must survive restart.
+- Confirm code mode, subagents, shell/Python, goals, timers and local schedules
+  are unavailable even when older saved grants contained them. Earlier device
+  agents remain retained history. New chats use the Quick Chat capability profile.
+- Run the synthetic SDK/native-note smoke described in
+  [lifecycle](IOS_CONTINUED_EXECUTION.md). Check interruption, explicit Resume,
+  note conflict handling, durable receipts and no duplicated effects.
+- With an explicitly configured test Exa connection, verify search/reading,
+  cancellation and useful missing-key errors. Synthetic tests never call Exa.
 
 ## Pairing and workspace control
 
-1. On the central database, open Settings → Devices. Tailscale sharing
+1. On the central database, open Settings → Apple Devices. Tailscale sharing
    starts automatically; QR/link controls remain visible when unavailable.
    Pair a phone/tablet with a fresh QR/link. Repeat lost confirmation, restart
    during setup, expired code, duplicate scan and pairing to a different database.
@@ -83,9 +108,10 @@ separately; compilation does not prove UI, Tailscale or real-account acceptance.
   interrupt its transfer, reconnect and verify exact bytes. Ordinary workspace
   files and runtime checkpoints stay at their owner. Cache cleanup must preserve
   pending writing, conflicts and locally originated execution history.
-- Create an offline phone calendar task, then sync it. Missed one-time phone
-  tasks run when iOS next permits; recurring misses coalesce. They never move
-  silently to another device. Calendar/task claims must not duplicate runs.
+- Create calendar edits offline and sync them. Scheduled tasks require an explicit
+  Mac/Linux owner and use the existing central scheduling path. Earlier phone
+  tasks remain retained until the user chooses another owner; no phone scheduler
+  executes them. Calendar/task claims must not duplicate runs.
 - Exercise managed datasets, linked tables/inline values and copies according to
   [the workspace data model](WORKSPACE_DATA_MODEL.md). A client must not interpret
   an owner-local file path as a path on its own device. Unsupported note features
@@ -95,6 +121,6 @@ separately; compilation does not prove UI, Tailscale or real-account acceptance.
 
 Automated tests cover persistence, receipts, scoped authorization, history replay,
 conflicts, cancellation and artifact integrity. Real provider plans/sign-in,
-Tailscale ACLs, second-Mac behavior, physical iPad layout and iOS background
-scheduling require the corresponding devices and accounts. Keep those results
+Tailscale ACLs, second-Mac behavior, physical iPad layout, dictation and iOS background
+interruption require the corresponding devices and accounts. Keep those results
 separate from build/fixture success in the PR handoff.

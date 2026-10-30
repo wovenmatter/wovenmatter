@@ -49,6 +49,122 @@ private actor ModelMac: CompanionTransport, CompanionCalendarTransport {
 }
 
 final class CompanionModelTests: XCTestCase {
+  @MainActor func testWorkspaceGroupingResolvesRegisteredMacContentIdentityWithoutChangingRoute() {
+    let model = CompanionModel()
+    let registryID = UUID().uuidString.lowercased(), hostID = UUID().uuidString.lowercased(), contentID = UUID().uuidString.lowercased()
+    var mac = CompanionExecutionWorkspace(id: registryID, libraryID: "library", ownerDeviceID: hostID, kind: .mac, name: "Mac", capabilities: ["history.central.v1"], executionDeviceID: hostID)
+    mac.contentWorkspaceID = "device:" + contentID
+    model.executionWorkspaces = [mac]
+    let folder = CompanionFolder(id: "project", name: "Project", execution: .init(workspaceID: "device:" + contentID, rootPath: "/project"))
+    let chat = CompanionConversation(id: "chat", title: "Chat", providerID: "pi", workspaceID: registryID)
+    model.state.folders[folder.id] = folder; model.state.conversations[chat.id] = chat
+    XCTAssertEqual(model.folderWorkspaceGroups.count, 2)
+    XCTAssertEqual(model.folderOwner(folder), contentID)
+    XCTAssertEqual(model.conversationOwner(chat), contentID)
+    XCTAssertEqual(model.executionOwner(of: chat.id), registryID, "Execution requests must retain the registered route identity")
+    XCTAssertTrue(model.routeOwnsFolder(workspaceID: "central", folderID: folder.id))
+    model.openFolder(folder.id)
+    XCTAssertEqual(model.selectedFolderWorkspaceID, contentID)
+  }
+
+  @MainActor func testRecentsCompareActualTimesAcrossFractionalSecondsAndOffsets() {
+    let model = CompanionModel()
+    model.state.notes["fraction"] = .init(id: "fraction", title: "Fraction", content: "", updatedAt: "2026-10-30T10:00:00.500Z")
+    model.state.notes["whole"] = .init(id: "whole", title: "Whole", content: "", updatedAt: "2026-10-30T10:00:00Z")
+    model.state.conversations["offset"] = .init(id: "offset", title: "Offset", updatedAt: "2026-10-30T07:00:01-03:00")
+    XCTAssertEqual(model.folderRecentItems.map(\.resourceID), ["offset", "fraction", "whole"])
+  }
+
+  @MainActor func testUnpairedNoteRenameAndMovePersistWithoutCentralRequests() async throws {
+    let model = CompanionModel()
+    let store = try XCTUnwrap(model.store)
+    let note = try await store.createNote(folderID: nil, title: "Before", content: NoteDocument().encoded())
+    let folder = try await store.createFolder(name: "Phone ideas")
+    await model.reload()
+    XCTAssertFalse(model.online)
+    XCTAssertTrue(model.canEditNoteDetails(note.id))
+    let renamed = await model.editNoteDetails(note.id, action: "rename", title: "After", folderID: nil)
+    let moved = await model.editNoteDetails(note.id, action: "move", title: "Stale title", folderID: folder.id)
+    XCTAssertTrue(renamed); XCTAssertTrue(moved)
+    let saved = await store.snapshot()
+    XCTAssertEqual(saved.notes[note.id]?.title, "After")
+    XCTAssertEqual(saved.notes[note.id]?.folderID, folder.id)
+    XCTAssertEqual(saved.notes[note.id]?.workspaceID, saved.deviceID)
+    XCTAssertTrue(saved.commands.isEmpty)
+    XCTAssertEqual(saved.outbox.filter { $0.mutation.resourceID == note.id }.count, 1)
+    XCTAssertEqual(saved.outbox.first { $0.mutation.resourceID == note.id }?.mutation.kind, .createNote)
+  }
+
+  @MainActor func testFolderRecentsMixNotesAndChatsByLatestActivityWithFourteenItemLimit() {
+    let model = CompanionModel()
+    for index in 0..<20 {
+      let id = "item-\(index)"
+      let timestamp = "2026-10-30T10:00:" + String(format: "%02d", index) + "Z"
+      if index.isMultiple(of: 2) {
+        model.state.notes[id] = .init(id: id, title: "Note \(index)", content: "", updatedAt: timestamp, isPinned: index == 0)
+      } else {
+        model.state.conversations[id] = .init(id: id, title: "Chat \(index)", updatedAt: timestamp, isPinned: index == 1)
+      }
+    }
+    let recents = model.folderRecentItems
+    XCTAssertEqual(recents.count, 14)
+    XCTAssertEqual(recents.first?.resourceID, "item-19")
+    XCTAssertEqual(recents.last?.resourceID, "item-6")
+    XCTAssertEqual(recents.filter(\.isNote).count, 7)
+    XCTAssertFalse(recents.contains { $0.resourceID == "item-0" || $0.resourceID == "item-1" }, "Pinning must not replace recent activity ordering")
+    model.state.notes["item-0"]?.updatedAt = "2026-10-30T11:00:00Z"
+    XCTAssertEqual(model.folderRecentItems.first?.resourceID, "item-0", "Editing an old note brings it into mixed recents")
+    XCTAssertEqual(model.folderRecentItems.count, 14)
+  }
+
+  @MainActor func testFolderGroupsDistinguishThisDeviceAndRetainUnknownOwnership() {
+    let model = CompanionModel()
+    let phone = model.state.deviceID
+    let otherPhone = UUID().uuidString.lowercased()
+    let local = CompanionFolder(id: UUID().uuidString, name: "Local", execution: .init(workspaceID: "device:" + phone, rootPath: "/local"))
+    let foreign = CompanionFolder(id: UUID().uuidString, name: "Other phone", execution: .init(workspaceID: "device:" + otherPhone, rootPath: "/foreign"))
+    model.state.folders = [local.id: local, foreign.id: foreign]
+    model.executionWorkspaces = [.init(id: otherPhone, libraryID: "library", ownerDeviceID: otherPhone, kind: .ios, name: "My iPad")]
+    let unknown = CompanionNote(id: UUID().uuidString, title: "Legacy", content: "")
+    model.state.notes[unknown.id] = unknown
+    XCTAssertEqual(model.folderWorkspaceGroups.map(\.id), [phone, otherPhone])
+    XCTAssertTrue(model.routeOwnsFolder(workspaceID: "local", folderID: local.id))
+    XCTAssertFalse(model.routeOwnsFolder(workspaceID: "local", folderID: foreign.id))
+    XCTAssertNil(model.noteOwner(unknown))
+    XCTAssertTrue(model.hasUnassignedContent)
+    XCTAssertTrue(model.folderAgents(in: model.folderWorkspaceGroups[1]).isEmpty)
+    model.openFolder(nil, workspaceID: phone, unfiled: true)
+    XCTAssertTrue(model.folderScopeIncludes(owner: phone, folderID: nil))
+    XCTAssertFalse(model.folderScopeIncludes(owner: otherPhone, folderID: nil))
+    XCTAssertFalse(model.folderScopeIncludes(owner: phone, folderID: local.id))
+    model.openFolder(nil)
+    XCTAssertTrue(model.folderScopeIncludes(owner: otherPhone, folderID: foreign.id))
+    XCTAssertTrue(model.folderScopeIncludes(owner: nil, folderID: nil))
+  }
+
+  @MainActor func testNewNoteFromHomeDoesNotInheritPreviouslyOpenedRemoteFolder() async throws {
+    let model = CompanionModel()
+    let folder = try await XCTUnwrap(model.store).createFolder(name: "Previously opened")
+    await model.reload()
+    model.openFolder(folder.id)
+    model.tab = .home
+    await model.newNote()
+    let note = try XCTUnwrap(model.selectedNote)
+    XCTAssertNil(note.folderID)
+    XCTAssertEqual(note.workspaceID, model.state.deviceID)
+  }
+
+  @MainActor func testForeignQuickChatIsHistoryAndUnknownConversationStaysUnassigned() {
+    let model = CompanionModel()
+    let owner = UUID().uuidString.lowercased()
+    let chat = CompanionConversation(id: UUID().uuidString, title: "Phone chat", providerID: "pi-durable-device", workspaceID: owner)
+    model.state.conversations[chat.id] = chat
+    model.selectedConversationID = chat.id
+    XCTAssertTrue(model.isViewingRemoteQuickChat)
+    XCTAssertEqual(model.conversationOwner(chat), owner)
+    XCTAssertNil(model.conversationOwner(.init(id: "legacy", title: "Unknown")))
+  }
+
   func testSharedIconLicenseIsIncludedInTheAppBundle() throws {
     let url = try XCTUnwrap(Bundle.main.url(forResource: "LUCIDE_LICENSE", withExtension: "txt"))
     let license = try String(contentsOf: url, encoding: .utf8)

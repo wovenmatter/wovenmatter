@@ -1,4 +1,7 @@
-# On-device command execution
+# Embedded execution test package
+
+This package is retained for isolated runtime tests and is **not linked or bundled
+in the iPhone/iPad app**. Quick Chat has no command or Python execution.
 
 `EmbeddedExecution` embeds **real CPython 3.14.2 via Pyodide 314.0.7 / WebAssembly**
 inside an independently terminable WebKit worker. It executes without a Mac,
