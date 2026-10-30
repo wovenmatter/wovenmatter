@@ -115,6 +115,11 @@ struct CompanionHostLifecycleTests {
             id: request.deviceID, libraryID: identity.libraryID, ownerDeviceID: request.deviceID, kind: .mac,
             name: "Mac (Dev) · fixture", endpoint: URL(string: "https://fixture.test.ts.net/wovenmatter"),
             executionDeviceID: request.deviceID, developmentInstance: "fixture")), deviceID: identity.hostDeviceID)
+        let absent = try await database.companionConnectionWorkspaces(activeDeviceIDs: [])
+        #expect(absent.first { $0.id == workspace.id }?.isVisibleInConnections == false)
+        let reconnected = try await database.companionConnectionWorkspaces(activeDeviceIDs: [request.deviceID])
+        #expect(reconnected.first { $0.id == workspace.id }?.endpoint == workspace.endpoint)
+        #expect(try await database.companionExecutionWorkspaces().first { $0.id == workspace.id }?.revision == workspace.revision)
         try await fixture.host.disconnectLocalDevelopment(.init(deviceID: request.deviceID, credential: connection.pairing.credential))
         #expect(!fixture.host.pairedDevices.contains { $0.id == request.deviceID })
         let retained = try #require(try await database.companionExecutionWorkspaces().first { $0.id == workspace.id })

@@ -315,6 +315,7 @@ public final class CompanionWorkspaceAPI {
             if request.method == "POST", path == "/v1/devices/development/disconnect" {
                 guard device.isDevelopment else { return .error("invalid_device", "Only a development connection has temporary presence.", status: 403) }
                 try await authentication.suspendLocalDevelopment(deviceID: device.id, credential: bearer)
+                try await database.withdrawDevelopmentWorkspaces(ownedBy: device.id)
                 onMutation()
                 return try .json(["disconnected": true])
             }
@@ -332,6 +333,10 @@ public final class CompanionWorkspaceAPI {
             }
             let values = target.queryItems ?? []
             func query(_ name: String) -> String? { values.first(where: { $0.name == name })?.value }
+            if request.method == "GET", path == "/v1/federation/workspaces" {
+                let roster = await authentication.devices()
+                return try .json(try await database.companionConnectionWorkspaces(activeDeviceIDs: Set(roster.map(\.id))))
+            }
             if path.hasPrefix("/v1/federation/") {
                 let response = try await CompanionFederationAPI.handle(request, path: path, query: values, device: device, database: database, commands: commands)
                 if request.method == "POST", response.status == 200 { onMutation() }

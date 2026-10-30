@@ -518,20 +518,14 @@ final class CompanionHostController {
     func disconnectLocalDevelopment(_ request: DevelopmentDisconnectRequest) async throws {
         guard let authentication, let database = model?.dashboardStore?.database else { throw CompanionAPIError(code: "unavailable", message: "The central library is unavailable.") }
         try await authentication.suspendLocalDevelopment(deviceID: request.deviceID, credential: request.credential)
+        try await database.withdrawDevelopmentWorkspaces(ownedBy: request.deviceID)
         try await refreshStatusAndDevelopmentPresence(database: database)
     }
 
     private func refreshStatusAndDevelopmentPresence(database: WorkspaceDatabase) async throws {
         pairedDevices = await authentication?.devices() ?? []
         let active = Set(pairedDevices.map(\.id))
-        let identity = try await database.companionLibraryIdentity()
-        for var workspace in try await database.companionExecutionWorkspaces() where !workspace.deleted
-            && workspace.developmentInstance != nil && workspace.ownerDeviceID != identity.hostDeviceID
-            && workspace.endpoint != nil && !active.contains(workspace.ownerDeviceID) {
-            workspace.endpoint = nil
-            _ = try await database.registerCompanionExecutionWorkspace(.init(workspace: workspace, expectedRevision: workspace.revision), deviceID: identity.hostDeviceID)
-        }
-        executionWorkspaces = try await database.companionExecutionWorkspaces()
+        executionWorkspaces = try await database.companionConnectionWorkspaces(activeDeviceIDs: active)
     }
 
     private func enqueueRevocation(deviceID: String, workspaceID: String) {
