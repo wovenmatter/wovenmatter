@@ -70,6 +70,11 @@ public enum LibraryTransferSQLite {
     }
     return columns
   }
+  static func folderBinding(_ db: OpaquePointer, id: String) throws -> [Value] {
+    let query = try statement(db, "SELECT workspace_id,root_path,managed,reference_paths FROM folder_execution_roots WHERE folder_id=?")
+    defer { sqlite3_finalize(query) }; try bind(.text(id), to: query, at: 1)
+    return sqlite3_step(query) == SQLITE_ROW ? (0..<4).map { value(query, Int32($0)) } : []
+  }
   public static func verify(_ url: URL) throws {
     do {
     let db = try open(url, readOnly: true); defer { sqlite3_close(db) }
@@ -235,7 +240,11 @@ public enum LibraryTransferSQLite {
             for (index, name) in natural.enumerated() { try bind(row[name] ?? .null, to: lookup, at: Int32(index + 1)) }
             if sqlite3_step(lookup) == SQLITE_ROW { existing = Dictionary(uniqueKeysWithValues: names.enumerated().map { ($0.element, value(lookup, Int32($0.offset))) }) }
           }
-          if existing == row { continue }
+          let bindingConflict: Bool
+          if table == "folders", existing != nil, let id = row["id"]?.string {
+            bindingConflict = try folderBinding(incoming, id: id) != folderBinding(db, id: id)
+          } else { bindingConflict = false }
+          if existing == row, !bindingConflict { continue }
           if existing != nil, table == "companion_versions" {
             let revision = try statement(db, "UPDATE companion_versions SET revision=MAX(revision,?),deleted=MAX(deleted,?) WHERE kind=? AND resource_id=?")
             defer { sqlite3_finalize(revision) }
@@ -244,7 +253,7 @@ public enum LibraryTransferSQLite {
             continue
           }
           if let existing, table == "notes", ["title", "content", "folder_id", "deleted_at"].allSatisfy({ existing[$0] == row[$0] }) { continue }
-          if let existing, table == "folders", ["name", "icon"].allSatisfy({ existing[$0] == row[$0] }) { continue }
+          if let existing, table == "folders", !bindingConflict, ["name", "icon"].allSatisfy({ existing[$0] == row[$0] }) { continue }
           if existing != nil {
             if immutable.contains(table) {
               throw CompanionAPIError(code: "transfer_event_conflict", message: "The libraries disagree about an immutable event or accepted operation. The handoff stopped safely; both original databases are retained.")

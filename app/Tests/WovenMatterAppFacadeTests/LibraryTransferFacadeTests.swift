@@ -31,6 +31,13 @@ struct LibraryTransferFacadeTests {
         #expect(journal.entries.values.allSatisfy { $0.workspaceID == descriptor.id && $0.conversationID != foreign })
         #expect(try await f.database.companionNote(id: sourceNote) != nil)
         #expect(try await f.database.workspaceOverview().conversations.contains { $0.id == local })
+        let nativeNamespace = try await f.model.executionWorkspaceIdentity(workspaceID: nil)
+        let folder = try await f.database.createFolder(name: "Source project", location: .init(workspaceID: nativeNamespace, rootPath: f.directory.path, managed: false))
+        try await workspace.capture()
+        #expect(await replica.snapshot().folders[folder]?.execution?.workspaceID == nativeNamespace)
+        let created = try await workspace.command(.init(deviceID: identity.hostDeviceID, kind: .createSession,
+            providerID: "local:codex", folderID: folder, workspaceID: descriptor.id))
+        #expect(created.status == .completed)
     }
 
     @Test func destinationImportsPendingWritingAndOwnHistoryWithoutAcknowledgingOrRelayingObservers() async throws {

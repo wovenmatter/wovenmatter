@@ -261,13 +261,8 @@ final class SecondaryMacExecutionWorkspace: ExecutionWorkspaceTransport {
         var execution = try await database.companionSnapshot(bodyByteBudget: CompanionProtocol.maximumNoteBytes)
         let executionNotes = try await completeNotes(execution.notes)
         var replicaState = await replica.snapshot()
-        let nativeDeviceID = try await model.dashboardStore?.dashboardDeviceID().uuidString.lowercased()
         // Folder identities must be queued before notes that refer to them.
-        for var folder in execution.folders {
-            if retainedCentralDatabase, var binding = folder.execution,
-               binding.workspaceID == "local" || binding.workspaceID == "device:" + descriptor.ownerDeviceID || binding.workspaceID == nativeDeviceID.map({ "device:" + $0 }) {
-                binding.workspaceID = descriptor.id; folder.execution = binding
-            }
+        for folder in execution.folders {
             if replicaState.folders[folder.id] == nil, projection.folders?[folder.id] == nil {
                 guard let binding = folder.execution else {
                     throw CompanionAPIError(code: "execution_owner", message: "This folder has no captured execution workspace.")

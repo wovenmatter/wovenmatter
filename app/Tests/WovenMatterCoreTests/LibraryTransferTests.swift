@@ -50,6 +50,13 @@ struct LibraryTransferTests {
     let existing = try await create(destination, id: sharedID, text: "Destination writing")
     let sourceOnly = try await create(source, text: "Same title")
     let destinationOnly = try await create(destination, text: "Same title")
+    let folderID = UUID().uuidString.lowercased()
+    for (database, owner, path) in [(source, "device:source", "/tmp/source-project"), (destination, "device:destination", "/tmp/destination-project")] {
+      #expect(try await database.applyCompanionMutation(.init(deviceID: UUID().uuidString.lowercased(), kind: .createFolder,
+        resourceID: folderID, title: "Project", folderExecution: .init(workspaceID: owner, rootPath: path))).status == .accepted)
+    }
+    #expect(try await source.applyCompanionMutation(.init(deviceID: UUID().uuidString.lowercased(), kind: .updateNote,
+      resourceID: sourceOnly.id, expectedRevision: sourceOnly.revision, folderID: folderID, title: sourceOnly.title, content: sourceOnly.content)).status == .accepted)
     let sourceFile = root.appending(path: "source.sqlite"), mergedFile = root.appending(path: "merged.sqlite")
     try await source.backupLibrary(to: sourceFile); try await destination.backupLibrary(to: mergedFile)
     let id = UUID().uuidString.lowercased()
@@ -63,6 +70,10 @@ struct LibraryTransferTests {
     #expect(notes.contains { $0.id != existing.id && $0.content == incoming.content })
     #expect(notes.contains { $0.id == sourceOnly.id })
     #expect(notes.contains { $0.id == destinationOnly.id })
+    let folders = try await merged.companionSnapshot().folders
+    #expect(folders.contains { $0.id == folderID && $0.execution?.rootPath == "/tmp/destination-project" })
+    #expect(folders.contains { $0.id != folderID && $0.execution?.rootPath == "/tmp/source-project" })
+    #expect(notes.first { $0.id == sourceOnly.id }?.folderID != folderID)
     let again = try LibraryTransferSQLite.merge(source: sourceFile, into: mergedFile, transferID: id,
       sourceLibraryID: sourceLibraryID, destinationLibraryID: destinationLibraryID)
     #expect(again == result)

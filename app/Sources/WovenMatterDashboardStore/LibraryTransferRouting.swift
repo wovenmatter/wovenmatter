@@ -65,9 +65,7 @@ extension WorkspaceDatabaseConnection {
         }
       }
       // A path that is local to the source must never become local to the target.
-      let roots = try prepareUnlocked("UPDATE folder_execution_roots SET workspace_id=? WHERE workspace_id IN ('local',?,'device:'||(SELECT device_id FROM desktop_local_identity WHERE singleton=1))")
-      defer { sqlite3_finalize(roots) }; try bind(local.id, at: 1, to: roots)
-      try bind("device:" + identity.hostDeviceID, at: 2, to: roots); try stepDone(roots)
+      try executeUnlocked("UPDATE folder_execution_roots SET workspace_id='device:'||(SELECT device_id FROM desktop_local_identity WHERE singleton=1) WHERE workspace_id='local' AND EXISTS(SELECT 1 FROM desktop_local_identity WHERE singleton=1)")
       // Source-owned schedules remain source-owned. Merely copying their rows
       // must never schedule a second execution on the new central Mac.
       try companionExecuteUnlocked("INSERT OR IGNORE INTO companion_calendar_owners(event_id,device_id) SELECT id,? FROM dashboard_calendar_items WHERE json_extract(calendar_json,'$.task') IS NOT NULL", values: [identity.hostDeviceID])
