@@ -26,15 +26,18 @@ struct SettingsMCPAccessSection: View {
                     set: { update(.setEnabled($0)) }))
                     .disabled(busy || snapshot == nil)
                 if let snapshot, snapshot.settings.isEnabled {
-                    ForEach(WorkspaceToolGroup.configurableCases) { group in
-                        Toggle(group.title, isOn: Binding(get: { self.snapshot?.settings.groups.contains(group) ?? false },
-                            set: { update(.setGroup(group, enabled: $0)) }))
+                    VStack(alignment: .leading, spacing: 14) {
+                        ForEach(WorkspaceToolGroup.configurableCases) { group in
+                            Toggle(group.title, isOn: Binding(get: { self.snapshot?.settings.groups.contains(group) ?? false },
+                                set: { update(.setGroup(group, enabled: $0)) }))
+                        }
+                        .disabled(busy)
+                        SettingsNote("Goals and visual replies are included. Usage data is always read only.")
+                        if let exposureError = snapshot.exposureError {
+                            SettingsNote("Tailnet endpoint unavailable: " + exposureError)
+                        }
                     }
-                    .disabled(busy)
-                    SettingsNote("Goals and visual replies are included. Usage data is always read only.")
-                    if let exposureError = snapshot.exposureError {
-                        SettingsNote("Tailnet endpoint unavailable: " + exposureError)
-                    }
+                    .padding(.leading, 38)
                 }
                 if let error { SettingsNote(error) }
             }
