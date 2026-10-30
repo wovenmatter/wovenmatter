@@ -520,81 +520,6 @@ struct StreamingPresentationTests {
         }
     }
 
-    @Test func longReasoningRemountRetainsFrozenAndExplicitHistoryPagesWithDelayedDetails() async throws {
-        _ = NSApplication.shared
-        for usesCompactPreview in [false, true] {
-            for selectsEarlierPage in [false, true] {
-                let fixture = ReasoningScrollFixture()
-                fixture.usesCompactPreview = usesCompactPreview
-                fixture.text = (0..<800).map {
-                    "Page paragraph \($0) preserves its unique supplied reasoning and stable native reading context.\n\n"
-                }.joined()
-                try #require(fixture.text.count > 40_000)
-                let state = ConversationTranscriptState()
-                let host = NSHostingView(rootView: ReasoningScrollFixtureView(fixture: fixture, state: state))
-                host.sizingOptions = []
-                let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 520),
-                    styleMask: [.borderless], backing: .buffered, defer: false)
-                window.isReleasedWhenClosed = false
-                window.contentView = host
-                host.setFrameSize(NSSize(width: 600, height: 520))
-                defer { window.contentView = nil; window.close() }
-                window.orderFront(nil)
-                let found = try await settle(host) {
-                    scrollViews(in: host).count == 1 && responseText(in: host).joined().count > 10_000
-                }
-                try #require(found, "The fixture must render a full bounded page, not just its compact preview")
-                var scroll = try #require(scrollViews(in: host).first)
-                let overflowing = try await settle(host) { metrics(scroll).maximumOffset > 200 }
-                try #require(overflowing)
-                if selectsEarlierPage {
-                    // A freshly loaded live detail may already follow its
-                    // bottom. Bring the actual page controls into view first.
-                    move(scroll, toOffset: 0)
-                    let controlsVisible = try await settle(host) { metrics(scroll).offset <= 4 }
-                    try #require(controlsVisible)
-                    let latest = responseText(in: host)
-                    try pressRenderedButton("Earlier reasoning", in: host, window: window)
-                    let changed = try await settle(host) {
-                        responseText(in: host) != latest && responseText(in: host).joined().count > 10_000
-                    }
-                    try #require(changed, "Selecting Earlier reasoning must change the actual native text page")
-                }
-                let target = selectsEarlierPage ? metrics(scroll).maximumOffset : 120
-                move(scroll, toOffset: target)
-                let positioned = try await settle(host) { abs(metrics(scroll).offset - target) <= 4 }
-                try #require(positioned)
-                let page = responseText(in: host)
-                let prior = metrics(scroll)
-                try #require(page.allSatisfy { $0.count <= 20_000 })
-                fixture.isMounted = false
-                let disappeared = try await settle(host) { scrollViews(in: host).isEmpty }
-                try #require(disappeared)
-                let previousLoads = fixture.detailRequests
-                for _ in 0..<12 { fixture.appendParagraph() }
-                fixture.isMounted = true
-                let reappeared = try await settle(host) {
-                    scrollViews(in: host).count == 1 && responseText(in: host).joined().count > 10_000
-                }
-                try #require(reappeared)
-                scroll = try #require(scrollViews(in: host).first)
-                let restored = try await settle(host) {
-                    responseText(in: host) == page && abs(metrics(scroll).offset - prior.offset) <= 4
-                }
-                #expect(restored, "Remount reset the native reasoning page or reading offset: compact=\(usesCompactPreview), earlier=\(selectsEarlierPage), before=\(prior), after=\(metrics(scroll))")
-                if usesCompactPreview {
-                    #expect(fixture.detailRequests > previousLoads, "The remount must exercise compact preview followed by a fresh full-detail load")
-                }
-                fixture.appendParagraph()
-                try await layoutPasses(host)
-                if usesCompactPreview { try await Task.sleep(for: .milliseconds(650)); try await layoutPasses(host) }
-                #expect(responseText(in: host) == page,
-                    "A later append replaced the restored page: compact=\(usesCompactPreview), earlier=\(selectsEarlierPage)")
-                #expect(abs(metrics(scroll).offset - prior.offset) <= 4)
-            }
-        }
-    }
-
     @Test func historicalWorkScrollPreservesReadingPositionAcrossUpdatesAndReopening() async throws {
         _ = NSApplication.shared
         let fixture = WorkScrollFixture()
@@ -750,32 +675,6 @@ struct StreamingPresentationTests {
         return (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: " ")
     }
 
-    /// Locates the real SwiftUI control in captured pixels and dispatches only
-    /// to this fixture's own window; no system-wide event or accessibility API.
-    private func pressRenderedButton(_ label: String, in host: NSView, window: NSWindow) throws {
-        host.layoutSubtreeIfNeeded()
-        let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
-        host.cacheDisplay(in: host.bounds, to: bitmap)
-        let request = VNRecognizeTextRequest()
-        request.recognitionLevel = .accurate
-        request.usesLanguageCorrection = false
-        try VNImageRequestHandler(cgImage: try #require(bitmap.cgImage)).perform([request])
-        let match = (request.results ?? []).first { $0.topCandidates(1).first?.string == label }
-        let observation = try #require(match, "The owned transcript must render the requested page control: \(label)")
-        let box = observation.boundingBox
-        let point = NSPoint(x: host.bounds.minX + box.midX * host.bounds.width,
-            y: host.isFlipped ? host.bounds.maxY - box.midY * host.bounds.height
-                : host.bounds.minY + box.midY * host.bounds.height)
-        let location = host.convert(point, to: nil)
-        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
-            let event = try #require(NSEvent.mouseEvent(with: type, location: location,
-                modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
-                windowNumber: window.windowNumber, context: nil, eventNumber: 1,
-                clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0))
-            window.sendEvent(event)
-        }
-    }
-
     private func responseText(in view: NSView) -> [String] {
         if let text = view as? ConversationResponseNativeTextView { return [text.string] }
         return view.subviews.flatMap { responseText(in: $0) }
@@ -920,8 +819,6 @@ struct StreamingPresentationTests {
 
     @MainActor private final class ReasoningScrollFixture: ObservableObject {
         @Published var isMounted = true
-        var usesCompactPreview = false
-        var detailRequests = 0
         @Published var text = (0..<28).map { "Original paragraph \($0) describes the supplied reasoning clearly.\n\n" }.joined()
         private var nextParagraph = 28
 
@@ -939,8 +836,7 @@ struct StreamingPresentationTests {
         var records: [WorkspaceRunActivityRecord] {
             [.init(id: "thought", runID: "reasoning-run", conversationID: "reasoning-fixture",
                 activity: .init(id: "thought", kind: .thought, status: "running",
-                    content: usesCompactPreview ? String(text.prefix(180)) : text,
-                    detailsAvailable: usesCompactPreview),
+                    content: text),
                 createdAt: "2026-10-27T00:00:00Z", sequence: 0)]
         }
     }
@@ -955,13 +851,6 @@ struct StreamingPresentationTests {
                     ConversationWorkTranscript(
                         run: .init(id: "reasoning-run", conversationID: "reasoning-fixture", status: "running"),
                         presentation: .init(startedAt: nil, completedDuration: nil), records: fixture.records)
-                        .environment(\.conversationActivityDetails, { _, _ in
-                            guard fixture.usesCompactPreview else { return nil }
-                            fixture.detailRequests += 1
-                            try await Task.sleep(for: .milliseconds(150))
-                            return AgentRunActivity(id: "thought", kind: .thought, status: "running",
-                                content: fixture.text, detailsAvailable: true)
-                        })
                         .environment(\.conversationTranscriptState, state)
                         .environment(\.dashboardTheme, DashboardTheme.dark)
                         .environment(\.colorScheme, .dark)

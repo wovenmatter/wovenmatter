@@ -35,17 +35,8 @@ final class CompanionCommandService: CompanionCommandServing {
         guard let database = model.dashboardStore?.database, let tools = model.agentTools else {
             throw CommandError.unavailable
         }
-        try await requireToolExecutionAccess(request.request, callerID: request.conversationID, deviceID: deviceID)
         if toolDispatcher == nil { toolDispatcher = CompanionToolDispatcher(database: database) }
-        return try await toolDispatcher!.execute(request, deviceID: deviceID) { [self] request, callerID in
-            // Reservation awaits SQLite; a device policy may change before the
-            // accepted operation actually reaches the provider/executor.
-            do { try await requireToolExecutionAccess(request, callerID: callerID, deviceID: deviceID) }
-            catch let error as CompanionAPIError {
-                return .init(success: false, error: error.message, code: error.code, requestID: request.requestID)
-            } catch {
-                return .init(success: false, error: error.localizedDescription, code: "execution_authorization_failed", requestID: request.requestID)
-            }
+        return try await toolDispatcher!.execute(request, deviceID: deviceID) { request, callerID in
             return await tools.handle(request, callerID: callerID)
         }
     }
@@ -212,107 +203,10 @@ final class CompanionCommandService: CompanionCommandServing {
             }
         }
         guard let store = model.dashboardStore else { throw CommandError.unavailable }
-        try await requireExecutionAccess(command, deviceID: deviceID)
         return try await dispatcher(for: store).execute(command) { [self] original in
-            try await requireExecutionAccess(command, deviceID: deviceID)
             var receipt = original
             try await dispatch(command, receipt: &receipt)
             return receipt
-        }
-    }
-
-    /// Map CLI execution to the same authority boundary as UI commands. Shared
-    /// library tools and read-only session inspection do not require execution
-    /// access. Existing session destinations always come from stored ownership.
-    private func requireToolExecutionAccess(_ request: WovenMatterToolRequest, callerID: String, deviceID: String) async throws {
-        let tool = try WovenMatterToolCommand(request.arguments)
-        guard !tool.wantsHelp else { return }
-        let command: CompanionCommand
-        switch (tool.group, tool.action) {
-        case (.sessions, "create"):
-            let workspace: String
-            if let explicit = tool.options["workspace"] { workspace = explicit }
-            else { workspace = try await conversation(callerID).remoteWorkspaceID?.uuidString.lowercased() ?? "local" }
-            let route: String
-            if workspace == "local" { route = "local:" }
-            else {
-                guard let id = UUID(uuidString: workspace) else { throw CommandError.invalidCommand }
-                route = "remote:\(id.uuidString.lowercased()):"
-            }
-            command = .init(deviceID: deviceID, kind: .createSession, providerID: route)
-        case (.goals, "set"), (.goals, "resume"):
-            // A goal starts native work through the continuation loop. It needs
-            // the same workspace execution permission as an ordinary send.
-            command = .init(deviceID: deviceID, kind: .send, conversationID: callerID)
-        case (.sessions, "send"), (.sessions, "manage"), (.sessions, "release"), (.sessions, "notifications"):
-            command = .init(deviceID: deviceID, kind: .send,
-                conversationID: try tool.required("id", allowPositional: true))
-        case (.calendar, "create"), (.calendar, "update"), (.calendar, "copy"), (.calendar, "detach"):
-            // Ordinary calendar edits stay shared. A scheduled task is an
-            // execution request even when this edit only changes its time.
-            guard tool.options["regular-event"] == nil else { return }
-            var existing: WorkspaceCalendarTask?
-            if tool.action != "create" {
-                guard let database = model.dashboardStore?.database else { throw CommandError.unavailable }
-                existing = try await database.calendarEvent(id: tool.required("id", allowPositional: true), callerID: callerID).calendar.task
-            }
-            guard existing != nil || tool.options["prompt"] != nil else { return }
-            let workspace: String
-            if let explicit = tool.options["workspace"] { workspace = explicit }
-            else if let existing { workspace = existing.configuration.workspaceID?.uuidString.lowercased() ?? "local" }
-            else { workspace = try await conversation(callerID).remoteWorkspaceID?.uuidString.lowercased() ?? "local" }
-            let route: String
-            if workspace == "local" { route = "local:" }
-            else {
-                guard let id = UUID(uuidString: workspace) else { throw CommandError.invalidCommand }
-                route = "remote:\(id.uuidString.lowercased()):"
-            }
-            command = .init(deviceID: deviceID, kind: .createSession, providerID: route)
-        case (.executor, "execute"), (.executor, "cancel"), (.browser, "call"), (.computer, "call"):
-            command = .init(deviceID: deviceID, kind: .createSession, providerID: "local:")
-        default: return
-        }
-        try await requireExecutionAccess(command, deviceID: deviceID)
-    }
-
-    /// Execution policy applies equally to direct grants and the legacy central
-    /// command route. Resolve existing sessions from stored ownership, never from
-    /// a workspace identifier supplied by the requesting client.
-    private func requireExecutionAccess(_ command: CompanionCommand, deviceID: String) async throws {
-        guard let database = model.dashboardStore?.database else { throw CommandError.unavailable }
-        let denied = Set(try await database.companionWorkspaceAccessPolicies()
-            .filter { $0.deviceID == deviceID && !$0.enabled }.map(\.workspaceID))
-        guard !denied.isEmpty else { return }
-        var conversationID = command.conversationID
-        if command.kind == .workspace {
-            switch command.workspaceAction {
-            case .goal(let id, _), .configureSession(let id, _, _, _), .sessionTools(let id, _, _): conversationID = id
-            case .saveCalendar(_, _, let draft):
-                guard let task = draft.task else { return }
-                let route: String
-                if let workspace = task.workspaceID {
-                    guard let id = UUID(uuidString: workspace) else { throw CommandError.invalidCommand }
-                    route = "remote:\(id.uuidString.lowercased()):"
-                } else { route = "local:" }
-                try await requireExecutionAccess(.init(deviceID: deviceID, kind: .createSession, providerID: route), deviceID: deviceID)
-                return
-            default: return // Library edits remain shared independently of execution.
-            }
-        }
-        let identity = try await database.companionLibraryIdentity()
-        let localID = try await database.companionExecutionWorkspaces().first {
-            $0.kind == .mac && ($0.executionDeviceID ?? $0.ownerDeviceID) == identity.hostDeviceID && !$0.deleted
-        }?.id
-        var target = localID
-        if command.kind == .createSession {
-            let route = command.providerID ?? command.routeID ?? ""
-            if route.hasPrefix("remote:") { target = route.split(separator: ":").dropFirst().first.map(String.init) }
-        } else if let conversationID {
-            if let owner = try await database.companionExecutionOwner(conversationID: conversationID) { target = owner }
-            else { target = try await conversation(conversationID).remoteWorkspaceID?.uuidString.lowercased() ?? localID }
-        }
-        if let target, denied.contains(target) {
-            throw CompanionAPIError(code: "execution_disabled", message: "Execution access for this workspace is disabled in Devices on the central Mac.")
         }
     }
 

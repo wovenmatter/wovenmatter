@@ -860,7 +860,7 @@ public actor LocalACPClient {
         let initializeResult = try await request(
             method: "initialize",
             params: .object([
-                // Codex ACP 2.3 and Claude ACP 0.98 route version 2 into their
+                // Codex ACP 2.3 and Claude ACP 0.99 route version 2 into their
                 // draft wire protocol. This client implements their v1 session API.
                 "protocolVersion": .integer(
                     [.codex, .claudeCode].contains(runtimeKind) ? 1 : Self.latestProtocolVersion

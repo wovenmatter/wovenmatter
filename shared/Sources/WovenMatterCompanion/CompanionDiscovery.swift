@@ -5,8 +5,9 @@ public struct CompanionDeviceMetadata: Codable, Equatable, Sendable {
   public let kind: CompanionDeviceKind
   public let osVersion: String?
   public let appVersion: String?
-  public init(kind: CompanionDeviceKind = .unknown, osVersion: String? = nil, appVersion: String? = nil) {
-    self.kind = kind; self.osVersion = osVersion; self.appVersion = appVersion
+  public let developmentInstance: String?
+  public init(kind: CompanionDeviceKind = .unknown, osVersion: String? = nil, appVersion: String? = nil, developmentInstance: String? = nil) {
+    self.kind = kind; self.osVersion = osVersion; self.appVersion = appVersion; self.developmentInstance = developmentInstance
   }
 }
 public struct CompanionPairingDeviceIdentity: Codable, Equatable, Sendable {

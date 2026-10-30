@@ -1,9 +1,9 @@
 {
   "package": "lucide-static",
-  "version": "1.62.0",
-  "tarball": "https://registry.npmjs.org/lucide-static/-/lucide-static-1.62.0.tgz",
-  "integrity": "sha512-WBZA/m2PvkFpMGHDtsBck5P2A9G4ehLlYu4GwwICcmEm1BvYVgj00lCDxKRWLlbMlOibLaiwdQ88G5pHkSWgwA==",
-  "source": "https://github.com/lucide-icons/lucide/tree/1.62.0",
+  "version": "1.65.0",
+  "tarball": "https://registry.npmjs.org/lucide-static/-/lucide-static-1.65.0.tgz",
+  "integrity": "sha512-Mbahsp1MHXzBK2qQ+j+OpdwvPwOFYFBOe2pD1O5eI+XLRpbqPY2euz6vemAddXGevRvJ5n8D83ilUCrtxP07RQ==",
+  "source": "https://github.com/lucide-icons/lucide/tree/1.65.0",
   "transform": "Retain asset names, 24-point view boxes, black template strokes, and existing stroke widths; omit CSS classes.",
   "assets": {
     "app/App/SharedAssets.xcassets/Lucide/lucide-arrow-down-s25.imageset/lucide-arrow-down-s25.svg": {

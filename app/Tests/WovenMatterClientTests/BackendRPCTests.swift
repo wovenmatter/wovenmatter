@@ -4,6 +4,13 @@ import Testing
 @testable import WovenMatterClient
 
 struct BackendRPCTests {
+    @Test func aNeverStartedEndpointIsUnavailable() async throws {
+        do {
+            _ = try await BackendRPCClient(socketURL: endpoint()).ping()
+            Issue.record("A missing service answered")
+        } catch BackendRPCError.unavailable { }
+    }
+
     @Test func endpointRejectsSharedAndSymlinkedDirectories() async throws {
         let url = endpoint(), alias = endpoint()
         defer {

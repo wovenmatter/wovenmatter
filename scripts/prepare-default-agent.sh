@@ -8,8 +8,8 @@ version="$(tr -d '[:space:]' < "$agent_root/.node-version")"
 arch="${CURRENT_ARCH:-$(uname -m)}"
 if [ "$arch" = undefined_arch ]; then arch="${NATIVE_ARCH_ACTUAL:-$(uname -m)}"; fi
 case "$arch" in
-  arm64) node_arch=arm64; checksum=1901d539912c02afa10d1cc126943a8855a7eedebe830119463470db5e6c59e8 ;;
-  x86_64) node_arch=x64; checksum=b85c2ea4420ad0bc4abf2dc6cf1f55130ed681f1cabf60cf3f526e4c9e2712ff ;;
+  arm64) node_arch=arm64; checksum=d38bd5e5a2ddce6bbb5ce45e46e208337da4d51fffe611e567fd32073d6439f6 ;;
+  x86_64) node_arch=x64; checksum=525c9b29bb0263d687de60a4cec0e2a6db876a8eb032369e5795eca71e7c358e ;;
   *) printf 'Unsupported Built-in architecture: %s\n' "$arch" >&2; exit 1 ;;
 esac
 cache="${TMPDIR:-/tmp}/wovenmatter-node-$version-$node_arch"
@@ -21,7 +21,14 @@ if [ ! -x "$cache/bin/node" ]; then
   tar -xzf "$archive" --strip-components=1 -C "$cache"
 fi
 export PATH="$cache/bin:$PATH"
-lock_hash="$(shasum -a 256 "$agent_root/package-lock.json" | cut -d ' ' -f1)-node-$version-darwin-$node_arch"
+# Bootstrap npm only prepares the verified current private tooling. Use that
+# tooling for the locked SDK install as well as the installed Settings updater.
+npm_selection="$(node -e 'console.log(JSON.stringify({prefix:process.argv[1],node:process.argv[2]+"/bin/node",bootstrap:[process.argv[2]+"/bin/node",process.argv[2]+"/lib/node_modules/npm/bin/npm-cli.js"],securityGraph:process.argv[3]+"/remote/npm-runtime"}))' "${TMPDIR:-/tmp}/wovenmatter-private-npm" "$cache" "$repo_root")"
+private_npm="$(node "$repo_root/harnesses/prepare-npm.mjs" "$npm_selection")"
+export PATH="${private_npm%/npm}:$PATH"
+npm_provenance="${private_npm%/bin/npm}/provenance.json"
+tooling_hash="$(shasum -a 256 "$npm_provenance" | cut -d ' ' -f1)"
+lock_hash="$(shasum -a 256 "$agent_root/package-lock.json" | cut -d ' ' -f1)-node-$version-darwin-$node_arch-npm-$tooling_hash"
 # Keep reproducible dependencies outside a possibly cloud-synced checkout.
 # Copying node_modules from Desktop can block on File Provider hydration (and
 # include conflict copies) even when every package version is already locked.
@@ -78,7 +85,8 @@ cp "$cache/bin/node" "$output/bin/node"
 cp "$cache/LICENSE" "$output/bin/NODE-LICENSE"
 # SDK maintenance runs npm with the signed bundled Node, without relying on a host install.
 mkdir -p "$output/lib/npm"
-rsync -a --delete "$cache/lib/node_modules/npm/" "$output/lib/npm/"
+rsync -a --delete "${private_npm%/bin/npm}/lib/node_modules/npm/" "$output/lib/npm/"
+cp "$npm_provenance" "$output/lib/npm/woven-provenance.json"
 if [ "${CODE_SIGNING_ALLOWED:-NO}" = YES ] && [ -n "${EXPANDED_CODE_SIGN_IDENTITY:-}" ]; then
   timestamp=--timestamp=none
   if [ "${CONFIGURATION:-Debug}" = Release ]; then timestamp=--timestamp; fi

@@ -22,9 +22,10 @@ struct OpenCodeCreationTests {
         let coordinator = OpenCodeSessionCoordinator(database: f.database, clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
         let preference = "wovenmatter.opencode." + (remote ? "remote." + f.remote.id.uuidString.lowercased() + "." : "")
         f.defaults.set(true, forKey: preference + "local-connected")
+        var connections = 0
         let model = await OpenCodeModel(store: f.store, ownerDeviceID: UUID(), defaults: f.defaults,
             remoteConfiguration: remote ? f.remote : nil, remoteWorkspaces: remote ? f.model.remoteWorkspaces : nil,
-            coordinator: coordinator, connectionProvider: { connection })
+            coordinator: coordinator, connectionProvider: { connections += 1; return connection })
         let saved = SessionSelectionPreferences(defaults: f.defaults)
         saved.saveDefaults(.init(model: rejected ? "fixture/unavailable" : "fixture/saved", tools: ["notes"]), harness: "opencode")
         let gate = FacadeGate(); gate.hold(); defer { gate.open() }
@@ -49,6 +50,10 @@ struct OpenCodeCreationTests {
         let changes = transport.modelChanges
         #expect(changes == (rejected ? 0 : 1))
         await model.watch(link)
+        // Both native streams must remain open while catalog reads, the first
+        // send, and manual edits run. A missing stream triggers reconnection
+        // and invalidates otherwise successful requests.
+        try await transport.waitForStreams(sessionID: link.sessionID)
         try await model.refreshCatalog(id)
         _ = try await model.send(id, input: .init(text: "First message"))
         #expect(toolsApplied == 1)
@@ -59,6 +64,8 @@ struct OpenCodeCreationTests {
         #expect(model.metadata(id)?.model == "fixture/newer")
         #expect(toolsApplied == 1)
         #expect(transport.modelChanges == changes + 1)
+        #expect(connections == 1)
+        #expect(transport.streamPaths == Set(["/api/event", "/api/experimental/session/" + link.sessionID + "/log"]))
         await model.shutdown()
     }
 }
@@ -67,6 +74,17 @@ private final class CreationTransport: @unchecked Sendable {
     private let lock = NSLock()
     private var sessions: [String: OpenCodeValue] = [:]
     private var changes = 0
+    private var streams: Set<String> = []
+    var streamPaths: Set<String> { lock.withLock { streams } }
+    func openedStream(_ path: String) { lock.withLock { _ = streams.insert(path) } }
+    func waitForStreams(sessionID: String) async throws {
+        let expected = Set(["/api/event", "/api/experimental/session/" + sessionID + "/log"])
+        let deadline = ContinuousClock.now + .seconds(10)
+        while !expected.isSubset(of: streamPaths), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try #require(expected.isSubset(of: streamPaths), "OpenCode did not open both event streams")
+    }
     var modelChanges: Int { lock.withLock { changes } }
     private func body(_ request: URLRequest) throws -> OpenCodeValue {
         if let data = request.httpBody { return try OpenCodeValue.decode(data) }
@@ -139,6 +157,16 @@ private final class CreationProtocol: URLProtocol, @unchecked Sendable {
             return
         }
         do {
+            let path = request.url!.path
+            if path == "/api/event" || (path.hasPrefix("/api/experimental/session/") && path.hasSuffix("/log")) {
+                let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
+                    headerFields: ["Content-Type": "text/event-stream"])!
+                client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+                client?.urlProtocol(self, didLoad: Data(": connected\n\n".utf8))
+                Self.transport.openedStream(path)
+                // Idle SSE requests stay open until the model/session cancels them.
+                return
+            }
             let (code, value) = try Self.transport.response(request)
             let response = HTTPURLResponse(url: request.url!, statusCode: code, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)

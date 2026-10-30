@@ -11,6 +11,7 @@ final class CompanionMacPairingController {
     private(set) var isDiscovering = false
     private(set) var isPairingMode = false
     private(set) var isRequestPending = false
+    private(set) var hasSubmittedRequest = false
     private(set) var status = ""
     private(set) var errorMessage: String?
     private let identity: @MainActor () -> CompanionPairingDeviceIdentity
@@ -45,7 +46,7 @@ final class CompanionMacPairingController {
     }
     static var metadata: CompanionDeviceMetadata {
         .init(kind: .mac, osVersion: ProcessInfo.processInfo.operatingSystemVersionString,
-              appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String)
+              appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String, developmentInstance: DevelopmentLaunch.instance)
     }
     func refreshDiscovery() async {
         guard !isDiscovering else { return }
@@ -101,6 +102,18 @@ final class CompanionMacPairingController {
             beginClaim(claim)
         } catch { errorMessage = error.localizedDescription }
     }
+    func requestPairing(endpoint: URL) async throws {
+        if let pendingClaim, pendingClaim.endpoint != endpoint {
+            throw MacDeviceSetupError("Finish or cancel this Mac’s pending pairing request before pairing with another database.")
+        }
+        guard !isRequestPending else { return }
+        let advertisement: CompanionDiscoveryAdvertisement = try await network.request(endpoint, path: "v1/discovery")
+        guard advertisement.role == .central, advertisement.protocolVersion == CompanionProtocol.version else {
+            throw MacDeviceSetupError("This Mac is not offering a compatible central database.")
+        }
+        await requestPairing(with: .init(endpoint: endpoint, advertisement: advertisement))
+        if let errorMessage { throw MacDeviceSetupError(errorMessage) }
+    }
     func restorePendingRequest() async {
         guard !isRequestPending else { return }
         do {
@@ -116,7 +129,7 @@ final class CompanionMacPairingController {
     }
     private func beginClaim(_ claim: CompanionStoredPairingClaim) {
         requestGeneration = UUID(); let attempt = requestGeneration
-        pendingClaim = claim; isRequestPending = true; errorMessage = nil
+        pendingClaim = claim; isRequestPending = true; hasSubmittedRequest = false; errorMessage = nil
         status = "Waiting for approval on the central database"
         pollTask = Task { [weak self] in
             var registered = false
@@ -129,6 +142,7 @@ final class CompanionMacPairingController {
                         path: registered ? "v1/pairing/result" : "v1/pairing/request", body: body)
                     registered = true
                     guard self.requestGeneration == attempt else { return }
+                    self.hasSubmittedRequest = true
                     if try await self.acceptResult(result, endpoint: claim.endpoint, identity: claim.request.identity) { return }
                 } catch let error as CompanionAPIError {
                     guard self.requestGeneration == attempt else { return }

@@ -27,6 +27,7 @@ for every package update. Three separate mechanisms do that:
 | `default-agent/.node-version` and the Node checksums in `scripts/prepare-default-agent.sh` and `LocalACPManagedRuntime.swift` | One current stable Node release and its official archive SHA-256 values | Maintenance PR, all copies together |
 | `remote/host/runtime-versions.json` | The same Node release's Linux archive SHA-256 values and the lockfile's Playwright version | The same maintenance PR; host bundle tests reject drift |
 | `remote/npm-runtime/package-lock.json` | Locked security replacements for npm's vendored dependencies, shared by image builds and each native host release's private npm | Dependency maintenance; runtime API and installer tests validate both uses |
+| `harnesses/npm-version.json` | Current private Mac npm archive and registry integrity, with the existing locked `remote/npm-runtime` vendor repairs | Maintenance PR; managed CLI and bundled SDK updater verification |
 | `app/Automation/cua-version.json` | Exact Cua Driver archive/executable digests, source and signing identity | Maintenance PR with desktop acceptance |
 | `app/Browser/cef-version.json` | Exact CEF build and archive SHA-1 values per architecture | Maintenance PR |
 | `app/Updater/sparkle-version.json` and the Xcode Sparkle revision | Release, exact commit, and tools archive SHA-256 for the updater | Maintenance PR, both together |
@@ -59,8 +60,11 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   The image copies Python 3.15.2 from the official `python:3.15.2-slim-trixie`
   multi-architecture image, now published for amd64 and arm64. Its manifest-index
   digest is recorded in `remote/Dockerfile` to preserve the verified interpreter,
-  native modules, and Debian ABI together. This replaces the temporary source
-  build used while the registry lagged the expedited security release.
+  native modules, and Debian ABI together. The current image rebuild uses the
+  October 27 Debian base refresh for both amd64 and arm64, retaining the same
+  Python source checksum, build options, and runtime entry points. This replaces
+  the temporary source build used while the registry lagged the expedited
+  security release.
   Maintenance checks the current stable Python release, official image recipe,
   both platform configurations, and image digest; refresh all records together.
   The final image still upgrades its Debian runtime libraries at build time.
@@ -116,6 +120,17 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   Executor also selects only the ncurses, acl, and util-linux source repairs it
   needs; do not install the workspace browser-library repairs into that smaller
   image without a runtime dependency.
+- **Mac npm** is selected independently of the Node archive, whose bundled npm
+  may lag. `harnesses/prepare-npm.mjs` verifies the recorded npm archive integrity,
+  applies the same locked `undici` and `ip-address` repairs used by Linux, verifies
+  their APIs, and retains provenance. Immutable cached selections supply
+  managed CLI installs, the locked bundle SDK installation, and the bundled SDK
+  updater; bootstrap npm only unpacks the verified archive/security graph. The
+  bundle dependency cache includes the private tooling provenance fingerprint,
+  so an npm or vendor-repair refresh rebuilds that installation. No global npm
+  or active Node tree changes.
+  Maintenance compares this npm record with current stable npm and validates
+  actual registry installs, lockfiles, SDK updates and patched runtime APIs.
 - **CEF** is compiled and signed into the app. The newest stable build is
   always proposed: Chromium ships security fixes only on its current major.
 - **Sparkle** delivers every later fix, so the Xcode project requires the exact
@@ -153,6 +168,18 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   Pi refresh and remove it once Pi's own requirement excludes the affected
   releases. Provider-free HTTP security fixtures and the coding-agent suites
   validate the overridden Node dependency; it is not part of the mobile bundle.
+  Pi AI 1.4.0 also pins older provider clients. Consumer-scoped minimum-only
+  overrides select the tested OpenAI 7.45.1, Anthropic 1.3.0, Google GenAI 2.32.0,
+  Bedrock Runtime 3.1160.0 and Smithy Node HTTP handler 4.14.0 releases without
+  changing vendor manifests. Keeping these clients current is required for
+  provider API and transport compatibility, including Anthropic's 2026-10-21
+  Messages API. Maintenance reviews each upstream requirement and removes an
+  override when Pi itself selects an equal or newer client. The committed lock
+  records the effective graph; Settings SDK generations retain these overrides.
+  Provider-free loopback fixtures exercise Pi's actual SDK clients, request
+  serialization, streaming text/tools, usage and cancellation. They do not
+  establish authenticated provider acceptance. The iOS bundle excludes these
+  network clients; its generated provenance still follows the shared lock.
 - **Pyodide and esbuild** produce the offline iOS resources and their
   provenance. They refresh together with the generated files.
 
@@ -176,15 +203,39 @@ requiring a separate Settings update.
 The fingerprint includes JavaScript helpers in nested source directories, so
 broker-only fixes also supersede stale generations without deleting them.
 
-Agent CLIs update the same way from Settings: ACP adapters take the latest
-release at or above their catalog minimum. OpenCode and Executor stay on v2,
-because v2 is the API Woven Matter implements. Maintenance must identify a
-new upstream API major and the integration work needed to support it.
-Codex ACP 2.3 and Claude ACP 0.98 serve both stable ACP v1 and an experimental
-v2 wire protocol. Woven Matter offers v1 explicitly to both adapters for its
-implemented session API. Check both routers on each refresh and migrate when
-ACP v2 becomes stable. Provider-free published-adapter handshakes and local
-client session tests validate this boundary.
+Agent CLIs, ACP connectors, and connector-owned engines are checked independently.
+An up-to-date connector does not establish that its engine or sign-in CLI is current.
+Settings selects the newest nondeprecated stable publication for each component;
+a stale npm dist-tag cannot hide a newer stable version. Claude's native installer
+and updater explicitly select `latest`, rather than retaining an older configured
+release channel. OpenCode and Executor retain the documented v2 API boundary;
+maintenance must review a newer stable API major and implement its migration.
+
+`harnesses/catalog.json` records tested connector and engine minimums separately:
+Codex ACP 2.5.0 with Codex 0.166.0, and Claude ACP 0.99.1 with Claude SDK 0.3.314
+(native Claude Code 2.1.314). The standalone Codex and Claude sign-in CLIs use their
+official current stable release channels. Codex ACP's `^0.165.0` engine range and
+Claude ACP's exact SDK 0.3.312 selection otherwise keep the chat engines behind.
+The consumer graph created by `harnesses/install-adapter.mjs` therefore declares
+the independently selected engine and scopes an npm override to that connector.
+This core-function exception keeps the engine used for chat current; it does not
+modify upstream manifests, copy credentials, or substitute a standalone CLI.
+
+Each explicit installation/update builds an immutable generation, retains its
+npm lockfile and integrity records, verifies package/executable versions and native
+Claude signatures, and requires an actual provider-free ACP v1 initialize response
+before atomically promoting the executable link. Verification uses an empty,
+private configuration with no inherited credentials or executable overrides.
+Failed candidates are removed; existing generations stay intact for running
+sessions. The Mac and remote installers use the same implementation. System-owned
+remote installations remain outside Woven's update ownership.
+
+Maintenance reviews both upstream connector requirements and current engine/CLI
+releases, updates catalog minimums, and validates the actual selected pairs plus
+host-side session/permission/cancellation interfaces with provider-free fixtures.
+This does not establish authenticated provider acceptance on every platform.
+Both current connectors still offer experimental ACP v2; Woven negotiates stable
+v1 until the stable protocol and implemented session APIs migrate together.
 
 Updates start only from Settings or explicit workspace actions; there is no
 background updater.

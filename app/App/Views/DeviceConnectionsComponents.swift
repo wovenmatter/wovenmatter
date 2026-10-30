@@ -26,42 +26,16 @@ struct DevicePairingDiscoveryCard: View {
     @Bindable var host: CompanionHostController
     var isCentral: Bool
     var canPairWithCentral: Bool
-    private var peers: [CompanionDiscoveredPeer] {
-        let candidates = pairing.peers + (isCentral ? host.discoveredPeers : [])
-        var endpoints = Set<String>()
-        return candidates.filter { peer in
-            guard peer.endpoint != host.endpoint, endpoints.insert(peer.id).inserted else { return false }
-            return peer.advertisement.role == .central ? canPairWithCentral : isCentral && host.endpoint != nil
-        }.sorted { $0.advertisement.identity.deviceName.localizedStandardCompare($1.advertisement.identity.deviceName) == .orderedAscending }
-    }
+    @State private var devices = MacDeviceSetupModel()
     var body: some View {
-        SettingsCard(title: "Find devices", detail: "Devices must be on the same Tailscale network.") {
+        SettingsCard(title: "Find devices", detail: "Find other Macs on your Tailscale network, even when Woven Matter is closed.") {
+            MacTailnetDiscoveryView(devices: devices, pairing: pairing, host: host, isCentral: isCentral, canPairWithCentral: canPairWithCentral)
             HStack {
-                Button(pairing.isDiscovering ? "Searching…" : "Find devices") {
-                    Task { await pairing.refreshDiscovery(); if isCentral { await host.refreshDiscovery() } }
-                }.buttonStyle(SettingsQuietButtonStyle()).disabled(pairing.isDiscovering)
                 if canPairWithCentral {
                     Button(pairing.isPairingMode ? "Stop discovery" : "Make this node discoverable") {
                         if pairing.isPairingMode { pairing.stopPairingMode() }
                         else { Task { await pairing.startPairingMode() } }
                     }.buttonStyle(SettingsQuietButtonStyle())
-                }
-            }
-            ForEach(peers) { peer in
-                HStack(spacing: 12) {
-                    DeviceConnectionIcon(kind: peer.advertisement.identity.metadata.kind)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(peer.advertisement.identity.deviceName).font(.system(size: 13, weight: .medium))
-                        Text(peer.advertisement.role == .central ? "Central database" : DeviceConnectionIcon.label(peer.advertisement.identity.metadata.kind))
-                            .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
-                    }
-                    Spacer()
-                    if peer.advertisement.role == .central {
-                        Button("Pair") { Task { await pairing.requestPairing(with: peer) } }
-                            .buttonStyle(SettingsQuietButtonStyle()).disabled(pairing.isRequestPending)
-                    } else {
-                        Button("Invite") { Task { await host.invitePairing(peer: peer) } }.buttonStyle(SettingsQuietButtonStyle())
-                    }
                 }
             }
             if pairing.isRequestPending {

@@ -127,6 +127,11 @@ extension ApplicationModel {
     }
 
     func executorPolicy(_ session: String) async throws -> ExecutorApprovalPolicy {
+        if session == WovenMCPCaller.outside {
+            guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
+            try await database.requireTool(.executor, sessionID: session)
+            return .full
+        }
         guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
         var runtime = workspaceOverview?.conversations.first { $0.id == session }?.localRuntimeKind
         if runtime == nil { runtime = try? await database.localACPSession(conversationID: session).runtimeKind }

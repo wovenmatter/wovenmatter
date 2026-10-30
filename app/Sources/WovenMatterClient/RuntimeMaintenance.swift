@@ -34,7 +34,7 @@ public struct RuntimeInventory: Codable, Equatable, Sendable {
                 + (component.outdated ? " → \(component.latest!)" : "")
         }.joined(separator: " · ")
     }
-    public var latestUnavailable: Bool { components.contains { $0.required && !$0.name.hasPrefix("Bundled ") && $0.latest == nil } }
+    public var latestUnavailable: Bool { components.contains { $0.required && (!$0.name.hasPrefix("Bundled ") || $0.package != nil) && $0.latest == nil } }
 }
 
 public enum RuntimeMaintenance {
@@ -85,7 +85,7 @@ public enum RuntimeMaintenance {
             let present = engine.map { FileManager.default.isExecutableFile(atPath: $0.path) } ?? false
             let engineVersion = present ? engine.flatMap(probe).flatMap(normalizeVersion) : nil
             components.append(RuntimeComponent(name: "Bundled \(dependency)", executable: nil,
-                installed: version, latest: nil, package: nil, required: true, present: present, verified: version != nil && engineVersion != nil))
+                installed: version, latest: checkLatest ? try? await registryVersion(dependency, executableRequired: false, fetch: fetch) : definition.minimumEngineVersion, package: dependency, required: true, present: present, verified: version != nil && engineVersion != nil))
             if kind == .claudeCode {
                 components.append(RuntimeComponent(name: "Bundled Claude Code", executable: nil,
                     installed: engineVersion, latest: nil, package: nil, required: true,
@@ -114,10 +114,10 @@ public enum RuntimeMaintenance {
         let limitation: String? = switch kind {
         case .codex: ProcessInfo.processInfo.environment["CODEX_PATH"]?.isEmpty == false
             ? "Chat has an inherited CODEX_PATH override; its version is reported separately."
-            : "Chat uses the adapter’s bundled Codex; adapter updates include its engine."
+            : "Chat uses the adapter and its independently updated Codex engine."
         case .claudeCode: ProcessInfo.processInfo.environment["CLAUDE_CODE_EXECUTABLE"]?.isEmpty == false
             ? "Chat has an inherited Claude executable override; its version is reported separately."
-            : "Chat uses the adapter’s bundled Claude SDK."
+            : "Chat uses the adapter and its independently updated Claude SDK."
         case .opencode: "OpenCode v2 releases can be updated independently. The running service is not restarted."
         default: nil
         }
@@ -126,7 +126,7 @@ public enum RuntimeMaintenance {
 
     public static func updateNative(_ kind: AgentRuntimeKind, executable: URL?) async throws {
         guard let executable else { throw RuntimeMaintenanceError.verification }
-        if kind == .codex {
+        if kind == .codex || kind == .claudeCode {
             let definition = LocalACPRuntimeCatalog.definition(for: kind)!
             let installer = LocalACPRuntimeInstaller()
             let preview = try await installer.prepareCLIInstall(definition)
@@ -161,7 +161,7 @@ public enum RuntimeMaintenance {
         } catch { return nil }
     }
 
-    public static func registryVersion(_ package: String, tag: String = "latest", fetch: Fetch = fetchMetadata) async throws -> String {
+    public static func registryVersion(_ package: String, tag: String = "latest", executableRequired: Bool = true, fetch: Fetch = fetchMetadata) async throws -> String {
         let encoded = package.replacingOccurrences(of: "/", with: "%2f")
         let base = "https://registry.npmjs.org/\(encoded)"
         let supportedMajor = package == "@opencode/cli" ? 2 : nil
@@ -170,15 +170,13 @@ public enum RuntimeMaintenance {
             guard let supportedMajor else { return true }
             return !version.contains("-") && version.split(separator: ".").first == Substring(String(supportedMajor))
         }
-        let data = try await fetch(URL(string: "\(base)/\(tag)")!)
-        let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        if let version = object?["version"] as? String, supported(version), object?["bin"] != nil, object?["deprecated"] == nil { return version }
-        // A moving upstream tag can advance beyond the API family we implement.
-        // Choose the newest stable release in that family rather than an old pin.
-        guard supportedMajor != nil else { throw RuntimeMaintenanceError.unavailable }
         let metadata = try JSONSerialization.jsonObject(with: await fetch(URL(string: base)!)) as? [String: Any]
-        let versions = metadata?["versions"] as? [String: [String: Any]] ?? [:]
-        guard let newest = versions.keys.filter({ supported($0) && versions[$0]?["bin"] != nil && versions[$0]?["deprecated"] == nil })
+        // Inspect publications rather than a potentially stale dist-tag. Adapter,
+        // engine and standalone CLI each select their own newest stable release.
+        let versions = metadata?["versions"] as? [String: [String: Any]]
+            ?? (metadata?["version"] as? String).map { [$0: metadata ?? [:]] } ?? [:]
+        guard let newest = versions.keys.filter({ supported($0) && !$0.contains("-")
+            && (!executableRequired || versions[$0]?["bin"] != nil) && versions[$0]?["deprecated"] == nil })
             .sorted(by: { version($0, precedes: $1) }).last else { throw RuntimeMaintenanceError.unavailable }
         return newest
     }

@@ -7,7 +7,8 @@ import tempfile
 
 root = Path(__file__).resolve().parents[2]
 source = (root / "scripts/build-release.sh").read_text()
-function = source[source.index('notarize() {'):source.index('\nditto -c -k')]
+start = source.index('notarize() {')
+function = source[start:source.index('\n}\n', start) + 3]
 with tempfile.TemporaryDirectory(prefix="wovenmatter-notary-test-") as temporary:
     fixture = Path(temporary)
     calls = fixture / "calls.jsonl"

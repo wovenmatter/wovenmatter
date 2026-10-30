@@ -154,6 +154,7 @@ def disconnect_snapshot(file, *, device_id, execution_root, published_root):
                 value["libraryID"] = library_id
                 if table == "companion_execution_workspaces":
                     value.pop("endpoint", None)
+                    value["retainedHistory"] = True
                 else:
                     value.pop("activeRunID", None)
                 db.execute("UPDATE " + table + " SET " + column + "=? WHERE id=?",
@@ -163,6 +164,14 @@ def disconnect_snapshot(file, *, device_id, execution_root, published_root):
         for name in ("workspace_session_deliveries", "workspace_calendar_runs"):
             if name in tables:
                 db.execute("UPDATE " + quote(name) + " SET status='cancelled' WHERE status IN ('queued','pending','sending','running','accepted')")
+        # Network exposure belongs to the source instance, not a new snapshot.
+        # Keep tool selections, but require an explicit enable in this instance.
+        if "workspace_tool_settings" in tables:
+            for identifier, raw in db.execute("SELECT id,value FROM workspace_tool_settings").fetchall():
+                value = json.loads(raw)
+                if value.get("externalMCP"):
+                    value["externalMCP"]["isEnabled"] = False
+                    db.execute("UPDATE workspace_tool_settings SET value=? WHERE id=?", (json.dumps(value), identifier))
         if "workspace_session_timers" in tables:
             db.execute("UPDATE workspace_session_timers SET is_paused=1,pending_delivery_id=NULL")
         # Retain task definitions with an unreachable owner. New schedules use

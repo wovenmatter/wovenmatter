@@ -67,7 +67,7 @@ public final class CompanionTailscaleServe {
     self.launch = launch ?? { try NativeCompanionServeProcess(executable: $0, arguments: $1) }
   }
 
-  public func start(loopbackPort: UInt16, preferredHTTPSPort: Int? = nil) async throws -> URL {
+  public func start(loopbackPort: UInt16, preferredHTTPSPort: Int? = nil, allowPortFallback: Bool = false) async throws -> URL {
     guard process == nil else { throw failure("Companion sharing is already running.") }
     generation = UUID()
     let attempt = generation
@@ -103,7 +103,11 @@ public final class CompanionTailscaleServe {
     // profiles across a larger range instead of imposing a four-client limit.
     let offset = Int(loopbackPort) % 1_000
     let additional = (0..<1_000).map { 11_000 + (offset + $0) % 1_000 }
-    let candidates = preferredHTTPSPort.map { [$0] } ?? ([8443, 10_000, 8444, 8445] + additional)
+    let fallback = [8443, 10_000, 8444, 8445] + additional
+    // Paired-device addresses remain strict. Discoverable MCP exposure can
+    // recover on another free port without replacing an existing service.
+    let candidates = (preferredHTTPSPort.map { [$0] } ?? [])
+      + (preferredHTTPSPort == nil || allowPortFallback ? fallback : [])
     guard let httpsPort = candidates.first(where: { (1...65535).contains($0) && !used.contains($0) }) else {
       throw failure("Another service is using this device connection address.")
     }
