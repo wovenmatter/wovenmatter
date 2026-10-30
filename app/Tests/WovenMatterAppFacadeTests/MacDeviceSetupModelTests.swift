@@ -42,12 +42,26 @@ struct MacDeviceSetupModelTests {
         #expect(model.rows.first?.installation?.version == "0.3.2")
         #expect(model.rows.first?.installation?.running == false)
     }
+    @Test func aPreviousPairingResultCannotFinishANewAttempt() async throws {
+        let fixture = SetupResultFixture(status: status)
+        let model = MacDeviceSetupModel(management: .init(executable: URL(fileURLWithPath: "/fixture/Tailscale"), run: { executable, args, _ in
+            try await fixture.run(executable: executable, args: args)
+        }), getRelease: { throw MacDeviceSetupError("No release fixture") }, pollDelay: {})
+        await model.discover()
+        let row = try #require(model.rows.first)
+        await model.perform(.pair, row: row, central: URL(string: "https://central.tail.ts.net:8443/wovenmatter")!)
+        #expect(row.error == nil)
+        #expect(row.message == "Current request accepted")
+        #expect(await fixture.polls == 2)
+        let prompt = DeviceSetupConfirmation(row: row, action: .pair, sendsInvitation: false)
+        #expect(prompt.message(version: nil, central: true, snapshot: true).contains("isolated snapshot database"))
+    }
 
     @Test func deviceRowsRenderAtNarrowAndWideSettingsInEveryTheme() async throws {
         _ = NSApplication.shared
         let input = Data(#"{"BackendState":"Running","Peer":{"mini":{"Online":true,"OS":"macOS","DNSName":"mini.tail.ts.net.","HostName":"Studio Mac mini","TailscaleIPs":["\#(Self.fixtureIP(2))"]},"fresh":{"Online":true,"OS":"macOS","DNSName":"fresh.tail.ts.net.","HostName":"New MacBook Pro","TailscaleIPs":["\#(Self.fixtureIP(3))"]},"offline":{"Online":false,"OS":"macOS","DNSName":"offline.tail.ts.net.","HostName":"Office Mac","TailscaleIPs":["\#(Self.fixtureIP(4))"]}}}"#.utf8)
         let release = try JSONDecoder().decode(CompanionMacRelease.self, from: Data("""
-            {"version":"0.3.6","build":999,"architecture":"arm64","minimum_macos":"26.0","download_url":"https://github.com/wovenmatter/wovenmatter/releases/download/v0.3.6/WovenMatter_0.3.6_arm64.dmg","sha256":"\(String(repeating: "a", count: 64))"}
+            {"version":"0.3.6","build":999,"architecture":"arm64","minimum_macos":"26.0","device_setup_version":1,"download_url":"https://github.com/wovenmatter/wovenmatter/releases/download/v0.3.6/WovenMatter_0.3.6_arm64.dmg","sha256":"\(String(repeating: "a", count: 64))"}
             """.utf8))
         let devices = MacDeviceSetupModel(management: .init(executable: URL(fileURLWithPath: "/fixture/Tailscale"), run: { executable, args, _ in
             guard executable.lastPathComponent == "ssh" else { return input }
@@ -84,5 +98,30 @@ struct MacDeviceSetupModelTests {
                 window.contentView = nil; window.close()
             }
         }
+    }
+}
+
+private actor SetupResultFixture {
+    let status: Data
+    var requestID: UUID?
+    var polls = 0
+    init(status: Data) { self.status = status }
+    func run(executable: URL, args: [String]) throws -> Data {
+        guard executable.lastPathComponent == "ssh" else { return status }
+        let command = args.last ?? ""
+        if command.contains("woven-mac-inspection-v1") {
+            var result = ""
+            if let requestID {
+                polls += 1
+                result = try CompanionMacSetupStatus(requestID: polls == 1 ? UUID() : requestID,
+                    phase: polls == 1 ? .paired : .waiting,
+                    message: polls == 1 ? "Old request succeeded" : "Current request accepted").json()
+            }
+            return Data("woven-mac-inspection-v1\ninstalled\n0.3.6\n999\n1\n0\narm64\n27.2\n\(result)\n\n".utf8)
+        }
+        let delimiter = try #require(command.range(of: " -- '", options: .backwards))
+        let json = String(command[delimiter.upperBound...].dropLast())
+        requestID = try JSONDecoder().decode(CompanionMacSetupRequest.self, from: Data(json.utf8)).id
+        return Data()
     }
 }

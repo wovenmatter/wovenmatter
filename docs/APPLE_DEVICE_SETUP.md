@@ -18,7 +18,10 @@ access outside the app. The app never requests a password or starts account logi
 - **Download & pair** downloads and verifies the current published release,
   installs it, opens it, and starts pairing.
 - **Update to [version]** installs a newer published version. Older installations
-  without remote setup support offer **Update & pair** for setup from a central Mac.
+  offer **Update & pair** only when the published manifest advertises the remote
+  pairing helper. Releases without that capability offer Download/Update and
+  Open Woven Matter for manual pairing. The downloaded signed app is checked for
+  that capability before replacement when a combined action was selected.
 
 When a central Mac initiates setup, the target app changes itself to Node using
 the existing guarded role transition. It flushes writing, checks running work,
@@ -30,6 +33,11 @@ An unpaired node can also open an installed central Mac and request pairing ther
 Remote setup uses a short-lived, nonsecret intent in the SSH user's app preferences.
 The receiving GUI consumes it after startup; pairing credentials stay in the
 existing device-only vault. Both cold launch and an already running app are supported.
+
+Each intent and status carries a request ID. Progress from an earlier request
+does not complete a later attempt. Consuming an intent checks that a newer one
+has not replaced it during a restart or shutdown. Snapshot builds identify their
+isolated database explicitly in the pairing confirmation.
 
 ## Download and update boundary
 
@@ -45,6 +53,8 @@ An unwritable system Applications folder uses the user's Applications folder for
 a first installation. Existing installations are updated in place only when the
 SSH user has permission. A failed replacement restores the previous app. No sudo,
 credential copying, public sharing, or forced process termination is used.
+An owned process lock serializes installations. Signal handlers clean up interrupted
+attempts and release the lock; a stale process lock can be reclaimed on retry.
 
 New versions prepare their own shutdown using the same write-flushing and backend
 handoff used for desktop updates. Legacy apps receive an ordinary Quit request;

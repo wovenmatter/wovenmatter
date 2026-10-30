@@ -5,6 +5,16 @@ version="${1:?usage: generate-release-manifest.sh VERSION BUILD DMG OUTPUT}"
 build="${2:?usage: generate-release-manifest.sh VERSION BUILD DMG OUTPUT}"
 dmg="${3:?usage: generate-release-manifest.sh VERSION BUILD DMG OUTPUT}"
 output="${4:?usage: generate-release-manifest.sh VERSION BUILD DMG OUTPUT}"
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+device_setup_version="$(python3 - "$repo_root/app/App/Info.plist" <<'PY'
+import plistlib, sys
+with open(sys.argv[1], 'rb') as source:
+    value = plistlib.load(source).get('WovenMatterDeviceSetupVersion', 0)
+if type(value) is not int or value < 0:
+    raise SystemExit('Invalid device setup capability in app Info.plist')
+print(value)
+PY
+)"
 
 [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
   || { printf '%s\n' 'Version must be X.Y.Z.' >&2; exit 64; }
@@ -23,12 +33,14 @@ jq -n \
   --arg download_url "https://github.com/wovenmatter/wovenmatter/releases/download/v${version}/${expected_asset}" \
   --arg release_url "https://github.com/wovenmatter/wovenmatter/releases/tag/v${version}" \
   --arg sha256 "$sha256" \
+  --argjson device_setup_version "$device_setup_version" \
   '{
     schema_version: 1,
     version: $version,
     build: $build,
     architecture: "arm64",
     minimum_macos: "26.0",
+    device_setup_version: $device_setup_version,
     download_url: $download_url,
     release_url: $release_url,
     sha256: $sha256

@@ -141,8 +141,8 @@ final class CompanionMacPairingController {
                     let result: CompanionPairingApprovalResult = try await self.network.request(claim.endpoint,
                         path: registered ? "v1/pairing/result" : "v1/pairing/request", body: body)
                     registered = true
-                    self.hasSubmittedRequest = true
                     guard self.requestGeneration == attempt else { return }
+                    self.hasSubmittedRequest = true
                     if try await self.acceptResult(result, endpoint: claim.endpoint, identity: claim.request.identity) { return }
                 } catch let error as CompanionAPIError {
                     guard self.requestGeneration == attempt else { return }

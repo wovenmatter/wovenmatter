@@ -17,7 +17,7 @@ final class MacDeviceRow: Identifiable {
 
 @MainActor @Observable
 final class MacDeviceSetupModel {
-    enum Action { case pair, installAndPair, update }
+    enum Action { case pair, installAndPair, download, update, open }
     private(set) var rows: [MacDeviceRow] = []
     private(set) var searching = false
     private(set) var searched = false
@@ -26,9 +26,12 @@ final class MacDeviceSetupModel {
     private(set) var releaseError: String?
     private let management: CompanionMacManagement
     private let getRelease: @Sendable () async throws -> CompanionMacRelease
-    init(management: CompanionMacManagement = .init(), getRelease: (@Sendable () async throws -> CompanionMacRelease)? = nil) {
+    private let pollDelay: @Sendable () async throws -> Void
+    init(management: CompanionMacManagement = .init(), getRelease: (@Sendable () async throws -> CompanionMacRelease)? = nil,
+         pollDelay: @escaping @Sendable () async throws -> Void = { try await Task.sleep(for: .seconds(2)) }) {
         self.management = management
         self.getRelease = getRelease ?? { try await management.latestRelease() }
+        self.pollDelay = pollDelay
     }
 
     func discover() async {
@@ -73,14 +76,20 @@ final class MacDeviceSetupModel {
         row.busy = true; row.error = nil; row.message = nil
         defer { row.busy = false }
         do {
-            if action == .update || action == .installAndPair {
+            if action == .open {
+                try await management.open(row.mac, connection: row.connection)
+                row.message = "Opened Woven Matter. In Apple Devices on that Mac, change it to a node and make it discoverable, then find devices here to pair."
+                return
+            }
+            if action == .update || action == .installAndPair || action == .download {
                 guard let release else { throw MacDeviceSetupError("Check for updates before downloading Woven Matter.") }
                 row.message = "Downloading and verifying Woven Matter \(release.version)…"
-                try await management.install(row.mac, connection: row.connection, release: release)
+                try await management.install(row.mac, connection: row.connection, release: release,
+                    requirePairingSupport: action == .installAndPair && central != nil)
                 row.installation = try await management.inspect(row.mac, connection: row.connection)
                 row.message = "Woven Matter \(row.installation?.version ?? release.version) installed."
             }
-            if action != .update {
+            if action != .update && action != .download {
                 guard let central else {
                     guard let requestRemoteCentral else { throw MacDeviceSetupError("Wait for this Mac’s central database to become available before pairing.") }
                     row.message = "Opening Woven Matter on the central Mac…"
@@ -93,17 +102,17 @@ final class MacDeviceSetupModel {
                     throw MacDeviceSetupError("This version needs to be updated before pairing from here. You can also open Apple Devices on that Mac to pair manually.")
                 }
                 row.message = "Opening Woven Matter and requesting pairing…"
-                try await management.requestPairing(row.mac, connection: row.connection, central: central)
+                let requestID = try await management.requestPairing(row.mac, connection: row.connection, central: central)
                 // Surface target-side transition failures instead of implying success
                 // merely because LaunchServices accepted an open request.
                 for _ in 0..<30 {
-                    try await Task.sleep(for: .seconds(2))
+                    try await pollDelay()
                     let state = try await management.inspect(row.mac, connection: row.connection)
                     row.installation = state
-                    if let status = state.setupStatus {
-                        row.message = status
-                        if status.hasPrefix("Pairing needs attention:") { throw MacDeviceSetupError(status) }
-                        if ["Waiting for pairing approval on the central Mac.", "Already paired with this central database.", "Paired with the central database."].contains(status) { return }
+                    if let status = state.setupResult, status.requestID == requestID {
+                        row.message = status.message
+                        if status.phase == .failed { throw MacDeviceSetupError(status.message) }
+                        if status.phase == .waiting || status.phase == .paired { return }
                     }
                 }
                 throw MacDeviceSetupError("The Mac has not confirmed its pairing request. Check Woven Matter on that Mac, then retry.")

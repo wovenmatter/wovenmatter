@@ -49,7 +49,7 @@ struct SettingsCompanionView: View {
                     HStack(spacing: 12) {
                         DeviceConnectionIcon(kind: .mac)
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(Host.current().localizedName ?? "This Mac").font(.system(size: 13, weight: .medium))
+                            Text(DevelopmentLaunch.isSnapshot ? DevelopmentLaunch.displayName + " snapshot" : Host.current().localizedName ?? "This Mac").font(.system(size: 13, weight: .medium))
                             Text(host.status)
                                 .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
                         }

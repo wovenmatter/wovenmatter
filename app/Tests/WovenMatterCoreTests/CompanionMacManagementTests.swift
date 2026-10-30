@@ -78,6 +78,7 @@ struct CompanionMacManagementTests {
         let now = Date(timeIntervalSince1970: 12345)
         let request = CompanionMacSetupRequest(action: .pair, endpoint: URL(string: "https://air.tail.ts.net:8443/wovenmatter")!, now: now)
         try JSONDecoder().decode(CompanionMacSetupRequest.self, from: Data(request.json().utf8)).validate(now: now)
+        try request.validate(now: now.addingTimeInterval(-120))
         #expect(throws: (any Error).self) { try request.validate(now: now.addingTimeInterval(901)) }
         #expect(throws: (any Error).self) { try CompanionMacSetupRequest(action: .pair, endpoint: URL(string: "https://example.com"), now: now).validate(now: now) }
         #expect(throws: (any Error).self) { try CompanionMacSetupRequest(action: .pair, now: now).validate(now: now) }
@@ -88,6 +89,40 @@ struct CompanionMacManagementTests {
         })
         do { try await manager.install(mini, connection: .init(alias: "mini"), release: decodeRelease()); Issue.record("Expected checksum failure") }
         catch { #expect(error.localizedDescription == "The download checksum did not match.") }
+    }
+    @Test func oldPublishedReleasesCannotStartDownloadAndPair() async throws {
+        let calls = MacManagementCalls()
+        let manager = CompanionMacManagement(executable: URL(fileURLWithPath: "/fixture/Tailscale"), run: { executable, _, _ in
+            await calls.append(executable.lastPathComponent)
+            return Self.status
+        })
+        let old = try decodeRelease(setupVersion: nil)
+        #expect(!old.supportsRemoteSetup)
+        #expect(try decodeRelease().supportsRemoteSetup)
+        await #expect(throws: (any Error).self) {
+            try await manager.install(mini, connection: .init(alias: "mini"), release: old, requirePairingSupport: true)
+        }
+        #expect(await calls.items.isEmpty)
+    }
+    @Test @MainActor func completingAnOldIntentCannotRemoveANewerOne() throws {
+        let suite = "device-intent-fixture-\(UUID())", old = try CompanionMacSetupRequest(action: .update).json()
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let fresh = try CompanionMacSetupRequest(action: .update).json()
+        defaults.set(fresh, forKey: CompanionMacSetupRequest.preferenceKey)
+        CompanionMacSetupRequest.clearIfCurrent(old, defaults: defaults)
+        #expect(defaults.string(forKey: CompanionMacSetupRequest.preferenceKey) == fresh)
+        CompanionMacSetupRequest.clearIfCurrent(fresh, defaults: defaults)
+        #expect(defaults.string(forKey: CompanionMacSetupRequest.preferenceKey) == nil)
+    }
+    @Test func setupResultsCarryTheSpecificRequestIdentity() throws {
+        let request = CompanionMacSetupRequest(action: .update)
+        let status = CompanionMacSetupStatus(requestID: request.id, phase: .failed, message: "Finish active work first.")
+        let data = Data("woven-mac-inspection-v1\ninstalled\n0.3.6\n999\n1\n1\narm64\n27.2\n\(try status.json())\n\n".utf8)
+        let result = try CompanionMacInstallation(data: data)
+        #expect(result.setupResult?.requestID == request.id)
+        #expect(result.setupResult?.phase == .failed)
+        #expect(result.setupStatus == status.message)
     }
     @Test func scriptsAreValidBashAndInspectionPreservesEmptyFields() throws {
         for script in [CompanionMacRemoteScripts.inspect, CompanionMacRemoteScripts.pair, CompanionMacRemoteScripts.install] {
@@ -107,8 +142,10 @@ struct CompanionMacManagementTests {
         process.waitUntilExit()
         #expect(!state.installed && state.version == nil && state.build == nil)
     }
-    private func decodeRelease(url: String = "https://github.com/wovenmatter/wovenmatter/releases/download/v0.3.6/WovenMatter_0.3.6_arm64.dmg", hash: String = String(repeating: "a", count: 64)) throws -> CompanionMacRelease {
-        try JSONDecoder().decode(CompanionMacRelease.self, from: JSONSerialization.data(withJSONObject: ["version": "0.3.6", "build": 999, "architecture": "arm64", "minimum_macos": "26.0", "download_url": url, "sha256": hash]))
+    private func decodeRelease(url: String = "https://github.com/wovenmatter/wovenmatter/releases/download/v0.3.6/WovenMatter_0.3.6_arm64.dmg", hash: String = String(repeating: "a", count: 64), setupVersion: Int? = 1) throws -> CompanionMacRelease {
+        var value: [String: Any] = ["version": "0.3.6", "build": 999, "architecture": "arm64", "minimum_macos": "26.0", "download_url": url, "sha256": hash]
+        value["device_setup_version"] = setupVersion
+        return try JSONDecoder().decode(CompanionMacRelease.self, from: JSONSerialization.data(withJSONObject: value))
     }
 }
 private actor MacManagementCalls {

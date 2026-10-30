@@ -30,17 +30,21 @@ public struct CompanionMacManagement: Sendable {
     public func inspect(_ mac: CompanionTailnetMac, connection: CompanionMacSSHConnection) async throws -> CompanionMacInstallation {
         try await CompanionMacInstallation(data: execute(mac, connection: connection, script: CompanionMacRemoteScripts.inspect))
     }
-    public func install(_ mac: CompanionTailnetMac, connection: CompanionMacSSHConnection, release: CompanionMacRelease) async throws {
+    public func install(_ mac: CompanionTailnetMac, connection: CompanionMacSSHConnection, release: CompanionMacRelease, requirePairingSupport: Bool = false) async throws {
         try release.validate()
+        guard !requirePairingSupport || release.supportsRemoteSetup else {
+            throw CompanionAPIError(code: "setup_unavailable", message: "This published release does not support pairing from another Mac yet. Update or download it separately, then pair in Apple Devices on that Mac.")
+        }
         _ = try await execute(mac, connection: connection, script: CompanionMacRemoteScripts.install,
-            arguments: [release.downloadURL.absoluteString, release.sha256, release.version, String(release.build), try CompanionMacSetupRequest(action: .update).json(), release.minimumMacOS], timeout: 600)
+            arguments: [release.downloadURL.absoluteString, release.sha256, release.version, String(release.build), try CompanionMacSetupRequest(action: .update).json(), release.minimumMacOS, requirePairingSupport ? "1" : "0"], timeout: 600)
     }
-    public func requestPairing(_ mac: CompanionTailnetMac, connection: CompanionMacSSHConnection, central: URL) async throws {
+    @discardableResult public func requestPairing(_ mac: CompanionTailnetMac, connection: CompanionMacSSHConnection, central: URL) async throws -> UUID {
         guard CompanionPairingPayload.isValidEndpoint(central) else {
             throw CompanionAPIError(code: "invalid_endpoint", message: "The central database is not ready for pairing.")
         }
-        _ = try await execute(mac, connection: connection, script: CompanionMacRemoteScripts.pair,
-            arguments: [try CompanionMacSetupRequest(action: .pair, endpoint: central).json()])
+        let request = CompanionMacSetupRequest(action: .pair, endpoint: central)
+        _ = try await execute(mac, connection: connection, script: CompanionMacRemoteScripts.pair, arguments: [try request.json()])
+        return request.id
     }
     public func open(_ mac: CompanionTailnetMac, connection: CompanionMacSSHConnection) async throws {
         _ = try await execute(mac, connection: connection, script: CompanionMacRemoteScripts.open)

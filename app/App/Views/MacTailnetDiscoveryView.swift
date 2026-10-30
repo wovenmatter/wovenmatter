@@ -34,7 +34,10 @@ struct MacTailnetDiscoveryView: View {
             ForEach(devices.rows) { row in
                 MacTailnetDeviceRow(row: row, release: devices.release, peer: peer(for: row), paired: isPaired(row),
                     isCentral: isCentral, canPairWithCentral: canPairWithCentral,
-                    onAction: { action in confirmation = .init(row: row, action: action, sendsInvitation: isCentral && peer(for: row)?.advertisement.role == .client) },
+                    onAction: { action in
+                        let item = DeviceSetupConfirmation(row: row, action: action, sendsInvitation: isCentral && peer(for: row)?.advertisement.role == .client)
+                        if action == .open { Task { await perform(item) } } else { confirmation = item }
+                    },
                     onInspect: { Task { await devices.inspect(row) } })
             }
             if let error = devices.releaseError {
@@ -46,7 +49,7 @@ struct MacTailnetDiscoveryView: View {
             Button(item.buttonTitle) { Task { await perform(item) } }
             Button("Cancel", role: .cancel) { confirmation = nil }
         } message: { item in
-            Text(item.message(version: devices.release?.version, central: isCentral))
+            Text(item.message(version: devices.release?.version, central: isCentral, snapshot: DevelopmentLaunch.isSnapshot))
         }
     }
     private func peer(for row: MacDeviceRow) -> CompanionDiscoveredPeer? {
@@ -63,7 +66,7 @@ struct MacTailnetDiscoveryView: View {
             if isCentral, peer.advertisement.role == .client { await host.invitePairing(peer: peer); return }
         }
         if isCentral {
-            guard item.action == .update || host.endpoint != nil else { item.row.error = "Wait for this central database to become available before pairing."; return }
+            guard [.update, .download, .open].contains(item.action) || host.endpoint != nil else { item.row.error = "Wait for this central database to become available before pairing."; return }
             await devices.perform(item.action, row: item.row, central: host.endpoint)
         } else {
             await devices.perform(item.action, row: item.row, central: nil, requestRemoteCentral: {
@@ -81,22 +84,30 @@ struct MacTailnetDiscoveryView: View {
     }
 }
 
-@MainActor private struct DeviceSetupConfirmation {
+@MainActor struct DeviceSetupConfirmation {
     let row: MacDeviceRow
     let action: MacDeviceSetupModel.Action
     let sendsInvitation: Bool
-    var title: String { action == .update ? "Update Woven Matter on \(row.mac.name)?" : "Pair with \(row.mac.name)?" }
-    var buttonTitle: String {
-        switch action { case .pair: "Pair"; case .installAndPair: row.installation?.installed == true ? "Update and pair" : "Download and pair"; case .update: "Update" }
+    var title: String {
+        switch action {
+        case .update: "Update Woven Matter on \(row.mac.name)?"
+        case .download: "Download Woven Matter on \(row.mac.name)?"
+        case .open: "Open Woven Matter on \(row.mac.name)?"
+        default: "Pair with \(row.mac.name)?"
+        }
     }
-    func message(version: String?, central: Bool) -> String {
-        if action == .update {
+    var buttonTitle: String {
+        switch action { case .pair: "Pair"; case .installAndPair: row.installation?.installed == true ? "Update and pair" : "Download and pair"; case .update: "Update"; case .download: "Download"; case .open: "Open" }
+    }
+    func message(version: String?, central: Bool, snapshot: Bool = false) -> String {
+        if action == .update || action == .download {
             return "Install Woven Matter \(version ?? "the latest version") on this Mac. Running work must finish before the app can restart. Its library stays on that Mac."
         }
-        if action == .pair && sendsInvitation { return "Send this Mac an invitation to your central database. Accept the invitation in Woven Matter on that Mac to finish pairing." }
+        let destination = snapshot ? "this isolated snapshot database" : "this central database"
+        if action == .pair && sendsInvitation { return "Send this Mac an invitation to \(destination). Accept the invitation in Woven Matter on that Mac to finish pairing." }
         let download = action == .installAndPair ? "Download and verify Woven Matter \(version ?? "the latest version"), then " : ""
         return download + (central
-            ? "open Woven Matter on this Mac, set it up as a node, and request access to this central database. Its existing library stays saved separately. Approve the pairing request here to finish."
+            ? "open Woven Matter on this Mac, set it up as a node, and request access to \(destination). Its existing library stays saved separately. Approve the pairing request here to finish."
             : "open Woven Matter and request access to this Mac’s central database. Approve the request on that Mac to finish.")
     }
 }
@@ -129,6 +140,11 @@ private struct MacTailnetDeviceRow: View {
             if row.mac.online && !row.checking { actions.disabled(row.busy).padding(.leading, 36) }
             if let message = row.message { Text(message).font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground) }
             if let error = row.error { Text(error).font(.system(size: 12)).foregroundStyle(DashboardPalette.danger).textSelection(.enabled) }
+            if isCentral, row.installation?.installed == true, row.installation?.supportsSetup == false,
+               !canUseService, release?.supportsRemoteSetup != true {
+                Text("Pair in Apple Devices on that Mac. Setup from here will be available when a release with remote pairing support is published.")
+                    .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
+            }
             if row.mac.online {
                 DisclosureGroup("Connection settings", isExpanded: $showConnection) {
                     VStack(alignment: .leading, spacing: 8) {
@@ -159,9 +175,13 @@ private struct MacTailnetDeviceRow: View {
                 if canUseService || (isCentral && row.installation?.supportsSetup == true) || (canPairWithCentral && row.installation?.installed == true) {
                     Button("Pair") { onAction(.pair) }.buttonStyle(SettingsQuietButtonStyle())
                 } else if isCentral || canPairWithCentral, let installation = row.installation, let release,
-                          !installation.installed || release.isNewer(than: installation) {
+                          (canPairWithCentral || release.supportsRemoteSetup), !installation.installed || release.isNewer(than: installation) {
                     Button(installation.installed ? "Update & pair" : "Download & pair") { onAction(.installAndPair) }
                         .buttonStyle(SettingsQuietButtonStyle())
+                } else if row.installation?.installed == true {
+                    Button("Open Woven Matter") { onAction(.open) }.buttonStyle(SettingsQuietButtonStyle())
+                } else if row.installation?.installed == false, release != nil {
+                    Button("Download") { onAction(.download) }.buttonStyle(SettingsQuietButtonStyle())
                 } else {
                     Button("Retry", action: onInspect).buttonStyle(SettingsQuietButtonStyle())
                 }
