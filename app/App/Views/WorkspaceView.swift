@@ -425,6 +425,12 @@ struct WorkspaceView: View {
         }
     }
 
+    private var presentsCanvas: Bool {
+        guard destination == .workspace, assets.tabs.isPresented,
+              let note = selectedNote else { return false }
+        return NoteDocument.decode(model.noteDraft(for: note).content).kind == .canvas
+    }
+
     private func desktopShell(layout: DashboardLayoutState) -> some View {
         let showLeftRailButton = sidebarStyle != .split
             ? !layout.showsLeftRail && singleSidebarSide == .left
@@ -433,7 +439,7 @@ struct WorkspaceView: View {
             ? !layout.showsRightRail && singleSidebarSide == .right
             : !layout.showsRightRail
 
-        return HStack(spacing: DashboardMetrics.shellGap) {
+        return HStack(spacing: presentsCanvas ? 0 : DashboardMetrics.shellGap) {
             if layout.showsLeftRail {
                 railGroup(side: .left)
             }
@@ -450,8 +456,8 @@ struct WorkspaceView: View {
                 railGroup(side: .right)
             }
         }
-        .padding(.horizontal, DashboardMetrics.shellInset)
-        .padding(.bottom, DashboardMetrics.shellInset)
+        .padding(.horizontal, presentsCanvas ? 0 : DashboardMetrics.shellInset)
+        .padding(.bottom, presentsCanvas ? 0 : DashboardMetrics.shellInset)
         .animation(reduceMotion ? nil : .snappy(duration: 0.3), value: layout)
     }
 

@@ -188,7 +188,9 @@ when an intentional design change is accepted.
   edge with the header controls using the same 12-point side inset.
 - **Canvas:** use the existing workspace and theme-whisper surfaces with quiet
   card borders. Let the board fill the editor below its title without outer
-  content gutters or a separate footer. Put compact Add card, Arrange, and zoom
+  content gutters or a separate footer. While Canvas is open, remove the desktop
+  shell’s sidebar gaps and outer insets too, so the board reaches adjacent panes
+  and the window bottom. Put compact Add card, Arrange, and zoom
   controls in the title row immediately before history and database actions; card
   headers own dragging and an accessible actions menu for movement, size, and
   removal. References open the original asset. Preserve chat beside the board
