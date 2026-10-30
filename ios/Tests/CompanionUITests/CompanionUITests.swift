@@ -51,19 +51,85 @@ final class CompanionUITests: XCTestCase {
     }
     return app
   }
+  @MainActor func reveal(_ element: XCUIElement, in app: XCUIApplication, scrollingDown: Bool = true) {
+    for _ in 0..<6 {
+      if element.isHittable { return }
+      if scrollingDown { app.swipeUp() } else { app.swipeDown() }
+    }
+    XCTAssertTrue(element.isHittable, "The requested folder navigation row must be reachable by scrolling")
+  }
+
+  @MainActor func testFolderHierarchyOrderTogglesAndMixedRecents() {
+    let app = launch(scenario: "workspace-organization")
+    let local = app.buttons["folders-local"], remote = app.buttons["folders-remote"]
+    let localAgent = app.buttons["folder-agent-local:pi-durable-device"]
+    let localFolder = app.buttons["folder-dddddddd-4444-4444-8444-444444444444"]
+    XCTAssertTrue(localAgent.waitForExistence(timeout: 5))
+    XCTAssertEqual(local.label, "Local Agent Workspace")
+    XCTAssertEqual(remote.label, "Remote Workspaces")
+    XCTAssertEqual(app.buttons["folder-all"].label, "All Workspaces")
+    XCTAssertFalse(app.staticTexts["This iPhone"].exists)
+    XCTAssertFalse(app.staticTexts["This iPad"].exists)
+    XCTAssertFalse(app.buttons["All items"].exists)
+    XCTAssertFalse(app.buttons["Unfiled items"].exists)
+    XCTAssertFalse(app.buttons["folders-workspace"].exists)
+    XCTAssertTrue(localFolder.exists)
+    XCTAssertEqual(app.buttons["action-new-chat"].frame.minX, localAgent.frame.minX, accuracy: 1,
+      "Workspace children must stay aligned with root rows")
+    let localFolders = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "workspace-folders-")).firstMatch
+    XCTAssertTrue(localFolders.exists)
+    localFolders.tap()
+    XCTAssertFalse(localFolder.exists)
+    XCTAssertTrue(localAgent.exists, "Collapsing Folders must leave its agent visible")
+    localFolders.tap()
+    XCTAssertTrue(localFolder.exists)
+    local.tap()
+    XCTAssertFalse(localAgent.exists)
+    XCTAssertFalse(localFolder.exists)
+    remote.tap()
+    XCTAssertFalse(app.buttons["folder-workspace-cccccccc-3333-4333-8333-333333333333"].exists)
+    let rows = [app.buttons["action-new-chat"], app.buttons["action-new-note"], app.buttons["folder-all"],
+      local, remote, app.buttons["folders-trash"], app.buttons["folders-recents"]]
+    for (above, below) in zip(rows, rows.dropFirst()) {
+      XCTAssertTrue(above.exists); XCTAssertTrue(below.exists)
+      XCTAssertLessThan(above.frame.minY, below.frame.minY)
+    }
+    let note = app.buttons["recent-note-organization-local-note"]
+    let chat = app.buttons["recent-conversation-organization-ipad-chat"]
+    XCTAssertTrue(note.exists); XCTAssertTrue(chat.exists)
+    let recents = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ OR identifier BEGINSWITH %@", "recent-note-", "recent-conversation-"))
+    XCTAssertLessThanOrEqual(recents.count, 14)
+    app.buttons["folders-recents"].tap()
+    XCTAssertFalse(note.exists); XCTAssertFalse(chat.exists)
+    app.buttons["folders-recents"].tap()
+    XCTAssertTrue(note.exists); XCTAssertTrue(chat.exists)
+    local.tap(); remote.tap()
+    XCTAssertTrue(localAgent.exists)
+    XCTAssertTrue(app.buttons["folder-workspace-cccccccc-3333-4333-8333-333333333333"].exists)
+  }
+
   @MainActor func testWorkspaceOrganizationAndForeignQuickChatHistory() {
     let app = launch(scenario: "workspace-organization")
-    XCTAssertTrue(app.staticTexts["Local workspace"].exists)
-    XCTAssertTrue(app.staticTexts["Remote workspaces"].exists)
+    XCTAssertTrue(app.buttons["folders-local"].exists)
+    XCTAssertTrue(app.buttons["folders-remote"].exists)
     XCTAssertTrue(app.buttons["folder-dddddddd-4444-4444-8444-444444444444"].exists)
     XCTAssertTrue(app.buttons["folder-agent-local:pi-durable-device"].exists)
-    XCTAssertFalse(app.buttons["folders-workspace"].exists)
     let ipad = "cccccccc-3333-4333-8333-333333333333"
+    reveal(app.buttons["folder-workspace-" + ipad], in: app)
     app.buttons["folder-workspace-" + ipad].tap()
+    let folders = app.buttons["workspace-folders-" + ipad]
+    XCTAssertTrue(folders.exists)
     XCTAssertTrue(app.buttons["folder-ffffffff-6666-4666-8666-666666666666"].exists)
     XCTAssertFalse(app.buttons["action-new-folder-" + ipad].exists)
     XCTAssertFalse(app.buttons["action-new-note-" + ipad].exists)
-    app.buttons["workspace-items-" + ipad].tap()
+    reveal(folders, in: app)
+    folders.tap()
+    XCTAssertFalse(app.buttons["folder-ffffffff-6666-4666-8666-666666666666"].exists)
+    folders.tap()
+    XCTAssertTrue(app.buttons["folder-ffffffff-6666-4666-8666-666666666666"].exists)
+    reveal(app.buttons["folder-all"], in: app, scrollingDown: false)
+    app.buttons["folder-all"].tap()
+    reveal(app.buttons["folder-chat-organization-ipad-chat"], in: app)
     app.buttons["folder-chat-organization-ipad-chat"].tap()
     XCTAssertTrue(app.staticTexts["Your weekend plan, saved from the iPad."].waitForExistence(timeout: 5))
     XCTAssertFalse(app.buttons["chat-new-session"].exists)
@@ -94,7 +160,7 @@ final class CompanionUITests: XCTestCase {
   @MainActor func testFiveNativeTabsAndFocusedSurfaces() {
     let app = launch()
     XCTAssertTrue(app.staticTexts["Folders"].exists)
-    XCTAssertTrue(app.staticTexts["Local workspace"].exists)
+    XCTAssertTrue(app.buttons["folders-local"].exists)
     XCTAssertTrue(app.buttons["folder-all"].exists)
     XCTAssertFalse(app.buttons["folders-workspace"].exists)
     app.buttons["tab-home"].tap()
@@ -102,6 +168,7 @@ final class CompanionUITests: XCTestCase {
     XCTAssertTrue(app.buttons["launch-agent-local:pi-durable-device"].waitForExistence(timeout: 5))
     XCTAssertFalse(app.buttons["tab-content"].exists)
     app.buttons["tab-folders"].tap()
+    app.buttons["folder-all"].tap()
     app.buttons["folder-inbox"].tap()
     XCTAssertTrue(app.staticTexts["pane-heading-inbox"].waitForExistence(timeout: 5))
     XCTAssertTrue(app.textFields["Search notes and conversations"].exists)
@@ -116,7 +183,8 @@ final class CompanionUITests: XCTestCase {
     app.buttons["tab-folders"].tap()
     XCTAssertTrue(app.staticTexts["pane-heading-inbox"].waitForExistence(timeout: 5))
     app.buttons["back-folders"].tap()
-    XCTAssertTrue(app.buttons["folder-inbox"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.buttons["folder-all"].waitForExistence(timeout: 5))
+    XCTAssertFalse(app.buttons["folder-inbox"].exists, "Unassigned folders stay in All Workspaces")
     app.buttons["tab-chats"].tap()
     XCTAssertTrue(app.staticTexts["Summarize the launch plan."].waitForExistence(timeout: 5))
     XCTAssertFalse(app.buttons["Send message"].isEnabled)
@@ -206,9 +274,9 @@ final class CompanionUITests: XCTestCase {
     app.buttons["Close agent chooser"].tap()
     XCTAssertTrue(app.staticTexts["pane-heading-woven matter"].waitForExistence(timeout: 5))
     app.buttons["tab-folders"].tap()
-    let localAgent = app.buttons["folder-agent-local:pi-durable-device"]
-    XCTAssertTrue(localAgent.waitForExistence(timeout: 5))
-    localAgent.tap()
+    app.buttons["action-new-chat"].tap()
+    XCTAssertTrue(chooser.waitForExistence(timeout: 5))
+    chooser.tap()
     let composer = app.descendants(matching: .any)["chat-composer"].firstMatch
     XCTAssertTrue(composer.waitForExistence(timeout: 5))
     XCTAssertEqual(composer.label, "Chat…")
@@ -241,7 +309,9 @@ final class CompanionUITests: XCTestCase {
     XCTAssertEqual(chatError.label, message)
     app.buttons["Close agent chooser"].tap()
     app.buttons["tab-folders"].tap()
+    reveal(app.buttons["folder-workspace-11111111-2222-4333-8444-555555555555"], in: app)
     app.buttons["folder-workspace-11111111-2222-4333-8444-555555555555"].tap()
+    reveal(app.buttons["action-new-folder-11111111-2222-4333-8444-555555555555"], in: app)
     app.buttons["action-new-folder-11111111-2222-4333-8444-555555555555"].tap()
     XCTAssertFalse(app.alerts["New folder"].exists)
     let folderError = app.staticTexts["workspace-action-error"]

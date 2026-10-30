@@ -49,6 +49,28 @@ private actor ModelMac: CompanionTransport, CompanionCalendarTransport {
 }
 
 final class CompanionModelTests: XCTestCase {
+  @MainActor func testFolderRecentsMixNotesAndChatsByLatestActivityWithFourteenItemLimit() {
+    let model = CompanionModel()
+    for index in 0..<20 {
+      let id = "item-\(index)"
+      let timestamp = "2026-10-30T10:00:" + String(format: "%02d", index) + "Z"
+      if index.isMultiple(of: 2) {
+        model.state.notes[id] = .init(id: id, title: "Note \(index)", content: "", updatedAt: timestamp, isPinned: index == 0)
+      } else {
+        model.state.conversations[id] = .init(id: id, title: "Chat \(index)", updatedAt: timestamp, isPinned: index == 1)
+      }
+    }
+    let recents = model.folderRecentItems
+    XCTAssertEqual(recents.count, 14)
+    XCTAssertEqual(recents.first?.resourceID, "item-19")
+    XCTAssertEqual(recents.last?.resourceID, "item-6")
+    XCTAssertEqual(recents.filter(\.isNote).count, 7)
+    XCTAssertFalse(recents.contains { $0.resourceID == "item-0" || $0.resourceID == "item-1" }, "Pinning must not replace recent activity ordering")
+    model.state.notes["item-0"]?.updatedAt = "2026-10-30T11:00:00Z"
+    XCTAssertEqual(model.folderRecentItems.first?.resourceID, "item-0", "Editing an old note brings it into mixed recents")
+    XCTAssertEqual(model.folderRecentItems.count, 14)
+  }
+
   @MainActor func testFolderGroupsDistinguishThisDeviceAndRetainUnknownOwnership() {
     let model = CompanionModel()
     let phone = model.state.deviceID

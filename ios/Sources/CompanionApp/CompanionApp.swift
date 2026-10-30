@@ -282,7 +282,10 @@ struct FoldersPane: View {
   @Bindable var model: CompanionModel
   @State private var newFolderWorkspace: MobileFolderWorkspace?
   @State private var folderName = ""
-  @State private var expandedWorkspaces: Set<String> = []
+  @State private var collapsedSections: Set<String> = []
+  @State private var initializedSections = false
+  @State private var managedRecent: MobileFolderRecentItem?
+  @State private var recentDetailsPresented = false
   private let workspaceID: String?
   init(model: CompanionModel, workspaceID: String? = nil) { self.model = model; self.workspaceID = workspaceID }
   private var groups: [MobileFolderWorkspace] {
@@ -297,33 +300,66 @@ struct FoldersPane: View {
           PaneHeader(title: "Folders") { EmptyView() }
           ScrollView {
             VStack(spacing: 0) {
-              if workspaceID == nil {
-                WorkspaceRow(icon: .folder, title: "All Workspace") { model.openFolder(nil) }
-                  .accessibilityIdentifier("folder-all")
-              }
+              WorkspaceRow(icon: .squarePen, title: "New Chat") {
+                model.closeFolder(); model.newChat()
+              }.accessibilityIdentifier("action-new-chat")
+              WorkspaceRow(icon: .fileText, title: "New Note") {
+                model.closeFolder(); Task { await model.newNote() }
+              }.accessibilityIdentifier("action-new-note")
+              WorkspaceRow(icon: .folder, title: "All Workspaces") { model.openFolder(nil) }
+                .accessibilityIdentifier("folder-all")
               ForEach(groups.filter(\.isLocal)) { workspace in
-                GroupLabel(text: "Local workspace")
-                workspaceSection(workspace)
+                sectionHeading("Local Agent Workspace", key: "local", identifier: "folders-local")
+                  .padding(.top, 12)
+                if isExpanded("local") { workspaceContents(workspace) }
               }
-              if !groups.filter({ !$0.isLocal }).isEmpty {
-                GroupLabel(text: "Remote workspaces")
-                ForEach(groups.filter { !$0.isLocal }) { workspace in workspaceSection(workspace) }
-              }
-              if workspaceID == nil, model.hasUnassignedContent {
-                GroupLabel(text: "Unassigned")
-                WorkspaceRow(icon: .folder, title: "Unassigned items", detail: "Existing items without a known workspace") {
-                  model.openFolder(nil, workspaceID: "unassigned")
+              if workspaceID == nil || groups.contains(where: { !$0.isLocal }) {
+                sectionHeading("Remote Workspaces", key: "remote", identifier: "folders-remote")
+                  .padding(.top, 12)
+                if isExpanded("remote") {
+                  ForEach(groups.filter { !$0.isLocal }) { workspace in
+                    sectionHeading(workspace.name, key: workspace.id, identifier: "folder-workspace-" + workspace.id)
+                    if isExpanded(workspace.id) { workspaceContents(workspace) }
+                  }
                 }
-                ForEach(model.folders.filter { model.folderOwner($0) == nil }) { folder in folderRow(folder) }
               }
               SettingsNavigationRow(title: "Trash", icon: .trash) { TrashPane(model: model).mobileNavigationPage("Trash") }
                 .padding(.top, 18).accessibilityIdentifier("folders-trash")
+              sectionHeading("Recents", key: "recents", identifier: "folders-recents").padding(.top, 8)
+              if isExpanded("recents") {
+                if model.folderRecentItems.isEmpty {
+                  Text("No recent items.").font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(14)
+                }
+                ForEach(model.folderRecentItems) { item in
+                  WorkspaceRow(icon: item.isNote ? .fileText : .messageSquare, title: item.title) {
+                    Task {
+                      if item.isNote { await model.openNote(item.resourceID) }
+                      else { await model.selectConversation(item.resourceID) }
+                    }
+                  }.accessibilityIdentifier("recent-" + item.id)
+                    .contextMenu {
+                      Button(item.isNote ? "Note details" : "Conversation details") {
+                        managedRecent = item; recentDetailsPresented = true
+                      }
+                    }
+                }
+              }
             }.padding(.horizontal, 18).padding(.bottom, 24)
           }.refreshable { await model.refresh() }
         }
       }
     }
-    .onAppear { for workspace in groups where workspace.isLocal { expandedWorkspaces.insert(workspace.id) } }
+    .onAppear {
+      guard !initializedSections else { return }
+      collapsedSections.formUnion(groups.filter { !$0.isLocal }.map(\.id))
+      initializedSections = true
+    }
+    .navigationDestination(isPresented: $recentDetailsPresented) {
+      if let item = managedRecent {
+        ItemManagementSheet(model: model, id: item.resourceID, isNote: item.isNote, title: item.title, folderID: item.folderID ?? "")
+      }
+    }
     .alert("New folder", isPresented: Binding(get: { newFolderWorkspace != nil }, set: { if !$0 { newFolderWorkspace = nil } })) {
       TextField("Folder name", text: $folderName)
       Button("Create") {
@@ -337,44 +373,50 @@ struct FoldersPane: View {
       Button("Cancel", role: .cancel) { folderName = ""; newFolderWorkspace = nil }
     } message: { Text("Create in " + (newFolderWorkspace?.name ?? "this workspace") + ".") }
   }
-  private func workspaceSection(_ workspace: MobileFolderWorkspace) -> some View {
-    DisclosureGroup(isExpanded: Binding(get: { expandedWorkspaces.contains(workspace.id) }, set: {
-      if $0 { expandedWorkspaces.insert(workspace.id) } else { expandedWorkspaces.remove(workspace.id) }
-    })) {
-      VStack(spacing: 0) {
-        WorkspaceRow(icon: .folder, title: "All items") { model.openFolder(nil, workspaceID: workspace.id) }.accessibilityIdentifier("workspace-items-" + workspace.id)
+  private func isExpanded(_ key: String) -> Bool { !collapsedSections.contains(key) }
+  private func sectionHeading(_ title: String, key: String, identifier: String) -> some View {
+    Button {
+      if isExpanded(key) { collapsedSections.insert(key) } else { collapsedSections.remove(key) }
+    } label: {
+      HStack {
+        Text(title).font(.subheadline.weight(.semibold))
+        Spacer()
+        Image(systemName: isExpanded(key) ? "chevron.down" : "chevron.right").font(.caption.weight(.semibold)).accessibilityHidden(true)
+      }.foregroundStyle(DashboardPalette.foreground).padding(.horizontal, 14)
+        .frame(minHeight: 44).contentShape(Rectangle())
+    }.buttonStyle(.plain).accessibilityIdentifier(identifier).accessibilityLabel(title)
+      .accessibilityValue(isExpanded(key) ? "Expanded" : "Collapsed")
+  }
+  private func workspaceContents(_ workspace: MobileFolderWorkspace) -> some View {
+    VStack(spacing: 0) {
+      if workspace.canCreate {
+        ForEach(model.folderAgents(in: workspace)) { agent in
+          WorkspaceRow(icon: MobileAgentIcon(runtimeKind: agent.runtimeKind, size: 24), title: agent.name) {
+            model.selectedFolderID = nil; model.selectedFolderWorkspaceID = workspace.id
+            model.newChatNoteID = nil
+            Task { await model.startNewChat(with: agent) }
+          }.accessibilityIdentifier("folder-agent-" + agent.id)
+        }
+      } else if workspace.kind == .ios {
+        WorkspaceRow(icon: .messageSquare, title: "Quick Chat", detail: "Saved history") {
+          model.openFolder(nil, workspaceID: workspace.id)
+        }.accessibilityIdentifier("workspace-history-" + workspace.id)
+      }
+      sectionHeading("Folders", key: workspace.id + ":folders", identifier: "workspace-folders-" + workspace.id)
+      if isExpanded(workspace.id + ":folders") {
         if workspace.canCreate {
-          ForEach(model.folderAgents(in: workspace)) { agent in
-            WorkspaceRow(icon: MobileAgentIcon(runtimeKind: agent.runtimeKind, size: 24), title: agent.name,
-              detail: workspace.isLocal ? "Powered by Pi Durable" : nil) {
-              model.selectedFolderID = nil; model.selectedFolderWorkspaceID = workspace.id
-              model.newChatNoteID = nil
-              Task { await model.startNewChat(with: agent) }
-            }.accessibilityIdentifier("folder-agent-" + agent.id)
-          }
-          WorkspaceRow(icon: .fileText, title: "New note") {
-            model.selectedFolderID = nil
-            Task { await model.newNote(workspaceID: workspace.id) }
-          }.accessibilityIdentifier("action-new-note-" + workspace.id)
-          WorkspaceRow(icon: .plus, title: "New folder") {
+          WorkspaceRow(icon: .plus, title: "New Folder") {
             if !workspace.isLocal, !model.workspaceIsConnected(model.workspaceRoute(for: workspace.id)) { model.errorMessage = CompanionModel.deviceConnectionMessage }
             else { newFolderWorkspace = workspace; folderName = "" }
           }.accessibilityIdentifier("action-new-folder-" + workspace.id)
-        } else if workspace.kind == .ios {
-          Text("Quick Chat history syncs from this device.").font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
-            .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 14).padding(.vertical, 8)
         }
-        ForEach(model.folders.filter { model.folderOwner($0) == workspace.id }) { folder in folderRow(folder) }
-        WorkspaceRow(icon: .fileText, title: "Unfiled items") { model.openFolder(nil, workspaceID: workspace.id, unfiled: true) }.accessibilityIdentifier("workspace-unfiled-" + workspace.id)
-      }.padding(.leading, 6)
-    } label: {
-      Text(workspace.name).font(.headline).frame(minHeight: 44)
-    }.padding(.horizontal, 14).accessibilityIdentifier("folder-workspace-" + workspace.id)
-  }
-  private func folderRow(_ folder: CompanionFolder) -> some View {
-    WorkspaceRow(icon: .folder, title: folder.name,
-      detail: String(model.notes.filter { $0.folderID == folder.id }.count + model.conversations.filter { $0.folderID == folder.id }.count)) { model.openFolder(folder.id) }
-      .accessibilityIdentifier("folder-" + folder.id)
+        ForEach(model.folders.filter { model.folderOwner($0) == workspace.id }) { folder in
+          WorkspaceRow(icon: .folder, title: folder.name,
+            detail: String(model.notes.filter { $0.folderID == folder.id }.count + model.conversations.filter { $0.folderID == folder.id }.count)) { model.openFolder(folder.id) }
+            .accessibilityIdentifier("folder-" + folder.id)
+        }
+      }
+    }
   }
 }
 
@@ -420,6 +462,7 @@ struct FolderContentsPane: View {
             GroupLabel(text: "Folders")
             ForEach(folders) { folder in
               WorkspaceRow(icon: .folder, title: folder.name) { model.openFolder(folder.id) }
+                .accessibilityIdentifier("folder-" + folder.id)
             }
           }
           if !notes.isEmpty {

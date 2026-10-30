@@ -65,7 +65,7 @@ extension CompanionModel {
   var selectedFolderScopeTitle: String {
     if let id = selectedFolderID { return state.folders[id]?.name ?? "Folder" }
     if selectedFolderWorkspaceID == "unassigned" { return "Unassigned items" }
-    guard let owner = selectedFolderWorkspaceID else { return "All Workspace" }
+    guard let owner = selectedFolderWorkspaceID else { return "All Workspaces" }
     let name = folderWorkspaceGroups.first { $0.id == owner }?.name ?? "Workspace"
     return folderContentsUnfiled ? "Unfiled · " + name : name
   }
@@ -147,4 +147,23 @@ struct MobileFolderWorkspace: Identifiable {
   let kind: CompanionExecutionWorkspace.Kind?
   let isLocal: Bool
   var canCreate: Bool { isLocal || kind == .mac || kind == .linux }
+}
+
+/// Matches the desktop sidebar: mixed notes/chats, newest activity first, at most 14.
+enum MobileFolderRecentItem: Identifiable {
+  case note(CompanionNote)
+  case conversation(CompanionConversation)
+  var id: String { (isNote ? "note-" : "conversation-") + resourceID }
+  var isNote: Bool { if case .note = self { return true }; return false }
+  var resourceID: String { switch self { case .note(let item): item.id; case .conversation(let item): item.id } }
+  var title: String { switch self { case .note(let item): item.title; case .conversation(let item): item.title } }
+  var folderID: String? { switch self { case .note(let item): item.folderID; case .conversation(let item): item.folderID } }
+  var activityTimestamp: String { switch self { case .note(let item): item.updatedAt; case .conversation(let item): item.updatedAt } }
+}
+extension CompanionModel {
+  var folderRecentItems: [MobileFolderRecentItem] {
+    Array((notes.map(MobileFolderRecentItem.note) + conversations.map(MobileFolderRecentItem.conversation)).sorted {
+      $0.activityTimestamp == $1.activityTimestamp ? $0.id > $1.id : $0.activityTimestamp > $1.activityTimestamp
+    }.prefix(14))
+  }
 }
