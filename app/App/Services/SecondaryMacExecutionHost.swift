@@ -8,6 +8,7 @@ import WovenMatterDashboardStore
 @MainActor
 final class SecondaryMacExecutionHost {
     private(set) var endpoint: URL?
+    var isRunning: Bool { endpoint != nil && exposure?.isRunning == true }
     private(set) var managementGrant: CompanionExecutionManagementGrant?
     private let workspace: SecondaryMacExecutionWorkspace
     private let directory: URL

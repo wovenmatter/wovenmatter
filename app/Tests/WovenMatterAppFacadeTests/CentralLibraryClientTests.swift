@@ -107,6 +107,39 @@ struct CentralLibraryClientTests {
         #expect(serving.child?.isRunning == false)
     }
 
+    @Test func automaticSharingRecoversWithoutReplacingTheExecutor() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        let replica = try MobileStore(file: fixture.directory.appending(path: "client/library.json"))
+        try await replica.bindWorkspace("00000000-0000-4000-8000-000000000001")
+        let serving = SecondaryServingFixture(); serving.failProbes = true
+        let central = MacClientFakeCentral()
+        let client = CentralLibraryClientModel(store: replica, transport: central, executionDirectory: fixture.directory,
+            makeLocalExecution: { directory, store in
+                try await SecondaryMacExecutionWorkspace.create(directory: directory, replica: store,
+                    executionModel: fixture.model)
+            }, makeLocalHost: { workspace, directory in
+                SecondaryMacExecutionHost(workspace: workspace, directory: directory, makeExposure: { serving.exposure() })
+            })
+        await client.initializeClientWorkspace()
+        let execution = try #require(client.localExecution)
+        #expect(!client.sharingLocalExecution)
+        #expect(client.deviceConnectionsError != nil)
+        serving.failProbes = false
+        await client.refresh()
+        #expect(client.sharingLocalExecution)
+        #expect(client.deviceConnectionsError == nil)
+        #expect(client.localExecution === execution)
+        let previous = try #require(serving.child)
+        previous.terminate() // Simulate the owned sharing process exiting.
+        await client.refresh()
+        #expect(client.sharingLocalExecution)
+        #expect(serving.child?.isRunning == true)
+        #expect(serving.child !== previous)
+        #expect(client.localExecution === execution)
+        try await client.prepareForQuit()
+        #expect(serving.child?.isRunning == false)
+    }
+
     @Test func olderActivityStaysWithItsConversationWhenNavigationChangesDuringLoad() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "MacClient-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -178,6 +211,12 @@ struct CentralLibraryClientTests {
         #expect(clearedWorkspaceIDs == ["remote"])
         #expect(!model.canControl(workspaceID: remote.id))
         #expect(model.localExecution != nil)
+        #expect(!model.sharingLocalExecution)
+        await model.initializeClientWorkspace()
+        await model.refresh()
+        #expect(!model.sharingLocalExecution)
+        #expect(serving.child?.isRunning == false)
+        #expect(created == 1)
         #expect(model.canControl(workspaceID: owner))
         #expect(model.state.notes[note.id]?.content == "Pending writing")
         #expect(model.state.chatDrafts["new-chat"]?.text == "Keep draft")

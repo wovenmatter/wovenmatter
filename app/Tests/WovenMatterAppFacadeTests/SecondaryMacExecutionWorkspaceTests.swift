@@ -164,6 +164,7 @@ struct SecondaryMacExecutionWorkspaceTests {
 }
 
 @MainActor final class SecondaryServingFixture {
+    var failProbes = false
     var child: SecondaryServingChild?
     func exposure() -> CompanionTailscaleServe {
         CompanionTailscaleServe(executable: URL(fileURLWithPath: "/fixture/tailscale"),
@@ -174,6 +175,7 @@ struct SecondaryMacExecutionWorkspaceTests {
             })
     }
     func probe(_ arguments: [String]) throws -> Data {
+        if failProbes { throw URLError(.notConnectedToInternet) }
         if arguments == ["status", "--json"] {
             return Data(#"{"BackendState":"Running","Self":{"DNSName":"secondary.test.ts.net."}}"#.utf8)
         }

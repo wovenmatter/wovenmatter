@@ -82,6 +82,7 @@ final class CentralLibraryClientModel {
     private let executionDirectoryOverride: URL?
     var deviceConnectionsError: String?
     @ObservationIgnored private var initializationTask: Task<Void, Never>?
+    private var nextLocalSharingAttempt = Date.distantPast
     private var nextDevelopmentConnection = Date.distantPast
     private var connectingDevelopment = false
     private var running = false
@@ -371,22 +372,31 @@ final class CentralLibraryClientModel {
         } catch { errorMessage = error.localizedDescription }
     }
     func startLocalSharing() async {
-        guard !preparingTransition, !localSharingBusy, let localExecution, !sharingLocalExecution, let store else { return }
+        // A retained replica/executor survives Unpair, but it must stay private
+        // until a central pairing configures a synchronization engine again.
+        guard !preparingTransition, !localSharingBusy, engine != nil,
+              let localExecution, !sharingLocalExecution, let store else { return }
+        let expectedConnection = connectionGeneration
         localSharingBusy = true; defer { localSharingBusy = false }
+        nextLocalSharingAttempt = Date().addingTimeInterval(5)
         deviceConnectionsError = nil
         do {
             let host = localHost ?? makeLocalHost(localExecution, executionDirectory)
             localHost = host
             let previousPort = journal.workspaces[localExecution.descriptor.id]?.endpoint?.port
             try await host.start(preferredHTTPSPort: previousPort)
-            guard !preparingTransition else { throw CancellationError() }
+            guard !preparingTransition, engine != nil, connectionGeneration == expectedConnection else { throw CancellationError() }
             sharingLocalExecution = true
             var descriptor = localExecution.descriptor
             descriptor.revision = journal.workspaces[descriptor.id]?.revision ?? 0
             try await store.journal.upsertWorkspace(descriptor)
+            guard !preparingTransition, engine != nil, connectionGeneration == expectedConnection else { throw CancellationError() }
+            nextLocalSharingAttempt = .distantPast
             await refresh()
         } catch {
             localHost?.stop(); try? await localHost?.waitUntilStopped()
+            sharingLocalExecution = false; publishedManagement = nil
+            try? await localExecution.setEndpoint(nil)
             deviceConnectionsError = error.localizedDescription
         }
     }
@@ -396,6 +406,7 @@ final class CentralLibraryClientModel {
         localHost?.stop()
         do { try await localHost?.waitUntilStopped() } catch { errorMessage = error.localizedDescription; return }
         sharingLocalExecution = false; publishedManagement = nil
+        nextLocalSharingAttempt = .distantPast
         if let localExecution, let store {
             do {
                 try await localExecution.setEndpoint(nil)
@@ -491,6 +502,13 @@ final class CentralLibraryClientModel {
     func refresh(background: Bool = false) async {
         guard !preparingTransition, !refreshing else { return }
         if requiresLocalExecution, localExecution == nil { await enableLocalExecution() }
+        if sharingLocalExecution, !localSharingBusy, localHost?.isRunning != true {
+            await stopLocalSharing()
+        }
+        if requiresLocalExecution, !sharingLocalExecution, !localSharingBusy, engine != nil,
+           !background || nextLocalSharingAttempt <= Date() {
+            await startLocalSharing()
+        }
         refreshing = true; defer { refreshing = false }
         async let directRefresh: Void = refreshAllExecutionWorkspaces(background: background)
         guard let engine, !background || nextCentralRefresh <= Date() else { await directRefresh; return }
