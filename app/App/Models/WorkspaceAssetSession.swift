@@ -95,7 +95,7 @@ final class WorkspaceAssetSession: NSObject, @preconcurrency WMBrowserPageDelega
         let openNotes = tabs.noteIDs.compactMap { id -> WorkspaceVisibleContext.Note? in
             guard let note = notes.first(where: { $0.id == id }) else { return nil }
             return .init(id: id, title: title(note), revision: note.updatedAt ?? note.createdAt ?? "",
-                         active: tabs.selected == .note(id))
+                         active: tabs.selected == .note(id), kind: NoteDocument.decode(note.content).kind)
         }
         let openPages = tabs.browserIDs.compactMap { id -> WorkspaceVisibleContext.Page? in
             guard let page = pages[id] else { return nil }

@@ -2573,7 +2573,7 @@ final class ApplicationModel {
             try dispatchFence.check()
             guard let revision = response.revision else { throw ApplicationModelError.noteContextUnavailable }
             context = AgentNoteContext(noteID: note.id, title: response.title ?? note.title, folderID: note.folderID,
-                revision: revision, requireCurrentRevision: expectedNoteRevision != nil ? true : nil)
+                revision: revision, artifactKind: response.document?.kind, requireCurrentRevision: expectedNoteRevision != nil ? true : nil)
         }
         let remote = conversation.remoteWorkspaceID.flatMap { remoteWorkspaces.configuration(id: $0) }
         if conversation.remoteWorkspaceID != nil, remote == nil { throw ApplicationModelError.remoteHarnessUnavailable }

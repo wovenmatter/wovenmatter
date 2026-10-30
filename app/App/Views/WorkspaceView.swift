@@ -232,7 +232,7 @@ struct WorkspaceView: View {
                         desktopShell(layout: layout)
                     }
                 }
-                .background(theme.palette.workspace)
+                .background(presentsCanvas ? theme.palette.themeWhisper : theme.palette.workspace)
                 .alert("Pi Durable switched models", isPresented: Binding(get: { model.defaultAgentFallbackNotice != nil }, set: { if !$0 { model.defaultAgentFallbackNotice = nil } })) {
                     Button("OK") { model.defaultAgentFallbackNotice = nil }
                 } message: { Text(model.defaultAgentFallbackNotice ?? "") }

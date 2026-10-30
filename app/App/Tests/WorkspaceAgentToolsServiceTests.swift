@@ -191,6 +191,51 @@ struct WorkspaceAgentToolsServiceTests {
 
 extension WorkspaceAgentToolsServiceTests {
 
+    @Test func canvasToolsEditCardsAndPreserveLayout() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "mcp-hardening-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
+        let caller = try await database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Writer", ownerDeviceID: UUID())
+        let model = try await WorkspaceAgentToolsModel(database: database,
+            sessionHandler: { _, _, _ in throw CancellationError() },
+            noteHandler: { caller, request, id in
+                switch request.command {
+                case .read: return try await database.readNoteForEditing(id: request.noteID, callerConversationID: caller)
+                case .apply: return try await database.applyNoteEdits(request, callerConversationID: caller, requestID: id)
+                }
+            },
+            noteRestoreHandler: { _, _, _, _, _ in throw CancellationError() },
+            usageHandler: { _ in throw CancellationError() }, onMutation: {})
+        defer { model.stop() }
+
+        let card = NoteRichTextBlock(text: "Original")
+        let placement = CanvasCardPlacement(x: 420, y: 240, assetID: "retained-reference")
+        let document = NoteDocument(kind: .canvas, blocks: [.richText(card)], canvas: [card.id: placement])
+        let note = try await database.createNote(folderID: nil, title: "Board", content: document.encoded(), kind: .canvas, callerConversationID: caller, requestID: UUID().uuidString)
+        let read = await model.handle(.init(arguments: ["notes", "read", note]), callerID: caller)
+        #expect(read.success)
+        #expect(read.result?.objectValue?["kind"]?.stringValue == "canvas")
+        let originalRevision = try #require(read.result?.objectValue?["revision"]?.stringValue)
+        let appended = await model.handle(.init(arguments: ["notes", "append", "--note-id", note, "--text", "Agent idea", "--revision", originalRevision]), callerID: caller)
+        #expect(appended.success)
+        let created = await model.handle(.init(arguments: ["notes", "table", "create", "--note-id", note, "--rows", "2", "--columns", "2"]), callerID: caller)
+        #expect(created.success)
+        let current = try await database.readNoteForEditing(id: note)
+        let table = try #require(current.document?.blocks.last)
+        let edited = await model.handle(.init(arguments: ["notes", "table", "set-cell", "--note-id", note, "--table-id", table.id, "--row", "0", "--column", "0", "--text", "Comparison", "--revision", try #require(current.revision)]), callerID: caller)
+        #expect(edited.success)
+        let stale = await model.handle(.init(arguments: ["notes", "delete-block", "--note-id", note, "--id", card.id, "--revision", originalRevision]), callerID: caller)
+        #expect(!stale.success)
+        let saved = try await database.readNoteForEditing(id: note)
+        #expect(saved.document?.kind == .canvas)
+        #expect(saved.document?.blocks.count == 3)
+        #expect(saved.document?.plainText.contains("Agent idea") == true)
+        #expect(saved.document?.plainText.contains("Comparison") == true)
+        #expect(saved.document?.canvas?[card.id] == placement)
+    }
+
+
     @Test func mutationHistoryIsMetadataOnlyAndNoteReadsAreChunked() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "mcp-hardening-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

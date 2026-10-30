@@ -53,6 +53,18 @@ Text cards display plain text. Existing rich-text runs remain stored, and local
 text edits preserve formatting/links outside the changed range. This beta does
 not provide rich-text rendering or formatting controls inside cards.
 
+## Working alongside an agent
+
+Open a Canvas beside the primary agent chat (use Restore chat and assets if the
+asset pane is focused). With Notes tools enabled, sending a message includes the
+open Canvas ID, kind, and active-tab status. Canvas-specific guidance directs the
+agent to read the current document and use note tools to add or edit its cards,
+with revision checks protecting concurrent edits. For example: “On this canvas,
+add three approaches and a comparison table.” The agent reads structured content;
+it does not receive a screenshot of the board. Positioning and reference-card
+creation remain manual. Merely opening a board does not start an agent run or
+enable disabled tools.
+
 ## Architecture
 
 `NoteArtifactKind.canvas` selects `DashboardCanvasEditor`. Its binding writes
