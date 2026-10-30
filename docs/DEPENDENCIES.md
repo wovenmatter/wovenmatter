@@ -123,9 +123,12 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
 - **Mac npm** is selected independently of the Node archive, whose bundled npm
   may lag. `harnesses/prepare-npm.mjs` verifies the recorded npm archive integrity,
   applies the same locked `undici` and `ip-address` repairs used by Linux, verifies
-  their APIs, and retains provenance. Immutable cached selections supply both
-  managed CLI installs and the bundled SDK updater; bootstrap npm only unpacks
-  the verified archive/security graph. No global npm or active Node tree changes.
+  their APIs, and retains provenance. Immutable cached selections supply
+  managed CLI installs, the locked bundle SDK installation, and the bundled SDK
+  updater; bootstrap npm only unpacks the verified archive/security graph. The
+  bundle dependency cache includes the private tooling provenance fingerprint,
+  so an npm or vendor-repair refresh rebuilds that installation. No global npm
+  or active Node tree changes.
   Maintenance compares this npm record with current stable npm and validates
   actual registry installs, lockfiles, SDK updates and patched runtime APIs.
 - **CEF** is compiled and signed into the app. The newest stable build is
@@ -165,6 +168,18 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   Pi refresh and remove it once Pi's own requirement excludes the affected
   releases. Provider-free HTTP security fixtures and the coding-agent suites
   validate the overridden Node dependency; it is not part of the mobile bundle.
+  Pi AI 1.4.0 also pins older provider clients. Consumer-scoped minimum-only
+  overrides select the tested OpenAI 7.45.1, Anthropic 1.3.0, Google GenAI 2.32.0,
+  Bedrock Runtime 3.1160.0 and Smithy Node HTTP handler 4.14.0 releases without
+  changing vendor manifests. Keeping these clients current is required for
+  provider API and transport compatibility, including Anthropic's 2026-10-21
+  Messages API. Maintenance reviews each upstream requirement and removes an
+  override when Pi itself selects an equal or newer client. The committed lock
+  records the effective graph; Settings SDK generations retain these overrides.
+  Provider-free loopback fixtures exercise Pi's actual SDK clients, request
+  serialization, streaming text/tools, usage and cancellation. They do not
+  establish authenticated provider acceptance. The iOS bundle excludes these
+  network clients; its generated provenance still follows the shared lock.
 - **Pyodide and esbuild** produce the offline iOS resources and their
   provenance. They refresh together with the generated files.
 
