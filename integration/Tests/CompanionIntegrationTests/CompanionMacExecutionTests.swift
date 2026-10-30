@@ -12,6 +12,26 @@ struct CompanionMacExecutionTests {
     try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true); return url
   }
 
+  @Test("a manually paired Dev can withdraw presence over its authenticated library connection")
+  func remoteDevelopmentDisconnect() async throws {
+    let dir = try directory(); defer { try? FileManager.default.removeItem(at: dir) }
+    let db = try await WorkspaceDatabase(url: dir.appendingPathComponent("workspace.sqlite"))
+    let library = try await db.companionWorkspaceID()
+    let auth = try CompanionAuthentication(fileURL: dir.appendingPathComponent("paired.json"))
+    let offer = try await auth.createOffer(endpoint: URL(string: "https://fixture.test.ts.net/wovenmatter")!)
+    let pairing = try await auth.pair(.init(token: offer.payload.token, deviceID: deviceID, deviceName: "Remote Mac",
+      metadata: .init(kind: .mac, developmentInstance: "review")), workspaceID: library)
+    #expect(await auth.deviceConnections().first?.name == "Remote Mac (Dev)")
+    let api = CompanionWorkspaceAPI(database: db, authentication: auth, commands: ScopedCommands(), isActive: { true })
+    let response = await api.handle(.init(method: "POST", target: "/v1/devices/development/disconnect",
+      headers: ["authorization": "Bearer " + pairing.credential, "x-woven-protocol": String(CompanionProtocol.version), "x-woven-workspace": library]))
+    #expect(response.status == 200)
+    #expect(await auth.devices().isEmpty)
+    // Presence withdrawal preserves pairing identity; a new request can reconnect.
+    #expect(try await auth.authenticate(bearer: pairing.credential).id == deviceID)
+    #expect(await auth.devices().count == 1)
+  }
+
   @Test("workspace access follows enrollment while token revocation still prevents dispatch")
   func automaticAccessAndRevocation() async throws {
     let dir = try directory(); defer { try? FileManager.default.removeItem(at: dir) }

@@ -131,7 +131,7 @@ final class CompanionHostController {
             }
             let centralIdentity = try await database.companionLibraryIdentity()
             discoveryIdentity = .init(deviceID: centralIdentity.hostDeviceID,
-                deviceName: DevelopmentLaunch.isSnapshot ? DevelopmentLaunch.displayName + " snapshot" : Host.current().localizedName ?? "Central Mac",
+                deviceName: DevelopmentLaunch.deviceName(),
                 metadata: CompanionMacPairingController.metadata)
             let api = CompanionWorkspaceAPI(database: database, authentication: authentication,
                 commands: model.companionCommands,
@@ -316,14 +316,27 @@ final class CompanionHostController {
     private func refreshExecutionRegistry() async throws {
         guard !registryRefreshInProgress, let model, let database = model.dashboardStore?.database else { return }
         registryRefreshInProgress = true
+        let expectedGeneration = generation
         defer { registryRefreshInProgress = false }
         let identity = try await database.companionLibraryIdentity()
         let existing = try await database.companionExecutionWorkspaces()
         let localID = localExecutionWorkspaceID(libraryID: identity.libraryID)
+        if DevelopmentLaunch.isSnapshot {
+            // Upgrade existing snapshots too. New paired owners remain live; copied
+            // owners retain their identity for history without becoming connections.
+            let connected = await authentication?.devices() ?? []
+            let paired = Set(connected.map(\.id))
+            for var copied in existing where !copied.deleted && copied.retainedHistory != true
+                && copied.id != localID && copied.ownerDeviceID != identity.hostDeviceID && !paired.contains(copied.ownerDeviceID) {
+                guard generation == expectedGeneration, !Task.isCancelled else { return }
+                copied.retainedHistory = true; copied.endpoint = nil
+                _ = try await database.registerCompanionExecutionWorkspace(.init(workspace: copied, expectedRevision: copied.revision), deviceID: identity.hostDeviceID)
+            }
+        }
         var desired: [CompanionExecutionWorkspace] = [
             .init(id: localID, libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID,
-                  kind: .mac, name: Host.current().localizedName ?? "Central Mac", endpoint: endpoint,
-                  capabilities: ["execution.v1", "history.central.v1", "inference.v1"], executionDeviceID: identity.hostDeviceID)
+                  kind: .mac, name: DevelopmentLaunch.deviceName(), endpoint: endpoint,
+                  capabilities: ["execution.v1", "history.central.v1", "inference.v1"], executionDeviceID: identity.hostDeviceID, developmentInstance: DevelopmentLaunch.instance)
         ]
         desired += model.remoteWorkspaces.workspaces.map { configuration in
             let id = configuration.id.uuidString.lowercased()
@@ -334,6 +347,7 @@ final class CompanionHostController {
                 executionDeviceID: prior?.executionDeviceID)
         }
         for var workspace in desired {
+            guard generation == expectedGeneration, !Task.isCancelled else { return }
             let prior = existing.first { $0.id == workspace.id }
             guard prior?.deleted != true else { continue }
             workspace.journalDeviceIDs = prior?.journalDeviceIDs ?? []
@@ -341,6 +355,7 @@ final class CompanionHostController {
             _ = try await database.registerCompanionExecutionWorkspace(
                 .init(workspace: workspace, expectedRevision: prior?.revision), deviceID: identity.hostDeviceID)
         }
+        guard generation == expectedGeneration, !Task.isCancelled else { return }
         executionWorkspaces = try await database.companionExecutionWorkspaces()
         for workspace in executionWorkspaces where workspace.kind == .linux && workspace.executionDeviceID != nil && !workspace.deleted {
             if let configuration = model.remoteWorkspaces.workspaces.first(where: { $0.id.uuidString.lowercased() == workspace.id }) {
@@ -484,6 +499,41 @@ final class CompanionHostController {
         return await authentication.isCurrent(device)
     }
 
+    func withdrawDevelopmentWorkspace() async throws {
+        guard DevelopmentLaunch.mode != nil, let database = model?.dashboardStore?.database else { return }
+        stop() // Cancel recovery as well as periodic registrations before withdrawal.
+        do {
+            let identity = try await database.companionLibraryIdentity()
+            let id = localExecutionWorkspaceID(libraryID: identity.libraryID)
+            if var workspace = try await database.companionExecutionWorkspaces().first(where: { $0.id == id && !$0.deleted }) {
+                workspace.endpoint = nil
+                _ = try await database.registerCompanionExecutionWorkspace(.init(workspace: workspace, expectedRevision: workspace.revision), deviceID: identity.hostDeviceID)
+            }
+        } catch {
+            await startForCentralDatabase()
+            throw error
+        }
+    }
+
+    func disconnectLocalDevelopment(_ request: DevelopmentDisconnectRequest) async throws {
+        guard let authentication, let database = model?.dashboardStore?.database else { throw CompanionAPIError(code: "unavailable", message: "The central library is unavailable.") }
+        try await authentication.suspendLocalDevelopment(deviceID: request.deviceID, credential: request.credential)
+        try await refreshStatusAndDevelopmentPresence(database: database)
+    }
+
+    private func refreshStatusAndDevelopmentPresence(database: WorkspaceDatabase) async throws {
+        pairedDevices = await authentication?.devices() ?? []
+        let active = Set(pairedDevices.map(\.id))
+        let identity = try await database.companionLibraryIdentity()
+        for var workspace in try await database.companionExecutionWorkspaces() where !workspace.deleted
+            && workspace.developmentInstance != nil && workspace.ownerDeviceID != identity.hostDeviceID
+            && workspace.endpoint != nil && !active.contains(workspace.ownerDeviceID) {
+            workspace.endpoint = nil
+            _ = try await database.registerCompanionExecutionWorkspace(.init(workspace: workspace, expectedRevision: workspace.revision), deviceID: identity.hostDeviceID)
+        }
+        executionWorkspaces = try await database.companionExecutionWorkspaces()
+    }
+
     private func enqueueRevocation(deviceID: String, workspaceID: String) {
         var pending = pendingRevocations
         pending[deviceID] = Array(Set((pending[deviceID] ?? []) + [workspaceID])).sorted()
@@ -585,7 +635,7 @@ final class CompanionHostController {
             try await loadAuthentication()
             pendingPairingRequests = await authentication?.pendingPairingRequests() ?? []
             pendingDeviceRevocations = pendingRevocations
-            executionWorkspaces = try await model?.dashboardStore?.database.companionExecutionWorkspaces() ?? []
+            if let database = model?.dashboardStore?.database { try await refreshStatusAndDevelopmentPresence(database: database) }
         } catch { errorMessage = error.localizedDescription }
     }
     func refreshDiscovery() async {

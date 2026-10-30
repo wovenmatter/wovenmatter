@@ -143,6 +143,8 @@ when an intentional design change is accepted.
 - **Apple devices:** show the shared Workspaces inventory once in its own card,
   separate from Paired devices. Pairing grants access to all available workspaces;
   do not add per-device workspace permissions or execution-sharing switches.
+  Dev workspaces include `(Dev)` and their instance name. Hide retained snapshot
+  owners and stopped Dev connections from the active inventory.
 - **Workspace sidebar:** group Agents and Folders within each owning workspace.
   Pinned agents and folders lead their respective lists without a separate Pinned
   section. Each Folders section starts with New folder, scoped to that workspace.

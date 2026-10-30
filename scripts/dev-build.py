@@ -154,6 +154,7 @@ def disconnect_snapshot(file, *, device_id, execution_root, published_root):
                 value["libraryID"] = library_id
                 if table == "companion_execution_workspaces":
                     value.pop("endpoint", None)
+                    value["retainedHistory"] = True
                 else:
                     value.pop("activeRunID", None)
                 db.execute("UPDATE " + table + " SET " + column + "=? WHERE id=?",

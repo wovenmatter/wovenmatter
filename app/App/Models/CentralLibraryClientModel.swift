@@ -156,9 +156,9 @@ final class CentralLibraryClientModel {
     func hasDirectAccess(_ workspaceID: String) -> Bool { directClients[workspaceID] != nil }
     @ObservationIgnored lazy var devicePairing = CompanionMacPairingController(identity: { [weak self] in
         guard let self else { return .init(deviceID: "00000000-0000-4000-8000-000000000000", deviceName: "Mac", metadata: .init(kind: .mac)) }
-        return .init(deviceID: self.state.deviceID, deviceName: Host.current().localizedName ?? "This Mac",
+        return .init(deviceID: self.state.deviceID, deviceName: DevelopmentLaunch.deviceName(),
             metadata: .init(kind: .mac, osVersion: ProcessInfo.processInfo.operatingSystemVersionString,
-                appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String))
+                appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String, developmentInstance: DevelopmentLaunch.instance))
     }, onPaired: { [weak self] endpoint, response in
         guard let self else { throw CancellationError() }
         try await self.acceptPairing(endpoint: endpoint, response: response)
@@ -311,7 +311,7 @@ final class CentralLibraryClientModel {
         guard credential.deviceID == state.deviceID else {
             throw CompanionAPIError(code: "device_identity_changed", message: "Pair this Mac with the central database again. Its local replica has a different device identity.")
         }
-        let transport = try HTTPSCompanionTransport(credential: credential)
+        let transport = try HTTPSCompanionTransport(credential: credential, metadata: CompanionMacPairingController.metadata)
         self.transport = transport; engine = MobileSyncEngine(store: store, transport: transport)
     }
     func configureUpdateAnalytics(_ analytics: ProductAnalyticsModel) async {
@@ -440,7 +440,18 @@ final class CentralLibraryClientModel {
         localExecution = nil
         await enableLocalExecution()
     }
-    func prepareForQuit() async throws { try await prepareForRoleChange() }
+    func prepareForQuit() async throws {
+        try await prepareForRoleChange()
+        if DevelopmentLaunch.mode != nil {
+            await stopLocalSharing()
+            // Withdraw the route before ending the local presence lease. Saved
+            // changes remain journaled if the central library is offline.
+            _ = try? await engine?.synchronize()
+            await engine?.cancelSynchronization()
+            try? await transport?.suspendDevelopmentConnection()
+            if DevelopmentLaunch.isClient, let credential { try? await DevelopmentLaunch.disconnect(deviceID: state.deviceID, credential: credential.token) }
+        }
+    }
     private func configureDirectClients() throws {
         guard credential != nil, let store else { return }
         for workspace in executionWorkspaces where directClients[workspace.id] == nil {

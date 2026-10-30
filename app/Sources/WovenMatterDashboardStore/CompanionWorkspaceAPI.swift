@@ -302,7 +302,7 @@ public final class CompanionWorkspaceAPI {
             guard let bearer = request.bearer else { return .error("unauthorized", "Pair this iPhone in Mac Settings.", status: 401) }
             let metadata: CompanionDeviceMetadata?
             if let rawKind = request.headers["x-woven-device-kind"], let kind = CompanionDeviceKind(rawValue: rawKind) {
-                metadata = .init(kind: kind, osVersion: request.headers["x-woven-os-version"], appVersion: request.headers["x-woven-app-version"])
+                metadata = .init(kind: kind, osVersion: request.headers["x-woven-os-version"], appVersion: request.headers["x-woven-app-version"], developmentInstance: request.headers["x-woven-development-instance"])
             } else { metadata = nil }
             let device = try await authentication.authenticate(bearer: bearer, metadata: metadata)
             guard isActive() else {
@@ -312,6 +312,12 @@ public final class CompanionWorkspaceAPI {
                 return .error("workspace_mismatch", "This credential belongs to a different workspace. Your local writing is preserved.", status: 409)
             }
             onRequest()
+            if request.method == "POST", path == "/v1/devices/development/disconnect" {
+                guard device.isDevelopment else { return .error("invalid_device", "Only a development connection has temporary presence.", status: 403) }
+                try await authentication.suspendLocalDevelopment(deviceID: device.id, credential: bearer)
+                onMutation()
+                return try .json(["disconnected": true])
+            }
             if path == "/mcp" {
                 return try await handleDeviceMCP(request, device: device)
             }

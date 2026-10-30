@@ -45,7 +45,7 @@ final class CompanionMacPairingController {
     }
     static var metadata: CompanionDeviceMetadata {
         .init(kind: .mac, osVersion: ProcessInfo.processInfo.operatingSystemVersionString,
-              appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String)
+              appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String, developmentInstance: DevelopmentLaunch.instance)
     }
     func refreshDiscovery() async {
         guard !isDiscovering else { return }

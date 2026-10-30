@@ -34,7 +34,7 @@ struct SettingsCompanionView: View {
                 SettingsCard(title: "This Mac") {
                     HStack {
                         DeviceConnectionIcon(kind: .mac)
-                        Text(Host.current().localizedName ?? "This Mac").font(.system(size: 13, weight: .medium))
+                        Text(DevelopmentLaunch.deviceName()).font(.system(size: 13, weight: .medium))
                         Spacer()
                         Text(client.sharingLocalExecution ? "Sharing workspace" : "Workspace not connected")
                             .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
@@ -47,7 +47,7 @@ struct SettingsCompanionView: View {
                     HStack(spacing: 12) {
                         DeviceConnectionIcon(kind: .mac)
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(Host.current().localizedName ?? "This Mac").font(.system(size: 13, weight: .medium))
+                            Text(DevelopmentLaunch.deviceName()).font(.system(size: 13, weight: .medium))
                             Text(host.status)
                                 .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
                         }
@@ -152,7 +152,7 @@ struct SettingsCompanionView: View {
                 HStack(spacing: 12) {
                     DeviceConnectionIcon(kind: device.kind)
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(device.name).font(.system(size: 13, weight: .medium))
+                        Text(device.displayName).font(.system(size: 13, weight: .medium))
                         Text(DeviceConnectionIcon.label(device.kind)).font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
                         if let seen = device.lastSeenAt {
                             Text("Last seen \(seen.formatted(date: .abbreviated, time: .shortened))")
@@ -173,7 +173,7 @@ struct SettingsCompanionView: View {
         SettingsCard(title: "Pending revocations") {
             ForEach(host.pendingDeviceRevocations.keys.sorted(), id: \.self) { id in
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(host.pairedDevices.first { $0.id == id }?.name ?? "Disconnected device")
+                    Text(host.pairedDevices.first { $0.id == id }?.displayName ?? "Disconnected device")
                         .font(.system(size: 13, weight: .medium))
                     let names = (host.pendingDeviceRevocations[id] ?? []).map { workspaceID in
                         host.executionWorkspaces.first { $0.id == workspaceID }?.name ?? "Unavailable workspace"
@@ -207,7 +207,7 @@ struct SettingsCompanionView: View {
 struct SettingsDeviceWorkspaceInventory: View {
     let workspaces: [CompanionExecutionWorkspace]
     private var active: [CompanionExecutionWorkspace] {
-        workspaces.filter { !$0.deleted }.sorted {
+        workspaces.filter(\.isVisibleInConnections).sorted {
             let order = $0.name.localizedStandardCompare($1.name)
             return order == .orderedSame ? $0.id < $1.id : order == .orderedAscending
         }

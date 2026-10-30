@@ -51,6 +51,7 @@ extension WorkspaceDatabaseConnection {
       guard value.libraryID == (try companionWorkspaceIDUnlocked()) else { throw federationError("library_mismatch", "This workspace belongs to another central library.") }
       guard federationID(value.id), federationID(value.ownerDeviceID), (value.ownerDeviceID == deviceID || deviceID == identity.hostDeviceID),
             value.executionDeviceID.map(federationID) ?? true,
+            value.developmentInstance.map({ !$0.isEmpty && $0.count <= 64 && $0.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") } }) ?? true,
             !value.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, value.name.utf8.count <= 256,
             value.journalDeviceIDs.count <= 64, value.journalDeviceIDs.allSatisfy(federationID),
             value.capabilities.count <= 64, value.capabilities.allSatisfy({ $0.utf8.count <= 120 }),

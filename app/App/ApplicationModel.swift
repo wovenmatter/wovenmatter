@@ -4299,7 +4299,7 @@ extension ApplicationModel {
         guard backendRPCServer == nil else { return }
         let server = BackendRPCServer(socketURL: try socketURL ?? LocalExecutionRole.backendSocketURL(workspaceDirectory: Self.dashboardSupportDirectory()))
         try server.start { [weak self] request in
-            guard request.method == "development.connect" else {
+            guard ["development.connect", "development.disconnect"].contains(request.method) else {
                 return BackendRPCResponse(id: request.id, error: "This foreground host only accepts development connections.")
             }
             guard let self else { return BackendRPCResponse(id: request.id, error: "The development host stopped.") }
@@ -4363,6 +4363,12 @@ extension ApplicationModel {
             if request.method == "development.replica" {
                 let snapshot = liveLibraryClient.map(DevelopmentReplicaSnapshot.init) ?? DevelopmentReplicaSnapshot()
                 return .init(id: request.id, result: try JSONEncoder().encode(snapshot))
+            }
+            if request.method == "development.disconnect" {
+                guard request.payload.count <= 4_096 else { throw BackendRPCError.invalidFrame }
+                let value = try JSONDecoder().decode(DevelopmentDisconnectRequest.self, from: request.payload)
+                try await companionHost.disconnectLocalDevelopment(value)
+                return .init(id: request.id)
             }
             if request.method == "development.connect" {
                 guard request.payload.count <= 4_096 else { throw BackendRPCError.invalidFrame }
@@ -4479,6 +4485,7 @@ extension ApplicationModel {
                     for stop in stops { try await stop.value }
                     try await prepareOpenCodeInstancesToQuit()
                     if let client = liveLibraryClient { try await client.prepareForQuit() }
+                    try await companionHost.withdrawDevelopmentWorkspace()
                     developmentReplicaTask?.cancel()
                     agentTools?.stop()
                 } catch { backendStopping = false; throw error }
@@ -4864,6 +4871,8 @@ extension ApplicationModel {
         isPreparedForExecutionRestart = true
         WovenMatterLifecycleDelegate.requestTerminationAfterUpdate()
     }
+
+    var stopsBackendOnQuit: Bool { DevelopmentLaunch.mode != nil }
 
     func prepareBackendForUpdate() async throws {
         guard isBackendFrontend else { return }

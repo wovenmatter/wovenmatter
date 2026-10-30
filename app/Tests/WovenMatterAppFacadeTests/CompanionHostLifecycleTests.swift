@@ -104,6 +104,29 @@ struct CompanionHostLifecycleTests {
     }
 
 
+    @Test func developmentDisconnectWithdrawsWorkspaceAndRestartReusesIdentity() async throws {
+        let fixture = try await HostFixture(); defer { fixture.remove() }
+        await fixture.host.start()
+        let database = try #require(fixture.model.dashboardStore?.database)
+        let identity = try await database.companionLibraryIdentity()
+        let request = DevelopmentClientRequest(deviceID: UUID().uuidString.lowercased(), name: "Dev · fixture")
+        let connection = try await fixture.host.connectLocalDevelopment(request)
+        let workspace = try await database.registerCompanionExecutionWorkspace(.init(workspace: .init(
+            id: request.deviceID, libraryID: identity.libraryID, ownerDeviceID: request.deviceID, kind: .mac,
+            name: "Mac (Dev) · fixture", endpoint: URL(string: "https://fixture.test.ts.net/wovenmatter"),
+            executionDeviceID: request.deviceID, developmentInstance: "fixture")), deviceID: identity.hostDeviceID)
+        try await fixture.host.disconnectLocalDevelopment(.init(deviceID: request.deviceID, credential: connection.pairing.credential))
+        #expect(!fixture.host.pairedDevices.contains { $0.id == request.deviceID })
+        let retained = try #require(try await database.companionExecutionWorkspaces().first { $0.id == workspace.id })
+        #expect(!retained.deleted && retained.endpoint == nil && !retained.isVisibleInConnections)
+        _ = try await fixture.host.connectLocalDevelopment(request)
+        #expect(fixture.host.pairedDevices.contains { $0.id == request.deviceID })
+        var restarted = retained; restarted.endpoint = workspace.endpoint
+        _ = try await database.registerCompanionExecutionWorkspace(.init(workspace: restarted, expectedRevision: retained.revision), deviceID: identity.hostDeviceID)
+        await fixture.host.refreshStatus()
+        #expect(fixture.host.executionWorkspaces.first { $0.id == workspace.id }?.isVisibleInConnections == true)
+    }
+
     @Test func clickPairingHTTPRequiresLocalApprovalAndReturnsAccurateMetadata() async throws {
         let fixture = try await HostFixture(); defer { fixture.remove() }
         await fixture.host.startForCentralDatabase()
