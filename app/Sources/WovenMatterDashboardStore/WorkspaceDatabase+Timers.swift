@@ -55,6 +55,10 @@ extension WorkspaceDatabaseConnection {
 
   func requireTimerAccessUnlocked(sourceID: String, targetID: String) throws {
     try requireToolUnlocked(.timers, sessionID: sourceID)
+    if sourceID == WovenMCPCaller.outside {
+      try requireToolSessionUnlocked(targetID)
+      return
+    }
     try requireToolUnlocked(.timers, sessionID: targetID)
     if sourceID != targetID {
       try requireToolUnlocked(.sessions, sessionID: sourceID)

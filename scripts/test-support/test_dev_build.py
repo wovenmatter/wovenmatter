@@ -149,6 +149,22 @@ class DevelopmentBuildTests(unittest.TestCase):
             self.assertEqual((target / "library-files/blob").read_bytes(), b"saved output")
             with self.assertRaises(ValueError): dev.snapshot(source, target)
 
+    def test_snapshot_keeps_outside_tool_choices_without_inheriting_network_exposure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); source = root / "production"; source.mkdir()
+            settings = {"enabledByDefault": ["notes"], "externalMCP": {"isEnabled": True, "groups": ["notes", "calendar"]}}
+            with sqlite3.connect(source / "workspace.sqlite") as db:
+                db.execute("CREATE TABLE workspace_tool_settings(id INTEGER PRIMARY KEY,value TEXT)")
+                db.execute("INSERT INTO workspace_tool_settings VALUES(1,?)", (json.dumps(settings),))
+            target = root / "snapshot"
+            dev.snapshot(source, target)
+            with sqlite3.connect(target / "workspace.sqlite") as db:
+                copied = json.loads(db.execute("SELECT value FROM workspace_tool_settings").fetchone()[0])
+            self.assertFalse(copied["externalMCP"]["isEnabled"])
+            self.assertEqual(copied["externalMCP"]["groups"], ["notes", "calendar"])
+            with sqlite3.connect(source / "workspace.sqlite") as db:
+                self.assertEqual(json.loads(db.execute("SELECT value FROM workspace_tool_settings").fetchone()[0]), settings)
+
     def test_snapshot_refuses_source_alias_and_symlinked_assets(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); source = root / "production"; source.mkdir()

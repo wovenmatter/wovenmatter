@@ -176,6 +176,7 @@ extension WorkspaceDatabaseConnection {
             VALUES(new.id,COALESCE((SELECT json_extract(value,'$.executor.defaultProfiles') FROM workspace_tool_settings WHERE id=1),'[]'));
         END;
         """)
+      try migrateMCPCallersUnlocked()
     }
   }
 
@@ -185,7 +186,14 @@ extension WorkspaceDatabaseConnection {
 
   public func saveToolSettings(_ settings: WorkspaceToolSettings) throws {
     try settings.validate()
-    try transaction { try toolsExecuteUnlocked("UPDATE workspace_tool_settings SET value=? WHERE id=1", [try toolsJSON(settings)]) }
+    try transaction {
+      try toolsExecuteUnlocked("UPDATE workspace_tool_settings SET value=? WHERE id=1", [try toolsJSON(settings)])
+      if settings.externalMCP?.enabledGroups.contains(.sessions) != true {
+        try toolsExecuteUnlocked("UPDATE workspace_session_relationships SET coordinator_id=NULL,coordination_epoch=NULL,coordination_since=NULL WHERE coordinator_id=?", [WovenMCPCaller.outside])
+        try toolsExecuteUnlocked("DELETE FROM workspace_session_grants WHERE source_id=? AND kind='approved'", [WovenMCPCaller.outside])
+        try toolsExecuteUnlocked("UPDATE workspace_session_deliveries SET status='cancelled' WHERE source_id=? AND status='queued' AND kind IN ('message','created')", [WovenMCPCaller.outside])
+      }
+    }
   }
 
   func toolSettingsUnlocked() throws -> WorkspaceToolSettings {
@@ -203,6 +211,12 @@ extension WorkspaceDatabaseConnection {
   }
 
   func sessionToolsUnlocked(_ id: String) throws -> WorkspaceSessionTools {
+    if id == WovenMCPCaller.outside {
+      let settings = try toolSettingsUnlocked()
+      let access = settings.externalMCP ?? .init()
+      guard access.isEnabled else { throw WorkspaceToolError.invalid("Outside MCP access is disabled.") }
+      return .init(enabled: access.enabledGroups, executorProfiles: settings.executor?.defaultProfiles ?? [])
+    }
     try requireToolSessionUnlocked(id)
     let rows = try historyRowsUnlocked("SELECT enabled_json FROM workspace_session_tools WHERE session_id=?", values: [id])
     guard let json = rows.first?.objectValue?["enabled_json"]?.stringValue else {
@@ -269,12 +283,18 @@ extension WorkspaceDatabaseConnection {
 
   func requireToolUnlocked(_ group: WorkspaceToolGroup, sessionID: String, writesCalendar: Bool = false) throws {
     guard try sessionToolsUnlocked(sessionID).enabled.contains(group) else { throw WorkspaceToolError.disabled(group) }
-    if group == .calendar, writesCalendar, try toolSettingsUnlocked().calendarAccess != .full {
+    if group == .calendar, writesCalendar, sessionID != WovenMCPCaller.outside, try toolSettingsUnlocked().calendarAccess != .full {
       throw WorkspaceToolError.invalid("Calendar is read only. Change its access in General settings.")
     }
   }
 
   func requireToolSessionUnlocked(_ id: String) throws {
+    if id == WovenMCPCaller.outside {
+      guard try toolSettingsUnlocked().externalMCP?.isEnabled == true else {
+        throw WorkspaceToolError.invalid("Outside MCP access is disabled.")
+      }
+      return
+    }
     guard !(try historyRowsUnlocked("SELECT id FROM dashboard_conversations WHERE id=? AND deleted_at IS NULL", values: [id])).isEmpty else {
       throw WorkspaceToolError.invalid("The session is unavailable.")
     }
@@ -409,7 +429,7 @@ extension WorkspaceDatabaseConnection {
           THEN coalesce(workspace_session_relationships.coordination_epoch,excluded.coordination_epoch) ELSE excluded.coordination_epoch END,
         coordination_since=CASE WHEN workspace_session_relationships.coordinator_id=excluded.coordinator_id
           THEN coalesce(workspace_session_relationships.coordination_since,excluded.coordination_since) ELSE excluded.coordination_since END
-      """, [targetID, sourceID, purpose, notifications ? "1" : "0", epoch, Self.timestamp(Date())])
+      """, [targetID, sourceID, purpose, notifications && sourceID != WovenMCPCaller.outside ? "1" : "0", epoch, Self.timestamp(Date())])
     if existing != sourceID {
       // A reassigned session must not deliver stale queued notifications from a
       // previous assignment, even if the same coordinator later acquires it.
@@ -418,6 +438,9 @@ extension WorkspaceDatabaseConnection {
   }
 
   public func setCoordinationNotifications(sourceID: String, targetID: String, enabled: Bool) throws {
+    guard sourceID != WovenMCPCaller.outside || !enabled else {
+      throw WorkspaceToolError.invalid("Outside agents poll status and receipts; Woven cannot wake an outside process.")
+    }
     try transaction {
       try requireToolUnlocked(.sessions, sessionID: sourceID)
       guard try relationshipUnlocked(targetID).coordinatorID == sourceID else {
@@ -429,7 +452,10 @@ extension WorkspaceDatabaseConnection {
 
   public func setAgentCoordinationNotifications(sourceID: String, targetID: String, epoch: String,
                                                  enabled: Bool, requestID: String) throws -> WorkspaceCoordinationMutationReceipt {
-    try transaction {
+    guard sourceID != WovenMCPCaller.outside || !enabled else {
+      throw WorkspaceToolError.invalid("Outside agents poll status and receipts; Woven cannot wake an outside process.")
+    }
+    return try transaction {
       try requireToolUnlocked(.sessions, sessionID: sourceID)
       let input = CoordinationMutationInput(targetID: targetID, epoch: epoch, enabled: enabled)
       let outcome = try performToolMutationUnlocked(callerID: sourceID, requestID: requestID,

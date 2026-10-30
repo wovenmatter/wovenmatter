@@ -101,10 +101,10 @@ extension WorkspaceDatabaseConnection {
             default: break
             }
             if let callerID {
-                guard callerID == sessionID else { throw WorkspaceToolError.invalid("An agent can only change its own goal.") }
+                guard callerID == sessionID || callerID == WovenMCPCaller.outside else { throw WorkspaceToolError.invalid("An agent can only change its own goal.") }
                 try requireToolUnlocked(.goals, sessionID: callerID)
             }
-            return try performToolMutationUnlocked(callerID: callerID, requestID: requestID, operation: "goals.mutate", input: mutation) {
+            return try performToolMutationUnlocked(callerID: callerID, requestID: requestID, operation: callerID == WovenMCPCaller.outside ? "goals.mutate:" + sessionID : "goals.mutate", input: mutation) {
                 var goal = try goalUnlocked(sessionID)
                 if case let .set(objective, tokens, turns) = mutation {
                     try requireToolUnlocked(.goals, sessionID: sessionID)

@@ -6,7 +6,25 @@ public enum WorkspaceCalendarAccess: String, CaseIterable, Codable, Sendable {
   public var title: String { self == .full ? "Full access" : "Read only" }
 }
 
+/// An app-wide caller supplied only by the host's private Tailnet transport.
+/// This is an identity for policy and receipts, never a conversation.
+public enum WovenMCPCaller {
+  public static let outside = "woven:tailnet"
+}
+
+public struct WorkspaceExternalMCPSettings: Codable, Equatable, Sendable {
+  public var isEnabled: Bool
+  public var groups: Set<WorkspaceToolGroup>
+  public init(isEnabled: Bool = false, groups: Set<WorkspaceToolGroup> = Set(WorkspaceToolGroup.configurableCases.filter { $0 != .computer && $0 != .executor })) {
+    self.isEnabled = isEnabled; self.groups = groups
+  }
+  public var enabledGroups: Set<WorkspaceToolGroup> {
+    isEnabled ? groups.union([.goals, .html]) : []
+  }
+}
+
 public struct WorkspaceToolSettings: Codable, Equatable, Sendable {
+  public var externalMCP: WorkspaceExternalMCPSettings?
   public var enabledByDefault: Set<WorkspaceToolGroup>
   public var calendarAccess: WorkspaceCalendarAccess
   public var maximumManagedSessions: Int
@@ -36,6 +54,7 @@ public struct WorkspaceToolSettings: Codable, Equatable, Sendable {
       selection.subtract(old.defaultProfiles.subtracting(change.defaultProfiles))
       result.executor?.defaultProfiles = selection.intersection(Set(current.apps.map(\.id)))
     }
+    if base.externalMCP != edited.externalMCP { result.externalMCP = edited.externalMCP }
     // Setup, inventory and connection identity belong to the manager.
     return result
   }

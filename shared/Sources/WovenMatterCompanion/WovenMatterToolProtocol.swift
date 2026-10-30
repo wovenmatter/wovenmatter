@@ -17,6 +17,9 @@ public struct WovenMatterToolRequest: Codable, Sendable {
   public var noteEdit: NoteEditingRequest?
   /// Immutable input binding supplied by the native tool integration.
   public var contextID: String?
+  /// Destination for an app-wide outside operation. The host supplies caller
+  /// authority separately; native conversation callers cannot retarget themselves.
+  public var targetSessionID: String?
   public init(arguments: [String], requestID: String = UUID().uuidString.lowercased(), noteEdit: NoteEditingRequest? = nil, contextID: String? = nil) {
     self.schemaVersion = 1
     self.requestID = UUID(uuidString: requestID)?.uuidString.lowercased() ?? requestID

@@ -42,7 +42,15 @@ extension WorkspaceDatabaseConnection {
       }
       if let eventKey, let existing = try historyRowsUnlocked("SELECT id FROM workspace_session_deliveries WHERE event_key=?", values: [eventKey]).first?.objectValue?["id"]?.stringValue,
          let delivery = try deliveryUnlocked(existing) { return delivery }
-      try toolsExecuteUnlocked("""
+      if sourceID == WovenMCPCaller.outside {
+        try toolsExecuteUnlocked("""
+          INSERT INTO workspace_session_deliveries(id,source_id,target_id,content,status,source_agent,source_title,
+            kind,purpose,target_title,target_harness,target_model,event_key)
+          SELECT ?,?,?,?,'queued','wovenmatter','Outside agent',?,?,t.title,
+            coalesce(d.runtime_kind,t.agent_codename),d.model,?
+          FROM dashboard_conversations t LEFT JOIN desktop_local_acp_sessions d ON d.conversation_id=t.id WHERE t.id=?
+          """, [requestID, sourceID, targetID, text, kind.rawValue, purpose, eventKey, targetID])
+      } else { try toolsExecuteUnlocked("""
         INSERT INTO workspace_session_deliveries(id,source_id,target_id,content,status,source_agent,source_title,
           kind,purpose,target_title,target_harness,target_model,event_key)
         SELECT ?,?,?,?,'queued',coalesce(s.runtime_kind,c.agent_codename),c.title,?,?,t.title,
@@ -50,7 +58,7 @@ extension WorkspaceDatabaseConnection {
         FROM dashboard_conversations c JOIN dashboard_conversations t ON t.id=?
         LEFT JOIN desktop_local_acp_sessions s ON s.conversation_id=c.id
         LEFT JOIN desktop_local_acp_sessions d ON d.conversation_id=t.id WHERE c.id=?
-        """, [requestID, sourceID, targetID, text, kind.rawValue, purpose, eventKey, targetID, sourceID])
+        """, [requestID, sourceID, targetID, text, kind.rawValue, purpose, eventKey, targetID, sourceID]) }
       guard let result = try deliveryUnlocked(requestID) else { throw WorkspaceToolError.invalid("Unable to reserve delivery.") }
       return result
   }
@@ -129,9 +137,11 @@ extension WorkspaceDatabaseConnection {
   }
 
   private func toolDeliveryAuthorizedUnlocked(_ delivery: WorkspaceSessionDelivery) throws -> Bool {
-    for id in [delivery.sourceID, delivery.targetID] {
+    for id in [delivery.sourceID, delivery.targetID] where id != WovenMCPCaller.outside {
       guard !(try historyRowsUnlocked("SELECT 1 FROM dashboard_conversations WHERE id=? AND deleted_at IS NULL", values: [id])).isEmpty else { return false }
     }
+    if delivery.sourceID == WovenMCPCaller.outside,
+       try toolSettingsUnlocked().externalMCP?.enabledGroups.contains(.sessions) != true { return false }
     let source = try sessionToolsUnlocked(delivery.sourceID)
     let target = try sessionToolsUnlocked(delivery.targetID)
     switch delivery.kind {

@@ -10,6 +10,7 @@ extension WorkspaceDatabaseConnection {
                                        notifications: Bool = true, requestID: String) throws -> WorkspaceCoordinationAccessRequest {
     try transaction {
       try requireToolUnlocked(.sessions, sessionID: sourceID)
+      let notifications = sourceID != WovenMCPCaller.outside && notifications
       let requestID = try persistedToolRequestID(requestID, in: .coordination)
       guard !purpose.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
             purpose.utf8.count <= 65_536 else { throw WorkspaceToolError.invalid("A valid request ID and management purpose are required.") }
@@ -23,7 +24,7 @@ extension WorkspaceDatabaseConnection {
       try validateCoordinationUnlocked(sourceID: sourceID, targetID: targetID)
       let pending: Bool
       do {
-        try requireTranscriptAccessUnlocked(sourceID: sourceID, targetID: targetID)
+        if sourceID != WovenMCPCaller.outside { try requireTranscriptAccessUnlocked(sourceID: sourceID, targetID: targetID) }
         pending = false
       } catch WorkspaceToolError.accessRequired { pending = true }
       if pending {
@@ -88,9 +89,9 @@ extension WorkspaceDatabaseConnection {
 
   private var coordinationAccessSelect: String {
     """
-      SELECT r.*,s.title AS source_title,t.title AS target_title
+      SELECT r.*,coalesce(s.title,'Outside agent') AS source_title,t.title AS target_title
       FROM workspace_coordination_access_requests r
-      JOIN dashboard_conversations s ON s.id=r.source_id JOIN dashboard_conversations t ON t.id=r.target_id
+      LEFT JOIN dashboard_conversations s ON s.id=r.source_id JOIN dashboard_conversations t ON t.id=r.target_id AND (s.id IS NOT NULL OR r.source_id='woven:tailnet')
       """
   }
 
