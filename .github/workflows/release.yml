@@ -27,7 +27,7 @@ jobs:
   macos:
     if: ${{ !inputs.cache_benchmark_run }}
     name: Signed Apple Silicon release
-    runs-on: macos-26
+    runs-on: macos-26-xlarge
     timeout-minutes: 120
     environment: release
     # Shared, non-secret phase settings.
@@ -248,7 +248,7 @@ jobs:
   cache-benchmark:
     if: github.event_name == 'workflow_dispatch' && inputs.cache_benchmark_run != '' && startsWith(github.ref, 'refs/tags/v-cache-benchmark-')
     name: Signed cache consumer benchmark (no publication)
-    runs-on: macos-26
+    runs-on: macos-26-xlarge
     timeout-minutes: 45
     environment: release
     permissions:

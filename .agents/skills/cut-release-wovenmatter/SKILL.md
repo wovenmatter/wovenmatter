@@ -56,10 +56,18 @@ artifact.
 
 The tag-triggered `.github/workflows/release.yml` builds a signed, notarized
 Apple Silicon app and stages a private draft. Its six named phase steps show live
-progress and record per-phase timings. It restores component caches produced on main by `Prepare release dependencies`.
-That workflow bootstraps changes to its own definition and refreshes after a
-successful release; it can also run manually. Release preparation does not
-dispatch it. Report observed cache hits and timings, rather than assuming that
+progress and record per-phase timings. It restores component caches produced on
+main by `Prepare release dependencies`. That workflow bootstraps changes to its
+own definition and refreshes after a successful release; it can also run manually.
+Release preparation does not dispatch it.
+
+The release and cache producer both use the billed `macos-26-xlarge` runner.
+Report its observed build timings and job durations; include the later cache
+preparation job when estimating runner cost. After a runner-class change, wait
+for the automatic main cache preparation to finish before cutting the next tag;
+its first run must populate entries for the new compiler thread count.
+
+Report observed cache hits and timings, rather than assuming that
 configured caches made a release faster. A miss, for example after a
 toolchain or browser-source change, compiles those parts in full; no release
 duration is guaranteed. After its successful run, verify

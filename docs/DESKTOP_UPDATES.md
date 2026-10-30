@@ -110,6 +110,19 @@ Reference: [publishing](https://sparkle-project.org/documentation/publishing/).
 
 ## Release performance and cache trust
 
+Release builds, the cache producer, and the explicit cache benchmark use
+`macos-26-xlarge` (M2, five CPU cores, 14 GB RAM). Keeping the producer and
+consumer on the same runner class also keeps their automatically selected Swift
+compiler thread counts aligned. Other validation workflows retain their existing
+runners. After a runner-class change, the automatic main cache preparation must
+finish before the next tag to populate entries for the new thread count.
+
+GitHub bills this larger runner even for public repositories. The current rate
+is [$0.102 per minute](https://docs.github.com/en/billing/reference/actions-runner-pricing),
+rounded up per job. Both the release job and its later cache-preparation job
+contribute to the cost; notarization waits also count while the release job is
+running. Actual cost depends on the observed job durations.
+
 `Prepare release dependencies` writes only default-branch caches from accepted
 `main`. It runs after a successful `Release` workflow and once when the cache
 workflow itself changes on main, bootstrapping a new cache layout. Ordinary source
