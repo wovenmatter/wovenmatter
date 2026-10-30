@@ -18,6 +18,27 @@ A client replica is separate from native runtime persistence. Cache eviction mus
 
 Library changes use conditional revisions and retained deletion/conflict state. Commands use stable IDs, immutable request identity and durable receipts. Replay imports observations; it never executes commands. Interrupted transfers resume by validated offsets and content digests. Acknowledgement is emitted only after durable acceptance. Histories exceeding a network page are paged or chunked without truncation.
 
+## Workspace organization across devices
+
+**All Workspace** is the combined library-content view, not an agent directory.
+Each client presents its own execution device as **Local workspace** and other
+registered devices as **Remote workspaces**, alongside configured Linux hosts.
+Agents and folders belong under their workspace. On iPhone and iPad the single
+local agent is **Quick Chat**, powered by Pi Durable. Another device's Quick Chat
+is saved history only; clients never start or control Quick Chat on a remote phone.
+
+Notes retain an explicit workspace identity even when they are not in a folder.
+Creating an unfiled note on a device assigns that device; editing synchronized
+writing elsewhere does not transfer ownership. Folder membership provides a
+workspace association for older filed notes. Existing unfiled notes without
+reliable ownership evidence remain shared/unassigned instead of being attributed
+to whichever client first downloads them. All Workspace keeps those items visible.
+
+Workspace comparisons normalize legacy device/remote ID prefixes without
+rewriting execution roots or moving runtime data. New-item actions use their
+workspace context, never the first reachable remote host. Connectivity affects
+whether remote actions are available, not whether a saved workspace is listed.
+
 ## Device connections and synchronization
 
 The central Mac manages membership and access in Settings → Devices.

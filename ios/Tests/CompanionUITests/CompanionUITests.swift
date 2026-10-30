@@ -51,6 +51,25 @@ final class CompanionUITests: XCTestCase {
     }
     return app
   }
+  @MainActor func testWorkspaceOrganizationAndForeignQuickChatHistory() {
+    let app = launch(scenario: "workspace-organization")
+    XCTAssertTrue(app.staticTexts["Local workspace"].exists)
+    XCTAssertTrue(app.staticTexts["Remote workspaces"].exists)
+    XCTAssertTrue(app.buttons["folder-dddddddd-4444-4444-8444-444444444444"].exists)
+    XCTAssertTrue(app.buttons["folder-agent-local:pi-durable-device"].exists)
+    XCTAssertFalse(app.buttons["folders-workspace"].exists)
+    let ipad = "cccccccc-3333-4333-8333-333333333333"
+    app.buttons["folder-workspace-" + ipad].tap()
+    XCTAssertTrue(app.buttons["folder-ffffffff-6666-4666-8666-666666666666"].exists)
+    XCTAssertFalse(app.buttons["action-new-folder-" + ipad].exists)
+    XCTAssertFalse(app.buttons["action-new-note-" + ipad].exists)
+    app.buttons["workspace-items-" + ipad].tap()
+    app.buttons["folder-chat-organization-ipad-chat"].tap()
+    XCTAssertTrue(app.staticTexts["Your weekend plan, saved from the iPad."].waitForExistence(timeout: 5))
+    XCTAssertFalse(app.buttons["chat-new-session"].exists)
+    XCTAssertFalse(app.descendants(matching: .any)["chat-composer"].exists)
+  }
+
   @MainActor func testDarkThemeSelectionPersistsAcrossLaunch() {
     let app = launch(tab: "Settings")
     app.buttons["General"].tap()
@@ -75,6 +94,9 @@ final class CompanionUITests: XCTestCase {
   @MainActor func testFiveNativeTabsAndFocusedSurfaces() {
     let app = launch()
     XCTAssertTrue(app.staticTexts["Folders"].exists)
+    XCTAssertTrue(app.staticTexts["Local workspace"].exists)
+    XCTAssertTrue(app.buttons["folder-all"].exists)
+    XCTAssertFalse(app.buttons["folders-workspace"].exists)
     app.buttons["tab-home"].tap()
     XCTAssertTrue(app.staticTexts["pane-heading-woven matter"].waitForExistence(timeout: 5))
     XCTAssertTrue(app.buttons["launch-agent-local:pi-durable-device"].waitForExistence(timeout: 5))
@@ -184,9 +206,9 @@ final class CompanionUITests: XCTestCase {
     app.buttons["Close agent chooser"].tap()
     XCTAssertTrue(app.staticTexts["pane-heading-woven matter"].waitForExistence(timeout: 5))
     app.buttons["tab-folders"].tap()
-    app.buttons["action-new-chat"].tap()
-    XCTAssertTrue(chooser.waitForExistence(timeout: 5))
-    chooser.tap()
+    let localAgent = app.buttons["folder-agent-local:pi-durable-device"]
+    XCTAssertTrue(localAgent.waitForExistence(timeout: 5))
+    localAgent.tap()
     let composer = app.descendants(matching: .any)["chat-composer"].firstMatch
     XCTAssertTrue(composer.waitForExistence(timeout: 5))
     XCTAssertEqual(composer.label, "Chat…")
@@ -208,7 +230,7 @@ final class CompanionUITests: XCTestCase {
   }
 
   @MainActor func testOfflineDeviceCreationExplainsConnectionAndSettingsHasNoPendingPage() {
-    let app = launch(scenario: "offline-device")
+    let app = launch(tab: "Home", scenario: "offline-device")
     let message = "Can’t connect to this device. Make sure it’s online and connected to the internet."
     app.buttons["action-new-chat"].tap()
     let agent = app.buttons["choose-chat-agent-11111111-2222-4333-8444-555555555555:pi"]
@@ -218,9 +240,9 @@ final class CompanionUITests: XCTestCase {
     XCTAssertTrue(chatError.waitForExistence(timeout: 5))
     XCTAssertEqual(chatError.label, message)
     app.buttons["Close agent chooser"].tap()
-    app.buttons["folders-workspace"].tap()
-    app.buttons["Offline Linux"].firstMatch.tap()
-    app.buttons["New folder"].tap()
+    app.buttons["tab-folders"].tap()
+    app.buttons["folder-workspace-11111111-2222-4333-8444-555555555555"].tap()
+    app.buttons["action-new-folder-11111111-2222-4333-8444-555555555555"].tap()
     XCTAssertFalse(app.alerts["New folder"].exists)
     let folderError = app.staticTexts["workspace-action-error"]
     XCTAssertTrue(folderError.waitForExistence(timeout: 5))

@@ -39,6 +39,7 @@ struct CompanionShell: View {
   @Bindable var model: CompanionModel
   @Environment(\.dashboardTheme) private var theme
   @State private var keyboardVisible = false
+  @State private var hoveredTab: CompanionModel.Tab?
   @State private var navigationReset = UUID()
   @Environment(\.horizontalSizeClass) private var sizeClass
   var body: some View {
@@ -83,13 +84,18 @@ struct CompanionShell: View {
             ForEach(Array(CompanionModel.Tab.allCases.prefix(5)), id: \.self) { tab in
               Button { selectTab(tab) } label: {
                 VStack(spacing: 5) {
-                  DashboardLucideIcon(glyph: tab.icon, size: 22)
-                    .frame(width: 54, height: 30)
-                    .background(isSelected(tab) ? theme.palette.themeSoft : .clear, in: Capsule())
+                  DashboardLucideIcon(glyph: tab.icon, size: 22).frame(height: 26)
                   Text(tab.rawValue).font(.caption2.weight(isSelected(tab) ? .semibold : .regular))
-                }.frame(maxWidth: .infinity).padding(.vertical, 11)
+                }.frame(maxWidth: .infinity).padding(.vertical, 9)
                   .foregroundStyle(isSelected(tab) ? DashboardPalette.foreground : DashboardPalette.mutedForeground)
-              }.accessibilityIdentifier("tab-\(tab.rawValue.lowercased())")
+                  .background(isSelected(tab) || hoveredTab == tab ? theme.palette.themeSoft : .clear,
+                    in: RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
+                  .contentShape(.interaction, RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
+                  .contentShape(.hoverEffect, RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
+                  .hoverEffect(.highlight)
+              }.buttonStyle(.plain).padding(.horizontal, 4).padding(.vertical, 6)
+                .onHover { hovering in hoveredTab = hovering ? tab : (hoveredTab == tab ? nil : hoveredTab) }
+                .accessibilityIdentifier("tab-\(tab.rawValue.lowercased())")
                 .accessibilityAddTraits(isSelected(tab) ? .isSelected : [])
             }
           }.background(theme == .dark ? theme.palette.railFill : theme.palette.themeWhisper).overlay(alignment: .top) { Divider() }
@@ -273,20 +279,13 @@ struct HomePane: View {
 
 struct FoldersPane: View {
   @Bindable var model: CompanionModel
-  @State private var newFolderPresented = false
+  @State private var newFolderWorkspace: MobileFolderWorkspace?
   @State private var folderName = ""
-  @State private var workspaceFilter: String
-  init(model: CompanionModel, workspaceID: String? = nil) {
-    self.model = model; _workspaceFilter = State(initialValue: workspaceID ?? "")
-  }
-  private var visibleFolders: [CompanionFolder] {
-    model.folders.filter { folder in
-      workspaceFilter.isEmpty || (workspaceFilter == "device" ? folder.execution?.workspaceID.hasPrefix("device:") == true : folder.execution?.workspaceID == workspaceFilter)
-    }
-  }
-  private var creationWorkspaceID: String {
-    if !workspaceFilter.isEmpty { return workspaceFilter }
-    return model.folderWorkspaces.first { model.workspaceReachable[$0.id] == true }?.id ?? "device"
+  @State private var expandedWorkspaces: Set<String> = []
+  private let workspaceID: String?
+  init(model: CompanionModel, workspaceID: String? = nil) { self.model = model; self.workspaceID = workspaceID }
+  private var groups: [MobileFolderWorkspace] {
+    model.folderWorkspaceGroups.filter { workspaceID == nil || $0.id == model.canonicalWorkspaceID(workspaceID!) }
   }
   var body: some View {
     Group {
@@ -297,26 +296,24 @@ struct FoldersPane: View {
           PaneHeader(title: "Folders") { EmptyView() }
           ScrollView {
             VStack(spacing: 0) {
-              Picker("Workspace", selection: $workspaceFilter) {
-                Text("All workspaces").tag("")
-                ForEach(model.folderWorkspaces) { Text($0.name).tag($0.id) }
-                Text("Notes on this device").tag("device")
-              }.padding(.horizontal, 14).accessibilityIdentifier("folders-workspace")
-              WorkspaceRow(icon: .squarePen, title: "New chat") { model.newChat() }
-                .accessibilityIdentifier("action-new-chat")
-              WorkspaceRow(icon: .fileText, title: "New note") { Task { await model.newNote() } }
-                .accessibilityIdentifier("action-new-note")
-              WorkspaceRow(icon: .plus, title: "New folder") {
-                if creationWorkspaceID != "device", !model.workspaceIsConnected(creationWorkspaceID) {
-                  model.errorMessage = CompanionModel.deviceConnectionMessage
-                } else { newFolderPresented = true }
+              if workspaceID == nil {
+                WorkspaceRow(icon: .folder, title: "All Workspace") { model.openFolder(nil) }
+                  .accessibilityIdentifier("folder-all")
               }
-              WorkspaceRow(icon: .folder, title: "All workspace") { model.openFolder(nil) }
-                .accessibilityIdentifier("folder-all")
-              ForEach(visibleFolders) { folder in
-                WorkspaceRow(icon: .folder, title: folder.name,
-                  detail: String(model.notes.filter { $0.folderID == folder.id }.count + model.conversations.filter { $0.folderID == folder.id }.count)) { model.openFolder(folder.id) }
-                  .accessibilityIdentifier("folder-" + folder.id)
+              ForEach(groups.filter(\.isLocal)) { workspace in
+                GroupLabel(text: "Local workspace")
+                workspaceSection(workspace)
+              }
+              if !groups.filter({ !$0.isLocal }).isEmpty {
+                GroupLabel(text: "Remote workspaces")
+                ForEach(groups.filter { !$0.isLocal }) { workspace in workspaceSection(workspace) }
+              }
+              if workspaceID == nil, model.hasUnassignedContent {
+                GroupLabel(text: "Unassigned")
+                WorkspaceRow(icon: .folder, title: "Unassigned items", detail: "Existing items without a known workspace") {
+                  model.openFolder(nil, workspaceID: "unassigned")
+                }
+                ForEach(model.folders.filter { model.folderOwner($0) == nil }) { folder in folderRow(folder) }
               }
               SettingsNavigationRow(title: "Trash", icon: .trash) { TrashPane(model: model).mobileNavigationPage("Trash") }
                 .padding(.top, 18).accessibilityIdentifier("folders-trash")
@@ -325,20 +322,58 @@ struct FoldersPane: View {
         }
       }
     }
-    .alert("New folder", isPresented: $newFolderPresented) {
+    .onAppear { for workspace in groups where workspace.isLocal { expandedWorkspaces.insert(workspace.id) } }
+    .alert("New folder", isPresented: Binding(get: { newFolderWorkspace != nil }, set: { if !$0 { newFolderWorkspace = nil } })) {
       TextField("Folder name", text: $folderName)
       Button("Create") {
-        let name = folderName, workspace = creationWorkspaceID; folderName = ""
+        guard let workspace = newFolderWorkspace else { return }
+        let name = folderName; folderName = ""; newFolderWorkspace = nil
         Task {
-          if workspace == "device" { await model.newFolder(name: name) }
-          else { do { try await model.newWorkspaceFolder(name: name, workspaceID: workspace) } catch { model.errorMessage = model.workspaceActionMessage(error); await model.reload() } }
+          if workspace.isLocal { await model.newFolder(name: name) }
+          else { do { try await model.newWorkspaceFolder(name: name, workspaceID: model.workspaceRoute(for: workspace.id)) } catch { model.errorMessage = model.workspaceActionMessage(error); await model.reload() } }
         }
-      }
-      .disabled(folderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || folderName.utf8.count > 4096)
-      Button("Cancel", role: .cancel) { folderName = "" }
-    } message: {
-      Text(creationWorkspaceID == "device" ? "Create a note folder on this device." : "Create in " + (model.folderWorkspaces.first { $0.id == creationWorkspaceID }?.name ?? "the selected workspace") + ".")
-    }
+      }.disabled(folderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || folderName.utf8.count > 4096)
+      Button("Cancel", role: .cancel) { folderName = ""; newFolderWorkspace = nil }
+    } message: { Text("Create in " + (newFolderWorkspace?.name ?? "this workspace") + ".") }
+  }
+  private func workspaceSection(_ workspace: MobileFolderWorkspace) -> some View {
+    DisclosureGroup(isExpanded: Binding(get: { expandedWorkspaces.contains(workspace.id) }, set: {
+      if $0 { expandedWorkspaces.insert(workspace.id) } else { expandedWorkspaces.remove(workspace.id) }
+    })) {
+      VStack(spacing: 0) {
+        WorkspaceRow(icon: .folder, title: "All items") { model.openFolder(nil, workspaceID: workspace.id) }.accessibilityIdentifier("workspace-items-" + workspace.id)
+        if workspace.canCreate {
+          ForEach(model.folderAgents(in: workspace)) { agent in
+            WorkspaceRow(icon: MobileAgentIcon(runtimeKind: agent.runtimeKind, size: 24), title: agent.name,
+              detail: workspace.isLocal ? "Powered by Pi Durable" : nil) {
+              model.selectedFolderID = nil; model.selectedFolderWorkspaceID = workspace.id
+              model.newChatNoteID = nil
+              Task { await model.startNewChat(with: agent) }
+            }.accessibilityIdentifier("folder-agent-" + agent.id)
+          }
+          WorkspaceRow(icon: .fileText, title: "New note") {
+            model.selectedFolderID = nil
+            Task { await model.newNote(workspaceID: workspace.id) }
+          }.accessibilityIdentifier("action-new-note-" + workspace.id)
+          WorkspaceRow(icon: .plus, title: "New folder") {
+            if !workspace.isLocal, !model.workspaceIsConnected(model.workspaceRoute(for: workspace.id)) { model.errorMessage = CompanionModel.deviceConnectionMessage }
+            else { newFolderWorkspace = workspace; folderName = "" }
+          }.accessibilityIdentifier("action-new-folder-" + workspace.id)
+        } else if workspace.kind == .ios {
+          Text("Quick Chat history syncs from this device.").font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+            .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 14).padding(.vertical, 8)
+        }
+        ForEach(model.folders.filter { model.folderOwner($0) == workspace.id }) { folder in folderRow(folder) }
+        WorkspaceRow(icon: .fileText, title: "Unfiled items") { model.openFolder(nil, workspaceID: workspace.id, unfiled: true) }.accessibilityIdentifier("workspace-unfiled-" + workspace.id)
+      }.padding(.leading, 6)
+    } label: {
+      Text(workspace.name).font(.headline).frame(minHeight: 44)
+    }.padding(.horizontal, 14).accessibilityIdentifier("folder-workspace-" + workspace.id)
+  }
+  private func folderRow(_ folder: CompanionFolder) -> some View {
+    WorkspaceRow(icon: .folder, title: folder.name,
+      detail: String(model.notes.filter { $0.folderID == folder.id }.count + model.conversations.filter { $0.folderID == folder.id }.count)) { model.openFolder(folder.id) }
+      .accessibilityIdentifier("folder-" + folder.id)
   }
 }
 
@@ -346,12 +381,17 @@ struct FolderContentsPane: View {
   @Bindable var model: CompanionModel
   @State private var search = ""
   private var notes: [CompanionNote] {
-    model.notes.filter { (model.selectedFolderID == nil || $0.folderID == model.selectedFolderID)
+    model.notes.filter { model.folderScopeIncludes(owner: model.noteOwner($0), folderID: $0.folderID)
       && (search.isEmpty || $0.title.localizedCaseInsensitiveContains(search)) }
   }
   private var conversations: [CompanionConversation] {
-    model.conversations.filter { (model.selectedFolderID == nil || $0.folderID == model.selectedFolderID)
+    model.conversations.filter { model.folderScopeIncludes(owner: model.conversationOwner($0), folderID: $0.folderID)
       && (search.isEmpty || $0.title.localizedCaseInsensitiveContains(search)) }
+  }
+  private var folders: [CompanionFolder] {
+    guard model.selectedFolderID == nil, !model.folderContentsUnfiled else { return [] }
+    return model.folders.filter { model.folderScopeIncludes(owner: model.folderOwner($0), folderID: nil)
+      && (search.isEmpty || $0.name.localizedCaseInsensitiveContains(search)) }
   }
   var body: some View {
     VStack(spacing: 0) {
@@ -360,20 +400,26 @@ struct FolderContentsPane: View {
           .accessibilityLabel("Back to Folders").accessibilityIdentifier("back-folders")
         Spacer()
       }.padding(.horizontal, 20)
-      PaneHeader(title: model.selectedFolderID.flatMap { model.state.folders[$0]?.name } ?? "All workspace") {
-        Menu {
+      PaneHeader(title: model.selectedFolderScopeTitle) {
+        if model.canCreateInFolderScope { Menu {
           Button("New chat", glyph: .squarePen) { model.newChat() }
           Button("New note", glyph: .fileText) { Task { await model.newNote() } }
         } label: { DashboardLucideIcon(glyph: .plus, size: 20).frame(width: 44, height: 44) }
-          .accessibilityLabel("Add to folder")
+          .accessibilityLabel("Add to folder") }
       }
       DashboardSearchField(text: $search, prompt: "Search notes and conversations")
         .textInputAutocapitalization(.never).padding(.horizontal, 20)
       ScrollView {
         VStack(spacing: 0) {
-          if notes.isEmpty && conversations.isEmpty {
+          if folders.isEmpty && notes.isEmpty && conversations.isEmpty {
             Text(search.isEmpty ? "This folder is empty. Add a note or start a chat." : "No matching notes or chats.")
               .foregroundStyle(DashboardPalette.mutedForeground).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 24).padding(.horizontal, 14)
+          }
+          if !folders.isEmpty {
+            GroupLabel(text: "Folders")
+            ForEach(folders) { folder in
+              WorkspaceRow(icon: .folder, title: folder.name) { model.openFolder(folder.id) }
+            }
           }
           if !notes.isEmpty {
             GroupLabel(text: "Notes & assets")
@@ -384,7 +430,7 @@ struct FolderContentsPane: View {
           if !conversations.isEmpty {
             GroupLabel(text: "Chats")
             ForEach(conversations) { conversation in
-              WorkspaceRow(icon: .messageSquare, title: conversation.title, detail: conversation.runtimeKind) { Task { await model.selectConversation(conversation.id) } }
+              WorkspaceRow(icon: .messageSquare, title: conversation.title, detail: conversation.runtimeKind) { Task { await model.selectConversation(conversation.id) } }.accessibilityIdentifier("folder-chat-" + conversation.id)
             }
           }
         }.padding(.horizontal, 18).padding(.bottom, 24)

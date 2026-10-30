@@ -36,6 +36,8 @@ import CompanionInference
   @ObservationIgnored let transcriptStates = MobileConversationStates()
   var loadingHistory = false
   var selectedFolderID: String?
+  var selectedFolderWorkspaceID: String?
+  var folderContentsUnfiled = false
   var folderContentsPresented = false
   var selectedNoteID: String?
   var selectedConversationID: String?
@@ -327,19 +329,22 @@ import CompanionInference
       await reload()
     }
   }
-  func openFolder(_ id: String?) {
-    selectedFolderID = id; folderContentsPresented = true; tab = .folders
+  func openFolder(_ id: String?, workspaceID: String? = nil, unfiled: Bool = false) {
+    selectedFolderID = id
+    selectedFolderWorkspaceID = workspaceID ?? id.flatMap { state.folders[$0]?.execution?.workspaceID }.map(CompanionWorkspaceIdentity.canonicalID)
+    folderContentsUnfiled = unfiled; folderContentsPresented = true; tab = .folders
   }
-  func closeFolder() { selectedFolderID = nil; folderContentsPresented = false }
+  func closeFolder() { selectedFolderID = nil; selectedFolderWorkspaceID = nil; folderContentsUnfiled = false; folderContentsPresented = false }
   func newFolder(name: String) async {
     guard let store, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
     do { let folder = try await store.createFolder(name: name); await analytics.record(.active); await reload(); openFolder(folder.id) }
     catch { errorMessage = error.localizedDescription }
   }
-  func newNote() async {
+  func newNote(workspaceID: String? = nil) async {
     guard let store else { return }
     do {
-      let note = try await store.createNote(folderID: selectedFolderID, title: "Untitled note", content: NoteDocument().encoded())
+      let scoped = tab == .folders && folderContentsPresented
+      let note = try await store.createNote(folderID: scoped ? selectedFolderID : nil, title: "Untitled note", content: NoteDocument().encoded(), workspaceID: workspaceID ?? (scoped ? selectedFolderWorkspaceID : nil))
       await analytics.record(.active)
       selectedNoteID = note.id; tab = .note; await reload()
     } catch { errorMessage = error.localizedDescription }
@@ -355,13 +360,15 @@ import CompanionInference
   func selectConversation(_ id: String, workspaceID: String? = nil) async {
     selectedConversationRoute = (id, workspaceID ?? preferredExecutionRoute(for: id))
     selectedConversationID = id; tab = .chat
-    if selectedExecutionWorkspaceID == "local" { await openDeviceConversation(id) }
+    if isViewingRemoteQuickChat { await refreshRemoteQuickChatHistory() }
+    else if selectedExecutionWorkspaceID == "local" { await openDeviceConversation(id) }
     else if selectedExecutionWorkspaceID == "central" { await refresh() }
     else { await refreshExecutionWorkspaces(force: true) }
   }
   func refreshConversation() async {
     let owner = selectedExecutionWorkspaceID
-    if owner == "local", let id = selectedConversationID { await openDeviceConversation(id) }
+    if isViewingRemoteQuickChat { await refreshRemoteQuickChatHistory() }
+    else if owner == "local", let id = selectedConversationID { await openDeviceConversation(id) }
     else if owner == "central" { await refresh() }
     else { await refreshDirectWorkspace(owner) }
   }
@@ -380,8 +387,9 @@ import CompanionInference
     catch { errorMessage = error.localizedDescription }
   }
   func showLatestMessages() { if let selectedConversationID { historyPages.removeValue(forKey: selectedConversationID) } }
-  func newChat(referencing noteID: String? = nil) {
-    if tab != .folders || !folderContentsPresented { selectedFolderID = nil }
+  func newChat(referencing noteID: String? = nil, workspaceID: String? = nil) {
+    if tab != .folders || !folderContentsPresented { selectedFolderID = nil; selectedFolderWorkspaceID = nil }
+    if let workspaceID { selectedFolderWorkspaceID = workspaceID }
     newChatNoteID = noteID; chatSetupProblem = nil; chatChooserPresented = true
   }
   func saveNote(id: String, title: String, content: String, base: CompanionNote) {
@@ -679,6 +687,28 @@ import CompanionInference
         executionWorkspaces = [workspace]
         workspaceProviders[workspace.id] = [.init(id: "pi", runtimeKind: "pi", displayName: "Pi Durable", available: true)]
         workspaceReachable[workspace.id] = false
+      }
+      if scenario == "workspace-organization" {
+        let mac = "aaaaaaaa-1111-4111-8111-111111111111", linux = "bbbbbbbb-2222-4222-8222-222222222222", ipad = "cccccccc-3333-4333-8333-333333333333"
+        executionWorkspaces = [
+          .init(id: mac, libraryID: "fixture", ownerDeviceID: mac, kind: .mac, name: "Studio Mac", capabilities: ["history.central.v1"]),
+          .init(id: linux, libraryID: "fixture", ownerDeviceID: mac, kind: .linux, name: "Linux workspace"),
+          .init(id: ipad, libraryID: "fixture", ownerDeviceID: ipad, kind: .ios, name: "Travel iPad", capabilities: ["quick-chat", "notes"])
+        ]
+        providers = [.init(id: "pi", runtimeKind: "pi", displayName: "Pi Durable", available: true)]
+        workspaceProviders[mac] = providers; workspaceProviders[linux] = providers
+        let localFolder = CompanionFolder(id: "dddddddd-4444-4444-8444-444444444444", name: "Phone ideas", execution: .init(workspaceID: "device:" + state.deviceID, rootPath: "/fixture/phone"))
+        let macFolder = CompanionFolder(id: "eeeeeeee-5555-4555-8555-555555555555", name: "Mac projects", execution: .init(workspaceID: "device:" + mac, rootPath: "/fixture/mac"))
+        let ipadFolder = CompanionFolder(id: "ffffffff-6666-4666-8666-666666666666", name: "Travel notes", execution: .init(workspaceID: "device:" + ipad, rootPath: "/fixture/ipad"))
+        let document = try NoteDocument().encoded()
+        let localNote = CompanionNote(id: "organization-local-note", title: "Unfiled phone idea", content: document, workspaceID: state.deviceID)
+        let ipadNote = CompanionNote(id: "organization-ipad-note", folderID: ipadFolder.id, title: "Packing list", content: document, workspaceID: ipad)
+        let chat = CompanionConversation(id: "organization-ipad-chat", title: "Weekend plans", providerID: "pi-durable-device", runtimeKind: "pi", workspaceID: ipad)
+        try await store.apply(.init(workspaceID: "fixture", cursor: 2, folders: folders + [localFolder, macFolder, ipadFolder], notes: notes + [localNote, ipadNote], conversations: conversations + [chat]))
+        try await store.cache(.init(conversationID: chat.id, messages: [
+          .init(id: "organization-message", conversationID: chat.id, role: "assistant", content: "Your weekend plan, saved from the iPad.", sequence: 0)
+        ]))
+        await reload()
       }
       selectedNoteID = notes.first?.id; selectedConversationID = "fixture-chat"
       if ProcessInfo.processInfo.environment["WOVENMATTER_UI_SCENARIO"] == "pairing" { pairingPresented = true }

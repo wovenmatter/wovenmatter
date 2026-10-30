@@ -26,6 +26,8 @@ final class CentralExecutionClient {
     private var refreshTasks: [String: Task<Void, any Error>] = [:]
     private(set) var workspaceByConversation: [String: CompanionExecutionWorkspace] = [:]
     private(set) var transcripts: [String: CompanionTranscript] = [:]
+    private(set) var workspaceProviders: [String: [CompanionProvider]] = [:]
+    private var providerRefreshAfter: [String: Date] = [:]
     private(set) var capabilities: [String: CompanionProvider] = [:]
     private(set) var pending: [String: [CompanionPendingInteraction]] = [:]
     private(set) var onlineWorkspaces: Set<String> = []
@@ -120,6 +122,17 @@ final class CentralExecutionClient {
             }
             throw error
         }
+    }
+
+    func providerCatalog(for workspaces: [CompanionExecutionWorkspace]) async -> [String: [CompanionProvider]] {
+        for workspace in workspaces where workspace.kind == .mac && !workspace.deleted && workspace.endpoint != nil && !workspace.capabilities.contains("history.central.v1") {
+            guard providerRefreshAfter[workspace.id].map({ $0 <= Date() }) ?? true else { continue }
+            providerRefreshAfter[workspace.id] = Date().addingTimeInterval(30)
+            if let providers = try? await transport(for: workspace).providers() { workspaceProviders[workspace.id] = providers }
+        }
+        let known = Set(workspaces.filter { !$0.deleted }.map(\.id))
+        workspaceProviders = workspaceProviders.filter { known.contains($0.key) }
+        return workspaceProviders
     }
 
     private func transport(for workspace: CompanionExecutionWorkspace) async throws -> any ExecutionWorkspaceTransport {
@@ -256,6 +269,9 @@ final class CentralExecutionClient {
     }
     private func submit(_ requested: CompanionCommand, workspace: CompanionExecutionWorkspace,
                         beforeDispatch: @MainActor () throws -> Void = {}) async throws -> CompanionCommandReceipt {
+        guard workspace.kind != .ios else {
+            throw CompanionAPIError(code: "read_only_history", message: "Quick Chat runs only on its iPhone or iPad. Synced history is read-only here.")
+        }
         let unresolved = await commandJournal.commandRecords(workspaceID: workspace.id).first {
             ($0.receipt == nil || $0.receipt?.status == .outcomeUnknown) &&
             $0.command.kind == requested.kind && $0.command.conversationID == requested.conversationID &&

@@ -136,7 +136,7 @@ extension WorkspaceDatabaseConnection {
   }
 
   func companionNoteUnlocked(id: String) throws -> CompanionNote? {
-    let statement = try prepareUnlocked("SELECT id, folder_id, title, content, updated_at, is_pinned FROM notes WHERE id = ? AND user_id = ? AND deleted_at IS NULL")
+    let statement = try prepareUnlocked("SELECT id, folder_id, title, content, updated_at, is_pinned, COALESCE(workspace_id,(SELECT workspace_id FROM folder_execution_roots WHERE folder_id=notes.folder_id)) FROM notes WHERE id = ? AND user_id = ? AND deleted_at IS NULL")
     defer { sqlite3_finalize(statement) }
     try bind(id, at: 1, to: statement); try bind(localMutationOperatorIDUnlocked(), at: 2, to: statement)
     let code = sqlite3_step(statement)
@@ -145,7 +145,7 @@ extension WorkspaceDatabaseConnection {
     return try CompanionNote(id: text(statement, column: 0), folderID: optionalText(statement, column: 1),
                              title: text(statement, column: 2), content: text(statement, column: 3),
                              revision: companionVersionUnlocked(kind: "note", id: id)?.revision ?? 1,
-                             updatedAt: text(statement, column: 4), kind: companionNoteKind(content: text(statement, column: 3)), isPinned: sqlite3_column_int(statement, 5) != 0)
+                             updatedAt: text(statement, column: 4), kind: companionNoteKind(content: text(statement, column: 3)), isPinned: sqlite3_column_int(statement, 5) != 0, workspaceID: optionalText(statement, column: 6))
   }
 
   func companionBudgetedNote(_ note: CompanionNote, remainingBytes: inout Int) -> CompanionNote {

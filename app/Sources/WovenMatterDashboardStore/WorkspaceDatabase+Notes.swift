@@ -326,6 +326,7 @@ extension WorkspaceDatabaseConnection {
     content: String = "",
     kind: NoteArtifactKind = .note,
     createdAt: Date = Date(),
+    workspaceID: String? = nil,
     callerConversationID: String? = nil,
     requestID: String? = nil
   ) throws -> String {
@@ -354,8 +355,8 @@ extension WorkspaceDatabaseConnection {
         let note = try prepareUnlocked("""
           INSERT INTO notes (
             id, user_id, folder_id, title, content, snippet, is_pinned, position,
-            created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
+            created_at, updated_at, workspace_id
+          ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
           """)
         defer { sqlite3_finalize(note) }
         try bind(noteID, at: 1, to: note)
@@ -369,6 +370,9 @@ extension WorkspaceDatabaseConnection {
         }
         try bind(timestamp, at: 8, to: note)
         try bind(timestamp, at: 9, to: note)
+        let folderOwner = try folderID.flatMap { try companionFolderUnlocked(id: $0)?.execution?.workspaceID }
+        let owner = folderOwner ?? workspaceID ?? (try? companionLibraryIdentityUnlocked().hostDeviceID)
+        try bindNullable(owner.map(CompanionWorkspaceIdentity.canonicalID), at: 10, to: note)
         try stepDone(note)
 
         try checkpointNoteUnlocked(id: noteID, source: "created", force: true)
@@ -635,10 +639,11 @@ extension WorkspaceDatabase {
     content: String = "",
     kind: NoteArtifactKind = .note,
     createdAt: Date = Date(),
+    workspaceID: String? = nil,
     callerConversationID: String? = nil,
     requestID: String? = nil
   ) async throws -> String {
-    try await write { try $0.createNote(id: id, folderID: folderID, title: title, content: content, kind: kind, createdAt: createdAt, callerConversationID: callerConversationID, requestID: requestID) }
+    try await write { try $0.createNote(id: id, folderID: folderID, title: title, content: content, kind: kind, createdAt: createdAt, workspaceID: workspaceID, callerConversationID: callerConversationID, requestID: requestID) }
   }
 
   @discardableResult

@@ -52,6 +52,7 @@ final class CompanionHostController {
     private(set) var pairingExpiresAt: Date?
     private(set) var discoveredPeers: [CompanionDiscoveredPeer] = []
     private(set) var pendingPairingRequests: [CompanionPendingPairingRequest] = []
+    private(set) var workspaceProviders: [String: [CompanionProvider]] = [:]
     private(set) var executionWorkspaces: [CompanionExecutionWorkspace] = []
     private(set) var isDiscovering = false
     private(set) var pendingDeviceRevocations: [String: [String]] = [:]
@@ -608,7 +609,8 @@ final class CompanionHostController {
               errorMessage: errorMessage, pairingPayload: pairingPayload, pairingExpiresAt: pairingExpiresAt,
               pairedDevices: pairedDevices, lastSeenAt: lastSeenAt, discoveredPeers: discoveredPeers,
               pendingPairingRequests: pendingPairingRequests, isDiscovering: isDiscovering, executionWorkspaces: executionWorkspaces,
-              pendingDeviceRevocations: pendingRevocations, workspaceAccessPolicies: workspaceAccessPolicies)
+              pendingDeviceRevocations: pendingRevocations, workspaceAccessPolicies: workspaceAccessPolicies,
+              workspaceProviders: workspaceProviders)
     }
 
     func refreshStatus() async {
@@ -619,6 +621,9 @@ final class CompanionHostController {
             pendingDeviceRevocations = pendingRevocations
             executionWorkspaces = try await model?.dashboardStore?.database.companionExecutionWorkspaces() ?? []
             workspaceAccessPolicies = try await model?.dashboardStore?.database.companionWorkspaceAccessPolicies() ?? []
+            if let client = try? model?.centralExecutionClient() {
+                workspaceProviders = await client.providerCatalog(for: executionWorkspaces)
+            }
         } catch { errorMessage = error.localizedDescription }
     }
     func refreshDiscovery() async {
@@ -664,6 +669,7 @@ final class CompanionHostController {
             pairingExpiresAt = value.pairingExpiresAt; pairedDevices = value.pairedDevices; lastSeenAt = value.lastSeenAt
             discoveredPeers = value.discoveredPeers; pendingPairingRequests = value.pendingPairingRequests
             isDiscovering = value.isDiscovering; executionWorkspaces = value.executionWorkspaces
+            workspaceProviders = value.workspaceProviders ?? [:]
             pendingDeviceRevocations = value.pendingDeviceRevocations; workspaceAccessPolicies = value.workspaceAccessPolicies
         } catch { errorMessage = error.localizedDescription }
     }
@@ -726,6 +732,7 @@ struct CompanionHostSnapshot: Codable, Sendable {
     let executionWorkspaces: [CompanionExecutionWorkspace]
     let pendingDeviceRevocations: [String: [String]]
     let workspaceAccessPolicies: [CompanionWorkspaceAccessPolicy]
+    var workspaceProviders: [String: [CompanionProvider]]? = nil
 }
 
 private struct ExecutionManagementAcknowledgement: Decodable { let revoked: Bool }

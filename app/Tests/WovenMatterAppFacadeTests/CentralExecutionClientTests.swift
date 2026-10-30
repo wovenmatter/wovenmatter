@@ -8,6 +8,31 @@ import WovenMatterClient
 
 @MainActor @Suite(.serialized)
 struct CentralExecutionClientTests {
+    @Test func phoneHistoryRejectsCommandsBeforeJournalingOrTransport() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        let identity = try await fixture.database.companionLibraryIdentity()
+        let phoneID = UUID().uuidString.lowercased()
+        let workspace = try await fixture.database.registerCompanionExecutionWorkspace(.init(workspace: .init(
+            id: phoneID, libraryID: identity.libraryID, ownerDeviceID: phoneID,
+            kind: .ios, name: "iPhone", endpoint: URL(string: "https://fixture.ts.net/wovenmatter"))), deviceID: identity.hostDeviceID)
+        let conversation = CompanionConversation(id: UUID().uuidString.lowercased(), title: "Quick Chat", providerID: "pi-durable-device", workspaceID: phoneID)
+        _ = try await fixture.database.ingestCompanionJournal(.init(libraryID: identity.libraryID, entries: [
+            .init(workspaceID: phoneID, originSequence: 1, conversationID: conversation.id, kind: .conversation, conversation: conversation)
+        ]), deviceID: phoneID)
+        let remote = CentralExecutionFixtureTransport(workspace: workspace, conversation: conversation, entries: [])
+        let journal = fixture.directory.appending(path: "phone-commands.json")
+        var provisioned = false
+        let client = try CentralExecutionClient(database: fixture.database, commandJournalURL: journal,
+            provision: { _ in provisioned = true; return .init(workspace: workspace, deviceID: identity.hostDeviceID, token: "fixture-only") },
+            makeTransport: { _ in remote }, loadCredential: { _ in nil }, saveCredential: { _ in })
+        await #expect(throws: (any Error).self) { _ = try await client.send(conversationID: conversation.id, text: "Do not execute") }
+        await #expect(throws: (any Error).self) { _ = try await client.stop(conversationID: conversation.id, runID: UUID().uuidString.lowercased()) }
+        #expect(!provisioned)
+        #expect(await remote.executions == 0)
+        let saved = try WorkspaceJournal(file: journal)
+        #expect(await saved.snapshot().commands.isEmpty)
+    }
+
     @Test func importedConversationRoutesThroughBackendAndRetainsLostAcknowledgement() async throws {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
         let identity = try await fixture.database.companionLibraryIdentity()

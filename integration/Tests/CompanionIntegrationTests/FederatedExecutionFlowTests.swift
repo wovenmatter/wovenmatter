@@ -11,6 +11,48 @@ import WovenMatterDashboardStore
 @Suite("Federated execution complete flows", .serialized)
 @MainActor
 struct FederatedExecutionFlowTests {
+  @Test("phone organization survives sync, another device editing, and restart")
+  func phoneWorkspaceOrganizationRoundTrip() async throws {
+    let fixture = try await FederationFlowFixture()
+    defer { fixture.remove() }
+    let phone = try await fixture.client("iPhone")
+    let phoneID = phone.credential.deviceID
+    let workspace = CompanionExecutionWorkspace(id: phoneID, libraryID: fixture.libraryID,
+      ownerDeviceID: phoneID, kind: .ios, name: "Trey’s iPhone", capabilities: ["quick-chat", "notes"])
+    try await phone.store.journal.upsertWorkspace(workspace)
+    let folder = try await phone.store.createFolder(name: "Phone notes")
+    let unfiled = try await phone.store.createNote(folderID: nil, title: "Phone unfiled", content: NoteDocument().encoded())
+    let filed = try await phone.store.createNote(folderID: folder.id, title: "Phone filed", content: NoteDocument().encoded())
+    let chat = CompanionConversation(id: UUID().uuidString.lowercased(), title: "Phone Quick Chat",
+      folderID: folder.id, providerID: "pi-durable-device", runtimeKind: "pi", libraryID: fixture.libraryID, workspaceID: phoneID)
+    let message = CompanionMessage(id: UUID().uuidString.lowercased(), conversationID: chat.id,
+      role: "assistant", content: "Saved Quick Chat history")
+    try await phone.store.journal.append(workspaceID: phoneID, conversation: chat,
+      transcript: .init(conversationID: chat.id, messages: [message]))
+    #expect(unfiled.workspaceID == phoneID)
+    #expect(CompanionWorkspaceIdentity.canonicalID(folder.execution?.workspaceID ?? "") == phoneID)
+    try await MobileSyncEngine(store: phone.store, transport: phone.transport).synchronize()
+    let mac = try await fixture.client("Other Mac")
+    try await MobileSyncEngine(store: mac.store, transport: mac.transport).synchronize()
+    let received = await mac.store.snapshot()
+    #expect(received.notes[unfiled.id]?.workspaceID == phoneID)
+    #expect(received.notes[filed.id]?.workspaceID == phoneID)
+    #expect(received.notes[filed.id]?.folderID == folder.id)
+    #expect(received.conversations[chat.id]?.workspaceID == phoneID)
+    #expect(received.transcripts[chat.id]?.messages == [message])
+    #expect(await mac.store.journal.snapshot().workspaces[phoneID]?.kind == .ios)
+    let base = try #require(received.notes[unfiled.id])
+    try await mac.store.editNote(id: base.id, title: "Edited on Mac", content: base.content, folderID: nil, base: base)
+    try await MobileSyncEngine(store: mac.store, transport: mac.transport).synchronize()
+    let restartedPhone = try MobileStore(file: phone.file)
+    try await MobileSyncEngine(store: restartedPhone, transport: phone.transport).synchronize()
+    let returned = await restartedPhone.snapshot()
+    #expect(returned.notes[unfiled.id]?.title == "Edited on Mac")
+    #expect(returned.notes[unfiled.id]?.workspaceID == phoneID)
+    #expect(returned.notes[unfiled.id]?.folderID == nil)
+    #expect(fixture.commands.executions == 0)
+  }
+
   @Test("offline execution survives lost central acknowledgement and restart without re-execution")
   func offlineExecutionLostAcknowledgement() async throws {
     let fixture = try await FederationFlowFixture()

@@ -57,7 +57,7 @@ final class CentralLibraryClientModel {
     private var directClients: [String: WorkspaceClient] = [:]
     private var centralProviders: [CompanionProvider] = []
     private var centralPending: [CompanionPendingInteraction] = []
-    private var directProviders: [String: [CompanionProvider]] = [:]
+    private(set) var directProviders: [String: [CompanionProvider]] = [:]
     private var directPending: [String: [CompanionPendingInteraction]] = [:]
     var pairingText = ""
     private(set) var localExecution: SecondaryMacExecutionWorkspace?
@@ -160,7 +160,15 @@ final class CentralLibraryClientModel {
         guard let self else { throw CancellationError() }
         try await self.acceptPairing(endpoint: endpoint, response: response)
     })
-    var canControl: Bool { canControl(workspaceID: selectedExecutionWorkspaceID) }
+    func isPhoneWorkspace(_ owner: String) -> Bool {
+        executionWorkspaces.contains { CompanionWorkspaceIdentity.canonicalID($0.id) == CompanionWorkspaceIdentity.canonicalID(owner) && $0.kind == .ios }
+    }
+    func isPhoneHistory(_ conversationID: String) -> Bool {
+        if state.conversations[conversationID]?.providerID == "pi-durable-device" { return true }
+        return executionOwner(for: conversationID).map(isPhoneWorkspace) ?? false
+    }
+    var selectedConversationIsPhoneHistory: Bool { selectedConversationID.map(isPhoneHistory) ?? false }
+    var canControl: Bool { !selectedConversationIsPhoneHistory && canControl(workspaceID: selectedExecutionWorkspaceID) }
     func canControl(workspaceID: String?) -> Bool {
         !preparingTransition && ((workspaceID ?? "central") == "central" ? online : directOnline.contains(workspaceID ?? "central"))
     }
@@ -564,11 +572,11 @@ final class CentralLibraryClientModel {
             if self?.noteWriteVersions[note.id] == version { self?.draftNotes[note.id] = nil }
         }
     }
-    func createNote(kind: NoteArtifactKind = .note) async {
+    func createNote(kind: NoteArtifactKind = .note, workspaceID: String? = nil) async {
         guard !preparingTransition, let store else { return }
         do {
             let content = try NoteDocument(kind: kind).encoded()
-            let note = try await store.createNote(folderID: selectedFolderID, title: "Untitled " + kind.displayName, content: content)
+            let note = try await store.createNote(folderID: section == .folders ? selectedFolderID : nil, title: "Untitled " + kind.displayName, content: content, workspaceID: workspaceID)
             await analytics.record(.active)
             await engine?.scheduleSynchronization(); await reload(); selectedNoteID = note.id; section = .notes
         } catch { errorMessage = error.localizedDescription }
@@ -671,11 +679,17 @@ final class CentralLibraryClientModel {
     private func launchConversation(_ requested: MobileLaunchRecord) async throws -> MobileLaunchRecord {
         guard !preparingTransition else { throw CompanionAPIError(code: "stopping", message: "This client is restarting or quitting.") }
         let owner = requested.create.workspaceID ?? requested.create.routeID ?? "central"
+        guard !isPhoneWorkspace(owner), requested.create.providerID != "pi-durable-device" else {
+            throw WorkspaceToolError.invalid("Start Quick Chat on its iPhone or iPad.")
+        }
         if owner == "central", let engine { return try await engine.startConversation(requested) }
         guard let client = directClients[owner] else { throw MobileConnectionError.offline }
         return try await client.startConversation(requested)
     }
     private func submit(_ command: CompanionCommand, workspaceID: String) async throws -> CompanionCommandReceipt {
+        guard !isPhoneWorkspace(workspaceID), !(command.conversationID.map(isPhoneHistory) ?? false) else {
+            throw WorkspaceToolError.invalid("Quick Chat history is read-only on other devices.")
+        }
         guard !preparingTransition else { throw CompanionAPIError(code: "stopping", message: "This client is restarting or quitting.") }
         if workspaceID == "central", let engine { return try await engine.submit(command) }
         guard let client = directClients[workspaceID] else { throw MobileConnectionError.offline }
@@ -683,7 +697,7 @@ final class CentralLibraryClientModel {
         return try await client.submit(routed)
     }
     func executionOwner(for conversationID: String) -> String? {
-        journal.conversationWorkspaceIDs[conversationID]
+        journal.conversationWorkspaceIDs[conversationID] ?? state.conversations[conversationID]?.workspaceID
     }
 
     func isForeignConversation(_ id: String) -> Bool {
@@ -691,6 +705,7 @@ final class CentralLibraryClientModel {
     }
 
     func desktopSend(id: String, text: String, beforeDispatch: () throws -> Void = {}) async throws {
+        guard !isPhoneHistory(id) else { throw WorkspaceToolError.invalid("Quick Chat history is read-only on other devices.") }
         let snapshot = try await desktopExecution(.refresh(conversationID: id))
         let command = CompanionCommand(deviceID: state.deviceID, kind: snapshot.transcript?.activeRunID == nil ? .send : .steer,
             conversationID: id, runID: snapshot.transcript?.activeRunID, text: text)
@@ -700,6 +715,13 @@ final class CentralLibraryClientModel {
     }
 
     func desktopExecution(_ action: FederatedExecutionAction) async throws -> FederatedExecutionSnapshot {
+        switch action {
+        case .stop(let id, _) where isPhoneHistory(id), .configure(let id, _) where isPhoneHistory(id):
+            throw WorkspaceToolError.invalid("Quick Chat history is read-only on other devices.")
+        case .respond(let interaction, _) where isPhoneHistory(interaction.conversationID):
+            throw WorkspaceToolError.invalid("Quick Chat history is read-only on other devices.")
+        default: break
+        }
         let id: String
         var earlier: CompanionTranscript?
         switch action {

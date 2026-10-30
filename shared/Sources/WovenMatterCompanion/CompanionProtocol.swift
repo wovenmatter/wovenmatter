@@ -9,6 +9,17 @@ public enum CompanionProtocol {
   public static let maximumReplayChanges = 10_000
 }
 
+/// Stable display/content identity across legacy execution-root prefixes.
+/// Root bindings retain their original identifier; this never transfers execution ownership.
+public enum CompanionWorkspaceIdentity {
+  public static func canonicalID(_ value: String) -> String {
+    for prefix in ["device:", "remote:"] where value.hasPrefix(prefix) {
+      if let id = UUID(uuidString: String(value.dropFirst(prefix.count))) { return id.uuidString.lowercased() }
+    }
+    return UUID(uuidString: value)?.uuidString.lowercased() ?? value
+  }
+}
+
 public struct CompanionFolderExecution: Codable, Equatable, Sendable {
   public var workspaceID: String
   public var rootPath: String
@@ -31,6 +42,7 @@ public struct CompanionFolder: Codable, Equatable, Identifiable, Sendable {
 public struct CompanionNote: Codable, Equatable, Identifiable, Sendable {
   public var id: String
   public var folderID: String?
+  public var workspaceID: String?
   public var title: String
   /// The canonical encoded document, byte-for-byte. Never flatten unknown formats.
   public var content: String
@@ -40,7 +52,8 @@ public struct CompanionNote: Codable, Equatable, Identifiable, Sendable {
   public var revision: Int64
   public var isPinned: Bool?
   public var updatedAt: String
-  public init(id: String, folderID: String? = nil, title: String, content: String, revision: Int64 = 1, updatedAt: String = "", contentIncluded: Bool = true, contentByteCount: Int? = nil, kind: NoteArtifactKind? = nil, isPinned: Bool? = nil) {
+  public init(id: String, folderID: String? = nil, title: String, content: String, revision: Int64 = 1, updatedAt: String = "", contentIncluded: Bool = true, contentByteCount: Int? = nil, kind: NoteArtifactKind? = nil, isPinned: Bool? = nil, workspaceID: String? = nil) {
+    self.workspaceID = workspaceID.map(CompanionWorkspaceIdentity.canonicalID)
     self.isPinned = isPinned
     self.id = id; self.folderID = folderID; self.title = title; self.content = content
     self.revision = revision; self.updatedAt = updatedAt
@@ -229,8 +242,10 @@ public struct CompanionMutation: Codable, Equatable, Sendable {
   public var folderID: String?
   public var title: String?
   public var content: String?
+  public var noteWorkspaceID: String?
   public var folderExecution: CompanionFolderExecution?
-  public init(operationID: String = UUID().uuidString.lowercased(), deviceID: String, kind: Kind, resourceID: String, expectedRevision: Int64? = nil, folderID: String? = nil, title: String? = nil, content: String? = nil, folderExecution: CompanionFolderExecution? = nil) {
+  public init(operationID: String = UUID().uuidString.lowercased(), deviceID: String, kind: Kind, resourceID: String, expectedRevision: Int64? = nil, folderID: String? = nil, title: String? = nil, content: String? = nil, folderExecution: CompanionFolderExecution? = nil, noteWorkspaceID: String? = nil) {
+    self.noteWorkspaceID = noteWorkspaceID.map(CompanionWorkspaceIdentity.canonicalID)
     self.operationID = operationID; self.deviceID = deviceID; self.kind = kind; self.resourceID = resourceID
     self.expectedRevision = expectedRevision; self.folderID = folderID; self.title = title; self.content = content; self.folderExecution = folderExecution
   }

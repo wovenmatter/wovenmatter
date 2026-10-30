@@ -563,6 +563,7 @@ extension WorkspaceDatabaseConnection {
           """
           SELECT json_object(
             'id', id, 'folder_id', folder_id, 'title', title,
+            'workspace_id', COALESCE(workspace_id,(SELECT workspace_id FROM folder_execution_roots WHERE folder_id=notes.folder_id)),
             'content', content, 'created_at', created_at,
             'updated_at', updated_at, 'is_pinned', is_pinned,
             'revision', CAST(COALESCE((SELECT revision FROM companion_versions WHERE kind = 'note' AND resource_id = notes.id), 1) AS TEXT)

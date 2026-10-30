@@ -77,6 +77,18 @@ extension ApplicationModel {
         if let client = liveLibraryClient { return try await client.desktopExecution(action) }
         if DevelopmentLaunch.isSnapshot { return try await savedDevelopmentExecution(action) }
         let client = try centralExecutionClient()
+        let targetID: String
+        switch action {
+        case .refresh(let id), .earlier(let id, _): targetID = id
+        case .stop(let id, _), .configure(let id, _): targetID = id
+        case .respond(let interaction, _): targetID = interaction.conversationID
+        }
+        if try await client.workspace(conversationID: targetID)?.kind == .ios {
+            switch action {
+            case .refresh, .earlier: break
+            default: throw WorkspaceToolError.invalid("Quick Chat runs only on its iPhone or iPad. Synced history is read-only here.")
+            }
+        }
         let id: String
         var earlier: CompanionTranscript?
         switch action {
@@ -167,6 +179,9 @@ extension ApplicationModel {
             try await adoptRegisteredRemoteConversationIfNeeded(conversation)
         }
         guard try await database.companionExecutionOwner(conversationID: conversationID) != nil else { return false }
+        if try await database.companionConversationExecutionWorkspace(conversationID: conversationID)?.kind == .ios {
+            throw WorkspaceToolError.invalid("Quick Chat runs only on its iPhone or iPad. Synced history is read-only here.")
+        }
         guard input.files.isEmpty else { throw CompanionAPIError(code: "attachment_unavailable", message: "Save this file to the workspace before referencing it in this remote conversation.") }
         try await waitForAgentStop(conversationID: conversationID)
         try dispatchFence.check()

@@ -212,8 +212,19 @@ extension CompanionModel {
   }
   func executionOwner(of conversationID: String) -> String {
     if executionRecords[conversationID] != nil { return "local" }
-    if let workspaceID = conversationWorkspaceIDs[conversationID] { return workspaceID == deviceWorkspaceID ? "local" : workspaceID }
+    if let workspaceID = conversationWorkspaceIDs[conversationID] ?? state.conversations[conversationID]?.workspaceID { return canonicalWorkspaceID(workspaceID) == canonicalWorkspaceID(deviceWorkspaceID) ? "local" : canonicalWorkspaceID(workspaceID) }
     return "central"
+  }
+  var isViewingRemoteQuickChat: Bool {
+    guard let id = selectedConversationID else { return false }
+    let owner = executionOwner(of: id)
+    return owner != "local" && (state.conversations[id]?.providerID == "pi-durable-device" || executionWorkspaces.contains { canonicalWorkspaceID($0.id) == canonicalWorkspaceID(owner) && $0.kind == .ios })
+  }
+  var historyAvailable: Bool { isViewingRemoteQuickChat ? online : executionOnline }
+  func refreshRemoteQuickChatHistory() async {
+    guard let id = selectedConversationID, let engine, online else { return }
+    do { try await engine.refreshTranscriptIfNeeded(id); await reload() }
+    catch { errorMessage = error.localizedDescription }
   }
   /// All entry points resolve the same agent identity, including Folders and pending requests.
   func preferredExecutionRoute(for conversationID: String) -> String {

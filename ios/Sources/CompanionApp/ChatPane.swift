@@ -25,16 +25,16 @@ struct ChatPane: View {
         }.contextMenu {
           if model.selectedConversationID != nil {
             Button("Details and export") { detailsPresented = true }
-            Button("Session settings") { settingsPresented = true }.disabled(!model.executionOnline)
+            if !model.isViewingRemoteQuickChat { Button("Session settings") { settingsPresented = true }.disabled(!model.executionOnline) }
           }
           if !model.allPending.isEmpty { Button("Pending requests") { pendingPresented = true } }
         }
         Spacer()
-        Button { composerFocused = false; Task { await model.newChatWithCurrentAgent() } } label: {
+        if !model.isViewingRemoteQuickChat { Button { composerFocused = false; Task { await model.newChatWithCurrentAgent() } } label: {
           if model.startingChat { ProgressView().frame(width: 44, height: 44) }
           else { DashboardLucideIcon(glyph: .squarePen, size: 22).frame(width: 44, height: 44) }
         }.buttonStyle(DashboardIconButtonStyle()).disabled(model.startingChat || model.sending || model.chatSettingsBusy)
-          .accessibilityLabel("New chat with this agent").accessibilityIdentifier("chat-new-session")
+          .accessibilityLabel("New chat with this agent").accessibilityIdentifier("chat-new-session") }
       }.padding(.horizontal, 20).padding(.top, 12).padding(.bottom, 10)
       ScrollViewReader { proxy in
         ScrollView {
@@ -43,11 +43,11 @@ struct ChatPane: View {
               Button("Return to latest messages", systemImage: "arrow.down") { showLatest(using: proxy) }.font(.caption)
             }
             if model.transcript?.olderCursor != nil {
-              Button(model.loadingHistory ? "Loading…" : "Load older messages", systemImage: "arrow.up") { takeScrollOwnership(); Task { await model.loadEarlierMessages() } }.font(.caption).disabled(!model.executionOnline || model.loadingHistory)
+              Button(model.loadingHistory ? "Loading…" : "Load older messages", systemImage: "arrow.up") { takeScrollOwnership(); Task { await model.loadEarlierMessages() } }.font(.caption).disabled(!model.historyAvailable || model.loadingHistory)
             }
             if model.selectedConversationID != nil && model.transcript == nil {
               Button("Load conversation") { Task { await model.refreshConversation() } }.buttonStyle(DashboardQuietButtonStyle())
-                .disabled(!model.executionOnline)
+                .disabled(!model.historyAvailable)
             }
             if let transcript = model.transcript {
               MobileConversationTranscript(transcript: transcript, disclosureState: model.transcriptStates.state(for: transcript.conversationID),
@@ -108,8 +108,11 @@ struct ChatPane: View {
           Button("Stop", role: .destructive) { Task { await model.stopOnDevice() } }.buttonStyle(DashboardQuietButtonStyle())
         }.padding(.horizontal, 18)
       }
-      if model.selectedExecutionWorkspaceID != "local", let id = model.selectedConversationID { MobileGoalControls(model: model, conversationID: id).id(id).padding(.horizontal, 18) }
-      composer
+      if !model.isViewingRemoteQuickChat, model.selectedExecutionWorkspaceID != "local", let id = model.selectedConversationID { MobileGoalControls(model: model, conversationID: id).id(id).padding(.horizontal, 18) }
+      if model.isViewingRemoteQuickChat {
+        Text("Quick Chat history · Continue on the device where it was created.")
+          .font(.caption).foregroundStyle(DashboardPalette.mutedForeground).padding(18)
+      } else { composer }
     }
     .navigationDestination(isPresented: $pendingPresented) {
       List(model.allPending) { request in

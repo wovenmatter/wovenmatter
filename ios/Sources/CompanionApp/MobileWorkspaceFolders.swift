@@ -3,21 +3,85 @@ import CompanionClient
 import WovenMatterCompanion
 
 extension CompanionModel {
+  func canonicalWorkspaceID(_ id: String) -> String {
+    if id == "local" || id == "device" { return CompanionWorkspaceIdentity.canonicalID(deviceWorkspaceID) }
+    if id == "central", let central = executionWorkspaces.first(where: { $0.capabilities.contains("history.central.v1") }) { return CompanionWorkspaceIdentity.canonicalID(central.id) }
+    return CompanionWorkspaceIdentity.canonicalID(id)
+  }
+  func folderOwner(_ folder: CompanionFolder) -> String? { folder.execution.map { canonicalWorkspaceID($0.workspaceID) } }
+  func noteOwner(_ note: CompanionNote) -> String? {
+    note.folderID.flatMap { state.folders[$0] }.flatMap(folderOwner) ?? note.workspaceID.map(canonicalWorkspaceID)
+  }
+  func conversationOwner(_ conversation: CompanionConversation) -> String? {
+    if executionRecords[conversation.id] != nil { return canonicalWorkspaceID(deviceWorkspaceID) }
+    if let owner = conversation.workspaceID ?? conversationWorkspaceIDs[conversation.id] { return canonicalWorkspaceID(owner) }
+    if let folder = conversation.folderID.flatMap({ state.folders[$0] }), let owner = folderOwner(folder) { return owner }
+    if let provider = conversation.providerID {
+      let parts = provider.split(separator: ":")
+      if parts.count == 3, parts[0] == "remote", UUID(uuidString: String(parts[1])) != nil { return canonicalWorkspaceID(String(parts[1])) }
+      if providers.contains(where: { $0.id == provider }) {
+        return executionWorkspaces.first(where: { $0.capabilities.contains("history.central.v1") }).map { canonicalWorkspaceID($0.id) }
+      }
+    }
+    return nil
+  }
+  var folderWorkspaceGroups: [MobileFolderWorkspace] {
+    let localID = canonicalWorkspaceID(deviceWorkspaceID)
+    var result = [MobileFolderWorkspace(id: localID, name: deviceWorkspaceName, kind: .ios, isLocal: true)]
+    for workspace in executionWorkspaces where !workspace.deleted {
+      let id = canonicalWorkspaceID(workspace.id)
+      guard !result.contains(where: { $0.id == id }) else { continue }
+      result.append(.init(id: id, name: workspace.name, kind: workspace.kind, isLocal: false))
+    }
+    let observed = Set(folders.compactMap(folderOwner) + notes.compactMap(noteOwner) + conversations.compactMap(conversationOwner))
+    for id in observed.sorted() where !result.contains(where: { $0.id == id }) {
+      result.append(.init(id: id, name: "Unavailable workspace", kind: nil, isLocal: false))
+    }
+    return result
+  }
+  var hasUnassignedContent: Bool {
+    folders.contains { folderOwner($0) == nil } || notes.contains { noteOwner($0) == nil } || conversations.contains { conversationOwner($0) == nil }
+  }
+  func folderAgents(in workspace: MobileFolderWorkspace) -> [CompanionAgentLauncher] {
+    guard workspace.isLocal || workspace.kind != .ios else { return [] }
+    return launcherAgents.filter { canonicalWorkspaceID($0.workspaceID) == workspace.id }
+  }
   var chatLauncherGroups: [CompanionAgentGroup] {
-    guard let id = selectedFolderID, let folder = state.folders[id], let owner = folder.execution?.workspaceID else { return launcherGroups }
+    let owner = selectedFolderID.flatMap { state.folders[$0] }.flatMap(folderOwner) ?? selectedFolderWorkspaceID
     return launcherGroups.compactMap { group in
       var group = group
       group.agents = group.agents.filter { agent in
-        agent.workspaceID == "local" ? owner.hasPrefix("device:") : routeOwnsFolder(workspaceID: agent.workspaceID, folderID: id)
+        let canonical = canonicalWorkspaceID(agent.workspaceID)
+        return (owner == nil || canonical == owner) && (agent.workspaceID == "local" || !executionWorkspaces.contains { canonicalWorkspaceID($0.id) == canonical && $0.kind == .ios })
       }
       return group.agents.isEmpty ? nil : group
     }
   }
   var folderWorkspaces: [CompanionExecutionWorkspace] { executionWorkspaces.filter { $0.kind == .mac || $0.kind == .linux } }
   func routeOwnsFolder(workspaceID: String, folderID: String?) -> Bool {
-    guard let folderID, let binding = state.folders[folderID]?.execution else { return true }
-    let owner = workspaceID == "central" ? folderWorkspaces.first(where: { $0.capabilities.contains("history.central.v1") })?.id : workspaceID
-    return binding.workspaceID == owner
+    guard let folderID, let folder = state.folders[folderID], let owner = folderOwner(folder) else { return true }
+    return owner == canonicalWorkspaceID(workspaceID)
+  }
+  var selectedFolderScopeTitle: String {
+    if let id = selectedFolderID { return state.folders[id]?.name ?? "Folder" }
+    if selectedFolderWorkspaceID == "unassigned" { return "Unassigned items" }
+    guard let owner = selectedFolderWorkspaceID else { return "All Workspace" }
+    let name = folderWorkspaceGroups.first { $0.id == owner }?.name ?? "Workspace"
+    return folderContentsUnfiled ? "Unfiled · " + name : name
+  }
+  func folderScopeIncludes(owner: String?, folderID: String?) -> Bool {
+    if let selectedFolderID { return folderID == selectedFolderID }
+    if folderContentsUnfiled && folderID != nil { return false }
+    if selectedFolderWorkspaceID == "unassigned" { return owner == nil }
+    return selectedFolderWorkspaceID == nil || owner == selectedFolderWorkspaceID
+  }
+  func workspaceRoute(for id: String) -> String {
+    executionWorkspaces.first { canonicalWorkspaceID($0.id) == canonicalWorkspaceID(id) }?.id ?? id
+  }
+  var canCreateInFolderScope: Bool {
+    if let folderID = selectedFolderID, state.folders[folderID].flatMap(folderOwner) == nil { return false }
+    guard let id = selectedFolderWorkspaceID else { return true }
+    return folderWorkspaceGroups.first { $0.id == id }?.canCreate == true
   }
   static let deviceConnectionMessage = "Can’t connect to this device. Make sure it’s online and connected to the internet."
   func workspaceIsConnected(_ id: String) -> Bool {
@@ -75,4 +139,12 @@ extension CompanionModel {
       _ = try await client.createFolder(.init(operationID: folder.id, deviceID: state.deviceID, kind: .createFolder, resourceID: folder.id, title: folder.name, folderExecution: folder.execution))
     }
   }
+}
+
+struct MobileFolderWorkspace: Identifiable {
+  let id: String
+  let name: String
+  let kind: CompanionExecutionWorkspace.Kind?
+  let isLocal: Bool
+  var canCreate: Bool { isLocal || kind == .mac || kind == .linux }
 }

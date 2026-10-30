@@ -120,6 +120,9 @@ struct DashboardSidebarRail: View {
     let remoteWorkspaces: RemoteWorkspacesModel
     let localWorkspaceReady: Bool
     let localExecutionWorkspaceID: String?
+    let registeredWorkspaces: [CompanionExecutionWorkspace]
+    let conversationOwners: [String: String]
+    let workspaceProviders: [String: [CompanionProvider]]
     let folders: [WorkspaceFolderRecord]
     let conversations: [WorkspaceConversationRecord]
     let notes: [WorkspaceNoteRecord]
@@ -157,6 +160,9 @@ struct DashboardSidebarRail: View {
             remoteWorkspaces: remoteWorkspaces,
             localWorkspaceReady: localWorkspaceReady,
             localExecutionWorkspaceID: localExecutionWorkspaceID,
+            registeredWorkspaces: registeredWorkspaces,
+            conversationOwners: conversationOwners,
+            workspaceProviders: workspaceProviders,
             folders: folders,
             conversations: conversations,
             notes: notes,
@@ -242,6 +248,9 @@ struct DashboardSidebarNavigationPage: View {
     let remoteWorkspaces: RemoteWorkspacesModel
     let localWorkspaceReady: Bool
     let localExecutionWorkspaceID: String?
+    let registeredWorkspaces: [CompanionExecutionWorkspace]
+    let conversationOwners: [String: String]
+    let workspaceProviders: [String: [CompanionProvider]]
     let folders: [WorkspaceFolderRecord]
     let conversations: [WorkspaceConversationRecord]
     let notes: [WorkspaceNoteRecord]
@@ -301,6 +310,11 @@ struct DashboardSidebarNavigationPage: View {
         Set(pinnedAgentOrder)
     }
 
+    private var pairedWorkspaceLinks: [CompanionExecutionWorkspace] {
+        DashboardPairedWorkspaceSidebarModel.workspaces(registeredWorkspaces,
+            localID: localExecutionWorkspaceID, configuredRemoteIDs: remoteWorkspaces.workspaces.map { $0.id.uuidString })
+    }
+
     private var remoteWorkspaceLinks: [DashboardRemoteWorkspaceSidebarLink] {
         DashboardRemoteWorkspaceSidebarModel.links(
             workspaces: remoteWorkspaces.workspaces,
@@ -347,7 +361,7 @@ struct DashboardSidebarNavigationPage: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text("Workspaces")
                     .font(.system(size: 13, weight: .semibold))
-                Text("\(remoteWorkspaceLinks.count + 1) \(remoteWorkspaceLinks.isEmpty ? "workspace" : "workspaces")")
+                Text("\(remoteWorkspaceLinks.count + pairedWorkspaceLinks.count + 1) workspaces")
                 .font(.system(size: 11))
                 .foregroundStyle(DashboardPalette.foreground)
             }
@@ -464,17 +478,26 @@ struct DashboardSidebarNavigationPage: View {
                             folders.filter { $0.executionWorkspaceID == owner }
                         } ?? []
                     )
+                    ForEach(notes.filter { note in
+                        guard let localExecutionWorkspaceID, let owner = note.workspaceID else { return false }
+                        return note.folderID == nil && CompanionWorkspaceIdentity.canonicalID(owner) == CompanionWorkspaceIdentity.canonicalID(localExecutionWorkspaceID)
+                    }) { note in
+                        Button(note.title) { onSelectNote(note.id) }.buttonStyle(.plain).padding(.leading, 16)
+                    }
                 }
             }
             if showsRemoteWorkspaces {
                 let key = DashboardAgentDisclosureKey.remoteWorkspaces
                 agentDisclosureHeading(title: "Remote workspaces", key: key)
                 if agentSectionExpanded(key) {
-                    if remoteWorkspaceLinks.isEmpty {
+                    if remoteWorkspaceLinks.isEmpty && pairedWorkspaceLinks.isEmpty {
                         agentEmptyLabel("No remote workspaces yet")
                     }
                     ForEach(remoteWorkspaceLinks) { workspace in
                         remoteWorkspaceSection(workspace)
+                    }
+                    ForEach(pairedWorkspaceLinks) { workspace in
+                        pairedWorkspaceSection(workspace)
                     }
                 }
             }
@@ -496,9 +519,52 @@ struct DashboardSidebarNavigationPage: View {
     }
 
     private var unavailableFolderOwnerIDs: [String] {
-        let known = Set(remoteWorkspaceLinks.map { "remote:" + $0.id.uuidString.lowercased() }
-            + [localExecutionWorkspaceID].compactMap { $0 })
-        return Set(folders.compactMap { $0.executionWorkspaceID }.filter { !$0.isEmpty }).subtracting(known).sorted()
+        let known = Set((remoteWorkspaceLinks.map { $0.id.uuidString } + registeredWorkspaces.filter { !$0.deleted }.map(\.id)
+            + [localExecutionWorkspaceID].compactMap { $0 }).map(CompanionWorkspaceIdentity.canonicalID))
+        return Set(folders.compactMap { $0.executionWorkspaceID }.filter { !$0.isEmpty && !known.contains(CompanionWorkspaceIdentity.canonicalID($0)) }).sorted()
+    }
+
+    private func pairedWorkspaceSection(_ workspace: CompanionExecutionWorkspace) -> some View {
+        let key = "paired-workspace:" + workspace.id
+        let owner = CompanionWorkspaceIdentity.canonicalID(workspace.id)
+        let ownedFolders = folders.filter { $0.executionWorkspaceID.map(CompanionWorkspaceIdentity.canonicalID) == owner }
+        let history = conversations.filter { conversationOwners[$0.id].map(CompanionWorkspaceIdentity.canonicalID) == owner }
+        let looseNotes = notes.filter { $0.folderID == nil && $0.workspaceID.map(CompanionWorkspaceIdentity.canonicalID) == owner }
+        return VStack(alignment: .leading, spacing: 0) {
+            agentDisclosureHeading(title: workspace.name, key: key)
+            if agentSectionExpanded(key) {
+                if workspace.kind == .ios {
+                    agentDisclosureHeading(title: "Quick Chat", key: key + ":history", level: 1)
+                    if agentSectionExpanded(key + ":history") {
+                        if history.isEmpty { agentEmptyLabel("No synced chats yet") }
+                        ForEach(history) { conversation in
+                            Button { onSelectConversation(conversation.id) } label: {
+                                Label(conversation.title, systemImage: "bubble.left").lineLimit(1)
+                                    .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
+                            }.buttonStyle(.plain).padding(.leading, 20)
+                        }
+                    }
+                } else {
+                    ForEach(workspaceProviders[workspace.id] ?? []) { provider in
+                        Text(provider.displayName).font(.subheadline).padding(.leading, 20).padding(.vertical, 5)
+                    }
+                    ForEach(history.filter { $0.folderID == nil }) { conversation in
+                        Button { onSelectConversation(conversation.id) } label: {
+                            Text(conversation.title).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
+                        }.buttonStyle(.plain).padding(.leading, 20)
+                    }
+                }
+                ForEach(looseNotes) { note in
+                    Button { onSelectNote(note.id) } label: {
+                        Text(note.title).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 5)
+                    }.buttonStyle(.plain).padding(.leading, 20)
+                }
+                ForEach(ownedFolders) { folder in
+                    folderRow(folder, sectionFolders: ownedFolders,
+                        counts: folderContentCounts[folder.id, default: .init()], workspaceTitle: workspace.name)
+                }
+            }
+        }
     }
 
     @ViewBuilder

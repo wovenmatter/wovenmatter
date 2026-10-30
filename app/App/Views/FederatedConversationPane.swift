@@ -18,6 +18,12 @@ struct FederatedConversationPane: View {
     @State private var hasLoadedEarlier = false
     @State private var historyGeneration = UUID()
     private var snapshot: FederatedExecutionSnapshot? { model.federatedExecutionSnapshots[conversation.id] }
+    private var isPhoneHistory: Bool {
+        if snapshot?.workspace.kind == .ios { return true }
+        guard let owner = model.federatedExecutionOwners[conversation.id] else { return false }
+        let registrations = model.liveLibraryClient?.executionWorkspaces ?? model.backendReplica.workspaces ?? model.companionHost.executionWorkspaces
+        return registrations.contains { CompanionWorkspaceIdentity.canonicalID($0.id) == CompanionWorkspaceIdentity.canonicalID(owner) && $0.kind == .ios }
+    }
     private var runID: String? { snapshot?.transcript?.activeRunID }
     private var messages: [CompanionMessage] {
         let current = snapshot?.transcript?.messages ?? savedMessages.map {
@@ -70,6 +76,10 @@ struct FederatedConversationPane: View {
                 }
                 .onChange(of: conversation.id, initial: true) { _, _ in proxy.scrollTo("federated-bottom", anchor: .bottom) }
             }
+            if isPhoneHistory {
+                Text("Quick Chat history · Continue on its iPhone or iPad")
+                    .font(.caption).foregroundStyle(DashboardPalette.mutedForeground).padding(20)
+            } else if snapshot != nil {
             VStack(alignment: .leading, spacing: 12) {
                 if let error = snapshot?.error { Text(error).font(.caption).foregroundStyle(DashboardPalette.mutedForeground).textSelection(.enabled) }
                 ForEach(snapshot?.interactions ?? []) { interaction in
@@ -110,6 +120,7 @@ struct FederatedConversationPane: View {
                         .disabled(sendInProgress || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || snapshot?.online != true || (runID != nil && snapshot?.capability?.canSteer != true))
                 }
             }.padding(20)
+            }
         }
         .onChange(of: snapshot?.online) { _, _ in
             // Switching between the owner's live history and the central archive

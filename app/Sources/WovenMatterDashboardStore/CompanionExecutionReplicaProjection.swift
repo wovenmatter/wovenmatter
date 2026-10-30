@@ -40,13 +40,13 @@ extension WorkspaceDatabaseConnection {
           return .init(operationID: request.operationID, status: .conflict, note: existing, message: "The execution note changed during projection.")
         }
         if existing == nil, try companionVersionUnlocked(kind: "note", id: request.resourceID) == nil {
-          try companionExecuteUnlocked("INSERT INTO notes(id,user_id,folder_id,title,content,snippet,position,created_at,updated_at) VALUES(?,?,?,?,?,?,0,?,?)",
-            values: [request.resourceID, operatorID, request.folderID, title, content, Self.noteSnippet(content), now, now])
+          try companionExecuteUnlocked("INSERT INTO notes(id,user_id,folder_id,title,content,snippet,position,created_at,updated_at,workspace_id) VALUES(?,?,?,?,?,?,0,?,?,?)",
+            values: [request.resourceID, operatorID, request.folderID, title, content, Self.noteSnippet(content), now, now, request.noteWorkspaceID])
         } else {
           try checkpointNoteUnlocked(id: request.resourceID, source: "before-replica-projection", force: true)
           let updatedAt = try nextNoteUpdatedAtUnlocked(id: request.resourceID)
-          try companionExecuteUnlocked("UPDATE notes SET title=?,content=?,snippet=?,folder_id=?,deleted_at=NULL,updated_at=? WHERE id=? AND user_id=?",
-            values: [title, content, Self.noteSnippet(content), request.folderID, updatedAt, request.resourceID, operatorID])
+          try companionExecuteUnlocked("UPDATE notes SET title=?,content=?,snippet=?,folder_id=?,deleted_at=NULL,updated_at=?,workspace_id=COALESCE(?,workspace_id) WHERE id=? AND user_id=?",
+            values: [title, content, Self.noteSnippet(content), request.folderID, updatedAt, request.noteWorkspaceID, request.resourceID, operatorID])
         }
         try checkpointNoteUnlocked(id: request.resourceID, source: "replica-projection", force: true)
         guard let note = try companionNoteUnlocked(id: request.resourceID) else { throw WorkspaceDatabaseError.corruptRow }

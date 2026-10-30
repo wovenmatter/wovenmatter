@@ -371,7 +371,8 @@ public actor DashboardStore {
     try await database.createNote(
       folderID: folderID,
       title: kind == .note ? "Untitled Note" : "Untitled \(kind.displayName)",
-      kind: kind
+      kind: kind,
+      workspaceID: try await executionWorkspaceID()
     )
   }
 

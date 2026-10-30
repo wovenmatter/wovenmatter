@@ -6,6 +6,46 @@ final class MobileStoreTests: XCTestCase {
   func file() -> URL { FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("store.json") }
   func content(_ text: String) throws -> String { try NoteDocument(blocks: [.richText(.init(id: "stable-block", text: text))]).encoded() }
 
+  func testNoteOwnershipSurvivesReopenAndExplicitWorkspaceCreation() async throws {
+    let path = file(), store = try MobileStore(file: path)
+    let device = await store.snapshot().deviceID
+    let note = try await store.createNote(folderID: nil, title: "Local", content: content("text"))
+    XCTAssertEqual(note.workspaceID, device)
+    let remote = UUID().uuidString.lowercased()
+    let folder = try await store.createFolder(name: "Remote", execution: .init(workspaceID: "remote:" + remote, rootPath: "/project"))
+    let filed = try await store.createNote(folderID: folder.id, title: "Filed", content: content("text"))
+    let unfiled = try await store.createNote(folderID: nil, title: "Remote unfiled", content: content("text"), workspaceID: remote)
+    XCTAssertEqual(filed.workspaceID, remote)
+    XCTAssertEqual(unfiled.workspaceID, remote)
+    try await store.editNote(id: note.id, title: note.title, content: note.content, folderID: folder.id)
+    let moved = await store.snapshot().notes[note.id]
+    XCTAssertEqual(moved?.workspaceID, remote)
+    try await store.editNote(id: note.id, title: note.title, content: note.content, folderID: nil)
+    let reopened = try MobileStore(file: path)
+    let saved = await reopened.snapshot()
+    XCTAssertEqual(saved.notes[note.id]?.workspaceID, remote)
+    XCTAssertEqual(saved.outbox.first { $0.mutation.resourceID == filed.id }?.mutation.noteWorkspaceID, remote)
+  }
+
+  func testLegacyNoteMigrationUsesEvidenceAndDoesNotGuessSyncedUnfiledOwner() async throws {
+    let path = file()
+    var state = MobileStoreState()
+    let local = CompanionNote(id: UUID().uuidString.lowercased(), title: "Pending", content: try content("local"), revision: 0)
+    let unknown = CompanionNote(id: UUID().uuidString.lowercased(), title: "Synced", content: try content("unknown"))
+    let remote = UUID().uuidString.lowercased()
+    let folder = CompanionFolder(id: UUID().uuidString.lowercased(), name: "Remote", execution: .init(workspaceID: "remote:" + remote, rootPath: "/project"))
+    let filed = CompanionNote(id: UUID().uuidString.lowercased(), folderID: folder.id, title: "Filed", content: try content("filed"))
+    state.folders[folder.id] = folder
+    state.notes = [local.id: local, unknown.id: unknown, filed.id: filed]
+    state.outbox = [.init(mutation: .init(deviceID: state.deviceID, kind: .createNote, resourceID: local.id, title: local.title, content: local.content))]
+    _ = try MobileStorePersistence.persist(state, at: path)
+    let migrated = await (try MobileStore(file: path)).snapshot()
+    XCTAssertEqual(migrated.notes[local.id]?.workspaceID, state.deviceID)
+    XCTAssertEqual(migrated.notes[filed.id]?.workspaceID, remote)
+    XCTAssertNil(migrated.notes[unknown.id]?.workspaceID)
+    XCTAssertEqual(migrated.outbox[0].mutation.noteWorkspaceID, state.deviceID)
+  }
+
   func testSelectedFormattingPreservesOtherRunsBlocksAndUnknownDocumentFields() throws {
     var raw = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(try content("Before selected after").utf8)) as? [String: Any])
     let source = String(decoding: try JSONSerialization.data(withJSONObject: raw), as: UTF8.self)

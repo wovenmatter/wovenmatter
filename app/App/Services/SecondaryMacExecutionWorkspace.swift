@@ -302,9 +302,9 @@ final class SecondaryMacExecutionWorkspace: ExecutionWorkspaceTransport {
         for note in replicaState.notes.values where note.contentIncluded {
             let existing = try await database.companionNote(id: note.id)
             if replicaState.conflicts[note.id] != nil { continue }
-            if existing?.title != note.title || existing?.content != note.content || existing?.folderID != note.folderID {
+            if existing?.title != note.title || existing?.content != note.content || existing?.folderID != note.folderID || existing?.workspaceID != note.workspaceID {
                 try await applyProjection(.init(deviceID: descriptor.ownerDeviceID, kind: existing == nil ? .createNote : .updateNote,
-                    resourceID: note.id, expectedRevision: existing?.revision, folderID: note.folderID, title: note.title, content: note.content))
+                    resourceID: note.id, expectedRevision: existing?.revision, folderID: note.folderID, title: note.title, content: note.content, noteWorkspaceID: note.workspaceID))
             }
             if let imported = try await database.companionNote(id: note.id) {
                 projection.notes[note.id] = .init(replica: note, executionRevision: imported.revision)

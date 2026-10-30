@@ -49,6 +49,54 @@ private actor ModelMac: CompanionTransport, CompanionCalendarTransport {
 }
 
 final class CompanionModelTests: XCTestCase {
+  @MainActor func testFolderGroupsDistinguishThisDeviceAndRetainUnknownOwnership() {
+    let model = CompanionModel()
+    let phone = model.state.deviceID
+    let otherPhone = UUID().uuidString.lowercased()
+    let local = CompanionFolder(id: UUID().uuidString, name: "Local", execution: .init(workspaceID: "device:" + phone, rootPath: "/local"))
+    let foreign = CompanionFolder(id: UUID().uuidString, name: "Other phone", execution: .init(workspaceID: "device:" + otherPhone, rootPath: "/foreign"))
+    model.state.folders = [local.id: local, foreign.id: foreign]
+    model.executionWorkspaces = [.init(id: otherPhone, libraryID: "library", ownerDeviceID: otherPhone, kind: .ios, name: "My iPad")]
+    let unknown = CompanionNote(id: UUID().uuidString, title: "Legacy", content: "")
+    model.state.notes[unknown.id] = unknown
+    XCTAssertEqual(model.folderWorkspaceGroups.map(\.id), [phone, otherPhone])
+    XCTAssertTrue(model.routeOwnsFolder(workspaceID: "local", folderID: local.id))
+    XCTAssertFalse(model.routeOwnsFolder(workspaceID: "local", folderID: foreign.id))
+    XCTAssertNil(model.noteOwner(unknown))
+    XCTAssertTrue(model.hasUnassignedContent)
+    XCTAssertTrue(model.folderAgents(in: model.folderWorkspaceGroups[1]).isEmpty)
+    model.openFolder(nil, workspaceID: phone, unfiled: true)
+    XCTAssertTrue(model.folderScopeIncludes(owner: phone, folderID: nil))
+    XCTAssertFalse(model.folderScopeIncludes(owner: otherPhone, folderID: nil))
+    XCTAssertFalse(model.folderScopeIncludes(owner: phone, folderID: local.id))
+    model.openFolder(nil)
+    XCTAssertTrue(model.folderScopeIncludes(owner: otherPhone, folderID: foreign.id))
+    XCTAssertTrue(model.folderScopeIncludes(owner: nil, folderID: nil))
+  }
+
+  @MainActor func testNewNoteFromHomeDoesNotInheritPreviouslyOpenedRemoteFolder() async throws {
+    let model = CompanionModel()
+    let folder = try await XCTUnwrap(model.store).createFolder(name: "Previously opened")
+    await model.reload()
+    model.openFolder(folder.id)
+    model.tab = .home
+    await model.newNote()
+    let note = try XCTUnwrap(model.selectedNote)
+    XCTAssertNil(note.folderID)
+    XCTAssertEqual(note.workspaceID, model.state.deviceID)
+  }
+
+  @MainActor func testForeignQuickChatIsHistoryAndUnknownConversationStaysUnassigned() {
+    let model = CompanionModel()
+    let owner = UUID().uuidString.lowercased()
+    let chat = CompanionConversation(id: UUID().uuidString, title: "Phone chat", providerID: "pi-durable-device", workspaceID: owner)
+    model.state.conversations[chat.id] = chat
+    model.selectedConversationID = chat.id
+    XCTAssertTrue(model.isViewingRemoteQuickChat)
+    XCTAssertEqual(model.conversationOwner(chat), owner)
+    XCTAssertNil(model.conversationOwner(.init(id: "legacy", title: "Unknown")))
+  }
+
   func testSharedIconLicenseIsIncludedInTheAppBundle() throws {
     let url = try XCTUnwrap(Bundle.main.url(forResource: "LUCIDE_LICENSE", withExtension: "txt"))
     let license = try String(contentsOf: url, encoding: .utf8)

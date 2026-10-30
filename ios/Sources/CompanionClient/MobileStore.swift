@@ -107,6 +107,23 @@ public actor MobileStore {
       state = MobileStoreState()
       _ = try MobileStorePersistence.persist(state, at: file)
     }
+    // Only durable folder bindings or a retained local creation prove legacy ownership.
+    var migratingState = state
+    var migrated = false
+    for id in Array(migratingState.notes.keys) where migratingState.notes[id]?.workspaceID == nil {
+      let pending = migratingState.outbox.first { $0.mutation.resourceID == id && $0.mutation.kind == .createNote }
+      let owner = migratingState.notes[id]?.folderID.flatMap { migratingState.folders[$0]?.execution?.workspaceID }
+        ?? pending.map { $0.mutation.noteWorkspaceID ?? $0.mutation.deviceID }
+      if let owner { migratingState.notes[id]?.workspaceID = CompanionWorkspaceIdentity.canonicalID(owner); migrated = true }
+    }
+    for index in migratingState.outbox.indices where migratingState.outbox[index].mutation.kind == .createNote && !migratingState.outbox[index].submitted {
+      if migratingState.outbox[index].mutation.noteWorkspaceID == nil,
+         let owner = migratingState.notes[migratingState.outbox[index].mutation.resourceID]?.workspaceID {
+        migratingState.outbox[index].mutation.noteWorkspaceID = owner; migrated = true
+      }
+    }
+    if migrated { _ = try MobileStorePersistence.persist(migratingState, at: file) }
+    state = migratingState
     calendar = try MobileCalendarStore(file: file.appendingPathExtension("calendar"), deviceID: state.deviceID)
   }
   public func snapshot() -> MobileStoreState { state }
@@ -256,11 +273,12 @@ public actor MobileStore {
     }
     return folder
   }
-  @discardableResult public func createNote(folderID: String?, title: String, content: String, id: String = UUID().uuidString.lowercased()) throws -> CompanionNote {
+  @discardableResult public func createNote(folderID: String?, title: String, content: String, id: String = UUID().uuidString.lowercased(), workspaceID: String? = nil) throws -> CompanionNote {
     try Task.checkCancellation()
     guard state.notes[id] == nil, !state.deletedNotes.contains(id) else { throw Failure.conflictingNote }
     guard content.utf8.count <= CompanionProtocol.maximumNoteBytes else { throw Failure.noteTooLarge }
-    let note = CompanionNote(id: id, folderID: folderID, title: title, content: content, revision: 0, updatedAt: Self.now)
+    let owner = folderID.flatMap { state.folders[$0]?.execution?.workspaceID } ?? workspaceID ?? state.deviceID
+    let note = CompanionNote(id: id, folderID: folderID, title: title, content: content, revision: 0, updatedAt: Self.now, workspaceID: owner)
     try transaction { next in
       next.notes[note.id] = note
       next.outbox.append(.init(mutation: Self.mutation(for: note, kind: .createNote, deviceID: next.deviceID)))
@@ -335,7 +353,7 @@ public actor MobileStore {
     } else if state.notes[note.id] != nil {
       try editNote(id: note.id, title: note.title, content: note.content, folderID: note.folderID, base: base)
     } else {
-      _ = try createNote(folderID: note.folderID, title: note.title, content: note.content, id: note.id)
+      _ = try createNote(folderID: note.folderID, title: note.title, content: note.content, id: note.id, workspaceID: note.workspaceID)
     }
   }
   public func editNote(id: String, title: String, content: String, folderID: String?, base: CompanionNote? = nil) throws {
@@ -357,6 +375,9 @@ public actor MobileStore {
           return
         }
       }
+      if let owner = folderID.flatMap({ next.folders[$0]?.execution?.workspaceID }) {
+        note.workspaceID = CompanionWorkspaceIdentity.canonicalID(owner)
+      }
       note.title = title; note.content = content; note.folderID = folderID; note.updatedAt = Self.now
       note.contentIncluded = true; note.contentByteCount = content.utf8.count; next.uncachedNoteIDs.remove(id)
       next.notes[id] = note
@@ -364,6 +385,7 @@ public actor MobileStore {
       else if let index = next.outbox.firstIndex(where: { $0.mutation.resourceID == id && !$0.submitted }) {
         next.outbox[index].mutation.title = title; next.outbox[index].mutation.content = content
         next.outbox[index].mutation.folderID = folderID
+        next.outbox[index].mutation.noteWorkspaceID = note.workspaceID
       } else if !next.outbox.contains(where: { $0.mutation.resourceID == id }) {
         next.outbox.append(.init(mutation: Self.mutation(for: note, kind: .updateNote, deviceID: next.deviceID)))
       }
@@ -384,6 +406,11 @@ public actor MobileStore {
     guard let entry = state.outbox.first(where: { $0.mutation.operationID == result.operationID }) else { return }
     let mutation = entry.mutation
     var result = result
+    if var note = result.note, note.workspaceID == nil {
+      note.workspaceID = note.folderID.flatMap { state.folders[$0]?.execution?.workspaceID }.map(CompanionWorkspaceIdentity.canonicalID)
+        ?? state.notes[note.id]?.workspaceID ?? mutation.noteWorkspaceID
+      result.note = note
+    }
     if result.status == .accepted, var note = result.note, !note.contentIncluded, let content = mutation.content {
       note.content = content; note.contentIncluded = true; note.contentByteCount = content.utf8.count; result.note = note
     }
@@ -632,7 +659,7 @@ public actor MobileStore {
   @discardableResult public func preserveConflictAsCopy(id: String) throws -> CompanionNote {
     guard let conflict = state.conflicts[id] else { throw Failure.missingNote }
     let copy = CompanionNote(id: UUID().uuidString.lowercased(), folderID: state.folders[conflict.local.folderID ?? ""]?.id,
-      title: conflict.local.title + " — recovery copy", content: conflict.local.content, revision: 0, updatedAt: Self.now)
+      title: conflict.local.title + " — recovery copy", content: conflict.local.content, revision: 0, updatedAt: Self.now, workspaceID: conflict.local.workspaceID ?? state.deviceID)
     try transaction { next in
       next.notes[copy.id] = copy
       next.outbox.append(.init(mutation: Self.mutation(for: copy, kind: .createNote, deviceID: next.deviceID)))
@@ -650,14 +677,19 @@ public actor MobileStore {
   private static var now: String { ISO8601DateFormatter().string(from: Date()) }
   static func mutation(for note: CompanionNote, kind: CompanionMutation.Kind, deviceID: String) -> CompanionMutation {
     .init(deviceID: deviceID, kind: kind, resourceID: note.id, expectedRevision: kind == .createNote ? nil : note.revision,
-          folderID: note.folderID, title: note.title, content: note.content)
+          folderID: note.folderID, title: note.title, content: note.content, noteWorkspaceID: note.workspaceID)
   }
   private static func checkWorkspace(_ id: String, state: inout MobileStoreState) throws {
     guard state.pairingTransitionWorkspaceID == nil,
       (state.workspaceID ?? state.detachedWorkspaceID) == nil || (state.workspaceID ?? state.detachedWorkspaceID) == id else { throw Failure.wrongWorkspace }
     state.workspaceID = id; state.detachedWorkspaceID = nil
   }
-  private static func remoteNote(_ note: CompanionNote, state: inout MobileStoreState) {
+  private static func remoteNote(_ incoming: CompanionNote, state: inout MobileStoreState) {
+    var note = incoming
+    if note.workspaceID == nil {
+      note.workspaceID = note.folderID.flatMap { state.folders[$0]?.execution?.workspaceID }.map(CompanionWorkspaceIdentity.canonicalID)
+        ?? state.notes[note.id]?.workspaceID
+    }
     if state.deletedNotes.contains(note.id), state.bases[note.id]?.revision ?? 0 >= note.revision { return }
     if state.isDirty(note.id) {
       if var conflict = state.conflicts[note.id] {
@@ -674,7 +706,6 @@ public actor MobileStore {
     }
     guard note.revision >= (state.bases[note.id]?.revision ?? 0) else { return }
     if state.bases[note.id]?.revision != note.revision { state.localRevisionParents.removeValue(forKey: note.id) }
-    var note = note
     if !note.contentIncluded {
       if let previous = state.notes[note.id], previous.revision == note.revision, previous.contentIncluded, !state.uncachedNoteIDs.contains(note.id) {
         note.content = previous.content; note.contentIncluded = true

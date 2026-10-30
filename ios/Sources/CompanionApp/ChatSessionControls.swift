@@ -8,12 +8,14 @@ extension CompanionModel {
     guard let current = launcherAgents.first(where: { $0.id == agent.id }) else { return }
     guard current.isAvailable else {
       chatSetupProblem = workspaceIsConnected(current.workspaceID) ? "This agent is currently unavailable." : Self.deviceConnectionMessage
+      if !chatChooserPresented { errorMessage = chatSetupProblem }
       return
     }
     await startNewChat(workspaceID: agent.workspaceID, agentID: agent.providerID)
   }
 
   func newChatWithCurrentAgent() async {
+    guard !isViewingRemoteQuickChat else { return }
     guard workspaceIsConnected(selectedExecutionWorkspaceID) else { errorMessage = Self.deviceConnectionMessage; return }
     guard let agent = activeProvider else { newChat(); return }
     await startNewChat(workspaceID: selectedExecutionWorkspaceID, agentID: agent.id)
@@ -23,7 +25,8 @@ extension CompanionModel {
     guard !startingChat, !sending, !chatSettingsBusy, let store else { return }
     startingChat = true; chatSetupProblem = nil
     defer { startingChat = false }
-    let folder = workspaceID == "local" ? nil : selectedFolderID, reference = newChatNoteID
+    let folder = selectedFolderID, reference = newChatNoteID
+    guard routeOwnsFolder(workspaceID: workspaceID, folderID: folder) else { chatSetupProblem = "Choose an agent in this folder’s owning workspace."; return }
     do {
       var conversationID: String?
       if workspaceID == "local", let connection = inferenceConnections.first(where: { $0.id == inferenceConnectionID }) {
