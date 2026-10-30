@@ -86,13 +86,14 @@ struct CompanionShell: View {
                 VStack(spacing: 5) {
                   DashboardLucideIcon(glyph: tab.icon, size: 22).frame(height: 26)
                   Text(tab.rawValue).font(.caption2.weight(isSelected(tab) ? .semibold : .regular))
-                }.frame(maxWidth: .infinity).padding(.vertical, 9)
+                }.padding(9)
                   .foregroundStyle(isSelected(tab) ? DashboardPalette.foreground : DashboardPalette.mutedForeground)
                   .background(isSelected(tab) || hoveredTab == tab ? theme.palette.themeSoft : .clear,
                     in: RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
                   .contentShape(.interaction, RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
                   .contentShape(.hoverEffect, RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
                   .hoverEffect(.highlight)
+                  .frame(maxWidth: .infinity)
               }.buttonStyle(.plain).padding(.horizontal, 4).padding(.vertical, 6)
                 .onHover { hovering in hoveredTab = hovering ? tab : (hoveredTab == tab ? nil : hoveredTab) }
                 .accessibilityIdentifier("tab-\(tab.rawValue.lowercased())")
