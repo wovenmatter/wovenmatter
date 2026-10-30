@@ -357,3 +357,43 @@ test('host installer rc writes fail the operation and restore the original shell
   assert.equal(result.operation.error, 'installer_modified_shell_config')
   assert.equal(await readFile(resolve(f.root, '.bashrc'), 'utf8'), 'existing configuration\n')
 })
+
+test('reviewed adapters update their engine even when the connector itself is current', async t => {
+  const root = await mkdtemp(resolve(tmpdir(), 'wm-independent-engine-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const adapter = resolve(root, 'node_modules/@agentclientprotocol/codex-acp')
+  const dependency = resolve(root, 'node_modules/@openai/codex')
+  await mkdir(resolve(adapter, 'bin'), { recursive: true }); await mkdir(resolve(dependency, 'bin'), { recursive: true })
+  await writeFile(resolve(adapter, 'package.json'), JSON.stringify({ name: '@agentclientprotocol/codex-acp', version: '2.5.0', dependencies: { '@openai/codex': '^0.165.0' } }))
+  await writeFile(resolve(adapter, 'bin/cli.js'), '')
+  await symlink(resolve(adapter, 'bin/cli.js'), resolve(root, 'codex-acp'))
+  let engine = '0.165.0', selected
+  await writeFile(resolve(dependency, 'package.json'), JSON.stringify({ name: '@openai/codex', version: engine }))
+  const h = { id: 'codex', displayName: 'Codex', command: 'codex-acp', cliCommand: 'codex', adapterPackage: '@agentclientprotocol/codex-acp', minimumAdapterVersion: '2.5.0', minimumEngineVersion: '0.166.0', install: { interpreter: 'sh', arguments: [] } }
+  const service = createRuntimeMaintenance({ catalog: new Map([['codex', h]]), workspaceRoot: root, environment: () => ({ HOME: root }), acquireLock: async () => () => {},
+    verifiedInstaller: async () => ({ path: resolve(root, 'fixture-installer.sh') }),
+    fetchImplementation: async url => ({ ok: true, json: async () => registryMetadata(String(url).includes('codex-acp') ? '2.5.0' : '0.166.0') }),
+    execute: async command => {
+      if (command === 'ps -eo pid=,args=') return { code: 0, output: '' }
+      if (command.startsWith('command -v')) return { code: 0, output: resolve(root, command.includes('codex-acp') ? 'codex-acp' : 'codex') }
+      if (command.endsWith('--version')) return { code: 0, output: command.includes('/bin/codex.js') ? engine : command.includes('codex-acp') ? '2.5.0' : '0.166.0' }
+      assert.ok(!command.includes('npm view'), 'reviewed engine selection must not fall back to the old upstream range')
+      const match = command.match(/'(\{"prefix":.*\})'$/)
+      if (match) {
+        selected = JSON.parse(match[1]); engine = selected.engineVersion
+        await writeFile(resolve(dependency, 'package.json'), JSON.stringify({ name: '@openai/codex', version: engine }))
+      }
+      return { code: 0, output: '' }
+    },
+  })
+  const before = await service.inventory(h, true)
+  assert.equal(before.components[0].updateAvailable, false)
+  assert.equal(before.components.find(c => c.id === 'bundled').updateTargetVersion, '0.166.0')
+  assert.equal(before.updateAvailable, true)
+  await service.start(h, 'update', { confirmed: true, sourceSHA256: 'fixture' })
+  const after = await finished(service)
+  assert.equal(after.operation.status, 'succeeded')
+  assert.equal(selected.adapterVersion, '2.5.0'); assert.equal(selected.engineVersion, '0.166.0')
+  assert.equal(after.components.find(c => c.id === 'bundled').installedVersion, '0.166.0')
+  assert.equal(after.updateAvailable, false)
+})

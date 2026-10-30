@@ -51,7 +51,8 @@
         "resume",
         "permissions",
         "attachments"
-      ]
+      ],
+      "minimumEngineVersion": "0.166.0"
     },
     {
       "id": "claude_code",
@@ -65,9 +66,11 @@
       "install": {
         "kind": "official-script",
         "source": "https://claude.ai/install.sh",
-        "command": "curl -fsSL https://claude.ai/install.sh | bash",
+        "command": "curl -fsSL https://claude.ai/install.sh | bash -s -- latest",
         "interpreter": "bash",
-        "arguments": []
+        "arguments": [
+          "latest"
+        ]
       },
       "authentication": {
         "statusCommands": [
@@ -103,7 +106,8 @@
         "resume",
         "permissions",
         "attachments"
-      ]
+      ],
+      "minimumEngineVersion": "0.3.314"
     },
     {
       "id": "grok_build",

@@ -78,7 +78,10 @@ cp "$cache/bin/node" "$output/bin/node"
 cp "$cache/LICENSE" "$output/bin/NODE-LICENSE"
 # SDK maintenance runs npm with the signed bundled Node, without relying on a host install.
 mkdir -p "$output/lib/npm"
-rsync -a --delete "$cache/lib/node_modules/npm/" "$output/lib/npm/"
+npm_selection="$(node -e 'console.log(JSON.stringify({prefix:process.argv[1],node:process.argv[2]+"/bin/node",bootstrap:[process.argv[2]+"/bin/node",process.argv[2]+"/lib/node_modules/npm/bin/npm-cli.js"],securityGraph:process.argv[3]+"/remote/npm-runtime"}))' "${TMPDIR:-/tmp}/wovenmatter-private-npm" "$cache" "$repo_root")"
+private_npm="$(node "$repo_root/harnesses/prepare-npm.mjs" "$npm_selection")"
+rsync -a --delete "${private_npm%/bin/npm}/lib/node_modules/npm/" "$output/lib/npm/"
+cp "${private_npm%/bin/npm}/provenance.json" "$output/lib/npm/woven-provenance.json"
 if [ "${CODE_SIGNING_ALLOWED:-NO}" = YES ] && [ -n "${EXPANDED_CODE_SIGN_IDENTITY:-}" ]; then
   timestamp=--timestamp=none
   if [ "${CONFIGURATION:-Debug}" = Release ]; then timestamp=--timestamp; fi
