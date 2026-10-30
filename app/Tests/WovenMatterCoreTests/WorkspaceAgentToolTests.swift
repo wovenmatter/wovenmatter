@@ -9,6 +9,20 @@ import WovenMatterClient
 struct WorkspaceAgentToolTests {
 
 
+  @Test func unfiledAgentNoteUsesItsCapturedExecutionWorkspace() async throws {
+    let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let db = try await WorkspaceDatabase(url: dir.appending(path: "workspace.sqlite"))
+    try await db.bindDeviceOwnership(ownerDeviceID: UUID())
+    let remote = UUID().uuidString.lowercased()
+    let caller = try await db.createFixtureLocalACPSession(runtimeKind: .codex, title: "Agent", ownerDeviceID: UUID(),
+      fixtureLocation: .init(workspaceID: "remote:" + remote, rootPath: dir.path, managed: false))
+    try await db.setSessionTools(.init(enabled: [.notes]), sessionID: caller)
+    let note = try await db.createNote(folderID: nil, callerConversationID: caller, requestID: UUID().uuidString)
+    #expect(try await db.companionSnapshot().notes.first { $0.id == note }?.workspaceID == remote)
+  }
+
   @Test func outsideTimersDispatchIndependentlyOfConversationToolSelection() async throws {
     let (db, dir, _, target) = try await fixture()
     defer { try? FileManager.default.removeItem(at: dir) }

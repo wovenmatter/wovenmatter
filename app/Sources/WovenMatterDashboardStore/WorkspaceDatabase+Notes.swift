@@ -371,7 +371,8 @@ extension WorkspaceDatabaseConnection {
         try bind(timestamp, at: 8, to: note)
         try bind(timestamp, at: 9, to: note)
         let folderOwner = try folderID.flatMap { try companionFolderUnlocked(id: $0)?.execution?.workspaceID }
-        let owner = try folderOwner ?? workspaceID ?? localNoteWorkspaceIDUnlocked()
+        let callerOwner = try callerConversationID.flatMap { try sessionExecutionRoot(id: $0)?.workspaceID }
+        let owner = try folderOwner ?? workspaceID ?? callerOwner ?? localNoteWorkspaceIDUnlocked()
         try bindNullable(owner.map(CompanionWorkspaceIdentity.canonicalID), at: 10, to: note)
         try stepDone(note)
 

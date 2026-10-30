@@ -27,6 +27,14 @@ final class MobileStoreTests: XCTestCase {
     XCTAssertEqual(saved.outbox.first { $0.mutation.resourceID == filed.id }?.mutation.noteWorkspaceID, remote)
   }
 
+  func testContentAliasDoesNotClaimAnotherDevicesPublisherIdentity() {
+    let local = UUID().uuidString.lowercased(), foreign = UUID().uuidString.lowercased()
+    let workspace = CompanionExecutionWorkspace(id: foreign, libraryID: UUID().uuidString.lowercased(), ownerDeviceID: foreign,
+      kind: .mac, name: "Other", executionDeviceID: local, contentWorkspaceID: "device:" + foreign)
+    XCTAssertEqual(CompanionWorkspaceIdentity.canonicalID(local, workspaces: [workspace]), local)
+    XCTAssertEqual(CompanionWorkspaceIdentity.canonicalID(foreign, workspaces: [workspace]), foreign)
+  }
+
   func testMoveAndUnfileWhileCreateIsInFlightPreservesNewOwner() async throws {
     let store = try MobileStore(file: file())
     let note = try await store.createNote(folderID: nil, title: "Note", content: content("text"))

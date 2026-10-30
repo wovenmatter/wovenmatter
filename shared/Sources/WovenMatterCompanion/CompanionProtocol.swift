@@ -20,6 +20,7 @@ public enum CompanionWorkspaceIdentity {
       let content = canonicalID(workspace.contentWorkspaceID ?? workspace.id)
       if candidate == canonicalID(workspace.id) || candidate == content { return content }
       if workspace.kind == .mac, workspace.contentWorkspaceID != nil,
+         workspace.executionDeviceID == workspace.ownerDeviceID,
          workspace.executionDeviceID.map(canonicalID) == candidate { return content }
     }
     return candidate
