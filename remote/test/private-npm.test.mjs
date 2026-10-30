@@ -1,10 +1,45 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtemp, mkdir, writeFile, readFile, access, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, access, readdir, rm, copyFile, symlink } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { prepareNPM } from '../../harnesses/prepare-npm.mjs';
+
+test('Mac bundle preparation uses verified private npm before installing SDKs and keys its cache by tooling provenance', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'woven-bundle-npm-'));
+  t.after(() => rm(root, { force: true, recursive: true }));
+  const temporary = join(root, 'temporary'), runtime = join(temporary, 'wovenmatter-node-0.0.1-arm64');
+  for (const path of ['scripts', 'default-agent', 'harnesses', 'temporary/wovenmatter-node-0.0.1-arm64/bin']) await mkdir(join(root, path), { recursive: true });
+  await copyFile(new URL('../../scripts/prepare-default-agent.sh', import.meta.url), join(root, 'scripts/prepare-default-agent.sh'));
+  await writeFile(join(root, 'default-agent/.node-version'), '0.0.1\n');
+  await writeFile(join(root, 'default-agent/package.json'), '{}\n');
+  await writeFile(join(root, 'default-agent/package-lock.json'), '{}\n');
+  await symlink(process.execPath, join(runtime, 'bin/node'));
+  const trace = join(root, 'trace');
+  await writeFile(join(runtime, 'bin/npm'), '#!/bin/sh\nprintf "bootstrap-ci\\n" >> "$WOVEN_NPM_FIXTURE_TRACE"\nexit 43\n', { mode: 0o755 });
+  const provenance = '{"version":"fixture-current"}\n';
+  await writeFile(join(root, 'harnesses/prepare-npm.mjs'), `
+    import { mkdir, writeFile, appendFile } from 'node:fs/promises';
+    import { join } from 'node:path';
+    const selection = JSON.parse(process.argv[2]);
+    const prefix = join(selection.prefix, 'verified');
+    await mkdir(join(prefix, 'bin'), { recursive: true });
+    await writeFile(join(prefix, 'provenance.json'), ${JSON.stringify(provenance)});
+    await writeFile(join(prefix, 'bin/npm'), '#!/bin/sh\\nprintf "private-ci\\n%s\\n" "$PWD" >> "$WOVEN_NPM_FIXTURE_TRACE"\\nexit 42\\n', { mode: 0o755 });
+    await appendFile(process.env.WOVEN_NPM_FIXTURE_TRACE, 'prepare-tooling\\n');
+    console.log(join(prefix, 'bin/npm'));
+  `);
+  const result = spawnSync('/bin/bash', [join(root, 'scripts/prepare-default-agent.sh')], {
+    encoding: 'utf8', timeout: 10000,
+    env: { ...process.env, TMPDIR: temporary, CURRENT_ARCH: 'arm64', WOVEN_NPM_FIXTURE_TRACE: trace },
+  });
+  assert.equal(result.status, 42, result.stderr);
+  const lines = (await readFile(trace, 'utf8')).trim().split('\n');
+  assert.deepEqual(lines.slice(0, 2), ['prepare-tooling', 'private-ci']);
+  assert.ok(lines[2].endsWith('-npm-' + createHash('sha256').update(provenance).digest('hex')));
+});
 
 test('private npm verifies the archive before execution and applies the locked vendor repairs', async t => {
   const root = await mkdtemp(join(tmpdir(), 'woven-private-npm-'));
