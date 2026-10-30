@@ -17,7 +17,7 @@ extension WorkspaceDatabaseConnection {
   func retireLibraryAuthority(workspace: CompanionExecutionWorkspace) throws {
     try transaction {
       try companionExecuteUnlocked("INSERT OR REPLACE INTO library_transfer_retired VALUES(1,?,?,?)", values: [workspace.libraryID,workspace.id,workspace.ownerDeviceID])
-      try companionExecuteUnlocked("INSERT OR IGNORE INTO companion_calendar_owners(event_id,device_id) SELECT id,? FROM dashboard_calendar_items WHERE json_extract(calendar_json,'$.task') IS NOT NULL", values: [workspace.ownerDeviceID])
+      try companionExecuteUnlocked("INSERT OR IGNORE INTO companion_calendar_owners(event_id,device_id) SELECT id,? FROM dashboard_calendar_items WHERE json_extract(calendar_json,'$.task') IS NOT NULL AND (json_extract(calendar_json,'$.task.configuration.workspaceID') IS NULL OR lower(json_extract(calendar_json,'$.task.configuration.workspaceID'))=lower(?))", values: [workspace.ownerDeviceID, workspace.id])
       try executeUnlocked("INSERT OR IGNORE INTO companion_calendar_run_owners(event_id,device_id) SELECT event_id,device_id FROM companion_calendar_owners")
     }
   }
@@ -68,7 +68,7 @@ extension WorkspaceDatabaseConnection {
       try executeUnlocked("UPDATE folder_execution_roots SET workspace_id='device:'||(SELECT device_id FROM desktop_local_identity WHERE singleton=1) WHERE workspace_id='local' AND EXISTS(SELECT 1 FROM desktop_local_identity WHERE singleton=1)")
       // Source-owned schedules remain source-owned. Merely copying their rows
       // must never schedule a second execution on the new central Mac.
-      try companionExecuteUnlocked("INSERT OR IGNORE INTO companion_calendar_owners(event_id,device_id) SELECT id,? FROM dashboard_calendar_items WHERE json_extract(calendar_json,'$.task') IS NOT NULL", values: [identity.hostDeviceID])
+      try companionExecuteUnlocked("INSERT OR IGNORE INTO companion_calendar_owners(event_id,device_id) SELECT id,? FROM dashboard_calendar_items WHERE json_extract(calendar_json,'$.task') IS NOT NULL AND (json_extract(calendar_json,'$.task.configuration.workspaceID') IS NULL OR lower(json_extract(calendar_json,'$.task.configuration.workspaceID'))=lower(?))", values: [identity.hostDeviceID, local.id])
       try executeUnlocked("INSERT OR IGNORE INTO companion_calendar_run_owners(event_id,device_id) SELECT event_id,device_id FROM companion_calendar_owners")
       try companionExecuteUnlocked("UPDATE dashboard_calendar_items SET calendar_json=json_set(calendar_json,'$.task.configuration.workspaceID',?) WHERE json_extract(calendar_json,'$.task') IS NOT NULL AND json_extract(calendar_json,'$.task.configuration.workspaceID') IS NULL AND id IN(SELECT event_id FROM companion_calendar_owners WHERE device_id=?)", values: [local.id,identity.hostDeviceID])
     }

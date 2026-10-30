@@ -36,8 +36,8 @@ struct LibraryTransferFacadeTests {
         try await workspace.capture()
         #expect(await replica.snapshot().folders[folder]?.execution?.workspaceID == nativeNamespace)
         let created = try await workspace.command(.init(deviceID: identity.hostDeviceID, kind: .createSession,
-            providerID: "local:codex", folderID: folder, workspaceID: descriptor.id))
-        #expect(created.status == .completed)
+            conversationID: UUID().uuidString.lowercased(), providerID: "local:codex", folderID: folder, workspaceID: descriptor.id))
+        #expect(created.status == .completed, "Creation receipt: \(created.message ?? "none")")
     }
 
     @Test func destinationImportsPendingWritingAndOwnHistoryWithoutAcknowledgingOrRelayingObservers() async throws {
