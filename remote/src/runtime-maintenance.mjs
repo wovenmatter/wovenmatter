@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process'
 import { readFile, writeFile, mkdir, rename, realpath, lstat, readlink } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { fileURLToPath } from 'node:url'
 import { supportsOpenCodeVersion, openCodeCommands } from './opencode-compatibility.mjs'
 import { loadRuntimeConfiguration, runtimeNPMCommand } from './config.mjs'
 import { withInstallerGuard } from './installer-guard.mjs'
@@ -187,16 +188,16 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
         components[1].latestVersion = await latest(h.id === 'codex' ? '@openai/codex' : '@anthropic-ai/claude-code')
         const bundled = components.find(c => c.id === 'bundled')
         bundled.latestVersion = await latest(dependencyName)
-        bundled.updateTargetVersion = null
+        bundled.updateTargetVersion = h.minimumEngineVersion ? bundled.latestVersion : null
         // npm performs the semver selection using the adapter's declared dependency
         // range. Never override a pinned/ranged adapter dependency with @latest.
-        if (adapterRoot && typeof dependencyRange === 'string' && /^[0-9v^~<>=|*xX. +\-]+$/.test(dependencyRange)) {
+        if (!h.minimumEngineVersion && adapterRoot && typeof dependencyRange === 'string' && /^[0-9v^~<>=|*xX. +\-]+$/.test(dependencyRange)) {
           const result = await run(`${npm} view ${quote(dependencyName + '@' + dependencyRange)} version --json --registry=https://registry.npmjs.org`, 15000)
           try { const versions = JSON.parse(result.output); if (result.code === 0) bundled.updateTargetVersion = normalizedVersion(Array.isArray(versions) ? versions.at(-1) : versions) } catch {}
         }
       }
     } else for (const c of components) { const cached = previous.find(p => p.id === c.id); c.latestVersion = cached?.latestVersion ?? null; if (c.id === 'bundled') c.updateTargetVersion = cached?.updateTargetVersion ?? null }
-    if (checkLatest) s.versionCheckAvailable = main.latestVersion !== null
+    if (checkLatest) s.versionCheckAvailable = components.filter(c => ['runtime', 'signin', 'bundled'].includes(c.id)).every(c => c.latestVersion !== null && (c.id !== 'bundled' || c.updateTargetVersion !== null))
     for (const c of components) c.updateAvailable = c.source !== 'system' && precedes(c.installedVersion, updateTarget(c))
     s.components = components
     const storedOperation = operations.get(h.id) ?? null
@@ -205,7 +206,7 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
     s.installed = installed
     let notice = h.id === 'opencode' ? 'OpenCode v2 releases can be updated independently.' : h.adapterPackage ? 'Chat uses the adapter and bundled engine shown here; sign-in CLI updates do not update that engine.' : null
     const bundled = components.find(c => c.id === 'bundled')
-    if (bundled?.latestVersion && bundled.latestVersion !== bundled.updateTargetVersion) notice += ' The newest bundled dependency may exceed the adapter’s declared compatibility; only compatible dependency updates are offered.'
+    if (!h.minimumEngineVersion && bundled?.latestVersion && bundled.latestVersion !== bundled.updateTargetVersion) notice += ' The newest bundled dependency may exceed the adapter’s declared compatibility; only compatible dependency updates are offered.'
     if (checkLatest && (main.latestVersion === null || (bundled && (!bundled.latestVersion || !bundled.updateTargetVersion)))) notice = [notice, 'Latest version information is unavailable.'].filter(Boolean).join(' ')
     s.notice = checkLatest ? notice : notice ?? s.notice ?? null
     return { id: h.id, displayName: h.displayName, source: main.source, path: main.path, enabled: installed, visible: true, installed, components, operation, failureCount: s.failureCount, diagnosticPrompt: s.failureCount >= 2 ? `Diagnose ${h.displayName} on this remote workspace host (${process.platform}/${process.arch}). Do not modify other hosts.\n${components.map(c => `${c.displayName}: installed=${c.installedVersion ?? 'unknown'} latest=${c.latestVersion ?? 'unknown'} verified=${c.installed}`).join('\n')}\nFailure: ${diagnosticCategory(operation?.error)}` : null, notice: s.notice, versionCheckAvailable: s.versionCheckAvailable ?? null, updateAvailable: components.some(c => c.updateAvailable) }
@@ -245,6 +246,19 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
     if (precedes(version, h.minimumAdapterVersion)) throw failure('adapter_version_below_minimum')
     return h.adapterPackage + '@' + version
   }
+  async function adapterInstallCommand(h, spec) {
+    if (!h.minimumEngineVersion) return `${npm} install --global --prefix "$HOME/.local" ${quote(spec)}`
+    const dependency = h.id === 'codex' ? '@openai/codex' : '@anthropic-ai/claude-agent-sdk'
+    const engineVersion = await latest(dependency)
+    if (!engineVersion || precedes(engineVersion, h.minimumEngineVersion)) throw failure('latest_engine_version_unavailable')
+    const installedScript = resolve(configuration.serviceRoot, 'harnesses/install-adapter.mjs')
+    const script = existsSync(installedScript) ? installedScript : fileURLToPath(new URL('../../harnesses/install-adapter.mjs', import.meta.url))
+    const selection = { prefix: resolve(configuration.home, '.local'), adapter: h.adapterPackage,
+      adapterVersion: spec.slice(h.adapterPackage.length + 1), engineVersion,
+      npm: configuration.runtimeKind === 'host'
+        ? [process.execPath, resolve(configuration.serviceRoot, 'tooling/lib/node_modules/npm/bin/npm-cli.js')] : ['npm'] }
+    return `${quote(process.execPath)} ${quote(script)} ${quote(JSON.stringify(selection))}`
+  }
   async function protectInstallDestination(command, component) {
     if (component?.source === 'managed') return
     const target = resolve(configuration.home, '.local/bin', command)
@@ -270,13 +284,14 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
     if (needsAdapter) {
       await protectInstallDestination(h.command, main)
       const spec = await adapterPackageSpec(h, body.adapterPackageSpec ?? (body.packageSpec?.startsWith(h.adapterPackage + '@') ? body.packageSpec : undefined))
-      commands.push(`${npm} install --global --prefix "$HOME/.local" ${quote(spec)}`)
+      commands.push(await adapterInstallCommand(h, spec))
       installedCommands.push(['runtime', h.command])
     }
     if (!commands.length && action === 'update') throw failure('system_install_update_forbidden')
     return { command: commands.join(' && '), installedCommands }
   }
   async function refreshAdapterDependency(h) {
+    if (h.minimumEngineVersion) return // The immutable consumer graph already verified both releases.
     // System adapter directories and their bundled engines are never mutated.
     const path = await commandPath(h.command)
     if (configuration.runtimeKind === 'host' && await componentSource(path) !== 'managed') return
@@ -308,7 +323,9 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
           ({ command, installedCommands } = await hostInstallation(h, action, body, before))
         } else {
           const pkg = h.install?.kind === 'npm-global' ? validatedPackageSpec(h, body.packageSpec ?? (await npmPreview(h)).packageSpec) : null
-          const adapter = h.adapterPackage ? ` && ${npm} install --global --prefix "$HOME/.local" ${quote(h.adapterPackage + '@latest')}` : ''
+          const adapter = h.adapterPackage ? ' && ' + (h.minimumEngineVersion
+            ? await adapterInstallCommand(h, await adapterPackageSpec(h))
+            : `${npm} install --global --prefix "$HOME/.local" ${quote(h.adapterPackage + '@latest')}`) : ''
           if (pkg) command = `${npm} install --global --prefix "$HOME/.local" ${quote(pkg)}${adapter}`
           else {
             if (typeof body.sourceSHA256 !== 'string') throw failure('source_digest_required')
@@ -375,7 +392,7 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
       const spec = await adapterPackageSpec(h)
       return { harnessID: h.id, source: 'https://registry.npmjs.org/' + h.adapterPackage,
         sha256: null, bytes: null, packageSpec: spec,
-        command: `${npm} install --global --prefix "$HOME/.local" ${quote(spec)}`, verification: 'npm-registry-integrity' }
+        command: await adapterInstallCommand(h, spec), verification: 'npm-registry-integrity' }
     },
     async recordFailure(h, action, error) {
       const s = await state(h.id)

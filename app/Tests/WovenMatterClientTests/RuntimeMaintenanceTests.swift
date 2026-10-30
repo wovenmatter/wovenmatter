@@ -34,6 +34,8 @@ struct RuntimeMaintenanceTests {
         #expect(inventory.isInstalled == !legacyAdapter)
         #expect(inventory.components[0].installed == adapterVersion)
         #expect(inventory.components[1].installed == "0.148.0")
+        #expect(inventory.components[1].latest == "99.0.0")
+        #expect(inventory.components[1].outdated)
         #expect(inventory.components[2].installed == "0.154.0")
         #expect(inventory.outdated)
         try FileManager.default.removeItem(at: engine.appending(path: "bin/codex.js"))
@@ -44,6 +46,18 @@ struct RuntimeMaintenanceTests {
         #expect(diagnostic.contains("0.148.0"))
         #expect(diagnostic.contains("0.154.0"))
         #expect(!diagnostic.contains(root.path))
+    }
+
+    @Test func releaseSelectionDoesNotHideNewerStableCLIOrSDKBehindAnOldTag() async throws {
+        let metadata = Data(#"{"dist-tags":{"latest":"0.165.0"},"versions":{"0.165.0":{"bin":{"codex":"index.js"}},"0.166.0":{"bin":{"codex":"index.js"}},"0.167.0":{"deprecated":"withdrawn","bin":{"codex":"index.js"}},"1.0.0-beta.1":{"bin":{"codex":"index.js"}}}}"#.utf8)
+        let cli = try await RuntimeMaintenance.registryVersion("@openai/codex", fetch: { _ in metadata })
+        #expect(cli == "0.166.0")
+        let sdk = try await RuntimeMaintenance.registryVersion("@anthropic-ai/claude-agent-sdk", executableRequired: false,
+            fetch: { _ in Data(#"{"versions":{"0.3.312":{},"0.3.314":{}}}"#.utf8) })
+        #expect(sdk == "0.3.314")
+        #expect(LocalACPRuntimeCatalog.definition(for: .codex)?.minimumEngineVersion == "0.166.0")
+        #expect(LocalACPRuntimeCatalog.definition(for: .claudeCode)?.minimumEngineVersion == "0.3.314")
+        #expect(LocalACPRuntimeCatalog.definition(for: .claudeCode)?.cliInstallerArguments == ["latest"])
     }
 
     @Test func openCodeInventorySeparatesV2CLIFromRegisteredServiceWithoutCopyingCredentials() async throws {

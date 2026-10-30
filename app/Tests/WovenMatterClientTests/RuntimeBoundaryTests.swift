@@ -277,3 +277,38 @@ private final class SSHRecorder: @unchecked Sendable {
     return response
   }
 }
+
+extension RuntimeBoundaryTests {
+  @Test("adapter installation selects its engine independently before staging")
+  func independentEngineInstall() async throws {
+    let fixture = try TemporaryDirectory(prefix: "woven-independent-engine")
+    defer { fixture.remove() }
+    let tools = fixture.url.appending(path: "tools")
+    let prefix = fixture.url.appending(path: "installed")
+    let argumentsFile = fixture.url.appending(path: "arguments")
+    try FileManager.default.createDirectory(at: tools, withIntermediateDirectories: true)
+    let npm = tools.appending(path: "npm"), node = tools.appending(path: "node")
+    try Data("#!/bin/sh\nexit 0\n".utf8).write(to: npm)
+    try Data("""
+      #!/bin/sh
+      printf '%s\\n' "$@" > '\(argumentsFile.path)'
+      mkdir -p '\(prefix.path)/bin'
+      printf '#!/bin/sh\\necho 2.5.0\\n' > '\(prefix.path)/bin/codex-acp'
+      chmod 700 '\(prefix.path)/bin/codex-acp'
+      """.utf8).write(to: node)
+    for path in [node, npm] { try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: path.path) }
+    let installer = LocalACPRuntimeInstaller(installPrefix: prefix, npmExecutableURL: npm, metadataFetcher: { url in
+      #expect(url.absoluteString.contains("@openai%2fcodex"))
+      return Data(#"{"dist-tags":{"latest":"0.165.0"},"versions":{"0.165.0":{},"0.166.0":{}}}"#.utf8)
+    })
+    let executable = try await installer.installPackage("@agentclientprotocol/codex-acp", version: "2.5.0", executableName: "codex-acp")
+    let arguments = try String(contentsOf: argumentsFile, encoding: .utf8).split(separator: "\n")
+    #expect(arguments.count == 2)
+    #expect(arguments[0].hasSuffix("harnesses/install-adapter.mjs"))
+    let selection = try #require(JSONSerialization.jsonObject(with: Data(arguments[1].utf8)) as? [String: Any])
+    #expect(selection["engineVersion"] as? String == "0.166.0")
+    #expect(selection["adapterVersion"] as? String == "2.5.0")
+    #expect(selection["npm"] as? [String] == [npm.path])
+    #expect(executable == prefix.appending(path: "bin/codex-acp"))
+  }
+}

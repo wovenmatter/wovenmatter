@@ -112,15 +112,18 @@ public actor LocalACPManagedNodeRuntime {
     public let rootDirectory: URL
     public let artifact: LocalACPManagedNodeArtifact
     private let downloader: Downloader?
+    private let npmPreparer: (@Sendable (URL) async throws -> URL)?
 
     public init(
         rootDirectory: URL = LocalACPManagedRuntimePaths.nodeRuntimeRoot,
         artifact: LocalACPManagedNodeArtifact = .current,
-        downloader: Downloader? = nil
+        downloader: Downloader? = nil,
+        npmPreparer: (@Sendable (URL) async throws -> URL)? = nil
     ) {
         self.rootDirectory = rootDirectory
         self.artifact = artifact
         self.downloader = downloader
+        self.npmPreparer = npmPreparer
     }
 
     private var installation: Task<URL, any Error>?
@@ -139,7 +142,7 @@ public actor LocalACPManagedNodeRuntime {
         defer { lock.release() }
         let finalDirectory = runtimeDirectory
         if runtimeIsReady(at: finalDirectory) {
-            return finalDirectory.appending(path: "bin/npm")
+            return try await prepareNPM(at: finalDirectory)
         }
 
         let fileManager = FileManager.default
@@ -222,7 +225,27 @@ public actor LocalACPManagedNodeRuntime {
         guard runtimeIsReady(at: finalDirectory) else {
             throw LocalACPManagedNodeError.runtimeVerificationFailed
         }
-        return finalDirectory.appending(path: "bin/npm")
+        return try await prepareNPM(at: finalDirectory)
+    }
+
+    private func prepareNPM(at nodeDirectory: URL) async throws -> URL {
+        if let npmPreparer { return try await npmPreparer(nodeDirectory) }
+        let roots = [Bundle.main.resourceURL, URL(fileURLWithPath: FileManager.default.currentDirectoryPath),
+            URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appending(path: "..")].compactMap { $0 }
+        guard let root = roots.first(where: { FileManager.default.isReadableFile(atPath: $0.appending(path: "harnesses/prepare-npm.mjs").path) }) else { throw LocalACPManagedNodeError.runtimeVerificationFailed }
+        let node = nodeDirectory.appending(path: "bin/node")
+        let selection: [String: Any] = ["prefix": rootDirectory.appending(path: "NPM").path, "node": node.path,
+            "bootstrap": [node.path, nodeDirectory.appending(path: "lib/node_modules/npm/bin/npm-cli.js").path],
+            "securityGraph": root.appending(path: "remote/npm-runtime").path]
+        var environment = ProcessInfo.processInfo.environment
+        environment["PATH"] = node.deletingLastPathComponent().path + ":" + LocalACPRuntimeResolver.executableSearchPath
+        let data = try JSONSerialization.data(withJSONObject: selection)
+        let result = try LocalACPProcessRunner.run(executableURL: node,
+            arguments: [root.appending(path: "harnesses/prepare-npm.mjs").path, String(decoding: data, as: UTF8.self)],
+            environment: environment, timeout: 600)
+        let npm = URL(fileURLWithPath: result.stdout.trimmingCharacters(in: .whitespacesAndNewlines))
+        guard result.succeeded, npm.path.hasPrefix(rootDirectory.path + "/NPM/"), FileManager.default.isExecutableFile(atPath: npm.path) else { throw LocalACPManagedNodeError.runtimeVerificationFailed }
+        return npm
     }
 
     private var runtimeDirectory: URL {
@@ -700,6 +723,31 @@ public struct LocalACPRuntimeInstaller: Sendable {
     ) async throws -> URL {
         guard Self.isExactPackageSpec(packageSpec) else {
             throw LocalACPRuntimeInstallError.unpinnedPackage
+        }
+        if let definition = LocalACPRuntimeCatalog.definitions.first(where: { $0.adapterPackage == String(packageSpec.prefix(upTo: packageSpec.lastIndex(of: "@")!)) }),
+           let minimum = definition.minimumEngineVersion {
+            let engine = definition.runtimeKind == .codex ? "@openai/codex" : "@anthropic-ai/claude-agent-sdk"
+            let version = try await RuntimeMaintenance.registryVersion(engine, executableRequired: false, fetch: metadataFetcher)
+            guard !RuntimeMaintenance.version(version, precedes: minimum) else { throw RuntimeMaintenanceError.unavailable }
+            let npm: URL
+            if let npmExecutableURL { npm = npmExecutableURL } else { npm = try await managedNodeRuntime.ensureInstalled() }
+            let candidates = [Bundle.main.resourceURL?.appending(path: "harnesses/install-adapter.mjs"),
+                URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appending(path: "harnesses/install-adapter.mjs"),
+                URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appending(path: "../harnesses/install-adapter.mjs")].compactMap { $0 }
+            guard let script = candidates.first(where: { FileManager.default.isReadableFile(atPath: $0.path) }) else { throw RuntimeMaintenanceError.verification }
+            let node = npm.deletingLastPathComponent().appending(path: "node")
+            let selection: [String: Any] = ["prefix": installPrefix.path, "adapter": definition.adapterPackage!,
+                "adapterVersion": String(packageSpec.split(separator: "@").last!), "engineVersion": version, "npm": [npm.path]]
+            let data = try JSONSerialization.data(withJSONObject: selection)
+            var environment = ProcessInfo.processInfo.environment
+            environment["PATH"] = node.deletingLastPathComponent().path + ":" + LocalACPRuntimeResolver.executableSearchPath
+            try FileManager.default.createDirectory(at: installPrefix, withIntermediateDirectories: true)
+            let result = try LocalACPProcessRunner.run(executableURL: node, arguments: [script.path, String(decoding: data, as: UTF8.self)],
+                environment: environment, currentDirectoryURL: installPrefix.deletingLastPathComponent(), timeout: 300)
+            guard result.succeeded else { throw LocalACPRuntimeInstallError.installFailed(result.combinedOutput) }
+            let installed = installPrefix.appending(path: "bin/" + executableName)
+            guard FileManager.default.isExecutableFile(atPath: installed.path) else { throw RuntimeMaintenanceError.verification }
+            return installed
         }
         let npm: URL
         if let npmExecutableURL {
