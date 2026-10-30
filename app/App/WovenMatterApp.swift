@@ -411,10 +411,6 @@ enum WovenMatterEntryPoint {
     @MainActor private static func runBackend() -> Never {
         do {
             try DevelopmentLaunch.validate()
-            if DevelopmentLaunch.mode == nil,
-               UserDefaults.standard.bool(forKey: LocalExecutionRole.libraryClientPreferenceKey) {
-                Darwin.exit(EXIT_SUCCESS)
-            }
             KeychainAccess.enforceCentralAuthorization()
             let lease = WorkspaceProcessLease.acquireOrExit()
             try WovenMatterBackendProcess.removeStaleSocketAfterAcquiringLease(

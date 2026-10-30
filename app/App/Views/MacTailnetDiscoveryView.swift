@@ -52,6 +52,7 @@ struct MacTailnetDiscoveryView: View {
             Text(item.message(version: devices.release?.version, central: isCentral, snapshot: DevelopmentLaunch.isSnapshot))
         }
     }
+    private func rowError(_ row: MacDeviceRow) { row.error = "Update both Macs to a version that supports paired Mac synchronization." }
     private func peer(for row: MacDeviceRow) -> CompanionDiscoveredPeer? {
         (pairing.peers + host.discoveredPeers).first { $0.endpoint.host == row.mac.dnsName }
     }
@@ -62,11 +63,11 @@ struct MacTailnetDiscoveryView: View {
     private func perform(_ item: DeviceSetupConfirmation) async {
         confirmation = nil
         if item.action == .pair, let peer = peer(for: item.row) {
-            if canPairWithCentral, peer.advertisement.role == .central { await pairing.requestPairing(with: peer); return }
-            if isCentral, peer.advertisement.role == .client { await host.invitePairing(peer: peer); return }
+            if peer.advertisement.capabilities?.contains(PairedMacSyncController.capability) == true { await host.pairWithPeer(peer); return }
+            rowError(item.row); return
         }
         if isCentral {
-            guard [.update, .download, .open].contains(item.action) || host.endpoint != nil else { item.row.error = "Wait for this central database to become available before pairing."; return }
+            guard [.update, .download, .open].contains(item.action) || host.endpoint != nil else { item.row.error = "Wait for this Mac’s library to become available before pairing."; return }
             await devices.perform(item.action, row: item.row, central: host.endpoint)
         } else {
             await devices.perform(item.action, row: item.row, central: nil, requestRemoteCentral: {
@@ -78,7 +79,7 @@ struct MacTailnetDiscoveryView: View {
                     }
                     try await Task.sleep(for: .seconds(2))
                 }
-                throw MacDeviceSetupError("Woven Matter opened, but this Mac is not offering a central database. Check its database role in Apple Devices.")
+                throw MacDeviceSetupError("Woven Matter opened, but this Mac is not offering paired Mac synchronization. Update both Macs to the same version.")
             })
         }
     }
@@ -103,12 +104,12 @@ struct MacTailnetDiscoveryView: View {
         if action == .update || action == .download {
             return "Install Woven Matter \(version ?? "the latest version") on this Mac. Running work must finish before the app can restart. Its library stays on that Mac."
         }
-        let destination = snapshot ? "this isolated snapshot database" : "this central database"
+        let destination = snapshot ? "this isolated snapshot database" : "this Mac’s library"
         if action == .pair && sendsInvitation { return "Send this Mac an invitation to \(destination). Accept the invitation in Woven Matter on that Mac to finish pairing." }
         let download = action == .installAndPair ? "Download and verify Woven Matter \(version ?? "the latest version"), then " : ""
         return download + (central
-            ? "open Woven Matter on this Mac, set it up as a node, and request access to \(destination). Its existing library stays saved separately. Approve the pairing request here to finish."
-            : "open Woven Matter and request access to this Mac’s central database. Approve the request on that Mac to finish.")
+            ? "open Woven Matter on this Mac, request pairing with \(destination). Both Macs keep their libraries and synchronize shared data. Approve the pairing request here to finish."
+            : "open Woven Matter and request access to this Mac’s library. Approve the request on that Mac to finish.")
     }
 }
 
@@ -123,7 +124,7 @@ private struct MacTailnetDeviceRow: View {
     var onInspect: () -> Void
     @State private var showConnection = false
     private var installedVersion: String? { row.installation?.version ?? peer?.advertisement.identity.metadata.appVersion }
-    private var canUseService: Bool { (isCentral && peer?.advertisement.role == .client) || (canPairWithCentral && peer?.advertisement.role == .central) }
+    private var canUseService: Bool { peer?.advertisement.capabilities?.contains(PairedMacSyncController.capability) == true }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {

@@ -129,9 +129,15 @@ def disconnect_snapshot(file, *, device_id, execution_root, published_root):
                             "companion_execution_conversations", "companion_execution_runs", "companion_native_history",
                             "companion_native_history_parts", "companion_saved_artifacts", "companion_artifact_chunks",
                             "companion_message_provenance"}
+        # Execution ownership is durable metadata, not sync state. Keep it so a
+        # snapshot's new identity owns nothing it copied and never runs another
+        # Mac's (or the source's) schedules; drop routes, cursors and journals.
+        retained_paired = {"paired_conversation_owners", "paired_agent_owners", "paired_calendar_owners", "paired_library_state"}
         for name in tables:
-            if name in transient or (name.startswith("companion_") and name not in retained_content):
+            if name in transient or (name.startswith("paired_") and name not in retained_paired) or (name.startswith("companion_") and name not in retained_content):
                 db.execute("DELETE FROM " + quote(name))
+        if "paired_library_state" in tables:
+            db.execute("DELETE FROM paired_library_state WHERE name<>'owners.bootstrap'")
         # A new device identity seeds its own local harness catalog at startup.
         # Keep copied agent rows for history references, but retire them from the
         # active catalog so they cannot appear as duplicate runnable harnesses.

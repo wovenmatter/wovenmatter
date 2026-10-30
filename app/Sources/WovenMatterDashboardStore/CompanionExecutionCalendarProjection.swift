@@ -28,7 +28,7 @@ extension WorkspaceDatabase {
 }
 extension WorkspaceDatabaseConnection {
   func calendarForeignExecutionEventIDs() throws -> Set<String> {
-    let localID = try historyRowsUnlocked("SELECT workspace_id FROM companion_calendar_execution_context WHERE singleton=1", values: []).first?.objectValue?["workspace_id"]?.stringValue
+    let localID = try historyRowsUnlocked("SELECT workspace_id FROM companion_calendar_execution_context WHERE singleton=1", values: []).first?.objectValue?["workspace_id"]?.stringValue ?? companionLibraryIdentityUnlocked().hostDeviceID
     let conflicts = try historyRowsUnlocked("SELECT event_id FROM companion_calendar_execution_conflicts", values: []).compactMap { $0.objectValue?["event_id"]?.stringValue }
     return Set(try calendarReplicaOwners().filter { $0.value != localID }.map(\.key)).union(conflicts)
   }

@@ -55,6 +55,17 @@ final class CompanionHostController {
     private(set) var executionWorkspaces: [CompanionExecutionWorkspace] = []
     private(set) var isDiscovering = false
     private(set) var pendingDeviceRevocations: [String: [String]] = [:]
+    @ObservationIgnored lazy var peerSync = PairedMacSyncController(host: self, storage: peerStorage)
+    /// Device-only secrets for paired Macs and direct execution grants.
+    let peerStorage: PairedMacDeviceStorage
+    private(set) var peerPairingStatus = ""
+    private(set) var peerSyncErrors: [String: String] = [:]
+    private(set) var peerPairingError: String?
+    private var projectedPeerRoutes: [PairedMacRoute] = []
+    var connectedPeerRoutes: [PairedMacRoute] { model?.isBackendFrontend == true ? projectedPeerRoutes : peerSync.routes }
+    var peerIdentity: CompanionPairingDeviceIdentity? { discoveryIdentity }
+    /// A former node exchanges nothing until its same-Mac upgrade completes.
+    var peerSyncPaused: Bool { LegacyMacLibraryUpgrade.blocksPeerSync(defaults) }
     private var discoveryIdentity: CompanionPairingDeviceIdentity?
     private let discovery = CompanionMacDiscovery()
     private let pairingNetwork = CompanionPairingNetwork()
@@ -83,7 +94,9 @@ final class CompanionHostController {
 
     init(model: ApplicationModel, defaults: UserDefaults = .standard, supportDirectory: URL? = nil,
          retryInterval: Duration = .seconds(15),
+         peerStorage: PairedMacDeviceStorage? = nil,
          makeExposure: @escaping @MainActor () -> CompanionTailscaleServe = { CompanionTailscaleServe() }) {
+        self.peerStorage = peerStorage ?? .standard
         self.model = model
         self.defaults = defaults
         self.supportDirectory = supportDirectory
@@ -91,7 +104,7 @@ final class CompanionHostController {
         self.retryInterval = retryInterval
     }
 
-    /// The central database is available while the app and Tailscale are running.
+    /// This Mac shares its local library while its background server and Tailscale are running.
     /// Listening does not create a pairing offer or authorize any device.
     func startForCentralDatabase() async {
         guard !DevelopmentLaunch.isClient else { return }
@@ -143,7 +156,7 @@ final class CompanionHostController {
                         throw CompanionAPIError(code: "revocation_pending", message: "This device's pairing could not yet be cancelled.")
                     }
                 },
-                discovery: { [weak self] in self?.discoveryIdentity.map { .init(role: .central, identity: $0) } },
+                discovery: { [weak self] in self?.discoveryIdentity.map { .init(role: .central, identity: $0, capabilities: [PairedMacSyncController.capability]) } },
                 onPair: { [weak self] in await self?.didPair() },
                 onMutation: { [weak model] in Task { await model?.refreshWorkspace() } },
                 onRequest: { [weak self] in self?.lastSeenAt = Date() },
@@ -178,14 +191,36 @@ final class CompanionHostController {
                 throw CompanionAPIError(code: "unavailable", message: "The local execution workspace could not be registered.")
             }
             let executionAuth = try loadExecutionAuthentication()
+            // Grants from before provenance existed cannot prove who received
+            // them; all but this Mac's own re-enroll through an active Mac.
+            try await executionAuth.retireUnknownProvenance(keeping: identity.hostDeviceID)
             guard generation == expectedGeneration, !Task.isCancelled else { throw CancellationError() }
+            // Each presented execution or inference grant is authorized live by
+            // its own provenance: a delegated grant ends with its provisioning Mac.
+            let authorizeGrant: CompanionInferenceHost.Authorize = { deviceID, provisionedBy in
+                if deviceID == centralIdentity.hostDeviceID, provisionedBy == nil { return }
+                guard await authentication.authorizesExecution(deviceID: deviceID, provisionedBy: provisionedBy) else {
+                    throw CompanionAPIError(code: "unauthorized", message: "This device is no longer paired.")
+                }
+            }
             executionAPI = CompanionMacExecutionAPI(database: database, commands: model.companionCommands,
                 authentication: executionAuth, descriptor: local,
-                isActive: { [weak self] in self?.generation == expectedGeneration && self?.endpoint != nil })
+                isActive: { [weak self] in self?.generation == expectedGeneration && self?.endpoint != nil },
+                authorizeDevice: { deviceID in
+                    // This Mac, a grant it issued, or a live delegation from a Mac
+                    // it still admits. Replicated membership never authorizes.
+                    if deviceID == centralIdentity.hostDeviceID { return }
+                    guard await authentication.mayExecute(deviceID: deviceID) else {
+                        throw CompanionAPIError(code: "unauthorized", message: "This device is no longer paired.")
+                    }
+                }, authorizeGrant: authorizeGrant)
             inferenceHost = CompanionInferenceHost(authentication: executionAuth, descriptor: local,
                 directory: try supportDirectory ?? ApplicationModel.dashboardSupportDirectory(),
-                isActive: { [weak self] in self?.generation == expectedGeneration && self?.endpoint != nil })
+                isActive: { [weak self] in self?.generation == expectedGeneration && self?.endpoint != nil }, authorize: authorizeGrant)
             isStarting = false; status = "Available to your paired devices"
+            // Paired-Mac credential storage is independent of phone and library
+            // availability. A failure is reported and retried, never fatal.
+            await peerSync.restoreRecordingFailures()
             // Availability alone must not hold the Mac awake. Active execution
             // continues to use the app's existing work/sleep policy.
             healthTask = Task { [weak self] in
@@ -199,6 +234,8 @@ final class CompanionHostController {
                     }
                     do { try await self.refreshExecutionRegistry() }
                     catch { self.errorMessage = error.localizedDescription }
+                    try? await LegacyMacLibraryUpgrade.reconnect(host: self, defaults: self.defaults)
+                    await self.peerSync.synchronize()
                     await self.retryPendingRevocations()
                     await self.refreshStatus()
                     if let model = self.model, let client = try? model.centralExecutionClient() {
@@ -220,6 +257,7 @@ final class CompanionHostController {
     private func handle(_ request: CompanionHTTPRequest, generation expected: UUID, libraryAPI: CompanionWorkspaceAPI) async -> CompanionHTTPResponse {
         guard generation == expected else { return .error("unavailable", "This sharing session has stopped.", status: 503) }
         let path = request.target.split(separator: "?", maxSplits: 1).first.map(String.init) ?? request.target
+        if let response = await peerSync.handle(request) { return response }
         if path == "/mcp" || path == "/wovenmatter/mcp" {
             if let response = await model?.agentTools?.handleMCP(request) { return response }
             return await libraryAPI.handle(request)
@@ -272,7 +310,22 @@ final class CompanionHostController {
     }
     func revoke(_ deviceID: String, expected: CompanionPairedDevice? = nil) async {
         if model?.isBackendFrontend == true { await forward(.revoke(deviceID)); return }
-        guard !revokingDeviceIDs.contains(deviceID) else { return }
+        do { try await performRevocation(deviceID, expected: expected) }
+        catch { errorMessage = error.localizedDescription }
+    }
+
+    /// Completes only after local library, execution and inference access are
+    /// revoked and any unreachable workspace revocation is durably queued.
+    /// Test seam: throws before local access is revoked, to prove a failed
+    /// revocation is retried rather than recorded as applied.
+    @ObservationIgnored var beforeLocalRevocation: (@MainActor (String) throws -> Void)?
+
+    /// `recordsUnpair` is true for a user's unpair on this Mac, which becomes a
+    /// signed event; applying another Mac's unpair never mints a new event.
+    private func performRevocation(_ deviceID: String, expected: CompanionPairedDevice? = nil, recordsUnpair: Bool = true) async throws {
+        guard !revokingDeviceIDs.contains(deviceID) else {
+            throw CompanionAPIError(code: "revocation_pending", message: "This device is already being unpaired.")
+        }
         revokingDeviceIDs.insert(deviceID)
         defer { revokingDeviceIDs.remove(deviceID) }
         do {
@@ -287,24 +340,75 @@ final class CompanionHostController {
                 var pending = pendingRevocations
                 let identity = try await database.companionLibraryIdentity()
                 let localID = localExecutionWorkspaceID(libraryID: identity.libraryID)
-                let targets = descriptors.filter { $0.kind != .ios && $0.id != localID && $0.journalDeviceIDs.contains(deviceID) }.map(\.id)
+                let targets = descriptors.filter { $0.kind != .ios && $0.id != localID && $0.libraryID == identity.libraryID && $0.journalDeviceIDs.contains(deviceID) }.map(\.id)
                 let workspaceIDs = Array(Set((pending[deviceID] ?? []) + targets)).sorted()
                 if workspaceIDs.isEmpty { pending.removeValue(forKey: deviceID) }
                 else { pending[deviceID] = workspaceIDs }
                 pendingRevocations = pending
+                // The device's own access is withdrawn: no in-flight
+                // replacement for it may satisfy this cleanup.
+                for id in workspaceIDs { replacementWindows[.init(deviceID: deviceID, workspaceID: id)]?.insert("") }
             }
-            try await authentication?.revoke(deviceID: deviceID, expected: expected)
+            try beforeLocalRevocation?(deviceID)
+            // Every execution and inference grant derived through this device
+            // (a paired Mac delegating for its phones) is revoked too. Remote
+            // cleanup is queued durably before local state changes; an offline
+            // workspace stays pending until it is reachable.
+            if let authentication {
+                // Provenance is read across suspension points. A replacement
+                // committed meanwhile (with other provenance) already removed
+                // the token this provenance obtained and retired its record, so
+                // its cleanup would only revoke the replacement.
+                let issued = remoteIssuances
+                let localID = try await model?.dashboardStore?.database.companionLibraryIdentity().libraryID
+                for delegation in await authentication.delegations(provisionedBy: deviceID)
+                    where localID.map({ delegation.workspaceID != localExecutionWorkspaceID(libraryID: $0) }) ?? true {
+                    let target = ExecutionTarget(deviceID: delegation.deviceID, workspaceID: delegation.workspaceID)
+                    if let latest = remoteIssuances[target], latest.generation != issued[target]?.generation,
+                       latest.provisionedBy != deviceID { continue }
+                    enqueueRevocation(deviceID: delegation.deviceID, workspaceID: delegation.workspaceID, provenance: deviceID)
+                }
+            }
+            try await loadExecutionAuthentication().revoke(provisionedBy: deviceID)
+            if recordsUnpair {
+                _ = try? await peerSync.identity()
+                try await authentication?.revoke(deviceID: deviceID, expected: expected)
+            } else {
+                try await authentication?.revokeLocally(deviceID: deviceID)
+            }
+            try await authentication?.removeDelegations(provisionedBy: deviceID)
+            try await model?.dashboardStore?.database.withdrawUnpairedMac(deviceID)
             try await loadExecutionAuthentication().revoke(deviceID: deviceID)
+            try peerSync.revoke(deviceID)
             pairedDevices = await authentication?.devices() ?? []
             pairingPayload = nil; pairingExpiresAt = nil; lastSeenAt = nil; errorMessage = nil
             try await removeJournalGrants(deviceID: deviceID)
             await retryPendingRevocations()
-        } catch { errorMessage = error.localizedDescription }
+        }
     }
     private var pendingRevocations: [String: [String]] {
         get { defaults.dictionary(forKey: Self.pendingRevocationsKey) as? [String: [String]] ?? [:] }
         set { defaults.set(newValue, forKey: Self.pendingRevocationsKey) }
     }
+
+    /// One device's access on one remote workspace. A remote workspace keeps
+    /// one token per device: each issuance replaces the previous token.
+    private struct ExecutionTarget: Hashable { let deviceID: String; let workspaceID: String }
+    /// The latest committed remote issuance per target, in commit order.
+    private var remoteIssuances: [ExecutionTarget: (generation: Int, provisionedBy: String?)] = [:]
+    private var remoteIssuanceGeneration = 0
+    /// Cleanup queued while a replacement for the same target is in flight,
+    /// keyed by the provenance being removed ("" for the device's own access).
+    /// Only a committed replacement with other provenance supersedes it.
+    private var replacementWindows: [ExecutionTarget: Set<String>] = [:]
+
+    /// Test seam: stands in for remote workspace enrollment and device removal,
+    /// keyed by workspace and device ID, so ordering is testable offline.
+    struct RemoteExecutionRequests {
+        var issue: @MainActor (_ workspaceID: String, _ deviceID: String) async throws -> CompanionExecutionCredential
+        var revoke: @MainActor (_ workspaceID: String, _ deviceID: String) async throws -> Void
+    }
+    @ObservationIgnored var remoteExecutionRequests: RemoteExecutionRequests?
 
     private func localExecutionWorkspaceID(libraryID: String) -> String {
         let key = "companion.execution.local-id." + libraryID
@@ -319,6 +423,7 @@ final class CompanionHostController {
         let expectedGeneration = generation
         defer { registryRefreshInProgress = false }
         let identity = try await database.companionLibraryIdentity()
+        try await database.savePairedRemoteWorkspaces(model.remoteWorkspaces.workspaces)
         let existing = try await database.companionExecutionWorkspaces()
         let localID = localExecutionWorkspaceID(libraryID: identity.libraryID)
         if DevelopmentLaunch.isSnapshot {
@@ -365,42 +470,100 @@ final class CompanionHostController {
     }
 
     func provisionExecutionWorkspace(id: String, device: CompanionPairedDevice) async throws -> CompanionExecutionCredential {
+        // Any queued device-only cleanup for this workspace drains before issuance
+        // (provisionExecution completes pending revocations first). Only after the
+        // direct grant is issued, replacing any delegated one, is stale
+        // delegated provenance retired, still under the workspace guard.
+        try await provisionExecution(id: id, deviceID: device.id, name: device.name, provisionedBy: nil, current: { [weak self] in
+            await self?.authentication?.isCurrent(device) == true
+        }, commit: { [weak self] in
+            try await self?.authentication?.retireDelegations(deviceID: device.id, workspaceID: id)
+        })
+    }
+
+    /// A paired Mac obtains this Mac's execution access for one of its own
+    /// mobile devices. Provenance is recorded first: when that Mac is unpaired
+    /// every grant derived through it is revoked, while this Mac's own grants
+    /// for the same device remain.
+    func provisionDelegatedExecution(id: String, deviceID: String, name: String, provisionedBy: String) async throws -> CompanionExecutionCredential {
+        guard let authentication = try? await peerAuthentication(), await authentication.mayDelegate(for: deviceID) else {
+            throw CompanionAPIError(code: "unauthorized", message: "Only a paired Mac's own mobile device may receive this delegated grant.")
+        }
+        // Stage the request; earlier provenance for this device and workspace is
+        // retired only once the replacement grant is actually issued.
+        guard !revokingDeviceIDs.contains(provisionedBy) else {
+            throw CompanionAPIError(code: "unauthorized", message: "The provisioning Mac is being unpaired.")
+        }
+        try await authentication.stageDelegation(deviceID: deviceID, workspaceID: id, provisionedBy: provisionedBy)
+        do {
+            // An unpair of the provisioning Mac may have read its delegations
+            // before this one was staged, so any unpair in progress fails it.
+            return try await provisionExecution(id: id, deviceID: deviceID, name: name, provisionedBy: provisionedBy, current: { [weak self] in
+                guard self?.revokingDeviceIDs.contains(provisionedBy) == false else { return false }
+                return await authentication.delegationActive(deviceID: deviceID, provisionedBy: provisionedBy)
+            }, commit: {
+                try await authentication.confirmDelegation(deviceID: deviceID, workspaceID: id, provisionedBy: provisionedBy)
+            })
+        } catch {
+            try? await authentication.cancelStagedDelegation(deviceID: deviceID, workspaceID: id, provisionedBy: provisionedBy)
+            throw error
+        }
+    }
+
+    /// `commit` records the issued grant's provenance while the workspace guard
+    /// is still held, so no unpair can read the provenance it replaces.
+    private func provisionExecution(id: String, deviceID: String, name: String, provisionedBy: String?,
+                                    current: @escaping @MainActor () async -> Bool,
+                                    commit: @MainActor () async throws -> Void) async throws -> CompanionExecutionCredential {
         guard UUID(uuidString: id) != nil, let model, let database = model.dashboardStore?.database,
-              authentication != nil, try await deviceMayExecute(device, workspaceID: id),
-              !revokingDeviceIDs.contains(device.id), !provisioningWorkspaceIDs.contains(id) else {
+              authentication != nil, try await deviceMayExecute(deviceID, workspaceID: id, current: current),
+              !revokingDeviceIDs.contains(deviceID), !provisioningWorkspaceIDs.contains(id) else {
             throw CompanionAPIError(code: "unavailable", message: "This workspace is unavailable or another enrollment is in progress. Retry shortly.")
         }
         provisioningWorkspaceIDs.insert(id)
         defer { provisioningWorkspaceIDs.remove(id) }
         let identity = try await database.companionLibraryIdentity()
-        if id == localExecutionWorkspaceID(libraryID: identity.libraryID) {
-            guard let executionAPI else { throw CompanionAPIError(code: "unavailable", message: "The central database connection is not ready yet.") }
-            let expectedGeneration = generation
-            let credential = try await executionAPI.provision(device: device)
-            guard generation == expectedGeneration, endpoint != nil,
-                  try await deviceMayExecute(device, workspaceID: id), !revokingDeviceIDs.contains(device.id) else {
-                try await loadExecutionAuthentication().revoke(deviceID: device.id)
-                throw CompanionAPIError(code: "unauthorized", message: "This device or sharing session was revoked during enrollment.")
-            }
+        if let workspace = try await database.companionExecutionWorkspaces().first(where: { $0.id == id && !$0.deleted }), workspace.libraryID != identity.libraryID {
+            let credential = try await peerSync.provision(workspace: workspace, deviceID: deviceID)
+            try await commit()
             return credential
         }
-        try await completePendingRevocation(workspaceID: id, deviceID: device.id)
-        guard try await deviceMayExecute(device, workspaceID: id), !revokingDeviceIDs.contains(device.id) else {
+        if id == localExecutionWorkspaceID(libraryID: identity.libraryID) {
+            guard let executionAPI else { throw CompanionAPIError(code: "unavailable", message: "This Mac’s workspace connection is not ready yet.") }
+            let expectedGeneration = generation
+            let credential = try await executionAPI.provision(deviceID: deviceID, provisionedBy: provisionedBy)
+            guard generation == expectedGeneration, endpoint != nil,
+                  try await deviceMayExecute(deviceID, workspaceID: id, current: current), !revokingDeviceIDs.contains(deviceID) else {
+                try await loadExecutionAuthentication().revoke(deviceID: deviceID)
+                throw CompanionAPIError(code: "unauthorized", message: "This device or sharing session was revoked during enrollment.")
+            }
+            try await commit()
+            return credential
+        }
+        // Cleanup queued from here on, while the replacement is in flight, is
+        // recorded with the provenance it removes.
+        let target = ExecutionTarget(deviceID: deviceID, workspaceID: id)
+        replacementWindows[target] = []
+        defer { replacementWindows.removeValue(forKey: target) }
+        try await completePendingRevocation(workspaceID: id, deviceID: deviceID)
+        guard try await deviceMayExecute(deviceID, workspaceID: id, current: current), !revokingDeviceIDs.contains(deviceID) else {
             throw CompanionAPIError(code: "unauthorized", message: "This device was revoked during enrollment.")
         }
         let configuration = model.remoteWorkspaces.workspaces.first(where: { $0.id.uuidString.lowercased() == id })
         let registered = try await database.companionExecutionWorkspaces().first { $0.id == id && !$0.deleted }
         var credential: CompanionExecutionCredential
-        if let configuration {
+        if let remoteExecutionRequests {
+            credential = try await remoteExecutionRequests.issue(id, deviceID)
+        } else if let configuration {
             credential = try await model.remoteWorkspaces.provisionExecutionDevice(configuration: configuration,
-                libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID, deviceID: device.id, deviceName: device.name)
+                libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID, deviceID: deviceID, deviceName: name)
         } else if let registered, registered.kind == .mac {
-            credential = try await managedExecutionRequest(workspace: registered, deviceID: device.id, revoke: false)
+            credential = try await managedExecutionRequest(workspace: registered, deviceID: deviceID, revoke: false)
         } else {
             throw CompanionAPIError(code: "unknown_workspace", message: "Enable client access on this workspace's managing device first.")
         }
         do {
-            guard credential.deviceID == device.id, credential.workspace.id == id,
+            guard credential.deviceID == deviceID, credential.workspace.id == id,
                   credential.workspace.libraryID == identity.libraryID,
                   registered.map({ original in
                       original.ownerDeviceID == credential.workspace.ownerDeviceID && original.kind == credential.workspace.kind
@@ -409,52 +572,68 @@ final class CompanionHostController {
                   }) ?? (configuration != nil) else {
                 throw CompanionAPIError(code: "wrong_workspace", message: "The workspace returned an execution grant for a different identity.")
             }
-            guard try await deviceMayExecute(device, workspaceID: id), !revokingDeviceIDs.contains(device.id) else {
+            guard try await deviceMayExecute(deviceID, workspaceID: id, current: current), !revokingDeviceIDs.contains(deviceID) else {
                 throw CompanionAPIError(code: "unauthorized", message: "This device was revoked during enrollment.")
             }
             let prior = try await database.companionExecutionWorkspaces().first { $0.id == id }
-            credential.workspace.journalDeviceIDs = Array(Set((prior?.journalDeviceIDs ?? []) + [device.id])).sorted()
+            credential.workspace.journalDeviceIDs = Array(Set((prior?.journalDeviceIDs ?? []) + [deviceID])).sorted()
             credential.workspace.revision = prior?.revision ?? 0
             credential.workspace = try await database.registerCompanionExecutionWorkspace(
                 .init(workspace: credential.workspace, expectedRevision: prior?.revision), deviceID: identity.hostDeviceID)
-            guard try await deviceMayExecute(device, workspaceID: id), !revokingDeviceIDs.contains(device.id) else {
-                try await removeJournalGrants(deviceID: device.id)
+            guard try await deviceMayExecute(deviceID, workspaceID: id, current: current), !revokingDeviceIDs.contains(deviceID) else {
+                try await removeJournalGrants(deviceID: deviceID)
                 throw CompanionAPIError(code: "unauthorized", message: "This device was revoked during enrollment.")
             }
             if let configuration { try? await ensureExecutionPublisher(workspace: credential.workspace, configuration: configuration) }
-            guard try await deviceMayExecute(device, workspaceID: id) else {
+            guard try await deviceMayExecute(deviceID, workspaceID: id, current: current) else {
                 throw CompanionAPIError(code: "unauthorized", message: "This device's execution access changed during enrollment.")
+            }
+            try await commit()
+            // Committed: the workspace replaced the device's earlier token, so
+            // cleanup queued meanwhile for other provenance is already satisfied.
+            // The device's own revocation, or this provenance's, still applies.
+            remoteIssuanceGeneration += 1
+            remoteIssuances[target] = (remoteIssuanceGeneration, provisionedBy)
+            if let superseded = replacementWindows[target], !superseded.isEmpty, !superseded.contains(provisionedBy ?? "") {
+                var pending = pendingRevocations
+                pending[deviceID]?.removeAll { $0 == id }
+                if pending[deviceID]?.isEmpty == true { pending.removeValue(forKey: deviceID) }
+                pendingRevocations = pending
+                pendingDeviceRevocations = pending
             }
             return credential
         } catch {
-            enqueueRevocation(deviceID: device.id, workspaceID: id)
+            enqueueRevocation(deviceID: deviceID, workspaceID: id)
             await retryPendingRevocations()
             throw error
         }
     }
 
-    /// Internal execution-owner path for the central desktop itself. It cannot
+    /// Internal execution-owner path for this desktop itself. It cannot
     /// choose an arbitrary principal and is never exposed as a client HTTP route.
     func provisionCentralExecutionWorkspace(id: String) async throws -> CompanionExecutionCredential {
         guard let model, !model.isBackendFrontend, !model.isLibraryClient,
               let database = model.dashboardStore?.database, UUID(uuidString: id) != nil,
               !provisioningWorkspaceIDs.contains(id) else {
-            throw CompanionAPIError(code: "unavailable", message: "The central execution owner is unavailable.")
+            throw CompanionAPIError(code: "unavailable", message: "This Mac’s execution owner is unavailable.")
         }
         provisioningWorkspaceIDs.insert(id)
         defer { provisioningWorkspaceIDs.remove(id) }
         let identity = try await database.companionLibraryIdentity()
+        if let workspace = try await database.companionExecutionWorkspaces().first(where: { $0.id == id && !$0.deleted }), workspace.libraryID != identity.libraryID {
+            return try await peerSync.provision(workspace: workspace, deviceID: identity.hostDeviceID)
+        }
         try await completePendingRevocation(workspaceID: id, deviceID: identity.hostDeviceID)
         let registered = try await database.companionExecutionWorkspaces().first { $0.id == id && !$0.deleted }
         var credential: CompanionExecutionCredential
         if let configuration = model.remoteWorkspaces.workspaces.first(where: { $0.id.uuidString.lowercased() == id }) {
             credential = try await model.remoteWorkspaces.provisionExecutionDevice(configuration: configuration,
                 libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID,
-                deviceID: identity.hostDeviceID, deviceName: Host.current().localizedName ?? "Central Mac")
+                deviceID: identity.hostDeviceID, deviceName: Host.current().localizedName ?? "Mac")
         } else if let registered, registered.kind == .mac {
             credential = try await managedExecutionRequest(workspace: registered, deviceID: identity.hostDeviceID, revoke: false)
         } else {
-            throw CompanionAPIError(code: "unavailable", message: "This execution workspace must be reachable and enrolled before the central Mac can control it.")
+            throw CompanionAPIError(code: "unavailable", message: "This execution workspace must be reachable and enrolled before this Mac can control it.")
         }
         guard credential.deviceID == identity.hostDeviceID, credential.workspace.id == id,
               credential.workspace.libraryID == identity.libraryID,
@@ -492,11 +671,11 @@ final class CompanionHostController {
         return workspace
     }
 
-    private func deviceMayExecute(_ device: CompanionPairedDevice, workspaceID: String) async throws -> Bool {
-        guard let authentication, let database = model?.dashboardStore?.database,
-              !revokingDeviceIDs.contains(device.id), await authentication.isCurrent(device) else { return false }
+    private func deviceMayExecute(_ deviceID: String, workspaceID: String, current: @MainActor () async -> Bool) async throws -> Bool {
+        guard authentication != nil, let database = model?.dashboardStore?.database,
+              !revokingDeviceIDs.contains(deviceID), await current() else { return false }
         guard try await database.companionExecutionWorkspaces().contains(where: { $0.id == workspaceID && !$0.deleted }) else { return false }
-        return await authentication.isCurrent(device)
+        return await current()
     }
 
     func withdrawDevelopmentWorkspace() async throws {
@@ -516,7 +695,7 @@ final class CompanionHostController {
     }
 
     func disconnectLocalDevelopment(_ request: DevelopmentDisconnectRequest) async throws {
-        guard let authentication, let database = model?.dashboardStore?.database else { throw CompanionAPIError(code: "unavailable", message: "The central library is unavailable.") }
+        guard let authentication, let database = model?.dashboardStore?.database else { throw CompanionAPIError(code: "unavailable", message: "This Mac’s library is unavailable.") }
         try await authentication.suspendLocalDevelopment(deviceID: request.deviceID, credential: request.credential)
         try await database.withdrawDevelopmentWorkspaces(ownedBy: request.deviceID)
         try await refreshStatusAndDevelopmentPresence(database: database)
@@ -528,7 +707,10 @@ final class CompanionHostController {
         executionWorkspaces = try await database.companionConnectionWorkspaces(activeDeviceIDs: active)
     }
 
-    private func enqueueRevocation(deviceID: String, workspaceID: String) {
+    /// `provenance` names the Mac whose delegated grant is being removed; nil
+    /// withdraws the device's access on that workspace regardless of origin.
+    private func enqueueRevocation(deviceID: String, workspaceID: String, provenance: String? = nil) {
+        replacementWindows[.init(deviceID: deviceID, workspaceID: workspaceID)]?.insert(provenance ?? "")
         var pending = pendingRevocations
         pending[deviceID] = Array(Set((pending[deviceID] ?? []) + [workspaceID])).sorted()
         pendingRevocations = pending
@@ -569,7 +751,7 @@ final class CompanionHostController {
     private func removeJournalGrants(deviceID: String) async throws {
         guard let database = model?.dashboardStore?.database else { return }
         let identity = try await database.companionLibraryIdentity()
-        for var workspace in try await database.companionExecutionWorkspaces() where !workspace.deleted && workspace.journalDeviceIDs.contains(deviceID) {
+        for var workspace in try await database.companionExecutionWorkspaces() where !workspace.deleted && workspace.libraryID == identity.libraryID && workspace.journalDeviceIDs.contains(deviceID) {
             let revision = workspace.revision
             workspace.journalDeviceIDs.removeAll { $0 == deviceID }
             _ = try await database.registerCompanionExecutionWorkspace(.init(workspace: workspace, expectedRevision: revision), deviceID: identity.hostDeviceID)
@@ -580,7 +762,9 @@ final class CompanionHostController {
     /// enrollment cannot race an old revocation or inherit its pending entry.
     private func completePendingRevocation(workspaceID: String, deviceID: String) async throws {
         guard pendingRevocations[deviceID]?.contains(workspaceID) == true, let model else { return }
-        if let configuration = model.remoteWorkspaces.workspaces.first(where: { $0.id.uuidString.lowercased() == workspaceID }) {
+        if let remoteExecutionRequests {
+            try await remoteExecutionRequests.revoke(workspaceID, deviceID)
+        } else if let configuration = model.remoteWorkspaces.workspaces.first(where: { $0.id.uuidString.lowercased() == workspaceID }) {
             try await model.remoteWorkspaces.revokeExecutionDevice(configuration: configuration, deviceID: deviceID)
         } else if let workspace = try await model.dashboardStore?.database.companionExecutionWorkspaces().first(where: { $0.id == workspaceID && $0.kind == .mac }) {
             let acknowledgement: ExecutionManagementAcknowledgement = try await managedExecutionRequest(workspace: workspace, deviceID: deviceID, revoke: true)
@@ -596,7 +780,7 @@ final class CompanionHostController {
         pendingRevocations = pending
     }
 
-    private func retryPendingRevocations() async {
+    func retryPendingRevocations() async {
         guard !revocationRetryInProgress, model != nil else { return }
         revocationRetryInProgress = true
         defer { revocationRetryInProgress = false }
@@ -620,7 +804,7 @@ final class CompanionHostController {
               errorMessage: errorMessage, pairingPayload: pairingPayload, pairingExpiresAt: pairingExpiresAt,
               pairedDevices: pairedDevices, lastSeenAt: lastSeenAt, discoveredPeers: discoveredPeers,
               pendingPairingRequests: pendingPairingRequests, isDiscovering: isDiscovering, executionWorkspaces: executionWorkspaces,
-              pendingDeviceRevocations: pendingRevocations)
+              pendingDeviceRevocations: pendingRevocations, peerPairingStatus: peerSync.pairing.status, peerPairingError: peerSync.pairing.errorMessage, peerSyncErrors: peerSync.errors, peerRoutes: peerSync.routes, peerIdentity: discoveryIdentity)
     }
 
     func refreshStatus() async {
@@ -676,7 +860,58 @@ final class CompanionHostController {
             discoveredPeers = value.discoveredPeers; pendingPairingRequests = value.pendingPairingRequests
             isDiscovering = value.isDiscovering; executionWorkspaces = value.executionWorkspaces
             pendingDeviceRevocations = value.pendingDeviceRevocations
+            peerPairingStatus = value.peerPairingStatus ?? ""; peerPairingError = value.peerPairingError
+            projectedPeerRoutes = value.peerRoutes ?? []; discoveryIdentity = value.peerIdentity
+            peerSyncErrors = value.peerSyncErrors ?? [:]
         } catch { errorMessage = error.localizedDescription }
+    }
+
+    func peerAuthentication() async throws -> CompanionAuthentication {
+        try await loadAuthentication()
+        guard let authentication else { throw CancellationError() }
+        return authentication
+    }
+    func peerRoute() async throws -> PairedMacRoute {
+        guard let endpoint, let database = model?.dashboardStore?.database else { throw CompanionAPIError(code: "unavailable", message: "Wait for this Mac to connect to Tailscale before pairing.") }
+        let identity = try await database.companionLibraryIdentity()
+        return .init(deviceID: identity.hostDeviceID, libraryID: identity.libraryID, endpoint: endpoint, name: DevelopmentLaunch.deviceName())
+    }
+    func pairWithPeer(_ peer: CompanionDiscoveredPeer) async {
+        if model?.isBackendFrontend == true { await forward(.pairWithPeer(peer)); return }
+        guard peer.advertisement.identity.deviceID != discoveryIdentity?.deviceID else { return }
+        await peerSync.pairing.requestPairing(with: peer)
+    }
+    func pairAtEndpoint(_ endpoint: URL) async {
+        if model?.isBackendFrontend == true { await forward(.pairAtEndpoint(endpoint)); return }
+        do {
+            let advertisement: CompanionDiscoveryAdvertisement = try await pairingNetwork.request(endpoint, path: "v1/discovery")
+            guard advertisement.capabilities?.contains(PairedMacSyncController.capability) == true else { throw CompanionAPIError(code: "update_required", message: "Update both Macs before pairing their libraries.") }
+            await pairWithPeer(.init(endpoint: endpoint, advertisement: advertisement))
+        } catch { errorMessage = error.localizedDescription }
+    }
+    func pairUsingLink(_ link: String) async {
+        if model?.isBackendFrontend == true { await forward(.pairUsingLink(link)); return }
+        do { try await peerSync.pairUsingLink(link); errorMessage = nil; await refreshStatus() }
+        catch { errorMessage = error.localizedDescription }
+    }
+    func cancelPeerPairing() async {
+        if model?.isBackendFrontend == true { await forward(.cancelPeerPairing); return }
+        peerSync.pairing.cancelRequest()
+    }
+    func applyPeerRevocations() async throws {
+        guard let authentication else { return }
+        var processed = Set(defaults.stringArray(forKey: "companion.peers.applied-revocations") ?? [])
+        var failure: (any Error)?
+        for (id, events) in await authentication.revokedDeviceContexts().sorted(by: { $0.key < $1.key }) {
+            let key = id + ":" + events.joined(separator: ",")
+            guard !processed.contains(key) else { continue }
+            // Mark applied only after local access is revoked; a transient
+            // failure is retried on the next synchronization turn.
+            do { try await performRevocation(id, recordsUnpair: false); processed.insert(key) } catch { failure = error }
+            defaults.set(Array(processed).sorted(), forKey: "companion.peers.applied-revocations")
+        }
+        pairedDevices = await authentication.devices()
+        if let failure { throw failure }
     }
 
     private func loadExecutionAuthentication() throws -> CompanionExecutionAuthentication {
@@ -703,7 +938,7 @@ final class CompanionHostController {
     func connectLocalDevelopment(_ request: DevelopmentClientRequest) async throws -> DevelopmentClientConnection {
         guard DevelopmentLaunch.mode == nil || DevelopmentLaunch.isLiveHost, model?.isLibraryClient == false,
               let database = model?.dashboardStore?.database, let endpoint, let authentication else {
-            throw CompanionAPIError(code: "unavailable", message: "Run production with background execution enabled, or a live Dev host, and wait for its central library to connect.")
+            throw CompanionAPIError(code: "unavailable", message: "Run production with background execution enabled, or a live Dev host, and wait for its library to connect.")
         }
         let response = try await authentication.enrollLocalDevelopment(deviceID: request.deviceID,
             name: request.name, workspaceID: database.companionWorkspaceID())
@@ -717,7 +952,7 @@ final class CompanionHostController {
 enum CompanionHostAction: Codable, Sendable {
     case status, start, stop, createCode
     case revoke(String), approvePairing(String), denyPairing(String)
-    case discover, invitePairing(CompanionDiscoveredPeer)
+    case discover, invitePairing(CompanionDiscoveredPeer), pairWithPeer(CompanionDiscoveredPeer), pairAtEndpoint(URL), pairUsingLink(String), cancelPeerPairing
 }
 
 struct CompanionHostSnapshot: Codable, Sendable {
@@ -735,6 +970,11 @@ struct CompanionHostSnapshot: Codable, Sendable {
     let isDiscovering: Bool
     let executionWorkspaces: [CompanionExecutionWorkspace]
     let pendingDeviceRevocations: [String: [String]]
+    var peerPairingStatus: String? = nil
+    var peerPairingError: String? = nil
+    var peerSyncErrors: [String: String]? = nil
+    var peerRoutes: [PairedMacRoute]? = nil
+    var peerIdentity: CompanionPairingDeviceIdentity? = nil
 }
 
 private struct ExecutionManagementAcknowledgement: Decodable { let revoked: Bool }
@@ -745,7 +985,7 @@ private final class ExecutionManagementRedirectPolicy: NSObject, URLSessionTaskD
     }
 }
 
-/// The central Mac holds only a workspace-scoped enrollment capability here.
+/// The Mac that added a workspace holds its scoped enrollment capability here.
 /// Tokens never enter SQLite, replicated app data, logs, or UserDefaults.
 private enum ExecutionManagementVault {
     private static var service: String { (Bundle.main.bundleIdentifier ?? "com.wovenmatter") + ".execution-management" }

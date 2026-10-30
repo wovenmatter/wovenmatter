@@ -15,12 +15,18 @@ final class CompanionInferenceHost {
     private let descriptor: CompanionExecutionWorkspace
     private let directory: URL
     private let isActive: @MainActor @Sendable () -> Bool
+    /// Live authorization of the presented grant, by device and provenance. It
+    /// runs before provider credentials are prepared and again before a model
+    /// stream starts, so a revoked provisioning Mac ends access immediately
+    /// rather than when its grant is eventually deleted.
+    typealias Authorize = @MainActor @Sendable (String, String?) async throws -> Void
+    private let authorize: Authorize
     init(authentication: CompanionExecutionAuthentication, descriptor: CompanionExecutionWorkspace, directory: URL,
-         isActive: @escaping @MainActor @Sendable () -> Bool,
+         isActive: @escaping @MainActor @Sendable () -> Bool, authorize: @escaping Authorize,
          preparePayload: @escaping Prepare = { try await ProviderAccountCoordinator.shared.prepare("local").data() },
          run: Run? = nil) {
         self.authentication = authentication; self.descriptor = descriptor; self.directory = directory; self.isActive = isActive
-        self.preparePayload = preparePayload; self.injectedRun = run
+        self.authorize = authorize; self.preparePayload = preparePayload; self.injectedRun = run
     }
     func handle(_ request: CompanionHTTPRequest) async -> CompanionHTTPResponse {
         guard isActive() else { return .error("unavailable", "This inference host is stopped.", status: 503) }
@@ -30,7 +36,8 @@ final class CompanionInferenceHost {
             let stream = request.method == "POST" && ["/v1/inference/stream", "/wovenmatter/v1/inference/stream"].contains(path)
             guard catalog || stream else { return .error("not_found", "Unknown inference endpoint.", status: 404) }
             guard let bearer = request.bearer else { return .error("unauthorized", "An authorized inference-host connection is required.", status: 401) }
-            let scope = try await authentication.authenticate(bearer: bearer)
+            let grant = try await authentication.authenticateGrant(bearer: bearer)
+            let scope = grant.scope
             guard scope.libraryID == descriptor.libraryID, scope.workspaceID == descriptor.id,
                   request.headers["x-woven-protocol"] == String(CompanionProtocol.version),
                   request.headers["x-woven-library"] == scope.libraryID,
@@ -49,6 +56,7 @@ final class CompanionInferenceHost {
                 }
                 object = value
             }
+            try await authorize(scope.deviceID, grant.provisionedBy)
             // This is the existing credential owner and refresh coordinator. Credentials cross only private stdin.
             let payload = try await preparePayload()
             guard isActive() else { return .error("unavailable", "This inference host stopped.", status: 503) }
@@ -64,6 +72,7 @@ final class CompanionInferenceHost {
                 let helper = CompanionInferenceProcess(executable: launch.executableURL, arguments: launch.arguments, directory: directory)
                 run = { body, emit in try await helper.run(body: body, emit: emit) }
             }
+            try await authorize(scope.deviceID, grant.provisionedBy)
             if catalog {
                 let collected = CompanionInferenceBytes()
                 try await run(body) { data in try collected.append(data) }
@@ -71,8 +80,12 @@ final class CompanionInferenceHost {
             }
             let model = object["model"] as? [String: Any] ?? [:]
             let provider = model["provider"] as? String ?? "", modelID = model["id"] as? String ?? ""
+            let authorize = self.authorize, deviceID = scope.deviceID, provisionedBy = grant.provisionedBy
             return CompanionHTTPResponse(contentType: "application/x-ndjson", stream: { emit in
-                do { try await run(body, emit) }
+                do {
+                    try await authorize(deviceID, provisionedBy)
+                    try await run(body, emit)
+                }
                 catch {
                     try Task.checkCancellation()
                     let message = (error as? CompanionInferenceHostError)?.message ?? "The inference host could not complete this request. Saved agent work remains on your device."

@@ -158,10 +158,10 @@ public actor WorkspaceJournal {
       next.libraryID = libraryID
     }
   }
-  public func upsertWorkspace(_ workspace: CompanionExecutionWorkspace, pending: Bool = true) throws {
+  public func upsertWorkspace(_ workspace: CompanionExecutionWorkspace, pending: Bool = true, trustedRegistry: Bool = false) throws {
     try transaction { next in
-      guard next.libraryID == nil || next.libraryID == workspace.libraryID else { throw Failure.wrongLibrary }
-      next.libraryID = workspace.libraryID
+      guard next.libraryID == nil || next.libraryID == workspace.libraryID || (trustedRegistry && !pending) else { throw Failure.wrongLibrary }
+      if next.libraryID == nil { next.libraryID = workspace.libraryID }
       if let existing = next.workspaces[workspace.id], existing.revision > workspace.revision { return }
       next.workspaces[workspace.id] = workspace
       if pending { next.pendingRegistrations.insert(workspace.id) }
@@ -169,7 +169,7 @@ public actor WorkspaceJournal {
     }
   }
   public func mergeRegistry(_ workspaces: [CompanionExecutionWorkspace]) throws {
-    for workspace in workspaces where !state.pendingRegistrations.contains(workspace.id) { try upsertWorkspace(workspace, pending: false) }
+    for workspace in workspaces where !state.pendingRegistrations.contains(workspace.id) { try upsertWorkspace(workspace, pending: false, trustedRegistry: true) }
   }
   public func record(_ entry: CompanionJournalEntry) throws {
     try transaction { next in try Self.insert(entry, into: &next); next.pendingEventIDs.insert(entry.eventID) }
@@ -365,7 +365,7 @@ public actor WorkspaceJournal {
   }
   public func receiveWorkspace(_ page: CompanionJournalPage, workspaceID: String, localDeviceID: String? = nil) throws {
     try transaction { next in
-      guard next.libraryID == page.libraryID else { throw Failure.wrongLibrary }
+      guard (next.workspaces[workspaceID]?.libraryID ?? next.libraryID) == page.libraryID else { throw Failure.wrongLibrary }
       let cursor = next.directCursors[workspaceID] ?? 0
       guard page.cursor == cursor + Int64(page.entries.count), !page.hasMore || !page.entries.isEmpty else { throw Failure.replayGap }
       for (index, entry) in page.entries.enumerated() {
@@ -497,7 +497,11 @@ public actor WorkspaceClient {
     let workspace = try await transport.identity()
     guard workspace.id == workspaceID, !workspace.deleted else { throw MobileStore.Failure.wrongWorkspace }
     centralHistory = workspace.capabilities.contains("history.central.v1")
-    if let libraryID = await store.snapshot().workspaceID, libraryID != workspace.libraryID { throw WorkspaceJournal.Failure.wrongLibrary }
+    if let libraryID = await store.snapshot().workspaceID, libraryID != workspace.libraryID {
+      guard let registered = await store.journal.snapshot().workspaces[workspaceID],
+            registered.libraryID == workspace.libraryID, registered.ownerDeviceID == workspace.ownerDeviceID,
+            registered.endpoint == workspace.endpoint else { throw WorkspaceJournal.Failure.wrongLibrary }
+    }
     if await store.journal.snapshot().workspaces[workspaceID] == nil {
       let deviceID = await store.snapshot().deviceID
       try await store.journal.upsertWorkspace(workspace, pending: !centralHistory && WorkspaceJournal.isLocalExecutionOwner(workspace, deviceID: deviceID))

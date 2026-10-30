@@ -13,23 +13,18 @@ enum RemoteDeviceSetup {
               model.isLibraryClient || model.state == .ready else { return }
         handling = true
         defer { handling = false }
-        if model.isLibraryClient, let observedRaw = defaults.string(forKey: observingKey),
+        let host = model.companionHost
+        await host.refreshStatus()
+        if let observedRaw = defaults.string(forKey: observingKey),
            let observed = try? JSONDecoder().decode(CompanionMacSetupRequest.self, from: Data(observedRaw.utf8)) {
-            await model.libraryClient.initialize()
-            let pairing = model.libraryClient.devicePairing
-            if !pairing.isRequestPending, pairing.errorMessage == nil { await pairing.restorePendingRequest() }
-            if let credential = model.libraryClient.credential {
-                publish(observed, phase: credential.endpoint == observed.endpoint ? .paired : .failed,
-                    message: credential.endpoint == observed.endpoint ? "Paired with the central database." : "This Mac is paired with another central database.", defaults: defaults)
+            if host.connectedPeerRoutes.contains(where: { route in route.endpoint == observed.endpoint && host.pairedDevices.contains(where: { $0.id == route.deviceID }) }) {
+                publish(observed, phase: .paired, message: "Paired Macs keep their libraries synchronized.", defaults: defaults)
                 defaults.removeObject(forKey: observingKey)
-            } else if let error = pairing.errorMessage, !pairing.isRequestPending {
+            } else if let error = host.peerPairingError ?? host.errorMessage {
                 publish(observed, phase: .failed, message: error, defaults: defaults)
                 defaults.removeObject(forKey: observingKey)
-            } else if !pairing.isRequestPending {
-                publish(observed, phase: .failed, message: "The pairing request was closed. Try pairing again.", defaults: defaults)
-                defaults.removeObject(forKey: observingKey)
-            } else if pairing.hasSubmittedRequest {
-                publish(observed, phase: .waiting, message: "Waiting for pairing approval on the central Mac.", defaults: defaults)
+            } else {
+                publish(observed, phase: .waiting, message: "Waiting for pairing approval on the other Mac.", defaults: defaults)
             }
         }
         guard let raw = defaults.string(forKey: CompanionMacSetupRequest.preferenceKey) else { return }
@@ -41,21 +36,12 @@ enum RemoteDeviceSetup {
             try request.validate()
             switch request.action {
             case .pair:
-                guard let endpoint = request.endpoint else { throw MacDeviceSetupError("The central database address is missing.") }
-                if !model.isLibraryClient {
-                    publish(request, phase: .preparing, message: "Preparing this Mac as a node…", defaults: defaults)
-                    // Retain the intent across the app's existing safe restart.
-                    try await model.activateLibraryClientMode()
-                    return
-                }
-                await model.libraryClient.initialize()
-                defaults.set(model.libraryClient.state.deviceID, forKey: "wovenmatter.device-setup.device-id")
-                if let credential = model.libraryClient.credential {
-                    guard credential.endpoint == endpoint else { throw MacDeviceSetupError("This Mac is already paired with another central database. Unpair it there before setting up a different database.") }
-                    publish(request, phase: .paired, message: "Already paired with this central database.", defaults: defaults)
+                guard let endpoint = request.endpoint else { throw MacDeviceSetupError("The paired Mac address is missing.") }
+                if let deviceID = host.peerIdentity?.deviceID { defaults.set(deviceID, forKey: "wovenmatter.device-setup.device-id") }
+                if host.connectedPeerRoutes.contains(where: { $0.endpoint == endpoint }) {
+                    publish(request, phase: .paired, message: "Already paired with this Mac.", defaults: defaults)
                 } else {
-                    await model.libraryClient.devicePairing.restorePendingRequest()
-                    try await model.libraryClient.devicePairing.requestPairing(endpoint: endpoint)
+                    await host.pairAtEndpoint(endpoint)
                     defaults.set(raw, forKey: observingKey)
                     publish(request, phase: .submitting, message: "Submitting pairing request…", defaults: defaults)
                 }

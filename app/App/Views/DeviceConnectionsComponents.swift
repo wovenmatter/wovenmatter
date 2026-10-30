@@ -30,23 +30,6 @@ struct DevicePairingDiscoveryCard: View {
     var body: some View {
         SettingsCard(title: "Find devices", detail: "Find other Macs on your Tailscale network, even when Woven Matter is closed.") {
             MacTailnetDiscoveryView(devices: devices, pairing: pairing, host: host, isCentral: isCentral, canPairWithCentral: canPairWithCentral)
-            HStack {
-                if canPairWithCentral {
-                    Button(pairing.isPairingMode ? "Stop discovery" : "Make this node discoverable") {
-                        if pairing.isPairingMode { pairing.stopPairingMode() }
-                        else { Task { await pairing.startPairingMode() } }
-                    }.buttonStyle(SettingsQuietButtonStyle())
-                }
-            }
-            if pairing.isRequestPending {
-                HStack {
-                    Text("Waiting for approval on the central database").font(.system(size: 12))
-                    Spacer()
-                    Button("Cancel") { pairing.cancelRequest() }.buttonStyle(SettingsQuietButtonStyle())
-                }
-            } else if pairing.isPairingMode {
-                Text("This Mac can receive an invitation for ten minutes.").font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground)
-            }
             ForEach(pairing.invitations) { invitation in
                 HStack {
                     Text("Connect to \(invitation.central.deviceName)?").font(.system(size: 13))

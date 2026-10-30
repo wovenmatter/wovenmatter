@@ -95,7 +95,7 @@ final class CompanionMacPairingController {
     func requestPairing(with peer: CompanionDiscoveredPeer) async {
         guard !isRequestPending, pendingClaim == nil, peer.advertisement.role == .central else { return }
         do {
-            let request = CompanionPairingApprovalRequest(requestID: UUID().uuidString.lowercased(), requestSecret: try Self.secret(), identity: identity())
+            let request = CompanionPairingApprovalRequest(requestID: UUID().uuidString.lowercased(), requestSecret: try Self.secret(), identity: identity(), purpose: CompanionPairingPurpose.peerMac)
             let claim = CompanionStoredPairingClaim(endpoint: peer.endpoint, request: request, expiresAt: Date().addingTimeInterval(600))
             // Stable, device-only Keychain storage precedes network acceptance.
             try saveClaim(claim, request.identity.deviceID)
@@ -109,7 +109,7 @@ final class CompanionMacPairingController {
         guard !isRequestPending else { return }
         let advertisement: CompanionDiscoveryAdvertisement = try await network.request(endpoint, path: "v1/discovery")
         guard advertisement.role == .central, advertisement.protocolVersion == CompanionProtocol.version else {
-            throw MacDeviceSetupError("This Mac is not offering a compatible central database.")
+            throw MacDeviceSetupError("This Mac is not offering compatible pairing.")
         }
         await requestPairing(with: .init(endpoint: endpoint, advertisement: advertisement))
         if let errorMessage { throw MacDeviceSetupError(errorMessage) }
@@ -130,7 +130,7 @@ final class CompanionMacPairingController {
     private func beginClaim(_ claim: CompanionStoredPairingClaim) {
         requestGeneration = UUID(); let attempt = requestGeneration
         pendingClaim = claim; isRequestPending = true; hasSubmittedRequest = false; errorMessage = nil
-        status = "Waiting for approval on the central database"
+        status = "Waiting for approval on the other Mac"
         pollTask = Task { [weak self] in
             var registered = false
             while !Task.isCancelled {
@@ -161,7 +161,7 @@ final class CompanionMacPairingController {
         }
     }
     private func acceptResult(_ result: CompanionPairingApprovalResult, endpoint: URL, identity: CompanionPairingDeviceIdentity) async throws -> Bool {
-        if result.state == .denied { throw CompanionAPIError(code: "pairing_denied", message: "The central database declined this pairing request.") }
+        if result.state == .denied { throw CompanionAPIError(code: "pairing_denied", message: "The other Mac declined this pairing request.") }
         guard result.state == .approved else { return false }
         guard let response = result.pairing, response.deviceID == identity.deviceID, response.protocolVersion == CompanionProtocol.version else {
             throw CompanionAPIError(code: "invalid_response", message: "The pairing response belongs to another device.")
@@ -214,7 +214,7 @@ final class CompanionMacPairingController {
         guard !isRequestPending, pendingClaim == nil, let invitation = invitations.first(where: { $0.id == id }), invitation.expiresAt > Date() else { return }
         do {
             let request = CompanionPairingApprovalRequest(requestID: UUID().uuidString.lowercased(), requestSecret: try Self.secret(),
-                identity: identity(), invitationToken: invitation.payload.token)
+                identity: identity(), invitationToken: invitation.payload.token, purpose: CompanionPairingPurpose.peerMac)
             let claim = CompanionStoredPairingClaim(endpoint: invitation.payload.endpoint, request: request,
                 expiresAt: Date().addingTimeInterval(600))
             try saveClaim(claim, request.identity.deviceID)
@@ -272,7 +272,7 @@ struct CompanionStoredPairingClaim: Codable {
 
 /// Pending claim secrets stay on this Mac and never enter defaults, app data,
 /// backend snapshots, discovery responses, or the library sync journal.
-private enum CompanionPendingPairingVault {
+enum CompanionPendingPairingVault {
     private static func query(deviceID: String) -> [CFString: Any] {
         [kSecClass: kSecClassGenericPassword,
          kSecAttrService: (Bundle.main.bundleIdentifier ?? "com.wovenmatter") + ".pending-pairing",

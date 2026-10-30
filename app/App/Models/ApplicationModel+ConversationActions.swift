@@ -17,6 +17,11 @@ extension ApplicationModel {
             }
         } else if isBackendFrontend {
             _ = try await sendBackendCommand(.workspaceMutation(.conversation(id: id, mutation: mutation)))
+        } else if !mutation.isPresentationOnly, try await pairedOwnerWorkspace(conversationID: id) != nil {
+            // Trash and restore change another Mac's running work; that Mac
+            // validates and applies them itself. Rename and pin stay shared.
+            let action: String = if case .moveToTrash = mutation { "trash" } else { "restore" }
+            try await performOnOwner(conversationID: id, action: .conversation(id: id, action: action, title: nil, folderID: nil))
         } else {
             guard let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
             let trashing: Bool = if case .moveToTrash = mutation { true } else { false }
@@ -53,5 +58,22 @@ extension ApplicationModel {
         }
         guard let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
         return try await dashboardStore.exportConversation(id: id, format: format)
+    }
+
+    /// The execution workspace of the paired Mac that runs this chat, when it
+    /// is another Mac. Independent Linux and iOS workspaces are not included.
+    func pairedOwnerWorkspace(conversationID id: String) async throws -> CompanionExecutionWorkspace? {
+        guard let database = dashboardStore?.database,
+              let workspace = try await database.companionConversationExecutionWorkspace(conversationID: id), workspace.kind == .mac,
+              try await workspace.ownerDeviceID != database.companionLibraryIdentity().hostDeviceID else { return nil }
+        return workspace
+    }
+
+    /// Sends a chat action to the Mac that runs it and surfaces its refusal.
+    func performOnOwner(conversationID id: String, action: CompanionWorkspaceAction) async throws {
+        let receipt = try await centralExecutionClient().perform(conversationID: id, action: action)
+        if receipt.status == .rejected {
+            throw CompanionAPIError(code: "rejected", message: receipt.message ?? WorkspaceConversationActionError.ownedByAnotherMac.localizedDescription)
+        }
     }
 }

@@ -12,6 +12,7 @@ import WovenMatterDashboardStore
 final class CentralExecutionClient {
     typealias Provision = @MainActor (String) async throws -> CompanionExecutionCredential
     typealias MakeTransport = @MainActor (DirectWorkspaceCredential) throws -> any ExecutionWorkspaceTransport
+    private var foreignHistoryJournals: [String: WorkspaceJournal] = [:]
     private let database: WorkspaceDatabase
     private let commandJournal: WorkspaceJournal
     private let provision: Provision
@@ -109,7 +110,7 @@ final class CentralExecutionClient {
             onlineWorkspaces.remove(descriptor.id); errors[descriptor.id] = error.localizedDescription
             // An observer may be ahead of the owner's last central publication.
             // Prefer that durable cache only while its origin cursor is newer.
-            let cached = await commandJournal.snapshot()
+            let cached = await (foreignHistoryJournals[descriptor.libraryID] ?? commandJournal).snapshot()
             let publishedCursor = (try? await database.companionExecutionOriginCursor(workspaceID: descriptor.id)) ?? 0
             if (cached.directCursors[descriptor.id] ?? 0) > publishedCursor, let saved = cached.transcripts[conversationID] {
                 transcripts[conversationID] = Self.markCursor(saved, origin: "owner")
@@ -129,14 +130,14 @@ final class CentralExecutionClient {
             throw CompanionAPIError(code: "workspace_unavailable", message: "Open Woven Matter on the device that owns this conversation to continue its on-device agent.")
         }
         let identity = try await database.companionLibraryIdentity()
-        let account = CentralExecutionCredentialVault.account(libraryID: identity.libraryID, workspaceID: workspace.id, deviceID: identity.hostDeviceID)
-        if let saved = try loadCredential(account), saved.libraryID == identity.libraryID,
+        let account = CentralExecutionCredentialVault.account(libraryID: workspace.libraryID, workspaceID: workspace.id, deviceID: identity.hostDeviceID)
+        if let saved = try loadCredential(account), saved.libraryID == workspace.libraryID,
            saved.workspaceID == workspace.id, saved.deviceID == identity.hostDeviceID,
            saved.endpoint == workspace.endpoint {
             let transport = try makeTransport(saved)
             do {
                 let remote = try await transport.identity()
-                guard remote.id == workspace.id, remote.libraryID == identity.libraryID else { throw MobileStore.Failure.wrongWorkspace }
+                guard remote.id == workspace.id, remote.libraryID == workspace.libraryID else { throw MobileStore.Failure.wrongWorkspace }
                 transports[workspace.id] = transport; transportEndpoints[workspace.id] = remote.endpoint
                 return transport
             } catch MobileConnectionError.revoked {
@@ -147,37 +148,45 @@ final class CentralExecutionClient {
             }
         }
         let issued = try await provision(workspace.id)
-        guard issued.workspace.id == workspace.id, issued.workspace.libraryID == identity.libraryID,
+        guard issued.workspace.id == workspace.id, issued.workspace.libraryID == workspace.libraryID,
               issued.deviceID == identity.hostDeviceID, let endpoint = issued.workspace.endpoint else { throw MobileConnectionError.invalidResponse }
-        let credential = DirectWorkspaceCredential(endpoint: endpoint, libraryID: identity.libraryID,
+        let credential = DirectWorkspaceCredential(endpoint: endpoint, libraryID: workspace.libraryID,
             workspaceID: workspace.id, deviceID: identity.hostDeviceID, token: issued.token)
         let transport = try makeTransport(credential)
         // Provisioning has acknowledged this scoped grant. Preserve it before
         // probing reachability so a lost probe does not rotate it on reconnect.
         try saveCredential(credential)
         let remote = try await transport.identity()
-        guard remote.id == workspace.id, remote.libraryID == identity.libraryID else { throw MobileStore.Failure.wrongWorkspace }
+        guard remote.id == workspace.id, remote.libraryID == workspace.libraryID else { throw MobileStore.Failure.wrongWorkspace }
         transports[workspace.id] = transport; transportEndpoints[workspace.id] = remote.endpoint
         return transport
     }
 
     private func replay(workspace: CompanionExecutionWorkspace) async throws {
         let identity = try await database.companionLibraryIdentity()
-        guard workspace.libraryID == identity.libraryID else { throw WorkspaceJournal.Failure.wrongLibrary }
+        if workspace.capabilities.contains("history.central.v1") { return }
+        let journal: WorkspaceJournal
+        if workspace.libraryID == identity.libraryID { journal = commandJournal }
+        else if let existing = foreignHistoryJournals[workspace.libraryID] { journal = existing }
+        else {
+            journal = try WorkspaceJournal(file: database.supportDirectory.appending(path: "Peer History/" + workspace.libraryID + ".json"))
+            foreignHistoryJournals[workspace.libraryID] = journal
+        }
         let transport = try await transport(for: workspace)
-        try await commandJournal.upsertWorkspace(workspace, pending: false)
+        try await journal.upsertWorkspace(workspace, pending: false)
         var changed = false
         for _ in 0..<100 {
-            let cursor = await commandJournal.snapshot().directCursors[workspace.id] ?? 0
+            let cursor = await journal.snapshot().directCursors[workspace.id] ?? 0
             let page = try await transport.events(after: cursor)
             // Validates library, contiguous workspace sequence, immutable event
             // identities and projection ownership in one durable transaction.
             // Omitting localDeviceID keeps every received event cache-only.
-            try await commandJournal.receiveWorkspace(page, workspaceID: workspace.id)
+            try await journal.receiveWorkspace(page, workspaceID: workspace.id)
+            try await database.retainDirectPairedHistory(page, workspace: workspace)
             changed = changed || !page.entries.isEmpty
             if !page.hasMore { break }
         }
-        let cached = await commandJournal.snapshot()
+        let cached = await journal.snapshot()
         for (id, owner) in cached.conversationWorkspaceIDs where owner == workspace.id {
             if cached.deletedConversationIDs.contains(id) {
                 workspaceByConversation.removeValue(forKey: id); transcripts.removeValue(forKey: id)
@@ -187,6 +196,18 @@ final class CentralExecutionClient {
             }
         }
         if changed { await onChange() }
+    }
+
+    func createSession(workspace: CompanionExecutionWorkspace, runtimeKind: AgentRuntimeKind,
+                       conversationID: String, folderID: String?) async throws -> CompanionCommandReceipt {
+        let identity = try await database.companionLibraryIdentity()
+        let providers = try await transport(for: workspace).providers()
+        guard let provider = providers.first(where: { $0.runtimeKind == runtimeKind.rawValue && $0.available && $0.canStart }) else {
+            throw CompanionAPIError(code: "unavailable", message: "Set up this agent on its workspace before starting a chat.")
+        }
+        return try await submit(.init(commandID: conversationID, deviceID: identity.hostDeviceID, kind: .createSession,
+            conversationID: conversationID, providerID: provider.id, runtimeKind: runtimeKind.rawValue, folderID: folderID,
+            libraryID: workspace.libraryID, workspaceID: workspace.id), workspace: workspace)
     }
 
     @discardableResult
@@ -200,7 +221,7 @@ final class CentralExecutionClient {
             $0.command.conversationID == conversationID && $0.command.text == text && $0.command.runID == expectedRunID
         }
         let command = existing?.command ?? CompanionCommand(deviceID: identity.hostDeviceID, kind: kind,
-            conversationID: conversationID, runID: expectedRunID, text: text, libraryID: identity.libraryID, workspaceID: workspace.id)
+            conversationID: conversationID, runID: expectedRunID, text: text, libraryID: workspace.libraryID, workspaceID: workspace.id)
         return try await submit(command, workspace: workspace, beforeDispatch: beforeDispatch)
     }
 
@@ -209,7 +230,7 @@ final class CentralExecutionClient {
         let workspace = try await requiredWorkspace(conversationID)
         let identity = try await database.companionLibraryIdentity()
         return try await submit(.init(deviceID: identity.hostDeviceID, kind: .stop, conversationID: conversationID,
-            runID: runID, libraryID: identity.libraryID, workspaceID: workspace.id), workspace: workspace)
+            runID: runID, libraryID: workspace.libraryID, workspaceID: workspace.id), workspace: workspace)
     }
 
     @discardableResult
@@ -218,7 +239,7 @@ final class CentralExecutionClient {
         let identity = try await database.companionLibraryIdentity()
         return try await submit(.init(deviceID: identity.hostDeviceID, kind: .respond, conversationID: interaction.conversationID,
             runID: interaction.runID, interactionID: interaction.id, response: response,
-            libraryID: identity.libraryID, workspaceID: workspace.id), workspace: workspace)
+            libraryID: workspace.libraryID, workspaceID: workspace.id), workspace: workspace)
     }
 
     func readWorkspace(conversationID: String, request: CompanionWorkspaceRead) async throws -> CompanionWorkspaceResult {
@@ -246,7 +267,7 @@ final class CentralExecutionClient {
         let workspace = try await requiredWorkspace(conversationID)
         let identity = try await database.companionLibraryIdentity()
         return try await submit(.init(deviceID: identity.hostDeviceID, kind: .workspace, conversationID: conversationID,
-            workspaceAction: action, libraryID: identity.libraryID, workspaceID: workspace.id), workspace: workspace)
+            workspaceAction: action, libraryID: workspace.libraryID, workspaceID: workspace.id), workspace: workspace)
     }
     private func requiredWorkspace(_ id: String) async throws -> CompanionExecutionWorkspace {
         guard let workspace = try await workspace(conversationID: id), !workspace.deleted else {

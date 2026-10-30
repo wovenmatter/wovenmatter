@@ -24,7 +24,9 @@ public struct CompanionDiscoveryAdvertisement: Codable, Equatable, Sendable {
   public let role: CompanionDiscoveryRole
   public let identity: CompanionPairingDeviceIdentity
   public let protocolVersion: Int
-  public init(role: CompanionDiscoveryRole, identity: CompanionPairingDeviceIdentity, protocolVersion: Int = CompanionProtocol.version) {
+  public let capabilities: [String]?
+  public init(role: CompanionDiscoveryRole, identity: CompanionPairingDeviceIdentity, protocolVersion: Int = CompanionProtocol.version, capabilities: [String]? = nil) {
+    self.capabilities = capabilities
     self.role = role; self.identity = identity; self.protocolVersion = protocolVersion
   }
 }
@@ -44,8 +46,10 @@ public struct CompanionPairingApprovalRequest: Codable, Equatable, Sendable {
   public let invitationToken: String?
   public let identity: CompanionPairingDeviceIdentity
   public let protocolVersion: Int
-  public init(requestID: String, requestSecret: String, identity: CompanionPairingDeviceIdentity, protocolVersion: Int = CompanionProtocol.version, invitationToken: String? = nil) {
+  public let purpose: String?
+  public init(requestID: String, requestSecret: String, identity: CompanionPairingDeviceIdentity, protocolVersion: Int = CompanionProtocol.version, invitationToken: String? = nil, purpose: String? = nil) {
     self.requestID = requestID; self.requestSecret = requestSecret; self.identity = identity; self.protocolVersion = protocolVersion; self.invitationToken = invitationToken
+    self.purpose = purpose
   }
 }
 public struct CompanionPairingPoll: Codable, Sendable {
