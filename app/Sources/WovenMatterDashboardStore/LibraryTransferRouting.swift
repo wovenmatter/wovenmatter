@@ -3,6 +3,11 @@ import SQLite3
 import WovenMatterCore
 
 extension WorkspaceDatabaseConnection {
+  func libraryTransferRuntimeOwnedHere(table: String, id: String) throws -> Bool {
+    let owners = try companionIDsUnlocked("SELECT device_id FROM library_transfer_runtime_owners WHERE table_name=? AND record_id=?", bindings: [table, id])
+    if owners.isEmpty { return true }
+    return owners == [try companionLibraryIdentityUnlocked().hostDeviceID]
+  }
   func retiredProjectionOwner(libraryID: String? = nil, workspaceID: String) throws -> String? {
     let query = try prepareUnlocked("SELECT owner_device_id FROM library_transfer_retired WHERE workspace_id=? AND (? IS NULL OR library_id=?)")
     defer { sqlite3_finalize(query) }; try bind(workspaceID, at: 1, to: query)
@@ -78,6 +83,7 @@ extension WorkspaceDatabase {
     try await write { connection in
       try connection.transaction {
         let identity = try connection.companionLibraryIdentityUnlocked()
+        try connection.companionExecuteUnlocked("DELETE FROM library_transfer_runtime_owners WHERE device_id=?", values: [identity.hostDeviceID])
         try connection.companionExecuteUnlocked("UPDATE dashboard_calendar_items SET calendar_json=json_remove(calendar_json,'$.task.configuration.workspaceID') WHERE id IN(SELECT event_id FROM companion_calendar_owners WHERE device_id=?) AND json_extract(calendar_json,'$.task') IS NOT NULL", values: [identity.hostDeviceID])
         try connection.companionExecuteUnlocked("DELETE FROM companion_calendar_owners WHERE device_id=?", values: [identity.hostDeviceID])
         try connection.executeUnlocked("DELETE FROM library_transfer_retired")

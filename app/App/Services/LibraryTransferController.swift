@@ -41,6 +41,7 @@ final class LibraryTransferController {
     private var outgoing: Outgoing?
     private var operation: Task<Void, Never>?
     private var ownerRelocationTask: Task<Void, Never>?
+    private var finalizing = Set<String>()
     private var restored = false
     private var recoveryServer: CompanionHTTPServer?
     private var recoveryExposure: CompanionTailscaleServe?
@@ -180,6 +181,11 @@ final class LibraryTransferController {
                     do { try await Task.sleep(for: .seconds(delay)) } catch { return }
                     delay = min(delay * 2, 30)
                 }
+                catch let error as CompanionAPIError where error.code == "transfer_busy" {
+                    self.presentation.message = error.message
+                    do { try await Task.sleep(for: .seconds(delay)) } catch { return }
+                    delay = min(delay * 2, 30)
+                }
                 catch { self.presentation.message = error.localizedDescription; return }
             }
         }
@@ -208,7 +214,7 @@ final class LibraryTransferController {
             try await LibraryTransferArchive.backup(database: database, to: backup)
             let authentication = try await model.companionHost.libraryTransferAuthentication()
             let authBackup = backup.appending(path: "companion-devices.json")
-            if !FileManager.default.fileExists(atPath: authBackup.path) { try LibraryTransferArchive.persist(await authentication.transferDevices(), to: authBackup) }
+            if !FileManager.default.fileExists(atPath: authBackup.path) { try await authentication.backupForLibraryTransfer(to: authBackup) }
             if !FileManager.default.fileExists(atPath: export.appending(path: "manifest.json").path) {
                 if FileManager.default.fileExists(atPath: export.path) { try FileManager.default.removeItem(at: export) }
                 try FileManager.default.createDirectory(at: export, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
@@ -262,7 +268,8 @@ final class LibraryTransferController {
                 status = try await network.request(value.destination, path: "v1/library-transfer/\(id)/verify", secret: secret, body: Data("{}".utf8))
             }
             guard status.phase == .verified || status.phase == .committed,
-                  let endpoint = status.destinationEndpoint, let libraryID = status.destinationLibraryID else { throw failure("The destination has not verified the merged library.") }
+                  let endpoint = status.destinationEndpoint, endpoint == value.destination,
+                  let libraryID = status.destinationLibraryID, UUID(uuidString: libraryID) != nil else { throw failure("The destination has not verified the merged library at its approved address.") }
             value.status.destinationEndpoint = endpoint; value.status.destinationLibraryID = libraryID
             value.status.phase = .verified
             try Task.checkCancellation()
@@ -375,6 +382,12 @@ final class LibraryTransferController {
             guard parts.count == 4, let secret = request.headers["x-woven-transfer-secret"] else { throw failure("The database transfer needs its approved device secret.") }
             let id = parts[2], action = parts[3]
             let session = try await receiver.authenticated(id, secret: secret)
+            let ownsFinalizing = request.method == "POST" && ["verify", "commit"].contains(action)
+            if ownsFinalizing {
+                guard !finalizing.contains(id) else { throw CompanionAPIError(code: "transfer_busy", message: "The destination is still verifying or activating this saved transfer.") }
+                finalizing.insert(id)
+            }
+            defer { if ownsFinalizing { finalizing.remove(id) } }
             let status: CompanionLibraryTransferStatus
             switch (request.method, action) {
             case ("GET", "status"): status = session.status
@@ -437,6 +450,10 @@ final class LibraryTransferController {
         if let value = outgoing, value.commitIssued, value.status.phase != .cancelled,
            model?.isTransferredLibraryNode == true || value.status.phase != .committed,
            let endpoint = value.status.destinationEndpoint, let current = value.status.destinationLibraryID {
+            if model?.isTransferredLibraryNode == true, let credential = model?.liveLibraryClient?.credential,
+               let transferID = credential.relocationID, let library = credential.centralLibraryID {
+                return .init(transferID: transferID, previousLibraryID: libraryID, endpoint: credential.endpoint, libraryID: library)
+            }
             return .init(transferID: value.request.id, previousLibraryID: libraryID, endpoint: endpoint, libraryID: current)
         }
         return nil

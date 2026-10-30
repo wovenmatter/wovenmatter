@@ -70,6 +70,7 @@ public actor CompanionAuthentication {
   /// This is an explicit library-authority transfer, never a content-sync or
   /// roster endpoint. Only credential digests leave the source Mac.
   public func transferDevices() -> [CompanionPairedDevice] { state.devices }
+  public func backupForLibraryTransfer(to file: URL) throws { try LibraryTransferArchive.persist(state, to: file) }
   static func validateTransferredDevices(_ devices: [CompanionPairedDevice]) throws {
     guard devices.count <= 4096, devices.allSatisfy({ UUID(uuidString: $0.id) != nil && $0.credentialHash.count == 32 }) else { throw Self.unauthorized }
   }

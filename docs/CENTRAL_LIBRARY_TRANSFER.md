@@ -23,6 +23,8 @@ change. A destination that was a node also needs this restart before the source
 can finish. Native agent sessions, execution files, provider accounts and
 checkpoints stay on their original Mac. Scheduled work keeps its execution
 owner; recovered conflicting schedules are not automatically scheduled.
+Copied timer and queued-delivery records also retain their original Mac's
+execution ownership, so the new central cannot dispatch a second copy.
 
 ## Backups and interrupted transfers
 

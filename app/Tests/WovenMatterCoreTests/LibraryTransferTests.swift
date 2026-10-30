@@ -232,6 +232,10 @@ struct LibraryTransferTests {
     let start = Date(timeIntervalSince1970: 1_700_000_000)
     let event = try await source.saveCalendarEvent(draft: .init(title: "Stay on source", startsAt: start, timeZoneID: "UTC",
       task: .init(prompt: "Fixture only", configuration: .init(runtimeKind: .codex, title: "Source task"))), creating: true)
+    let session = try await #require(source.companionSnapshot().conversations.first?.id)
+    try await source.setSessionTools(.init(enabled: [.timers]), sessionID: session)
+    let timer = WorkspaceSessionTimer(sessionID: session, instruction: "Stay on source", nextFireAt: start)
+    try await source.saveSessionTimer(timer, callerID: session)
     let projected = root.appending(path: "projected.sqlite"), mergedFile = root.appending(path: "merged.sqlite")
     try await source.backupLibrary(to: projected); try await destination.backupLibrary(to: mergedFile)
     let export = try await WorkspaceDatabase(url: projected)
@@ -240,8 +244,11 @@ struct LibraryTransferTests {
     let merged = try await WorkspaceDatabase(url: mergedFile)
     #expect(try await merged.companionCalendarSnapshot().records.first { $0.id == event }?.ownerDeviceID == identity.hostDeviceID)
     #expect(try await merged.dueCalendarRuns(now: start).isEmpty)
+    #expect(try await merged.dueSessionTimers(now: start).isEmpty)
+    #expect(try await merged.sessionTimers().contains { $0.id == timer.id })
     try await source.retireLibraryAuthority(workspace: workspace)
     _ = try await source.executionCalendarSnapshot(libraryID: identity.libraryID, workspaceID: workspace.id)
     #expect(try await source.dueCalendarRuns(now: start).contains { $0.eventID == event })
+    #expect(try await source.dueSessionTimers(now: start).contains { $0.id == timer.id })
   }
 }

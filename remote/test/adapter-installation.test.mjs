@@ -25,7 +25,10 @@ test('real npm installs a newer engine outside the adapter range; failed verific
     await writeFile(join(directory, 'package.json'), JSON.stringify(manifest));
     for (const [name, text] of Object.entries(files)) { await mkdir(dirname(join(directory, name)), { recursive: true }); await writeFile(join(directory, name), text); }
     const { stdout } = await exec(npm[0], [...npm.slice(1), 'pack', '--json', '--ignore-scripts'], { cwd: directory });
-    const file = JSON.parse(stdout)[0].filename;
+    // npm 12 keys pack results by package name; older npm returns an array.
+    const packed = JSON.parse(stdout);
+    const file = (Array.isArray(packed) ? packed[0] : packed[name])?.filename;
+    assert.equal(typeof file, 'string', 'npm pack returned no archive filename');
     const bytes = await readFile(join(directory, file));
     archives.set('/' + file, bytes);
     const versions = metadata.get(name) ?? {};

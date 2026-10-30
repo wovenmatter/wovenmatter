@@ -9,6 +9,7 @@ extension WorkspaceDatabaseConnection {
       CREATE TABLE IF NOT EXISTS library_transfer_retired(singleton INTEGER PRIMARY KEY CHECK(singleton=1), library_id TEXT NOT NULL, workspace_id TEXT NOT NULL, owner_device_id TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS library_transfer_conflicts(transfer_id TEXT NOT NULL, table_name TEXT NOT NULL, identity TEXT NOT NULL, incoming BLOB NOT NULL, PRIMARY KEY(transfer_id,table_name,identity));
       CREATE TABLE IF NOT EXISTS library_transfer_imports(id TEXT PRIMARY KEY,result BLOB NOT NULL);
+      CREATE TABLE IF NOT EXISTS library_transfer_runtime_owners(table_name TEXT NOT NULL,record_id TEXT NOT NULL,device_id TEXT NOT NULL,PRIMARY KEY(table_name,record_id));
       CREATE TABLE IF NOT EXISTS companion_library_identity (
         singleton INTEGER PRIMARY KEY CHECK(singleton = 1), host_device_id TEXT NOT NULL
       );

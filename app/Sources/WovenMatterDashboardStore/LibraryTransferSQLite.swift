@@ -125,6 +125,7 @@ public enum LibraryTransferSQLite {
   public static func merge(source: URL, into destination: URL, transferID: String,
                            sourceLibraryID: String, destinationLibraryID: String) throws -> MergeResult {
     try verify(source); try verify(destination)
+    let sourceHost = try identity(source).hostDeviceID
     let incoming = try open(source, readOnly: true); defer { sqlite3_close(incoming) }
     let db = try open(destination, readOnly: false); defer { sqlite3_close(db) }
     try WorkspaceSQLiteTextFunctions.register(on: db)
@@ -144,7 +145,7 @@ public enum LibraryTransferSQLite {
       "workspace_executor_sessions", "workspace_automation_requests", "workspace_automation_cancellations",
       "workspace_session_creations", "workspace_coordination_access_requests", "product_analytics_limits"]
     let allowed = tables.filter { name, sql in
-      !excluded.contains(name) && !name.hasPrefix("workspace_history_search") && (!name.hasPrefix("library_transfer_") || name == "library_transfer_conflicts")
+      !excluded.contains(name) && !name.hasPrefix("workspace_history_search") && (!name.hasPrefix("library_transfer_") || ["library_transfer_conflicts", "library_transfer_runtime_owners"].contains(name))
         && !sql.uppercased().contains("VIRTUAL TABLE")
     }
     // Validate every table before any import. Unknown/new schema cannot cause a
@@ -307,7 +308,12 @@ public enum LibraryTransferSQLite {
             let identity = SHA256.hash(data: try JSONEncoder().encode(original)).map { String(format: "%02x", $0) }.joined()
             try insert(db, table: "library_transfer_conflicts", row: ["transfer_id": .text(transferID), "table_name": .text(table), "identity": .text(identity), "incoming": .blob(try JSONEncoder().encode(original))])
             result.retainedConflicts += 1
-          } else { result.importedRows += changes }
+          } else {
+            result.importedRows += changes
+            if ["workspace_session_timers", "workspace_session_deliveries"].contains(table), let id = row["id"]?.string {
+              try insert(db, table: "library_transfer_runtime_owners", row: ["table_name": .text(table), "record_id": .text(id), "device_id": .text(sourceHost)])
+            }
+          }
         }
       }
       // A deletion on either side keeps the original synchronized identity

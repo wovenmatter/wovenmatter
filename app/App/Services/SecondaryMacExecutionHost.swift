@@ -68,7 +68,9 @@ final class SecondaryMacExecutionHost {
                 try await management.revoke(deviceID: descriptor.libraryID)
                 throw CancellationError()
             }
-            managementGrant = .init(workspaceID: descriptor.id, endpoint: endpoint, token: token)
+            var grant = CompanionExecutionManagementGrant(workspaceID: descriptor.id, endpoint: endpoint, token: token)
+            grant.executionLibraryID = descriptor.libraryID
+            managementGrant = grant
             awakeActivity = ProcessInfo.processInfo.beginActivity(options: [.idleSystemSleepDisabled, .userInitiatedAllowingIdleSystemSleep], reason: "Share this Mac’s Woven Matter execution workspace")
         } catch {
             server.stop(); exposure.stop()

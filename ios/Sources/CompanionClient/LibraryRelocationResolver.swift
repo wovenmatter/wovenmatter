@@ -50,6 +50,7 @@ public enum LibraryRelocationResolver {
         guard (response as? HTTPURLResponse)?.statusCode == 200, data.count <= 8192 else { return nil }
         #endif
         let proof = try JSONDecoder().decode(CompanionLibraryRelocationProof.self, from: data)
+        guard proof.relocation.endpoint != credential.endpoint, proof.relocation.transferID != credential.relocationID else { return nil }
         return try verify(proof, credential: credential, nonce: nonce) ? proof.relocation : nil
       } catch { return nil }
       }

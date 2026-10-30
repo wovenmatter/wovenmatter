@@ -14,6 +14,7 @@ public struct MobileCredential: Codable, Sendable, Equatable {
   public var token: String
   public var confirmationPending: Bool?
   public var relocationID: String? = nil
+  public var centralLibraryID: String? = nil
   public var migrationCandidates: [URL]? = nil
   public init(endpoint: URL, workspaceID: String, deviceID: String, token: String, confirmationPending: Bool? = nil) {
     self.endpoint = endpoint; self.workspaceID = workspaceID; self.deviceID = deviceID; self.token = token; self.confirmationPending = confirmationPending
@@ -225,7 +226,7 @@ public final class HTTPSCompanionTransport: CompanionTransport, @unchecked Senda
     guard relocation.previousLibraryID == existing.workspaceID, UUID(uuidString: relocation.transferID) != nil,
           UUID(uuidString: relocation.libraryID) != nil, Self.validEndpoint(relocation.endpoint),
           relocation.endpoint != existing.endpoint else { throw MobileConnectionError.invalidResponse }
-    var next = existing; next.endpoint = relocation.endpoint; next.relocationID = relocation.transferID
+    var next = existing; next.endpoint = relocation.endpoint; next.relocationID = relocation.transferID; next.centralLibraryID = relocation.libraryID
     // Persist the route before using it. The sync engine resets only central
     // cursors; pending operations and direct-owner credentials keep their IDs.
     try MobileCredentialVault.save(next)

@@ -81,6 +81,7 @@ public actor LibraryTransferReceiver {
   }
   public func setManifest(_ manifest: CompanionLibraryTransferManifest, id: String, secret: String) throws -> CompanionLibraryTransferStatus {
     var session = try authenticated(id, secret: secret)
+    if busy.contains(id) { throw transferBusy }
     guard session.status.phase == .receiving, !busy.contains(id), manifest.transferID == id,
           manifest.libraryID == session.request.sourceLibraryID else { throw invalid }
     try LibraryTransferArchive.validate(manifest)
@@ -106,6 +107,7 @@ public actor LibraryTransferReceiver {
   public func verify(_ id: String, secret: String) async throws -> CompanionLibraryTransferStatus {
     var session = try authenticated(id, secret: secret)
     if [.verified, .committed].contains(session.status.phase) { return session.status }
+    if busy.contains(id) { throw transferBusy }
     guard session.status.phase == .receiving, let manifest = session.manifest, let backup = session.status.backupPath,
           let libraryID = session.status.destinationLibraryID, !busy.contains(id) else { throw invalid }
     busy.insert(id); defer { busy.remove(id) }
@@ -142,6 +144,7 @@ public actor LibraryTransferReceiver {
                      authentication: CompanionAuthentication) async throws -> CompanionLibraryTransferStatus {
     var session = try authenticated(id, secret: secret)
     if session.status.phase == .committed { return session.status }
+    if busy.contains(id) { throw transferBusy }
     guard session.status.phase == .verified, let manifest = session.manifest, !busy.contains(id) else { throw invalid }
     busy.insert(id); defer { busy.remove(id) }
     try await database.fenceLibraryTransfer(id)
@@ -172,4 +175,5 @@ public actor LibraryTransferReceiver {
   }
   public func incomingDirectory(_ id: String) throws -> URL { guard sessions[id] != nil else { throw invalid }; return folder(id).appending(path: "incoming") }
   private nonisolated var invalid: CompanionAPIError { .init(code: "invalid_transfer", message: "The database transfer is unavailable, unapproved, or no longer current.") }
+  private nonisolated var transferBusy: CompanionAPIError { .init(code: "transfer_busy", message: "The destination is still verifying or activating the saved transfer. It will resume automatically.") }
 }

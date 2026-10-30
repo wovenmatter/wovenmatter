@@ -67,6 +67,7 @@ struct SecondaryMacExecutionWorkspaceTests {
         try await host.start()
         let originalEndpoint = host.endpoint
         let originalGrant = try #require(host.managementGrant)
+        #expect(originalGrant.executionLibraryID == libraryID)
         let oldHandler = host.requestHandler()
         let deviceID = UUID().uuidString.lowercased()
         func request(_ grant: CompanionExecutionManagementGrant, path: String) throws -> CompanionHTTPRequest {

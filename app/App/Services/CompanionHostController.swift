@@ -256,6 +256,9 @@ final class CompanionHostController {
                 let challenge = try JSONDecoder().decode(CompanionLibraryRelocationChallenge.self, from: request.body)
                 guard let database = model?.dashboardStore?.database, let authentication else { return .error("unavailable", "Library unavailable.", status: 503) }
                 let aliases = try await database.libraryTransferAliases()
+                guard challenge.libraryID == (try await database.companionWorkspaceID()) || aliases.contains(where: { $0.previousLibraryID == challenge.libraryID }) else {
+                    return .error("wrong_workspace", "This device has no transfer route for that library.", status: 403)
+                }
                 guard let relocation = model?.libraryTransfer.relocation(for: challenge.libraryID)
                         ?? aliases.first(where: { $0.previousLibraryID == challenge.libraryID }) else {
                     return .error("not_found", "This library has no transfer route.", status: 404)
