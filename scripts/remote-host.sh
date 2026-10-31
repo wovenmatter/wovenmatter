@@ -498,13 +498,16 @@ def prepare_npm_tooling(node_root,release,environment):
     try:
         graph=json.loads((release/'npm-runtime/package-lock.json').read_text())['packages']
         installed={'npmVersion':npm_version}
-        for name in ('undici','ip-address'):
+        for key in graph:
+            if not key.startswith('node_modules/') or '/node_modules/' in key[13:]: continue
+            name=key[13:]
             source=release/'npm-runtime/node_modules'/name
             expected=graph['node_modules/'+name]['version']
             if source.is_symlink() or not source.is_dir() or json.loads((source/'package.json').read_text())['version']!=expected: raise ValueError()
             destination=npm_root/'node_modules'/name
             if destination.is_symlink(): destination.unlink()
             elif destination.exists(): shutil.rmtree(destination)
+            destination.parent.mkdir(parents=True,exist_ok=True)
             shutil.copytree(source,destination)
             if json.loads((destination/'package.json').read_text())['version']!=expected: raise ValueError()
             installed[name]=expected
@@ -512,7 +515,7 @@ def prepare_npm_tooling(node_root,release,environment):
         fail('npm_security_verification_failed','The private npm vendor packages differ from the committed security graph.',78)
     # Exercise the replaced modules under the actual pinned Node executable.
     # Keep credentials out of arguments and verification output.
-    probe="import {createRequire} from 'node:module'; const require=createRequire(process.argv[1]); const undici=require('undici'); const ip=require('ip-address'); if(typeof undici.request!=='function'||typeof ip.Address6!=='function') process.exit(1)"
+    probe="import {createRequire} from 'node:module'; const require=createRequire(process.argv[1]); const undici=require('undici'); const ip=require('ip-address'); if(typeof undici.request!=='function'||typeof ip.Address6!=='function'||typeof require('minimatch').minimatch!=='function') process.exit(1)"
     checked=run([node,'--input-type=module','-e',probe,npm_cli],timeout=30,env=environment)
     if checked.returncode: fail('npm_security_verification_failed','The private npm security packages failed their runtime API check.',78)
     # SDK maintenance already prefers this bundled location over Node's stock

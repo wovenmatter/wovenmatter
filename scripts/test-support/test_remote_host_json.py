@@ -65,7 +65,9 @@ class HostFixtures(unittest.TestCase):
             (npm/'node_modules/undici/package.json').write_text(json.dumps({'version':'6.29.0'}))
         elif 'ci' in args and '--prefix' in args and args[args.index('--prefix')+1].endswith('/npm-runtime'):
             prefix=Path(args[args.index('--prefix')+1]); graph=json.loads((prefix/'package-lock.json').read_text())['packages']
-            for name in ('undici','ip-address'):
+            for key in graph:
+                if not key.startswith('node_modules/') or '/node_modules/' in key[13:]: continue
+                name=key[13:]
                 target=prefix/'node_modules'/name; target.mkdir(parents=True)
                 (target/'package.json').write_text(json.dumps({'version':'0.0.0' if self.bad_npm_vendor else graph['node_modules/'+name]['version']}))
         elif args[-1]=='--version': output=b'v26.12.1\n'
@@ -248,7 +250,9 @@ class HostFixtures(unittest.TestCase):
             self.assertIn(b'NoNewPrivileges=no',before[self.m.UNIT])
             tooling=self.m.ROOT/'current/tooling/lib/node_modules/npm'
             graph=json.loads((ROOT/'remote/npm-runtime/package-lock.json').read_text())['packages']
-            for name in ('undici','ip-address'):
+            for key in graph:
+                if not key.startswith('node_modules/') or '/node_modules/' in key[13:]: continue
+                name=key[13:]
                 self.assertEqual(json.loads((tooling/'node_modules'/name/'package.json').read_text())['version'],graph['node_modules/'+name]['version'])
             self.assertEqual((self.m.ROOT/'current/default-agent/lib/npm').resolve(),tooling.resolve())
             node_file=self.m.ROOT/'node/26.12.1/bin/node'; before_node=node_file.read_bytes()

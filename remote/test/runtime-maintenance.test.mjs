@@ -397,3 +397,31 @@ test('reviewed adapters update their engine even when the connector itself is cu
   assert.equal(after.components.find(c => c.id === 'bundled').installedVersion, '0.166.0')
   assert.equal(after.updateAvailable, false)
 })
+
+test('Claude native install uses the newest stable publication when channel tags lag', async t => {
+  for (const runtimeKind of ['host', 'container']) for (const available of [true, false]) {
+    const root = await mkdtemp(resolve(tmpdir(), 'wm-claude-channel-'))
+    t.after(() => rm(root, { recursive: true, force: true }))
+    const h = { id: 'claude_code', displayName: 'Claude', command: 'claude', cliCommand: 'claude', install: { kind: 'official-script', interpreter: 'bash', arguments: ['latest'] } }
+    let installed = false, command
+    const service = createRuntimeMaintenance({ catalog: new Map([[h.id, h]]), workspaceRoot: root,
+      configuration: loadRuntimeConfiguration({ HOME: root, WOVENMATTER_RUNTIME_KIND: runtimeKind, WOVENMATTER_SERVICE_ROOT: root }),
+      environment: () => ({ HOME: root }), acquireLock: async () => () => {},
+      verifiedInstaller: async () => ({ path: resolve(root, 'fixture.sh') }),
+      fetchImplementation: async () => ({ ok: available, status: 503, json: async () => ({ 'dist-tags': { latest: '2.1.314' }, versions: {
+        '2.1.314': {}, '2.1.316': {}, '2.1.317': { deprecated: 'withdrawn' }, '2.2.0-beta.1': {},
+      } }) }),
+      execute: async value => {
+        if (value === 'ps -eo pid=,args=') return { code: 0, output: '' }
+        if (value.startsWith('command -v')) return { code: installed ? 0 : 1, output: resolve(root, 'claude') }
+        if (value.endsWith('--version')) return { code: 0, output: '2.1.316' }
+        command = value; installed = true; return { code: 0, output: '' }
+      },
+    })
+    await service.start(h, 'install', { confirmed: true, sourceSHA256: 'fixture' })
+    const after = await finished(service)
+    assert.equal(after.operation.status, available ? 'succeeded' : 'failed')
+    if (available) assert.equal(command, `'bash' '${resolve(root, 'fixture.sh')}' '2.1.316'`)
+    else assert.equal(command, undefined, 'unavailable metadata must refuse execution')
+  }
+})

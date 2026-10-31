@@ -265,6 +265,13 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
     try { await lstat(target) } catch (error) { if (error.code === 'ENOENT') return; throw error }
     throw failure('unmanaged_install_destination')
   }
+  async function installerArguments(h) {
+    if (h.id !== 'claude_code') return h.install.arguments ?? []
+    // Native latest/stable channel pointers can lag the published stable CLI.
+    const version = await latest('@anthropic-ai/claude-code')
+    if (!version) throw failure('latest_cli_version_unavailable')
+    return [version]
+  }
   async function hostInstallation(h, action, body, before) {
     const commands = [], installedCommands = []
     const { main, cli, needsCLI, needsAdapter } = hostTargets(h, action, before)
@@ -276,7 +283,7 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
       } else {
         if (typeof body.sourceSHA256 !== 'string') throw failure('source_digest_required')
         const installer = await verifiedInstaller(h, body.sourceSHA256)
-        commands.push(`${quote(h.install.interpreter)} ${quote(installer.path)} ${(h.install.arguments ?? []).map(quote).join(' ')}`)
+        commands.push(`${quote(h.install.interpreter)} ${quote(installer.path)} ${(await installerArguments(h)).map(quote).join(' ')}`)
       }
       installedCommands.push(['signin', h.cliCommand ?? h.command])
       if (!h.adapterPackage) installedCommands.push(['runtime', h.command])
@@ -330,7 +337,7 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
           else {
             if (typeof body.sourceSHA256 !== 'string') throw failure('source_digest_required')
             const installer = await verifiedInstaller(h, body.sourceSHA256)
-            command = `${quote(h.install.interpreter)} ${quote(installer.path)} ${(h.install.arguments ?? []).map(quote).join(' ')}${adapter}`
+            command = `${quote(h.install.interpreter)} ${quote(installer.path)} ${(await installerArguments(h)).map(quote).join(' ')}${adapter}`
           }
         }
         if (await busy(h, maintainedNames)) throw failure('runtime_active_stop_conversations_or_server_first')
