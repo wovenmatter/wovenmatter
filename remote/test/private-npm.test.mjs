@@ -45,7 +45,7 @@ test('private npm verifies the archive before execution and applies the locked v
   const root = await mkdtemp(join(tmpdir(), 'woven-private-npm-'));
   t.after(() => rm(root, { force: true, recursive: true }));
   const graph = join(root, 'security'); await mkdir(graph);
-  const versions = { undici: '8.12.3', 'ip-address': '10.7.5' };
+  const versions = { undici: '8.12.3', 'ip-address': '10.7.5', minimatch: '11.0.3', '@isaacs/nonrecursive-glob-match': '1.0.3' };
   const packages = Object.fromEntries(Object.entries(versions).map(([name, version]) => ['node_modules/' + name, { version }]));
   await writeFile(join(graph, 'package-lock.json'), JSON.stringify({ packages }));
   await writeFile(join(graph, 'package.json'), '{}');
@@ -70,6 +70,9 @@ test('private npm verifies the archive before execution and applies the locked v
       write('node_modules/undici/index.js', 'exports.request = function() {};');
       write('node_modules/ip-address/package.json', JSON.stringify({version:'10.7.5',main:'index.js'}));
       write('node_modules/ip-address/index.js', 'exports.Address6 = class {};');
+      write('node_modules/minimatch/package.json', JSON.stringify({version:'11.0.3',main:'index.js'}));
+      write('node_modules/minimatch/index.js', 'exports.minimatch = function() {};');
+      write('node_modules/@isaacs/nonrecursive-glob-match/package.json', JSON.stringify({version:'1.0.3'}));
     }
   `);
   const options = { prefix: join(root, 'private'), node: process.execPath, bootstrap: [process.execPath, bootstrap], securityGraph: graph, recordPath: record };

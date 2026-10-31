@@ -68,3 +68,24 @@ test('MCP body parser survives trailing compressed bytes and continues parsing J
     } finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
   `], { timeout: 10000, env: { PATH: process.env.PATH } });
 });
+
+test('Pi model globs retain matching semantics and reject amplification patterns within a bounded child', { timeout: 15000 }, async () => {
+  await execute(process.execPath, ['--max-old-space-size=96', '--input-type=module', '-e', `
+    import assert from 'node:assert/strict';
+    import { createRequire } from 'node:module';
+    import { resolveModelScopeWithDiagnostics } from '@earendil-works/pi-coding-agent';
+    const fromPi = createRequire(${JSON.stringify(piEntry)});
+    const { Minimatch, minimatch } = fromPi('minimatch');
+    const models = [{ id: 'alpha', provider: 'fixture' }, { id: 'beta', provider: 'fixture' }];
+    const scope = await resolveModelScopeWithDiagnostics(['FIXTURE/a*:high', 'b[ae]ta'], { getAvailable: async () => models });
+    assert.deepEqual(scope.scopedModels.map(x => [x.model.id, x.thinkingLevel]), [['alpha', 'high'], ['beta', undefined]]);
+    assert.deepEqual(scope.diagnostics, []);
+    assert.equal(minimatch('skills/nested/SKILL.md', 'skills/**/SKILL.md'), true);
+    assert.equal(minimatch('skills/private/SKILL.md', 'skills/!(private)/**'), false);
+    // GHSA-g3hv-75wg-m249: globstar/parent preprocessing used to amplify
+    // entries exponentially at optimization level 2. Failure kills only this child.
+    const pattern = '**/../a/b/'.repeat(24) + 'fixture';
+    const matcher = new Minimatch(pattern, { optimizationLevel: 2, braceExpandMax: 64 });
+    assert.equal(typeof matcher.match('fixture'), 'boolean');
+  `], { timeout: 10000, cwd: new URL('..', import.meta.url), env: { PATH: process.env.PATH } });
+});

@@ -107,7 +107,7 @@
         "permissions",
         "attachments"
       ],
-      "minimumEngineVersion": "0.3.314"
+      "minimumEngineVersion": "0.3.316"
     },
     {
       "id": "grok_build",
