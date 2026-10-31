@@ -34,6 +34,7 @@ test('real npm installs a newer engine outside the adapter range; failed verific
     versions[version] = { ...manifest, dist: { tarball: file, integrity: 'sha512-' + createHash('sha512').update(bytes).digest('base64') } };
     metadata.set(name, versions);
   }
+  await pack('@agentclientprotocol/sdk', '2.2.0', { 'index.js': 'exports.version = \"2.2.0\";' }, { bin: undefined });
   await pack(engine, '0.166.0', {
     'index.js': '#!/usr/bin/env node\nconsole.log("codex-cli 0.166.0");',
     'bin/codex.js': '#!/usr/bin/env node\nconsole.log("codex-cli 0.166.0");',
@@ -44,13 +45,14 @@ test('real npm installs a newer engine outside the adapter range; failed verific
     if (process.env.WOVEN_TEST_SECRET || process.env.CODEX_PATH) process.exit(4);
     const dependency = require('@openai/codex/package.json');
     if (dependency.version !== '0.166.0') process.exit(5);
+    if (require('@agentclientprotocol/sdk').version !== '2.2.0') process.exit(8);
     if (!fs.existsSync(process.env.CODEX_HOME)) process.exit(6);
     readline.createInterface({ input: process.stdin }).on('line', line => {
       const request = JSON.parse(line);
       if (request.method !== 'initialize') process.exit(7);
       console.log(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { protocolVersion: ${protocol}, agentInfo: { name: 'fixture', version: '${version}' } } }));
     });`;
-  for (const [version, protocol] of [['2.5.0', 1], ['2.6.0', 2]]) await pack(adapter, version, { 'index.js': fixture(version, protocol) }, { dependencies: { [engine]: '^0.165.0' } });
+  for (const [version, protocol] of [['2.5.0', 1], ['2.6.0', 2]]) await pack(adapter, version, { 'index.js': fixture(version, protocol) }, { dependencies: { [engine]: '^0.165.0', '@agentclientprotocol/sdk': '2.1.0' } });
   const server = createServer((request, response) => {
     const path = decodeURIComponent(request.url);
     if (archives.has(path)) return response.end(archives.get(path));
@@ -64,7 +66,7 @@ test('real npm installs a newer engine outside the adapter range; failed verific
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise(resolve => server.close(resolve)));
   const prefix = join(root, 'installed');
-  const options = { prefix, adapter, adapterVersion: '2.5.0', engineVersion: '0.166.0',
+  const options = { prefix, adapter, adapterVersion: '2.5.0', engineVersion: '0.166.0', protocolSDKVersion: '2.2.0',
     npm: [...npm, '--registry', `http://127.0.0.1:${server.address().port}`] };
   const previousSecret = process.env.WOVEN_TEST_SECRET, previousOverride = process.env.CODEX_PATH;
   process.env.WOVEN_TEST_SECRET = 'must-not-reach-probe'; process.env.CODEX_PATH = '/must-not-be-used';
@@ -82,6 +84,10 @@ test('real npm installs a newer engine outside the adapter range; failed verific
   const verification = JSON.parse(await readFile(join(generation, 'verification.json'), 'utf8'));
   assert.equal(verification.engineVersion, '0.166.0');
   assert.equal(verification.protocolVersion, 1);
+  assert.equal(verification.protocolSDKVersion, '2.2.0');
+  assert.equal(lock.packages['node_modules/@agentclientprotocol/sdk'].version, '2.2.0');
+  assert.equal(lock.packages['node_modules/' + adapter].dependencies['@agentclientprotocol/sdk'], '2.1.0');
+  assert.match(lock.packages['node_modules/@agentclientprotocol/sdk'].integrity, /^sha512-/);
   await assert.rejects(installAdapter({ ...options, adapterVersion: '2.6.0' }), /ACP v1 verification/);
   assert.equal(await readlink(executable), target, 'failed candidate must not retire or replace the working graph');
   assert.equal((await readdir(join(prefix, 'Installations'))).length, 1, 'failed generation is removed');

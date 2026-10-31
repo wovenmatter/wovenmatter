@@ -175,7 +175,7 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   releases. Provider-free HTTP security fixtures and the coding-agent suites
   validate the overridden Node dependency; it is not part of the mobile bundle.
   Pi AI 1.4.0 also pins older provider clients. Consumer-scoped minimum-only
-  overrides select the tested OpenAI 7.46.0, Anthropic 1.3.0, Google GenAI 2.32.0,
+  overrides select the tested OpenAI 7.47.0, Anthropic 1.3.0, Google GenAI 2.32.0,
   Bedrock Runtime 3.1161.0 and Smithy Node HTTP handler 4.14.1 releases without
   changing vendor manifests. Keeping these clients current is required for
   provider API and transport compatibility, including Anthropic's 2026-10-21
@@ -229,6 +229,14 @@ Codex ACP 2.5.0 with Codex 0.166.0, and Claude ACP 0.99.1 with Claude SDK 0.3.31
 (native Claude Code 2.1.316). The standalone Codex and Claude sign-in CLIs use their
 official current stable release channels. Codex ACP's `^0.165.0` engine range and
 Claude ACP's exact SDK 0.3.312 selection otherwise keep the chat engines behind.
+Both connectors also retain ACP TypeScript SDK 2.1 through restrictive ranges
+or exact pins. The catalog's independent ACP SDK floor is 2.2.0. Mac and native
+Linux/container explicit updates resolve its newest nondeprecated stable
+publication independently, retain the vendor manifests, and verify the exact
+consumer graph and ACP v1 handshake before activation. SDK-only updates appear
+in inventory even when connector and engine are current. Failed candidates
+leave the active generation intact. The 2.2 schema update retains stable v1;
+its v2 changes remain experimental and do not change Woven Matter's wire API.
 The consumer graph created by `harnesses/install-adapter.mjs` therefore declares
 the independently selected engine and scopes an npm override to that connector.
 This core-function exception keeps the engine used for chat current; it does not

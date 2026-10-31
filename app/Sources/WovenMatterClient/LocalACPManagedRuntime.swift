@@ -741,8 +741,13 @@ public struct LocalACPRuntimeInstaller: Sendable {
                 URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appending(path: "../harnesses/install-adapter.mjs")].compactMap { $0 }
             guard let script = candidates.first(where: { FileManager.default.isReadableFile(atPath: $0.path) }) else { throw RuntimeMaintenanceError.verification }
             let node = npm.deletingLastPathComponent().appending(path: "node")
-            let selection: [String: Any] = ["prefix": installPrefix.path, "adapter": definition.adapterPackage!,
+            var selection: [String: Any] = ["prefix": installPrefix.path, "adapter": definition.adapterPackage!,
                 "adapterVersion": String(packageSpec.split(separator: "@").last!), "engineVersion": version, "npm": [npm.path]]
+            if let minimum = definition.minimumProtocolSDKVersion {
+                let sdk = try await RuntimeMaintenance.registryVersion("@agentclientprotocol/sdk", executableRequired: false, fetch: metadataFetcher)
+                guard !RuntimeMaintenance.version(sdk, precedes: minimum) else { throw RuntimeMaintenanceError.unavailable }
+                selection["protocolSDKVersion"] = sdk
+            }
             let data = try JSONSerialization.data(withJSONObject: selection)
             var environment = ProcessInfo.processInfo.environment
             environment["PATH"] = node.deletingLastPathComponent().path + ":" + LocalACPRuntimeResolver.executableSearchPath
