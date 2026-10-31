@@ -29,6 +29,8 @@ struct MobileNoteIcon: View {
   let content: String
   var body: some View {
     switch RichDocumentEditing.document(content)?.kind {
+    case .canvas:
+      DashboardLucideIcon(glyph: .panelsTopLeft, size: 22)
     case .spreadsheet:
       Image(systemName: "tablecells").font(.system(size: 20, weight: .medium))
     case .html:

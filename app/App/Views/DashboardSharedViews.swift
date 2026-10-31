@@ -721,6 +721,8 @@ struct DashboardNoteRow: View {
                     case .spreadsheet:
                         Image(systemName: "tablecells")
                             .font(.system(size: 15, weight: .medium))
+                    case .canvas:
+                        DashboardLucideIcon(glyph: .panelsTopLeft, size: 18)
                     case .html:
                         Image(systemName: "chevron.left.forwardslash.chevron.right")
                             .font(.system(size: 14, weight: .medium))

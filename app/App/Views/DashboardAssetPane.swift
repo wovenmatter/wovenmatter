@@ -78,7 +78,9 @@ struct DashboardAssetPane: View {
                         DashboardNotePane(
                             model: model, note: note,
                             focusesTitleOnAppear: note.id == newlyCreatedNoteID,
-                            onInitialFocusHandled: { onNewNoteFocusHandled(note.id) }
+                            onInitialFocusHandled: { onNewNoteFocusHandled(note.id) },
+                            onOpenNote: { assets.openNote($0) },
+                            onCanvasContext: { assets.canvasContexts[note.id] = $0 }
                         ).id(id)
                     } else {
                         ContentUnavailableView("Asset unavailable", systemImage: "doc")

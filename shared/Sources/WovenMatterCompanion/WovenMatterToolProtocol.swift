@@ -120,7 +120,7 @@ public struct WovenMatterToolCommand: Sendable {
     guard !args.isEmpty else { throw WorkspaceToolError.invalid("Choose a \(domain) operation.") }
     self.action = (domain == "databases" ? "database-" : "") + args.removeFirst()
     let allowedActions: [WorkspaceToolGroup: Set<String>] = [
-      .notes: ["database-list", "database-create", "database-query", "database-execute", "list", "folders", "create", "read", "append", "insert", "replace-block", "delete-block", "format", "set-title", "table", "set-html", "link", "unlink", "apply", "versions", "version", "restore"],
+      .notes: ["database-list", "database-create", "database-query", "database-execute", "list", "folders", "create", "read", "append", "insert", "replace-block", "delete-block", "format", "set-title", "table", "set-html", "link", "unlink", "canvas", "apply", "versions", "version", "restore"],
       .history: ["search", "conversations", "conversation", "message", "runs", "trace", "events", "event"],
       .sessions: ["list", "status", "create", "send", "manage", "release", "notifications", "receipts", "folders", "harnesses"],
       .goals: ["get", "set", "pause", "resume", "clear", "complete", "block", "checkpoint"],
@@ -191,7 +191,7 @@ public struct WovenMatterToolCommand: Sendable {
     case (.notes, "set-html"): allowed = ["note-id", "html"] + revision + request; maximumPositionals = 0
     case (.notes, "link"): allowed = ["note-id", "source-id", "database-id", "path", "query", "table-id"] + revision + request; maximumPositionals = 0
     case (.notes, "unlink"): allowed = ["note-id", "table-id"] + revision + request; maximumPositionals = 0
-    case (.notes, "apply"): allowed = ["note-id", "json"] + revision + request; maximumPositionals = 0
+    case (.notes, "apply"), (.notes, "canvas"): allowed = ["note-id", "json"] + revision + request; maximumPositionals = 0
     case (.notes, "versions"): allowed = pagination + ["note-id"]; maximumPositionals = 1
     case (.notes, "version"): allowed = bodyChunk + ["id", "version"]; maximumPositionals = 1
     case (.notes, "restore"): allowed = ["note-id", "version", "revision"] + request; maximumPositionals = 1

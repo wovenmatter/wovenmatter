@@ -7,6 +7,11 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		CA4A50000000000000000051 /* DashboardCanvasInspector.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA4A50000000000000000052 /* DashboardCanvasInspector.swift */; };
+		CA4A50000000000000000041 /* DashboardCanvasControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA4A50000000000000000042 /* DashboardCanvasControls.swift */; };
+		CA4A50000000000000000031 /* DashboardCanvasCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA4A50000000000000000032 /* DashboardCanvasCard.swift */; };
+		CA4A50000000000000000021 /* DashboardCanvasInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA4A50000000000000000022 /* DashboardCanvasInput.swift */; };
+		CA4A50000000000000000011 /* DashboardCanvasViewState.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA4A50000000000000000012 /* DashboardCanvasViewState.swift */; };
 		58D2DD715AC36ACD6DF22BB2 /* LUCIDE_LICENSE.txt in Resources */ = {isa = PBXBuildFile; fileRef = 0AAFD6EAB1F3FB697B1A2D05 /* LUCIDE_LICENSE.txt */; };
 		E02200000000000000000001 /* HarnessSetupModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E02200000000000000000002; };
 		E02200000000000000000003 /* HarnessSetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E02200000000000000000004; };
@@ -82,6 +87,7 @@
 		E8E4FA74C6587F81C8999942 /* DashboardConversation.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5CEADA1DA4AFBF4EFFC2CDC /* DashboardConversation.swift */; };
 		FE8DA980F8CFABCB8AAB3893 /* DashboardComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45C178F10C928BB5DF700830 /* DashboardComposer.swift */; };
 		2350EC32F0F50FD3DB4069F3 /* DashboardNotePane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52C822631EDF91C6FE39C754 /* DashboardNotePane.swift */; };
+		CA4A50000000000000000001 /* DashboardCanvasEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA4A50000000000000000002 /* DashboardCanvasEditor.swift */; };
 		923D138C1F54FC887AA90493 /* DashboardSharedViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40D1B5DEF1B0023CB8C52B6D /* DashboardSharedViews.swift */; };
 		C04200000000000000000001 /* DashboardConversationPopover.swift in Sources */ = {isa = PBXBuildFile; fileRef = C04200000000000000000002 /* DashboardConversationPopover.swift */; };
 		4C606D43824083BD3A612FF1 /* OpenCodeModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3CE258FB55B3D55A39972D5B /* OpenCodeModel.swift */; };
@@ -174,6 +180,11 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		CA4A50000000000000000052 /* DashboardCanvasInspector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardCanvasInspector.swift; sourceTree = "<group>"; };
+		CA4A50000000000000000042 /* DashboardCanvasControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardCanvasControls.swift; sourceTree = "<group>"; };
+		CA4A50000000000000000032 /* DashboardCanvasCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardCanvasCard.swift; sourceTree = "<group>"; };
+		CA4A50000000000000000022 /* DashboardCanvasInput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardCanvasInput.swift; sourceTree = "<group>"; };
+		CA4A50000000000000000012 /* DashboardCanvasViewState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardCanvasViewState.swift; sourceTree = "<group>"; };
 		0AAFD6EAB1F3FB697B1A2D05 /* LUCIDE_LICENSE.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = ../docs/assets/LUCIDE_LICENSE.txt; sourceTree = SOURCE_ROOT; };
 		E02200000000000000000002 /* HarnessSetupModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Models/HarnessSetupModel.swift"; sourceTree = SOURCE_ROOT; };
 		E02200000000000000000004 /* HarnessSetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Views/HarnessSetupView.swift"; sourceTree = SOURCE_ROOT; };
@@ -248,6 +259,7 @@
 		B5CEADA1DA4AFBF4EFFC2CDC /* DashboardConversation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardConversation.swift; sourceTree = "<group>"; };
 		45C178F10C928BB5DF700830 /* DashboardComposer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardComposer.swift; sourceTree = "<group>"; };
 		52C822631EDF91C6FE39C754 /* DashboardNotePane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardNotePane.swift; sourceTree = "<group>"; };
+		CA4A50000000000000000002 /* DashboardCanvasEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardCanvasEditor.swift; sourceTree = "<group>"; };
 		40D1B5DEF1B0023CB8C52B6D /* DashboardSharedViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardSharedViews.swift; sourceTree = "<group>"; };
 		C04200000000000000000002 /* DashboardConversationPopover.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardConversationPopover.swift; sourceTree = "<group>"; };
 		3CE258FB55B3D55A39972D5B /* OpenCodeModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenCodeModel.swift; sourceTree = "<group>"; };
@@ -485,6 +497,12 @@
 				40D1B5DEF1B0023CB8C52B6D /* DashboardSharedViews.swift */,
 				C04200000000000000000002 /* DashboardConversationPopover.swift */,
 				52C822631EDF91C6FE39C754 /* DashboardNotePane.swift */,
+				CA4A50000000000000000002 /* DashboardCanvasEditor.swift */,
+				CA4A50000000000000000052 /* DashboardCanvasInspector.swift */,
+				CA4A50000000000000000042 /* DashboardCanvasControls.swift */,
+				CA4A50000000000000000032 /* DashboardCanvasCard.swift */,
+				CA4A50000000000000000022 /* DashboardCanvasInput.swift */,
+				CA4A50000000000000000012 /* DashboardCanvasViewState.swift */,
 				45C178F10C928BB5DF700830 /* DashboardComposer.swift */,
 				B5CEADA1DA4AFBF4EFFC2CDC /* DashboardConversation.swift */,
 				988F5895CCE74B6E9C970200 /* ConversationGoalControls.swift */,
@@ -766,6 +784,12 @@
 				923D138C1F54FC887AA90493 /* DashboardSharedViews.swift in Sources */,
 				C04200000000000000000001 /* DashboardConversationPopover.swift in Sources */,
 				2350EC32F0F50FD3DB4069F3 /* DashboardNotePane.swift in Sources */,
+				CA4A50000000000000000001 /* DashboardCanvasEditor.swift in Sources */,
+				CA4A50000000000000000051 /* DashboardCanvasInspector.swift in Sources */,
+				CA4A50000000000000000041 /* DashboardCanvasControls.swift in Sources */,
+				CA4A50000000000000000031 /* DashboardCanvasCard.swift in Sources */,
+				CA4A50000000000000000021 /* DashboardCanvasInput.swift in Sources */,
+				CA4A50000000000000000011 /* DashboardCanvasViewState.swift in Sources */,
 				FE8DA980F8CFABCB8AAB3893 /* DashboardComposer.swift in Sources */,
 				E8E4FA74C6587F81C8999942 /* DashboardConversation.swift in Sources */,
 				A9682778D5284ABE8DF0D342 /* ConversationGoalControls.swift in Sources */,

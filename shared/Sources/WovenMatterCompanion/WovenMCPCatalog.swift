@@ -182,7 +182,7 @@ public enum WovenMCPCatalog {
     for action in ["query", "execute"] { add("databases " + action, fields("database-id query"), required: "databaseID query", mutation: action == "execute", description: "\(action == "query" ? "Read" : "Modify") the execution workspace's managed SQLite database. Database writes are not replayable after an uncertain outcome; query current data before another write.") }
     add("notes list", fields("search folder") + [field("sort", choices: ["newest", "oldest"])] + page)
     add("notes folders", page)
-    add("notes create", fields("title folder") + [field("kind", choices: ["note", "spreadsheet", "html"])], required: "title", mutation: true)
+    add("notes create", fields("title folder") + [field("kind", choices: ["note", "spreadsheet", "html", "canvas"])], required: "title", mutation: true)
     add("notes read", [note] + chunk, required: "noteID")
     add("notes append", [note, revision] + fields("text style"), required: "noteID text", mutation: true)
     add("notes insert", [note, revision] + fields("text after style"), required: "noteID text revision", mutation: true)
@@ -191,6 +191,7 @@ public enum WovenMCPCatalog {
     add("notes format", [note, revision] + fields("block-id style"), required: "noteID blockID style revision", mutation: true)
     add("notes set-title", [note, revision, field("title")], required: "noteID title revision", mutation: true)
     add("notes set-html", [note, revision, field("html")], required: "noteID html revision", mutation: true)
+    add("notes canvas", [note, revision, field("json", name: "edits", type: "array", json: true)], required: "noteID revision edits", mutation: true, description: "Atomically apply up to 128 Canvas edits, with the current revision from woven_notes_read. Actions: add {id: new stable card ID, text: optional text, block: optional ordinary richText/table NoteBlock, placement:{x,y,width,height,assetID?,title?,color?,sectionID?}}; place {id,placement}; remove {id}; section {section:{id,title,x,y,width,height,color},ids?:card IDs to assign} (moving a section moves its members); removeSection {id}; connect {connection:{id,from,to,label,color}}; disconnect {id}; arrange {ids?,layout:grid|row|column}. Colors: neutral,green,blue,purple,orange,pink. Coordinates can be negative. For new independent assets use woven_notes_create, populate with note tools, then add a reference card with assetID. Card removal never deletes an asset. Read the board after revision conflicts; preserve unrelated cards. All fields are nested JSON, edits is an array of action objects.")
     add("notes apply", [note, revision, field("json", name: "operations", type: "array", json: true)], required: "noteID operations", mutation: true, description: "Apply up to 128 typed note operations. Read the document first for block/table IDs and revision. Destructive edits require revision; append-only operations may omit it.")
     add("notes link", [note, revision] + fields("source-id database-id query table-id"), required: "noteID sourceID databaseID query revision", mutation: true)
     add("notes unlink", [note, revision, table], required: "noteID revision", mutation: true)

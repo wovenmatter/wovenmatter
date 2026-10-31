@@ -6,6 +6,9 @@ public struct NoteDocument: Codable, Equatable, Sendable {
   public var version: Int
   public var kind: NoteArtifactKind
   public var blocks: [NoteBlock]
+  public var canvas: [String: CanvasCardPlacement]?
+  public var canvasSections: [CanvasSection]?
+  public var canvasConnections: [CanvasConnection]?
   public var html: String
   public var databaseLink: DatabaseArtifactLink?
 
@@ -14,23 +17,29 @@ public struct NoteDocument: Codable, Equatable, Sendable {
     kind: NoteArtifactKind = .note,
     blocks: [NoteBlock] = [],
     html: String = "",
+    canvas: [String: CanvasCardPlacement]? = nil,
+    canvasSections: [CanvasSection]? = nil,
+    canvasConnections: [CanvasConnection]? = nil,
     databaseLink: DatabaseArtifactLink? = nil
   ) {
     self.version = version
     self.kind = kind
-    self.blocks = if blocks.isEmpty {
+    self.blocks = if blocks.isEmpty && kind != .canvas {
       kind == .spreadsheet
         ? [.table(NoteTableBlock(rows: 20, columns: 8, headerRow: true))]
         : [.richText(NoteRichTextBlock())]
     } else {
       blocks
     }
+    self.canvas = canvas
+    self.canvasSections = canvasSections
+    self.canvasConnections = canvasConnections
     self.html = html
     self.databaseLink = databaseLink
   }
 
   private enum CodingKeys: String, CodingKey {
-    case version, kind, blocks, html, databaseLink
+    case version, kind, blocks, html, databaseLink, canvas, canvasSections, canvasConnections
   }
 
   public init(from decoder: any Decoder) throws {
@@ -46,6 +55,9 @@ public struct NoteDocument: Codable, Equatable, Sendable {
     version = Self.currentVersion
     kind = try values.decodeIfPresent(NoteArtifactKind.self, forKey: .kind) ?? .note
     blocks = try values.decodeIfPresent([NoteBlock].self, forKey: .blocks) ?? []
+    canvasSections = try values.decodeIfPresent([CanvasSection].self, forKey: .canvasSections)
+    canvasConnections = try values.decodeIfPresent([CanvasConnection].self, forKey: .canvasConnections)
+    canvas = try values.decodeIfPresent([String: CanvasCardPlacement].self, forKey: .canvas)
     html = try values.decodeIfPresent(String.self, forKey: .html) ?? ""
     databaseLink = try values.decodeIfPresent(
       DatabaseArtifactLink.self,
@@ -83,6 +95,9 @@ public struct NoteDocument: Codable, Equatable, Sendable {
       kind: kind,
       blocks: blocks.map(\.normalized),
       html: html,
+      canvas: canvas,
+      canvasSections: canvasSections,
+      canvasConnections: canvasConnections,
       databaseLink: databaseLink
     )
   }

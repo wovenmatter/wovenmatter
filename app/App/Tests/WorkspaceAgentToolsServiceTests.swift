@@ -191,6 +191,94 @@ struct WorkspaceAgentToolsServiceTests {
 
 extension WorkspaceAgentToolsServiceTests {
 
+    @Test func canvasToolsEditCardsAndPreserveLayout() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "mcp-hardening-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
+        let caller = try await database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Writer", ownerDeviceID: UUID())
+        let model = try await WorkspaceAgentToolsModel(database: database,
+            sessionHandler: { _, _, _ in throw CancellationError() },
+            noteHandler: { caller, request, id in
+                switch request.command {
+                case .read: return try await database.readNoteForEditing(id: request.noteID, callerConversationID: caller)
+                case .apply: return try await database.applyNoteEdits(request, callerConversationID: caller, requestID: id)
+                }
+            },
+            noteRestoreHandler: { _, _, _, _, _ in throw CancellationError() },
+            usageHandler: { _ in throw CancellationError() }, onMutation: {})
+        defer { model.stop() }
+
+        let card = NoteRichTextBlock(text: "Original")
+        let placement = CanvasCardPlacement(x: 420, y: 240, assetID: "retained-reference")
+        let document = NoteDocument(kind: .canvas, blocks: [.richText(card)], canvas: [card.id: placement])
+        let note = try await database.createNote(folderID: nil, title: "Board", content: document.encoded(), kind: .canvas, callerConversationID: caller, requestID: UUID().uuidString)
+        let read = await model.handle(.init(arguments: ["notes", "read", note]), callerID: caller)
+        #expect(read.success)
+        #expect(read.result?.objectValue?["kind"]?.stringValue == "canvas")
+        let originalRevision = try #require(read.result?.objectValue?["revision"]?.stringValue)
+        let appended = await model.handle(.init(arguments: ["notes", "append", "--note-id", note, "--text", "Agent idea", "--revision", originalRevision]), callerID: caller)
+        #expect(appended.success)
+        let created = await model.handle(.init(arguments: ["notes", "table", "create", "--note-id", note, "--rows", "2", "--columns", "2"]), callerID: caller)
+        #expect(created.success)
+        let current = try await database.readNoteForEditing(id: note)
+        let table = try #require(current.document?.blocks.last)
+        let edited = await model.handle(.init(arguments: ["notes", "table", "set-cell", "--note-id", note, "--table-id", table.id, "--row", "0", "--column", "0", "--text", "Comparison", "--revision", try #require(current.revision)]), callerID: caller)
+        #expect(edited.success)
+        let stale = await model.handle(.init(arguments: ["notes", "delete-block", "--note-id", note, "--id", card.id, "--revision", originalRevision]), callerID: caller)
+        #expect(!stale.success)
+        let saved = try await database.readNoteForEditing(id: note)
+        #expect(saved.document?.kind == .canvas)
+        #expect(saved.document?.blocks.count == 3)
+        #expect(saved.document?.plainText.contains("Agent idea") == true)
+        #expect(saved.document?.plainText.contains("Comparison") == true)
+        #expect(saved.document?.canvas?[card.id] == placement)
+        // Exercise the actual command parser, permissions, service and transactional store.
+        let asset = try await database.createNote(folderID: nil, title: "Independent artifact", kind: .html,
+            callerConversationID: caller, requestID: UUID().uuidString)
+        let reference = NoteRichTextBlock(text: "Artifact")
+        let section = CanvasSection(title: "Options", x: -400, y: -300)
+        var referencePlacement = CanvasCardPlacement(x: -360, y: -240, width: 500, height: 400, assetID: asset)
+        referencePlacement.sectionID = section.id
+        let connection = CanvasConnection(from: card.id, to: reference.id, label: "supports")
+        let edits: [CanvasEdit] = [
+            .init(action: .section, section: section),
+            .init(action: .add, block: .richText(reference), placement: referencePlacement),
+            .init(action: .connect, connection: connection),
+            .init(action: .arrange, ids: [card.id, reference.id], layout: "row")
+        ]
+        let json = String(decoding: try JSONEncoder().encode(edits), as: UTF8.self)
+        let arguments = ["notes", "canvas", "--note-id", note, "--revision", try #require(saved.revision), "--json", json]
+        let requestID = UUID().uuidString
+        let batch = await model.handle(.init(arguments: arguments, requestID: requestID), callerID: caller)
+        #expect(batch.success)
+        let replay = await model.handle(.init(arguments: arguments, requestID: requestID), callerID: caller)
+        #expect(replay.success)
+        #expect(replay.result?.objectValue?["replayed"]?.boolValue == true)
+        let arranged = try await database.readNoteForEditing(id: note)
+        #expect(arranged.document?.canvasConnections == [connection])
+        #expect(arranged.document?.canvas?[reference.id]?.assetID == asset)
+        #expect(arranged.document?.canvas?[reference.id]?.sectionID == section.id)
+        #expect(arranged.document?.blocks.count == 4)
+        let staleLayout = await model.handle(.init(arguments: arguments, requestID: UUID().uuidString), callerID: caller)
+        #expect(!staleLayout.success)
+        let invalid: [CanvasEdit] = [.init(action: .remove, id: reference.id), .init(action: .disconnect, id: "missing")]
+        let invalidJSON = String(decoding: try JSONEncoder().encode(invalid), as: UTF8.self)
+        let rejected = await model.handle(.init(arguments: ["notes", "canvas", "--note-id", note, "--revision", try #require(arranged.revision), "--json", invalidJSON]), callerID: caller)
+        #expect(!rejected.success)
+        #expect(try await database.readNoteForEditing(id: note).document == arranged.document)
+        let removal = String(decoding: try JSONEncoder().encode([CanvasEdit(action: .remove, id: reference.id)]), as: UTF8.self)
+        let removed = await model.handle(.init(arguments: ["notes", "canvas", "--note-id", note, "--revision", try #require(arranged.revision), "--json", removal]), callerID: caller)
+        #expect(removed.success)
+        #expect(try await database.readNoteForEditing(id: asset).success)
+        #expect(try await database.readNoteForEditing(id: note).document?.canvasConnections?.isEmpty == true)
+        try await database.setSessionTools(.init(enabled: [.history]), sessionID: caller)
+        let denied = await model.handle(.init(arguments: arguments), callerID: caller)
+        #expect(!denied.success)
+
+    }
+
+
     @Test func mutationHistoryIsMetadataOnlyAndNoteReadsAreChunked() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "mcp-hardening-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

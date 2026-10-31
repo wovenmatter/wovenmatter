@@ -1530,6 +1530,7 @@ struct DashboardNewNoteDrawer: View {
                         icon: .panelTop,
                         kind: .html
                     )
+                    artifactButton("Canvas", detail: "Beta · Arrange ideas and assets together", icon: .panelsTopLeft, kind: .canvas)
                 }
                 .padding(20)
             }
@@ -2326,6 +2327,8 @@ final class DashboardListPresentationCache: @unchecked Sendable {
             }.first ?? "Spreadsheet"
         case .html:
             "Agent-rendered HTML artifact"
+        case .canvas:
+            "Canvas · \(document.blocks.count) cards"
         }
         let presentation = DashboardNoteRowPresentation(
             note: note,

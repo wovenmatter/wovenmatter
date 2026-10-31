@@ -316,7 +316,8 @@
           "enum" : [
             "note",
             "spreadsheet",
-            "html"
+            "html",
+            "canvas"
           ],
           "type" : "string"
         },
@@ -607,6 +608,42 @@
       "type" : "object"
     },
     "name" : "woven_notes_set_html"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : false
+    },
+    "description" : "Atomically apply up to 128 Canvas edits, with the current revision from woven_notes_read. Actions: add {id: new stable card ID, text: optional text, block: optional ordinary richText/table NoteBlock, placement:{x,y,width,height,assetID?,title?,color?,sectionID?}}; place {id,placement}; remove {id}; section {section:{id,title,x,y,width,height,color},ids?:card IDs to assign} (moving a section moves its members); removeSection {id}; connect {connection:{id,from,to,label,color}}; disconnect {id}; arrange {ids?,layout:grid|row|column}. Colors: neutral,green,blue,purple,orange,pink. Coordinates can be negative. For new independent assets use woven_notes_create, populate with note tools, then add a reference card with assetID. Card removal never deletes an asset. Read the board after revision conflicts; preserve unrelated cards. All fields are nested JSON, edits is an array of action objects. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "edits" : {
+          "items" : {
+            "type" : "object"
+          },
+          "maxItems" : 128,
+          "type" : "array"
+        },
+        "noteID" : {
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        },
+        "revision" : {
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "edits",
+        "noteID",
+        "revision"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_notes_canvas"
   },
   {
     "annotations" : {

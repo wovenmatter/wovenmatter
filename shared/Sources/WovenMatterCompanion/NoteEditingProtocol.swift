@@ -184,7 +184,7 @@ public struct RemoteNoteEditEnvelope: Codable, Equatable, Sendable {
       case .addTableRow(_, let after), .addTableColumn(_, let after): after != nil
       case .setTitle, .replaceBlock, .deleteBlock, .setParagraphStyle, .setTableCell,
            .removeTableRow, .removeTableColumn, .setHTML, .setArtifactDatabaseLink,
-           .setTableDatabaseLink: true
+           .setTableDatabaseLink, .canvas: true
       }
     }
   }
@@ -222,6 +222,8 @@ public struct RemoteNoteEditEnvelope: Codable, Equatable, Sendable {
         throw RemoteNoteEditError.operationTooLarge
       }
       switch operation {
+      case .canvas:
+        guard noteKind == .canvas else { throw RemoteNoteEditError.operationNotAllowed }
       case .setTitle(let title):
         guard noteKind != .html, title.utf8.count <= 1_024 else {
           throw RemoteNoteEditError.operationNotAllowed
@@ -385,6 +387,7 @@ public struct NoteEditingResponse: Codable, Equatable, Sendable {
 }
 
 public enum NoteEditOperation: Codable, Equatable, Sendable {
+  case canvas(CanvasEdit)
   case setTitle(String)
   case appendText(String, NoteParagraphStyle)
   case insertText(afterBlockID: String?, text: String, style: NoteParagraphStyle)
@@ -404,11 +407,11 @@ public enum NoteEditOperation: Codable, Equatable, Sendable {
   private enum CodingKeys: String, CodingKey {
     case type, title, text, style, afterBlockID, id, block, blockID
     case rows, columns, headerRow, tableID, row, column, runs, after
-    case html, databaseLink
+    case html, databaseLink, edit
   }
 
   private enum Kind: String, Codable {
-    case setTitle, appendText, insertText, replaceBlock, deleteBlock
+    case canvas, setTitle, appendText, insertText, replaceBlock, deleteBlock
     case setParagraphStyle, createTable, setTableCell
     case addTableRow, removeTableRow, addTableColumn, removeTableColumn
     case setHTML, setArtifactDatabaseLink, setTableDatabaseLink
@@ -417,6 +420,8 @@ public enum NoteEditOperation: Codable, Equatable, Sendable {
   public init(from decoder: any Decoder) throws {
     let values = try decoder.container(keyedBy: CodingKeys.self)
     switch try values.decode(Kind.self, forKey: .type) {
+    case .canvas:
+      self = .canvas(try values.decode(CanvasEdit.self, forKey: .edit))
     case .setTitle:
       self = .setTitle(try values.decode(String.self, forKey: .title))
     case .appendText:
@@ -493,6 +498,9 @@ public enum NoteEditOperation: Codable, Equatable, Sendable {
   public func encode(to encoder: any Encoder) throws {
     var values = encoder.container(keyedBy: CodingKeys.self)
     switch self {
+    case .canvas(let edit):
+      try values.encode(Kind.canvas, forKey: .type)
+      try values.encode(edit, forKey: .edit)
     case .setTitle(let title):
       try values.encode(Kind.setTitle, forKey: .type)
       try values.encode(title, forKey: .title)
@@ -572,6 +580,8 @@ public extension NoteDocument {
     var title: String?
     for operation in operations {
       switch operation {
+      case .canvas(let edit):
+        try applyCanvasEdit(edit)
       case .setTitle(let value):
         guard value.utf8.count <= 4096 else { throw NoteDocumentSafetyError.tooLarge }
         title = value
@@ -584,12 +594,23 @@ public extension NoteDocument {
         guard let index = blocks.firstIndex(where: { $0.id == id }) else {
           throw NoteEditError.blockNotFound(id)
         }
+        if let placement = canvas?.removeValue(forKey: id) { canvas?[block.id] = placement }
         blocks[index] = block
+        if id != block.id {
+          canvasConnections = canvasConnections?.map { connection in
+            var value = connection
+            if value.from == id { value.from = block.id }
+            if value.to == id { value.to = block.id }
+            return value
+          }
+        }
       case .deleteBlock(let id):
         guard let index = blocks.firstIndex(where: { $0.id == id }) else {
           throw NoteEditError.blockNotFound(id)
         }
         blocks.remove(at: index)
+        canvas?.removeValue(forKey: id)
+        canvasConnections?.removeAll { $0.from == id || $0.to == id }
       case .setParagraphStyle(let blockID, let style):
         guard let index = blocks.firstIndex(where: { $0.id == blockID }),
               case .richText(var block) = blocks[index] else {

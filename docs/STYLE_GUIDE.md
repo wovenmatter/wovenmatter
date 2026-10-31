@@ -186,6 +186,17 @@ when an intentional design change is accepted.
   24-point bottom gutter outside the scrolling text, without stacking additional
   editor or footer padding beneath the note. Align the count button's right
   edge with the header controls using the same 12-point side inset.
+- **Canvas:** use the existing workspace and theme-whisper surfaces with quiet
+  card borders. Let the board fill the editor below its title without outer
+  content gutters or a separate footer. While Canvas is open, remove the desktop
+  shell’s sidebar gaps and outer insets too, so the board reaches adjacent panes
+  and the window bottom. Put compact Add card, Arrange, and zoom
+  controls in the title row immediately before history and database actions; card
+  headers own dragging and an accessible actions menu for movement, size, and
+  removal. Canvas uses a virtual pan/zoom viewport, quiet dots, colored sections,
+  and labeled connections; selection controls stay in the title row. References
+  preview the original asset and expand into its normal tab. Preserve chat beside the board
+  and use the existing note title, history, and save/conflict controls.
 - **Conversation progress:** use the shared elapsed work header and static semantic
   icons with meaningful live text. Do not show busy spinners in tool-call rows,
   work-group headers, reasoning indicators, or tool-detail loading. Thinking and
