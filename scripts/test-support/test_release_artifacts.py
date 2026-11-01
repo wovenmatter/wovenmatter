@@ -1,5 +1,4 @@
 """Reusable private release bytes: real publish script, offline GitHub/Apple stubs."""
-import hashlib
 import importlib.util
 import json
 import os
@@ -68,10 +67,9 @@ def release_files(folder, payload):
     for name in (LEGACY, FULL):
         (folder / name).write_bytes(payload)
     prefix = f'https://github.com/wovenmatter/wovenmatter/releases/download/v{VERSION}/'
-    (folder / 'latest-mac.json').write_text(json.dumps(dict(
-        schema_version=1, version=VERSION, build=BUILD, architecture='arm64', minimum_macos='26.0',
-        download_url=prefix + LEGACY, release_url=f'https://github.com/wovenmatter/wovenmatter/releases/tag/v{VERSION}',
-        sha256=hashlib.sha256(payload).hexdigest())))
+    # The production generator writes the manifest, so this fixture follows its contract.
+    subprocess.run([str(ROOT / 'scripts/generate-release-manifest.sh'), VERSION, str(BUILD),
+                    str(folder / LEGACY), str(folder / 'latest-mac.json')], check=True)
     (folder / 'appcast.xml').write_text(
         '<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"><channel><item>'
         f'<sparkle:version>{BUILD}</sparkle:version><sparkle:shortVersionString>{VERSION}</sparkle:shortVersionString>'
