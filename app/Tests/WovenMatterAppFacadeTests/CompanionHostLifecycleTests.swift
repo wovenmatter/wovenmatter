@@ -7,6 +7,41 @@ import WovenMatterDashboardStore
 
 @MainActor @Suite(.serialized)
 struct CompanionHostLifecycleTests {
+    /// A service restart cancels the catalog refresh and starts another. The old
+    /// refresh finishing late must neither clear the new one, apply its result,
+    /// nor stop a later refresh from starting once the new one finishes.
+    @Test func lateCatalogRefreshFromAStoppedServiceCannotClearOrBlockItsReplacement() async throws {
+        let refresh = CompanionSingleRefresh()
+        var gates: [CheckedContinuation<Void, Never>] = [], applied: [String] = [], started: [String] = []
+        func begin(_ name: String) {
+            refresh.startIfIdle { isCurrent in
+                started.append(name)
+                await withCheckedContinuation { gates.append($0) }
+                if isCurrent() { applied.append(name) }
+            }
+        }
+        begin("old")
+        try await waitUntil { gates.count == 1 }
+        begin("ignored")
+        for _ in 0..<20 { await Task.yield() }
+        #expect(started == ["old"], "Only one refresh runs at a time")
+        refresh.cancel()
+        begin("new")
+        try await waitUntil { gates.count == 2 }
+        gates[0].resume()
+        try await waitUntil { refresh.isRunning && applied.isEmpty && started == ["old", "new"] }
+        for _ in 0..<20 { await Task.yield() }
+        #expect(refresh.isRunning, "The stale refresh did not clear its replacement")
+        #expect(applied.isEmpty, "A cancelled refresh never applies its result")
+        gates[1].resume()
+        try await waitUntil { !refresh.isRunning }
+        #expect(applied == ["new"])
+        begin("later")
+        try await waitUntil { gates.count == 3 }
+        gates[2].resume()
+        try await waitUntil { !refresh.isRunning }
+        #expect(applied == ["new", "later"])
+    }
 
 
     @Test func restoredCancellationRetainsItsProofUntilTheMacAcknowledges() async throws {

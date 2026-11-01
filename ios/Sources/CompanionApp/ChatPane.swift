@@ -10,6 +10,7 @@ struct ChatPane: View {
   @State private var detailsPresented = false
   @State private var settingsPresented = false
   @State private var pendingPresented = false
+  @State private var filesPresented = false
   @State private var composerFocused = false
   @State private var dictationEditor = MobileDictationEditor()
   @State private var scrollState = DashboardConversationScrollState()
@@ -26,6 +27,7 @@ struct ChatPane: View {
           if model.selectedConversationID != nil {
             Button("Details and export") { detailsPresented = true }
             if !model.isViewingRemoteQuickChat { Button("Session settings") { settingsPresented = true }.disabled(!model.executionOnline) }
+            if let id = model.selectedConversationID, model.executionRecords[id] != nil { Button("Saved files") { filesPresented = true } }
           }
           if !model.allPending.isEmpty { Button("Pending requests") { pendingPresented = true } }
         }
@@ -107,6 +109,22 @@ struct ChatPane: View {
           .buttonStyle(DashboardQuietButtonStyle()).disabled(model.sending).padding(.horizontal, 18)
           .accessibilityIdentifier("chat-retry-unconfirmed")
       }
+      if model.selectedConversationID == nil {
+        // A new chat whose first message has no confirmed outcome stays saved with its original identity.
+        ForEach(model.unconfirmedLaunches) { launch in
+          VStack(alignment: .leading, spacing: 6) {
+            Text("New chat not yet confirmed").font(.caption.weight(.semibold))
+            Text(launch.initialSend.text ?? "").font(.caption).lineLimit(2).foregroundStyle(DashboardPalette.mutedForeground)
+            HStack {
+              Button("Retry") { Task { await model.retryUnconfirmedLaunch(launch.id) } }
+                .buttonStyle(DashboardQuietButtonStyle()).disabled(model.sending)
+              Button("Show in composer") { model.restoreUnconfirmedLaunch(launch.id) }
+                .buttonStyle(DashboardQuietButtonStyle())
+            }
+          }.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 18)
+            .accessibilityElement(children: .contain).accessibilityIdentifier("chat-unconfirmed-launch-" + launch.id)
+        }
+      }
       if model.canResumeLocalRun {
         HStack {
           Button("Resume saved run") { Task { await model.resumeDeviceRun() } }.buttonStyle(DashboardPrimaryButtonStyle()).disabled(model.sending)
@@ -128,6 +146,9 @@ struct ChatPane: View {
           }
         }
       }.mobileNavigationPage("Pending requests")
+    }
+    .navigationDestination(isPresented: $filesPresented) {
+      if let id = model.selectedConversationID { RetainedDeviceFilesPane(model: model, conversationID: id) }
     }
     .navigationDestination(isPresented: $detailsPresented) {
       if let item = model.selectedConversation { ItemManagementSheet(model: model, id: item.id, isNote: false, title: item.title, folderID: item.folderID ?? "") }
@@ -367,5 +388,28 @@ private struct MobileGoalControls: View {
         showingDetails = false
       } else { problem = model.errorMessage ?? "The execution owner did not confirm this goal change." }
     }
+  }
+}
+
+/// Files an earlier on-device agent saved in this chat's folder. They can be
+/// viewed and exported; no agent runtime or file tool is reopened.
+struct RetainedDeviceFilesPane: View {
+  @Bindable var model: CompanionModel
+  let conversationID: String
+  @State private var files: [RetainedDeviceFile] = []
+  var body: some View {
+    List {
+      Section {
+        ForEach(files) { file in
+          ShareLink(item: file.url) {
+            Label(file.path, systemImage: "square.and.arrow.up").lineLimit(2)
+          }.accessibilityIdentifier("retained-file-" + file.path)
+        }
+        if files.isEmpty { Text("No files were saved in this chat.").foregroundStyle(DashboardPalette.mutedForeground) }
+      } footer: {
+        Text("Files saved by an earlier on-device agent stay on this device. Share one to export it.")
+      }
+    }.scrollIndicators(.never).mobileNavigationPage("Saved files")
+      .task { files = model.retainedDeviceFiles(conversationID: conversationID) }
   }
 }

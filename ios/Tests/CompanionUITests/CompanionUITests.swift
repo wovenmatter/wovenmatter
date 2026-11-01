@@ -131,7 +131,9 @@ final class CompanionUITests: XCTestCase {
     app.buttons["folder-all"].tap()
     reveal(app.buttons["folder-chat-organization-ipad-chat"], in: app)
     app.buttons["folder-chat-organization-ipad-chat"].tap()
-    XCTAssertTrue(app.staticTexts["Your weekend plan, saved from the iPad."].waitForExistence(timeout: 5))
+    // Agent replies render in a selectable text view, not a static label.
+    let reply = app.textViews.matching(NSPredicate(format: "label == 'Agent response' AND value CONTAINS %@", "Your weekend plan, saved from the iPad.")).firstMatch
+    XCTAssertTrue(reply.waitForExistence(timeout: 5), "The foreign Quick Chat transcript shows its saved reply")
     XCTAssertFalse(app.buttons["chat-new-session"].exists)
     XCTAssertFalse(app.descendants(matching: .any)["chat-composer"].exists)
   }
@@ -226,7 +228,7 @@ final class CompanionUITests: XCTestCase {
     let permissions = app.buttons["chat-permissions"]
     XCTAssertTrue(permissions.waitForExistence(timeout: 5))
     XCTAssertTrue(permissions.isHittable)
-    XCTAssertEqual(permissions.value as? String, "Ask Before Note Edits", "Chats without a saved choice ask first")
+    XCTAssertEqual(permissions.value as? String, "Ask Before Edits and Web Reads", "Chats without a saved choice ask first")
     let controls = [app.buttons["Add to chat"], app.buttons["chat-model"], app.buttons["chat-thinking"], permissions, app.buttons["chat-tools"], app.buttons["Send message"]]
     XCTAssertEqual(controls[1].value as? String, "GPT-6.1 Sol")
     XCTAssertEqual(controls[2].value as? String, "High")
@@ -240,8 +242,8 @@ final class CompanionUITests: XCTestCase {
     XCTAssertLessThanOrEqual(controls.last!.frame.maxX, app.frame.maxX)
     permissions.tap()
     XCTAssertTrue(app.staticTexts["Permissions"].waitForExistence(timeout: 5))
-    XCTAssertTrue(app.buttons["Ask Before Note Edits"].exists)
-    XCTAssertTrue(app.buttons["Allow Note Edits"].exists)
+    XCTAssertTrue(app.buttons["Ask Before Edits and Web Reads"].exists)
+    XCTAssertTrue(app.buttons["Allow Edits and Web Reads"].exists)
     let capture = XCTAttachment(screenshot: app.screenshot())
     capture.name = "Composer permissions"
     capture.lifetime = .keepAlways
@@ -434,18 +436,65 @@ final class CompanionUITests: XCTestCase {
     undo.tap()
     XCTAssertEqual(editors.count, 1, "Undo removes the paragraph break as one step")
     XCTAssertEqual(first.value as? String, "Plan")
+    XCTAssertTrue(waitForKeyboardFocus(first), "Undo keeps editing in the restored paragraph")
     redo.tap()
     XCTAssertTrue(second.waitForExistence(timeout: 5))
-    second.tap()
-    XCTAssertTrue(waitForKeyboardFocus(second))
+    // No tap: redo returns the caret to the recreated paragraph.
+    XCTAssertTrue(waitForKeyboardFocus(second), "Redo continues editing in the new paragraph")
     app.typeText(XCUIKeyboardKey.delete.rawValue)
     let joined = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in editors.count == 1 }, object: app)
     XCTAssertEqual(XCTWaiter.wait(for: [joined], timeout: 5), .completed, "Delete at a paragraph start joins it to the previous one")
     XCTAssertEqual(first.value as? String, "Plan")
+    // Undo the join, then the break: the focused paragraph disappears again.
+    undo.tap()
+    XCTAssertTrue(second.waitForExistence(timeout: 5))
+    undo.tap()
+    let removed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in editors.count == 1 }, object: app)
+    XCTAssertEqual(XCTWaiter.wait(for: [removed], timeout: 5), .completed)
+    XCTAssertTrue(waitForKeyboardFocus(first))
+    app.typeText("!")
+    XCTAssertEqual(first.value as? String, "Plan!", "Typing right after undo lands at the restored caret")
+    app.buttons["note-format"].tap()
+    app.buttons["Bold"].tap()
+    XCTAssertFalse(app.staticTexts["workspace-action-error"].waitForExistence(timeout: 2), "Formatting addresses the restored paragraph")
+    XCTAssertEqual(first.value as? String, "Plan!")
+  }
+  /// A note holding only a table offers one empty paragraph after it. Writing
+  /// there adds prose that survives a relaunch beside the read-only table; the
+  /// table's exact data is checked by RichDocumentParagraphTests.
+  @MainActor func testWritingContinuesAfterATableOnlyNote() {
+    let app = launch(tab: "Notes", scenario: "table-note")
+    let editors = app.textViews.matching(NSPredicate(format: "identifier BEGINSWITH 'note-body-editor-' "))
+    let table = app.descendants(matching: .any)["Table, read only"]
+    XCTAssertTrue(table.waitForExistence(timeout: 5))
+    XCTAssertTrue(editors.firstMatch.waitForExistence(timeout: 5), "An empty paragraph follows the table")
+    XCTAssertEqual(editors.count, 1)
+    XCTAssertFalse(app.buttons["Add paragraph"].exists)
+    let after = editors.firstMatch
+    XCTAssertGreaterThan(after.frame.minY, table.frame.minY)
+    after.tap()
+    after.typeText("After the table")
+    XCTAssertEqual(after.value as? String, "After the table")
+    let saved = app.buttons["note-save-state"]
+    expectation(for: NSPredicate(format: "label CONTAINS 'Saved on this device'"), evaluatedWith: saved)
+    waitForExpectations(timeout: 10)
+    app.terminate()
+    app.launch()
+    let reopened = app.textViews.matching(NSPredicate(format: "identifier BEGINSWITH 'note-body-editor-' "))
+    XCTAssertTrue(app.descendants(matching: .any)["Table, read only"].waitForExistence(timeout: 10))
+    XCTAssertTrue(reopened.firstMatch.waitForExistence(timeout: 5))
+    XCTAssertEqual(reopened.count, 1, "The written paragraph replaces the offered one")
+    XCTAssertEqual(reopened.firstMatch.value as? String, "After the table")
   }
   @MainActor func testFolderCanBeCreatedWithoutPairingOrNetwork() {
     let app = launch()
-    app.buttons["New folder"].tap()
+    // The default fixture's only creatable workspace is this device's local one.
+    let newFolder = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "action-new-folder-"))
+    XCTAssertTrue(newFolder.firstMatch.waitForExistence(timeout: 5))
+    XCTAssertEqual(newFolder.count, 1)
+    XCTAssertEqual(newFolder.firstMatch.label, "New Folder")
+    reveal(newFolder.firstMatch, in: app)
+    newFolder.firstMatch.tap()
     let name = "Offline " + String(UUID().uuidString.prefix(6))
     let alert = app.alerts["New folder"]
     let field = alert.textFields["Folder name"]
@@ -464,7 +513,8 @@ final class CompanionUITests: XCTestCase {
     XCTAssertTrue(app.buttons["back-folders"].waitForExistence(timeout: 5))
     XCTAssertTrue(app.staticTexts["This folder is empty. Add a note or start a chat."].exists)
     app.buttons["back-folders"].tap()
-    XCTAssertTrue(app.buttons.containing(.staticText, identifier: name).firstMatch.waitForExistence(timeout: 5))
+    let created = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'folder-' AND label BEGINSWITH %@", name)).firstMatch
+    XCTAssertTrue(created.waitForExistence(timeout: 5))
   }
   @MainActor func testWorkspaceSurfacesAndRotation() {
     let app = launch(tab: "Home")

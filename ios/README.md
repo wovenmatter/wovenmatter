@@ -12,19 +12,28 @@ on-device provider sign-ins, streaming, history, dictation and note references.
 Its tools are limited to notes and public web search/reading. Add an optional
 Exa API key in Settings → Quick Chat → Web search. Keys remain in the device-only
 Keychain. Quick Chat has no shell, repository tools, Python, code mode, subagents,
-goals or local scheduling. Previous device-agent chats remain retained history.
+goals or local scheduling. Previous device-agent chats remain retained history;
+files those agents saved stay on the device and can be exported from the chat's
+title menu → Saved files without reopening a runtime or tool.
 
 Quick Chat asks before it first sends content to each model endpoint, and before
 its first web search or page read through Exa. The sheet names the recipient,
 its address and what is sent: messages, chat history, referenced or read notes,
 web results and other tool output, and the chat's instructions. Declining sends
-nothing and keeps the draft. Each permission covers one provider and endpoint
+nothing and keeps the draft. Before resuming an interrupted run it asks the same
+way; declining keeps that run saved, and allowing resumes the same run identity.
+An answer applies only to the chat that asked. Each permission covers one provider and endpoint
 origin, so a changed endpoint asks again; existing accounts from earlier builds
 start without permission. Settings → Data sharing lists and withdraws them, taking
 effect at the next request. The inference and Exa clients refuse to send without
-a saved permission, including for resumed runs. In Ask mode, Quick Chat also asks
-before saving note edits and before reading a webpage address that neither the
-user nor a search in that chat supplied.
+a saved permission, including for resumed runs. Don’t Allow on the first Exa
+question holds for that chat until relaunch; stopping or interrupting the run
+while it is open is not an answer, so Resume asks again. The permission modes are
+Ask Before Edits and Web Reads (the default) and Allow Edits and Web Reads. In Ask
+mode, Quick Chat asks before saving note edits and before reading a webpage
+address that neither the user nor a search in that chat supplied. These prompts
+show the exact action; they do not make content read from notes or the web safe
+to share, and web search itself is not limited.
 
 Earlier builds could assign scheduled tasks to the phone, which no longer runs
 schedules. Choosing a Mac or Linux agent for such a task retires it and creates a
@@ -48,8 +57,20 @@ the same revision for the new folder APIs. Creating a remote folder or chat
 requires a live connection to its owner. Interrupted replies recover in place
 using the original request identity. A new chat with different text never waits
 on an earlier unconfirmed one; that request stays saved and reconciles from its
-receipt. Within a chat, later input waits, and Retry previous message resends the
-saved message with its original identity.
+receipt. The new-chat screen lists each unconfirmed one with Retry, which resends
+it with its original IDs, and Show in composer. Within a chat, later input waits,
+and Retry previous message resends the saved message with its original identity.
+A library change with an unknown outcome orders only later changes to the same
+item; repeating it resends the original command, and other items are unaffected.
+
+A direct host proves only that it answers for its workspace ID. Its owner,
+execution device, endpoint, content identity, journal devices, central-history
+attestation and revision come from central's registry; a host's self-report can
+refresh only its display name and descriptive capabilities. A Linux service
+publishes its own folders independently: a folder central refuses as deleted or
+foreign is kept with that reason, and a revoked or unexplained refusal or a receipt
+for a different folder or root leaves the folder pending to retry with backoff.
+Neither stops that workspace's history from publishing.
 
 ## Build and development validation
 
@@ -192,4 +213,4 @@ See [architecture](../docs/DISTRIBUTED_CLIENT_ARCHITECTURE.md),
 
 ### Note editing on iPhone
 
-Notes keep the existing offline store and coalesced synchronization. The toolbar sits above the full-width title, followed directly by the note body. It provides undo/redo, selection formatting (bold, italic, underline, highlight, fonts and links), headings and lists, and dictation. A bottom-right word count toggles to characters, matching the desktop count semantics. Save/sync status is a compact bottom-left control; tap for details. Return starts a new paragraph block. After a heading it starts body text, inside a list it continues the list, and on an empty list item it leaves the list. Pasted lines become paragraphs. Delete at the start of a list item or heading first turns it into body text; at the start of body text it joins the previous paragraph. Each break or join is one undo step. There is no Add paragraph action. Existing spreadsheet, table and linked-artifact previews retain their current read-only behavior on mobile.
+Notes keep the existing offline store and coalesced synchronization. The toolbar sits above the full-width title, followed directly by the note body. It provides undo/redo, selection formatting (bold, italic, underline, highlight, fonts and links), headings and lists, and dictation. A bottom-right word count toggles to characters, matching the desktop count semantics. Save/sync status is a compact bottom-left control; tap for details. Return starts a new paragraph block. After a heading it starts body text, inside a list it continues the list, and on an empty list item it leaves the list. Numbered items count within their list as on the Mac (1, 2, 3); body text, a table or another list restarts the count. Pasted lines become paragraphs in one bounded edit; a paste beyond the note's size or 10,000-block limit is refused without changing the note. Dictated line breaks become paragraphs the same way and insert once. Delete at the start of a list item or heading first turns it into body text; at the start of body text it joins the previous paragraph. Each break or join is one undo step, and undo or redo returns the caret to the restored paragraph so typing and formatting continue without a tap. A note that ends in a table offers an empty paragraph after it, which joins the note only once written in. There is no Add paragraph action. Existing spreadsheet, table and linked-artifact previews retain their current read-only behavior on mobile.

@@ -188,6 +188,108 @@ final class ExecutionRoutingTests: XCTestCase {
     XCTAssertFalse(declined, "Runtime requests read the current decision")
   }
 
+  /// Resume asks before any further request. Declining or dismissing keeps the
+  /// interrupted run exactly as saved; allowing resumes that same run identity.
+  /// The account is unavailable, so the resume stops before a runtime or request exists.
+  @MainActor func testResumeConsentKeepsTheExactSavedRunWhateverTheAnswer() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let model = CompanionModel(store: try MobileStore(file: root.appendingPathComponent("library.json")), transport: ExecutionTestLibrary())
+    model.executionDirectory = root.appendingPathComponent("execution")
+    try await model.loadExecutionConfiguration()
+    let pinned = InferenceModel(id: "codex-test", name: "Test", provider: "openai-codex", api: "openai-codex-responses", baseUrl: "https://chatgpt.com/backend-api")
+    let removed = InferenceConnection(id: "signed-out", name: "ChatGPT", provider: "openai-codex", route: .direct, modelID: pinned.id, selectedModel: pinned)
+    let saved = DeviceConversationRecord(id: "chat", title: "Chat", connectionID: removed.id, connection: removed, modelJSON: try pinned.descriptorJSON(),
+      runID: "run-1", submissionID: nil, pendingInput: "Continue the summary", status: "interrupted", updatedAt: "")
+    model.executionRecords = ["chat": saved]; model.executionWorkspaceID = "local"; model.selectedConversationID = "chat"
+    XCTAssertTrue(model.canResumeLocalRun)
+
+    await model.resumeDeviceRun()
+    var request = try XCTUnwrap(model.dataSharingRequest)
+    XCTAssertTrue(request.resume); XCTAssertEqual(request.conversationID, "chat")
+    XCTAssertEqual(model.executionRecords["chat"], saved, "Asking changes nothing")
+    await model.answerDataSharing(request, allowed: false)
+    XCTAssertEqual(model.executionRecords["chat"], saved, "Declining keeps the run saved")
+    XCTAssertTrue(model.canResumeLocalRun)
+    XCTAssertFalse(model.dataSharing.permits(request.destination))
+
+    // Dismissing the sheet clears the request without an answer.
+    await model.resumeDeviceRun()
+    request = try XCTUnwrap(model.dataSharingRequest)
+    model.dataSharingRequest = nil
+    await model.answerDataSharing(request, allowed: true)
+    XCTAssertFalse(model.dataSharing.permits(request.destination), "A dismissed request cannot be answered later")
+    XCTAssertEqual(model.executionRecords["chat"], saved)
+
+    // A permission granted while another chat is selected is kept, but resumes nothing.
+    await model.resumeDeviceRun()
+    request = try XCTUnwrap(model.dataSharingRequest)
+    model.selectedConversationID = "other"
+    await model.answerDataSharing(request, allowed: true)
+    XCTAssertTrue(model.dataSharing.permits(request.destination))
+    XCTAssertEqual(model.executionRecords["chat"], saved)
+    try model.setDataSharing(request.destination, allowed: false)
+
+    model.selectedConversationID = "chat"
+    await model.resumeDeviceRun()
+    request = try XCTUnwrap(model.dataSharingRequest)
+    await model.answerDataSharing(request, allowed: true)
+    XCTAssertTrue(model.dataSharing.permits(request.destination))
+    XCTAssertTrue(model.localRuntimes.isEmpty, "The unavailable account stops before a runtime exists")
+    XCTAssertEqual(model.errorMessage, InferenceError.accountUnavailable.localizedDescription, "Allowing resumes immediately")
+    let resumed = try XCTUnwrap(model.executionRecords["chat"])
+    XCTAssertEqual(resumed.runID, "run-1", "Resume keeps the saved run identity")
+    XCTAssertEqual(resumed.pendingInput, "Continue the summary")
+    XCTAssertEqual(resumed.status, "interrupted")
+  }
+
+  /// Stopping or interrupting a run while the first Exa question is open is not
+  /// the user's answer: Resume asks again. Only Don't allow is remembered.
+  @MainActor func testExaConsentDistinguishesInterruptionFromTheUsersAnswer() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let model = CompanionModel(store: try MobileStore(file: root.appendingPathComponent("library.json")), transport: ExecutionTestLibrary())
+    model.executionDirectory = root.appendingPathComponent("execution")
+    try await model.loadExecutionConfiguration()
+    func ask(_ chat: String, _ call: String) -> Task<Result<Void, any Error>, Never> {
+      Task { @MainActor in
+        do { try await model.confirmExaSharing(conversationID: chat, toolCallID: call); return .success(()) }
+        catch { return .failure(error) }
+      }
+    }
+    func waitForQuestion(_ call: String) async {
+      for _ in 0..<200 where model.localApprovals[call] == nil { await Task.yield() }
+    }
+    func interaction(_ chat: String, _ call: String) -> CompanionPendingInteraction {
+      .init(id: call, conversationID: chat, runID: nil, kind: .approval, title: "Allow web search with Exa?")
+    }
+
+    let interrupted = ask("chat", "first")
+    await waitForQuestion("first")
+    XCTAssertEqual(model.localPending.map(\.id), ["first"])
+    model.cancelDeviceApprovals("chat")
+    guard case .failure(let error) = await interrupted.value, error is CancellationError else { return XCTFail("Interruption is not an answer") }
+    XCTAssertFalse(model.exaSharingDeclined.contains("chat"))
+
+    let resumed = ask("chat", "second")
+    await waitForQuestion("second")
+    XCTAssertEqual(model.localPending.map(\.id), ["second"], "Resume asks again")
+    await model.respond(interaction("chat", "second"), response: .init(optionID: "deny"))
+    guard case .failure(let denied) = await resumed.value, case QuickChatSearchError.permissionRequired = denied else { return XCTFail("Denial must refuse the search") }
+    XCTAssertTrue(model.exaSharingDeclined.contains("chat"))
+    guard case .failure = await ask("chat", "third").value else { return XCTFail("A decline holds for this chat") }
+    XCTAssertNil(model.localApprovals["third"], "A declined chat is not asked again")
+    XCTAssertFalse(model.dataSharing.permits(.exa))
+
+    let other = ask("other", "fourth")
+    await waitForQuestion("fourth")
+    await model.respond(interaction("other", "fourth"), response: .init(optionID: "allow"))
+    guard case .success = await other.value else { return XCTFail("Allowing continues the search") }
+    model.dataSharing = .init(); model.loadDataSharing()
+    XCTAssertTrue(model.dataSharing.permits(.exa), "Allowing is saved")
+    XCTAssertTrue(model.exaSharingDeclined.isEmpty, "Allowing replaces earlier declines")
+  }
+
   @MainActor func testQuickChatRejectsAutonomousToolsEvenWhenSavedGrantsEnabledThem() async throws {
     for name in ["execute_command", "write_file", "read_file", "woven_goals_set", "woven_timers_create", "woven_sessions_create", "woven_executor_execute", "woven_browser_use", "woven_computer_use"] {
       XCTAssertFalse(CompanionModel.deviceToolEnabled(name, selection: nil))
@@ -686,6 +788,43 @@ final class ExecutionRoutingTests: XCTestCase {
     XCTAssertThrowsError(try model.deviceWorkspaceURL(conversationID: id, path: "/etc/passwd"))
     try FileManager.default.createSymbolicLink(at: workspace.appendingPathComponent("outside"), withDestinationURL: root)
     XCTAssertThrowsError(try model.deviceWorkspaceURL(conversationID: id, path: "outside/library.json"))
+  }
+
+  /// Retained chats from earlier on-device agents keep read-only export of their
+  /// saved files, including nested ones, without reopening a runtime.
+  @MainActor func testRetainedChatFilesListNestedFilesAndStayInsideTheirFolder() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let model = CompanionModel(store: try MobileStore(file: root.appendingPathComponent("library.json")), transport: ExecutionTestLibrary())
+    let execution = root.appendingPathComponent("execution"); model.executionDirectory = execution
+    let id = UUID().uuidString.lowercased()
+    let folder = execution.appendingPathComponent("files/" + id, isDirectory: true)
+
+    XCTAssertEqual(model.retainedDeviceFiles(conversationID: id), [])
+    XCTAssertFalse(FileManager.default.fileExists(atPath: folder.path), "Listing a chat without files creates nothing")
+
+    let manager = FileManager.default
+    try manager.createDirectory(at: folder.appendingPathComponent("reports/2026"), withIntermediateDirectories: true)
+    try Data("summary".utf8).write(to: folder.appendingPathComponent("reports/2026/summary.md"))
+    try Data("notes".utf8).write(to: folder.appendingPathComponent("notes.txt"))
+    try Data("hidden".utf8).write(to: folder.appendingPathComponent(".hidden"))
+    try Data("secret".utf8).write(to: root.appendingPathComponent("outside.txt"))
+    try manager.createSymbolicLink(at: folder.appendingPathComponent("escape.txt"), withDestinationURL: root.appendingPathComponent("outside.txt"))
+    try manager.createSymbolicLink(at: folder.appendingPathComponent("escape-folder"), withDestinationURL: root)
+    try manager.createSymbolicLink(at: folder.appendingPathComponent("alias.txt"), withDestinationURL: folder.appendingPathComponent("notes.txt"))
+
+    let files = model.retainedDeviceFiles(conversationID: id)
+    XCTAssertEqual(files.map(\.path), ["alias.txt", "notes.txt", "reports/2026/summary.md"])
+    XCTAssertEqual(try Data(contentsOf: try XCTUnwrap(files.last).url), Data("summary".utf8))
+    XCTAssertTrue(files.allSatisfy { $0.url.resolvingSymlinksInPath().path.hasPrefix(folder.resolvingSymlinksInPath().path + "/") })
+
+    // A chat folder that is itself a link elsewhere lists nothing.
+    let linked = UUID().uuidString.lowercased()
+    try manager.createSymbolicLink(at: execution.appendingPathComponent("files/" + linked), withDestinationURL: root)
+    XCTAssertEqual(model.retainedDeviceFiles(conversationID: linked), [])
+    XCTAssertEqual(model.retainedDeviceFiles(conversationID: ".."), [])
+    XCTAssertEqual(model.retainedDeviceFiles(conversationID: id + "/../" + linked), [])
+    XCTAssertTrue(model.localRuntimes.isEmpty)
   }
 }
 

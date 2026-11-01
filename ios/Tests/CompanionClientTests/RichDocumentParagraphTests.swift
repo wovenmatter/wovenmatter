@@ -115,4 +115,95 @@ final class RichDocumentParagraphTests: XCTestCase {
     XCTAssertNil(try RichDocumentEditing.mergingBackward(table, blockID: "after"))
     XCTAssertThrowsError(try RichDocumentEditing.mergingBackward(table, blockID: "missing"))
   }
+
+  func testNumberedParagraphsCountWithinTheirListAndIndependentListsRestart() throws {
+    let saved = NoteListFormatting(levels: [.init(id: "saved", markerFormat: "{decimal}.", startingItemNumber: 4)], headIndent: 28, firstLineHeadIndent: 6)
+    let other = NoteListFormatting(levels: [.init(id: "other", markerFormat: "{decimal}.")], headIndent: 28, firstLineHeadIndent: 6)
+    let document = NoteDocument(blocks: [
+      .richText(.init(id: "a1", style: .numberedList, text: "One")),
+      .richText(.init(id: "a2", style: .numberedList, text: "Two")),
+      .richText(.init(id: "a3", style: .numberedList, text: "Three")),
+      .richText(.init(id: "prose", text: "Between")),
+      .richText(.init(id: "b1", style: .numberedList, text: "Restart")),
+      .richText(.init(id: "bullet", style: .bulletedList, text: "Dot")),
+      .richText(.init(id: "c1", style: .numberedList, text: "Again")),
+      .table(.init(id: "table", columns: [.init()], rows: [.init(cells: [.init(text: "cell")])])),
+      .richText(.init(id: "d1", style: .numberedList, text: "After table")),
+      .richText(.init(id: "s1", style: .numberedList, text: "Saved", list: saved)),
+      .richText(.init(id: "s2", style: .numberedList, text: "Saved next", list: saved)),
+      .richText(.init(id: "o1", style: .numberedList, text: "Other list", list: other)),
+    ])
+    let numbers = RichDocumentEditing.listItemNumbers(document)
+    XCTAssertEqual(["a1", "a2", "a3"].map { numbers[$0] }, [1, 2, 3])
+    XCTAssertNil(numbers["prose"])
+    XCTAssertEqual(numbers["b1"], 1, "Body text ends a list")
+    XCTAssertEqual(numbers["c1"], 1, "A different list style ends a list")
+    XCTAssertEqual(numbers["d1"], 1, "A table ends a list")
+    XCTAssertEqual(numbers["s1"], 4, "A saved list keeps its starting number")
+    XCTAssertEqual(numbers["s2"], 5)
+    XCTAssertEqual(numbers["o1"], 1, "A different saved list restarts even when adjacent")
+  }
+
+  func testReturnInANumberedListContinuesItsNumbering() throws {
+    let list = NoteListFormatting(levels: [.init(id: "steps", markerFormat: "{decimal}.")], headIndent: 28, firstLineHeadIndent: 6)
+    var content = try NoteDocument(blocks: [.richText(.init(id: "first", style: .numberedList, text: "Mix", list: list))]).encoded()
+    var caret = RichDocumentEditing.Caret(blockID: "first", location: 3)
+    let next = ids()
+    for word in ["Bake", "Serve"] {
+      let split = try RichDocumentEditing.editing(content, blockID: caret.blockID, range: .init(location: caret.location, length: 0), replacement: "\n", newBlockID: next)
+      let typed = try RichDocumentEditing.editing(split.content, blockID: split.caret.blockID, range: .init(location: 0, length: 0), replacement: word)
+      content = typed.content; caret = typed.caret
+    }
+    let document = try XCTUnwrap(RichDocumentEditing.document(content))
+    let numbers = RichDocumentEditing.listItemNumbers(document)
+    XCTAssertEqual(try blocks(content).map(\.plainText), ["Mix", "Bake", "Serve"])
+    XCTAssertEqual(try blocks(content).map { numbers[$0.id] }, [1, 2, 3])
+    XCTAssertEqual(Set(try blocks(content).compactMap { $0.list?.levels.first?.id }), ["steps"], "New items keep the list's identity")
+    // Changing a list's style drops identity that belonged to the old style.
+    let bulleted = try RichDocumentEditing.settingStyle(in: content, blockID: "new-1", style: .bulletedList)
+    XCTAssertNil(try blocks(bulleted)[1].list)
+    XCTAssertNotNil(try blocks(bulleted)[0].list)
+  }
+
+  func testLargeLinePasteIsOneBoundedTransactionAndAnOversizedPasteChangesNothing() throws {
+    let source = try NoteDocument(blocks: [.richText(.init(id: "block", runs: [.init(text: "Head tail", italic: true)]))]).encoded()
+    let lines = (1...8_000).map { "Line \($0)" }
+    let started = ContinuousClock.now
+    let pasted = try RichDocumentEditing.editing(source, blockID: "block", range: .init(location: 5, length: 0), replacement: lines.joined(separator: "\n"), newBlockID: ids())
+    // Reparsing the growing document once per line is quadratic; one transaction stays far under this bound.
+    XCTAssertLessThan(started.duration(to: .now), .seconds(20))
+    let result = try blocks(pasted.content)
+    XCTAssertEqual(result.count, 8_000)
+    XCTAssertEqual(result.first?.plainText, "Head Line 1")
+    XCTAssertEqual(result.last?.plainText, "Line 8000tail")
+    XCTAssertEqual(result.last?.id, "new-7999")
+    XCTAssertTrue(result.allSatisfy { $0.runs.allSatisfy(\.italic) }, "Pasted lines keep the formatting at the caret")
+    XCTAssertEqual(pasted.caret, .init(blockID: "new-7999", location: 9))
+    XCTAssertTrue(RichDocumentEditing.canEdit(pasted.content))
+
+    // Beyond the block limit the paste is refused before anything is built.
+    let tooMany = (0...RichDocumentEditing.maximumBlocks).map(String.init).joined(separator: "\n")
+    var created = 0
+    XCTAssertThrowsError(try RichDocumentEditing.editing(source, blockID: "block", range: .init(location: 5, length: 0), replacement: tooMany, newBlockID: { created += 1; return "x\(created)" })) {
+      XCTAssertEqual($0 as? RichDocumentEditing.Failure, .documentLimit)
+    }
+    XCTAssertEqual(created, 0)
+    let tooLarge = String(repeating: "x", count: CompanionProtocol.maximumNoteBytes) + "\nend"
+    XCTAssertThrowsError(try RichDocumentEditing.editing(source, blockID: "block", range: .init(location: 5, length: 0), replacement: tooLarge)) {
+      XCTAssertEqual($0 as? RichDocumentEditing.Failure, .documentLimit)
+    }
+  }
+
+  func testWritingAfterATableOnlyNoteAppendsProseAndLeavesTheTableUnchanged() throws {
+    let table = NoteBlock.table(.init(id: "table", columns: [.init(width: 90)], rows: [.init(cells: [.init(text: "cell", backgroundHex: "#C8E6C9")])], headerRowCount: 1))
+    let source = try NoteDocument(blocks: [table]).encoded()
+    let offered = try RichDocumentEditing.appendingParagraph(to: source, id: "after")
+    let typed = try RichDocumentEditing.replacingText(in: offered, blockID: "after", range: .init(location: 0, length: 0), replacement: "Notes")
+    let continued = try RichDocumentEditing.editing(typed, blockID: "after", range: .init(location: 5, length: 0), replacement: "\nMore", newBlockID: ids())
+    XCTAssertEqual(try blocks(continued.content).map(\.plainText), ["Notes", "More"])
+    let before = try XCTUnwrap(raw(source)["blocks"] as? [[String: Any]]), after = try XCTUnwrap(raw(continued.content)["blocks"] as? [[String: Any]])
+    XCTAssertEqual(after.count, 3)
+    XCTAssertEqual(try json(before[0]), try json(after[0]), "The table keeps its exact data")
+    XCTAssertTrue(RichDocumentEditing.canEdit(continued.content))
+  }
 }

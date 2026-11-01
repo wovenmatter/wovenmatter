@@ -9,7 +9,8 @@ enum DevicePermissionMode: String, Codable, CaseIterable {
   case ask, full
   /// Asking is the safe default; Allow is an explicit per-chat or default choice.
   static let defaultMode: Self = .ask
-  var label: String { self == .full ? "Allow Note Edits" : "Ask Before Note Edits" }
+  /// Pickers without the detail line show only this label, so it names both kinds of action.
+  var label: String { self == .full ? "Allow Edits and Web Reads" : "Ask Before Edits and Web Reads" }
   var detail: String {
     self == .full ? "Quick Chat may save note changes and read webpages it chooses, using its enabled tools."
       : "Ask before Quick Chat saves a note change or reads a webpage you didn’t provide."
@@ -141,8 +142,12 @@ struct InferenceSetupCredential: InferenceCredentialReading {
 struct LocalToolApproval {
   var token: String
   var conversationID: String
-  var continuation: CheckedContinuation<Bool, Never>
+  var continuation: CheckedContinuation<LocalApprovalOutcome, Never>
 }
+
+/// Withdrawn means Stop, interruption or a replaced request ended the wait.
+/// Only `declined` is the user's answer.
+enum LocalApprovalOutcome { case allowed, declined, withdrawn }
 
 enum DeviceExecutionError: LocalizedError {
   case unavailable(String)

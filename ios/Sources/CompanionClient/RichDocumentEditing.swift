@@ -80,7 +80,11 @@ public enum RichDocumentEditing {
   }
 
   public static func settingStyle(in content: String, blockID: String, style: NoteParagraphStyle) throws -> String {
-    try changeBlock(content, blockID: blockID) { raw, _ in raw["style"] = style.rawValue }
+    // A saved native list belongs to the previous style; a bullet list's marker must not label numbered items.
+    try changeBlock(content, blockID: blockID) { raw, block in
+      if block.style != style { raw.removeValue(forKey: "list") }
+      raw["style"] = style.rawValue
+    }
   }
 
   public static func togglingBold(in content: String, blockID: String) throws -> String {
@@ -174,37 +178,65 @@ public enum RichDocumentEditing {
       let next = try changeBlock(content, blockID: blockID) { raw, _ in raw["style"] = NoteParagraphStyle.paragraph.rawValue; raw.removeValue(forKey: "list") }
       return (next, Caret(blockID, 0))
     }
+    // A paste of thousands of lines is one parse and one serialization, not one per line.
+    guard document(content).map({ $0.blocks.count + lines.count - 1 <= maximumBlocks }) == true,
+          content.utf8.count + text.utf8.count <= CompanionProtocol.maximumNoteBytes else { throw Failure.documentLimit }
+    guard range.length >= 0 else { throw Failure.invalidRange }
+    try requireBoundary(range.location, in: block.plainText)
+    try requireBoundary(NSMaxRange(range), in: block.plainText)
     // Text after the break keeps the formatting in effect at the caret.
-    let inherited = attributes ?? run(in: block, before: range.location)
-    var current = try replacingText(in: content, blockID: blockID, range: range, replacement: lines[0], attributes: attributes)
-    var caret = Caret(blockID, range.location + lines[0].utf16.count)
-    for line in lines.dropFirst() {
-      let id = newBlockID()
-      current = try splitting(current, blockID: caret.blockID, at: caret.location, newBlockID: id)
-      if !line.isEmpty {
-        current = try replacingText(in: current, blockID: id, range: NSRange(location: 0, length: 0), replacement: line, attributes: inherited)
+    let inherited = attributes ?? run(in: block, before: range.location) ?? NoteTextRun(text: "")
+    func runs(_ line: String) -> [NoteTextRun] { line.isEmpty ? [] : [{ var run = inherited; run.text = line; return run }()] }
+    let head = split(block.runs, at: range.location).0, tail = split(block.runs, at: NSMaxRange(range)).1
+    let list = block.style == .bulletedList || block.style == .numberedList
+    let style: NoteParagraphStyle = block.style.rawValue.hasPrefix("heading") && tail.allSatisfy(\.text.isEmpty) ? .paragraph : block.style
+    let ids = lines.dropFirst().map { _ in newBlockID() }
+    let next = try changeBlocks(content, blockID: blockID) { blocks, index, _ in
+      guard var value = blocks[index]["value"] as? [String: Any] else { throw Failure.missingBlock }
+      value["runs"] = try runsJSON(head + runs(lines[0]))
+      blocks[index]["value"] = value
+      var created: [[String: Any]] = []
+      for (offset, line) in lines.dropFirst().enumerated() {
+        var paragraph: [String: Any] = ["id": ids[offset], "style": style.rawValue,
+                                        "runs": try runsJSON(runs(line) + (offset == ids.count - 1 ? tail : []))]
+        if list, let format = value["list"] { paragraph["list"] = format }
+        created.append(["type": "richText", "value": paragraph])
       }
-      caret = Caret(id, line.utf16.count)
+      blocks.insert(contentsOf: created, at: index + 1)
     }
-    return (current, caret)
+    return (next, Caret(ids[ids.count - 1], lines[lines.count - 1].utf16.count))
   }
 
-  /// Splits one paragraph at the caret. The original block keeps its identity
-  /// and every unfamiliar field; the new block continues lists and leaves a
-  /// heading for body text when the break is at the heading's end.
-  public static func splitting(_ content: String, blockID: String, at location: Int, newBlockID: String) throws -> String {
-    try changeBlocks(content, blockID: blockID) { blocks, index, block in
-      try requireBoundary(location, in: block.plainText)
-      let (prefix, suffix) = split(block.runs, at: location)
-      guard var value = blocks[index]["value"] as? [String: Any] else { throw Failure.missingBlock }
-      value["runs"] = try runsJSON(prefix)
-      blocks[index]["value"] = value
-      let list = block.style == .bulletedList || block.style == .numberedList
-      let style: NoteParagraphStyle = block.style.rawValue.hasPrefix("heading") && suffix.allSatisfy(\.text.isEmpty) ? .paragraph : block.style
-      var created: [String: Any] = ["id": newBlockID, "style": style.rawValue, "runs": try runsJSON(suffix)]
-      if list, let format = value["list"] { created["list"] = format }
-      blocks.insert(["type": "richText", "value": created], at: index + 1)
+  /// The block count an editable document may hold; see `NoteDocument.validateEditableShape`.
+  public static let maximumBlocks = 10_000
+
+  /// The item number each list paragraph displays, matching the Mac's native lists:
+  /// paragraphs with saved list identity share that list wherever it continues;
+  /// earlier flat paragraphs share one list while the same style continues.
+  public static func listItemNumbers(_ document: NoteDocument) -> [String: Int] {
+    enum Identity: Hashable { case native(NoteTextList), flat(Int) }
+    var numbers: [String: Int] = [:]
+    var previousStyle: NoteParagraphStyle?, previousList: Identity?
+    // Items counted so far in each list's current run. A paragraph outside a
+    // list, including body text and tables, ends that list's run. One pass.
+    var running: [Identity: Int] = [:]
+    for (index, block) in document.blocks.enumerated() {
+      guard case .richText(let text) = block else { running = [:]; previousStyle = nil; previousList = nil; continue }
+      var chain: [Identity] = []
+      if let levels = text.list?.levels, !levels.isEmpty, text.style == .bulletedList || text.style == .numberedList {
+        chain = levels.map(Identity.native)
+      } else if text.style == .bulletedList || text.style == .numberedList {
+        chain = [previousStyle == text.style ? previousList ?? .flat(index) : .flat(index)]
+      }
+      previousStyle = text.style; previousList = chain.first
+      running = running.filter { chain.contains($0.key) }
+      guard let own = chain.last else { continue }
+      let count = running[own, default: 0]
+      running[own] = count + 1
+      let start = if case .native(let list) = own { list.startingItemNumber } else { 1 }
+      numbers[text.id] = start + count
     }
+    return numbers
   }
 
   /// Delete at the start of a paragraph: a list item or heading first becomes
@@ -273,10 +305,11 @@ public enum RichDocumentEditing {
     if location > 0 && location < units.count, (0xDC00...0xDFFF).contains(units[location]), (0xD800...0xDBFF).contains(units[location - 1]) { throw Failure.invalidRange }
   }
 
-  public static func appendingParagraph(to content: String) throws -> String {
+  /// Appends an empty body paragraph, for example to continue writing after a final table.
+  public static func appendingParagraph(to content: String, id: String = UUID().uuidString.lowercased()) throws -> String {
     guard canEdit(content), var raw = try JSONSerialization.jsonObject(with: Data(content.utf8)) as? [String: Any],
           var blocks = raw["blocks"] as? [[String: Any]] else { throw Failure.unsupported }
-    let block = NoteBlock.richText(NoteRichTextBlock())
+    let block = NoteBlock.richText(NoteRichTextBlock(id: id))
     blocks.append(try JSONSerialization.jsonObject(with: JSONEncoder().encode(block)) as! [String: Any])
     raw["blocks"] = blocks
     return try serialize(raw)

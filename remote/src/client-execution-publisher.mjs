@@ -14,6 +14,12 @@ export function createClientExecutionPublisher({ db, identity, secret, events, f
     INSERT OR IGNORE INTO central_publication_lanes(name) VALUES ('journal'),('artifacts');
     CREATE TABLE IF NOT EXISTS execution_folders (id TEXT PRIMARY KEY, body TEXT NOT NULL, published INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE IF NOT EXISTS saved_execution_artifacts (id TEXT PRIMARY KEY, manifest TEXT NOT NULL, bytes BLOB NOT NULL, uploaded INTEGER NOT NULL DEFAULT 0);`)
+  // published: 0 pending, 1 accepted by central, 2 refused by central for this folder alone.
+  // A held folder keeps its reason and retries with backoff.
+  const folderColumns = new Set(db.prepare('PRAGMA table_info(execution_folders)').all().map(column => column.name))
+  for (const [name, type] of [['reason','TEXT'],['failures','INTEGER NOT NULL DEFAULT 0'],['next_attempt','INTEGER NOT NULL DEFAULT 0']]) {
+    if (!folderColumns.has(name)) db.exec(`ALTER TABLE execution_folders ADD COLUMN ${name} ${type}`)
+  }
   const key = typeof secret === 'string' && secret.length >= 16 ? createHash('sha256').update('wovenmatter-workspace-publisher-v1\0'+secret).digest() : null
   let inFlight, stopped = false, timer
   const controllers = new Set()
@@ -53,6 +59,7 @@ export function createClientExecutionPublisher({ db, identity, secret, events, f
       ...(item.last_success?{lastSuccessAt:item.last_success}:{}),...(item.last_error_code?{lastErrorCode:item.last_error_code}:{})} }
     return {configured:!!value,...(value?{grantID:value.grantID}:{}),acknowledgedOriginSequence:row?.acknowledged??0,
       pendingArtifacts:db.prepare('SELECT count(*) AS count FROM saved_execution_artifacts WHERE uploaded=0').get().count,
+      pendingFolders:db.prepare('SELECT count(*) AS count FROM execution_folders WHERE published=0').get().count,
       rejectedFolders:db.prepare('SELECT count(*) AS count FROM execution_folders WHERE published=2').get().count,
       journal:lane('journal'),artifacts:lane('artifacts')}
   }
@@ -90,31 +97,58 @@ export function createClientExecutionPublisher({ db, identity, secret, events, f
       sent=true
     }
   }
-  async function publishJournal(value) {
-    flush()
+  /// Publish owner folders before conversations that reference them. This outbox
+  /// survives a closed phone and a central outage without relaying via iOS.
+  /// Network failures and 5xx keep that order by failing the lane. Anything
+  /// central says about one folder affects only that folder, so history continues:
+  /// - folder_deleted or wrong_owner: refused, kept with its reason, not retried;
+  /// - 404 from a central without folder publication: every folder waits for an update;
+  /// - other 4xx, such as a revoked grant, or a receipt for a different folder or
+  ///   root: never treated as accepted; the folder stays pending and retries.
+  async function publishFolders(value, automatic) {
     let sent = false
-    // Publish owner folders before conversations that reference them. This outbox
-    // survives a closed phone and a central outage without relaying via iOS.
-    // Transient failures keep that order; a definitive refusal settles only its
-    // folder, so one deleted or foreign folder never stops this workspace's history.
-    for (const row of db.prepare('SELECT id,body FROM execution_folders WHERE published=0 ORDER BY id').all()) {
+    const now = Date.now()
+    for (const row of db.prepare('SELECT id,body,failures,next_attempt FROM execution_folders WHERE published=0 ORDER BY id').all()) {
+      if (automatic && row.next_attempt > now) continue
       const folder = JSON.parse(row.body)
-      let result
+      let result, reason
       try {
         result = await post(value, 'folders', { operationID: folder.id, deviceID: value.workspaceID, kind: 'createFolder', resourceID: folder.id, title: folder.name, folderExecution: folder.execution })
       } catch (error) {
-        // A central Mac without folder projection cannot learn folders yet; retry them after it updates.
-        if (error.statusCode === 404) break
-        if (!['folder_deleted', 'wrong_owner'].includes(error.code)) throw error
-        result = null
+        if (!Number.isInteger(error.statusCode) || error.statusCode >= 500 || error.statusCode === 429) throw error
+        if (stopped) return sent
+        if (['folder_deleted', 'wrong_owner'].includes(error.code)) {
+          db.prepare('UPDATE execution_folders SET published=2,reason=? WHERE id=? AND body=? AND published=0').run(error.code, row.id, row.body)
+          sent = true
+          continue
+        }
+        reason = error.code ?? 'http_' + error.statusCode
+        if (error.statusCode === 404) { holdFolders(db.prepare('SELECT id,body,failures FROM execution_folders WHERE published=0').all(), reason); break }
       }
       if (stopped) return sent
       sent = true
-      // An idempotent retry receives the same answer, so a mismatched binding is also final.
-      const accepted = result?.operationID === folder.id && result.status === 'accepted' && result.folder?.id === folder.id
+      const accepted = !reason && result?.operationID === folder.id && result.status === 'accepted' && result.folder?.id === folder.id
         && result.folder?.execution?.workspaceID === value.workspaceID && result.folder?.execution?.rootPath === folder.execution.rootPath
-      db.prepare('UPDATE execution_folders SET published=? WHERE id=? AND body=?').run(accepted ? 1 : 2, row.id, row.body)
+      if (accepted) db.prepare('UPDATE execution_folders SET published=1,reason=NULL,failures=0,next_attempt=0 WHERE id=? AND body=?').run(row.id, row.body)
+      else holdFolders([row], reason ?? 'mismatched_receipt')
     }
+    return sent
+  }
+  function holdFolders(rows, reason) {
+    for (const row of rows) {
+      const failures = Math.min((row.failures ?? 0) + 1, 2147483647)
+      db.prepare('UPDATE execution_folders SET reason=?,failures=?,next_attempt=? WHERE id=? AND body=? AND published=0')
+        .run(reason, failures, Date.now() + Math.min(retryMaximum, retryBase * 2 ** Math.min(failures - 1, 20)), row.id, row.body)
+    }
+  }
+  function folderStatus() {
+    return db.prepare('SELECT id,published,reason FROM execution_folders WHERE published<>1 ORDER BY id').all()
+      .map(row => ({ id: row.id, state: row.published === 2 ? 'refused' : 'pending', ...(row.reason ? { reason: row.reason } : {}) }))
+  }
+  async function publishJournal(value, automatic) {
+    flush()
+    let sent = await publishFolders(value, automatic)
+    if (stopped) return sent
     sent = await settleRetainedRuns(value) || sent
     let acknowledged = db.prepare('SELECT acknowledged FROM central_publication WHERE id=1').get().acknowledged
     for (;;) {
@@ -177,7 +211,7 @@ export function createClientExecutionPublisher({ db, identity, secret, events, f
   async function publish(automatic) {
     const value=grant();if(!value||stopped)return
     const results=await Promise.allSettled([
-      runLane('journal',()=>publishJournal(value),automatic),
+      runLane('journal',()=>publishJournal(value,automatic),automatic),
       runLane('artifacts',()=>publishArtifacts(value),automatic)
     ])
     const failure=results.find(result=>result.status==='rejected')
@@ -211,5 +245,5 @@ export function createClientExecutionPublisher({ db, identity, secret, events, f
     const value=grant();if(!value||!uuid(request?.runID))return null
     try { return await post(value,'association',request) } catch(error) { if(error.statusCode===404)return null;throw error }
   }
-  return {configure,status,syncNow,saveArtifact,resolveRetainedAssociation,async close(){stopped=true;clearTimeout(timer);for(const controller of controllers)controller.abort();await inFlight?.catch(()=>{})}}
+  return {configure,status,folderStatus,syncNow,saveArtifact,resolveRetainedAssociation,async close(){stopped=true;clearTimeout(timer);for(const controller of controllers)controller.abort();await inFlight?.catch(()=>{})}}
 }

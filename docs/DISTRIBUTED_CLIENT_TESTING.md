@@ -19,13 +19,21 @@ then physical devices and real network transitions.
    the modest Notes/Web tools and absence of repository or shell tools. The first
    send to each provider shows the data-sharing sheet; Don’t Allow keeps the
    draft and sends nothing. The first web search asks about Exa. Settings → Data
-   sharing lists both. Stop sharing makes the next send ask again.
+   sharing lists both. Stop sharing makes the next send ask again. Interrupt a run
+   (for example by backgrounding until expiry), stop sharing, then tap Resume saved
+   run: the sheet offers Allow and Resume, and Don’t Allow keeps the run resumable.
+   Stopping a run while the first Exa question is open must let Resume ask again.
    On a fresh install, the first dictation should ask only for the microphone,
    since the plist has no speech-recognition purpose string; record any other
    prompt or failure.
 5. Disconnect the network. Create/edit a note: type a heading, press Return and
    continue in body text, leave a list with Return on an empty item, and join
-   paragraphs with Delete. Exercise undo/redo and the
+   paragraphs with Delete. Number three items and confirm 1, 2, 3, then start a
+   second numbered list after body text and confirm it restarts at 1. Dictate
+   into a note; if a transcript contains a line break, confirm it inserts once as
+   paragraphs with nothing left to insert again. Paste a few thousand lines, then
+   undo it in one step. Undo
+   a Return and type immediately without tapping. Exercise undo/redo and the
    word/character count, then terminate/reopen. Reconnect and check moderate sync
    and preservation of any concurrent edits. Tools belong above the title; the
    title leads directly into the body, with save details in the footer.

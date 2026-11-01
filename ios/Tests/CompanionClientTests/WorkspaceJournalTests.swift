@@ -59,7 +59,8 @@ final class WorkspaceJournalTests: XCTestCase {
     try await client.checkConnection()
     func saved() async throws -> CompanionExecutionWorkspace { let value = await store.journal.snapshot().workspaces["linux"]; return try XCTUnwrap(value) }
     var current = try await saved()
-    XCTAssertEqual(current.name, "Renamed server"); XCTAssertEqual(current.capabilities, ["history.central.v1"])
+    XCTAssertEqual(current.name, "Renamed server")
+    XCTAssertEqual(current.capabilities, [], "Only central's registry can attest central history")
     XCTAssertEqual(current.ownerDeviceID, mac); XCTAssertEqual(current.executionDeviceID, linuxDevice)
     XCTAssertEqual(current.endpoint, registered.endpoint); XCTAssertEqual(current.revision, 4)
     XCTAssertNil(current.contentWorkspaceID, "Another workspace's content identity is never adopted")
@@ -70,11 +71,48 @@ final class WorkspaceJournalTests: XCTestCase {
     current = try await saved()
     XCTAssertNil(current.contentWorkspaceID, "A host cannot group its content as this phone's")
 
-    // A previously unrecorded alias of its own is still learned for display grouping.
+    // Content identity comes only from the registry, even an alias nobody else holds.
     claim.contentWorkspaceID = "remote:" + linuxDevice.replacingOccurrences(of: "2222-4222", with: "3333-4333")
+    claim.capabilities = ["quick-chat"]
     await host.report(claim); try await client.checkConnection()
     current = try await saved()
-    XCTAssertEqual(current.contentWorkspaceID, claim.contentWorkspaceID)
+    XCTAssertNil(current.contentWorkspaceID)
+    XCTAssertEqual(current.capabilities, ["quick-chat"], "Descriptive capabilities still refresh")
+
+    // The registry's central attestation survives a host that omits it.
+    var attestedCentral = central; attestedCentral.capabilities = ["history.central.v1"]; attestedCentral.revision = 3
+    try await store.journal.mergeRegistry([attestedCentral])
+    var macReport = attestedCentral; macReport.capabilities = []; macReport.revision = 1
+    try await WorkspaceClient(store: store, workspaceID: "central-mac", transport: ReportingWorkspace(macReport)).checkConnection()
+    let keptCentral = await store.journal.snapshot().workspaces["central-mac"]
+    XCTAssertEqual(keptCentral?.capabilities, ["history.central.v1"])
+  }
+
+  func testUnregisteredHostRecordsOnlyUnattestedDetailsUntilTheRegistryArrives() async throws {
+    let store = try MobileStore(file: path())
+    let phone = await store.snapshot().deviceID
+    let mac = "11111111-1111-4111-8111-111111111111", linuxDevice = "22222222-2222-4222-8222-222222222222"
+    let claim = CompanionExecutionWorkspace(id: "linux", libraryID: "library", ownerDeviceID: mac, kind: .linux, name: "Server",
+      endpoint: URL(string: "https://server.tail.ts.net"), capabilities: ["history.central.v1", "quick-chat"], executionDeviceID: linuxDevice,
+      journalDeviceIDs: [mac], revision: 1_000_000, contentWorkspaceID: "device:" + mac)
+    try await WorkspaceClient(store: store, workspaceID: "linux", transport: ReportingWorkspace(claim)).checkConnection()
+    let recorded = await store.journal.snapshot().workspaces["linux"]
+    let first = try XCTUnwrap(recorded)
+    XCTAssertEqual(first.capabilities, ["quick-chat"]); XCTAssertNil(first.contentWorkspaceID)
+    XCTAssertEqual(first.journalDeviceIDs, []); XCTAssertEqual(first.revision, 0)
+    // A low registry revision still replaces the self-report.
+    var registered = claim; registered.capabilities = []; registered.journalDeviceIDs = []; registered.contentWorkspaceID = nil
+    registered.name = "Registered server"; registered.revision = 2
+    try await store.journal.mergeRegistry([registered])
+    let replaced = await store.journal.snapshot().workspaces["linux"]
+    XCTAssertEqual(replaced, registered)
+
+    // A remote host cannot claim to be this device's own execution workspace.
+    let impostor = CompanionExecutionWorkspace(id: "impostor", libraryID: "library", ownerDeviceID: phone, kind: .ios, name: "This iPhone", executionDeviceID: phone)
+    do { try await WorkspaceClient(store: store, workspaceID: "impostor", transport: ReportingWorkspace(impostor)).checkConnection(); XCTFail("Impersonated this device") }
+    catch MobileStore.Failure.wrongWorkspace {}
+    let pending = await store.journal.snapshot()
+    XCTAssertNil(pending.workspaces["impostor"]); XCTAssertFalse(pending.pendingRegistrations.contains("impostor"))
   }
   private func path() -> URL { FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("library.json") }
   private func entry(_ sequence: Int64, workspace: String = "phone", id: String = "chat") -> CompanionJournalEntry {

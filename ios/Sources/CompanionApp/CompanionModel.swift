@@ -81,6 +81,9 @@ import CompanionInference
   var store: MobileStore?
   var engine: MobileSyncEngine?
   var transport: HTTPSCompanionTransport?
+  /// Pairing confirmation and unpairing for a paired transport. Tests record
+  /// these requests instead of contacting central.
+  @ObservationIgnored var pairingRequests: (HTTPSCompanionTransport) -> any MobilePairingRequests = { $0 }
   var saveTask: Task<Void, Never>?
   private var saveGenerations: [String: Int] = [:]
   private var refreshInProgress = false
@@ -143,6 +146,22 @@ import CompanionInference
     return DeviceRuntimeSmoke.enabled
     #else
     return false
+    #endif
+  }
+  /// The UI-test scenario and tab. Release builds compile no fixture environment
+  /// lookups at all, rather than relying on the optimizer to remove them.
+  static var uiScenario: String? {
+    #if DEBUG
+    ProcessInfo.processInfo.environment["WOVENMATTER_UI_SCENARIO"]
+    #else
+    nil
+    #endif
+  }
+  static var uiTab: String? {
+    #if DEBUG
+    ProcessInfo.processInfo.environment["WOVENMATTER_UI_TAB"]
+    #else
+    nil
     #endif
   }
   init() {
@@ -547,6 +566,36 @@ import CompanionInference
       await refresh()
     } catch { errorMessage = workspaceActionMessage(error) }
   }
+  /// New chats whose first message has no confirmed outcome. Each keeps its
+  /// original command IDs and text until its owner confirms or rejects it.
+  var unconfirmedLaunches: [MobileLaunchRecord] { state.launches.filter { !$0.accepted && !$0.terminalFailure } }
+  /// Resends a saved launch with its original IDs. An owner that already ran it
+  /// answers from its receipt, so the first message is never sent twice.
+  func retryUnconfirmedLaunch(_ id: String) async {
+    guard !sending, let launch = unconfirmedLaunches.first(where: { $0.id == id }) else { return }
+    sending = true; defer { sending = false }
+    do {
+      let result: MobileLaunchRecord
+      if let workspaceID = launch.create.workspaceID {
+        guard let client = workspaceClients[workspaceID] else { throw DeviceExecutionError.unavailable("This execution workspace is unavailable.") }
+        result = try await client.startConversation(launch)
+      } else {
+        guard online, let engine else { throw MobileConnectionError.offline }
+        result = try await engine.startConversation(launch)
+      }
+      await reload()
+      if result.accepted { errorMessage = nil; selectedConversationID = result.create.conversationID }
+      else { errorMessage = result.sendReceipt?.message ?? result.createReceipt?.message ?? "This new chat still hasn’t been confirmed. It stays saved; try again when connected." }
+      await refresh()
+    } catch { errorMessage = workspaceActionMessage(error); await reload() }
+  }
+  /// Shows a saved launch's first message in the new-chat composer. The launch
+  /// itself stays saved; sending the same message to the same agent reuses it.
+  func restoreUnconfirmedLaunch(_ id: String) {
+    guard let launch = unconfirmedLaunches.first(where: { $0.id == id }) else { return }
+    selectedConversationID = nil
+    updateChatDraft(key: draftKey, draft: .init(text: launch.initialSend.text ?? "", noteID: launch.initialSend.noteID, providerID: launch.create.providerID))
+  }
   func stop() async {
     if selectedExecutionWorkspaceID == "local" { await stopOnDevice(); return }
     if selectedExecutionWorkspaceID != "central" { await stopExecutionWorkspace(); return }
@@ -559,7 +608,8 @@ import CompanionInference
       if !response.answers.isEmpty {
         localQuestionAnswers[interaction.id] = response.answers.values.flatMap { $0 }.joined(separator: "\n")
       }
-      approval.continuation.resume(returning: !response.cancelled && (response.optionID == "allow" || !response.answers.isEmpty))
+      approval.continuation.resume(returning: response.cancelled ? .withdrawn
+        : response.optionID == "allow" || !response.answers.isEmpty ? .allowed : .declined)
       return
     }
     if executionRoute(for: interaction.conversationID) != "central" { await respondInExecutionWorkspace(interaction, response: response); return }
@@ -614,9 +664,12 @@ import CompanionInference
     guard !workspaceActionInProgress else { return false }
     workspaceActionInProgress = true; defer { workspaceActionInProgress = false }
     await reload()
-    let pending = state.commands.first { $0.command.kind == .workspace && ($0.receipt == nil || $0.receipt?.status == .accepted || $0.receipt?.status == .outcomeUnknown) }
+    // An unconfirmed change orders only later changes to the same item. Repeating
+    // it resends its original command; other items proceed independently.
+    let pending = state.commands.first { $0.command.kind == .workspace && ($0.receipt == nil || $0.receipt?.status == .accepted || $0.receipt?.status == .outcomeUnknown)
+      && $0.command.workspaceAction?.confirmationScope == action.confirmationScope }
     if let pending, pending.command.workspaceAction != action {
-      errorMessage = "The previous change hasn’t been confirmed yet. Try again shortly."
+      errorMessage = "The previous change to this item hasn’t been confirmed yet. Repeat that change to retry it, or try again shortly."
       return false
     }
     errorMessage = nil
@@ -698,7 +751,7 @@ import CompanionInference
           .init(id: "assistant", conversationID: "fixture-chat", runID: "11111111-1111-4111-8111-111111111111", role: "assistant", content: "A focused plan for the next release.\n\n• Capture the idea in a note.\n• Review it together on the Mac.\n• Keep the next step small and clear.", status: "completed", sequence: 2)], activities: [.init(id: "activity", runID: "11111111-1111-4111-8111-111111111111", title: "Run finished", detail: "The plan is ready for review.", status: "completed", sequence: 1)], runs: [.init(id: "11111111-1111-4111-8111-111111111111", status: "completed")]))
       }
       await reload()
-      if ProcessInfo.processInfo.environment["WOVENMATTER_UI_SCENARIO"] == "conflict", state.conflicts.isEmpty,
+      if Self.uiScenario == "conflict", state.conflicts.isEmpty,
          let base = state.notes["11111111-1111-4111-8111-111111111111"] {
         let localContent = try NoteDocument(blocks: [.richText(.init(text: "The idea I captured on the train: make the next release small, focused, and easy to try."))]).encoded()
         try await store.editNote(id: base.id, title: base.title, content: localContent, folderID: base.folderID, base: base)
@@ -709,7 +762,7 @@ import CompanionInference
         }
         await reload()
       }
-      let scenario = ProcessInfo.processInfo.environment["WOVENMATTER_UI_SCENARIO"] ?? ""
+      let scenario = Self.uiScenario ?? ""
       if scenario.hasPrefix("running-tools") {
         let runID = "11111111-1111-4111-8111-111111111111"
         let startedAt = ISO8601DateFormatter().string(from: Date().addingTimeInterval(-8))
@@ -736,6 +789,17 @@ import CompanionInference
       if scenario == "permissions" || scenario == "tools-menu" {
         let descriptor = InferenceModel(id: "gpt-fixture", name: "GPT-6.1 Sol", provider: "openai", api: "openai-responses", baseUrl: "https://example.invalid", reasoning: true)
         executionRecords["fixture-chat"] = .init(id: "fixture-chat", title: "Launch plan", thinkingLevel: "high", connectionID: "fixture", modelJSON: try descriptor.descriptorJSON(), status: "ready", updatedAt: "")
+      }
+      var scenarioNoteID: String?
+      if scenario == "table-note" {
+        // A note whose only block is a read-only table; relaunches reuse it.
+        if let existing = state.notes.values.first(where: { $0.title == "Table only" }) { scenarioNoteID = existing.id }
+        else {
+          let table = NoteTableBlock(id: "fixture-table", columns: [.init(width: 120), .init(width: 120)],
+            rows: [.init(cells: [.init(text: "Item"), .init(text: "Owner")]), .init(cells: [.init(text: "Launch"), .init(text: "Mac")])], headerRowCount: 1)
+          scenarioNoteID = try await store.createNote(folderID: nil, title: "Table only", content: NoteDocument(blocks: [.table(table)]).encoded()).id
+        }
+        await reload()
       }
       if scenario == "offline-device" {
         let workspace = CompanionExecutionWorkspace(id: "11111111-2222-4333-8444-555555555555", libraryID: "fixture", ownerDeviceID: "fixture-host", kind: .linux, name: "Offline Linux")
@@ -772,9 +836,21 @@ import CompanionInference
         ]))
         await reload()
       }
-      selectedNoteID = notes.first?.id; selectedConversationID = "fixture-chat"
-      if ProcessInfo.processInfo.environment["WOVENMATTER_UI_SCENARIO"] == "pairing" { pairingPresented = true }
-      tab = Tab(rawValue: ProcessInfo.processInfo.environment["WOVENMATTER_UI_TAB"] ?? "Folders") ?? .folders
+      selectedNoteID = scenarioNoteID ?? notes.first?.id; selectedConversationID = "fixture-chat"
+      if Self.uiScenario == "pairing" { pairingPresented = true }
+      tab = Tab(rawValue: Self.uiTab ?? "Folders") ?? .folders
     } catch { errorMessage = error.localizedDescription }
+  }
+}
+
+extension CompanionWorkspaceAction {
+  /// The item whose changes must be confirmed in order.
+  var confirmationScope: String {
+    switch self {
+    case .conversation(let id, _, _, _), .goal(let id, _), .configureSession(let id, _, _, _), .sessionTools(let id, _, _): "conversation:" + id
+    case .note(let id, _, _, _, _): "note:" + id
+    case .saveCalendar(let id, _, _), .deleteCalendar(let id, _, _): "calendar:" + id
+    case .retryLibrary(let id): "library:" + id
+    }
   }
 }

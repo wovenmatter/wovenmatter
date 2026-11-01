@@ -168,7 +168,7 @@ struct ChatComposerSettings<Accessory: View, Submission: View>: View {
     .task(id: context) {
       settings = nil; problem = nil
       if !local { await loadSession() }
-      if model.fixture, ProcessInfo.processInfo.environment["WOVENMATTER_UI_SCENARIO"] == "tools-menu" { toolsOpen = true }
+      if model.fixture, CompanionModel.uiScenario == "tools-menu" { toolsOpen = true }
     }
     .onChange(of: model.activeRunID) { Task { if !local { await loadSession() } } }
   }

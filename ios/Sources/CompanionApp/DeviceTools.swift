@@ -63,6 +63,31 @@ extension CompanionModel {
     guard resolved == rootPath || resolved.hasPrefix(rootPath + "/"), directory || resolved != rootPath else { throw DeviceExecutionError.unavailable("The file path leaves this device workspace.") }
     return candidate
   }
+  /// Files earlier on-device agents saved for a chat, for viewing and export only.
+  /// Listing never creates the folder or reopens a runtime or tool. Links that
+  /// resolve outside the chat's folder, or a folder that is itself such a link, are left out.
+  func retainedDeviceFiles(conversationID: String) -> [RetainedDeviceFile] {
+    guard let executionDirectory, !conversationID.isEmpty, !conversationID.contains("/"), !conversationID.contains("\0"),
+          conversationID != ".", conversationID != ".." else { return [] }
+    let files = executionDirectory.appendingPathComponent("files", isDirectory: true)
+    let root = files.appendingPathComponent(conversationID, isDirectory: true)
+    let rootPath = root.resolvingSymlinksInPath().path
+    guard rootPath.hasPrefix(files.resolvingSymlinksInPath().path + "/") else { return [] }
+    var result: [RetainedDeviceFile] = []
+    // Linked directories are never entered; a linked file is listed only if it resolves inside the folder.
+    func visit(_ directory: URL, prefix: String, depth: Int) {
+      guard depth < 32, let names = try? FileManager.default.contentsOfDirectory(atPath: directory.path) else { return }
+      for name in names.sorted() where !name.hasPrefix(".") && result.count < 10_000 {
+        let url = directory.appendingPathComponent(name), resolved = url.resolvingSymlinksInPath()
+        guard resolved.path.hasPrefix(rootPath + "/") else { continue }
+        let type = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.type] as? FileAttributeType
+        if type == .typeDirectory { visit(url, prefix: prefix + name + "/", depth: depth + 1) }
+        else if (try? resolved.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true { result.append(.init(path: prefix + name, url: resolved)) }
+      }
+    }
+    visit(root, prefix: "", depth: 0)
+    return result.sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
+  }
   func requireDeviceApproval(id: String, conversationID: String, title: String, detail: String) async throws {
     try Task.checkCancellation()
     if let record = executionRecords[conversationID], (record.permissionMode ?? .defaultMode) == .full { return }
@@ -70,9 +95,9 @@ extension CompanionModel {
     let cancelWait: @MainActor @Sendable () -> Void = { [weak self] in
       self?.cancelDeviceApproval(id, token: token)
     }
-    let allowed = await withTaskCancellationHandler {
-      await withCheckedContinuation { continuation in
-        guard !Task.isCancelled else { continuation.resume(returning: false); return }
+    let outcome = await withTaskCancellationHandler {
+      await withCheckedContinuation { (continuation: CheckedContinuation<LocalApprovalOutcome, Never>) in
+        guard !Task.isCancelled else { continuation.resume(returning: .withdrawn); return }
         localApprovals[id] = .init(token: token, conversationID: conversationID, continuation: continuation)
         localPending.append(.init(id: id, conversationID: conversationID, runID: executionRecords[conversationID]?.runID,
           kind: .approval, title: title, detail: detail, options: [.init(id: "allow", label: "Allow once"), .init(id: "deny", label: "Don’t allow")]))
@@ -81,16 +106,20 @@ extension CompanionModel {
       Task { @MainActor [cancelWait] in cancelWait() }
     }
     try Task.checkCancellation()
-    guard allowed else { throw DeviceExecutionError.unavailable("The user declined this tool action.") }
+    switch outcome {
+    case .allowed: return
+    case .declined: throw DeviceExecutionError.unavailable("The user declined this tool action.")
+    case .withdrawn: throw CancellationError()
+    }
   }
   func askDeviceQuestion(id: String, conversationID: String, question: String) async throws -> String {
     let token = UUID().uuidString
     let cancelWait: @MainActor @Sendable () -> Void = { [weak self] in
       self?.cancelDeviceApproval(id, token: token)
     }
-    let allowed = await withTaskCancellationHandler {
-      await withCheckedContinuation { continuation in
-        guard !Task.isCancelled else { continuation.resume(returning: false); return }
+    let outcome = await withTaskCancellationHandler {
+      await withCheckedContinuation { (continuation: CheckedContinuation<LocalApprovalOutcome, Never>) in
+        guard !Task.isCancelled else { continuation.resume(returning: .withdrawn); return }
         localApprovals[id] = .init(token: token, conversationID: conversationID, continuation: continuation)
         localPending.append(.init(id: id, conversationID: conversationID, runID: executionRecords[conversationID]?.runID,
           kind: .question, title: "Quick Chat needs your input", questions: [.init(id: id, prompt: question)]))
@@ -99,17 +128,24 @@ extension CompanionModel {
       Task { @MainActor [cancelWait] in cancelWait() }
     }
     try Task.checkCancellation()
-    guard allowed, let answer = localQuestionAnswers.removeValue(forKey: id) else { throw DeviceExecutionError.unavailable("The question was cancelled.") }
+    guard outcome == .allowed, let answer = localQuestionAnswers.removeValue(forKey: id) else { throw DeviceExecutionError.unavailable("The question was cancelled.") }
     return answer
   }
   func cancelDeviceApproval(_ id: String, token: String? = nil) {
     if let token, localApprovals[id]?.token != token { return }
     guard let approval = localApprovals.removeValue(forKey: id) else { return }
     localPending.removeAll { $0.id == id }; localQuestionAnswers.removeValue(forKey: id)
-    approval.continuation.resume(returning: false)
+    approval.continuation.resume(returning: .withdrawn)
   }
   func cancelDeviceApprovals(_ conversationID: String) {
     for id in localApprovals.filter({ $0.value.conversationID == conversationID }).keys { cancelDeviceApproval(id) }
   }
   static func toolJSON(_ value: Any) throws -> String { String(decoding: try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]), as: UTF8.self) }
+}
+
+struct RetainedDeviceFile: Identifiable, Equatable {
+  /// Path inside the chat's folder, such as "reports/summary.md".
+  var path: String
+  var url: URL
+  var id: String { path }
 }

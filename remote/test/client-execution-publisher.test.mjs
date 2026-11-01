@@ -153,18 +153,47 @@ async function offlineFolders(f,count){
 }
 const folderRequests=f=>f.requests.filter(request=>request.url.endsWith('/folders')).length
 
-test('a deleted, foreign or mismatched folder settles alone and history still publishes',async t=>{
-  const f=fixture(t),[deleted,foreign,mismatched]=await offlineFolders(f,3)
-  f.folderReply=body=>body.resourceID===deleted?refusal(400,'folder_deleted'):body.resourceID===foreign?refusal(403,'wrong_owner')
-    :body.resourceID===mismatched?{ok:true,status:200,json:async()=>({operationID:body.operationID,status:'accepted',folder:{id:body.resourceID,execution:{...body.folderExecution,rootPath:'/elsewhere'}}})}:null
+test('a deleted or foreign folder is refused alone and history still publishes',async t=>{
+  const f=fixture(t),[deleted,foreign]=await offlineFolders(f,2)
+  f.folderReply=body=>body.resourceID===deleted?refusal(400,'folder_deleted'):body.resourceID===foreign?refusal(403,'wrong_owner'):null
   f.online=true
   await f.service.synchronizePublisher()
   assert.ok(f.events.size>0,'conversation history reached central')
   const status=f.service.publisherStatus()
-  assert.equal(status.rejectedFolders,3);assert.equal(status.journal.failureCount,0)
+  assert.equal(status.rejectedFolders,2);assert.equal(status.pendingFolders,0);assert.equal(status.journal.failureCount,0)
   assert.equal(status.acknowledgedOriginSequence,f.service.events().cursor)
+  assert.deepEqual(f.service.publisherFolders(),[{id:deleted,state:'refused',reason:'folder_deleted'},{id:foreign,state:'refused',reason:'wrong_owner'}].sort((a,b)=>a.id<b.id?-1:1))
   const sent=folderRequests(f);await f.restart();await f.service.synchronizePublisher()
   assert.equal(folderRequests(f),sent,'settled refusals are not retried')
+})
+
+// A revoked or unexplained refusal and a receipt for another root are never acceptance.
+for (const [name,reply,reason] of [
+  ['an unexplained authorization refusal',()=>({ok:false,status:403,json:async()=>({})}),'http_403'],
+  ['a revoked grant',()=>refusal(401,'unauthorized'),'unauthorized'],
+  ['a mismatched acknowledgement',body=>({ok:true,status:200,json:async()=>({operationID:body.operationID,status:'accepted',folder:{id:body.resourceID,execution:{...body.folderExecution,rootPath:'/elsewhere'}}})}),'mismatched_receipt'],
+]) test(`${name} keeps the folder pending while history publishes, then retries it`,async t=>{
+  const f=fixture(t),[held,other]=await offlineFolders(f,2)
+  f.folderReply=body=>body.resourceID===held?reply(body):null
+  f.online=true
+  await f.service.synchronizePublisher()
+  assert.ok(f.events.size>0,'conversation history reached central')
+  let status=f.service.publisherStatus()
+  assert.equal(status.acknowledgedOriginSequence,f.service.events().cursor)
+  assert.equal(status.journal.failureCount,0)
+  assert.equal(status.pendingFolders,1);assert.equal(status.rejectedFolders,0)
+  assert.deepEqual(f.service.publisherFolders(),[{id:held,state:'pending',reason}])
+  // The unaffected folder was accepted and is not sent again.
+  const otherRequests=()=>f.requests.filter(request=>request.url.endsWith('/folders')&&JSON.parse(request.options.body).resourceID===other).length
+  assert.equal(otherRequests(),1)
+  await f.restart()
+  f.folderReply=null;await f.service.synchronizePublisher()
+  const last=f.requests.filter(request=>request.url.endsWith('/folders')).at(-1)
+  assert.equal(JSON.parse(last.options.body).resourceID,held,'the held folder retries with its original identity')
+  status=f.service.publisherStatus()
+  assert.equal(status.pendingFolders,0);assert.equal(status.rejectedFolders,0)
+  assert.deepEqual(f.service.publisherFolders(),[])
+  assert.equal(otherRequests(),1)
 })
 
 test('an older central without folder publication still receives history and folders retry after it updates',async t=>{
@@ -173,6 +202,7 @@ test('an older central without folder publication still receives history and fol
   await f.service.synchronizePublisher()
   assert.ok(f.events.size>0)
   assert.equal(f.service.publisherStatus().rejectedFolders,0)
+  assert.deepEqual(f.service.publisherFolders(),[{id:folder,state:'pending',reason:'not_found'}])
   f.folderReply=null;await f.service.synchronizePublisher()
   const last=f.requests.filter(request=>request.url.endsWith('/folders')).at(-1)
   assert.equal(JSON.parse(last.options.body).resourceID,folder)

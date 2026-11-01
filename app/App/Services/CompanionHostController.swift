@@ -79,7 +79,7 @@ final class CompanionHostController {
     private let makeExposure: @MainActor () -> CompanionTailscaleServe
     private var generation = UUID()
     private var healthTask: Task<Void, Never>?
-    private var providerCatalogTask: Task<Void, Never>?
+    private let providerCatalogRefresh = CompanionSingleRefresh()
     private var availabilityTask: Task<Void, Never>?
     private let retryInterval: Duration
 
@@ -115,7 +115,7 @@ final class CompanionHostController {
         if model?.isBackendFrontend == true { await forward(.start); return }
         guard model?.isLibraryClient == false, !isStarting, endpoint == nil, model?.dashboardStore != nil else { return }
         isStarting = true; errorMessage = nil; status = "Connecting…"
-        generation = UUID()
+        generation = UUID(); providerCatalogRefresh.cancel()
         let expectedGeneration = generation
         var attemptListener: CompanionHTTPServer?
         var attemptExposure: CompanionTailscaleServe?
@@ -248,7 +248,7 @@ final class CompanionHostController {
 
     private func stopService() {
         generation = UUID(); healthTask?.cancel(); healthTask = nil
-        providerCatalogTask?.cancel(); providerCatalogTask = nil
+        providerCatalogRefresh.cancel()
         server?.stop(); server = nil; executionAPI = nil; inferenceHost = nil
         if let serve {
             serve.stop()
@@ -637,18 +637,12 @@ final class CompanionHostController {
             if let client = try? model?.centralExecutionClient() {
                 let known = Set(executionWorkspaces.filter { !$0.deleted && $0.retainedHistory != true }.map(\.id))
                 workspaceProviders = client.workspaceProviders.filter { known.contains($0.key) }
-                if providerCatalogTask == nil {
-                    let expectedGeneration = generation, workspaces = executionWorkspaces
-                    providerCatalogTask = Task { [weak self] in
-                        let providers = await client.providerCatalog(for: workspaces)
-                        guard let self, !Task.isCancelled else { return }
-                        // Only one catalog task exists at a time. Clear it before any stale
-                        // return so a restarted service can refresh the catalog again.
-                        self.providerCatalogTask = nil
-                        guard self.generation == expectedGeneration else { return }
-                        let active = Set(self.executionWorkspaces.filter { !$0.deleted && $0.retainedHistory != true }.map(\.id))
-                        self.workspaceProviders = providers.filter { active.contains($0.key) }
-                    }
+                let expectedGeneration = generation, workspaces = executionWorkspaces
+                providerCatalogRefresh.startIfIdle { [weak self] isCurrent in
+                    let providers = await client.providerCatalog(for: workspaces)
+                    guard let self, isCurrent(), self.generation == expectedGeneration else { return }
+                    let active = Set(self.executionWorkspaces.filter { !$0.deleted && $0.retainedHistory != true }.map(\.id))
+                    self.workspaceProviders = providers.filter { active.contains($0.key) }
                 }
             }
         } catch { errorMessage = error.localizedDescription }
@@ -758,6 +752,28 @@ struct CompanionHostSnapshot: Codable, Sendable {
     let executionWorkspaces: [CompanionExecutionWorkspace]
     let pendingDeviceRevocations: [String: [String]]
     var workspaceProviders: [String: [CompanionProvider]]? = nil
+}
+
+/// At most one refresh runs at a time. A finished refresh clears only its own
+/// registration, so one from a stopped or restarted service never clears or
+/// blocks a newer refresh, and a cancelled one can always be replaced.
+@MainActor final class CompanionSingleRefresh {
+    private var task: Task<Void, Never>?
+    private var token: UUID?
+    var isRunning: Bool { task != nil }
+    /// Starts `operation` unless a refresh is running. `isCurrent` reports whether
+    /// this refresh is still the registered, uncancelled one.
+    func startIfIdle(_ operation: @escaping @MainActor (_ isCurrent: @escaping @MainActor () -> Bool) async -> Void) {
+        guard task == nil else { return }
+        let token = UUID()
+        self.token = token
+        task = Task { [weak self] in
+            await operation { self?.token == token && !Task.isCancelled }
+            guard let self, self.token == token else { return }
+            self.task = nil; self.token = nil
+        }
+    }
+    func cancel() { task?.cancel(); task = nil; token = nil }
 }
 
 private struct ExecutionManagementAcknowledgement: Decodable { let revoked: Bool }

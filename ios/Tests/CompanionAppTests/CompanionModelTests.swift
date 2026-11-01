@@ -49,6 +49,39 @@ private actor ModelMac: CompanionTransport, CompanionCalendarTransport {
 }
 
 final class CompanionModelTests: XCTestCase {
+  /// A lost reply leaves change A with an unknown outcome. A is kept with its
+  /// command ID; a different change to the same item waits, an unrelated item
+  /// proceeds, and repeating A resends the original command rather than a new one.
+  @MainActor func testUnknownWorkspaceChangeOrdersOnlyItsOwnItemAndRetryKeepsItsIdentity() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let mac = ModelMac(); await mac.release()
+    let store = try MobileStore(file: directory.appendingPathComponent("library.json"))
+    let model = CompanionModel(store: store, transport: mac)
+    model.online = true
+    let renameA = CompanionWorkspaceAction.conversation(id: "chat-a", action: "rename", title: "A", folderID: nil)
+    await mac.loseNextReply()
+    let lost = await model.perform(renameA)
+    XCTAssertFalse(lost)
+    let recorded = await store.snapshot().commands.first { $0.command.workspaceAction == renameA }
+    let unknown = try XCTUnwrap(recorded)
+    XCTAssertNil(unknown.receipt, "The unconfirmed change is kept, not discarded or marked done")
+
+    let renameB = await model.perform(.conversation(id: "chat-b", action: "rename", title: "B", folderID: nil))
+    XCTAssertTrue(renameB, "An unrelated item is not blocked by A")
+    let moveA = await model.perform(.conversation(id: "chat-a", action: "move", title: nil, folderID: "folder"))
+    XCTAssertFalse(moveA, "A later change to the same item waits for A")
+    XCTAssertNotNil(model.errorMessage)
+
+    let retried = await model.perform(renameA)
+    XCTAssertTrue(retried)
+    let commands = await mac.commands
+    XCTAssertEqual(commands.filter { $0.workspaceAction == renameA }.map(\.commandID), [unknown.id, unknown.id], "Retry resends the original command identity")
+    XCTAssertFalse(commands.contains { $0.workspaceAction == .conversation(id: "chat-a", action: "move", title: nil, folderID: "folder") })
+    let saved = await store.snapshot().commands.first { $0.id == unknown.id }
+    XCTAssertEqual(saved?.receipt?.status, .completed)
+  }
+
   @MainActor func testWorkspaceGroupingResolvesRegisteredMacContentIdentityWithoutChangingRoute() {
     let model = CompanionModel()
     let registryID = UUID().uuidString.lowercased(), hostID = UUID().uuidString.lowercased(), contentID = UUID().uuidString.lowercased()

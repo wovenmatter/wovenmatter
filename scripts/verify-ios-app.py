@@ -21,8 +21,10 @@ PROFILES = {
     'distribution': ('Woven Matter', 'com.wovenmatter.companion'),
 }
 VERSION = re.compile(r'[0-9]+(\.[0-9]+){0,2}')
-# Present only in Debug builds (#if DEBUG); a distribution binary containing them is a Debug build.
-DEBUG_MARKERS = (b'WOVENMATTER_UI_FIXTURE', b'WOVENMATTER_UI_SCENARIO')
+# Every UI-test environment lookup is compiled only in Debug builds (#if DEBUG). The
+# prefixes deliberately also match variants such as WOVENMATTER_UI_FIXTURE_NAMESPACE
+# and WOVENMATTER_UI_TAB, so any fixture plumbing in a distribution binary fails.
+DEBUG_MARKERS = (b'WOVENMATTER_UI_FIXTURE', b'WOVENMATTER_UI_SCENARIO', b'WOVENMATTER_UI_TAB')
 REQUIRED_REASONS = ('UserDefaults', 'FileTimestamp', 'SystemBootTime')
 USAGE_DESCRIPTIONS = ('NSMicrophoneUsageDescription', 'NSCameraUsageDescription')
 ALLOWED_ENTITLEMENTS = {

@@ -82,6 +82,8 @@ def mutations():
     yield 'tracking privacy manifest', lambda app: edit_plist(app / 'PrivacyInfo.xcprivacy', lambda v: v.update(NSPrivacyTracking=True))
     yield 'empty required reason', lambda app: edit_plist(app / 'PrivacyInfo.xcprivacy', lambda v: v['NSPrivacyAccessedAPITypes'][1].update(NSPrivacyAccessedAPITypeReasons=[]))
     yield 'debug fixtures', lambda app: (app / 'WovenMatterCompanion').write_bytes(b'binary WOVENMATTER_UI_FIXTURE binary')
+    yield 'fixture namespace lookup', lambda app: (app / 'WovenMatterCompanion').write_bytes(b'binary WOVENMATTER_UI_FIXTURE_NAMESPACE\0binary')
+    yield 'fixture tab lookup', lambda app: (app / 'WovenMatterCompanion').write_bytes(b'binary WOVENMATTER_UI_TAB\0binary')
 
 
 def run_cli(prefix, extra_env, arguments):

@@ -32,12 +32,14 @@ struct NotePane: View {
   @State private var showsSaveDetails = false
   @State private var showsLinkEditor = false
   @State private var link = ""
+  /// Identity of the empty paragraph offered after a final table until the user writes in it.
+  @State private var trailingParagraphID = UUID().uuidString.lowercased()
   init(model: CompanionModel, note: CompanionNote) {
     self.model = model; self.note = note
     _title = State(initialValue: model.draftTitles[note.id] ?? note.title)
     _content = State(initialValue: model.draftContents[note.id] ?? note.content)
     _editorBase = State(initialValue: note)
-    _conflictsPresented = State(initialValue: model.fixture && ProcessInfo.processInfo.environment["WOVENMATTER_UI_SCENARIO"] == "conflict")
+    _conflictsPresented = State(initialValue: model.fixture && CompanionModel.uiScenario == "conflict")
   }
   private var document: NoteDocument? { RichDocumentEditing.document(content) }
   private var editable: Bool { RichDocumentEditing.canEdit(content) && !model.state.uncachedNoteIDs.contains(note.id) }
@@ -121,19 +123,22 @@ struct NotePane: View {
               if document.kind == .spreadsheet, document.databaseLink != nil, document.blocks.isEmpty {
                 LinkedArtifactPreview(model: model, note: note, tableID: nil, html: nil)
               }
-              ForEach(document.blocks, id: \.id) { block in
+              let numbers = RichDocumentEditing.listItemNumbers(document)
+              ForEach(renderedBlocks(document), id: \.id) { block in
                 switch block {
                 case .richText(let text):
                   HStack(alignment: .top, spacing: 9) {
-                    RichBlockTextView(block: text, generation: documentGeneration, editable: editable, controller: editorController,
+                    RichBlockTextView(block: text, listNumber: numbers[text.id], generation: documentGeneration, editable: editable, controller: editorController,
                       dictationEditor: dictationEditor, dictationIdentity: "note:\(note.id):\(text.id)",
                       focused: { selectedBlockID = text.id; MobileDictation.shared.activeEditor = dictationEditor },
                       paragraphBreak: { range, replacement in editParagraphs(text.id, range: range, replacement: replacement) },
                       deleteAtStart: { mergeBackward(text.id) }) { range, replacement in
                       do {
-                        let next = try RichDocumentEditing.replacingText(in: content, blockID: text.id, range: range, replacement: replacement, attributes: editorController.typingRun)
-                        editorController.expectCaret(NSRange(location: range.location + replacement.utf16.count, length: 0))
-                        editorController.recordTextChange(from: content, to: next, blockID: text.id, apply: adopt)
+                        let next = try RichDocumentEditing.replacingText(in: try editableContent(text.id), blockID: text.id, range: range, replacement: replacement, attributes: editorController.typingRun)
+                        let after = RichDocumentEditing.Caret(blockID: text.id, location: range.location + replacement.utf16.count)
+                        editorController.expectCaret(NSRange(location: after.location, length: 0))
+                        editorController.recordTextChange(from: content, to: next, blockID: text.id,
+                          before: .init(blockID: text.id, location: NSMaxRange(range)), after: after, apply: adopt)
                         content = next
                         documentGeneration += 1
                         persist()
@@ -203,9 +208,23 @@ struct NotePane: View {
     }
   }
   private func persist() { if editable { model.saveNote(id: note.id, title: title, content: content, base: editorBase) } }
+  /// A note that ends in a table, or has no blocks, offers an empty paragraph
+  /// after it. It joins the document only once the user writes in it.
+  private func renderedBlocks(_ document: NoteDocument) -> [NoteBlock] {
+    guard editable, document.kind == .note else { return document.blocks }
+    if let last = document.blocks.last, case .richText = last { return document.blocks }
+    return document.blocks + [.richText(.init(id: trailingParagraphID))]
+  }
+  private func isOfferedParagraph(_ blockID: String) -> Bool {
+    blockID == trailingParagraphID && document?.blocks.contains { $0.id == blockID } == false
+  }
+  /// The content an edit to `blockID` applies to, including the offered paragraph once written in.
+  private func editableContent(_ blockID: String) throws -> String {
+    isOfferedParagraph(blockID) ? try RichDocumentEditing.appendingParagraph(to: content, id: blockID) : content
+  }
   private func setStyle(_ style: NoteParagraphStyle) {
-    guard let id = selectedBlockID ?? document?.blocks.first?.id else { return }
-    change { try RichDocumentEditing.settingStyle(in: content, blockID: id, style: style) }
+    guard let id = editorController.activeBlockID ?? selectedBlockID ?? document?.blocks.first?.id else { return }
+    change { try RichDocumentEditing.settingStyle(in: try editableContent(id), blockID: id, style: style) }
   }
   private func format(_ format: RichDocumentEditing.TextFormat) {
     guard let id = editorController.activeBlockID ?? selectedBlockID ?? document?.blocks.first?.id else { return }
@@ -233,29 +252,36 @@ struct NotePane: View {
       editorController.setTypingRun(run)
     } else {
       editorController.clearTypingRun()
-      change { try RichDocumentEditing.formattingText(in: content, blockID: id, range: editorController.selection, format: format) }
+      change { try RichDocumentEditing.formattingText(in: try editableContent(id), blockID: id, range: editorController.selection, format: format) }
     }
   }
   /// Return and multi-line paste create paragraphs; the caret follows into the new block.
-  private func editParagraphs(_ blockID: String, range: NSRange, replacement: String) {
+  /// Returns whether the whole edit was saved, so dictation reports it exactly once.
+  private func editParagraphs(_ blockID: String, range: NSRange, replacement: String) -> Bool {
     do {
-      let typing = editorController.typingRun ?? RichDocumentEditing.typingFormat(in: content, blockID: blockID, at: range.location)
-      let result = try RichDocumentEditing.editing(content, blockID: blockID, range: range, replacement: replacement, attributes: editorController.typingRun)
-      applyStructure(result.content, caret: result.caret, typingRun: result.caret.blockID == blockID ? nil : typing, action: "New paragraph")
-    } catch { model.errorMessage = error.localizedDescription }
+      let base = try editableContent(blockID)
+      let typing = editorController.typingRun ?? RichDocumentEditing.typingFormat(in: base, blockID: blockID, at: range.location)
+      let result = try RichDocumentEditing.editing(base, blockID: blockID, range: range, replacement: replacement, attributes: editorController.typingRun)
+      return applyStructure(result.content, before: .init(blockID: blockID, location: NSMaxRange(range)), caret: result.caret,
+                            typingRun: result.caret.blockID == blockID ? nil : typing, action: "New paragraph")
+    } catch { model.errorMessage = error.localizedDescription; return false }
   }
   private func mergeBackward(_ blockID: String) {
+    guard !isOfferedParagraph(blockID) else { return }
     do {
       guard let result = try RichDocumentEditing.mergingBackward(content, blockID: blockID) else { return }
-      applyStructure(result.content, caret: result.caret, typingRun: nil, action: "Delete")
+      applyStructure(result.content, before: .init(blockID: blockID, location: 0), caret: result.caret, typingRun: nil, action: "Delete")
     } catch { model.errorMessage = error.localizedDescription }
   }
-  private func applyStructure(_ next: String, caret: RichDocumentEditing.Caret, typingRun: NoteTextRun?, action: String) {
-    guard next != content else { return }
-    editorController.recordChange(from: content, to: next, action: action, apply: adopt)
+  @discardableResult
+  private func applyStructure(_ next: String, before: RichDocumentEditing.Caret, caret: RichDocumentEditing.Caret,
+                              typingRun: NoteTextRun?, action: String) -> Bool {
+    guard next != content else { return false }
+    editorController.recordChange(from: content, to: next, action: action, before: before, after: caret, apply: adopt)
     editorController.focus(caret, typingRun: typingRun)
     selectedBlockID = caret.blockID
     adopt(next)
+    return true
   }
   private func adopt(_ value: String) { content = value; documentGeneration += 1; persist() }
   private func change(_ operation: () throws -> String) {
@@ -276,15 +302,19 @@ struct NotePane: View {
   @ObservationIgnored private weak var activeView: UITextView?
   @ObservationIgnored private var observers: [NSObjectProtocol] = []
   @ObservationIgnored private var currentContent: String?
+  @ObservationIgnored private var currentCaret: RichDocumentEditing.Caret?
+  @ObservationIgnored private var restoresFocus = false
   @ObservationIgnored private(set) var typingRun: NoteTextRun?
   @ObservationIgnored private var expectedCaret: NSRange?
   @ObservationIgnored private var typingBlock: String?
   @ObservationIgnored private var lastTypedAt: ContinuousClock.Instant?
-  @ObservationIgnored private var pendingFocus: (caret: RichDocumentEditing.Caret, typingRun: NoteTextRun?)?
+  @ObservationIgnored private var pendingFocus: (caret: RichDocumentEditing.Caret, typingRun: NoteTextRun?, raisesKeyboard: Bool)?
   private(set) var activeBlockID: String?
   private(set) var canUndo = false
   private(set) var canRedo = false
-  var selection: NSRange? { activeView?.selectedRange }
+  /// A caret waiting for its block to render is already the selection, so
+  /// formatting right after undo or Return addresses the block the user sees.
+  var selection: NSRange? { pendingFocus.map { NSRange(location: $0.caret.location, length: 0) } ?? activeView?.selectedRange }
   init() {
     history.levelsOfUndo = 100
     history.groupsByEvent = false
@@ -311,7 +341,9 @@ struct NotePane: View {
   }
   func expectCaret(_ range: NSRange) { expectedCaret = range }
   /// A structural edit names the block and offset where typing continues once that block renders.
-  func focus(_ caret: RichDocumentEditing.Caret, typingRun: NoteTextRun?) { pendingFocus = (caret, typingRun) }
+  func focus(_ caret: RichDocumentEditing.Caret, typingRun: NoteTextRun?, raisesKeyboard: Bool = true) {
+    pendingFocus = (caret, typingRun, raisesKeyboard); activeBlockID = caret.blockID
+  }
   func claimFocus(_ view: UITextView, blockID: String) {
     // A view not yet in a window retries from didMoveToWindow.
     guard let pending = pendingFocus, pending.caret.blockID == blockID, view.window != nil else { return }
@@ -319,7 +351,7 @@ struct NotePane: View {
     // Defer focus changes out of SwiftUI's update pass.
     DispatchQueue.main.async { [weak self, weak view] in
       guard let self, let view, view.window != nil else { return }
-      if !view.isFirstResponder { view.becomeFirstResponder() }
+      if pending.raisesKeyboard, !view.isFirstResponder { view.becomeFirstResponder() }
       view.selectedRange = NSRange(location: min(pending.caret.location, view.attributedText.length), length: 0)
       self.activate(view, blockID: blockID)
       if let run = pending.typingRun { self.setTypingRun(run) }
@@ -332,31 +364,49 @@ struct NotePane: View {
     activeView?.typingAttributes = RichBlockTextView.attributed(.init(runs: [sample])).attributes(at: 0, effectiveRange: nil)
   }
   func refreshUndoState() { canUndo = history.canUndo; canRedo = history.canRedo }
-  func undo() { guard history.canUndo else { return }; history.undo(); refreshUndoState() }
-  func redo() { guard history.canRedo else { return }; history.redo(); refreshUndoState() }
-  func reset() { history.removeAllActions(); currentContent = nil; pendingFocus = nil; typingBlock = nil; lastTypedAt = nil; clearTypingRun(); refreshUndoState() }
-  func recordTextChange(from old: String, to new: String, blockID: String, apply: @escaping (String) -> Void) {
+  func undo() { guard history.canUndo else { return }; restoring { history.undo() } }
+  func redo() { guard history.canRedo else { return }; restoring { history.redo() } }
+  /// Undo can remove the focused paragraph. Editing continues at the restored
+  /// caret; the keyboard is only raised again if it was already up.
+  private func restoring(_ operation: () -> Void) {
+    restoresFocus = activeView?.isFirstResponder == true
+    operation()
+    restoresFocus = false
+    refreshUndoState()
+  }
+  func reset() { history.removeAllActions(); currentContent = nil; currentCaret = nil; pendingFocus = nil; typingBlock = nil; lastTypedAt = nil; clearTypingRun(); refreshUndoState() }
+  /// `before` and `after` are where the caret stood around the change; undo and redo return there.
+  func recordTextChange(from old: String, to new: String, blockID: String,
+                        before: RichDocumentEditing.Caret, after: RichDocumentEditing.Caret, apply: @escaping (String) -> Void) {
     guard old != new else { return }
     let now = ContinuousClock.now
     let coalesces = typingBlock == blockID && lastTypedAt.map { $0.duration(to: now) < .milliseconds(650) } == true && !history.canRedo
-    if !coalesces { registerRestoration(old, apply: apply, action: "Typing") }
-    currentContent = new; typingBlock = blockID; lastTypedAt = now
+    if !coalesces { registerRestoration(old, caret: before, apply: apply, action: "Typing") }
+    currentContent = new; currentCaret = after; typingBlock = blockID; lastTypedAt = now
     refreshUndoState()
   }
-  func recordChange(from old: String, to new: String, action: String = "Format note", apply: @escaping (String) -> Void) {
-    registerRestoration(old, apply: apply, action: action)
+  /// A change without carets, such as formatting, leaves the caret where it is.
+  func recordChange(from old: String, to new: String, action: String = "Format note",
+                    before: RichDocumentEditing.Caret? = nil, after: RichDocumentEditing.Caret? = nil, apply: @escaping (String) -> Void) {
+    registerRestoration(old, caret: before, apply: apply, action: action)
     currentContent = new; typingBlock = nil; lastTypedAt = nil
+    if let after { currentCaret = after }
     refreshUndoState()
   }
-  private func registerRestoration(_ value: String, apply: @escaping (String) -> Void, action: String) {
+  private func registerRestoration(_ value: String, caret: RichDocumentEditing.Caret?, apply: @escaping (String) -> Void, action: String) {
     let ownsGroup = !history.isUndoing && !history.isRedoing
     let wasDisabled = !history.isUndoRegistrationEnabled
     if wasDisabled { history.enableUndoRegistration() }
     if ownsGroup { history.beginUndoGrouping() }
     history.registerUndo(withTarget: self) { controller in
       guard let inverse = controller.currentContent else { return }
-      controller.registerRestoration(inverse, apply: apply, action: action)
+      controller.registerRestoration(inverse, caret: controller.currentCaret, apply: apply, action: action)
       controller.currentContent = value
+      if let caret {
+        controller.currentCaret = caret
+        controller.typingBlock = nil; controller.clearTypingRun()
+        controller.focus(caret, typingRun: nil, raisesKeyboard: controller.restoresFocus)
+      }
       apply(value)
     }
     history.setActionName(action)
@@ -433,13 +483,16 @@ private struct ConflictPane: View {
 struct RichBlockTextView: UIViewRepresentable {
   @Environment(\.colorScheme) private var colorScheme
   var block: NoteRichTextBlock
+  /// The item number shown for a numbered-list paragraph.
+  var listNumber: Int?
   var generation: Int
   var editable: Bool
   var controller: MobileNoteEditorController
   var dictationEditor: MobileDictationEditor
   var dictationIdentity: String
   var focused: () -> Void
-  var paragraphBreak: (NSRange, String) -> Void
+  /// Applies a line break as a paragraph edit; false if nothing was saved.
+  var paragraphBreak: (NSRange, String) -> Bool
   var deleteAtStart: () -> Void
   var edit: (NSRange, String) -> (NoteRichTextBlock, Int)?
   func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -451,7 +504,7 @@ struct RichBlockTextView: UIViewRepresentable {
     view.overrideUserInterfaceStyle = colorScheme == .dark ? .dark : .light
     view.tintColor = DashboardColors.primary
     view.linkTextAttributes = [.foregroundColor: DashboardColors.success]
-    view.delegate = context.coordinator; view.attributedText = Self.attributed(block)
+    view.delegate = context.coordinator; view.attributedText = Self.attributed(block, listNumber: listNumber)
     dictationEditor.bind(view, identity: dictationIdentity)
     controller.bind(view, blockID: block.id)
     view.deleteAtStart = { [weak coordinator = context.coordinator] in coordinator?.parent.deleteAtStart() }
@@ -469,12 +522,12 @@ struct RichBlockTextView: UIViewRepresentable {
     context.coordinator.parent = self; view.isEditable = editable
     dictationEditor.bind(view, identity: dictationIdentity)
     context.coordinator.latestGeneration = generation
-    if context.coordinator.renderedBlock != block {
-      let desired = Self.attributed(block)
+    if context.coordinator.renderedBlock != block || context.coordinator.renderedNumber != listNumber {
+      let desired = Self.attributed(block, listNumber: listNumber)
       let selection = view.selectedRange; view.attributedText = desired
       let start = min(selection.location, desired.length)
       view.selectedRange = NSRange(location: start, length: min(selection.length, desired.length - start))
-      context.coordinator.renderedBlock = block
+      context.coordinator.renderedBlock = block; context.coordinator.renderedNumber = listNumber
     }
     view.accessibilityLabel = block.plainText.isEmpty ? "Note paragraph" : nil
     controller.claimFocus(view, blockID: block.id)
@@ -484,26 +537,33 @@ struct RichBlockTextView: UIViewRepresentable {
     let size = uiView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
     return CGSize(width: width, height: max(42, size.height))
   }
-  final class Coordinator: NSObject, UITextViewDelegate {
+  final class Coordinator: NSObject, UITextViewDelegate, MobileTextAdmitting {
     var parent: RichBlockTextView
     var latestGeneration: Int
     var renderedBlock: NoteRichTextBlock
-    init(_ parent: RichBlockTextView) { self.parent = parent; latestGeneration = parent.generation; renderedBlock = parent.block }
+    var renderedNumber: Int?
+    init(_ parent: RichBlockTextView) {
+      self.parent = parent; latestGeneration = parent.generation; renderedBlock = parent.block; renderedNumber = parent.listNumber
+    }
     func textViewDidBeginEditing(_ textView: UITextView) {
       parent.dictationEditor.bind(textView, identity: parent.dictationIdentity)
       parent.controller.activate(textView, blockID: parent.block.id)
       parent.focused()
     }
     func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
+      admit(textView, range: range, text: text) == .insertNatively
+    }
+    func admit(_ textView: UITextView, range: NSRange, text: String) -> MobileTextAdmission {
       // A paragraph break is a document change, never a newline inside this block.
-      if RichDocumentEditing.containsParagraphBreak(text) { parent.paragraphBreak(range, text); return false }
-      guard let (result, generation) = parent.edit(range, text) else { return false }
+      // The text view must not also insert it.
+      if RichDocumentEditing.containsParagraphBreak(text) { return parent.paragraphBreak(range, text) ? .applied : .rejected }
+      guard let (result, generation) = parent.edit(range, text) else { return .rejected }
       latestGeneration = generation; renderedBlock = result
-      let desired = RichBlockTextView.attributed(result)
+      let desired = RichBlockTextView.attributed(result, listNumber: parent.listNumber)
       if !text.isEmpty, desired.length > 0 { textView.typingAttributes = desired.attributes(at: min(range.location, desired.length - 1), effectiveRange: nil) }
       // UIKit owns insertion, composition and selection. Replacing the
       // attributed string on every key races SwiftUI and resets keyboard state.
-      return true
+      return .insertNatively
     }
     func textViewDidChange(_ textView: UITextView) {
       let actual = textView.text ?? ""
@@ -519,11 +579,11 @@ struct RichBlockTextView: UIViewRepresentable {
         let length = String(old[prefix..<(old.count - suffix)]).utf16.count
         let replacement = String(new[prefix..<(new.count - suffix)])
         if RichDocumentEditing.containsParagraphBreak(replacement) {
-          textView.attributedText = RichBlockTextView.attributed(renderedBlock)
-          parent.paragraphBreak(.init(location: start, length: length), replacement)
+          textView.attributedText = RichBlockTextView.attributed(renderedBlock, listNumber: renderedNumber)
+          _ = parent.paragraphBreak(.init(location: start, length: length), replacement)
         } else if let (result, generation) = parent.edit(.init(location: start, length: length), replacement) {
           renderedBlock = result; latestGeneration = generation
-        } else { textView.attributedText = RichBlockTextView.attributed(renderedBlock) }
+        } else { textView.attributedText = RichBlockTextView.attributed(renderedBlock, listNumber: renderedNumber) }
       }
       textView.invalidateIntrinsicContentSize()
       parent.controller.refreshUndoState()
@@ -532,11 +592,16 @@ struct RichBlockTextView: UIViewRepresentable {
       if textView.isFirstResponder { parent.controller.activate(textView, blockID: parent.block.id) }
     }
   }
-  static func attributed(_ block: NoteRichTextBlock) -> NSAttributedString {
+  /// Each paragraph is its own text view, so a numbered item carries its
+  /// number in the list's starting value instead of counting siblings.
+  static func attributed(_ block: NoteRichTextBlock, listNumber: Int? = nil) -> NSAttributedString {
     let result = NSMutableAttributedString()
     let paragraph = NSMutableParagraphStyle(); paragraph.lineSpacing = 4
     if block.style == .bulletedList || block.style == .numberedList {
-      paragraph.textLists = [NSTextList(markerFormat: block.style == .bulletedList ? .disc : .decimal, options: 0)]
+      let saved = block.list?.levels.last?.markerFormat.trimmingCharacters(in: .whitespaces)
+      let marker = saved.flatMap { $0.isEmpty ? nil : NSTextList.MarkerFormat(rawValue: $0) }
+        ?? (block.style == .bulletedList ? .disc : .decimal)
+      paragraph.textLists = [NSTextList(markerFormat: marker, options: [], startingItemNumber: listNumber ?? 1)]
       paragraph.headIndent = 24
     }
     for run in block.runs.isEmpty ? [NoteTextRun(text: "")] : block.runs {
