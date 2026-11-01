@@ -70,10 +70,13 @@ enum MobileStorePersistence {
       }
       return reference
     }
-    // Content can move between cache and local writing, such as when an edit is acknowledged.
-    for (reference, backup) in references { try applyBackupIfChanged(backup, at: directory.appendingPathComponent(reference)) }
+    // Content can move between cache and local writing, such as when an edit is
+    // acknowledged. Inclusion precedes the index commit; exclusion follows it, so a
+    // failed commit never leaves the previous index referencing excluded writing.
+    for (reference, backup) in references where backup == .include { try applyBackupIfChanged(.include, at: directory.appendingPathComponent(reference)) }
     let encoded = try JSONEncoder().encode(Envelope(version: 2, state: state))
     try writeDurably(encoded, at: file, backup: .include); bytesWritten += encoded.count
+    for (reference, backup) in references where backup == .exclude { try? applyBackupIfChanged(.exclude, at: directory.appendingPathComponent(reference)) }
     // Cleanup is best effort and occurs after the index commits. A crash can leave
     // an orphan, but can never evict a referenced draft, conflict or retry payload.
     if let files = try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) {
@@ -119,11 +122,17 @@ enum MobileStorePersistence {
     for id in Array(state.chatDrafts.keys) { state.chatDrafts[id]!.text = try body(state.chatDrafts[id]!.text, .local) }
   }
   static func applyBackup(_ backup: MobileBackup, at file: URL) throws {
+    try setBackupFlag(backup, at: file)
+    AppliedBackup.shared.record(backup, at: file.path)
+  }
+  private static func setBackupFlag(_ backup: MobileBackup, at file: URL) throws {
+    if let failure = backupFlagFailure, failure(file, backup) { throw CocoaError(.fileWriteUnknown) }
     var url = file, values = URLResourceValues()
     values.isExcludedFromBackup = backup == .exclude
     try url.setResourceValues(values)
-    AppliedBackup.shared.record(backup, at: file.path)
   }
+  /// Tests inject a metadata failure for one file and flag; nil in normal use.
+  nonisolated(unsafe) static var backupFlagFailure: ((URL, MobileBackup) -> Bool)?
   /// Avoids a metadata write per body on every save; each process verifies each body once.
   static func applyBackupIfChanged(_ backup: MobileBackup, at file: URL) throws {
     guard AppliedBackup.shared.value(at: file.path) != backup else { return }
@@ -138,6 +147,7 @@ enum MobileStorePersistence {
     func value(at path: String) -> MobileBackup? { lock.withLock { values[path] } }
     func record(_ backup: MobileBackup, at path: String) { lock.withLock { values[path] = backup } }
     func reset() { lock.withLock { values.removeAll() } }
+    func forget(_ path: String) { _ = lock.withLock { values.removeValue(forKey: path) } }
   }
   static func writeDurably(_ data: Data, at file: URL, backup: MobileBackup) throws {
     let directory = file.deletingLastPathComponent()
@@ -150,6 +160,12 @@ enum MobileStorePersistence {
     #endif
     let handle = try FileHandle(forWritingTo: temporary)
     try handle.synchronize(); try handle.close()
+    // The flag travels with the file through rename, so a failure to include it
+    // in backups happens before the commit and leaves the previous file intact.
+    // Only local writing must reach backups; a cache flag failure is harmless.
+    let flagged: Bool
+    if backup == .include { try setBackupFlag(.include, at: temporary); flagged = true }
+    else { flagged = (try? setBackupFlag(.exclude, at: temporary)) != nil }
     #if canImport(Darwin)
     guard rename(temporary.path, file.path) == 0 else { throw POSIXError(.init(rawValue: errno) ?? .EIO) }
     let descriptor = open(directory.path, O_RDONLY)
@@ -158,7 +174,7 @@ enum MobileStorePersistence {
     if FileManager.default.fileExists(atPath: file.path) { _ = try FileManager.default.replaceItemAt(file, withItemAt: temporary) }
     else { try FileManager.default.moveItem(at: temporary, to: file) }
     #endif
-    // Only local writing must reach backups; a cache flag failure is harmless.
-    if backup == .include { try applyBackup(.include, at: file) } else { try? applyBackup(.exclude, at: file) }
+    // Bookkeeping after the commit cannot fail.
+    if flagged { AppliedBackup.shared.record(backup, at: file.path) } else { AppliedBackup.shared.forget(file.path) }
   }
 }

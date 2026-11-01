@@ -42,6 +42,8 @@ public actor MobileCalendarStore {
   public init(file: URL, deviceID: String) throws {
     self.file = file; self.deviceID = deviceID
     state = FileManager.default.fileExists(atPath: file.path) ? try JSONDecoder().decode(State.self, from: Data(contentsOf: file)) : State()
+    // Earlier builds excluded local calendar changes; include them on open, before any edit.
+    if FileManager.default.fileExists(atPath: file.path) { try? MobileStorePersistence.applyBackupIfChanged(.include, at: file) }
   }
   public func allRecords() -> [CompanionCalendarRecord] { state.records.values.sorted { $0.id < $1.id } }
   /// Merge native execution-database edits against the exact replica version
@@ -168,12 +170,17 @@ public actor MobileCalendarStore {
       original.event.revision == expectedRevision, state.conflicts[id] == nil else { throw CompanionCalendarError.conflict }
     guard UUID(uuidString: replacementID) != nil, state.records[replacementID] == nil,
       let task = draft.task, !task.runtime.isEmpty, task.workspaceID != deviceID else { throw CompanionCalendarError.invalid }
-    let ran = state.runs.values.filter { $0.eventID == id && $0.status != "cancelled" }.map(\.scheduledAt)
+    // A pending reservation never started; it is cancelled below and its occurrence
+    // moves with the task. Running, finished or failed work fences the replacement,
+    // since a running claim's outcome may be uncertain.
+    let ran = state.runs.values.filter { $0.eventID == id && !["cancelled", "pending"].contains($0.status) }.map(\.scheduledAt)
+    // Occurrences the user deleted stay deleted, matched by date in the new recurrence.
+    let deleted = original.excludedOccurrences.compactMap { CompanionCalendarSchedule.date(original.event.draft, index: $0) }
     var excluded = Set<Int>()
     if draft.recurrenceUnit == nil {
       if let last = ran.max(), draft.startsAt <= last { throw MobileCalendarReassignmentError.alreadyRan }
     } else {
-      for date in ran {
+      for date in ran + deleted {
         if let index = CompanionCalendarSchedule.index(draft, onOrBefore: date), CompanionCalendarSchedule.date(draft, index: index) == date { excluded.insert(index) }
       }
     }

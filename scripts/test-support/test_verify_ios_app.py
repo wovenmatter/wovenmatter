@@ -17,11 +17,11 @@ import tempfile
 import zipfile
 
 sys.dont_write_bytecode = True  # Loading the verifier must not leave caches in the source tree.
-ROOT = pathlib.Path(__file__).resolve().parents[2]
-SCRIPT = ROOT / 'scripts/verify-ios-app.py'
-spec = importlib.util.spec_from_file_location('verify_ios_app', SCRIPT)
-verifier = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(verifier)
+_fixture_spec = importlib.util.spec_from_file_location('ios_app_fixture', pathlib.Path(__file__).resolve().parent / 'ios_app_fixture.py')
+fixture = importlib.util.module_from_spec(_fixture_spec)
+_fixture_spec.loader.exec_module(fixture)
+ROOT, SCRIPT, verifier = fixture.ROOT, fixture.SCRIPT, fixture.verifier
+write_plist, make_app = fixture.write_plist, fixture.make_app
 
 INTERPRETERS = [
     ([sys.executable, '-I'], {}),
@@ -32,32 +32,6 @@ INTERPRETERS = [
 
 def fail(message):
     raise SystemExit('FAIL: ' + message)
-
-
-def write_plist(path, value):
-    path.write_bytes(plistlib.dumps(value))
-
-
-def make_app(directory, profile='distribution'):
-    name, identifier = verifier.PROFILES[profile]
-    app = directory / 'WovenMatterCompanion.app'
-    app.mkdir(parents=True)
-    write_plist(app / 'Info.plist', {
-        'CFBundleDisplayName': name, 'CFBundleIdentifier': identifier, 'CFBundleExecutable': 'WovenMatterCompanion',
-        'CFBundleShortVersionString': '0.1.0', 'CFBundleVersion': '19',
-        'NSMicrophoneUsageDescription': 'Dictation.', 'NSCameraUsageDescription': 'Pairing.',
-        'CFBundleIcons': {'CFBundlePrimaryIcon': {'CFBundleIconName': 'AppIcon'}},
-    })
-    write_plist(app / 'PrivacyInfo.xcprivacy', {
-        'NSPrivacyTracking': False, 'NSPrivacyTrackingDomains': [],
-        'NSPrivacyAccessedAPITypes': [
-            {'NSPrivacyAccessedAPIType': 'NSPrivacyAccessedAPICategory' + category, 'NSPrivacyAccessedAPITypeReasons': ['X.1']}
-            for category in verifier.REQUIRED_REASONS],
-    })
-    (app / 'WovenMatterCompanion').write_bytes(b'\xcf\xfa\xed\xfe release binary')
-    (app / 'Assets.car').write_bytes(b'car')
-    (app / 'LUCIDE_LICENSE.txt').write_text('ISC')
-    return app
 
 
 def edit_plist(path, change):

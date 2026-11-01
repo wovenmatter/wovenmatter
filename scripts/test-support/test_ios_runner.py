@@ -1,12 +1,18 @@
 """Exercise simulator ownership, readiness, results and failure propagation offline."""
+import importlib.util
 import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 
+sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[2]
+_fixture_spec = importlib.util.spec_from_file_location('ios_app_fixture', Path(__file__).resolve().parent / 'ios_app_fixture.py')
+ios_app_fixture = importlib.util.module_from_spec(_fixture_spec)
+_fixture_spec.loader.exec_module(ios_app_fixture)
 STUB = '''#!/usr/bin/env python3
 import json, os, signal, sys, time
 from pathlib import Path
@@ -117,29 +123,51 @@ class IOSRunnerTests(unittest.TestCase):
 
 
 class IOSBuildSigningTests(unittest.TestCase):
+    """build-ios.sh signs for its destination, then verifies the product it built.
+
+    The fake xcodebuild builds nothing, so each case owns its build directory
+    and places a synthetic Dev bundle where Xcode would write that destination's
+    product. A missing or invalid product must fail the build.
+    """
+    def build(self, fixture, mode, products=None):
+        tool = fixture / 'xcodebuild'
+        tool.write_text(STUB)
+        tool.chmod(0o755)
+        build_dir = fixture / 'build'
+        if products:
+            ios_app_fixture.make_app(build_dir / 'Build/Products' / products, profile='dev')
+        calls = fixture / 'calls.jsonl'
+        environment = dict(os.environ, PATH=str(fixture) + os.pathsep + os.environ['PATH'],
+            WM_RUNNER_CALLS=str(calls), WM_NO_SIMULATOR='1',
+            WOVENMATTER_IOS_DEVICE_ID='test-phone', WOVENMATTER_IOS_BUILD_DIR=str(build_dir))
+        result = subprocess.run(['bash', str(ROOT / 'scripts/build-ios.sh'),
+            *([mode] if mode else [])], env=environment, capture_output=True, text=True)
+        return result, json.loads(calls.read_text()), build_dir
+
     def test_signing_matches_destination(self):
-        for mode, destination, allowed, identity in [
-            (None, 'generic/platform=iOS Simulator', 'YES', '-'),
-            ('--device-compile', 'generic/platform=iOS', 'NO', None),
-            ('--device', 'platform=iOS,id=test-phone', 'YES', None),
+        for mode, destination, allowed, identity, products in [
+            (None, 'generic/platform=iOS Simulator', 'YES', '-', 'Debug-iphonesimulator'),
+            ('--device-compile', 'generic/platform=iOS', 'NO', None, 'Debug-iphoneos'),
+            ('--device', 'platform=iOS,id=test-phone', 'YES', None, 'Debug-iphoneos'),
         ]:
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary:
-                fixture = Path(temporary)
-                tool = fixture / 'xcodebuild'
-                tool.write_text(STUB)
-                tool.chmod(0o755)
-                calls = fixture / 'calls.jsonl'
-                environment = dict(os.environ, PATH=str(fixture) + os.pathsep + os.environ['PATH'],
-                    WM_RUNNER_CALLS=str(calls), WM_NO_SIMULATOR='1',
-                    WOVENMATTER_IOS_DEVICE_ID='test-phone')
-                result = subprocess.run(['bash', str(ROOT / 'scripts/build-ios.sh'),
-                    *([mode] if mode else [])], env=environment, capture_output=True, text=True)
+                result, call, build_dir = self.build(Path(temporary), mode, products)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                call = json.loads(calls.read_text())
                 self.assertEqual(call[call.index('-destination') + 1], destination)
+                self.assertEqual(call[call.index('-derivedDataPath') + 1], str(build_dir))
                 self.assertIn('CODE_SIGNING_ALLOWED=' + allowed, call)
                 identities = [arg for arg in call if arg.startswith('CODE_SIGN_IDENTITY=')]
                 self.assertEqual(identities, ['CODE_SIGN_IDENTITY=' + identity] if identity else [])
+                self.assertIn('Verified dev iOS bundle', result.stdout)
+
+    def test_missing_or_wrong_product_fails_verification(self):
+        for mode, products in [(None, None), ('--device-compile', 'Debug-iphonesimulator')]:
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary:
+                result, call, _ = self.build(Path(temporary), mode, products)
+                self.assertEqual(call[0], 'xcodebuild')
+                self.assertNotEqual(result.returncode, 0, 'An unverified product must fail the build')
+                self.assertIn('Not an app bundle', result.stderr + result.stdout)
+                self.assertNotIn('Verified dev iOS bundle', result.stdout)
 
 
 if __name__ == '__main__':

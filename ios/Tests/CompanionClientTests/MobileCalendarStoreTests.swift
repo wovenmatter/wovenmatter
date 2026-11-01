@@ -122,4 +122,61 @@ final class MobileCalendarStoreTests: XCTestCase, @unchecked Sendable {
     let noUpload = try await store.nextMutation()
     XCTAssertNil(noUpload, "The replacement never uploads beside a schedule that was not retired")
   }
+
+  /// A pending reservation never started, so moving the task neither rejects it
+  /// as already run nor skips its occurrence; the phone's claim is cancelled.
+  /// A running or finished claim still fences the replacement.
+  func testPendingReservationMovesWithTheTaskWhileStartedWorkStaysFenced() async throws {
+    let (store, file) = try fixture(); defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+    let once = try await legacyPhoneTask(store, startsAt: date("2026-01-01T09:00:00Z"), recurring: false)
+    let reserved = try await XCTUnwrapAsync(try await store.dueRuns(deviceID: device, now: date("2026-01-01T09:01:00Z")).first)
+    var draft = once.event.draft; draft.task?.workspaceID = nil; draft.task?.runtime = "codex"
+    let movedOnce = try await store.reassign(id: once.id, expectedRevision: once.event.revision, draft: draft)
+    XCTAssertEqual(movedOnce.event.draft.startsAt, once.event.draft.startsAt, "The never-run time moves unchanged")
+    let cancelled = await store.runs(eventID: once.id).first { $0.id == reserved.id }
+    XCTAssertEqual(cancelled?.status, "cancelled")
+
+    let (dailyStore, second) = try fixture(); defer { try? FileManager.default.removeItem(at: second.deletingLastPathComponent()) }
+    let daily = try await legacyPhoneTask(dailyStore, startsAt: date("2026-02-01T09:00:00Z"), recurring: true)
+    let finished = try await runOnPhone(dailyStore, now: date("2026-02-02T10:00:00Z"))
+    let pending = try await XCTUnwrapAsync(try await dailyStore.dueRuns(deviceID: device, now: date("2026-02-04T10:00:00Z")).first)
+    XCTAssertNotEqual(pending.occurrence, finished.occurrence)
+    var dailyDraft = daily.event.draft; dailyDraft.task?.workspaceID = nil; dailyDraft.task?.runtime = "codex"
+    let current = try await XCTUnwrapAsync(await dailyStore.record(id: daily.id))
+    let movedDaily = try await dailyStore.reassign(id: daily.id, expectedRevision: current.event.revision, draft: dailyDraft)
+    XCTAssertEqual(movedDaily.excludedOccurrences, [finished.occurrence], "Only work that started is excluded")
+
+    // A running claim's outcome may be unknown, so a one-time task stays fenced.
+    let (third, thirdFile) = try fixture(); defer { try? FileManager.default.removeItem(at: thirdFile.deletingLastPathComponent()) }
+    let started = try await legacyPhoneTask(third, startsAt: date("2026-03-01T09:00:00Z"), recurring: false)
+    let claim = try await XCTUnwrapAsync(try await third.dueRuns(deviceID: device, now: date("2026-03-01T09:01:00Z")).first)
+    _ = try await third.beginRun(claim.id)
+    var startedDraft = started.event.draft; startedDraft.task?.workspaceID = nil; startedDraft.task?.runtime = "codex"
+    do { _ = try await third.reassign(id: started.id, expectedRevision: started.event.revision, draft: startedDraft); XCTFail("Running work would repeat") }
+    catch MobileCalendarReassignmentError.alreadyRan {}
+  }
+
+  /// Occurrences the user deleted stay deleted after the move, mapped by date
+  /// into the replacement's recurrence.
+  func testMovedRecurringTaskKeepsUserDeletedOccurrences() async throws {
+    let (store, file) = try fixture(); defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+    let legacy = try await legacyPhoneTask(store, startsAt: date("2026-01-01T09:00:00Z"), recurring: true)
+    try await store.delete(id: legacy.id, expectedRevision: legacy.event.revision, occurrence: 10)
+    let current = try await XCTUnwrapAsync(await store.record(id: legacy.id))
+    XCTAssertEqual(current.excludedOccurrences, [10])
+    var same = current.event.draft; same.task?.workspaceID = nil; same.task?.runtime = "codex"
+    let moved = try await store.reassign(id: legacy.id, expectedRevision: current.event.revision, draft: same)
+    XCTAssertEqual(moved.excludedOccurrences, [10], "The deleted future occurrence does not return")
+
+    // A replacement starting later maps the same date to its own index.
+    let (otherStore, second) = try fixture(); defer { try? FileManager.default.removeItem(at: second.deletingLastPathComponent()) }
+    let other = try await legacyPhoneTask(otherStore, startsAt: date("2026-01-01T09:00:00Z"), recurring: true)
+    try await otherStore.delete(id: other.id, expectedRevision: other.event.revision, occurrence: 10)
+    let otherCurrent = try await XCTUnwrapAsync(await otherStore.record(id: other.id))
+    var later = otherCurrent.event.draft; later.task?.workspaceID = nil; later.task?.runtime = "codex"
+    later.startsAt = date("2026-01-05T09:00:00Z")
+    let shifted = try await otherStore.reassign(id: other.id, expectedRevision: otherCurrent.event.revision, draft: later)
+    XCTAssertEqual(shifted.excludedOccurrences, [6], "January 11 is index 6 of a schedule starting January 5")
+    XCTAssertNil(CompanionCalendarSchedule.occurrence(shifted, index: 6))
+  }
 }

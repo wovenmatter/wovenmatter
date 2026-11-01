@@ -3,19 +3,54 @@ import CryptoKit
 @testable import CompanionClient
 import WovenMatterCompanion
 
+/// Serves one remote artifact; uploads are accepted in full.
+private actor BackupArtifactLibrary: FederationTransport {
+  var remote: CompanionArtifactManifest?, remoteData = Data()
+  var uploaded: [String: Data] = [:], uploadManifests: [String: CompanionArtifactManifest] = [:]
+  func publish(_ data: Data, id: String) {
+    remoteData = data
+    remote = .init(id: id, workspaceID: "mac", title: "From the Mac", mediaType: "text/plain", byteCount: Int64(data.count),
+      sha256: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined(), revision: 1)
+  }
+  func libraryIdentity() throws -> CompanionLibraryIdentity { throw MobileConnectionError.offline }
+  func executionWorkspaces() -> [CompanionExecutionWorkspace] { [] }
+  func registerWorkspace(_ registration: CompanionWorkspaceRegistration) throws -> CompanionExecutionWorkspace { throw MobileConnectionError.offline }
+  func journal(after: Int64) throws -> CompanionJournalPage { throw MobileConnectionError.offline }
+  func importJournal(_ batch: CompanionJournalBatch) throws -> CompanionJournalBatchResult { throw MobileConnectionError.offline }
+  func artifactManifests() -> [CompanionArtifactManifest] { remote.map { [$0] } ?? [] }
+  func registerArtifact(_ registration: CompanionArtifactRegistration) -> CompanionArtifactTransfer {
+    var manifest = registration.manifest; manifest.revision = 1; uploadManifests[manifest.id] = manifest
+    return .init(manifest: manifest, nextOffset: Int64(uploaded[manifest.id]?.count ?? 0), complete: false)
+  }
+  func artifactStatus(_ id: String) throws -> CompanionArtifactTransfer { throw MobileConnectionError.offline }
+  func uploadArtifactChunk(_ chunk: CompanionArtifactChunk) throws -> CompanionArtifactTransfer {
+    uploaded[chunk.id, default: Data()].append(chunk.data)
+    return .init(manifest: uploadManifests[chunk.id]!, nextOffset: Int64(uploaded[chunk.id]!.count), complete: false)
+  }
+  func commitArtifact(_ commit: CompanionArtifactCommit) throws -> CompanionArtifactManifest { uploadManifests[commit.id]! }
+  func downloadArtifactChunk(_ id: String, revision: Int64, offset: Int64) throws -> CompanionArtifactChunk {
+    .init(id: id, revision: revision, offset: offset, data: remoteData.subdata(in: Int(offset)..<remoteData.count))
+  }
+}
+
 /// Backups must keep writing that exists only on this device and may skip
 /// caches that central can provide again. A restore omits those caches.
 final class MobileStoreBackupTests: XCTestCase {
   private var roots: [URL] = []
-  override func tearDown() { for root in roots { try? FileManager.default.removeItem(at: root) }; super.tearDown() }
+  override func tearDown() {
+    MobileStorePersistence.backupFlagFailure = nil
+    for root in roots { try? FileManager.default.removeItem(at: root) }; super.tearDown()
+  }
   private func file() -> URL {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent("backup-" + UUID().uuidString, isDirectory: true)
     roots.append(root)
     return root.appendingPathComponent("library.json")
   }
+  /// Reads the flag from disk. Resource-value reads can be served from a
+  /// per-process cache after another URL changed the same file.
   private func excluded(_ url: URL) throws -> Bool {
     XCTAssertTrue(FileManager.default.fileExists(atPath: url.path), url.lastPathComponent)
-    return try url.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup ?? false
+    return getxattr(url.path, "com.apple.metadata:com_apple_backup_excludeItem", nil, 0, 0, 0) >= 0
   }
   private func body(_ content: String, in file: URL) -> URL {
     let digest = SHA256.hash(data: Data(content.utf8)).map { String(format: "%02x", $0) }.joined()
@@ -26,7 +61,7 @@ final class MobileStoreBackupTests: XCTestCase {
   private func restore(_ file: URL) throws {
     let root = file.deletingLastPathComponent()
     for case let url as URL in FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isExcludedFromBackupKey])! {
-      if try url.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup == true { try FileManager.default.removeItem(at: url) }
+      if try excluded(url) { try FileManager.default.removeItem(at: url) }
     }
     MobileStorePersistence.forgetAppliedBackups()
   }
@@ -103,5 +138,127 @@ final class MobileStoreBackupTests: XCTestCase {
     let artifacts = file.appendingPathExtension("artifacts")
     XCTAssertFalse(try excluded(artifacts.appendingPathComponent(saved.sha256 + ".blob")))
     XCTAssertFalse(try excluded(artifacts.appendingPathComponent("index.json")))
+  }
+
+  /// Every file an earlier build wrote, excluded as that build did (files only).
+  private func excludeEverything(under root: URL) throws {
+    for case let url as URL in FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey])!
+      where try url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true && url.pathExtension != "sqlite" {
+      // Written directly and synchronously, as a completed earlier launch left it.
+      let value = Array("com.apple.backupd".utf8)
+      XCTAssertEqual(setxattr(url.path, "com.apple.metadata:com_apple_backup_excludeItem", value, value.count, 0, 0), 0)
+      XCTAssertTrue(try excluded(url))
+    }
+    MobileStorePersistence.forgetAppliedBackups()
+  }
+
+  /// Upgrading must protect existing phone history, calendar changes and saved
+  /// files as soon as they are opened, not only after their next edit.
+  func testEarlierBuildsExcludedHistoryCalendarAndSavedFilesAreIncludedOnOpenWithoutEdits() async throws {
+    let file = file(), root = file.deletingLastPathComponent()
+    var store: MobileStore? = try MobileStore(file: file)
+    let device = await store!.snapshot().deviceID
+    let transcript = CompanionTranscript(conversationID: "quick-chat", messages: [.init(id: "m", conversationID: "quick-chat", role: "user", content: "Asked before upgrading")])
+    try await store!.adoptExecution(conversation: .init(id: "quick-chat", title: "Quick Chat"), transcript: transcript)
+    try await store!.journal.appendNativeRecord(workspaceID: device, conversationID: "quick-chat", recordID: "r", format: "pi-durable.entry.v1", data: Data("native before upgrading".utf8))
+    let event = try await store!.calendar.save(expectedRevision: nil, draft: .init(title: "Offline event", startsAt: Date(timeIntervalSince1970: 1_800_000_000)))
+    let saved = try await store!.artifacts.save(data: Data("scanned before upgrading".utf8), workspaceID: device, title: "Scan", mediaType: "text/plain")
+    store = nil
+    try excludeEverything(under: root)
+
+    _ = try MobileStore(file: file) // Open only; no edit.
+    let journalBodies = file.appendingPathExtension("execution.bodies")
+    for url in [file.appendingPathExtension("execution"), file.appendingPathExtension("calendar"),
+                file.appendingPathExtension("artifacts").appendingPathComponent("index.json"),
+                file.appendingPathExtension("artifacts").appendingPathComponent(saved.sha256 + ".blob")]
+      + (try FileManager.default.contentsOfDirectory(at: journalBodies, includingPropertiesForKeys: nil)) {
+      XCTAssertFalse(try excluded(url), url.lastPathComponent)
+    }
+
+    try restore(file)
+    let restored = try MobileStore(file: file)
+    let journal = await restored.journal.snapshot()
+    XCTAssertTrue(journal.entries.values.contains { $0.nativeRecord?.data == Data("native before upgrading".utf8) })
+    let restoredState = await restored.snapshot()
+    XCTAssertEqual(restoredState.transcripts["quick-chat"]?.messages.first?.content, "Asked before upgrading")
+    let calendarRecord = await restored.calendar.record(id: event.id)
+    XCTAssertEqual(calendarRecord?.event.draft.title, "Offline event")
+    let pendingCalendar = await restored.calendar.pendingCount()
+    XCTAssertEqual(pendingCalendar, 1, "The unsent calendar change still waits to upload")
+    let local = await restored.artifacts.localURL(id: saved.id)
+    XCTAssertEqual(try Data(contentsOf: try XCTUnwrap(local)), Data("scanned before upgrading".utf8))
+    let uploads = await restored.artifacts.pendingUploadCount()
+    XCTAssertEqual(uploads, 1)
+  }
+
+  /// Identical bytes share one blob. Downloading a central copy of the same bytes
+  /// must not exclude the source of a file saved here that has not uploaded yet.
+  func testDownloadedCopyOfIdenticalBytesKeepsAPendingLocalSourceInBackups() async throws {
+    let root = file().deletingLastPathComponent().appendingPathComponent("artifacts")
+    let bytes = Data("the same scan on both devices".utf8)
+    let store = try SavedArtifactStore(directory: root)
+    let local = try await store.save(data: bytes, workspaceID: "phone", title: "Scan", mediaType: "text/plain")
+    let library = BackupArtifactLibrary(); await library.publish(bytes, id: "remote-copy")
+    try await store.refreshManifests(using: library)
+    let downloaded = try await store.download(id: "remote-copy", using: library)
+    XCTAssertEqual(downloaded.lastPathComponent, local.sha256 + ".blob", "Both records share one blob")
+    XCTAssertFalse(try excluded(downloaded), "A pending local file still needs these bytes")
+
+    try restore(root.appendingPathComponent("index.json"))
+    let restored = try SavedArtifactStore(directory: root)
+    let source = await restored.localURL(id: local.id)
+    XCTAssertEqual(try Data(contentsOf: try XCTUnwrap(source)), bytes)
+    let pending = await restored.pendingUploadCount()
+    XCTAssertEqual(pending, 1)
+    let fresh = BackupArtifactLibrary()
+    try await restored.synchronize(using: fresh)
+    let received = await fresh.uploaded[local.id]
+    XCTAssertEqual(received, bytes, "The restored queued upload sends the original bytes")
+
+    // With no local record left needing it, the shared blob becomes a cache again.
+    let onlyRemote = try SavedArtifactStore(directory: root.deletingLastPathComponent().appendingPathComponent("remote-only"))
+    try await onlyRemote.refreshManifests(using: library)
+    let cached = try await onlyRemote.download(id: "remote-copy", using: library)
+    XCTAssertTrue(try excluded(cached))
+  }
+
+  /// A metadata failure is reported before the commit, so disk and memory agree:
+  /// the previous file stays in place and the next save starts from it.
+  func testBackupFlagFailureLeavesThePreviousCommittedFileAndState() async throws {
+    let calendarFile = file().deletingLastPathComponent().appendingPathComponent("calendar.json")
+    let calendar = try MobileCalendarStore(file: calendarFile, deviceID: "phone")
+    let first = try await calendar.save(expectedRevision: nil, draft: .init(title: "Kept", startsAt: Date(timeIntervalSince1970: 1_800_000_000)))
+    let before = try Data(contentsOf: calendarFile)
+    MobileStorePersistence.backupFlagFailure = { url, backup in url.lastPathComponent.hasPrefix(".write-") && backup == .include }
+    do { _ = try await calendar.save(expectedRevision: nil, draft: .init(title: "Not saved", startsAt: Date())); XCTFail("The failure must be reported") } catch {}
+    XCTAssertEqual(try Data(contentsOf: calendarFile), before, "Nothing was committed")
+    XCTAssertFalse(try excluded(calendarFile))
+    let inMemory = await calendar.allRecords().map(\.id)
+    XCTAssertEqual(inMemory, [first.id], "The actor did not adopt an uncommitted state")
+    MobileStorePersistence.backupFlagFailure = nil
+    let second = try await calendar.save(expectedRevision: nil, draft: .init(title: "Saved", startsAt: Date()))
+    let reopened = try MobileCalendarStore(file: calendarFile, deviceID: "phone")
+    let reopenedIDs = await reopened.allRecords().map(\.id)
+    XCTAssertEqual(Set(reopenedIDs), [first.id, second.id])
+  }
+
+  /// When writing becomes a rebuildable cache, its body is excluded only after the
+  /// new index commits. A failed commit leaves the old index and its body included.
+  func testFailedIndexCommitKeepsTheBodyThePreviousIndexNeedsInBackups() throws {
+    let file = file()
+    let content = try document("Local writing that later syncs")
+    let note = CompanionNote(id: "note", title: "Note", content: content, revision: 2, workspaceID: "mac")
+    var state = MobileStoreState(); state.workspaceID = "central"; state.notes[note.id] = note
+    _ = try MobileStorePersistence.persist(state, at: file)
+    XCTAssertFalse(try excluded(body(content, in: file)), "Unsynced writing is in backups")
+    let committed = try Data(contentsOf: file)
+    var synced = state; synced.bases[note.id] = note
+    MobileStorePersistence.backupFlagFailure = { url, _ in url.lastPathComponent.hasPrefix(".write-") }
+    XCTAssertThrowsError(try MobileStorePersistence.persist(synced, at: file))
+    MobileStorePersistence.backupFlagFailure = nil
+    XCTAssertEqual(try Data(contentsOf: file), committed)
+    XCTAssertFalse(try excluded(body(content, in: file)), "The previous index still needs this body")
+    _ = try MobileStorePersistence.persist(synced, at: file)
+    XCTAssertTrue(try excluded(body(content, in: file)), "After the commit it is a cache")
   }
 }

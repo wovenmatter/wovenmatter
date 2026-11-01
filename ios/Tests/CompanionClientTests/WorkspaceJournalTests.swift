@@ -28,14 +28,16 @@ private actor OfflineWorkspace: ExecutionWorkspaceTransport {
 private actor ReportingWorkspace: ExecutionWorkspaceTransport {
   var reported: CompanionExecutionWorkspace
   init(_ reported: CompanionExecutionWorkspace) { self.reported = reported }
+  var forged: [CompanionConversation] = []
   func report(_ value: CompanionExecutionWorkspace) { reported = value }
+  func forge(_ conversations: [CompanionConversation]) { forged = conversations }
   func identity() -> CompanionExecutionWorkspace { reported }
   func providers() -> [CompanionProvider] { [] }
   func pending() -> [CompanionPendingInteraction] { [] }
   func command(_ command: CompanionCommand) throws -> CompanionCommandReceipt { throw URLError(.badServerResponse) }
   func receipt(_ id: String) -> CompanionCommandReceipt? { nil }
   func events(after: Int64) -> CompanionJournalPage { .init(libraryID: "library", cursor: after) }
-  func conversations() -> [CompanionConversation] { [] }
+  func conversations() -> [CompanionConversation] { forged }
   func transcript(_ id: String) -> CompanionTranscript { .init(conversationID: id) }
   func folders() -> [CompanionFolder] { [] }
 }
@@ -86,6 +88,26 @@ final class WorkspaceJournalTests: XCTestCase {
     try await WorkspaceClient(store: store, workspaceID: "central-mac", transport: ReportingWorkspace(macReport)).checkConnection()
     let keptCentral = await store.journal.snapshot().workspaces["central-mac"]
     XCTAssertEqual(keptCentral?.capabilities, ["history.central.v1"])
+  }
+
+  /// Central history is authority, not display metadata: a registered Linux host
+  /// claiming it must not overwrite library conversations through refresh.
+  func testForgedCentralHistoryCannotOverwriteLibraryConversations() async throws {
+    let store = try MobileStore(file: path())
+    let original = CompanionConversation(id: "library-chat", title: "Planning", providerID: "codex", workspaceID: "central-mac")
+    try await store.apply(CompanionSnapshot(workspaceID: "library", cursor: 1, conversations: [original]))
+    let mac = "11111111-1111-4111-8111-111111111111"
+    let registered = CompanionExecutionWorkspace(id: "linux", libraryID: "library", ownerDeviceID: mac, kind: .linux, name: "Server",
+      endpoint: URL(string: "https://server.tail.ts.net"), executionDeviceID: "22222222-2222-4222-8222-222222222222", revision: 1)
+    try await store.journal.mergeRegistry([registered])
+    var claim = registered; claim.capabilities = ["history.central.v1"]
+    let host = ReportingWorkspace(claim)
+    await host.forge([.init(id: "library-chat", title: "Forged", providerID: "codex", workspaceID: "linux"),
+                      .init(id: "invented-chat", title: "Injected", providerID: "codex", workspaceID: "central-mac")])
+    try await WorkspaceClient(store: store, workspaceID: "linux", transport: host).refresh()
+    let conversations = await store.snapshot().conversations
+    XCTAssertEqual(conversations["library-chat"], original, "A host cannot rewrite a library conversation")
+    XCTAssertNil(conversations["invented-chat"], "A host cannot inject conversations as central history")
   }
 
   func testUnregisteredHostRecordsOnlyUnattestedDetailsUntilTheRegistryArrives() async throws {

@@ -39,6 +39,23 @@ public actor SavedArtifactStore {
       && !FileManager.default.fileExists(atPath: directory.appendingPathComponent(record.manifest.sha256 + ".blob").path) && record.localOrigin != true {
       state.records[id]?.complete = false; state.records[id]?.downloadedBytes = 0
     }
+    // Earlier builds excluded saved files; correct them on open, before any edit.
+    try? MobileStorePersistence.applyBackupIfChanged(.include, at: file)
+    for hash in Set(state.records.values.map(\.manifest.sha256)) { try? Self.applyBlobBackup(hash, in: state, directory: directory, downgrade: true) }
+  }
+  /// A blob is shared by every record with the same content. It stays in backups
+  /// while any of them exists only here: saved on this device or waiting to upload.
+  private static func backup(_ hash: String, in state: State) -> MobileBackup {
+    state.records.values.contains { $0.manifest.sha256 == hash && ($0.localOrigin == true || $0.upload) } ? .include : .exclude
+  }
+  /// Inclusion is applied before an index commits and must succeed. Exclusion is
+  /// best effort after a commit, so a failed write never leaves needed bytes excluded.
+  private static func applyBlobBackup(_ hash: String, in state: State, directory: URL, downgrade: Bool) throws {
+    let url = directory.appendingPathComponent(hash + ".blob")
+    guard FileManager.default.fileExists(atPath: url.path) else { return }
+    let backup = backup(hash, in: state)
+    if backup == .include { try MobileStorePersistence.applyBackupIfChanged(.include, at: url) }
+    else if downgrade { try? MobileStorePersistence.applyBackupIfChanged(.exclude, at: url) }
   }
   public func moveDeviceArtifacts(to libraryID: String, deviceID: String) throws {
     guard state.libraryID != libraryID else { return }
@@ -49,8 +66,7 @@ public actor SavedArtifactStore {
       next.records[id]?.upload = true
     }
     next.libraryID = libraryID
-    try MobileStorePersistence.writeDurably(JSONEncoder().encode(next), at: directory.appendingPathComponent("index.json"), backup: .include)
-    state = next
+    try commit(next)
   }
 
   public func manifests() -> [CompanionArtifactManifest] { state.records.values.map(\.manifest) }
@@ -170,8 +186,10 @@ public actor SavedArtifactStore {
       record.downloadedBytes = 0; try update(id, record); throw Failure.checksumMismatch
     }
     guard state.records[id]?.manifest == manifest else { throw Failure.invalidTransfer }
-    // Downloads are central copies and can be fetched again after a restore.
-    try MobileStorePersistence.writeDurably(downloaded, at: blob(manifest), backup: record.localOrigin == true ? .include : .exclude)
+    // Downloads are central copies and can be fetched again after a restore,
+    // unless identical bytes also belong to a file saved here.
+    var after = state; after.records[id] = record
+    try MobileStorePersistence.writeDurably(downloaded, at: blob(manifest), backup: Self.backup(manifest.sha256, in: after))
     record.complete = true; record.requestedDownload = false; record.pinned = state.records[id]?.pinned
     try update(id, record)
     try? FileManager.default.removeItem(at: partial)
@@ -195,6 +213,13 @@ public actor SavedArtifactStore {
   private func part(_ manifest: CompanionArtifactManifest) -> URL { directory.appendingPathComponent(Self.digest(Data((manifest.id + ":" + String(manifest.revision)).utf8)) + ".partial") }
   private func update(_ id: String, _ record: Record) throws {
     var next = state; next.records[id] = record
-    try MobileStorePersistence.writeDurably(JSONEncoder().encode(next), at: directory.appendingPathComponent("index.json"), backup: .include); state = next
+    try commit(next)
+  }
+  private func commit(_ next: State) throws {
+    let hashes = Set((state.records.values.map(\.manifest.sha256)) + next.records.values.map(\.manifest.sha256))
+    for hash in hashes { try Self.applyBlobBackup(hash, in: next, directory: directory, downgrade: false) }
+    try MobileStorePersistence.writeDurably(JSONEncoder().encode(next), at: directory.appendingPathComponent("index.json"), backup: .include)
+    state = next
+    for hash in hashes { try? Self.applyBlobBackup(hash, in: next, directory: directory, downgrade: true) }
   }
 }

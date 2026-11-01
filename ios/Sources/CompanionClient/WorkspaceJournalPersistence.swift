@@ -9,7 +9,9 @@ enum WorkspaceJournalPersistence {
   static func load(at file: URL) throws -> WorkspaceJournalState {
     let data = try Data(contentsOf: file)
     guard let envelope = try? JSONDecoder().decode(Envelope.self, from: data) else {
-      return try JSONDecoder().decode(WorkspaceJournalState.self, from: data)
+      let legacy = try JSONDecoder().decode(WorkspaceJournalState.self, from: data)
+      try? MobileStorePersistence.applyBackupIfChanged(.include, at: file)
+      return legacy
     }
     guard envelope.version == 2 else { throw WorkspaceJournal.Failure.incompatibleStore }
     var state = envelope.state
@@ -22,6 +24,10 @@ enum WorkspaceJournalPersistence {
       guard digest(data) == reference else { throw WorkspaceJournal.Failure.incompatibleStore }
       loaded[reference] = data; return data
     }
+    // Earlier builds excluded the journal. History may have no other copy until
+    // central accepts it, so include every body and the index on open, before any edit.
+    for reference in loaded.keys { try? MobileStorePersistence.applyBackupIfChanged(.include, at: directory(file).appendingPathComponent(reference)) }
+    try? MobileStorePersistence.applyBackupIfChanged(.include, at: file)
     return state
   }
   static func persist(_ source: WorkspaceJournalState, at file: URL) throws {

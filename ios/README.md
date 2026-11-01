@@ -38,14 +38,21 @@ to share, and web search itself is not limited.
 Earlier builds could assign scheduled tasks to the phone, which no longer runs
 schedules. Choosing a Mac or Linux agent for such a task retires it and creates a
 replacement with a new identity. The replacement uploads only after central
-accepts the retirement, and occurrences that already ran on the phone are
-excluded, so exactly one runnable copy exists.
+accepts the retirement, and occurrences that started on the phone (running,
+finished or failed) are excluded, so exactly one runnable copy exists. A
+reservation that never started is cancelled and its occurrence moves with the
+task, and occurrences the user deleted stay deleted, matched by date.
 
 Backups include writing that exists only on the device: offline and unsynced
 notes and their bases, conflicts, pending sends and chat drafts, phone Quick Chat
 history, local calendar changes and files saved on the device. Unchanged notes,
 transcripts and downloads that central can supply again are excluded; after a
-restore their metadata stays visible and the bodies are fetched again. Pairing and
+restore their metadata stays visible and the bodies are fetched again. Files that
+earlier builds excluded are corrected when each store opens, without waiting for
+an edit. A saved file's bytes stay in backups while any record sharing them was
+saved here or waits to upload, even after downloading an identical central copy.
+A backup flag that cannot be set fails the write before it commits, and content
+leaves backups only after the index that no longer needs it commits. Pairing and
 provider credentials are device-only Keychain items and are never restored, so a
 restored device pairs and signs in again.
 
