@@ -84,7 +84,10 @@ membership, routes, cursors, tombstones and recovery state survive restart.
 Large values are content-addressed separately from their row metadata. A receive
 page can durably queue such a row until its bytes arrive, allowing other writing
 to continue; waiting rows are scanned from a rotating durable position, so
-unavailable bytes never starve ready rows. File downloads retain byte offsets
+unavailable bytes never starve ready rows. A waiting row is relayed at once,
+ahead of later writing that covers it, and until it is applied a local edit of
+that identity stays concurrent with it, so a version whose bytes are still in
+transit is never silently superseded. File downloads retain byte offsets
 across restart, accept only the expected next chunk, and verify size and SHA-256
 before installing a local file, including a complete download interrupted before
 installation. Incomplete or corrupt files never replace a completed copy.
@@ -129,7 +132,9 @@ it acknowledges every known unpair event for its device, and an admission's
 subject signs the exact set it acknowledges. Concurrent unpairs on different Macs
 therefore all apply when they meet, and only a pairing made after learning them
 survives; a grant issued without knowledge of an unpair made elsewhere is
-revoked when that unpair arrives. Each exchange advances trust by one hop. The
+revoked when that unpair arrives. An exchange stops as soon as either Mac
+learns, from the other's membership or locally, that the other is unpaired:
+no further page is accepted or returned. Each exchange advances trust by one hop. The
 Macs this Mac admits when an exchange begins are the only signers it trusts in
 that exchange: every new unpair they signed is accepted together, as concurrent
 events, before any introduction is judged, and only those Macs (if still
@@ -196,11 +201,15 @@ workspace's registered library namespace and endpoint. Every new or renewed
 workspace credential the phone installs, whether requested automatically or
 from Settings, also replaces the token of each inference connection bound to
 that workspace's exact host scope and endpoint; a reconnect or re-pair during
-installation installs nothing further. A Dev connected client that keeps a
+installation installs nothing further. Concurrent requests for one workspace
+share a single issuance, and its inference connections and workspace client
+always follow the credential the phone's workspace vault holds. A Dev connected client that keeps a
 direct workspace credential clears it when the workspace rejects it and
 requests a replacement through its central library, retrying on each reachable
 central refresh until it succeeds, including after a restart; it never presents
-the rejected token again. The pending request records only workspace IDs, bound
+the rejected token again. Like a phone, it accepts a credential for a workspace
+another paired Mac owns only for that workspace's registered library namespace
+and endpoint. The pending request records only workspace IDs, bound
 to that client's library and device, and is cleared on success, on unpairing,
 or when the workspace is removed.
 The retired node's execution host, which runs only for a Dev connected client,

@@ -112,6 +112,7 @@ final class CentralLibraryClientModel {
     private let saveCentralCredential: @MainActor (MobileCredential) throws -> Void
     private let clearWorkspaceCredential: @MainActor (String) throws -> Void
     private let enrollWorkspace: (@MainActor (String) async throws -> DirectWorkspaceCredential)?
+    private let loadWorkspaceCredential: @MainActor (String) throws -> DirectWorkspaceCredential?
     private let saveWorkspaceCredential: @MainActor (DirectWorkspaceCredential) throws -> Void
     private let makeWorkspaceTransport: @MainActor (DirectWorkspaceCredential) throws -> any ExecutionWorkspaceTransport
     private let clearCentralCredential: @MainActor () throws -> Void
@@ -141,6 +142,7 @@ final class CentralLibraryClientModel {
          clearCentralCredential: @escaping @MainActor () throws -> Void = { try MobileCredentialVault.clear() },
          clearWorkspaceCredential: @escaping @MainActor (String) throws -> Void = { try WorkspaceCredentialVault.clear(workspaceID: $0) },
          enrollWorkspace: (@MainActor (String) async throws -> DirectWorkspaceCredential)? = nil,
+         loadWorkspaceCredential: @escaping @MainActor (String) throws -> DirectWorkspaceCredential? = { try WorkspaceCredentialVault.load(workspaceID: $0) },
          saveWorkspaceCredential: @escaping @MainActor (DirectWorkspaceCredential) throws -> Void = { try WorkspaceCredentialVault.save($0) },
          makeWorkspaceTransport: @escaping @MainActor (DirectWorkspaceCredential) throws -> any ExecutionWorkspaceTransport = {
              try HTTPSExecutionWorkspaceTransport(credential: $0)
@@ -152,6 +154,7 @@ final class CentralLibraryClientModel {
         self.clearCentralCredential = clearCentralCredential
         self.clearWorkspaceCredential = clearWorkspaceCredential
         self.enrollWorkspace = enrollWorkspace
+        self.loadWorkspaceCredential = loadWorkspaceCredential
         self.saveWorkspaceCredential = saveWorkspaceCredential
         self.makeWorkspaceTransport = makeWorkspaceTransport
         self.saveCentralCredential = saveCentralCredential
@@ -497,11 +500,18 @@ final class CentralLibraryClientModel {
             if DevelopmentLaunch.isClient, let credential { try? await DevelopmentLaunch.disconnect(deviceID: state.deviceID, credential: credential.token) }
         }
     }
+    /// This device's credential for its central library's namespace, or for a
+    /// workspace another paired Mac owns, checked against that workspace's
+    /// registered namespace and endpoint.
+    private func acceptsWorkspaceCredential(_ credential: DirectWorkspaceCredential) -> Bool {
+        WorkspaceCredentialPolicy.accepts(credential, deviceID: state.deviceID, libraryID: state.workspaceID,
+            registered: journal.workspaces[credential.workspaceID])
+    }
     private func configureDirectClients() throws {
         guard credential != nil, let store else { return }
         for workspace in executionWorkspaces where directClients[workspace.id] == nil {
-            if let credential = try WorkspaceCredentialVault.load(workspaceID: workspace.id) {
-                guard credential.deviceID == state.deviceID, credential.libraryID == state.workspaceID else { continue }
+            if let credential = try loadWorkspaceCredential(workspace.id) {
+                guard credential.workspaceID == workspace.id, acceptsWorkspaceCredential(credential) else { continue }
                 let connection = try makeWorkspaceTransport(credential)
                 directClients[workspace.id] = WorkspaceClient(store: store, workspaceID: workspace.id, transport: connection)
             }
@@ -578,7 +588,7 @@ final class CentralLibraryClientModel {
         do {
             let issued = try await enroll(workspaceID)
             guard generation == connectionGeneration, directClients[workspaceID] == nil else { return }
-            guard issued.workspaceID == workspaceID, issued.deviceID == state.deviceID, issued.libraryID == state.workspaceID else {
+            guard issued.workspaceID == workspaceID, acceptsWorkspaceCredential(issued) else {
                 throw MobileStore.Failure.wrongWorkspace
             }
             let client = WorkspaceClient(store: store, workspaceID: workspaceID, transport: try makeWorkspaceTransport(issued))

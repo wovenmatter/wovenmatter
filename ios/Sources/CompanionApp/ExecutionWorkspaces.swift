@@ -34,25 +34,82 @@ extension CompanionModel {
     try workspaceCredentials.save(credential)
     try await bindInferenceConnections(to: credential, generation: generation)
   }
-  /// Inference connections hosted by the workspace present its current token.
-  /// Only a connection with the credential's exact host scope and endpoint
-  /// changes; an unchanged token is not rewritten. Each write is conditional
-  /// on the token just read, so a concurrent renewal is never overwritten,
-  /// and a disconnect or re-pair during any read installs nothing further.
-  /// Callers commit a workspace client only after this returns.
+  /// Inference connections hosted by the workspace present its current token:
+  /// the one in the workspace vault. Only a connection with the credential's
+  /// exact host scope and endpoint changes; an unchanged token is not
+  /// rewritten. Bindings of one workspace run one at a time, in call order,
+  /// and a binding whose credential the vault no longer holds stops, so the
+  /// binding for the vault's latest credential always writes last. A lost
+  /// conditional write against another writer is retried. A disconnect or
+  /// re-pair during any read installs nothing further. Callers commit a
+  /// workspace client only after this returns.
   func bindInferenceConnections(to credential: DirectWorkspaceCredential, generation: UUID) async throws {
+    let id = credential.workspaceID, previous = workspaceBindings[id]
+    let binding = Task { [unowned self] () async throws -> Void in
+      _ = await previous?.result
+      try await bindInferenceConnectionsInOrder(to: credential, generation: generation)
+    }
+    workspaceBindings[id] = binding
+    defer { if workspaceBindings[id] == binding { workspaceBindings.removeValue(forKey: id) } }
+    try await binding.value
+  }
+  private func bindInferenceConnectionsInOrder(to credential: DirectWorkspaceCredential, generation: UUID) async throws {
     let current = { [unowned self] in generation == connectionGeneration && !pairingInProgress }
+    let owns = { [unowned self] in (try? workspaceCredentials.load(credential.workspaceID)) == credential }
     var seen = Set<String>()
     for connection in inferenceConnections + executionRecords.values.compactMap(\.connection)
       where Self.presentsWorkspaceCredential(connection, credential) && seen.insert(connection.id).inserted {
-      guard current() else { throw MobileConnectionError.revoked }
-      let stored = try await executionCredentialStore.read(connectionID: connection.id)
-      guard current() else { throw MobileConnectionError.revoked }
-      guard stored != credential.token else { continue }
-      if let stored { _ = try await executionCredentialStore.compareAndSwap(connectionID: connection.id, expected: stored, replacement: credential.token) }
-      else { try await executionCredentialStore.save(credential.token, connectionID: connection.id) }
+      var bound = false
+      for _ in 0..<8 {
+        guard current() else { throw MobileConnectionError.revoked }
+        guard owns() else { return }
+        let stored = try await executionCredentialStore.read(connectionID: connection.id)
+        guard current() else { throw MobileConnectionError.revoked }
+        guard owns() else { return }
+        if stored == credential.token { bound = true; break }
+        if let stored {
+          guard try await executionCredentialStore.compareAndSwap(connectionID: connection.id, expected: stored, replacement: credential.token) else { continue }
+        } else {
+          try await executionCredentialStore.save(credential.token, connectionID: connection.id)
+        }
+        // A newer install binds after this one, in order.
+        if owns() { bound = true; break }
+      }
+      guard bound || !owns() else { throw MobileConnectionError.invalidResponse }
     }
     guard current() else { throw MobileConnectionError.revoked }
+  }
+  /// Issues and installs a fresh credential for one workspace. Concurrent
+  /// first, automatic and manual requests in the same connection generation
+  /// share one issuance, so the installed credential is the last one issued.
+  func issueWorkspaceCredential(_ id: String, generation: UUID) async throws -> DirectWorkspaceCredential {
+    // The caller receives the credential the vault holds for this connection
+    // generation, never one a later issuance already replaced.
+    func held(_ issued: DirectWorkspaceCredential) async throws -> DirectWorkspaceCredential {
+      guard generation == connectionGeneration, !pairingInProgress,
+            let saved = try workspaceCredentials.load(id) else { throw MobileConnectionError.revoked }
+      if saved != issued, !(await acceptsWorkspaceCredential(saved)) { throw MobileConnectionError.revoked }
+      // Rechecked after the namespace lookup suspended.
+      guard generation == connectionGeneration, !pairingInProgress, try workspaceCredentials.load(id) == saved else {
+        throw MobileConnectionError.revoked
+      }
+      return saved
+    }
+    while let inFlight = workspaceIssuances[id] {
+      let result = await inFlight.task.result
+      if inFlight.generation == generation { return try await held(result.get()) }
+    }
+    guard generation == connectionGeneration, !pairingInProgress, let transport else { throw MobileConnectionError.revoked }
+    let task = Task { [unowned self] () async throws -> DirectWorkspaceCredential in
+      // Leaves the registry before any waiter observes completion.
+      defer { workspaceIssuances.removeValue(forKey: id) }
+      let credential = try await transport.executionCredential(workspaceID: id)
+      guard generation == connectionGeneration, !pairingInProgress else { throw MobileConnectionError.revoked }
+      try await installWorkspaceCredential(credential, generation: generation)
+      return credential
+    }
+    workspaceIssuances[id] = (generation, task)
+    return try await held(task.value)
   }
   nonisolated static func presentsWorkspaceCredential(_ connection: InferenceConnection, _ credential: DirectWorkspaceCredential) -> Bool {
     guard connection.route == .adapter, let scope = connection.hostScope else { return false }
@@ -62,20 +119,16 @@ extension CompanionModel {
   func authorizedWorkspaceCredential(_ id: String) async throws -> DirectWorkspaceCredential {
     guard !fixture, !isolatedTestHost else { throw DeviceExecutionError.unavailable("Use the regular app to authorize execution workspaces.") }
     if let existing = try workspaceCredentials.load(id), await acceptsWorkspaceCredential(existing) { return existing }
-    guard online, let transport else { throw DeviceExecutionError.unavailable("Connect to your central database to authorize this workspace for the first time.") }
-    let generation = connectionGeneration
-    let credential = try await transport.executionCredential(workspaceID: id)
-    try await installWorkspaceCredential(credential, generation: generation)
-    return credential
+    guard online, transport != nil else { throw DeviceExecutionError.unavailable("Connect to your central database to authorize this workspace for the first time.") }
+    return try await issueWorkspaceCredential(id, generation: connectionGeneration)
   }
   func renewWorkspaceAccess(_ id: String) async {
-    guard !fixture, !isolatedTestHost, let store, online, let transport else { errorMessage = "Connect to your central database to refresh device access."; return }
+    guard !fixture, !isolatedTestHost, let store, online, transport != nil else { errorMessage = "Connect to your central database to refresh device access."; return }
     let generation = connectionGeneration
     do {
-      let credential = try await transport.executionCredential(workspaceID: id)
-      guard generation == connectionGeneration, !pairingInProgress else { return }
-      try await installWorkspaceCredential(credential, generation: generation)
-      guard generation == connectionGeneration, !pairingInProgress else { return }
+      let credential = try await issueWorkspaceCredential(id, generation: generation)
+      // Only the credential the vault still holds becomes the workspace client.
+      guard generation == connectionGeneration, !pairingInProgress, try workspaceCredentials.load(id) == credential else { return }
       workspaceClients[id] = WorkspaceClient(store: store, workspaceID: id, transport: try HTTPSExecutionWorkspaceTransport(credential: credential))
       workspaceAuthorizationRetryAt.removeValue(forKey: id)
       await refreshDirectWorkspace(id)
@@ -125,12 +178,11 @@ extension CompanionModel {
         if workspaceClients[workspace.id] == nil {
           var saved = try workspaceCredentials.load(workspace.id)
           if let candidate = saved, !(await acceptsWorkspaceCredential(candidate)) { saved = nil }
-          if saved == nil, online, let transport {
+          if saved == nil, online, transport != nil {
             if !force, let retry = workspaceAuthorizationRetryAt[workspace.id], retry > Date() { continue }
             do {
-              let issued = try await transport.executionCredential(workspaceID: workspace.id)
+              let issued = try await issueWorkspaceCredential(workspace.id, generation: generation)
               guard generation == connectionGeneration, !pairingInProgress else { return }
-              try await installWorkspaceCredential(issued, generation: generation)
               saved = issued
             } catch {
               guard generation == connectionGeneration, !pairingInProgress else { return }
@@ -145,6 +197,8 @@ extension CompanionModel {
           catch MobileConnectionError.revoked { return }
           catch { workspaceProblems[workspace.id] = error.localizedDescription }
           guard generation == connectionGeneration, !pairingInProgress else { return }
+          // A renewal that installed a newer credential meanwhile commits its own client.
+          guard try workspaceCredentials.load(workspace.id) == credential, workspaceClients[workspace.id] == nil else { continue }
           workspaceClients[workspace.id] = WorkspaceClient(store: store, workspaceID: workspace.id,
             transport: try HTTPSExecutionWorkspaceTransport(credential: credential))
         }

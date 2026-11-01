@@ -757,7 +757,18 @@ private actor MemoryWorkspaceInferenceCredentials: InferenceCredentialUpdating {
     }
     return values[connectionID]
   }
-  func save(_ secret: String, connectionID: String) { values[connectionID] = secret }
+  private var suspendNextSave = false
+  private var saver: CheckedContinuation<Void, Never>?
+  private(set) var saveSuspended = false
+  func suspendSave() { suspendNextSave = true }
+  func resumeSave() { saveSuspended = false; saver?.resume(); saver = nil }
+  func save(_ secret: String, connectionID: String) async {
+    if suspendNextSave {
+      suspendNextSave = false
+      await withCheckedContinuation { saver = $0; saveSuspended = true }
+    }
+    values[connectionID] = secret
+  }
   func remove(connectionID: String) { values.removeValue(forKey: connectionID) }
   func compareAndSwap(connectionID: String, expected: String, replacement: String) -> Bool {
     guard values[connectionID] == expected else { return false }
@@ -851,5 +862,93 @@ extension ExecutionRoutingTests {
     XCTAssertEqual(stored["bound"], "old-token")
     XCTAssertEqual(stored["pinned"], "fresh-token")
     XCTAssertNil(model.workspaceClients["foreign"])
+  }
+
+  /// Two installs in the same connection generation: the earlier one suspends
+  /// while reading or writing an inference token, and the later one saves its
+  /// credential to the vault meanwhile; its inference binding then waits for
+  /// the earlier binding. The earlier install never overwrites the later
+  /// credential, so the vault and every hosted inference connection present
+  /// the same token. Concurrent requests share one in-flight issuance.
+  @MainActor func testConcurrentInstallsConvergeOnTheVaultCredentialAndShareOneIssuance() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = try MobileStore(file: root.appendingPathComponent("library.json"))
+    let model = CompanionModel(store: store, transport: ExecutionTestLibrary())
+    await model.reload()
+    let endpoint = URL(string: "https://other-mac.example.ts.net/wovenmatter")!
+    try await store.journal.upsertWorkspace(.init(id: "foreign", libraryID: "library-b", ownerDeviceID: "mac-b", kind: .mac, name: "Other Mac", endpoint: endpoint))
+    let vault = MemoryWorkspaceVault()
+    model.workspaceCredentials = vault.storage
+    let deviceID = model.state.deviceID
+    let bound = InferenceConnection(id: "bound", name: "bound", provider: "openai-codex", accountID: "account", route: .adapter,
+      baseURL: endpoint.absoluteString, modelID: "m",
+      hostScope: .init(libraryID: "library-b", workspaceID: "foreign", deviceID: deviceID, protocolVersion: CompanionProtocol.version))
+    let inference = MemoryWorkspaceInferenceCredentials(["bound": "old-token"])
+    model.executionCredentialStore = inference
+    model.inferenceConnections = [bound]
+    let first = DirectWorkspaceCredential(endpoint: endpoint, libraryID: "library-b", workspaceID: "foreign", deviceID: deviceID, token: "first-token")
+    var second = first; second.token = "second-token"
+    let installSecond = second
+    await inference.suspendRead()
+    let earlier = Task { try await model.installWorkspaceCredential(first, generation: model.connectionGeneration) }
+    for _ in 0..<2_000 where !(await inference.readSuspended) { try await Task.sleep(for: .milliseconds(5)) }
+    let suspended = await inference.readSuspended
+    XCTAssertTrue(suspended)
+    let overlapping = Task { try await model.installWorkspaceCredential(installSecond, generation: model.connectionGeneration) }
+    // The later install has saved its credential before the earlier read resumes.
+    for _ in 0..<2_000 where vault.credentials["foreign"] != second { try await Task.sleep(for: .milliseconds(5)) }
+    XCTAssertEqual(vault.credentials["foreign"], second)
+    await inference.resumeRead()
+    try await earlier.value
+    try await overlapping.value
+    XCTAssertEqual(vault.credentials["foreign"], second)
+    let stored = await inference.snapshot()
+    XCTAssertEqual(stored["bound"], "second-token")
+
+    // A connection without any token yet: the earlier install's first write
+    // suspends, a later install saves its credential meanwhile, and its
+    // binding, which waits for the earlier one, still writes last.
+    let fresh = InferenceConnection(id: "fresh", name: "fresh", provider: "openai-codex", accountID: "account", route: .adapter,
+      baseURL: endpoint.absoluteString, modelID: "m",
+      hostScope: .init(libraryID: "library-b", workspaceID: "foreign", deviceID: deviceID, protocolVersion: CompanionProtocol.version))
+    model.inferenceConnections = [fresh]
+    var third = first; third.token = "third-token"
+    var fourth = first; fourth.token = "fourth-token"
+    let installThird = third, installFourth = fourth
+    await inference.suspendSave()
+    let writing = Task { try await model.installWorkspaceCredential(installThird, generation: model.connectionGeneration) }
+    for _ in 0..<2_000 where !(await inference.saveSuspended) { try await Task.sleep(for: .milliseconds(5)) }
+    let saving = await inference.saveSuspended
+    XCTAssertTrue(saving)
+    let later = Task { try await model.installWorkspaceCredential(installFourth, generation: model.connectionGeneration) }
+    // The later install has saved its credential before the earlier save resumes.
+    for _ in 0..<2_000 where vault.credentials["foreign"] != fourth { try await Task.sleep(for: .milliseconds(5)) }
+    XCTAssertEqual(vault.credentials["foreign"], fourth)
+    await inference.resumeSave()
+    try await writing.value
+    try await later.value
+    XCTAssertEqual(vault.credentials["foreign"], fourth)
+    let rebound = await inference.snapshot()
+    XCTAssertEqual(rebound["fresh"], "fourth-token")
+
+    // A request made while an issuance is in flight joins it, and receives the
+    // credential the vault holds rather than one already replaced.
+    let replaced = second
+    let shared = Task<DirectWorkspaceCredential, any Error> { replaced }
+    model.workspaceIssuances["foreign"] = (model.connectionGeneration, shared)
+    let joined = try await model.issueWorkspaceCredential("foreign", generation: model.connectionGeneration)
+    XCTAssertEqual(joined, fourth)
+    model.workspaceIssuances.removeValue(forKey: "foreign")
+    vault.credentials["foreign"] = replaced
+    let current = Task<DirectWorkspaceCredential, any Error> { replaced }
+    model.workspaceIssuances["foreign"] = (model.connectionGeneration, current)
+    let same = try await model.issueWorkspaceCredential("foreign", generation: model.connectionGeneration)
+    XCTAssertEqual(same, replaced)
+    // A credential the vault no longer holds is never returned.
+    vault.credentials.removeValue(forKey: "foreign")
+    do { _ = try await model.issueWorkspaceCredential("foreign", generation: model.connectionGeneration); XCTFail("Returned a cleared credential") }
+    catch MobileConnectionError.revoked { }
+    model.workspaceIssuances.removeValue(forKey: "foreign")
   }
 }

@@ -889,3 +889,157 @@ extension PairedLibraryTests {
     #expect(try await total() == 34)
   }
 }
+
+
+extension PairedLibraryTests {
+  private func copyRecordBytes(from source: Mac, to target: Mac) async throws {
+    let sender = PairedLibraryFiles(root: source.directory), receiver = PairedLibraryFiles(root: target.directory)
+    for file in try await sender.page(after: "").files where file.store == "paired-records" {
+      while let offset = try await receiver.nextOffset(file) { try await receiver.receive(sender.chunk(.init(file: file, offset: offset))) }
+    }
+  }
+  private func largeEdit(_ mac: Mac, _ id: String, title: String) async throws {
+    let text = String(repeating: "Large offline writing 🧵 ", count: 20_000)
+    let content = try NoteDocument(blocks: [.richText(.init(text: text))]).encoded()
+    let receipt = try await mac.database.applyCompanionMutation(.init(deviceID: mac.id, kind: .updateNote, resourceID: id,
+      expectedRevision: mac.database.companionNote(id: id)?.revision, title: title, content: content))
+    #expect(receipt.status == .accepted)
+  }
+  private func titles(_ mac: Mac) async throws -> Set<String> { Set(try await mac.database.companionSnapshot().notes.map(\.title)) }
+
+  /// Malformed shared tool settings are quarantined on their own; the rest of
+  /// the page, and every later page, still applies.
+  @Test func malformedSharedToolSettingsAreQuarantinedWithoutStallingThePage() async throws {
+    let a = try await Mac(), b = try await Mac(); defer { a.remove(); b.remove() }
+    var settings = try await a.database.toolSettings(); settings.maximumManagedSessions = 5
+    try await a.database.saveToolSettings(settings)
+    let id = UUID().uuidString.lowercased()
+    try await a.note(id, title: "Writing beside bad settings")
+    let records = try await journal(a.database)
+    let valid = try #require(records.last { $0.table == "workspace_tool_settings" && $0.row["value"]?.type == "text" })
+    // Each malformed version supersedes the receiver's own, so it must materialize.
+    let local = try await b.database.read {
+      try $0.historyRowsUnlocked("SELECT json_extract(payload,'$.vector') AS vector FROM paired_library_rows WHERE table_name=? AND record_key=?",
+        values: [valid.table, valid.key]).first?.objectValue?["vector"]?.stringValue
+    }
+    var vector = try local.map { try JSONDecoder().decode([String: Int64].self, from: Data($0.utf8)) } ?? [:]
+    vector.merge(valid.vector, uniquingKeysWith: max)
+    let validValue = try #require(valid.row["value"]?.value)
+    let parsedShape = try JSONSerialization.jsonObject(with: Data(validValue.utf8))
+    var shape = try #require(parsedShape as? [String: Any])
+    shape["maximumManagedSessions"] = "five"
+    let incompatible = String(decoding: try JSONSerialization.data(withJSONObject: shape, options: [.sortedKeys]), as: UTF8.self)
+    let note = try #require(records.last { $0.table == "notes" && $0.key == "[\"\(id)\"]" })
+    for (index, value) in ["{not json", "[]", incompatible].enumerated() {
+      var row = valid.row; row["value"] = .init(type: "text", value: value)
+      let clock = (vector.values.max() ?? 0) + 1_000
+      vector[a.id] = clock
+      let malformed = PairedLibraryRecord(table: valid.table, key: valid.key, row: row, deleted: valid.deleted,
+        clock: clock, origin: a.id, vector: vector)
+      try await deliver(index == 0 ? [malformed, note] : [malformed], to: b.database, from: a.id)
+      #expect(try await b.database.pairedLibraryQuarantineCount() == index + 1)
+    }
+    #expect(try await b.database.companionNote(id: id)?.title == "Writing beside bad settings")
+    // The receiver's settings still load; nothing unreadable was stored.
+    _ = try await b.database.toolSettings()
+  }
+
+  /// A version waiting for its bytes has not been seen here. Later writing from
+  /// the same Mac applies meanwhile, but a local edit of the waiting note must
+  /// stay concurrent with it, never silently supersede it on every Mac.
+  @Test func aLocalEditWhileALargeVersionWaitsForItsBytesKeepsBothVersions() async throws {
+    let a = try await Mac(), b = try await Mac(); defer { a.remove(); b.remove() }
+    let id = UUID().uuidString.lowercased(), later = UUID().uuidString.lowercased()
+    try await a.note(id, title: "Shared")
+    try await a.send(to: b); try await b.send(to: a)
+    try await largeEdit(a, id, title: "Large Air edit")
+    try await a.note(later, title: "Later Air writing")
+    try await a.send(to: b)
+    #expect(try await b.database.companionNote(id: later)?.title == "Later Air writing")
+    #expect(try await b.database.companionNote(id: id)?.title == "Shared")
+    try await b.note(id, title: "Mini edit", revision: b.database.companionNote(id: id)?.revision)
+    try await copyRecordBytes(from: a, to: b)
+    try await b.database.materializePendingPeerRecords()
+    try await b.send(to: a); try await a.send(to: b)
+    #expect(try await a.database.companionNote(id: id)?.title == b.database.companionNote(id: id)?.title)
+    for mac in [a, b] {
+      let names = try await titles(mac)
+      #expect(names.contains("Mini edit") || names.contains("Mini edit (Recovered edit)"))
+      #expect(names.contains("Large Air edit") || names.contains("Large Air edit (Recovered edit)"))
+    }
+  }
+
+  /// A record whose envelope is invalid is quarantined even while its bytes are
+  /// unavailable: it is never queued, relayed or retried.
+  @Test func aMalformedWaitingRecordIsQuarantinedNotQueuedOrRelayed() async throws {
+    let a = try await Mac(), b = try await Mac(); defer { a.remove(); b.remove() }
+    let id = UUID().uuidString.lowercased()
+    try await a.note(id, title: "Shared")
+    let valid = try #require(try await journal(a.database).last { $0.table == "notes" && $0.key == "[\"\(id)\"]" })
+    var row = valid.row; row["content"] = .init(type: "reference:text", value: String(repeating: "a", count: 64))
+    // The origin's own entry disagrees with the record's clock.
+    var vector = valid.vector; vector[a.id] = valid.clock + 1
+    let malformed = PairedLibraryRecord(table: valid.table, key: valid.key, row: row, deleted: false, clock: valid.clock, origin: a.id, vector: vector)
+    let before = try await lastChange(b.database)
+    try await deliver([malformed], to: b.database, from: a.id)
+    #expect(try await b.database.pairedLibraryQuarantineCount() == 1)
+    #expect(try await b.database.read { try $0.historyRowsUnlocked("SELECT id FROM paired_library_pending", values: []).isEmpty })
+    #expect(try await lastChange(b.database) == before)
+  }
+
+  /// Several waiting versions of one note survive a restart, and an edit made
+  /// after the restart stays concurrent with the latest of them.
+  @Test func severalWaitingVersionsSurviveRestartAndStayConcurrentWithALocalEdit() async throws {
+    let a = try await Mac(), b = try await Mac(); defer { a.remove(); b.remove() }
+    let id = UUID().uuidString.lowercased(), later = UUID().uuidString.lowercased()
+    try await a.note(id, title: "Shared")
+    try await a.send(to: b); try await b.send(to: a)
+    try await largeEdit(a, id, title: "Large Air edit 1")
+    try await largeEdit(a, id, title: "Large Air edit 2")
+    try await a.note(later, title: "Later Air writing")
+    try await a.send(to: b)
+    #expect(try await b.database.read { try $0.historyRowsUnlocked("SELECT id FROM paired_library_pending", values: []).count } >= 2)
+    let restarted = try await WorkspaceDatabase(url: b.database.fileURL)
+    let content = try NoteDocument(blocks: [.richText(.init(text: "Mini edit"))]).encoded()
+    let receipt = try await restarted.applyCompanionMutation(.init(deviceID: b.id, kind: .updateNote, resourceID: id,
+      expectedRevision: restarted.companionNote(id: id)?.revision, title: "Mini edit", content: content))
+    #expect(receipt.status == .accepted)
+    try await copyRecordBytes(from: a, to: b)
+    try await restarted.materializePendingPeerRecords()
+    #expect(try await restarted.read { try $0.historyRowsUnlocked("SELECT id FROM paired_library_pending", values: []).isEmpty })
+    let names = Set(try await restarted.companionSnapshot().notes.map(\.title))
+    #expect(names.contains("Mini edit") || names.contains("Mini edit (Recovered edit)"))
+    #expect(names.contains("Large Air edit 2") || names.contains("Large Air edit 2 (Recovered edit)"))
+  }
+
+  /// A relaying Mac forwards a waiting version before any later writing that
+  /// covers it, so a third Mac that edits the note meanwhile cannot claim to
+  /// have seen the waiting version either.
+  @Test func aRelayedLaterWriteNeverLetsAThirdMacSupersedeAWaitingVersion() async throws {
+    let a = try await Mac(), b = try await Mac(), c = try await Mac(); defer { a.remove(); b.remove(); c.remove() }
+    let id = UUID().uuidString.lowercased(), later = UUID().uuidString.lowercased()
+    try await a.note(id, title: "Shared")
+    try await a.send(to: b); try await b.send(to: c)
+    try await largeEdit(a, id, title: "Large Air edit")
+    try await a.note(later, title: "Later Air writing")
+    // The Mini lacks the bytes and relays the Air's later writing to a third Mac.
+    try await a.send(to: b); try await b.send(to: c)
+    #expect(try await c.database.companionNote(id: later)?.title == "Later Air writing")
+    try await c.note(id, title: "Third Mac edit", revision: c.database.companionNote(id: id)?.revision)
+    try await c.send(to: b); try await c.send(to: a)
+    try await copyRecordBytes(from: a, to: b); try await copyRecordBytes(from: a, to: c)
+    for mac in [b, c] { try await mac.database.materializePendingPeerRecords() }
+    for _ in 0..<2 {
+      try await a.send(to: b); try await b.send(to: c); try await c.send(to: a)
+      try await b.send(to: a); try await c.send(to: b); try await a.send(to: c)
+    }
+    let winner = try await a.database.companionNote(id: id)?.title
+    #expect(try await b.database.companionNote(id: id)?.title == winner)
+    #expect(try await c.database.companionNote(id: id)?.title == winner)
+    for mac in [a, b, c] {
+      let names = try await titles(mac)
+      #expect(names.contains("Third Mac edit") || names.contains("Third Mac edit (Recovered edit)"))
+      #expect(names.contains("Large Air edit") || names.contains("Large Air edit (Recovered edit)"))
+    }
+  }
+}

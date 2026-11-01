@@ -274,6 +274,48 @@ struct CentralLibraryClientTests {
         #expect(await renewed.identityRequests == rejectedRequests)
     }
 
+    /// A workspace another paired Mac owns keeps its own library namespace. Its
+    /// replacement grant is accepted against that registered namespace and
+    /// endpoint; a grant for another namespace, endpoint or device never is.
+    @Test func aForeignWorkspaceGrantIsCheckedAgainstItsRegisteredNamespace() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        let replica = try MobileStore(file: fixture.directory.appending(path: "client/library.json"))
+        let library = "00000000-0000-4000-8000-000000000001", foreign = "00000000-0000-4000-8000-0000000000f0"
+        try await replica.bindWorkspace(library)
+        let deviceID = await replica.snapshot().deviceID
+        fixture.defaults.set(false, forKey: "wovenmatter.client.local-execution")
+        let central = MacClientFakeCentral(); await central.setOffline(true)
+        let remote = CompanionExecutionWorkspace(id: "foreign-remote", libraryID: foreign, ownerDeviceID: "other-mac", kind: .linux, name: "Linux",
+            endpoint: URL(string: "https://linux.example.ts.net/wovenmatter"))
+        let endpoint = try #require(remote.endpoint)
+        let valid = DirectWorkspaceCredential(endpoint: endpoint, libraryID: foreign, workspaceID: remote.id, deviceID: deviceID, token: "foreign-token")
+        var wrongEndpoint = valid; wrongEndpoint.endpoint = try #require(URL(string: "https://elsewhere.example.ts.net/wovenmatter")); wrongEndpoint.token = "endpoint"
+        var wrongLibrary = valid; wrongLibrary.libraryID = "00000000-0000-4000-8000-0000000000aa"; wrongLibrary.token = "library"
+        var wrongDevice = valid; wrongDevice.deviceID = "another-device"; wrongDevice.token = "device"
+        var issue = [wrongEndpoint, wrongLibrary, wrongDevice, valid]
+        var saved: [DirectWorkspaceCredential] = []
+        let renewed = MacClientFakeExecution(workspace: remote)
+        let model = CentralLibraryClientModel(store: replica, transport: central, executionDirectory: fixture.directory,
+            clearWorkspaceCredential: { _ in },
+            enrollWorkspace: { _ in issue.isEmpty ? valid : issue.removeFirst() },
+            saveWorkspaceCredential: { saved.append($0) },
+            makeWorkspaceTransport: { _ in renewed })
+        let stale = MacClientFakeExecution(workspace: remote); await stale.setRevoked(true)
+        try await model.attachExecutionWorkspace(remote, transport: stale)
+        // The rejected grant's first replacement names another endpoint: refused.
+        await model.refresh()
+        #expect(saved.isEmpty && !model.canControl(workspaceID: remote.id))
+        // Each later reachable central refresh retries; only the registered
+        // namespace, endpoint and this device are accepted.
+        await central.setOffline(false)
+        for _ in 0..<3 { await model.refresh() }
+        #expect(saved == [valid])
+        #expect(issue.isEmpty)
+        await model.refresh()
+        #expect(model.canControl(workspaceID: remote.id))
+        #expect(await renewed.identityRequests > 0)
+    }
+
     @Test func aRejectedDirectGrantIsReplacedOnceTheCentralIsReachableAgain() async throws {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
         let replica = try MobileStore(file: fixture.directory.appending(path: "client/library.json"))

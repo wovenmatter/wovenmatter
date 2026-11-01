@@ -355,10 +355,18 @@ final class PairedMacSyncController {
                 try await authentication.mergeMembership(exchange.membership, own: identity())
                 do { try await host.applyPeerRevocations(); errors.removeValue(forKey: "revocations") }
                 catch { errors["revocations"] = error.localizedDescription }
+                // An unpair learned in this exchange, or made here meanwhile, ends
+                // the requester's access before any page is accepted or returned.
+                guard await authentication.isAuthorizedPeer(principal) else {
+                    return .error("unauthorized", "This Mac is no longer paired.", status: 401)
+                }
                 try await database.receivePairedLibrary(exchange.page, from: principal.id)
                 let own = try await host.peerRoute()
                 let reply = try await PairedMacExchange(deviceID: own.deviceID, after: exchange.page.cursor,
                     page: database.pairedLibraryPage(after: exchange.after), membership: authentication.peerMembership())
+                guard await authentication.isAuthorizedPeer(principal) else {
+                    return .error("unauthorized", "This Mac is no longer paired.", status: 401)
+                }
                 lastSynchronized[principal.id] = Date(); errors.removeValue(forKey: principal.id)
                 Task { await host.model?.refreshWorkspace() }
                 return try .json(reply)
@@ -418,17 +426,26 @@ final class PairedMacSyncController {
                     if verified.name != route.name { try await database.savePairedMacRoute(verified) }
                     // Bound each turn so a slow peer never starves other peers.
                     for _ in 0..<8 {
+                        // An unpair made here meanwhile sends no further page.
+                        guard await authentication.isActiveMac(route.deviceID) else {
+                            throw CompanionAPIError(code: "peer_unpaired", message: "\(route.name) is no longer paired.")
+                        }
                         let cursors = try await database.pairedLibraryCursors(route.deviceID)
                         let page = try await database.pairedLibraryPage(after: cursors.pushed)
                         let exchange = PairedMacExchange(deviceID: own.deviceID, after: cursors.pulled, page: page, membership: await authentication.peerMembership())
                         let reply: PairedMacExchange = try await network.request(route.endpoint, path: "v1/peers/exchange", token: credential.token, body: JSONEncoder().encode(exchange))
                         guard reply.deviceID == route.deviceID, reply.after == page.cursor else { throw CompanionAPIError(code: "wrong_peer", message: "The peer did not acknowledge this exact page.") }
                         try await authentication.mergeMembership(reply.membership, own: identity)
+                        // An unpair learned from this reply, or made here while the
+                        // request was in flight, stops this exchange before its page.
+                        guard await authentication.isActiveMac(route.deviceID) else {
+                            throw CompanionAPIError(code: "peer_unpaired", message: "\(route.name) is no longer paired.")
+                        }
                         try await database.receivePairedLibrary(reply.page, from: route.deviceID)
                         try await database.acknowledgePairedLibrary(peer: route.deviceID, cursor: page.cursor)
                         if !page.hasMore && !reply.page.hasMore { break }
                     }
-                    if (nextFileAttempt[route.deviceID] ?? .distantPast) <= Date() {
+                    if (nextFileAttempt[route.deviceID] ?? .distantPast) <= Date(), await authentication.isActiveMac(route.deviceID) {
                         // File failure is independent of durable row acceptance.
                         do { try await synchronizeFiles(route: route, credential: credential) }
                         catch { errors["files:" + route.deviceID] = error.localizedDescription }
@@ -497,15 +514,17 @@ final class PairedMacSyncController {
     }
 
     private func synchronizeFiles(route: PairedMacRoute, credential: PairedMacCredential) async throws {
-        guard let files, let database = host?.model?.dashboardStore?.database else { return }
+        guard let files, let database = host?.model?.dashboardStore?.database, let authentication = try? await host?.peerAuthentication() else { return }
         var cursor = try await database.pairedLibraryFileCursor(route.deviceID), chunks = 0
         for _ in 0..<8 {
+            // An unpair made during a transfer sends no further request.
+            guard await authentication.isActiveMac(route.deviceID) else { return }
             let page: PairedLibraryFilePage = try await network.request(route.endpoint, path: "v1/peers/files", token: credential.token, body: JSONEncoder().encode(cursor))
             for file in page.files {
                 let errorKey = "file:" + route.deviceID + ":" + file.id
                 do {
                     while let offset = try await files.nextOffset(file) {
-                        guard !Task.isCancelled, chunks < 32 else { return }
+                        guard !Task.isCancelled, chunks < 32, await authentication.isActiveMac(route.deviceID) else { return }
                         let chunk: PairedLibraryFileChunk = try await network.request(route.endpoint, path: "v1/peers/file", token: credential.token,
                             body: JSONEncoder().encode(PairedLibraryFileRequest(file: file, offset: offset)))
                         guard chunk.file == file, chunk.offset == offset else { throw CompanionAPIError(code: "peer_file", message: "Shared file identity changed.") }

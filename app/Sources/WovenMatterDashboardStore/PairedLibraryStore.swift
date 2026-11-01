@@ -120,7 +120,7 @@ extension WorkspaceDatabaseConnection {
           let row = operation == "DELETE" ? "OLD" : "NEW"
           let name = "paired_\(table.name)_\(operation)"
           if let sql = try historyRowsUnlocked("SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?", values: [name]).first?.objectValue?["sql"]?.stringValue,
-             !sql.contains("paired_library_frontier") { try executeUnlocked("DROP TRIGGER " + Self.peerQuote(name)) }
+             !sql.contains("paired_library_pending") { try executeUnlocked("DROP TRIGGER " + Self.peerQuote(name)) }
           let condition = operation == "UPDATE" ? " AND (" + table.columns.map { "OLD.\(Self.peerQuote($0)) IS NOT NEW.\(Self.peerQuote($0))" }.joined(separator: " OR ") + ")" : ""
           try executeUnlocked("""
             CREATE TRIGGER IF NOT EXISTS paired_\(table.name)_\(operation) AFTER \(operation) ON \(Self.peerQuote(table.name))
@@ -189,7 +189,35 @@ extension WorkspaceDatabaseConnection {
       return ["'\(column)'", "json_object('type',typeof(\(value)),'value',CASE WHEN typeof(\(value))='blob' THEN hex(\(value)) WHEN typeof(\(value))='real' THEN printf('%!.17g',\(value)) ELSE CAST(\(value) AS TEXT) || '' END)"]
     }.joined(separator: ",")
     let tombstone = deleted ? "json('true')" : table.columns.contains("deleted_at") ? "json(CASE WHEN \(field("deleted_at")) IS NOT NULL THEN 'true' ELSE 'false' END)" : table.columns.contains("deleted") ? "json(CASE WHEN \(field("deleted"))<>0 THEN 'true' ELSE 'false' END)" : "json('false')"
-    return "json_object('table','\(table.name)','key',printf('%s',\(key)),'row',json_object(\(fields)),'deleted',\(tombstone),'clock',(SELECT tick FROM paired_library_clock),'origin',(SELECT device_id FROM paired_library_clock),'vector',json((SELECT vector FROM paired_library_clock)))"
+    return "json_object('table','\(table.name)','key',printf('%s',\(key)),'row',json_object(\(fields)),'deleted',\(tombstone),'clock',(SELECT tick FROM paired_library_clock),'origin',(SELECT device_id FROM paired_library_clock),'vector',\(captureVector(table, key: key)))"
+  }
+
+  /// The causal vector a local write of one identity carries. A version still
+  /// waiting for its bytes has not been seen here, although later writing from
+  /// its origin has advanced this Mac's clock. For each such version that the
+  /// identity's applied versions do not already cover, the write stays below
+  /// it, so it is concurrent with that version instead of silently superseding
+  /// it on every Mac.
+  private func captureVector(_ table: PeerTable, key: String) -> String {
+    let identity = "printf('%s',\(key))"
+    let waiting = "json_extract(paired_p.payload,'$.table')='\(table.name)' AND json_extract(paired_p.payload,'$.key')=\(identity)"
+    let entry = "'$.vector.\"' || paired_v.key || '\"'"
+    let seen = """
+      MAX(COALESCE((SELECT json_extract(paired_r.payload,\(entry)) FROM paired_library_rows paired_r
+          WHERE paired_r.table_name='\(table.name)' AND paired_r.record_key=\(identity)),0),
+        COALESCE((SELECT MAX(json_extract(paired_f.payload,\(entry))) FROM paired_library_frontier paired_f
+          WHERE paired_f.table_name='\(table.name)' AND paired_f.record_key=\(identity)),0))
+      """
+    let cap = """
+      (SELECT MIN(json_extract(paired_p.payload,'$.clock'))-1 FROM paired_library_pending paired_p
+        WHERE \(waiting) AND json_extract(paired_p.payload,'$.origin')=paired_v.key AND json_extract(paired_p.payload,'$.clock')>\(seen))
+      """
+    let capped = "MIN(paired_v.value,COALESCE(\(cap),paired_v.value))"
+    return """
+      json(CASE WHEN NOT EXISTS(SELECT 1 FROM paired_library_pending paired_p WHERE \(waiting)) THEN (SELECT vector FROM paired_library_clock)
+        ELSE (SELECT json_group_object(paired_v.key,\(capped)) FROM json_each((SELECT vector FROM paired_library_clock)) paired_v
+          WHERE \(capped)>0) END)
+      """
   }
 
   /// The execution owner republishes its native row as a new local version
@@ -218,15 +246,16 @@ extension WorkspaceDatabaseConnection {
       return ["'\(column)'", "json_object('type',typeof(\(value)),'value',CASE WHEN typeof(\(value))='blob' THEN hex(\(value)) WHEN typeof(\(value))='real' THEN printf('%!.17g',\(value)) ELSE CAST(\(value) AS TEXT) || '' END)"]
     }.joined(separator: ",")
     let tombstone = deleted ? "json('true')" : table.columns.contains("deleted_at") ? "json(CASE WHEN \(field("deleted_at")) IS NOT NULL THEN 'true' ELSE 'false' END)" : table.columns.contains("deleted") ? "json(CASE WHEN \(field("deleted"))<>0 THEN 'true' ELSE 'false' END)" : "json('false')"
-    let payload = "json_object('table','\(table.name)','key',printf('%s',\(key)),'row',json_object(\(fields)),'deleted',\(tombstone),'clock',(SELECT tick FROM paired_library_clock),'origin',(SELECT device_id FROM paired_library_clock),'vector',json((SELECT vector FROM paired_library_clock)))"
+    let payload = "json_object('table','\(table.name)','key',printf('%s',\(key)),'row',json_object(\(fields)),'deleted',\(tombstone),'clock',(SELECT tick FROM paired_library_clock),'origin',(SELECT device_id FROM paired_library_clock),'vector',\(captureVector(table, key: key)))"
     // A local write causally supersedes every version this Mac has applied,
-    // so its retained concurrent versions for that identity are obsolete.
+    // so its retained concurrent versions for that identity are obsolete. They
+    // are removed after the write's vector has been derived from them.
     let collapse = source.isEmpty ? "DELETE FROM paired_library_frontier WHERE table_name='\(table.name)' AND record_key=printf('%s',\(key));" : ""
     return """
-      \(collapse)
       INSERT INTO paired_library_changes(payload) SELECT \(payload)\(source);
       INSERT INTO paired_library_rows(table_name,record_key,payload) SELECT '\(table.name)',\(key),\(payload)\(source) WHERE true
       ON CONFLICT(table_name,record_key) DO UPDATE SET payload=excluded.payload;
+      \(collapse)
       """
   }
 
@@ -279,23 +308,33 @@ extension WorkspaceDatabaseConnection {
         // rejection discovered mid-materialization leaves no partial change.
         try executeUnlocked("SAVEPOINT paired_record")
         do {
+          // Everything checkable without the referenced bytes is checked first,
+          // so a malformed record is never queued or relayed.
+          guard let known = tables[received.table], UUID(uuidString: received.origin) != nil,
+                received.clock > 0, received.clock < Int64.max - 1,
+                received.vector.count <= 4096, received.vector[received.origin] == received.clock,
+                received.vector.allSatisfy({ UUID(uuidString: $0.key) != nil && $0.value > 0 && $0.value <= received.clock }),
+                Set(received.row.keys) == Set(known.columns) else { throw PeerRecordRejected(message: "Invalid shared record in " + received.table + ".") }
+          table = known
+          try validatePeerKey(received, table: table)
           guard let hydrated = try hydratePeerValues(received) else {
             if pendingID == nil {
               let payload = try peerJSON(received)
               let id = SHA256.hash(data: Data(payload.utf8)).map { String(format: "%02x", $0) }.joined()
+              // Relay a newly waiting version now, in arrival order, ahead of
+              // any later writing that covers it. A Mac that receives that
+              // writing from here then also knows this version is outstanding.
+              if try historyRowsUnlocked("SELECT 1 AS present FROM paired_library_pending WHERE id=?", values: [id]).isEmpty,
+                 try !frontierMembersUnlocked(table: received.table, key: received.key)
+                  .contains(where: { $0.vector == received.vector || $0.dominates(received) }) {
+                try toolsExecuteUnlocked("INSERT INTO paired_library_changes(payload) VALUES(?)", [payload])
+              }
               try toolsExecuteUnlocked("INSERT OR IGNORE INTO paired_library_pending VALUES(?,?,?,?)", [id, payload, peer, String(cursor ?? 0)])
             }
             try executeUnlocked("RELEASE paired_record")
             continue
           }
           record = hydrated
-          guard let known = tables[record.table], UUID(uuidString: record.origin) != nil,
-                record.clock > 0, record.clock < Int64.max - 1,
-                record.vector.count <= 4096, record.vector[record.origin] == record.clock,
-                record.vector.allSatisfy({ UUID(uuidString: $0.key) != nil && $0.value > 0 && $0.value <= record.clock }),
-                Set(record.row.keys) == Set(known.columns) else { throw PeerRecordRejected(message: "Invalid shared record in " + record.table + ".") }
-          table = known
-          try validatePeerKey(record, table: table)
           try applyPeerRecordUnlocked(record, table: table, scope: &scope)
         } catch let rejected as PeerRecordRejected {
           // One malformed record must not stall every independent resource
@@ -617,16 +656,28 @@ extension WorkspaceDatabaseConnection {
   /// Network exposure is a property of one Mac. Shared tool choices synchronize,
   /// while this Mac's outside MCP policy is never enabled or replaced by a peer.
   private func preservingLocalExposure(_ value: PairedLibraryValue, record: PairedLibraryRecord, table: PeerTable) throws -> PairedLibraryValue {
-    guard value.type == "text", let incoming = value.value,
-          var settings = try JSONSerialization.jsonObject(with: Data(incoming.utf8)) as? [String: Any] else { return value }
+    // Settings that this version cannot load are a deterministic rejection of
+    // this record, never a storage failure that stalls the page or a stored
+    // value that fails every later reload.
+    func loadable(_ data: Data) -> Bool { (try? JSONDecoder().decode(WorkspaceToolSettings.self, from: data).validate()) != nil }
+    guard value.type == "text", let incoming = value.value, loadable(Data(incoming.utf8)),
+          var settings = try? JSONSerialization.jsonObject(with: Data(incoming.utf8)) as? [String: Any] else {
+      throw PeerRecordRejected(message: "Invalid shared tool settings.")
+    }
     let match = table.keys.map { Self.peerQuote($0) + " IS ?" }.joined(separator: " AND ")
     let query = try prepareUnlocked("SELECT value FROM \(Self.peerQuote(table.name)) WHERE \(match)")
     defer { sqlite3_finalize(query) }
     for (index, key) in table.keys.enumerated() { try bindPeer(record.row[key]!, query, Int32(index + 1)) }
     let local = sqlite3_step(query) == SQLITE_ROW ? optionalText(query, column: 0) : nil
-    let localSettings = try local.flatMap { try JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] }
+    // An unreadable local value carries no exposure to keep: it stays disabled.
+    let localSettings = local.flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] }
     if let exposure = localSettings?["externalMCP"] { settings["externalMCP"] = exposure } else { settings.removeValue(forKey: "externalMCP") }
-    let data = try JSONSerialization.data(withJSONObject: settings, options: [.sortedKeys])
+    var data = try JSONSerialization.data(withJSONObject: settings, options: [.sortedKeys])
+    if !loadable(data) {
+      // An unreadable local exposure is not kept: it stays disabled.
+      settings.removeValue(forKey: "externalMCP")
+      data = try JSONSerialization.data(withJSONObject: settings, options: [.sortedKeys])
+    }
     return .init(type: "text", value: String(decoding: data, as: UTF8.self))
   }
 
