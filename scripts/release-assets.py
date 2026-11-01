@@ -4,11 +4,20 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import plistlib
 import re
 import xml.etree.ElementTree as ET
 
 SPARKLE = '{http://www.andymatuschak.org/xml-namespaces/sparkle}'
 PUBLIC_KEY = 'fuIqCE9IUmecB8Hjj44IcBz2XrVX/fMxenjhsTJIglI='
+INFO_PLIST = Path(__file__).resolve().parents[1] / 'app/App/Info.plist'
+
+def device_setup_version():
+    """The device-setup capability generate-release-manifest.sh publishes, read the same way."""
+    with INFO_PLIST.open('rb') as source:
+        value = plistlib.load(source).get('WovenMatterDeviceSetupVersion', 0)
+    assert type(value) is int and value >= 0, 'Invalid device setup capability in app Info.plist'
+    return value
 
 def digest(path):
     h = hashlib.sha256()
@@ -56,8 +65,10 @@ def verify(folder, version, revision):
     assert checksums[asset] == checksums[legacy], 'Compatibility DMG differs from signed update'
     manifest = json.loads((folder / 'latest-mac.json').read_text())
     prefix = f'https://github.com/wovenmatter/wovenmatter/releases/download/v{version}/'
+    # Exact integer type: in Python True == 1, so equality alone would accept a Bool.
+    assert type(manifest.get('device_setup_version')) is int, 'Device setup capability must be an integer'
     assert manifest == dict(schema_version=1, version=version, build=build, architecture='arm64',
-                           minimum_macos='26.0', download_url=prefix + legacy,
+                           minimum_macos='26.0', device_setup_version=device_setup_version(), download_url=prefix + legacy,
                            release_url=f'https://github.com/wovenmatter/wovenmatter/releases/tag/v{version}',
                            sha256=checksums[legacy])
     items = ET.parse(folder / 'appcast.xml').findall('./channel/item')

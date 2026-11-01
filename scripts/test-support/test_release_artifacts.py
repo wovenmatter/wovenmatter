@@ -70,7 +70,7 @@ def release_files(folder, payload):
     prefix = f'https://github.com/wovenmatter/wovenmatter/releases/download/v{VERSION}/'
     (folder / 'latest-mac.json').write_text(json.dumps(dict(
         schema_version=1, version=VERSION, build=BUILD, architecture='arm64', minimum_macos='26.0',
-        download_url=prefix + LEGACY, release_url=f'https://github.com/wovenmatter/wovenmatter/releases/tag/v{VERSION}',
+        device_setup_version=assets.device_setup_version(), download_url=prefix + LEGACY, release_url=f'https://github.com/wovenmatter/wovenmatter/releases/tag/v{VERSION}',
         sha256=hashlib.sha256(payload).hexdigest())))
     (folder / 'appcast.xml').write_text(
         '<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"><channel><item>'
@@ -97,6 +97,25 @@ with tempfile.TemporaryDirectory() as directory:
     calls, state, cache = temp / 'calls', temp / 'remote.json', temp / 'cache'
     # Every byte value, including ESC, as in a compressed disk image.
     original = release_files(temp / 'original', bytes(range(256)) * 1000)
+    # The manifest must carry the app's exact device-setup capability, as an integer.
+    manifest_file = original / 'latest-mac.json'
+    valid_manifest = manifest_file.read_text()
+    capability = assets.device_setup_version()
+    for label, change in [('missing', lambda m: m.pop('device_setup_version')),
+                          ('wrong value', lambda m: m.update(device_setup_version=capability + 1)),
+                          ('Bool masquerading as 1', lambda m: m.update(device_setup_version=bool(capability) if capability in (0, 1) else True)),
+                          ('string', lambda m: m.update(device_setup_version=str(capability))),
+                          ('float', lambda m: m.update(device_setup_version=float(capability)))]:
+        manifest = json.loads(valid_manifest); change(manifest)
+        manifest_file.write_text(json.dumps(manifest))
+        try:
+            assets.prepare(original, VERSION, BUILD, SHA)  # Rewrites checksums, then verifies.
+        except AssertionError:
+            pass
+        else:
+            raise SystemExit(f'FAIL: a {label} device setup capability was accepted')
+    manifest_file.write_text(valid_manifest)
+    assets.prepare(original, VERSION, BUILD, SHA)
     scope = cache / 'wovenmatter/wovenmatter' / f'7-{SHA}'
     env = dict(os.environ, PATH=str(stubs) + os.pathsep + os.environ['PATH'], RELEASE_CALLS=str(calls),
                RELEASE_REMOTE=str(state), WOVENMATTER_RELEASE_ARTIFACT_CACHE=str(cache))
