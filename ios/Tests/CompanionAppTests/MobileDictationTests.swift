@@ -1,5 +1,6 @@
 import XCTest
 import UIKit
+import SwiftUI
 import WovenMatterCompanion
 import CompanionClient
 @testable import WovenMatterMobileApp
@@ -170,5 +171,95 @@ import CompanionClient
     XCTAssertEqual(controller.activeBlockID, "B")
     controller.undo()
     XCTAssertEqual(controller.activeBlockID, "A")
+  }
+
+  /// A live note editor in a key window, driven through the same text view
+  /// delegate and undo manager UIKit uses for keys, shake and the edit menu.
+  @MainActor private struct LiveNote {
+    let window: UIWindow, previous: UIWindow?, model: CompanionModel
+    func editors() -> [MobileNoteTextView] {
+      func collect(_ view: UIView) -> [MobileNoteTextView] { (view as? MobileNoteTextView).map { [$0] } ?? view.subviews.flatMap(collect) }
+      return collect(window).sorted { $0.convert($0.bounds, to: nil).minY < $1.convert($1.bounds, to: nil).minY }
+    }
+    func content() -> String { model.draftContents[model.selectedNoteID ?? ""] ?? model.selectedNote?.content ?? "" }
+    func close() { window.isHidden = true; previous?.makeKeyAndVisible() }
+  }
+  private func openNote() async throws -> LiveNote {
+    let model = CompanionModel()
+    await model.newNote()
+    let note = try XCTUnwrap(model.selectedNote)
+    let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+    let previous = scene.windows.first(where: \.isKeyWindow)
+    let window = UIWindow(windowScene: scene)
+    window.rootViewController = UIHostingController(rootView: NavigationStack { NotePane(model: model, note: note) })
+    window.makeKeyAndVisible()
+    return LiveNote(window: window, previous: previous, model: model)
+  }
+  private func settle(_ condition: () -> Bool) async throws {
+    for _ in 0..<300 {
+      if condition() { return }
+      try await Task.sleep(for: .milliseconds(10))
+    }
+    XCTFail("The editor did not settle")
+  }
+  /// Types as the keyboard does: the delegate admits the edit, then UIKit inserts it unless the editor applied it.
+  private func type(_ text: String, into view: UITextView) {
+    view.selectedRange = NSRange(location: (view.text as NSString).length, length: 0)
+    if view.delegate?.textView?(view, shouldChangeTextIn: view.selectedRange, replacementText: text) != false { view.insertText(text) }
+  }
+
+  func testNativeUndoAndRedoOfReturnKeepTheKeyboardInTheRestoredParagraph() async throws {
+    let note = try await openNote(); defer { note.close() }
+    try await settle { note.editors().count == 1 }
+    let first = try XCTUnwrap(note.editors().first)
+    XCTAssertTrue(first.becomeFirstResponder())
+    type("Plan", into: first)
+    type("\n", into: first)
+    try await settle { note.editors().count == 2 && note.editors()[1].isFirstResponder }
+    let second = note.editors()[1]
+    XCTAssertTrue(second.undoManager === first.undoManager, "Every paragraph shares the note's history")
+
+    // UIKit's own path: the focused text view's undo manager, not the toolbar.
+    second.undoManager?.undo()
+    try await settle { note.editors().count == 1 && note.editors()[0].isFirstResponder }
+    XCTAssertEqual(note.editors()[0].text, "Plan")
+
+    note.editors()[0].undoManager?.redo()
+    try await settle { note.editors().count == 2 && note.editors()[1].isFirstResponder }
+    type("Details", into: note.editors()[1])
+    XCTAssertEqual(note.editors().map(\.text), ["Plan", "Details"], "Typing continues after redo without a tap")
+
+    note.editors()[1].undoManager?.undo() // typing
+    note.editors()[1].undoManager?.undo() // Return
+    try await settle { note.editors().count == 1 && note.editors()[0].isFirstResponder }
+    type("!", into: note.editors()[0])
+    XCTAssertEqual(note.editors()[0].text, "Plan!", "Typing continues after undo at the restored caret")
+  }
+
+  /// One undo reverses one dictation, whether it inserted text in place or
+  /// became new paragraphs, through the note editor's own undo manager.
+  func testOneUndoReversesSingleAndMultilineDictation() async throws {
+    let note = try await openNote(); defer { note.close() }
+    try await settle { note.editors().count == 1 }
+    let first = try XCTUnwrap(note.editors().first)
+    XCTAssertTrue(first.becomeFirstResponder())
+    type("Start", into: first)
+    try await Task.sleep(for: .milliseconds(700)) // End typing coalescence.
+    let typed = note.content()
+    let editor = MobileDictationEditor(); editor.bind(first, identity: "note:dictation")
+
+    XCTAssertTrue(try XCTUnwrap(editor.ticket()).insert(" spoken"))
+    try await settle { note.editors().first?.text == "Start spoken" }
+    first.undoManager?.undo()
+    try await settle { note.editors().first?.text == "Start" }
+    XCTAssertEqual(note.content(), typed, "One undo removes the whole single-line dictation")
+
+    XCTAssertTrue(try XCTUnwrap(editor.ticket()).insert(" one\ntwo"))
+    try await settle { note.editors().count == 2 }
+    XCTAssertEqual(note.editors().map(\.text), ["Start one", "two"])
+    note.editors()[1].undoManager?.undo()
+    try await settle { note.editors().count == 1 }
+    XCTAssertEqual(note.editors().first?.text, "Start")
+    XCTAssertEqual(note.content(), typed, "One undo removes the whole multiline dictation")
   }
 }

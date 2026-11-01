@@ -21,7 +21,10 @@ enum MobileStorePersistence {
   static func load(from file: URL) throws -> MobileStoreState {
     let data = try Data(contentsOf: file)
     guard let envelope = try? JSONDecoder().decode(Envelope.self, from: data) else {
-      return try JSONDecoder().decode(MobileStoreState.self, from: data)
+      // The earliest stores kept all writing inline in this one excluded file.
+      let legacy = try JSONDecoder().decode(MobileStoreState.self, from: data)
+      try? applyBackupIfChanged(.include, at: file)
+      return legacy
     }
     guard envelope.version == 2 else { throw MobileStore.Failure.incompatibleStore }
     var state = envelope.state

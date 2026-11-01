@@ -53,6 +53,9 @@ struct SecondaryMacReplicaToolTests {
         let owner = await replica.snapshot().deviceID
         let caller = try await fixture.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Native caller", ownerDeviceID: UUID())
         let workspace = try await SecondaryMacExecutionWorkspace(descriptor: .init(id: owner, libraryID: libraryID, ownerDeviceID: owner, kind: .mac, name: "Secondary Mac"), model: fixture.model, replica: replica, directory: fixture.directory)
+        // As CentralLibraryClientModel.attachExecutionWorkspace does before any client
+        // use: this Mac publishes its own workspace, so it registers it as pending.
+        try await replica.journal.upsertWorkspace(workspace.descriptor, pending: true)
         let phone = UUID().uuidString.lowercased()
         try await replica.journal.upsertWorkspace(.init(id: phone, libraryID: libraryID, ownerDeviceID: phone, kind: .ios, name: "Phone"), pending: false)
         return (replica, workspace, caller, phone)

@@ -319,6 +319,12 @@ struct NotePane: View {
     history.levelsOfUndo = 100
     history.groupsByEvent = false
     history.disableUndoRegistration()
+    // Hardware keys, shake and the edit menu call the text view's undo manager
+    // directly; they restore the caret exactly like the toolbar buttons.
+    history.restoring = { [weak self] operation in
+      guard let self else { operation(); return }
+      self.restoring(operation)
+    }
     for name in [Notification.Name.NSUndoManagerDidUndoChange, .NSUndoManagerDidRedoChange] {
       observers.append(NotificationCenter.default.addObserver(forName: name, object: history, queue: .main) { [weak self] _ in
         MainActor.assumeIsolated {
@@ -364,8 +370,8 @@ struct NotePane: View {
     activeView?.typingAttributes = RichBlockTextView.attributed(.init(runs: [sample])).attributes(at: 0, effectiveRange: nil)
   }
   func refreshUndoState() { canUndo = history.canUndo; canRedo = history.canRedo }
-  func undo() { guard history.canUndo else { return }; restoring { history.undo() } }
-  func redo() { guard history.canRedo else { return }; restoring { history.redo() } }
+  func undo() { guard history.canUndo else { return }; history.undo() }
+  func redo() { guard history.canRedo else { return }; history.redo() }
   /// Undo can remove the focused paragraph. Editing continues at the restored
   /// caret; the keyboard is only raised again if it was already up.
   private func restoring(_ operation: () -> Void) {
@@ -417,17 +423,15 @@ struct NotePane: View {
 
 /// Redo registration must be enabled before Foundation opens its inverse group.
 /// Native input remains unregistered outside the document's restoration actions.
+/// Every undo and redo, from the toolbar or from UIKit, runs inside `restoring`.
 final class MobileNoteUndoManager: UndoManager {
-  override func undo() {
+  var restoring: ((() -> Void) -> Void)?
+  override func undo() { perform { super.undo() } }
+  override func redo() { perform { super.redo() } }
+  private func perform(_ operation: () -> Void) {
     let wasDisabled = !isUndoRegistrationEnabled
     if wasDisabled { enableUndoRegistration() }
-    super.undo()
-    if wasDisabled { disableUndoRegistration() }
-  }
-  override func redo() {
-    let wasDisabled = !isUndoRegistrationEnabled
-    if wasDisabled { enableUndoRegistration() }
-    super.redo()
+    if let restoring { restoring(operation) } else { operation() }
     if wasDisabled { disableUndoRegistration() }
   }
 }
