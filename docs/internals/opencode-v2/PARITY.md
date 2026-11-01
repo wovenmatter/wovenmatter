@@ -2,7 +2,7 @@
 
 WovenMatter connects conversations to the standard local OpenCode v2 service.
 This reference covers its connection, session, and persistence behavior. For
-setup in the app, see [Agent setup](../guide/agents.md).
+setup in the app, see [Agent setup](../../guide/agents.md).
 
 Existing v1 transcripts remain readable in SQLite; new work uses v2 sessions.
 Other harness integrations keep their own transports.
@@ -12,7 +12,7 @@ Other harness integrations keep their own transports.
 - **Settings → Local Agent Workspace** lists OpenCode under **Runtimes** with
   **Settings**, update controls, **Hide/Show**, and **Install** or **Enable/Disable**.
   Its **Settings** button opens the local server and model controls. The top-level
-  **Settings → Open Code** page lists local and remote OpenCode workspaces.
+  **Settings → OpenCode** page lists local and remote OpenCode workspaces.
 - Connect reuses OpenCode's standard authenticated local service, or starts it when absent. New Chat can also connect/start it. After a successful connection, reopening Woven Matter reconnects according to the saved lifecycle preferences.
 - New OpenCode chats use the same Woven Matter workspace root as the other local harnesses. OpenCode owns the backend session; its v2 clients can access that same session through the same service.
 - The OpenCode page contains connection status, **Open in browser**, **Manage models**, Connect, server controls, and lifecycle preferences. Model visibility is saved by Woven Matter; OpenCode browser show/hide preferences remain separate. Selected models sort first in Manage models.
@@ -38,7 +38,7 @@ Startup runs the installed `opencode serve --service` (`opencode2` remains a dis
 Earlier custom/remote connections are no longer opened by this local flow. Their cached transcripts remain in SQLite; session identifiers are not transplanted into the standard service.
 
 Remote workspaces now use a separate v2 service through the authenticated workspace
-proxy; see [Runtime maintenance](../RUNTIME_MAINTENANCE.md). The local service
+proxy; see [Runtime maintenance](../../RUNTIME_MAINTENANCE.md). The local service
 contract above does not describe that remote lifecycle.
 
 ## Persistence and recovery

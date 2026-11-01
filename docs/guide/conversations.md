@@ -19,7 +19,7 @@ workspace and harness defaults are retained. New conversations use this order:
 1. A choice supplied for that conversation.
 2. The workspace default for that harness.
 3. The harness default.
-4. WovenMatter's starting default: **Full access** for permissions on supported
+4. Woven Matter's starting default: **Full access** for permissions on supported
    harnesses; the harness's own default for other selections.
 
 New conversations start with Full access unless you choose a different policy
@@ -54,7 +54,7 @@ Only supported choices appear. A harness may also offer more specific policies:
   the same conversation before the next message.
 - OpenCode offers **Ask for approval**, **Auto-accept edits**, and **Full access**.
   These apply to the
-  conversation while WovenMatter is connected. They do not run a smart reviewer
+  conversation while Woven Matter is connected. They do not run a smart reviewer
   or save permissions for other conversations. Native deny rules remain in
   effect; questions and sign-in steps still need your response. Returning to Ask
   stops accepting new requests and preserves permissions already allowed by the
@@ -67,10 +67,11 @@ longer available, choose a supported value before continuing the conversation.
 ## App tools and session access
 
 Use **Tools** in the composer to control Notes, Conversation history, Session
-management, Timers, Usage data, Calendar, and Library independently. General
-settings supplies defaults for new sessions. Calendar can be Full access or Read
-only; Usage data and Library are read-only tools. Library lets an agent find
-exchanged files, links, and photos and identify their source messages.
+management, Timers, Usage data, Calendar, Library, Executor, Browser Use, and
+Computer Use independently. General settings supplies defaults for new
+conversations; changing a default does not change existing ones. Calendar can be
+Full access or Read only; Usage data and Library are read-only tools. Goals and
+visual replies are always available. See [Agent tools](agent-tools.md).
 
 Use the plus button to **Attach or upload photos or files**, **Attach notes**,
 or **Attach conversation**. You can also drop files onto the composer or paste
@@ -97,7 +98,7 @@ permission requests in the conversation; the available choices come from the har
 ## Organize and continue your work
 
 Use folders to keep related conversations and notes together. **Recents** lets
-you return to work across your harnesses. WovenMatter saves conversation
+you return to work across your harnesses. Woven Matter saves conversation
 transcripts in its local SQLite database alongside your notes and other items.
 
 Reopen a conversation to review the work or continue a supported session.

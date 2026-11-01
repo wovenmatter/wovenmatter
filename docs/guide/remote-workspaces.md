@@ -13,17 +13,24 @@ is unchanged.
 
 - An online amd64 or arm64 Linux host in your Tailnet.
 - Connected Tailscale on both machines, plus working OpenSSH authentication and trusted host keys.
-- A regular SSH account, Python 3 and a working systemd user
+- A regular (non-root) SSH account, Python 3 and a working systemd user
   manager. Full root access uses that account's existing passwordless sudo.
+- Agents run with that account's permissions. There is no container isolation.
 - Enough host disk space for workspace files, harnesses, and caches.
 
 Tailscale is required for every remote connection. Select an online Tailnet
 Linux machine or enter its Tailscale name, MagicDNS name, or Tailscale IP. The
-picker lists all online, unexpired Linux devices. Connect Macs, iPhones, and
-iPads through **Settings → Apple Devices**. SSH uses the local Tailscale daemon for the transport and your existing SSH configuration
-and agent for authentication. Arbitrary SSH aliases, LAN addresses, and public
-hosts are unsupported. Existing configurations must name an online Tailnet peer;
-there is no fallback connection mode.
+picker lists all online, unexpired Linux devices. Other Macs connect through
+**Settings → Apple Devices** instead.
+
+SSH always runs through `tailscale nc` to the peer's Tailscale address. Woven
+Matter overrides `HostName`, `ProxyJump`, `ProxyCommand`, and connection sharing,
+so `~/.ssh/config` host aliases cannot redirect the connection onto a LAN or
+public address. Your SSH keys, agent, and trusted host keys still provide
+authentication. Arbitrary SSH aliases, LAN addresses, and public hosts are
+unsupported; there is no fallback connection mode. When testing by hand, use
+the host's Tailscale name rather than an alias that works only through your SSH
+config.
 
 ## Create a workspace
 
@@ -46,7 +53,8 @@ there is no fallback connection mode.
 
 Native installation stages a verified service bundle, pinned Node runtime and
 Chromium, then proves the browser sandbox works. Failed activation restores the
-previous service. Native host workspaces do not require Docker. See
+previous service. Native host workspaces do not require Docker; only the
+optional remote [Executor](executor.md) deployment uses it. See
 [Native Linux hosts](../reference/REMOTE_HOSTS.md) for permissions and details.
 
 If preparation is blocked, resolve the reported requirement on the host and
