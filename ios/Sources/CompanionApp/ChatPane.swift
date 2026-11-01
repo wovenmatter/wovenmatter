@@ -102,6 +102,11 @@ struct ChatPane: View {
           }
         }
       }
+      if let id = model.unconfirmedSendConversationID, id == model.selectedConversationID {
+        Button("Retry previous message") { Task { await model.retryUnconfirmedSend() } }
+          .buttonStyle(DashboardQuietButtonStyle()).disabled(model.sending).padding(.horizontal, 18)
+          .accessibilityIdentifier("chat-retry-unconfirmed")
+      }
       if model.canResumeLocalRun {
         HStack {
           Button("Resume saved run") { Task { await model.resumeDeviceRun() } }.buttonStyle(DashboardPrimaryButtonStyle()).disabled(model.sending)

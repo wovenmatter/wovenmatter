@@ -169,12 +169,7 @@ extension CompanionModel {
       let result: CompanionCommandReceipt
       if target == nil {
         try await requireWorkspaceConnection(workspaceID)
-        let pending = state.launches.first { $0.create.workspaceID == workspaceID && !$0.accepted && !$0.terminalFailure }
-        if let pending {
-          guard pending.initialSend.text == prompt, pending.create.providerID == route else {
-            throw DeviceExecutionError.unavailable("The previous message hasn’t been confirmed. Retry it here when the device is connected.")
-          }
-        }
+        let pending = MobileLaunchRecord.reusable(state.launches, workspaceID: workspaceID, providerID: route, text: prompt, noteID: nil)
         conversationID = pending?.create.conversationID ?? UUID().uuidString.lowercased()
         var create = CompanionCommand(deviceID: state.deviceID, kind: .createSession, conversationID: conversationID,
           providerID: route, folderID: selectedFolderID)
@@ -190,7 +185,8 @@ extension CompanionModel {
         let records = await store.journal.commandRecords(workspaceID: workspaceID)
         let pending = records.first { $0.command.conversationID == target && ($0.receipt == nil || $0.receipt?.status == .outcomeUnknown) && ($0.command.kind == .send || $0.command.kind == .steer) }
         if let pending, pending.command.text != prompt {
-          throw DeviceExecutionError.unavailable("The last message has not been acknowledged. Retry that message before sending different input.")
+          unconfirmedSendConversationID = target
+          throw DeviceExecutionError.unavailable("The previous message hasn’t been confirmed. Retry it before sending different input.")
         }
         let command = pending?.command ?? CompanionCommand(deviceID: state.deviceID, kind: runID == nil ? .send : .steer,
           conversationID: conversationID, runID: runID, text: prompt)

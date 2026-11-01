@@ -641,10 +641,13 @@ final class CompanionHostController {
                     let expectedGeneration = generation, workspaces = executionWorkspaces
                     providerCatalogTask = Task { [weak self] in
                         let providers = await client.providerCatalog(for: workspaces)
-                        guard let self, !Task.isCancelled, self.generation == expectedGeneration else { return }
+                        guard let self, !Task.isCancelled else { return }
+                        // Only one catalog task exists at a time. Clear it before any stale
+                        // return so a restarted service can refresh the catalog again.
+                        self.providerCatalogTask = nil
+                        guard self.generation == expectedGeneration else { return }
                         let active = Set(self.executionWorkspaces.filter { !$0.deleted && $0.retainedHistory != true }.map(\.id))
                         self.workspaceProviders = providers.filter { active.contains($0.key) }
-                        self.providerCatalogTask = nil
                     }
                 }
             }

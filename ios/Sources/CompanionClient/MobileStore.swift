@@ -532,8 +532,6 @@ public actor MobileStore {
       if let transcript = history.transcripts[conversation.id] { try cache(transcript) }
     }
   }
-  /// Read-through projection for the central host's own execution API. The
-  /// authoritative snapshot/change feed continues to own these conversations.
   public func rememberWorkspaceFolder(_ mutation: CompanionMutation, workspaceID: String) throws {
     try transaction { next in
       if let saved = next.workspaceFolderRequests?[workspaceID], saved != mutation { throw Failure.conflictingNote }
@@ -555,6 +553,8 @@ public actor MobileStore {
       }
     }
   }
+  /// Read-through projection for the central host's own execution API. The
+  /// authoritative snapshot/change feed continues to own these conversations.
   public func cacheCentralConversations(_ conversations: [CompanionConversation]) throws {
     try transaction { next in
       for conversation in conversations { next.conversations[conversation.id] = conversation }

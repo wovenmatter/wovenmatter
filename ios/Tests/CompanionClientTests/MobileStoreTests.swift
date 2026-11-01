@@ -135,3 +135,26 @@ final class MobileStoreTests: XCTestCase {
 
 
 }
+
+final class MobileLaunchSelectionTests: XCTestCase {
+  func testOnlyTheSameRequestRetriesAnUnconfirmedLaunchAndOthersStartSeparately() {
+    func launch(_ text: String, workspace: String? = nil, provider: String = "codex", note: String? = nil) -> MobileLaunchRecord {
+      var create = CompanionCommand(deviceID: "phone", kind: .createSession, conversationID: UUID().uuidString, providerID: provider)
+      var send = CompanionCommand(deviceID: "phone", kind: .send, conversationID: create.conversationID, text: text, noteID: note)
+      create.workspaceID = workspace; send.workspaceID = workspace
+      return .init(create: create, initialSend: send)
+    }
+    let unknown = launch("Earlier question")
+    var rejected = launch("Rejected"); rejected.createReceipt = .init(commandID: rejected.create.commandID, deviceID: "phone", status: .rejected)
+    let linux = launch("Earlier question", workspace: "linux")
+    let launches = [rejected, unknown, linux]
+    XCTAssertEqual(MobileLaunchRecord.reusable(launches, workspaceID: nil, providerID: "codex", text: "Earlier question", noteID: nil)?.id, unknown.id,
+      "Retrying the same message keeps its original IDs, so it cannot be duplicated")
+    XCTAssertNil(MobileLaunchRecord.reusable(launches, workspaceID: nil, providerID: "codex", text: "A new question", noteID: nil),
+      "A different message is not blocked by the unconfirmed one")
+    XCTAssertNil(MobileLaunchRecord.reusable(launches, workspaceID: nil, providerID: "claude", text: "Earlier question", noteID: nil))
+    XCTAssertNil(MobileLaunchRecord.reusable(launches, workspaceID: nil, providerID: "codex", text: "Earlier question", noteID: "note"))
+    XCTAssertNil(MobileLaunchRecord.reusable(launches, workspaceID: nil, providerID: "codex", text: "Rejected", noteID: nil))
+    XCTAssertEqual(MobileLaunchRecord.reusable(launches, workspaceID: "linux", providerID: "codex", text: "Earlier question", noteID: nil)?.id, linux.id)
+  }
+}

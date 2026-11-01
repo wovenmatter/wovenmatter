@@ -2,6 +2,7 @@ import Foundation
 import CryptoKit
 import CompanionClient
 import WovenMatterCompanion
+import CompanionInference
 
 extension CompanionModel {
   private static let deviceFileToolsJSON = #"""

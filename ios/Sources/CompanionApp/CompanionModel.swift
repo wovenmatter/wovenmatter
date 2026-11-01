@@ -129,6 +129,7 @@ import CompanionInference
   var dataSharingRequest: DataSharingRequest?
   var exaSharingDeclined: Set<String> = []
   var quickChatSearchResults: [String: Set<String>] = [:]
+  var unconfirmedSendConversationID: String?
   var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
   var backgroundFallbackToken: UUID?
   var calendarRevision = 0
@@ -161,7 +162,12 @@ import CompanionInference
     }
     do {
       let root = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+      // Release builds carry no fixture plumbing; scripts/verify-ios-app.sh checks the binary.
+      #if DEBUG
       let namespace = ProcessInfo.processInfo.environment["WOVENMATTER_UI_FIXTURE_NAMESPACE"] ?? "default"
+      #else
+      let namespace = "default"
+      #endif
       let safeNamespace = namespace.filter { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") }
       let filename = fixture ? "fixture-library-\(safeNamespace).json" : "mobile-library.json"
       let libraryRoot = root.appendingPathComponent("WovenMatterCompanion")
@@ -469,7 +475,7 @@ import CompanionInference
     let provider = activeProvider
     let draftContext = currentDraft
     let deviceID = state.deviceID
-    let pendingLaunch = target == nil ? state.launches.first(where: { $0.create.workspaceID == nil && !$0.accepted && !$0.terminalFailure }) : nil
+    let pendingLaunch = target == nil ? MobileLaunchRecord.reusable(state.launches, workspaceID: nil, providerID: route, text: text, noteID: noteID) : nil
     sending = true
     defer { sending = false }
     await saveTask?.value
@@ -482,12 +488,7 @@ import CompanionInference
         try await requireWorkspaceConnection("central")
         let conversationID = pendingLaunch?.create.conversationID ?? UUID().uuidString.lowercased()
         let launch: MobileLaunchRecord
-        if let pendingLaunch {
-          guard pendingLaunch.initialSend.text == text, pendingLaunch.initialSend.noteID == noteID else {
-            errorMessage = "The previous message hasn’t been confirmed. Retry it here when the device is connected."; return
-          }
-          launch = pendingLaunch
-        } else {
+        if let pendingLaunch { launch = pendingLaunch } else {
           launch = .init(create: .init(deviceID: deviceID, kind: .createSession, conversationID: conversationID, providerID: route, folderID: folder),
             initialSend: .init(deviceID: deviceID, kind: .send, conversationID: conversationID, text: text, noteID: noteID))
         }
@@ -506,7 +507,9 @@ import CompanionInference
         let command: CompanionCommand
         if let unresolved {
           guard unresolved.command.text == text, unresolved.command.noteID == noteID else {
-            errorMessage = "The previous message hasn’t been confirmed. Retry it here when the device is connected."; return
+            // Later input must not overtake it; offer to resend the saved original instead.
+            unconfirmedSendConversationID = target
+            errorMessage = "The previous message hasn’t been confirmed. Retry it before sending different input."; return
           }
           command = unresolved.command
         } else {
@@ -519,6 +522,30 @@ import CompanionInference
       if original == draftContext && providerID == route { updateChatDraft(key: sourceKey, draft: .init(text: "")) }
       await refresh()
     } catch { errorMessage = workspaceActionMessage(error); await reload() }
+  }
+  /// Resends the saved unconfirmed message with its original command ID. The
+  /// owner deduplicates by that ID, so a message that did arrive is not repeated.
+  func retryUnconfirmedSend() async {
+    guard let id = unconfirmedSendConversationID, !sending else { return }
+    sending = true; defer { sending = false }
+    let route = executionRoute(for: id)
+    do {
+      var receipt: CompanionCommandReceipt?
+      let unresolved: (MobileCommandRecord) -> Bool = { $0.command.conversationID == id && ($0.receipt == nil || $0.receipt?.status == .outcomeUnknown) && ($0.command.kind == .send || $0.command.kind == .steer) }
+      if route == "central" {
+        guard let engine else { throw MobileConnectionError.offline }
+        if let pending = state.commands.first(where: unresolved) { receipt = try await engine.submit(pending.command) }
+      } else {
+        guard let client = workspaceClients[route], let store else { throw DeviceExecutionError.unavailable("This execution workspace is unavailable.") }
+        if let pending = await store.journal.commandRecords(workspaceID: route).first(where: unresolved) { receipt = try await client.submit(pending.command) }
+      }
+      if let receipt, receipt.status == .outcomeUnknown {
+        errorMessage = receipt.message ?? "The previous message still hasn’t been confirmed. Try again when the device is connected."
+      } else {
+        unconfirmedSendConversationID = nil; errorMessage = receipt?.status == .rejected ? receipt?.message ?? "The previous message was not accepted." : nil
+      }
+      await refresh()
+    } catch { errorMessage = workspaceActionMessage(error) }
   }
   func stop() async {
     if selectedExecutionWorkspaceID == "local" { await stopOnDevice(); return }

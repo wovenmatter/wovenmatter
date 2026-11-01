@@ -20,6 +20,9 @@ then physical devices and real network transitions.
    send to each provider shows the data-sharing sheet; Don’t Allow keeps the
    draft and sends nothing. The first web search asks about Exa. Settings → Data
    sharing lists both. Stop sharing makes the next send ask again.
+   On a fresh install, the first dictation should ask only for the microphone,
+   since the plist has no speech-recognition purpose string; record any other
+   prompt or failure.
 5. Disconnect the network. Create/edit a note: type a heading, press Return and
    continue in body text, leave a list with Return on an empty item, and join
    paragraphs with Delete. Exercise undo/redo and the

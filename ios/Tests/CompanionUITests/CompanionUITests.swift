@@ -226,7 +226,7 @@ final class CompanionUITests: XCTestCase {
     let permissions = app.buttons["chat-permissions"]
     XCTAssertTrue(permissions.waitForExistence(timeout: 5))
     XCTAssertTrue(permissions.isHittable)
-    XCTAssertEqual(permissions.value as? String, "Allow Note Edits")
+    XCTAssertEqual(permissions.value as? String, "Ask Before Note Edits", "Chats without a saved choice ask first")
     let controls = [app.buttons["Add to chat"], app.buttons["chat-model"], app.buttons["chat-thinking"], permissions, app.buttons["chat-tools"], app.buttons["Send message"]]
     XCTAssertEqual(controls[1].value as? String, "GPT-6.1 Sol")
     XCTAssertEqual(controls[2].value as? String, "High")

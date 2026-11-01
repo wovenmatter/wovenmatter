@@ -20,9 +20,11 @@ extension CompanionModel {
   /// Read at each request, so revoking in Settings stops the next request of a running chat.
   var dataSharingPolicy: DataSharingPolicy {
     DataSharingPolicy { [weak self] destination in
-      await MainActor.run { self.map { !$0.fixture && $0.dataSharing.permits(destination) } ?? false }
+      guard let self else { return false }
+      return await self.permitsSharing(destination)
     }
   }
+  func permitsSharing(_ destination: DataSharingDestination) -> Bool { !fixture && dataSharing.permits(destination) }
   func setDataSharing(_ destination: DataSharingDestination, allowed: Bool) throws {
     guard let dataSharingFile else { throw DeviceExecutionError.unavailable("The device workspace could not be opened.") }
     var updated = dataSharing

@@ -154,6 +154,40 @@ final class ExecutionRoutingTests: XCTestCase {
     XCTAssertTrue(model.localRuntimes.isEmpty)
   }
 
+  /// Only the decline path runs here, so no provider request can be attempted.
+  @MainActor func testSendWithoutDataSharingPermissionAsksAndDeclineKeepsTheDraft() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let model = CompanionModel(store: try MobileStore(file: root.appendingPathComponent("library.json")), transport: ExecutionTestLibrary())
+    model.executionDirectory = root.appendingPathComponent("execution")
+    try await model.loadExecutionConfiguration()
+    let pinned = InferenceModel(id: "gpt-test", name: "Test", provider: "openai", api: "openai-responses", baseUrl: "https://api.openai.com/v1")
+    let connection = InferenceConnection(id: "existing-account", name: "API", provider: "openai", route: .direct, modelID: pinned.id, selectedModel: pinned)
+    model.inferenceConnections = [connection]; model.inferenceConnectionID = connection.id; model.executionWorkspaceID = "local"
+    model.composer = "Summarize my private note"
+    await model.sendOnDevice()
+    let request = try XCTUnwrap(model.dataSharingRequest, "An account saved before this permission existed must ask first")
+    XCTAssertEqual(request.destination, .init(service: .inference, provider: "openai", origin: "https://api.openai.com"))
+    XCTAssertTrue(model.executionRecords.isEmpty, "Nothing is created or submitted before permission")
+    XCTAssertTrue(model.localRuntimes.isEmpty)
+    await model.answerDataSharing(request, allowed: false)
+    XCTAssertNil(model.dataSharingRequest)
+    XCTAssertEqual(model.composer, "Summarize my private note")
+    XCTAssertTrue(model.executionRecords.isEmpty)
+    XCTAssertFalse(model.dataSharing.permits(request.destination))
+
+    try model.setDataSharing(request.destination, allowed: true)
+    model.dataSharing = .init(); model.loadDataSharing()
+    XCTAssertTrue(model.dataSharing.permits(request.destination), "The decision is durable")
+    var moved = connection; moved.provider = "local-server-openai"; moved.baseURL = "https://models.example.ts.net"; moved.selectedModel = nil
+    XCTAssertFalse(model.dataSharing.permits(try XCTUnwrap(model.inferenceDestination(for: nil, connection: moved))), "Another endpoint asks again")
+    try model.setDataSharing(request.destination, allowed: false)
+    model.loadDataSharing()
+    XCTAssertFalse(model.dataSharing.permits(request.destination))
+    let declined = await model.dataSharingPolicy.permits(request.destination)
+    XCTAssertFalse(declined, "Runtime requests read the current decision")
+  }
+
   @MainActor func testQuickChatRejectsAutonomousToolsEvenWhenSavedGrantsEnabledThem() async throws {
     for name in ["execute_command", "write_file", "read_file", "woven_goals_set", "woven_timers_create", "woven_sessions_create", "woven_executor_execute", "woven_browser_use", "woven_computer_use"] {
       XCTAssertFalse(CompanionModel.deviceToolEnabled(name, selection: nil))

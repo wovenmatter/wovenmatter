@@ -46,7 +46,10 @@ Mac/Linux service. Linux publishes its new folder metadata before its conversati
 history after reconnecting with the central library. Update workspace services to
 the same revision for the new folder APIs. Creating a remote folder or chat
 requires a live connection to its owner. Interrupted replies recover in place
-using the original request identity.
+using the original request identity. A new chat with different text never waits
+on an earlier unconfirmed one; that request stays saved and reconciles from its
+receipt. Within a chat, later input waits, and Retry previous message resends the
+saved message with its original identity.
 
 ## Build and development validation
 
