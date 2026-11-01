@@ -671,9 +671,14 @@ public struct LocalACPRuntimeInstaller: Sendable {
         guard actualSHA256 == expectedSourceSHA256.lowercased() else {
             throw LocalACPRuntimeInstallError.sourceDigestChanged
         }
+        // The native channel pointer can lag a stable npm publication. Pass the
+        // independently resolved release to the unchanged official installer.
+        let arguments = definition.runtimeKind == .claudeCode
+            ? [try await RuntimeMaintenance.registryVersion("@anthropic-ai/claude-code", fetch: metadataFetcher)]
+            : definition.cliInstallerArguments
         let result = try LocalACPProcessRunner.run(
             executableURL: URL(fileURLWithPath: "/bin/\(interpreter)"),
-            arguments: [file.path] + definition.cliInstallerArguments,
+            arguments: [file.path] + arguments,
             currentDirectoryURL: FileManager.default.homeDirectoryForCurrentUser
         )
         guard result.succeeded else {

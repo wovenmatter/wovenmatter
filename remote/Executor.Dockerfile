@@ -64,10 +64,7 @@ RUN test -n "$EXECUTOR_VERSION" \
     && export npm_config_cache=/tmp/wovenmatter-npm-build-cache \
     && npm install --global --ignore-scripts --no-audit --no-fund 'npm@>=12.2.1' \
     && npm ci --prefix /opt/wovenmatter/npm-runtime --omit=dev --ignore-scripts --no-audit --no-fund \
-    && rm -rf /usr/local/lib/node_modules/npm/node_modules/undici /usr/local/lib/node_modules/npm/node_modules/ip-address \
-    && cp -a /opt/wovenmatter/npm-runtime/node_modules/undici /usr/local/lib/node_modules/npm/node_modules/undici \
-    && cp -a /opt/wovenmatter/npm-runtime/node_modules/ip-address /usr/local/lib/node_modules/npm/node_modules/ip-address \
-    && node -e 'const {createRequire}=require("node:module"); const npm=createRequire("/usr/local/lib/node_modules/npm/package.json"); for(const name of ["undici","ip-address"]){const expected=require("/opt/wovenmatter/npm-runtime/node_modules/"+name+"/package.json").version; if(npm(name+"/package.json").version!==expected)process.exit(1)}' \
+    && node -e 'const fs=require("node:fs"), path=require("node:path"); const root="/opt/wovenmatter/npm-runtime", vendor="/usr/local/lib/node_modules/npm/node_modules"; for(const [key,record] of Object.entries(require(root+"/package-lock.json").packages)){if(!key.startsWith("node_modules/")||key.slice(13).includes("/node_modules/"))continue; const target=path.join(vendor,key.slice(13)); fs.rmSync(target,{recursive:true,force:true}); fs.mkdirSync(path.dirname(target),{recursive:true}); fs.cpSync(path.join(root,key),target,{recursive:true}); if(require(target+"/package.json").version!==record.version)throw Error("npm vendor graph differs from lock")} const npm=require("node:module").createRequire("/usr/local/lib/node_modules/npm/package.json"); if(typeof npm("undici").request!=="function"||typeof npm("ip-address").Address6!=="function"||typeof npm("minimatch").minimatch!=="function")throw Error("npm security API verification failed")' \
     && npm ci --prefix /opt/wovenmatter/executor-runtime --omit=dev --ignore-scripts --no-audit --no-fund \
     && npm install --prefix /opt/executor --ignore-scripts --no-audit --no-fund --save-exact "executor@$EXECUTOR_VERSION" \
     && runtime_modules="$(find /opt/executor/node_modules -type d -path '*/runtime/node_modules' -print -quit)" \

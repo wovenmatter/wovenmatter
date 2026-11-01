@@ -104,7 +104,7 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   and patch checksums together, and validate both amd64 and arm64 images.
   npm 12.2.1 still bundles affected undici 6.29.0. The workspace image replaces
   that vendored module with the current, independently locked security selection
-  in `remote/npm-runtime` (tested undici 8.12.3 and ip-address 10.7.5), addressing CVE-2026-111997,
+  in `remote/npm-runtime` (tested undici 8.12.3, ip-address 10.7.5 and minimatch 11.0.3), addressing CVE-2026-111997,
   GHSA-xjj6-f33q-929c and the
   related denial-of-service advisories. npm ignores overrides for its bundled
   dependencies, so this replacement is explicit in the image definition.
@@ -120,9 +120,15 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   Executor also selects only the ncurses, acl, and util-linux source repairs it
   needs; do not install the workspace browser-library repairs into that smaller
   image without a runtime dependency.
+  npm also vendors minimatch 10.2.5, affected by GHSA-g3hv-75wg-m249. The
+  same graph replaces minimatch with 11.0.3 and its locked dependency closure.
+  Mac, native Linux and both container paths copy and verify every graph module,
+  including scoped dependencies; npm's actual install/ci behavior and bounded
+  glob-pattern fixtures validate this major migration. Keep this replacement
+  until npm's bundled graph excludes affected minimatch releases.
 - **Mac npm** is selected independently of the Node archive, whose bundled npm
   may lag. `harnesses/prepare-npm.mjs` verifies the recorded npm archive integrity,
-  applies the same locked `undici` and `ip-address` repairs used by Linux, verifies
+  applies the same locked vendor repairs used by Linux, verifies
   their APIs, and retains provenance. Immutable cached selections supply
   managed CLI installs, the locked bundle SDK installation, and the bundled SDK
   updater; bootstrap npm only unpacks the verified archive/security graph. The
@@ -169,8 +175,8 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   releases. Provider-free HTTP security fixtures and the coding-agent suites
   validate the overridden Node dependency; it is not part of the mobile bundle.
   Pi AI 1.4.0 also pins older provider clients. Consumer-scoped minimum-only
-  overrides select the tested OpenAI 7.45.1, Anthropic 1.3.0, Google GenAI 2.32.0,
-  Bedrock Runtime 3.1160.0 and Smithy Node HTTP handler 4.14.0 releases without
+  overrides select the tested OpenAI 7.46.0, Anthropic 1.3.0, Google GenAI 2.32.0,
+  Bedrock Runtime 3.1161.0 and Smithy Node HTTP handler 4.14.1 releases without
   changing vendor manifests. Keeping these clients current is required for
   provider API and transport compatibility, including Anthropic's 2026-10-21
   Messages API. Maintenance reviews each upstream requirement and removes an
@@ -180,6 +186,11 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   serialization, streaming text/tools, usage and cancellation. They do not
   establish authenticated provider acceptance. The iOS bundle excludes these
   network clients; its generated provenance still follows the shared lock.
+  Pi Coding Agent 1.4.0 pins minimatch 10.2.6, also affected by
+  GHSA-g3hv-75wg-m249. A consumer-scoped `>=11.0.3` override retains the named
+  matching API while fixing attacker-controlled glob preprocessing amplification.
+  Provider-free model-scope matching and bounded adversarial-pattern fixtures
+  validate the override; remove it when Pi itself excludes affected versions.
 - **Pyodide and esbuild** produce the offline iOS resources and their
   provenance. They refresh together with the generated files.
 
@@ -207,13 +218,15 @@ Agent CLIs, ACP connectors, and connector-owned engines are checked independentl
 An up-to-date connector does not establish that its engine or sign-in CLI is current.
 Settings selects the newest nondeprecated stable publication for each component;
 a stale npm dist-tag cannot hide a newer stable version. Claude's native installer
-and updater explicitly select `latest`, rather than retaining an older configured
-release channel. OpenCode and Executor retain the documented v2 API boundary;
+and updater receive the newest nondeprecated stable CLI version explicitly,
+resolved from publication metadata. Native `latest` and `stable` pointers can lag
+that publication; unavailable metadata refuses installation rather than retaining
+an older configured channel. OpenCode and Executor retain the documented v2 API boundary;
 maintenance must review a newer stable API major and implement its migration.
 
 `harnesses/catalog.json` records tested connector and engine minimums separately:
-Codex ACP 2.5.0 with Codex 0.166.0, and Claude ACP 0.99.1 with Claude SDK 0.3.314
-(native Claude Code 2.1.314). The standalone Codex and Claude sign-in CLIs use their
+Codex ACP 2.5.0 with Codex 0.166.0, and Claude ACP 0.99.1 with Claude SDK 0.3.316
+(native Claude Code 2.1.316). The standalone Codex and Claude sign-in CLIs use their
 official current stable release channels. Codex ACP's `^0.165.0` engine range and
 Claude ACP's exact SDK 0.3.312 selection otherwise keep the chat engines behind.
 The consumer graph created by `harnesses/install-adapter.mjs` therefore declares

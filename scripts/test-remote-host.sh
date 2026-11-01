@@ -42,9 +42,9 @@ const npmVersion=JSON.parse(readFileSync(join(npmRoot,'package.json'),'utf8')).v
 const npmNumbers=npmVersion.split('.').map(Number);
 assert.ok(npmNumbers[0]>12||(npmNumbers[0]===12&&(npmNumbers[1]>2||(npmNumbers[1]===2&&npmNumbers[2]>=1))),'Private npm is below its security floor.');
 const npmGraph=JSON.parse(readFileSync(join(root,'current/npm-runtime/package-lock.json'),'utf8')).packages;
-for(const name of ['undici','ip-address']) assert.equal(JSON.parse(readFileSync(join(npmRoot,'node_modules',name,'package.json'),'utf8')).version,npmGraph['node_modules/'+name].version);
+for(const name of Object.keys(npmGraph).filter(key=>key.startsWith('node_modules/')&&!key.slice(13).includes('/node_modules/')).map(key=>key.slice(13))) assert.equal(JSON.parse(readFileSync(join(npmRoot,'node_modules',name,'package.json'),'utf8')).version,npmGraph['node_modules/'+name].version);
 const require=createRequire(join(npmRoot,'bin/npm-cli.js'));
-assert.equal(typeof require('undici').request,'function'); assert.equal(typeof require('ip-address').Address6,'function');
+assert.equal(typeof require('undici').request,'function'); assert.equal(typeof require('ip-address').Address6,'function'); assert.equal(typeof require('minimatch').minimatch,'function');
 assert.equal(execFileSync(process.execPath,[join(npmRoot,'bin/npm-cli.js'),'--version'],{encoding:'utf8'}).trim(),npmVersion);
 const { chromium }=await import(pathToFileURL(join(root,'current/default-agent/node_modules/playwright-core/index.mjs')).href);
 const connections=[];
