@@ -104,16 +104,15 @@ COPY --from=workspace-security-build /archive-tar-install/usr/local/share/perl/ 
 WORKDIR /opt/wovenmatter
 COPY remote/npm-runtime/package*.json ./npm-runtime/
 COPY --chown=woven:woven default-agent/package*.json ./default-agent/
-# npm bundles an affected undici even in its current release. Replace that
-# vendored module with the locked current API-compatible security selection.
+# npm bundles affected vendor modules even in its current release. Replace
+# the complete locked security graph, including each replacement dependency.
 # The workspace Playwright CLI matches playwright-core in the tested lockfile.
 # Keep browsers outside /home so persistent volumes cannot hide image updates.
 RUN export npm_config_cache=/tmp/wovenmatter-npm-build-cache \
     && npm install --global --ignore-scripts --no-audit --no-fund 'npm@>=12.2.1' \
     && npm ci --prefix npm-runtime --omit=dev --ignore-scripts --no-audit --no-fund \
-    && rm -rf /usr/local/lib/node_modules/npm/node_modules/undici /usr/local/lib/node_modules/npm/node_modules/ip-address /opt/yarn-* /usr/local/bin/yarn /usr/local/bin/yarnpkg \
-    && cp -a /opt/wovenmatter/npm-runtime/node_modules/undici /usr/local/lib/node_modules/npm/node_modules/undici \
-    && cp -a /opt/wovenmatter/npm-runtime/node_modules/ip-address /usr/local/lib/node_modules/npm/node_modules/ip-address \
+    && node -e 'const fs=require("node:fs"), path=require("node:path"); const root="/opt/wovenmatter/npm-runtime", vendor="/usr/local/lib/node_modules/npm/node_modules"; for(const [key,record] of Object.entries(require(root+"/package-lock.json").packages)){if(!key.startsWith("node_modules/")||key.slice(13).includes("/node_modules/"))continue; const target=path.join(vendor,key.slice(13)); fs.rmSync(target,{recursive:true,force:true}); fs.mkdirSync(path.dirname(target),{recursive:true}); fs.cpSync(path.join(root,key),target,{recursive:true}); if(require(target+"/package.json").version!==record.version)throw Error("npm vendor graph differs from lock")} const npm=require("node:module").createRequire("/usr/local/lib/node_modules/npm/package.json"); if(typeof npm("undici").request!=="function"||typeof npm("ip-address").Address6!=="function"||typeof npm("minimatch").minimatch!=="function")throw Error("npm security API verification failed")' \
+    && rm -rf /opt/yarn-* /usr/local/bin/yarn /usr/local/bin/yarnpkg \
     && npm install --global --ignore-scripts --no-audit --no-fund \
       "playwright@$(node -p 'require("./default-agent/package-lock.json").packages["node_modules/playwright-core"].version')" \
     && playwright install --with-deps chromium \

@@ -202,6 +202,26 @@ struct RuntimeBoundaryTests {
     #expect(await downloads.fetchCount() == 2)
   }
 
+  @Test("Claude installer receives the newest stable publication despite a stale channel tag")
+  func claudeInstallerPublicationSelection() async throws {
+    let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let script = Data("#!/bin/sh\n[ \"$1\" = 2.1.316 ]\n".utf8)
+    let installer = LocalACPRuntimeInstaller(
+      installPrefix: root,
+      installerFetcher: { _, destination, _ in try script.write(to: destination); return script.count },
+      metadataFetcher: { url in
+        #expect(url.absoluteString == "https://registry.npmjs.org/@anthropic-ai%2fclaude-code")
+        return Data(#"{"dist-tags":{"latest":"2.1.314"},"versions":{"2.1.314":{"bin":{"claude":"cli.js"}},"2.1.316":{"bin":{"claude":"cli.js"}},"2.1.317":{"bin":{"claude":"cli.js"},"deprecated":"withdrawn"},"2.2.0-beta.1":{"bin":{"claude":"cli.js"}}}}"#.utf8)
+      },
+      executableResolver: { _ in URL(fileURLWithPath: "/bin/sh") }
+    )
+    let definition = try #require(LocalACPRuntimeCatalog.definition(for: .claudeCode))
+    let preview = try await installer.prepareCLIInstall(definition)
+    let executable = try await installer.install(definition, component: .cli, expectedSourceSHA256: preview.sha256)
+    #expect(executable.path == "/bin/sh")
+  }
+
   private static let statusJSON = #"{"id":"container","name":"wovenmatter-work-1","state":"running","running":true,"health":null,"startedAt":"now","image":"wovenmatter/workspace:0.1","memoryBytes":8589934592,"swapBytes":4294967296,"swapMode":"additional","hostPort":7440,"persistentVolume":"wovenmatter-work-1-home","capabilities":{"memory":true,"swap":true},"storageKind":"named-volume","storageUsedBytes":1048576,"hostStorageCapacityBytes":107374182400,"hostStorageAvailableBytes":53687091200,"hostStorageLow":false,"storageWarning":null,"legacyStorage":false}"#
 
   private func cliDefinition() -> LocalACPRuntimeDefinition {
