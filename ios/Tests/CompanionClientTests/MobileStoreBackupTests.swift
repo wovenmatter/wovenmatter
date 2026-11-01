@@ -85,6 +85,7 @@ final class MobileStoreBackupTests: XCTestCase {
     let cached = CompanionNote(id: "cached", title: "From the Mac", content: try document("Central copy"), revision: 3, workspaceID: "mac")
     let edited = CompanionNote(id: "edited", title: "Being edited", content: try document("Server version"), revision: 2, workspaceID: "mac")
     try await store.apply(CompanionSnapshot(workspaceID: "central", cursor: 1, notes: [cached, edited]))
+    XCTAssertTrue(try excluded(body(edited.content, in: file)), "Before the edit the server version is a rebuildable cache")
     let edit = try document("Offline edit waiting to sync")
     try await store.editNote(id: edited.id, title: edited.title, content: edit, folderID: nil, base: edited)
     try await store.cache(.init(conversationID: "central-chat", messages: [.init(id: "m", conversationID: "central-chat", role: "assistant", content: "Mac reply")]))
@@ -117,11 +118,25 @@ final class MobileStoreBackupTests: XCTestCase {
     let file = file(), store = try MobileStore(file: file)
     let content = try document("Written before this fix")
     _ = try await store.createNote(folderID: nil, title: "Earlier build", content: content)
-    for url in [file, body(content, in: file)] { try MobileStorePersistence.applyBackup(.exclude, at: url) }
+    let note = body(content, in: file)
+    // The save just replaced the index file. An earlier build's exclusion of it was
+    // set in an earlier launch, so it is already on disk; write that state directly.
+    // (Excluding a just-replaced file through Foundation and including it again in the
+    // same process is applied asynchronously by the system: the include completes, as a
+    // fresh process confirms, but may not be visible on disk when setResourceValues
+    // returns. Production never excludes an index; only this test would create that state.)
+    try markExcludedByEarlierLaunch(file)
+    // The body is written once and never replaced; cover the in-process Foundation
+    // exclude → include transition on it.
+    try MobileStorePersistence.applyBackup(.exclude, at: note)
+    XCTAssertTrue(try excluded(file)); XCTAssertTrue(try excluded(note))
     MobileStorePersistence.forgetAppliedBackups()
     _ = try MobileStore(file: file)
     XCTAssertFalse(try excluded(file))
-    XCTAssertFalse(try excluded(body(content, in: file)))
+    XCTAssertFalse(try excluded(note))
+    try restore(file)
+    let restored = try await MobileStore(file: file).snapshot()
+    XCTAssertEqual(restored.notes.values.first?.content, content)
   }
 
   func testPhoneHistoryCalendarAndSavedFilesAreBackedUp() async throws {
@@ -140,14 +155,17 @@ final class MobileStoreBackupTests: XCTestCase {
     XCTAssertFalse(try excluded(artifacts.appendingPathComponent("index.json")))
   }
 
+  /// The backup exclusion an earlier launch completed, written directly to disk.
+  private func markExcludedByEarlierLaunch(_ url: URL) throws {
+    let value = Array("com.apple.backupd".utf8)
+    XCTAssertEqual(setxattr(url.path, "com.apple.metadata:com_apple_backup_excludeItem", value, value.count, 0, 0), 0)
+    XCTAssertTrue(try excluded(url))
+  }
   /// Every file an earlier build wrote, excluded as that build did (files only).
   private func excludeEverything(under root: URL) throws {
     for case let url as URL in FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey])!
       where try url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true && url.pathExtension != "sqlite" {
-      // Written directly and synchronously, as a completed earlier launch left it.
-      let value = Array("com.apple.backupd".utf8)
-      XCTAssertEqual(setxattr(url.path, "com.apple.metadata:com_apple_backup_excludeItem", value, value.count, 0, 0), 0)
-      XCTAssertTrue(try excluded(url))
+      try markExcludedByEarlierLaunch(url)
     }
     MobileStorePersistence.forgetAppliedBackups()
   }
