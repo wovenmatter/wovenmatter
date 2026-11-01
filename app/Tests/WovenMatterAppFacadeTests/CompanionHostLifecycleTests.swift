@@ -618,6 +618,69 @@ extension CompanionHostLifecycleTests {
         #expect(try await !air.host.peerAuthentication().isActiveMac(miniID))
     }
 
+    /// A snapshot retires only copied owners in its own namespace. A paired
+    /// Mac's workspace that arrives through another Mac's relay, before that
+    /// Mac holds any grant here, stays live and raises no registry error.
+    @Test func aSnapshotNeverRetiresAPeerWorkspaceLearnedBeforeItsDirectGrant() async throws {
+        let mesh = PeerTestMesh(); defer { mesh.remove() }
+        let air = try await mesh.add("copied-air"), mini = try await mesh.add("copied-mini"), third = try await mesh.add("copied-third")
+        try await mesh.pair(air, with: mini); try await mesh.pair(third, with: mini)
+        await air.host.peerSync.synchronize(force: true)
+        let airID = try await air.host.peerRoute().deviceID
+        let airWorkspace = try #require(air.host.executionWorkspaces.first { $0.ownerDeviceID == airID && $0.kind == .mac })
+        // The Air goes quiet, so it never obtains a grant at the third Mac.
+        air.host.stopSharing()
+        await mini.host.peerSync.synchronize(force: true)
+        third.host.stopSharing()
+        let thirdDB = try #require(third.model.dashboardStore?.database)
+        let learned = try #require(try await thirdDB.companionExecutionWorkspaces().first { $0.id == airWorkspace.id })
+        let thirdAuth = try await third.host.peerAuthentication()
+        #expect(await thirdAuth.isActiveMac(airID))
+        #expect(!(await thirdAuth.devices().map(\.id)).contains(airID))
+        third.host.retiresCopiedExecutionOwners = true
+        try await third.host.refreshExecutionRegistry()
+        let after = try #require(try await thirdDB.companionExecutionWorkspaces().first { $0.id == airWorkspace.id })
+        #expect(after.retainedHistory != true && after.endpoint == learned.endpoint && after.libraryID == airWorkspace.libraryID)
+    }
+
+    /// After a restart with the signing key unavailable, an unpair fails
+    /// visibly and changes nothing; once the key loads again, a retry records a
+    /// signed event that a paired Mac accepts.
+    @Test func anUnpairWithoutItsSigningKeyFailsVisiblyAndASignedRetryReachesPeers() async throws {
+        let mesh = PeerTestMesh(); defer { mesh.remove() }
+        let air = try await mesh.add("sign-air"), mini = try await mesh.add("sign-mini")
+        try await mesh.pair(air, with: mini)
+        let airID = try await air.host.peerRoute().deviceID
+        let airAuth = try await air.host.peerAuthentication()
+        let phoneID = UUID().uuidString.lowercased()
+        let phone = try await airAuth.pair(.init(token: try await airAuth.createOffer(endpoint: air.host.peerRoute().endpoint).payload.token,
+            deviceID: phoneID, deviceName: "Phone", metadata: .init(kind: .iPhone)), workspaceID: air.host.peerRoute().libraryID)
+        // The Air restarts and its Keychain refuses the signing key.
+        var keychainAvailable = false
+        let load = air.storage.loadSigningKey
+        air.storage.loadSigningKey = {
+            guard keychainAvailable else { throw NSError(domain: NSOSStatusErrorDomain, code: -25308) }
+            return try load()
+        }
+        air.host.stopSharing()
+        air.host = air.makeHost()
+        await air.host.revoke(phoneID)
+        #expect(air.host.errorMessage?.contains("pairing key is unavailable") == true)
+        let restarted = try await air.host.peerAuthentication()
+        #expect(try await restarted.authenticate(bearer: phone.credential).id == phoneID)
+        #expect(await restarted.revocationContext(for: phoneID).isEmpty)
+        // The key is available again: the retry is a signed unpair.
+        keychainAvailable = true
+        await air.host.revoke(phoneID)
+        #expect(air.host.errorMessage == nil)
+        await #expect(throws: CompanionAPIError.self) { try await restarted.authenticate(bearer: phone.credential) }
+        let event = try #require(await restarted.peerMembership().revocations.first { $0.deviceID == phoneID })
+        #expect(event.revokerDeviceID == airID && event.signature.count == 64)
+        let miniAuth = try await mini.host.peerAuthentication()
+        try await miniAuth.mergeMembership(restarted.peerMembership(), own: mini.host.peerSync.identity())
+        #expect(await miniAuth.revocationContext(for: phoneID) == [event.eventID])
+    }
+
     @Test func formerNodeUpgradeKeepsUnsentWritingAndOpensTheFullApp() async throws {
         let fixture = try await HostFixture(isNode: true); defer { fixture.remove() }
         let database = try #require(fixture.model.dashboardStore?.database)

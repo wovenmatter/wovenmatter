@@ -127,7 +127,9 @@ synchronized membership. Every paired-Mac endpoint, and the ordinary library and
 federation endpoints, accept only grants the receiving Mac issued, so a bearer a
 Mac minted or holds for another Mac is useless anywhere else.
 
-An unpair is a distinct signed event. A grant or admission stays valid only while
+An unpair is a distinct signed event. It needs this Mac's signing key: if the key
+cannot be loaded, the unpair fails with an error before anything changes and the
+device stays paired until a retry succeeds. A grant or admission stays valid only while
 it acknowledges every known unpair event for its device, and an admission's
 subject signs the exact set it acknowledges. Concurrent unpairs on different Macs
 therefore all apply when they meet, and only a pairing made after learning them

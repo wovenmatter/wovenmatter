@@ -333,6 +333,16 @@ final class CompanionHostController {
             if let expected, await authentication?.isCurrent(expected) != true {
                 throw CompanionAPIError(code: "unauthorized", message: "This pairing has already changed.")
             }
+            // A user's unpair is a signed event every paired Mac applies. The
+            // signing key loads before any side effect: if it is unavailable
+            // the unpair fails visibly and the device stays paired for a retry,
+            // never revoked only on this Mac.
+            let signer: PeerSelf?
+            do { signer = recordsUnpair ? try await peerSync.identity() : nil }
+            catch {
+                throw CompanionAPIError(code: "signing_unavailable",
+                    message: "This Mac’s pairing key is unavailable, so nothing was unpaired. Make sure this Mac is unlocked, then try again.")
+            }
             // Persist the remote work list before revoking local access. An offline
             // workspace remains explicitly pending until its token is removed.
             if let database = model?.dashboardStore?.database {
@@ -370,8 +380,8 @@ final class CompanionHostController {
                 }
             }
             try await loadExecutionAuthentication().revoke(provisionedBy: deviceID)
-            if recordsUnpair {
-                _ = try? await peerSync.identity()
+            if let signer {
+                await authentication?.useIdentity(signer)
                 try await authentication?.revoke(deviceID: deviceID, expected: expected)
             } else {
                 try await authentication?.revokeLocally(deviceID: deviceID)
@@ -416,8 +426,12 @@ final class CompanionHostController {
         let value = UUID().uuidString.lowercased(); defaults.set(value, forKey: key); return value
     }
 
+    /// A Dev snapshot retires the execution owners it copied from its source.
+    /// Test seam: fixtures exercise snapshot registry rules without a Dev bundle.
+    @ObservationIgnored var retiresCopiedExecutionOwners = DevelopmentLaunch.isSnapshot
+
     /// Registry changes do not open connections, start containers, or move workspace files.
-    private func refreshExecutionRegistry() async throws {
+    func refreshExecutionRegistry() async throws {
         guard !registryRefreshInProgress, let model, let database = model.dashboardStore?.database else { return }
         registryRefreshInProgress = true
         let expectedGeneration = generation
@@ -426,12 +440,15 @@ final class CompanionHostController {
         try await database.savePairedRemoteWorkspaces(model.remoteWorkspaces.workspaces)
         let existing = try await database.companionExecutionWorkspaces()
         let localID = localExecutionWorkspaceID(libraryID: identity.libraryID)
-        if DevelopmentLaunch.isSnapshot {
+        if retiresCopiedExecutionOwners {
             // Upgrade existing snapshots too. New paired owners remain live; copied
             // owners retain their identity for history without becoming connections.
+            // Only this library's own namespace is registered here. A paired
+            // Mac's workspace keeps its own namespace and owner, and arrives
+            // through synchronization before that Mac holds any grant here.
             let connected = await authentication?.devices() ?? []
             let paired = Set(connected.map(\.id))
-            for var copied in existing where !copied.deleted && copied.retainedHistory != true
+            for var copied in existing where !copied.deleted && copied.retainedHistory != true && copied.libraryID == identity.libraryID
                 && copied.id != localID && copied.ownerDeviceID != identity.hostDeviceID && !paired.contains(copied.ownerDeviceID) {
                 guard generation == expectedGeneration, !Task.isCancelled else { return }
                 copied.retainedHistory = true; copied.endpoint = nil
