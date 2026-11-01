@@ -98,7 +98,10 @@ struct NotePane: View {
         Button { Task { await model.newNote() } } label: {
           DashboardLucideIcon(glyph: .plus, size: 20).frame(width: 44, height: 44)
         }.accessibilityLabel("New note").accessibilityIdentifier("action-new-note")
-      }.buttonStyle(DashboardIconButtonStyle()).padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 4)
+      }.buttonStyle(DashboardIconButtonStyle())
+        // Undo, redo, formatting and dictation continue editing the focused paragraph.
+        .keepsKeyboard()
+        .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 4)
       TextField("Untitled note", text: Binding(get: { title }, set: { title = $0; persist() }), axis: .vertical)
         .font(.title.weight(.semibold)).lineLimit(1...3)
         .accessibilityIdentifier("note-title").disabled(!editable)

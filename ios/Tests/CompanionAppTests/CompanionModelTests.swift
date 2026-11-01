@@ -280,15 +280,25 @@ final class CompanionModelTests: XCTestCase {
     let mac = ModelMac(); await mac.release(); await mac.loseNextReply()
     let model = CompanionModel(store: store, transport: mac)
     let action = CompanionWorkspaceAction.retryLibrary(id: "retained-file")
+    let unrelatedAction = CompanionWorkspaceAction.retryLibrary(id: "unrelated")
     let first = await model.perform(action); XCTAssertFalse(first)
-    let different = await model.perform(.retryLibrary(id: "unrelated")); XCTAssertFalse(different)
+    // An unknown outcome waits only for its own item; another item proceeds with its own command.
+    let unrelated = await model.perform(unrelatedAction); XCTAssertTrue(unrelated)
+    let between = await store.snapshot().commands
+    XCTAssertNil(between.first { $0.command.workspaceAction == action }?.receipt, "The original stays unresolved, not discarded or settled")
+    XCTAssertEqual(between.first { $0.command.workspaceAction == unrelatedAction }?.receipt?.status, .completed)
     let second = await model.perform(action); XCTAssertTrue(second)
     let commands = await mac.commands
-    XCTAssertEqual(commands.count, 2)
-    XCTAssertEqual(commands.first, commands.last)
+    XCTAssertEqual(commands.map(\.workspaceAction), [action, unrelatedAction, action], "Lost original, unrelated item, then the original's retry")
+    let originals = commands.filter { $0.workspaceAction == action }, others = commands.filter { $0.workspaceAction == unrelatedAction }
+    XCTAssertEqual(originals.count, 2)
+    XCTAssertEqual(originals.first, originals.last, "The retry resends the identical command and payload")
+    XCTAssertEqual(others.count, 1)
+    XCTAssertNotEqual(others.first?.commandID, originals.first?.commandID)
     let snapshot = await store.snapshot()
-    XCTAssertEqual(snapshot.commands.count, 1)
-    XCTAssertEqual(snapshot.commands.first?.receipt?.status, .completed)
+    XCTAssertEqual(Set(snapshot.commands.map(\.id)), Set([originals.first?.commandID, others.first?.commandID].compactMap { $0 }),
+                   "Both requests stay recorded; the lost one is not discarded or replaced")
+    XCTAssertTrue(snapshot.commands.allSatisfy { $0.receipt?.status == .completed })
   }
 
   @MainActor func testRemoteTitleAndBodyAdoptionDoesNotCreateSyntheticEdit() async throws {

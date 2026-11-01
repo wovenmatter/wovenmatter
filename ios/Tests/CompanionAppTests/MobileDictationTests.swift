@@ -262,4 +262,26 @@ import CompanionClient
     XCTAssertEqual(note.editors().first?.text, "Start")
     XCTAssertEqual(note.content(), typed, "One undo removes the whole multiline dictation")
   }
+
+  /// Taps on note editing controls keep the keyboard; taps anywhere else still dismiss it.
+  func testOnlyMarkedEditingControlsKeepTheKeyboard() async throws {
+    let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+    let previous = scene.windows.first(where: \.isKeyWindow)
+    let window = UIWindow(windowScene: scene)
+    defer { window.isHidden = true; previous?.makeKeyAndVisible() }
+    window.rootViewController = UIHostingController(rootView: VStack(spacing: 0) {
+      HStack { Button("Undo") {}; Button("Redo") {} }.frame(maxWidth: .infinity, minHeight: 44).keepsKeyboard()
+      Color.clear.frame(maxWidth: .infinity, maxHeight: .infinity)
+    }.background(MobileKeyboardDismissal()))
+    window.makeKeyAndVisible()
+    for _ in 0..<300 where MobileKeyboardDismissal.keepers.allObjects.first(where: { $0.window === window }) == nil { try await Task.sleep(for: .milliseconds(10)) }
+    let keeper = try XCTUnwrap(MobileKeyboardDismissal.keepers.allObjects.first { $0.window === window })
+    let toolbar = keeper.convert(keeper.bounds, to: window)
+    XCTAssertGreaterThan(toolbar.height, 0)
+    XCTAssertTrue(MobileKeyboardDismissal.keepsKeyboard(at: CGPoint(x: toolbar.midX, y: toolbar.midY), in: window))
+    XCTAssertFalse(MobileKeyboardDismissal.keepsKeyboard(at: CGPoint(x: toolbar.midX, y: toolbar.maxY + 100), in: window), "Ordinary outside taps still dismiss")
+    window.isHidden = true; window.rootViewController = nil
+    for _ in 0..<300 where keeper.window != nil { try await Task.sleep(for: .milliseconds(10)) }
+    XCTAssertFalse(MobileKeyboardDismissal.keepers.allObjects.contains { $0 === keeper }, "A removed control stops keeping the keyboard")
+  }
 }

@@ -385,6 +385,9 @@ final class CompanionUITests: XCTestCase {
     XCTAssertEqual(writtenBody.map { $0.lowercased() }, paragraphs.map { $0.lowercased() })
     XCTAssertFalse(app.buttons["dismiss-keyboard"].exists)
     app.buttons["note-text-count"].tap()
+    // A tap outside the editor and its editing controls still ends editing.
+    let dismissed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "hasKeyboardFocus == false"), object: second)
+    XCTAssertEqual(XCTWaiter.wait(for: [dismissed], timeout: 5), .completed, "An ordinary outside tap dismisses the keyboard")
     XCTAssertTrue(app.buttons["tab-home"].waitForExistence(timeout: 5))
     let saved = app.buttons["note-save-state"]
     let savedPredicate = NSPredicate(format: "label CONTAINS 'Saved on this device'")
