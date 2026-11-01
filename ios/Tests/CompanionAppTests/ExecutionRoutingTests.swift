@@ -268,23 +268,23 @@ final class ExecutionRoutingTests: XCTestCase {
     await waitForQuestion("first")
     XCTAssertEqual(model.localPending.map(\.id), ["first"])
     model.cancelDeviceApprovals("chat")
-    guard case .failure(let error) = await interrupted.value, error is CancellationError else { return XCTFail("Interruption is not an answer") }
+    guard case .failure(let error) = try await bounded(model, "An interrupted Exa question", { await interrupted.value }), error is CancellationError else { return XCTFail("Interruption is not an answer") }
     XCTAssertFalse(model.exaSharingDeclined.contains("chat"))
 
     let resumed = ask("chat", "second")
     await waitForQuestion("second")
     XCTAssertEqual(model.localPending.map(\.id), ["second"], "Resume asks again")
     await model.respond(interaction("chat", "second"), response: .init(optionID: "deny"))
-    guard case .failure(let denied) = await resumed.value, case QuickChatSearchError.permissionRequired = denied else { return XCTFail("Denial must refuse the search") }
+    guard case .failure(let denied) = try await bounded(model, "A declined Exa question", { await resumed.value }), case QuickChatSearchError.permissionRequired = denied else { return XCTFail("Denial must refuse the search") }
     XCTAssertTrue(model.exaSharingDeclined.contains("chat"))
-    guard case .failure = await ask("chat", "third").value else { return XCTFail("A decline holds for this chat") }
+    guard case .failure = try await bounded(model, "A remembered Exa decline", { await ask("chat", "third").value }) else { return XCTFail("A decline holds for this chat") }
     XCTAssertNil(model.localApprovals["third"], "A declined chat is not asked again")
     XCTAssertFalse(model.dataSharing.permits(.exa))
 
     let other = ask("other", "fourth")
     await waitForQuestion("fourth")
     await model.respond(interaction("other", "fourth"), response: .init(optionID: "allow"))
-    guard case .success = await other.value else { return XCTFail("Allowing continues the search") }
+    guard case .success = try await bounded(model, "An allowed Exa question", { await other.value }) else { return XCTFail("Allowing continues the search") }
     model.dataSharing = .init(); model.loadDataSharing()
     XCTAssertTrue(model.dataSharing.permits(.exa), "Allowing is saved")
     XCTAssertTrue(model.exaSharingDeclined.isEmpty, "Allowing replaces earlier declines")
@@ -499,6 +499,7 @@ final class ExecutionRoutingTests: XCTestCase {
     let created = try XCTUnwrap(model.selectedConversationID)
     XCTAssertEqual(model.executionRecords[created]?.status, "ready")
     XCTAssertEqual(model.executionRecords[created]?.thinkingLevel, "medium", "New chats use the middle supported non-Off level")
+    XCTAssertEqual(model.executionRecords[created]?.permissionMode, .ask, "A new chat saves the mode it starts with, so a later default cannot change it")
     XCTAssertTrue(model.localRuntimes.isEmpty, "Choosing an agent must not start inference")
     XCTAssertEqual(model.state.transcripts[created]?.messages, [])
     let record = DeviceConversationRecord(id: "first", title: "First", connectionID: connection.id, connection: connection, modelJSON: try descriptor.descriptorJSON(), status: "ready", updatedAt: "")
@@ -673,33 +674,116 @@ final class ExecutionRoutingTests: XCTestCase {
     XCTAssertNotEqual(try MobileToolSupport.fingerprint(original), try MobileToolSupport.fingerprint(edited))
   }
 
+  private struct UnansweredWait: Error { var label: String }
+  /// Runs work that may wait for an approval or question, with a real deadline.
+  /// If nothing answers in time, the test fails, the operation and pending
+  /// prompts are cancelled, and this throws without awaiting the operation again.
+  @MainActor private func bounded<T: Sendable>(_ model: CompanionModel, _ label: String, seconds: Double = 10,
+                                               _ operation: @escaping @MainActor () async throws -> T) async throws -> T {
+    let finished = XCTestExpectation(description: label)
+    var outcome: Result<T, any Error>?
+    let task = Task { @MainActor in
+      do { outcome = .success(try await operation()) } catch { outcome = .failure(error) }
+      finished.fulfill()
+    }
+    guard await XCTWaiter().fulfillment(of: [finished], timeout: seconds) == .completed, let outcome else {
+      task.cancel()
+      for id in Array(model.localApprovals.keys) { model.cancelDeviceApproval(id) }
+      XCTFail(label + " did not finish: an approval or question was left unanswered")
+      throw UnansweredWait(label: label)
+    }
+    return try outcome.get()
+  }
+
   @MainActor func testFullAccessRunsToolsWithoutPromptsAndAskModeStillRequiresApproval() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
     let model = CompanionModel(store: try MobileStore(file: root.appendingPathComponent("library.json")), transport: ExecutionTestLibrary())
     model.executionDirectory = root.appendingPathComponent("execution")
-    let full = DeviceConversationRecord(id: "full", title: "Full", connectionID: "fixture", modelJSON: "{}", status: "ready", updatedAt: "")
+    defer { for id in Array(model.localApprovals.keys) { model.cancelDeviceApproval(id) } }
+    var full = DeviceConversationRecord(id: "full", title: "Full", connectionID: "fixture", modelJSON: "{}", status: "ready", updatedAt: "")
+    full.permissionMode = .full
     var ask = full; ask.id = "ask"; ask.permissionMode = .ask
     model.executionRecords = [full.id: full, ask.id: ask]
     model.selectedConversationID = ask.id
     let request = try CompanionModel.toolJSON(["name": "woven_notes_create", "conversationID": full.id, "arguments": ["title": "Saved", "kind": "note"]])
-    _ = try await model.performDeviceTool(request)
+    _ = try await bounded(model, "A Full Access note write") { try await model.performDeviceTool(request) }
     XCTAssertEqual(model.notes.first?.title, "Saved")
     XCTAssertTrue(model.localPending.isEmpty, "Permission belongs to the tool's owner, not the selected chat")
     model.selectedConversationID = full.id
-    XCTAssertEqual(model.deviceChatPermission, .full, "Chats saved before the selector existed default to full access")
+    XCTAssertEqual(model.deviceChatPermission, .full, "An explicit Allow choice is honored")
     guard case .session(let settings) = try await model.readDeviceWorkspace(.session(id: full.id)) else { return XCTFail("Missing settings") }
     XCTAssertEqual(settings.permission, "full")
+
+    // The same write in an Ask chat waits for the user; declining saves nothing.
+    let askRequest = try CompanionModel.toolJSON(["name": "woven_notes_create", "conversationID": ask.id, "arguments": ["title": "Declined", "kind": "note"]])
+    let declined = Task { @MainActor in try await model.performDeviceTool(askRequest) }
+    for _ in 0..<500 where model.localPending.isEmpty { await Task.yield() }
+    let prompt = try XCTUnwrap(model.localPending.first, "An Ask chat prompts before a note write")
+    XCTAssertEqual(prompt.conversationID, ask.id)
+    await model.respond(prompt, response: .init(optionID: "deny"))
+    do { _ = try await bounded(model, "A declined note write") { try await declined.value }; XCTFail("A declined write must not run") } catch is CancellationError { XCTFail("Declining is not cancellation") } catch {}
+    XCTAssertFalse(model.notes.contains { $0.title == "Declined" }, "Nothing is saved after declining")
+
     let waiting = Task { try await model.requireDeviceApproval(id: "ask-write", conversationID: ask.id, title: "Write", detail: "File") }
     for _ in 0..<100 where model.localApprovals["ask-write"] == nil { await Task.yield() }
-    XCTAssertEqual(model.localPending.map(\.id), ["ask-write"], "An explicit Ask for Approval choice keeps prompting")
+    XCTAssertEqual(model.localPending.map(\.id), ["ask-write"], "An explicit Ask choice keeps prompting")
     waiting.cancel()
-    do { try await waiting.value; XCTFail("Cancelled approval must not continue") } catch is CancellationError { }
+    do { try await bounded(model, "A cancelled approval") { try await waiting.value }; XCTFail("Cancelled approval must not continue") } catch is CancellationError { }
     let question = Task { try await model.askDeviceQuestion(id: "question", conversationID: full.id, question: "Which file?") }
     for _ in 0..<100 where model.localApprovals["question"] == nil { await Task.yield() }
     XCTAssertEqual(model.localPending.map(\.id), ["question"], "Full access must still surface questions")
     question.cancel()
-    do { _ = try await question.value; XCTFail("Cancelled question must not continue") } catch is CancellationError { }
+    do { _ = try await bounded(model, "A cancelled question") { try await question.value }; XCTFail("Cancelled question must not continue") } catch is CancellationError { }
+  }
+
+  /// Ask is the default, and saved choices never flip on reopen: an explicit mode
+  /// keeps its value, a current chat without one asks, and a chat from an earlier
+  /// on-device agent (no Quick Chat version) stays retained history whatever its mode.
+  @MainActor func testPermissionModesSurviveReopenAndEarlierChatsStayRetained() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = try MobileStore(file: root.appendingPathComponent("library.json"))
+    let model = CompanionModel(store: store, transport: ExecutionTestLibrary())
+    model.executionDirectory = root.appendingPathComponent("execution")
+    // A complete saved connection, so reopening reaches the retained-history guard
+    // itself rather than failing earlier for a missing account. No request is made.
+    let connection = InferenceConnection(id: "fixture", name: "Saved", provider: "openai", route: .direct, modelID: "test")
+    func record(_ id: String, _ mode: DevicePermissionMode?) -> DeviceConversationRecord {
+      var value = DeviceConversationRecord(id: id, title: id, connectionID: connection.id, connection: connection, modelJSON: "{}", status: "ready", updatedAt: "")
+      value.permissionMode = mode; return value
+    }
+    model.executionRecords = ["full": record("full", .full), "ask": record("ask", .ask), "unset": record("unset", nil), "legacy": record("legacy", .full)]
+    try model.persistExecutionConfiguration()
+    // An earlier build wrote no Quick Chat version.
+    let file = try XCTUnwrap(model.executionDirectory).appendingPathComponent("preferences.json")
+    var saved = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+    var conversations = try XCTUnwrap(saved["conversations"] as? [String: Any])
+    var legacy = try XCTUnwrap(conversations["legacy"] as? [String: Any]); legacy.removeValue(forKey: "quickChatVersion")
+    conversations["legacy"] = legacy; saved["conversations"] = conversations
+    try JSONSerialization.data(withJSONObject: saved).write(to: file)
+
+    let reopened = CompanionModel(store: store, transport: ExecutionTestLibrary())
+    reopened.executionDirectory = model.executionDirectory
+    try await reopened.loadExecutionConfiguration()
+    XCTAssertEqual(reopened.executionRecords["full"]?.permissionMode, .full)
+    XCTAssertEqual(reopened.executionRecords["ask"]?.permissionMode, .ask)
+    XCTAssertNil(reopened.executionRecords["unset"]?.permissionMode, "Nothing is migrated to an explicit mode")
+    for (id, expected) in [("full", DevicePermissionMode.full), ("ask", .ask), ("unset", .ask)] {
+      reopened.selectedConversationID = id
+      XCTAssertEqual(reopened.deviceChatPermission, expected, id)
+      guard case .session(let settings) = try await reopened.readDeviceWorkspace(.session(id: id)) else { return XCTFail("Missing settings") }
+      XCTAssertEqual(settings.permission, expected.rawValue, id)
+    }
+    let retained = try XCTUnwrap(reopened.executionRecords["legacy"])
+    XCTAssertEqual(retained.quickChatVersion, 0)
+    XCTAssertEqual(retained.status, "retained")
+    XCTAssertEqual(retained.permissionMode, .full, "The earlier chat's saved mode is kept as it was")
+    reopened.selectedConversationID = "legacy"
+    XCTAssertFalse(reopened.canResumeLocalRun, "Earlier chats are history and never run tools")
+    do { _ = try await reopened.deviceRuntime("legacy"); XCTFail("An earlier chat reopened its runtime") }
+    catch { XCTAssertTrue(error.localizedDescription.contains("saved as history"), "Refused as retained history, not for another reason: \(error.localizedDescription)") }
+    XCTAssertTrue(reopened.localRuntimes.isEmpty)
   }
 
   @MainActor func testDraftPermissionPersistsAndInvalidRemoteModeIsRejected() async throws {
@@ -708,7 +792,12 @@ final class ExecutionRoutingTests: XCTestCase {
     let store = try MobileStore(file: root.appendingPathComponent("library.json"))
     let model = CompanionModel(store: store, transport: ExecutionTestLibrary())
     model.executionDirectory = root.appendingPathComponent("execution")
-    XCTAssertEqual(model.deviceChatPermission, .full)
+    XCTAssertEqual(model.deviceChatPermission, .ask, "A new chat asks first")
+    try await model.configureDeviceChat(permission: .full)
+    let reopenedFull = CompanionModel(store: store, transport: ExecutionTestLibrary())
+    reopenedFull.executionDirectory = model.executionDirectory
+    try await reopenedFull.loadExecutionConfiguration()
+    XCTAssertEqual(reopenedFull.deviceChatPermission, .full, "An explicit draft choice survives reopening")
     try await model.configureDeviceChat(permission: .ask)
     let reopened = CompanionModel(store: store, transport: ExecutionTestLibrary())
     reopened.executionDirectory = model.executionDirectory
@@ -736,7 +825,7 @@ final class ExecutionRoutingTests: XCTestCase {
     XCTAssertNotNil(model.localApprovals["approval"])
     XCTAssertEqual(model.localPending.map(\.id), ["approval"])
     waiting.cancel()
-    let cancelled = await waiting.value
+    let cancelled = try await bounded(model, "A cancelled approval") { await waiting.value }
     XCTAssertTrue(cancelled)
     XCTAssertNil(model.localApprovals["approval"])
     XCTAssertTrue(model.localPending.isEmpty)
@@ -760,7 +849,7 @@ final class ExecutionRoutingTests: XCTestCase {
     for _ in 0..<100 where model.localApprovals["question"] == nil { await Task.yield() }
     let firstToken = try XCTUnwrap(model.localApprovals["question"]?.token)
     first.cancel()
-    let firstCancelled = await first.value
+    let firstCancelled = try await bounded(model, "A cancelled question") { await first.value }
     XCTAssertTrue(firstCancelled)
     let second = questionTask()
     for _ in 0..<100 where model.localApprovals["question"] == nil { await Task.yield() }
@@ -770,7 +859,7 @@ final class ExecutionRoutingTests: XCTestCase {
     XCTAssertEqual(model.localApprovals["question"]?.token, secondToken)
     XCTAssertEqual(model.localPending.map(\.id), ["question"])
     second.cancel()
-    let secondCancelled = await second.value
+    let secondCancelled = try await bounded(model, "A replacement question") { await second.value }
     XCTAssertTrue(secondCancelled)
     XCTAssertTrue(model.localPending.isEmpty)
     XCTAssertTrue(model.localQuestionAnswers.isEmpty)

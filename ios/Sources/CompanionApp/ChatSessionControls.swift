@@ -43,7 +43,7 @@ extension CompanionModel {
         let descriptor = try await CompanionInferenceService(connection: connection, credentials: executionCredentialStore).model()
         let id = UUID().uuidString.lowercased()
         let record = DeviceConversationRecord(id: id, title: "New chat", folderID: folder,
-          enabledTools: deviceAgentDefaults.enabledTools, thinkingLevel: deviceAgentDefaults.thinking(for: descriptor), executionPolicy: deviceAgentDefaults.executionPolicy ?? .init(), additionalInstructions: deviceAgentDefaults.instructions,
+          enabledTools: deviceAgentDefaults.enabledTools, thinkingLevel: deviceAgentDefaults.thinking(for: descriptor), permissionMode: draftDeviceSettings.permissionMode ?? .defaultMode, executionPolicy: deviceAgentDefaults.executionPolicy ?? .init(), additionalInstructions: deviceAgentDefaults.instructions,
           connectionID: connection.id, connection: connection, modelJSON: try descriptor.descriptorJSON(), status: "ready", updatedAt: Self.executionTimestamp())
         executionRecords[id] = record
         do { try persistExecutionConfiguration() } catch { executionRecords.removeValue(forKey: id); throw error }

@@ -407,8 +407,9 @@ extension CompanionModel {
         let model = try await service.model()
         // The resolved model fixes the endpoint; confirm it before the chat is created.
         guard confirmDataSharing(.inference(connection, model: model), resume: false) else { return }
+        // The chat keeps the permission it was created with, even if the default later changes.
         executionRecords[id] = .init(id: id, title: String(text.prefix(80)), folderID: selectedFolderID,
-          enabledTools: chatSettings.enabledTools ?? defaults.enabledTools, thinkingLevel: chatSettings.thinkingLevel.flatMap { model.supportedThinkingLevels.contains($0) ? $0 : nil } ?? defaults.thinking(for: model), permissionMode: chatSettings.permissionMode, executionPolicy: defaults.executionPolicy ?? .init(), additionalInstructions: defaults.instructions, connectionID: connection.id, connection: connection, modelJSON: try model.descriptorJSON(), status: "ready", updatedAt: Self.executionTimestamp())
+          enabledTools: chatSettings.enabledTools ?? defaults.enabledTools, thinkingLevel: chatSettings.thinkingLevel.flatMap { model.supportedThinkingLevels.contains($0) ? $0 : nil } ?? defaults.thinking(for: model), permissionMode: chatSettings.permissionMode ?? .defaultMode, executionPolicy: defaults.executionPolicy ?? .init(), additionalInstructions: defaults.instructions, connectionID: connection.id, connection: connection, modelJSON: try model.descriptorJSON(), status: "ready", updatedAt: Self.executionTimestamp())
         try persistExecutionConfiguration()
         if userInitiated { await analytics.record(.active) }
       }

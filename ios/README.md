@@ -29,7 +29,8 @@ effect at the next request. The inference and Exa clients refuse to send without
 a saved permission, including for resumed runs. Don’t Allow on the first Exa
 question holds for that chat until relaunch; stopping or interrupting the run
 while it is open is not an answer, so Resume asks again. The permission modes are
-Ask Before Edits and Web Reads (the default) and Allow Edits and Web Reads. In Ask
+Ask Before Edits and Web Reads (the default) and Allow Edits and Web Reads. A new chat saves the mode it starts with, and an explicit choice is kept
+across relaunches; chats from earlier on-device agents remain retained history. In Ask
 mode, Quick Chat asks before saving note edits and before reading a webpage
 address that neither the user nor a search in that chat supplied. These prompts
 show the exact action; they do not make content read from notes or the web safe
