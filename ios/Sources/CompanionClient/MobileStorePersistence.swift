@@ -50,8 +50,9 @@ enum MobileStorePersistence {
       case .local: break
       }
     }
-    // Earlier builds excluded everything; correct existing bodies without waiting for an edit.
-    for (reference, backup) in roles { try? applyBackupIfChanged(backup, at: blobDirectory(file).appendingPathComponent(reference)) }
+    // Earlier builds excluded everything; include local writing without waiting for an edit.
+    // Nothing is excluded in place (see persist).
+    for (reference, backup) in roles where backup == .include { try? applyBackupIfChanged(.include, at: blobDirectory(file).appendingPathComponent(reference)) }
     try? applyBackupIfChanged(.include, at: file)
     return state
   }
@@ -73,13 +74,13 @@ enum MobileStorePersistence {
       }
       return reference
     }
-    // Content can move between cache and local writing, such as when an edit is
-    // acknowledged. Inclusion precedes the index commit; exclusion follows it, so a
-    // failed commit never leaves the previous index referencing excluded writing.
+    // Content can move from cache to local writing, such as a note's base once it is
+    // edited; inclusion precedes the index commit. A body is never excluded again in
+    // place: the system can apply an in-place exclusion late, even to a file later
+    // written at the same path. New cache bodies are excluded only as they are written.
     for (reference, backup) in references where backup == .include { try applyBackupIfChanged(.include, at: directory.appendingPathComponent(reference)) }
     let encoded = try JSONEncoder().encode(Envelope(version: 2, state: state))
     try writeDurably(encoded, at: file, backup: .include); bytesWritten += encoded.count
-    for (reference, backup) in references where backup == .exclude { try? applyBackupIfChanged(.exclude, at: directory.appendingPathComponent(reference)) }
     // Cleanup is best effort and occurs after the index commits. A crash can leave
     // an orphan, but can never evict a referenced draft, conflict or retry payload.
     if let files = try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) {

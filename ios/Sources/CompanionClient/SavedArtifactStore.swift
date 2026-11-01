@@ -41,21 +41,21 @@ public actor SavedArtifactStore {
     }
     // Earlier builds excluded saved files; correct them on open, before any edit.
     try? MobileStorePersistence.applyBackupIfChanged(.include, at: file)
-    for hash in Set(state.records.values.map(\.manifest.sha256)) { try? Self.applyBlobBackup(hash, in: state, directory: directory, downgrade: true) }
+    for hash in Set(state.records.values.map(\.manifest.sha256)) { try? Self.includeBlobIfNeeded(hash, in: state, directory: directory) }
   }
   /// A blob is shared by every record with the same content. It stays in backups
   /// while any of them exists only here: saved on this device or waiting to upload.
   private static func backup(_ hash: String, in state: State) -> MobileBackup {
     state.records.values.contains { $0.manifest.sha256 == hash && ($0.localOrigin == true || $0.upload) } ? .include : .exclude
   }
-  /// Inclusion is applied before an index commits and must succeed. Exclusion is
-  /// best effort after a commit, so a failed write never leaves needed bytes excluded.
-  private static func applyBlobBackup(_ hash: String, in state: State, directory: URL, downgrade: Bool) throws {
+  /// Inclusion is applied before an index commits and must succeed. A blob is never
+  /// excluded again in place: the system can apply an in-place exclusion late, even to
+  /// a file later written at the same path, so bytes once needed here stay in backups.
+  /// Only a fresh download no local record needs is written excluded.
+  private static func includeBlobIfNeeded(_ hash: String, in state: State, directory: URL) throws {
     let url = directory.appendingPathComponent(hash + ".blob")
-    guard FileManager.default.fileExists(atPath: url.path) else { return }
-    let backup = backup(hash, in: state)
-    if backup == .include { try MobileStorePersistence.applyBackupIfChanged(.include, at: url) }
-    else if downgrade { try? MobileStorePersistence.applyBackupIfChanged(.exclude, at: url) }
+    guard FileManager.default.fileExists(atPath: url.path), backup(hash, in: state) == .include else { return }
+    try MobileStorePersistence.applyBackupIfChanged(.include, at: url)
   }
   public func moveDeviceArtifacts(to libraryID: String, deviceID: String) throws {
     guard state.libraryID != libraryID else { return }
@@ -186,10 +186,14 @@ public actor SavedArtifactStore {
       record.downloadedBytes = 0; try update(id, record); throw Failure.checksumMismatch
     }
     guard state.records[id]?.manifest == manifest else { throw Failure.invalidTransfer }
-    // Downloads are central copies and can be fetched again after a restore,
-    // unless identical bytes also belong to a file saved here.
+    // Downloads are central copies and can be fetched again after a restore, unless
+    // identical bytes also belong to a file saved here. Verified identical bytes already
+    // stored are kept as they are, so a download never downgrades another record's blob.
     var after = state; after.records[id] = record
-    try MobileStorePersistence.writeDurably(downloaded, at: blob(manifest), backup: Self.backup(manifest.sha256, in: after))
+    let existing = blob(manifest)
+    if !(FileManager.default.fileExists(atPath: existing.path) && (try? Self.digest(Data(contentsOf: existing, options: .mappedIfSafe))) == manifest.sha256) {
+      try MobileStorePersistence.writeDurably(downloaded, at: existing, backup: Self.backup(manifest.sha256, in: after))
+    }
     record.complete = true; record.requestedDownload = false; record.pinned = state.records[id]?.pinned
     try update(id, record)
     try? FileManager.default.removeItem(at: partial)
@@ -216,10 +220,8 @@ public actor SavedArtifactStore {
     try commit(next)
   }
   private func commit(_ next: State) throws {
-    let hashes = Set((state.records.values.map(\.manifest.sha256)) + next.records.values.map(\.manifest.sha256))
-    for hash in hashes { try Self.applyBlobBackup(hash, in: next, directory: directory, downgrade: false) }
+    for hash in Set(next.records.values.map(\.manifest.sha256)) { try Self.includeBlobIfNeeded(hash, in: next, directory: directory) }
     try MobileStorePersistence.writeDurably(JSONEncoder().encode(next), at: directory.appendingPathComponent("index.json"), backup: .include)
     state = next
-    for hash in hashes { try? Self.applyBlobBackup(hash, in: next, directory: directory, downgrade: true) }
   }
 }

@@ -52,8 +52,10 @@ restore their metadata stays visible and the bodies are fetched again. Files tha
 earlier builds excluded are corrected when each store opens, without waiting for
 an edit. A saved file's bytes stay in backups while any record sharing them was
 saved here or waits to upload, even after downloading an identical central copy.
-A backup flag that cannot be set fails the write before it commits, and content
-leaves backups only after the index that no longer needs it commits. Pairing and
+A backup flag that cannot be set fails the write before it commits. Content that
+was ever needed only on this device is never excluded again in place, because the
+system can apply such a change late, even to bytes later saved at the same path; it
+leaves backups when it is removed. Caches are excluded as they are written. Pairing and
 provider credentials are device-only Keychain items and are never restored, so a
 restored device pairs and signs in again.
 

@@ -17,6 +17,11 @@ private actor BackupArtifactLibrary: FederationTransport {
   func registerWorkspace(_ registration: CompanionWorkspaceRegistration) throws -> CompanionExecutionWorkspace { throw MobileConnectionError.offline }
   func journal(after: Int64) throws -> CompanionJournalPage { throw MobileConnectionError.offline }
   func importJournal(_ batch: CompanionJournalBatch) throws -> CompanionJournalBatchResult { throw MobileConnectionError.offline }
+  /// Central now holds other content, at a later revision, under an existing ID.
+  func replace(_ id: String, revision: Int64, with data: Data) {
+    remote = .init(id: id, workspaceID: "phone", title: "Replaced", mediaType: "text/plain", byteCount: Int64(data.count),
+      sha256: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined(), revision: revision)
+  }
   func artifactManifests() -> [CompanionArtifactManifest] { remote.map { [$0] } ?? [] }
   func registerArtifact(_ registration: CompanionArtifactRegistration) -> CompanionArtifactTransfer {
     var manifest = registration.manifest; manifest.revision = 1; uploadManifests[manifest.id] = manifest
@@ -114,6 +119,34 @@ final class MobileStoreBackupTests: XCTestCase {
     XCTAssertThrowsError(try MobileStore(file: file))
   }
 
+  /// The platform boundary itself: excluding a just-replaced file through Foundation and
+  /// including it again in the same process settles asynchronously. On disk the flag may
+  /// read excluded, or briefly flip back to excluded, after setResourceValues returns.
+  /// The include is never lost: within a bounded time it settles included and stays so.
+  func testIncludeAfterSameProcessExclusionOfAReplacedFileSettlesWithinADeadline() async throws {
+    let directory = file().deletingLastPathComponent()
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    for index in 0..<50 {
+      let url = directory.appendingPathComponent("replaced-\(index).json")
+      try Data("first".utf8).write(to: url)
+      try MobileStorePersistence.writeDurably(Data("second".utf8), at: url, backup: .include)
+      try MobileStorePersistence.applyBackup(.exclude, at: url)
+      try MobileStorePersistence.applyBackup(.include, at: url)
+      // Settled means included continuously for 250 ms, reached within 3 s.
+      let deadline = ContinuousClock.now + .seconds(3)
+      var includedSince: ContinuousClock.Instant?
+      while ContinuousClock.now < deadline {
+        if try excluded(url) { includedSince = nil }
+        else if let since = includedSince { if since.duration(to: .now) >= .milliseconds(250) { break } }
+        else { includedSince = .now }
+        try await Task.sleep(for: .milliseconds(5))
+      }
+      let settled = includedSince.map { $0.duration(to: .now) >= .milliseconds(250) } ?? false
+      XCTAssertTrue(settled, "File \(index): the include did not settle; the exclusion persisted")
+      XCTAssertFalse(try excluded(url)); XCTAssertFalse(try foundationExcluded(url))
+    }
+  }
+
   func testEarlierBuildsExcludedLocalWritingIsIncludedOnLaunch() async throws {
     let file = file(), store = try MobileStore(file: file)
     let content = try document("Written before this fix")
@@ -122,9 +155,8 @@ final class MobileStoreBackupTests: XCTestCase {
     // The save just replaced the index file. An earlier build's exclusion of it was
     // set in an earlier launch, so it is already on disk; write that state directly.
     // (Excluding a just-replaced file through Foundation and including it again in the
-    // same process is applied asynchronously by the system: the include completes, as a
-    // fresh process confirms, but may not be visible on disk when setResourceValues
-    // returns. Production never excludes an index; only this test would create that state.)
+    // same process settles asynchronously; see the deadline test above. Indexes are
+    // only ever written included, so only a test creates that sequence for them.)
     try markExcludedByEarlierLaunch(file)
     // The body is written once and never replaced; cover the in-process Foundation
     // exclude → include transition on it.
@@ -134,6 +166,7 @@ final class MobileStoreBackupTests: XCTestCase {
     _ = try MobileStore(file: file)
     XCTAssertFalse(try excluded(file))
     XCTAssertFalse(try excluded(note))
+    XCTAssertFalse(try foundationExcluded(file)); XCTAssertFalse(try foundationExcluded(note))
     try restore(file)
     let restored = try await MobileStore(file: file).snapshot()
     XCTAssertEqual(restored.notes.values.first?.content, content)
@@ -155,11 +188,18 @@ final class MobileStoreBackupTests: XCTestCase {
     XCTAssertFalse(try excluded(artifacts.appendingPathComponent("index.json")))
   }
 
-  /// The backup exclusion an earlier launch completed, written directly to disk.
+  /// What Foundation reads, from a fresh URL with no cached resource values.
+  private func foundationExcluded(_ url: URL) throws -> Bool {
+    var fresh = URL(fileURLWithPath: url.path); fresh.removeAllCachedResourceValues()
+    return try fresh.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup ?? false
+  }
+  /// The backup exclusion an earlier launch completed, written directly to disk with
+  /// the exact payload Foundation itself writes: a binary property list naming backupd.
   private func markExcludedByEarlierLaunch(_ url: URL) throws {
-    let value = Array("com.apple.backupd".utf8)
-    XCTAssertEqual(setxattr(url.path, "com.apple.metadata:com_apple_backup_excludeItem", value, value.count, 0, 0), 0)
+    let payload = [UInt8](try PropertyListSerialization.data(fromPropertyList: "com.apple.backupd", format: .binary, options: 0))
+    XCTAssertEqual(setxattr(url.path, "com.apple.metadata:com_apple_backup_excludeItem", payload, payload.count, 0, 0), 0)
     XCTAssertTrue(try excluded(url))
+    XCTAssertTrue(try foundationExcluded(url), "Foundation reads the earlier launch's exclusion")
   }
   /// Every file an earlier build wrote, excluded as that build did (files only).
   private func excludeEverything(under root: URL) throws {
@@ -260,8 +300,8 @@ final class MobileStoreBackupTests: XCTestCase {
     XCTAssertEqual(Set(reopenedIDs), [first.id, second.id])
   }
 
-  /// When writing becomes a rebuildable cache, its body is excluded only after the
-  /// new index commits. A failed commit leaves the old index and its body included.
+  /// When writing becomes a rebuildable cache it is not excluded again in place, so a
+  /// failed commit leaves the old index and its body included, and so does a later one.
   func testFailedIndexCommitKeepsTheBodyThePreviousIndexNeedsInBackups() throws {
     let file = file()
     let content = try document("Local writing that later syncs")
@@ -277,7 +317,53 @@ final class MobileStoreBackupTests: XCTestCase {
     XCTAssertEqual(try Data(contentsOf: file), committed)
     XCTAssertFalse(try excluded(body(content, in: file)), "The previous index still needs this body")
     _ = try MobileStorePersistence.persist(synced, at: file)
-    XCTAssertTrue(try excluded(body(content, in: file)), "After the commit it is a cache")
+    XCTAssertFalse(try excluded(body(content, in: file)), "Writing once needed here is never excluded again in place")
+    // A body that was only ever a cache is still written excluded.
+    let cachedOnly = CompanionNote(id: "cached", title: "Cached", content: try document("Central copy only"), revision: 1, workspaceID: "mac")
+    var withCache = synced; withCache.notes[cachedOnly.id] = cachedOnly; withCache.bases[cachedOnly.id] = cachedOnly
+    _ = try MobileStorePersistence.persist(withCache, at: file)
+    XCTAssertTrue(try excluded(body(cachedOnly.content, in: file)))
+  }
+
+  private struct UnsettledBackupFlag: Error {}
+  /// The settled backup flag: unchanged for 250 ms, reached within 3 s. Failing to
+  /// settle is itself a failure, never reported as whichever value was seen last.
+  private func settledExcluded(_ url: URL) async throws -> Bool {
+    let deadline = ContinuousClock.now + .seconds(3)
+    var value = try excluded(url), since = ContinuousClock.now
+    while ContinuousClock.now < deadline {
+      if since.duration(to: .now) >= .milliseconds(250) { return value }
+      try await Task.sleep(for: .milliseconds(5))
+      let now = try excluded(url)
+      if now != value { value = now; since = .now }
+    }
+    XCTFail("The backup flag of \(url.lastPathComponent) did not settle within the deadline")
+    throw UnsettledBackupFlag()
+  }
+
+  /// Uploaded bytes whose ID central later gives other content, then saved again here
+  /// under a new ID: the reused blob path must end up in backups, as the only copy.
+  func testBytesSavedAgainAfterTheirFirstUseLeftStayInBackups() async throws {
+    for iteration in 0..<20 {
+      let root = file().deletingLastPathComponent().appendingPathComponent("artifacts-\(iteration)")
+      let store = try SavedArtifactStore(directory: root)
+      let bytes = Data("locally captured scan".utf8)
+      let library = BackupArtifactLibrary()
+      let first = try await store.save(data: bytes, workspaceID: "phone", title: "First", mediaType: "text/plain")
+      try await store.synchronize(using: library)
+      await library.replace(first.id, revision: 2, with: Data("other".utf8))
+      try await store.refreshManifests(using: library)
+      // No record needs these bytes now, but they are not excluded again in place:
+      // an in-place exclusion can land late on bytes saved again at this path.
+      XCTAssertFalse(try excluded(root.appendingPathComponent(first.sha256 + ".blob")), "Iteration \(iteration): bytes once local were excluded in place")
+      let second = try await store.save(data: bytes, workspaceID: "phone", title: "Second", mediaType: "text/plain")
+      let blob = root.appendingPathComponent(second.sha256 + ".blob")
+      let pending = await store.pendingUploadCount()
+      XCTAssertEqual(pending, 1, "The new save exists only here")
+      let stillExcluded = try await settledExcluded(blob)
+      XCTAssertFalse(stillExcluded, "Iteration \(iteration): the only copy of saved bytes left backups")
+      XCTAssertFalse(try foundationExcluded(blob))
+    }
   }
 
   /// The earliest stores kept everything inline in one excluded file. Opening one
