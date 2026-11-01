@@ -8,6 +8,10 @@ app uses. An app and an MCP server are not necessarily one-to-one.
 
 ## Setup
 
+![Executor setup with On this Mac selected and the Install and start Executor button](../assets/screenshots/executor.png)
+
+*Connected apps · Executor expanded in Settings, with On this Mac selected. Green theme.*
+
 Open **Settings → General → Executor**. Choose **On this Mac**, then
 **Install and start Executor**. Woven resolves the current published Executor runtime,
 downloads it unchanged and runs it alongside its background service.

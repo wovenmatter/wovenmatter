@@ -4,7 +4,9 @@ Open a note beside your conversation to work on it with your agent. Keep a
 research summary in view, develop a plan, or organize reference material without
 scrolling back through the chat. Notes and conversations can share the same folders.
 
-![A research conversation beside a note, using fictional demo data](../assets/screenshots/notes.png)
+![A Pi Durable research conversation beside the Pilot checklist note](../assets/screenshots/notes.png)
+
+*The research conversation and Pilot checklist note open side by side. Green theme.*
 
 ## Library
 

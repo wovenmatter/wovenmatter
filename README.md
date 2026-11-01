@@ -1,9 +1,9 @@
 # Woven Matter
 
-People already using Codex, Claude Code, or a similar agent are stuck in one
-vendor's app. Woven Matter lets you keep the installs and accounts you already
-have and pick a different harness or model per panel, side by side, in one
-local Mac workspace, instead of switching apps.
+Using Codex or Claude Code usually means working in that vendor's app.
+Woven Matter lets you keep the installs and accounts you already have and
+choose a different harness or model for each panel, side by side, in one local
+Mac workspace.
 
 [**Download for Mac**](https://wovenmatter.com/download) ·
 [Getting started](docs/guide/getting-started.md) · [Documentation](docs/README.md) ·
@@ -19,7 +19,8 @@ provider charges still apply.
 
 ![Woven Matter with Pi Durable, Claude Code, and Codex conversations open in three panels](docs/assets/screenshots/workspace.png)
 
-*The desktop app with fictional demo conversations. Light gray appearance.*
+*Pi Durable, Claude Code, and Codex in three panels, with all five harnesses
+in the sidebar. Green theme.*
 
 ## Your work, across agents
 

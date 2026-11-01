@@ -23,7 +23,9 @@ you to confirm pausing active timers.
 
 ## Calendar
 
-![Calendar with fictional demo events](../assets/screenshots/calendar.png)
+![November calendar with pilot kickoff, research review, and weekly brief events](../assets/screenshots/calendar.png)
+
+*Three events in the November calendar. Green theme.*
 
 Use **Calendar** for ordinary events and scheduled tasks. Click **Add event**,
 choose a day and time, and optionally add a description. Ordinary events can be
@@ -68,6 +70,10 @@ occurrence removes its calendar entry without deleting its sessions. Each event 
 last edited it, including the agent for changes made through Calendar tools.
 
 ## Usage
+
+![Usage analytics with 30-day token totals, model calls, and provider breakdowns](../assets/screenshots/usage.png)
+
+*The 30-day view shows token totals, 90 sessions, and 1,845 model calls. Green theme.*
 
 **Usage analytics** combines Woven Matter records and local harness activity.
 It needs no account setup or provider switches. OpenCode activity includes all
