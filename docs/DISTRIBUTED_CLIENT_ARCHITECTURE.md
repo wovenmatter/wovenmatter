@@ -18,6 +18,31 @@ A client replica is separate from native runtime persistence. Cache eviction mus
 
 Library changes use conditional revisions and retained deletion/conflict state. Commands use stable IDs, immutable request identity and durable receipts. Replay imports observations; it never executes commands. Interrupted transfers resume by validated offsets and content digests. Acknowledgement is emitted only after durable acceptance. Histories exceeding a network page are paged or chunked without truncation.
 
+## Workspace organization across devices
+
+**All Workspace** is the combined library-content view, not an agent directory.
+Each client presents its own execution device as **Local workspace** and other
+registered devices as **Remote workspaces**, alongside configured Linux hosts.
+Agents and folders belong under their workspace. On iPhone and iPad the single
+local agent is **Quick Chat**, powered by Pi Durable. Another device's Quick Chat
+is saved history only; clients never start or control Quick Chat on a remote phone.
+
+Notes retain an explicit workspace identity even when they are not in a folder.
+Creating an unfiled note on a device assigns that device; editing synchronized
+writing elsewhere does not transfer ownership. Folder membership provides a
+workspace association for older filed notes. Existing unfiled notes without
+reliable ownership evidence remain shared/unassigned instead of being attributed
+to whichever client first downloads them. All Workspace keeps those items visible.
+
+Workspace registrations expose an optional `contentWorkspaceID` for the native
+content/root identity, separate from the registry routing ID and execution
+publisher device ID. Display grouping resolves these registered aliases; command
+authentication continues to use the exact registry and device identities.
+Workspace comparisons normalize legacy device/remote ID prefixes without
+rewriting execution roots or moving runtime data. New-item actions use their
+workspace context, never the first reachable remote host. Connectivity affects
+whether remote actions are available, not whether a saved workspace is listed.
+
 ## Device connections and synchronization
 
 The central Mac manages membership and access in Settings → Devices.
@@ -69,15 +94,30 @@ create intrusive banners or dialogs. Explicit **Unpair** removes central-issued
 access grants, retaining cached content, pending writing, inference sign-ins,
 and the database binding so another database cannot receive old pending writes.
 
-## Pi Durable on iOS and iPadOS
+## Quick Chat on iOS and iPadOS
 
-Pi Durable executes on the iOS device. Its SDK owns the agent loop, submissions, tools, checkpoints and recovery. Inference is exclusively through supported cloud connections or an inference service on another Tailscale device. On-device inference is outside scope for all versions.
+Quick Chat is powered by Pi Durable on the phone, with device-local provider
+connections and unchanged native sign-in flows. Models run through the selected
+cloud provider or explicitly configured Tailscale inference adapter. Local model
+inference is outside scope. Account secrets stay in the device Keychain.
 
-The reviewed SDK is bundled with the app and hosted through JavaScriptCore. Native bridges provide durable storage, network streams, credentials, cancellation and mobile tools. The mobile workspace exposes only supported local capabilities. Mac/Linux workspace operations require an explicit target; a suspended local run is never silently moved elsewhere.
+Quick Chat exposes a fixed notes/web tool boundary. It can edit the existing
+local notes replica, use explicit note references, and search/read the public web
+through an optional device-owned Exa key. Native and SDK dispatch both exclude
+code execution, shell/repository tools, Python/WASM, subagents, goals, timers and
+phone-owned scheduling. It has only a short save/interruption allowance when
+backgrounded, followed by explicit Resume; it promises no background execution.
+Earlier phone-agent chats remain history without resuming their saved tool work.
 
-Device connections are independent of central-library pairing. ChatGPT and Grok use native device-code sign-in; Claude uses native PKCE sign-in with the provider’s returned code. API-key connections, including OpenCode Zen and Go, save their keys on the device. Access and refresh tokens stay in the device-only Keychain, and refresh calls the provider directly. Native Claude requests identify Woven Matter and retain Pi’s actual prompt and tool names; they do not claim to be Claude Code. Real provider authorization and inference acceptance require user testing. An explicitly selected hosted connection can still use an authenticated inference-only adapter. That adapter may translate model requests but cannot execute the phone's tools or own its agent loop. The selected adapter's availability is a model-connection dependency, separate from central-library availability.
-
-Accepted work and tool intent are persisted before display/dispatch. iOS background execution is opportunistic: interruption recovery uses native checkpoints and tool receipts. User cancellation remains cancellation after restart. Ambiguous external effects are reconciled or surfaced rather than blindly replayed.
+Mac/Linux workspace agents remain the primary mobile execution experience. Their
+existing sessions, permissions, models, approvals, questions, Stop and steering
+controls stay with their owners. Owner-scoped folder APIs allocate directories
+on the execution host, and direct session creation captures that folder's root.
+Linux keeps an independent durable folder outbox and publishes metadata before
+its conversations when central returns. Immediate direct control requires only
+the already-authorized Linux service and the phone on the Tailnet. Shared calendar
+schedules retain the existing central-library scheduling path; the phone does
+not run scheduled tasks or move old phone-owned tasks automatically.
 
 ## Client roles and compatibility
 
@@ -87,7 +127,7 @@ The existing companion protocol remains compatible while new federation capabili
 
 ## Required acceptance
 
-- Real Pi Durable on iOS executes tools locally with a controlled inference fixture, preserves history and resumes safely after interruption.
+- Real Pi Durable Quick Chat edits local notes with a controlled inference fixture, rejects coding/automation tools, preserves history and resumes safely after interruption.
 - Cloud/provider and Tailscale inference routes preserve selected model/account identity; real account checks are reported separately from fixtures.
 - With the central Mac offline, clients control reachable workspaces and retain local writing and execution history.
 - Reconnection consolidates multiple clients and execution origins without duplicate sends, stale Stop/approval actions, missing output, or resurrected deletions.

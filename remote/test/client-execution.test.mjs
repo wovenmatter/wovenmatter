@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, readFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, readFileSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -334,4 +334,43 @@ for(const terminal of ['completed','failed','cancelled'])test(`rapid dirty flush
   const row=f.service.transcript(opened.conversationID).activities[0],parts=f.service.events().entries.filter(item=>item.nativeRecord?.recordID===row.detailsRecordID).map(item=>item.nativeRecord)
   assert.equal(row.status,terminal)
   assert.equal(JSON.parse(Buffer.concat(parts.map(part=>Buffer.from(part.data,'base64')))).activity.content,text+' suffix'.repeat(20))
+})
+
+
+test('device-owned folder requests survive a lost reply and restart and set the native root without central access', async t => {
+  const f = fixture(t), id = randomUUID()
+  let directory
+  f.runtime.create = async input => { directory = input.nativeWorkingDirectory; return { sessionID: randomUUID() } }
+  const request = { operationID: randomUUID(), deviceID: f.enrollment.deviceID, kind: 'createFolder', resourceID: id, title: 'Phone project' }
+  const [first, retry] = await Promise.all([f.service.createFolder(request, f.principal), f.service.createFolder(request, f.principal)])
+  assert.deepEqual(first, retry)
+  assert.equal(first.execution.workspaceID, f.enrollment.workspaceID)
+  assert.ok(first.execution.rootPath.startsWith(realpathSync(f.directory) + '/projects/'))
+  assert.deepEqual(f.service.folders(), [first])
+  await assert.rejects(f.service.createFolder({ ...request, title: 'Changed payload' }, f.principal), { statusCode: 409 })
+  await assert.rejects(f.service.createFolder({ ...request, operationID: randomUUID(), resourceID: randomUUID(), folderExecution: { workspaceID: randomUUID(), rootPath: '/tmp' } }, f.principal), { statusCode: 400 })
+  const importedRequest = { ...request, operationID: randomUUID(), folderExecution: first.execution }
+  assert.deepEqual(await f.service.createFolder(importedRequest, f.principal), first)
+  await assert.rejects(f.service.createFolder({ ...importedRequest, title: 'Reused import identity' }, f.principal), { statusCode: 409 })
+  await f.restart()
+  assert.deepEqual(await f.service.createFolder(request, f.principal), first)
+  await assert.rejects(f.service.createFolder({ ...importedRequest, resourceID: randomUUID() }, f.principal), { statusCode: 409 })
+  const opened = await f.service.command(f.command('createSession', { folderID: id }), f.principal)
+  assert.equal(opened.status, 'completed')
+  assert.equal(directory, first.execution.rootPath)
+  const conflictingCommand = f.command('createSession', {
+    folderID: id, initialConfiguration: { nativeWorkingDirectory: f.directory }
+  })
+  await assert.rejects(f.service.command(conflictingCommand, f.principal), { statusCode: 400 })
+  const conflictingRoot = await f.service.command(conflictingCommand, f.principal, { internal: true })
+  assert.equal(conflictingRoot.status, 'rejected')
+  assert.equal(directory, first.execution.rootPath, 'A rejected folder-root override must not reach the runtime')
+  const matchingRoot = await f.service.command(f.command('createSession', {
+    folderID: id, initialConfiguration: { nativeWorkingDirectory: first.execution.rootPath }
+  }), f.principal, { internal: true })
+  assert.equal(matchingRoot.status, 'completed')
+  assert.equal(directory, first.execution.rootPath)
+  const missing = await f.service.command(f.command('createSession', { folderID: randomUUID() }), f.principal)
+  assert.equal(missing.status, 'rejected')
+  assert.equal(f.service.conversations().length, 2)
 })

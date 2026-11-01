@@ -16,14 +16,17 @@ const tick=()=>new Promise(resolve=>setTimeout(resolve,5))
 async function until(predicate){for(let n=0;n<200;n++){if(predicate())return;await tick()}assert.fail('owner publisher did not retry')}
 function fixture(t,{automatic=false}={}) {
   const directory=mkdtempSync(join(tmpdir(),'wm-owner-publish-')),events=new Map(),artifacts=new Map(),requests=[]
-  let online=false,loseReply=false,loseRetainedReply=false,cursor=0,rejectJournal=false,rejectArtifacts=false
+  let online=false,loseReply=false,loseRetainedReply=false,cursor=0,rejectJournal=false,rejectArtifacts=false,folderReply=null
   const token='publisher-token-'+randomUUID(),secret='existing-admin-'+randomUUID()
   const fetchImpl=async(url,options)=>{
     requests.push({url,options});if(!online)throw Error('Central offline')
     assert.equal(options.redirect,'error');assert.equal(options.headers.authorization,'Bearer '+token)
     if((rejectJournal&&url.endsWith('/journal'))||(rejectArtifacts&&url.includes('/artifacts/')))return {ok:false,status:503}
     const body=JSON.parse(options.body);let result
-    if(url.endsWith('/retained/settle')) {
+    if(url.endsWith('/folders')) {
+      const custom=folderReply?.(body);if(custom)return custom
+      result={operationID:body.operationID,status:'accepted',folder:{id:body.resourceID,name:body.title,execution:body.folderExecution}}
+    } else if(url.endsWith('/retained/settle')) {
       result={libraryID:body.libraryID,acceptedEventIDs:body.entries.map(entry=>entry.eventID),cursor:0}
       if(loseRetainedReply){loseRetainedReply=false;throw Error('Retained receipt lost')}
     } else if(url.endsWith('/journal')) {
@@ -49,7 +52,7 @@ function fixture(t,{automatic=false}={}) {
   service.configurePublisher(grant)
   const createSession=()=>service.command({commandID:randomUUID(),deviceID:enrollment.deviceID,libraryID:enrollment.libraryID,workspaceID:enrollment.workspaceID,kind:'createSession'},principal)
   t.after(async()=>{await service.close();rmSync(directory,{recursive:true,force:true})})
-  return {directory,events,artifacts,requests,grant,createSession,get service(){return service},set online(x){online=x},set loseReply(x){loseReply=x},set loseRetainedReply(x){loseRetainedReply=x},set rejectJournal(x){rejectJournal=x},set rejectArtifacts(x){rejectArtifacts=x},async restart(){await service.close();service=create()}}
+  return {directory,events,artifacts,requests,grant,createSession,enrollment,principal,get service(){return service},set online(x){online=x},set loseReply(x){loseReply=x},set loseRetainedReply(x){loseRetainedReply=x},set rejectJournal(x){rejectJournal=x},set rejectArtifacts(x){rejectArtifacts=x},set folderReply(x){folderReply=x},async restart(){await service.close();service=create()}}
 }
 test('owner executes offline and restart retries original immutable events without any observer',async t=>{
   const f=fixture(t,{automatic:true})
@@ -120,4 +123,97 @@ test('retained terminal preflight retries exact proofs before chronological jour
   assert.equal(proofs.length,2);assert.deepEqual(JSON.parse(proofs[1].options.body),first)
   assert.deepEqual([...f.events.keys()],entries.map(entry=>entry.eventID))
   const count=f.requests.length;await f.restart();await f.service.synchronizePublisher();assert.equal(f.requests.length,count)
+})
+
+
+test('Linux publishes its own offline folder before its conversation after the phone closes', async t => {
+  const f = fixture(t), id = randomUUID()
+  const folder = await f.service.createFolder({ operationID: randomUUID(), deviceID: f.enrollment.deviceID, kind: 'createFolder', resourceID: id, title: 'Offline folder' }, f.principal)
+  const opened = await f.service.command({ commandID: randomUUID(), deviceID: f.enrollment.deviceID, libraryID: f.enrollment.libraryID, workspaceID: f.enrollment.workspaceID, kind: 'createSession', folderID: id }, f.principal)
+  assert.equal(opened.status, 'completed')
+  await assert.rejects(f.service.synchronizePublisher())
+  await f.restart(); f.online = true
+  await f.service.synchronizePublisher()
+  const accepted = f.requests.filter(request => request.url.endsWith('/folders') || request.url.endsWith('/journal')).slice(-2)
+  assert.ok(accepted[0].url.endsWith('/folders'))
+  assert.equal(JSON.parse(accepted[0].options.body).folderExecution.rootPath, folder.execution.rootPath)
+  assert.ok(accepted[1].url.endsWith('/journal'))
+  assert.ok([...f.events.values()].some(entry => entry.conversation?.folderID === id))
+})
+
+const refusal=(status,code)=>({ok:false,status,json:async()=>({code,message:'Central message stays out of local state.'})})
+async function offlineFolders(f,count){
+  const ids=[]
+  for(let index=0;index<count;index++){
+    const id=randomUUID();ids.push(id)
+    await f.service.createFolder({operationID:randomUUID(),deviceID:f.enrollment.deviceID,kind:'createFolder',resourceID:id,title:'Folder '+index},f.principal)
+  }
+  await f.service.command({commandID:randomUUID(),deviceID:f.enrollment.deviceID,libraryID:f.enrollment.libraryID,workspaceID:f.enrollment.workspaceID,kind:'createSession',folderID:ids[0]},f.principal)
+  return ids.sort()
+}
+const folderRequests=f=>f.requests.filter(request=>request.url.endsWith('/folders')).length
+
+test('a deleted or foreign folder is refused alone and history still publishes',async t=>{
+  const f=fixture(t),[deleted,foreign]=await offlineFolders(f,2)
+  f.folderReply=body=>body.resourceID===deleted?refusal(400,'folder_deleted'):body.resourceID===foreign?refusal(403,'wrong_owner'):null
+  f.online=true
+  await f.service.synchronizePublisher()
+  assert.ok(f.events.size>0,'conversation history reached central')
+  const status=f.service.publisherStatus()
+  assert.equal(status.rejectedFolders,2);assert.equal(status.pendingFolders,0);assert.equal(status.journal.failureCount,0)
+  assert.equal(status.acknowledgedOriginSequence,f.service.events().cursor)
+  assert.deepEqual(f.service.publisherFolders(),[{id:deleted,state:'refused',reason:'folder_deleted'},{id:foreign,state:'refused',reason:'wrong_owner'}].sort((a,b)=>a.id<b.id?-1:1))
+  const sent=folderRequests(f);await f.restart();await f.service.synchronizePublisher()
+  assert.equal(folderRequests(f),sent,'settled refusals are not retried')
+})
+
+// A revoked or unexplained refusal and a receipt for another root are never acceptance.
+for (const [name,reply,reason] of [
+  ['an unexplained authorization refusal',()=>({ok:false,status:403,json:async()=>({})}),'http_403'],
+  ['a revoked grant',()=>refusal(401,'unauthorized'),'unauthorized'],
+  ['a mismatched acknowledgement',body=>({ok:true,status:200,json:async()=>({operationID:body.operationID,status:'accepted',folder:{id:body.resourceID,execution:{...body.folderExecution,rootPath:'/elsewhere'}}})}),'mismatched_receipt'],
+]) test(`${name} keeps the folder pending while history publishes, then retries it`,async t=>{
+  const f=fixture(t),[held,other]=await offlineFolders(f,2)
+  f.folderReply=body=>body.resourceID===held?reply(body):null
+  f.online=true
+  await f.service.synchronizePublisher()
+  assert.ok(f.events.size>0,'conversation history reached central')
+  let status=f.service.publisherStatus()
+  assert.equal(status.acknowledgedOriginSequence,f.service.events().cursor)
+  assert.equal(status.journal.failureCount,0)
+  assert.equal(status.pendingFolders,1);assert.equal(status.rejectedFolders,0)
+  assert.deepEqual(f.service.publisherFolders(),[{id:held,state:'pending',reason}])
+  // The unaffected folder was accepted and is not sent again.
+  const otherRequests=()=>f.requests.filter(request=>request.url.endsWith('/folders')&&JSON.parse(request.options.body).resourceID===other).length
+  assert.equal(otherRequests(),1)
+  await f.restart()
+  f.folderReply=null;await f.service.synchronizePublisher()
+  const last=f.requests.filter(request=>request.url.endsWith('/folders')).at(-1)
+  assert.equal(JSON.parse(last.options.body).resourceID,held,'the held folder retries with its original identity')
+  status=f.service.publisherStatus()
+  assert.equal(status.pendingFolders,0);assert.equal(status.rejectedFolders,0)
+  assert.deepEqual(f.service.publisherFolders(),[])
+  assert.equal(otherRequests(),1)
+})
+
+test('an older central without folder publication still receives history and folders retry after it updates',async t=>{
+  const f=fixture(t),[folder]=await offlineFolders(f,1)
+  f.folderReply=()=>({ok:false,status:404,json:async()=>({code:'not_found'})});f.online=true
+  await f.service.synchronizePublisher()
+  assert.ok(f.events.size>0)
+  assert.equal(f.service.publisherStatus().rejectedFolders,0)
+  assert.deepEqual(f.service.publisherFolders(),[{id:folder,state:'pending',reason:'not_found'}])
+  f.folderReply=null;await f.service.synchronizePublisher()
+  const last=f.requests.filter(request=>request.url.endsWith('/folders')).at(-1)
+  assert.equal(JSON.parse(last.options.body).resourceID,folder)
+  const sent=folderRequests(f);await f.service.synchronizePublisher();assert.equal(folderRequests(f),sent)
+})
+
+test('a transient folder failure keeps folders ahead of the history that references them',async t=>{
+  const f=fixture(t);await offlineFolders(f,1)
+  f.folderReply=()=>({ok:false,status:503,json:async()=>({code:'unavailable'})});f.online=true
+  await assert.rejects(f.service.synchronizePublisher(),{statusCode:503})
+  assert.equal(f.events.size,0);assert.equal(f.service.publisherStatus().journal.lastErrorCode,'http_503')
+  f.folderReply=null;await f.service.synchronizePublisher()
+  assert.ok(f.events.size>0);assert.equal(f.service.publisherStatus().rejectedFolders,0)
 })

@@ -35,10 +35,12 @@ extension CompanionModel {
   func ensureDeviceWorkspace() async throws {
     guard let store, let libraryID = state.workspaceID, !fixture else { return }
     let journal = await store.journal.snapshot()
-    guard journal.workspaces[deviceWorkspaceID] == nil else { return }
-    try await store.journal.upsertWorkspace(.init(id: deviceWorkspaceID, libraryID: libraryID,
-      ownerDeviceID: state.deviceID, kind: .ios, name: UIDevice.current.name,
-      capabilities: ["pi-durable", "notes", "files", "documents", "images", "approvals", "questions", "codemode", "subagents"]))
+    let capabilities = ["quick-chat", "notes", "approvals", "questions"]
+    var workspace = journal.workspaces[deviceWorkspaceID] ?? CompanionExecutionWorkspace(id: deviceWorkspaceID, libraryID: libraryID,
+      ownerDeviceID: state.deviceID, kind: .ios, name: UIDevice.current.name)
+    guard workspace.capabilities != capabilities else { return }
+    workspace.capabilities = capabilities
+    try await store.journal.upsertWorkspace(workspace)
   }
   func recordDeviceHistory(conversation: CompanionConversation, transcript: CompanionTranscript?) async throws {
     guard let store else { return }
@@ -109,6 +111,9 @@ extension CompanionModel {
     do {
       try await client.refresh()
       let discoveredProviders = try await client.providers()
+      do { try await store?.cacheExecutionFolders(client.folders(), workspaceID: workspaceID) }
+      catch MobileConnectionError.http(let code, _) where code == 404 || code == 400 { /* Older services retain chat control. */ }
+
       guard !Task.isCancelled, workspaceClients[workspaceID] === client else { return }
       workspaceProviders[workspaceID] = discoveredProviders
       if selectedExecutionWorkspaceID == workspaceID {
@@ -163,12 +168,8 @@ extension CompanionModel {
       let conversationID: String
       let result: CompanionCommandReceipt
       if target == nil {
-        let pending = state.launches.first { $0.create.workspaceID == workspaceID && !$0.accepted && !$0.terminalFailure }
-        if let pending {
-          guard pending.initialSend.text == prompt, pending.create.providerID == route else {
-            throw DeviceExecutionError.unavailable("An earlier new conversation needs acknowledgement. Continue its saved request in Settings → Pair to Mac → Pending changes before sending different input.")
-          }
-        }
+        try await requireWorkspaceConnection(workspaceID)
+        let pending = MobileLaunchRecord.reusable(state.launches, workspaceID: workspaceID, providerID: route, text: prompt, noteID: nil)
         conversationID = pending?.create.conversationID ?? UUID().uuidString.lowercased()
         var create = CompanionCommand(deviceID: state.deviceID, kind: .createSession, conversationID: conversationID,
           providerID: route, folderID: selectedFolderID)
@@ -176,7 +177,7 @@ extension CompanionModel {
         create.workspaceID = workspaceID; send.workspaceID = workspaceID
         let launch = try await client.startConversation(pending ?? .init(create: create, initialSend: send))
         guard launch.accepted, let receipt = launch.sendReceipt else {
-          throw DeviceExecutionError.unavailable(launch.sendReceipt?.message ?? launch.createReceipt?.message ?? "This request is saved. Continue it in Settings → Pair to Mac → Pending changes when the workspace is available.")
+          throw DeviceExecutionError.unavailable(launch.sendReceipt?.message ?? launch.createReceipt?.message ?? "The device hasn’t confirmed this request. Try again here when it’s connected.")
         }
         result = receipt
       } else {
@@ -184,7 +185,8 @@ extension CompanionModel {
         let records = await store.journal.commandRecords(workspaceID: workspaceID)
         let pending = records.first { $0.command.conversationID == target && ($0.receipt == nil || $0.receipt?.status == .outcomeUnknown) && ($0.command.kind == .send || $0.command.kind == .steer) }
         if let pending, pending.command.text != prompt {
-          throw DeviceExecutionError.unavailable("The last message has not been acknowledged. Retry that message before sending different input.")
+          unconfirmedSendConversationID = target
+          throw DeviceExecutionError.unavailable("The previous message hasn’t been confirmed. Retry it before sending different input.")
         }
         let command = pending?.command ?? CompanionCommand(deviceID: state.deviceID, kind: runID == nil ? .send : .steer,
           conversationID: conversationID, runID: runID, text: prompt)
@@ -196,7 +198,7 @@ extension CompanionModel {
       if (draftBuffer[sourceKey] ?? state.chatDrafts[sourceKey]) == draft { updateChatDraft(key: sourceKey, draft: .init(text: "")) }
       await reload(); await refreshExecutionWorkspaces()
       await workspacePollTasks[workspaceID]?.value
-    } catch { errorMessage = error.localizedDescription; await reload() }
+    } catch { errorMessage = workspaceActionMessage(error); await reload() }
   }
   func stopExecutionWorkspace() async {
     guard let id = selectedConversationID, let runID = activeRunID else { return }

@@ -87,6 +87,7 @@ const browserMCPSchemas = new Map(loadWorkspaceMCPCatalog().filter(tool => ['wov
 
 const clientExecution = runningAsService ? createClientExecution({
   directory: resolve(workspaceRoot, '.wovenmatter/client-execution'),
+  projectsRoot: resolve(workspaceRoot, 'Projects'),
   publisherKey: apiToken,
   mcpEndpointURL: () => `http://127.0.0.1:${server.address()?.port ?? listenPort}/mcp`, managedDataRoot,externalRunningSessions:()=>taskGateway.status().activeRuns,
   kind: process.platform === 'darwin' ? 'mac' : 'linux',
@@ -193,6 +194,11 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
       return json(response,200,retainedExecution.status())
     }
     if (url.pathname === '/v1/execution' && request.method === 'GET') return json(response,200,clientExecution.descriptor())
+    if (url.pathname === '/v1/execution/folders' && request.method === 'GET') return json(response,200,clientExecution.folders())
+    if (url.pathname === '/v1/execution/folders' && request.method === 'POST') {
+      const body = await readJSON(request)
+      return json(response,200,await clientExecution.createFolder(body,device ?? {id:body.deviceID}))
+    }
     if (url.pathname === '/v1/execution/commands' && request.method === 'POST') {
       const body = await readJSON(request)
       return json(response,200,await clientExecution.command(body,device ?? {id:body.deviceID}))

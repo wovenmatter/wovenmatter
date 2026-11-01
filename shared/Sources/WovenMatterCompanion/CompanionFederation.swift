@@ -26,6 +26,8 @@ public struct CompanionExecutionWorkspace: Codable, Equatable, Identifiable, Sen
   /// Device authorized to manage registration and archive grants; not necessarily the execution host.
   public var ownerDeviceID: String
   public var executionDeviceID: String?
+  /// Native content/root identity, distinct from registry routing and publication authority.
+  public var contentWorkspaceID: String?
   public var kind: Kind
   public var name: String
   public var endpoint: URL?
@@ -42,8 +44,9 @@ public struct CompanionExecutionWorkspace: Codable, Equatable, Identifiable, Sen
     !deleted && retainedHistory != true && (developmentInstance == nil || endpoint != nil)
   }
   public init(id: String, libraryID: String, ownerDeviceID: String, kind: Kind, name: String,
-              endpoint: URL? = nil, capabilities: [String] = [], executionDeviceID: String? = nil, journalDeviceIDs: [String] = [], revision: Int64 = 0, deleted: Bool = false, developmentInstance: String? = nil, retainedHistory: Bool? = nil) {
+              endpoint: URL? = nil, capabilities: [String] = [], executionDeviceID: String? = nil, journalDeviceIDs: [String] = [], revision: Int64 = 0, deleted: Bool = false, developmentInstance: String? = nil, retainedHistory: Bool? = nil, contentWorkspaceID: String? = nil) {
     self.id = id; self.libraryID = libraryID; self.ownerDeviceID = ownerDeviceID; self.kind = kind; self.name = name
+    self.contentWorkspaceID = contentWorkspaceID
     self.executionDeviceID = executionDeviceID
     self.endpoint = endpoint; self.capabilities = capabilities; self.journalDeviceIDs = journalDeviceIDs
     self.revision = revision; self.deleted = deleted

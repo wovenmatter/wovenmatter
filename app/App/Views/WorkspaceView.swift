@@ -206,6 +206,12 @@ struct WorkspaceView: View {
             model.pendingConnectionsScope = event.object as? String ?? "global"
             openUtility(.settings)
         }
+        .task {
+            while !Task.isCancelled {
+                await model.companionHost.refreshStatus()
+                do { try await Task.sleep(for: .seconds(15)) } catch { return }
+            }
+        }
         .task(id: model.state == .ready) {
             localExecutionWorkspaceID = try? await model.executionWorkspaceIdentity(workspaceID: nil)
         }
@@ -592,7 +598,11 @@ struct WorkspaceView: View {
             navigationAgents: sidebarAgents,
             remoteWorkspaces: model.remoteWorkspaces,
             localWorkspaceReady: model.localACPWorkspaceAvailability.isReady,
-            localExecutionWorkspaceID: localExecutionWorkspaceID,
+            localExecutionWorkspaceID: model.liveLibraryClient?.localExecution?.descriptor.id ?? model.backendReplica.localWorkspaceID ?? localExecutionWorkspaceID,
+            registeredWorkspaces: model.liveLibraryClient?.executionWorkspaces ?? model.backendReplica.workspaces ?? model.companionHost.executionWorkspaces,
+            conversationOwners: model.federatedExecutionOwners,
+            conversationProviders: model.federatedExecutionProviders,
+            workspaceProviders: model.liveLibraryClient?.directProviders ?? model.backendReplica.workspaceProviders ?? model.companionHost.workspaceProviders,
             folders: model.workspaceOverview?.folders ?? [],
             conversations: model.workspaceOverview?.conversations ?? [],
             notes: model.workspaceOverview?.notes ?? [],

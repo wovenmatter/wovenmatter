@@ -24,7 +24,118 @@ private actor OfflineWorkspace: ExecutionWorkspaceTransport {
   func transcript(_ id: String) -> CompanionTranscript { .init(conversationID: id) }
 }
 
+/// A host that reports whatever identity it likes about itself.
+private actor ReportingWorkspace: ExecutionWorkspaceTransport {
+  var reported: CompanionExecutionWorkspace
+  init(_ reported: CompanionExecutionWorkspace) { self.reported = reported }
+  var forged: [CompanionConversation] = []
+  func report(_ value: CompanionExecutionWorkspace) { reported = value }
+  func forge(_ conversations: [CompanionConversation]) { forged = conversations }
+  func identity() -> CompanionExecutionWorkspace { reported }
+  func providers() -> [CompanionProvider] { [] }
+  func pending() -> [CompanionPendingInteraction] { [] }
+  func command(_ command: CompanionCommand) throws -> CompanionCommandReceipt { throw URLError(.badServerResponse) }
+  func receipt(_ id: String) -> CompanionCommandReceipt? { nil }
+  func events(after: Int64) -> CompanionJournalPage { .init(libraryID: "library", cursor: after) }
+  func conversations() -> [CompanionConversation] { forged }
+  func transcript(_ id: String) -> CompanionTranscript { .init(conversationID: id) }
+  func folders() -> [CompanionFolder] { [] }
+}
+
 final class WorkspaceJournalTests: XCTestCase {
+  func testHostSelfReportCannotRewriteRegistryIdentityOrClaimAnotherWorkspace() async throws {
+    let store = try MobileStore(file: path())
+    let phone = await store.snapshot().deviceID
+    let mac = "11111111-1111-4111-8111-111111111111", linuxDevice = "22222222-2222-4222-8222-222222222222"
+    let registered = CompanionExecutionWorkspace(id: "linux", libraryID: "library", ownerDeviceID: mac, kind: .linux, name: "Server",
+      endpoint: URL(string: "https://server.tail.ts.net"), executionDeviceID: linuxDevice, revision: 4)
+    let central = CompanionExecutionWorkspace(id: "central-mac", libraryID: "library", ownerDeviceID: mac, kind: .mac, name: "Studio",
+      executionDeviceID: mac, revision: 2, contentWorkspaceID: "device:" + mac)
+    try await store.journal.mergeRegistry([registered, central])
+    var claim = registered
+    claim.name = "Renamed server"; claim.capabilities = ["history.central.v1"]; claim.revision = 9
+    claim.ownerDeviceID = linuxDevice; claim.executionDeviceID = mac; claim.endpoint = URL(string: "https://elsewhere.tail.ts.net")
+    claim.contentWorkspaceID = "device:" + mac
+    let host = ReportingWorkspace(claim)
+    let client = WorkspaceClient(store: store, workspaceID: "linux", transport: host)
+    try await client.checkConnection()
+    func saved() async throws -> CompanionExecutionWorkspace { let value = await store.journal.snapshot().workspaces["linux"]; return try XCTUnwrap(value) }
+    var current = try await saved()
+    XCTAssertEqual(current.name, "Renamed server")
+    XCTAssertEqual(current.capabilities, [], "Only central's registry can attest central history")
+    XCTAssertEqual(current.ownerDeviceID, mac); XCTAssertEqual(current.executionDeviceID, linuxDevice)
+    XCTAssertEqual(current.endpoint, registered.endpoint); XCTAssertEqual(current.revision, 4)
+    XCTAssertNil(current.contentWorkspaceID, "Another workspace's content identity is never adopted")
+    XCTAssertEqual(CompanionWorkspaceIdentity.canonicalID("linux", workspaces: [current]), "linux")
+
+    claim.contentWorkspaceID = "device:" + phone
+    await host.report(claim); try await client.checkConnection()
+    current = try await saved()
+    XCTAssertNil(current.contentWorkspaceID, "A host cannot group its content as this phone's")
+
+    // Content identity comes only from the registry, even an alias nobody else holds.
+    claim.contentWorkspaceID = "remote:" + linuxDevice.replacingOccurrences(of: "2222-4222", with: "3333-4333")
+    claim.capabilities = ["quick-chat"]
+    await host.report(claim); try await client.checkConnection()
+    current = try await saved()
+    XCTAssertNil(current.contentWorkspaceID)
+    XCTAssertEqual(current.capabilities, ["quick-chat"], "Descriptive capabilities still refresh")
+
+    // The registry's central attestation survives a host that omits it.
+    var attestedCentral = central; attestedCentral.capabilities = ["history.central.v1"]; attestedCentral.revision = 3
+    try await store.journal.mergeRegistry([attestedCentral])
+    var macReport = attestedCentral; macReport.capabilities = []; macReport.revision = 1
+    try await WorkspaceClient(store: store, workspaceID: "central-mac", transport: ReportingWorkspace(macReport)).checkConnection()
+    let keptCentral = await store.journal.snapshot().workspaces["central-mac"]
+    XCTAssertEqual(keptCentral?.capabilities, ["history.central.v1"])
+  }
+
+  /// Central history is authority, not display metadata: a registered Linux host
+  /// claiming it must not overwrite library conversations through refresh.
+  func testForgedCentralHistoryCannotOverwriteLibraryConversations() async throws {
+    let store = try MobileStore(file: path())
+    let original = CompanionConversation(id: "library-chat", title: "Planning", providerID: "codex", workspaceID: "central-mac")
+    try await store.apply(CompanionSnapshot(workspaceID: "library", cursor: 1, conversations: [original]))
+    let mac = "11111111-1111-4111-8111-111111111111"
+    let registered = CompanionExecutionWorkspace(id: "linux", libraryID: "library", ownerDeviceID: mac, kind: .linux, name: "Server",
+      endpoint: URL(string: "https://server.tail.ts.net"), executionDeviceID: "22222222-2222-4222-8222-222222222222", revision: 1)
+    try await store.journal.mergeRegistry([registered])
+    var claim = registered; claim.capabilities = ["history.central.v1"]
+    let host = ReportingWorkspace(claim)
+    await host.forge([.init(id: "library-chat", title: "Forged", providerID: "codex", workspaceID: "linux"),
+                      .init(id: "invented-chat", title: "Injected", providerID: "codex", workspaceID: "central-mac")])
+    try await WorkspaceClient(store: store, workspaceID: "linux", transport: host).refresh()
+    let conversations = await store.snapshot().conversations
+    XCTAssertEqual(conversations["library-chat"], original, "A host cannot rewrite a library conversation")
+    XCTAssertNil(conversations["invented-chat"], "A host cannot inject conversations as central history")
+  }
+
+  func testUnregisteredHostRecordsOnlyUnattestedDetailsUntilTheRegistryArrives() async throws {
+    let store = try MobileStore(file: path())
+    let phone = await store.snapshot().deviceID
+    let mac = "11111111-1111-4111-8111-111111111111", linuxDevice = "22222222-2222-4222-8222-222222222222"
+    let claim = CompanionExecutionWorkspace(id: "linux", libraryID: "library", ownerDeviceID: mac, kind: .linux, name: "Server",
+      endpoint: URL(string: "https://server.tail.ts.net"), capabilities: ["history.central.v1", "quick-chat"], executionDeviceID: linuxDevice,
+      journalDeviceIDs: [mac], revision: 1_000_000, contentWorkspaceID: "device:" + mac)
+    try await WorkspaceClient(store: store, workspaceID: "linux", transport: ReportingWorkspace(claim)).checkConnection()
+    let recorded = await store.journal.snapshot().workspaces["linux"]
+    let first = try XCTUnwrap(recorded)
+    XCTAssertEqual(first.capabilities, ["quick-chat"]); XCTAssertNil(first.contentWorkspaceID)
+    XCTAssertEqual(first.journalDeviceIDs, []); XCTAssertEqual(first.revision, 0)
+    // A low registry revision still replaces the self-report.
+    var registered = claim; registered.capabilities = []; registered.journalDeviceIDs = []; registered.contentWorkspaceID = nil
+    registered.name = "Registered server"; registered.revision = 2
+    try await store.journal.mergeRegistry([registered])
+    let replaced = await store.journal.snapshot().workspaces["linux"]
+    XCTAssertEqual(replaced, registered)
+
+    // A remote host cannot claim to be this device's own execution workspace.
+    let impostor = CompanionExecutionWorkspace(id: "impostor", libraryID: "library", ownerDeviceID: phone, kind: .ios, name: "This iPhone", executionDeviceID: phone)
+    do { try await WorkspaceClient(store: store, workspaceID: "impostor", transport: ReportingWorkspace(impostor)).checkConnection(); XCTFail("Impersonated this device") }
+    catch MobileStore.Failure.wrongWorkspace {}
+    let pending = await store.journal.snapshot()
+    XCTAssertNil(pending.workspaces["impostor"]); XCTAssertFalse(pending.pendingRegistrations.contains("impostor"))
+  }
   private func path() -> URL { FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("library.json") }
   private func entry(_ sequence: Int64, workspace: String = "phone", id: String = "chat") -> CompanionJournalEntry {
     .init(eventID: "event-\(workspace)-\(sequence)", workspaceID: workspace, originSequence: sequence,

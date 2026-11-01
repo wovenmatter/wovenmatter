@@ -45,6 +45,12 @@ when an intentional design change is accepted.
   patterns in
   [SettingsComponents.swift](../app/App/Views/SettingsComponents.swift).
   Preserve intentional differences such as borderless Usage sections.
+- **Mobile Quick Chat:** name the device conversation feature **Quick Chat**,
+  with **Powered by Pi Durable** in its setup explanation. Mac/Linux agents retain
+  their harness names. Workspaces lead mobile navigation; Quick Chat follows them.
+  Ask for data-sharing permission in a sheet that names the recipient, its address
+  and the shared data. Use Allow and Send as the primary action and Don’t Allow as
+  a quiet action. Settings → Data sharing lists each permission with Stop sharing.
 - **Agent naming:** use **Pi Durable** for the agent in navigation, settings,
   conversation labels, and actions. Use **Pi Durable SDK** for the underlying SDK
   in technical descriptions and version/update controls. Keep the agent name

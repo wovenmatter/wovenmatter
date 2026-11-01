@@ -42,6 +42,8 @@ test('Executor uses the v2 HTTP client with a legacy server, scoped credentials 
   const broker = await new ExecutorBroker(directory).load();
   t.after(async () => {
     await broker.stop(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve));
+    // A job reports not busy before its final receipt write; let that write finish before removal.
+    await broker.saveTail;
     await rm(directory, { recursive: true, force: true });
   });
   broker.config = { id: randomUUID(), location: 'local' };

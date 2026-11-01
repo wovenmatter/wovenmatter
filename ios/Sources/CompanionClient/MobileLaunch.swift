@@ -17,6 +17,16 @@ public struct MobileLaunchRecord: Codable, Equatable, Identifiable, Sendable {
   public init(create: CompanionCommand, initialSend: CompanionCommand) { self.create = create; self.initialSend = initialSend }
   public var terminalFailure: Bool { createReceipt?.status == .rejected || sendReceipt?.status == .rejected }
   public var accepted: Bool { sendReceipt?.status == .completed || sendReceipt?.status == .accepted }
+  /// An unconfirmed launch is retried, with its original IDs, only for the same
+  /// request. Different input starts a separate launch: the earlier one stays saved
+  /// and reconciles from its receipts, so it is neither discarded nor blocking.
+  public static func reusable(_ launches: [MobileLaunchRecord], workspaceID: String?, providerID: String?,
+                              text: String?, noteID: String?) -> MobileLaunchRecord? {
+    launches.first { launch in
+      launch.create.workspaceID == workspaceID && !launch.accepted && !launch.terminalFailure
+        && launch.create.providerID == providerID && launch.initialSend.text == text && launch.initialSend.noteID == noteID
+    }
+  }
 }
 
 extension MobileSyncEngine {

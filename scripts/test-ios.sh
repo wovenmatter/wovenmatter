@@ -69,5 +69,5 @@ if [[ "$mode" != "--package" ]]; then
     -collect-test-diagnostics "${WOVENMATTER_IOS_TEST_DIAGNOSTICS:-never}")
   if [[ "$mode" == "--simulator" ]]; then xcode_arguments+=(-only-testing:CompanionAppTests); fi
   if [[ -n "${WOVENMATTER_IOS_TEST_ONLY:-}" ]]; then xcode_arguments+=("-only-testing:$WOVENMATTER_IOS_TEST_ONLY"); fi
-  xcodebuild "${xcode_arguments[@]}" CODE_SIGNING_ALLOWED=NO test 2>&1 | tee "$results/xcodebuild.log"
+  xcodebuild "${xcode_arguments[@]}" CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- test 2>&1 | tee "$results/xcodebuild.log"
 fi

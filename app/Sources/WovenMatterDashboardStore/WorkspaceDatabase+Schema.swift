@@ -383,6 +383,16 @@ extension WorkspaceDatabaseConnection {
   }
 
   private func addCurrentColumnsUnlocked() throws {
+    let noteColumns = try prepareUnlocked("PRAGMA table_info(notes)")
+    var hasWorkspaceID = false
+    while sqlite3_step(noteColumns) == SQLITE_ROW {
+      if optionalText(noteColumns, column: 1) == "workspace_id" { hasWorkspaceID = true }
+    }
+    sqlite3_finalize(noteColumns)
+    if !hasWorkspaceID { try executeUnlocked("ALTER TABLE notes ADD COLUMN workspace_id TEXT") }
+    // Old unfiled notes remain unassigned. A folder binding is durable ownership evidence.
+    try executeUnlocked("UPDATE notes SET workspace_id=(SELECT workspace_id FROM folder_execution_roots WHERE folder_id=notes.folder_id) WHERE workspace_id IS NULL AND EXISTS(SELECT 1 FROM folder_execution_roots WHERE folder_id=notes.folder_id)")
+
     let traces = try prepareUnlocked("PRAGMA table_info(dashboard_run_trace_events)")
     defer { sqlite3_finalize(traces) }
     var hasProjectionApplied = false

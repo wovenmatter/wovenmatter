@@ -84,7 +84,7 @@ extension MobileStore {
       let folder = command.options["folder"] ?? context.folderID
       if let folder, state.folders[folder] == nil { throw WorkspaceToolError.notFound("This folder is not available on this device.") }
       let content = try NoteDocument(kind: kind).encoded()
-      let note = CompanionNote(id: id, folderID: folder, title: try command.required("title"), content: content, revision: 0, updatedAt: ISO8601DateFormatter().string(from: Date()), kind: kind)
+      let note = CompanionNote(id: id, folderID: folder, title: try command.required("title"), content: content, revision: 0, updatedAt: ISO8601DateFormatter().string(from: Date()), kind: kind, workspaceID: folder.flatMap { state.folders[$0]?.execution?.workspaceID } ?? state.deviceID)
       guard note.title.utf8.count <= 4096 else { throw WorkspaceToolError.invalid("The title is too long.") }
       state.notes[id] = note
       state.outbox.append(.init(mutation: mutation(for: note, kind: .createNote, deviceID: state.deviceID)))

@@ -4,11 +4,25 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import plistlib
 import re
+import subprocess
 import xml.etree.ElementTree as ET
 
 SPARKLE = '{http://www.andymatuschak.org/xml-namespaces/sparkle}'
 PUBLIC_KEY = 'fuIqCE9IUmecB8Hjj44IcBz2XrVX/fMxenjhsTJIglI='
+# The repository holding release source revisions; not necessarily checked out at them.
+SOURCE = Path(__file__).resolve().parents[1]
+
+def device_setup_version(revision):
+    """The device-setup capability generate-release-manifest.sh published for this
+    source revision, read from that commit rather than the current checkout."""
+    assert re.fullmatch('[0-9a-f]{40}', revision), 'Invalid source revision'
+    shown = subprocess.run(['git', 'show', f'{revision}:app/App/Info.plist'], cwd=SOURCE, capture_output=True)
+    assert shown.returncode == 0, 'The release source revision or its app Info.plist is unavailable'
+    value = plistlib.loads(shown.stdout).get('WovenMatterDeviceSetupVersion', 0)
+    assert type(value) is int and value >= 0, 'Invalid device setup capability in app Info.plist'
+    return value
 
 def digest(path):
     h = hashlib.sha256()
@@ -56,8 +70,10 @@ def verify(folder, version, revision):
     assert checksums[asset] == checksums[legacy], 'Compatibility DMG differs from signed update'
     manifest = json.loads((folder / 'latest-mac.json').read_text())
     prefix = f'https://github.com/wovenmatter/wovenmatter/releases/download/v{version}/'
+    # Exact integer type: in Python True == 1, so equality alone would accept a Bool.
+    assert type(manifest.get('device_setup_version')) is int, 'Device setup capability must be an integer'
     assert manifest == dict(schema_version=1, version=version, build=build, architecture='arm64',
-                           minimum_macos='26.0', download_url=prefix + legacy,
+                           minimum_macos='26.0', device_setup_version=device_setup_version(revision), download_url=prefix + legacy,
                            release_url=f'https://github.com/wovenmatter/wovenmatter/releases/tag/v{version}',
                            sha256=checksums[legacy])
     items = ET.parse(folder / 'appcast.xml').findall('./channel/item')

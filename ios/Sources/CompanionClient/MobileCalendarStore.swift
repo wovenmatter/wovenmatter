@@ -7,6 +7,12 @@ public struct MobileCalendarConflict: Codable, Equatable, Sendable {
   public var executionConflict: Bool?
 }
 public typealias MobileCalendarRun = CompanionCalendarRun
+public enum MobileCalendarReassignmentError: Error, LocalizedError, Equatable {
+  case alreadyRan
+  public var errorDescription: String? {
+    "This one-time task already ran on this phone. Choose a later time to run it with a Mac or Linux agent."
+  }
+}
 
 /// The UI, native agent tools and command environment share this durable actor.
 /// Writes are local immediately. Network failure never rolls back local edits.
@@ -36,6 +42,8 @@ public actor MobileCalendarStore {
   public init(file: URL, deviceID: String) throws {
     self.file = file; self.deviceID = deviceID
     state = FileManager.default.fileExists(atPath: file.path) ? try JSONDecoder().decode(State.self, from: Data(contentsOf: file)) : State()
+    // Earlier builds excluded local calendar changes; include them on open, before any edit.
+    if FileManager.default.fileExists(atPath: file.path) { try? MobileStorePersistence.applyBackupIfChanged(.include, at: file) }
   }
   public func allRecords() -> [CompanionCalendarRecord] { state.records.values.sorted { $0.id < $1.id } }
   /// Merge native execution-database edits against the exact replica version
@@ -144,6 +152,47 @@ public actor MobileCalendarStore {
       if let requestID { next.requests[requestID] = .init(input: input, result: record) }
     }
     return record
+  }
+  /// Moves a task this phone owns to a Mac or Linux agent. Ownership never
+  /// changes in place: the phone no longer runs schedules, so its schedule is
+  /// retired and a replacement with a new identity and no device owner is
+  /// created. The replacement uploads only after central accepts the
+  /// retirement, so at most one runnable copy exists, and occurrences this
+  /// phone already ran are excluded from it.
+  @discardableResult public func reassign(id: String, expectedRevision: Int, draft: CompanionCalendarDraft,
+    replacementID: String? = nil, requestID: String? = nil) throws -> CompanionCalendarRecord {
+    try Task.checkCancellation()
+    let input = try Self.encode(ReassignInput(id: id, revision: expectedRevision, draft: draft, replacement: replacementID))
+    if let result = try replay(requestID, input: input) { return result }
+    let replacementID = replacementID ?? UUID().uuidString.lowercased()
+    let draft = try CompanionCalendarSchedule.normalized(draft)
+    guard var original = state.records[id], !original.deleted, original.event.draft.task != nil, original.ownerDeviceID == deviceID,
+      original.event.revision == expectedRevision, state.conflicts[id] == nil else { throw CompanionCalendarError.conflict }
+    guard UUID(uuidString: replacementID) != nil, state.records[replacementID] == nil,
+      let task = draft.task, !task.runtime.isEmpty, task.workspaceID != deviceID else { throw CompanionCalendarError.invalid }
+    // A pending reservation never started; it is cancelled below and its occurrence
+    // moves with the task. Running, finished or failed work fences the replacement,
+    // since a running claim's outcome may be uncertain.
+    let ran = state.runs.values.filter { $0.eventID == id && !["cancelled", "pending"].contains($0.status) }.map(\.scheduledAt)
+    // Occurrences the user deleted stay deleted, matched by date in the new recurrence.
+    let deleted = original.excludedOccurrences.compactMap { CompanionCalendarSchedule.date(original.event.draft, index: $0) }
+    var excluded = Set<Int>()
+    if draft.recurrenceUnit == nil {
+      if let last = ran.max(), draft.startsAt <= last { throw MobileCalendarReassignmentError.alreadyRan }
+    } else {
+      for date in ran + deleted {
+        if let index = CompanionCalendarSchedule.index(draft, onOrBefore: date), CompanionCalendarSchedule.date(draft, index: index) == date { excluded.insert(index) }
+      }
+    }
+    original.deleted = true; original.event.revision += 1
+    let replacement = CompanionCalendarRecord(event: .init(id: replacementID, revision: 0, draft: draft), excludedOccurrences: excluded, ownerDeviceID: nil)
+    try update { next in
+      enqueue(original, into: &next); cancelPending(id, in: &next)
+      let retirement = next.outbox.last { $0.mutation.record.id == id }?.mutation.id
+      enqueue(replacement, into: &next, dependency: retirement)
+      if let requestID { next.requests[requestID] = .init(input: input, result: replacement) }
+    }
+    return replacement
   }
   public func delete(id: String, expectedRevision: Int, occurrence: Int? = nil, requestID: String? = nil) throws {
     try Task.checkCancellation()
@@ -354,10 +403,11 @@ public actor MobileCalendarStore {
   private func update(_ body: (inout State) throws -> Void) throws {
     var next = state; try body(&next)
     try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-    try MobileStorePersistence.writeDurably(Self.encode(next), at: file); state = next
+    try MobileStorePersistence.writeDurably(Self.encode(next), at: file, backup: .include); state = next
   }
   private static func encode<T: Encodable>(_ value: T) throws -> Data { let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]; return try encoder.encode(value) }
   private struct SaveInput: Codable { var id: String; var revision: Int?; var draft: CompanionCalendarDraft; var owner: String? }
+  private struct ReassignInput: Codable { var id: String; var revision: Int; var draft: CompanionCalendarDraft; var replacement: String? }
   private struct DeleteInput: Codable { var id: String; var revision: Int; var occurrence: Int? }
   private struct DetachInput: Codable { var id: String; var revision: Int; var occurrence: Int; var draft: CompanionCalendarDraft }
 }

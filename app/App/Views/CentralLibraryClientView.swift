@@ -11,6 +11,11 @@ struct CentralLibraryClientView: View {
     @State private var folderName = ""
     @State private var newFolderPresented = false
     @State private var search = ""
+    @State private var selectedWorkspaceID: String?
+
+    private func contentOwner(_ id: String) -> String {
+        CompanionWorkspaceIdentity.canonicalID(id, workspaces: model.executionWorkspaces)
+    }
 
     var body: some View {
         NavigationSplitView {
@@ -19,6 +24,7 @@ struct CentralLibraryClientView: View {
                 ForEach(CentralLibraryClientModel.Section.allCases) { section in
                     Button {
                         model.section = section
+                        model.selectedFolderID = nil; selectedWorkspaceID = nil
                         if section == .browser, application.workspaceAssets.tabs.browserIDs.isEmpty {
                             application.workspaceAssets.openBrowser()
                         }
@@ -31,21 +37,18 @@ struct CentralLibraryClientView: View {
                     }.buttonStyle(.plain)
                 }
                 Divider().padding(.vertical, 8)
-                HStack { Text("Folders").font(.system(size: 11, weight: .semibold)); Spacer()
-                    Button { newFolderPresented = true } label: { DashboardLucideIcon(glyph: .plus, size: 13) }
-                        .buttonStyle(DashboardIconButtonStyle()).help("New folder")
-                }.padding(.horizontal, 12)
                 ScrollView {
-                    VStack(spacing: 2) {
-                        ForEach(model.folders) { folder in
-                            Button {
-                                model.selectedFolderID = folder.id; model.section = .folders
-                            } label: {
-                                HStack { DashboardLucideIcon(glyph: .folder, size: 14); Text(folder.name).lineLimit(1); Spacer() }
-                                    .padding(.horizontal, 12).padding(.vertical, 8)
-                            }.buttonStyle(.plain)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Button("All Workspace") { selectedWorkspaceID = nil; model.selectedFolderID = nil; model.section = .folders }
+                        Text("Local workspace").font(.headline)
+                        clientWorkspace(model.localExecution?.descriptor, fallbackName: "This Mac", local: true)
+                        Text("Remote workspaces").font(.headline).padding(.top, 10)
+                        ForEach(model.executionWorkspaces.filter {
+                            contentOwner($0.id) != contentOwner(model.localExecution?.descriptor.id ?? model.state.deviceID)
+                        }) { workspace in
+                            DisclosureGroup(workspace.name) { clientWorkspace(workspace, fallbackName: workspace.name, local: false) }
                         }
-                    }
+                    }.padding(.horizontal, 12)
                 }
                 Spacer(minLength: 0)
                 Button { Task { await model.refresh() } } label: {
@@ -159,24 +162,56 @@ struct CentralLibraryClientView: View {
             }.padding(28).frame(maxWidth: 900, alignment: .leading).frame(maxWidth: .infinity, alignment: .leading)
         }.scrollIndicators(.never)
     }
+    private func clientWorkspace(_ workspace: CompanionExecutionWorkspace?, fallbackName: String, local: Bool) -> some View {
+        let owner = contentOwner(workspace?.id ?? model.state.deviceID)
+        return VStack(alignment: .leading, spacing: 6) {
+            Button("All items") { selectedWorkspaceID = owner; model.selectedFolderID = nil; model.section = .folders }
+            if workspace?.kind == .ios {
+                Text("Quick Chat · Saved history").font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+            } else {
+                ForEach(model.directProviders[workspace?.id ?? ""] ?? []) { provider in
+                    Button(provider.displayName) { Task {
+                        await model.selectExecutionWorkspace(workspace?.id ?? "central")
+                        model.selectedProviderID = provider.id
+                        await model.selectConversation(nil)
+                        model.section = .chats
+                    } }.disabled(!provider.available || !provider.canStart)
+                }
+            }
+            if local { Button("New folder") { newFolderPresented = true } }
+            ForEach(model.folders.filter { $0.execution.map { contentOwner($0.workspaceID) } == owner }) { folder in
+                Button(folder.name) { selectedWorkspaceID = owner; model.selectedFolderID = folder.id; model.section = .folders }
+            }
+        }.buttonStyle(.plain).padding(.leading, 8)
+    }
     private var folderContents: some View {
         VStack(spacing: 0) {
-            LibraryClientPaneHeader(title: model.selectedFolderID.flatMap { model.state.folders[$0]?.name } ?? "Folders") {
-                Button("New folder") { newFolderPresented = true }
-                Button("New note") { Task { await model.createNote() } }
+            LibraryClientPaneHeader(title: model.selectedFolderID.flatMap { model.state.folders[$0]?.name } ?? selectedWorkspaceID.flatMap { owner in model.executionWorkspaces.first { contentOwner($0.id) == owner }?.name } ?? "All Workspace") {
+                if selectedWorkspaceID == nil || selectedWorkspaceID == contentOwner(model.localExecution?.descriptor.id ?? model.state.deviceID) {
+                    Button("New folder") { newFolderPresented = true }
+                }
+                Button("New note") { Task { await model.createNote(workspaceID: selectedWorkspaceID) } }
             }
             List {
                 if model.selectedFolderID == nil {
-                    ForEach(model.folders) { folder in
+                    ForEach(model.folders.filter { folder in
+                        selectedWorkspaceID == nil || folder.execution.map { contentOwner($0.workspaceID) } == selectedWorkspaceID
+                    }) { folder in
                         Button { model.selectedFolderID = folder.id } label: {
                             HStack { DashboardLucideIcon(glyph: .folder, size: 16); Text(folder.name); Spacer() }
                         }.buttonStyle(.plain)
                     }
                 } else {
-                    Button("All folders") { model.selectedFolderID = nil }
-                    ForEach(model.notes.filter { $0.folderID == model.selectedFolderID }) { note in noteRow(note) }
-                    ForEach(model.conversations.filter { $0.folderID == model.selectedFolderID }) { conversation in conversationRow(conversation) }
+                    Button("All Workspace") { model.selectedFolderID = nil; selectedWorkspaceID = nil }
                 }
+                ForEach(model.notes.filter { note in
+                    if let folder = model.selectedFolderID { return note.folderID == folder }
+                    return selectedWorkspaceID == nil || note.workspaceID.map(contentOwner) == selectedWorkspaceID
+                }) { note in noteRow(note) }
+                ForEach(model.conversations.filter { conversation in
+                    if let folder = model.selectedFolderID { return conversation.folderID == folder }
+                    return selectedWorkspaceID == nil || model.executionOwner(for: conversation.id).map(contentOwner) == selectedWorkspaceID
+                }) { conversation in conversationRow(conversation) }
             }.listStyle(.plain).scrollContentBackground(.hidden)
         }
     }
@@ -314,13 +349,13 @@ private struct LibraryClientChatPane: View {
         VStack(spacing: 0) {
             LibraryClientPaneHeader(title: model.selectedConversation?.title ?? "New chat") {
                 if model.selectedConversationID != nil {
-                    Button("Session settings") { settings = true }
+                    if !model.selectedConversationIsPhoneHistory { Button("Session settings") { settings = true } }
                     Button { details = true } label: { Image(systemName: "ellipsis") }.help("Conversation details")
                 }
             }
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 22) {
-                    if model.transcript?.olderCursor != nil { Button("Load older messages") { Task { await model.olderMessages() } }.disabled(!model.canControl) }
+                    if model.transcript?.olderCursor != nil { Button("Load older messages") { Task { await model.olderMessages() } }.disabled(!model.online && !model.canControl) }
                     ForEach(model.transcript?.messages ?? []) { message in
                         VStack(alignment: .leading, spacing: 7) {
                             Text(message.role == "user" ? "You" : message.role.capitalized).font(.system(size: 11, weight: .semibold)).foregroundStyle(DashboardPalette.mutedForeground)
@@ -336,15 +371,20 @@ private struct LibraryClientChatPane: View {
                     ForEach(model.transcript?.activities ?? []) { activity in
                         DisclosureGroup(activity.title) { Text(activity.detail ?? activity.status).font(.system(size: 12, design: .monospaced)).textSelection(.enabled) }
                     }
-                    ForEach(model.currentPending) { interaction in LibraryClientInteraction(model: model, interaction: interaction) }
+                    if !model.selectedConversationIsPhoneHistory {
+                        ForEach(model.currentPending) { interaction in LibraryClientInteraction(model: model, interaction: interaction) }
+                    }
                 }.padding(24)
             }.scrollIndicators(.never)
             Divider()
+            if model.selectedConversationIsPhoneHistory {
+                Text("Quick Chat history · Continue on its iPhone or iPad").font(.caption).padding(20)
+            } else {
             VStack(alignment: .leading, spacing: 10) {
                 if model.selectedConversationID == nil {
                     Picker("Execution workspace", selection: Binding(get: { model.selectedExecutionWorkspaceID }, set: { id in Task { await model.selectExecutionWorkspace(id) } })) {
                         Text("Central database").tag("central")
-                        ForEach(model.executionWorkspaces) { workspace in Text(workspace.name).tag(workspace.id) }
+                        ForEach(model.executionWorkspaces.filter { $0.kind != .ios }) { workspace in Text(workspace.name).tag(workspace.id) }
                     }
                     Picker("Agent workspace", selection: $model.selectedProviderID) {
                         Text("Select agent").tag("")
@@ -368,6 +408,7 @@ private struct LibraryClientChatPane: View {
                         .disabled(!model.canControl || model.sending || model.composer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (model.activeRunID != nil && model.activeProvider?.canSteer != true))
                 }
             }.padding(20)
+            }
         }
         .sheet(isPresented: $settings) {
             if let id = model.selectedConversationID { LibraryClientSessionSettingsSheet(model: model, id: id).frame(minWidth: 500, minHeight: 440) }

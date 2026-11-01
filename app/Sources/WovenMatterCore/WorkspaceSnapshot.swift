@@ -183,6 +183,7 @@ public struct WorkspaceMessageRecord: Codable, Equatable, Identifiable, Sendable
 public struct WorkspaceNoteRecord: Codable, Equatable, Identifiable, Sendable {
   public let id: String
   public let folderID: String?
+  public let workspaceID: String?
   public let title: String
   public let content: String
   public let createdAt: String?
@@ -193,6 +194,7 @@ public struct WorkspaceNoteRecord: Codable, Equatable, Identifiable, Sendable {
   enum CodingKeys: String, CodingKey {
     case id, title, content, revision
     case folderID = "folder_id"
+    case workspaceID = "workspace_id"
     case createdAt = "created_at"
     case updatedAt = "updated_at"
     case isPinned = "is_pinned"
@@ -202,6 +204,7 @@ public struct WorkspaceNoteRecord: Codable, Equatable, Identifiable, Sendable {
     let values = try decoder.container(keyedBy: CodingKeys.self)
     id = try values.decode(String.self, forKey: .id)
     folderID = try values.decodeIfPresent(String.self, forKey: .folderID)
+    workspaceID = try values.decodeIfPresent(String.self, forKey: .workspaceID)
     title = try values.decode(String.self, forKey: .title)
     content = try values.decode(String.self, forKey: .content)
     createdAt = try values.decodeIfPresent(String.self, forKey: .createdAt)

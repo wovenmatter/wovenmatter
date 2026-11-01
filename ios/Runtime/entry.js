@@ -77,9 +77,11 @@ const methods = {
       },
     }));
     registry.install(defineExtension({name:'wovenmatter-ios',tools}));
-    registry.install(createSubagents(() => root.id, config.executionPolicy));
-    codemode = createCodeMode({hostCall,getHarness:()=>harness});
-    registry.install(codemode.extension);
+    if (!config.quickChat) {
+      registry.install(createSubagents(() => root.id, config.executionPolicy));
+      codemode = createCodeMode({hostCall,getHarness:()=>harness});
+      registry.install(codemode.extension);
+    }
     const storage = await JsonlStorage.open('/',filesystem(),context,{fsync:true});
     harness = await Harness.open(storage,{models,registry,
       settings:{progress:{partialIntervalMs:100,outputIntervalMs:100}},

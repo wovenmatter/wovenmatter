@@ -35,7 +35,7 @@ extension CompanionModel {
     await previousEngine?.cancelSynchronization()
     let committed = try await MobilePairingCommit.complete(paired, store: store,
       allowingLibraryChange: allowingLibraryChange, saveCredential: saveCredential,
-      confirm: { try await connection.confirmPairing() })
+      confirm: { try await pairingRequests(connection).confirmPairing() })
     credential = committed; transport = connection
     engine = MobileSyncEngine(store: store, transport: connection)
     synchronizationStatus = .init(); online = false; connectionLabel = "Connecting"
@@ -64,7 +64,7 @@ extension CompanionModel {
     await previousEngine?.cancelSynchronization()
     do {
       // Best effort while reachable; local unpairing also works offline.
-      try? await previousTransport?.unpair()
+      if let previousTransport { try? await pairingRequests(previousTransport).unpair() }
       try clearCredential()
       try await store?.recoverPairingTransition()
       try await store?.detachWorkspace()

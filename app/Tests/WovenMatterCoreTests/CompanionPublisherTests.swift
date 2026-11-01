@@ -9,6 +9,24 @@ import WovenMatterCore
 @MainActor
 struct CompanionPublisherTests {
 
+  @Test func publishedFoldersRemainOwnerScopedAndIdempotentWithoutOpeningRemotePaths() async throws {
+    let f = try await Fixture(); defer { f.remove() }
+    let id = UUID().uuidString.lowercased(), path = "/v1/federation/publisher/folders"
+    let binding = CompanionFolderExecution(workspaceID: f.workspace.id, rootPath: "/home/worker/" + id)
+    let request = CompanionMutation(deviceID: f.workspace.id, kind: .createFolder, resourceID: id, title: "From iPhone", folderExecution: binding)
+    for _ in 0..<2 {
+      let result = try await CompanionWorkspacePublisherAPI.handle(f.request(path, request), path: path, database: f.database)
+      #expect(result.status == 200)
+    }
+    let folder = try #require(await f.database.companionSnapshot(bodyByteBudget: 0).folders.first { $0.id == id })
+    #expect(folder.execution == binding)
+    #expect(!FileManager.default.fileExists(atPath: binding.rootPath))
+    var other = request; other.folderExecution?.workspaceID = UUID().uuidString.lowercased()
+    #expect(try await CompanionWorkspacePublisherAPI.handle(f.request(path, other), path: path, database: f.database).status == 403)
+    other = request; other.folderExecution?.rootPath += "/other"
+    #expect(try await CompanionWorkspacePublisherAPI.handle(f.request(path, other), path: path, database: f.database).status == 403)
+  }
+
   @Test func retainedPreflightSettlesMultipleStaleRunsButNeverTransfersAnActualActiveRun() async throws {
     let f = try await Fixture(); defer { f.remove() }
     let conversationID = try await f.database.createFixtureRemoteACPSession(runtimeKind: .codex, remoteWorkspaceID: UUID(uuidString: f.workspace.id)!, remoteWorkspaceName: "Linux", title: "Offline history", ownerDeviceID: UUID(uuidString: f.identity.hostDeviceID)!)

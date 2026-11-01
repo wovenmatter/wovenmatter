@@ -40,11 +40,11 @@ extension WorkspaceDatabaseConnection {
       case .moveToFolder(let folderID):
         try validateFolderUnlocked(id: folderID, operatorID: operatorID)
         try toolsExecuteUnlocked("""
-          UPDATE notes SET folder_id = ?, position = (
+          UPDATE notes SET workspace_id = COALESCE((SELECT workspace_id FROM folder_execution_roots WHERE folder_id = ?), workspace_id), folder_id = ?, position = (
             SELECT COALESCE(MAX(position), -1) + 1 FROM notes
             WHERE user_id = ? AND folder_id IS ? AND deleted_at IS NULL AND id != ?
           ), updated_at = ? WHERE id = ? AND user_id = ?
-          """, [folderID, operatorID, folderID, id, revision, id, operatorID])
+          """, [folderID, folderID, operatorID, folderID, id, revision, id, operatorID])
       case .moveToTrash:
         // Keep the document, history, links, and pin intact. Only visibility changes.
         try checkpointNoteUnlocked(id: id, source: "before-trash", force: true)

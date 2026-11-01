@@ -168,6 +168,36 @@ public actor WorkspaceJournal {
       else { next.pendingRegistrations.remove(workspace.id); next.centralWorkspaceRevisions[workspace.id] = workspace.revision }
     }
   }
+  /// Only the central library may attest that a workspace holds central history.
+  public static let centralHistoryCapability = "history.central.v1"
+  /// A host's self-report may refresh only its display name and descriptive
+  /// capabilities. Ownership, routing, endpoint, content identity, journal devices,
+  /// central history and the central-confirmed revision stay as the registry recorded them.
+  @discardableResult public func refreshReportedDetails(_ reported: CompanionExecutionWorkspace) throws -> CompanionExecutionWorkspace? {
+    var result: CompanionExecutionWorkspace?
+    try transaction { next in
+      guard var current = next.workspaces[reported.id], current.libraryID == reported.libraryID else {
+        result = next.workspaces[reported.id]; return
+      }
+      current.name = reported.name
+      current.capabilities = Self.attestedCapabilities(reported.capabilities, registry: current.capabilities)
+      next.workspaces[reported.id] = current; result = current
+    }
+    return result
+  }
+  /// What a direct host may record about itself before the central registry knows it:
+  /// its name, kind, endpoint and descriptive capabilities. It is never central, claims
+  /// no other content identity or journal devices, and holds no confirmed revision, so
+  /// the registry's record replaces it.
+  public static func unattested(_ reported: CompanionExecutionWorkspace) -> CompanionExecutionWorkspace {
+    var value = reported
+    value.capabilities = attestedCapabilities(reported.capabilities, registry: [])
+    value.contentWorkspaceID = nil; value.journalDeviceIDs = []; value.revision = 0
+    return value
+  }
+  private static func attestedCapabilities(_ reported: [String], registry: [String]) -> [String] {
+    reported.filter { $0 != centralHistoryCapability } + (registry.contains(centralHistoryCapability) ? [centralHistoryCapability] : [])
+  }
   public func mergeRegistry(_ workspaces: [CompanionExecutionWorkspace]) throws {
     for workspace in workspaces where !state.pendingRegistrations.contains(workspace.id) { try upsertWorkspace(workspace, pending: false) }
   }
@@ -488,20 +518,42 @@ public actor WorkspaceClient {
   public init(store: MobileStore, workspaceID: String, transport: any ExecutionWorkspaceTransport) {
     self.store = store; self.workspaceID = workspaceID; self.transport = transport
   }
+  public func checkConnection() async throws { try await verify() }
   public func providers() async throws -> [CompanionProvider] { try await transport.providers() }
   public func pending() async throws -> [CompanionPendingInteraction] { try await transport.pending() }
   public func capabilities(_ id: String) async throws -> CompanionProvider { try await verify(); return try await transport.capabilities(id) }
   public func earlierTranscript(_ id: String, before: String) async throws -> CompanionTranscript { try await verify(); return try await transport.transcript(id, before: before) }
+  public func folders() async throws -> [CompanionFolder] { try await verify(); return try await transport.folders() }
+  public func createFolder(_ mutation: CompanionMutation) async throws -> CompanionFolder {
+    let workspace = try await verify()
+    let owner = CompanionWorkspaceIdentity.canonicalID(workspaceID, workspaces: [workspace])
+    guard mutation.folderExecution == nil || mutation.folderExecution.map({ CompanionWorkspaceIdentity.canonicalID($0.workspaceID, workspaces: [workspace]) }) == owner else { throw MobileStore.Failure.wrongWorkspace }
+    let folder = try await transport.createFolder(mutation)
+    guard folder.id == mutation.resourceID, folder.execution.map({ CompanionWorkspaceIdentity.canonicalID($0.workspaceID, workspaces: [workspace]) }) == owner,
+      mutation.folderExecution == nil || folder.execution == mutation.folderExecution else { throw MobileStore.Failure.wrongWorkspace }
+    try await store.cacheExecutionFolders([folder], workspaceID: workspaceID)
+    return folder
+  }
   public func readWorkspace(_ request: CompanionWorkspaceRead) async throws -> CompanionWorkspaceResult { try await verify(); return try await transport.readWorkspace(request) }
-  private func verify() async throws {
-    let workspace = try await transport.identity()
-    guard workspace.id == workspaceID, !workspace.deleted else { throw MobileStore.Failure.wrongWorkspace }
-    centralHistory = workspace.capabilities.contains("history.central.v1")
-    if let libraryID = await store.snapshot().workspaceID, libraryID != workspace.libraryID { throw WorkspaceJournal.Failure.wrongLibrary }
-    if await store.journal.snapshot().workspaces[workspaceID] == nil {
-      let deviceID = await store.snapshot().deviceID
-      try await store.journal.upsertWorkspace(workspace, pending: !centralHistory && WorkspaceJournal.isLocalExecutionOwner(workspace, deviceID: deviceID))
+  /// The host proves only that it answers for this workspace ID. Everything the
+  /// phone acts on, including whether it holds central history, comes from the
+  /// registry record; see refreshReportedDetails and unattested.
+  @discardableResult private func verify() async throws -> CompanionExecutionWorkspace {
+    let reported = try await transport.identity()
+    guard reported.id == workspaceID, !reported.deleted else { throw MobileStore.Failure.wrongWorkspace }
+    if let libraryID = await store.snapshot().workspaceID, libraryID != reported.libraryID { throw WorkspaceJournal.Failure.wrongLibrary }
+    let saved = await store.journal.snapshot(), deviceID = await store.snapshot().deviceID
+    let attested: CompanionExecutionWorkspace
+    if let current = saved.workspaces[workspaceID] {
+      attested = saved.pendingRegistrations.contains(workspaceID) ? current : try await store.journal.refreshReportedDetails(reported) ?? current
+    } else {
+      // A remote host is never this device's own execution workspace.
+      guard !WorkspaceJournal.isLocalExecutionOwner(reported, deviceID: deviceID), reported.executionDeviceID != deviceID else { throw MobileStore.Failure.wrongWorkspace }
+      try await store.journal.upsertWorkspace(WorkspaceJournal.unattested(reported), pending: false)
+      attested = (await store.journal.snapshot()).workspaces[workspaceID] ?? WorkspaceJournal.unattested(reported)
     }
+    centralHistory = attested.capabilities.contains(WorkspaceJournal.centralHistoryCapability)
+    return attested
   }
   public func startConversation(_ requested: MobileLaunchRecord) async throws -> MobileLaunchRecord {
     if let task = launchTasks[requested.id] { return try await task.value }

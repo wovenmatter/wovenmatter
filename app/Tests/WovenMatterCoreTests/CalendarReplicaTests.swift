@@ -64,4 +64,30 @@ struct CalendarReplicaTests {
     await #expect(throws: (any Error).self) { try await database.companionCalendarPublishRuns([run], deviceID: "other") }
   }
 
+  /// Mirrors MobileCalendarStore.reassign: an earlier phone-owned task is
+  /// retired, then replaced by a new schedule without a device owner.
+  @Test func retiredPhoneTaskAndItsReplacementLeaveExactlyOneCentralRun() async throws {
+    let (database, directory) = try await fixture(); defer { try? FileManager.default.removeItem(at: directory) }
+    let legacy = mutation(owner: true)
+    #expect(try await database.companionCalendarMutate(legacy, deviceID: device).status == .accepted)
+    #expect(try await database.dueCalendarRuns(now: Date(timeIntervalSince1970: 200)).isEmpty)
+    let base = try #require(try await database.companionCalendarSnapshot().records.first { $0.id == legacy.record.id })
+
+    var takeover = CompanionCalendarMutation(deviceID: device, expectedRevision: base.event.revision, record: base)
+    takeover.record.ownerDeviceID = nil
+    #expect(try await database.companionCalendarMutate(takeover, deviceID: device).status == .conflict, "Owners never change in place")
+
+    var retired = base; retired.deleted = true
+    #expect(try await database.companionCalendarMutate(.init(deviceID: device, expectedRevision: base.event.revision, record: retired), deviceID: device).status == .accepted)
+    var draft = base.event.draft; draft.startsAt = Date(timeIntervalSince1970: 150)
+    let replacement = CompanionCalendarRecord(event: .init(id: UUID().uuidString.lowercased(), revision: 0, draft: draft), ownerDeviceID: nil)
+    #expect(try await database.companionCalendarMutate(.init(deviceID: device, expectedRevision: nil, record: replacement), deviceID: device).status == .accepted)
+
+    let runs = try await database.dueCalendarRuns(now: Date(timeIntervalSince1970: 200))
+    #expect(runs.map(\.eventID) == [replacement.id])
+    let snapshot = try await database.companionCalendarSnapshot().records
+    #expect(snapshot.first { $0.id == legacy.record.id }?.deleted != false)
+    #expect(snapshot.first { $0.id == replacement.id }?.ownerDeviceID == nil)
+  }
+
 }

@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 import SQLite3
+import WovenMatterCore
 
 extension WorkspaceDatabaseConnection {
     /// A recovery copy has a new stable identity, allowing acknowledgement-loss
@@ -32,11 +33,14 @@ extension WorkspaceDatabaseConnection {
             }
             let owner = try localMutationOperatorIDUnlocked()
             let destination = try folderID.flatMap { try companionFolderUnlocked(id: $0) }?.id
+            let sourceWorkspace = try companionIDsUnlocked("SELECT workspace_id FROM notes WHERE id=? AND workspace_id IS NOT NULL", bindings: [sourceID]).first
+            let destinationWorkspace = try destination.flatMap { try companionFolderUnlocked(id: $0)?.execution?.workspaceID }
+            let workspace = destinationWorkspace ?? sourceWorkspace
             let timestamp = Self.timestamp(Date())
             try companionExecuteUnlocked("""
-                INSERT INTO notes(id, user_id, folder_id, title, content, snippet, position, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)
-                """, values: [id, owner, destination, recoveredTitle, content, Self.noteSnippet(content), timestamp, timestamp])
+                INSERT INTO notes(id, user_id, folder_id, title, content, snippet, position, created_at, updated_at, workspace_id)
+                VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
+                """, values: [id, owner, destination, recoveredTitle, content, Self.noteSnippet(content), timestamp, timestamp, workspace.map(CompanionWorkspaceIdentity.canonicalID)])
             try checkpointNoteUnlocked(id: id, source: "recovered", force: true)
             return id
         }

@@ -326,6 +326,7 @@ extension WorkspaceDatabaseConnection {
     content: String = "",
     kind: NoteArtifactKind = .note,
     createdAt: Date = Date(),
+    workspaceID: String? = nil,
     callerConversationID: String? = nil,
     requestID: String? = nil
   ) throws -> String {
@@ -354,8 +355,8 @@ extension WorkspaceDatabaseConnection {
         let note = try prepareUnlocked("""
           INSERT INTO notes (
             id, user_id, folder_id, title, content, snippet, is_pinned, position,
-            created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
+            created_at, updated_at, workspace_id
+          ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
           """)
         defer { sqlite3_finalize(note) }
         try bind(noteID, at: 1, to: note)
@@ -369,12 +370,25 @@ extension WorkspaceDatabaseConnection {
         }
         try bind(timestamp, at: 8, to: note)
         try bind(timestamp, at: 9, to: note)
+        let folderOwner = try folderID.flatMap { try companionFolderUnlocked(id: $0)?.execution?.workspaceID }
+        let callerOwner = try callerConversationID.flatMap { try sessionExecutionRoot(id: $0)?.workspaceID }
+        let owner = try folderOwner ?? workspaceID ?? callerOwner ?? localNoteWorkspaceIDUnlocked()
+        try bindNullable(owner.map(CompanionWorkspaceIdentity.canonicalID), at: 10, to: note)
         try stepDone(note)
 
         try checkpointNoteUnlocked(id: noteID, source: "created", force: true)
         return noteID
       }.result
     }
+  }
+
+  /// Native content belongs to this execution device, independently of the
+  /// central library's publishing identity. Isolated node replicas retain theirs.
+  func localNoteWorkspaceIDUnlocked() throws -> String? {
+    if try !companionIDsUnlocked("SELECT name FROM sqlite_master WHERE type='table' AND name='companion_execution_replica_context'", bindings: []).isEmpty,
+       let replica = try companionIDsUnlocked("SELECT workspace_id FROM companion_execution_replica_context WHERE singleton=1", bindings: []).first { return replica }
+    return try companionIDsUnlocked("SELECT device_id FROM desktop_local_identity WHERE singleton=1", bindings: []).first
+      ?? companionLibraryIdentityUnlocked().hostDeviceID
   }
 
   @discardableResult
@@ -635,10 +649,11 @@ extension WorkspaceDatabase {
     content: String = "",
     kind: NoteArtifactKind = .note,
     createdAt: Date = Date(),
+    workspaceID: String? = nil,
     callerConversationID: String? = nil,
     requestID: String? = nil
   ) async throws -> String {
-    try await write { try $0.createNote(id: id, folderID: folderID, title: title, content: content, kind: kind, createdAt: createdAt, callerConversationID: callerConversationID, requestID: requestID) }
+    try await write { try $0.createNote(id: id, folderID: folderID, title: title, content: content, kind: kind, createdAt: createdAt, workspaceID: workspaceID, callerConversationID: callerConversationID, requestID: requestID) }
   }
 
   @discardableResult

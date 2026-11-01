@@ -3,6 +3,22 @@ import SQLite3
 import WovenMatterCore
 
 extension WorkspaceDatabaseConnection {
+  /// Accept an old registry-bound root only when this database's registered
+  /// owner explicitly names the expected native root identity. Paths are never changed.
+  public func executionWorkspaceMatches(captured: String, expected: String) throws -> Bool {
+    try withLock { try executionWorkspaceMatchesUnlocked(captured: captured, expected: expected) }
+  }
+  func executionWorkspaceMatchesUnlocked(captured: String, expected: String) throws -> Bool {
+    if captured == expected { return true }
+    guard let workspace = try federationWorkspaceUnlocked(captured), !workspace.deleted else { return false }
+    if workspace.kind == .mac {
+      let identity = try companionLibraryIdentityUnlocked()
+      return workspace.ownerDeviceID == identity.hostDeviceID && workspace.executionDeviceID == identity.hostDeviceID
+        && workspace.capabilities.contains("history.central.v1") && workspace.contentWorkspaceID == expected
+    }
+    if workspace.kind == .linux { return expected == "remote:" + workspace.id && (workspace.contentWorkspaceID == nil || workspace.contentWorkspaceID == expected) }
+    return false
+  }
   public func companionLibraryIdentity() throws -> CompanionLibraryIdentity {
     try withLock { try companionLibraryIdentityUnlocked() }
   }
@@ -14,6 +30,12 @@ extension WorkspaceDatabaseConnection {
   public func companionExecutionWorkspaces() throws -> [CompanionExecutionWorkspace] {
     try withLock {
       try federationValuesUnlocked("SELECT payload FROM companion_execution_workspaces ORDER BY id", as: CompanionExecutionWorkspace.self)
+    }
+  }
+  public func companionExecutionProviders() throws -> [String: String] {
+    try withLock {
+      let conversations = try federationValuesUnlocked("SELECT conversation FROM companion_execution_conversations WHERE deleted=0", as: CompanionConversation.self)
+      return Dictionary(uniqueKeysWithValues: conversations.compactMap { value in value.providerID.map { (value.id, $0) } })
     }
   }
   public func companionExecutionOwners() throws -> [String: String] {
@@ -51,6 +73,7 @@ extension WorkspaceDatabaseConnection {
       guard value.libraryID == (try companionWorkspaceIDUnlocked()) else { throw federationError("library_mismatch", "This workspace belongs to another central library.") }
       guard federationID(value.id), federationID(value.ownerDeviceID), (value.ownerDeviceID == deviceID || deviceID == identity.hostDeviceID),
             value.executionDeviceID.map(federationID) ?? true,
+            value.contentWorkspaceID.map({ $0.utf8.count <= 64 && federationID(CompanionWorkspaceIdentity.canonicalID($0)) }) ?? true,
             value.developmentInstance.map({ !$0.isEmpty && $0.count <= 64 && $0.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") } }) ?? true,
             !value.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, value.name.utf8.count <= 256,
             value.journalDeviceIDs.count <= 64, value.journalDeviceIDs.allSatisfy(federationID),
@@ -58,11 +81,24 @@ extension WorkspaceDatabaseConnection {
             value.endpoint.map({ CompanionPairingPayload.isValidEndpoint($0) }) ?? true else {
         throw federationError("invalid_workspace", "Only a workspace owner can register its identity and grants with a private Tailscale endpoint.")
       }
+      if let content = value.contentWorkspaceID {
+        let contentID = CompanionWorkspaceIdentity.canonicalID(content)
+        let ownsCentral = value.kind == .mac && value.ownerDeviceID == identity.hostDeviceID && deviceID == identity.hostDeviceID
+        guard ownsCentral || contentID == (value.kind == .linux ? value.id : value.ownerDeviceID) else {
+          throw federationError("wrong_owner", "A client content identity must belong to its own device.")
+        }
+      }
       value.journalDeviceIDs = Array(Set(value.journalDeviceIDs)).sorted()
       value.capabilities = Array(Set(value.capabilities)).sorted()
       if let existing = try federationWorkspaceUnlocked(value.id) {
         guard existing.ownerDeviceID == value.ownerDeviceID, existing.kind == value.kind, (existing.executionDeviceID == nil || existing.executionDeviceID == value.executionDeviceID) else {
           throw federationError("wrong_owner", "The execution owner and workspace kind cannot change.")
+        }
+        if let content = existing.contentWorkspaceID {
+          guard value.contentWorkspaceID == nil || value.contentWorkspaceID == content else {
+            throw federationError("wrong_owner", "The content workspace identity cannot change.")
+          }
+          value.contentWorkspaceID = content
         }
         value.revision = existing.revision
         if value == existing { return existing }
@@ -229,6 +265,13 @@ extension WorkspaceDatabaseConnection {
 }
 
 extension WorkspaceDatabase {
+  public func executionWorkspaceMatches(captured: String, expected: String) async throws -> Bool {
+    try await read { try $0.executionWorkspaceMatches(captured: captured, expected: expected) }
+  }
+
+  public func companionExecutionProviders() async throws -> [String: String] {
+    try await read { try $0.companionExecutionProviders() }
+  }
   public func companionExecutionOwners() async throws -> [String: String] {
     try await read { try $0.companionExecutionOwners() }
   }

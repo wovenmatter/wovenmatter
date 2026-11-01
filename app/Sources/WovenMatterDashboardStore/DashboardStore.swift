@@ -371,7 +371,8 @@ public actor DashboardStore {
     try await database.createNote(
       folderID: folderID,
       title: kind == .note ? "Untitled Note" : "Untitled \(kind.displayName)",
-      kind: kind
+      kind: kind,
+      workspaceID: try await executionWorkspaceID()
     )
   }
 
@@ -397,7 +398,7 @@ public actor DashboardStore {
     executionRoot: SessionCreationRoot
   ) async throws -> String {
     await runControls?.beforeSessionCreation()
-    guard executionRoot.location.workspaceID == (try await executionWorkspaceID()) else {
+    guard try await database.executionWorkspaceMatches(captured: executionRoot.location.workspaceID, expected: executionWorkspaceID()) else {
       throw WorkspaceToolError.invalid("Create this chat in its owning execution workspace.")
     }
     return try await database.createLocalACPSession(

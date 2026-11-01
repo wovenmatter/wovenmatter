@@ -52,6 +52,7 @@ final class CompanionHostController {
     private(set) var pairingExpiresAt: Date?
     private(set) var discoveredPeers: [CompanionDiscoveredPeer] = []
     private(set) var pendingPairingRequests: [CompanionPendingPairingRequest] = []
+    private(set) var workspaceProviders: [String: [CompanionProvider]] = [:]
     private(set) var executionWorkspaces: [CompanionExecutionWorkspace] = []
     private(set) var isDiscovering = false
     private(set) var pendingDeviceRevocations: [String: [String]] = [:]
@@ -78,6 +79,7 @@ final class CompanionHostController {
     private let makeExposure: @MainActor () -> CompanionTailscaleServe
     private var generation = UUID()
     private var healthTask: Task<Void, Never>?
+    private let providerCatalogRefresh = CompanionSingleRefresh()
     private var availabilityTask: Task<Void, Never>?
     private let retryInterval: Duration
 
@@ -113,7 +115,7 @@ final class CompanionHostController {
         if model?.isBackendFrontend == true { await forward(.start); return }
         guard model?.isLibraryClient == false, !isStarting, endpoint == nil, model?.dashboardStore != nil else { return }
         isStarting = true; errorMessage = nil; status = "Connecting…"
-        generation = UUID()
+        generation = UUID(); providerCatalogRefresh.cancel()
         let expectedGeneration = generation
         var attemptListener: CompanionHTTPServer?
         var attemptExposure: CompanionTailscaleServe?
@@ -246,6 +248,7 @@ final class CompanionHostController {
 
     private func stopService() {
         generation = UUID(); healthTask?.cancel(); healthTask = nil
+        providerCatalogRefresh.cancel()
         server?.stop(); server = nil; executionAPI = nil; inferenceHost = nil
         if let serve {
             serve.stop()
@@ -336,7 +339,8 @@ final class CompanionHostController {
         var desired: [CompanionExecutionWorkspace] = [
             .init(id: localID, libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID,
                   kind: .mac, name: DevelopmentLaunch.deviceName(), endpoint: endpoint,
-                  capabilities: ["execution.v1", "history.central.v1", "inference.v1"], executionDeviceID: identity.hostDeviceID, developmentInstance: DevelopmentLaunch.instance)
+                  capabilities: ["execution.v1", "history.central.v1", "inference.v1"], executionDeviceID: identity.hostDeviceID, developmentInstance: DevelopmentLaunch.instance,
+                  contentWorkspaceID: try await model.executionWorkspaceIdentity(workspaceID: nil))
         ]
         desired += model.remoteWorkspaces.workspaces.map { configuration in
             let id = configuration.id.uuidString.lowercased()
@@ -620,7 +624,7 @@ final class CompanionHostController {
               errorMessage: errorMessage, pairingPayload: pairingPayload, pairingExpiresAt: pairingExpiresAt,
               pairedDevices: pairedDevices, lastSeenAt: lastSeenAt, discoveredPeers: discoveredPeers,
               pendingPairingRequests: pendingPairingRequests, isDiscovering: isDiscovering, executionWorkspaces: executionWorkspaces,
-              pendingDeviceRevocations: pendingRevocations)
+              pendingDeviceRevocations: pendingRevocations, workspaceProviders: workspaceProviders)
     }
 
     func refreshStatus() async {
@@ -630,6 +634,17 @@ final class CompanionHostController {
             pendingPairingRequests = await authentication?.pendingPairingRequests() ?? []
             pendingDeviceRevocations = pendingRevocations
             if let database = model?.dashboardStore?.database { try await refreshStatusAndDevelopmentPresence(database: database) }
+            if let client = try? model?.centralExecutionClient() {
+                let known = Set(executionWorkspaces.filter { !$0.deleted && $0.retainedHistory != true }.map(\.id))
+                workspaceProviders = client.workspaceProviders.filter { known.contains($0.key) }
+                let expectedGeneration = generation, workspaces = executionWorkspaces
+                providerCatalogRefresh.startIfIdle { [weak self] isCurrent in
+                    let providers = await client.providerCatalog(for: workspaces)
+                    guard let self, isCurrent(), self.generation == expectedGeneration else { return }
+                    let active = Set(self.executionWorkspaces.filter { !$0.deleted && $0.retainedHistory != true }.map(\.id))
+                    self.workspaceProviders = providers.filter { active.contains($0.key) }
+                }
+            }
         } catch { errorMessage = error.localizedDescription }
     }
     func refreshDiscovery() async {
@@ -675,6 +690,7 @@ final class CompanionHostController {
             pairingExpiresAt = value.pairingExpiresAt; pairedDevices = value.pairedDevices; lastSeenAt = value.lastSeenAt
             discoveredPeers = value.discoveredPeers; pendingPairingRequests = value.pendingPairingRequests
             isDiscovering = value.isDiscovering; executionWorkspaces = value.executionWorkspaces
+            workspaceProviders = value.workspaceProviders ?? [:]
             pendingDeviceRevocations = value.pendingDeviceRevocations
         } catch { errorMessage = error.localizedDescription }
     }
@@ -735,6 +751,29 @@ struct CompanionHostSnapshot: Codable, Sendable {
     let isDiscovering: Bool
     let executionWorkspaces: [CompanionExecutionWorkspace]
     let pendingDeviceRevocations: [String: [String]]
+    var workspaceProviders: [String: [CompanionProvider]]? = nil
+}
+
+/// At most one refresh runs at a time. A finished refresh clears only its own
+/// registration, so one from a stopped or restarted service never clears or
+/// blocks a newer refresh, and a cancelled one can always be replaced.
+@MainActor final class CompanionSingleRefresh {
+    private var task: Task<Void, Never>?
+    private var token: UUID?
+    var isRunning: Bool { task != nil }
+    /// Starts `operation` unless a refresh is running. `isCurrent` reports whether
+    /// this refresh is still the registered, uncancelled one.
+    func startIfIdle(_ operation: @escaping @MainActor (_ isCurrent: @escaping @MainActor () -> Bool) async -> Void) {
+        guard task == nil else { return }
+        let token = UUID()
+        self.token = token
+        task = Task { [weak self] in
+            await operation { self?.token == token && !Task.isCancelled }
+            guard let self, self.token == token else { return }
+            self.task = nil; self.token = nil
+        }
+    }
+    func cancel() { task?.cancel(); task = nil; token = nil }
 }
 
 private struct ExecutionManagementAcknowledgement: Decodable { let revoked: Bool }
