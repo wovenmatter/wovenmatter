@@ -1,9 +1,10 @@
 # Woven Matter
 
-Using Codex or Claude Code usually means working in that vendor's app.
-Woven Matter lets you keep the installs and accounts you already have and
-choose a different harness or model for each panel, side by side, in one local
-Mac workspace.
+Woven Matter brings AI agents, conversations, notes, files, and tools into one
+local Mac workspace. Research, write, analyze data, build software, and schedule
+follow-up work with different agents side by side. Start with the included
+Pi Durable agent or use the installs and accounts you already have, choosing a
+harness and model for each panel.
 
 [**Download for Mac**](https://wovenmatter.com/download) ·
 [Getting started](docs/guide/getting-started.md) · [Documentation](docs/README.md) ·
