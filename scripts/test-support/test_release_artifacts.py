@@ -4,14 +4,29 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import plistlib
+import shutil
 import subprocess
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location('release_assets', ROOT / 'scripts/release-assets.py')
 assets = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(assets)
-SHA = 'a' * 40
+sys.dont_write_bytecode = True
+_fixture_spec = importlib.util.spec_from_file_location('release_source_fixture', Path(__file__).with_name('release_source_fixture.py'))
+release_source = importlib.util.module_from_spec(_fixture_spec)
+_fixture_spec.loader.exec_module(release_source)
+# Release verification reads the app capability from the source revision. A real
+# throwaway repository supplies it: the release commit, a later commit with another
+# capability, and a working tree with a third, as on a developer's other branch.
+CAPABILITY = plistlib.loads((ROOT / 'app/App/Info.plist').read_bytes()).get('WovenMatterDeviceSetupVersion', 0)
+_source = tempfile.TemporaryDirectory()
+SOURCE = Path(_source.name)
+SHA, LATER_SHA = release_source.make(SOURCE, [CAPABILITY, CAPABILITY + 1], uncommitted=CAPABILITY + 2)
+assets.SOURCE = SOURCE
+REAL_GIT = shutil.which('git')
 VERSION, BUILD = '1.2.3', 42
 LEGACY, FULL = f'WovenMatter_{VERSION}_arm64.dmg', f'WovenMatter_{VERSION}_{BUILD}_arm64.dmg'
 STUB = r'''#!/usr/bin/env python3
@@ -19,13 +34,14 @@ import hashlib, json, os, pathlib, sys
 name, args = pathlib.Path(sys.argv[0]).name, sys.argv[1:]
 with open(os.environ['RELEASE_CALLS'], 'a') as log:
     log.write(json.dumps([name, args]) + '\n')
-sha = 'a' * 40
+sha = os.environ['RELEASE_SHA']
 state_path = pathlib.Path(os.environ['RELEASE_REMOTE'])
 remote = json.loads(state_path.read_text())
 if name == 'git':
     if args[:2] == ['remote', 'get-url']: print('git@github-release-agent:wovenmatter/wovenmatter.git')
     elif args[0] == 'rev-parse': print(sha)
     elif args[0] == 'ls-remote': print(sha + '\trefs/tags/v1.2.3^{}')
+    elif args[0] == 'show': os.execv(os.environ['RELEASE_GIT'], ['git', '-C', os.environ['RELEASE_SOURCE'], *args])
     elif args[0] not in ('fetch', 'merge-base'): sys.exit(90)
 elif name == 'gh':
     if args == ['api', '--hostname', 'github.com', 'user', '--jq', '.login']: print('release-agent')
@@ -70,7 +86,7 @@ def release_files(folder, payload):
     prefix = f'https://github.com/wovenmatter/wovenmatter/releases/download/v{VERSION}/'
     (folder / 'latest-mac.json').write_text(json.dumps(dict(
         schema_version=1, version=VERSION, build=BUILD, architecture='arm64', minimum_macos='26.0',
-        device_setup_version=assets.device_setup_version(), download_url=prefix + LEGACY, release_url=f'https://github.com/wovenmatter/wovenmatter/releases/tag/v{VERSION}',
+        device_setup_version=assets.device_setup_version(SHA), download_url=prefix + LEGACY, release_url=f'https://github.com/wovenmatter/wovenmatter/releases/tag/v{VERSION}',
         sha256=hashlib.sha256(payload).hexdigest())))
     (folder / 'appcast.xml').write_text(
         '<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"><channel><item>'
@@ -100,7 +116,8 @@ with tempfile.TemporaryDirectory() as directory:
     # The manifest must carry the app's exact device-setup capability, as an integer.
     manifest_file = original / 'latest-mac.json'
     valid_manifest = manifest_file.read_text()
-    capability = assets.device_setup_version()
+    capability = assets.device_setup_version(SHA)
+    assert capability == CAPABILITY and assets.device_setup_version(LATER_SHA) == CAPABILITY + 1
     for label, change in [('missing', lambda m: m.pop('device_setup_version')),
                           ('wrong value', lambda m: m.update(device_setup_version=capability + 1)),
                           ('Bool masquerading as 1', lambda m: m.update(device_setup_version=bool(capability) if capability in (0, 1) else True)),
@@ -116,8 +133,30 @@ with tempfile.TemporaryDirectory() as directory:
             raise SystemExit(f'FAIL: a {label} device setup capability was accepted')
     manifest_file.write_text(valid_manifest)
     assets.prepare(original, VERSION, BUILD, SHA)
+    # The capability is bound to the release's own source revision, not the checkout.
+    # The working tree holds CAPABILITY + 2, yet the release commit's value verifies.
+    assert plistlib.loads((SOURCE / 'app/App/Info.plist').read_bytes())['WovenMatterDeviceSetupVersion'] == CAPABILITY + 2
+    try:
+        assets.prepare(original, VERSION, BUILD, LATER_SHA)
+    except AssertionError:
+        pass
+    else:
+        raise SystemExit('FAIL: a manifest from one revision verified against another revision\'s capability')
+    later = json.loads(valid_manifest); later['device_setup_version'] = CAPABILITY + 1
+    manifest_file.write_text(json.dumps(later))
+    assets.prepare(original, VERSION, BUILD, LATER_SHA)  # The later revision's own capability verifies.
+    for unavailable in ('f' * 40, 'not-a-revision'):
+        try:
+            assets.device_setup_version(unavailable)
+        except AssertionError:
+            pass
+        else:
+            raise SystemExit(f'FAIL: an unavailable source revision {unavailable!r} did not fail closed')
+    manifest_file.write_text(valid_manifest)
+    assets.prepare(original, VERSION, BUILD, SHA)
     scope = cache / 'wovenmatter/wovenmatter' / f'7-{SHA}'
     env = dict(os.environ, PATH=str(stubs) + os.pathsep + os.environ['PATH'], RELEASE_CALLS=str(calls),
+               RELEASE_SHA=SHA, RELEASE_GIT=REAL_GIT, RELEASE_SOURCE=str(SOURCE),
                RELEASE_REMOTE=str(state), WOVENMATTER_RELEASE_ARTIFACT_CACHE=str(cache))
 
     def remote(**changes):

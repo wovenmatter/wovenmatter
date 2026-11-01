@@ -15,6 +15,11 @@ ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('assets', ROOT / 'scripts/release-assets.py')
 assets = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(assets)
+import sys
+sys.dont_write_bytecode = True
+source_spec = importlib.util.spec_from_file_location('release_source_fixture', ROOT / 'scripts/test-support/release_source_fixture.py')
+release_source = importlib.util.module_from_spec(source_spec)
+source_spec.loader.exec_module(release_source)
 
 def run(*args):
     return subprocess.check_output([str(a) for a in args], text=True).strip()
@@ -31,6 +36,10 @@ with tempfile.TemporaryDirectory(prefix='wovenmatter-update-test-') as temp:
     archives, output = root / 'archives', root / 'output'
     archives.mkdir()
     output.mkdir()
+    # A genuine source commit carrying the app capability the manifest publishes.
+    capability = plistlib.loads((ROOT / 'app/App/Info.plist').read_bytes()).get('WovenMatterDeviceSetupVersion', 0)
+    (revision,) = release_source.make(root / 'source', [capability])
+    assets.SOURCE = root / 'source'
     tools = Path(os.environ.get('WOVENMATTER_TEST_SPARKLE_TOOLS') or run(ROOT / 'scripts/prepare-sparkle-tools.sh'))
     # A temporary signing identity, unrelated to the production release key.
     keyfile = root / 'key'
@@ -66,7 +75,7 @@ with tempfile.TemporaryDirectory(prefix='wovenmatter-update-test-') as temp:
     path_spec.loader.exec_module(paths)
     paths.verify(output, notarized=False)
     run(ROOT / 'scripts/generate-release-manifest.sh', '0.3.0', '2', output / 'WovenMatter_0.3.0_arm64.dmg', output / 'latest-mac.json')
-    assets.prepare(output, '0.3.0', 2, 'a' * 40)
+    assets.prepare(output, '0.3.0', 2, revision)
     run('swift', ROOT / 'scripts/verify-update-signatures.swift', output, public)
     # Exercise the real retained-artifact validator too. Only the fixture's
     # public signing identity and Apple notarization/Gatekeeper services differ
@@ -74,6 +83,7 @@ with tempfile.TemporaryDirectory(prefix='wovenmatter-update-test-') as temp:
     stage_spec = importlib.util.spec_from_file_location('stage', ROOT / 'scripts/stage-update.py')
     stage = importlib.util.module_from_spec(stage_spec)
     stage_spec.loader.exec_module(stage)
+    stage.assets.SOURCE = root / 'source'
     trust_checks = []
     def reuse_run(*args):
         if args[0] == 'swift':
@@ -85,25 +95,25 @@ with tempfile.TemporaryDirectory(prefix='wovenmatter-update-test-') as temp:
             return ''
         return run(*args)
     with mock_patch.dict(os.environ, WOVENMATTER_SPARKLE_PRIVATE_KEY=str(keyfile)), mock_patch.object(stage, 'run', side_effect=reuse_run):
-        stage.validate_reused(output, '0.3.0', 'a' * 40, 2)
+        stage.validate_reused(output, '0.3.0', revision, 2)
         assert [call[0] for call in trust_checks] == ['codesign', 'xcrun', 'spctl']
         feed = output / 'appcast.xml'
         signed = feed.read_bytes()
         feed.write_bytes(signed.replace(b'<channel>', b'<channel><!-- tampered retained feed -->', 1))
-        assets.prepare(output, '0.3.0', 2, 'a' * 40)
-        fails(lambda: stage.validate_reused(output, '0.3.0', 'a' * 40, 2))
+        assets.prepare(output, '0.3.0', 2, revision)
+        fails(lambda: stage.validate_reused(output, '0.3.0', revision, 2))
         feed.write_bytes(signed)
-        assets.prepare(output, '0.3.0', 2, 'a' * 40)
+        assets.prepare(output, '0.3.0', 2, revision)
     fails(lambda: assets.verify(output, '0.3.0', 'b' * 40))
     original = full.read_bytes()
     full.write_bytes(original + b'tampered')
-    fails(lambda: assets.verify(output, '0.3.0', 'a' * 40))
+    fails(lambda: assets.verify(output, '0.3.0', revision))
     fails(lambda: run('swift', ROOT / 'scripts/verify-update-signatures.swift', output, public))
     full.write_bytes(original)
     # A delta asset is rejected, not silently skipped.
     stray = output / 'WovenMatter_0.3.0_2_from_1_arm64.delta'
     stray.write_bytes(b'delta')
-    fails(lambda: assets.verify(output, '0.3.0', 'a' * 40))
+    fails(lambda: assets.verify(output, '0.3.0', revision))
     fails(lambda: paths.verify(output, notarized=False))
     stray.unlink()
     print(f'Full-only round trip passed: {full.stat().st_size:,}-byte signed update with no deltas; same visible version, updated build, signature and source checks enforced.')
