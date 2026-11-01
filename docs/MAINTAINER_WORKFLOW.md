@@ -4,8 +4,9 @@
 
 `scripts/test-changes.sh --all` runs deterministic checks and an unsigned macOS
 build. Use `--macos` or `--remote` for focused validation.
-Container lifecycle changes also use `scripts/test-container.sh` when Docker is
-available. Tests use temporary data and must not consume provider services.
+Native Linux host checks in that command are provider-free and do not need
+Docker. Docker applies to the separate Executor image in the manual `images`
+scope. Tests use temporary data and must not consume provider services.
 
 Every PR runs one Linux **CI** check: public-tree and syntax checks, then portable
 fixtures, agent/service tests and generated-resource verification selected by
@@ -24,7 +25,7 @@ Run **Manual validation** (`validation.yml`) explicitly on the desired branch:
 | --- | --- |
 | `desktop` | Native macOS fixtures, package tests, unsigned app build, embedded WebKit smoke, companion integration and signed full-only update round trip |
 | `mobile` | iPhone and iPad package/app/UI tests on disposable simulators |
-| `images` | amd64/arm64 workspace and Executor images, isolation, native helpers, permissions/cancellation and vulnerability inventory |
+| `images` | amd64/arm64 Executor image, the deprecated workspace image, isolation, native helpers, permissions/cancellation, and vulnerability inventory |
 | `all` (default) | All portable suites plus every platform check above |
 
 For example, `gh workflow run validation.yml --ref BRANCH -f scope=desktop`

@@ -167,6 +167,7 @@ with your own account.
 
 ## iOS
 
-The iOS app is coming soon. When it is available, Pi Durable on iOS will support
+The iPhone app is not available on the App Store; it is still in development
+and coming to TestFlight soon. When it is available, Pi Durable on iOS will support
 one subscription connection per provider (ChatGPT, Claude, and Grok) per device,
 and multiple API-key connections.

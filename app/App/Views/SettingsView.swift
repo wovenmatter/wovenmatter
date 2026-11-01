@@ -211,7 +211,7 @@ struct SettingsView: View {
                     action: { section = .harness(.grokBuild, nil, .landing) }
                 )
                 SettingsDestinationRow(
-                    title: "Open Code",
+                    title: "OpenCode",
                     detail: "Agent names and connections.",
                     icon: { DashboardHarnessLogoIcon(logo: .openCode, size: 15) },
                     action: { section = .openCode }

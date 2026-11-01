@@ -42,7 +42,9 @@ and evidence in historical audits rather than presenting them as current tests.
 - Do not include credentials, provider transcripts, personal paths, private
   hosts, generated build products, or proprietary assets.
 - Keep the local app useful without a remote machine.
-- Keep one remote container equal to one complete workspace, not one agent.
+- Keep one native Linux workspace per host and SSH account. Its harnesses share
+  that account's systemd user service; do not model a remote agent as its own
+  container.
 - Do not bundle third-party harness CLIs or ACP adapters.
 
 ## Validate
@@ -53,11 +55,17 @@ Run:
 scripts/test-changes.sh --all
 ```
 
-When remote container behavior changes and Docker is available, also run:
+That command includes provider-free checks for native Linux hosts:
+`scripts/test-remote-host.sh` and `scripts/test-remote-workspace.sh`.
+They do not need Docker or a live machine. To check a workspace already
+installed on a Linux host, follow
+[Native host validation](docs/reference/REMOTE_HOST_VALIDATION.md).
 
-```sh
-scripts/test-container.sh
-```
+Docker is not required for remote workspaces. It is used by the separate
+Executor image. When that image changes and Docker is available, the manual
+validation `images` scope builds `remote/Executor.Dockerfile` and runs
+`scripts/test-support/test-executor-image.sh`. Provider-free Executor
+deployment fixtures already run inside `scripts/test-changes.sh`.
 
 Tests must be deterministic, need no provider credentials, and make no real LLM
 calls. Describe any platform or environment limitation in the pull request.
@@ -65,8 +73,8 @@ Continuous integration runs the same repository-owned validation without
 provider, release, deployment, or signing credentials.
 
 Dependency updates are reviewed and opened deliberately by maintainers. Check
-the container base-image digest and harness catalog sources as part of that
-manual review.
+harness catalog sources and the Linux Node archive checksums in
+`remote/host/runtime-versions.json` as part of that manual review.
 
 See `docs/MAINTAINER_WORKFLOW.md` for the validation contract and environment
 boundaries.

@@ -14,7 +14,7 @@ motion or interaction changes. Delete this section when it does not apply.
 ## Validation
 
 - [ ] I ran the relevant `scripts/test-changes.sh` validation (`--all` across application, package, harness, remote, or build-system boundaries)
-- [ ] I ran `scripts/test-container.sh` when container behavior changed
+- [ ] Remote host changes include the provider-free native host fixtures; an installed Linux host was checked when one was available
 - [ ] No provider-consuming or credential-dependent tests were added
 
 ## Review notes

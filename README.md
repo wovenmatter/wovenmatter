@@ -1,10 +1,9 @@
 # Woven Matter
 
-**One local Mac workspace for your AI agents.**
-
-Run Pi Durable, Codex, Claude Code, Grok Build, and OpenCode side by side.
-Keep your conversations, notes, and reference material together while choosing
-the harness and model that fit each task.
+People already using Codex, Claude Code, or a similar agent are stuck in one
+vendor's app. Woven Matter lets you keep the installs and accounts you already
+have and pick a different harness or model per panel, side by side, in one
+local Mac workspace, instead of switching apps.
 
 [**Download for Mac**](https://wovenmatter.com/download) ·
 [Getting started](docs/guide/getting-started.md) · [Documentation](docs/README.md) ·
@@ -12,19 +11,21 @@ the harness and model that fit each task.
 
 **Apple silicon · macOS 26 or later · Free and MIT licensed**
 
+The iPhone app is not available on the App Store; it is still in development
+and coming to TestFlight soon.
+
 No Woven Matter account required. Bring your own AI subscriptions or API keys;
-provider charges still apply. **iOS is coming soon.**
+provider charges still apply.
 
 ![Woven Matter with Pi Durable, Claude Code, and Codex conversations open in three panels](docs/assets/screenshots/workspace.png)
 
-*The desktop app with fictional demo conversations. Green theme, light appearance.*
+*The desktop app with fictional demo conversations. Light gray appearance.*
 
 ## Your work, across agents
 
-For people who already use AI agents for research, analysis, writing, and code,
-Woven Matter puts those tools in a shared desktop workspace. Work in ordinary
-project folders, compare answers in separate panels, and return to saved work
-without keeping track of which vendor's app you used.
+Use Woven Matter for research, analysis, writing, and code. Work in ordinary
+project folders, compare answers in separate panels, and return to saved
+conversations and notes in the same workspace.
 
 | Harness | Getting connected |
 | --- | --- |

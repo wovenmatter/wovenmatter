@@ -1,7 +1,9 @@
 # Woven Matter documentation
 
 Woven Matter is a Mac workspace for Pi Durable, Codex, Claude Code, Grok Build,
-and OpenCode. Start locally, then add a Linux host if you need one. iOS is coming soon.
+and OpenCode. Start locally, then add a Linux host if you need one. The iPhone
+app is not available on the App Store; it is still in development and coming to
+TestFlight soon.
 
 ## Get started
 

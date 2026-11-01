@@ -10,7 +10,8 @@ A **harness** is the software that runs the agent. Settings also calls it a
 
 ![The desktop Settings list with all five harnesses](../assets/screenshots/harness-settings.png)
 
-*Settings in an isolated demo workspace. iOS is coming soon.*
+*Settings in an isolated demo workspace. The iPhone app is not available on the
+App Store; it is still in development and coming to TestFlight soon.*
 
 ## Set up a harness
 

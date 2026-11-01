@@ -19,7 +19,7 @@ The app is `Woven Matter OpenCode Dev.app` under that cache's `DerivedData/Build
    **Hide/Show** controls. The server settings page may show **Download** when
    the local CLI is missing.
 2. Confirm installed OpenCode appears in the sidebar without an Enable step. Open its runtime **Settings**, or choose the local
-   workspace from **Settings → Open Code**. **Connect** reuses the standard local
+   workspace from **Settings → OpenCode**. **Connect** reuses the standard local
    service or starts it if absent. **Open in browser** opens that service without
    a manual sign-in prompt. Configure provider accounts in OpenCode itself.
 3. Use New chat → OpenCode. The session must use the Woven Matter workspace root (`~/.woven-matter` by default). The default model must appear before the first message.

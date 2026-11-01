@@ -1,8 +1,9 @@
 # Getting started
 
-Woven Matter runs on Apple silicon Macs with macOS 26 or later. An iOS app is
-coming soon. Download the
-DMG from [GitHub Releases](https://github.com/wovenmatter/wovenmatter/releases/latest),
+Woven Matter runs on Apple silicon Macs with macOS 26 or later. The iPhone app
+is not available on the App Store; it is still in development and coming to
+TestFlight soon. Download the DMG from
+[GitHub Releases](https://github.com/wovenmatter/wovenmatter/releases/latest),
 open it, and move the app into Applications.
 
 No Woven Matter account is required. Start with a harness you already use and
