@@ -170,6 +170,10 @@ struct FederatedExecutionFlowTests {
     let batch = CompanionJournalBatch(libraryID: fixture.libraryID, entries: entries)
     let source = RecordedExecutionSource(workspace: workspace, entries: entries)
     for client in [phone, mac] {
+      // As paired clients do, learn the workspace from central's registry before
+      // connecting to it directly: a host's own report is not trusted identity.
+      try await MobileSyncEngine(store: client.store, transport: client.transport).synchronize()
+      #expect(await client.store.journal.snapshot().workspaces[workspace.id] == workspace)
       try await WorkspaceClient(store: client.store, workspaceID: workspace.id, transport: source).refresh()
       #expect(await client.store.snapshot().transcripts[conversationID]?.messages == [message])
       // Reproduce a previous-build cache whose foreign records were marked pending.
