@@ -91,6 +91,13 @@ public enum RuntimeMaintenance {
                     installed: engineVersion, latest: nil, package: nil, required: true,
                     present: present, verified: engineVersion != nil))
             }
+            if let minimum = definition.minimumProtocolSDKVersion {
+                let sdk = root.flatMap { dependencyRoot(from: $0, name: "@agentclientprotocol/sdk") }
+                let installed = sdk.flatMap { packageVersion(at: $0) }
+                components.append(RuntimeComponent(name: "Bundled ACP SDK", executable: nil,
+                    installed: installed, latest: checkLatest ? try? await registryVersion("@agentclientprotocol/sdk", executableRequired: false, fetch: fetch) : minimum,
+                    package: "@agentclientprotocol/sdk", required: true, present: sdk != nil, verified: installed != nil))
+            }
             if let cliName = definition.underlyingCLIName {
                 let cli = resolver.executable(named: cliName)
                 let cliPackage = kind == .codex ? "@openai/codex" : "@anthropic-ai/claude-code"

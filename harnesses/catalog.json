@@ -52,7 +52,8 @@
         "permissions",
         "attachments"
       ],
-      "minimumEngineVersion": "0.166.0"
+      "minimumEngineVersion": "0.166.0",
+      "minimumProtocolSDKVersion": "2.2.0"
     },
     {
       "id": "claude_code",
@@ -107,7 +108,8 @@
         "permissions",
         "attachments"
       ],
-      "minimumEngineVersion": "0.3.316"
+      "minimumEngineVersion": "0.3.316",
+      "minimumProtocolSDKVersion": "2.2.0"
     },
     {
       "id": "grok_build",

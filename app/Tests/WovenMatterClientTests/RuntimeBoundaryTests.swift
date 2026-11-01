@@ -299,7 +299,7 @@ private final class SSHRecorder: @unchecked Sendable {
 }
 
 extension RuntimeBoundaryTests {
-  @Test("adapter installation selects its engine independently before staging")
+  @Test("adapter installation selects engine and protocol SDK independently before staging")
   func independentEngineInstall() async throws {
     let fixture = try TemporaryDirectory(prefix: "woven-independent-engine")
     defer { fixture.remove() }
@@ -318,6 +318,9 @@ extension RuntimeBoundaryTests {
       """.utf8).write(to: node)
     for path in [node, npm] { try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: path.path) }
     let installer = LocalACPRuntimeInstaller(installPrefix: prefix, npmExecutableURL: npm, metadataFetcher: { url in
+      if url.absoluteString.contains("@agentclientprotocol%2fsdk") {
+        return Data(#"{"dist-tags":{"latest":"2.1.0"},"versions":{"2.1.0":{},"2.2.0":{},"2.3.0":{"deprecated":"withdrawn"},"3.0.0-beta.1":{}}}"#.utf8)
+      }
       #expect(url.absoluteString.contains("@openai%2fcodex"))
       return Data(#"{"dist-tags":{"latest":"0.165.0"},"versions":{"0.165.0":{},"0.166.0":{}}}"#.utf8)
     })
@@ -327,6 +330,7 @@ extension RuntimeBoundaryTests {
     #expect(arguments[0].hasSuffix("harnesses/install-adapter.mjs"))
     let selection = try #require(JSONSerialization.jsonObject(with: Data(arguments[1].utf8)) as? [String: Any])
     #expect(selection["engineVersion"] as? String == "0.166.0")
+    #expect(selection["protocolSDKVersion"] as? String == "2.2.0")
     #expect(selection["adapterVersion"] as? String == "2.5.0")
     #expect(selection["npm"] as? [String] == [npm.path])
     #expect(executable == prefix.appending(path: "bin/codex-acp"))

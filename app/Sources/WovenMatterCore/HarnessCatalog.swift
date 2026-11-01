@@ -52,6 +52,7 @@ public struct HarnessDefinition: Codable, Equatable, Identifiable, Sendable {
   public let adapterPackage: String?
   public let minimumAdapterVersion: String?
   public let minimumEngineVersion: String?
+  public let minimumProtocolSDKVersion: String?
   public let transportCheckCommand: String?
   public let install: Installation
   public let authentication: Authentication

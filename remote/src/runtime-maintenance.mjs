@@ -172,6 +172,12 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
       const result = engine ? await run(`${quote(engine)} --version`) : null
       components.push({ id: 'bundled', displayName: 'Bundled ' + dependency, path: engine, source: main.source, installedVersion: normalizedVersion(object?.version), latestVersion: null, required: true, installed: Boolean(object?.version && result?.code === 0 && normalizedVersion(result.output)) })
       if (h.id === 'claude_code') components.push({ id: 'engine', displayName: 'Bundled Claude Code', path: engine, source: main.source, installedVersion: normalizedVersion(result?.output), latestVersion: null, required: true, installed: result?.code === 0 && Boolean(normalizedVersion(result.output)) })
+      if (h.minimumProtocolSDKVersion) {
+        const sdk = root ? await packageRoot(root, '@agentclientprotocol/sdk', true) : null
+        const version = sdk ? normalizedVersion((await packageAt(sdk))?.version) : null
+        components.push({ id: 'protocol-sdk', displayName: 'Bundled ACP SDK', path: sdk, source: main.source,
+          installedVersion: version, latestVersion: null, required: true, installed: version !== null })
+      }
       const key = h.id === 'codex' ? 'CODEX_PATH' : 'CLAUDE_CODE_EXECUTABLE'
       if (environment()[key]) components.push(await component('override', key + ' override', environment()[key]))
     }
@@ -187,6 +193,8 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
       if (h.adapterPackage) {
         components[1].latestVersion = await latest(h.id === 'codex' ? '@openai/codex' : '@anthropic-ai/claude-code')
         const bundled = components.find(c => c.id === 'bundled')
+        const sdk = components.find(c => c.id === 'protocol-sdk')
+        if (sdk) sdk.latestVersion = await latest('@agentclientprotocol/sdk')
         bundled.latestVersion = await latest(dependencyName)
         bundled.updateTargetVersion = h.minimumEngineVersion ? bundled.latestVersion : null
         // npm performs the semver selection using the adapter's declared dependency
@@ -197,7 +205,7 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
         }
       }
     } else for (const c of components) { const cached = previous.find(p => p.id === c.id); c.latestVersion = cached?.latestVersion ?? null; if (c.id === 'bundled') c.updateTargetVersion = cached?.updateTargetVersion ?? null }
-    if (checkLatest) s.versionCheckAvailable = components.filter(c => ['runtime', 'signin', 'bundled'].includes(c.id)).every(c => c.latestVersion !== null && (c.id !== 'bundled' || c.updateTargetVersion !== null))
+    if (checkLatest) s.versionCheckAvailable = components.filter(c => ['runtime', 'signin', 'bundled', 'protocol-sdk'].includes(c.id)).every(c => c.latestVersion !== null && (c.id !== 'bundled' || c.updateTargetVersion !== null))
     for (const c of components) c.updateAvailable = c.source !== 'system' && precedes(c.installedVersion, updateTarget(c))
     s.components = components
     const storedOperation = operations.get(h.id) ?? null
@@ -257,6 +265,11 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
       adapterVersion: spec.slice(h.adapterPackage.length + 1), engineVersion,
       npm: configuration.runtimeKind === 'host'
         ? [process.execPath, resolve(configuration.serviceRoot, 'tooling/lib/node_modules/npm/bin/npm-cli.js')] : ['npm'] }
+    if (h.minimumProtocolSDKVersion) {
+      const sdk = await latest('@agentclientprotocol/sdk')
+      if (!sdk || precedes(sdk, h.minimumProtocolSDKVersion)) throw failure('latest_protocol_sdk_version_unavailable')
+      selection.protocolSDKVersion = sdk
+    }
     return `${quote(process.execPath)} ${quote(script)} ${quote(JSON.stringify(selection))}`
   }
   async function protectInstallDestination(command, component) {

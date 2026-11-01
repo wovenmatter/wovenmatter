@@ -16,6 +16,7 @@ public struct LocalACPRuntimeDefinition: Equatable, Identifiable, Sendable {
     public let adapterPackage: String?
     public let minimumAdapterVersion: String?
     public let minimumEngineVersion: String?
+    public let minimumProtocolSDKVersion: String?
     public let adapterDescription: String
     public let readinessProbe: LocalACPRuntimeReadinessProbe?
 
@@ -39,6 +40,7 @@ public struct LocalACPRuntimeDefinition: Equatable, Identifiable, Sendable {
         adapterPackage: String?,
         minimumAdapterVersion: String? = nil,
         minimumEngineVersion: String? = nil,
+        minimumProtocolSDKVersion: String? = nil,
         adapterDescription: String,
         readinessProbe: LocalACPRuntimeReadinessProbe? = nil
     ) {
@@ -56,6 +58,7 @@ public struct LocalACPRuntimeDefinition: Equatable, Identifiable, Sendable {
         self.adapterPackage = adapterPackage
         self.minimumAdapterVersion = minimumAdapterVersion
         self.minimumEngineVersion = minimumEngineVersion
+        self.minimumProtocolSDKVersion = minimumProtocolSDKVersion
         self.adapterDescription = adapterDescription
         self.readinessProbe = readinessProbe
     }
@@ -104,6 +107,7 @@ public enum LocalACPRuntimeCatalog {
                 adapterPackage: harness.adapterPackage,
                 minimumAdapterVersion: harness.minimumAdapterVersion,
                 minimumEngineVersion: harness.minimumEngineVersion,
+                minimumProtocolSDKVersion: harness.minimumProtocolSDKVersion,
                 adapterDescription: "Woven Matter uses \(harness.transport) transport for \(harness.displayName)."
             )
         }
