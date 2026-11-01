@@ -1,10 +1,11 @@
 import Foundation
 
 public enum QuickChatSearchError: Error, LocalizedError {
-  case unconfigured, invalidQuery, invalidURL, failed, responseTooLarge
+  case unconfigured, permissionRequired, invalidQuery, invalidURL, failed, responseTooLarge
   public var errorDescription: String? {
     switch self {
     case .unconfigured: "Add an Exa API key in Settings → Quick Chat → Web search."
+    case .permissionRequired: "Web search needs your permission to send queries and webpage addresses to Exa. Nothing was sent."
     case .invalidQuery: "Enter a search query shorter than 4,000 characters."
     case .invalidURL: "Choose a public HTTP or HTTPS webpage."
     case .failed: "Web search failed. Check the search connection and available credits."
@@ -19,8 +20,10 @@ public struct QuickChatWebSearch: Sendable {
   public static let credentialID = "quick-chat-exa"
   private let credentials: any InferenceCredentialReading
   private let transport: any InferenceHTTPTransport
-  public init(credentials: any InferenceCredentialReading, transport: any InferenceHTTPTransport = InferenceURLSessionTransport()) {
-    self.credentials = credentials; self.transport = transport
+  private let sharing: any DataSharingAuthorizing
+  public init(credentials: any InferenceCredentialReading, transport: any InferenceHTTPTransport = InferenceURLSessionTransport(),
+              sharing: any DataSharingAuthorizing = DataSharingPolicy.denied) {
+    self.credentials = credentials; self.transport = transport; self.sharing = sharing
   }
   public func search(_ query: String) async throws -> String {
     let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -38,12 +41,14 @@ public struct QuickChatWebSearch: Sendable {
     return try await lookup(path: "contents", parameters: ["urls": [url.absoluteString], "text": ["maxCharacters": 16_000]])
   }
   private func lookup(path: String, parameters: [String: Any]) async throws -> String {
+    guard await sharing.permits(.exa) else { throw QuickChatSearchError.permissionRequired }
     guard let key = try await credentials.read(connectionID: Self.credentialID), !key.isEmpty else { throw QuickChatSearchError.unconfigured }
     var request = URLRequest(url: URL(string: "https://api.exa.ai/" + path)!)
     request.httpMethod = "POST"; request.timeoutInterval = 30
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     request.setValue(key, forHTTPHeaderField: "x-api-key")
     request.httpBody = try JSONSerialization.data(withJSONObject: parameters)
+    guard (try? await DataSharingPolicy.authorize(request, as: .exa, using: sharing)) != nil else { throw QuickChatSearchError.permissionRequired }
     var body = "", successful = false
     do {
       for try await event in try await transport.stream(request) {
@@ -69,5 +74,35 @@ public struct QuickChatWebSearch: Sendable {
     } catch is CancellationError { throw CancellationError() }
     catch let error as QuickChatSearchError { throw error }
     catch { throw QuickChatSearchError.failed }
+  }
+}
+
+/// Distinguishes pages the user chose from addresses composed by the model. A page
+/// named in the user's own messages or returned by a search in the same chat is
+/// expected; any other address may carry note contents to an outside server, so
+/// Ask mode shows the exact address for approval before Exa fetches it.
+public enum QuickChatWebReadProvenance {
+  public static func isExpected(_ address: String, userMessages: [String], searchResults: Set<String>) -> Bool {
+    guard let target = normalized(address) else { return false }
+    if searchResults.contains(where: { normalized($0) == target }) { return true }
+    return userMessages.contains { message in links(in: message).contains { normalized($0) == target } }
+  }
+  /// URLs returned by `QuickChatWebSearch.search`.
+  public static func resultURLs(_ output: String) -> Set<String> {
+    guard let object = try? JSONSerialization.jsonObject(with: Data(output.utf8)) as? [String: Any],
+      let results = object["results"] as? [[String: Any]] else { return [] }
+    return Set(results.compactMap { $0["url"] as? String })
+  }
+  static func links(in text: String) -> [String] {
+    guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else { return [] }
+    return detector.matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap { $0.url?.absoluteString }
+  }
+  /// Scheme and host compare case-insensitively; path, query and fragment must match exactly.
+  static func normalized(_ address: String) -> String? {
+    guard var components = URLComponents(string: address.trimmingCharacters(in: .whitespacesAndNewlines)),
+      let scheme = components.scheme?.lowercased(), ["http", "https"].contains(scheme), let host = components.host?.lowercased() else { return nil }
+    components.scheme = scheme; components.host = host
+    if components.path.isEmpty { components.path = "/" }
+    return components.string
   }
 }

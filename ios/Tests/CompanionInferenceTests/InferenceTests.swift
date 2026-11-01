@@ -122,7 +122,8 @@ final class InferenceTests: XCTestCase {
   func testAdapterPreservesExactAccountScopeAndDoesNotForwardProviderKeys() async throws {
     let connection = InferenceConnection(id: "adapter", name: "Host", provider: "openai-codex", accountID: "account-b", route: .adapter, baseURL: "https://host.example.ts.net", modelID: "m", hostScope: .init(libraryID: "library", workspaceID: "workspace", deviceID: "phone", protocolVersion: 3))
     let transport = FixtureTransport([.response(200), .line("{\"type\":\"done\",\"reason\":\"stop\",\"message\":{\"content\":[]}}")])
-    let service = CompanionInferenceService(connection: connection, credentials: TestCredentials(), transport: transport, model: model)
+    let service = CompanionInferenceService(connection: connection, credentials: TestCredentials(), transport: transport, model: model,
+      sharing: DataSharingPolicy { $0 == DataSharingDestination(service: .inference, provider: "openai-codex", origin: "https://host.example.ts.net") })
     try await service.stream(requestJSON: "{\"model\":{\"id\":\"m\",\"provider\":\"openai-codex\"},\"context\":{\"messages\":[]},\"scope\":{\"conversationID\":\"c\",\"requestID\":\"c:task\"}}", emit: { _ in })
     let requests = await transport.requests, request = try XCTUnwrap(requests.first)
     let body = try XCTUnwrap(try JSONSerialization.jsonObject(with: XCTUnwrap(request.httpBody)) as? InferenceObject)

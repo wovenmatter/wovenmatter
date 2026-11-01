@@ -16,8 +16,13 @@ then physical devices and real network transitions.
    and check that the workspace's new folder and history appear there.
 4. Verify the user's existing Quick Chat provider connections, an explicit note
    reference, a note edit, dictation and optional configured web search. Confirm
-   the modest Notes/Web tools and absence of repository or shell tools.
-5. Disconnect the network. Create/edit a note, exercise undo/redo and the
+   the modest Notes/Web tools and absence of repository or shell tools. The first
+   send to each provider shows the data-sharing sheet; Don’t Allow keeps the
+   draft and sends nothing. The first web search asks about Exa. Settings → Data
+   sharing lists both. Stop sharing makes the next send ask again.
+5. Disconnect the network. Create/edit a note: type a heading, press Return and
+   continue in body text, leave a list with Return on an empty item, and join
+   paragraphs with Delete. Exercise undo/redo and the
    word/character count, then terminate/reopen. Reconnect and check moderate sync
    and preservation of any concurrent edits. Tools belong above the title; the
    title leads directly into the body, with save details in the footer.

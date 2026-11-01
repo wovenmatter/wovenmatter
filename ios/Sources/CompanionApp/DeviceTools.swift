@@ -33,8 +33,16 @@ extension CompanionModel {
       return try await performDeviceMCP(name: name, arguments: input.objectValue ?? [:],
         conversationID: conversationID, requestID: toolCallID)
     }
-    if name == "web_search" { return try await performQuickChatSearch(arguments, conversationID: conversationID) }
-    if name == "web_read" { return try await performQuickChatSearch(arguments, conversationID: conversationID, reading: true) }
+    if name == "web_search" || name == "web_read" {
+      guard !fixture, !isolatedTestHost, try await executionCredentialStore.read(connectionID: QuickChatWebSearch.credentialID) != nil
+      else { throw QuickChatSearchError.unconfigured }
+      try await confirmExaSharing(conversationID: conversationID, toolCallID: toolCallID)
+      if name == "web_read", let address = arguments["url"] as? String, !quickChatWebReadExpected(address, conversationID: conversationID) {
+        try await requireDeviceApproval(id: toolCallID, conversationID: conversationID, title: "Read this webpage?",
+          detail: "Quick Chat chose an address that you didn’t provide and no search returned. Exa will fetch exactly:\n" + address)
+      }
+      return try await performQuickChatSearch(arguments, conversationID: conversationID, reading: name == "web_read")
+    }
     let output: String
     switch name {
     case "ask_user":

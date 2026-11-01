@@ -6,4 +6,5 @@
   <key>teamID</key><string>3M84Q9NAMN</string>
   <key>signingStyle</key><string>automatic</string>
   <key>uploadSymbols</key><true/>
+  <key>manageAppVersionAndBuildNumber</key><false/>
 </dict></plist>

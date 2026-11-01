@@ -116,6 +116,7 @@ struct CompanionShell: View {
       if tab != .chat && tab != .note { MobileDictation.shared.stop() }
     }
     .sheet(isPresented: $model.chatChooserPresented, onDismiss: { model.newChatNoteID = nil }) { NewChatChooser(model: model).environment(\.dashboardTheme, theme) }
+    .sheet(item: $model.dataSharingRequest) { request in DataSharingConsentSheet(model: model, request: request).environment(\.dashboardTheme, theme) }
     .scrollIndicators(.never)
     .foregroundStyle(DashboardPalette.foreground).tint(theme.palette.themeAccent)
     .background(theme.palette.workspace)
@@ -501,6 +502,8 @@ struct CompanionSettingsPane: View {
           SettingsNavigationRow(title: "General", icon: .settings) { GeneralSettingsPane(model: model) }
           SettingsNavigationRow(title: "Dictation", icon: .mic) { DictationHistoryPane(model: model) }
           SettingsNavigationRow(title: "Quick Chat", icon: .bot) { DeviceAgentSettingsPane(model: model) }
+          SettingsNavigationRow(title: "Data sharing", icon: .keyRound) { DataSharingSettingsPane(model: model) }
+            .accessibilityIdentifier("settings-data-sharing")
           SettingsNavigationRow(title: model.deviceConnectionsTitle, icon: .plug) { ExecutionSettingsPane(model: model) }
           SettingsNavigationRow(title: "Device Connections", icon: .monitor) { PairingPane(model: model) }
           SettingsNavigationRow(title: "Workspaces", icon: .container) { WorkspacesSettingsPane(model: model) }

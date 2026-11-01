@@ -19,10 +19,14 @@ public actor CompanionInferenceService {
   private let credentials: any InferenceCredentialReading
   private let transport: any InferenceHTTPTransport
   private let oauthResolver: InferenceOAuthCredentialResolver
+  private let sharing: any DataSharingAuthorizing
+  /// `sharing` defaults to denial: conversation content leaves only with the user's saved permission.
   public init(connection: InferenceConnection, credentials: any InferenceCredentialReading = InferenceCredentialStore(),
-              transport: any InferenceHTTPTransport = InferenceURLSessionTransport(), catalogLoader: ProviderModelCatalog = .shared, model: InferenceModel? = nil, oauthResolver: InferenceOAuthCredentialResolver = .shared) {
+              transport: any InferenceHTTPTransport = InferenceURLSessionTransport(), catalogLoader: ProviderModelCatalog = .shared, model: InferenceModel? = nil, oauthResolver: InferenceOAuthCredentialResolver = .shared,
+              sharing: any DataSharingAuthorizing = DataSharingPolicy.denied) {
     self.connection = connection; self.credentials = credentials; self.transport = transport
     self.catalogLoader = catalogLoader; self.pinnedModel = model ?? connection.selectedModel; self.oauthResolver = oauthResolver
+    self.sharing = sharing
   }
   public func model() async throws -> InferenceModel {
     try connection.validate()
@@ -76,6 +80,9 @@ public actor CompanionInferenceService {
     guard requested["id"] as? String == connection.modelID, requested["provider"] as? String == connection.provider else { throw InferenceError.modelUnavailable }
     // Validate the pinned routing metadata before even reading the credential.
     let selected = connection.route == .direct ? try await model() : nil
+    // Check permission before credential refresh or any request; denial sends nothing.
+    guard let destination = DataSharingDestination.inference(connection, model: selected) else { throw InferenceError.invalidEndpoint }
+    guard await sharing.permits(destination) else { throw DataSharingError.permissionRequired(destination) }
     let oauth = connection.route == .direct && InferenceOAuthSession.supports(connection.provider)
       ? try await oauthResolver.resolve(connection: connection, credentials: credentials) : nil
     let secret: String
@@ -90,6 +97,7 @@ public actor CompanionInferenceService {
       request.setValue("application/x-ndjson", forHTTPHeaderField: "Accept")
       request.httpBody = try JSONSerialization.data(withJSONObject: input)
       applyHostScope(to: &request)
+      try await DataSharingPolicy.authorize(request, as: destination, using: sharing)
       var terminal = false
       for try await event in try await transport.stream(request) {
         try Task.checkCancellation()
@@ -112,6 +120,7 @@ public actor CompanionInferenceService {
       var route = connection
       route.id = SHA256.hash(data: Data([connection.id, connection.provider, connection.modelID, oauth?.bindingID ?? secret].joined(separator: "\u{0}").utf8)).map { String(format: "%02x", $0) }.joined()
       let request = try InferenceRequestBuilder(connection: route, model: selected).request(input, secret: secret, accountID: oauth?.accountID)
+      try await DataSharingPolicy.authorize(request, as: destination, using: sharing)
       let decoder = InferenceStreamDecoder(model: selected, connectionID: route.id, emit: emit)
       var payload = [String]()
       for try await event in try await transport.stream(request) {

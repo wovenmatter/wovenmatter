@@ -293,7 +293,7 @@ final class InferenceOAuthTests: XCTestCase {
       let saved = try credential(provider), store = OAuthMemoryStore(["fixture-key": try saved.serialized()]), clock = OAuthClock()
       let auth = OAuthFixture([]), resolver = InferenceOAuthCredentialResolver(transport: auth, now: { clock.now() })
       let lines = provider == "claude-subscription" ? ["{\"type\":\"message_start\",\"message\":{\"id\":\"fixture\",\"usage\":{}}}", "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}", "{\"type\":\"message_stop\"}"] : ["{\"type\":\"\(provider == "openai-codex" ? "response.done" : "response.completed")\",\"response\":{\"status\":\"completed\",\"output\":[],\"usage\":{}}}"]
-      let modelTransport = OAuthModelTransport(lines), service = CompanionInferenceService(connection: connection(provider), credentials: store, transport: modelTransport, model: model(provider), oauthResolver: resolver), capture = OAuthEventCapture()
+      let modelTransport = OAuthModelTransport(lines), service = CompanionInferenceService(connection: connection(provider), credentials: store, transport: modelTransport, model: model(provider), oauthResolver: resolver, sharing: DataSharingPolicy { _ in true }), capture = OAuthEventCapture()
       let input: InferenceObject = ["model": ["id": "fixture-model", "provider": provider], "options": ["temperature": 0.5, "sessionId": "private-conversation-id"], "context": ["systemPrompt": "Woven Matter native agent", "tools": [["name": "read_image", "parameters": ["type": "object"]]], "messages": [["role": "user", "content": "hello"]]]]
       try await service.stream(requestJSON: inferenceJSONString(input), emit: capture.append)
       let requests = await modelTransport.requests, authRequests = await auth.requests
@@ -332,12 +332,12 @@ final class InferenceOAuthTests: XCTestCase {
     for (raw, accountID) in cases {
       let store = OAuthMemoryStore(["fixture-key": raw]), transport = OAuthModelTransport([])
       var connection = connection(); connection.accountID = accountID
-      let service = CompanionInferenceService(connection: connection, credentials: store, transport: transport, model: model("openai-codex"), oauthResolver: resolver)
+      let service = CompanionInferenceService(connection: connection, credentials: store, transport: transport, model: model("openai-codex"), oauthResolver: resolver, sharing: DataSharingPolicy { _ in true })
       do { try await service.stream(requestJSON: "{\"model\":{\"id\":\"fixture-model\",\"provider\":\"openai-codex\"},\"context\":{\"messages\":[]}}", emit: { _ in }); XCTFail("Wrong credential accepted") } catch {}
       let requests = await transport.requests; XCTAssertTrue(requests.isEmpty)
     }
     var foreign = model("openai-codex"); foreign.baseUrl = "https://foreign.invalid"
-    let store = OAuthMemoryStore(), transport = OAuthModelTransport([]), service = CompanionInferenceService(connection: connection(), credentials: store, transport: transport, model: foreign, oauthResolver: resolver)
+    let store = OAuthMemoryStore(), transport = OAuthModelTransport([]), service = CompanionInferenceService(connection: connection(), credentials: store, transport: transport, model: foreign, oauthResolver: resolver, sharing: DataSharingPolicy { _ in true })
     do { try await service.stream(requestJSON: "{\"model\":{\"id\":\"fixture-model\",\"provider\":\"openai-codex\"}}", emit: { _ in }); XCTFail("Foreign endpoint accepted") } catch {}
     let reads = await store.reads, requests = await auth.requests; XCTAssertEqual(reads, 0); XCTAssertTrue(requests.isEmpty)
   }

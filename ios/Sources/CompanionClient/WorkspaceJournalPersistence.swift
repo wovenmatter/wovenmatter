@@ -38,9 +38,11 @@ enum WorkspaceJournalPersistence {
     guard index.count <= 256 * 1_024 * 1_024 - bytes else { throw WorkspaceJournal.Failure.storageFull }
     for (reference, data) in pending {
       let blob = directory(file).appendingPathComponent(reference)
-      if !FileManager.default.fileExists(atPath: blob.path) { try MobileStorePersistence.writeDurably(data, at: blob) }
+      if !FileManager.default.fileExists(atPath: blob.path) { try MobileStorePersistence.writeDurably(data, at: blob, backup: .include) }
     }
-    try MobileStorePersistence.writeDurably(index, at: file)
+    // Phone-origin history has no other copy until central accepts it; keep it in backups.
+    for reference in pending.keys { try MobileStorePersistence.applyBackupIfChanged(.include, at: directory(file).appendingPathComponent(reference)) }
+    try MobileStorePersistence.writeDurably(index, at: file, backup: .include)
     // Crashes can leave unreferenced bodies; they never remove a live record.
     // History retention/compaction is explicit, not part of cache eviction.
   }

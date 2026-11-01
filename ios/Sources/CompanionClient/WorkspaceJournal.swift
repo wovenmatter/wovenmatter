@@ -168,6 +168,28 @@ public actor WorkspaceJournal {
       else { next.pendingRegistrations.remove(workspace.id); next.centralWorkspaceRevisions[workspace.id] = workspace.revision }
     }
   }
+  /// A host's self-report may refresh its name and capabilities and supply a content
+  /// alias the registry has not recorded yet. Ownership, routing, endpoint and the
+  /// central-confirmed revision stay as recorded, and an alias that already names
+  /// another registered workspace or a reserved identity (this device) is ignored.
+  @discardableResult public func refreshReportedDetails(_ reported: CompanionExecutionWorkspace, reservedIDs: Set<String>) throws -> CompanionExecutionWorkspace? {
+    var result: CompanionExecutionWorkspace?
+    try transaction { next in
+      guard var current = next.workspaces[reported.id], current.libraryID == reported.libraryID, current.revision <= reported.revision else {
+        result = next.workspaces[reported.id]; return
+      }
+      current.name = reported.name; current.capabilities = reported.capabilities
+      if current.contentWorkspaceID == nil, let alias = reported.contentWorkspaceID {
+        let claimed = CompanionWorkspaceIdentity.canonicalID(alias)
+        let taken = reservedIDs.map(CompanionWorkspaceIdentity.canonicalID).contains(claimed) || next.workspaces.values.contains { other in
+          other.id != current.id && [other.id, other.contentWorkspaceID, other.executionDeviceID].compactMap { $0 }.map(CompanionWorkspaceIdentity.canonicalID).contains(claimed)
+        }
+        if !taken { current.contentWorkspaceID = alias }
+      }
+      next.workspaces[reported.id] = current; result = current
+    }
+    return result
+  }
   public func mergeRegistry(_ workspaces: [CompanionExecutionWorkspace]) throws {
     for workspace in workspaces where !state.pendingRegistrations.contains(workspace.id) { try upsertWorkspace(workspace, pending: false) }
   }
@@ -510,12 +532,15 @@ public actor WorkspaceClient {
     guard workspace.id == workspaceID, !workspace.deleted else { throw MobileStore.Failure.wrongWorkspace }
     centralHistory = workspace.capabilities.contains("history.central.v1")
     if let libraryID = await store.snapshot().workspaceID, libraryID != workspace.libraryID { throw WorkspaceJournal.Failure.wrongLibrary }
-    let saved = await store.journal.snapshot()
-    if saved.workspaces[workspaceID] == nil || (!saved.pendingRegistrations.contains(workspaceID) && (saved.workspaces[workspaceID]?.revision ?? -1) <= workspace.revision && saved.workspaces[workspaceID] != workspace) {
-      let deviceID = await store.snapshot().deviceID
-      try await store.journal.upsertWorkspace(workspace, pending: !centralHistory && WorkspaceJournal.isLocalExecutionOwner(workspace, deviceID: deviceID))
+    let saved = await store.journal.snapshot(), deviceID = await store.snapshot().deviceID
+    guard saved.workspaces[workspaceID] != nil, !saved.pendingRegistrations.contains(workspaceID) else {
+      if saved.workspaces[workspaceID] == nil {
+        try await store.journal.upsertWorkspace(workspace, pending: !centralHistory && WorkspaceJournal.isLocalExecutionOwner(workspace, deviceID: deviceID))
+      }
+      return (await store.journal.snapshot()).workspaces[workspaceID] ?? workspace
     }
-    return workspace
+    // The central registry stays authoritative for identity; see refreshReportedDetails.
+    return try await store.journal.refreshReportedDetails(workspace, reservedIDs: [deviceID]) ?? workspace
   }
   public func startConversation(_ requested: MobileLaunchRecord) async throws -> MobileLaunchRecord {
     if let task = launchTasks[requested.id] { return try await task.value }

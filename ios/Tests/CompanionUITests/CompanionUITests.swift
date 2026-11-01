@@ -372,10 +372,15 @@ final class CompanionUITests: XCTestCase {
     title.typeText(marker)
     XCTAssertTrue(body.waitForExistence(timeout: 5))
     body.tap()
-    let bodyText = "Offline body survives restart.\nSecond line retains the exact writing."
-    body.typeText(bodyText)
-    let writtenBody = body.value as? String
-    XCTAssertEqual(writtenBody?.lowercased(), bodyText.lowercased())
+    // Return starts a second paragraph block; typing continues there.
+    let paragraphs = ["Offline body survives restart.", "Second line retains the exact writing."]
+    body.typeText(paragraphs[0] + "\n")
+    let second = bodyEditors.element(boundBy: 1)
+    XCTAssertTrue(second.waitForExistence(timeout: 5))
+    XCTAssertTrue(waitForKeyboardFocus(second))
+    app.typeText(paragraphs[1])
+    let writtenBody = (0..<2).map { bodyEditors.element(boundBy: $0).value as? String ?? "" }
+    XCTAssertEqual(writtenBody.map { $0.lowercased() }, paragraphs.map { $0.lowercased() })
     XCTAssertFalse(app.buttons["dismiss-keyboard"].exists)
     app.buttons["note-text-count"].tap()
     XCTAssertTrue(app.buttons["tab-home"].waitForExistence(timeout: 5))
@@ -390,9 +395,53 @@ final class CompanionUITests: XCTestCase {
     XCTAssertTrue(reopened.waitForExistence(timeout: 10))
     XCTAssertTrue((reopened.value as? String ?? reopened.label).contains(marker.trimmingCharacters(in: .whitespaces)))
     XCTAssertTrue(app.buttons["note-save-state"].label.contains("Saved on this device"))
-    let restoredBody = app.textViews.matching(NSPredicate(format: "identifier BEGINSWITH 'note-body-editor-' ")).firstMatch
-    XCTAssertTrue(restoredBody.waitForExistence(timeout: 5))
-    XCTAssertEqual(restoredBody.value as? String, writtenBody)
+    let restoredBody = app.textViews.matching(NSPredicate(format: "identifier BEGINSWITH 'note-body-editor-' "))
+    XCTAssertTrue(restoredBody.element(boundBy: 1).waitForExistence(timeout: 5))
+    XCTAssertEqual(restoredBody.count, 2)
+    XCTAssertEqual((0..<2).map { restoredBody.element(boundBy: $0).value as? String ?? "" }, writtenBody)
+  }
+  @MainActor func waitForKeyboardFocus(_ element: XCUIElement) -> Bool {
+    let focused = XCTNSPredicateExpectation(predicate: NSPredicate(format: "hasKeyboardFocus == true"), object: element)
+    return XCTWaiter.wait(for: [focused], timeout: 5) == .completed
+  }
+  @MainActor func testReturnStartsParagraphsAndDeleteJoinsThemWithUndo() {
+    let app = launch()
+    app.buttons["tab-notes"].tap()
+    let editors = app.textViews.matching(NSPredicate(format: "identifier BEGINSWITH 'note-body-editor-' "))
+    XCTAssertTrue(editors.firstMatch.waitForExistence(timeout: 5))
+    let originalEditorID = editors.firstMatch.identifier
+    app.buttons["action-new-note"].tap()
+    let first = editors.firstMatch
+    let created = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+      first.exists && first.identifier != originalEditorID && (first.value as? String ?? "").isEmpty
+    }, object: app)
+    XCTAssertEqual(XCTWaiter.wait(for: [created], timeout: 5), .completed)
+    app.buttons["note-format"].tap()
+    app.buttons["Heading and style"].tap()
+    app.buttons["Heading 1"].tap()
+    first.tap()
+    first.typeText("Plan")
+    first.typeText("\n")
+    let second = editors.element(boundBy: 1)
+    XCTAssertTrue(second.waitForExistence(timeout: 5), "Return creates a paragraph instead of a line inside the heading")
+    XCTAssertTrue(waitForKeyboardFocus(second), "Typing continues in the new paragraph")
+    app.typeText("Details")
+    XCTAssertEqual(first.value as? String, "Plan")
+    XCTAssertEqual(second.value as? String, "Details")
+    let undo = app.buttons["note-undo"], redo = app.buttons["note-redo"]
+    undo.tap()
+    XCTAssertEqual(second.value as? String, "")
+    undo.tap()
+    XCTAssertEqual(editors.count, 1, "Undo removes the paragraph break as one step")
+    XCTAssertEqual(first.value as? String, "Plan")
+    redo.tap()
+    XCTAssertTrue(second.waitForExistence(timeout: 5))
+    second.tap()
+    XCTAssertTrue(waitForKeyboardFocus(second))
+    app.typeText(XCUIKeyboardKey.delete.rawValue)
+    let joined = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in editors.count == 1 }, object: app)
+    XCTAssertEqual(XCTWaiter.wait(for: [joined], timeout: 5), .completed, "Delete at a paragraph start joins it to the previous one")
+    XCTAssertEqual(first.value as? String, "Plan")
   }
   @MainActor func testFolderCanBeCreatedWithoutPairingOrNetwork() {
     let app = launch()

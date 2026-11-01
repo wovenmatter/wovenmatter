@@ -7,10 +7,12 @@ import PiDurableRuntime
 
 enum DevicePermissionMode: String, Codable, CaseIterable {
   case ask, full
-  static let defaultMode: Self = .full
+  /// Asking is the safe default; Allow is an explicit per-chat or default choice.
+  static let defaultMode: Self = .ask
   var label: String { self == .full ? "Allow Note Edits" : "Ask Before Note Edits" }
   var detail: String {
-    self == .full ? "Quick Chat may save note changes using its enabled note tools." : "Ask before Quick Chat saves a note change."
+    self == .full ? "Quick Chat may save note changes and read webpages it chooses, using its enabled tools."
+      : "Ask before Quick Chat saves a note change or reads a webpage you didn’t provide."
   }
 }
 
@@ -300,6 +302,7 @@ extension CompanionModel {
   func loadExecutionConfiguration() async throws {
     guard let executionDirectory else { return }
     try FileManager.default.createDirectory(at: executionDirectory, withIntermediateDirectories: true)
+    loadDataSharing()
     let file = executionDirectory.appendingPathComponent("preferences.json")
     if FileManager.default.fileExists(atPath: file.path) {
       let saved = try JSONDecoder().decode(DeviceExecutionPreferences.self, from: Data(contentsOf: file))
@@ -381,6 +384,8 @@ extension CompanionModel {
     guard !sending, !startingChat, selectedConversationID.map({ !configuringDeviceSessions.contains($0) }) ?? true, executionOnline, activeRunID == nil, !canResumeLocalRun,
           !composer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
     guard let connection = selectedInferenceConnection else { executionSettingsPresented = true; return }
+    // Ask before any state changes: a declined send leaves the draft and saved chat untouched.
+    guard confirmDataSharing(inferenceDestination(for: selectedConversationID, connection: connection), resume: false) else { return }
     let sourceKey = draftKey, text = composer, draft = currentDraft, noteID = referencedNoteID
     let defaults = deviceAgentDefaults
     let chatSettings = draftDeviceSettings
@@ -395,6 +400,8 @@ extension CompanionModel {
       if executionRecords[id] == nil {
         let service = CompanionInferenceService(connection: connection, credentials: executionCredentialStore)
         let model = try await service.model()
+        // The resolved model fixes the endpoint; confirm it before the chat is created.
+        guard confirmDataSharing(.inference(connection, model: model), resume: false) else { return }
         executionRecords[id] = .init(id: id, title: String(text.prefix(80)), folderID: selectedFolderID,
           enabledTools: chatSettings.enabledTools ?? defaults.enabledTools, thinkingLevel: chatSettings.thinkingLevel.flatMap { model.supportedThinkingLevels.contains($0) ? $0 : nil } ?? defaults.thinking(for: model), permissionMode: chatSettings.permissionMode, executionPolicy: defaults.executionPolicy ?? .init(), additionalInstructions: defaults.instructions, connectionID: connection.id, connection: connection, modelJSON: try model.descriptorJSON(), status: "ready", updatedAt: Self.executionTimestamp())
         try persistExecutionConfiguration()
@@ -454,7 +461,8 @@ extension CompanionModel {
           let connection = record.connection ?? inferenceConnections.first(where: { $0.id == record.connectionID }) else { throw InferenceError.missingCredential }
     guard record.quickChatVersion == 1 else { throw DeviceExecutionError.unavailable("This earlier on-device agent chat is saved as history. Start a new Quick Chat to continue.") }
     let pinned = try JSONDecoder().decode(InferenceModel.self, from: Data(record.modelJSON.utf8))
-    let service = CompanionInferenceService(connection: connection, credentials: executionCredentialStore, model: pinned)
+    // Every runtime request, including resumed and tool-driven turns, rechecks the saved decision.
+    let service = CompanionInferenceService(connection: connection, credentials: executionCredentialStore, model: pinned, sharing: dataSharingPolicy)
     let runtime = try PiDurableRuntime(storageDirectory: root.appendingPathComponent("sessions/" + id, isDirectory: true),
       configuration: .init(conversationID: id, modelJSON: record.modelJSON, toolsJSON: try toolsJSON(for: record),
         instructions: Self.instructions(for: record), thinkingLevel: record.thinkingLevel ?? "off", executionPolicy: record.executionPolicy ?? deviceAgentDefaults.executionPolicy ?? .init(), quickChat: true),
@@ -524,6 +532,9 @@ extension CompanionModel {
   func resumeDeviceRun(userInitiated: Bool = true) async {
     guard let id = selectedConversationID, canResumeLocalRun, !sending, !configuringDeviceSessions.contains(id),
           let requestID = executionRecords[id]?.runID else { return }
+    if let record = executionRecords[id], let connection = record.connection ?? inferenceConnections.first(where: { $0.id == record.connectionID }) {
+      guard confirmDataSharing(inferenceDestination(for: id, connection: connection), resume: true) else { return }
+    }
     sending = true; configuringDeviceSessions.insert(id)
     defer { sending = false; configuringDeviceSessions.remove(id) }
     var attemptID: String?

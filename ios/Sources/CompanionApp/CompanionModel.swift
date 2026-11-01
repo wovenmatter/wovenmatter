@@ -125,6 +125,10 @@ import CompanionInference
   var executionDirectory: URL?
   var executionRefreshTasks: [String: Task<Void, Never>] = [:]
   var executionCredentialStore = InferenceCredentialStore()
+  var dataSharing = DataSharingPermissions()
+  var dataSharingRequest: DataSharingRequest?
+  var exaSharingDeclined: Set<String> = []
+  var quickChatSearchResults: [String: Set<String>] = [:]
   var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
   var backgroundFallbackToken: UUID?
   var calendarRevision = 0

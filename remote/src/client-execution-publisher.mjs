@@ -53,6 +53,7 @@ export function createClientExecutionPublisher({ db, identity, secret, events, f
       ...(item.last_success?{lastSuccessAt:item.last_success}:{}),...(item.last_error_code?{lastErrorCode:item.last_error_code}:{})} }
     return {configured:!!value,...(value?{grantID:value.grantID}:{}),acknowledgedOriginSequence:row?.acknowledged??0,
       pendingArtifacts:db.prepare('SELECT count(*) AS count FROM saved_execution_artifacts WHERE uploaded=0').get().count,
+      rejectedFolders:db.prepare('SELECT count(*) AS count FROM execution_folders WHERE published=2').get().count,
       journal:lane('journal'),artifacts:lane('artifacts')}
   }
   async function post(value, path, body) {
@@ -63,7 +64,12 @@ export function createClientExecutionPublisher({ db, identity, secret, events, f
       const response = await fetchImpl(value.endpoint.replace(/\/$/,'')+'/v1/federation/publisher/'+path, {
         method:'POST',redirect:'error',signal:controller.signal,
         headers:{authorization:'Bearer '+value.token,'content-type':'application/json','x-woven-protocol':'3','x-woven-workspace':value.libraryID},body:JSON.stringify(body)})
-      if (!response.ok) throw fail(response.status,'The central library did not accept this workspace publication.')
+      if (!response.ok) {
+        // Keep only central's machine-readable code; its message never enters local state.
+        const detail = await response.json?.().catch(()=>null)
+        throw Object.assign(fail(response.status,'The central library did not accept this workspace publication.'),
+          typeof detail?.code === 'string' && /^[a-z_]{1,64}$/.test(detail.code) ? { code: detail.code } : {})
+      }
       return await response.json()
     } finally { clearTimeout(timeout); controllers.delete(controller) }
   }
@@ -89,14 +95,25 @@ export function createClientExecutionPublisher({ db, identity, secret, events, f
     let sent = false
     // Publish owner folders before conversations that reference them. This outbox
     // survives a closed phone and a central outage without relaying via iOS.
+    // Transient failures keep that order; a definitive refusal settles only its
+    // folder, so one deleted or foreign folder never stops this workspace's history.
     for (const row of db.prepare('SELECT id,body FROM execution_folders WHERE published=0 ORDER BY id').all()) {
       const folder = JSON.parse(row.body)
-      const result = await post(value, 'folders', { operationID: folder.id, deviceID: value.workspaceID, kind: 'createFolder', resourceID: folder.id, title: folder.name, folderExecution: folder.execution })
-      if (result.operationID !== folder.id || result.status !== 'accepted' || result.folder?.id !== folder.id
-        || result.folder?.execution?.workspaceID !== value.workspaceID || result.folder?.execution?.rootPath !== folder.execution.rootPath) throw fail(409, 'The central library did not acknowledge this execution folder.')
+      let result
+      try {
+        result = await post(value, 'folders', { operationID: folder.id, deviceID: value.workspaceID, kind: 'createFolder', resourceID: folder.id, title: folder.name, folderExecution: folder.execution })
+      } catch (error) {
+        // A central Mac without folder projection cannot learn folders yet; retry them after it updates.
+        if (error.statusCode === 404) break
+        if (!['folder_deleted', 'wrong_owner'].includes(error.code)) throw error
+        result = null
+      }
       if (stopped) return sent
-      db.prepare('UPDATE execution_folders SET published=1 WHERE id=? AND body=?').run(row.id, row.body)
       sent = true
+      // An idempotent retry receives the same answer, so a mismatched binding is also final.
+      const accepted = result?.operationID === folder.id && result.status === 'accepted' && result.folder?.id === folder.id
+        && result.folder?.execution?.workspaceID === value.workspaceID && result.folder?.execution?.rootPath === folder.execution.rootPath
+      db.prepare('UPDATE execution_folders SET published=? WHERE id=? AND body=?').run(accepted ? 1 : 2, row.id, row.body)
     }
     sent = await settleRetainedRuns(value) || sent
     let acknowledged = db.prepare('SELECT acknowledged FROM central_publication WHERE id=1').get().acknowledged
