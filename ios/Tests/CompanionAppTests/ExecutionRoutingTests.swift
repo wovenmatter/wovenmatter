@@ -707,7 +707,13 @@ final class ExecutionRoutingTests: XCTestCase {
     model.executionRecords = [full.id: full, ask.id: ask]
     model.selectedConversationID = ask.id
     let request = try CompanionModel.toolJSON(["name": "woven_notes_create", "conversationID": full.id, "arguments": ["title": "Saved", "kind": "note"]])
-    _ = try await bounded(model, "A Full Access note write") { try await model.performDeviceTool(request) }
+    // Note tools report failures as MCP results rather than throwing.
+    func toolResult(_ json: String) throws -> (isError: Bool, text: String) {
+      let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+      return (object["isError"] as? Bool ?? true, ((object["content"] as? [[String: Any]])?.first?["text"] as? String) ?? "")
+    }
+    let written = try toolResult(try await bounded(model, "A Full Access note write") { try await model.performDeviceTool(request) })
+    XCTAssertFalse(written.isError, written.text)
     XCTAssertEqual(model.notes.first?.title, "Saved")
     XCTAssertTrue(model.localPending.isEmpty, "Permission belongs to the tool's owner, not the selected chat")
     model.selectedConversationID = full.id
@@ -718,11 +724,13 @@ final class ExecutionRoutingTests: XCTestCase {
     // The same write in an Ask chat waits for the user; declining saves nothing.
     let askRequest = try CompanionModel.toolJSON(["name": "woven_notes_create", "conversationID": ask.id, "arguments": ["title": "Declined", "kind": "note"]])
     let declined = Task { @MainActor in try await model.performDeviceTool(askRequest) }
-    for _ in 0..<500 where model.localPending.isEmpty { await Task.yield() }
+    for _ in 0..<500 where model.localPending.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
     let prompt = try XCTUnwrap(model.localPending.first, "An Ask chat prompts before a note write")
     XCTAssertEqual(prompt.conversationID, ask.id)
     await model.respond(prompt, response: .init(optionID: "deny"))
-    do { _ = try await bounded(model, "A declined note write") { try await declined.value }; XCTFail("A declined write must not run") } catch is CancellationError { XCTFail("Declining is not cancellation") } catch {}
+    let refused = try toolResult(try await bounded(model, "A declined note write") { try await declined.value })
+    XCTAssertTrue(refused.isError, "A declined write is reported to the agent as a failed tool call")
+    XCTAssertEqual(refused.text, "The user declined this tool action.", "Declining is reported as the user's answer, not as cancellation")
     XCTAssertFalse(model.notes.contains { $0.title == "Declined" }, "Nothing is saved after declining")
 
     let waiting = Task { try await model.requireDeviceApproval(id: "ask-write", conversationID: ask.id, title: "Write", detail: "File") }
