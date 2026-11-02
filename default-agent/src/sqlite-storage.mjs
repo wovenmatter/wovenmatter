@@ -46,11 +46,13 @@ export async function openWorkspacePiStorage({databasePath, root, manifest, cont
       await database.transaction(async transaction => {
         // Every schema change, commit and activation receipt shares one SQLite
         // transaction. Failure leaves no partially imported execution store.
-        const facade = {...Object.fromEntries(['exec','run','get','all'].map(name=>[name,(...args)=>transaction[name](...args)])),
+        const facade = {...Object.fromEntries(['exec','run','runCounted','get','all'].map(name=>[name,(...args)=>transaction[name](...args)])),
           transaction: operation=>operation(transaction),close:async()=>{}};
         const target = await SqliteStorage.open(facade,{prefix});
         for (const commit of commits) {
-          const seq = await target.commit(commit.writes,context);
+          let seq;
+          const result = await target.commit([commit.writes], (index, storedSeq) => { seq = storedSeq; }, context);
+          if (result.stored !== 1 || result.refused !== undefined) throw new Error('Legacy commit was refused.', {cause: result.refused});
           if (seq !== commit.seq) throw new Error('Legacy commit identities could not be preserved.');
         }
         await beforeActivation?.(target);

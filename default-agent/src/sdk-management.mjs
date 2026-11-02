@@ -191,7 +191,7 @@ const verificationSource = `
 const pi = await import('@earendil-works/pi-coding-agent');
 for (const name of ['createCodingTools','createCodemodeExtension','DefaultResourceLoader','ModelRuntime','SettingsManager']) if (typeof pi[name] !== 'function') throw Error('Pi API unavailable');
 const durable = await import('@earendil-works/pi-durable');
-for (const name of ['createRegistry','watchEvents','defineDoc','defineExtension']) if (typeof durable[name] !== 'function') throw Error('Durable API unavailable');
+for (const name of ['createRegistry','ConversationTranscript','defineDoc','defineExtension']) if (typeof durable[name] !== 'function') throw Error('Durable API unavailable');
 if (typeof durable.Harness?.open !== 'function') throw Error('Durable API unavailable');
 const storage = await import('@earendil-works/pi-durable/storage/jsonl/node');
 if (typeof storage.openNodeJsonlStorage !== 'function') throw Error('Durable migration reader unavailable');
@@ -204,6 +204,17 @@ for (const name of ['getCurrentSystemPrompt','getCurrentTools']) if (typeof tran
 const claude = await import('@anthropic-ai/claude-agent-sdk');
 if (typeof claude.query !== 'function') throw Error('Claude API unavailable');
 await import('./src/engine.mjs');
+const { BACKGROUND_CONTEXT: context } = await import('@earendil-works/chord/context');
+const { createModels } = await import('@earendil-works/pi-ai/models');
+const { watchConversation } = await import('./src/durable-view.mjs');
+const harness = await durable.Harness.open(new durable.MemoryStorage(), { models: createModels(), registry: durable.createRegistry() }, context);
+try {
+  const observation = harness.observeCommits({ advance: () => {}, end: () => {} });
+  observation.detach();
+  const conversation = await harness.root(context);
+  const watch = await watchConversation(conversation, context);
+  await watch.stop();
+} finally { await harness.close(context); }
 `;
 // The second argument is an in-process fixture seam; transports only supply the request.
 export async function updateSDK({ directory, id, version, signal }, { registryFetch, run = command, installer = npmCLI, lock = acquireLock } = {}) {
@@ -254,7 +265,8 @@ export async function updateSDK({ directory, id, version, signal }, { registryFe
         if (await packageVersion(stage, pkg) !== selected.latestVersion) throw fail('The SDK installation did not match the requested version. The previous SDKs were kept.');
       }
     }
-    // Imports only: no credentials, model discovery, account checks, or inference.
+    // Check the real APIs with an ephemeral memory store; no credentials,
+    // model discovery, account checks, or inference.
     await run(process.execPath, ['--input-type=module', '--eval', verificationSource], { cwd: stage,
       env: { ...env, WOVENMATTER_INSTRUCTIONS_FILE: fileURLToPath(new URL('../../harnesses/woven-instructions.txt', import.meta.url)) }, signal });
     const claude = join(stage, 'node_modules', `@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}`, 'claude');

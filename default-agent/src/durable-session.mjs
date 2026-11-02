@@ -1,3 +1,4 @@
+import { watchConversation } from './durable-view.mjs';
 import { runtimeStageError } from './runtime-stage-error.mjs';
 import { withReasoningSummaries } from './reasoning-stream-options.mjs';
 import { wovenInstructions } from './woven-instructions.mjs';
@@ -11,7 +12,7 @@ import { ownNativeStore } from './native-owner.mjs';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { getSupportedThinkingLevels } from '@earendil-works/pi-ai/models';
 import { createCodingTools, createGrepTool, createFindTool, createLsTool, createCodemodeExtension, DefaultResourceLoader, SettingsManager } from '@earendil-works/pi-coding-agent';
-import { AgentDoc, CompactionTask, Harness, LiveDoc, ProviderDoc, ToolTask, defineDoc, defineExtension, section, watchEvents } from '@earendil-works/pi-durable';
+import { AgentDoc, CompactionTask, Harness, LiveDoc, ProviderDoc, ToolTask, defineDoc, defineExtension, section } from '@earendil-works/pi-durable';
 import { openWorkspacePiStorage } from './sqlite-storage.mjs';
 import { DefaultAgentError, accessFailure, operationErrorMessage, readJSON, writePrivateJSON } from './config.mjs';
 import { ProviderCompactionError } from './provider-compaction.mjs';
@@ -196,7 +197,7 @@ export async function openDurableSession(engine, id, requested) {
     const harness = await Harness.open(storage, { models, registry, settings: { retry: { enabled: false, maxRetries: 0 }, stream: { transport: 'sse', maxRetries: 0 }, toolExecution: 'sequential', compaction: { backgroundTokens: 0 } } }, context);
     record.harness = harness; record.storage = storage; record.registry = registry;
     openingStage = 'nativeSession';
-    record.unsubscribeCommits = harness.subscribeCommits(publication => {
+    const commitObservation = harness.observeCommits({ advance: publication => {
       const records = [];
       const changedGroup = publication.changes.find(change => change.type === 'document' && change.record.kind === Subagents.definition.kind && change.conversationId === record.conversation?.id);
       const reportEntries = new Set(publication.changes.filter(change => change.type === 'submission' && change.value.requestId?.startsWith('woven-subagent-report:')).map(change => change.value.entry));
@@ -223,7 +224,8 @@ export async function openDurableSession(engine, id, requested) {
           ...(messages ? { text: textOf(messages) } : {}) });
       });
       record.appendArchive(records);
-    });
+    }, end: () => {} });
+    record.unsubscribeCommits = () => commitObservation.detach();
     const conversation = await harness.root(context, { init: async tx => { await tx.doc(Requests, 1); await tx.doc(Options, 1); await tx.doc(NativeContext, 1); } });
     record.conversation = conversation;
     record.nativeBridge = nativeContextBridge(record, engine, context);
@@ -263,7 +265,7 @@ export async function openDurableSession(engine, id, requested) {
     const mcpClient = new WovenMCPClient();
     createCodemodeExtension({ models: false })( { registerTool: tool => { codemode = tool; }, getSettings: () => ({ codemode: { mode: (toolScopes.getStore() ?? record).codeModeState.value } }), getAllTools: () => tools, appendEntry: (customType, data) => { toolScopes.getStore().pendingStoreWrites.push({ customType, data }); } });
     // Retain the native receipts/recovery for synthetic nested model calls,
-    // and project progress because watchEvents has no live slot for them.
+    // and project progress because the root view has no live slot for them.
     const nestedProgress = new Set();
     const adaptTool = tool => ({ ...tool, replay: tool.replay ?? (['read', 'grep', 'find', 'ls', 'web_search', 'web_read', checklistTool.name].includes(tool.name) ? 'safe' : 'unsafe'), execute: async (args, api, ctx) => {
       const scope = await scopeFor(api.conversationId);
@@ -454,7 +456,7 @@ export async function openDurableSession(engine, id, requested) {
             if (prior?.compactionTaskID !== undefined) return prior.compactionTaskID;
             engine.sessions.get(sessionID)?.promptController?.signal.throwIfAborted();
             const taskID = await tx.createTask(CompactionTask, { reason: 'manual', ...(manual[1] ? { instructions: manual[1] } : {}) }, { ownership: { kind: 'conversation' }, conversationId: conversation.id, background: false });
-            const live = await tx.doc(LiveDoc, conversation.id); live.compactions ??= []; live.compactions.push({ taskId: taskID, reason: 'manual', blocking: false, attempt: 1 });
+            const live = await tx.doc(LiveDoc, conversation.id); live.compactions ??= []; live.compactions.push({ taskId: taskID, trigger: 'manual', blocking: false, attempt: 1 });
             state.requests[logicalID] = { fingerprint, compactionTaskID: taskID };
             return taskID;
           }, context);
@@ -491,7 +493,7 @@ export async function openDurableSession(engine, id, requested) {
     };
     record.session = session;
     await session.refreshContext();
-    eventStream = await watchEvents(harness, conversation.id, context);
+    eventStream = await watchConversation(conversation, context);
     void eventStream.closed.then(() => { record.eventClosed = true; });
     const knownEntries = new Set(eventStream.snapshot.entries.map(e => e.id));
     const toolStream = new NativeToolStream();
@@ -506,7 +508,7 @@ export async function openDurableSession(engine, id, requested) {
           if (message.usage) for (const listener of listeners) listener({ usage: message.usage });
           if (['error', 'aborted'].includes(message.stopReason)) for (const update of toolStream.finishPending()) send(update);
         }
-        // watchEvents is scoped to the root conversation. Child results remain
+        // The conversation watch is scoped to the root conversation. Child results remain
         // in their native archive/subagent activity and cannot update this plan.
         if (message.role === 'toolResult' && message.toolName === checklistTool.name && message.isError === false && Array.isArray(message.details?.wovenChecklist)) {
           const entries = message.details.wovenChecklist;

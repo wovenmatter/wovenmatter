@@ -32,8 +32,8 @@ RUN export DEBIAN_FRONTEND=noninteractive \
 # The official image now publishes the required Python security release for both
 # native architectures. Record its verified manifest index; maintenance refreshes
 # this runtime selection together with docs/DEPENDENCIES.md.
-FROM python:3.15.2-slim-trixie@sha256:c4158543ecb725b99e57d129dfd43d761d4c43e4577b5e23326aabb223cf7f4e AS workspace-python
-RUN python3 -m pip install --no-cache-dir --upgrade 'pip>=26.2.2' 'setuptools>=84.2.1' \
+FROM python:3.15.2-slim-trixie@sha256:8c13a3f37a6a5b71498228e902c4b9f51c1f7900d49fabf71f9a650c6120e0d0 AS workspace-python
+RUN python3 -m pip install --no-cache-dir --upgrade 'pip>=26.3' 'setuptools>=84.2.1' \
     && find /usr/local -type f -executable ! -name '*tkinter*' -exec ldd '{}' ';' 2>/dev/null \
       | awk '/=>/ { so = $(NF-1); if (index(so, "/usr/local/") == 1) next; gsub("^/(usr/)?", "", so); printf "*%s\n", so }' \
       | sort -u | xargs -r dpkg-query --search \

@@ -1,3 +1,4 @@
+import { LiveDoc } from '@earendil-works/pi-durable';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -162,6 +163,7 @@ test('interrupted native compact archives available failed stream records and us
   const native = { route: { provider: 'openai', accountID: 'a' }, rawSSE: 'event: response.output_item.added\ndata: {"partial":"exposed partial native 🙂"}\n\nevent: response.failed\ndata: {"error":"interrupted native compact"}\n\n', nativeEvents: [{ event: 'response.output_item.added', data: { partial: 'exposed partial native 🙂' } }, { event: 'response.failed', data: { error: 'interrupted native compact' } }], usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 } };
   engine.compactionFetch = async () => { const error = new ProviderCompactionError('transport', 'Synthetic native interruption'); error.nativeResponse = native; throw error; };
   await assert.rejects(engine.handle('session/prompt', { sessionId: record.session.sessionId, prompt: [{ type: 'text', text: '/compact' }] }), /model request failed|compaction|Synthetic/);
+  assert.equal((await record.harness.snapshot(LiveDoc, record.conversation.id, ctx)).compactionFailure.trigger, 'manual');
   assert.notEqual((await record.conversation.context(ctx)).head?.kind, 'woven.native-compaction');
   assert.equal((await record.harness.usage(ctx)).models['openai/native-fixture'].totalTokens, 12);
   let after = 0, saved; do { const page = await record.history(after); saved ??= page.recordBatch.records.find(item => item.kind === 'provider.compaction.interrupted'); after = page.nextAfter; if (!page.hasMore) break; } while (true);

@@ -80,7 +80,7 @@ struct RuntimeMaintenanceTests {
         let inventory = await RuntimeMaintenance.inspect(.codex, checkLatest: true,
             resolver: LocalACPRuntimeResolver(executableSearchDirectories: [root.appending(path: "bin").path]),
             fetch: { url in
-                let version = url.absoluteString.hasSuffix("%2fsdk") ? "2.2.0" : url.absoluteString.contains("codex-acp") ? "2.5.0" : "0.166.0"
+                let version = url.absoluteString.hasSuffix("%2fsdk") ? "2.4.0" : url.absoluteString.contains("codex-acp") ? "2.5.0" : "0.166.0"
                 return try JSONSerialization.data(withJSONObject: ["versions": [version: ["bin": ["cli": "index.js"]]]])
             }, probe: { url in url.path.contains("codex-acp") ? "2.5.0" : "0.166.0" })
         #expect(inventory.isInstalled)
@@ -97,8 +97,8 @@ struct RuntimeMaintenanceTests {
         #expect(sdk == "0.3.314")
         #expect(LocalACPRuntimeCatalog.definition(for: .codex)?.minimumEngineVersion == "0.166.0")
         #expect(LocalACPRuntimeCatalog.definition(for: .claudeCode)?.minimumEngineVersion == "0.3.316")
-        #expect(LocalACPRuntimeCatalog.definition(for: .codex)?.minimumProtocolSDKVersion == "2.2.0")
-        #expect(LocalACPRuntimeCatalog.definition(for: .claudeCode)?.minimumProtocolSDKVersion == "2.2.0")
+        #expect(LocalACPRuntimeCatalog.definition(for: .codex)?.minimumProtocolSDKVersion == "2.4.0")
+        #expect(LocalACPRuntimeCatalog.definition(for: .claudeCode)?.minimumProtocolSDKVersion == "2.4.0")
         #expect(LocalACPRuntimeCatalog.definition(for: .claudeCode)?.cliInstallerArguments == ["latest"])
     }
 
