@@ -433,7 +433,7 @@ export function createSubagents({ record, engine, context, allTools, getTrustedI
         const page = await conversation?.entries({}, MAX_ROWS, undefined, context);
         for (const entry of [...(page?.items ?? [])].reverse()) addEntry(entry);
       }
-      unsubscribe = record.harness.subscribeCommits(publication => {
+      const observation = record.harness.observeCommits({ advance: publication => {
         let relevant = false;
         for (const change of publication.changes) {
           if (change.type === 'document' && change.record.kind === Subagents.definition.kind && change.conversationId === rootID) groupState = change.value;
@@ -443,7 +443,8 @@ export function createSubagents({ record, engine, context, allTools, getTrustedI
           if (change.type === 'task' && (change.value.kind === Reporter.definition.name || metadata.has(change.value.conversationId))) relevant = true;
         }
         if (relevant) scheduleNotification();
-      });
+      }, end: () => {} });
+      unsubscribe = () => observation.detach();
       await notify();
     },
     beginGroup: async runID => {

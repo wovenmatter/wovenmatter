@@ -612,3 +612,25 @@ test('native run group preparation has a safe distinct stage',async t=>{
   await assert.rejects(engine.prompt(record,'fixture',()=>{},undefined,{runID:randomUUID()}),{message:'Pi Durable could not prepare the native run group.'});
   assert.equal(record.busy,false);
 });
+
+test('Pi schema migration coerces JSON tool arguments and refuses invalid calls before execution', async t => {
+  const { engine } = await fixture(t), record = await engine.create();
+  const executed = [];
+  const tool = { name: 'schema_fixture', description: 'Offline schema migration fixture', parameters: {
+    type: 'object', properties: { count: { type: 'integer', minimum: 1 }, tags: { type: 'array', items: { type: 'string' } } },
+    required: ['count', 'tags'], additionalProperties: false,
+  }, replay: 'safe', execute: async args => { executed.push(args); return { output: [{ type: 'text', text: 'validated' }] }; } };
+  record.registry.install(defineExtension({ name: 'schema-fixture', tools: [tool] }));
+  await record.conversation.configure({ tools: [tool] }, BACKGROUND_CONTEXT);
+  record.session.setActiveToolsByName = () => {};
+  for (const [id, args] of [['coerced', { count: '2', tags: 'one' }], ['invalid', { count: 0, tags: ['one'] }]]) {
+    let calls = 0;
+    record.streamFunction = model => stream(model, ++calls === 1
+      ? [{ type: 'toolCall', id, name: tool.name, arguments: args }] : [{ type: 'text', text: 'Finished' }]);
+    await engine.prompt(record, id, () => {});
+    const result = record.session.messages.find(message => message.role === 'toolResult' && message.toolCallId === id);
+    assert.ok(result, 'the real SDK must persist a result for both valid and refused calls');
+    assert.equal(Boolean(result.isError), id === 'invalid');
+  }
+  assert.deepEqual(executed, [{ count: 2, tags: ['one'] }]);
+});
