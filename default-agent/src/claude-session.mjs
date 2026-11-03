@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, rm } from 'node:fs/promises';
 import { join, isAbsolute } from 'node:path';
 import { DefaultAgentError, readJSON, writePrivateJSON } from './config.mjs';
 
@@ -49,6 +49,11 @@ export async function openClaudeSession(model, request, options) {
   return { workspace, routeKey, nativeSessionID, frames: request.frames.slice(resume ? saved.frameCount : 0),
     sdkOptions: { cwd: workspace, persistSession: true, sessionStore: claudeTranscriptArchive(scope.archive, scope.runID), sessionStoreFlush: 'eager',
       ...(resume ? { resume: nativeSessionID } : { sessionId: nativeSessionID }) },
+    async invalidate() {
+      // A partially written native transcript cannot safely resume even from
+      // the previous turn's marker. Rebuild from canonical host history.
+      await rm(stateFile, { force: true });
+    },
     async commit(response) {
       const prefix = response ? [...frames, { role: 'assistant', content: response.content }] : frames;
       // The SDK may store its inventory-only result after a tool call. At that

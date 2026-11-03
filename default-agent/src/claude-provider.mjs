@@ -347,6 +347,10 @@ export function createClaudeStream(claude, credentials, dependencies = {}) {
             resetTimeout();
             options.signal?.throwIfAborted();
             if (event.type === 'system' && event.subtype === 'mirror_error') captureFailure = new DefaultAgentError('Claude transcript archive failed. Its native local transcript remains intact.');
+            if (event.type === 'system' && event.subtype === 'session_writes_lost' && event.lost?.includes('transcript')) {
+              captureFailure = new DefaultAgentError('Claude could not save its native transcript because storage is full or its quota was reached. Free storage before retrying; the next turn will rebuild from conversation history.');
+              await native.invalidate();
+            }
             if (event.type === 'system' && event.subtype === 'compact_boundary') { compactBoundary = event; compactionCount++; }
             if (nativeContext.archive && event.type !== 'auth_status') await nativeContext.archive([{ id: `claude-sdk:event:${event.uuid ?? createHash('sha256').update(JSON.stringify(event)).digest('hex')}`,
               kind: `claude.sdk.event.${event.subtype ?? event.type}`, payload: JSON.stringify(event), contentMode: 'event', ...(nativeContext.runID ? { runID: nativeContext.runID } : {}) }]);

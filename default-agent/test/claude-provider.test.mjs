@@ -33,7 +33,7 @@ function responseEvents({ blocks = [{ type: 'text', text: 'Hello' }], stop = 'en
   return events.map(frame).join('');
 }
 
-async function fixture(t, { body = responseEvents(), status = 200, extraTurn = false, badAck = false, fetcher } = {}) {
+async function fixture(t, { body = responseEvents(), status = 200, extraTurn = false, badAck = false, fetcher, trailingEvents = [] } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'woven-claude-protocol-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const calls = { requests: 0, credentials: [], environment: [], frames: [], options: undefined };
@@ -57,6 +57,7 @@ async function fixture(t, { body = responseEvents(), status = 200, extraTurn = f
         await send();
         if (extraTurn) await send();
         yield { type: 'result', num_turns: 1, is_error: extraTurn, subtype: extraTurn ? 'error_max_turns' : 'success', usage: { input_tokens: 999 } };
+        yield* trailingEvents;
       })();
       native.close = () => {}; native.accountInfo = async () => principal;
       return native;
@@ -145,6 +146,43 @@ test('incomplete streams and unknown tool names never publish executable calls',
     for await (const event of stream) events.push(event);
     assert.equal((await stream.result()).stopReason, 'error');
     assert.equal(events.filter(event => event.type === 'toolcall_end').length, 0);
+  }
+});
+
+test('lost native transcript writes after a successful result invalidate resume and rebuild canonical history', async t => {
+  const trailingEvents = [];
+  const f = await fixture(t, { trailingEvents });
+  const first = await f.stream(model, context()).result();
+  const sessionID = f.calls.options.sessionId;
+  assert.equal(first.stopReason, 'stop');
+  const continued = normalizeContext({ systemPrompt: 'Host instructions', tools: [tool], messages: [
+    { role: 'user', content: 'Read my note.', timestamp: 1 }, first, { role: 'user', content: 'Continue.', timestamp: 2 },
+  ] });
+  trailingEvents.push({ type: 'system', subtype: 'session_writes_lost', error_code: 'ENOSPC',
+    lost: ['transcript'], transcript_session_ids: [sessionID], session_id: sessionID, uuid: randomUUID() });
+  const failed = await f.stream(model, continued).result();
+  assert.equal(f.calls.options.resume, sessionID);
+  assert.equal(failed.stopReason, 'error');
+  assert.match(failed.errorMessage, /could not save its native transcript/);
+  assert.equal(failed.wovenNativeContinuation, undefined);
+  trailingEvents.length = 0;
+  const recovered = await f.stream(model, continued).result();
+  assert.equal(recovered.stopReason, 'stop');
+  assert.equal(f.calls.options.resume, undefined);
+  assert.notEqual(f.calls.options.sessionId, sessionID);
+});
+
+test('lost native transcript writes never publish tool calls; config-only loss retains the valid result', async t => {
+  for (const lost of [['transcript', 'global_config'], ['global_config']]) {
+    const f = await fixture(t, { body: responseEvents({ blocks: [{ type: 'tool_use', id: 'call-1', name: 'mcp__woven__read', input: { path: 'note.md' } }], stop: 'tool_use' }),
+      trailingEvents: [{ type: 'system', subtype: 'session_writes_lost', error_code: 'EDQUOT', lost, session_id: randomUUID(), uuid: randomUUID() }] });
+    const stream = f.stream(model, context()), events = [];
+    for await (const event of stream) events.push(event);
+    const result = await stream.result();
+    const transcriptLost = lost.includes('transcript');
+    assert.equal(result.stopReason, transcriptLost ? 'error' : 'toolUse');
+    assert.equal(events.filter(event => event.type === 'toolcall_end').length, transcriptLost ? 0 : 1);
+    assert.equal(Boolean(result.wovenNativeContinuation), !transcriptLost);
   }
 });
 

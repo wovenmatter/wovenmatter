@@ -236,11 +236,15 @@ an older configured channel. OpenCode and Executor retain the documented v2 API 
 maintenance must review a newer stable API major and implement its migration.
 
 `harnesses/catalog.json` records tested connector and engine minimums separately:
-Codex ACP 2.5.0 with Codex 0.166.0, and Claude ACP 0.100.0 with Claude SDK 0.3.316
-(native Claude Code 2.1.316). The standalone Codex and Claude sign-in CLIs use their
+Codex ACP 2.5.0 with Codex 0.166.0, and Claude ACP 0.100.0 with Claude SDK 0.3.317
+(native Claude Code 2.1.317). The standalone Codex and Claude sign-in CLIs use their
 official current stable release channels. Codex ACP's `^0.165.0` engine range
 otherwise keeps its chat engine behind; its ACP TypeScript SDK also retains 2.1
-through a restrictive range. Claude ACP now selects SDK 0.3.316 and protocol SDK
+through a restrictive range. Claude ACP 0.100.0 pins SDK 0.3.316; the consumer-scoped override raises
+its engine to 0.3.317 without changing the connector. Transcript-write loss
+invalidates the native resume marker and refuses tool dispatch/continuation commits;
+config-only write loss leaves a valid response intact. Provider-free persistence
+fixtures verify canonical replay after recovery. The connector selects protocol SDK
 2.4.0 directly. The catalog's independent ACP SDK floor is 2.4.0. Mac and native
 Linux/container explicit updates resolve its newest nondeprecated stable
 publication independently, retain the vendor manifests, and verify the exact
