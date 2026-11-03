@@ -89,3 +89,21 @@ test('Pi model globs retain matching semantics and reject amplification patterns
     assert.equal(typeof matcher.match('fixture'), 'boolean');
   `], { timeout: 10000, cwd: new URL('..', import.meta.url), env: { PATH: process.env.PATH } });
 });
+
+test('effective IP parser escapes invalid IPv6 characters while retaining address classification', { timeout: 10000 }, async () => {
+  await execute(process.execPath, ['--input-type=module', '-e', `
+    import assert from 'node:assert/strict';
+    import { createRequire } from 'node:module';
+    const { Address6 } = createRequire(${JSON.stringify(import.meta.url)})('ip-address');
+    assert.equal(new Address6('2001:db8::1').correctForm(), '2001:db8::1');
+    assert.equal(new Address6('::ffff:127.0.0.1').isLoopback(), true);
+    for (const character of ['<', '>', '&', '"', "'"]) {
+      assert.throws(() => new Address6('2001:db8::' + character), error => {
+        assert.equal(error.name, 'AddressError');
+        const encoded = { '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;' }[character];
+        assert.ok(error.parseMessage.includes('<span class="parse-error">' + encoded + '</span>'), error.parseMessage);
+        return true;
+      });
+    }
+  `], { timeout: 5000, env: { PATH: process.env.PATH } });
+});

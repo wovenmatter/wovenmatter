@@ -108,7 +108,7 @@
         "permissions",
         "attachments"
       ],
-      "minimumEngineVersion": "0.3.317",
+      "minimumEngineVersion": "0.3.318",
       "minimumProtocolSDKVersion": "2.4.0"
     },
     {
