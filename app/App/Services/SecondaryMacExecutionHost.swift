@@ -61,8 +61,10 @@ final class SecondaryMacExecutionHost {
                 descriptor: descriptor, isActive: { [weak self] in self?.generation == attempt && self?.endpoint != nil },
                 events: { [workspace] after in try await workspace.events(after: after) })
             self.api = api; self.endpoint = endpoint
+            // The retired node host issues only its own central-scoped grants and
+            // has no delegated provenance; token validity remains its authority.
             inference = CompanionInferenceHost(authentication: authentication, descriptor: descriptor, directory: directory,
-                isActive: { [weak self] in self?.generation == attempt && self?.endpoint != nil })
+                isActive: { [weak self] in self?.generation == attempt && self?.endpoint != nil }, authorize: { _, _ in })
             let token = try await management.provision(deviceID: descriptor.libraryID, libraryID: descriptor.libraryID, workspaceID: descriptor.id)
             guard generation == attempt, !Task.isCancelled else {
                 try await management.revoke(deviceID: descriptor.libraryID)

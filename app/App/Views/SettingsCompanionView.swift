@@ -6,9 +6,9 @@ import WovenMatterCompanion
 struct SettingsCompanionView: View {
     @Bindable var model: ApplicationModel
     @Bindable var host: CompanionHostController
+    @State private var pairingLink = ""
+    @State private var pairingLinkBusy = false
     @State private var recoveryError: String?
-    @State private var switching = false
-    @State private var confirmRoleChange = false
     var reservesRailControlSpace = false
     var onBack: () -> Void
     private var client: CentralLibraryClientModel { model.libraryClient }
@@ -16,7 +16,7 @@ struct SettingsCompanionView: View {
     var body: some View {
         SettingsPage(title: "Apple Devices", reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
             if DevelopmentLaunch.isClient {
-                SettingsCard(title: "Central database") {
+                SettingsCard(title: "This Mac") {
                     HStack(spacing: 12) {
                         DeviceConnectionIcon(kind: .mac)
                         VStack(alignment: .leading, spacing: 4) {
@@ -29,89 +29,69 @@ struct SettingsCompanionView: View {
                     Text("This development instance keeps a local database synchronized with the live library. Its own background server runs its agents and scheduled work.")
                         .font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground)
                 }
-            } else if model.isLibraryClient {
-                CentralLibraryPairingCard(client: client, application: model)
-                SettingsCard(title: "This Mac") {
-                    HStack {
-                        DeviceConnectionIcon(kind: .mac)
-                        Text(DevelopmentLaunch.deviceName()).font(.system(size: 13, weight: .medium))
-                        Spacer()
-                        Text(client.sharingLocalExecution ? "Sharing workspace" : "Workspace not connected")
-                            .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
-                    }
-                    if let error = client.deviceConnectionsError { Text(error).font(.system(size: 12)).foregroundStyle(DashboardPalette.danger) }
-                }
-                if !client.connectedDevices.isEmpty { clientDeviceRoster }
             } else {
-                SettingsCard(title: "Central database") {
+                SettingsCard(title: "This Mac") {
                     HStack(spacing: 12) {
                         DeviceConnectionIcon(kind: .mac)
                         VStack(alignment: .leading, spacing: 4) {
                             Text(DevelopmentLaunch.deviceName()).font(.system(size: 13, weight: .medium))
-                            Text(host.status)
+                            Text("Keeps a complete local library and synchronizes with paired Macs when connected.")
                                 .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
                         }
                         Spacer()
                     }
                 }
                 if !host.pendingPairingRequests.isEmpty { pairingRequests }
-                if !host.pairedDevices.isEmpty { pairedDevices }
+                if host.pairedDevices.contains(where: { $0.id != host.peerIdentity?.deviceID }) { pairedDevices }
                 if !host.pendingDeviceRevocations.isEmpty { pendingRevocations }
             }
             SettingsDeviceWorkspaceInventory(workspaces: model.isLibraryClient ? client.executionWorkspaces : host.executionWorkspaces)
             if !DevelopmentLaunch.isClient {
-                if !model.isLibraryClient || client.credential == nil {
-                    DevicePairingDiscoveryCard(pairing: client.devicePairing, host: host, isCentral: !model.isLibraryClient, canPairWithCentral: model.isLibraryClient)
+                DevicePairingDiscoveryCard(pairing: client.devicePairing, host: host, isCentral: true, canPairWithCentral: true)
+                DevicePairingCodeCard(host: host)
+                SettingsCard(title: "Use a pairing link", detail: "Copy a pairing link from the other Mac’s Apple Devices settings.") {
+                    HStack {
+                        SecureField("Pairing link", text: $pairingLink).accessibilityIdentifier("companion.peer-link")
+                        Button("Pair Mac") {
+                            let link = pairingLink; pairingLink = ""; pairingLinkBusy = true
+                            Task { await host.pairUsingLink(link); pairingLinkBusy = false }
+                        }.buttonStyle(SettingsQuietButtonStyle())
+                            .disabled(pairingLink.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || pairingLinkBusy)
+                    }
                 }
-                if !model.isLibraryClient { DevicePairingCodeCard(host: host) }
-                if !model.isLibraryClient, let message = host.errorMessage {
+                if !host.peerPairingStatus.isEmpty {
+                    HStack {
+                        Text(host.peerPairingStatus).font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground)
+                        Spacer()
+                        Button("Cancel pairing") { Task { await host.cancelPeerPairing() } }.buttonStyle(SettingsQuietButtonStyle())
+                    }
+                }
+                if let message = host.peerPairingError ?? host.errorMessage {
                     Text(message).font(.system(size: 12)).foregroundStyle(DashboardPalette.danger)
                         .textSelection(.enabled).accessibilityIdentifier("companion.error")
                 }
-                if let error = client.deviceConnectionsError, !model.isLibraryClient {
-                    Text(error).font(.system(size: 12)).foregroundStyle(DashboardPalette.danger)
+                if !host.peerSyncErrors.isEmpty {
+                    SettingsCard(title: "Synchronization needs attention", detail: "Local writing is saved while synchronization retries.") {
+                        ForEach(Array(Set(host.peerSyncErrors.values)).sorted(), id: \.self) { message in
+                            Text(message).font(.system(size: 12)).foregroundStyle(DashboardPalette.danger)
+                        }
+                    }
                 }
                 if !model.companionRecoveredNoteDrafts.isEmpty { recoveredDrafts }
-                SettingsCard(title: "Database role", detail: model.isLibraryClient
-                    ? "This Mac is a node. Pair it with a central database to share its data and workspaces."
-                    : "This Mac hosts the central database. Paired devices use this database and its connected workspaces.") {
-                    HStack {
-                        Text(model.isLibraryClient ? "Node" : "Central database").font(.system(size: 13, weight: .medium))
-                        Spacer()
-                        Button(model.isLibraryClient ? "Use as central database…" : "Change to node…") { confirmRoleChange = true }
-                            .buttonStyle(SettingsQuietButtonStyle()).disabled(switching)
-                    }
-                    Text("Changing roles restarts Woven Matter. This Mac’s existing data stays on this Mac.")
-                        .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
+                SettingsCard(title: "Paired Macs", detail: "Each Mac saves shared notes, chats, library files, settings and connections locally. You can add workspaces or Apple devices from any Mac. Offline changes synchronize automatically when the Macs reconnect.") {
+                    Text("Agents and scheduled work keep running on the workspace that owns them.")
+                        .font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground)
                 }
             }
         }
         .task {
             guard !DevelopmentLaunch.isClient else { return }
-            await client.initialize()
-            if model.isLibraryClient { await client.devicePairing.restorePendingRequest() }
             while !Task.isCancelled {
                 if !model.isLibraryClient { await host.refreshStatus() }
                 do { try await Task.sleep(for: .seconds(2)) } catch { return }
             }
         }
-        .onDisappear { if !DevelopmentLaunch.isClient { client.devicePairing.stopPairingMode() } }
-        .confirmationDialog(model.isLibraryClient ? "Use this Mac as a central database?" : "Change this Mac to a node?", isPresented: $confirmRoleChange) {
-            Button("Change role and restart") {
-                switching = true
-                Task {
-                    defer { switching = false }
-                    do {
-                        if model.isLibraryClient { try await model.returnToCentralLibraryMode() }
-                        else { try await model.activateLibraryClientMode() }
-                    } catch { client.deviceConnectionsError = error.localizedDescription }
-                }
-            }
-        } message: {
-            Text(model.isLibraryClient
-                ? "This reopens this Mac’s own database. Its paired database and pending changes stay saved separately."
-                : "After restarting, pair this node with a central database. This Mac’s existing database stays saved separately.")
-        }
+
     }
     private var clientDeviceRoster: some View {
         SettingsCard(title: "Paired devices") {
@@ -148,7 +128,7 @@ struct SettingsCompanionView: View {
     }
     private var pairedDevices: some View {
         SettingsCard(title: "Paired devices") {
-            ForEach(host.pairedDevices) { device in
+            ForEach(host.pairedDevices.filter { $0.id != host.peerIdentity?.deviceID }) { device in
                 HStack(spacing: 12) {
                     DeviceConnectionIcon(kind: device.kind)
                     VStack(alignment: .leading, spacing: 4) {

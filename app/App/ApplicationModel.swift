@@ -342,6 +342,7 @@ final class ApplicationModel {
     @ObservationIgnored var federatedAdoptionTasks: [String: Task<Void, any Error>] = [:]
     @ObservationIgnored var adoptedExecutionConversations: Set<String> = []
     var federatedExecutionSnapshots: [String: FederatedExecutionSnapshot] = [:]
+    private(set) var peerAgentWorkspaces: [UUID: CompanionExecutionWorkspace] = [:]
     var federatedExecutionOwners: [String: String] = [:]
     @ObservationIgnored
     lazy var companionCommands = CompanionCommandService(model: self)
@@ -425,8 +426,7 @@ final class ApplicationModel {
     ) {
         self.workspaceAssets = workspaceAssets ?? WorkspaceAssetSession()
         self.applicationDefaults = applicationDefaults
-        self.isLibraryClient = dashboardStore == nil && LocalExecutionRole.current != .backend
-            && DevelopmentLaunch.mode == nil && applicationDefaults.bool(forKey: LocalExecutionRole.libraryClientPreferenceKey)
+        self.isLibraryClient = false
         let closedLidProtection = ClosedLidWorkProtection(
             ownsExecution: ownsExecutionOverride ?? LocalExecutionRole.current.ownsExecution, defaults: applicationDefaults)
         self.closedLidProtection = closedLidProtection
@@ -674,6 +674,7 @@ final class ApplicationModel {
             )
             let dashboardStore = try await DashboardStore(supportDirectory: supportDirectory)
             self.dashboardStore = dashboardStore
+            await LegacyMacLibraryUpgrade.prepareRecordingFailure(database: dashboardStore.database, defaults: applicationDefaults)
             analytics.configure(database: dashboardStore.database, publisher: true)
             await analytics.refresh()
             await dashboardStore.setLocalACPResumePermissionHandler { [weak self] conversationID, request in
@@ -1238,6 +1239,7 @@ final class ApplicationModel {
             let priorRevision = force || workspaceOverview == nil ? nil : workspaceRevision
             if let snapshot = try await dashboardStore.snapshot(ifChangedFrom: priorRevision) {
                 guard self.dashboardStore === dashboardStore, generation == workspaceRefreshGeneration, !Task.isCancelled else { return }
+                peerAgentWorkspaces = try await dashboardStore.database.pairedAgentWorkspaces()
                 apply(snapshot)
             }
             guard self.dashboardStore === dashboardStore, generation == workspaceRefreshGeneration, !Task.isCancelled else { return }
@@ -1251,7 +1253,10 @@ final class ApplicationModel {
             let nativeDirectories = try await dashboardStore.sessionNativeWorkingDirectories(
                 ids: (workspaceOverview?.conversations ?? []).map(\.id))
             guard self.dashboardStore === dashboardStore, generation == workspaceRefreshGeneration, !Task.isCancelled else { return }
-            let libraryLocations = (workspaceOverview?.conversations ?? []).map { conversation in
+            // Workspace files belong to the execution owner. Observed and paired
+            // conversations download retained bytes; they never get a local root.
+            let libraryLocations = (workspaceOverview?.conversations ?? [])
+                .filter { federatedExecutionOwners[$0.id] == nil }.map { conversation in
                 let remote = conversation.remoteWorkspaceID.flatMap { remoteWorkspaces.configuration(id: $0) }
                 let nativeDirectory = openCodeModel(for: conversation.id)?.snapshots[conversation.id]?.info["location"]["directory"].string
                 let root = nativeDirectory.flatMap { $0.isEmpty ? nil : $0 }
@@ -1780,6 +1785,12 @@ final class ApplicationModel {
         }
         folderMutationError = nil
         do {
+            if !isBackendFrontend, try await pairedOwnerWorkspace(conversationID: id) != nil {
+                // A draft's folder is its execution directory on the Mac that runs it.
+                try await performOnOwner(conversationID: id, action: .conversation(id: id, action: "move", title: nil, folderID: folderID))
+                await refreshWorkspace()
+                return true
+            }
             if isBackendFrontend {
                 let result = try await sendBackendCommand(.workspaceMutation(.moveConversation(id: id, folderID: folderID)))
                 await refreshWorkspace()
@@ -3043,6 +3054,26 @@ final class ApplicationModel {
         return .localACPRuntimeUnavailable
     }
 
+    func createPairedMacSession(agentID: UUID, conversationID: UUID, folderID: String?) async throws -> String {
+        if isBackendFrontend {
+            let result = try await sendBackendCommand(.createPeerSession(agentID: agentID, conversationID: conversationID, folderID: folderID))
+            guard let id = result.conversationID else { throw ApplicationModelError.dashboardStoreUnavailable }
+            await refreshWorkspace(); return id
+        }
+        guard let database = dashboardStore?.database,
+              let workspace = try await database.pairedAgentWorkspaces()[agentID],
+              let agent = try await database.dashboardAgents().first(where: { $0.id == agentID }) else {
+            throw CompanionAPIError(code: "unknown_workspace", message: "This paired workspace is unavailable. Reconnect its Mac to continue.")
+        }
+        let client = try centralExecutionClient()
+        _ = try await client.createSession(workspace: workspace, runtimeKind: agent.runtimeKind,
+            conversationID: conversationID.uuidString.lowercased(), folderID: folderID)
+        try await database.installPairedConversationPlaceholder(id: conversationID.uuidString.lowercased(), agentID: agentID,
+            workspace: workspace, runtimeKind: agent.runtimeKind.rawValue)
+        await refreshWorkspace()
+        return conversationID.uuidString.lowercased()
+    }
+
     func createLocalACPSession(
         runtimeKind: AgentRuntimeKind,
         requestedConversationID: UUID? = nil,
@@ -4169,12 +4200,19 @@ final class ApplicationModel {
             )
             loggedDashboardRecordCounts = counts
         }
-        let nextLocalCLIAgents = snapshot.agents.filter {
-            $0.governingPlane == .wovenmatterMacOS
+        let presentedAgents = snapshot.agents.map { agent -> WorkspaceAgent in
+            guard let workspace = peerAgentWorkspaces[agent.id] else { return agent }
+            return WorkspaceAgent(id: agent.id, userID: agent.userID, codename: agent.codename,
+                displayName: agent.runtimeKind.displayName + " · " + workspace.name, iconKey: agent.iconKey,
+                executionLocation: .remote, governingPlane: .remoteWorkspace, authorityKind: agent.authorityKind,
+                authorityDeviceID: agent.authorityDeviceID, runtimeKind: agent.runtimeKind,
+                runtimeDeviceID: UUID(uuidString: workspace.id), platformCodename: agent.platformCodename,
+                runtimeStatus: agent.runtimeStatus, runtimeVersion: agent.runtimeVersion,
+                imageDigest: agent.imageDigest, revision: agent.revision, createdAt: agent.createdAt,
+                updatedAt: agent.updatedAt, deletedAt: agent.deletedAt)
         }
-        let nextRemoteWorkspaceAgents = snapshot.agents.filter {
-            $0.governingPlane == .remoteWorkspace
-        }
+        let nextLocalCLIAgents = presentedAgents.filter { $0.governingPlane == .wovenmatterMacOS }
+        let nextRemoteWorkspaceAgents = presentedAgents.filter { $0.governingPlane == .remoteWorkspace }
         if localCLIAgents != nextLocalCLIAgents {
             localCLIAgents = nextLocalCLIAgents
         }

@@ -109,6 +109,7 @@ extension WorkspaceDatabaseConnection {
         JOIN dashboard_messages m ON m.id=q.message_id
         JOIN dashboard_conversations c ON c.id=m.conversation_id
         WHERE q.dirty=1 AND m.status NOT IN ('streaming','pending','queued') AND \(Self.libraryVisibility)
+          AND \(PairedLibraryOwnership.localConversation("c.id"))
         ORDER BY m.created_at,m.id LIMIT ?
         """, values: [try localMutationOperatorIDUnlocked(), String(max(1, min(limit, 200)))])
       for row in rows {
@@ -269,10 +270,11 @@ extension WorkspaceDatabaseConnection {
         """
         INSERT INTO library_locations SELECT ?,?,? WHERE EXISTS(
           SELECT 1 FROM dashboard_conversations WHERE id=? AND deleted_at IS NULL)
+          AND \(PairedLibraryOwnership.localConversation("?"))
         ON CONFLICT(conversation_id) DO UPDATE
         SET workspace_name=excluded.workspace_name,root=excluded.root
         WHERE workspace_name!=excluded.workspace_name OR root!=excluded.root
-        """, [conversationID, workspaceName, root, conversationID])
+        """, [conversationID, workspaceName, root, conversationID, conversationID, conversationID, conversationID])
     }
   }
 
@@ -397,6 +399,7 @@ extension WorkspaceDatabaseConnection {
       try decodeCanonicalRowsUnlocked(
         Self.libraryProjection + Self.libraryJoins + """
            WHERE \(Self.libraryVisibility) AND i.storage IN ('pending','unavailable')
+           AND \(PairedLibraryOwnership.localConversation("c.id"))
            AND (i.retry_at IS NULL OR i.retry_at<=?) ORDER BY m.created_at LIMIT ?
           """, bindings: [try localMutationOperatorIDUnlocked(), Self.timestamp(now), String(max(1, min(limit, 20)))],
         as: WorkspaceLibraryItem.self)
@@ -410,6 +413,7 @@ extension WorkspaceDatabaseConnection {
         AND storage IN ('pending','unavailable') AND content_hash IS NULL
         AND EXISTS (SELECT 1 FROM dashboard_conversations c
           WHERE c.id=library_items.conversation_id AND c.deleted_at IS NULL)
+        AND \(PairedLibraryOwnership.localConversation("library_items.conversation_id"))
         """,
         [
           hash, size.map(String.init), hash == nil ? "unavailable" : "retained", error,
@@ -448,10 +452,18 @@ extension WorkspaceDatabaseConnection {
       let rows = try historyRowsUnlocked(
         "SELECT content_hash,storage FROM library_items WHERE content_hash IS NOT NULL", values: [])
       let visible = Set(rows.compactMap { $0.objectValue?["content_hash"]?.stringValue })
+      // Losing concurrent versions stay recoverable with their bytes: a hash
+      // referenced only by a retained peer conflict or frontier member is kept.
+      let recoverable = try historyRowsUnlocked("""
+        SELECT json_extract(payload,'$.row.content_hash.value') AS content_hash FROM paired_library_conflicts
+        WHERE json_extract(payload,'$.table')='library_items' AND json_extract(payload,'$.row.storage.value')='retained'
+        UNION SELECT json_extract(payload,'$.row.content_hash.value') FROM paired_library_frontier
+        WHERE table_name='library_items' AND json_extract(payload,'$.row.storage.value')='retained'
+        """, values: []).compactMap { $0.objectValue?["content_hash"]?.stringValue }
       let retained = Set(
         rows.filter { $0.objectValue?["storage"]?.stringValue == "retained" }
-          .compactMap { $0.objectValue?["content_hash"]?.stringValue })
-      try libraryFiles.cleanup(retained: retained, visible: visible)
+          .compactMap { $0.objectValue?["content_hash"]?.stringValue }).union(recoverable)
+      try libraryFiles.cleanup(retained: retained, visible: visible.union(recoverable))
     }
   }
 

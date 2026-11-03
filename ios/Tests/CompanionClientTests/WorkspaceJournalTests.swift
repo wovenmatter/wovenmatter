@@ -30,6 +30,27 @@ final class WorkspaceJournalTests: XCTestCase {
     .init(eventID: "event-\(workspace)-\(sequence)", workspaceID: workspace, originSequence: sequence,
       conversationID: id, kind: .conversation, conversation: .init(id: id, title: "Version \(sequence)"))
   }
+  func testAuthenticatedPeerRegistryKeepsForeignExecutionNamespaceAcrossRestart() async throws {
+    let file = path(), journal = try WorkspaceJournal(file: file)
+    try await journal.bind(libraryID: "air-library")
+    let remote = CompanionExecutionWorkspace(id: "linux", libraryID: "mini-library", ownerDeviceID: "mini", kind: .linux, name: "Server")
+    do { try await journal.upsertWorkspace(remote); XCTFail("Untrusted registration cannot change the library namespace") }
+    catch WorkspaceJournal.Failure.wrongLibrary { }
+    try await journal.mergeRegistry([remote])
+    let page = CompanionJournalPage(libraryID: "mini-library", cursor: 1, entries: [entry(1, workspace: "linux")])
+    try await journal.receiveWorkspace(page, workspaceID: "linux")
+    let reopened = try WorkspaceJournal(file: file)
+    let state = await reopened.snapshot()
+    XCTAssertEqual(state.libraryID, "air-library")
+    XCTAssertEqual(state.workspaces["linux"]?.libraryID, "mini-library")
+    XCTAssertEqual(state.conversationWorkspaceIDs["chat"], "linux")
+    XCTAssertEqual(state.directCursors["linux"], 1)
+    XCTAssertTrue(state.pendingRegistrations.isEmpty)
+    do {
+      try await reopened.receiveWorkspace(.init(libraryID: "air-library", cursor: 1), workspaceID: "linux")
+      XCTFail("Direct replay must match the actual execution namespace")
+    } catch WorkspaceJournal.Failure.wrongLibrary { }
+  }
   func testDirectControlCommandsPersistOwnerBeforeDispatchAndRejectMismatches() async throws {
     let store = try MobileStore(file: path()), transport = OfflineWorkspace(loseReply: false)
     let client = WorkspaceClient(store: store, workspaceID: "linux", transport: transport)

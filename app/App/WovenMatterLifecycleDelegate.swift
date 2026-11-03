@@ -392,7 +392,7 @@ enum LocalExecutionRole: String {
             return arguments.contains("--backend") ? .backend : .frontend
         }
         if arguments.contains("--backend") { return .backend }
-        if libraryClientEnabled { return .libraryClient }
+        // Older node preferences are migration input; every desktop runs the full local app.
         return .frontend
     }
 

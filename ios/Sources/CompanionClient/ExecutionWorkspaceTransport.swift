@@ -7,6 +7,19 @@ import FoundationNetworking
 import Security
 #endif
 
+/// Whether a saved or newly issued direct workspace credential belongs to this
+/// phone: its own device, and either its paired Mac's library or the workspace's
+/// own registered namespace and endpoint (a workspace another paired Mac owns).
+public enum WorkspaceCredentialPolicy {
+  public static func accepts(_ credential: DirectWorkspaceCredential, deviceID: String, libraryID: String?,
+                             registered: CompanionExecutionWorkspace?) -> Bool {
+    guard credential.deviceID == deviceID else { return false }
+    if credential.libraryID == libraryID { return true }
+    guard let registered, !registered.deleted, registered.id == credential.workspaceID else { return false }
+    return registered.libraryID == credential.libraryID && registered.endpoint == credential.endpoint
+  }
+}
+
 public struct DirectWorkspaceCredential: Codable, Equatable, Sendable {
   public var endpoint: URL
   public var libraryID: String

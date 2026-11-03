@@ -118,11 +118,19 @@ import CompanionInference
   var executionWorkspaceRefreshInProgress = false
   var remotePending: [String: [CompanionPendingInteraction]] = [:]
   var workspaceAuthorizationRetryAt: [String: Date] = [:]
+  /// One in-flight credential issuance per workspace. Each issuance replaces
+  /// the device's earlier token there, so concurrent requests share it.
+  @ObservationIgnored var workspaceIssuances: [String: (generation: UUID, task: Task<DirectWorkspaceCredential, any Error>)] = [:]
+  /// The latest inference binding per workspace; each binding waits for the
+  /// one before it, so binders of one workspace never interleave.
+  @ObservationIgnored var workspaceBindings: [String: Task<Void, any Error>] = [:]
   var workspaceProblems: [String: String] = [:]
   var inferenceProblem: String?
   var executionDirectory: URL?
   var executionRefreshTasks: [String: Task<Void, Never>] = [:]
-  var executionCredentialStore = InferenceCredentialStore()
+  var executionCredentialStore: any InferenceCredentialUpdating = InferenceCredentialStore()
+  /// Device-only storage for direct workspace credentials; tests inject memory.
+  var workspaceCredentials = WorkspaceCredentialStorage.keychain
   let deviceBackgroundExecution = DeviceBackgroundExecution()
   var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
   var backgroundFallbackToken: UUID?

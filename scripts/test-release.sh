@@ -94,6 +94,7 @@ print("Release access checks passed: existing access, unavailable credentials/ne
 PYTEST
 python3 scripts/test-support/test_release_approval.py
 python3 scripts/test-support/test_release_artifacts.py
+python3 scripts/test-support/test_release_manifest.py
 python3 scripts/test-support/test_release_phases.py
 python3 scripts/test-support/test_release_notarization.py
 python3 scripts/test-support/test_release_cache.py

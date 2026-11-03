@@ -106,24 +106,26 @@ final class CompanionUITests: XCTestCase {
   }
   @MainActor func testRunningToolsDoNotDuplicateProgressWhenExpanded() {
     let app = launch(tab: "Chats", scenario: "running-tools")
-    let group = app.buttons["work-group:group:fixture-read"]
-    XCTAssertTrue(group.waitForExistence(timeout: 5))
-    // SwiftUI combines a button's spinner into its accessibility element.
-    // Assert the exposed progress owner across each disclosure state.
-    let busyRows = app.buttons.matching(NSPredicate(format: "value ENDSWITH %@", ", In progress"))
-    XCTAssertEqual(group.value as? String, "Collapsed, In progress")
-    XCTAssertEqual(busyRows.count, 1, "Collapsed work has one progress owner")
-    XCTAssertFalse(app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "Running on ")).firstMatch.exists)
-    group.tap()
+    // Live tools stay individually visible until another event folds them
+    // into history. Expanding a tool must retain exactly one progress owner.
     let activity = app.buttons["work-activity:fixture-current"]
+    let finishedActivity = app.buttons["work-activity:fixture-read"]
     XCTAssertTrue(activity.waitForExistence(timeout: 5))
-    XCTAssertEqual(group.value as? String, "Expanded")
+    XCTAssertTrue(finishedActivity.exists)
+    XCTAssertFalse(app.buttons["work-group:group:fixture-read"].exists)
+    let busyRows = app.buttons.matching(NSPredicate(format: "value ENDSWITH %@", ", In progress"))
     XCTAssertEqual(activity.value as? String, "Collapsed, In progress")
-    XCTAssertEqual(busyRows.count, 1, "Expanded work moves progress to the current tool")
+    XCTAssertEqual(finishedActivity.value as? String, "Collapsed")
+    XCTAssertEqual(busyRows.count, 1, "Only the current live tool owns progress")
+    XCTAssertFalse(app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "Running on ")).firstMatch.exists)
     activity.tap()
     XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label ==[c] %@", "Input")).firstMatch.waitForExistence(timeout: 5))
     XCTAssertEqual(activity.value as? String, "Expanded, In progress")
     XCTAssertEqual(busyRows.count, 1, "Opening tool details does not add another progress owner")
+    activity.tap()
+    XCTAssertEqual(activity.value as? String, "Collapsed, In progress")
+    XCTAssertEqual(busyRows.count, 1, "Closing tool details keeps the same progress owner")
+    activity.tap()
     let capture = XCTAttachment(screenshot: app.screenshot())
     capture.name = "Running tool details without duplicate spinners"
     capture.lifetime = .keepAlways
@@ -131,9 +133,10 @@ final class CompanionUITests: XCTestCase {
     app.terminate()
     app.launchEnvironment["WOVENMATTER_UI_SCENARIO"] = "running-tools-settled"
     app.launch()
-    XCTAssertTrue(app.buttons["work-group:group:fixture-read"].waitForExistence(timeout: 5))
+    XCTAssertTrue(activity.waitForExistence(timeout: 5))
     XCTAssertEqual(busyRows.count, 0, "Finished tools stop spinning while the agent continues its reply")
-    XCTAssertEqual(app.buttons["work-group:group:fixture-read"].value as? String, "Collapsed")
+    XCTAssertEqual(activity.value as? String, "Collapsed")
+    XCTAssertEqual(finishedActivity.value as? String, "Collapsed")
     XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH %@", "Working for ")).firstMatch.exists)
   }
 

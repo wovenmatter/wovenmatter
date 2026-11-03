@@ -39,13 +39,17 @@ extension ApplicationModel {
         }
         guard !isBackendFrontend, let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
         if let federatedExecutionClient { return federatedExecutionClient }
-        let directory = try CompanionTestWorkspace.supportDirectory ?? Self.dashboardSupportDirectory()
+        // The command journal lives beside the library it addresses, never in a
+        // global directory a fixture or another instance could share.
+        let directory = dashboardStore.database.supportDirectory
+        let storage = companionHost.peerStorage
         let client = try CentralExecutionClient(database: dashboardStore.database,
             commandJournalURL: directory.appending(path: "central-execution-commands.json"),
             provision: { [weak self] id in
                 guard let self else { throw CancellationError() }
                 return try await self.companionHost.provisionCentralExecutionWorkspace(id: id)
-            }, onChange: { [weak self] in await self?.refreshWorkspace() })
+            }, loadCredential: storage.loadExecutionCredential, saveCredential: storage.saveExecutionCredential,
+            onChange: { [weak self] in await self?.refreshWorkspace() })
         federatedExecutionClient = client
         return client
     }

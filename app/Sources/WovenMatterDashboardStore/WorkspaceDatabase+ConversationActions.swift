@@ -12,6 +12,9 @@ extension WorkspaceDatabaseConnection {
           AND deleted_at IS \(restoring ? "NOT NULL" : "NULL")
         """, values: [id])
       guard !rows.isEmpty else { throw WorkspaceConversationActionError.unavailable }
+      // Trash and restore have runtime effects (goals, timers, deliveries) that
+      // only the execution owner may apply. Another Mac's chat is routed to it.
+      if !(mutation.isPresentationOnly) { try requireProtectedConversationMutationUnlocked(id) }
       let timestamp = Self.timestamp(Date())
       switch mutation {
       case .setPinned(let pinned):
@@ -106,5 +109,36 @@ extension WorkspaceDatabase {
 
   public func trashedConversations() async throws -> [WorkspaceTrashedConversation] {
     try await read { try $0.trashedConversations() }
+  }
+}
+
+extension WorkspaceConversationMutation {
+  /// Rename and pin are shared presentation; they never change runtime state.
+  public var isPresentationOnly: Bool {
+    switch self { case .rename, .setPinned: true; case .moveToTrash, .restore: false }
+  }
+}
+
+extension WorkspaceDatabaseConnection {
+  /// Trash, restore and draft moves need positive authority here: this Mac
+  /// executes the chat natively, or the chat belongs to a known independent
+  /// Linux or iOS workspace whose projection this library has always managed.
+  /// Unknown ownership (for example a chat received before its owner record)
+  /// is unavailable; a chat another paired Mac runs is routed to that Mac.
+  func requireProtectedConversationMutationUnlocked(_ id: String) throws {
+    if try locallyOwnsConversationUnlocked(id) { return }
+    if try historyRowsUnlocked("""
+      SELECT 1 AS independent FROM companion_execution_conversations x JOIN companion_execution_workspaces w ON w.id=x.workspace_id
+      WHERE x.id=? AND w.deleted=0 AND json_extract(CAST(w.payload AS TEXT),'$.kind') IN ('linux','ios')
+      """, values: [id]).isEmpty == false { return }
+    throw try pairedForeignOwnerUnlocked(id) != nil ? WorkspaceConversationActionError.ownedByAnotherMac : WorkspaceConversationActionError.unavailable
+  }
+
+  /// The paired Mac that owns this chat when it is not this Mac.
+  func pairedForeignOwnerUnlocked(_ id: String) throws -> String? {
+    try historyRowsUnlocked("""
+      SELECT o.device_id FROM paired_conversation_owners o JOIN companion_library_identity i ON i.singleton=1
+      WHERE o.id=? AND o.device_id<>i.host_device_id
+      """, values: [id]).first?.objectValue?["device_id"]?.stringValue
   }
 }

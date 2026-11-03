@@ -88,6 +88,8 @@ extension WorkspaceDatabaseConnection {
     updatedAt: Date = Date()
   ) throws -> Bool {
     try transaction {
+      // A draft's folder is its execution directory; only its executor moves it.
+      try requireProtectedConversationMutationUnlocked(id)
       let operatorID = try localMutationOperatorIDUnlocked()
       try validateFolderUnlocked(id: folderID, operatorID: operatorID)
       let root = try availableSessionExecutionRoot(id: id)

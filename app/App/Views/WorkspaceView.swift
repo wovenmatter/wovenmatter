@@ -898,7 +898,16 @@ struct WorkspaceView: View {
 
     private func createAgentChat(_ id: UUID) {
         if let agent = allAgents.first(where: { $0.id == id }) {
-            if agent.governingPlane == .remoteWorkspace,
+            if model.peerAgentWorkspaces[agent.id] != nil {
+                let folder = selectedFolderID
+                let selection = beginChatCreation(agentID: agent.id)
+                Task {
+                    do {
+                        let id = try await model.createPairedMacSession(agentID: agent.id, conversationID: selection.id, folderID: folder)
+                        finishChatCreation(selection, conversationID: id)
+                    } catch { finishChatCreation(selection, conversationID: nil); showNotice(error.localizedDescription) }
+                }
+            } else if agent.governingPlane == .remoteWorkspace,
                let target = model.remoteWorkspaces.readyChatTargets.first(where: {
                    $0.configuration.id == agent.runtimeDeviceID && $0.harness.id == agent.runtimeKind
                }) {

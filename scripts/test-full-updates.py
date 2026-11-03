@@ -45,6 +45,7 @@ with tempfile.TemporaryDirectory(prefix='wovenmatter-update-test-') as temp:
     info = dict(CFBundleIdentifier='wovenmatter.tests.update', CFBundleName='Woven Matter',
                 CFBundleExecutable='Probe', CFBundlePackageType='APPL',
                 CFBundleShortVersionString='0.3.0', CFBundleVersion='2', LSMinimumSystemVersion='26.0',
+                WovenMatterDeviceSetupVersion=assets.device_setup_version(),
                 SUFeedURL='https://example.invalid/appcast.xml', SUPublicEDKey=public,
                 SURequireSignedFeed=True, SUVerifyUpdateBeforeExtraction=True)
     (new / 'Contents/Info.plist').write_bytes(plistlib.dumps(info))
