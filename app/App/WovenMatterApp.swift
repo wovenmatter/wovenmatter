@@ -100,9 +100,6 @@ enum WorkspaceProcessLeaseStartupError: Error, Equatable, LocalizedError {
 }
 
 final class WorkspaceProcessLease {
-    static let defaultMaximumAcquisitionAttempts = 11
-    static let defaultRetryDelayMicroseconds: useconds_t = 50_000
-
     private static let appBundleIdentifiers = [
         "wovenmatter.desktop",
         "wovenmatter.desktop.dev",
@@ -110,11 +107,8 @@ final class WorkspaceProcessLease {
 
     private let descriptor: Int32
 
-    init(
-        fileURL: URL = WorkspaceProcessLease.defaultFileURL(),
-        owner: WorkspaceProcessLeaseOwner? = nil
-    ) throws {
-        let owner = owner ?? Self.currentOwner()
+    init(fileURL: URL = WorkspaceProcessLease.defaultFileURL()) throws {
+        let owner = Self.currentOwner()
         try FileManager.default.createDirectory(
             at: fileURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
@@ -178,22 +172,17 @@ final class WorkspaceProcessLease {
         )
     }
 
-    static func resolveStartup(
-        maximumAcquisitionAttempts: Int = defaultMaximumAcquisitionAttempts,
-        retryDelayMicroseconds: useconds_t = defaultRetryDelayMicroseconds,
-        acquire: () throws -> WorkspaceProcessLease = { try WorkspaceProcessLease() },
-        handOff: (WorkspaceProcessLeaseOwner?) -> WorkspaceProcessLeaseHandoffResult = activateIncumbent,
-        waitBeforeRetry: (useconds_t) -> Void = { _ = Darwin.usleep($0) }
-    ) throws -> WorkspaceProcessLeaseStartupResult {
-        precondition(maximumAcquisitionAttempts > 0)
+    static func resolveStartup() throws -> WorkspaceProcessLeaseStartupResult {
+        let maximumAcquisitionAttempts = 11
+        let retryDelayMicroseconds: useconds_t = 50_000
         var lastRecordedOwner: WorkspaceProcessLeaseOwner?
 
         for attempt in 1...maximumAcquisitionAttempts {
             do {
-                return .acquired(try acquire())
+                return .acquired(try WorkspaceProcessLease())
             } catch WorkspaceProcessLeaseError.occupied(let owner) {
                 lastRecordedOwner = owner
-                switch handOff(owner) {
+                switch activateIncumbent(owner) {
                 case .activated(let incumbent):
                     return .handedOff(incumbent)
                 case .unavailable:
@@ -204,12 +193,12 @@ final class WorkspaceProcessLease {
                                 lastRecordedOwner: lastRecordedOwner
                             )
                     }
-                    waitBeforeRetry(retryDelayMicroseconds)
+                    _ = Darwin.usleep(retryDelayMicroseconds)
                 }
             }
         }
 
-        // The precondition and loop bounds make this unreachable.
+        // The loop bounds make this unreachable.
         throw WorkspaceProcessLeaseStartupError.occupiedWithoutVerifiedIncumbent(
             attempts: maximumAcquisitionAttempts,
             lastRecordedOwner: lastRecordedOwner
@@ -501,7 +490,6 @@ struct WovenMatterApp: App {
     @State private var applicationModel: ApplicationModel
 
     init() {
-
         let environment = ProcessInfo.processInfo.environment
         let isRunningUnitTests = environment["XCTestBundlePath"] != nil
             || environment["XCTestSessionIdentifier"] != nil

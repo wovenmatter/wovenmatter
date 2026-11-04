@@ -125,25 +125,28 @@ final class ApplicationModel {
             else {
                 instance = await OpenCodeModel(store: dashboardStore, ownerDeviceID: ownerDeviceID, defaults: applicationDefaults,
                     remoteConfiguration: configuration, remoteWorkspaces: remoteWorkspaces)
-                instance.applyInitialSessionTools = { [weak self] id, tools in
-                    guard let apply = self?.applyInitialSessionToolIDs else { throw ApplicationModelError.unavailableSessionTools }
-                    try await apply(id, tools)
-                }
-                await instance.coordinator.setMCPConnectionProvider { [weak self] id in
-                    try await self?.sessionMCPConnection(id)
-                }
+                await attachOpenCode(instance, remoteWorkspaceID: configuration.id)
                 remoteOpenCodes[configuration.id] = instance
-                instance.onChange = { [weak self, weak instance] id in
-                    guard let self, let instance, self.remoteOpenCodes[configuration.id] === instance else { return }
-                    if instance.snapshots[id]?.active == true { self.localRunningConversationIDs.insert(id) }
-                    else { self.localRunningConversationIDs.remove(id) }
-                    await self.refreshWorkspaceIfChanged()
-                    await self.refreshConversation(id: id)
-                }
             }
             if remoteWorkspaces.isRuntimeInstalled(.opencode, in: configuration) {
                 if !instance.isReady && !instance.isConnecting && instance.canRestoreAutomatically { await instance.restore() }
             } else { await instance.suspendConnection() }
+        }
+    }
+
+    private func attachOpenCode(_ instance: OpenCodeModel, remoteWorkspaceID: UUID? = nil) async {
+        instance.applyInitialSessionTools = { [weak self] id, tools in
+            guard let apply = self?.applyInitialSessionToolIDs else { throw ApplicationModelError.unavailableSessionTools }
+            try await apply(id, tools)
+        }
+        await instance.coordinator.setMCPConnectionProvider { [weak self] id in try await self?.sessionMCPConnection(id) }
+        instance.onChange = { [weak self, weak instance] id in
+            guard let self, let instance,
+                  remoteWorkspaceID.map({ self.remoteOpenCodes[$0] === instance }) ?? true else { return }
+            if instance.snapshots[id]?.active == true { self.localRunningConversationIDs.insert(id) }
+            else { self.localRunningConversationIDs.remove(id) }
+            await self.refreshWorkspaceIfChanged()
+            await self.refreshConversation(id: id)
         }
     }
 
@@ -351,7 +354,6 @@ final class ApplicationModel {
     private var noteWriteBehind: DashboardNoteWriteBehind?
     private(set) var noteEditingSuspended = false
     private var dashboardStoreStarted = false
-    private var dashboardStoreStartDeferredForNoteRecovery = false
     @ObservationIgnored var backendRPCClient: BackendRPCClient?
     @ObservationIgnored var backendRPCServer: BackendRPCServer?
     @ObservationIgnored var backendApplicationService: BackendApplicationService?
@@ -382,7 +384,6 @@ final class ApplicationModel {
     @ObservationIgnored var sessionSelectionWorkspaceID: ((String) async throws -> String?)?
     @ObservationIgnored var applyInitialSessionToolIDs: ((String, [String]) async throws -> Void)?
     @ObservationIgnored var applyingSessionSelectionTasks: [String: Task<Void, any Error>] = [:]
-    @ObservationIgnored
     @ObservationIgnored
     private let localACPWorkspaceStore: LocalACPWorkspaceConfigurationStore
     @ObservationIgnored
@@ -499,11 +500,7 @@ final class ApplicationModel {
                     id: entry.noteID,
                     title: entry.title,
                     content: entry.content,
-                    folderID: entry.folderID,
-                    createdAt: entry.createdAt,
                     expectedRevision: entry.expectedRevision,
-                    baseContent: entry.baseContent,
-                    baseTitle: entry.baseTitle,
                     operationID: entry.mutationID
                 )
             },
@@ -521,14 +518,15 @@ final class ApplicationModel {
 
     #if COMPANION_FACADE_TESTS
     var runtimeMaintenanceFixture: (@Sendable (AgentRuntimeKind) async throws -> RuntimeInventory)?
-    var remoteSSHOptionsFixture: (@Sendable (String) throws -> [String])?
+    /// Facade fixtures launch remote harnesses without tailnet SSH options or MCP bridges.
+    var isCompanionFixture = false
 
     /// Installs explicit inert provider metadata while preserving real routing,
     /// session preferences, tools, persistence and note recovery.
     func configureCompanionFixture(directory: URL) async throws {
         guard let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
         titleGenerationSettings.isEnabled = false
-        remoteSSHOptionsFixture = { _ in [] }
+        isCompanionFixture = true
         let runtimes = AgentRuntimeKind.allCases.filter { $0 != .opencode }
         localACPLaunchConfigurations = Dictionary(uniqueKeysWithValues: runtimes.map {
             ($0, LocalACPRuntimeLaunchConfiguration(runtimeKind: $0,
@@ -576,18 +574,7 @@ final class ApplicationModel {
         await refreshLocalACPWorkspace()
         let openCode = await OpenCodeModel(store: dashboardStore,
             ownerDeviceID: try await dashboardStore.dashboardDeviceID(), defaults: applicationDefaults)
-        openCode.applyInitialSessionTools = { [weak self] id, tools in
-            guard let apply = self?.applyInitialSessionToolIDs else { throw ApplicationModelError.unavailableSessionTools }
-            try await apply(id, tools)
-        }
-        await openCode.coordinator.setMCPConnectionProvider { [weak self] id in try await self?.sessionMCPConnection(id) }
-        openCode.onChange = { [weak self, weak openCode] id in
-            guard let self, let openCode else { return }
-            if openCode.snapshots[id]?.active == true { self.localRunningConversationIDs.insert(id) }
-            else { self.localRunningConversationIDs.remove(id) }
-            await self.refreshWorkspaceIfChanged()
-            await self.refreshConversation(id: id)
-        }
+        await attachOpenCode(openCode)
         self.openCode = openCode
         await openCode.restore()
         await refreshWorkspace()
@@ -666,7 +653,6 @@ final class ApplicationModel {
             pendingConversationChanges.removeAll()
             terminalRunIDsByConversation.removeAll()
             dashboardStoreStarted = false
-            dashboardStoreStartDeferredForNoteRecovery = false
             let supportDirectory = try Self.dashboardSupportDirectory()
             NSLog(
                 "Woven Matter dashboard database: %@",
@@ -682,21 +668,8 @@ final class ApplicationModel {
             }
             try await dashboardStore.prepareLocalWorkspace()
             let openCode = await OpenCodeModel(store: dashboardStore, ownerDeviceID: try await dashboardStore.dashboardDeviceID(), defaults: applicationDefaults)
-            openCode.applyInitialSessionTools = { [weak self] id, tools in
-                guard let apply = self?.applyInitialSessionToolIDs else { throw ApplicationModelError.unavailableSessionTools }
-                try await apply(id, tools)
-            }
-            await openCode.coordinator.setMCPConnectionProvider { [weak self] id in
-                try await self?.sessionMCPConnection(id)
-            }
+            await attachOpenCode(openCode)
             self.openCode = openCode
-            openCode.onChange = { [weak self, weak openCode] id in
-                guard let self, let openCode else { return }
-                if openCode.snapshots[id]?.active == true { self.localRunningConversationIDs.insert(id) }
-                else { self.localRunningConversationIDs.remove(id) }
-                await self.refreshWorkspaceIfChanged()
-                await self.refreshConversation(id: id)
-            }
             Task { await openCode.restore() }
             remoteWorkspaces.onTaskGatewayChangeRequested = { [weak self] configuration, enabled in
                 guard let self else { throw ApplicationModelError.dashboardStoreUnavailable }
@@ -735,7 +708,6 @@ final class ApplicationModel {
             } catch {
                 // Recovery conflicts preserve their journal entries but do not prevent
                 // unrelated conversations and the companion service from starting.
-                dashboardStoreStartDeferredForNoteRecovery = false
                 noteMutationError = error.localizedDescription
                 for entry in recoveredEntries {
                     noteDrafts[entry.noteID]?.fail(error.localizedDescription)
@@ -1043,7 +1015,6 @@ final class ApplicationModel {
 
     private func startDashboardStoreIfReady() {
         guard !dashboardStoreStarted,
-              !dashboardStoreStartDeferredForNoteRecovery,
               let dashboardStore else { return }
         dashboardStoreStarted = true
         conversationChangeTask?.cancel()
@@ -1076,20 +1047,7 @@ final class ApplicationModel {
             // The running adapter already supplied this snapshot. Preparing a
             // session here would turn its initial notification into a refresh
             // loop, keeping the composer loading while idle sessions restart.
-            localACPSessionMetadata[change.conversationID] = LocalACPSessionMetadata(
-                sessionKey: change.conversationID,
-                model: configuration.model,
-                thinking: configuration.thinking,
-                modelOptions: configuration.modelOptions,
-                thinkingLevels: configuration.thinkingOptions,
-                slashCommands: configuration.slashCommands,
-                modelOptionMetadata: configuration.modelOptionMetadata,
-                thinkingOptionMetadata: configuration.thinkingOptionMetadata,
-                permission: configuration.permission,
-                permissionOptions: configuration.permissionOptions,
-                permissionOptionMetadata: configuration.permissionOptionMetadata,
-                workingDirectory: configuration.workingDirectory
-            )
+            localACPSessionMetadata[change.conversationID] = LocalACPSessionMetadata(sessionKey: change.conversationID, configuration: configuration)
             return
         }
         if LocalExecutionRole.current == .backend, change.phase == .content { return }
@@ -1290,7 +1248,7 @@ final class ApplicationModel {
             if workspaceError != nil {
                 workspaceError = nil
             }
-            try await agentTools?.reloadInBackground(policyIDs: Set(conversationStatesByID.keys))
+            try await agentTools?.reload(policyIDs: Set(conversationStatesByID.keys))
         } catch is CancellationError {
         } catch {
             guard generation == workspaceRefreshGeneration, !Task.isCancelled else { return }
@@ -1519,30 +1477,29 @@ final class ApplicationModel {
             let partition = ConversationWorkTimeline.displayPartition(
                 AssistantTranscriptProjection(messageID: message.id,
                     content: message.content, activities: workActivities),
-                activities: workActivities, isLive: isStreaming)
+                activities: workActivities)
             let candidateBody = isStreaming
                 ? AssistantStreamingText.readyPrefix(of: partition.body) : partition.body
             let existing = previous[message.id]
             // The persistence invalidation stream already coalesces updates.
             // Dropping a final append here without a trailing delivery leaves
             // text stale until another provider event happens to arrive.
-            let displayedBody = candidateBody
             let commentaryIDs = partition.commentaryIDs
             result[message.id] = DashboardMessagePresentation(
                 source: message.content,
-                displayedBody: displayedBody,
+                displayedBody: candidateBody,
                 status: message.status,
                 isStreaming: isStreaming,
                 createdAt: message.createdAt,
-                document: displayedBody == existing?.displayedBody ? existing?.document : message.role == "assistant"
+                document: candidateBody == existing?.displayedBody ? existing?.document : message.role == "assistant"
                     ? ConversationMarkdownDocument(
-                        RemoteNoteEditEnvelope.redactingEnvelopes(in: displayedBody)
+                        RemoteNoteEditEnvelope.redactingEnvelopes(in: candidateBody)
                     )
                     : nil,
                 activities: work,
                 commentaryIDs: commentaryIDs,
                 workTimeline: ConversationWorkTimeline(records: work, commentaryIDs: commentaryIDs),
-                textDeliveredAt: displayedBody == existing?.displayedBody ? existing!.textDeliveredAt : Date()
+                textDeliveredAt: candidateBody == existing?.displayedBody ? existing!.textDeliveredAt : Date()
             )
         }
         return result
@@ -1752,7 +1709,7 @@ final class ApplicationModel {
                       folder.managedRoot, let owner = folder.executionWorkspaceID, let path = folder.rootPath else {
                     throw WorkspaceToolError.invalid("Only a managed Woven project root can be deleted.")
                 }
-                if owner.hasPrefix("remote:"), let workspaceID = UUID(uuidString: String(owner.dropFirst(7))),
+                if let workspaceID = Self.remoteWorkspaceID(sourceID: owner),
                    let configuration = remoteWorkspaces.configuration(id: workspaceID) {
                     try await remoteWorkspaces.deleteProject(path: path, in: configuration)
                 } else {
@@ -2049,11 +2006,6 @@ final class ApplicationModel {
             if hasOutstandingWork == false {
                 noteMutationError = nil
             }
-            if dashboardStoreStartDeferredForNoteRecovery,
-               hasOutstandingWork == false {
-                dashboardStoreStartDeferredForNoteRecovery = false
-                startDashboardStoreIfReady()
-            }
             noteRefreshTask?.cancel()
             noteRefreshTask = Task {
                 guard !Task.isCancelled else { return }
@@ -2293,7 +2245,7 @@ final class ApplicationModel {
 
     func conversationAttachmentDraft(
         _ conversation: WorkspaceConversationRecord
-    ) async throws -> AgentMessageAttachmentDraft {
+    ) -> AgentMessageAttachmentDraft {
         return .reference(AgentMessageReferenceDraft(
             kind: .conversation,
             resourceID: conversation.id,
@@ -2851,20 +2803,7 @@ final class ApplicationModel {
                   localACPSessionRefreshLifecycle.isCurrent(request) else {
                 return
             }
-            localACPSessionMetadata[conversation.id] = LocalACPSessionMetadata(
-                sessionKey: conversation.id,
-                model: configuration.model,
-                thinking: configuration.thinking,
-                modelOptions: configuration.modelOptions,
-                thinkingLevels: configuration.thinkingOptions,
-                slashCommands: configuration.slashCommands,
-                modelOptionMetadata: configuration.modelOptionMetadata,
-                thinkingOptionMetadata: configuration.thinkingOptionMetadata,
-                permission: configuration.permission,
-                permissionOptions: configuration.permissionOptions,
-                permissionOptionMetadata: configuration.permissionOptionMetadata,
-                workingDirectory: configuration.workingDirectory
-            )
+            localACPSessionMetadata[conversation.id] = LocalACPSessionMetadata(sessionKey: conversation.id, configuration: configuration)
             if let metadata = localACPSessionMetadata[conversation.id] {
                 await recordConfirmedSessionSelections(conversationID: conversation.id, metadata: metadata)
             }
@@ -2948,20 +2887,7 @@ final class ApplicationModel {
                         workspace: workspace
                     )
                 localACPSessionMetadata[conversation.id] =
-                    LocalACPSessionMetadata(
-                        sessionKey: conversation.id,
-                        model: configuration.model,
-                        thinking: configuration.thinking,
-                        modelOptions: configuration.modelOptions,
-                        thinkingLevels: configuration.thinkingOptions,
-                        slashCommands: configuration.slashCommands,
-                        modelOptionMetadata: configuration.modelOptionMetadata,
-                        thinkingOptionMetadata: configuration.thinkingOptionMetadata,
-                        permission: configuration.permission,
-                        permissionOptions: configuration.permissionOptions,
-                        permissionOptionMetadata: configuration.permissionOptionMetadata,
-                        workingDirectory: configuration.workingDirectory
-                    )
+                    LocalACPSessionMetadata(sessionKey: conversation.id, configuration: configuration)
                 sessionSelectionPreferences.markApplied(id: conversation.id)
                 if let metadata = localACPSessionMetadata[conversation.id] {
                     await recordConfirmedSessionSelections(conversationID: conversation.id, metadata: metadata)
@@ -2993,7 +2919,7 @@ final class ApplicationModel {
               let childID = Int(request.nativeConversationID), childID > 0 else {
             throw BackendRPCError.remote("Invalid subagent archive identity.")
         }
-        let hostPrefix = descriptor.remoteWorkspaceID.map { "remote:" + $0.uuidString.lowercased() + ":" } ?? "local:"
+        let hostPrefix = descriptor.remoteWorkspaceID.map { Self.remoteDatabaseSourceID($0) + ":" } ?? "local:"
         let sourceID = hostPrefix + request.sourceID
         var query = WorkspaceHistoryQuery(command: "events", conversationID: request.conversationID,
             after: request.after, limit: 30, sourceID: sourceID,
@@ -3176,7 +3102,7 @@ final class ApplicationModel {
         let resolvedRoot: URL
         do { resolvedRoot = try await folderWorkingDirectory(folderID: folderID, workspaceID: target.configuration.id, explicit: nativeWorkingDirectory, calendarExecutionRoot: calendarExecutionRoot) }
         catch { localRunError = error.localizedDescription; return nil }
-        let selectionWorkspace = "remote:" + target.configuration.id.uuidString.lowercased()
+        let selectionWorkspace = Self.remoteDatabaseSourceID(target.configuration.id)
         let capturedDefaults = sessionSelectionPreferences.defaults(harness: target.harness.id.rawValue, workspace: selectionWorkspace)
         let usesProductPermissionDefault = sessionSelectionPreferences.usesProductPermissionDefault(
             harness: target.harness.id.rawValue, workspace: selectionWorkspace)
@@ -3249,13 +3175,12 @@ final class ApplicationModel {
 
             var sshOptions: @Sendable (String) throws -> [String] = RemoteWorkspaceTailnet.sshOptions
             #if COMPANION_FACADE_TESTS
-            if let fixture = remoteSSHOptionsFixture { sshOptions = fixture }
+            if isCompanionFixture { sshOptions = { _ in [] } }
             #endif
             return try RemoteHarnessLaunchResolver.resolve(
                 configuration: configuration,
                 runtimeKind: runtimeKind,
                 processWorkingDirectory: processDirectory,
-                workspaceRoot: URL(fileURLWithPath: remoteWorkspaces.remoteWorkspaceRoot(for: configuration)),
                 workingDirectory: inheritedRoot,
                 durableChannelID: conversation.id,
                 tailnetSSHOptions: sshOptions
@@ -3291,14 +3216,13 @@ final class ApplicationModel {
                 let kind = definition.runtimeKind
                 guard !runtimeMaintenanceBusy(kind), checkingRuntimeKinds.insert(kind).inserted else { continue }
                 let generation = runtimeInventoryGeneration[kind, default: 0]
-                let checkLatest = true
                 let inventory = await Task.detached(priority: .utility) {
-                    await RuntimeMaintenance.inspect(kind, checkLatest: checkLatest, selectedOpenCode: selectedOpenCode)
+                    await RuntimeMaintenance.inspect(kind, checkLatest: true, selectedOpenCode: selectedOpenCode)
                 }.value
                 checkingRuntimeKinds.remove(kind)
                 guard !runtimeMaintenanceBusy(kind), generation == runtimeInventoryGeneration[kind, default: 0] else { continue }
                 runtimeInventories[kind] = inventory
-                if checkLatest { checkedRuntimeKinds.insert(kind) }
+                checkedRuntimeKinds.insert(kind)
             }
         }
     }
@@ -3526,27 +3450,6 @@ final class ApplicationModel {
         if isBackendFrontend { sendBackendRuntimeCommand(.refreshTitleCapabilities); return }
         Task { await refreshTitleGenerationCapabilities() }
     }
-
-    func setUpLocalACPWorkspace(homeDirectory: URL) {
-        if isBackendFrontend { sendBackendRuntimeCommand(.setUpWorkspace(homeDirectory)); return }
-        Task {
-            do {
-                try await localACPWorkspaceStore.setUpWorkspace(
-                    in: homeDirectory
-                )
-                localRunError = nil
-                await refreshLocalACPWorkspace()
-                await refreshLocalACPRuntimes()
-            } catch {
-                localRunError = error.localizedDescription
-            }
-        }
-    }
-
-
-
-
-
 
     @discardableResult
     func resolveLocalACPPermission(id: UUID, optionID: String?) -> Bool {
@@ -4036,6 +3939,11 @@ final class ApplicationModel {
         "remote:\(id.uuidString.lowercased())"
     }
 
+    static func remoteWorkspaceID(sourceID: String) -> UUID? {
+        guard sourceID.hasPrefix("remote:") else { return nil }
+        return UUID(uuidString: String(sourceID.dropFirst(7)))
+    }
+
     private func remoteDatabaseConfiguration(sourceID: String) -> RemoteWorkspaceConfiguration? {
         remoteWorkspaces.workspaces.first { Self.remoteDatabaseSourceID($0.id) == sourceID }
     }
@@ -4147,38 +4055,6 @@ final class ApplicationModel {
             allowsCreation: allowsCreation
         )
     }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     private func apply(_ snapshot: DashboardStoreSnapshot) {
         if let backendApplicationService, snapshot.revision != workspaceRevision {
@@ -4377,7 +4253,6 @@ extension ApplicationModel {
             }
             observeBackendApplicationState()
             observeBackendRemoteState()
-            observeBackendGatewaySettingsState()
             observeBackendDatabasesState()
             observeBackendUsageState()
             observeBackendOpenCodeState()
@@ -4444,9 +4319,6 @@ extension ApplicationModel {
             }
             if request.method == "workspaceServices.command" {
                 return .init(id: request.id, result: try await handleBackendWorkspaceServicesRequest(payload: request.payload))
-            }
-            if request.method == "gatewaySettings.snapshot" {
-                return .init(id: request.id, result: try JSONEncoder().encode(backendGatewaySettingsSnapshot()))
             }
             if request.method == "databases.snapshot" {
                 return .init(id: request.id, result: try JSONEncoder().encode(backendDatabasesSnapshot()))
@@ -4688,7 +4560,6 @@ extension ApplicationModel {
             try await configureFrontendNoteWriteBehind(store: store, supportDirectory: support)
             try await refreshBackendApplicationState()
             try await refreshBackendRemoteState()
-            try await refreshBackendGatewaySettingsState()
             try await refreshBackendDatabasesState()
             try await refreshBackendOpenCodeState()
             try await refreshBackendConnectionsState()
@@ -4735,7 +4606,6 @@ extension ApplicationModel {
                     if change.requiresReload || !change.scopes.isDisjoint(with: [.runtime, .permissions]) {
                         try await self.refreshBackendApplicationState()
                     }
-                    if change.requiresReload || change.scopes.contains(.gatewaySettings) { try await self.refreshBackendGatewaySettingsState() }
                     if change.requiresReload || change.scopes.contains(.databases) { try await self.refreshBackendDatabasesState() }
                     if change.requiresReload || change.scopes.contains(.remoteWorkspaces) { try await self.refreshBackendRemoteState() }
                     if change.requiresReload || change.scopes.contains(.openCode) { try await self.refreshBackendOpenCodeState() }
@@ -4745,7 +4615,7 @@ extension ApplicationModel {
                         await self.analytics.refresh()
                     }
                     if change.requiresReload || change.scopes.contains(.usage) { await self.usage.refreshBackendSnapshot() }
-                    if change.requiresReload || change.scopes.contains(.settings) { try await self.agentTools?.reloadInBackground() }
+                    if change.requiresReload || change.scopes.contains(.settings) { try await self.agentTools?.reload() }
                     if self.workspaceError == disconnectedMessage { self.workspaceError = nil }
                 }, failed: { [weak self] _ in
                     self?.workspaceError = disconnectedMessage
@@ -5063,7 +4933,6 @@ extension ApplicationModel {
         case .cancelInstall: cancelPreparedLocalACPRuntimeInstall()
         case .refreshRuntimes(let kinds): refreshLocalACPRuntimesNow(checkCredentialsFor: kinds)
         case .refreshSignIn: await refreshLocalSignInStatus()
-        case .setUpWorkspace(let url): setUpLocalACPWorkspace(homeDirectory: url)
         case .titleEnabled(let enabled): setTitleGenerationEnabled(enabled)
         case .titleModel(let model): setTitleGenerationModel(model)
         case .titleThinking(let thinking): setTitleGenerationThinking(thinking)
@@ -5071,13 +4940,6 @@ extension ApplicationModel {
         }
         return try JSONEncoder().encode(backendRuntimeSnapshot())
     }
-}
-
-
-extension ApplicationModel {
-
-
-
 }
 
 
@@ -5156,18 +5018,6 @@ extension ApplicationModel {
 }
 
 extension ApplicationModel {
-
-
-
-
-
-    func backendGatewaySettingsSnapshot() -> BackendGatewaySettingsSnapshot {
-        .init(metadata: localACPSessionMetadata)
-    }
-
-    func applyBackendGatewaySettingsSnapshot(_ value: BackendGatewaySettingsSnapshot) {
-    }
-
     func backendDatabasesSnapshot() -> BackendDatabasesSnapshot {
         .init(catalog: databasesSnapshot, refreshing: isRefreshingDatabases,
               error: databaseError)
@@ -5182,18 +5032,8 @@ extension ApplicationModel {
     private func sendBackendWorkspaceService(_ command: BackendWorkspaceServiceCommand) async throws -> BackendWorkspaceServiceResponse {
         let data = try await callBackend(method: "workspaceServices.command", payload: JSONEncoder().encode(command))
         let response = try JSONDecoder().decode(BackendWorkspaceServiceResponse.self, from: data)
-        if let gateway = response.gateway { applyBackendGatewaySettingsSnapshot(gateway) }
         if let databases = response.databases { applyBackendDatabasesSnapshot(databases) }
         return response
-    }
-
-    private func forwardBackendWorkspaceService(_ command: BackendWorkspaceServiceCommand) {
-        Task { await forwardBackendWorkspaceServiceAndWait(command) }
-    }
-
-    private func forwardBackendWorkspaceServiceAndWait(_ command: BackendWorkspaceServiceCommand) async {
-        do { _ = try await sendBackendWorkspaceService(command) }
-        catch { localRunError = error.localizedDescription }
     }
 
     func handleBackendWorkspaceServicesRequest(payload: Data) async throws -> Data {
@@ -5227,23 +5067,12 @@ extension ApplicationModel {
         case let .databaseData(link): databaseCommand = true; response.data = try await linkedData(for: link)
         }
         if databaseCommand { response.databases = backendDatabasesSnapshot() }
-        else { response.gateway = backendGatewaySettingsSnapshot() }
         return try JSONEncoder().encode(response)
     }
 }
 
 
 extension ApplicationModel {
-
-    private func observeBackendGatewaySettingsState() {
-        withObservationTracking { _ = backendGatewaySettingsSnapshot() } onChange: { [weak self] in
-            Task { @MainActor in
-                guard let self, let service = self.backendApplicationService else { return }
-                self.observeBackendGatewaySettingsState()
-                await service.invalidations.publish(scopes: [.gatewaySettings])
-            }
-        }
-    }
 
     private func observeBackendDatabasesState() {
         withObservationTracking { _ = backendDatabasesSnapshot() } onChange: { [weak self] in
@@ -5253,12 +5082,6 @@ extension ApplicationModel {
                 await service.invalidations.publish(scopes: [.databases])
             }
         }
-    }
-
-
-    private func refreshBackendGatewaySettingsState() async throws {
-        applyBackendGatewaySettingsSnapshot(try JSONDecoder().decode(BackendGatewaySettingsSnapshot.self,
-            from: await callBackend(method: "gatewaySettings.snapshot")))
     }
 
     private func refreshBackendDatabasesState() async throws {
@@ -5274,7 +5097,10 @@ extension ApplicationModel {
         pendingComposerPrefills.removeValue(forKey: conversationID)
         if isBackendFrontend {
             consumedBackendPrefills[conversationID] = expected
-            forwardBackendWorkspaceService(.consumePrefill(conversationID, expected))
+            Task {
+                do { _ = try await sendBackendWorkspaceService(.consumePrefill(conversationID, expected)) }
+                catch { localRunError = error.localizedDescription }
+            }
         }
     }
 }
@@ -5282,7 +5108,7 @@ extension ApplicationModel {
 
 extension ApplicationModel {
     func executionWorkspaceIdentity(workspaceID: UUID?) async throws -> String {
-        if let workspaceID { return "remote:" + workspaceID.uuidString.lowercased() }
+        if let workspaceID { return Self.remoteDatabaseSourceID(workspaceID) }
         guard let store = dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
         return try await store.executionWorkspaceID()
     }

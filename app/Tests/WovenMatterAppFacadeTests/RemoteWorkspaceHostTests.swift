@@ -119,7 +119,7 @@ private final class HostInspectionFixture: @unchecked Sendable {
         model.checkHost(hostName: existing.hostName, userName: "trey", kind: .host, accessMode: .fullRoot)
         try await settled(model)
         model.create(name: "Another", workspaceID: "another", hostName: existing.hostName, userName: "trey",
-            port: 7448, memoryLimit: "", swapLimit: "", kind: .host, accessMode: .fullRoot)
+            port: 7448, kind: .host, accessMode: .fullRoot)
         #expect(model.errorMessage?.contains("already configured for this host and user") == true)
         #expect(!model.isCreating && model.workspaces == [existing])
         #expect(fixture.calls.count == 1)
@@ -130,7 +130,7 @@ private final class HostInspectionFixture: @unchecked Sendable {
         let model = makeModel(fixture)
         let originalWorkspaces = model.workspaces
         model.create(name: "Fixture", workspaceID: "fixture", hostName: "fixture.invalid",
-                     userName: "", port: 7337, memoryLimit: "", swapLimit: "")
+                     userName: "", port: 7337)
         #expect(model.errorMessage?.contains("inspect a ready host") == true)
         model.prepareHost(hostName: "fixture.invalid", userName: "")
         #expect(model.pendingHostPreparation == nil)
@@ -170,7 +170,7 @@ private final class HostInspectionFixture: @unchecked Sendable {
         model.checkHost(hostName: legacy.hostName, userName: "", kind: .container)
         model.prepareHost(hostName: legacy.hostName, userName: "", kind: .container)
         model.create(name: "Legacy", workspaceID: "legacy", hostName: legacy.hostName, userName: "",
-            port: 7337, memoryLimit: "", swapLimit: "", kind: .container)
+            port: 7337, kind: .container)
         #expect(model.errorMessage?.contains("deprecated") == true)
         #expect(fixture.calls.isEmpty)
         #expect(!model.isCreating)

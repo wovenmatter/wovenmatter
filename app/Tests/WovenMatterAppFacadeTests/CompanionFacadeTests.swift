@@ -28,7 +28,7 @@ struct CompanionFacadeTests {
         #expect(await fixture.recorder.deliveries.count == 1)
     }
 
-    // OpenCode uses its native coordinator, covered by OpenCodeCoordinatorTests.
+    // OpenCode uses its native coordinator, covered by OpenCodeIntegrationTests and OpenCodeStableCompatibilityTests.
     // Every remaining runtime still traverses the real facade and launch routing.
 
     @Test(arguments: ["local", "remote"])

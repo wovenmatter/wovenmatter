@@ -12,11 +12,10 @@ enum BackendRemoteWorkspaceCommand: Codable {
     case backgroundExecution(UUID, Bool)
     case checkHost(hostName: String, userName: String, kind: RemoteWorkspaceKind = .host, accessMode: RemoteWorkspaceAccessMode = .user)
     case prepareHost(hostName: String, userName: String, kind: RemoteWorkspaceKind = .host, accessMode: RemoteWorkspaceAccessMode = .user)
-    case create(name: String, workspaceID: String, hostName: String, userName: String, port: Int, memoryLimit: String, swapLimit: String, kind: RemoteWorkspaceKind = .host, accessMode: RemoteWorkspaceAccessMode = .user)
+    case create(name: String, workspaceID: String, hostName: String, userName: String, port: Int, kind: RemoteWorkspaceKind = .host, accessMode: RemoteWorkspaceAccessMode = .user)
     case authorizeHostPreparation, cancelHostPreparation
     case dismissHarnessSetup(UUID)
     case lifecycle(UUID, String), updateContainer(UUID)
-    case resources(UUID, memoryLimit: String, swapLimit: String)
     case delete(UUID, removePersistentData: Bool)
     case logs(UUID), browserSelfTest(UUID)
     case performHarness(UUID, AgentRuntimeKind, String), prepareHarness(UUID, AgentRuntimeKind, String)
@@ -73,8 +72,8 @@ struct BackendRemoteWorkspaceService {
         case .backgroundExecution(let id, let enabled): model.setBackgroundExecution(enabled, for: try workspace(id))
         case .checkHost(let host, let user, let kind, let access): model.checkHost(hostName: host, userName: user, kind: kind, accessMode: access)
         case .prepareHost(let host, let user, let kind, let access): model.prepareHost(hostName: host, userName: user, kind: kind, accessMode: access)
-        case .create(let name, let id, let host, let user, let port, let memory, let swap, let kind, let access):
-            model.create(name: name, workspaceID: id, hostName: host, userName: user, port: port, memoryLimit: memory, swapLimit: swap, kind: kind, accessMode: access)
+        case .create(let name, let id, let host, let user, let port, let kind, let access):
+            model.create(name: name, workspaceID: id, hostName: host, userName: user, port: port, kind: kind, accessMode: access)
         case .dismissHarnessSetup(let id): model.dismissHarnessSetup(id)
         case .authorizeHostPreparation: model.authorizeHostPreparation()
         case .cancelHostPreparation: model.cancelHostPreparation()
@@ -82,7 +81,6 @@ struct BackendRemoteWorkspaceService {
             guard let action = RemoteWorkspaceLifecycleAction(rawValue: value) else { throw BackendRPCError.remote("Unknown workspace action.") }
             model.lifecycle(action, configuration: try workspace(id))
         case .updateContainer(let id): model.updateContainer(try workspace(id))
-        case .resources(let id, let memory, let swap): model.applyResources(try workspace(id), memoryLimit: memory, swapLimit: swap)
         case .delete(let id, let removeData): model.delete(try workspace(id), removePersistentData: removeData)
         case .logs(let id): model.loadLogs(try workspace(id))
         case .browserSelfTest(let id): model.checkBrowserSandbox(try workspace(id))

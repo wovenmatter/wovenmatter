@@ -65,13 +65,9 @@ extension CompanionCommandService {
         return result
     }
 
-    func nativeInteractionResponseIsSafeToJournal(_ command: CompanionCommand) -> Bool {
-        CompanionNativeInteractionProjection.responseIsSafeToJournal(command)
-    }
-
     func respondToNativeInteraction(_ command: CompanionCommand) async throws -> Bool {
         guard let interactionID = command.interactionID, interactionID.hasPrefix("opencode:") else { return false }
-        guard nativeInteractionResponseIsSafeToJournal(command),
+        guard CompanionNativeInteractionProjection.responseIsSafeToJournal(command),
               let conversationID = command.conversationID,
               let native = model.openCodeModel(for: conversationID), native.isLocalSession(conversationID),
               let link = native.links[conversationID], let snapshot = native.snapshots[conversationID],

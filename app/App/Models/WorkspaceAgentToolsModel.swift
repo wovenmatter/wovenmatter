@@ -131,10 +131,6 @@ final class WorkspaceAgentToolsModel {
         } else { try await setEnabled(group, enabled: enabled, sessionID: sessionID, confirmedPausingTimers: confirmedPausingTimers) }
     }
 
-    func reloadInBackground(policyIDs: Set<String> = []) async throws {
-        try await reload(policyIDs: policyIDs)
-    }
-
     func reload(policyIDs: Set<String> = []) async throws {
         guard !stopped else { return }
         let generation = UUID()

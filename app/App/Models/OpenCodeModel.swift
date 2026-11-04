@@ -347,7 +347,7 @@ final class OpenCodeModel {
     func create(workspace: URL, requestedConversationID: UUID? = nil, title: String? = nil, nativeWorkspaceID: String? = nil, allowMissingCalendarFolder: Bool = false, executionRoot: SessionCreationRoot) async throws -> String {
         if isBackendProjection { return try await backendCommand(.create(workspace, requestedConversationID, title, nativeWorkspaceID, allowMissingCalendarFolder, executionRoot)).createdID ?? "" }
         let owner: String
-        if let configuration = remoteConfiguration { owner = "remote:" + configuration.id.uuidString.lowercased() }
+        if let configuration = remoteConfiguration { owner = ApplicationModel.remoteDatabaseSourceID(configuration.id) }
         else { owner = try await store.executionWorkspaceID() }
         guard executionRoot.location.workspaceID == owner else {
             throw OpenCodeError.message("Create this chat in its owning execution workspace.")
@@ -706,7 +706,7 @@ final class OpenCodeModel {
     }
 
     private func selectionWorkspace(_ workspace: URL) -> String {
-        remoteConfiguration.map { "remote:" + $0.id.uuidString.lowercased() }
+        remoteConfiguration.map { ApplicationModel.remoteDatabaseSourceID($0.id) }
             ?? "local:" + workspace.standardizedFileURL.path
     }
 
@@ -733,12 +733,6 @@ final class OpenCodeModel {
         guard pendingDispatches[id] == nil else { throw OpenCodeError.message("The previous input is still being submitted.") }
         pendingDispatches[id] = fence
         defer { pendingDispatches.removeValue(forKey: id) }
-        if isBackendProjection {
-            if let selection = selectionTasks[id] { try await selection.value }
-            // IPC dispatch may reach the execution owner even if its reply is lost.
-            try fence.claimDispatch()
-            _ = try await backendCommand(.send(id, input)); return OpenCodeSubmissionReceipt()
-        }
         guard let link = links[id], isLocalSession(id) else { throw OpenCodeError.message("This saved transcript is read-only. Create a new OpenCode chat.") }
         guard isEnabled else { throw OpenCodeError.message("Connect OpenCode in this workspace before sending.") }
         if let configuration = remoteConfiguration,

@@ -77,7 +77,6 @@ final class RemoteWorkspacesModel {
     private(set) var isCheckingHost = false
     private(set) var isCreating = false
     private(set) var progress: String?
-    private var deploymentProgressID: UUID?
     private(set) var errorMessage: String?
     private(set) var checkedPreflight: RemoteWorkspacePreflight?
     private var checkedHostKey: String?
@@ -308,7 +307,7 @@ final class RemoteWorkspacesModel {
     func refreshRuntimeMaintenanceAtStartup() { checkRuntimeMaintenanceOnActivation() }
 
     func remoteWorkspaceRoot(for configuration: RemoteWorkspaceConfiguration) -> String {
-        workspaceRoots[configuration.id] ?? configuration.workspaceRoot ?? (configuration.kind == .container ? "/home/.woven-matter" : "")
+        workspaceRoots[configuration.id] ?? configuration.workspaceRoot ?? ""
     }
 
     func stopOpenCode(for configuration: RemoteWorkspaceConfiguration) async throws {
@@ -782,8 +781,6 @@ final class RemoteWorkspacesModel {
         hostName: String,
         userName: String,
         port: Int,
-        memoryLimit: String,
-        swapLimit: String,
         kind: RemoteWorkspaceKind = .host,
         accessMode: RemoteWorkspaceAccessMode = .user
     ) {
@@ -791,7 +788,7 @@ final class RemoteWorkspacesModel {
             errorMessage = "Remote container workspaces are deprecated. Create a native Linux host workspace."
             return
         }
-        if forwardToBackend(.create(name: name, workspaceID: workspaceID, hostName: hostName, userName: userName, port: port, memoryLimit: memoryLimit, swapLimit: swapLimit, kind: kind, accessMode: accessMode)) { return }
+        if forwardToBackend(.create(name: name, workspaceID: workspaceID, hostName: hostName, userName: userName, port: port, kind: kind, accessMode: accessMode)) { return }
         guard !isCreating else { return }
         let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let cleanID = workspaceID.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -810,8 +807,6 @@ final class RemoteWorkspacesModel {
             hostName: cleanHost,
             userName: userName.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
             remotePort: port,
-            memoryLimit: kind == .container ? memoryLimit.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty : nil,
-            swapLimit: kind == .container ? swapLimit.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty : nil,
             kind: kind, accessMode: accessMode
         )
         do {
@@ -833,19 +828,6 @@ final class RemoteWorkspacesModel {
             }) {
                 throw RemoteWorkspaceClientError.invalidResourceLimit(
                     "That workspace ID is already configured on this SSH host."
-                )
-            }
-            if kind == .container, workspaces.contains(where: {
-                Self.hostKey(
-                    hostName: $0.hostName,
-                    userName: $0.userName ?? ""
-                ) == Self.hostKey(
-                    hostName: configuration.hostName,
-                    userName: configuration.userName ?? ""
-                ) && $0.remotePort == configuration.remotePort
-            }) {
-                throw RemoteWorkspaceClientError.invalidResourceLimit(
-                    "That remote loopback port is already assigned to another workspace on this SSH host."
                 )
             }
         } catch {
@@ -878,10 +860,6 @@ final class RemoteWorkspacesModel {
                         preflight.limitations.joined(separator: " ")
                     )
                 }
-                try Self.requireCapabilities(
-                    preflight,
-                    for: configuration
-                )
                 try await provision(configuration)
             } catch {
                 try? await credentials.deleteToken(for: configuration.id, allowInteraction: false)
@@ -958,58 +936,10 @@ final class RemoteWorkspacesModel {
         if forwardToBackend(.updateContainer(configuration.id)) { return }
         performBusy(configuration) {
             defer { self.progress = nil }
-            if configuration.kind == .host {
-                let status = try await self.sshClient.deployHost(configuration: configuration, update: true) { [weak self] message in
-                    Task { @MainActor [weak self] in self?.progress = message }
-                }
-                await self.refreshService(self.recordStatus(status, for: configuration))
-                return
+            let status = try await self.sshClient.deployHost(configuration: configuration, update: true) { [weak self] message in
+                Task { @MainActor [weak self] in self?.progress = message }
             }
-            let imageID = try await self.deployImage(configuration, forceRefresh: true)
-            self.progress = "Recreating the container and preserving its home…"
-            self.statuses[configuration.id] = try await self.sshClient.update(
-                configuration: configuration, imageID: imageID
-            )
-            await self.refreshService(configuration)
-        }
-    }
-
-    func applyResources(
-        _ configuration: RemoteWorkspaceConfiguration,
-        memoryLimit: String,
-        swapLimit: String
-    ) {
-        guard configuration.kind == .container else { return }
-        if forwardToBackend(.resources(configuration.id, memoryLimit: memoryLimit, swapLimit: swapLimit)) { return }
-        var updated = configuration
-        updated.memoryLimit = memoryLimit
-            .trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
-        updated.swapLimit = swapLimit
-            .trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
-        performBusy(configuration) {
-            self.checkingRuntimeIDs.removeValue(forKey: configuration.id)
-            self.actionErrors.removeValue(forKey: configuration.id)
-            self.browserFeeds.removeValue(forKey: configuration.id)?.stop()
-            self.workspaceEpochs[configuration.id] = UUID()
-            self.invalidatingWorkspaceIDs.insert(configuration.id)
-            defer { self.invalidatingWorkspaceIDs.remove(configuration.id) }
-            try RemoteWorkspaceSSHClient.validateConfiguration(updated)
-            let preflight = try await self.sshClient.preflight(
-                hostName: updated.hostName,
-                userName: updated.userName
-            )
-            try Self.requireCapabilities(preflight, for: updated)
-            self.statuses[configuration.id] = try await self.sshClient.update(
-                configuration: updated
-            )
-            if let index = self.workspaces.firstIndex(where: {
-                $0.id == configuration.id
-            }) {
-                self.workspaces[index] = updated
-                self.save()
-            }
-            self.invalidatingWorkspaceIDs.remove(configuration.id)
-            await self.refreshService(updated)
+            await self.refreshService(self.recordStatus(status, for: configuration))
         }
     }
 
@@ -1441,36 +1371,14 @@ final class RemoteWorkspacesModel {
         }
     }
 
-    private func deployImage(_ configuration: RemoteWorkspaceConfiguration, forceRefresh: Bool = false) async throws -> String {
-        let operationID = UUID()
-        deploymentProgressID = operationID
-        defer { if deploymentProgressID == operationID { deploymentProgressID = nil } }
-        progress = "Checking the workspace image on the host…"
-        return try await sshClient.deployService(
-            hostName: configuration.hostName, userName: configuration.userName, forceRefresh: forceRefresh
-        ) { [weak self] message in
-            Task { @MainActor [weak self] in
-                guard let self, self.deploymentProgressID == operationID else { return }
-                self.progress = message
-            }
-        }
-    }
-
     private func provision(
         _ configuration: RemoteWorkspaceConfiguration
     ) async throws {
         let token = try Self.generateToken()
         try await credentials.save(token: token, for: configuration.id)
-        let status: RemoteWorkspaceStatus
-        if configuration.kind == .host {
-            progress = "Installing the native workspace service…"
-            status = try await sshClient.deployHost(configuration: configuration, token: token) { [weak self] message in
-                Task { @MainActor [weak self] in self?.progress = message }
-            }
-        } else {
-            let imageID = try await deployImage(configuration)
-            progress = "Creating and health-checking the loopback-only container…"
-            status = try await sshClient.create(configuration: configuration, token: token, imageID: imageID)
+        progress = "Installing the native workspace service…"
+        let status = try await sshClient.deployHost(configuration: configuration, token: token) { [weak self] message in
+            Task { @MainActor [weak self] in self?.progress = message }
         }
         workspaces.append(configuration)
         let resolved = recordStatus(status, for: configuration)
@@ -1768,22 +1676,6 @@ final class RemoteWorkspacesModel {
     private nonisolated static func inspectionKey(hostName: String, userName: String,
         kind: RemoteWorkspaceKind, accessMode: RemoteWorkspaceAccessMode) -> String {
         hostKey(hostName: hostName, userName: userName) + "|" + kind.rawValue + "|" + accessMode.rawValue
-    }
-
-    private static func requireCapabilities(
-        _ preflight: RemoteWorkspacePreflight,
-        for configuration: RemoteWorkspaceConfiguration
-    ) throws {
-        if configuration.memoryLimit != nil, !preflight.capabilities.memory {
-            throw RemoteWorkspaceClientError.unsupportedResource(
-                "This host cannot enforce a container memory limit."
-            )
-        }
-        if configuration.swapLimit != nil, !preflight.capabilities.swap {
-            throw RemoteWorkspaceClientError.unsupportedResource(
-                "This host cannot enforce an additional swap limit."
-            )
-        }
     }
 }
 

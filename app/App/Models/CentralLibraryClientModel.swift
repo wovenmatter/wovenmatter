@@ -200,7 +200,6 @@ final class CentralLibraryClientModel {
     var calendarCentralProviders: [CompanionProvider] { centralProviders }
     var calendarLocalProviders: [CompanionProvider] { localExecution.flatMap { directProviders[$0.descriptor.id] } ?? [] }
     var executionWorkspaces: [CompanionExecutionWorkspace] { journal.workspaces.values.filter { !$0.deleted }.sorted { $0.name < $1.name } }
-    func hasDirectAccess(_ workspaceID: String) -> Bool { directClients[workspaceID] != nil }
     @ObservationIgnored lazy var devicePairing = CompanionMacPairingController(identity: { [weak self] in
         guard let self else { return .init(deviceID: "00000000-0000-4000-8000-000000000000", deviceName: "Mac", metadata: .init(kind: .mac)) }
         return .init(deviceID: self.state.deviceID, deviceName: DevelopmentLaunch.deviceName(),
@@ -266,15 +265,13 @@ final class CentralLibraryClientModel {
             if let store { await analytics.configure(store.analytics, transport: transport) }
         } catch { errorMessage = error.localizedDescription }
     }
-    func reconnectDevelopmentLibrary(
-        connect: @MainActor (String) async throws -> DevelopmentClientConnection = { try await DevelopmentLaunch.connect(deviceID: $0) }
-    ) async {
+    func reconnectDevelopmentLibrary() async {
         guard credential == nil, !preparingTransition, !connectingDevelopment else { return }
         connectingDevelopment = true
         defer { connectingDevelopment = false; nextDevelopmentConnection = Date().addingTimeInterval(5) }
         let generation = connectionGeneration
         do {
-            let connection = try await connect(state.deviceID)
+            let connection = try await DevelopmentLaunch.connect(deviceID: state.deviceID)
             guard !Task.isCancelled, !preparingTransition, connectionGeneration == generation, credential == nil else { return }
             try await acceptPairing(endpoint: connection.endpoint, response: connection.pairing)
             deviceConnectionsError = nil
