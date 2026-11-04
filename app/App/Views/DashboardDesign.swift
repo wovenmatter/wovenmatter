@@ -56,14 +56,13 @@ enum DashboardAgentSidebarGroup: String, CaseIterable, Identifiable, Hashable, S
         from agents: [WorkspaceAgent],
         in group: DashboardAgentSidebarGroup,
         pinnedIDs: Set<UUID>,
-        pinOrder: [UUID] = [],
         customOrder: [UUID] = []
     ) -> [WorkspaceAgent] {
         switch group {
         case .pinned:
             return applyOrder(
                 agents.filter { contains($0, in: .pinned, pinnedIDs: pinnedIDs) },
-                preferred: pinOrder.isEmpty ? customOrder : pinOrder
+                preferred: customOrder
             )
         case .localWorkspace:
             let defaultOrder = agents
@@ -549,32 +548,16 @@ struct DashboardActiveConversationRowBackground: View {
 }
 
 struct DashboardCard<Content: View>: View {
-    @Environment(\.dashboardTheme) private var theme
-    let showsBorder: Bool
-    let showsBackground: Bool
     let content: Content
 
-    init(
-        showsBorder: Bool = true,
-        showsBackground: Bool = true,
-        @ViewBuilder content: () -> Content
-    ) {
-        self.showsBorder = showsBorder
-        self.showsBackground = showsBackground
+    init(@ViewBuilder content: () -> Content) {
         self.content = content()
     }
 
     var body: some View {
         content
             .padding(16)
-            .background(showsBackground ? DashboardPalette.background.opacity(0.72) : .clear)
             .clipShape(RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
-            .overlay {
-                if showsBorder {
-                    RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous)
-                        .stroke(theme.palette.border, lineWidth: 1)
-                }
-            }
     }
 }
 
@@ -582,7 +565,6 @@ struct DashboardCard<Content: View>: View {
 /// Keeping the native control preserves keyboard and accessibility behavior.
 struct DashboardSwitchToggleStyle: ToggleStyle {
     @Environment(\.isEnabled) private var isEnabled
-    var showsLabel = true
 
     func makeBody(configuration: Configuration) -> some View {
         HStack(spacing: 8) {
@@ -593,11 +575,9 @@ struct DashboardSwitchToggleStyle: ToggleStyle {
                 .fixedSize()
                 .scaleEffect(0.8)
                 .frame(width: 28, height: 16)
-            if showsLabel {
-                configuration.label
-                    .contentShape(Rectangle())
-                    .onTapGesture { if isEnabled { configuration.isOn.toggle() } }
-            }
+            configuration.label
+                .contentShape(Rectangle())
+                .onTapGesture { if isEnabled { configuration.isOn.toggle() } }
         }
         .accessibilityRepresentation {
             Toggle(isOn: configuration.$isOn) { configuration.label }

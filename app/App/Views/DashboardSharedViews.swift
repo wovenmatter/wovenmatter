@@ -1,6 +1,5 @@
 import AppKit
 import SwiftUI
-import UniformTypeIdentifiers
 import WovenMatterClient
 import WovenMatterCore
 
@@ -8,7 +7,6 @@ struct DashboardConversationEmptyState: View {
     let icon: DashboardLucideGlyph
     let title: String
     var detail: String? = nil
-    var loading = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -17,12 +15,8 @@ struct DashboardConversationEmptyState: View {
                     .fill(DashboardPalette.primaryFill)
                     .frame(width: 56, height: 56)
                     .shadow(color: DashboardPalette.primaryFill.opacity(0.30), radius: 15, y: 8)
-                if loading {
-                    ProgressView().controlSize(.small).tint(DashboardPalette.primaryForeground)
-                } else {
-                    DashboardLucideIcon(glyph: icon, size: 22)
-                        .foregroundStyle(DashboardPalette.primaryForeground)
-                }
+                DashboardLucideIcon(glyph: icon, size: 22)
+                    .foregroundStyle(DashboardPalette.primaryForeground)
             }
             Text(title)
                 .font(.system(size: 15, weight: .medium))
@@ -831,11 +825,8 @@ func dashboardComposerPlaceholder(
     return "Message \(recipient)…"
 }
 
-func dashboardAgentGlyph(
-    _ agent: WorkspaceAgent,
-    iconKey: String? = nil
-) -> DashboardLucideGlyph {
-    let key = (iconKey ?? dashboardAgentPresentation(agent).iconKey).lowercased()
+func dashboardAgentGlyph(_ agent: WorkspaceAgent) -> DashboardLucideGlyph {
+    let key = dashboardAgentPresentation(agent).iconKey.lowercased()
     switch key {
     case "monitor": return .monitor
     case "circle-user": return .circleUser

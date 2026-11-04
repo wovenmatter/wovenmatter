@@ -1,6 +1,5 @@
 import AppKit
 import SwiftUI
-import UniformTypeIdentifiers
 import WovenMatterClient
 import WovenMatterCore
 
@@ -60,7 +59,6 @@ struct DashboardCloudConversation: View {
     let onRemoveAttachment: (String) -> Void
     let onDropFiles: ([URL]) -> Bool
     let onCommandNavigation: (DashboardComposerNavigationDirection) -> Bool
-    let onUnavailableComposerAction: (String) -> Void
     private var workspaceOpenCode: OpenCodeModel? {
         guard let conversation, !conversation.isArchived else { return nil }
         return model.openCodeModel(for: conversation.id)
@@ -556,7 +554,6 @@ struct DashboardCloudConversation: View {
                                 guard conversation?.isArchived != true else { return false }
                                 return onDropFiles(urls)
                             },
-                            onUnavailableAction: onUnavailableComposerAction,
                             onCommandNavigation: onCommandNavigation,
                             onSend: {
                                 guard conversation?.isArchived != true else { return }

@@ -1,6 +1,5 @@
 import AppKit
 import SwiftUI
-import UniformTypeIdentifiers
 import WovenMatterClient
 import WovenMatterCore
 
@@ -52,7 +51,6 @@ struct DashboardComposer: View {
     let onRemoveAttachment: (String) -> Void
     let onOpenAttachment: (AgentFileAttachmentDraft) -> Void
     let onDropFiles: ([URL]) -> Bool
-    let onUnavailableAction: (String) -> Void
     let onCommandNavigation: (DashboardComposerNavigationDirection) -> Bool
     let onSend: () -> Void
     var onStop: (() -> Void)? = nil
@@ -693,46 +691,22 @@ struct DashboardComposer: View {
         capitalizeOptions: Bool = false,
         action: ((String) -> Void)?
     ) -> some View {
-        let unavailable = sessionMenuUnavailable(
-            kind: kind, options: options, selection: selection, action: action
-        )
-        return Button {
-            guard !unavailable else { return }
-            onActivate()
-            focused = false
-            openMenu = openMenu == kind ? nil : kind
-        } label: {
+        sessionMenu(
+            kind: kind,
+            title: title,
+            menuTitle: menuTitle,
+            accessibilityLabel: accessibilityLabel,
+            options: options,
+            selection: selection,
+            optionMetadata: optionMetadata,
+            capitalizeOptions: capitalizeOptions,
+            action: action,
+            fixedHorizontalSize: false
+        ) {
             DashboardLucideIcon(glyph: icon, size: 16)
                 .frame(width: 36, height: 36)
                 .contentShape(Circle())
         }
-        .buttonStyle(DashboardComposerControlButtonStyle())
-        .disabled(unavailable)
-        .opacity(unavailable ? 0.4 : 1)
-        .accessibilityLabel(accessibilityLabel)
-        .accessibilityValue("\(title), \(openMenu == kind ? "Expanded" : "Collapsed")")
-        .help(kind == .model ? title : [title, selection, selection.flatMap { optionMetadata[$0]?.description }]
-            .compactMap { $0 }.joined(separator: "\n"))
-        .popover(isPresented: Binding(
-            get: { openMenu == kind },
-            set: { if !$0, openMenu == kind { openMenu = nil } }
-        ), arrowEdge: .bottom) {
-            DashboardComposerOptionMenu(
-                title: menuTitle,
-                options: options,
-                selection: selection,
-                capitalizeOptions: capitalizeOptions,
-                optionMetadata: optionMetadata,
-                showsDescriptions: kind == .permission,
-                emptyMessage: kind == .permission
-                    ? "This harness has not reported native permission choices."
-                    : nil
-            ) { option in
-                openMenu = nil
-                action?(option)
-            }
-        }
-        .zIndex(openMenu == kind ? 3 : 0)
     }
 
     private func sessionMenu(
@@ -748,25 +722,55 @@ struct DashboardComposer: View {
         capitalizeOptions: Bool = false,
         action: ((String) -> Void)?
     ) -> some View {
-        let unavailable = sessionMenuUnavailable(
-            kind: kind, options: options, selection: selection, action: action
-        )
-        return Button {
-            guard !unavailable else { return }
-            onActivate()
-            focused = false
-            openMenu = openMenu == kind ? nil : kind
-        } label: {
+        sessionMenu(
+            kind: kind,
+            title: title,
+            menuTitle: menuTitle,
+            accessibilityLabel: accessibilityLabel,
+            options: options,
+            selection: selection,
+            optionMetadata: optionMetadata,
+            capitalizeOptions: capitalizeOptions,
+            action: action,
+            fixedHorizontalSize: true
+        ) {
             DashboardComposerSessionLabel(
                 icon: icon,
                 title: inlineTitle ?? title,
                 maximumTitleWidth: kind == .thinking ? 40 : nil
             )
         }
+    }
+
+    private func sessionMenu<Label: View>(
+        kind: DashboardComposerMenuKind,
+        title: String,
+        menuTitle: String,
+        accessibilityLabel: String,
+        options: [String],
+        selection: String?,
+        optionMetadata: [String: SessionOptionMetadata],
+        capitalizeOptions: Bool,
+        action: ((String) -> Void)?,
+        fixedHorizontalSize: Bool,
+        @ViewBuilder label: () -> Label
+    ) -> some View {
+        let unavailable = sessionMenuUnavailable(
+            kind: kind, options: options, selection: selection, action: action
+        )
+        let menuLabel = label()
+        return Button {
+            guard !unavailable else { return }
+            onActivate()
+            focused = false
+            openMenu = openMenu == kind ? nil : kind
+        } label: {
+            menuLabel
+        }
         .buttonStyle(DashboardComposerControlButtonStyle())
         .disabled(unavailable)
         .opacity(unavailable ? 0.4 : 1)
-        .fixedSize(horizontal: true, vertical: false)
+        .fixedSize(horizontal: fixedHorizontalSize, vertical: false)
         .accessibilityLabel(accessibilityLabel)
         .accessibilityValue("\(title), \(openMenu == kind ? "Expanded" : "Collapsed")")
         .help(kind == .model ? title : [title, selection, selection.flatMap { optionMetadata[$0]?.description }]

@@ -36,7 +36,6 @@ private enum SettingsSection: Equatable {
 struct SettingsView: View {
     @Bindable var model: ApplicationModel
     var reservesRailControlSpace = false
-    var executionOnly = false
     var clientContext: CentralLibraryClientModel?
     var applicationContext: ApplicationModel?
     @AppStorage(DashboardTheme.storageKey) private var storedTheme = DashboardTheme.green.rawValue
@@ -165,7 +164,6 @@ struct SettingsView: View {
             reservesRailControlSpace: reservesRailControlSpace
         ) {
             VStack(spacing: 2) {
-                if !executionOnly {
                 SettingsDestinationRow(
                     title: "General",
                     detail: "Theme, sidebar layout, and conversation titles.",
@@ -184,7 +182,6 @@ struct SettingsView: View {
                     icon: { DashboardLucideIcon(glyph: .mic, size: 15) },
                     action: { section = .dictation }
                 )
-                }
 
                 SettingsDestinationRow(
                     title: AgentRuntimeKind.defaultAgent.displayName,
@@ -216,21 +213,19 @@ struct SettingsView: View {
                     icon: { DashboardHarnessLogoIcon(logo: .openCode, size: 15) },
                     action: { section = .openCode }
                 )
-                if !executionOnly {
                 SettingsDestinationRow(
                     title: "Apple Devices",
                     detail: "Connect Macs, iPhones, and iPads to share your library.",
                     icon: { DashboardLucideIcon(glyph: .monitor, size: 15) },
                     action: { section = .companion }
                 )
-                }
                 SettingsDestinationRow(
                     title: "Local Workspace",
                     detail: "Agents and files on this Mac.",
                     icon: { DashboardLucideIcon(glyph: .terminal, size: 15) },
                     action: { section = .localWorkspace }
                 )
-                if !executionOnly && clientContext == nil {
+                if clientContext == nil {
                 SettingsDestinationRow(
                     title: "Remote Workspaces",
                     detail: "Agents and files on remote Linux machines.",
@@ -238,14 +233,12 @@ struct SettingsView: View {
                     action: { section = .remoteWorkspaces }
                 )
                 }
-                if !executionOnly {
                 SettingsDestinationRow(
                     title: "Usage",
                     detail: "Accounts and usage tracking.",
                     icon: { DashboardLucideIcon(glyph: .barChart, size: 15) },
                     action: { section = .usage }
                 )
-                }
             }
         }
     }

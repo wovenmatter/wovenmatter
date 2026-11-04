@@ -417,12 +417,12 @@ struct SettingsRemoteWorkspacesView: View {
 
             SettingsField("Tailscale machine") {
                 TextField("machine.tailnet-name.ts.net", text: $hostName)
-                    .settingsInput()
+                    .dashboardInput()
                     .onSubmit { model.checkHost(hostName: hostName, userName: userName, kind: workspaceKind, accessMode: accessMode) }
             }
             SettingsField("Remote username (optional)") {
                 TextField("Resolved by SSH config", text: $userName)
-                    .settingsInput()
+                    .dashboardInput()
             }
             SettingsNote("Requires connected Tailscale on both machines. Uses your SSH agent; Woven Matter does not store SSH keys.")
             Button(model.isCheckingHost ? "Inspecting host…" : "Inspect host") {
@@ -494,11 +494,11 @@ struct SettingsRemoteWorkspacesView: View {
         SettingsCard(title: "Create workspace", detail: "On \(hostName.trimmingCharacters(in: .whitespacesAndNewlines))") {
             SettingsField("Name") {
                 TextField("Remote workspace name", text: $name)
-                    .settingsInput()
+                    .dashboardInput()
             }
             SettingsField("Workspace ID") {
                 TextField("remote-workspace-id", text: $workspaceID)
-                    .settingsInput()
+                    .dashboardInput()
             }
             SettingsNote("Files use available disk space on the remote machine.")
             if workspaceKind == .host {
@@ -635,10 +635,6 @@ struct SettingsRemoteWorkspacesView: View {
         return "\(component.displayName) \(installed)" + (newer.map { " → \($0)" } ?? "")
     }
 
-    private func resourceLabel(_ bytes: Int64) -> String {
-        bytes > 0 ? ByteCountFormatter.string(fromByteCount: bytes, countStyle: .memory) : "Unlimited"
-    }
-
     private func remoteValueRow(label: String, value: String) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(label)
@@ -650,39 +646,6 @@ struct SettingsRemoteWorkspacesView: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.vertical, 2)
-    }
-
-    private func resourceInputValue(_ value: String?) -> String {
-        guard let value else { return "" }
-        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard normalized.lowercased().hasSuffix("g"),
-              normalized.dropLast().allSatisfy(\.isNumber) else {
-            return normalized
-        }
-        return String(normalized.dropLast())
-    }
-
-    private func swapLabel(_ status: RemoteWorkspaceStatus) -> String {
-        switch status.swapMode {
-        case "default": return "Host default"
-        case "disabled": return "Disabled"
-        case "unlimited": return "Unlimited"
-        case "additional": return resourceLabel(status.swapBytes)
-        default: break
-        }
-        if status.swapBytes < 0 { return "Unlimited" }
-        if status.memoryBytes > 0, status.swapBytes == 0 { return "Disabled" }
-        return resourceLabel(status.swapBytes)
-    }
-
-    private func inspectionCapabilityLabel(
-        _ supported: Bool,
-        preflight: RemoteWorkspacePreflight
-    ) -> String {
-        if supported { return "Supported" }
-        return preflight.preparationRequired == true
-            ? "Verify after preparation"
-            : "Unavailable"
     }
 
     private func workspaceUsageLabel(_ status: RemoteWorkspaceStatus) -> String {

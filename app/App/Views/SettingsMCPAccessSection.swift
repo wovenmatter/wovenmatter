@@ -97,7 +97,7 @@ struct SettingsMCPAccessSection: View {
 
     private var createForm: some View {
         VStack(alignment: .leading, spacing: 12) {
-            TextField("Agent name", text: $label).settingsInput()
+            TextField("Agent name", text: $label).dashboardInput()
                 .accessibilityLabel("Outside agent name")
             Picker("Act through chat", selection: $sessionID) {
                 Text("Choose a chat").tag("")

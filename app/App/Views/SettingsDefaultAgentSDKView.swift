@@ -103,8 +103,8 @@ struct SettingsDefaultAgentSDKView: View {
         }
     }
 
-    private func perform(_ action: DefaultAgentSDKRequest.Action, id: String? = nil, version: String? = nil, in workspace: Workspace) {
-        connections.sdks.request(.init(workspaceID: workspace.remoteID, request: .init(action: action, id: id, version: version)),
+    private func perform(_ action: DefaultAgentSDKRequest.Action, in workspace: Workspace) {
+        connections.sdks.request(.init(workspaceID: workspace.remoteID, request: .init(action: action)),
                                  connections: connections, remoteWorkspaces: remoteWorkspaces)
     }
 }
