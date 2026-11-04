@@ -46,17 +46,7 @@ public struct LocalACPRunIdentifiers: Equatable, Sendable {
   }
 }
 
-public struct LocalACPSteeringIdentifiers: Equatable, Sendable {
-  public let runID: String
-  public let userMessageID: String
-  public let assistantMessageID: String
-
-  public init(runID: String, userMessageID: String, assistantMessageID: String) {
-    self.runID = runID
-    self.userMessageID = userMessageID
-    self.assistantMessageID = assistantMessageID
-  }
-}
+public typealias LocalACPSteeringIdentifiers = LocalACPRunIdentifiers
 
 public enum LocalACPSessionDatabaseError: LocalizedError, Equatable, Sendable {
   case runtimeUnavailable
@@ -1376,15 +1366,14 @@ extension WorkspaceDatabaseConnection {
   ) throws {
     try transaction {
       let timestamp = Self.timestamp(completedAt)
-      let runStatus = error == nil ? "completed" : "failed"
-      let messageStatus = error == nil ? "completed" : "failed"
+      let status = error == nil ? "completed" : "failed"
       let run = try prepareUnlocked("""
         UPDATE dashboard_runs
         SET status = ?, error = ?, completed_at = ?, updated_at = ?
         WHERE id = ? AND desktop_owned = 1 AND status = 'running'
         """)
       defer { sqlite3_finalize(run) }
-      try bind(runStatus, at: 1, to: run)
+      try bind(status, at: 1, to: run)
       try bindNullable(error, at: 2, to: run)
       try bind(timestamp, at: 3, to: run)
       try bind(timestamp, at: 4, to: run)
@@ -1407,7 +1396,7 @@ extension WorkspaceDatabaseConnection {
       defer { sqlite3_finalize(message) }
       try bindNullable(error, at: 1, to: message)
       try bindNullable(error, at: 2, to: message)
-      try bind(messageStatus, at: 3, to: message)
+      try bind(status, at: 3, to: message)
       try bind(timestamp, at: 4, to: message)
       try bind(runID, at: 5, to: message)
       try stepDone(message)

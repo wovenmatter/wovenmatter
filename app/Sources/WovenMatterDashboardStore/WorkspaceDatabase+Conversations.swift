@@ -149,28 +149,11 @@ extension WorkspaceDatabaseConnection {
     }
     let messages = try decodeCanonicalRowsUnlocked(
       """
-      SELECT json_object(
-        'id', message.id, 'conversation_id', message.conversation_id,
-        'client_message_id', message.client_message_id,
-        'sender_kind',COALESCE((SELECT kind FROM workspace_session_deliveries WHERE message_id=message.id),(SELECT kind FROM companion_message_provenance WHERE message_id=message.id)),
-        'sender_session_id',COALESCE((SELECT source_id FROM workspace_session_deliveries WHERE message_id=message.id),(SELECT source_id FROM companion_message_provenance WHERE message_id=message.id)),
-        'sender_agent',COALESCE((SELECT source_agent FROM workspace_session_deliveries WHERE message_id=message.id),(SELECT source_agent FROM companion_message_provenance WHERE message_id=message.id)),
-        'sender_session_title',COALESCE((SELECT source_title FROM workspace_session_deliveries WHERE message_id=message.id),(SELECT source_title FROM companion_message_provenance WHERE message_id=message.id),(SELECT title FROM dashboard_conversations WHERE id=(SELECT source_id FROM companion_message_provenance WHERE message_id=message.id))),
-        'run_id', message.run_id, 'role', message.role,
-        'governing_plane', message.governing_plane,
-        'authority_device_id', message.authority_device_id,
-        'content', message.content, 'status', message.status,
-        'created_at', message.created_at, 'updated_at', message.updated_at
-      )
+      SELECT \(Self.messageProjection)
       FROM dashboard_messages AS message
       JOIN dashboard_conversations AS conversation
         ON conversation.id = message.conversation_id
-      WHERE (conversation.user_id = ? OR conversation.desktop_owned = 1)
-        AND conversation.id = ?
-        AND conversation.deleted_at IS NULL
-        AND (conversation.is_archived = 0 OR (conversation.desktop_owned = 1
-          AND EXISTS (SELECT 1 FROM retained_execution_history
-            WHERE conversation_id=conversation.id)))
+      WHERE \(Self.visibleConversationPredicate)
         AND NOT EXISTS (SELECT 1 FROM desktop_opencode_hidden_messages hidden WHERE hidden.message_id=message.id)
         AND conversation.governing_plane = 'wovenmatter_macos'
       ORDER BY message.created_at, message.id
@@ -180,26 +163,11 @@ extension WorkspaceDatabaseConnection {
     )
     let runs = try decodeCanonicalRowsUnlocked(
       """
-      SELECT json_object(
-        'id', run.id, 'conversation_id', run.conversation_id,
-        'agent_id', run.agent_id,
-        'governing_plane', run.governing_plane,
-        'authority_device_id', run.authority_device_id,
-        'user_message_id', run.user_message_id,
-        'assistant_message_id', run.assistant_message_id,
-        'status', run.status, 'error', run.error,
-        'started_at', run.started_at, 'completed_at', run.completed_at,
-        'created_at', run.created_at, 'updated_at', run.updated_at
-      )
+      SELECT \(Self.runProjection)
       FROM dashboard_runs AS run
       JOIN dashboard_conversations AS conversation
         ON conversation.id = run.conversation_id
-      WHERE (conversation.user_id = ? OR conversation.desktop_owned = 1)
-        AND conversation.id = ?
-        AND conversation.deleted_at IS NULL
-        AND (conversation.is_archived = 0 OR (conversation.desktop_owned = 1
-          AND EXISTS (SELECT 1 FROM retained_execution_history
-            WHERE conversation_id=conversation.id)))
+      WHERE \(Self.visibleConversationPredicate)
         AND conversation.governing_plane = 'wovenmatter_macos'
       ORDER BY run.created_at, run.id
       """,
@@ -278,47 +246,18 @@ extension WorkspaceDatabaseConnection {
       let changedJSON = String(decoding: try JSONEncoder().encode(changedIDs), as: UTF8.self)
       let retainedMessages: [WorkspaceMessageRecord] = changedIDs.isEmpty ? [] : try decodeCanonicalRowsUnlocked(
         """
-        SELECT json_object(
-          'id', message.id, 'conversation_id', message.conversation_id,
-          'client_message_id', message.client_message_id,
-          'sender_kind',COALESCE((SELECT kind FROM workspace_session_deliveries WHERE message_id=message.id),(SELECT kind FROM companion_message_provenance WHERE message_id=message.id)),
-          'sender_session_id',COALESCE((SELECT source_id FROM workspace_session_deliveries WHERE message_id=message.id),(SELECT source_id FROM companion_message_provenance WHERE message_id=message.id)),
-          'sender_agent',COALESCE((SELECT source_agent FROM workspace_session_deliveries WHERE message_id=message.id),(SELECT source_agent FROM companion_message_provenance WHERE message_id=message.id)),
-          'sender_session_title',COALESCE((SELECT source_title FROM workspace_session_deliveries WHERE message_id=message.id),(SELECT source_title FROM companion_message_provenance WHERE message_id=message.id),(SELECT title FROM dashboard_conversations WHERE id=(SELECT source_id FROM companion_message_provenance WHERE message_id=message.id))),
-          'run_id', message.run_id, 'role', message.role,
-          'governing_plane', message.governing_plane,
-          'authority_device_id', message.authority_device_id,
-          'content', message.content, 'status', message.status,
-          'created_at', message.created_at, 'updated_at', message.updated_at
-        )
+        SELECT \(Self.messageProjection)
         FROM dashboard_messages AS message
         WHERE message.id IN (SELECT value FROM json_each(?)) AND message.conversation_id=?
         ORDER BY message.created_at,message.id
         """, bindings: [changedJSON,id], as: WorkspaceMessageRecord.self)
       var newestFirst = try decodeCanonicalRowsUnlocked(
         """
-        SELECT json_object(
-          'id', message.id, 'conversation_id', message.conversation_id,
-          'client_message_id', message.client_message_id,
-          'sender_kind',COALESCE((SELECT kind FROM workspace_session_deliveries WHERE message_id=message.id),(SELECT kind FROM companion_message_provenance WHERE message_id=message.id)),
-          'sender_session_id',COALESCE((SELECT source_id FROM workspace_session_deliveries WHERE message_id=message.id),(SELECT source_id FROM companion_message_provenance WHERE message_id=message.id)),
-          'sender_agent',COALESCE((SELECT source_agent FROM workspace_session_deliveries WHERE message_id=message.id),(SELECT source_agent FROM companion_message_provenance WHERE message_id=message.id)),
-          'sender_session_title',COALESCE((SELECT source_title FROM workspace_session_deliveries WHERE message_id=message.id),(SELECT source_title FROM companion_message_provenance WHERE message_id=message.id),(SELECT title FROM dashboard_conversations WHERE id=(SELECT source_id FROM companion_message_provenance WHERE message_id=message.id))),
-          'run_id', message.run_id, 'role', message.role,
-          'governing_plane', message.governing_plane,
-          'authority_device_id', message.authority_device_id,
-          'content', message.content, 'status', message.status,
-          'created_at', message.created_at, 'updated_at', message.updated_at
-        )
+        SELECT \(Self.messageProjection)
         FROM dashboard_messages AS message
         JOIN dashboard_conversations AS conversation
           ON conversation.id = message.conversation_id
-        WHERE (conversation.user_id = ? OR conversation.desktop_owned = 1)
-          AND conversation.id = ?
-          AND conversation.deleted_at IS NULL
-          AND (conversation.is_archived = 0 OR (conversation.desktop_owned = 1
-            AND EXISTS (SELECT 1 FROM retained_execution_history
-              WHERE conversation_id=conversation.id)))
+        WHERE \(Self.visibleConversationPredicate)
           AND conversation.governing_plane='wovenmatter_macos'
           AND NOT EXISTS (SELECT 1 FROM desktop_opencode_hidden_messages hidden WHERE hidden.message_id=message.id)
           \(cursorPredicate)
@@ -357,26 +296,11 @@ extension WorkspaceDatabaseConnection {
         let placeholders = Array(repeating: "?", count: messageIDs.count).joined(separator: ", ")
         runs = try decodeCanonicalRowsUnlocked(
           """
-          SELECT json_object(
-            'id', run.id, 'conversation_id', run.conversation_id,
-            'agent_id', run.agent_id,
-            'governing_plane', run.governing_plane,
-            'authority_device_id', run.authority_device_id,
-            'user_message_id', run.user_message_id,
-            'assistant_message_id', run.assistant_message_id,
-            'status', run.status, 'error', run.error,
-            'started_at', run.started_at, 'completed_at', run.completed_at,
-            'created_at', run.created_at, 'updated_at', run.updated_at
-          )
+          SELECT \(Self.runProjection)
           FROM dashboard_runs AS run
           JOIN dashboard_conversations AS conversation
             ON conversation.id = run.conversation_id
-          WHERE (conversation.user_id = ? OR conversation.desktop_owned = 1)
-            AND conversation.id = ?
-            AND conversation.deleted_at IS NULL
-            AND (conversation.is_archived = 0 OR (conversation.desktop_owned = 1
-              AND EXISTS (SELECT 1 FROM retained_execution_history
-                WHERE conversation_id=conversation.id)))
+          WHERE \(Self.visibleConversationPredicate)
             AND (
               run.user_message_id IN (\(placeholders))
               OR run.assistant_message_id IN (\(placeholders))
@@ -606,6 +530,47 @@ extension WorkspaceDatabaseConnection {
     return records.sorted(by: WorkspaceRunActivityRecord.precedes)
   }
 
+  private static let messageProjection = """
+    json_object(
+      'id', message.id, 'conversation_id', message.conversation_id,
+      'client_message_id', message.client_message_id,
+      'sender_kind',COALESCE((SELECT kind FROM workspace_session_deliveries WHERE message_id=message.id),(SELECT kind FROM companion_message_provenance WHERE message_id=message.id)),
+      'sender_session_id',COALESCE((SELECT source_id FROM workspace_session_deliveries WHERE message_id=message.id),(SELECT source_id FROM companion_message_provenance WHERE message_id=message.id)),
+      'sender_agent',COALESCE((SELECT source_agent FROM workspace_session_deliveries WHERE message_id=message.id),(SELECT source_agent FROM companion_message_provenance WHERE message_id=message.id)),
+      'sender_session_title',COALESCE((SELECT source_title FROM workspace_session_deliveries WHERE message_id=message.id),(SELECT source_title FROM companion_message_provenance WHERE message_id=message.id),(SELECT title FROM dashboard_conversations WHERE id=(SELECT source_id FROM companion_message_provenance WHERE message_id=message.id))),
+      'run_id', message.run_id, 'role', message.role,
+      'governing_plane', message.governing_plane,
+      'authority_device_id', message.authority_device_id,
+      'content', message.content, 'status', message.status,
+      'created_at', message.created_at, 'updated_at', message.updated_at
+    )
+    """
+
+  private static let runProjection = """
+    json_object(
+      'id', run.id, 'conversation_id', run.conversation_id,
+      'agent_id', run.agent_id,
+      'governing_plane', run.governing_plane,
+      'authority_device_id', run.authority_device_id,
+      'user_message_id', run.user_message_id,
+      'assistant_message_id', run.assistant_message_id,
+      'status', run.status, 'error', run.error,
+      'started_at', run.started_at, 'completed_at', run.completed_at,
+      'created_at', run.created_at, 'updated_at', run.updated_at
+    )
+    """
+
+  /// Rows an operator may read: their own or desktop-owned conversations that are
+  /// live, or archived desktop transcripts retained as execution history.
+  private static let visibleConversationPredicate = """
+    (conversation.user_id = ? OR conversation.desktop_owned = 1)
+    AND conversation.id = ?
+    AND conversation.deleted_at IS NULL
+    AND (conversation.is_archived = 0 OR (conversation.desktop_owned = 1
+      AND EXISTS (SELECT 1 FROM retained_execution_history
+        WHERE conversation_id=conversation.id)))
+    """
+
   private static func tracePayload(_ value: Any?) -> [String: Any]? {
     let object = dictionary(value)
     return dictionary(object?["payload"]) ?? object
@@ -673,18 +638,6 @@ extension WorkspaceDatabaseConnection {
         status: status
       )
     }
-  }
-
-  func decodeCanonicalRowsUnlocked<Value: Decodable>(
-    _ sql: String,
-    operatorID: String,
-    as type: Value.Type
-  ) throws -> [Value] {
-    try decodeCanonicalRowsUnlocked(
-      sql,
-      bindings: [operatorID],
-      as: type
-    )
   }
 
   func decodeCanonicalRowsUnlocked<Value: Decodable>(

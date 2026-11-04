@@ -107,23 +107,18 @@ public actor CompanionAuthentication {
        let device = state.devices.first(where: {
          $0.id == entry.request.identity.deviceID && $0.revokedAt == nil && Self.constantTimeEqual($0.credentialHash, Self.digest(credential))
        }) { return device }
-    try cancelPairing(request, revokeApproved: false)
+    try cancelPairing(request)
     return nil
   }
 
-  public func cancelPairing(_ request: CompanionPairingPoll, revokeApproved: Bool = true) throws {
+  public func cancelPairing(_ request: CompanionPairingPoll) throws {
     guard (32...256).contains(request.requestSecret.utf8.count),
           let entry = (state.approvals ?? []).first(where: { $0.request.id == request.requestID }),
           entry.request.expiresAt > now(), Self.constantTimeEqual(entry.proof, Self.proof(request.requestSecret)) else {
       throw Self.error("invalid_pairing", "The pairing request is invalid or expired.")
     }
     var next = state
-    if revokeApproved, entry.state == .approved, let encrypted = entry.encryptedCredential,
-       let credential = String(data: try AES.GCM.open(AES.GCM.SealedBox(combined: encrypted), using: Self.key(request.requestSecret)), encoding: .utf8),
-       let index = next.devices.firstIndex(where: {
-         $0.id == entry.request.identity.deviceID && Self.constantTimeEqual($0.credentialHash, Self.digest(credential))
-       }) { next.devices[index].revokedAt = now() }
-    if !revokeApproved, entry.state == .approved, let encrypted = entry.encryptedCredential,
+    if entry.state == .approved, let encrypted = entry.encryptedCredential,
        let credential = String(data: try AES.GCM.open(AES.GCM.SealedBox(combined: encrypted), using: Self.key(request.requestSecret)), encoding: .utf8),
        state.devices.contains(where: { $0.revokedAt == nil && $0.id == entry.request.identity.deviceID && Self.constantTimeEqual($0.credentialHash, Self.digest(credential)) }) {
       throw Self.error("revocation_pending", "Finish revoking this device's workspace access before cancelling pairing.")

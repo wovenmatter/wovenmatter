@@ -316,13 +316,6 @@ public actor LocalACPSessionCoordinator {
     private var sessionShutdownSequence: UInt64 = 0
     private var useSequence: UInt64 = 0
 
-    public init(database: WorkspaceDatabase) {
-        self.init(
-            database: database,
-            clientFactory: Self.defaultClientFactory
-        )
-    }
-
     init(
         database: WorkspaceDatabase,
         processLease: (any LocalACPProcessLeasing)? = nil,
@@ -1889,13 +1882,10 @@ public actor LocalACPSessionCoordinator {
     private func initializeSession(
         _ client: LocalACPSessionDriver,
         descriptor: LocalACPSessionDescriptor,
-        usesPersistedSessionID: Bool = true,
         workspace: LocalACPWorkspaceLaunchConfiguration,
         systemPrompt: String?
     ) async throws -> LocalACPInitializedSession {
-        let sessionID = usesPersistedSessionID
-            ? descriptor.acpSessionID
-            : nil
+        let sessionID = descriptor.acpSessionID
         return try await withTaskCancellationHandler {
             // Loading a durable session can resume a remote run that is
             // waiting for approval, before any new prompt handler exists.

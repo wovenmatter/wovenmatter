@@ -497,11 +497,7 @@ final class ApplicationModel {
                     id: entry.noteID,
                     title: entry.title,
                     content: entry.content,
-                    folderID: entry.folderID,
-                    createdAt: entry.createdAt,
                     expectedRevision: entry.expectedRevision,
-                    baseContent: entry.baseContent,
-                    baseTitle: entry.baseTitle,
                     operationID: entry.mutationID
                 )
             },

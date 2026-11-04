@@ -23,7 +23,7 @@ extension WorkspaceDatabaseConnection {
 
   func saveCompanionDraftReceiptUnlocked(operationID: String?, id: String, title: String, content: String, revision: String) throws {
     guard let operationID else { return }
-    try companionExecuteUnlocked("INSERT INTO companion_draft_receipts(operation_id, note_id, title, content, revision) VALUES (?, ?, ?, ?, ?)", values: [operationID, id, title, Self.companionContentFingerprint(content), revision])
+    try toolsExecuteUnlocked("INSERT INTO companion_draft_receipts(operation_id, note_id, title, content, revision) VALUES (?, ?, ?, ?, ?)", [operationID, id, title, Self.companionContentFingerprint(content), revision])
   }
 }
 

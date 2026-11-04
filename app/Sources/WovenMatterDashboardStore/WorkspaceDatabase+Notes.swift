@@ -377,23 +377,6 @@ extension WorkspaceDatabaseConnection {
     }
   }
 
-  @discardableResult
-  public func updateNote(
-    id: String,
-    title: String,
-    content: String,
-    updatedAt: Date = Date(),
-    expectedRevision: String? = nil
-  ) throws -> Bool {
-    // Legacy in-process callers may intentionally replace the current value.
-    // Client autosave uses persistNoteDraft with the revision it actually read.
-    try withLock {
-      let revision = try expectedRevision ?? noteForEditingUnlocked(id: id, operatorID: localMutationOperatorIDUnlocked()).revision
-      return try persistNoteDraft(id: id, title: title, content: content,
-                                  updatedAt: updatedAt, expectedRevision: revision)
-    }
-  }
-
   /// Whole-document autosave shares the optimistic boundary used by mobile and
   /// agent edits. A missing or deleted note is never recreated under its old ID.
   @discardableResult
@@ -401,12 +384,8 @@ extension WorkspaceDatabaseConnection {
     id: String,
     title: String,
     content: String,
-    folderID: String? = nil,
-    createdAt: String? = nil,
     updatedAt: Date = Date(),
     expectedRevision: String? = nil,
-    baseContent: String? = nil,
-    baseTitle: String? = nil,
     operationID: String? = nil
   ) throws -> Bool {
     try transaction {
@@ -434,9 +413,9 @@ extension WorkspaceDatabaseConnection {
         _ = try NoteDocument.editableDocument(from: content)
       }
       try checkpointNoteUnlocked(id: id, source: "editor", force: false)
-      try companionExecuteUnlocked(
+      try toolsExecuteUnlocked(
         "UPDATE notes SET title = ?, content = ?, snippet = ?, updated_at = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
-        values: [title, content, Self.noteSnippet(content), try nextNoteUpdatedAtUnlocked(id: id, now: updatedAt), id, operatorID]
+        [title, content, Self.noteSnippet(content), try nextNoteUpdatedAtUnlocked(id: id, now: updatedAt), id, operatorID]
       )
       guard changedRowCountUnlocked == 1 else { throw WorkspaceNoteMutationError.noteNotFound }
       try checkpointNoteUnlocked(id: id, source: "editor", force: false)
@@ -642,27 +621,14 @@ extension WorkspaceDatabase {
   }
 
   @discardableResult
-  public func updateNote(
-    id: String,
-    title: String,
-    content: String,
-    updatedAt: Date = Date(),
-    expectedRevision: String? = nil
-  ) async throws -> Bool {
-    try await write { try $0.updateNote(id: id, title: title, content: content, updatedAt: updatedAt, expectedRevision: expectedRevision) }
-  }
-
-  @discardableResult
   public func persistNoteDraft(
     id: String,
     title: String,
     content: String,
-    folderID: String? = nil,
-    createdAt: String? = nil,
     updatedAt: Date = Date(),
-    expectedRevision: String? = nil, baseContent: String? = nil, baseTitle: String? = nil, operationID: String? = nil
+    expectedRevision: String? = nil, operationID: String? = nil
   ) async throws -> Bool {
-    try await write { try $0.persistNoteDraft(id: id, title: title, content: content, folderID: folderID, createdAt: createdAt, updatedAt: updatedAt, expectedRevision: expectedRevision, baseContent: baseContent, baseTitle: baseTitle, operationID: operationID) }
+    try await write { try $0.persistNoteDraft(id: id, title: title, content: content, updatedAt: updatedAt, expectedRevision: expectedRevision, operationID: operationID) }
   }
 
   public func readNoteForEditing(id: String, callerConversationID: String? = nil) async throws -> NoteEditingResponse {

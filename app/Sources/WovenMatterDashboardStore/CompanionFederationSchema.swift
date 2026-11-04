@@ -68,7 +68,7 @@ extension WorkspaceDatabaseConnection {
         bytes BLOB NOT NULL, PRIMARY KEY(artifact_id, revision, offset)
       );
       """)
-    try companionExecuteUnlocked("INSERT OR IGNORE INTO companion_library_identity VALUES (1, ?)",
-                                 values: [UUID().uuidString.lowercased()])
+    try toolsExecuteUnlocked("INSERT OR IGNORE INTO companion_library_identity VALUES (1, ?)",
+                                 [UUID().uuidString.lowercased()])
   }
 }

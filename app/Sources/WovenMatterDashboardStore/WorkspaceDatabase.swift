@@ -34,10 +34,6 @@ public final class WorkspaceDatabase: Sendable {
     self.readers = readers
   }
 
-  public var workerMetrics: [DatabaseWorkerMetrics] {
-    [workers.writer.metrics] + workers.readers.map(\.metrics)
-  }
-
   func write<T: Sendable>(_ operation: @escaping @Sendable (WorkspaceDatabaseConnection) throws -> T) async throws -> T {
     guard let writer else { throw WorkspaceDatabaseError.readOnlyProjection }
     return try await writer.worker.perform { _ in try writer.use(operation) }

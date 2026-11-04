@@ -64,9 +64,7 @@ extension BackendApplicationService {
             result.noteResponse = try await store.database.restoreNoteAssetVersion(noteID: id, versionID: version, expectedRevision: revision)
         case let .persistNoteDraft(entry):
             try await store.database.persistNoteDraft(id: entry.noteID, title: entry.title, content: entry.content,
-                                                folderID: entry.folderID, createdAt: entry.createdAt,
-                                                expectedRevision: entry.expectedRevision, baseContent: entry.baseContent,
-                                                baseTitle: entry.baseTitle, operationID: entry.mutationID)
+                                                expectedRevision: entry.expectedRevision, operationID: entry.mutationID)
         }
         await model.refreshWorkspace()
         return result

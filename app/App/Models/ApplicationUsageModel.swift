@@ -353,9 +353,6 @@ final class ApplicationUsageModel {
                     refreshReason: reason,
                     enabledProviders: enabledProviders,
                     allowCredentialAccess: allowsCredentialAccess,
-                    keychainInteraction: keychainInteraction,
-                    interactiveProvider: interactiveProvider,
-                    selectedCodexWorkspaceID: requestedCodexWorkspaceID,
                     selectedConnections: requestedConnections
                 )
             }

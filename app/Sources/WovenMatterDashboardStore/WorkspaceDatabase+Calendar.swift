@@ -91,7 +91,7 @@ extension WorkspaceDatabaseConnection {
         'starts_at',starts_at,'ends_at',ends_at,'all_day',all_day,'status',status,'source',source,
         'created_at',created_at,'updated_at',updated_at,'calendar',json(calendar_json))
       FROM dashboard_calendar_items WHERE user_id=? \(includeDeleted ? "" : "AND deleted_at IS NULL") ORDER BY starts_at,id
-      """, operatorID: operatorID, as: WorkspaceCalendarItemRecord.self)
+      """, bindings: [operatorID], as: WorkspaceCalendarItemRecord.self)
   }
 
   private struct CalendarMutationInput: Codable {

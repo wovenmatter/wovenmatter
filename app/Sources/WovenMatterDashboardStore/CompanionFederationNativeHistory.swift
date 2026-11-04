@@ -66,7 +66,7 @@ extension WorkspaceDatabaseConnection {
     guard size == part.byteCount, hash.finalize().map({ String(format: "%02x", $0) }).joined() == part.sha256 else {
       throw federationError("record_digest", "Native history record integrity failed. The source must retain its unacknowledged history.")
     }
-    try companionExecuteUnlocked("UPDATE companion_native_history SET complete=1 WHERE workspace_id=? AND record_id=?", values: [entry.workspaceID, part.recordID])
+    try toolsExecuteUnlocked("UPDATE companion_native_history SET complete=1 WHERE workspace_id=? AND record_id=?", [entry.workspaceID, part.recordID])
     // The canonical searchable archive points at the complete chunked record.
     // Only its search excerpt is bounded; retrieval uses the verified manifest.
     let manifest: [String: String] = ["workspaceID": entry.workspaceID, "recordID": part.recordID, "format": part.format,

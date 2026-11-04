@@ -33,10 +33,10 @@ extension WorkspaceDatabaseConnection {
             let owner = try localMutationOperatorIDUnlocked()
             let destination = try folderID.flatMap { try companionFolderUnlocked(id: $0) }?.id
             let timestamp = Self.timestamp(Date())
-            try companionExecuteUnlocked("""
+            try toolsExecuteUnlocked("""
                 INSERT INTO notes(id, user_id, folder_id, title, content, snippet, position, created_at, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)
-                """, values: [id, owner, destination, recoveredTitle, content, Self.noteSnippet(content), timestamp, timestamp])
+                """, [id, owner, destination, recoveredTitle, content, Self.noteSnippet(content), timestamp, timestamp])
             try checkpointNoteUnlocked(id: id, source: "recovered", force: true)
             return id
         }

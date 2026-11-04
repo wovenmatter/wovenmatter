@@ -54,17 +54,6 @@ extension WorkspaceDatabaseConnection {
     }
   }
 
-  public func attachOpenCodeSession(_ link: OpenCodeSessionLink) throws {
-    try transaction {
-      let statement = try prepareUnlocked("INSERT INTO desktop_opencode_sessions(conversation_id, connection_id, session_id, snapshot_json) VALUES (?, ?, ?, '{}')")
-      defer { sqlite3_finalize(statement) }
-      try bind(link.conversationID, at: 1, to: statement)
-      try bind(link.connectionID, at: 2, to: statement)
-      try bind(link.sessionID, at: 3, to: statement)
-      try stepDone(statement)
-    }
-  }
-
   public func openCodeSnapshot(conversationID: String) throws -> OpenCodeSessionSnapshot? {
     try withLock {
       let statement = try prepareUnlocked("SELECT snapshot_json FROM desktop_opencode_sessions WHERE conversation_id = ?")
@@ -335,10 +324,6 @@ extension WorkspaceDatabase {
 
   public func archiveImportedOpenCodeSession(conversationID: String) async throws {
     try await write { try $0.archiveImportedOpenCodeSession(conversationID: conversationID) }
-  }
-
-  public func attachOpenCodeSession(_ link: OpenCodeSessionLink) async throws {
-    try await write { try $0.attachOpenCodeSession(link) }
   }
 
   public func openCodeSnapshot(conversationID: String) async throws -> OpenCodeSessionSnapshot? {
