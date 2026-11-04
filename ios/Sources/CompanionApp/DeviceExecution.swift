@@ -636,7 +636,7 @@ extension CompanionModel {
           let page = try Self.executionObject(await runtime.history(nativeConversationID: nativeID, cursorJSON: cursor))
           for entry in page["items"] as? [[String: Any]] ?? [] {
             let data = try JSONSerialization.data(withJSONObject: entry, options: [.sortedKeys])
-            let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+            let digest = SHA256.hash(data: data).hexString
             try await store.journal.appendNativeRecord(workspaceID: deviceWorkspaceID, conversationID: id,
               recordID: "pi-\(id)-\(nativeID)-\(entry["id"] as? Int ?? 0)-\(digest)", format: "pi-durable.entry.v1", data: data)
           }

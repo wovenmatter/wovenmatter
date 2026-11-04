@@ -231,8 +231,3 @@ public enum LibraryLinkDiscovery {
     return results
   }
 }
-
-extension Sequence where Element == UInt8 {
-  /// Lowercase hexadecimal text of these bytes.
-  public var hexString: String { map { String(format: "%02x", $0) }.joined() }
-}

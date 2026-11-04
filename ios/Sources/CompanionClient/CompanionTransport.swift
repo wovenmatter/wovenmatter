@@ -281,8 +281,8 @@ public enum MobileCredentialVault {
 /// Multiple desktop instances share a Keychain but must never share a device's
 /// library bearer. Preserve the established service for ordinary installations.
 public enum ClientCredentialNamespace {
-  public static func service(_ base: String, bundleID: String? = Bundle.main.bundleIdentifier) -> String {
-    guard let bundleID, bundleID.hasPrefix("wovenmatter.desktop.dev.") else { return base }
+  public static func service(_ base: String) -> String {
+    guard let bundleID = Bundle.main.bundleIdentifier, bundleID.hasPrefix("wovenmatter.desktop.dev.") else { return base }
     return base + "." + bundleID
   }
 }

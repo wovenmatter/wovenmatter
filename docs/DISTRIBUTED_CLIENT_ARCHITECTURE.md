@@ -133,10 +133,4 @@ An empty cache has an unavailable/retry state, with no app-authored aliases. The
 SDK does not expose context/output limits in that result; the existing native
 adapter's conservative host budgets remain limits, not discovered entitlements.
 
-The upstream Pi desktop/remote dependencies still contain and eagerly import their
-own provider baseline (about 951 KB in Pi 1.1.0). Woven's provider catalogs and
-selected-label UI no longer depend on it. Removing those upstream bytes requires
-an SDK packaging change and is outside this cleanup. The actual iOS Pi Durable
-runtime bundle and `harnesses/catalog.json` installation manifest are retained.
-
 OpenRouter catalog entries that declare the dynamic-router unavailable-price sentinel are omitted; their prices are never replaced with zero. Normal chat entries remain available, and destination/header validation still runs before exclusion.

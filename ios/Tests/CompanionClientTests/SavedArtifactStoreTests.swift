@@ -13,7 +13,7 @@ private actor ArtifactLibrary: FederationTransport {
   func configureUploadLoss() { loseUploadReply = true }
   func seed(_ bytes: Data, corruptHash: Bool = false) {
     data = bytes; complete = true
-    let digest = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+    let digest = SHA256.hash(data: bytes).hexString
     manifest = .init(id: "artifact", workspaceID: "phone", title: "Saved", mediaType: "text/plain", byteCount: Int64(bytes.count), sha256: corruptHash ? String(repeating: "0", count: 64) : digest, revision: 1)
   }
   func failDownload(at offset: Int64) { loseDownloadAt = offset }
@@ -34,7 +34,7 @@ private actor ArtifactLibrary: FederationTransport {
     return .init(manifest: manifest!, nextOffset: Int64(data.count), complete: false)
   }
   func commitArtifact(_ commit: CompanionArtifactCommit) throws -> CompanionArtifactManifest {
-    let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    let digest = SHA256.hash(data: data).hexString
     guard digest == manifest!.sha256 else { throw SavedArtifactStore.Failure.checksumMismatch }
     complete = true; return manifest!
   }

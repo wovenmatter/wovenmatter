@@ -25,7 +25,7 @@ public enum DeviceUsageProjection {
         data.append(entry.nativeRecord!.data)
         guard data.count <= metadata.byteCount else { throw MobileConnectionError.invalidResponse }
       }
-      guard data.count == metadata.byteCount, SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == metadata.sha256,
+      guard data.count == metadata.byteCount, SHA256.hash(data: data).hexString == metadata.sha256,
         let record = try JSONSerialization.jsonObject(with: data) as? [String: Any],
         let id = record["id"] as? Int, let nativeConversation = record["conversationId"] as? Int else { throw MobileConnectionError.invalidResponse }
       let key = "\(workspaceID):\(first.conversationID):\(nativeConversation):\(id)"

@@ -47,10 +47,13 @@ separately; compilation does not prove UI, Tailscale or real-account acceptance.
    during setup, expired code, duplicate scan and pairing to a different database.
    Pending enrollment must not appear paired or grant data access. Local writing
    and device provider connections must survive interrupted setup and re-pairing.
-2. On a second Mac, choose Database role → Node, restart and test discovery,
-   approval and link fallback. Discovery alone grants no access. The previous
-   database remains preserved; the Mac has its own local execution workspace.
-   Refuse role changes with active work and restore access after a failed change.
+2. On a second Mac, pair from Settings → Apple Devices → Find devices (Pair, or
+   Download & pair when Woven Matter is not installed there) or start pairing
+   from the other Mac; test discovery, approval on the other Mac and the pairing
+   link fallback. Discovery alone grants no access. Both Macs keep their full
+   desktop app and existing library; the second Mac has its own local execution
+   workspace. Interrupted or failed setup must leave the installed app and the
+   existing library intact.
 3. Paired clients automatically receive all available workspace routes. Empty workspaces have no
    invented agents; central/direct routes to the same Mac appear once with its
    device name. Temporarily unavailable workspaces acquire access on reconnect.

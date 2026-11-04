@@ -9,7 +9,7 @@ struct CompanionFederationTests {
   let owner = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
   let observer = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
   func uuid() -> String { UUID().uuidString.lowercased() }
-  func digest(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
+  func digest(_ data: Data) -> String { SHA256.hash(data: data).hexString }
   func fixture() throws -> URL {
     let url = FileManager.default.temporaryDirectory.appendingPathComponent("federation-\(UUID())", isDirectory: true)
     try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)

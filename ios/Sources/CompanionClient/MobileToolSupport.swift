@@ -74,7 +74,7 @@ public enum MobileToolSupport {
   }
   public static func fingerprint(_ note: CompanionNote) throws -> String {
     let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
-    return SHA256.hash(data: try encoder.encode(note)).map { String(format: "%02x", $0) }.joined()
+    return SHA256.hash(data: try encoder.encode(note)).hexString
   }
   public static func value<T: Encodable>(_ value: T) throws -> GatewayJSONValue {
     let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601

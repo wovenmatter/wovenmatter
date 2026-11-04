@@ -120,7 +120,7 @@ public actor WorkspaceJournal {
         bytes.append(part.data)
       }
       guard bytes.count == first.byteCount,
-        SHA256.hash(data: bytes).map({ String(format: "%02x", $0) }).joined() == first.sha256 else { throw CompanionActivityDetails.invalid }
+        SHA256.hash(data: bytes).hexString == first.sha256 else { throw CompanionActivityDetails.invalid }
       return (first.format, bytes)
     }
     guard let text = String(data: data, encoding: .utf8) else { throw CompanionActivityDetails.invalid }
@@ -194,7 +194,7 @@ public actor WorkspaceJournal {
       for (index, row) in activities.enumerated() {
         guard row.isTransient != true, let projection = row.projectionJSON, projection.utf8.count > 32 * 1_024 else { continue }
         let data = Data(projection.utf8)
-        let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        let digest = SHA256.hash(data: data).hexString
         let recordID = "activity-\(row.id)-\(digest)"
         // Large details use the existing chunked native-record transport. The
         // transcript remains small enough for sync and a collapsed UI preview.
@@ -217,7 +217,7 @@ public actor WorkspaceJournal {
       delta.activities = delta.activities.filter { activity in !previous.activities.contains(activity) }
       delta.removedMessageIDs = delta.removedMessageIDs.map { ids in
         Array(Set(ids.flatMap { id in
-          let chunkPrefix = "chunk-" + SHA256.hash(data: Data(id.utf8)).map { String(format: "%02x", $0) }.joined() + "-"
+          let chunkPrefix = "chunk-" + SHA256.hash(data: Data(id.utf8)).hexString + "-"
           return previous.messages.filter { row in
             row.role != "user" && (row.id == id || (row.id.hasPrefix(chunkPrefix) && Int(row.id.dropFirst(chunkPrefix.count)).map { $0 > 0 } == true))
           }.map(\.id)
@@ -261,7 +261,7 @@ public actor WorkspaceJournal {
   // JSON-escaped text is bounded, with stable IDs across capture/replay. Clear
   // any old trailing parts when a mutable activity becomes shorter.
   private static func parts(_ text: String, id: String, previousIDs: [String]) -> [(String, String)] {
-    let prefix = "chunk-" + SHA256.hash(data: Data(id.utf8)).map { String(format: "%02x", $0) }.joined() + "-"
+    let prefix = "chunk-" + SHA256.hash(data: Data(id.utf8)).hexString + "-"
     var values: [String] = [], start = text.unicodeScalars.startIndex
     while start < text.unicodeScalars.endIndex {
       let end = text.unicodeScalars.index(start, offsetBy: 16_384, limitedBy: text.unicodeScalars.endIndex) ?? text.unicodeScalars.endIndex
@@ -323,7 +323,7 @@ public actor WorkspaceJournal {
   /// checksum verifies bytes; it must not serve as identity for distinct records.
   @discardableResult public func appendNativeRecord(workspaceID: String, conversationID: String, runID: String? = nil,
     recordID: String, format: String, data: Data) throws -> [CompanionJournalEntry] {
-    let sha = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    let sha = SHA256.hash(data: data).hexString
     let existing = state.entries.values.filter { $0.workspaceID == workspaceID && $0.nativeRecord?.recordID == recordID }
     if !existing.isEmpty {
       guard existing.allSatisfy({ $0.conversationID == conversationID && $0.runID == runID && $0.nativeRecord?.sha256 == sha && $0.nativeRecord?.format == format }) else { throw Failure.reusedIdentity }

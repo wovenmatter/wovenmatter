@@ -51,7 +51,7 @@ enum MobileStorePersistence {
     return bytesWritten
   }
   private static func blobDirectory(_ file: URL) -> URL { file.deletingLastPathComponent().appendingPathComponent(file.lastPathComponent + ".bodies") }
-  private static func digest(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
+  private static func digest(_ data: Data) -> String { SHA256.hash(data: data).hexString }
   private static func transform(_ state: inout MobileStoreState, _ body: (String) throws -> String) throws {
     for id in Array(state.notes.keys) { state.notes[id]!.content = try body(state.notes[id]!.content) }
     for id in Array(state.bases.keys) { state.bases[id]!.content = try body(state.bases[id]!.content) }
