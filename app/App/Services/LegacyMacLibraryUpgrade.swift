@@ -9,7 +9,6 @@ import WovenMatterDashboardStore
 @MainActor enum LegacyMacLibraryUpgrade {
     static let importedKey = "wovenmatter.paired-macs.legacy-imported"
     static let connectedKey = "wovenmatter.paired-macs.legacy-connected"
-    static let failureKey = "wovenmatter.paired-macs.legacy-error"
 
     /// A former node must finish its same-Mac upgrade under its retained device
     /// identity before exchanging any library content with another Mac.
@@ -19,11 +18,10 @@ import WovenMatterDashboardStore
     }
 
     /// Never makes the full app unusable. A failure (for example the retired
-    /// node's lease is still held) is recorded and retried on the next launch;
-    /// paired synchronization stays paused until the upgrade completes.
+    /// node's lease is still held) is retried on the next launch; paired
+    /// synchronization stays paused until the upgrade completes.
     static func prepareRecordingFailure(database: WorkspaceDatabase, defaults: UserDefaults) async {
-        do { try await prepare(database: database, defaults: defaults); defaults.removeObject(forKey: failureKey) }
-        catch { defaults.set(error.localizedDescription, forKey: failureKey) }
+        try? await prepare(database: database, defaults: defaults)
     }
 
     static func prepare(database: WorkspaceDatabase, defaults: UserDefaults) async throws {

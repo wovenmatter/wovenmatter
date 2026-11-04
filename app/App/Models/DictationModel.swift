@@ -70,10 +70,7 @@ import WovenMatterCompanion
     func configureDictationHistory() {
         DictationSession.shared.saveHistory = { [weak self] record in
             guard let self else { throw CancellationError() }
-            if self.isLibraryClient {
-                guard let store = self.libraryClient.clientStore else { throw ApplicationModelError.dashboardStoreUnavailable }
-                try await store.dictations.save(record)
-            } else if self.isBackendFrontend {
+            if self.isBackendFrontend {
                 _ = try await self.sendBackendCommand(.saveDictation(record))
             } else {
                 guard let database = self.dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }

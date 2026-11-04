@@ -6,7 +6,6 @@ struct MacTailnetDiscoveryView: View {
     @Bindable var devices: MacDeviceSetupModel
     @Bindable var pairing: CompanionMacPairingController
     @Bindable var host: CompanionHostController
-    var isCentral: Bool
     var canPairWithCentral: Bool
     @State private var confirmation: DeviceSetupConfirmation?
     private var busy: Bool { devices.searching || pairing.isDiscovering || host.isDiscovering || devices.rows.contains(where: \.busy) }
@@ -17,7 +16,7 @@ struct MacTailnetDiscoveryView: View {
                 Task {
                     async let inventory: Void = devices.discover()
                     await pairing.refreshDiscovery()
-                    if isCentral { await host.refreshDiscovery() }
+                    await host.refreshDiscovery()
                     await inventory
                 }
             }.buttonStyle(SettingsQuietButtonStyle()).disabled(busy)
@@ -33,9 +32,9 @@ struct MacTailnetDiscoveryView: View {
             }
             ForEach(devices.rows) { row in
                 MacTailnetDeviceRow(row: row, release: devices.release, peer: peer(for: row), paired: isPaired(row),
-                    isCentral: isCentral, canPairWithCentral: canPairWithCentral,
+                    canPairWithCentral: canPairWithCentral,
                     onAction: { action in
-                        let item = DeviceSetupConfirmation(row: row, action: action, sendsInvitation: isCentral && peer(for: row)?.advertisement.role == .client)
+                        let item = DeviceSetupConfirmation(row: row, action: action)
                         if action == .open { Task { await perform(item) } } else { confirmation = item }
                     },
                     onInspect: { Task { await devices.inspect(row) } })
@@ -49,7 +48,7 @@ struct MacTailnetDiscoveryView: View {
             Button(item.buttonTitle) { Task { await perform(item) } }
             Button("Cancel", role: .cancel) { confirmation = nil }
         } message: { item in
-            Text(item.message(version: devices.release?.version, central: isCentral, snapshot: DevelopmentLaunch.isSnapshot))
+            Text(item.message(version: devices.release?.version, snapshot: DevelopmentLaunch.isSnapshot))
         }
     }
     private func rowError(_ row: MacDeviceRow) { row.error = "Update both Macs to a version that supports paired Mac synchronization." }
@@ -66,29 +65,14 @@ struct MacTailnetDiscoveryView: View {
             if peer.advertisement.capabilities?.contains(PairedMacSyncController.capability) == true { await host.pairWithPeer(peer); return }
             rowError(item.row); return
         }
-        if isCentral {
-            guard [.update, .download, .open].contains(item.action) || host.endpoint != nil else { item.row.error = "Wait for this Mac’s library to become available before pairing."; return }
-            await devices.perform(item.action, row: item.row, central: host.endpoint)
-        } else {
-            await devices.perform(item.action, row: item.row, central: nil, requestRemoteCentral: {
-                for _ in 0..<10 {
-                    await pairing.refreshDiscovery()
-                    if let peer = peer(for: item.row), peer.advertisement.role == .central {
-                        try await pairing.requestPairing(endpoint: peer.endpoint)
-                        return
-                    }
-                    try await Task.sleep(for: .seconds(2))
-                }
-                throw MacDeviceSetupError("Woven Matter opened, but this Mac is not offering paired Mac synchronization. Update both Macs to the same version.")
-            })
-        }
+        guard [.update, .download, .open].contains(item.action) || host.endpoint != nil else { item.row.error = "Wait for this Mac’s library to become available before pairing."; return }
+        await devices.perform(item.action, row: item.row, central: host.endpoint)
     }
 }
 
 @MainActor struct DeviceSetupConfirmation {
     let row: MacDeviceRow
     let action: MacDeviceSetupModel.Action
-    let sendsInvitation: Bool
     var title: String {
         switch action {
         case .update: "Update Woven Matter on \(row.mac.name)?"
@@ -100,16 +84,13 @@ struct MacTailnetDiscoveryView: View {
     var buttonTitle: String {
         switch action { case .pair: "Pair"; case .installAndPair: row.installation?.installed == true ? "Update and pair" : "Download and pair"; case .update: "Update"; case .download: "Download"; case .open: "Open" }
     }
-    func message(version: String?, central: Bool, snapshot: Bool = false) -> String {
+    func message(version: String?, snapshot: Bool = false) -> String {
         if action == .update || action == .download {
             return "Install Woven Matter \(version ?? "the latest version") on this Mac. Running work must finish before the app can restart. Its library stays on that Mac."
         }
         let destination = snapshot ? "this isolated snapshot database" : "this Mac’s library"
-        if action == .pair && sendsInvitation { return "Send this Mac an invitation to \(destination). Accept the invitation in Woven Matter on that Mac to finish pairing." }
         let download = action == .installAndPair ? "Download and verify Woven Matter \(version ?? "the latest version"), then " : ""
-        return download + (central
-            ? "open Woven Matter on this Mac, request pairing with \(destination). Both Macs keep their libraries and synchronize shared data. Approve the pairing request here to finish."
-            : "open Woven Matter and request access to this Mac’s library. Approve the request on that Mac to finish.")
+        return download + "open Woven Matter on this Mac, request pairing with \(destination). Both Macs keep their libraries and synchronize shared data. Approve the pairing request here to finish."
     }
 }
 
@@ -118,7 +99,6 @@ private struct MacTailnetDeviceRow: View {
     var release: CompanionMacRelease?
     var peer: CompanionDiscoveredPeer?
     var paired: Bool
-    var isCentral: Bool
     var canPairWithCentral: Bool
     var onAction: (MacDeviceSetupModel.Action) -> Void
     var onInspect: () -> Void
@@ -141,7 +121,7 @@ private struct MacTailnetDeviceRow: View {
             if row.mac.online && !row.checking { actions.disabled(row.busy).padding(.leading, 36) }
             if let message = row.message { Text(message).font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground) }
             if let error = row.error { Text(error).font(.system(size: 12)).foregroundStyle(DashboardPalette.danger).textSelection(.enabled) }
-            if isCentral, row.installation?.installed == true, row.installation?.supportsSetup == false,
+            if row.installation?.installed == true, row.installation?.supportsSetup == false,
                !canUseService, release?.supportsRemoteSetup != true {
                 Text("Pair in Apple Devices on that Mac. Setup from here will be available when a release with remote pairing support is published.")
                     .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
@@ -173,9 +153,9 @@ private struct MacTailnetDeviceRow: View {
     @ViewBuilder private var actions: some View {
         HStack(spacing: 8) {
             if !paired {
-                if canUseService || (isCentral && row.installation?.supportsSetup == true) || (canPairWithCentral && row.installation?.installed == true) {
+                if canUseService || row.installation?.supportsSetup == true || (canPairWithCentral && row.installation?.installed == true) {
                     Button("Pair") { onAction(.pair) }.buttonStyle(SettingsQuietButtonStyle())
-                } else if isCentral || canPairWithCentral, let installation = row.installation, let release,
+                } else if let installation = row.installation, let release,
                           (canPairWithCentral || release.supportsRemoteSetup), !installation.installed || release.isNewer(than: installation) {
                     Button(installation.installed ? "Update & pair" : "Download & pair") { onAction(.installAndPair) }
                         .buttonStyle(SettingsQuietButtonStyle())

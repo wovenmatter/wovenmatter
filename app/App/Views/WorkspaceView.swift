@@ -50,32 +50,6 @@ extension EnvironmentValues {
     }
 }
 
-struct DashboardCreatedNotePresentation: Equatable {
-    let selectedNoteID: String
-    let titleFocusNoteID: String
-
-    init(noteID: String) {
-        selectedNoteID = noteID
-        titleFocusNoteID = noteID
-    }
-}
-
-struct DashboardSendResult: Equatable {
-    let draft: String
-    let accepted: Bool
-
-    static func resolve(
-        submittedDraft: String,
-        currentDraft: String,
-        accepted: Bool
-    ) -> DashboardSendResult {
-        DashboardSendResult(
-            draft: accepted && currentDraft == submittedDraft ? "" : currentDraft,
-            accepted: accepted
-        )
-    }
-}
-
 struct DashboardRunDisplayPolicy {
     static func presentsStatus(_ run: WorkspaceRunRecord) -> Bool {
         run.status != "queued" && run.status != "accepted"
@@ -970,9 +944,8 @@ struct WorkspaceView: View {
                 showNotice(model.noteMutationError ?? "The note could not be created.")
                 return
             }
-            let presentation = DashboardCreatedNotePresentation(noteID: noteID)
-            newlyCreatedNoteID = presentation.titleFocusNoteID
-            selectNote(presentation.selectedNoteID)
+            newlyCreatedNoteID = noteID
+            selectNote(noteID)
         }
     }
 
@@ -1319,12 +1292,8 @@ struct WorkspaceView: View {
                     ),
                     note: capturedNote
                 )
-                let result = DashboardSendResult.resolve(
-                        submittedDraft: content,
-                        currentDraft: draftsByConversationID[conversationID, default: ""],
-                        accepted: accepted
-                    )
-                draftsByConversationID[conversationID] = result.draft
+                let currentDraft = draftsByConversationID[conversationID, default: ""]
+                draftsByConversationID[conversationID] = accepted && currentDraft == content ? "" : currentDraft
                 if accepted {
                     let submittedIDs = Set(submittedAttachments.map(\.id))
                     attachmentDraftsByConversation[conversationID, default: []]

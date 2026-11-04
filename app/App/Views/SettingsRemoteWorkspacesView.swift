@@ -15,8 +15,6 @@ struct SettingsRemoteWorkspacesView: View {
     @State private var workspaceID = ""
     @State private var hostName = ""
     @State private var userName = ""
-    @State private var port = 7337
-    private let workspaceKind: RemoteWorkspaceKind = .host
     @State private var accessMode: RemoteWorkspaceAccessMode = .fullRoot
     @State private var acknowledgedHostAccess = false
     @State private var pendingDeletion: RemoteWorkspaceConfiguration?
@@ -120,7 +118,7 @@ struct SettingsRemoteWorkspacesView: View {
             .padding(24).frame(width: 760, height: 520)
             .foregroundStyle(DashboardPalette.foreground).background(DashboardPalette.background)
         }
-        .onChange(of: hostName + userName + workspaceKind.rawValue + accessMode.rawValue) { _, _ in
+        .onChange(of: hostName + userName + accessMode.rawValue) { _, _ in
             acknowledgedHostAccess = false
         }
         .onChange(of: model.workspaces.map(\.id)) { _, workspaceIDs in
@@ -252,7 +250,7 @@ struct SettingsRemoteWorkspacesView: View {
     private var currentPreflight: RemoteWorkspacePreflight? {
         model.preflight(
             hostName: hostName,
-            userName: userName, kind: workspaceKind, accessMode: accessMode
+            userName: userName, kind: .host, accessMode: accessMode
         )
     }
 
@@ -402,17 +400,15 @@ struct SettingsRemoteWorkspacesView: View {
 
     private var hostCard: some View {
         SettingsCard(title: "Host", detail: "Choose a machine, then check that it can run a workspace. Remote workspaces run Woven Matter directly on Linux.") {
-            if workspaceKind == .host {
-                SettingsField("Workspace access") {
-                    Picker("Workspace access", selection: $accessMode) {
-                        Text("Full root access").tag(RemoteWorkspaceAccessMode.fullRoot)
-                        Text("Normal user permissions").tag(RemoteWorkspaceAccessMode.user)
-                    }.labelsHidden()
-                }
-                SettingsNote(accessMode == .fullRoot
-                    ? "Agents can administer this machine without approval for each elevated command. The access level applies to the entire workspace."
-                    : "Agents use this Linux account's normal permissions. The access level applies to the entire workspace.")
+            SettingsField("Workspace access") {
+                Picker("Workspace access", selection: $accessMode) {
+                    Text("Full root access").tag(RemoteWorkspaceAccessMode.fullRoot)
+                    Text("Normal user permissions").tag(RemoteWorkspaceAccessMode.user)
+                }.labelsHidden()
             }
+            SettingsNote(accessMode == .fullRoot
+                ? "Agents can administer this machine without approval for each elevated command. The access level applies to the entire workspace."
+                : "Agents use this Linux account's normal permissions. The access level applies to the entire workspace.")
             SettingsField("Tailnet machines") {
                 VStack(alignment: .leading, spacing: 8) {
                     let onlineMachines = model.machineCandidates.filter(\.online)
@@ -424,7 +420,7 @@ struct SettingsRemoteWorkspacesView: View {
                     ForEach(onlineMachines) { machine in
                         Button {
                             hostName = machine.hostName
-                            model.checkHost(hostName: hostName, userName: userName, kind: workspaceKind, accessMode: accessMode)
+                            model.checkHost(hostName: hostName, userName: userName, kind: .host, accessMode: accessMode)
                         } label: {
                             HStack(spacing: 8) {
                                 Text(machine.displayName)
@@ -446,7 +442,7 @@ struct SettingsRemoteWorkspacesView: View {
             SettingsField("Tailscale machine") {
                 TextField("machine.tailnet-name.ts.net", text: $hostName)
                     .dashboardInput()
-                    .onSubmit { model.checkHost(hostName: hostName, userName: userName, kind: workspaceKind, accessMode: accessMode) }
+                    .onSubmit { model.checkHost(hostName: hostName, userName: userName, kind: .host, accessMode: accessMode) }
             }
             SettingsField("Remote username (optional)") {
                 TextField("Resolved by SSH config", text: $userName)
@@ -456,7 +452,7 @@ struct SettingsRemoteWorkspacesView: View {
             Button(model.isCheckingHost ? "Inspecting host…" : "Inspect host") {
                 model.checkHost(
                     hostName: hostName,
-                    userName: userName, kind: workspaceKind, accessMode: accessMode
+                    userName: userName, kind: .host, accessMode: accessMode
                 )
             }
             .buttonStyle(SettingsQuietButtonStyle())
@@ -507,7 +503,7 @@ struct SettingsRemoteWorkspacesView: View {
                         }
                         if preflight.canPrepare == true {
                             Button(model.isCreating ? "Preparing host…" : "Prepare host") {
-                                model.prepareHost(hostName: hostName, userName: userName, kind: workspaceKind, accessMode: accessMode)
+                                model.prepareHost(hostName: hostName, userName: userName, kind: .host, accessMode: accessMode)
                             }
                             .buttonStyle(DashboardPrimaryButtonStyle())
                         }
@@ -529,11 +525,9 @@ struct SettingsRemoteWorkspacesView: View {
                     .dashboardInput()
             }
             SettingsNote("Files use available disk space on the remote machine.")
-            if workspaceKind == .host {
-                SettingsNote(hostWarning(user: userName.isEmpty ? nil : userName, host: hostName))
-                Toggle("I understand this workspace's access to the host", isOn: $acknowledgedHostAccess)
-                    .toggleStyle(DashboardSwitchToggleStyle())
-            }
+            SettingsNote(hostWarning(user: userName.isEmpty ? nil : userName, host: hostName))
+            Toggle("I understand this workspace's access to the host", isOn: $acknowledgedHostAccess)
+                .toggleStyle(DashboardSwitchToggleStyle())
 
             Button(model.isCreating ? "Creating…" : "Create workspace") {
                 model.create(
@@ -541,13 +535,13 @@ struct SettingsRemoteWorkspacesView: View {
                     workspaceID: workspaceID,
                     hostName: hostName,
                     userName: userName,
-                    port: port,
-                    kind: workspaceKind, accessMode: accessMode
+                    port: 7337,
+                    kind: .host, accessMode: accessMode
                 )
             }
             .buttonStyle(DashboardPrimaryButtonStyle())
             .disabled(model.isCreating || currentPreflight?.ready != true
-                || (workspaceKind == .host && !acknowledgedHostAccess)
+                || !acknowledgedHostAccess
                 || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 || workspaceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }

@@ -490,10 +490,7 @@ struct WovenMatterApp: App {
     @State private var applicationModel: ApplicationModel
 
     init() {
-        let environment = ProcessInfo.processInfo.environment
-        let isRunningUnitTests = environment["XCTestBundlePath"] != nil
-            || environment["XCTestSessionIdentifier"] != nil
-            || environment.keys.contains("XCTestConfigurationFilePath")
+        let isRunningUnitTests = ApplicationModel.isRunningUnitTests
         if !isRunningUnitTests, CompanionTestWorkspace.supportDirectory == nil {
             do { try DevelopmentLaunch.validate() }
             catch {
@@ -579,14 +576,7 @@ struct WovenMatterApp: App {
         .commands { WorkspaceMenuCommands() }
 
         Window("Set up Woven Matter", id: HarnessSetupPresentation.windowID) {
-            if applicationModel.isLibraryClient {
-                if let execution = applicationModel.libraryClient.localExecution {
-                    HarnessSetupView(model: execution.model)
-                } else {
-                    Text("Connect this Mac to its library in Settings → Devices before setting up harnesses.")
-                        .frame(width: 640, height: 240)
-                }
-            } else if applicationModel.state == .ready {
+            if applicationModel.state == .ready {
                 HarnessSetupView(model: applicationModel)
             } else {
                 ProgressView("Opening workspace…").frame(width: 740, height: 640)
@@ -598,8 +588,7 @@ struct WovenMatterApp: App {
 
         Settings {
             Group {
-                if applicationModel.isLibraryClient { CentralLibraryClientSettings(model: applicationModel.libraryClient, application: applicationModel) }
-                else { SettingsView(model: applicationModel) }
+                SettingsView(model: applicationModel)
             }.scrollIndicators(.never)
         }
     }

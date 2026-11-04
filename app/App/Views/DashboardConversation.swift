@@ -1096,8 +1096,8 @@ struct DashboardMessageRow: View {
     let runPresentation: DashboardRunPresentation?
     let activities: [WorkspaceRunActivityRecord]
     let onOpenAttachment: (WorkspaceMessageAttachmentRecord) -> Void
-    var resolveFile: ((String) async throws -> URL)? = nil
-    var layout: ConversationMessageLayout.Row? = nil
+    let resolveFile: (String) async throws -> URL
+    let layout: ConversationMessageLayout.Row
     var displayedBody: String? = nil
     var commentaryIDs: Set<String>? = nil
     var workTimeline: ConversationWorkTimeline? = nil
@@ -1127,7 +1127,7 @@ struct DashboardMessageRow: View {
             }
             .font(.system(size: 12))
             .foregroundStyle(DashboardPalette.mutedForeground)
-        } else if layout?.content == .fileChanges {
+        } else if layout.content == .fileChanges {
             HStack {
                 ConversationChangedFilesCard(records: activities, topSpacing: {
                     if showsAssistantBody { return 18 }
@@ -1169,12 +1169,9 @@ struct DashboardMessageRow: View {
                         )
                         .padding(.horizontal, 4)
                         .padding(.vertical, 2)
-                        if let resolveFile, !isStreaming {
+                        if !isStreaming {
                             ConversationFilePreviews(content: assistantBody, messageID: message.id, resolveFile: resolveFile)
                         }
-                    }
-                    if !isUser, layout == nil {
-                        ConversationChangedFilesCard(records: activities)
                     }
                 }
                 .frame(maxWidth: isUser ? nil : .infinity, alignment: isUser ? .trailing : .leading)

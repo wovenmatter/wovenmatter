@@ -108,7 +108,7 @@ final class CompanionHostController {
     /// Listening does not create a pairing offer or authorize any device.
     func startForCentralDatabase() async {
         guard !DevelopmentLaunch.isClient else { return }
-        guard model?.isLibraryClient == false else { return }
+        guard model != nil else { return }
         if model?.isBackendFrontend == true { await forward(.status); return }
         guard availabilityTask == nil else { return }
         isEnabled = true
@@ -124,7 +124,7 @@ final class CompanionHostController {
     func start() async {
         guard !DevelopmentLaunch.isClient else { return }
         if model?.isBackendFrontend == true { await forward(.start); return }
-        guard model?.isLibraryClient == false, !isStarting, endpoint == nil, model?.dashboardStore != nil else { return }
+        guard !isStarting, endpoint == nil, model?.dashboardStore != nil else { return }
         isStarting = true; errorMessage = nil; status = "Connecting…"
         generation = UUID()
         let expectedGeneration = generation
@@ -629,7 +629,7 @@ final class CompanionHostController {
     /// Internal execution-owner path for this desktop itself. It cannot
     /// choose an arbitrary principal and is never exposed as a client HTTP route.
     func provisionCentralExecutionWorkspace(id: String) async throws -> CompanionExecutionCredential {
-        guard let model, !model.isBackendFrontend, !model.isLibraryClient,
+        guard let model, !model.isBackendFrontend,
               let database = model.dashboardStore?.database, UUID(uuidString: id) != nil,
               !provisioningWorkspaceIDs.contains(id) else {
             throw CompanionAPIError(code: "unavailable", message: "This Mac’s execution owner is unavailable.")
@@ -854,19 +854,6 @@ final class CompanionHostController {
         do { try await authentication?.denyPairing(id: id); await refreshStatus() }
         catch { errorMessage = error.localizedDescription }
     }
-    func invitePairing(peer: CompanionDiscoveredPeer) async {
-        if model?.isBackendFrontend == true { await forward(.invitePairing(peer)); return }
-        guard peer.advertisement.role == .client, discoveredPeers.contains(peer),
-              let endpoint, let authentication, let identity = discoveryIdentity else { return }
-        do {
-            let offer = try await authentication.createOffer(endpoint: endpoint, deviceID: peer.advertisement.identity.deviceID)
-            let invitation = CompanionPairingInvitation(id: UUID().uuidString.lowercased(), central: identity,
-                payload: offer.payload, expiresAt: offer.expiresAt)
-            let _: [String: Bool] = try await pairingNetwork.request(peer.endpoint, path: "v1/pairing/invite", body: JSONEncoder().encode(invitation))
-            errorMessage = nil
-        } catch { errorMessage = error.localizedDescription }
-    }
-
     private func forward(_ action: CompanionHostAction) async {
         guard let model else { return }
         do {
@@ -953,7 +940,7 @@ final class CompanionHostController {
     }
 
     func connectLocalDevelopment(_ request: DevelopmentClientRequest) async throws -> DevelopmentClientConnection {
-        guard DevelopmentLaunch.mode == nil || DevelopmentLaunch.isLiveHost, model?.isLibraryClient == false,
+        guard DevelopmentLaunch.mode == nil || DevelopmentLaunch.isLiveHost,
               let database = model?.dashboardStore?.database, let endpoint, let authentication else {
             throw CompanionAPIError(code: "unavailable", message: "Run production with background execution enabled, or a live Dev host, and wait for its library to connect.")
         }
@@ -969,7 +956,7 @@ final class CompanionHostController {
 enum CompanionHostAction: Codable, Sendable {
     case status, start, stop, createCode
     case revoke(String), approvePairing(String), denyPairing(String)
-    case discover, invitePairing(CompanionDiscoveredPeer), pairWithPeer(CompanionDiscoveredPeer), pairAtEndpoint(URL), pairUsingLink(String), cancelPeerPairing
+    case discover, pairWithPeer(CompanionDiscoveredPeer), pairAtEndpoint(URL), pairUsingLink(String), cancelPeerPairing
 }
 
 struct CompanionHostSnapshot: Codable, Sendable {

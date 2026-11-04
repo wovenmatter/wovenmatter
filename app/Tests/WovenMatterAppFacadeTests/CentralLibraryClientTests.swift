@@ -21,8 +21,9 @@ struct CentralLibraryClientTests {
         let direct = MacClientFakeExecution(workspace: workspace)
         try await client.attachExecutionWorkspace(workspace, transport: direct)
         await client.selectExecutionWorkspace(workspace.id)
-        client.composer = "Fixture first message"; await client.send()
-        let id = try #require(client.selectedConversationID)
+        let id = UUID().uuidString.lowercased()
+        _ = await direct.command(.init(deviceID: client.state.deviceID, kind: .createSession, conversationID: id))
+        await client.refresh()
         fixture.model.liveLibraryClient = client
         await fixture.model.refreshWorkspace()
         #expect(fixture.model.workspaceOverview?.conversations.contains { $0.id == id } == true)
@@ -41,7 +42,7 @@ struct CentralLibraryClientTests {
         #expect(try await fixture.database.companionSnapshot().conversations.isEmpty)
         fixture.model.liveLibraryClient = client
         try await client.desktopSend(id: id, text: "Fixture second message")
-        #expect(await direct.sendCount == 2)
+        #expect(await direct.sendCount == 1)
         #expect(await central.sendCount == 0)
         #expect(try await client.desktopExecution(.refresh(conversationID: id)).workspace.id == workspace.id)
         let backend = BackendApplicationService(model: fixture.model)
@@ -50,7 +51,7 @@ struct CentralLibraryClientTests {
                 admission: .init(instanceID: backend.instanceID, clientID: UUID(), stopSequence: 0, observedStopRevision: 0))))
         let response = await backend.handle(request)
         #expect(response.error == nil, "\(response.error ?? "")")
-        #expect(await direct.sendCount == 3)
+        #expect(await direct.sendCount == 2)
         #expect(await central.sendCount == 0)
     }
 
@@ -141,32 +142,7 @@ struct CentralLibraryClientTests {
         #expect(serving.child?.isRunning == false)
     }
 
-    @Test func olderActivityStaysWithItsConversationWhenNavigationChangesDuringLoad() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: "MacClient-" + UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let store = try MobileStore(file: root.appending(path: "library.json"))
-        try await store.cache(.init(conversationID: "A", messages: [.init(id: "latest-a", conversationID: "A", role: "assistant", content: "A")],
-            activities: (5..<45).map { .init(id: "tool-\($0)", runID: "run", title: "Recent", status: "running") }, olderCursor: "older"))
-        try await store.cache(.init(conversationID: "B", messages: [.init(id: "latest-b", conversationID: "B", role: "assistant", content: "B")]))
-        let transport = MacClientFakeCentral()
-        let model = CentralLibraryClientModel(store: store, transport: transport)
-        await model.initialize(); model.selectedConversationID = "A"
-        let loading = Task { await model.olderMessages() }
-        _ = try await pollUntil(attempts: 100, interval: .milliseconds(10)) { await transport.historyWaiting }
-        #expect(await transport.historyWaiting)
-        model.selectedConversationID = "B"
-        await transport.releaseHistory(); await loading.value
-        #expect(model.transcript?.messages.map(\.id) == ["latest-b"])
-        model.selectedConversationID = "A"
-        #expect(model.transcript?.messages.map(\.id) == ["older-a", "latest-a"])
-        #expect(model.transcript?.activities.map(\.id) == (0..<45).map { "tool-\($0)" })
-        try await store.cache(.init(conversationID: "A", activities: (5..<45).map { .init(id: "tool-\($0)", runID: "run", title: "Recent", status: "completed") }))
-        await model.reload()
-        #expect(model.transcript?.activities.map(\.id) == (0..<45).map { "tool-\($0)" })
-        #expect(model.transcript?.activities.last?.status == "completed")
-    }
-
-    @Test func secondaryMacAlwaysStartsItsOwnWorkspaceAndKeepsItAfterDisconnect() async throws {
+    @Test func secondaryMacAlwaysStartsItsOwnWorkspaceOnce() async throws {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
         let replica = try MobileStore(file: fixture.directory.appending(path: "client/library.json"))
         let library = "00000000-0000-4000-8000-000000000001"
@@ -175,8 +151,7 @@ struct CentralLibraryClientTests {
         let serving = FixtureTailscaleServe(dnsName: "secondary.test.ts.net")
         fixture.defaults.set(false, forKey: "wovenmatter.client.local-execution")
         let central = MacClientFakeCentral(); await central.setOffline(true)
-        var created = 0, cleared = 0
-        var clearedWorkspaceIDs: [String] = []
+        var created = 0
         let model = CentralLibraryClientModel(store: replica, transport: central, executionDirectory: fixture.directory,
             makeLocalExecution: { directory, store in
                 created += 1
@@ -185,7 +160,7 @@ struct CentralLibraryClientTests {
                     model: fixture.model, replica: store, directory: directory)
             }, makeLocalHost: { workspace, directory in
                 SecondaryMacExecutionHost(workspace: workspace, directory: directory, makeExposure: { serving.exposure() })
-            }, clearCentralCredential: { cleared += 1 }, clearWorkspaceCredential: { clearedWorkspaceIDs.append($0) })
+            })
         await model.initialize()
         #expect(created == 0) // Opening central pairing settings does not start another executor.
         await model.initializeClientWorkspace()
@@ -203,29 +178,11 @@ struct CentralLibraryClientTests {
         try await model.attachExecutionWorkspace(remote, transport: MacClientFakeExecution(workspace: remote))
         await model.refresh()
         #expect(model.canControl(workspaceID: remote.id))
-        await model.createNote()
-        let note = try #require(model.selectedNote)
-        model.editNote(note, title: "Keep offline", content: "Pending writing")
-        model.composer = "Keep draft"
-        await model.disconnectCentralLibrary()
-        #expect(cleared == 1)
-        #expect(clearedWorkspaceIDs == ["remote"])
-        #expect(!model.canControl(workspaceID: remote.id))
-        #expect(model.localExecution != nil)
-        #expect(!model.sharingLocalExecution)
-        await model.initializeClientWorkspace()
-        await model.refresh()
-        #expect(!model.sharingLocalExecution)
-        #expect(serving.child?.isRunning == false)
-        #expect(created == 1)
-        #expect(model.canControl(workspaceID: owner))
+        let note = try await replica.createNote(folderID: nil, title: "Keep offline", content: "")
+        model.editNote(note, content: "Pending writing")
+        try await model.flushLocalWrites()
         #expect(model.state.notes[note.id]?.content == "Pending writing")
-        #expect(model.state.chatDrafts["new-chat"]?.text == "Keep draft")
-        #expect(model.synchronization.lanes[.library]?.pendingCount == 1)
-        let reopened = try MobileStore(file: fixture.directory.appending(path: "client/library.json"))
-        #expect(await reopened.snapshot().workspaceID == library)
-        #expect(await reopened.snapshot().notes[note.id]?.title == "Keep offline")
-        #expect(await reopened.snapshot().outbox.count == 1)
+        #expect(await replica.snapshot().outbox.contains { $0.mutation.resourceID == note.id })
     }
 
     @Test func aRevokedDirectGrantIsClearedAndReplacedOnceThroughTheCentral() async throws {
@@ -436,15 +393,6 @@ struct CentralLibraryClientTests {
 }
 
 private actor MacClientFakeCentral: CompanionTransport {
-    var historyWaiting = false
-    var historyContinuation: CheckedContinuation<Void, Never>?
-    func releaseHistory() { historyContinuation?.resume(); historyContinuation = nil }
-    func transcript(_ id: String, before: String) async -> CompanionTranscript {
-        historyWaiting = true
-        await withCheckedContinuation { historyContinuation = $0 }
-        return .init(conversationID: id, messages: [.init(id: "older-a", conversationID: id, role: "assistant", content: "Older A")],
-            activities: (0..<5).map { .init(id: "tool-\($0)", runID: "run", title: "Older", status: "completed") })
-    }
     var notes: [String: CompanionNote] = [:]
     var folders: [String: CompanionFolder] = [:]
     var publishedChanges: [CompanionChange] = []

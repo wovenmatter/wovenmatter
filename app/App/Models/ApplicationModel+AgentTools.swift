@@ -397,11 +397,6 @@ extension ApplicationModel {
         return try await task.value
     }
 
-    func resolveToolSessionCreation(source: WorkspaceConversationRecord, command: WovenMatterToolCommand,
-                                            title: String) async throws -> WorkspaceSessionCreationConfiguration {
-        try await resolveToolSessionCreation(source: WorkspaceToolCallerSource(source), command: command, title: title)
-    }
-
     func resolveToolSessionCreation(source: WorkspaceToolCallerSource, command: WovenMatterToolCommand,
                                             title: String) async throws -> WorkspaceSessionCreationConfiguration {
         if let raw = command.options["harness"], AgentRuntimeKind(rawValue: raw) == nil {

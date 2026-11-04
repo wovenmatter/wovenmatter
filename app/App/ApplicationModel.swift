@@ -69,9 +69,15 @@ final class ApplicationModel {
         case ready
         case failed(String)
     }
+    /// XCTest and swift-testing hosts set one of these before loading a bundle.
+    nonisolated static var isRunningUnitTests: Bool {
+        let environment = ProcessInfo.processInfo.environment
+        return environment["XCTestBundlePath"] != nil
+            || environment["XCTestSessionIdentifier"] != nil
+            || environment.keys.contains("XCTestConfigurationFilePath")
+    }
 
     private(set) var state: State = .starting
-    let isLibraryClient: Bool
     @ObservationIgnored lazy var libraryClient = makeLibraryClient()
     private func makeLibraryClient() -> CentralLibraryClientModel {
         guard DevelopmentLaunch.isClient, LocalExecutionRole.current == .backend else {
@@ -427,7 +433,6 @@ final class ApplicationModel {
     ) {
         self.workspaceAssets = workspaceAssets ?? WorkspaceAssetSession()
         self.applicationDefaults = applicationDefaults
-        self.isLibraryClient = false
         let closedLidProtection = ClosedLidWorkProtection(
             ownsExecution: ownsExecutionOverride ?? LocalExecutionRole.current.ownsExecution, defaults: applicationDefaults)
         self.closedLidProtection = closedLidProtection
@@ -467,11 +472,7 @@ final class ApplicationModel {
                 forKey: Self.titleGenerationThinkingDefaultsKey
             ) ?? ""
         )
-        let environment = ProcessInfo.processInfo.environment
-        let isRunningTests = environment["XCTestBundlePath"] != nil
-            || environment["XCTestSessionIdentifier"] != nil
-            || environment.keys.contains("XCTestConfigurationFilePath")
-        guard startsAutomatically ?? !isRunningTests else { return }
+        guard startsAutomatically ?? !Self.isRunningUnitTests else { return }
         startupTask = Task { await start() }
     }
 
@@ -549,11 +550,11 @@ final class ApplicationModel {
     }
     #endif
 
-    /// Starts only the optional execution workspace belonging to a library client.
+    /// Starts only the optional execution workspace belonging to a Dev client build.
     /// Its database stores runtime state and a replica projection, never library authority.
     func configureClientExecutionWorkspace(directory: URL, executionWorkspaceDeviceID: UUID? = nil, store: DashboardStore? = nil) async throws {
         if let store { dashboardStore = store }
-        guard !isLibraryClient, !isBackendFrontend, let dashboardStore else {
+        guard !isBackendFrontend, let dashboardStore else {
             throw ApplicationModelError.dashboardStoreUnavailable
         }
         titleGenerationSettings.isEnabled = false
@@ -635,7 +636,6 @@ final class ApplicationModel {
     }
 
     private func start() async {
-        if isLibraryClient { state = .ready; return }
         if isBackendFrontend { await startBackendClient(); return }
         if DevelopmentLaunch.isClient {
             developmentReplicaTask = Task { [weak self] in
@@ -1177,7 +1177,6 @@ final class ApplicationModel {
     }
 
     func refreshWorkspace() async {
-        if isLibraryClient { await libraryClient.refresh(); return }
         await refreshWorkspace(force: true)
     }
 
@@ -1913,7 +1912,6 @@ final class ApplicationModel {
 
     @discardableResult
     func flushNoteDrafts() async -> Bool {
-        if isLibraryClient { return await flushLibraryClientWrites() }
         guard let noteWriteBehind else { return false }
         do {
             try await noteWriteBehind.flush()
@@ -1969,7 +1967,6 @@ final class ApplicationModel {
     }
 
     func flushNotesBeforeBackendClientQuit() async -> Bool {
-        if isLibraryClient { return await flushLibraryClientWrites() }
         guard let writer = noteWriteBehind else { return true }
         do { try await writer.flushAsync(); return true }
         catch { noteMutationError = error.localizedDescription; return false }
@@ -4704,80 +4701,6 @@ extension ApplicationModel {
                 applyClosedLidPolicy(policy)
             }
         } catch { closedLidSettingsError = error.localizedDescription }
-    }
-
-    private func flushLibraryClientWrites() async -> Bool {
-        do { try await libraryClient.flushLocalWrites(); return true }
-        catch { noteMutationError = error.localizedDescription; return false }
-    }
-
-    func prepareLibraryClientForQuit() async throws {
-        guard isLibraryClient else { return }
-        try await libraryClient.prepareForQuit()
-    }
-
-    func activateLibraryClientMode() async throws {
-        guard !isLibraryClient else { return }
-        try await changeLibraryClientMode(enabled: true)
-    }
-
-    func returnToCentralLibraryMode() async throws {
-        guard isLibraryClient else { return }
-        try await changeLibraryClientMode(enabled: false)
-    }
-
-    /// A library role changes only across a validated restart. The old central
-    /// store stays on disk, and a client never opens it as its own authority.
-    private func changeLibraryClientMode(enabled: Bool) async throws {
-        guard DevelopmentLaunch.mode == nil else { throw WorkspaceToolError.invalid("Choose client, snapshot, or live with the development launcher.") }
-        guard LocalExecutionRole.current != .backend, state == .ready,
-              !DictationModel.shared.isBusy, !executionHasPendingOperations,
-              localRunningConversationIDs.isEmpty, runningToolSessionIDs.isEmpty,
-              pendingLocalACPPermissions.isEmpty, pendingLocalACPInteractions.isEmpty,
-              pendingSessionAccess.isEmpty else {
-            throw BackendRPCError.remote("Finish running work and pending approvals before changing this Mac's library role.")
-        }
-        let wasSuspended = noteEditingSuspended
-        suspendNoteEditing()
-        defer {
-            if !isPreparedForExecutionRestart {
-                WorkspaceAssetSession.cancelPreparedRestart()
-                if !wasSuspended { resumeNoteEditing() }
-            }
-        }
-        guard await flushNotesBeforeBackendClientQuit() else { throw ApplicationModelError.noteDraftSaveFailed }
-        guard await WorkspaceAssetSession.prepareForRestart() else { throw CancellationError() }
-        let roleKey = LocalExecutionRole.libraryClientPreferenceKey
-        let previousBackgroundKey = roleKey + ".previous-background-execution"
-        let previousRole = applicationDefaults.bool(forKey: roleKey)
-        let previousSavedBackground = applicationDefaults.object(forKey: previousBackgroundKey)
-        let previousBackground = LocalBackgroundExecution.shared.isEnabled
-        let nextBackground = enabled ? false : applicationDefaults.bool(forKey: previousBackgroundKey)
-        try await LocalExecutionTransition.perform(prepare: {
-            if self.isLibraryClient { try await self.libraryClient.prepareForRoleChange() }
-            else if self.isBackendFrontend { try await self.prepareBackendForUpdate() }
-            else { try await self.prepareOpenCodeInstancesToQuit() }
-        }, commit: {
-            // This is the only throwing commit step. Do it before setting role
-            // preferences so a failed job update cannot strand the new role.
-            try LocalBackgroundExecution.shared.commitEnabled(nextBackground)
-            if enabled { self.applicationDefaults.set(previousBackground, forKey: previousBackgroundKey) }
-            else { self.applicationDefaults.removeObject(forKey: previousBackgroundKey) }
-            self.applicationDefaults.set(enabled, forKey: roleKey)
-        }, relaunch: {
-            try LocalBackgroundExecution.relaunchAfterCurrentProcessExits()
-        }, rollback: {
-            self.applicationDefaults.set(previousRole, forKey: roleKey)
-            if let previousSavedBackground { self.applicationDefaults.set(previousSavedBackground, forKey: previousBackgroundKey) }
-            else { self.applicationDefaults.removeObject(forKey: previousBackgroundKey) }
-            try LocalBackgroundExecution.shared.commitEnabled(previousBackground)
-        }, recover: {
-            if self.isLibraryClient { await self.libraryClient.restoreExecutionAfterFailedTransition() }
-            else if self.isBackendFrontend { try await self.recoverBackendAfterFailedUpdate() }
-            else { await self.restoreOpenCodeInstances() }
-        })
-        isPreparedForExecutionRestart = true
-        WovenMatterLifecycleDelegate.requestTerminationAfterUpdate()
     }
 
     var stopsBackendOnQuit: Bool { DevelopmentLaunch.mode != nil }

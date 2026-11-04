@@ -1570,7 +1570,7 @@ private struct ConversationDiffSheet: View {
     }
 }
 
-private extension String {
+extension String {
     var nonempty: String? {
         let value = trimmingCharacters(in: .whitespacesAndNewlines)
         return value.isEmpty ? nil : self

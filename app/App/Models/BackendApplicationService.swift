@@ -215,7 +215,6 @@ final class BackendApplicationService {
             case .discover: await host.refreshDiscovery()
             case .approvePairing(let id): await host.approvePairing(id: id)
             case .denyPairing(let id): await host.denyPairing(id: id)
-            case .invitePairing(let peer): await host.invitePairing(peer: peer)
             case .start: await host.start()
             case .stop: host.stopSharing()
             case .createCode: await host.createPairingCode()

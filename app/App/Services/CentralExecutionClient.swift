@@ -25,7 +25,6 @@ final class CentralExecutionClient {
     private var backgroundRefreshInProgress = false
     private var transportEndpoints: [String: URL] = [:]
     private var refreshTasks: [String: Task<Void, any Error>] = [:]
-    private(set) var workspaceByConversation: [String: CompanionExecutionWorkspace] = [:]
     private(set) var transcripts: [String: CompanionTranscript] = [:]
     private(set) var capabilities: [String: CompanionProvider] = [:]
     private(set) var pending: [String: [CompanionPendingInteraction]] = [:]
@@ -50,8 +49,6 @@ final class CentralExecutionClient {
                 descriptor = try await database.companionExecutionWorkspaces().first { $0.id == owner && !$0.deleted }
             }
         }
-        if let descriptor { workspaceByConversation[conversationID] = descriptor }
-        else { workspaceByConversation.removeValue(forKey: conversationID) }
         return descriptor
     }
 
@@ -189,10 +186,9 @@ final class CentralExecutionClient {
         let cached = await journal.snapshot()
         for (id, owner) in cached.conversationWorkspaceIDs where owner == workspace.id {
             if cached.deletedConversationIDs.contains(id) {
-                workspaceByConversation.removeValue(forKey: id); transcripts.removeValue(forKey: id)
-            } else {
-                workspaceByConversation[id] = workspace
-                if let transcript = cached.transcripts[id] { transcripts[id] = Self.markCursor(transcript, origin: "owner") }
+                transcripts.removeValue(forKey: id)
+            } else if let transcript = cached.transcripts[id] {
+                transcripts[id] = Self.markCursor(transcript, origin: "owner")
             }
         }
         if changed { await onChange() }

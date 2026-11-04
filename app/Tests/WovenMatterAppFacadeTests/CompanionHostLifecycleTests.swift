@@ -416,7 +416,6 @@ extension CompanionHostLifecycleTests {
         // authenticates only at the Mac it paired with.
         #expect(try await air.host.peerAuthentication().rosterName(for: phoneID) == "New iPhone")
         await #expect(throws: CompanionAPIError.self) { try await air.host.peerAuthentication().authenticate(bearer: phone.credential) }
-        #expect(!air.model.isLibraryClient && !third.model.isLibraryClient)
         #expect(air.host.peerSync.errors.isEmpty && third.host.peerSync.errors.isEmpty)
     }
 
@@ -682,8 +681,6 @@ extension CompanionHostLifecycleTests {
         #expect(recovered.contains { $0.title.hasPrefix("Unsent message") })
         #expect(try await database.companionLibraryIdentity().hostDeviceID == original.deviceID)
         #expect(await replica.snapshot().outbox == original.outbox)
-        #expect(!fixture.model.isLibraryClient)
-        #expect(LocalExecutionRole.resolve(arguments: [], libraryClientEnabled: true) == .frontend)
         try await LegacyMacLibraryUpgrade.prepare(database: database, defaults: fixture.defaults)
         #expect(try await database.companionSnapshot().notes.count == recovered.count)
     }

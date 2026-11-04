@@ -18,7 +18,7 @@ public final class CompanionPairingNetwork: @unchecked Sendable {
   }
   public func request<T: Decodable & Sendable>(_ endpoint: URL, path: String, body: Data? = nil) async throws -> T {
     guard CompanionPairingPayload.isValidEndpoint(endpoint),
-          ["v1/discovery", "v1/pair", "v1/pairing/request", "v1/pairing/result", "v1/pairing/invite", "v1/pairing/cancel"].contains(path) else {
+          ["v1/discovery", "v1/pair", "v1/pairing/request", "v1/pairing/result", "v1/pairing/cancel"].contains(path) else {
       throw CompanionAPIError(code: "invalid_endpoint", message: "Use a Woven Matter Tailscale HTTPS endpoint.")
     }
     var request = URLRequest(url: endpoint.appending(path: path))
