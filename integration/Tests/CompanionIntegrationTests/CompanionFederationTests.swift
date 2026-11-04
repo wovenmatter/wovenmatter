@@ -203,7 +203,7 @@ struct CompanionFederationTests {
     #expect(try await db.companionExecutionOriginCursor(workspaceID: descriptor.id) == 1)
     try await db.write { connection in
       try connection.transaction {
-        try connection.companionExecuteUnlocked("UPDATE dashboard_runs SET status='running' WHERE id=?", values: [run.runID])
+        try connection.toolsExecuteUnlocked("UPDATE dashboard_runs SET status='running' WHERE id=?", [run.runID])
       }
     }
     let reopened = try await WorkspaceDatabase(url: directory.appendingPathComponent("workspace.sqlite"))
@@ -223,7 +223,7 @@ struct CompanionFederationTests {
     let content = String(decoding: try JSONEncoder().encode(legacy), as: UTF8.self)
     try await db.write { connection in
       try connection.transaction {
-        try connection.companionExecuteUnlocked("UPDATE companion_execution_conversations SET transcript=? WHERE id=?", values: [content, first.conversationID])
+        try connection.toolsExecuteUnlocked("UPDATE companion_execution_conversations SET transcript=? WHERE id=?", [content, first.conversationID])
       }
     }
     let page = try #require(try await db.companionFederatedTranscript(conversationID: first.conversationID))
@@ -238,7 +238,7 @@ struct CompanionFederationTests {
     _ = try await db.ingestCompanionJournal(.init(libraryID: workspace.libraryID, entries: [first]), deviceID: owner)
     try await db.write { connection in
       try connection.transaction {
-        try connection.companionExecuteUnlocked("UPDATE dashboard_conversations SET title='Central title',deleted_at='deleted' WHERE id=?", values: [first.conversationID])
+        try connection.toolsExecuteUnlocked("UPDATE dashboard_conversations SET title='Central title',deleted_at='deleted' WHERE id=?", [first.conversationID])
       }
     }
     var replay = first; replay.eventID = uuid(); replay.originSequence = 2; replay.conversation?.title = "Stale title"
