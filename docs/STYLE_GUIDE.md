@@ -165,8 +165,8 @@ when an intentional design change is accepted.
   and disabled states without making quiet or icon actions look primary. Do not
   add persistent colored focus rings. Preserve keyboard navigation and accessible
   labels and states, and respect Reduce Motion and Reduce Transparency.
-- **Text inputs:** use `DashboardSearchField` for search, `.dashboardInput()` for
-  new text/secure fields, and `.settingsInput()` in desktop settings. These use
+- **Text inputs:** use `DashboardSearchField` for search and `.dashboardInput()` for
+  new text/secure fields, including desktop settings. These use
   plain native editing on the theme-whisper surface, matching sidebar chat search.
   Never use `.textFieldStyle(.roundedBorder)`, native blue focus outlines, or a
   custom bright focus border on app forms. Do not disable focus or keyboard

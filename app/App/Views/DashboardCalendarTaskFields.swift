@@ -22,7 +22,7 @@ struct DashboardCalendarTaskFields: View {
             if key == \.permission { task.configuration.usesProductPermissionDefault = false }
             if key == \.nativeWorkingDirectory {
                 task.configuration.nativeWorkspaceID = nil
-                task.configuration.selectionWorkspace = task.configuration.workspaceID.map { "remote:" + $0.uuidString.lowercased() }
+                task.configuration.selectionWorkspace = task.configuration.workspaceID.map { ApplicationModel.remoteDatabaseSourceID($0) }
                     ?? "local:" + URL(fileURLWithPath: value).standardizedFileURL.path
             }
         })

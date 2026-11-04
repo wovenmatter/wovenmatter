@@ -141,7 +141,7 @@ private actor HeldHarnessUpdates {
         if fail { waiter?.resume(throwing: RuntimeMaintenanceError.verification) }
         else {
             let inventory = try JSONDecoder().decode(RuntimeInventory.self, from: Data("""
-                {"kind":"\(kind.rawValue)","components":[],"detectedUpdateAvailable":false}
+                {"kind":"\(kind.rawValue)","components":[]}
                 """.utf8))
             waiter?.resume(returning: inventory)
         }

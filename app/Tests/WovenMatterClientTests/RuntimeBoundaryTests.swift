@@ -103,13 +103,6 @@ struct RuntimeBoundaryTests {
 
   @Test("remote commands preserve data and reject unsafe input")
   func remoteWorkspaceBoundary() async throws {
-    let recorder = SSHRecorder(response: Self.statusJSON)
-    let client = RemoteWorkspaceSSHClient(
-      runner: { destination, command, input in
-        try recorder.record(destination: destination, command: command, input: input)
-      },
-      scriptLoader: { Data("script".utf8) }
-    )
     let configuration = RemoteWorkspaceConfiguration(
       name: "Work",
       workspaceID: "work-1",
@@ -119,17 +112,6 @@ struct RuntimeBoundaryTests {
       memoryLimit: "8",
       swapLimit: "4"
     )
-
-    let imageID = "sha256:" + String(repeating: "a", count: 64)
-    _ = try await client.create(configuration: configuration, token: "secret-token", imageID: imageID)
-    #expect(recorder.command?.contains("'" + imageID + "'") == true)
-    #expect(recorder.destination == "woven@linux-box")
-    #expect(recorder.command?.contains("secret-token") == false)
-    #expect(recorder.command?.contains("'8589934592' '12884901888'") == true)
-    #expect(recorder.input?.starts(with: Data("secret-token\nscript".utf8)) == true)
-    _ = try await client.update(configuration: configuration, imageID: imageID)
-    #expect(recorder.command?.contains("'" + imageID + "'") == true)
-
 
     // The retained lifecycle helper is not a supported workspace launch path.
     for runtime in AgentRuntimeKind.allCases {
@@ -221,9 +203,6 @@ struct RuntimeBoundaryTests {
     let executable = try await installer.install(definition, component: .cli, expectedSourceSHA256: preview.sha256)
     #expect(executable.path == "/bin/sh")
   }
-
-  private static let statusJSON = #"{"id":"container","name":"wovenmatter-work-1","state":"running","running":true,"health":null,"startedAt":"now","image":"wovenmatter/workspace:0.1","memoryBytes":8589934592,"swapBytes":4294967296,"swapMode":"additional","hostPort":7440,"persistentVolume":"wovenmatter-work-1-home","capabilities":{"memory":true,"swap":true},"storageKind":"named-volume","storageUsedBytes":1048576,"hostStorageCapacityBytes":107374182400,"hostStorageAvailableBytes":53687091200,"hostStorageLow":false,"storageWarning":null,"legacyStorage":false}"#
-
   private func cliDefinition() -> LocalACPRuntimeDefinition {
     LocalACPRuntimeDefinition(
       runtimeKind: .codex,

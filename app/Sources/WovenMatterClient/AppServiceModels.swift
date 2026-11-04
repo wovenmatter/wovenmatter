@@ -154,6 +154,20 @@ public struct LocalACPSessionMetadata: Codable, Equatable, Sendable {
     }
 }
 
+extension LocalACPSessionMetadata {
+    public init(sessionKey: String, configuration: LocalACPSessionConfiguration) {
+        self.init(sessionKey: sessionKey, model: configuration.model, thinking: configuration.thinking,
+            modelOptions: configuration.modelOptions, thinkingLevels: configuration.thinkingOptions,
+            slashCommands: configuration.slashCommands,
+            modelOptionMetadata: configuration.modelOptionMetadata,
+            thinkingOptionMetadata: configuration.thinkingOptionMetadata,
+            permission: configuration.permission,
+            permissionOptions: configuration.permissionOptions,
+            permissionOptionMetadata: configuration.permissionOptionMetadata,
+            workingDirectory: configuration.workingDirectory)
+    }
+}
+
 /// Restored native chats may appear before their local or remote launch context.
 /// Include readiness in the SwiftUI task key so discovery completion retries a
 /// skipped refresh, without polling or restarting on unchanged runtime snapshots.

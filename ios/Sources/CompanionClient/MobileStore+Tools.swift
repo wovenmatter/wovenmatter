@@ -11,7 +11,6 @@ extension MobileStore {
       let command = try WovenMatterToolCommand(request.arguments)
       if let id = command.options["request-id"], UUID(uuidString: id) != uuid { throw WorkspaceToolError.invalid("--request-id must match the request envelope.") }
       try context.authorize(command)
-      guard !command.wantsHelp else { throw WorkspaceToolError.invalid("Use a named Woven MCP tool with structured arguments.") }
       if command.action == "context" { return .init(result: request.contextID.map(GatewayJSONValue.string) ?? .null) }
       let key = context.sessionID + ":" + uuid.uuidString.lowercased()
       if command.isMutation, let receipt = state.toolReceipts?[key] {

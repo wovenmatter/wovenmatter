@@ -70,7 +70,7 @@ struct LibraryClientCalendarPane: View {
     if event.draft.task != nil {
       return event.draft.recurrenceUnit == nil ? DashboardPalette.calendarTask : DashboardPalette.calendarRecurringTask
     }
-    return event.draft.recurrenceUnit == nil ? DashboardPalette.calendarEvent : DashboardPalette.calendarRecurringEvent
+    return event.draft.recurrenceUnit == nil ? DashboardPalette.primary : DashboardPalette.calendarRecurringEvent
   }
   private func shift(_ step: Int) { month = Calendar.current.date(byAdding: .month, value: step, to: month) ?? month }
   private func load() async {

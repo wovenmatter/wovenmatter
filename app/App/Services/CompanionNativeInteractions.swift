@@ -21,7 +21,7 @@ enum CompanionNativeInteractionProjection {
             "session": .string(link.sessionID), "conversation": .string(link.conversationID),
             "kind": .string(kind), "request": request]
         let data = (try? encoder.encode(identity)) ?? Data()
-        return "opencode:" + kind + ":" + SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        return "opencode:" + kind + ":" + SHA256.hash(data: data).hexString
     }
 
     static func pending(link: OpenCodeSessionLink, snapshot: OpenCodeSessionSnapshot,
