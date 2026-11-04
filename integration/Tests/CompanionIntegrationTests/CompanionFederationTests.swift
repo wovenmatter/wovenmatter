@@ -172,7 +172,7 @@ struct CompanionFederationTests {
       remoteWorkspaceName: "Remote", title: "Existing conversation", ownerDeviceID: UUID(),
       executionRoot: .init(folderID: nil, location: .init(workspaceID: "remote:" + descriptor.id, rootPath: "/workspace/projects/existing", managed: false), defaultPath: "/workspace"))
     try await db.updateLocalACPSessionID(conversationID: conversationID, sessionID: "native-existing")
-    let run = try await db.beginLocalACPRun(conversationID: conversationID, content: "Preserve this history")
+    let run = try await db.beginLocalACPRun(conversationID: conversationID, input: .init(text: "Preserve this history"))
     await #expect(throws: CompanionAPIError.self) {
       try await db.prepareCompanionExecutionAdoption(conversationID: conversationID, workspaceID: descriptor.id, deviceID: identity.hostDeviceID)
     }
@@ -186,7 +186,7 @@ struct CompanionFederationTests {
     #expect(transfer.nativeWorkingDirectory == "/workspace/projects/existing")
     #expect(try await db.companionExecutionOwner(conversationID: conversationID) == descriptor.id)
     await #expect(throws: CompanionAPIError.self) {
-      try await db.beginLocalACPRun(conversationID: conversationID, content: "Legacy execution must stay fenced")
+      try await db.beginLocalACPRun(conversationID: conversationID, input: .init(text: "Legacy execution must stay fenced"))
     }
     #expect(try await db.companionFederatedTranscript(conversationID: conversationID)?.messages.contains(where: { $0.content == "Preserve this history" }) == true)
     #expect(try await db.localACPSession(conversationID: conversationID).acpSessionID == "native-existing")
