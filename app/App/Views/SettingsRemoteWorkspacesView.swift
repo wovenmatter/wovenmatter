@@ -514,8 +514,7 @@ struct SettingsRemoteWorkspacesView: View {
                     hostName: hostName,
                     userName: userName,
                     port: port,
-                    memoryLimit: memoryLimit,
-                    swapLimit: swapLimit, kind: workspaceKind, accessMode: accessMode
+                    kind: workspaceKind, accessMode: accessMode
                 )
             }
             .buttonStyle(DashboardPrimaryButtonStyle())

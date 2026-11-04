@@ -11,10 +11,6 @@ enum BackendWorkspaceServiceCommand: Codable, Sendable {
     case copyDatabase(database: DashboardAgentDatabase, destinationSourceID: String, name: String)
 }
 
-struct BackendGatewaySettingsSnapshot: Codable, Sendable {
-    var metadata: [String: LocalACPSessionMetadata]
-}
-
 struct BackendDatabasesSnapshot: Codable, Sendable {
     var catalog: DashboardDatabasesSnapshot
     var refreshing: Bool
@@ -22,7 +18,6 @@ struct BackendDatabasesSnapshot: Codable, Sendable {
 }
 
 struct BackendWorkspaceServiceResponse: Codable, Sendable {
-    var gateway: BackendGatewaySettingsSnapshot?
     var databases: BackendDatabasesSnapshot?
     var agent: WorkspaceAgent?
     var success: Bool?

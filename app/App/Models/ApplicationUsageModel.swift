@@ -37,17 +37,10 @@ enum BackendUsageCommand: Codable, Sendable {
     case refresh(range: UsageTimeRange, limits: Bool, reason: UsageRefreshReason, explicit: Bool, provider: ProviderKind?)
     case analyticsSelected(UsageTimeRange)
     case sharedConnectionsChanged
-    case saveOpenRouterKey(String, UsageTimeRange)
-    case deleteOpenRouterKey(UsageTimeRange)
     case acknowledgeDisclosure
     case authorizeSavedCredentials
     case enable(ProviderKind, UsageTimeRange)
-    case retry(ProviderKind, UsageTimeRange)
-    case selectConnection(String, ProviderKind, UsageTimeRange)
     case selectWorkspace(String, UsageTimeRange)
-    case disable(ProviderKind, UsageTimeRange)
-    case signIn(ProviderKind)
-    case reconnectWorkspace
 }
 
 private struct BackendUsageSamplesRequest: Codable {
@@ -173,20 +166,13 @@ final class ApplicationUsageModel {
                 await refreshLocalUsage(range: range, refreshLimits: limits, reason: reason, explicitCredentialAccess: explicit, interactiveProvider: provider)
             case let .analyticsSelected(range): await usageAnalyticsSelected(range: range)
             case .sharedConnectionsChanged: await sharedConnectionsChanged()
-            case let .saveOpenRouterKey(value, range): await saveOpenRouterAPIKey(value, range: range)
-            case let .deleteOpenRouterKey(range): await deleteOpenRouterAPIKey(range: range)
             case .acknowledgeDisclosure: acknowledgeCredentialAccessDisclosure()
             case .authorizeSavedCredentials:
                 try await KeychainAccess.$isCredentialAuthorizationActive.withValue(true) {
                     try await authorizeSavedCredentials()
                 }
             case let .enable(provider, range): await enableUsageProvider(provider, range: range)
-            case let .retry(provider, range): await retryUsageProviderCredentialAccess(provider, range: range)
-            case let .selectConnection(id, provider, range): await selectUsageConnection(id, provider: provider, range: range)
             case let .selectWorkspace(id, range): await selectCodexUsageWorkspace(id, range: range)
-            case let .disable(provider, range): await disableUsageProvider(provider, range: range)
-            case let .signIn(provider): signInUsageProvider(provider)
-            case .reconnectWorkspace: reconnectSelectedCodexUsageWorkspace()
             }
         } else if request.method != "usage.snapshot" { throw BackendRPCError.invalidFrame }
         return try JSONEncoder().encode(backendSnapshot())
@@ -431,53 +417,6 @@ final class ApplicationUsageModel {
         return rawValue.flatMap(UsageTimeRange.init(rawValue:)) ?? .last30Days
     }
 
-    func saveOpenRouterAPIKey(_ value: String, range: UsageTimeRange) async {
-        if isBackendProjection { await forward(.saveOpenRouterKey(value, range)); return }
-        guard !isAuthorizingUsageCredential else { return }
-        isAuthorizingUsageCredential = true
-        defer { isAuthorizingUsageCredential = false }
-        do {
-            acknowledgeCredentialAccessDisclosure()
-            enableUsageProviderPreference(.openRouter)
-            try await localUsageService.saveOpenRouterAPIKey(value)
-            isOpenRouterCredentialConfigured = true
-            applicationDefaults.set(
-                true,
-                forKey: Self.openRouterCredentialConfiguredDefaultsKey
-            )
-            await refreshLocalUsage(
-                range: range,
-                refreshLimits: true,
-                reason: .credentialChanged
-            )
-        } catch {
-            localUsageError = error.localizedDescription
-        }
-    }
-
-    func deleteOpenRouterAPIKey(range: UsageTimeRange) async {
-        if isBackendProjection { await forward(.deleteOpenRouterKey(range)); return }
-        guard !isAuthorizingUsageCredential else { return }
-        isAuthorizingUsageCredential = true
-        defer { isAuthorizingUsageCredential = false }
-        do {
-            try await localUsageService.deleteOpenRouterAPIKey()
-            isOpenRouterCredentialConfigured = false
-            applicationDefaults.set(
-                false,
-                forKey: Self.openRouterCredentialConfiguredDefaultsKey
-            )
-            disableUsageProviderPreference(.openRouter)
-            await refreshLocalUsage(
-                range: range,
-                refreshLimits: true,
-                reason: .credentialChanged
-            )
-        } catch {
-            localUsageError = error.localizedDescription
-        }
-    }
-
     func acknowledgeCredentialAccessDisclosure() {
         if isBackendProjection {
             hasAcknowledgedCredentialAccessDisclosure = true
@@ -531,51 +470,6 @@ final class ApplicationUsageModel {
         )
     }
 
-    func retryUsageProviderCredentialAccess(
-        _ provider: ProviderKind,
-        range: UsageTimeRange
-    ) async {
-        if isBackendProjection { await forward(.retry(provider, range)); return }
-        guard enabledUsageProviders.contains(provider),
-              !isAuthorizingUsageCredential else { return }
-        isAuthorizingUsageCredential = true
-        defer { isAuthorizingUsageCredential = false }
-        acknowledgeCredentialAccessDisclosure()
-        if provider == .openRouter {
-            do {
-                try await localUsageService.authorizeOpenRouterCredentialAccess()
-            } catch {
-                localUsageError = error.localizedDescription
-                return
-            }
-        }
-        await refreshLocalUsage(
-            range: range,
-            refreshLimits: true,
-            reason: .credentialChanged,
-            explicitCredentialAccess: [.codex, .claude, .grok].contains(provider),
-            interactiveProvider: provider == .openRouter ? nil : provider
-        )
-    }
-
-    func selectUsageConnection(_ id: String, provider: ProviderKind, range: UsageTimeRange) async {
-        if isBackendProjection { await forward(.selectConnection(id, provider, range)); return }
-        guard enabledUsageProviders.contains(provider),
-              usageConnectionChoices.contains(where: { $0.provider == provider && $0.id == id }),
-              selectedUsageConnections[provider.rawValue] != id else { return }
-        selectedUsageConnections[provider.rawValue] = id
-        applicationDefaults.set(selectedUsageConnections, forKey: "wovenmatter.usage.selected-connections")
-        // Remove the old account's numbers immediately, before any asynchronous
-        // request can leave them displayed under the newly selected identity.
-        if let current = localUsage {
-            localUsage = LocalUsageSnapshot(analytics: current.analytics,
-                limits: current.limits.filter { $0.provider != provider },
-                hasOpenRouterCredential: current.hasOpenRouterCredential)
-        }
-        await refreshUsageLimits(reason: .credentialChanged, force: true,
-            keychainInteraction: .noninteractive, interactiveProvider: nil)
-    }
-
     func selectCodexUsageWorkspace(
         _ workspaceID: String,
         range: UsageTimeRange
@@ -596,184 +490,11 @@ final class ApplicationUsageModel {
         )
     }
 
-    func disableUsageProvider(
-        _ provider: ProviderKind,
-        range: UsageTimeRange
-    ) async {
-        if isBackendProjection { await forward(.disable(provider, range)); return }
-        disableUsageProviderPreference(provider)
-        await refreshLocalUsage(
-            range: range,
-            refreshLimits: true,
-            reason: .credentialChanged
-        )
-    }
-
     private func enableUsageProviderPreference(_ provider: ProviderKind) {
         guard enabledUsageProviders.insert(provider).inserted else { return }
-        persistEnabledUsageProviders()
-    }
-
-    private func disableUsageProviderPreference(_ provider: ProviderKind) {
-        guard enabledUsageProviders.remove(provider) != nil else { return }
-        persistEnabledUsageProviders()
-    }
-
-    private func persistEnabledUsageProviders() {
         UsageProviderPreferences(defaults: applicationDefaults).save(
             enabledUsageProviders
         )
     }
 
-    func signInUsageProvider(_ provider: ProviderKind) {
-        if isBackendProjection {
-            if [.codex, .claude, .grok, .openRouter, .openCodeGo].contains(provider) {
-                NotificationCenter.default.post(name: .init("wovenmatter.open-usage-settings"), object: "global")
-            } else { Task { await forward(.signIn(provider)) } }
-            return
-        }
-        if [.codex, .claude, .grok, .openRouter, .openCodeGo].contains(provider) {
-            NotificationCenter.default.post(name: .init("wovenmatter.open-usage-settings"), object: "global")
-            return
-        }
-        guard !signingInUsageProviders.contains(provider) else { return }
-        guard enabledUsageProviders.contains(provider) else {
-            localUsageError = "Enable \(provider.displayName) usage tracking before signing in."
-            return
-        }
-        guard let command = Self.usageProviderSignInCommand(provider) else {
-            localUsageError = "\(provider.displayName) sign-in is unavailable because its CLI is not installed."
-            return
-        }
-        signingInUsageProviders.insert(provider)
-        localUsageError = nil
-        Task {
-            defer { signingInUsageProviders.remove(provider) }
-            do {
-                try await Task.detached(priority: .userInitiated) {
-                    let process = Process()
-                    process.executableURL = command.executable
-                    process.arguments = command.arguments
-                    process.standardOutput = FileHandle.nullDevice
-                    process.standardError = FileHandle.nullDevice
-                    try process.run()
-                    process.waitUntilExit()
-                    guard process.terminationStatus == 0 else {
-                        throw UsageProviderSignInError.failed(
-                            provider.displayName,
-                            process.terminationStatus
-                        )
-                    }
-                }.value
-                await refreshLocalUsage(
-                    range: currentUsageRange,
-                    refreshLimits: true,
-                    reason: .credentialChanged,
-                    explicitCredentialAccess: [.codex, .claude, .grok].contains(provider),
-                    interactiveProvider: provider == .openRouter ? nil : provider
-                )
-            } catch {
-                localUsageError = error.localizedDescription
-            }
-        }
-    }
-
-    func reconnectSelectedCodexUsageWorkspace() {
-        if isBackendProjection { Task { await forward(.reconnectWorkspace) }; return }
-        guard !signingInUsageProviders.contains(.codex),
-              enabledUsageProviders.contains(.codex),
-              hasAcknowledgedCredentialAccessDisclosure,
-              let workspaceID = selectedCodexUsageWorkspaceID
-        else { return }
-        signingInUsageProviders.insert(.codex)
-        localUsageError = nil
-        Task {
-            defer { signingInUsageProviders.remove(.codex) }
-            do {
-                guard let homeDirectory = await localUsageService
-                    .codexWorkspaceHomeDirectory(workspaceID: workspaceID),
-                      let command = Self.usageProviderSignInCommand(.codex)
-                else {
-                    throw UsageProviderSignInError.unavailable(
-                        "The selected OpenAI workspace is no longer available."
-                    )
-                }
-                try await Task.detached(priority: .userInitiated) {
-                    let process = Process()
-                    process.executableURL = command.executable
-                    process.arguments = command.arguments
-                    var environment = ProcessInfo.processInfo.environment
-                    environment["CODEX_HOME"] = homeDirectory.path
-                    process.environment = environment
-                    process.standardOutput = FileHandle.nullDevice
-                    process.standardError = FileHandle.nullDevice
-                    try process.run()
-                    process.waitUntilExit()
-                    guard process.terminationStatus == 0 else {
-                        throw UsageProviderSignInError.failed(
-                            "Codex / OpenAI",
-                            process.terminationStatus
-                        )
-                    }
-                }.value
-                await refreshLocalUsage(
-                    range: currentUsageRange,
-                    refreshLimits: true,
-                    reason: .credentialChanged
-                )
-            } catch {
-                localUsageError = error.localizedDescription
-            }
-        }
-    }
-
-    private nonisolated static func usageProviderSignInCommand(
-        _ provider: ProviderKind
-    ) -> UsageProviderSignInCommand? {
-        let executableName: String
-        let arguments: [String]
-        switch provider {
-        case .codex:
-            executableName = "codex"
-            arguments = ["login"]
-        case .claude:
-            executableName = "claude"
-            arguments = ["auth", "login", "--claudeai"]
-        case .grok:
-            executableName = "grok"
-            arguments = ["login", "--oauth"]
-        case .openCodeGo:
-            executableName = "opencode"
-            arguments = ["auth", "login", "--provider", "opencode-go"]
-        case .cursor, .openRouter, .unknown:
-            return nil
-        }
-        guard let executable = LocalACPRuntimeResolver.resolveExecutable(
-            named: executableName
-        ) else { return nil }
-        return UsageProviderSignInCommand(
-            executable: executable,
-            arguments: arguments
-        )
-    }
-
-}
-
-private struct UsageProviderSignInCommand: Sendable {
-    let executable: URL
-    let arguments: [String]
-}
-
-private enum UsageProviderSignInError: LocalizedError {
-    case failed(String, Int32)
-    case unavailable(String)
-
-    var errorDescription: String? {
-        switch self {
-        case .failed(let provider, let status):
-            "\(provider) sign-in did not complete (exit status \(status))."
-        case .unavailable(let message):
-            message
-        }
-    }
 }

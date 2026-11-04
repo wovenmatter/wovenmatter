@@ -39,7 +39,7 @@ extension ApplicationModel {
         if let folder = command.options["folder"] { config.folderID = folder == "all" ? nil : folder }
         if let directory = command.options["directory"] {
             config.nativeWorkingDirectory = directory; config.nativeWorkspaceID = nil
-            config.selectionWorkspace = config.workspaceID.map { "remote:" + $0.uuidString.lowercased() }
+            config.selectionWorkspace = config.workspaceID.map { Self.remoteDatabaseSourceID($0) }
                 ?? "local:" + URL(fileURLWithPath: directory).standardizedFileURL.path
         }
         config.nativeWorkingDirectory = try await folderWorkingDirectory(folderID: config.folderID, workspaceID: config.workspaceID, explicit: command.options["directory"].map { URL(fileURLWithPath: $0) }).path
@@ -110,7 +110,7 @@ extension ApplicationModel {
 
     func calendarTaskDefaults(runtime: AgentRuntimeKind, workspaceID: UUID?, title: String = "") -> WorkspaceCalendarTask {
         let directory = try? defaultToolWorkingDirectory(workspaceID: workspaceID)
-        let scope = workspaceID.map { "remote:" + $0.uuidString.lowercased() } ?? "local:" + (directory ?? "")
+        let scope = workspaceID.map { Self.remoteDatabaseSourceID($0) } ?? "local:" + (directory ?? "")
         let selections = selectionsApplyingWorkspaceAccess(
             sessionSelectionPreferences.defaults(harness: runtime.rawValue, workspace: scope), runtime: runtime, workspaceID: workspaceID)
         let settings = agentTools?.settings ?? WorkspaceToolSettings()
@@ -210,7 +210,7 @@ extension ApplicationModel {
                 folderID = nil
             }
         }
-        let scope = config.selectionWorkspace ?? config.workspaceID.map { "remote:" + $0.uuidString.lowercased() }
+        let scope = config.selectionWorkspace ?? config.workspaceID.map { Self.remoteDatabaseSourceID($0) }
             ?? "local:" + path
         let selections = selectionsApplyingWorkspaceAccess(SessionSelections(model: config.model, thinking: config.thinking,
             permission: config.permission, tools: config.tools.enabled.map(\.rawValue).sorted()), runtime: config.runtimeKind, workspaceID: config.workspaceID)

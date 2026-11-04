@@ -32,7 +32,7 @@ extension ApplicationModel {
         guard root.workspaceID == (try await executionWorkspaceIdentity(workspaceID: session.remoteWorkspaceID)) else {
             throw WorkspaceToolError.invalid("This chat belongs to a different execution workspace.")
         }
-        if let remote = session.remoteWorkspaceID { return "remote:" + remote.uuidString.lowercased() }
+        if let remote = session.remoteWorkspaceID { return Self.remoteDatabaseSourceID(remote) }
         if let scratch = try await database.sessionScratchDirectory(id: conversationID), scratch.rootPath == root.rootPath {
             return "local:" + (try defaultToolWorkingDirectory(workspaceID: nil))
         }
@@ -43,7 +43,7 @@ extension ApplicationModel {
                                               alreadyConfigured: Bool) throws {
         let scope: String
         if let saved = configuration.selectionWorkspace { scope = saved }
-        else if let remote = configuration.workspaceID { scope = "remote:" + remote.uuidString.lowercased() }
+        else if let remote = configuration.workspaceID { scope = Self.remoteDatabaseSourceID(remote) }
         else {
             let path = try configuration.nativeWorkingDirectory ?? defaultToolWorkingDirectory(workspaceID: nil)
             scope = "local:" + URL(fileURLWithPath: path).standardizedFileURL.path
@@ -136,7 +136,7 @@ extension ApplicationModel {
             }
             await runConversationGoals()
             try await database.settleCalendarRuns()
-            try await agentTools?.reloadInBackground()
+            try await agentTools?.reload()
         } catch { agentTools?.error = error.localizedDescription }
     }
 
@@ -411,7 +411,7 @@ extension ApplicationModel {
         } else { destinationFolder = sameWorkspace ? source.folderID : nil }
         let directory = try await folderWorkingDirectory(folderID: destinationFolder, workspaceID: workspaceID,
             explicit: command.options["directory"].map { URL(fileURLWithPath: $0) }).path
-        let scope = workspaceID.map { "remote:" + $0.uuidString.lowercased() }
+        let scope = workspaceID.map { Self.remoteDatabaseSourceID($0) }
             ?? "local:" + URL(fileURLWithPath: directory).standardizedFileURL.path
         let explicit = SessionSelections(model: command.options["model"], thinking: command.options["thinking"])
         let resolved = explicit.overlaying(sessionSelectionPreferences.defaults(harness: runtime.rawValue, workspace: scope))
