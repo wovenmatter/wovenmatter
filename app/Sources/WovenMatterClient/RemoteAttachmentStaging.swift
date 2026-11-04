@@ -21,11 +21,6 @@ public struct RemoteAttachmentStager: Sendable {
         self.runner = runner
     }
 
-    /// The container path `draft` will occupy once staged.
-    public static func containerPath(for draft: AgentFileAttachmentDraft) throws -> String {
-        try path(for: draft, directory: directory)
-    }
-
     public static func path(for draft: AgentFileAttachmentDraft, directory: String) throws -> String {
         guard draft.contentHash.wholeMatch(of: /[0-9a-f]{64}/) != nil else {
             throw AgentMessageAttachmentError.unreadableFile(draft.fileName)
@@ -61,7 +56,7 @@ public struct RemoteAttachmentStager: Sendable {
                 throw AgentMessageAttachmentError.fileTooLarge(name: draft.fileName,
                     maximumBytes: AgentMessageAttachmentLimits.maximumFileBytes)
             }
-            let hash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+            let hash = SHA256.hash(data: data).hexString
             guard hash == draft.contentHash, data.count == draft.sizeBytes else {
                 throw AgentMessageAttachmentError.unreadableFile(draft.fileName)
             }
@@ -91,7 +86,7 @@ public struct RemoteAttachmentStager: Sendable {
         """
         set -e
         umask 077
-        p=\(quoted(path)); n=\(byteCount); h=\(quoted(hash))
+        p=\(RemoteWorkspaceExecTarget.quote(path)); n=\(byteCount); h=\(RemoteWorkspaceExecTarget.quote(hash))
         matches() { [ -f "$1" ] && [ "$(wc -c <"$1")" -eq "$n" ] && [ "$(sha256sum <"$1" | cut -d ' ' -f 1)" = "$h" ]; }
         if matches "$p"; then cat >/dev/null; else
           mkdir -p "$(dirname "$p")"
@@ -112,9 +107,5 @@ public struct RemoteAttachmentStager: Sendable {
             .map { $0 == "/" || $0 == "\\" || $0.value < 0x20 ? "_" : Character($0) }
         let name = String(cleaned).trimmingCharacters(in: .whitespaces)
         return name.isEmpty || name == "." || name == ".." ? "attachment" : name
-    }
-
-    private static func quoted(_ value: String) -> String {
-        "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
     }
 }

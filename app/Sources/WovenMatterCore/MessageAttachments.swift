@@ -166,10 +166,6 @@ public struct AgentMessageInput: Codable, Equatable, Sendable {
 
   /// Notes retain their attachment snapshots. Conversation attachments carry
   /// only an ID and metadata; transcript access is enforced by the app service.
-  public var textWithReferenceContext: String {
-    transportText()
-  }
-
   public func transportText(deliveryText: String? = nil) -> String {
     let baseText = [deliveryText ?? text, visibleWorkspace?.promptContext].compactMap { $0 }.joined(separator: "\n\n")
     let references = references

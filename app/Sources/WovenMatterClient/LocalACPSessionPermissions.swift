@@ -16,7 +16,7 @@ enum LocalACPSessionPermissions {
             )
             let command = Array(wrapped.command.prefix(wrapped.harnessArgumentsStartIndex)) + harnessArguments
             var arguments = launch.arguments
-            arguments[wrapped.argumentIndex] = command.map { "'" + $0.replacingOccurrences(of: "'", with: "'\\''") + "'" }.joined(separator: " ")
+            arguments[wrapped.argumentIndex] = command.map(RemoteWorkspaceExecTarget.quote).joined(separator: " ")
             return (arguments, launch.requestedPermission ?? explicitPermission(runtimeKind: launch.runtimeKind, arguments: harnessArguments))
         }
         let arguments = try launchArguments(launch.arguments, runtimeKind: launch.runtimeKind, permission: launch.requestedPermission)

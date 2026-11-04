@@ -1,3 +1,0 @@
-import WovenMatterCompanion
-
-public typealias DictationInsertion = WovenMatterCompanion.DictationInsertion

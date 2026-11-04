@@ -10,7 +10,7 @@ public struct ConversationTaskProgress: Equatable, Sendable {
     case pending
     case inProgress
     case completed
-    /// Cancelled or skipped; retained in `allSteps` but excluded from counts.
+    /// Cancelled or skipped; excluded from counts.
     case cancelled
 
     public init(_ value: String) {
@@ -37,8 +37,6 @@ public struct ConversationTaskProgress: Equatable, Sendable {
 
   public let runID: String
   public let planID: String
-  /// Every source entry in order, including cancelled ones.
-  public let allSteps: [Step]
   /// Counted entries: everything except cancelled steps.
   public let steps: [Step]
   public let completedCount: Int
@@ -60,7 +58,6 @@ public struct ConversationTaskProgress: Equatable, Sendable {
       ?? steps.last else { return nil }
     self.runID = runID
     self.planID = planID
-    self.allSteps = allSteps
     self.steps = steps
     completedCount = steps.filter { $0.status == .completed }.count
     currentStep = current
