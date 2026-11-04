@@ -88,25 +88,32 @@ struct DashboardMoveToFolderMenu: View {
     }
 }
 
-struct DashboardRenameConversationSheet: View {
-    let conversation: WorkspaceConversationRecord
-    let model: ApplicationModel
+struct DashboardRenameSheet: View {
+    let heading: String
+    let placeholder: String
+    let onSave: @MainActor (String) async throws -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var title: String
     @State private var error: String?
     @State private var saving = false
     @FocusState private var titleFocused: Bool
 
-    init(conversation: WorkspaceConversationRecord, model: ApplicationModel) {
-        self.conversation = conversation
-        self.model = model
-        _title = State(initialValue: conversation.title)
+    init(
+        heading: String,
+        placeholder: String,
+        initialTitle: String,
+        onSave: @escaping @MainActor (String) async throws -> Void
+    ) {
+        self.heading = heading
+        self.placeholder = placeholder
+        self.onSave = onSave
+        _title = State(initialValue: initialTitle)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Rename chat").font(.headline)
-            TextField("Chat name", text: $title)
+            Text(heading).font(.headline)
+            TextField(placeholder, text: $title)
                 .focused($titleFocused)
                 .onSubmit(save)
                 .disabled(saving)
@@ -131,7 +138,7 @@ struct DashboardRenameConversationSheet: View {
         error = nil
         Task {
             do {
-                try await model.mutateConversation(id: conversation.id, mutation: .rename(title))
+                try await onSave(title)
                 dismiss()
             } catch {
                 self.error = error.localizedDescription

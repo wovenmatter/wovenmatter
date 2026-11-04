@@ -329,7 +329,7 @@ enum DashboardTheme: String, CaseIterable, Identifiable {
 }
 
 struct DashboardPalette {
-    static let calendarEvent = Color(dashboardColor: DashboardColors.primary)
+    static let calendarEvent = primary
     static let calendarTask = Color(dashboardColor: DashboardColors.calendarTask)
     static let calendarRecurringEvent = Color(dashboardColor: DashboardColors.calendarRecurringEvent)
     static let calendarRecurringTask = Color(dashboardColor: DashboardColors.calendarRecurringTask)

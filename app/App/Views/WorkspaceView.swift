@@ -357,10 +357,14 @@ struct WorkspaceView: View {
         }
         .onDisappear { noticeTask?.cancel() }
         .sheet(item: $conversationToRename) { conversation in
-            DashboardRenameConversationSheet(conversation: conversation, model: model)
+            DashboardRenameSheet(heading: "Rename chat", placeholder: "Chat name", initialTitle: conversation.title) { title in
+                try await model.mutateConversation(id: conversation.id, mutation: .rename(title))
+            }
         }
         .sheet(item: $noteToRename) { note in
-            DashboardRenameNoteSheet(note: note, model: model)
+            DashboardRenameSheet(heading: "Rename note", placeholder: "Note name", initialTitle: model.noteDraft(for: note).title) { title in
+                try await model.mutateNote(id: note.id, mutation: .rename(title))
+            }
         }
         .sheet(isPresented: $showsWorkspaceTrash) {
             if let client = model.liveLibraryClient {
@@ -717,8 +721,7 @@ struct WorkspaceView: View {
                         onSend: send,
                         onAttachmentAction: handleAttachmentAction,
                         onRemoveAttachment: removeAttachment,
-                        onDropFiles: attachFiles,
-                        onUnavailableComposerAction: showUnavailableMutation
+                        onDropFiles: attachFiles
                     )
                 case .calendar:
                     DashboardCalendarSurface(model: model, onOpenSession: { id in
@@ -1484,7 +1487,6 @@ struct DashboardWorkspaceSurface: View {
     let onAttachmentAction: (DashboardChatPanelID, DashboardComposerAttachmentAction) -> Void
     let onRemoveAttachment: (String, DashboardChatPanelID) -> Void
     let onDropFiles: ([URL], DashboardChatPanelID) -> Bool
-    let onUnavailableComposerAction: (String) -> Void
 
     var body: some View {
         GeometryReader { geometry in
@@ -1615,8 +1617,7 @@ struct DashboardWorkspaceSurface: View {
                 onAttachmentAction: { onAttachmentAction(panelID, $0) },
                 onRemoveAttachment: { onRemoveAttachment($0, panelID) },
                 onDropFiles: { onDropFiles($0, panelID) },
-                onCommandNavigation: handleComposerNavigation,
-                onUnavailableComposerAction: onUnavailableComposerAction
+                onCommandNavigation: handleComposerNavigation
             )
             if showNoteButton {
                 Button {

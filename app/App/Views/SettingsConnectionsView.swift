@@ -28,14 +28,12 @@ struct SettingsConnectionsView: View {
     var embedded = false
     var onConnected: ((String) -> Void)?
     var onManageShared: (() -> Void)?
-    let onBack: () -> Void
     @State private var keyDrafts: [String: String] = [:]
     @State private var keyLabels: [String: String] = [:]
     @State private var answer = ""
     @State private var confirmingCredentialReset = false
     @Environment(\.dashboardTheme) private var theme
     private var agent: DefaultAgentSettingsModel { model.connections }
-    private var editable: Bool { true }
     private var remote: RemoteWorkspaceConfiguration? {
         model.remoteWorkspaces.workspaces.first { $0.id.uuidString.lowercased() == agent.scope }
     }
@@ -176,14 +174,14 @@ struct SettingsConnectionsView: View {
                         Spacer()
                         Button("Reconnect") { Task { await agent.reconnectAccount(account.id, provider: id, remote: remote) } }
                         Button("Remove") { Task { await agent.removeAccount(account.id, provider: id, remote: remote) } }
-                    }.buttonStyle(SettingsQuietButtonStyle()).disabled(agent.busy || !editable)
+                    }.buttonStyle(SettingsQuietButtonStyle()).disabled(agent.busy)
                 }
                 Text(agent.connectionLabel(id)).font(.callout).foregroundStyle(.secondary)
                 if accounts.isEmpty || remote != nil && id != "claude-subscription" {
                     Button(id == "claude-subscription" ? "Sign in with Claude" : "Sign in") {
                         if id == "claude-subscription" { agent.signInClaude(remote: remote) }
                         else { agent.refresh(remote: remote, login: id) }
-                    }.buttonStyle(SettingsQuietButtonStyle()).disabled(agent.busy || !editable)
+                    }.buttonStyle(SettingsQuietButtonStyle()).disabled(agent.busy)
                 }
             } else {
                 ForEach(Array(accounts.enumerated()), id: \.element.id) { index, account in
@@ -197,7 +195,7 @@ struct SettingsConnectionsView: View {
                                 Button("Move down") { Task { await agent.moveAccount(account.id, provider: id, offset: 1) } }.disabled(account.isSelected || index == accounts.count - 1)
                                 Spacer()
                                 Button("Remove") { Task { await agent.removeAccount(account.id, provider: id, remote: remote) } }
-                            }.buttonStyle(SettingsQuietButtonStyle()).disabled(!editable || agent.busy)
+                            }.buttonStyle(SettingsQuietButtonStyle()).disabled(agent.busy)
                         }
                     } label: {
                         HStack {
@@ -218,7 +216,7 @@ struct SettingsConnectionsView: View {
                 Text("An independent workspace sign-in replaces the shared account.")
                     .font(.caption).foregroundStyle(.secondary)
                 Button("Use shared sign-in") { Task { await agent.signOut(id, remote: remote) } }
-                    .buttonStyle(SettingsQuietButtonStyle()).disabled(agent.busy || !editable)
+                    .buttonStyle(SettingsQuietButtonStyle()).disabled(agent.busy)
             }
             if agent.signInProvider == id { signInSection }
             else { completedSignInSection(for: id) }
@@ -227,10 +225,10 @@ struct SettingsConnectionsView: View {
     private func keyEntry(_ id: String) -> some View {
         HStack {
             if focus != .webSearch {
-                TextField("Label (optional)", text: Binding(get: { keyLabels[id] ?? "" }, set: { keyLabels[id] = $0 })).settingsInput().frame(maxWidth: 180)
+                TextField("Label (optional)", text: Binding(get: { keyLabels[id] ?? "" }, set: { keyLabels[id] = $0 })).dashboardInput().frame(maxWidth: 180)
             }
             SecureField("Add API key", text: Binding(get: { keyDrafts[id] ?? "" }, set: { keyDrafts[id] = $0 }))
-                .settingsInput().accessibilityLabel("\(id) API key")
+                .dashboardInput().accessibilityLabel("\(id) API key")
             Button("Save key") {
                 Task { @MainActor in
                     guard await agent.saveKeyConfirmed(keyDrafts[id] ?? "", provider: id, label: (keyLabels[id] ?? "").isEmpty ? nil : keyLabels[id]) else { return }
@@ -240,7 +238,7 @@ struct SettingsConnectionsView: View {
                     else { agent.refresh(remote: remote) }
                 }
             }.disabled((keyDrafts[id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-        }.buttonStyle(SettingsQuietButtonStyle()).disabled(!editable || agent.busy)
+        }.buttonStyle(SettingsQuietButtonStyle()).disabled(agent.busy)
     }
     private var signInSection: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -267,7 +265,7 @@ struct SettingsConnectionsView: View {
             if let prompt = agent.prompt {
                 Text(prompt).font(.callout)
                 if agent.promptOptions.isEmpty {
-                    HStack { TextField("Authorization code or redirect URL", text: $answer).settingsInput(); Button("Continue") { agent.respond(answer); answer = "" } }
+                    HStack { TextField("Authorization code or redirect URL", text: $answer).dashboardInput(); Button("Continue") { agent.respond(answer); answer = "" } }
                 } else {
                     HStack { ForEach(agent.promptOptions, id: \.id) { option in Button(option.label) { agent.respond(option.id) } } }
                 }

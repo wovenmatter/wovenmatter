@@ -13,7 +13,7 @@ struct SettingsUsageView: View {
             reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
             SettingsNote("Signing in saves credentials in Apple Keychain and allows automatic limit checks. Accounts are shared with Pi Durable; chat models stay as you selected them.")
             SettingsConnectionsView(model: model, focus: .providers, embedded: true,
-                onConnected: accountConnected, onBack: {})
+                onConnected: accountConnected)
             if let provider = connectedProvider {
                 HStack {
                     SettingsNote("Account added. Choose models if you also want to use it for chat.")
