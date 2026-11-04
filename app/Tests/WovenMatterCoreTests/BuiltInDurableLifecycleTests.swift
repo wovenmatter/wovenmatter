@@ -30,7 +30,7 @@ struct BuiltInDurableLifecycleTests {
     }
     try await Task.sleep(for: .milliseconds(30))
     #expect(await client.permissionSetCount == 0)
-    #expect(lease.snapshot.holds == 1)
+    #expect(lease.holds == 1)
     if cancelRequest { update.cancel() }
     await client.finishBackgroundWork()
     do {

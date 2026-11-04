@@ -144,7 +144,6 @@ struct CompanionHostLifecycleTests {
             var request = URLRequest(url: base.appending(path: path))
             request.httpMethod = "POST"; request.httpBody = body
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             let (data, response) = try await URLSession.shared.data(for: request)
             return (data, try #require((response as? HTTPURLResponse)?.statusCode))
         }
@@ -213,15 +212,10 @@ private enum HostFixtureError: Error { case timeout }
     let model: ApplicationModel
     var storage = PairedMacDeviceStorage.memory()
     lazy var host = makeHost()
-    var existingPorts: Set<Int> = [443]
+    let existingPorts: Set<Int> = [443]
     var exposureCount = 0
     var children: [HostServingChild] = []
-    var replacementCreatedWhileStopping = false
     var dnsName = "fixture.test.ts.net"
-    var tailscaleRunning = true
-    var holdFirstStatus = false
-    var firstStatusArrived = false
-    private var firstStatusWaiter: CheckedContinuation<Void, Never>?
 
     init(isNode: Bool = false) async throws {
         directory = FileManager.default.temporaryDirectory.appending(path: "companion-host-\(UUID())")
@@ -277,24 +271,17 @@ private enum HostFixtureError: Error { case timeout }
         return try #require(URL(string: child.target)).appendingPathComponent(path)
     }
     func makeExposure() -> CompanionTailscaleServe {
-        replacementCreatedWhileStopping = replacementCreatedWhileStopping || children.contains { $0.stoppedAt != nil && $0.isRunning }
         exposureCount += 1
-        let attempt = exposureCount
         return CompanionTailscaleServe(executable: URL(fileURLWithPath: "/fixture/tailscale"),
-            probe: { [self] _, arguments in try await probe(arguments, attempt: attempt) },
+            probe: { [self] _, arguments in try await probe(arguments) },
             launch: { [self] _, arguments in
                 let child = HostServingChild(port: Int(arguments[1].dropFirst("--https=".count))!, target: arguments[3])
                 children.append(child)
                 return child
             })
     }
-    func probe(_ arguments: [String], attempt: Int) async throws -> Data {
+    func probe(_ arguments: [String]) throws -> Data {
         if arguments == ["status", "--json"] {
-            if attempt == 1 && holdFirstStatus {
-                firstStatusArrived = true
-                await withCheckedContinuation { firstStatusWaiter = $0 }
-            }
-            guard tailscaleRunning else { return Data(#"{"BackendState":"Stopped"}"#.utf8) }
             return try JSONSerialization.data(withJSONObject: ["BackendState": "Running", "Self": ["DNSName": dnsName + "."]])
         }
         let tcp = Dictionary(uniqueKeysWithValues: existingPorts.map { (String($0), ["HTTPS": true]) })
@@ -305,9 +292,7 @@ private enum HostFixtureError: Error { case timeout }
         }
         return try JSONSerialization.data(withJSONObject: ["TCP": tcp, "Foreground": foreground])
     }
-    func releaseFirstStatus() { firstStatusWaiter?.resume(); firstStatusWaiter = nil }
     func remove() {
-        releaseFirstStatus()
         host.stopSharing()
         children.forEach { $0.forceStopped = true }
         defaults.removePersistentDomain(forName: suite)
@@ -826,17 +811,15 @@ extension CompanionHostLifecycleTests {
 
     @Test func formerNodeWritingIsReconciledAtItsOriginalMacWithOriginalOperations() async throws {
         let fixture = try await HostFixture(isNode: true); defer { fixture.remove() }
-        let centralDirectory = FileManager.default.temporaryDirectory.appending(path: "legacy-central-\(UUID())")
-        defer { try? FileManager.default.removeItem(at: centralDirectory) }
-        try FileManager.default.createDirectory(at: centralDirectory, withIntermediateDirectories: true)
-        let central = try await WorkspaceDatabase(url: centralDirectory.appending(path: "workspace.sqlite"))
+        let centralPersistence = try PersistenceFixture(); defer { centralPersistence.remove() }
+        let central = try await centralPersistence.openDatabase()
         let centralHost = try await central.companionLibraryIdentity().hostDeviceID
         let content = { (text: String) in try NoteDocument(blocks: [.richText(.init(text: text))]).encoded() }
         let edited = UUID().uuidString.lowercased(), deleted = UUID().uuidString.lowercased(), folder = UUID().uuidString.lowercased()
         _ = try await central.applyCompanionMutation(.init(deviceID: centralHost, kind: .createNote, resourceID: edited, title: "Plan", content: content("Plan v1")))
         _ = try await central.applyCompanionMutation(.init(deviceID: centralHost, kind: .createNote, resourceID: deleted, title: "Draft", content: content("Draft v1")))
         let created = try await central.applyCompanionMutation(.init(deviceID: centralHost, kind: .createFolder, resourceID: folder, title: "Projects",
-            folderExecution: .init(workspaceID: "local", rootPath: centralDirectory.path)))
+            folderExecution: .init(workspaceID: "local", rootPath: centralPersistence.directory.path)))
         #expect(created.status == .accepted)
         // The node cached the central library, then wrote offline.
         let replica = try MobileStore(file: fixture.directory.appending(path: "LibraryClient/library.json"))
@@ -913,8 +896,8 @@ extension CompanionHostLifecycleTests {
         let executionDirectory = fixture.directory.appending(path: "LibraryClient/Execution/" + deviceID)
         try FileManager.default.createDirectory(at: executionDirectory, withIntermediateDirectories: true)
         let node = try await WorkspaceDatabase(url: executionDirectory.appending(path: "workspace.sqlite"))
-        let session = try await node.createLocalACPSession(runtimeKind: .codex, title: "Node goal", ownerDeviceID: UUID(),
-            executionRoot: .init(folderID: nil, location: .init(workspaceID: "local", rootPath: executionDirectory.path, managed: false), defaultPath: executionDirectory.path))
+        let session = try await node.createFixtureLocalACPSession(runtimeKind: .codex, title: "Node goal", ownerDeviceID: UUID(),
+            fixtureLocation: .init(workspaceID: "local", rootPath: executionDirectory.path, managed: false))
         let goal = try #require(try await node.mutateGoal(sessionID: session, mutation: .set(objective: "Keep going", tokenBudget: nil, turnBudget: nil)))
         let run = try await node.beginLocalACPRun(conversationID: session, content: "Interrupted by the upgrade")
         try await LegacyMacLibraryUpgrade.prepare(database: database, defaults: fixture.defaults)
@@ -1015,7 +998,7 @@ extension CompanionHostLifecycleTests {
         })
     }
     func untilSuspended() async throws {
-        for _ in 0..<2_000 where !suspended { try await Task.sleep(for: .milliseconds(5)) }
+        _ = try await pollUntil(attempts: 2_000, interval: .milliseconds(5)) { suspended }
         try #require(suspended)
     }
     func resume() { suspended = false; gate?.resume(); gate = nil }

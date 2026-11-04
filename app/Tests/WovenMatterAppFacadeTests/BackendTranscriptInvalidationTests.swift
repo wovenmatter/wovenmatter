@@ -86,10 +86,7 @@ struct BackendTranscriptInvalidationTests {
     }
 
     private func waitUntil(_ condition: () -> Bool) async throws {
-        for _ in 0..<100 {
-            if condition() { return }
-            try await Task.sleep(for: .milliseconds(10))
-        }
+        if try await pollUntil(attempts: 100, interval: .milliseconds(10), { condition() }) { return }
         try #require(condition(), "Transcript refresh waited for the deliberately blocked metadata consumer")
     }
 }

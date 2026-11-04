@@ -35,6 +35,43 @@ public func rows(_ value: GatewayJSONValue) -> [GatewayJSONValue] {
   value.objectValue?["rows"]?.arrayValue ?? []
 }
 
+/// A fake `tailscale serve` whose probe replies describe the one child it
+/// launched and any ports already in use.
+@MainActor public final class FixtureTailscaleServe {
+  public let dnsName: String
+  public var failProbes = false
+  public var existingPorts: Set<Int> = []
+  public private(set) var child: FixtureServingChild?
+  public init(dnsName: String) { self.dnsName = dnsName }
+  public func exposure() -> CompanionTailscaleServe {
+    CompanionTailscaleServe(executable: URL(fileURLWithPath: "/fixture/tailscale"),
+      probe: { [self] _, arguments in try await probe(arguments) },
+      launch: { [self] _, arguments in
+        let value = FixtureServingChild(port: Int(arguments[1].dropFirst("--https=".count))!, target: arguments[3])
+        child = value; return value
+      })
+  }
+  public func probe(_ arguments: [String]) throws -> Data {
+    if failProbes { throw URLError(.notConnectedToInternet) }
+    if arguments == ["status", "--json"] {
+      return Data(#"{"BackendState":"Running","Self":{"DNSName":"\#(dnsName)."}}"#.utf8)
+    }
+    let tcp = Dictionary(uniqueKeysWithValues: existingPorts.map { (String($0), ["HTTPS": true]) })
+    guard let child, child.isRunning else { return try JSONSerialization.data(withJSONObject: ["TCP": tcp]) }
+    return try JSONSerialization.data(withJSONObject: ["TCP": tcp, "Foreground": ["fixture": [
+      "TCP": [String(child.port): ["HTTPS": true]],
+      "Web": ["\(dnsName):\(child.port)": ["Handlers": ["/wovenmatter": ["Proxy": child.target]]]]]]])
+  }
+}
+
+@MainActor public final class FixtureServingChild: CompanionServingProcess {
+  public let port: Int
+  public let target: String
+  public var isRunning = true
+  public init(port: Int, target: String) { self.port = port; self.target = target }
+  public func terminate() { isRunning = false }
+}
+
 // Existing suites create provider-free records with explicit fixture locations.
 // These helpers are test-target dependencies only; production requires a root.
 extension WorkspaceDatabase {

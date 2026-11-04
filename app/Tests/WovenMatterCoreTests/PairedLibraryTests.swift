@@ -10,16 +10,16 @@ import WovenMatterCore
 @Suite("Equal paired Mac libraries", .serialized)
 struct PairedLibraryTests {
   private struct Mac {
-    let directory: URL
+    let persistence: PersistenceFixture
     let database: WorkspaceDatabase
     let id: String
+    var directory: URL { persistence.directory }
     init() async throws {
-      directory = FileManager.default.temporaryDirectory.appending(path: "paired-mac-" + UUID().uuidString)
-      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-      database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+      persistence = try PersistenceFixture()
+      database = try await persistence.openDatabase()
       id = try await database.companionLibraryIdentity().hostDeviceID
     }
-    func remove() { try? FileManager.default.removeItem(at: directory) }
+    func remove() { persistence.remove() }
     func note(_ id: String, title: String, revision: Int64? = nil) async throws {
       let content = try NoteDocument(blocks: [.richText(.init(text: title))]).encoded()
       let receipt = try await database.applyCompanionMutation(.init(deviceID: self.id,
@@ -394,7 +394,7 @@ extension PairedLibraryTests {
       var row = record.row; row["title"] = .init(type: "reference:text", value: hash)
       return .init(table: record.table, key: record.key, row: row, deleted: record.deleted, clock: record.clock, origin: record.origin, vector: record.vector)
     }
-    let bytes = Data("Ready bytes".utf8), hash = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+    let bytes = Data("Ready bytes".utf8), hash = SHA256.hash(data: bytes).hexString
     let records = b.directory.appending(path: "paired-records")
     try FileManager.default.createDirectory(at: records, withIntermediateDirectories: true)
     try bytes.write(to: records.appending(path: hash))
@@ -564,6 +564,10 @@ extension PairedLibraryTests {
   private func projectedWorkspace(_ database: WorkspaceDatabase, _ id: String) async throws -> String? {
     try await database.read { try $0.historyRowsUnlocked("SELECT workspace_id FROM companion_execution_conversations WHERE id=?", values: [id]).first?.objectValue?["workspace_id"]?.stringValue }
   }
+  private func insertRun(_ database: WorkspaceDatabase, _ id: String, conversation: String) async throws {
+    try await database.write { try $0.toolsExecuteUnlocked("INSERT INTO dashboard_runs(id,conversation_id,status,created_at) VALUES(?,?,'completed',?)",
+      [id, conversation, WorkspaceDatabaseConnection.timestamp(Date())]) }
+  }
 
   @Test func aSyntheticProjectionGuessedForTheWrongMacIsRepairedFromTheOwnerRecord() async throws {
     let a = try await Mac(), b = try await Mac(), c = try await Mac(); defer { a.remove(); b.remove(); c.remove() }
@@ -626,12 +630,8 @@ extension PairedLibraryTests {
 
   @Test func importedGoalsKeepStableRunMembershipAndUsageAcrossRenumberedRuns() async throws {
     let old = try await Mac(), full = try await Mac(); defer { old.remove(); full.remove() }
-    let session = try await old.database.createLocalACPSession(runtimeKind: .codex, title: "Goal chat", ownerDeviceID: UUID(),
-      executionRoot: .init(folderID: nil, location: .init(workspaceID: "local", rootPath: old.directory.path, managed: false), defaultPath: old.directory.path))
-    func insertRun(_ database: WorkspaceDatabase, _ id: String, conversation: String) async throws {
-      try await database.write { try $0.toolsExecuteUnlocked("INSERT INTO dashboard_runs(id,conversation_id,status,created_at) VALUES(?,?,'completed',?)",
-        [id, conversation, WorkspaceDatabaseConnection.timestamp(Date())]) }
-    }
+    let session = try await old.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Goal chat", ownerDeviceID: UUID(),
+      fixtureLocation: .init(workspaceID: "local", rootPath: old.directory.path, managed: false))
     // High, gapped source sequences.
     for index in 0..<40 { try await insertRun(old.database, "gap-\(index)", conversation: UUID().uuidString.lowercased()) }
     try await old.database.write { try $0.executeUnlocked("DELETE FROM dashboard_runs WHERE id LIKE 'gap-%'") }
@@ -665,8 +665,8 @@ extension PairedLibraryTests {
 
   @Test func anImportNeverRewritesAGoalThisLibraryAlreadyHad() async throws {
     let old = try await Mac(), full = try await Mac(); defer { old.remove(); full.remove() }
-    let session = try await old.database.createLocalACPSession(runtimeKind: .codex, title: "Shared chat", ownerDeviceID: UUID(),
-      executionRoot: .init(folderID: nil, location: .init(workspaceID: "local", rootPath: old.directory.path, managed: false), defaultPath: old.directory.path))
+    let session = try await old.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Shared chat", ownerDeviceID: UUID(),
+      fixtureLocation: .init(workspaceID: "local", rootPath: old.directory.path, managed: false))
     _ = try await old.database.mutateGoal(sessionID: session, mutation: .set(objective: "Source goal", tokenBudget: nil, turnBudget: nil))
     // This library already has the chat and its own goal for it.
     let existing = #"{"baselineRunSequence":999,"completedTurns":0,"createdAt":0,"enrolledRunSequence":999,"id":"existing-goal","objective":"Kept","observedRunSequence":999,"progressRevision":0,"sessionID":"\#(session)","status":"active","updatedAt":0}"#
@@ -800,7 +800,7 @@ extension PairedLibraryTests {
     let a = try await Mac(), b = try await Mac(); defer { a.remove(); b.remove() }
     let workspace = try await registerMacWorkspace(a)
     let session = try await a.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Owner's chat", ownerDeviceID: UUID())
-    let goal = try #require(try await a.database.mutateGoal(sessionID: session, mutation: .set(objective: "Continue", tokenBudget: nil, turnBudget: nil)))
+    _ = try #require(try await a.database.mutateGoal(sessionID: session, mutation: .set(objective: "Continue", tokenBudget: nil, turnBudget: nil)))
     // The chat and its goal arrive before its owner record and workspace.
     let records = try await journal(a.database)
     let metadata = records.filter { ["paired_conversation_owners", "companion_execution_workspaces"].contains($0.table) }
@@ -819,7 +819,6 @@ extension PairedLibraryTests {
     await #expect(throws: WorkspaceConversationActionError.ownedByAnotherMac) { try await b.database.mutateConversation(id: session, mutation: .moveToTrash) }
     #expect(try await b.database.companionConversationExecutionWorkspace(conversationID: session)?.id == workspace.id)
     #expect(try await goalValue() == originalGoal)
-    _ = goal
   }
 
   @Test func aChatAdoptedIntoLinuxIsManagedThroughItsIndependentWorkspaceNotItsOldMac() async throws {
@@ -849,14 +848,10 @@ extension PairedLibraryTests {
 
   @Test func reimportingAGoalThisLibraryAlreadyHasNeverDuplicatesItsAccounting() async throws {
     let old = try await Mac(), full = try await Mac(); defer { old.remove(); full.remove() }
-    let session = try await old.database.createLocalACPSession(runtimeKind: .codex, title: "Goal chat", ownerDeviceID: UUID(),
-      executionRoot: .init(folderID: nil, location: .init(workspaceID: "local", rootPath: old.directory.path, managed: false), defaultPath: old.directory.path))
+    let session = try await old.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Goal chat", ownerDeviceID: UUID(),
+      fixtureLocation: .init(workspaceID: "local", rootPath: old.directory.path, managed: false))
     let goal = try #require(try await old.database.mutateGoal(sessionID: session, mutation: .set(objective: "Finish", tokenBudget: 1000, turnBudget: nil)))
-    func insertRun(_ database: WorkspaceDatabase, _ id: String) async throws {
-      try await database.write { try $0.toolsExecuteUnlocked("INSERT INTO dashboard_runs(id,conversation_id,status,created_at) VALUES(?,?,'completed',?)",
-        [id, session, WorkspaceDatabaseConnection.timestamp(Date())]) }
-    }
-    try await insertRun(old.database, "shared-run")
+    try await insertRun(old.database, "shared-run", conversation: session)
     try await old.database.recordGoalUsage(runID: "shared-run", tokens: 20)
     let first = old.directory.appending(path: "first-copy.sqlite")
     try WorkspaceDatabase.snapshotDatabase(from: old.database.fileURL, to: first)
@@ -866,7 +861,7 @@ extension PairedLibraryTests {
     #expect(try await total() == 20)
     // The node kept working: more usage on the same run, and a new run.
     try await old.database.recordGoalUsage(runID: "shared-run", tokens: 80)
-    try await insertRun(old.database, "new-run")
+    try await insertRun(old.database, "new-run", conversation: session)
     try await old.database.recordGoalUsage(runID: "new-run", tokens: 5)
     let second = old.directory.appending(path: "second-copy.sqlite")
     try WorkspaceDatabase.snapshotDatabase(from: old.database.fileURL, to: second)
@@ -884,7 +879,7 @@ extension PairedLibraryTests {
     // resuming does not enroll it; a run after resuming counts normally.
     try await full.database.recordGoalUsage(runID: "new-run", tokens: 5)
     #expect(try await total() == 30)
-    try await insertRun(full.database, "after-resume")
+    try await insertRun(full.database, "after-resume", conversation: session)
     try await full.database.recordGoalUsage(runID: "after-resume", tokens: 4)
     #expect(try await total() == 34)
   }

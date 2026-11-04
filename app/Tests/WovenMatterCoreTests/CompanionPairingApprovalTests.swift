@@ -139,10 +139,6 @@ import WovenMatterCore
         #expect(await auth.devices().isEmpty)
         _ = try await auth.authenticate(bearer: resumed.credential)
         #expect(await auth.devices().count == 1)
-        try await auth.revoke(deviceID: id)
-        await #expect(throws: CompanionAPIError.self) {
-            try await auth.enrollLocalDevelopment(deviceID: id, name: name, workspaceID: fixture.libraryID)
-        }
     }
 
     @Test func localDevelopmentEnrollmentCannotTakeOverPairedDevicesOrUndoRevocation() async throws {

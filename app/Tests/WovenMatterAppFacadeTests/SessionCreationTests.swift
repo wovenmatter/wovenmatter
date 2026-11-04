@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import WorkspaceFixtures
 import WovenMatterCore
 import WovenMatterDashboardStore
 @testable import WovenMatterAppFacade
@@ -72,10 +73,7 @@ struct SessionCreationTests {
         try await f.model.refreshClientExecutionState()
         await f.recorder.rejectConfiguration(false)
         await f.model.updateLocalACPSession(conversation: chat, model: "chosen-in-dropdown")
-        let deadline = Date().addingTimeInterval(10)
-        while f.model.localACPSessionMetadata[id]?.model != "chosen-in-dropdown", Date() < deadline {
-            try await Task.sleep(for: .milliseconds(10))
-        }
+        _ = try await pollUntil(attempts: 1_000, interval: .milliseconds(10)) { f.model.localACPSessionMetadata[id]?.model == "chosen-in-dropdown" }
         #expect(f.model.localACPSessionMetadata[id]?.model == "chosen-in-dropdown")
         #expect(await f.recorder.configurations.count == 2)
         #expect(await f.recorder.configurations.last?.selections.thinking == nil)

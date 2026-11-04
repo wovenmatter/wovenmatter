@@ -16,7 +16,7 @@ struct WorkspaceAgentToolTests {
     try await db.setSessionTools(.init(enabled: []), sessionID: target)
     let timer = WorkspaceSessionTimer(sessionID: target, instruction: "Outside follow-up", nextFireAt: .distantPast)
     try await db.saveSessionTimer(timer, callerID: WovenMCPCaller.outside, requestID: UUID().uuidString, creating: true)
-    let reopened = try await WorkspaceDatabase(url: persistence.databaseURL)
+    let reopened = try await persistence.openDatabase()
     let due = try #require(await reopened.dueSessionTimers().first { $0.id == timer.id })
     let occurrence = try #require(due.pendingDeliveryID)
     #expect(try await reopened.isTimerOccurrenceActive(id: timer.id, deliveryID: occurrence))
@@ -129,31 +129,31 @@ struct WorkspaceAgentToolTests {
     #expect(try await db.readNoteForEditing(id: note).document?.plainText
       .components(separatedBy: "distantneedle").count == 2)
     let notes = try await db.listAgentNotes(callerID: caller, search: "distantneedle", limit: 1)
-    #expect(notes.objectValue?["rows"]?.arrayValue?.first?.objectValue?["kind"]?.stringValue == "note")
+    #expect(rows(notes).first?.objectValue?["kind"]?.stringValue == "note")
     let newer = try await db.createNote(folderID: nil, title: "Newer", callerConversationID: caller,
       requestID: UUID().uuidString)
     let newest = try await db.listAgentNotes(callerID: caller, limit: 1)
     let oldest = try await db.listAgentNotes(callerID: caller, after: 0, limit: 1, newestFirst: false)
-    #expect(newest.objectValue?["rows"]?.arrayValue?.first?.objectValue?["id"]?.stringValue == newer)
-    #expect(oldest.objectValue?["rows"]?.arrayValue?.first?.objectValue?["id"]?.stringValue == note)
+    #expect(rows(newest).first?.objectValue?["id"]?.stringValue == newer)
+    #expect(rows(oldest).first?.objectValue?["id"]?.stringValue == note)
 
     try await db.setSessionTools(.init(enabled: [.notes, .timers]), sessionID: caller)
     let folders = try await db.listAgentFolders(callerID: caller, requiredTool: .notes, limit: 1)
-    #expect(folders.objectValue?["rows"]?.arrayValue?.count == 1)
-    let firstFolder = folders.objectValue?["rows"]?.arrayValue?.first?.objectValue?["id"]?.stringValue
+    #expect(rows(folders).count == 1)
+    let firstFolder = rows(folders).first?.objectValue?["id"]?.stringValue
     let folderCursor = Int64(folders.objectValue?["nextCursor"]?.intValue ?? 0)
     let remainingFolders = try await db.listAgentFolders(callerID: caller, requiredTool: .notes,
       after: folderCursor, limit: 200)
-    let folderIDs = ([firstFolder] + (remainingFolders.objectValue?["rows"]?.arrayValue?.map {
+    let folderIDs = ([firstFolder] + rows(remainingFolders).map {
       $0.objectValue?["id"]?.stringValue
-    } ?? [])).compactMap { $0 }
+    }).compactMap { $0 }
     #expect(folderIDs == expectedFolders)
     for index in 0..<3 {
       try await db.saveSessionTimer(.init(sessionID: caller, instruction: "Timer \(index)",
         nextFireAt: Date(timeIntervalSince1970: 4_000_000_000 + Double(index))), callerID: caller)
     }
     let timers = try await db.querySessionTimers(callerID: caller, sessionID: caller, limit: 1)
-    #expect(timers.objectValue?["rows"]?.arrayValue?.count == 1)
+    #expect(rows(timers).count == 1)
     #expect(timers.objectValue?["hasMore"]?.boolValue == true)
   }
 

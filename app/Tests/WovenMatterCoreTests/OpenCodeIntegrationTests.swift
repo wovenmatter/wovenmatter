@@ -20,10 +20,8 @@ struct OpenCodeIntegrationTests {
         case "nul-directory": data["location"]["directory"] = .string("/bad\0path")
         default: data["location"]["directory"] = "/another/project"
         }
-        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+        let persistence = try PersistenceFixture(); defer { persistence.remove() }
+        let database = try await persistence.openDatabase()
         let id = try await database.createOpenCodeFixtureSession(runtimeKind: .opencode, title: "MCP scope",
             ownerDeviceID: UUID(), openCodeAssociation: ("fixture", "ses_fixture"))
         let link = OpenCodeSessionLink(conversationID: id, connectionID: "fixture", sessionID: "ses_fixture")
@@ -59,10 +57,8 @@ struct OpenCodeIntegrationTests {
         case "missing-endpoint": fixture.mcpConnectReply = ["output": ["bearerToken": "fixture-token"]]
         default: fixture.mcpConnectReply = ["output": ["endpointURL": "http://127.0.0.1:1235/mcp", "bearerToken": ""]]
         }
-        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+        let persistence = try PersistenceFixture(); defer { persistence.remove() }
+        let database = try await persistence.openDatabase()
         let id = try await database.createOpenCodeFixtureSession(runtimeKind: .opencode, title: "MCP envelope",
             ownerDeviceID: UUID(), openCodeAssociation: ("fixture", "ses_fixture"))
         let link = OpenCodeSessionLink(conversationID: id, connectionID: "fixture", sessionID: "ses_fixture")
@@ -97,10 +93,8 @@ struct OpenCodeIntegrationTests {
 
     @Test func multipleFollowedChatsShareOneVolatileSubscription() async throws {
         let fixture = OpenCodeFixture(); fixture.streamEvents = true; FixtureProtocol.fixture = fixture
-        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+        let persistence = try PersistenceFixture(); defer { persistence.remove() }
+        let database = try await persistence.openDatabase()
         let first = try await database.createOpenCodeFixtureSession(runtimeKind: .opencode, title: "One", ownerDeviceID: UUID(), openCodeAssociation: ("fixture", "ses_fixture"))
         let second = try await database.createOpenCodeFixtureSession(runtimeKind: .opencode, title: "Two", ownerDeviceID: UUID(), openCodeAssociation: ("fixture", "ses_second"))
         let session = fixtureSession()
@@ -131,10 +125,8 @@ struct OpenCodeIntegrationTests {
 
     @Test func volatileTextPersistsBeforeCompletionAndInterruptionReconcilesWithoutCompletedTime() async throws {
         let fixture = OpenCodeFixture(); FixtureProtocol.fixture = fixture
-        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+        let persistence = try PersistenceFixture(); defer { persistence.remove() }
+        let database = try await persistence.openDatabase()
         let id = try await database.createOpenCodeFixtureSession(runtimeKind: .opencode, title: "Live", ownerDeviceID: UUID(), openCodeAssociation: ("fixture", "ses_fixture"))
         let link = OpenCodeSessionLink(conversationID: id, connectionID: "fixture", sessionID: "ses_fixture")
         let session = fixtureSession()
@@ -488,7 +480,6 @@ private final class OpenCodeFixture: @unchecked Sendable {
     var nativeDirectory = "/original/project"
     var sessionInfoReplies: [OpenCodeValue] = []
     var createCount = 0
-    var lastCreate: OpenCodeValue = .null
     var messages: [OpenCodeValue] = []
     var sessions: [OpenCodeValue] = []
     var listedCount = 0
@@ -505,7 +496,6 @@ private final class OpenCodeFixture: @unchecked Sendable {
     var loseCommandResponse = false
     var lastCommand: OpenCodeValue = .null
     var historyRequests = 0
-    var streamTimeout: TimeInterval?
     var streamEvents = false
     var liveRequests = 0
     var durableRequests = 0
@@ -530,7 +520,7 @@ private final class OpenCodeFixture: @unchecked Sendable {
             let sessionID = path.contains("/ses_second") ? "ses_second" : "ses_fixture"
             if streamEvents { path = path.replacingOccurrences(of: "/ses_second", with: "/ses_fixture") }
             if path == "/api/event" { liveRequests += 1; return (200, [:]) }
-            if path.hasSuffix("/log") { durableRequests += 1; streamTimeout = request.timeoutInterval; return (200, [:]) }
+            if path.hasSuffix("/log") { durableRequests += 1; return (200, [:]) }
             if path == "/api/info" || path == "/api/health" {
                 return (200, ["healthy": .bool(true), "version": .string("2.0.22"), "pid": .number(Double(ProcessInfo.processInfo.processIdentifier))])
             }
@@ -593,7 +583,7 @@ private final class OpenCodeFixture: @unchecked Sendable {
             }
             if path == "/api/session", request.httpMethod == "POST" {
                 createCount += 1
-                lastCreate = try requestBody(request)
+                let lastCreate = try requestBody(request)
                 nativeDirectory = lastCreate["location"]["directory"].text
                 return (200, ["data": ["id": "ses_fixture", "title": "Created fixture"]])
             }
@@ -674,10 +664,9 @@ private final class FixtureHealthGate: @unchecked Sendable {
 private extension WorkspaceDatabase {
     func createOpenCodeFixtureSession(runtimeKind: AgentRuntimeKind, title: String, ownerDeviceID: UUID,
         openCodeAssociation: (connectionID: String, sessionID: String)? = nil,
-        importedOpenCodeSnapshot: OpenCodeSessionSnapshot? = nil, requestedConversationID: UUID? = nil) async throws -> String {
+        importedOpenCodeSnapshot: OpenCodeSessionSnapshot? = nil) async throws -> String {
         try await createFixtureLocalACPSession(runtimeKind: runtimeKind, title: title, ownerDeviceID: ownerDeviceID,
             openCodeAssociation: openCodeAssociation, importedOpenCodeSnapshot: importedOpenCodeSnapshot,
-            requestedConversationID: requestedConversationID,
             fixtureLocation: .init(workspaceID: "device:test", rootPath: "/original/project", managed: false))
     }
 }

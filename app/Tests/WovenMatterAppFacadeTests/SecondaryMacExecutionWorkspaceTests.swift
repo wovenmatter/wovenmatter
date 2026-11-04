@@ -57,7 +57,7 @@ struct SecondaryMacExecutionWorkspaceTests {
     @Test func managementRequestCannotCrossAHostRestartAtTheSameEndpoint() async throws {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
         let (_, workspace, owner, libraryID) = try await setup(fixture)
-        let serving = SecondaryServingFixture()
+        let serving = FixtureTailscaleServe(dnsName: "secondary.test.ts.net")
         let gate = SecondaryManagementGate()
         let host = SecondaryMacExecutionHost(workspace: workspace, directory: fixture.directory,
             makeExposure: { serving.exposure() }, afterManagementAuthentication: { await gate.pauseIfRequested() })
@@ -154,35 +154,4 @@ struct SecondaryMacExecutionWorkspaceTests {
         await withCheckedContinuation { waiter = $0 }
     }
     func release() { waiter?.resume(); waiter = nil }
-}
-
-@MainActor final class SecondaryServingFixture {
-    var failProbes = false
-    var child: SecondaryServingChild?
-    func exposure() -> CompanionTailscaleServe {
-        CompanionTailscaleServe(executable: URL(fileURLWithPath: "/fixture/tailscale"),
-            probe: { [self] _, arguments in try await probe(arguments) },
-            launch: { [self] _, arguments in
-                let value = SecondaryServingChild(port: Int(arguments[1].dropFirst("--https=".count))!, target: arguments[3])
-                child = value; return value
-            })
-    }
-    func probe(_ arguments: [String]) throws -> Data {
-        if failProbes { throw URLError(.notConnectedToInternet) }
-        if arguments == ["status", "--json"] {
-            return Data(#"{"BackendState":"Running","Self":{"DNSName":"secondary.test.ts.net."}}"#.utf8)
-        }
-        guard let child, child.isRunning else { return Data("{}".utf8) }
-        return try JSONSerialization.data(withJSONObject: ["Foreground": ["fixture": [
-            "TCP": [String(child.port): ["HTTPS": true]],
-            "Web": ["secondary.test.ts.net:\(child.port)": ["Handlers": ["/wovenmatter": ["Proxy": child.target]]]]]]])
-    }
-}
-
-@MainActor final class SecondaryServingChild: CompanionServingProcess {
-    let port: Int
-    let target: String
-    var isRunning = true
-    init(port: Int, target: String) { self.port = port; self.target = target }
-    func terminate() { isRunning = false }
 }

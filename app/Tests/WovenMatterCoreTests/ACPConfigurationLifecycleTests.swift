@@ -9,10 +9,8 @@ struct ACPConfigurationLifecycleTests {
 
   @Test(arguments: [AgentRuntimeKind.codex, .claudeCode], ["error", "cancel", "stop", "shutdown", "unsent"])
   func dispatchedFirstPromptKeepsItsNativeIdentityAcrossFailure(runtime: AgentRuntimeKind, outcome: String) async throws {
-    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+    let persistence = try PersistenceFixture(); defer { persistence.remove() }
+    let database = try await persistence.openDatabase()
     let id = try await database.createFixtureLocalACPSession(runtimeKind: runtime, title: "Interrupted first prompt", ownerDeviceID: UUID())
     let config = LocalACPSessionConfiguration(permission: "ask", permissionOptions: ["ask", "auto"])
     let interruption = DraftPromptInterruption(), lease = ConfigurationTestProcessLease()
@@ -33,18 +31,15 @@ struct ACPConfigurationLifecycleTests {
       })
     })
     let launch = LocalACPRuntimeLaunchConfiguration(runtimeKind: runtime, executableURL: URL(filePath: "/nonexistent-interruption-fixture"), arguments: [])
-    let workspace = LocalACPWorkspaceLaunchConfiguration(rootURL: directory), fence = AgentDispatchFence()
+    let workspace = LocalACPWorkspaceLaunchConfiguration(rootURL: persistence.directory), fence = AgentDispatchFence()
     let run = try await coordinator.accept(conversationID: id, content: "First prompt", launch: launch, workspace: workspace, dispatchFence: fence)
     if outcome == "stop" || outcome == "shutdown" {
       await interruption.waitUntilEntered()
       if outcome == "stop" { try await coordinator.stop(conversationID: id) }
       else { await coordinator.shutdown() }
     }
-    for _ in 0..<500 {
-      if lease.snapshot.holds == 0 { break }
-      try await Task.sleep(for: .milliseconds(10))
-    }
-    #expect(lease.snapshot.holds == 0)
+    _ = try await pollUntil(attempts: 500, interval: .milliseconds(10)) { lease.holds == 0 }
+    #expect(lease.holds == 0)
     let expectedID: String? = outcome == "unsent" ? nil : "native-first"
     #expect(fence.hasDispatched == (outcome != "unsent"))
     #expect(try await database.localACPSession(conversationID: id).acpSessionID == expectedID)
@@ -81,10 +76,8 @@ struct ACPConfigurationLifecycleTests {
   }
 
   @Test func claudeDraftsSurviveLeasedConfigurationAndPermissionBeforeFirstPrompt() async throws {
-    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+    let persistence = try PersistenceFixture(); defer { persistence.remove() }
+    let database = try await persistence.openDatabase()
     let id = try await database.createFixtureLocalACPSession(runtimeKind: .claudeCode, title: "Claude draft", ownerDeviceID: UUID())
     let probe = SelectorDriverState(expectedExistingSessionID: nil, sessionID: "probe")
     let permission = SelectorDriverState(expectedExistingSessionID: nil, sessionID: "permission-probe")
@@ -95,7 +88,7 @@ struct ACPConfigurationLifecycleTests {
     let coordinator = LocalACPSessionCoordinator(database: database, processLease: lease, clientFactory: { _, _ in drivers.next() })
     let launch = LocalACPRuntimeLaunchConfiguration(runtimeKind: .claudeCode,
       executableURL: URL(filePath: "/nonexistent-claude-draft-fixture"), arguments: [])
-    let workspace = LocalACPWorkspaceLaunchConfiguration(rootURL: directory)
+    let workspace = LocalACPWorkspaceLaunchConfiguration(rootURL: persistence.directory)
     _ = try await coordinator.configuration(conversationID: id, launch: launch, workspace: workspace)
     #expect(probe.shutdowns == 1)
     #expect(try await database.localACPSession(conversationID: id).acpSessionID == nil)
@@ -104,11 +97,8 @@ struct ACPConfigurationLifecycleTests {
     #expect(permission.shutdowns == 1)
     #expect(try await database.localACPSession(conversationID: id).acpSessionID == nil)
     _ = try await coordinator.accept(conversationID: id, content: "First prompt", launch: launch, workspace: workspace)
-    for _ in 0..<500 {
-      if lease.snapshot.holds == 0 { break }
-      try await Task.sleep(for: .milliseconds(10))
-    }
-    #expect(lease.snapshot.holds == 0)
+    _ = try await pollUntil(attempts: 500, interval: .milliseconds(10)) { lease.holds == 0 }
+    #expect(lease.holds == 0)
     #expect(prompt.shutdowns == 1)
     #expect(try await database.localACPSession(conversationID: id).acpSessionID == "durable")
     let changed = try await coordinator.updateConfiguration(conversationID: id, permission: "ask", launch: launch, workspace: workspace)
@@ -120,10 +110,8 @@ struct ACPConfigurationLifecycleTests {
 
   @Test(arguments: [false, true])
   func obsoleteClaudeDraftCanBeReplacedOnlyWithoutPriorHistory(hasPriorRun: Bool) async throws {
-    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+    let persistence = try PersistenceFixture(); defer { persistence.remove() }
+    let database = try await persistence.openDatabase()
     let id = try await database.createFixtureLocalACPSession(runtimeKind: .claudeCode, title: "Older Claude", ownerDeviceID: UUID())
     try await database.updateLocalACPSessionID(conversationID: id, sessionID: "older-id")
     try await database.updateLocalACPSessionConfiguration(conversationID: id, model: nil, thinking: nil, permission: "ask")
@@ -136,7 +124,7 @@ struct ACPConfigurationLifecycleTests {
       clientFactory: { _, _ in driver.driver() })
     let launch = LocalACPRuntimeLaunchConfiguration(runtimeKind: .claudeCode,
       executableURL: URL(filePath: "/nonexistent-claude-draft-fixture"), arguments: [])
-    let workspace = LocalACPWorkspaceLaunchConfiguration(rootURL: directory)
+    let workspace = LocalACPWorkspaceLaunchConfiguration(rootURL: persistence.directory)
     if hasPriorRun {
       await #expect(throws: (any Error).self) {
         try await coordinator.updateConfiguration(conversationID: id, permission: "auto", launch: launch, workspace: workspace)
@@ -154,10 +142,8 @@ struct ACPConfigurationLifecycleTests {
 
   @Test(arguments: ["message", "event", "trace", "import", "retained"])
   func claudeDraftRepairRejectsStandaloneHistoryEvidence(evidence: String) async throws {
-    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+    let persistence = try PersistenceFixture(); defer { persistence.remove() }
+    let database = try await persistence.openDatabase()
     let id = try await database.createFixtureLocalACPSession(runtimeKind: .claudeCode, title: "Retained Claude", ownerDeviceID: UUID())
     try await database.updateLocalACPSessionID(conversationID: id, sessionID: "native")
     let sql: String = switch evidence {
@@ -227,19 +213,12 @@ private final class SelectorDriverState: @unchecked Sendable {
   private let sessionID: String
   private let missingExistingSession: Bool
   private let initial: LocalACPSessionConfiguration
-  private let observedUpdate: LocalACPSessionConfiguration?
   private var current: LocalACPSessionConfiguration
-  private var startCount = 0
-  private var configurationReadCount = 0
   private var shutdownCount = 0
-  private var requests: [String] = []
-  private var initializedDirectories: [String] = []
   private var observer: (@Sendable (LocalACPSessionConfiguration) async -> Void)?
 
   init(
     expectedExistingSessionID: String?,
-    modelOptions: [String] = ["default-model", "selected-model"],
-    observedUpdate: LocalACPSessionConfiguration? = nil,
     sessionID: String = "fixture-session",
     missingExistingSession: Bool = false
   ) {
@@ -249,25 +228,18 @@ private final class SelectorDriverState: @unchecked Sendable {
     initial = LocalACPSessionConfiguration(
       model: "default-model",
       thinking: "low",
-      modelOptions: modelOptions,
+      modelOptions: ["default-model", "selected-model"],
       thinkingOptions: ["low", "high"],
       permission: "ask", permissionOptions: ["ask", "auto"]
     )
-    self.observedUpdate = observedUpdate
     current = initial
   }
 
-  var starts: Int { lock.withLock { startCount } }
-  var configurationReads: Int { lock.withLock { configurationReadCount } }
   var shutdowns: Int { lock.withLock { shutdownCount } }
-  var setRequests: [String] { lock.withLock { requests } }
-  var directories: [String] { lock.withLock { initializedDirectories } }
 
   func driver() -> LocalACPSessionDriver {
-    lock.withLock { startCount += 1 }
-    return LocalACPSessionDriver(
-      initializeSession: { [self] directory, existing, _, _ in
-        lock.withLock { initializedDirectories.append(directory.path) }
+    LocalACPSessionDriver(
+      initializeSession: { [self] _, existing, _, _ in
         #expect(existing == expectedExistingSessionID)
         return LocalACPInitializedSession(
           sessionID: sessionID,
@@ -276,27 +248,16 @@ private final class SelectorDriverState: @unchecked Sendable {
         )
       },
       prompt: { _, _, _, _ in .endTurn },
-      configuration: { [self] in
-        lock.withLock {
-          configurationReadCount += 1
+      configuration: { [self] in lock.withLock { current } },
+      observeConfiguration: { [self] handler in
+        let snapshot = lock.withLock {
+          observer = handler
           return current
         }
-      },
-      observeConfiguration: { [self] handler in
-        let snapshots = lock.withLock {
-          observer = handler
-          var snapshots = [current]
-          if let observedUpdate {
-            current = observedUpdate
-            snapshots.append(observedUpdate)
-          }
-          return snapshots
-        }
-        for snapshot in snapshots { await handler(snapshot) }
+        await handler(snapshot)
       },
       setConfiguration: { [self] model, thinking in
         lock.withLock {
-          requests.append("model=\(model ?? "nil");thinking=\(thinking ?? "nil")")
           current = current.selecting(model: model, thinking: thinking)
           return current
         }
@@ -341,33 +302,19 @@ private final class SelectorDriverSequence: @unchecked Sendable {
 }
 
 final class ConfigurationTestProcessLease: LocalACPProcessLeasing, @unchecked Sendable {
-  struct Snapshot: Equatable {
-    let acquisitions: Int
-    let releases: Int
-    let holds: Int
-  }
-
   private let lock = NSLock()
-  private var acquisitions = 0
-  private var releases = 0
-  private var holds = 0
+  private var holdCount = 0
 
-  var snapshot: Snapshot {
-    lock.withLock { Snapshot(acquisitions: acquisitions, releases: releases, holds: holds) }
-  }
+  var holds: Int { lock.withLock { holdCount } }
 
   func acquire() throws -> LocalACPProcessLeaseAcquisition {
     lock.withLock {
-      acquisitions += 1
-      holds += 1
-      return holds == 1 ? .acquired : .retained
+      holdCount += 1
+      return holdCount == 1 ? .acquired : .retained
     }
   }
 
   func release() {
-    lock.withLock {
-      releases += 1
-      holds = max(0, holds - 1)
-    }
+    lock.withLock { holdCount = max(0, holdCount - 1) }
   }
 }

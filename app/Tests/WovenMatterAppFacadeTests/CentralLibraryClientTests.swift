@@ -58,7 +58,7 @@ struct CentralLibraryClientTests {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
         let replica = try MobileStore(file: fixture.directory.appending(path: "client/library.json"))
         try await replica.bindWorkspace("00000000-0000-4000-8000-000000000001")
-        let serving = SecondaryServingFixture()
+        let serving = FixtureTailscaleServe(dnsName: "secondary.test.ts.net")
         let central = MacClientFakeCentral()
         let client = CentralLibraryClientModel(store: replica, transport: central, executionDirectory: fixture.directory,
             makeLocalExecution: { directory, store in
@@ -112,7 +112,7 @@ struct CentralLibraryClientTests {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
         let replica = try MobileStore(file: fixture.directory.appending(path: "client/library.json"))
         try await replica.bindWorkspace("00000000-0000-4000-8000-000000000001")
-        let serving = SecondaryServingFixture(); serving.failProbes = true
+        let serving = FixtureTailscaleServe(dnsName: "secondary.test.ts.net"); serving.failProbes = true
         let central = MacClientFakeCentral()
         let client = CentralLibraryClientModel(store: replica, transport: central, executionDirectory: fixture.directory,
             makeLocalExecution: { directory, store in
@@ -172,7 +172,7 @@ struct CentralLibraryClientTests {
         let library = "00000000-0000-4000-8000-000000000001"
         try await replica.bindWorkspace(library)
         let owner = await replica.snapshot().deviceID
-        let serving = SecondaryServingFixture()
+        let serving = FixtureTailscaleServe(dnsName: "secondary.test.ts.net")
         fixture.defaults.set(false, forKey: "wovenmatter.client.local-execution")
         let central = MacClientFakeCentral(); await central.setOffline(true)
         var created = 0, cleared = 0

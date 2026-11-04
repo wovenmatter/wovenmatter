@@ -261,17 +261,13 @@ private struct TemporaryDirectory {
 private final class SSHRecorder: @unchecked Sendable {
   private let lock = NSLock()
   private let response: Data
-  private(set) var destination: String?
   private(set) var command: String?
-  private(set) var input: Data?
 
   init(response: String) { self.response = Data(response.utf8) }
 
   func record(destination: String, command: String, input: Data?) throws -> Data {
     lock.lock()
-    self.destination = destination
     self.command = command
-    self.input = input
     lock.unlock()
     return response
   }

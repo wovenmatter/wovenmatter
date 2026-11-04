@@ -56,15 +56,15 @@ struct WorkspaceLibraryTests {
 
 
   struct Fixture {
-    let root: URL
+    let persistence: PersistenceFixture
     let db: WorkspaceDatabase
+    var root: URL { persistence.directory }
     init() async throws {
-      root = FileManager.default.temporaryDirectory.appending(path: "library-tests-" + UUID().uuidString)
-      try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-      db = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
+      persistence = try PersistenceFixture()
+      db = try await persistence.openDatabase()
       try await db.bindDeviceOwnership(ownerDeviceID: UUID())
     }
-    func close() { try? FileManager.default.removeItem(at: root) }
+    func close() { persistence.remove() }
     func session(_ name: String = "Research", _ kind: AgentRuntimeKind = .codex) async throws -> String {
       try await db.createFixtureLocalACPSession(runtimeKind: kind, title: name, ownerDeviceID: UUID())
     }
@@ -250,7 +250,7 @@ private actor LibraryPassGate {
   }
   func release() { continuation?.resume(); continuation = nil }
   func untilHeld() async throws {
-    for _ in 0..<2_000 where !held { try await Task.sleep(for: .milliseconds(5)) }
+    _ = try await pollUntil(attempts: 2_000, interval: .milliseconds(5)) { held }
     #expect(held)
   }
 }

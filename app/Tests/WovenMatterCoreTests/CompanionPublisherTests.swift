@@ -52,7 +52,7 @@ struct CompanionPublisherTests {
       contentIsDelta: false, detailsAvailable: true, detailVersion: 1)
     let bytes = try JSONEncoder().encode(full), chunkSize = 131_072
     let count = (bytes.count + chunkSize - 1) / chunkSize
-    let digest = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+    let digest = SHA256.hash(data: bytes).hexString
     var sequence: Int64 = 0
     func entry(_ kind: CompanionJournalEntry.Kind, transcript: CompanionTranscript? = nil,
       native: CompanionNativeRecordPart? = nil) -> CompanionJournalEntry {
@@ -84,7 +84,7 @@ struct CompanionPublisherTests {
     #expect(page.activities.first?.projectionJSON == row.projectionJSON)
     #expect(page.activities.first?.detail?.count == 2048)
     #expect(try await f.database.conversationActivityDetails(conversationID: conversationID, runID: runID, activityID: id) == full)
-    let restarted = try await WorkspaceDatabase(url: f.directory.appending(path: "workspace.sqlite"))
+    let restarted = try await f.persistence.openDatabase()
     #expect(try await restarted.conversationActivityDetails(conversationID: conversationID, runID: runID, activityID: id) == full)
     #expect(try await restarted.conversationActivityDetails(conversationID: conversationID, runID: UUID().uuidString, activityID: id) == nil)
     for (index, correction) in ["Corrected reasoning", ""].enumerated() {
@@ -111,7 +111,7 @@ struct CompanionPublisherTests {
     let bytes = try JSONEncoder().encode(full), chunkSize = 131_072
     #expect(bytes.count > 400 * 1_024)
     let count = (bytes.count + chunkSize - 1) / chunkSize
-    let digest = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+    let digest = SHA256.hash(data: bytes).hexString
     let preview = AgentRunActivity(id: id, kind: .thought, title: "Thinking", content: "Bounded preview",
       contentIsDelta: false, detailsAvailable: true, detailVersion: 1)
     let row = CompanionActivity(id: id, runID: runID, title: "Thinking", detail: "Bounded preview",
@@ -187,7 +187,7 @@ struct CompanionPublisherTests {
       if let previous { envelope["previousDetailsRecordID"] = previous }
       let bytes = try JSONSerialization.data(withJSONObject: envelope), chunk = 131_072
       let count = (bytes.count + chunk - 1) / chunk
-      let digest = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+      let digest = SHA256.hash(data: bytes).hexString
       return (0..<count).map { .init(recordID: recordID, format: "wovenmatter.activity.v2", partIndex: $0,
         partCount: count, byteCount: Int64(bytes.count), sha256: digest,
         data: bytes.subdata(in: $0 * chunk..<min(bytes.count, ($0 + 1) * chunk))) }
@@ -219,7 +219,7 @@ struct CompanionPublisherTests {
     let expected = AgentRunActivity(id: id, kind: .thought, title: "Head metadata", content: base + " café suffix 🧵",
       contentIsDelta: false, detailsAvailable: true, detailVersion: 3)
     #expect(try await f.database.conversationActivityDetails(conversationID: conversationID, runID: runID, activityID: id) == expected)
-    let reopened = try await WorkspaceDatabase(url: f.directory.appending(path: "workspace.sqlite"))
+    let reopened = try await f.persistence.openDatabase()
     #expect(try await reopened.conversationActivityDetails(conversationID: conversationID, runID: runID, activityID: id) == expected)
     for part in try parts("terminal", "Corrected final 🧵", version: 4) { try await ingest(.nativeRecord, native: part) }
     try await point("terminal")
@@ -249,7 +249,6 @@ struct CompanionPublisherTests {
         ownerDeviceID: identity.hostDeviceID, kind: .linux, name: "Linux", executionDeviceID: UUID().uuidString.lowercased(), journalDeviceIDs: [identity.hostDeviceID, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"])), deviceID: identity.hostDeviceID)
       grant = try await database.issueCompanionWorkspacePublisher(workspaceID: workspace.id, endpoint: URL(string: "https://central.tail.ts.net/wovenmatter")!, deviceID: identity.hostDeviceID)
     }
-    var directory: URL { persistence.directory }
     func remove() { persistence.remove() }
     func request<T: Encodable>(_ path: String, _ value: T, libraryID: String? = nil) throws -> CompanionHTTPRequest {
       .init(method: "POST", target: path, headers: ["authorization": "Bearer " + grant.token, "x-woven-workspace": libraryID ?? identity.libraryID], body: try JSONEncoder().encode(value))

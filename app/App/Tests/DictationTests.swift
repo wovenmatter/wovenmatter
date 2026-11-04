@@ -19,13 +19,6 @@ import WovenMatterCompanion
     let history = UndoManager()
     override var undoManager: UndoManager? { history }
 }
-@MainActor private final class RejectingDictationDelegate: NSObject, NSTextViewDelegate {
-    var admissions = 0
-    func textView(_ textView: NSTextView, shouldChangeTextIn range: NSRange, replacementString: String?) -> Bool {
-        admissions += 1
-        return false
-    }
-}
 @MainActor @Suite(.serialized) struct DictationTests {
     private func settle(_ condition: () -> Bool) async throws {
         if try await pollUntil(attempts: 500, interval: .milliseconds(2), { condition() }) { return }

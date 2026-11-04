@@ -49,7 +49,7 @@ private final class HostInspectionFixture: @unchecked Sendable {
         let harnesses = try #require(fixture.model.remoteWorkspaces.harnesses[host.id])
         let maintenance = try #require(fixture.model.remoteWorkspaces.runtimeMaintenance[host.id])
         fixture.model.remoteWorkspaces.configureCompanionFixture(host, status: status, harnesses: harnesses, maintenance: maintenance)
-        let scope = "remote:" + host.id.uuidString.lowercased()
+        let scope = ApplicationModel.remoteDatabaseSourceID(host.id)
         fixture.model.sessionSelectionPreferences.saveDefaults(.init(permission: "read-only"), harness: "codex", workspace: scope)
         let target = RemoteHarnessChatTarget(configuration: host, harness: try #require(harnesses.first { $0.id == .codex }))
         let folderless = try #require(await fixture.model.createRemoteACPSession(target: target))

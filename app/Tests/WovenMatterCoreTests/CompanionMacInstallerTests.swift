@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 import Testing
+import WovenMatterCore
 @testable import WovenMatterDashboardStore
 
 struct CompanionMacInstallerTests {
@@ -58,7 +59,7 @@ struct CompanionMacInstallerTests {
             try FileManager.default.createDirectory(at: lock.deletingLastPathComponent(), withIntermediateDirectories: true)
             try Data("\(ProcessInfo.processInfo.processIdentifier)\n".utf8).write(to: lock)
         }
-        let hash = scenario == "checksum" ? String(repeating: "a", count: 64) : SHA256.hash(data: Data("payload".utf8)).map { String(format: "%02x", $0) }.joined()
+        let hash = scenario == "checksum" ? String(repeating: "a", count: 64) : SHA256.hash(data: Data("payload".utf8)).hexString
         let process = Process(), output = Pipe()
         process.executableURL = URL(fileURLWithPath: "/bin/bash")
         process.arguments = ["-c", script, "--", "https://fixture.invalid/app.dmg", hash, "0.3.6", "999", try CompanionMacSetupRequest(action: .update).json(), "26.0", scenario == "unsupported-pairing" ? "1" : "0"]
