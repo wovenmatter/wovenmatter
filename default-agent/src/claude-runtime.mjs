@@ -67,15 +67,15 @@ async function requirePrivateDirectory(path) {
   if (!info.isDirectory() || info.isSymbolicLink() || info.uid !== process.getuid()) throw new DefaultAgentError('The Claude runtime directory is not private to this user.');
 }
 
-export function claudeEnvironment(paths, apiKey, source = process.env) {
+function claudeEnvironment(paths, apiKey, source = process.env) {
   const env = Object.fromEntries(Object.entries(source).filter(([key]) => !/^(ANTHROPIC_|CLAUDE_|CLAUDECODE$)/.test(key)));
   return { ...env, CLAUDE_CONFIG_DIR: paths.config, CLAUDE_SECURESTORAGE_CONFIG_DIR: paths.storage,
     CLAUDE_AGENT_SDK_CLIENT_APP: 'wovenmatter/0.1.0', ...(apiKey ? { ANTHROPIC_API_KEY: apiKey } : {}) };
 }
 
 export class ClaudeRuntime {
-  constructor(directory, { executeCommand = execute, query, directories = claudeDirectories } = {}) {
-    this.directory = directory; this.executeCommand = executeCommand; this.query = query; this.directories = directories;
+  constructor(directory, { query, directories = claudeDirectories } = {}) {
+    this.directory = directory; this.query = query; this.directories = directories;
     this.models = [];
     this.profileContext = new AsyncLocalStorage();
   }
@@ -103,7 +103,7 @@ export class ClaudeRuntime {
     signal?.throwIfAborted();
     let stdout;
     try {
-      ({ stdout } = await this.executeCommand(claudeExecutable(), ['auth', 'status', '--json'], {
+      ({ stdout } = await execute(claudeExecutable(), ['auth', 'status', '--json'], {
         env: await this.environment(undefined, profile), timeout: 10000, maxBuffer: 65536, killSignal: 'SIGKILL', signal,
       }));
     } catch (error) {
@@ -166,7 +166,7 @@ export class ClaudeRuntime {
     return this.models;
   }
   async signOut(profile) {
-    await this.executeCommand(claudeExecutable(), ['auth', 'logout'], { env: await this.environment(undefined, profile), timeout: 15000, maxBuffer: 65536 });
+    await execute(claudeExecutable(), ['auth', 'logout'], { env: await this.environment(undefined, profile), timeout: 15000, maxBuffer: 65536 });
   }
 }
 

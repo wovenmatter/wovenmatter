@@ -2,28 +2,16 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { EventEmitter } from 'node:events'
-import { PassThrough, Writable } from 'node:stream'
+import { Writable } from 'node:stream'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { createServer as createNetServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
-import { authenticationInput, authenticationDeadline, downloadInstallerSource, probeHarnessTransport } from '../src/server.mjs'
-
-
-
-
-
-
-
-
-
-
-
+import { authenticationInput, authenticationDeadline, downloadInstallerSource } from '../src/server.mjs'
 
 const repositoryRoot = resolve(import.meta.dirname, '../..')
 const catalogPath = resolve(repositoryRoot, 'harnesses/catalog.json')
-
 
 test('internal remote browser MCP permits only administrator forwarding and validates the native caller envelope', async context => {
   const root = await temporaryFixture(context, 'woven-browser-mcp-route-')
@@ -60,8 +48,6 @@ test('runtime inspection is authenticated and never starts a Pi worker', async c
   assert.ok(!JSON.stringify(snapshot).includes(token))
 })
 
-
-
 test('installer download cancels a stream as soon as it exceeds the byte limit', async () => {
   const oversized = installerResponse([
     Buffer.alloc(4, 'a'),
@@ -93,7 +79,6 @@ test('installer download cancels a stream as soon as it exceeds the byte limit',
   assert.equal(declaredOversized.pulls(), 0)
   assert.equal(declaredOversized.wasCancelled(), true)
 })
-
 
 for (const outcome of ['exit', 'cancel', 'timeout']) {
   test(`authorization input rechecks ${outcome} after the request body arrives`, async () => {
@@ -199,14 +184,11 @@ test('native sign-in reports a real handoff and verifies provider state', async 
   assert.equal((await terminalCancellation.json()).error, 'authentication_session_not_active')
 })
 
-
-
 async function temporaryFixture(context, prefix) {
   const directory = await mkdtemp(resolve(tmpdir(), prefix))
   context.after(() => rm(directory, { recursive: true, force: true }))
   return directory
 }
-
 
 test('Built-in credential routes require authentication, unlock explicitly, and keep files encrypted', async context => {
   const root = await temporaryFixture(context, 'wovenmatter-credentials-api-');
@@ -232,7 +214,6 @@ test('Built-in credential routes require authentication, unlock explicitly, and 
   const disk = await readFile(resolve(root, '.wovenmatter/default-agent/credentials.enc.json'), 'utf8');
   assert.ok(!disk.includes('fixture-provider-secret') && !disk.includes(unlockKey));
 });
-
 
 async function stopService(child) {
   if (child.exitCode !== null || child.signalCode !== null || !child.pid) return
@@ -510,8 +491,6 @@ createInterface({ input: process.stdin }).on('line', line => {
   assert.equal((await readFile(marker, 'utf8')).trim().split('\n').length, 1)
 })
 
-
-
 test('host health reports native paths and source inventory without exposing its token', async context => {
   const home = await temporaryFixture(context, 'woven-host-health-')
   const workspace = resolve(home, 'workspace'), databases = resolve(home, 'data/databases')
@@ -541,7 +520,6 @@ test('host health reports native paths and source inventory without exposing its
   assert.ok((await listed.json()).directories.some(item => item.name === 'workspace'))
 })
 
-
 test('authorization input contains asynchronous pipe failures and observes later stream errors', async () => {
   const failure = Object.assign(new Error('write EPIPE'), { code: 'EPIPE' })
   const input = new Writable({ write(_chunk, _encoding, callback) { callback(failure) } })
@@ -558,7 +536,6 @@ test('authorization input contains asynchronous pipe failures and observes later
   input.destroy()
 })
 
-
 test('authorization input reports acceptance only after the write completes', async () => {
   let finishWrite, written, accepted = false
   const input = new Writable({ write(chunk, _encoding, callback) { written = chunk.toString(); finishWrite = callback } })
@@ -573,9 +550,6 @@ test('authorization input reports acceptance only after the write completes', as
   assert.equal(accepted, true)
   input.destroy()
 })
-
-
-
 
 test('installation uses latest adapter and fails unless actual components verify', async (context) => {
   const fixture = await temporaryFixture(context, 'wovenmatter-install-')

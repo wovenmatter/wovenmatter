@@ -6,12 +6,6 @@ import { resolve } from 'node:path'
 import { createRuntimeMaintenance, sanitize } from '../src/runtime-maintenance.mjs'
 import { loadRuntimeConfiguration } from '../src/config.mjs'
 
-
-
-
-
-
-
 const registryMetadata = version => ({ versions: { [version]: {} }, 'dist-tags': { latest: version } })
 const npmInvocation = (command, action) => command.startsWith('npm ' + action) || command.includes("/npm-cli.js' " + action)
 

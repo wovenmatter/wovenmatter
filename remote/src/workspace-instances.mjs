@@ -23,7 +23,6 @@ export function createWorkspaceInstances(options) {
   const fetchRequest = options.fetch ?? fetch
   const read = options.readFile ?? readFile
   const signal = options.signal ?? ((pid, value) => process.kill(pid, value))
-  const sleep = options.sleep ?? delay
   const stateHome = resolve(workspaceRoot, '.woven-matter', 'opencode-state')
   const registrationPath = resolve(stateHome, 'opencode', 'service.json')
   const isEnabled = options.isEnabled ?? (async () => true)
@@ -92,7 +91,7 @@ export function createWorkspaceInstances(options) {
     if (launched && launched.exitCode === null) throw fail(409, 'opencode_start_pending_refresh_before_retry')
     const hostEnvironment = environment()
     if (!hostEnvironment.HOME) throw fail(503, 'opencode_host_home_unavailable')
-    const releaseLock = await (options.acquireLock ?? acquireHostLock)(resolve((options.configuration ?? loadRuntimeConfiguration(hostEnvironment)).stateDirectory, 'runtime-operation.lock'), hostEnvironment, workspaceRoot, true)
+    const releaseLock = await (options.acquireLock ?? acquireHostLock)(resolve(loadRuntimeConfiguration(hostEnvironment).stateDirectory, 'runtime-operation.lock'), hostEnvironment, workspaceRoot, true)
     let ownedChild = null
     let released = false
     const unlock = () => { if (!released) { released = true; releaseLock() } }
@@ -119,7 +118,7 @@ export function createWorkspaceInstances(options) {
       for (let attempt = 0; attempt < 120; attempt++) {
         if (spawnFailed || (child.exitCode !== null && child.exitCode !== 0)) throw fail(503, 'opencode_start_failed')
         try { const info = await registration(); if (info) { await health(info); return } } catch { /* startup registration may be incomplete */ }
-        await sleep(250)
+        await delay(250)
       }
       // Startup may still be migrating host data. Never kill an uncertain service.
       throw fail(503, 'opencode_start_pending_refresh_before_retry')
@@ -141,7 +140,7 @@ export function createWorkspaceInstances(options) {
     try { signal(info.pid, 'SIGTERM') } catch (error) { if (error.code !== 'ESRCH') throw fail(503, 'opencode_stop_failed') }
     for (let attempt = 0; attempt < 80; attempt++) {
       if (!alive(info.pid)) { launched = null; return }
-      await sleep(125)
+      await delay(125)
     }
     throw fail(503, 'opencode_stop_pending')
   }
@@ -175,7 +174,7 @@ export function createWorkspaceInstances(options) {
       for (const name of ['accept', 'content-type', 'last-event-id']) {
         if (request.headers[name]) headers[name] = request.headers[name]
       }
-      const upstream = (options.httpRequest ?? httpRequest)(target, { method: request.method, headers }, (incoming) => {
+      const upstream = httpRequest(target, { method: request.method, headers }, (incoming) => {
         // No credentials/cookies/redirects from the host service escape this proxy.
         if (incoming.statusCode >= 300 && incoming.statusCode < 400) {
           incoming.resume(); reject(fail(502, 'opencode_redirect_refused')); return

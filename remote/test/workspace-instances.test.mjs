@@ -62,7 +62,6 @@ test('startup is serialized, version checked, loopback bound and workspace state
   assert.equal(unlocks, 1)
 })
 
-
 test('streaming proxy uses host Basic auth, strips client bearer and cookies, preserves SSE', async () => {
   let recorded
   const upstream = createServer((request, response) => {

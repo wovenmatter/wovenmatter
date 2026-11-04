@@ -3,7 +3,7 @@ import { runtimeStageError } from './runtime-stage-error.mjs';
 import { withReasoningSummaries } from './reasoning-stream-options.mjs';
 import { wovenInstructions } from './woven-instructions.mjs';
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -14,7 +14,7 @@ import { getSupportedThinkingLevels } from '@earendil-works/pi-ai/models';
 import { createCodingTools, createGrepTool, createFindTool, createLsTool, createCodemodeExtension, DefaultResourceLoader, SettingsManager } from '@earendil-works/pi-coding-agent';
 import { AgentDoc, CompactionTask, Harness, LiveDoc, ProviderDoc, ToolTask, defineDoc, defineExtension, section } from '@earendil-works/pi-durable';
 import { openWorkspacePiStorage } from './sqlite-storage.mjs';
-import { DefaultAgentError, accessFailure, operationErrorMessage, readJSON, writePrivateJSON } from './config.mjs';
+import { DefaultAgentError, accessFailure, canonicalHash, operationErrorMessage, readJSON, writePrivateJSON } from './config.mjs';
 import { ProviderCompactionError } from './provider-compaction.mjs';
 import { providerFetch } from './transport.mjs';
 import { searchTools } from './search.mjs';
@@ -33,8 +33,6 @@ import { recoverNativeRuns, validateRecoveryRuns } from './native-recovery.mjs';
 const context = BACKGROUND_CONTEXT;
 const Requests = defineDoc({ kind: 'woven.requests', version: 1, scope: 'conversation', checkpointWhen: () => false, history: 'latest', fork: 'initial', initial: () => ({ requests: {} }) });
 const Options = defineDoc({ kind: 'woven.options', version: 1, scope: 'conversation', checkpointWhen: () => false, history: 'latest', fork: 'current', initial: () => ({ permission: 'full' }) });
-const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(k => [k, canonical(value[k])])) : value;
-const digest = value => createHash('sha256').update(JSON.stringify(canonical(value))).digest('hex');
 const textOf = messages => (messages ?? []).flatMap(m => typeof m.content === 'string' ? [m.content] : (m.content ?? []).flatMap(b => b.type === 'text' ? [b.text] : b.type === 'thinking' ? [b.thinking] : [])).join('\n');
 const safeNativeFailure = error => ({ message: error instanceof DefaultAgentError || error instanceof ProviderCompactionError ? error.message : accessFailure(error) ?? contextOverflowDiagnostic(error) ?? operationErrorMessage(error), ...(error instanceof ProviderCompactionError ? { code: error.code } : {}) });
 // AgentSession is deliberately absent: the coding package supplies the existing
@@ -133,7 +131,7 @@ export async function openDurableSession(engine, id, requested) {
       return account;
     };
     const withAccount = (model, account, operation, scope = record) => engine.programStatusContext.run({ record, scope }, () =>
-      engine.credentials.runWithAccount(model.provider, account, () => model.provider === 'claude-subscription' && engine.claude.withProfile ? engine.claude.withProfile(account.credential?.accountId, operation) : operation()));
+      engine.withAccount(model.provider, account, operation));
     const currentRoute = async (api, ctx) => {
       const scope = await prepareScope(api, ctx);
       const reference = (await api.snapshot(AgentDoc, api.conversationId, ctx)).model;
@@ -283,8 +281,8 @@ export async function openDurableSession(engine, id, requested) {
       }));
       await detailsQueue;
       if (detailsError) throw detailsError;
-      // Preserve the classic coding-tool result for retained 1.1 generations;
-      // Durable 1.2 reads the same model-visible blocks from output.
+      // Keep the classic coding-tool result alongside output, which Durable
+      // reads for the same model-visible blocks.
       return { ...result, output: result.content ?? [], ...(result.structuredContent === undefined ? {} : { details: { ...result.details, structuredContent: result.structuredContent } }) };
     } });
     const adapted = tools.map(adaptTool);
@@ -449,7 +447,7 @@ export async function openDurableSession(engine, id, requested) {
         if (opts.streamingBehavior !== 'steer') await record.subagents.beginGroup(record.runID);
         const manual = typeof content === 'string' && content.match(/^\/compact(?:\s+([\s\S]*))?$/);
         if (manual) {
-          const fingerprint = digest({ content });
+          const fingerprint = canonicalHash({ content });
           const taskID = await conversation.commit(async tx => {
             const state = await tx.doc(Requests, conversation.id), prior = state.requests[logicalID];
             if (prior && prior.fingerprint !== fingerprint) throw new DefaultAgentError('This run identifier belongs to a different request.');
@@ -473,7 +471,7 @@ export async function openDurableSession(engine, id, requested) {
         const priorReceipt = (await harness.snapshot(Requests, conversation.id, context))?.requests?.[logicalID];
         if (priorReceipt?.nativeRequestIDs?.length && !record.allowFallback) requestId = priorReceipt.nativeRequestIDs.at(-1);
         else requestId = `${logicalID}:attempt:${priorReceipt?.nativeRequestIDs?.length ?? 0}`;
-        const fingerprint = digest({ content });
+        const fingerprint = canonicalHash({ content });
         engine.sessions.get(sessionID)?.promptController?.signal.throwIfAborted();
         const settled = await conversation.commit(async tx => { const receipts = await tx.doc(Requests, conversation.id); const existing = receipts.requests[logicalID]; if (existing && existing.fingerprint !== fingerprint) throw new DefaultAgentError('This run identifier belongs to a different request.'); receipts.requests[logicalID] ??= { fingerprint };
           const receipt = receipts.requests[logicalID]; receipt.nativeRequestIDs ??= []; if (!receipt.nativeRequestIDs.includes(requestId)) receipt.nativeRequestIDs.push(requestId);

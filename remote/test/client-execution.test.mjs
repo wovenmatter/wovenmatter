@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { createClientExecution } from '../src/client-execution.mjs'
+import { enroll } from './fixtures/execution.mjs'
 
 const deferred=()=>{let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b});return {promise,resolve,reject}}
 const turn=()=>new Promise(resolve=>setImmediate(resolve))
@@ -17,8 +18,7 @@ function fixture(t) {
     respond:async()=>{},steer:async()=>{},close:async()=>{for(const run of runs)run.done.resolve()}}
   const create=()=>createClientExecution({directory,runtime})
   let service=create()
-  const enrollment={libraryID:randomUUID(),workspaceID:randomUUID(),ownerDeviceID:randomUUID(),deviceID:randomUUID(),scopes:['execution'],endpoint:'https://machine.tail.ts.net:8443/wovenmatter-execution/test'}
-  const grant=service.provision(enrollment),principal=service.principal('Bearer '+grant.token,'execution')
+  const {enrollment,grant,principal}=enroll(service,{endpoint:'https://machine.tail.ts.net:8443/wovenmatter-execution/test'})
   const command=(kind,values={})=>({commandID:randomUUID(),deviceID:enrollment.deviceID,libraryID:enrollment.libraryID,workspaceID:enrollment.workspaceID,kind,...values})
   t.after(async()=>{await service.close();rmSync(directory,{recursive:true,force:true})})
   return {directory,runs,calls,runtime,enrollment,grant,principal,command,get service(){return service},async restart(){await service.close();service=create()},create}

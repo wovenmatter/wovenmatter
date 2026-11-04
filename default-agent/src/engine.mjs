@@ -104,8 +104,7 @@ export class DefaultAgentEngine {
       // API discovery needs the resolved key; subscription uses only its selected native profile.
       const key = provider === 'anthropic' ? (await this.credentials.read(provider))?.key : undefined;
       const operation = () => this.claude.discover(key, { signal });
-      if (this.claude.withProfile) await this.claude.withProfile((await this.credentials.read('claude-subscription'))?.accountId, operation);
-      else await operation();
+      await this.claude.withProfile((await this.credentials.read('claude-subscription'))?.accountId, operation);
       registerClaudeProviders(this.runtime, this.claude, this.credentials);
     } else if (providerEndpoints[provider]) {
       const saved = await this.providerCatalog.read(provider, { signal });
@@ -271,6 +270,10 @@ export class DefaultAgentEngine {
     }
   }
   resolveModel(reference) { const slash = reference?.indexOf('/') ?? -1; return slash < 0 ? undefined : this.runtime.getModel(reference.slice(0, slash), reference.slice(slash + 1)); }
+  withAccount(provider, account, operation) {
+    return this.credentials.runWithAccount(provider, account, () => provider === 'claude-subscription'
+      ? this.claude.withProfile(account?.credential?.accountId, operation) : operation());
+  }
   async select(record, reference, option = 'model') {
     if (record.busy) throw new Error('Wait for the current response before changing models.');
     const native = await record.harness.inspect(record.nativeContext);
@@ -293,8 +296,7 @@ export class DefaultAgentEngine {
     if (!account && model.provider !== 'claude-subscription') throw new DefaultAgentError(`Connect ${this.providerName(model.provider)} in Settings → Pi Durable before choosing this model.`);
     try {
       const select = () => record.session.setModel(model);
-      await this.credentials.runWithAccount(model.provider, account ?? accounts[0], () => model.provider === 'claude-subscription' && this.claude.withProfile
-        ? this.claude.withProfile(account?.credential?.accountId, select) : select());
+      await this.withAccount(model.provider, account ?? accounts[0], select);
     } catch { throw new DefaultAgentError(`This ${this.providerName(model.provider)} connection is unavailable. Check its account in Settings → Pi Durable.`); }
     record.selected = reference;
     this.persistOptions(record);
@@ -303,7 +305,7 @@ export class DefaultAgentEngine {
   }
   async prompt(record, text, emit, mcpContext, identity) {
     if (record.busy) throw new DefaultAgentError('This Pi Durable session already has an active turn.');
-    const nextRunID = identity === undefined ? record.runID : identity.runID;
+    const nextRunID = identity.runID;
     record.busy = true;
     record.mcp ??= new SessionMCPContext();
     let ready;
@@ -325,7 +327,7 @@ export class DefaultAgentEngine {
       try { await record.subagents.beginGroup(nextRunID); }
       catch (error) { throw runtimeStageError('runPreparation', error); }
       record.runID = nextRunID;
-      if (identity !== undefined) record.inputID = identity.inputID;
+      record.inputID = identity.inputID;
       record.emit = emit;
       statusStarted = true;
       reportProgramStatus(record, { state: 'clear' });
@@ -364,9 +366,6 @@ export class DefaultAgentEngine {
         if (!this.config.providers.includes(reference.split('/')[0])) { reason = 'The previous connection is disabled in Settings → Pi Durable.'; continue; }
         record.httpAccessFailure = undefined;
         try {
-          const withAccount = action => this.credentials.runWithAccount(provider, account, () =>
-            provider === 'claude-subscription' && this.claude.withProfile
-              ? this.claude.withProfile(account.credential?.accountId, action) : action());
           const run = async () => {
           const model = reference === record.selected && record.session.model ? record.session.model : await this.ensureModel(reference);
           if (!model) throw new Error('Model is no longer available. Select a model in Settings → Pi Durable.');
@@ -395,7 +394,7 @@ export class DefaultAgentEngine {
             controller.signal.throwIfAborted();
             let accepted = false;
             const removeBinding = record.mcp.enqueue(binding);
-            const task = withAccount(() => record.session.prompt(input, {
+            const task = this.withAccount(provider, account, () => record.session.prompt(input, {
               streamingBehavior: 'steer', requestId,
               preflightResult: disposition => {
                 if (disposition === 'started' || disposition === 'queued') {
@@ -440,7 +439,7 @@ export class DefaultAgentEngine {
           if (last?.role === 'assistant' && last.stopReason === 'error') throw new Error(last.errorMessage ?? 'The model request failed.');
           return { stopReason: last?.stopReason === 'aborted' ? 'cancelled' : 'end_turn', usage };
           };
-          const result = await withAccount(run);
+          const result = await this.withAccount(provider, account, run);
           statusOutcome = result.stopReason;
           return result;
         } catch (error) {
@@ -486,7 +485,6 @@ export class DefaultAgentEngine {
   }
   async handle(method, params = {}, emit = () => {}) {
     if (method === 'initialize') return { protocolVersion: 1, agentInfo: { name: 'wovenmatter-default-agent', version: '0.1.0' }, agentCapabilities: { loadSession: true, promptCapabilities: { image: false } }, authMethods: [], _meta: { steering: { supported: true } } };
-    if (method === 'woven/status') return this.status();
     if (method === 'session/new' || method === 'session/load') {
       const record = await this.create(method === 'session/load' ? params.sessionId : undefined, params.cwd, params._meta?.wovenMCPConnection);
       if (!record.busy) record.emit = emit;

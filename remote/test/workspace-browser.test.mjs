@@ -121,7 +121,6 @@ test('frames use only known tabs, bound the current viewport, and reuse the cont
   await f.service.close()
 })
 
-
 test('persistent screenshot failure has bounded retries and releases capture ownership', async () => {
   const f = fixture(); await f.service.connect(); f.addPage()
   const tab = (await f.service.tabs()).tabs[0]
@@ -144,7 +143,6 @@ test('persistent screenshot failure has bounded retries and releases capture own
   assert.equal((await f.service.frame(tab.id)).tabID, tab.id)
   await f.service.close()
 })
-
 
 const uuid = () => globalThis.crypto.randomUUID()
 test('input targets the captured page, maps coordinates, serializes and refuses stale or duplicate gestures', async () => {
@@ -177,7 +175,6 @@ test('keyboard modifiers and text are sent only to the explicit live tab', async
   await f.service.close()
 })
 
-
 test('input batches preserve DOM key events, stop after navigation, and never replay partial delivery', async () => {
   const f = fixture(); await f.service.connect(); const page = f.addPage()
   const tab = (await f.service.tabs()).tabs[0], frame = await f.service.frame(tab.id)
@@ -193,8 +190,6 @@ test('input batches preserve DOM key events, stop after navigation, and never re
   assert.equal(f.commands.filter(c => c.params?.text === 'b').length, 1)
   await f.service.close()
 })
-
-
 
 function streamResponse() {
   const response = new EventEmitter()
@@ -229,8 +224,6 @@ test('a stalled viewer cannot build an unbounded video backlog', async () => {
   await streamBrowserFrames({ watch: async (_, emit) => { emit({ imageID: 'image', imageBase64: 'jpeg' }); return () => {} } }, 'tab', response)
   assert.equal(response.destroyed, true)
 })
-
-
 
 test('viewers share change-driven capture, preserve full-viewport coordinates, and stop on last disconnect', async () => {
   const f = fixture(); await f.service.connect(); const page = f.addPage()
@@ -273,7 +266,6 @@ test('live pointer moves while held, releases outside, and rejects a late cancel
   await f.service.close()
 })
 
-
 test('cancellation overtakes a suspended move without re-pressing the mouse', async () => {
   const f = fixture(); await f.service.connect(); f.addPage()
   const tab = (await f.service.tabs()).tabs[0], frame = await f.service.frame(tab.id), gestureID = uuid()
@@ -310,13 +302,6 @@ test('a disconnect during capture startup tears down the late capture session', 
   assert.equal(f.sessions[0].listenerCount('Page.screencastFrame'), 0)
   await f.service.close()
 })
-
-
-
-
-
-
-
 
 test('an active drag can use fresh frames after its press frame expires, but cannot cross documents', async t => {
   const f = fixture(); await f.service.connect(); const page = f.addPage()

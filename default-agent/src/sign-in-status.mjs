@@ -59,7 +59,7 @@ export async function signInStatuses(harnesses, execute = exec, readAccount = re
 
 const safeLabel = value => typeof value === 'string' && value.length > 0 && value.length <= 160
   && !/[\x00-\x1f\x7f]|sk-|Bearer |^eyJ/.test(value) ? value : undefined;
-export function accountDetails(id, text) {
+function accountDetails(id, text) {
   if (id === 'claude_code') {
     try {
       const value = JSON.parse(text), name = safeLabel(value.email) ?? safeLabel(value.apiKeyName);

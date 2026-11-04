@@ -2,7 +2,6 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { PassThrough } from 'node:stream'
 import { createInterface } from 'node:readline'
-import { once } from 'node:events'
 import { runMCPRelay } from '../src/mcp-relay.mjs'
 
 test('remote HTTP relay authenticates requests, preserves MCP results, and propagates cancellation',async t=>{

@@ -1,10 +1,9 @@
 import { existsSync } from 'node:fs'
 import { readFile, stat } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
+import { ordered } from './durable-json.mjs'
 
 const fail = (statusCode, message) => Object.assign(new Error(message), { statusCode })
-const ordered = value => Array.isArray(value) ? value.map(ordered) : value && typeof value === 'object'
-  ? Object.fromEntries(Object.keys(value).sort().map(key => [key, ordered(value[key])])) : value
 const interrupted = () => fail(503, 'Browser operation interrupted. Inspect fresh state before repeating input.')
 const text = value => ({ content: [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value) }] })
 

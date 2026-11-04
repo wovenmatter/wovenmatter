@@ -8,7 +8,7 @@ import { createClientExecution } from '../src/client-execution.mjs'
 import { createTaskGateway } from '../src/task-gateway.mjs'
 import { createRetainedExecutionCapture } from '../src/client-retained-history.mjs'
 import { createDefaultAgentService } from '../../default-agent/src/service.mjs'
-
+import { enroll } from './fixtures/execution.mjs'
 
 const turn=()=>new Promise(done=>setTimeout(done,5))
 async function until(test){for(let n=0;n<200;n++){if(test())return;await turn()}assert.fail('Timed out waiting for retained capture')}
@@ -17,7 +17,7 @@ function fixture(t){
   mkdirSync(defaultDirectory,{recursive:true})
   const runtime={providers:async()=>[],close:async()=>{}}
   let execution=createClientExecution({directory:join(root,'execution'),runtime})
-  execution.provision({libraryID:randomUUID(),workspaceID:randomUUID(),ownerDeviceID:randomUUID(),deviceID:randomUUID(),scopes:['execution']})
+  enroll(execution)
   t.after(async()=>{await execution.close();rmSync(root,{recursive:true,force:true})})
   return {root,directory,defaultDirectory,get execution(){return execution},async restart(){await execution.close();execution=createClientExecution({directory:join(root,'execution'),runtime})}}
 }

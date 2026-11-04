@@ -57,7 +57,7 @@ sudo policy or the AppArmor user-namespace sysctl.
 | Arch / Omarchy | `pacman -S --needed` for missing dependencies | Existing kernel policy |
 | Other Linux distributions | Packages are operator-managed; reported as best-effort | Browser self-test must still pass |
 
-The package records are in `remote/host/deps/`. Preparation runs only commands
+The package records are in `scripts/remote-host.sh`. Preparation runs only commands
 reported by inspection: `loginctl enable-linger USER`, the appropriate APT or
 pacman commands for missing packages, and, when necessary, installation and
 `apparmor_parser -r` of `/etc/apparmor.d/wovenmatter-chromium-UID`. When private

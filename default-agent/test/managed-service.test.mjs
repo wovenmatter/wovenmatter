@@ -36,7 +36,6 @@ async function waitForFile(path) {
   }
 }
 
-
 test('SDK retirement transfers only the current attachment authority and trusted cancellation', async t => {
   const source = `
     import { createDefaultAgentService as createService } from ${JSON.stringify(new URL('../src/service.mjs', import.meta.url).href)};

@@ -6,14 +6,14 @@ import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { createClientExecution } from '../src/client-execution.mjs'
 import { maximumMCPRequestBytes } from '../src/workspace-mcp.mjs'
+import { enroll } from './fixtures/execution.mjs'
 
 async function fixture(t,{fetchImpl,workspaceBrowser}={}) {
   const directory=mkdtempSync(join(tmpdir(),'woven-workspace-mcp-'))
   const runtime={providers:async()=>[{id:'default_agent',runtimeKind:'default_agent',available:true}],create:async()=>({sessionID:randomUUID()}),close:async()=>{}}
   const service=createClientExecution({directory,runtime,managedDataRoot:join(directory,'databases'),publisherKey:'k'.repeat(40),publisherFetch:fetchImpl,publisherIntervalMilliseconds:0,workspaceBrowser})
   t.after(async()=>{await service.close();rmSync(directory,{recursive:true,force:true})})
-  const grant=service.provision({libraryID:randomUUID(),workspaceID:randomUUID(),deviceID:randomUUID(),ownerDeviceID:randomUUID(),scopes:['execution']})
-  const device=service.principal('Bearer '+grant.token,'execution')
+  const {principal:device}=enroll(service)
   const command=(kind,values={})=>service.command({commandID:randomUUID(),deviceID:device.id,kind,...values},device)
   const opened=await command('createSession'),id=opened.conversationID,connection=service.mcp.sessionConnection(id)
   const scope=service.mcp.resolvePrincipal('Bearer '+connection.bearerToken)

@@ -89,12 +89,10 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
     })
     if(recovered) {
       try {
-        {
-          const initialized=await rpc(channel,'initialize',{protocolVersion:1,clientCapabilities:{fs:{readTextFile:false,writeTextFile:false},terminal:false,elicitation:{form:{}}},clientInfo:{name:'Woven Matter Workspace',version:'1'}})
-          if(initialized.protocolVersion!==1)throw fail('Unsupported native agent protocol.')
-          native.steeringSupported=initialized._meta?.steering?.supported===true
-          native.configuration=await rpc(channel,'session/load',{sessionId:native.sessionID,cwd:native.nativeWorkingDirectory??workspaceRoot,mcpServers:mcpServers(mcpConnection),_meta:{...(mcpConnection?{wovenMCPConnection:mcpConnection}:{})}})
-        }
+        const initialized=await rpc(channel,'initialize',{protocolVersion:1,clientCapabilities:{fs:{readTextFile:false,writeTextFile:false},terminal:false,elicitation:{form:{}}},clientInfo:{name:'Woven Matter Workspace',version:'1'}})
+        if(initialized.protocolVersion!==1)throw fail('Unsupported native agent protocol.')
+        native.steeringSupported=initialized._meta?.steering?.supported===true
+        native.configuration=await rpc(channel,'session/load',{sessionId:native.sessionID,cwd:native.nativeWorkingDirectory??workspaceRoot,mcpServers:mcpServers(mcpConnection),_meta:{...(mcpConnection?{wovenMCPConnection:mcpConnection}:{})}})
         if(native.configuration.sessionId!==native.sessionID)throw fail('The reopened native session has a different identity.')
       } catch(error){channel.stopped=true;channels.delete(native.channelID);throw error}
     }
@@ -164,12 +162,10 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
     if(!harness||!['acp','agent-stdio'].includes(harness.transport))throw fail('This native runtime is unavailable for direct execution.')
     const native={channelID:conversationID,sessionID:null,nativeWorkingDirectory,...(runtimeKind==='grok_build'?{permission:permission??'default'}:{})}
     const channel=await attach(native,runtimeKind)
-    {
-      const initialized=await rpc(channel,'initialize',{protocolVersion:1,clientCapabilities:{fs:{readTextFile:false,writeTextFile:false},terminal:false,elicitation:{form:{}}},clientInfo:{name:'Woven Matter Workspace',version:'1'}})
-      native.steeringSupported=initialized._meta?.steering?.supported===true
-      if(initialized.protocolVersion!==1)throw fail('Unsupported native agent protocol.')
-      native.configuration=await rpc(channel,'session/new',{cwd:native.nativeWorkingDirectory??workspaceRoot,mcpServers:mcpServers(mcpConnection),_meta:{...(mcpConnection?{wovenMCPConnection:mcpConnection}:{})}});native.sessionID=native.configuration.sessionId
-    }
+    const initialized=await rpc(channel,'initialize',{protocolVersion:1,clientCapabilities:{fs:{readTextFile:false,writeTextFile:false},terminal:false,elicitation:{form:{}}},clientInfo:{name:'Woven Matter Workspace',version:'1'}})
+    native.steeringSupported=initialized._meta?.steering?.supported===true
+    if(initialized.protocolVersion!==1)throw fail('Unsupported native agent protocol.')
+    native.configuration=await rpc(channel,'session/new',{cwd:native.nativeWorkingDirectory??workspaceRoot,mcpServers:mcpServers(mcpConnection),_meta:{...(mcpConnection?{wovenMCPConnection:mcpConnection}:{})}});native.sessionID=native.configuration.sessionId
     if(typeof native.sessionID!=='string'||!native.sessionID)throw fail('The native agent did not create a session.')
     await applyWorkspacePolicy(native, runtimeKind, (method, params) => rpc(channel, method, params))
     return native

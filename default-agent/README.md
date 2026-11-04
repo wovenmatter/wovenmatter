@@ -1,16 +1,17 @@
 # Pi Durable runtime
 
-The agent uses locked Pi Durable SDK 1.5.0 `Harness`, `Conversation` and `Submission`
+The agent uses the Pi Durable SDK `Harness`, `Conversation` and `Submission`
 APIs locally and remotely. The coding-agent library supplies image/file/search
 and code-mode tools, instructions and `ModelRuntime`; Durable owns execution.
 Claude accounts use the official Claude Agent SDK. Standalone Pi is independent.
 
 ## Native persistence
 
-Each conversation owns `durable/<woven-session-uuid>/native/` under its execution
-host's Pi Durable workspace root. Durable persists its tasks, requests, checkpoints
-and context in fsynced multi-file JSONL. A small manifest identifies the store and
-working directory; a library heartbeat lock enforces one execution owner.
+Each conversation owns `durable/<woven-session-uuid>/` under its execution host's
+Pi Durable workspace root. Durable persists its tasks, requests, checkpoints and
+context in the workspace SQLite database; an older JSONL store under `native/` is
+imported once and kept as a read-only backup. A small manifest identifies the store
+and working directory; a library heartbeat lock enforces one execution owner.
 
 Input fingerprints reject reuse with different content. Native request IDs and
 unsafe-tool receipts prevent duplicate external effects. Stop aborts native work

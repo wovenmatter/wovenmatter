@@ -2,11 +2,10 @@ import test from 'node:test';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import assert from 'node:assert/strict';
-import { cp, mkdtemp, mkdir, readFile, readdir, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { fileURLToPath, pathToFileURL } from 'node:url';
 import { resolveSDKRuntime, sdkStatus, checkSDKUpdates, updateSDK } from '../src/sdk-management.mjs';
 
 // Fixtures follow the bundled declarations, which are the updater's policy.
@@ -43,8 +42,6 @@ async function fixture(t) {
   }
   return { directory, bundled, active, generation };
 }
-
-
 
 test('no compatible release or a cancelled update leaves the active generation unchanged', async t => {
   const f = await fixture(t), installed = await f.generation(); await installed.activate();
@@ -106,7 +103,6 @@ test('cancellation after mock installation but before activation keeps the old g
   assert.deepEqual(await readdir(join(f.directory, 'sdk-runtime/generations')), [installed.id]);
 });
 
-
 test('oversized activation and latest metadata do not block bundled fallback', async t => {
   const f = await fixture(t), installed = await f.generation(); await installed.activate();
   await writeFile(f.active, JSON.stringify({ base: f.bundled.base, generation: installed.id, padding: 'x'.repeat(4096) }));
@@ -119,8 +115,6 @@ test('oversized activation and latest metadata do not block bundled fallback', a
   assert.equal(status.generation, installed.id);
   assert.equal(status.sdks.find(sdk => sdk.id === 'claude').latestVersion, null);
 });
-
-
 
 test('a candidate failing its staged API verification is discarded and the active generation remains', async t => {
   const f = await fixture(t), installed = await f.generation(); await installed.activate();
@@ -135,8 +129,6 @@ test('a candidate failing its staged API verification is discarded and the activ
   assert.deepEqual(await readdir(join(f.directory, 'sdk-runtime/generations')), [installed.id]);
   assert.equal((await resolveSDKRuntime({ directory: f.directory })).root, installed.root);
 });
-
-
 
 test('combined update failure preserves both active SDKs', async t => {
   const f = await fixture(t), installed = await f.generation(); await installed.activate();

@@ -1,21 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-
 import { createHash } from 'node:crypto'
 import { createNativeTaskExecutor } from '../src/task-gateway-native.mjs'
 import { nativePresentationUpdates } from '../../default-agent/src/native-journal.mjs'
 import { createTaskNativeArchive } from '../src/task-native-archive.mjs'
-
-
-
-
-
-
-
-
-
-
 
 const fixtureVersion = '2.0.22'
 const options = {workspaceRoot:'/workspace',environment:()=>({HOME:'/home'})}
