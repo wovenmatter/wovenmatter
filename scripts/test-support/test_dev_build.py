@@ -46,17 +46,9 @@ class DevelopmentBuildTests(unittest.TestCase):
         with self.assertRaises(ValueError): dev.profile(Path("/tmp/a"), "../production", "client")
 
     def test_auto_always_launches_full_app_and_client_remains_explicit(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            def git(*args): subprocess.run(["git", "-C", tmp, *args], check=True, capture_output=True)
-            git("init"); git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "base")
-            git("update-ref", "refs/remotes/origin/main", "HEAD")
-            path = root / "app/App/Views/Fixture.swift"; path.parent.mkdir(parents=True); path.write_text("UI")
-            self.assertEqual(dev.choose_mode(root), "snapshot")
-            path = root / "app/Sources/WovenMatterDashboardStore/WorkspaceDatabase+Schema.swift"
-            path.parent.mkdir(parents=True); path.write_text("schema")
-            self.assertEqual(dev.choose_mode(root), "snapshot")
-            self.assertEqual(dev.profile(root, "fixture", "client")["mode"], "client")
+        root = Path("/tmp/work-a/repo")
+        self.assertEqual(dev.profile(root, "fixture", "auto")["mode"], "snapshot")
+        self.assertEqual(dev.profile(root, "fixture", "client")["mode"], "client")
 
     def test_default_launcher_plan_selects_the_standalone_snapshot(self):
         root = Path(__file__).resolve().parents[2]

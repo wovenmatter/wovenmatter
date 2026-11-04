@@ -14,7 +14,7 @@ The remote ACP relay admits same-run inputs, shares their transcript accumulator
 
 | Harness | Active input | Completion ownership |
 | --- | --- | --- |
-| Codex | Advertised `_session/steering`, backed by native `turn/steer` | Injected input belongs to the original prompt. `startedNewTurn` follows buffered `_meta.codex.threadStatus` active/idle events, including completion before acknowledgement. Adapter-only commands such as `/status` complete on their receipt because they emit no native turn lifecycle. |
+| Codex | Advertised `_session/steering` | Injected input belongs to the original prompt. `startedNewTurn` follows buffered `_meta.codex.threadStatus` active/idle events, including completion before acknowledgement. Adapter-only commands such as `/status` complete on their receipt because they emit no native turn lifecycle. |
 | Claude Code | Advertised `_session/steering` with `idleBehavior: promptRequired` | The adapter's original prompt owns injected input; a completion race returns `promptRequired` and Woven Matter tracks the subsequent prompt. |
 | Built-in | Advertised `_session/steering` over Pi's `prompt` with `streamingBehavior: steer` | The engine keeps its subscription and selected account context through native preflight and any continuation. Idle returns `promptRequired`. |
 | Grok Build | `_x.ai/interject`; existing concurrent ACP prompt path for attachments or an unavailable extension | Native receipt or prompt completion, without cancellation. |
@@ -28,10 +28,11 @@ Provider-free regressions exercise repeated corrections, rejected/unsupported in
 
 Run `scripts/test-changes.sh --all` for the complete automated suite and unsigned native build. These checks do not establish live-provider acceptance. Live review should send several corrections during a tool-using run in each installed harness, confirm acknowledgement and continued work in the same conversation, repeat near completion, and verify Stop and reconnect. No provider calls, app installation, live account authentication or production deployment are part of the automated checks.
 
+
 ## Async database compatibility
 
 The steering compatibility update depends on the async workspace database facade
-and `AgentDispatchFence` from PR #86. Steering reservations cross the writer lane
+and `AgentDispatchFence`. Steering reservations cross the writer lane
 as value-only receipts; definite local/native refusal settles rollback through
 the cancellation-independent terminal writer. After an async reservation, the
 coordinator checks run ownership and Stop intent again before dispatch. The same
@@ -52,7 +53,7 @@ stopped. Actual durable routes register the run, workspace and allocated native
 session identity in one transaction before dispatch. Unknown initial prompts or
 continuations retain `uncertain` run/assistant status and their original input
 identities. They continue to count as active work, block another initial prompt,
-and remain visible even without tool activity. PR #88's Trash guard includes
+and remain visible even without tool activity. The Trash guard includes
 this status. Local Built-in and foreground SSH runs keep their existing local
 process lifecycle.
 
@@ -73,7 +74,7 @@ failed with a missing-result explanation. Timeouts, disconnected clients, an
 old logical-run snapshot, and another session's idle result cannot clear it.
 Reopening the conversation's session configuration reattaches without resending
 the input. Successful scoped recovery also clears the matching failed native
-Stop identity from PR #86; the outer Stop barrier still requires explicit retry.
+Stop identity; the outer Stop barrier still requires explicit retry.
 
 The route marker is additive. Startup preserves marked durable runs as
 uncertain and backfills older remote Built-in runs only when their saved native

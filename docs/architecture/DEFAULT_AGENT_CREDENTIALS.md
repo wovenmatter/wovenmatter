@@ -82,3 +82,19 @@ runtime settings. Remote native state uses private tmpfs and is not included in
 the persistent workspace volume. Container restarts require a new native sign-in;
 Mac reconnection cannot restore Claude subscription credentials. Account extra
 usage remains controlled by Anthropic’s account settings.
+
+Connections starts the bundled runtime’s native sign-in locally or through the
+workspace’s existing SSH/docker-exec route. The authorization link appears beneath
+the account; the user completes sign-in in their browser. No authentication UI is
+driven by automated tests. On macOS, `CLAUDE_SECURESTORAGE_CONFIG_DIR` keeps a
+stable private path that identifies the native Keychain entry. An
+`everyone deny add_file` macOS ACL blocks regular-file creation, including
+temporary files used by the plaintext fallback. Owner mode `0700` still permits
+the selected runtime to create and remove its `.storage-write.lock` directory
+before accessing Keychain. The ACL is installed before enabling directory writes;
+existing non-directory entries stop setup without reading or removing their
+contents. A native login exit code of zero is followed by a native status check;
+an unsaved or unverifiable connection is reported as a failure. This storage
+contract must be rechecked when updating the runtime pin. Linux uses a private,
+verified tmpfs directory for native state. Host swap and memory snapshots remain
+outside the file-storage guarantee.
