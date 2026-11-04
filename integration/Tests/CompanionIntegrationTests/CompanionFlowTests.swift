@@ -583,7 +583,7 @@ private final class FakeCommands: CompanionCommandServing {
           guard let note = try await database.companionNote(id: noteID), note.revision == command.noteRevision else { throw MobileStore.Failure.conflictingNote }
           boundNoteContents.append(note.content)
         }
-        let run = try await database.beginLocalACPRun(conversationID: conversationID, content: command.text ?? "")
+        let run = try await database.beginLocalACPRun(conversationID: conversationID, input: .init(text: command.text ?? ""))
         started = true; startedWaiter?.resume(); startedWaiter = nil
         if holdCommands { await withCheckedContinuation { releaseWaiter = $0 } }
         try await database.completeLocalACPRun(runID: run.runID)
