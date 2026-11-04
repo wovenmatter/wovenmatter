@@ -586,8 +586,6 @@ public actor LocalACPSessionCoordinator {
                     let source = "interaction:" + UUID().uuidString
                     let kind: ProgramStatus.Kind = switch request {
                     case .questions, .form: .question
-                    case .plan: .permission
-                    case .secret: .auth
                     }
                     try? await self.database.recordProgramStatus(ProgramStatus(state: .blocked, kind: kind), runID: run.runID, source: source)
                     await self.publishChange(conversationID: descriptor.conversationID, runID: run.runID, phase: .content)

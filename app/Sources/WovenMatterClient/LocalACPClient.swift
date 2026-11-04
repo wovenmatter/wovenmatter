@@ -82,30 +82,14 @@ public enum LocalACPQuestionAnswer: Codable, Equatable, Sendable {
     case multiple([String])
 }
 
-public struct LocalACPPlanRequest: Codable, Equatable, Sendable {
-    public let name: String?
-    public let overview: String?
-    public let markdown: String
-
-    public init(name: String? = nil, overview: String? = nil, markdown: String) {
-        self.name = name
-        self.overview = overview
-        self.markdown = markdown
-    }
-}
-
 public enum LocalACPInteractionRequest: Codable, Equatable, Sendable {
     case form(LocalACPFormRequest)
     case questions(LocalACPQuestionRequest)
-    case plan(LocalACPPlanRequest)
-    case secret(prompt: String)
 }
 
 public enum LocalACPInteractionResponse: Codable, Equatable, Sendable {
     case formValues([String: LocalACPFormValue])
     case answers([String: LocalACPQuestionAnswer])
-    case planAccepted(Bool)
-    case secret(String)
     case cancelled
 }
 
