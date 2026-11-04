@@ -23,7 +23,7 @@ WAL, foreign keys, transaction semantics, and durability settings are retained.
 
 Pi Durable has a separate Node-owned connection to private namespaces in this
 same execution-host database. Those writes use SQLite locking rather than the
-Swift worker registry. See [Pi execution storage](architecture/PI_DURABLE_STORAGE.md)
+Swift worker registry. See [Pi execution storage](PI_DURABLE_STORAGE.md)
 for transaction, migration, and recovery boundaries.
 
 The async boundary is outside each existing transaction. No transaction suspends
@@ -119,39 +119,6 @@ require the `session.dispatch-epochs` readiness capability. Legacy sends are
 rejected with reconnect guidance; legacy Stop still cancels current work and
 invalidates older versioned sends. No uncertain send is automatically replayed.
 
-`workerMetrics` reports pending/high-water counts, finished and failed jobs,
-cancellation, timeout and rejection counts, and maximum queue/execution time. It
-contains no SQL, document text, credentials, or provider payloads.
-
-## Validation
-
-`AsyncDatabaseWorkerTests` exercises concurrent sessions and snapshots, blocked
-writers with responsive readers/main actor, bounded admission, queued cancellation,
-executing read cancellation, queue/read deadlines, definitive write completion,
-transaction rollback, connection teardown, cancelled-run tail preservation, stream
-flush ordering, and shared usage/workspace lanes. Note writer tests cover async
-flush ordering, journal failure and replay; transport tests cover delayed history
-recording across timeout and disconnect, overlapping ACP prompts, failed history
-writes, and shutdown during a pending connection read. Usage tests suspend a save
-and supersede its refresh to check that stale results cannot replace the current
-cache. Additional regression sources cover WAL snapshot coherence across a
-concurrent commit, observed-only receipt loading, failed flush barriers, queued
-usage ownership changes, and Stop during pending Gateway admission. Admission regression sources cover delayed sends, cross-client Stops, backend restart, non-evicting capacity, native Stop wait/retry, and superseded barriers. Gateway tests overlap unsequenced events behind a blocked writer and verify
-that both deltas and their ordered trace records survive.
-
-The production audit includes source inspection, Swift syntax parsing, and diff
-checks. Its provider-free focused runs passed 75 database, ownership, admission,
-Stop, Pi, and settings tests, plus 31 Calendar and 31 OpenCode/Hermes tests. The
-final focused log is `/private/tmp/wm-pr86-adversarial-final-tests.log`. Full
-repository validation and hosted CI must still run on the integrated dependency
-head; these focused results do not validate the combined Dev app or live providers.
-
-```sh
-swift test --package-path app --filter AsyncDatabaseWorkerTests
-scripts/test-changes.sh --all
-```
-
-The stress fixture uses 50 synthetic sessions, 500 persisted chunks, and 30
-concurrent snapshots, then checks exact transcript contents and reopening. It does
-not call providers or touch the user's workspace. Timing output is a local
-synthetic observation, not a claim about provider throughput or native frame time.
+The worker's `metrics` expose only `pending` (queued and running jobs) and
+`rejected` (admissions refused at capacity). They contain no SQL, document text,
+credentials, or provider payloads.

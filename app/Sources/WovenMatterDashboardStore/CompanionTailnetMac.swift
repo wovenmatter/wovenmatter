@@ -51,7 +51,6 @@ public struct CompanionMacInstallation: Equatable, Sendable {
     public let running: Bool
     public let architecture: String
     public let macOSVersion: String
-    public let setupStatus: String?
     public let setupResult: CompanionMacSetupStatus?
     public let deviceID: String?
 
@@ -66,7 +65,6 @@ public struct CompanionMacInstallation: Equatable, Sendable {
         build = Int(fields[3]); supportsSetup = fields[4] == "1"; running = fields[5] == "1"
         architecture = fields[6]; macOSVersion = fields[7]
         setupResult = try? JSONDecoder().decode(CompanionMacSetupStatus.self, from: Data(fields[8].utf8))
-        setupStatus = setupResult?.message ?? (fields[8].isEmpty ? nil : fields[8])
         deviceID = fields.count > 9 && UUID(uuidString: fields[9]) != nil ? fields[9] : nil
     }
 }

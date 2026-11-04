@@ -8,10 +8,8 @@ import WovenMatterCore
 struct ACPResumePermissionTests {
   @Test(arguments: [AgentRuntimeKind.defaultAgent, .codex], [false, true])
   func configurationLoadsRouteDurableApprovalsToTheirConversation(runtime: AgentRuntimeKind, remote: Bool) async throws {
-    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+    let persistence = try PersistenceFixture(); defer { persistence.remove() }
+    let database = try await persistence.openDatabase()
     var conversations: [String] = []
     for index in 0..<2 {
       let id: String
@@ -35,7 +33,7 @@ struct ACPResumePermissionTests {
     let launch = LocalACPRuntimeLaunchConfiguration(
       runtimeKind: runtime, executableURL: URL(filePath: "/nonexistent-resume-fixture"), arguments: []
     )
-    let workspace = LocalACPWorkspaceLaunchConfiguration(rootURL: directory)
+    let workspace = LocalACPWorkspaceLaunchConfiguration(rootURL: persistence.directory)
 
     // A configuration refresh can load an active remote run before a prompt
     // supplies its own handler. Each concurrent load must keep its identity.

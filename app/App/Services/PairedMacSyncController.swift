@@ -40,9 +40,7 @@ struct PairedMacDeviceStorage {
     /// memory storage even when a fixture forgets to inject its own.
     @MainActor static var standard: Self { isTestProcess ? .memory() : .keychain }
     static var isTestProcess: Bool {
-        let environment = ProcessInfo.processInfo.environment
-        return environment["XCTestBundlePath"] != nil || environment["XCTestSessionIdentifier"] != nil
-            || environment.keys.contains("XCTestConfigurationFilePath")
+        ApplicationModel.isRunningUnitTests
             || ["xctest", "swiftpm-testing-helper"].contains(ProcessInfo.processInfo.processName)
             || Bundle.allBundles.contains { $0.bundlePath.hasSuffix(".xctest") }
     }
@@ -181,7 +179,7 @@ final class PairedMacSyncController {
         try route.validate()
         var credentials = try loadCredentials()
         let previous = credentials.first { $0.route.deviceID == route.deviceID && $0.token == response.credential }
-        let reciprocal = try (previous?.returnToken ?? Self.secret())
+        let reciprocal = try (previous?.returnToken ?? CompanionMacPairingController.secret())
         let credential = PairedMacCredential(route: route, deviceID: own.deviceID, token: response.credential, returnToken: reciprocal, needsJoin: true, confirmationPending: response.confirmationRequired)
         credentials.removeAll { $0.route.deviceID == route.deviceID }; credentials.append(credential)
         try saveCredentials(credentials)
@@ -549,12 +547,6 @@ final class PairedMacSyncController {
         var credentials = try loadCredentials()
         credentials.removeAll { $0.route.deviceID == deviceID }
         try saveCredentials(credentials)
-    }
-
-    static func secret() throws -> String {
-        var bytes = [UInt8](repeating: 0, count: 32)
-        guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else { throw POSIXError(.EIO) }
-        return Data(bytes).base64EncodedString()
     }
 }
 

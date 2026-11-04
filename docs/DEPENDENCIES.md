@@ -282,8 +282,7 @@ background updater.
 
 Maintenance belongs in an owner-run agent task or a manual session. Do not add
 Dependabot or GitHub-hosted dependency proposal schedules. The former monolithic
-refresh script has been removed. External maintenance jobs are configured separately; this PR does not create
-or alter them.
+refresh script has been removed. External maintenance jobs are configured separately.
 
 - Scan the complete dependency declarations and runtime records against current
   upstream releases, including ordinary npm packages, coordinated SDK families,

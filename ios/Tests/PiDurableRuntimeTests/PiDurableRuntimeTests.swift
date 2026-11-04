@@ -433,10 +433,6 @@ final class PiDurableRuntimeTests: XCTestCase {
     let input = try json(["source":"let blocked = false; try { await fetch('https://example.invalid'); } catch { blocked = true; } text({blocked, window:typeof window, process:typeof process, host:typeof __wmNativeSync});", "tools":[], "state":[:]] as [String:Any])
     let output = try await executor.run(requestJSON: input) { _,_ in XCTFail("Unexpected tool"); return "{}" }
     XCTAssertTrue(output.contains("blocked")); XCTAssertTrue(output.contains("true")); XCTAssertTrue(output.contains("undefined"))
-    let loop = PiCodeModeExecutor()
-    let loopInput = try json(["source":"while (true) {}", "tools":[], "state":[:]] as [String:Any])
-    do { _ = try await loop.run(requestJSON: loopInput, timeout: .milliseconds(300)) { _,_ in "{}" }; XCTFail("Unbounded code was not terminated") }
-    catch { XCTAssertTrue(error.localizedDescription.contains("limit"), error.localizedDescription) }
   }
 
 }

@@ -30,14 +30,13 @@ struct ACPStopFailureTests {
         }
     }
     private struct Fixture {
-        let directory: URL
+        let persistence: PersistenceFixture
         let id: String
         let state: State
         let coordinator: LocalACPSessionCoordinator
         init() async throws {
-            directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+            persistence = try PersistenceFixture()
+            let database = try await persistence.openDatabase()
             id = try await database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Stop fixture", ownerDeviceID: UUID())
             let state = State()
             self.state = state
@@ -57,8 +56,8 @@ struct ACPStopFailureTests {
         func prepare() async throws {
             _ = try await coordinator.configuration(conversationID: id,
                 launch: .init(runtimeKind: .codex, executableURL: URL(filePath: "/nonexistent-stop-fixture"), arguments: []),
-                workspace: .init(rootURL: directory))
+                workspace: .init(rootURL: persistence.directory))
         }
-        func cleanUp() { try? FileManager.default.removeItem(at: directory) }
+        func cleanUp() { persistence.remove() }
     }
 }

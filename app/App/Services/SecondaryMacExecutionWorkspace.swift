@@ -221,7 +221,7 @@ final class SecondaryMacExecutionWorkspace: ExecutionWorkspaceTransport {
             guard !records.isEmpty else { return }
             for record in records {
                 let identity = conversationID + ":" + record.id
-                let digest = SHA256.hash(data: Data(identity.utf8)).map { String(format: "%02x", $0) }.joined()
+                let digest = SHA256.hash(data: Data(identity.utf8)).hexString
                 _ = try await origin.appendNativeRecord(workspaceID: descriptor.id, conversationID: conversationID,
                     runID: record.runID, recordID: "history-" + digest, format: "woven-matter-history.v1", data: record.data)
                 cursor = record.sequence

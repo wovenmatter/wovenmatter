@@ -38,14 +38,14 @@ private struct LocalModelServerConnectionRow: View {
     @State private var verified = false
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            TextField("Server URL", text: $url).settingsInput()
+            TextField("Server URL", text: $url).dashboardInput()
                 .accessibilityLabel("Local model server URL")
                 .disabled(server != nil)
             if server != nil {
                 Text("Add a new connection to use a different server URL.").font(.caption).foregroundStyle(.secondary)
             }
             SecureField(server == nil ? "API key" : "API key · leave empty to keep saved key", text: $key)
-                .settingsInput().accessibilityLabel("Local model server API key")
+                .dashboardInput().accessibilityLabel("Local model server API key")
             HStack {
                 Button(busy ? "Connecting…" : "Connect") { connect() }
                     .buttonStyle(SettingsQuietButtonStyle()).disabled(busy || url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (server == nil && key.isEmpty))

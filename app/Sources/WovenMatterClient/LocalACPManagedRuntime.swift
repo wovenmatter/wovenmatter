@@ -338,7 +338,7 @@ public actor LocalACPManagedNodeRuntime {
             if data.isEmpty { break }
             hash.update(data: data)
         }
-        return hash.finalize().map { String(format: "%02x", $0) }.joined()
+        return hash.finalize().hexString
     }
 }
 
@@ -1059,7 +1059,7 @@ enum LocalACPProcessRunner {
     }
 }
 
-private extension Array where Element: Equatable {
+extension Array where Element: Equatable {
     func uniqued() -> [Element] {
         reduce(into: []) { result, element in
             if !result.contains(element) {

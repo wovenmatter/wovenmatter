@@ -323,9 +323,8 @@ export function createSubagents({ record, engine, context, allTools, getTrustedI
       } catch (error) { return reply(operationErrorMessage(error), { ...(error.code ? { code: error.code } : {}), ...(error.choices ? { choices: error.choices } : {}) }, true); }
 
       const parentAgent = await api.agent(ctx);
-      const registrations = typeof allTools === 'function' ? allTools() : allTools;
       const names = new Set(parentAgent.tools.map(value => value.name).filter(name => name !== tool.name));
-      const childTools = (registrations ?? parentAgent.tools).filter(value => names.has(value.name) && value.name !== tool.name);
+      const childTools = allTools().filter(value => names.has(value.name) && value.name !== tool.name);
       const publicRoute = publicSubagentRoute(chosen);
       const input = args.action === 'spawn' ? [message, args.context ? `Selected context:\n${args.context}` : '', args.instructions ? `Parent-selected instructions:\n${args.instructions}` : ''].filter(Boolean).join('\n\n') : message;
       const admitted = await api.commit(async tx => {
@@ -422,7 +421,6 @@ export function createSubagents({ record, engine, context, allTools, getTrustedI
     tool, tasks: [Anchor, Reporter],
     metadata: conversationID => metadata.get(conversationID),
     currentRunID: () => groupState?.runID,
-    notify,
     start: async () => {
       const state = await record.harness.snapshot(Subagents, rootID, context);
       groupState = state;

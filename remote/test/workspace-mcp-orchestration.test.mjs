@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { createClientExecution } from '../src/client-execution.mjs'
+import { enroll } from './fixtures/execution.mjs'
 
 const turn=()=>new Promise(resolve=>setImmediate(resolve))
 async function fixture(t,{kind='opencode',sourcePermission='ask',destinationPermission='allow',permissionOptions=['ask','allow']}={}) {
@@ -15,8 +16,7 @@ async function fixture(t,{kind='opencode',sourcePermission='ask',destinationPerm
     run:async input=>{let end;const promise=new Promise(resolve=>end=resolve);runs.push({...input,end});await promise},
     close:async()=>{for(const run of runs)run.end()}}
   const service=createClientExecution({directory,runtime,publisherKey:'owner'.repeat(10),publisherIntervalMilliseconds:0})
-  const enrollment=service.provision({libraryID:randomUUID(),workspaceID:randomUUID(),ownerDeviceID:randomUUID(),deviceID:randomUUID(),scopes:['execution']})
-  const principal=service.principal('Bearer '+enrollment.token,'execution')
+  const {principal}=enroll(service)
   const command=(kind,values={})=>service.command({commandID:randomUUID(),deviceID:principal.id,kind,...values},principal)
   const source=(await command('createSession',{providerID:kind})).conversationID,connection=service.mcp.sessionConnection(source),scope=service.mcp.resolvePrincipal('Bearer '+connection.bearerToken)
   const call=(name,input={},caller=scope)=>service.mcp.handle(caller,{jsonrpc:'2.0',id:randomUUID(),method:'tools/call',params:{name,arguments:{requestID:randomUUID(),...input}}})

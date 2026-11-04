@@ -1,10 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, symlink, rm, readdir } from 'node:fs/promises';
+import { mkdtemp, symlink, rm, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { spawn, execFileSync } from 'node:child_process'
+import { execFileSync } from 'node:child_process'
 import { databaseOperation } from '../src/database-catalog.mjs'
 
 async function fixture(t) {
@@ -15,8 +15,6 @@ async function fixture(t) {
 const create = (root, name = 'Metrics') => databaseOperation(root, { action: 'create', name })
 const execute = (root, id, sql) => databaseOperation(root, { action: 'execute', databaseID: id, sql })
 const data = (root, id, sql) => databaseOperation(root, { action: 'data', databaseID: id, sqliteQuery: sql })
-
-
 
 test('managed storage rejects linked roots and database files without touching their targets', async t => {
   const root = await fixture(t), outside = await fixture(t)
@@ -32,7 +30,6 @@ test('managed storage rejects linked roots and database files without touching t
   await assert.rejects(execute(root, row.id, 'DROP TABLE user_data'))
   assert.equal(execFileSync('/usr/bin/python3', ['-c', 'import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute("SELECT name FROM sqlite_master").fetchone()[0])', external], { encoding: 'utf8' }).trim(), 'user_data')
 })
-
 
 test('Linux service bounds SQLite materialization and returns a controlled memory error', { skip: process.platform !== 'linux' }, async t => {
   const root = await fixture(t), row = await create(root)

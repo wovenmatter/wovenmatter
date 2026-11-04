@@ -92,7 +92,7 @@ public actor SavedArtifactLibraryService {
       hash.update(data: chunk.data)
       offset += Int64(chunk.data.count)
     }
-    guard offset == manifest.byteCount, Self.hex(hash.finalize()) == manifest.sha256 else {
+    guard offset == manifest.byteCount, hash.finalize().hexString == manifest.sha256 else {
       throw WorkspaceToolError.invalid("This saved artifact failed its integrity check. Its opening copy was discarded.")
     }
     try Task.checkCancellation()
@@ -118,11 +118,10 @@ public actor SavedArtifactLibraryService {
       size += Int64(bytes.count)
       guard size <= manifest.byteCount else { return false }
     }
-    return size == manifest.byteCount && Self.hex(hash.finalize()) == manifest.sha256
+    return size == manifest.byteCount && hash.finalize().hexString == manifest.sha256
   }
 
-  private static func hex(_ digest: SHA256.Digest) -> String { digest.map { String(format: "%02x", $0) }.joined() }
-  private static func digest(_ data: Data) -> String { hex(SHA256.hash(data: data)) }
+  private static func digest(_ data: Data) -> String { SHA256.hash(data: data).hexString }
   private static func fileName(_ manifest: CompanionArtifactManifest) -> String {
     let forbidden = CharacterSet.controlCharacters.union(CharacterSet(charactersIn: "/:\\"))
     var name = String(String.UnicodeScalarView(manifest.title.unicodeScalars.filter { !forbidden.contains($0) }))

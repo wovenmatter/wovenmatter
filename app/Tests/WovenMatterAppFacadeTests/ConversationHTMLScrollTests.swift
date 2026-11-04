@@ -2,6 +2,7 @@ import AppKit
 import CoreGraphics
 import Testing
 import WebKit
+import WorkspaceFixtures
 @testable import WovenMatterAppFacade
 
 @MainActor @Suite(.serialized, .timeLimit(.minutes(1)))
@@ -24,10 +25,7 @@ struct ConversationHTMLScrollTests {
         coordinator.onReady = { ready = true }
         coordinator.apply(html: "<div style='height:240px'>A chart fixture</div>",
             theme: ConversationHTMLTheme.value(.green), to: web)
-        for _ in 0..<400 {
-            if ready { break }
-            try await Task.sleep(for: .milliseconds(10))
-        }
+        _ = try await pollUntil(attempts: 400, interval: .milliseconds(10)) { ready }
         try #require(ready)
         window.contentView?.layoutSubtreeIfNeeded()
         let event = try wheelEvent(window: window, web: web)
@@ -61,10 +59,7 @@ struct ConversationHTMLScrollTests {
             addEventListener('message',e=>{if(e.data?.kind==='fixture-scroll')scrollTo(0,240)});
             </script>
             """, theme: ConversationHTMLTheme.value(.green), to: web)
-        for _ in 0..<400 {
-            if ready { break }
-            try await Task.sleep(for: .milliseconds(10))
-        }
+        _ = try await pollUntil(attempts: 400, interval: .milliseconds(10)) { ready }
         try #require(ready)
         target.scrollWheel(with: try wheelEvent(window: window, web: web))
         try await Task.sleep(for: .milliseconds(200))
@@ -73,9 +68,8 @@ struct ConversationHTMLScrollTests {
         // not deliver this synthetic event into its child process. Verify its
         // unchanged native route above and real child scrolling separately.
         _ = try await web.evaluateJavaScript("document.getElementById('page').contentWindow.postMessage({kind:'fixture-scroll'},'*')")
-        for _ in 0..<100 {
-            if coordinator.consoleMessages.contains(where: { $0["text"] == "fixture-scroll:240" }) { break }
-            try await Task.sleep(for: .milliseconds(10))
+        _ = try await pollUntil(attempts: 100, interval: .milliseconds(10)) {
+            coordinator.consoleMessages.contains(where: { $0["text"] == "fixture-scroll:240" })
         }
         #expect(coordinator.consoleMessages.contains { $0["text"] == "fixture-scroll:240" },
             "Expanded sandboxed browser content lost internal scrolling")

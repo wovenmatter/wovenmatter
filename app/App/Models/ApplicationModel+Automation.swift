@@ -39,7 +39,7 @@ extension ApplicationModel {
     func automationRemoteWorkspace(callerID: String) async throws -> RemoteWorkspaceConfiguration? {
         guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
         guard let root = try await database.sessionExecutionRoot(id: callerID), root.workspaceID.hasPrefix("remote:") else { return nil }
-        guard let workspaceID = UUID(uuidString: String(root.workspaceID.dropFirst("remote:".count))),
+        guard let workspaceID = Self.remoteWorkspaceID(sourceID: root.workspaceID),
               let configuration = remoteWorkspaces.configuration(id: workspaceID),
               try await database.localACPSession(conversationID: callerID).remoteWorkspaceID == workspaceID else {
             throw WorkspaceToolError.invalid("The browser caller's execution workspace is unavailable.")

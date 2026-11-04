@@ -56,7 +56,6 @@ if [ "$output" != "$agent_root" ]; then
   cp "$agent_root/.node-version" "$output/.node-version"
   mkdir -p "$(dirname "$output")/scripts"
   cp -p "$repo_root/scripts/remote-host.sh" "$(dirname "$output")/scripts/remote-host.sh"
-  rm -f "$(dirname "$output")/wovenmatter" "$(dirname "$output")/wovenmatter-remote.py"
 fi
 mkdir -p "$output/node_modules"
 rsync -a --delete "$dependency_root/node_modules/" "$output/node_modules/"

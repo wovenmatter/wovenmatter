@@ -31,7 +31,7 @@ def fingerprint(root):
 class BundleTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory(); self.root=Path(self.temp.name)
-        for target in ('remote/src','remote/npm-runtime','remote/host/bin','remote/host/deps','remote/host/apparmor','harnesses/mcp','default-agent/src','scripts'):
+        for target in ('remote/src','remote/npm-runtime','remote/host/bin','harnesses/mcp','default-agent/src','scripts'):
             (self.root/target).mkdir(parents=True,exist_ok=True)
         for path in ('remote/host/build-bundle.sh','remote/host/bin/wm-exec','remote/host/runtime-versions.json','scripts/remote-host.sh','remote/npm-runtime/package.json','remote/npm-runtime/package-lock.json'):
             shutil.copy2(ROOT/path,self.root/path)

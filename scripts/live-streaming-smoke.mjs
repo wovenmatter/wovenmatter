@@ -68,22 +68,17 @@ try {
   const session = await request('session/new', { cwd: root, mcpServers: [] });
   sessionID = session.sessionId;
   if (!sessionID) throw new Error('adapter returned no session');
-  report.advertisedModels = session.configOptions?.find(value => value.category === 'model')?.options?.map(value => value.value)
-    ?? session.models?.availableModels?.map(value => value.modelId) ?? [];
-  if (args.includes('--catalog-only')) report.terminal = 'catalog-only';
-  else {
-    if (flag('--model')) {
-      const option = session.configOptions?.find(value => value.category === 'model');
-      await request(option ? 'session/set_config_option' : 'session/set_model', option
-        ? { sessionId: sessionID, configId: option.id, value: flag('--model') }
-        : { sessionId: sessionID, modelId: flag('--model') });
-    }
-    promptStart = performance.now();
-    const result = await request('session/prompt', { sessionId: sessionID, prompt: [{ type: 'text',
-      text: 'This is a bounded streaming transport smoke check. Do not use tools, access files, execute commands, make network requests, or delegate. Explain in about 80 words why 17 times 19 is 323, then finish with STREAM_SMOKE_COMPLETE.' }] });
-    report.terminal = result.stopReason ?? 'response';
-    report.terminalMS = Math.round(performance.now() - promptStart);
+  if (flag('--model')) {
+    const option = session.configOptions?.find(value => value.category === 'model');
+    await request(option ? 'session/set_config_option' : 'session/set_model', option
+      ? { sessionId: sessionID, configId: option.id, value: flag('--model') }
+      : { sessionId: sessionID, modelId: flag('--model') });
   }
+  promptStart = performance.now();
+  const result = await request('session/prompt', { sessionId: sessionID, prompt: [{ type: 'text',
+    text: 'This is a bounded streaming transport smoke check. Do not use tools, access files, execute commands, make network requests, or delegate. Explain in about 80 words why 17 times 19 is 323, then finish with STREAM_SMOKE_COMPLETE.' }] });
+  report.terminal = result.stopReason ?? 'response';
+  report.terminalMS = Math.round(performance.now() - promptStart);
 } catch (error) { report.error = error.message; report.terminal ??= 'error'; }
 finally {
   clearTimeout(timeout);
@@ -98,5 +93,5 @@ report.elapsedMS = Math.round(performance.now() - started);
 report.passed = report.terminal === 'end_turn' && report.textBeforeTerminal && report.counts.agent_message_chunk > 1;
 const json = JSON.stringify(report, null, 2) + '\n';
 if (flag('--output')) await writeFile(flag('--output'), json, { mode: 0o600 });
-process.stdout.write(flag('--output') ? JSON.stringify({ ...report, events: undefined, advertisedModels: undefined }, null, 2) + '\n' : json);
-process.exitCode = report.passed || report.terminal === 'catalog-only' ? 0 : 1;
+process.stdout.write(flag('--output') ? JSON.stringify({ ...report, events: undefined }, null, 2) + '\n' : json);
+process.exitCode = report.passed ? 0 : 1;

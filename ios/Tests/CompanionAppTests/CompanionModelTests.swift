@@ -4,7 +4,22 @@ import CompanionClient
 import WovenMatterCompanion
 @testable import WovenMatterMobileApp
 
-private actor ModelMac: CompanionTransport, CompanionCalendarTransport {
+/// Offline central-library defaults shared by the app test transports.
+protocol OfflineCompanionTransport: CompanionTransport {}
+extension OfflineCompanionTransport {
+  func workspaceIdentity() async throws -> String { throw MobileConnectionError.offline }
+  func snapshot() async throws -> CompanionSnapshot { throw MobileConnectionError.offline }
+  func changes(after: Int64) async throws -> CompanionChangePage { throw MobileConnectionError.offline }
+  func mutate(_ mutation: CompanionMutation) async throws -> CompanionMutationResult { throw MobileConnectionError.offline }
+  func note(_ id: String) async throws -> CompanionNote { throw MobileConnectionError.offline }
+  func providers() async throws -> [CompanionProvider] { throw MobileConnectionError.offline }
+  func pending() async throws -> [CompanionPendingInteraction] { throw MobileConnectionError.offline }
+  func transcript(_ id: String) async throws -> CompanionTranscript { throw MobileConnectionError.offline }
+  func command(_ command: CompanionCommand) async throws -> CompanionCommandReceipt { throw MobileConnectionError.offline }
+  func receipt(_ id: String) async throws -> CompanionCommandReceipt? { throw MobileConnectionError.offline }
+}
+
+private actor ModelMac: OfflineCompanionTransport, CompanionCalendarTransport {
   var calendarRecords: [String: CompanionCalendarRecord] = [:]
   var calendarReceipts: [String: CompanionCalendarReceipt] = [:]
   var calendarRequests: [CompanionCalendarMutation] = []
@@ -35,8 +50,6 @@ private actor ModelMac: CompanionTransport, CompanionCalendarTransport {
   func release() { shouldGate = false; gate?.resume(); gate = nil }
   func snapshot() async throws -> CompanionSnapshot { .init(workspaceID: "workspace", cursor: 1) }
   func changes(after: Int64) async throws -> CompanionChangePage { .init(workspaceID: "workspace", cursor: 1) }
-  func mutate(_ mutation: CompanionMutation) async throws -> CompanionMutationResult { throw MobileConnectionError.offline }
-  func note(_ id: String) async throws -> CompanionNote { throw MobileConnectionError.offline }
   func providers() async throws -> [CompanionProvider] { [] }
   func pending() async throws -> [CompanionPendingInteraction] { [] }
   func transcript(_ id: String) async throws -> CompanionTranscript { .init(conversationID: id) }

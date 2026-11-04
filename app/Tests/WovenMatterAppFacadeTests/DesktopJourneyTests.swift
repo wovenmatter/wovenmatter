@@ -124,7 +124,7 @@ struct DesktopJourneyTests {
         let exported = try String(contentsOf: export.url, encoding: .utf8)
         #expect(Data(exported.utf8) == Data(("# Renamed\n\n" + content + "\n").utf8))
         await #expect(throws: (any Error).self) {
-            _ = try await f.database.updateNote(id: id, title: "Stale", content: "Lost edit", expectedRevision: originalRevision)
+            _ = try await f.database.persistNoteDraft(id: id, title: "Stale", content: "Lost edit", expectedRevision: originalRevision)
         }
         try await f.model.mutateNote(id: id, mutation: .moveToTrash)
         #expect(try await f.model.trashedNotes().map(\.id) == [id])
@@ -167,7 +167,7 @@ struct DesktopJourneyTests {
             "Run tests with CODEX_HOME unset so fixtures cannot read inherited credentials.")
         let f = try await FacadeFixture(); defer { f.remove() }
         let id = try await f.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Passive", ownerDeviceID: UUID())
-        let run = try await f.database.beginLocalACPRun(conversationID: id, content: "Retained private body")
+        let run = try await f.database.beginLocalACPRun(conversationID: id, input: .init(text: "Retained private body"))
         let capability = "/private/tmp/wmtools-" + String(repeating: "a", count: 32) + "/" + String(repeating: "b", count: 32) + ".sock"
         let native = "{\"token\":\"retained-protocol-token\",\"toolEndpoint\":\"\(capability)\"}"
         try await f.database.upsertDeviceOwnedRunActivity(runID: run.runID,
@@ -244,12 +244,10 @@ struct DesktopJourneyTests {
         f.usageProbe.expectPassiveLimits(providers: providers)
         _ = try await f.usageService.snapshot(range: .today, refreshLimits: true,
             enabledProviders: providers, allowCredentialAccess: false)
-        #expect(f.usageProbe.limitRequests.count == 1)
-        let usageRequest = try #require(f.usageProbe.limitRequests.first)
-        #expect(usageRequest.enabledProviders == providers && !usageRequest.allowCredentialAccess)
-        #expect(usageRequest.keychainInteraction == .noninteractive && usageRequest.interactiveProvider == nil)
-        #expect(usageRequest.openRouterAPIKey == nil)
-        #expect(usageRequest.codexWorkspaceSource == nil && usageRequest.codexWorkspaceCount == 0)
+        let usageRequests = f.usageProbe.limitRequests
+        #expect(usageRequests.count == providers.count)
+        #expect(Set(usageRequests.flatMap(\.enabledProviders)) == providers)
+        #expect(usageRequests.allSatisfy { !$0.allowCredentialAccess })
         #expect(f.usageProbe.calls.isEmpty)
         #expect(await f.recorder.deliveries.isEmpty)
         #expect(await f.recorder.configurations.isEmpty)

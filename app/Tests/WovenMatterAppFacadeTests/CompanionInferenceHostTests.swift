@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import Foundation
 import Testing
 import WovenMatterCore
@@ -77,10 +78,7 @@ struct CompanionInferenceHostTests {
         let helper = CompanionInferenceProcess(executable: URL(fileURLWithPath: "/usr/bin/env"), arguments: ["node", "-e", script, "--"], directory: root)
         let probe = InferenceHostProbe()
         let running = Task { try await helper.run(body: Data("{}".utf8)) { _ in await probe.started() } }
-        for _ in 0..<200 {
-            if await probe.didStart { break }
-            try await Task.sleep(for: .milliseconds(10))
-        }
+        _ = try await pollUntil(attempts: 200, interval: .milliseconds(10)) { await probe.didStart }
         #expect(await probe.didStart)
         let start = ContinuousClock.now
         running.cancel()

@@ -1,6 +1,5 @@
 import CryptoKit
 import Foundation
-import Security
 import SQLite3
 import WovenMatterCore
 
@@ -26,9 +25,7 @@ extension WorkspaceDatabaseConnection {
             let executor = workspace.executionDeviceID, federationID(executor), workspace.kind == .linux else {
         throw federationError("wrong_owner", "Only the central host can issue a publisher for a registered Linux execution owner.")
       }
-      var bytes = [UInt8](repeating: 0, count: 32)
-      guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else { throw federationError("unavailable", "Unable to create a workspace publisher.") }
-      let token = Data(bytes).base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
+      guard let token = CompanionSecrets.randomToken() else { throw federationError("unavailable", "Unable to create a workspace publisher.") }
       let record = WorkspacePublisherRecord(grantID: UUID().uuidString.lowercased(), workspaceID: workspaceID,
         libraryID: identity.libraryID, executionDeviceID: executor, endpoint: endpoint)
       let statement = try prepareUnlocked("INSERT INTO companion_workspace_publishers(workspace_id,digest,payload) VALUES (?,?,?) ON CONFLICT(workspace_id) DO UPDATE SET digest=excluded.digest,payload=excluded.payload")

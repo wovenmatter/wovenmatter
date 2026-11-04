@@ -171,7 +171,6 @@ final class WovenMCPRemoteBridge: @unchecked Sendable {
         if process.isRunning { process.terminate() }
     }
     deinit { stop() }
-    private static func quote(_ text: String) -> String { "'" + text.replacingOccurrences(of: "'", with: "'\\''") + "'" }
 }
 
 private final class WovenMCPBridgeReady: @unchecked Sendable {

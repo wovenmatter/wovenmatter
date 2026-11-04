@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import WovenMatterCore
 
 /// Source-only host bundle. The app uses Foundation and the macOS gzip binary,
 /// so deployment does not require Python, npm, Xcode, or a local Linux runtime.
@@ -50,7 +51,7 @@ enum RemoteHostBundle {
             hash.update(data: Data("\(source)\0false\0\(sourceMode)\0".utf8))
             hash.update(data: Data(SHA256.hash(data: bytes)))
         }
-        guard hash.finalize().map({ String(format: "%02x", $0) }).joined() == deployment.fingerprint else {
+        guard hash.finalize().hexString == deployment.fingerprint else {
             throw RemoteWorkspaceClientError.invalidResponse("The host sources changed while preparing deployment. Retry the update.")
         }
         let encoder = JSONEncoder()
@@ -71,7 +72,7 @@ enum RemoteHostBundle {
     }
 
     private static func digest(_ data: Data) -> String {
-        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        SHA256.hash(data: data).hexString
     }
 
     private static func targetPath(_ source: String) throws -> String {

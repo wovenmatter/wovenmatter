@@ -74,8 +74,7 @@ export function nativeContextBridge(record, engine, background) {
   };
   const withRouteAccount = async (route, operation) => {
     const account = await selectedAccount(route);
-    return engine.credentials.runWithAccount(route.provider, account, () => route.provider === 'claude-subscription' && engine.claude.withProfile
-      ? engine.claude.withProfile(account.credential?.accountId, operation) : operation());
+    return engine.withAccount(route.provider, account, operation);
   };
   const scope = (route, taskID, canonicalMessages, continuation) => ({
     directory: record.nativeRoot, sessionID: record.session.sessionId,
@@ -203,7 +202,7 @@ export function nativeContextBridge(record, engine, background) {
           }
           return provider.claudePrincipalIdentity(principal, { sessionID: record.session.sessionId, accountID: route.accountID, authIdentity });
         };
-        const principal = engine.claude.withProfile ? await engine.claude.withProfile(account.credential?.accountId, identity) : await identity();
+        const principal = await engine.claude.withProfile(account.credential?.accountId, identity);
         if (authIdentity) next.credentialIdentity = authIdentity; next.authIdentity = principal; next.nativePrincipalIdentity = principal;
       }
     }

@@ -61,13 +61,21 @@ final class WorkspaceDatabaseConnection {
   }
 
   func backupPairedLibrary(to url: URL) throws {
+    try Self.copyMainDatabase(from: connection, to: url, openFailure: "Could not create the local recovery backup.",
+      copyFailure: "Could not snapshot the local library.", incompleteFailure: "The local recovery backup did not complete.")
+  }
+
+  /// Writes a consistent copy of `source`'s main database, including committed
+  /// WAL content, to a new rollback-journal file at `url` and verifies it.
+  static func copyMainDatabase(from source: OpaquePointer?, to url: URL,
+                               openFailure: String, copyFailure: String, incompleteFailure: String) throws {
     var target: OpaquePointer?
-    guard sqlite3_open(url.path, &target) == SQLITE_OK, let target else { throw WorkspaceDatabaseError.open("Could not create the local recovery backup.") }
+    guard sqlite3_open(url.path, &target) == SQLITE_OK, let target else { sqlite3_close(target); throw WorkspaceDatabaseError.open(openFailure) }
     defer { sqlite3_close(target) }
-    guard let connection, let backup = sqlite3_backup_init(target, "main", connection, "main") else { throw WorkspaceDatabaseError.execute("Could not snapshot the local library.") }
+    guard let source, let backup = sqlite3_backup_init(target, "main", source, "main") else { throw WorkspaceDatabaseError.execute(copyFailure) }
     let status = sqlite3_backup_step(backup, -1), finish = sqlite3_backup_finish(backup)
     guard status == SQLITE_DONE, finish == SQLITE_OK,
-          sqlite3_exec(target, "PRAGMA journal_mode=DELETE", nil, nil, nil) == SQLITE_OK else { throw WorkspaceDatabaseError.execute("The local recovery backup did not complete.") }
+          sqlite3_exec(target, "PRAGMA journal_mode=DELETE", nil, nil, nil) == SQLITE_OK else { throw WorkspaceDatabaseError.execute(incompleteFailure) }
     var check: OpaquePointer?
     guard sqlite3_prepare_v2(target, "PRAGMA integrity_check", -1, &check, nil) == SQLITE_OK, let check else { throw WorkspaceDatabaseError.corruptRow }
     defer { sqlite3_finalize(check) }
@@ -338,34 +346,43 @@ extension WorkspaceDatabaseConnection {
   /// interruption. query_only additionally rejects accidental writes on readers.
   func readSnapshot<T>(context: DatabaseJobContext, _ operation: () throws -> T) throws -> T {
     guard let connection else { throw WorkspaceDatabaseError.execute("Database is closed") }
-    let pointer = Unmanaged.passUnretained(context).toOpaque()
-    sqlite3_progress_handler(connection, 1_000, { pointer in
-      guard let pointer else { return 0 }
-      do { try Unmanaged<DatabaseJobContext>.fromOpaque(pointer).takeUnretainedValue().check(); return 0 }
-      catch { return 1 }
-    }, pointer)
-    sqlite3_busy_handler(connection, { pointer, attempt in
-      guard let pointer, attempt < 500 else { return 0 }
-      do { try Unmanaged<DatabaseJobContext>.fromOpaque(pointer).takeUnretainedValue().check() }
-      catch { return 0 }
-      sqlite3_sleep(10)
-      return 1
-    }, pointer)
-    defer {
-      sqlite3_progress_handler(connection, 0, nil, nil)
-      sqlite3_busy_timeout(connection, 5000)
-    }
-    try executeUnlocked("BEGIN DEFERRED")
-    do {
-      let value = try operation()
-      try context.check()
-      try executeUnlocked("COMMIT")
-      return value
-    } catch {
-      sqlite3_progress_handler(connection, 0, nil, nil)
-      try? executeUnlocked("ROLLBACK")
-      try context.check()
-      throw error
-    }
+    return try withSQLiteReadSnapshot(connection, context: context, execute: executeUnlocked, operation)
+  }
+}
+
+/// Shared by the workspace and usage readers: a deferred read transaction whose
+/// progress and busy handlers cooperate with the worker job's cancellation.
+func withSQLiteReadSnapshot<T>(
+  _ connection: OpaquePointer, context: DatabaseJobContext,
+  execute: (String) throws -> Void, _ operation: () throws -> T
+) throws -> T {
+  let pointer = Unmanaged.passUnretained(context).toOpaque()
+  sqlite3_progress_handler(connection, 1_000, { pointer in
+    guard let pointer else { return 0 }
+    do { try Unmanaged<DatabaseJobContext>.fromOpaque(pointer).takeUnretainedValue().check(); return 0 }
+    catch { return 1 }
+  }, pointer)
+  sqlite3_busy_handler(connection, { pointer, attempt in
+    guard let pointer, attempt < 500 else { return 0 }
+    do { try Unmanaged<DatabaseJobContext>.fromOpaque(pointer).takeUnretainedValue().check() }
+    catch { return 0 }
+    sqlite3_sleep(10)
+    return 1
+  }, pointer)
+  defer {
+    sqlite3_progress_handler(connection, 0, nil, nil)
+    sqlite3_busy_timeout(connection, 5000)
+  }
+  try execute("BEGIN DEFERRED")
+  do {
+    let value = try operation()
+    try context.check()
+    try execute("COMMIT")
+    return value
+  } catch {
+    sqlite3_progress_handler(connection, 0, nil, nil)
+    try? execute("ROLLBACK")
+    try context.check()
+    throw error
   }
 }

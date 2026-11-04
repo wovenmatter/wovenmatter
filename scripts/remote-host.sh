@@ -194,8 +194,7 @@ def tailscale_operator_ready():
     except (ValueError,AttributeError): return None
 
 def dependency_packages(distro):
-    # Kept in sync with remote/host/deps/apt-{ubuntu,debian}.txt. Bootstrap
-    # inspect/prepare are self-contained and cannot trust an installed release.
+    # Bootstrap inspect/prepare are self-contained and cannot trust an installed release.
     common='libasound2 libatk-bridge2.0-0 libatk1.0-0 libatspi2.0-0 libcairo2 libcups2 libdbus-1-3 libdrm2 libgbm1 libglib2.0-0 libnspr4 libnss3 libpango-1.0-0 libwayland-client0 libx11-6 libxcb1 libxcomposite1 libxdamage1 libxext6 libxfixes3 libxkbcommon0 libxrandr2 libfontconfig1 libfreetype6 fonts-liberation fonts-noto-color-emoji util-linux python3 ca-certificates curl'.split()
     identity=distro.get('ID','')
     if identity in ('ubuntu','debian'):

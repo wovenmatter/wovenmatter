@@ -53,8 +53,8 @@ struct MacDeviceSetupModelTests {
         #expect(row.error == nil)
         #expect(row.message == "Current request accepted")
         #expect(await fixture.polls == 2)
-        let prompt = DeviceSetupConfirmation(row: row, action: .pair, sendsInvitation: false)
-        #expect(prompt.message(version: nil, central: true, snapshot: true).contains("isolated snapshot database"))
+        let prompt = DeviceSetupConfirmation(row: row, action: .pair)
+        #expect(prompt.message(version: nil, snapshot: true).contains("isolated snapshot database"))
     }
 
     @Test func deviceRowsRenderAtNarrowAndWideSettingsInEveryTheme() async throws {
@@ -79,7 +79,7 @@ struct MacDeviceSetupModelTests {
             for width: CGFloat in [440, 920] {
                 let view = SettingsPage(title: "Apple Devices") {
                     SettingsCard(title: "Find devices", detail: "Find other Macs on your Tailscale network, even when Woven Matter is closed.") {
-                        MacTailnetDiscoveryView(devices: devices, pairing: pairing, host: application.companionHost, isCentral: true, canPairWithCentral: false)
+                        MacTailnetDiscoveryView(devices: devices, pairing: pairing, host: application.companionHost, canPairWithCentral: false)
                     }
                 }.background(theme.palette.workspace).environment(\.dashboardTheme, theme).preferredColorScheme(theme.colorScheme)
                 let host = NSHostingView(rootView: view)

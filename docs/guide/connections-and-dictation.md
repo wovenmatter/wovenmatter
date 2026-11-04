@@ -70,6 +70,27 @@ iPhone app also stops capture. Interrupted recordings retain completed text wher
 possible. Unsupported languages and failed preparation have explicit errors;
 there is no cloud transcription fallback.
 
+### How dictation works
+
+`DictationSession` owns one native recording on the interface device, shared by
+Mac and iPhone. `AppleDictationEngine` uses SpeechAnalyzer with SpeechTranscriber,
+or DictationTranscriber for a supported language/device where appropriate.
+Apple-managed language assets are prepared only on an explicit recording action.
+The microphone stream is converted to the analyzer's negotiated audio format;
+audio is neither stored nor forwarded through workspace RPC. Finalized text
+segments are accumulated by audio range, and volatile revisions are preview-only.
+Stop drains and finalizes the analyzer before insertion. Cancellation fences late
+results and retains resource ownership until native work has settled. Capture
+interruptions retain completed text for explicit insertion where possible.
+
+Each native editor exposes a `DictationEditor` bridge. Stop captures its logical
+identity, current text, and UTF-16 selection. Insertion uses the platform's native
+text system for rich text and one undo group. Non-overlapping edits can be
+reconciled; a reused/closed editor or conflicting edit retains the final
+transcript for explicit insertion. Leaving the workspace always stops capture.
+Test fixtures inject permission, credentials, transport, and audio without
+accessing providers, Keychain, or the microphone.
+
 ## Local Model Server
 
 In **Settings → Pi Durable → Local model servers**, enter a **Server URL** and **API key**, then click

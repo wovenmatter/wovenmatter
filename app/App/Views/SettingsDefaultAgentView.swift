@@ -68,10 +68,10 @@ struct SettingsDefaultAgentView: View {
                 SettingsDefaultAgentSDKView(connections: agent, remoteWorkspaces: model.remoteWorkspaces)
                 Text("Provider accounts").font(.headline)
                 SettingsConnectionsView(model: model, focus: .providers, embedded: true,
-                    onConnected: connected, onManageShared: manageSharedAccounts, onBack: {})
+                    onConnected: connected, onManageShared: manageSharedAccounts)
                 Text("Web search accounts").font(.headline)
                 SettingsConnectionsView(model: model, focus: .webSearch, embedded: true,
-                    onManageShared: manageSharedAccounts, onBack: {})
+                    onManageShared: manageSharedAccounts)
                 DisclosureGroup("Local model servers · Shared connections") { LocalModelServerConnections(agent: agent) }
             } else {
             scopeSection
@@ -401,7 +401,7 @@ private struct SettingsAgentModelsView: View {
                 requested: browsingAllModels, includesAllModels: agent.catalogIncludesAllModels,
                 loading: agent.busy, error: agent.error, setBrowsingAllModels: setBrowsingAllModels)
             if showingAllModels {
-                TextField("Find a model or provider", text: $filter.query).settingsInput()
+                TextField("Find a model or provider", text: $filter.query).dashboardInput()
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: 12) { modelFilters }
                     VStack(alignment: .leading, spacing: 8) { modelFilters }

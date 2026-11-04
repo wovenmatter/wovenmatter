@@ -13,7 +13,7 @@ struct OpenCodeWireCaptureTests {
     let capture = OpenCodeWireCapture()
     let client = OpenCodeHTTPClient(connection: try OpenCodeConnection(identity: "scope-test", url: URL(string: "http://fixture.invalid")!, password: "credential"), session: session)
       .recording { capture.append($0, $1) }
-    try await client.events("/api/event", sessionID: "ses_fixture") { value in
+    try await client.events("/api/event", accept: { $0["data"]["sessionID"].text == "ses_fixture" }) { value in
       #expect(value["data"]["sessionID"].text == "ses_fixture")
     }
     let native = try capture.values.filter { $0.0 == "native" }.flatMap { try JSONDecoder().decode(WorkspaceNativeRunRecordBatch.self, from: $0.1).records }
@@ -70,17 +70,4 @@ private final class CaptureFixtureProtocol: URLProtocol, @unchecked Sendable {
     client?.urlProtocol(self, didLoad: Data((live ? liveStream : stream ? Self.stream : failure ? "{\"error\":\"fixture rejection\"}" : "{\"future_response\":true}").utf8))
     client?.urlProtocolDidFinishLoading(self)
   }
-}
-
-private actor ApprovalWriteGate {
-  private var waiting: CheckedContinuation<Void, Never>?
-  private var observers: [CheckedContinuation<Void, Never>] = []
-  func pause() async {
-    await withCheckedContinuation { waiting = $0; observers.forEach { $0.resume() }; observers.removeAll() }
-  }
-  func entered() async {
-    if waiting != nil { return }
-    await withCheckedContinuation { observers.append($0) }
-  }
-  func release() { waiting?.resume(); waiting = nil }
 }

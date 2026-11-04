@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { VERSION } from '@earendil-works/pi-coding-agent';
 import { DefaultAgentError, writePrivateJSON } from './config.mjs';
 
-export const refreshInterval = 4 * 60 * 60 * 1000;
+const refreshInterval = 4 * 60 * 60 * 1000;
 const byteLimit = 4 * 1024 * 1024;
 // Fixed protocol policy; never downloaded and never a model inventory.
 export const providerEndpoints = {
@@ -62,8 +62,8 @@ export function parseProviderModels(value, provider) {
 
 /** Implements Pi's public ModelsStore, with one bounded, version-aware provider file. */
 export class ProviderCatalog {
-  constructor(directory, { fetchCatalog = globalThis.fetch, now = Date.now, version = VERSION } = {}) {
-    this.directory = join(directory, 'provider-models'); this.fetchCatalog = fetchCatalog; this.now = now; this.version = version;
+  constructor(directory, { fetchCatalog = globalThis.fetch } = {}) {
+    this.directory = join(directory, 'provider-models'); this.fetchCatalog = fetchCatalog;
     this.entries = new Map();
   }
   path(provider) {
@@ -82,7 +82,7 @@ export class ProviderCatalog {
       const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
       if (bytesRead > byteLimit) return undefined;
       const saved = JSON.parse(buffer.subarray(0, bytesRead));
-      if (saved.piVersion !== this.version || !Number.isFinite(saved.checkedAt) || !Array.isArray(saved.models) || !saved.models.length || saved.models.length > 4096 || new Set(saved.models.map(model => model.id)).size !== saved.models.length) return undefined;
+      if (saved.piVersion !== VERSION || !Number.isFinite(saved.checkedAt) || !Array.isArray(saved.models) || !saved.models.length || saved.models.length > 4096 || new Set(saved.models.map(model => model.id)).size !== saved.models.length) return undefined;
       for (const model of saved.models) validatePublicModel(model, provider);
       signal?.throwIfAborted();
       this.entries.set(provider, saved);
@@ -92,7 +92,7 @@ export class ProviderCatalog {
   }
   async write(provider, entry, { signal } = {}) {
     for (const model of entry.models) validatePublicModel(model, provider);
-    const value = { ...entry, piVersion: this.version };
+    const value = { ...entry, piVersion: VERSION };
     if (Buffer.byteLength(JSON.stringify(value)) > byteLimit) throw invalid();
     signal?.throwIfAborted();
     await writePrivateJSON(this.path(provider), value);
@@ -106,19 +106,19 @@ export class ProviderCatalog {
   async load(provider, { signal, force = false } = {}) {
     signal?.throwIfAborted();
     const saved = await this.read(provider, { signal });
-    if (!force && saved && this.now() >= saved.checkedAt && this.now() - saved.checkedAt < refreshInterval) return saved;
+    if (!force && saved && Date.now() >= saved.checkedAt && Date.now() - saved.checkedAt < refreshInterval) return saved;
     const source = provider === 'xai-api' ? 'xai' : provider;
     this.path(provider);
     // Avoid the service’s version-normalization redirect without relaxing redirect policy.
-    const response = await this.fetchCatalog(`https://pi.dev/api/models/providers/${source}?types=chat&pi-version=${encodeURIComponent(this.version)}`, {
-      headers: { accept: 'application/json', 'User-Agent': `pi/${this.version}`,
+    const response = await this.fetchCatalog(`https://pi.dev/api/models/providers/${source}?types=chat&pi-version=${encodeURIComponent(VERSION)}`, {
+      headers: { accept: 'application/json', 'User-Agent': `pi/${VERSION}`,
         ...(saved && validator(saved.etag) ? { 'If-None-Match': saved.etag } : {}),
         ...(saved && validator(saved.lastModifiedHeader) ? { 'If-Modified-Since': saved.lastModifiedHeader } : {}) },
       credentials: 'omit', redirect: 'error', signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(15000)]) : AbortSignal.timeout(15000),
     });
     signal?.throwIfAborted();
     let entry;
-    if (response.status === 304 && saved) entry = { ...saved, checkedAt: this.now() };
+    if (response.status === 304 && saved) entry = { ...saved, checkedAt: Date.now() };
     else {
       if (response.status !== 200) throw new DefaultAgentError('Models could not be loaded. Refresh models to retry.');
       if (Number(response.headers.get('content-length')) > byteLimit) { await response.body?.cancel(); throw invalid(); }
@@ -130,7 +130,7 @@ export class ProviderCatalog {
       }
       const models = parseProviderModels(JSON.parse(Buffer.concat(chunks).toString('utf8')), provider);
       const lastModifiedHeader = validator(response.headers.get('last-modified'));
-      entry = { models, checkedAt: this.now(), etag: validator(response.headers.get('etag')), lastModifiedHeader,
+      entry = { models, checkedAt: Date.now(), etag: validator(response.headers.get('etag')), lastModifiedHeader,
         ...(Number.isFinite(Date.parse(lastModifiedHeader)) ? { lastModified: Date.parse(lastModifiedHeader) } : {}) };
     }
     signal?.throwIfAborted();

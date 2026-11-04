@@ -1,6 +1,5 @@
 import WorkspaceFixtures
 import Foundation
-import SQLite3
 import Testing
 import WovenMatterCore
 @testable import WovenMatterDashboardStore
@@ -12,8 +11,8 @@ struct CompanionWorkspaceTests {
 
   @Test("mobile history, desktop drafts and agent restore share revisions and independent receipts")
   func mobileHistoryAndAgentRestore() async throws {
-    let fixture = try CompanionFixture(); defer { fixture.remove() }
-    let db = try await WorkspaceDatabase(url: fixture.url)
+    let fixture = try PersistenceFixture(); defer { fixture.remove() }
+    let db = try await fixture.openDatabase()
     let caller = try await db.createFixtureLocalACPSession(runtimeKind: .codex, title: "Writer", ownerDeviceID: UUID())
     try await db.setSessionTools(.init(enabled: [.notes]), sessionID: caller)
     let noteID = UUID().uuidString.lowercased()
@@ -47,7 +46,7 @@ struct CompanionWorkspaceTests {
     let agentID = UUID().uuidString.lowercased()
     let agentResult = try await db.applyNoteEdits(agentRequest, callerConversationID: caller, requestID: agentID)
     #expect(agentResult.revision == "5")
-    let reopened = try await WorkspaceDatabase(url: fixture.url)
+    let reopened = try await fixture.openDatabase()
     #expect(try await reopened.applyCompanionMutation(mobileUpdate) == accepted)
     #expect(try await reopened.companionDraftRevision(operationID: draftID) == "2")
     let replay = try await reopened.restoreNoteAssetVersion(noteID: noteID, versionID: first.id,
@@ -64,25 +63,5 @@ struct CompanionWorkspaceTests {
 
   private func document(_ text: String) throws -> String {
     try NoteDocument(blocks: [.richText(NoteRichTextBlock(text: text))]).encoded()
-  }
-}
-
-private struct CompanionFixture {
-  let directory: URL
-  var url: URL { directory.appending(path: "workspace.sqlite") }
-  init() throws {
-    directory = FileManager.default.temporaryDirectory.appending(path: "companion-\(UUID())")
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-  }
-  func remove() { try? FileManager.default.removeItem(at: directory) }
-  func scalar(_ sql: String) throws -> Int64 {
-    var db: OpaquePointer?
-    guard sqlite3_open(url.path, &db) == SQLITE_OK else { throw WorkspaceDatabaseError.open("fixture") }
-    defer { sqlite3_close(db) }
-    var statement: OpaquePointer?
-    guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { throw WorkspaceDatabaseError.prepare("fixture") }
-    defer { sqlite3_finalize(statement) }
-    guard sqlite3_step(statement) == SQLITE_ROW else { throw WorkspaceDatabaseError.step("fixture") }
-    return sqlite3_column_int64(statement, 0)
   }
 }

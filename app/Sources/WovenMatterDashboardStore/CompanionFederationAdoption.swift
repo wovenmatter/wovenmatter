@@ -54,10 +54,10 @@ extension WorkspaceDatabaseConnection {
         try bind(JSONEncoder().encode(federationLegacyTranscriptUnlocked(conversationID)), at: 4, to: statement)
         try stepDone(statement)
         for runID in try companionIDsUnlocked("SELECT id FROM dashboard_runs WHERE conversation_id=?", bindings: [conversationID]) {
-          try companionExecuteUnlocked("INSERT INTO companion_execution_runs(id,workspace_id,conversation_id) VALUES (?,?,?)", values: [runID, workspaceID, conversationID])
+          try toolsExecuteUnlocked("INSERT INTO companion_execution_runs(id,workspace_id,conversation_id) VALUES (?,?,?)", [runID, workspaceID, conversationID])
         }
         // Notify every client that control now belongs to the independent origin.
-        try companionExecuteUnlocked("UPDATE dashboard_conversations SET updated_at=? WHERE id=?", values: [Self.timestamp(Date()), conversationID])
+        try toolsExecuteUnlocked("UPDATE dashboard_conversations SET updated_at=? WHERE id=?", [Self.timestamp(Date()), conversationID])
       }
       let adoption = try CompanionExecutionAdoption(workspaceID: workspaceID, conversation: conversation,
         runtimeKind: text(session, column: 0), nativeSessionID: nativeID, model: optionalText(session, column: 2),

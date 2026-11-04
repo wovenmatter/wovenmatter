@@ -98,6 +98,15 @@ public struct DefaultAgentSyncReceipt: Decodable, Sendable {
 /// One Mac owns renewal. Ordinary sends compare cached revisions and deadlines.
 /// All slow work is coalesced, and replacement refresh tokens reach Keychain
 /// before any borrowed access token becomes visible to a session or remote.
+private struct RefreshRequest: Encodable {
+    let action = "refresh"
+    let credentials: [String: DefaultAgentCredential]
+}
+private struct RefreshResult: Decodable {
+    let credentials: [String: DefaultAgentCredential]
+    let errors: [String: String]
+}
+
 @MainActor
 public final class ProviderAccountCoordinator {
     public static let shared = ProviderAccountCoordinator()
@@ -203,7 +212,7 @@ public final class ProviderAccountCoordinator {
             var prepared: [String: DefaultAgentPayload] = [:]
             for (scope, var value) in values {
                 value.revision = nil
-                value.revision = SHA256.hash(data: try value.data()).map { String(format: "%02x", $0) }.joined()
+                value.revision = SHA256.hash(data: try value.data()).hexString
                 prepared[scope] = value
             }
             cached = prepared
@@ -246,7 +255,7 @@ public final class ProviderAccountCoordinator {
         for (scope, payload) in cached {
             var value = reconfigure(payload)
             value.revision = nil
-            value.revision = SHA256.hash(data: try value.data()).map { String(format: "%02x", $0) }.joined()
+            value.revision = SHA256.hash(data: try value.data()).hexString
             updated[scope] = value
         }
         cached = updated
@@ -281,17 +290,9 @@ public final class ProviderAccountCoordinator {
         else { return }
         var expired = original
         expired.expires = 0  // Force the SDK renewal without changing the saved credential.
-        struct Request: Encodable {
-            let action = "refresh"
-            let credentials: [String: DefaultAgentCredential]
-        }
-        struct Result: Decodable {
-            let credentials: [String: DefaultAgentCredential]
-            let errors: [String: String]
-        }
         let response = try await DefaultAgentControl.run(
-            JSONEncoder().encode(Request(credentials: [provider: expired])))
-        let result = try JSONDecoder().decode(Result.self, from: response)
+            JSONEncoder().encode(RefreshRequest(credentials: [provider: expired])))
+        let result = try JSONDecoder().decode(RefreshResult.self, from: response)
         guard result.errors[provider] == nil, let renewed = result.credentials[provider],
             (renewed.expires ?? 0) > Date().timeIntervalSince1970 * 1000
         else {
@@ -310,12 +311,10 @@ public final class ProviderAccountCoordinator {
                 for account in try ProviderConnectionAccounts.list(provider: provider, scope: scope) {
                     guard let original = try ProviderConnectionAccounts.credential(account.id, provider: provider, scope: scope),
                         (original.expires ?? 0) <= Date().timeIntervalSince1970 * 1000 + 300000 else { continue }
-                    struct Request: Encodable { let action = "refresh"; let credentials: [String: DefaultAgentCredential] }
-                    struct Result: Decodable { let credentials: [String: DefaultAgentCredential]; let errors: [String: String] }
-                    let result: Result
+                    let result: RefreshResult
                     do {
-                        let response = try await DefaultAgentControl.run(try JSONEncoder().encode(Request(credentials: [provider: original])))
-                        result = try JSONDecoder().decode(Result.self, from: response)
+                        let response = try await DefaultAgentControl.run(try JSONEncoder().encode(RefreshRequest(credentials: [provider: original])))
+                        result = try JSONDecoder().decode(RefreshResult.self, from: response)
                     } catch is CancellationError { throw CancellationError() }
                     catch { continue } // One unavailable account must not block its healthy backups.
                     if let error = result.errors[provider] {

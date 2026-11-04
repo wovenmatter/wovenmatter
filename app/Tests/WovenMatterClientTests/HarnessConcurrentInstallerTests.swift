@@ -5,10 +5,6 @@ import WovenMatterCore
 @testable import WovenMatterClient
 
 struct HarnessConcurrentInstallerTests {
-}
-
-
-extension HarnessConcurrentInstallerTests {
     @Test func separateInstallersShareOneVerifiedNodeBootstrap() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "node-concurrency-\(UUID())")
         let bin = root.appending(path: "archive/node/bin")
@@ -25,7 +21,7 @@ extension HarnessConcurrentInstallerTests {
         #expect(packed.succeeded)
         let data = try Data(contentsOf: archive)
         let artifact = LocalACPManagedNodeArtifact(version: "v99.0.0", platform: "fixture", archiveFileName: "node.tar.gz",
-            sha256: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined())
+            sha256: SHA256.hash(data: data).hexString)
         let downloads = FixtureNodeDownloads(data: data)
         let destination = root.appending(path: "managed")
         let first = LocalACPManagedNodeRuntime(rootDirectory: destination, artifact: artifact, downloader: { _ in try await downloads.fetch() }, npmPreparer: { $0.appending(path: "bin/npm") })

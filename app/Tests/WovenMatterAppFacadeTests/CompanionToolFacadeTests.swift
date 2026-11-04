@@ -25,7 +25,7 @@ struct CompanionToolFacadeTests {
         try await fixture.database.write { connection in
             try connection.executeUnlocked("CREATE TABLE companion_workspace_access(device_id TEXT,workspace_id TEXT,enabled INTEGER)")
             for id in [localID, remoteID] {
-                try connection.companionExecuteUnlocked("INSERT INTO companion_workspace_access VALUES (?,?,0)", values: [device, id])
+                try connection.toolsExecuteUnlocked("INSERT INTO companion_workspace_access VALUES (?,?,0)", [device, id])
             }
         }
         try await fixture.database.requireCompanionAutomationAccess(callerID: caller)

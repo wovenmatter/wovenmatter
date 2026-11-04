@@ -131,20 +131,9 @@ final class WovenMatterLifecycleDelegate: NSObject, NSApplicationDelegate {
         guard !terminating else { return .terminateLater }
         terminating = true
         model.suspendNoteEditing()
-        if LocalExecutionRole.current == .frontend || model.isLibraryClient {
+        if LocalExecutionRole.current == .frontend {
             Task {
-                var flushed = await model.flushNotesBeforeBackendClientQuit()
-                if flushed {
-                    do { try await model.prepareLibraryClientForQuit() }
-                    catch {
-                        flushed = false
-                        let alert = NSAlert()
-                        alert.messageText = "Finish local work before quitting"
-                        alert.informativeText = error.localizedDescription
-                        alert.addButton(withTitle: "Keep Woven Matter open")
-                        alert.runModal()
-                    }
-                }
+                let flushed = await model.flushNotesBeforeBackendClientQuit()
                 if !flushed { terminating = false; model.resumeNoteEditing() }
                 if flushed { await finishTermination(sender) }
                 else { sender.reply(toApplicationShouldTerminate: false) }
@@ -373,7 +362,7 @@ enum LocalExecutionTransition {
 /// Captured once at startup; a running process keeps its ownership role.
 /// Isolated test hosts and the backend share the execution lease name.
 enum LocalExecutionRole: String {
-    case developmentHost, frontend, backend, libraryClient
+    case developmentHost, frontend, backend
 
     nonisolated static let libraryClientPreferenceKey = "wovenmatter.library.client-mode"
     #if COMPANION_FACADE_TESTS
@@ -381,13 +370,10 @@ enum LocalExecutionRole: String {
     // to or install the user's production server.
     static let current: LocalExecutionRole = .developmentHost
     #else
-    static let current: LocalExecutionRole = resolve(arguments: CommandLine.arguments,
-        libraryClientEnabled: UserDefaults.standard.bool(forKey: libraryClientPreferenceKey),
-        developmentMode: DevelopmentLaunch.mode)
+    static let current: LocalExecutionRole = resolve(arguments: CommandLine.arguments, developmentMode: DevelopmentLaunch.mode)
     #endif
 
-    static func resolve(arguments: [String], libraryClientEnabled: Bool = false,
-                        developmentMode: DevelopmentLaunch.Mode? = nil) -> Self {
+    static func resolve(arguments: [String], developmentMode: DevelopmentLaunch.Mode? = nil) -> Self {
         if developmentMode != nil {
             return arguments.contains("--backend") ? .backend : .frontend
         }
@@ -400,7 +386,6 @@ enum LocalExecutionRole: String {
     var leaseFileName: String {
         switch self {
         case .frontend: "frontend-owner.lock"
-        case .libraryClient: "library-client-owner.lock"
         case .developmentHost, .backend: "workspace-owner.lock"
         }
     }

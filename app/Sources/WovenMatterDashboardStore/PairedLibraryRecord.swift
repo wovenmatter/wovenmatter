@@ -18,13 +18,6 @@ public struct PairedLibraryRecord: Codable, Equatable, Sendable {
   public let origin: String
   public let vector: [String: Int64]
 
-  /// Causal updates supersede their predecessors. Concurrent deletion wins;
-  /// concurrent edits have the same deterministic winner on every Mac.
-  public func supersedes(_ other: Self) -> Bool {
-    if dominates(other) { return true }
-    if other.dominates(self) { return false }
-    return outranks(other)
-  }
   /// Deterministic order among concurrent maximal versions only.
   func outranks(_ other: Self) -> Bool {
     if deleted != other.deleted { return deleted }
@@ -46,9 +39,6 @@ public struct PairedLibraryRecord: Codable, Equatable, Sendable {
   public func dominates(_ other: Self) -> Bool {
     other.vector.allSatisfy { vector[$0.key, default: 0] >= $0.value }
       && vector.contains { $0.value > other.vector[$0.key, default: 0] }
-  }
-  public func concurrent(with other: Self) -> Bool {
-    vector != other.vector && !dominates(other) && !other.dominates(self)
   }
 }
 

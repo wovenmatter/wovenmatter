@@ -316,13 +316,6 @@ public actor LocalACPSessionCoordinator {
     private var sessionShutdownSequence: UInt64 = 0
     private var useSequence: UInt64 = 0
 
-    public init(database: WorkspaceDatabase) {
-        self.init(
-            database: database,
-            clientFactory: Self.defaultClientFactory
-        )
-    }
-
     init(
         database: WorkspaceDatabase,
         processLease: (any LocalACPProcessLeasing)? = nil,
@@ -357,33 +350,6 @@ public actor LocalACPSessionCoordinator {
 
     public func setResumePermissionHandler(_ handler: @escaping ResumePermissionHandler) {
         resumePermissionHandler = handler
-    }
-
-    @discardableResult
-    public func accept(
-        conversationID: String,
-        content: String,
-        deliveryContent: String? = nil,
-        noteContext: AgentNoteContext? = nil,
-        launch: LocalACPRuntimeLaunchConfiguration,
-        workspace: LocalACPWorkspaceLaunchConfiguration,
-        systemPrompt: String? = nil,
-        onPermission: PermissionHandler? = nil,
-        onInteraction: InteractionHandler? = nil,
-        dispatchFence: AgentDispatchFence? = nil
-    ) async throws -> LocalACPRunIdentifiers {
-        try await accept(
-            conversationID: conversationID,
-            input: AgentMessageInput(text: content),
-            deliveryContent: deliveryContent,
-            noteContext: noteContext,
-            launch: launch,
-            workspace: workspace,
-            systemPrompt: systemPrompt,
-            onPermission: onPermission,
-            onInteraction: onInteraction,
-            dispatchFence: dispatchFence
-        )
     }
 
     @discardableResult
@@ -609,8 +575,6 @@ public actor LocalACPSessionCoordinator {
                     let source = "interaction:" + UUID().uuidString
                     let kind: ProgramStatus.Kind = switch request {
                     case .questions, .form: .question
-                    case .plan: .permission
-                    case .secret: .auth
                     }
                     try? await self.database.recordProgramStatus(ProgramStatus(state: .blocked, kind: kind), runID: run.runID, source: source)
                     await self.publishChange(conversationID: descriptor.conversationID, runID: run.runID, phase: .content)
@@ -1073,21 +1037,6 @@ public actor LocalACPSessionCoordinator {
     @discardableResult
     public func sendActiveInput(
         conversationID: String,
-        content: String,
-        deliveryContent: String? = nil,
-        dispatchFence: AgentDispatchFence? = nil
-    ) async throws -> LocalACPSteeringIdentifiers {
-        try await sendActiveInput(
-            conversationID: conversationID,
-            input: AgentMessageInput(text: content),
-            deliveryContent: deliveryContent,
-            dispatchFence: dispatchFence
-        )
-    }
-
-    @discardableResult
-    public func sendActiveInput(
-        conversationID: String,
         input: AgentMessageInput,
         deliveryContent: String? = nil,
         expectedRunID: String? = nil,
@@ -1129,7 +1078,7 @@ public actor LocalACPSessionCoordinator {
         try checkActiveInputAdmission(conversationID: conversationID, runID: runID,
             sessionID: active.configurationObservationID, dispatchFence: operationFence)
         await eventBuffer.pause()
-        let reservation: WorkspaceDatabase.SteeringReservation
+        let reservation: LocalACPSteeringReservation
         do {
             try await streamWriter.finishSegmentAndPause()
             try checkActiveInputAdmission(conversationID: conversationID, runID: runID,
@@ -1406,7 +1355,6 @@ public actor LocalACPSessionCoordinator {
         for run in runs {
             _ = try? await run.value
         }
-
     }
 
     private func acquireOperationLease(
@@ -1913,7 +1861,7 @@ public actor LocalACPSessionCoordinator {
         launch.historyRecorder = database.historyWireRecorder(
             conversationID: descriptor.conversationID, harness: descriptor.runtimeKind.rawValue,
             sourceScope: [.defaultAgent, .codex, .claudeCode, .grokBuild].contains(descriptor.runtimeKind)
-                ? nil : descriptor.remoteWorkspaceID.map { "remote:" + $0.uuidString.lowercased() } ?? "local"
+                ? nil : descriptor.remoteWorkspaceID.map(WorkspaceFolderLocation.remoteWorkspaceSourceID) ?? "local"
         )
         let started = try clientFactory(launch, workspace.rootURL)
         do {
@@ -1933,13 +1881,10 @@ public actor LocalACPSessionCoordinator {
     private func initializeSession(
         _ client: LocalACPSessionDriver,
         descriptor: LocalACPSessionDescriptor,
-        usesPersistedSessionID: Bool = true,
         workspace: LocalACPWorkspaceLaunchConfiguration,
         systemPrompt: String?
     ) async throws -> LocalACPInitializedSession {
-        let sessionID = usesPersistedSessionID
-            ? descriptor.acpSessionID
-            : nil
+        let sessionID = descriptor.acpSessionID
         return try await withTaskCancellationHandler {
             // Loading a durable session can resume a remote run that is
             // waiting for approval, before any new prompt handler exists.

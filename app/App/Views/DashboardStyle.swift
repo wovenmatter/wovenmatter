@@ -6,7 +6,7 @@ import UIKit
 // Compiled by both apps. Keep icons, tokens and reusable controls here;
 // desktop window/sidebar behavior remains in DashboardDesign.swift.
 
-/// Lucide 1.63.0 template vectors. The suffix records the stroke width.
+/// Lucide 1.67.0 template vectors. The suffix records the stroke width.
 struct DashboardLucideGlyph: Hashable, Sendable {
     let rawValue: String
 
@@ -329,7 +329,6 @@ enum DashboardTheme: String, CaseIterable, Identifiable {
 }
 
 struct DashboardPalette {
-    static let calendarEvent = Color(dashboardColor: DashboardColors.primary)
     static let calendarTask = Color(dashboardColor: DashboardColors.calendarTask)
     static let calendarRecurringEvent = Color(dashboardColor: DashboardColors.calendarRecurringEvent)
     static let calendarRecurringTask = Color(dashboardColor: DashboardColors.calendarRecurringTask)

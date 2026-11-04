@@ -109,10 +109,3 @@ final class ProviderModelCatalogTests: XCTestCase {
   }
 
 }
-
-
-final class SubscriptionConnectionPolicyTests: XCTestCase {
-  private func connection(_ id: String, _ provider: String, route: InferenceRoute = .direct) -> InferenceConnection {
-    .init(id: id, name: id, provider: provider, route: route, modelID: "fixture")
-  }
-}

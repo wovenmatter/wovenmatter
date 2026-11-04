@@ -74,7 +74,7 @@ extension CompanionModel {
       activeRuntime = runtime
       try Task.checkCancellation()
       guard executionRecords[id]?.runID == job.id, executionRecords[id]?.status == "running", !localInterrupting.contains(id), !localStopping.contains(id) else { throw CancellationError() }
-      executionRecords[id]?.goalUsageBaseline = try await deviceTokenUsage(runtime)
+      executionRecords[id]?.goalUsageBaseline = try await runtime.tokenUsage()
       if job.text.hasPrefix("<wovenmatter-goal-continuation>\n"), executionRecords[id]?.goalLedger?.authorizes(job.id) != true {
         try await store.updateToolSubmission(id: job.id, state: "cancelled")
         if executionRecords[id]?.runID == job.id, !localStopping.contains(id), !localInterrupting.contains(id) {

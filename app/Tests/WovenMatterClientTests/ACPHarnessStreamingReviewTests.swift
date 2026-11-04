@@ -27,7 +27,7 @@ struct ACPHarnessStreamingReviewTests {
     let client = try await fixture.client()
     _ = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: nil, title: nil)
     let events = ACPReviewEvents()
-    _ = try await client.prompt("Replay") { await events.record($0) }
+    _ = try await client.prompt(.init(text: "Replay")) { await events.record($0) }
     await client.finishRun()
     await client.shutdown()
     let values = await events.values()
@@ -164,7 +164,7 @@ struct ACPHarnessStreamingReviewTests {
     _ = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: nil,
       title: nil, systemPrompt: nil)
     let events = ACPReviewEvents()
-    #expect(try await client.prompt("Replay") { await events.record($0) } == .endTurn)
+    #expect(try await client.prompt(.init(text: "Replay")) { await events.record($0) } == .endTurn)
     await client.shutdown()
     let values = await events.values()
     let snapshots = values.compactMap { event -> String? in
@@ -198,7 +198,7 @@ struct ACPHarnessStreamingReviewTests {
     )
     check(initialized.configuration)
     let events = ACPReviewEvents()
-    #expect(try await client.prompt("prompt") { await events.record($0) } == .endTurn)
+    #expect(try await client.prompt(.init(text: "prompt")) { await events.record($0) } == .endTurn)
     let streamed = await events.values()
     guard case .activity(let trailing, let appends)? = streamed.last else {
       Issue.record("The prompt should leave its trailing reasoning phase open until run settlement")

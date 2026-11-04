@@ -3,7 +3,6 @@ import XCTest
 import WovenMatterCompanion
 
 final class MobileStoreTests: XCTestCase {
-  func file() -> URL { FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("store.json") }
   func content(_ text: String) throws -> String { try NoteDocument(blocks: [.richText(.init(id: "stable-block", text: text))]).encoded() }
 
   func testOversizePasteAndBlockAdditionAreRejectedBeforeEditorAdoption() throws {

@@ -24,7 +24,7 @@ struct HarnessSetupView: View {
                             model.pendingDefaultAgentModelProvider = provider
                             model.pendingDefaultAgentSettingsScope = "global"
                             finish()
-                        }, onBack: { self.connectionFocus = nil })
+                        })
                     } else if step == 0 {
                         harnesses
                     } else {

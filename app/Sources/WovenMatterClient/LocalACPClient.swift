@@ -82,30 +82,14 @@ public enum LocalACPQuestionAnswer: Codable, Equatable, Sendable {
     case multiple([String])
 }
 
-public struct LocalACPPlanRequest: Codable, Equatable, Sendable {
-    public let name: String?
-    public let overview: String?
-    public let markdown: String
-
-    public init(name: String? = nil, overview: String? = nil, markdown: String) {
-        self.name = name
-        self.overview = overview
-        self.markdown = markdown
-    }
-}
-
 public enum LocalACPInteractionRequest: Codable, Equatable, Sendable {
     case form(LocalACPFormRequest)
     case questions(LocalACPQuestionRequest)
-    case plan(LocalACPPlanRequest)
-    case secret(prompt: String)
 }
 
 public enum LocalACPInteractionResponse: Codable, Equatable, Sendable {
     case formValues([String: LocalACPFormValue])
     case answers([String: LocalACPQuestionAnswer])
-    case planAccepted(Bool)
-    case secret(String)
     case cancelled
 }
 
@@ -177,15 +161,15 @@ public struct LocalACPSessionConfiguration: Equatable, Sendable {
     ) {
         self.model = model
         self.thinking = thinking
-        self.modelOptions = Self.unique(modelOptions + [model].compactMap { $0 })
-        self.thinkingOptions = Self.unique(thinkingOptions)
+        self.modelOptions = LocalACPSessionMetadata.unique(modelOptions + [model].compactMap { $0 })
+        self.thinkingOptions = LocalACPSessionMetadata.unique(thinkingOptions)
         self.slashCommands = slashCommands
         self.modelOptionMetadata = modelOptionMetadata
         self.thinkingOptionMetadata = thinkingOptionMetadata
         self.fallbackNotice = fallbackNotice
         self.workingDirectory = workingDirectory
         self.permission = permission
-        self.permissionOptions = Self.unique(permissionOptions)
+        self.permissionOptions = LocalACPSessionMetadata.unique(permissionOptions)
         self.permissionOptionMetadata = permissionOptionMetadata
     }
 
@@ -208,14 +192,6 @@ public struct LocalACPSessionConfiguration: Equatable, Sendable {
             workingDirectory: workingDirectory
         )
     }
-
-    private static func unique(_ values: [String]) -> [String] {
-        var seen: Set<String> = []
-        return values.compactMap {
-            let value = $0.trimmingCharacters(in: .whitespacesAndNewlines)
-            return !value.isEmpty && seen.insert(value).inserted ? value : nil
-        }
-    }
 }
 
 public struct LocalACPInitializedSession: Equatable, Sendable {
@@ -237,22 +213,6 @@ public struct LocalACPInitializedSession: Equatable, Sendable {
         self.recoveredDefaultAgentRuns = recoveredDefaultAgentRuns
         self.confirmedRemoteIdleSessionID = confirmedRemoteIdleSessionID
         self.configuration = configuration
-    }
-}
-
-public struct LocalACPConnectionProbe: Equatable, Sendable {
-    public let agentName: String?
-    public let agentVersion: String?
-    public let authenticationMethodIDs: [String]
-
-    public init(
-        agentName: String?,
-        agentVersion: String?,
-        authenticationMethodIDs: [String]
-    ) {
-        self.agentName = agentName
-        self.agentVersion = agentVersion
-        self.authenticationMethodIDs = authenticationMethodIDs
     }
 }
 
@@ -379,7 +339,7 @@ public final class ACPLineCursor: @unchecked Sendable {
     }
 
     public func next() async throws -> Data? {
-        let cancellation = ReadCancellation()
+        let cancellation = CancellationFlag()
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 queue.async {
@@ -418,7 +378,7 @@ public final class ACPLineCursor: @unchecked Sendable {
         return data
     }
 
-    private func readFrame(cancellation: ReadCancellation) throws -> Data? {
+    private func readFrame(cancellation: CancellationFlag) throws -> Data? {
         if let terminalError { throw terminalError }
         while true {
             try cancellation.check()
@@ -454,15 +414,6 @@ public final class ACPLineCursor: @unchecked Sendable {
             if count == 0 {
                 return finishFrame()
             }
-        }
-    }
-
-    private final class ReadCancellation: @unchecked Sendable {
-        private let lock = NSLock()
-        private var cancelled = false
-        func cancel() { lock.withLock { cancelled = true } }
-        func check() throws {
-            if lock.withLock({ cancelled }) { throw CancellationError() }
         }
     }
 }
@@ -556,7 +507,6 @@ public actor LocalACPClient {
     private let workingDirectory: URL
     private var nextID: Int64 = 0
     private var negotiatedProtocolVersion: Int64?
-    private var agentName: String?
     private var defaultAgentRunID: String?
     private var defaultAgentRemote = false
     private var durableRemoteACP = false
@@ -631,7 +581,6 @@ public actor LocalACPClient {
     private var activePermissionHandler: PermissionHandler? { (activePrompts.last ?? retainedRunHandlers)?.onPermission }
     private var resumePermissionHandler: PermissionHandler?
     private var activeInteractionHandler: InteractionHandler? { (activePrompts.last ?? retainedRunHandlers)?.onInteraction }
-    var activePromptRequestCount: Int { activePrompts.count }
     // A steer receipt is separate from completion. In particular Codex can
     // start a continuation when the original turn ends during admission.
     private var codexSteeringObservers: [UUID: AsyncThrowingStream<ACPRequestResponse, any Error>.Continuation] = [:]
@@ -748,39 +697,6 @@ public actor LocalACPClient {
         )
     }
 
-    public static func probeConnection(
-        launch: LocalACPRuntimeLaunchConfiguration,
-        workingDirectory: URL,
-        timeout: Duration = .seconds(5)
-    ) async throws -> LocalACPConnectionProbe {
-        let client = try start(
-            launch: launch,
-            workingDirectory: workingDirectory
-        )
-        return try await withTaskCancellationHandler {
-            let timeoutTask = Task {
-                do {
-                    try await Task.sleep(for: timeout)
-                } catch {
-                    return
-                }
-                await client.shutdown()
-            }
-            do {
-                let probe = try await client.connectionProbe()
-                timeoutTask.cancel()
-                await client.shutdown()
-                return probe
-            } catch {
-                timeoutTask.cancel()
-                await client.shutdown()
-                throw error
-            }
-        } onCancel: {
-            Task { await client.shutdown() }
-        }
-    }
-
     public func initializeSession(
         workingDirectory: URL,
         existingSessionID: String?,
@@ -842,16 +758,6 @@ public actor LocalACPClient {
         )
     }
 
-    private func connectionProbe() async throws -> LocalACPConnectionProbe {
-        let result = try await initializeConnection()
-        return LocalACPConnectionProbe(
-            agentName: result?["agentInfo"]?["name"]?.stringValue,
-            agentVersion: result?["agentInfo"]?["version"]?.stringValue,
-            authenticationMethodIDs: result?["authMethods"]?.arrayValue?
-                .compactMap { $0["id"]?.stringValue } ?? []
-        )
-    }
-
     private func initializeConnection() async throws -> ACPJSONValue? {
         var clientCapabilities: [String: ACPJSONValue] = [:]
         if runtimeKind == .claudeCode {
@@ -883,7 +789,6 @@ public actor LocalACPClient {
             )
         }
         negotiatedProtocolVersion = negotiatedVersion
-        agentName = initializeResult?["agentInfo"]?["name"]?.stringValue
         loadSessionSupported =
             initializeResult?["agentCapabilities"]?["loadSession"]?.boolValue ?? false
         steeringSupported = initializeResult?["_meta"]?["steering"]?["supported"]?
@@ -1124,22 +1029,6 @@ public actor LocalACPClient {
     }
 
     public func prompt(
-        _ text: String,
-        onEvent: EventHandler? = nil,
-        onPermission: PermissionHandler? = nil,
-        onInteraction: InteractionHandler? = nil,
-        dispatchFence: AgentDispatchFence? = nil
-    ) async throws -> LocalACPStopReason {
-        try await prompt(
-            AgentMessageInput(text: text),
-            onEvent: onEvent,
-            onPermission: onPermission,
-            onInteraction: onInteraction,
-            dispatchFence: dispatchFence
-        )
-    }
-
-    public func prompt(
         _ input: AgentMessageInput,
         onEvent: EventHandler? = nil,
         onPermission: PermissionHandler? = nil,
@@ -1161,13 +1050,6 @@ public actor LocalACPClient {
     /// Accepts another user message while the session has an active prompt.
     /// Returns on admission; the receipt retains any continuation's completion.
     /// Never cancel the current prompt to simulate steering.
-    public func beginActiveInput(
-        _ text: String,
-        dispatchFence: AgentDispatchFence? = nil
-    ) async throws -> LocalACPActiveInputReceipt {
-        try await beginActiveInput(AgentMessageInput(text: text), dispatchFence: dispatchFence)
-    }
-
     public func beginActiveInput(
         _ input: AgentMessageInput,
         dispatchFence: AgentDispatchFence? = nil

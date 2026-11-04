@@ -8,14 +8,12 @@ import WovenMatterCore
 @Suite struct DurableACPUncertaintyTests {
     @Test(arguments: [false, true])
     func unknownReceiptSurvivesRestartUntilScopedRecovery(hasTerminalSnapshot: Bool) async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: "durable-uncertain-\(UUID())")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
+        let persistence = try PersistenceFixture(); defer { persistence.remove() }
+        let database = try await persistence.openDatabase()
         let workspaceID = UUID()
         let conversation = try await database.createFixtureRemoteACPSession(runtimeKind: .codex,
             remoteWorkspaceID: workspaceID, remoteWorkspaceName: "Fixture", title: "Remote", ownerDeviceID: UUID())
-        let run = try await database.beginLocalACPRun(conversationID: conversation, content: "first")
+        let run = try await database.beginLocalACPRun(conversationID: conversation, input: .init(text: "first"))
         // The allocated identity becomes durable before the first native claim.
         try await database.registerDurableLocalACPRun(runID: run.runID, remoteWorkspaceID: workspaceID, sessionID: "native")
         #expect(try await database.localACPSession(conversationID: conversation).acpSessionID == "native")
@@ -23,7 +21,7 @@ import WovenMatterCore
         #expect(try await database.conversationContent(id: conversation).runs.first?.status == "uncertain")
         #expect(try await database.activeDeviceOwnedConversationIDs().contains(conversation))
         await #expect(throws: LocalACPSessionDatabaseError.runAlreadyActive) {
-            try await database.beginLocalACPRun(conversationID: conversation, content: "duplicate")
+            try await database.beginLocalACPRun(conversationID: conversation, input: .init(text: "duplicate"))
         }
         let terminal = [DefaultAgentRunSnapshot(runID: run.runID, content: "recovered", error: nil)]
         // An unfenced response (possibly the original turn before a delayed
@@ -43,7 +41,7 @@ import WovenMatterCore
         #expect(recovered.runs.first?.status == (hasTerminalSnapshot ? "completed" : "failed"))
         #expect(try await !database.activeDeviceOwnedConversationIDs().contains(conversation))
         if hasTerminalSnapshot { #expect(recovered.messages.last?.content == "recovered") }
-        _ = try await database.beginLocalACPRun(conversationID: conversation, content: "new input")
+        _ = try await database.beginLocalACPRun(conversationID: conversation, input: .init(text: "new input"))
     }
 
 }

@@ -196,7 +196,7 @@ extension WorkspaceDatabaseConnection {
     try withLock { try deliveryUnlocked(id) }
   }
 
-  public func sessionDeliveries(sessionID: String? = nil, queuedOnly: Bool = false, limit: Int = 200, beforeID: String? = nil, outgoingOnly: Bool = false, activityOnly: Bool = false, includeCalendar: Bool = true) throws -> [WorkspaceSessionDelivery] {
+  public func sessionDeliveries(sessionID: String? = nil, queuedOnly: Bool = false, limit: Int = 200, beforeID: String? = nil, activityOnly: Bool = false, includeCalendar: Bool = true) throws -> [WorkspaceSessionDelivery] {
     try withLock {
       var sql = "SELECT rowid AS sequence,* FROM workspace_session_deliveries WHERE 1=1"
       var values: [String?] = []
@@ -205,8 +205,7 @@ extension WorkspaceDatabaseConnection {
         if activityOnly {
           sql += " AND ((source_id=? AND kind IN ('message','created')) OR (target_id=? AND native_command IS NOT NULL))"
           values += [sessionID, sessionID]
-        } else if outgoingOnly { sql += " AND source_id=? AND kind IN ('message','created')"; values.append(sessionID) }
-        else { sql += " AND (source_id=? OR target_id=?)"; values += [sessionID, sessionID] }
+        } else { sql += " AND (source_id=? OR target_id=?)"; values += [sessionID, sessionID] }
       }
       if let beforeID {
         guard !queuedOnly, let cursor = try deliveryUnlocked(beforeID),
@@ -306,8 +305,8 @@ extension WorkspaceDatabase {
     try await read { try $0.toolDelivery(id: id) }
   }
 
-  public func sessionDeliveries(sessionID: String? = nil, queuedOnly: Bool = false, limit: Int = 200, beforeID: String? = nil, outgoingOnly: Bool = false, activityOnly: Bool = false, includeCalendar: Bool = true) async throws -> [WorkspaceSessionDelivery] {
-    try await read { try $0.sessionDeliveries(sessionID: sessionID, queuedOnly: queuedOnly, limit: limit, beforeID: beforeID, outgoingOnly: outgoingOnly, activityOnly: activityOnly, includeCalendar: includeCalendar) }
+  public func sessionDeliveries(sessionID: String? = nil, queuedOnly: Bool = false, limit: Int = 200, beforeID: String? = nil, activityOnly: Bool = false, includeCalendar: Bool = true) async throws -> [WorkspaceSessionDelivery] {
+    try await read { try $0.sessionDeliveries(sessionID: sessionID, queuedOnly: queuedOnly, limit: limit, beforeID: beforeID, activityOnly: activityOnly, includeCalendar: includeCalendar) }
   }
 
   public func sessionActivityWindow(sessionID: String, throughID: String) async throws -> [WorkspaceSessionDelivery] {

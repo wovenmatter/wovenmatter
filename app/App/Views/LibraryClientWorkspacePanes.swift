@@ -2,6 +2,16 @@ import SwiftUI
 import QuickLook
 import CompanionClient
 import WovenMatterCompanion
+import WovenMatterCore
+
+struct LibraryClientPaneHeader<Actions: View>: View {
+  let title: String
+  @ViewBuilder var actions: () -> Actions
+  var body: some View {
+    HStack { Text(title).font(.system(size: 21, weight: .semibold)).lineLimit(1); Spacer(); actions() }
+      .buttonStyle(DashboardQuietButtonStyle()).padding(22)
+  }
+}
 
 struct LibraryClientLibraryPane: View {
   @Environment(\.openDocumentPreview) private var openPreview
@@ -243,5 +253,134 @@ struct LibraryClientSessionSettingsSheet: View {
   private func saveTools(confirmed: Bool) async {
     busy = true; defer { busy = false }
     if await model.perform(.sessionTools(id: id, enabled: enabled.sorted(), confirmPausingTimers: confirmed)) { await load() }
+  }
+}
+
+struct LibraryClientNotePane: View {
+  @Bindable var model: CentralLibraryClientModel
+  let note: CompanionNote
+  @State private var editor = DashboardNoteEditorController()
+  @State private var cache = DashboardNoteDocumentCache()
+  @State private var details = false
+  private var source: CompanionNote { model.draftNotes[note.id] ?? model.state.notes[note.id] ?? note }
+  private var document: Binding<NoteDocument> {
+    Binding(get: { cache.value(noteID: note.id, source: source.content) }, set: { document in
+      do { model.editNote(source, content: try cache.encode(document, noteID: note.id)) }
+      catch { model.errorMessage = error.localizedDescription }
+    })
+  }
+  private var hasLinkedData: Bool {
+    document.wrappedValue.databaseLink != nil || document.wrappedValue.blocks.contains {
+      if case .table(let table) = $0 { return table.databaseLink != nil }; return false
+    }
+  }
+  @ViewBuilder private var linkedPreview: some View {
+    let value = document.wrappedValue
+    if value.kind == .html {
+      LibraryClientLinkedPreview(model: model, note: source, tableID: nil, html: value.html)
+    } else if value.kind == .spreadsheet, value.databaseLink != nil {
+      LibraryClientLinkedPreview(model: model, note: source, tableID: nil, html: nil)
+    } else {
+      ScrollView {
+        VStack(alignment: .leading, spacing: 18) {
+          ForEach(value.blocks, id: \.id) { block in
+            if case .table(let table) = block, table.databaseLink != nil || value.databaseLink != nil {
+              LibraryClientLinkedPreview(model: model, note: source, tableID: table.id, html: nil)
+            } else { Text(block.plainText).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
+          }
+        }.padding(22)
+      }
+    }
+  }
+  var body: some View {
+    VStack(spacing: 0) {
+      HStack {
+        TextField("Untitled note", text: Binding(get: { source.title }, set: { model.editNote(source, title: $0) }))
+          .textFieldStyle(.plain).font(.system(size: 21, weight: .semibold))
+        Spacer()
+        Text(model.state.isDirty(note.id) ? "Saved on this Mac" : "Synchronized").font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+        Button { details = true } label: { Image(systemName: "ellipsis") }.buttonStyle(DashboardIconButtonStyle()).help("Note details")
+      }.padding(22)
+      if model.state.uncachedNoteIDs.contains(note.id) {
+        ContentUnavailableView("Not downloaded", systemImage: "arrow.down.circle", description: Text("Reconnect to the central database to download this note."))
+      } else if !cache.isEditable(noteID: note.id, source: source.content) {
+        Text("This document uses a newer format. Update Woven Matter to edit it.").padding()
+      } else if hasLinkedData {
+        linkedPreview
+      } else {
+        switch document.wrappedValue.kind {
+        case .note:
+          HStack(spacing: 12) {
+            Button("Bold") { editor.toggleBold() }; Button("Italic") { editor.toggleItalic() }; Button("Underline") { editor.toggleUnderline() }
+            Button("Insert table") { editor.insertTable() }; Spacer()
+          }.buttonStyle(DashboardQuietButtonStyle()).padding(.horizontal, 22)
+          DashboardNoteEditor(document: document, controller: editor).padding(.horizontal, 22)
+        case .spreadsheet: DashboardSpreadsheetEditor(document: document)
+        case .html:
+          VSplitView {
+            TextEditor(text: Binding(get: { document.wrappedValue.html }, set: { var value = document.wrappedValue; value.html = $0; document.wrappedValue = value }))
+              .font(.system(size: 12, design: .monospaced)).frame(minHeight: 150)
+            DashboardHTMLArtifactView(html: document.wrappedValue.html, linkedDataJSON: nil).frame(minHeight: 150)
+          }.padding(.horizontal, 22)
+        }
+      }
+    }
+    .sheet(isPresented: $details) {
+      LibraryClientItemManagementSheet(model: model, id: note.id, isNote: true, title: source.title, folderID: source.folderID ?? "").frame(minWidth: 440, minHeight: 430)
+    }
+  }
+}
+
+private struct LibraryClientLinkedPreview: View {
+  @Environment(\.dashboardTheme) private var theme
+  @Bindable var model: CentralLibraryClientModel
+  let note: CompanionNote
+  let tableID: String?
+  let html: String?
+  @State private var data: CompanionLinkedData?
+  @State private var error: String?
+  @State private var loading = false
+  private var requestKey: String { "\(note.id):\(note.revision):\(tableID ?? "document"):\(model.online)" }
+  var body: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      HStack {
+        DashboardLucideIcon(glyph: .database, size: 14)
+        Text("Live linked data · read only").font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+        Spacer()
+        if loading { ProgressView().controlSize(.small) }
+        else { Button("Refresh") { Task { await load() } }.disabled(!model.online) }
+      }
+      if let error { Text(error).font(.caption).foregroundStyle(DashboardPalette.mutedForeground) }
+      if let html { DashboardHTMLArtifactView(html: html, linkedDataJSON: data?.json).frame(minHeight: 250) }
+      else if let data {
+        ScrollView([.horizontal, .vertical]) {
+          LazyVStack(alignment: .leading, spacing: 0) {
+            row(data.columns, header: true)
+            ForEach(Array(data.rows.enumerated()), id: \.offset) { _, cells in row(cells, header: false) }
+          }
+        }.accessibilityLabel("Live linked table, read only")
+      }
+    }.padding(22).task(id: requestKey) { await load() }
+  }
+  private func row(_ cells: [String], header: Bool) -> some View {
+    HStack(spacing: 0) {
+      ForEach(Array(cells.enumerated()), id: \.offset) { _, text in
+        Text(text).font(.system(size: 13, weight: header ? .semibold : .regular)).textSelection(.enabled)
+          .frame(width: 150, alignment: .leading).padding(8)
+          .background(header ? theme.palette.themeWhisper : .clear)
+          .overlay(Rectangle().stroke(theme.palette.border, lineWidth: 0.5))
+      }
+    }
+  }
+  private func load() async {
+    let key = requestKey
+    data = nil; error = nil; loading = true
+    defer { if requestKey == key { loading = false } }
+    guard model.online else { error = "Connect to your central database to preview this linked data."; return }
+    do {
+      let result = try await model.linkedData(note: note, tableID: tableID)
+      guard !Task.isCancelled, requestKey == key else { return }
+      data = result
+    } catch is CancellationError {} catch { if requestKey == key { self.error = error.localizedDescription } }
   }
 }

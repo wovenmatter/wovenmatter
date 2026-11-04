@@ -18,7 +18,7 @@ import { writePrivateJSON } from '../config.mjs';
 // major is an unverified API. Newer V2 releases install without an app update;
 // Dependency maintenance reviews new upstream majors before changing this API line.
 export const EXECUTOR_API_MAJOR = 2;
-export const supportsExecutorVersion = version => releaseVersion(version) && Number(version.split('.')[0]) === EXECUTOR_API_MAJOR;
+const supportsExecutorVersion = version => releaseVersion(version) && Number(version.split('.')[0]) === EXECUTOR_API_MAJOR;
 export const latestExecutorVersion = fetchImplementation => latestSupportedPackage('executor', {
   major: EXECUTOR_API_MAJOR, prerelease: true, executable: 'executor', fetchImplementation });
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));

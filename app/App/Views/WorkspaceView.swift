@@ -50,32 +50,6 @@ extension EnvironmentValues {
     }
 }
 
-struct DashboardCreatedNotePresentation: Equatable {
-    let selectedNoteID: String
-    let titleFocusNoteID: String
-
-    init(noteID: String) {
-        selectedNoteID = noteID
-        titleFocusNoteID = noteID
-    }
-}
-
-struct DashboardSendResult: Equatable {
-    let draft: String
-    let accepted: Bool
-
-    static func resolve(
-        submittedDraft: String,
-        currentDraft: String,
-        accepted: Bool
-    ) -> DashboardSendResult {
-        DashboardSendResult(
-            draft: accepted && currentDraft == submittedDraft ? "" : currentDraft,
-            accepted: accepted
-        )
-    }
-}
-
 struct DashboardRunDisplayPolicy {
     static func presentsStatus(_ run: WorkspaceRunRecord) -> Bool {
         run.status != "queued" && run.status != "accepted"
@@ -357,10 +331,14 @@ struct WorkspaceView: View {
         }
         .onDisappear { noticeTask?.cancel() }
         .sheet(item: $conversationToRename) { conversation in
-            DashboardRenameConversationSheet(conversation: conversation, model: model)
+            DashboardRenameSheet(heading: "Rename chat", placeholder: "Chat name", initialTitle: conversation.title) { title in
+                try await model.mutateConversation(id: conversation.id, mutation: .rename(title))
+            }
         }
         .sheet(item: $noteToRename) { note in
-            DashboardRenameNoteSheet(note: note, model: model)
+            DashboardRenameSheet(heading: "Rename note", placeholder: "Note name", initialTitle: model.noteDraft(for: note).title) { title in
+                try await model.mutateNote(id: note.id, mutation: .rename(title))
+            }
         }
         .sheet(isPresented: $showsWorkspaceTrash) {
             if let client = model.liveLibraryClient {
@@ -412,12 +390,8 @@ struct WorkspaceView: View {
                     attachmentTargetConversationID = nil
                     attachmentPicker = nil
                     Task { @MainActor in
-                        do {
-                            if let conversationID = targetConversationID {
-                                appendAttachment(try await model.conversationAttachmentDraft(conversation), conversationID: conversationID)
-                            }
-                        } catch {
-                            showNotice(error.localizedDescription)
+                        if let conversationID = targetConversationID {
+                            appendAttachment(model.conversationAttachmentDraft(conversation), conversationID: conversationID)
                         }
                     }
                 }
@@ -717,8 +691,7 @@ struct WorkspaceView: View {
                         onSend: send,
                         onAttachmentAction: handleAttachmentAction,
                         onRemoveAttachment: removeAttachment,
-                        onDropFiles: attachFiles,
-                        onUnavailableComposerAction: showUnavailableMutation
+                        onDropFiles: attachFiles
                     )
                 case .calendar:
                     DashboardCalendarSurface(model: model, onOpenSession: { id in
@@ -971,9 +944,8 @@ struct WorkspaceView: View {
                 showNotice(model.noteMutationError ?? "The note could not be created.")
                 return
             }
-            let presentation = DashboardCreatedNotePresentation(noteID: noteID)
-            newlyCreatedNoteID = presentation.titleFocusNoteID
-            selectNote(presentation.selectedNoteID)
+            newlyCreatedNoteID = noteID
+            selectNote(noteID)
         }
     }
 
@@ -1320,12 +1292,8 @@ struct WorkspaceView: View {
                     ),
                     note: capturedNote
                 )
-                let result = DashboardSendResult.resolve(
-                        submittedDraft: content,
-                        currentDraft: draftsByConversationID[conversationID, default: ""],
-                        accepted: accepted
-                    )
-                draftsByConversationID[conversationID] = result.draft
+                let currentDraft = draftsByConversationID[conversationID, default: ""]
+                draftsByConversationID[conversationID] = accepted && currentDraft == content ? "" : currentDraft
                 if accepted {
                     let submittedIDs = Set(submittedAttachments.map(\.id))
                     attachmentDraftsByConversation[conversationID, default: []]
@@ -1484,7 +1452,6 @@ struct DashboardWorkspaceSurface: View {
     let onAttachmentAction: (DashboardChatPanelID, DashboardComposerAttachmentAction) -> Void
     let onRemoveAttachment: (String, DashboardChatPanelID) -> Void
     let onDropFiles: ([URL], DashboardChatPanelID) -> Bool
-    let onUnavailableComposerAction: (String) -> Void
 
     var body: some View {
         GeometryReader { geometry in
@@ -1615,8 +1582,7 @@ struct DashboardWorkspaceSurface: View {
                 onAttachmentAction: { onAttachmentAction(panelID, $0) },
                 onRemoveAttachment: { onRemoveAttachment($0, panelID) },
                 onDropFiles: { onDropFiles($0, panelID) },
-                onCommandNavigation: handleComposerNavigation,
-                onUnavailableComposerAction: onUnavailableComposerAction
+                onCommandNavigation: handleComposerNavigation
             )
             if showNoteButton {
                 Button {

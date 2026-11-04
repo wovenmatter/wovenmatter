@@ -406,6 +406,20 @@ export function* nativePresentationUpdates(update) {
   }
 }
 
+// Reassemble a snapshot before projecting it. A partial replacement cannot
+// pass the coordinator's cumulative steering-prefix fence.
+export function publishNativePresentation(update, publish) {
+  let offset = 0;
+  for (const preview of nativePresentationUpdates(update)) {
+    if ((update._meta?.wovenAssistantSnapshot || update._meta?.wovenThoughtSnapshot) && typeof update.content?.text === 'string') {
+      const start = offset === 0; offset += preview.content.text.length;
+      preview._meta = { ...preview._meta, wovenSnapshotStart: start && (update._meta.wovenSnapshotStart ?? true),
+        wovenSnapshotEnd: offset === update.content.text.length && (update._meta.wovenSnapshotEnd ?? true) };
+    }
+    publish(preview);
+  }
+}
+
 // A single child's history must never consume the identities or route/state
 // fields of later children. This public projection uses explicit scalar fields
 // and a separate, fair content budget; native records retain the full content.

@@ -108,26 +108,6 @@ struct RemoteWorkspaceDeploymentTests {
         #expect(throws: RemoteWorkspaceClientError.self) { try RemoteHostBundle.archive(root: root, deployment: deployment) }
     }
 
-    @Test func changedImageBuildsAndExplicitUpdateSkipsReuse() async throws {
-        let root = try fixture(); defer { try? FileManager.default.removeItem(at: root) }
-        let image = "sha256:" + String(repeating: "b", count: 64)
-        for force in [false, true] {
-            let client = RemoteWorkspaceSSHClient(runner: { _, command, input in
-                #expect(!force)
-                #expect(command.contains(" -- inspect "))
-                #expect(input == nil)
-                return Data("build\n".utf8)
-            }, scriptLoader: { Data() }, deploymentRoot: root, streamingRunner: { _, command, input, progress in
-                #expect(command.contains(" -- build "))
-                #expect(command.hasSuffix(force ? " true" : " false"))
-                #expect((input?.count ?? 0) > 0)
-                progress(Data("WM_PROGRESS building\nWM_PROGRESS ready\n".utf8))
-                return Data(image.utf8)
-            })
-            #expect(try await client.deployService(hostName: "host", userName: nil, forceRefresh: force) == image)
-        }
-    }
-
     @Test func progressStreamsBeforeExitAndFiltersRawOutput() throws {
         let state = ProgressState()
         let decoder = RemoteWorkspaceBuildProgress { state.append($0) }
@@ -146,7 +126,6 @@ struct RemoteWorkspaceDeploymentTests {
         #expect(result.status == 0)
         #expect(result.output.trimmingCharacters(in: .whitespacesAndNewlines) == "done")
         #expect(state.messages.last == "Workspace image ready.")
-        #expect(RemoteWorkspaceDeployment.imageID(Data("arbitrary output".utf8)) == nil)
     }
 }
 

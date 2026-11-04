@@ -14,11 +14,9 @@ public struct OpenCodeSessionUpdate: Sendable {
 /// Commands acknowledge without a message ID. Neither response invents run IDs.
 public struct OpenCodeSubmissionReceipt: Equatable, Sendable {
     public let nativeUserMessageID: String?
-    public let identifiers: LocalACPRunIdentifiers?
 
-    public init(nativeUserMessageID: String? = nil, identifiers: LocalACPRunIdentifiers? = nil) {
+    public init(nativeUserMessageID: String? = nil) {
         self.nativeUserMessageID = nativeUserMessageID
-        self.identifiers = identifiers
     }
 }
 
@@ -704,7 +702,7 @@ public actor OpenCodeSessionCoordinator {
               let credential = proxy["bearerToken"].string, !credential.isEmpty else {
             throw OpenCodeError.message("OpenCode did not confirm the Woven MCP connection.")
         }
-        let server = "woven_" + String(SHA256.hash(data: Data(link.sessionID.utf8)).map { String(format: "%02x", $0) }.joined().prefix(16))
+        let server = "woven_" + String(SHA256.hash(data: Data(link.sessionID.utf8)).hexString.prefix(16))
         _ = try await client.call("PUT", "/api/experimental/mcp/" + server, query: query, body: ["config": [
             "type": .string("remote"), "url": .string(endpoint), "oauth": .bool(false), "codemode": .bool(false),
             "headers": ["Authorization": .string("Bearer " + credential)]
@@ -881,7 +879,7 @@ public actor OpenCodeSessionCoordinator {
         if interactionFences[link.conversationID]?.isCancelled == true {
             interactionFences[link.conversationID] = AgentDispatchFence()
         }
-        let deliveryText = input.textWithReferenceContext
+        let deliveryText = input.transportText()
         let id = "msg_" + UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
         var files: [OpenCodeValue] = []
         for file in input.files {

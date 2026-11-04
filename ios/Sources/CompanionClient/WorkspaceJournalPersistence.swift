@@ -45,7 +45,7 @@ enum WorkspaceJournalPersistence {
     // History retention/compaction is explicit, not part of cache eviction.
   }
   private static func directory(_ file: URL) -> URL { file.appendingPathExtension("bodies") }
-  private static func digest(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
+  private static func digest(_ data: Data) -> String { SHA256.hash(data: data).hexString }
   private static func transform(_ state: inout WorkspaceJournalState, _ body: (Data) throws -> Data) throws {
     func text(_ value: String) throws -> String {
       guard let result = String(data: try body(Data(value.utf8)), encoding: .utf8) else { throw WorkspaceJournal.Failure.incompatibleStore }

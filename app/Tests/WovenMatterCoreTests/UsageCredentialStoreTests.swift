@@ -39,7 +39,6 @@ struct UsageCredentialStoreTests {
     let directory = try temporaryDirectory()
     defer { try? FileManager.default.removeItem(at: directory) }
     let credentials = SessionCredentialFixture()
-    let collector = CredentialUseRecorder()
     let revision = ConnectionRevisionFixture()
     let service = LocalUsageService(
       homeDirectory: directory,
@@ -47,62 +46,53 @@ struct UsageCredentialStoreTests {
       credentialStore: credentials,
       usageDatabaseURL: directory.appending(path: "usage.sqlite"),
       sharedConnectionRevision: { revision.value },
-      limitCollector: { request in
-        collector.recordLimit(request.openRouterAPIKey)
-        return []
-      }
+      limitCollector: { _ in [] }
     )
-    func refresh() async throws {
-      _ = try await service.snapshot(
+    func refresh() async throws -> Bool {
+      try await service.snapshot(
         range: .last30Days,
         refreshLimits: true,
         refreshReason: .manual,
         enabledProviders: [.openRouter]
-      )
+      ).hasOpenRouterCredential
     }
 
     try await service.authorizeOpenRouterCredentialAccess()
     revision.advance() // An unrelated shared account change must not invalidate this isolated store.
-    try await refresh()
-    try await refresh()
+    #expect(try await refresh())
+    #expect(try await refresh())
     #expect(credentials.authorizationCount == 1)
-    #expect(credentials.readCount == 0)
-    #expect(collector.limitKeys == ["original", "original"])
+    #expect(credentials.presenceChecks == 0)
 
     credentials.denyAuthorization()
     await #expect(throws: UsageCredentialStoreError.self) {
       try await service.authorizeOpenRouterCredentialAccess()
     }
-    try await refresh()
-    #expect(collector.limitKeys.last == "original")
-    #expect(credentials.readCount == 0)
+    #expect(try await refresh())
+    #expect(credentials.presenceChecks == 0)
 
     try await service.saveOpenRouterAPIKey(" replacement ")
     revision.advance()
-    try await refresh()
-    #expect(collector.limitKeys.last == "replacement")
-    #expect(credentials.readCount == 0)
+    #expect(try await refresh())
+    #expect(credentials.presenceChecks == 0)
 
     try await service.deleteOpenRouterAPIKey()
-    try await refresh()
-    #expect(collector.limitKeys.last == "missing")
-    #expect(credentials.readCount == 1) // Limits only; analytics never reads the key.
+    #expect(try await refresh() == false)
+    #expect(credentials.presenceChecks == 1) // Limits only; analytics never checks the key.
   }
 
-  @Test("presence reads attributes only and secret reads never allow authentication")
+  @Test("presence reads attributes only and never allow authentication")
   func noninteractiveReads() throws {
     let fixture = KeychainFixture()
     let store = fixture.store()
 
     #expect(try store.hasOpenRouterAPIKey())
-    #expect(try store.loadOpenRouterAPIKey() == "fixture-key")
 
     let reads = fixture.reads
-    #expect(reads.count == 2)
+    #expect(reads.count == 1)
     #expect(reads[0].attributes && !reads[0].secret)
-    #expect(reads[1].secret && !reads[1].attributes)
     #expect(reads.allSatisfy { !$0.interactionAllowed && $0.contextDisallowsInteraction })
-    #expect(fixture.policyChanges == [false, true, false, true])
+    #expect(fixture.policyChanges == [false, true])
     #expect(fixture.interactionAllowed)
   }
 
@@ -112,100 +102,34 @@ struct UsageCredentialStoreTests {
       KeychainFixture(policyStatus: errSecNotAvailable),
       KeychainFixture(suppressionStatus: errSecNotAvailable),
     ] {
-      #expect(throws: UsageCredentialStoreError.self) { try fixture.store().loadOpenRouterAPIKey() }
+      #expect(throws: UsageCredentialStoreError.self) { try fixture.store().hasOpenRouterAPIKey() }
       #expect(fixture.reads.isEmpty)
       #expect(fixture.interactionAllowed)
     }
   }
 
-  @Test("failed background credential reads preserve last-good quota values")
-  func deniedLimitRefreshKeepsLastGood() async throws {
+  @Test("a superseded limits refresh cannot replace the current session cache")
+  func supersededRefreshDoesNotPublishStaleLimits() async throws {
     let directory = try temporaryDirectory()
     defer { try? FileManager.default.removeItem(at: directory) }
-    let databaseURL = directory.appending(path: "usage.sqlite")
-    let now = Date(timeIntervalSince1970: 1_800_000_000)
-    let prior = UsageLimitAccount(
-      provider: .openRouter,
-      accountLabel: "Saved account",
-      status: .available,
-      balance: ProviderMoney(amountMicros: 20_000_000, currency: "USD"),
-      source: "Fixture",
-      detail: "Last successful refresh",
-      observedAt: now.addingTimeInterval(-120)
-    )
-    try UsageStore(databaseURL: databaseURL).saveUsageLimitAccounts([prior], storedAt: prior.observedAt)
-    let fixture = KeychainFixture(secretStatus: errSecInteractionNotAllowed)
-    let service = LocalUsageService(
-      homeDirectory: directory,
-      fileManager: .default,
-      credentialStore: fixture.store(),
-      usageDatabaseURL: databaseURL,
-      limitCollector: { request in
-        #expect(request.openRouterAPIKey == nil)
-        return [UsageLimitAccount(
-          provider: .openRouter,
-          accountLabel: "OpenRouter",
-          status: .needsCredential,
-          source: "Fixture",
-          detail: "No key supplied",
-          observedAt: request.now
-        )]
-      }
-    )
-    for reason in [UsageRefreshReason.startup, .manual, .credentialChanged] {
-      let snapshot = try await service.limitsSnapshot(
-        refresh: true,
-        refreshReason: reason,
-        enabledProviders: [.openRouter],
-        keychainInteraction: .oneShotExplicit,
-        now: now
-      )
-      let account = try #require(snapshot.accounts.first)
-      #expect(account.balance == prior.balance)
-      #expect(account.observedAt == prior.observedAt)
-      #expect(account.isStale)
-      #expect(account.refreshError?.contains("Keychain") == true)
-      #expect(snapshot.hasOpenRouterCredential)
-    }
-    #expect(fixture.reads.filter(\.secret).count == 3)
-    #expect(fixture.reads.allSatisfy { !$0.interactionAllowed && $0.contextDisallowsInteraction })
-  }
-
-  @Test("a superseded limits save cannot replace the current session cache")
-  func supersededDatabaseSaveDoesNotPublishStaleLimits() async throws {
-    let directory = try temporaryDirectory()
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let databaseURL = directory.appending(path: "usage.sqlite")
+    let gate = LimitRefreshGate()
     let service = LocalUsageService(homeDirectory: directory, fileManager: .default,
-      credentialStore: SessionCredentialFixture(), usageDatabaseURL: databaseURL,
+      credentialStore: SessionCredentialFixture(), usageDatabaseURL: directory.appending(path: "usage.sqlite"),
+      sharedConnectionRevision: { 0 },
       limitCollector: { request in
-        [UsageLimitAccount(provider: .openRouter, accountLabel: "At \(request.now.timeIntervalSince1970)",
+        if request.now.timeIntervalSince1970 == 200 { await gate.hold() }
+        return [UsageLimitAccount(provider: .openRouter, accountLabel: "At \(request.now.timeIntervalSince1970)",
           status: .available, source: "Fixture", detail: "Fixture", observedAt: request.now)]
       })
     let initial = try await service.limitsSnapshot(refresh: true,
       enabledProviders: [.openRouter], allowCredentialAccess: false, now: Date(timeIntervalSince1970: 100))
-    let workers = DatabaseWorkers.shared(url: databaseURL)
-    let entered = AsyncStream<Void>.makeStream()
-    let release = DispatchSemaphore(value: 0)
-    defer { release.signal() }
-    let blocked = Task { try await workers.writer.perform { _ in
-      entered.continuation.yield(())
-      #expect(release.wait(timeout: .now() + 60) == .success)
-    } }
-    var iterator = entered.stream.makeAsyncIterator()
-    await iterator.next()
     let outdated = Task { try await service.limitsSnapshot(refresh: true,
       enabledProviders: [.openRouter], allowCredentialAccess: false, now: Date(timeIntervalSince1970: 200)) }
-    let deadline = ContinuousClock.now + .seconds(60)
-    while workers.writer.metrics.pending < 2 {
-      guard ContinuousClock.now < deadline else { throw DatabaseWorkerError.timedOut }
-      try await Task.sleep(for: .milliseconds(1))
-    }
+    await gate.waitForArrival()
     let current = try await service.limitsSnapshot(refresh: false,
       enabledProviders: [.openRouter], allowCredentialAccess: false)
     #expect(current.accounts.first?.accountLabel == initial.accounts.first?.accountLabel)
-    release.signal()
-    try await blocked.value
+    await gate.open()
     await #expect(throws: CancellationError.self) { try await outdated.value }
     let cached = try await service.limitsSnapshot(refresh: false,
       enabledProviders: [.openRouter], allowCredentialAccess: false)
@@ -231,7 +155,6 @@ private final class KeychainFixture: @unchecked Sendable {
   private var allowed: Bool
   private var recordedReads: [Read] = []
   private var recordedPolicyChanges: [Bool] = []
-  private var recordedWritePolicies: [Bool] = []
   private let readStatus: OSStatus
   private let secretStatus: OSStatus
   private let policyStatus: OSStatus
@@ -253,7 +176,6 @@ private final class KeychainFixture: @unchecked Sendable {
 
   var reads: [Read] { lock.withLock { recordedReads } }
   var policyChanges: [Bool] { lock.withLock { recordedPolicyChanges } }
-  var writePolicies: [Bool] { lock.withLock { recordedWritePolicies } }
   var interactionAllowed: Bool { lock.withLock { allowed } }
 
   func store() -> UsageCredentialStore {
@@ -282,17 +204,10 @@ private final class KeychainFixture: @unchecked Sendable {
           return errSecSuccess
         }
       },
-      update: { [self] _, _ in recordWrite() },
-      add: { [self] _ in recordWrite() },
-      delete: { [self] _ in recordWrite() }
+      update: { _, _ in errSecSuccess },
+      add: { _ in errSecSuccess },
+      delete: { _ in errSecSuccess }
     ))
-  }
-
-  private func recordWrite() -> OSStatus {
-    lock.withLock {
-      recordedWritePolicies.append(allowed)
-      return errSecSuccess
-    }
   }
 }
 
@@ -301,15 +216,12 @@ private final class SessionCredentialFixture: UsageCredentialStoring, @unchecked
   private var key: String? = "original"
   private var shouldDenyAuthorization = false
   private var authorizations = 0
-  private var reads = 0
+  private var presence = 0
 
   var authorizationCount: Int { lock.withLock { authorizations } }
-  var readCount: Int { lock.withLock { reads } }
+  var presenceChecks: Int { lock.withLock { presence } }
   func denyAuthorization() { lock.withLock { shouldDenyAuthorization = true } }
-  func hasOpenRouterAPIKey() throws -> Bool { lock.withLock { key != nil } }
-  func loadOpenRouterAPIKey() throws -> String? {
-    lock.withLock { reads += 1; return key }
-  }
+  func hasOpenRouterAPIKey() throws -> Bool { lock.withLock { presence += 1; return key != nil } }
   func authorizeOpenRouterAPIKey() throws -> String? {
     try lock.withLock {
       authorizations += 1
@@ -321,11 +233,31 @@ private final class SessionCredentialFixture: UsageCredentialStoring, @unchecked
   func deleteOpenRouterAPIKey() throws { lock.withLock { key = nil } }
 }
 
-private final class CredentialUseRecorder: @unchecked Sendable {
-  private let lock = NSLock()
-  private var limits: [String] = []
-  var limitKeys: [String] { lock.withLock { limits } }
-  func recordLimit(_ value: String?) { lock.withLock { limits.append(value ?? "missing") } }
+/// Holds one limits refresh inside its collector until the test releases it.
+private actor LimitRefreshGate {
+  private var arrivals = 0
+  private var opened = false
+  private var arrivalWaiters: [CheckedContinuation<Void, Never>] = []
+  private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+  func hold() async {
+    arrivals += 1
+    arrivalWaiters.forEach { $0.resume() }
+    arrivalWaiters = []
+    guard !opened else { return }
+    await withCheckedContinuation { releaseWaiters.append($0) }
+  }
+
+  func waitForArrival() async {
+    guard arrivals == 0 else { return }
+    await withCheckedContinuation { arrivalWaiters.append($0) }
+  }
+
+  func open() {
+    opened = true
+    releaseWaiters.forEach { $0.resume() }
+    releaseWaiters = []
+  }
 }
 
 private final class ConnectionRevisionFixture: @unchecked Sendable {

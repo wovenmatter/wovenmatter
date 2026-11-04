@@ -4,7 +4,6 @@ import WovenMatterClient
 
 protocol UsageCredentialStoring: Sendable {
   func hasOpenRouterAPIKey() throws -> Bool
-  func loadOpenRouterAPIKey() throws -> String?
   func authorizeOpenRouterAPIKey() throws -> String?
   func saveOpenRouterAPIKey(_ key: String) throws
   func deleteOpenRouterAPIKey() throws
@@ -28,10 +27,6 @@ struct UsageCredentialStore: UsageCredentialStoring, Sendable {
     if status == errSecItemNotFound { return false }
     guard status == errSecSuccess else { throw UsageCredentialStoreError.keychain(status) }
     return true
-  }
-
-  func loadOpenRouterAPIKey() throws -> String? {
-    try loadOpenRouterAPIKey(allowInteraction: false)
   }
 
   /// Called only by explicit saved-credential recovery, never a refresh.

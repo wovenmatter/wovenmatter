@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import WovenMatterCore
 
 /// Identity of deployment inputs, independent of archive timestamps.
 struct RemoteWorkspaceDeployment {
@@ -47,13 +48,8 @@ struct RemoteWorkspaceDeployment {
             hash.update(data: Data("\(path)\0\(isLink)\0\(executable & 0o111)\0".utf8))
             hash.update(data: Data(SHA256.hash(data: bytes)))
         }
-        fingerprint = hash.finalize().map { String(format: "%02x", $0) }.joined()
+        fingerprint = hash.finalize().hexString
         script = try String(contentsOf: root.appending(path: kind == .host ? "scripts/remote-host.sh" : "remote/build-image.sh"), encoding: .utf8)
-    }
-
-    static func imageID(_ output: Data) -> String? {
-        let value = String(decoding: output, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-        return value.wholeMatch(of: /^sha256:[a-f0-9]{64}$/) == nil ? nil : value
     }
 }
 

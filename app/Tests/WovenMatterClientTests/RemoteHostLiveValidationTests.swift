@@ -112,7 +112,7 @@ struct RemoteHostLiveValidationTests {
         let name = "host transfer 'quoted' $(literal)-" + UUID().uuidString + ".bin"
         var bytes = Data(("Woven Matter native transfer fixture " + UUID().uuidString + "\n").utf8)
         bytes.append(contentsOf: (0..<65539).map { UInt8($0 % 251) })
-        let hash = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+        let hash = SHA256.hash(data: bytes).hexString
         let local = FileManager.default.temporaryDirectory.appending(path: ".wovenmatter-live-transfer-" + UUID().uuidString)
         guard FileManager.default.createFile(atPath: local.path, contents: bytes,
             attributes: [.posixPermissions: 0o600]) else {

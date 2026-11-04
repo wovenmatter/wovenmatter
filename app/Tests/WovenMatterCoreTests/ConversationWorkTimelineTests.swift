@@ -86,15 +86,13 @@ struct ConversationWorkTimelineTests {
     let timeline = ConversationWorkTimeline(records: [record(command, at: "1"), record(thought, at: "2")], commentaryIDs: [])
     #expect(timeline.entries.map(\.id) == ["group:command", "activity:thought"])
     let group = groups(timeline)[0]
-    #expect(group.liveActivity?.id == "command")
-    #expect(group.liveLabel(runIsActive: true) == "Run the stream check")
-    #expect(group.latestThought == nil, "Supplied reasoning must never be hidden in a tool group")
+    #expect(command.workTimelineLabel(active: group.showsProgress(command)) == "Run the stream check")
     #expect(group.activeActivityIDs == ["command"])
   }
 
   @Test("waiting indicator covers commentary and failure without doubling active work")
   func thinkingIndicator() {
-    #expect(ConversationWorkTimeline.empty.needsThinkingIndicator)
+    #expect(ConversationWorkTimeline(records: [], commentaryIDs: []).needsThinkingIndicator)
     let commentary = record(AgentRunActivity(id: "c", kind: .assistant, content: "Checking."), at: "1")
     #expect(ConversationWorkTimeline(records: [commentary], commentaryIDs: ["c"]).needsThinkingIndicator)
     let failed = record(tool("failed", "bash", status: "failed"), at: "2")
@@ -140,7 +138,6 @@ struct ConversationWorkTimelineTests {
     let timeline = ConversationWorkTimeline(records: records, commentaryIDs: ["empty-commentary"])
     #expect(timeline.entries.map(\.id) == ["activity:t1", "group:a", "activity:t2"])
     #expect(groups(timeline).map { $0.activities.map(\.id) } == [["a", "b"]])
-    #expect(timeline.foldedEntries.map(\.id) == ["activity:t1", "activity:t2"])
   }
 
   @Test("thought phases preserve tool row identities across deltas and status revisions")
@@ -176,7 +173,6 @@ struct ConversationWorkTimelineTests {
     guard case .activity(let thoughtA) = settled.entries[1].content else { Issue.record("Thought A was grouped"); return }
     #expect(thoughtA.content == "Plan A. More context.")
     #expect(thoughtA.status == "completed")
-    #expect(settled.foldedEntries.map(\.id) == ["activity:thoughtA", "activity:thoughtB"])
   }
 
   @Test("commentary progress and subagent snapshots remain boundaries between tool lists")
@@ -196,7 +192,6 @@ struct ConversationWorkTimelineTests {
     #expect(timeline.entries.map(\.id) == ["group:tool1", "commentary:comment", "group:tool3",
       "activity:progress", "group:tool4", "activity:built-in-subagents", "group:tool5", "activity:thought"])
     #expect(groups(timeline).map { $0.activities.map(\.id) } == [["tool1", "tool2"], ["tool3"], ["tool4"], ["tool5"]])
-    #expect(timeline.foldedEntries.map(\.id) == ["commentary:comment", "activity:thought"])
     guard case .activity(let snapshot) = timeline.entries[5].content else { Issue.record("Subagent snapshot was grouped"); return }
     #expect(snapshot.subagents?.map(\.id) == ["child"])
   }
@@ -208,21 +203,17 @@ struct ConversationWorkTimelineTests {
     let activities = records.map(\.activity)
     let transcript = AssistantTranscriptProjection(messageID: "m", content: "Let me check.\n", activities: activities)
 
-    let live = ConversationWorkTimeline.displayPartition(transcript, activities: activities, isLive: true)
+    let live = ConversationWorkTimeline.displayPartition(transcript, activities: activities)
     #expect(live.commentaryIDs == ["s"])
     #expect(live.body.allSatisfy { $0.isWhitespace })
     #expect(ConversationWorkTimeline(records: records, commentaryIDs: live.commentaryIDs).entries.map(\.id)
       == ["commentary:s", "group:a"])
 
-    let settled = ConversationWorkTimeline.displayPartition(transcript, activities: activities, isLive: false)
-    #expect(settled.commentaryIDs == ["s"])
-    #expect(settled.body.allSatisfy { $0.isWhitespace })
-
-    let unfollowed = ConversationWorkTimeline.displayPartition(transcript, activities: [segment], isLive: true)
+    let unfollowed = ConversationWorkTimeline.displayPartition(transcript, activities: [segment])
     #expect(unfollowed.commentaryIDs.isEmpty)
     let checklistOnly = ConversationWorkTimeline.displayPartition(transcript,
       activities: [segment, AgentRunActivity(id: "p", kind: .plan, planKind: "checklist"),
-        tool("update", "update_plan")], isLive: true)
+        tool("update", "update_plan")])
     #expect(checklistOnly.commentaryIDs.isEmpty)
     #expect(checklistOnly.body == transcript.body)
   }

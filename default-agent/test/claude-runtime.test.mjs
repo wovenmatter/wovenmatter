@@ -1,15 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rm, chmod, readFile, rename, stat, statfs, lstat, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, chmod, readFile, statfs, lstat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ClaudeRuntime, claudeDirectories, claudeEnvironment } from '../src/claude-runtime.mjs';
+import { ClaudeRuntime, claudeDirectories } from '../src/claude-runtime.mjs';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { createSignInPrompt } from '../src/sign-in-interaction.mjs';
 import { inlineClaudeLogin } from '../src/claude-runtime.mjs';
-
-
 
 test('Mac native storage rejects preexisting plaintext without reading or removing it', { skip: process.platform !== 'darwin' }, async t => {
   const root = await mkdtemp(join(tmpdir(), 'woven-claude-existing-'));
@@ -21,7 +19,6 @@ test('Mac native storage rejects preexisting plaintext without reading or removi
   await assert.rejects(claudeDirectories(root, { platform: 'darwin' }), /unexpected file/);
   assert.equal(await readFile(file, 'utf8'), 'nonsecret fixture');
 });
-
 
 test('Linux native credential directories use private isolated real tmpfs storage', { skip: process.platform !== 'linux' }, async t => {
   const root = await mkdtemp('/dev/shm/woven-claude-policy-');
@@ -54,7 +51,6 @@ test('native profiles are isolated across concurrent asynchronous operations', a
   assert.equal((await runtime.environment()).CLAUDE_CONFIG_DIR, '/fixture');
   await assert.rejects(runtime.environment(undefined, '../unsafe'), /Invalid Claude account/);
 });
-
 
 test('Claude sign-in joins streamed links and forwards the UI code only to native stdin', { timeout: 2000 }, async () => {
   const child = new EventEmitter();

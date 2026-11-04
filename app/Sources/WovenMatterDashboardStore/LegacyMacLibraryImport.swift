@@ -11,24 +11,14 @@ extension WorkspaceDatabase {
     try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
     let partial = target.deletingLastPathComponent().appending(path: UUID().uuidString + ".partial")
     defer { try? FileManager.default.removeItem(at: partial) }
-    var original: OpaquePointer?, copy: OpaquePointer?
+    var original: OpaquePointer?
     guard sqlite3_open_v2(source.path, &original, SQLITE_OPEN_READONLY, nil) == SQLITE_OK, let original else {
       sqlite3_close(original); throw WorkspaceDatabaseError.open("Could not read the saved local workspace.")
     }
     defer { sqlite3_close(original) }
-    guard sqlite3_open(partial.path, &copy) == SQLITE_OK, let copy else {
-      sqlite3_close(copy); throw WorkspaceDatabaseError.open("Could not create the saved workspace copy.")
-    }
-    defer { sqlite3_close(copy) }
-    guard let backup = sqlite3_backup_init(copy, "main", original, "main") else { throw WorkspaceDatabaseError.execute("Could not copy the saved local workspace.") }
-    let status = sqlite3_backup_step(backup, -1), finish = sqlite3_backup_finish(backup)
-    guard status == SQLITE_DONE, finish == SQLITE_OK, sqlite3_exec(copy, "PRAGMA journal_mode=DELETE", nil, nil, nil) == SQLITE_OK else {
-      throw WorkspaceDatabaseError.execute("The saved local workspace copy did not complete.")
-    }
-    var check: OpaquePointer?
-    guard sqlite3_prepare_v2(copy, "PRAGMA integrity_check", -1, &check, nil) == SQLITE_OK, let check else { throw WorkspaceDatabaseError.corruptRow }
-    defer { sqlite3_finalize(check) }
-    guard sqlite3_step(check) == SQLITE_ROW, let result = sqlite3_column_text(check, 0), String(cString: result) == "ok" else { throw WorkspaceDatabaseError.corruptRow }
+    try WorkspaceDatabaseConnection.copyMainDatabase(from: original, to: partial,
+      openFailure: "Could not create the saved workspace copy.", copyFailure: "Could not copy the saved local workspace.",
+      incompleteFailure: "The saved local workspace copy did not complete.")
     try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: partial.path)
     try FileManager.default.moveItem(at: partial, to: target)
   }
@@ -51,7 +41,7 @@ extension WorkspaceDatabase {
   public func importLegacyLocalMacWorkspace(from source: URL) async throws {
     guard source.standardizedFileURL != fileURL.standardizedFileURL else { return }
     try await backUpBeforePeerSync()
-    let marker = "legacy.import." + SHA256.hash(data: Data(source.standardizedFileURL.path.utf8)).map { String(format: "%02x", $0) }.joined()
+    let marker = "legacy.import." + SHA256.hash(data: Data(source.standardizedFileURL.path.utf8)).hexString
     try await write { connection in
       guard try connection.pairedStateUnlocked(marker) == nil else { return }
       let attach = try connection.prepareUnlocked("ATTACH DATABASE ? AS legacy_mac")

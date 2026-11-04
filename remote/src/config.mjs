@@ -1,12 +1,21 @@
+import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+export const shellQuote = value => `'${String(value).replaceAll("'", "'\\''")}'`
+
+// Installed hosts bundle default-agent beside this service; a checkout keeps it one level up.
+export function defaultAgentModule(name) {
+  const bundled = new URL('../default-agent/' + name, import.meta.url)
+  return existsSync(bundled) ? bundled.href : new URL('../../default-agent/' + name, import.meta.url).href
+}
+
 // This is shared by the HTTP service, maintenance and host launch helpers. Keep
 // container defaults stable: persisted volumes and older clients depend on them.
-export function loadRuntimeConfiguration(environment = process.env, options = {}) {
+export function loadRuntimeConfiguration(environment = process.env) {
   const home = environment.HOME ?? homedir()
-  const serviceRoot = options.serviceRoot ?? resolve(dirname(fileURLToPath(import.meta.url)), '..')
+  const serviceRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
   const runtimeKind = environment.WOVENMATTER_RUNTIME_KIND ?? 'container'
   const accessMode = environment.WOVENMATTER_ACCESS_MODE ?? 'user'
   if (!['container', 'host'].includes(runtimeKind)) throw new Error('invalid_runtime_kind')
@@ -40,11 +49,10 @@ export function runtimeHarnessEnvironment(environment = process.env, configurati
 
 export function runtimeNPMCommand(configuration = runtimeConfiguration, nodeExecutable = process.execPath) {
   if (configuration.runtimeKind !== 'host') return 'npm'
-  const quote = value => `'${String(value).replaceAll("'", "'\\''")}'`
   // This is the release's patched npm, not Node's stock bundled npm or a user
   // shim. Explicit Node also prevents npm's /usr/bin/env shebang selecting an
   // unrelated runtime earlier in the user's harness PATH.
-  return [nodeExecutable, resolve(configuration.serviceRoot, 'tooling/lib/node_modules/npm/bin/npm-cli.js')].map(quote).join(' ')
+  return [nodeExecutable, resolve(configuration.serviceRoot, 'tooling/lib/node_modules/npm/bin/npm-cli.js')].map(shellQuote).join(' ')
 }
 
 export function workspacePermission(runtimeKind, requested, configuration = runtimeConfiguration) {

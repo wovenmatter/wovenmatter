@@ -23,9 +23,8 @@ public struct RuntimeInventory: Codable, Equatable, Sendable {
     public let kind: AgentRuntimeKind
     public let components: [RuntimeComponent]
     public let limitation: String?
-    public var detectedUpdateAvailable = false
     public var versionCheckAvailable: Bool? = nil
-    public var updateAvailable: Bool { outdated || detectedUpdateAvailable }
+    public var updateAvailable: Bool { outdated }
     public var isInstalled: Bool { !components.isEmpty && components.allSatisfy { !$0.required || ($0.present && $0.verified) } }
     public var outdated: Bool { components.contains(where: \.outdated) }
     public var summary: String {
@@ -140,7 +139,7 @@ public enum RuntimeMaintenance {
             _ = try await installer.install(definition, component: .cli, expectedSourceSHA256: preview.sha256)
             return
         }
-        guard [.claudeCode, .grokBuild].contains(kind) else { throw RuntimeMaintenanceError.unavailable }
+        guard kind == .grokBuild else { throw RuntimeMaintenanceError.unavailable }
         let result = try await Task.detached(priority: .utility) {
             try LocalACPProcessRunner.run(executableURL: executable, arguments: ["update"],
                 environment: ProcessInfo.processInfo.environment.merging(["PATH": LocalACPRuntimeResolver.executableSearchPath]) { _, new in new })

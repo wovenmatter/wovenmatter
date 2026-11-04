@@ -11,7 +11,7 @@ extension CompanionHostController {
               workspace.id == configuration.id.uuidString.lowercased(), let endpoint,
               let model, let database = model.dashboardStore?.database else { return }
         let identity = try await database.companionLibraryIdentity()
-        guard !model.isBackendFrontend, !model.isLibraryClient, workspace.libraryID == identity.libraryID else { return }
+        guard !model.isBackendFrontend, workspace.libraryID == identity.libraryID else { return }
         let current = try await model.remoteWorkspaces.executionPublisherStatus(configuration: configuration)
         let publisherMatches: Bool
         if current.configured, let id = current.grantID {

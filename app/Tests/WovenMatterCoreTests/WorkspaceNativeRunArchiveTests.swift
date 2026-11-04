@@ -9,16 +9,16 @@ import WovenMatterCore
 struct WorkspaceNativeRunArchiveTests {
 
   @Test func fullExportsRedactWovenCapabilitiesFromSavedProjectionRowsWithoutRemovingRunContent() async throws {
-    let (db, directory) = try await database()
-    defer { try? FileManager.default.removeItem(at: directory) }
+    let (db, persistence) = try await database()
+    defer { persistence.remove() }
     let conversation = try await session(db)
-    let run = try await db.beginLocalACPRun(conversationID: conversation, content: "Prompt")
+    let run = try await db.beginLocalACPRun(conversationID: conversation, input: .init(text: "Prompt"))
     let capability = "/private/tmp/wmtools-" + String(repeating: "a", count: 32) + "/" + String(repeating: "b", count: 32) + ".sock"
     let output = "{\"token\":\"retained-lexical-token\",\"toolEndpoint\":\"\(capability)\"}"
     try await db.upsertDeviceOwnedRunActivity(runID: run.runID,
       activity: .init(id: "tool", kind: .tool, rawOutputJSON: output, rawPayloadJSON: output))
     let bounded = try await db.conversationExport(id: conversation, format: .fullRun)
-    let destination = directory.appending(path: "capabilities.json")
+    let destination = persistence.directory.appending(path: "capabilities.json")
     try await db.exportConversationArchive(id: conversation, to: destination)
     for data in [bounded, try Data(contentsOf: destination)] {
       let text = String(decoding: data, as: UTF8.self)
@@ -29,8 +29,8 @@ struct WorkspaceNativeRunArchiveTests {
   }
 
   @Test func interruptedBatchAdmissionRollsBackEveryRecordAndItsSearchIndexBeforeRetry() async throws {
-    let (db, directory) = try await database()
-    defer { try? FileManager.default.removeItem(at: directory) }
+    let (db, persistence) = try await database()
+    defer { persistence.remove() }
     let conversation = try await session(db)
     var batch = WorkspaceNativeRunRecordBatch(sourceID: "local:store", nativeSessionID: "s", records: [
       .init(id: "first", kind: "event", payload: #"{"text":"rollback-violet-marker"}"#),
@@ -42,7 +42,7 @@ struct WorkspaceNativeRunArchiveTests {
     #expect(rows(try await db.queryHistory(.init(command: "search", search: "rollback-violet-marker", conversationID: conversation))).isEmpty)
     batch.records[1].contentMode = "event"
     try await db.recordNativeRunRecords(batch, conversationID: conversation, harness: "pi")
-    let reopened = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+    let reopened = try await persistence.openDatabase()
     try await reopened.recordNativeRunRecords(batch, conversationID: conversation, harness: "pi")
     let first = try await reopened.queryHistory(.init(command: "events", conversationID: conversation, kind: "native.event", limit: 1))
     #expect(rows(first).count == 1 && first.objectValue?["hasMore"]?.boolValue == true)
@@ -53,8 +53,8 @@ struct WorkspaceNativeRunArchiveTests {
   }
 
   @Test func nativeContentKeepsTokenFieldsAndFormattingWhileCredentialTransportIsRedacted() async throws {
-    let (db, directory) = try await database()
-    defer { try? FileManager.default.removeItem(at: directory) }
+    let (db, persistence) = try await database()
+    defer { persistence.remove() }
     let conversation = try await session(db)
     let raw = "{ \"toolResult\": {\"method\":\"connect\",\"token\":\"lexical-token\",\"headers\":{\"Authorization\":\"content evidence\"}}, \"future\": [1,2] }"
     try await db.historyWireRecorder(conversationID: conversation, harness: "pi", sourceScope: "local")("native", JSONEncoder().encode(
@@ -71,13 +71,11 @@ struct WorkspaceNativeRunArchiveTests {
     #expect(WorkspaceHistoryPrivacy.redactingTransportSecrets(raw) == raw)
   }
 
-  private func database() async throws -> (WorkspaceDatabase, URL) {
-    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString.lowercased())
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    return (try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite")), directory)
+  private func database() async throws -> (WorkspaceDatabase, PersistenceFixture) {
+    let persistence = try PersistenceFixture()
+    return (try await persistence.openDatabase(), persistence)
   }
   private func session(_ db: WorkspaceDatabase) async throws -> String {
     try await db.createFixtureLocalACPSession(runtimeKind: .claudeCode, title: "Archive", ownerDeviceID: UUID())
   }
-  private func rows(_ result: GatewayJSONValue) -> [GatewayJSONValue] { result.objectValue?["rows"]?.arrayValue ?? [] }
 }

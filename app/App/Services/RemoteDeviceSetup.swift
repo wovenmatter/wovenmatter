@@ -10,7 +10,7 @@ enum RemoteDeviceSetup {
     private static let observingKey = "wovenmatter.device-setup.observing-pairing"
     static func handle(model: ApplicationModel, defaults: UserDefaults = .standard) async {
         guard !handling, !model.isPreparedForExecutionRestart, DevelopmentLaunch.mode == nil, LocalExecutionRole.current != .backend,
-              model.isLibraryClient || model.state == .ready else { return }
+              model.state == .ready else { return }
         handling = true
         defer { handling = false }
         let host = model.companionHost
@@ -49,8 +49,7 @@ enum RemoteDeviceSetup {
                 CompanionMacSetupRequest.clearIfCurrent(raw, defaults: defaults)
                 publish(request, phase: .preparing, message: "Preparing Woven Matter to update…", defaults: defaults)
                 guard await WorkspaceAssetSession.prepareForRestart() else { throw CancellationError() }
-                if model.isLibraryClient { try await model.prepareLibraryClientForQuit() }
-                else if model.isBackendFrontend { try await model.prepareBackendForUpdate() }
+                if model.isBackendFrontend { try await model.prepareBackendForUpdate() }
                 else {
                     guard await model.flushNotesBeforeBackendClientQuit() else { throw ApplicationModelError.noteDraftSaveFailed }
                     try await model.prepareOpenCodeInstancesToQuit()

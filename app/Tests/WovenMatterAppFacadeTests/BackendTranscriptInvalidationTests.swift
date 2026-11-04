@@ -61,7 +61,7 @@ struct BackendTranscriptInvalidationTests {
             releaseMetadata?.resume()
         }
         try await waitUntil { metadataStarted && !refreshedIDs.isEmpty }
-        let run = try await fixture.database.beginLocalACPRun(conversationID: id, content: "Visible fixture prompt")
+        let run = try await fixture.database.beginLocalACPRun(conversationID: id, input: .init(text: "Visible fixture prompt"))
         await journal.publish(scopes: [.settings, .usage], conversationIDs: [id, "unobserved-session"])
         try await waitUntil { state.content?.messages.contains { $0.role == "user" && $0.content == "Visible fixture prompt" } == true }
         #expect(releaseMetadata != nil, "The metadata gate must still be closed when the prompt appears")
@@ -86,10 +86,7 @@ struct BackendTranscriptInvalidationTests {
     }
 
     private func waitUntil(_ condition: () -> Bool) async throws {
-        for _ in 0..<100 {
-            if condition() { return }
-            try await Task.sleep(for: .milliseconds(10))
-        }
+        if try await pollUntil(attempts: 100, interval: .milliseconds(10), { condition() }) { return }
         try #require(condition(), "Transcript refresh waited for the deliberately blocked metadata consumer")
     }
 }

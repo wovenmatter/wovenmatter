@@ -16,14 +16,13 @@ struct RootView: View {
             case .starting:
                 startupView
             case .ready:
-                if model.isLibraryClient { CentralLibraryClientView(model: model.libraryClient, application: model) }
-                else { WorkspaceView(model: model) }
+                WorkspaceView(model: model)
             case .failed(let message):
                 failureView(message: message)
             }
         }
         .task(id:model.state) {
-            guard model.state == .ready, !model.isLibraryClient else { return }
+            guard model.state == .ready else { return }
             if HarnessSetupPresentation.shared.takeAutomaticPresentation() {
                 openWindow(id: HarnessSetupPresentation.windowID)
             }

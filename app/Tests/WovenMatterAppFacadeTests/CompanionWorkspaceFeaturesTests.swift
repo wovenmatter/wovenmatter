@@ -14,7 +14,7 @@ struct CompanionWorkspaceFeaturesTests {
         let source = fixture.directory.appending(path: "budget.csv")
         let bytes = Data("Category,Amount\nTravel,120".utf8)
         try bytes.write(to: source)
-        let run = try await fixture.database.beginLocalACPRun(conversationID: chat, content: "Create a budget")
+        let run = try await fixture.database.beginLocalACPRun(conversationID: chat, input: .init(text: "Create a budget"))
         try await fixture.database.replaceLocalACPAssistantMessage(runID: run.runID, content: "[Budget](./budget.csv)")
         try await fixture.database.completeLocalACPRun(runID: run.runID)
         try await fixture.store.library.synchronize(locations: [.init(conversationID: chat, name: "Local", root: fixture.directory.path)], remoteWorkspace: { _ in nil })

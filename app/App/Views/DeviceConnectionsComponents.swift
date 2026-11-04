@@ -24,20 +24,11 @@ struct DeviceConnectionIcon: View {
 struct DevicePairingDiscoveryCard: View {
     @Bindable var pairing: CompanionMacPairingController
     @Bindable var host: CompanionHostController
-    var isCentral: Bool
     var canPairWithCentral: Bool
     @State private var devices = MacDeviceSetupModel()
     var body: some View {
         SettingsCard(title: "Find devices", detail: "Find other Macs on your Tailscale network, even when Woven Matter is closed.") {
-            MacTailnetDiscoveryView(devices: devices, pairing: pairing, host: host, isCentral: isCentral, canPairWithCentral: canPairWithCentral)
-            ForEach(pairing.invitations) { invitation in
-                HStack {
-                    Text("Connect to \(invitation.central.deviceName)?").font(.system(size: 13))
-                    Spacer()
-                    Button("Decline") { pairing.declineInvitation(id: invitation.id) }.buttonStyle(SettingsQuietButtonStyle())
-                    Button("Connect") { Task { await pairing.acceptInvitation(id: invitation.id) } }.buttonStyle(SettingsQuietButtonStyle())
-                }
-            }
+            MacTailnetDiscoveryView(devices: devices, pairing: pairing, host: host, canPairWithCentral: canPairWithCentral)
             if let error = pairing.errorMessage { Text(error).font(.system(size: 12)).foregroundStyle(DashboardPalette.danger).textSelection(.enabled) }
         }
     }

@@ -79,7 +79,6 @@ test('private CDP bridge owns one page, rejects discovery outside it and maps na
   socket.terminate();
 });
 
-
 test('browser upload accepts 2 MiB and rejects one extra byte before changing the file input', async () => {
   const files = [];
   const page = { setDefaultTimeout() {}, setDefaultNavigationTimeout() {},

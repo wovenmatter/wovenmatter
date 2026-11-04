@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import WorkspaceFixtures
 import WovenMatterClient
 import WovenMatterCore
 import WovenMatterDashboardStore
@@ -31,7 +32,7 @@ struct OpenCodeCreationTests {
         let gate = FacadeGate(); gate.hold(); defer { gate.open() }
         var toolsApplied = 0
         model.applyInitialSessionTools = { _, _ in toolsApplied += 1; await gate.pass() }
-        let owner = remote ? "remote:" + f.remote.id.uuidString.lowercased() : try await f.store.executionWorkspaceID()
+        let owner = remote ? ApplicationModel.remoteDatabaseSourceID(f.remote.id) : try await f.store.executionWorkspaceID()
         let root = SessionCreationRoot(folderID: nil, location: .init(workspaceID: owner, rootPath: f.directory.path, managed: false), defaultPath: f.directory.path)
         let uuid = UUID()
         let creation = Task { try await model.create(workspace: f.directory, requestedConversationID: uuid, executionRoot: root) }
@@ -79,10 +80,7 @@ private final class CreationTransport: @unchecked Sendable {
     func openedStream(_ path: String) { lock.withLock { _ = streams.insert(path) } }
     func waitForStreams(sessionID: String) async throws {
         let expected = Set(["/api/event", "/api/experimental/session/" + sessionID + "/log"])
-        let deadline = ContinuousClock.now + .seconds(10)
-        while !expected.isSubset(of: streamPaths), ContinuousClock.now < deadline {
-            try await Task.sleep(for: .milliseconds(10))
-        }
+        _ = try await pollUntil(attempts: 1_000, interval: .milliseconds(10)) { expected.isSubset(of: streamPaths) }
         try #require(expected.isSubset(of: streamPaths), "OpenCode did not open both event streams")
     }
     var modelChanges: Int { lock.withLock { changes } }

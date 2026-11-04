@@ -33,7 +33,7 @@ extension ApplicationModel {
                 sessionSelectionPreferences.removeDefault(.model, harness: runtime.rawValue, workspace: workspace)
             }
         }
-        let workspaceID = workspace.flatMap { $0.hasPrefix("remote:") ? UUID(uuidString: String($0.dropFirst(7))) : nil }
+        let workspaceID = workspace.flatMap { Self.remoteWorkspaceID(sourceID: $0) }
         return (sessionSelectionPreferences.storedDefaults(harness: runtime.rawValue, workspace: workspace),
             selectionsApplyingWorkspaceAccess(sessionSelectionPreferences.defaults(harness: runtime.rawValue, workspace: workspace), runtime: runtime, workspaceID: workspaceID),
             workspace.map { sessionSelectionPreferences.usesSharedDefaults(harness: runtime.rawValue, workspace: $0) } ?? false)
@@ -100,7 +100,7 @@ extension ApplicationModel {
         if let resolved = try await sessionSelectionWorkspaceID?(conversationID) {
             workspace = resolved
         } else if let remote = session.remoteWorkspaceID {
-            workspace = "remote:" + remote.uuidString.lowercased()
+            workspace = Self.remoteDatabaseSourceID(remote)
         } else {
             guard let root = localACPWorkspaceLaunchConfiguration?.rootURL else {
                 throw ApplicationModelError.localACPRuntimeUnavailable
@@ -204,16 +204,7 @@ extension ApplicationModel {
                     conversationID: conversationID, model: desired.model, thinking: desired.thinking,
                     permission: desired.permission,
                     launch: context.launch, workspace: context.workspace)
-                let metadata = LocalACPSessionMetadata(sessionKey: conversationID,
-                    model: configuration.model, thinking: configuration.thinking,
-                    modelOptions: configuration.modelOptions, thinkingLevels: configuration.thinkingOptions,
-                    slashCommands: configuration.slashCommands,
-                    modelOptionMetadata: configuration.modelOptionMetadata,
-                    thinkingOptionMetadata: configuration.thinkingOptionMetadata,
-                    permission: configuration.permission,
-                    permissionOptions: configuration.permissionOptions,
-                    permissionOptionMetadata: configuration.permissionOptionMetadata,
-                    workingDirectory: configuration.workingDirectory)
+                let metadata = LocalACPSessionMetadata(sessionKey: conversationID, configuration: configuration)
                 publishSessionSelectionMetadata(metadata, conversationID: conversationID)
                 confirmedMetadata = metadata
             }

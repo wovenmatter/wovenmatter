@@ -1,16 +1,14 @@
 import { existsSync } from 'node:fs'
-const bundledVersions = new URL('../default-agent/src/package-versions.mjs', import.meta.url)
-const { latestSupportedPackage } = await import(existsSync(bundledVersions) ? bundledVersions.href : new URL('../../default-agent/src/package-versions.mjs', import.meta.url).href)
 import { spawn } from 'node:child_process'
 import { readFile, writeFile, mkdir, rename, realpath, lstat, readlink } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { supportsOpenCodeVersion, openCodeCommands } from './opencode-compatibility.mjs'
-import { loadRuntimeConfiguration, runtimeNPMCommand } from './config.mjs'
+import { loadRuntimeConfiguration, runtimeNPMCommand, shellQuote as quote, defaultAgentModule } from './config.mjs'
 import { withInstallerGuard } from './installer-guard.mjs'
 
-const quote = value => `'${String(value).replaceAll("'", "'\\''")}'`
+const { latestSupportedPackage } = await import(defaultAgentModule('src/package-versions.mjs'))
 const failure = message => Object.assign(new Error(message), { statusCode: 409 })
 export const normalizedVersion = value => String(value ?? '').match(/\d+\.\d+\.\d+(?:[-+][a-zA-Z0-9.-]+)?/)?.[0] ?? null
 export function precedes(a, b) {

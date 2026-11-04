@@ -38,7 +38,7 @@ struct FederatedExecutionFlowTests {
     // The journal carries immutable parts rather than truncating it into a preview.
     let nativeBytes = Data(String(repeating: "tool result with full detail\n", count: 340_000).utf8)
     let recordID = UUID().uuidString.lowercased()
-    let hash = SHA256.hash(data: nativeBytes).map { String(format: "%02x", $0) }.joined()
+    let hash = SHA256.hash(data: nativeBytes).hexString
     let partSize = 512 * 1_024
     let partCount = (nativeBytes.count + partSize - 1) / partSize
     for index in 0..<partCount {

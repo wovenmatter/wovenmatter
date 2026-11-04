@@ -207,14 +207,6 @@ extension WorkspaceDatabaseConnection {
         raw_event_json TEXT NOT NULL DEFAULT '{}', stream_event_json TEXT NOT NULL DEFAULT '[]',
         origin_device_id TEXT, created_at TEXT NOT NULL DEFAULT ''
       );
-      CREATE TABLE IF NOT EXISTS dashboard_user_view_state (
-        user_id TEXT PRIMARY KEY, selected_agent_codename TEXT,
-        active_conversation_id TEXT, active_note_id TEXT, selected_folder_id TEXT,
-        workspace_mode TEXT NOT NULL DEFAULT 'chats', pane_order TEXT NOT NULL DEFAULT 'chat-note',
-        chat_width_percent REAL NOT NULL DEFAULT 58, agent_rail_collapsed INTEGER NOT NULL DEFAULT 0,
-        inbox_collapsed INTEGER NOT NULL DEFAULT 0, origin_device_id TEXT,
-        created_at TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT ''
-      );
       CREATE TABLE IF NOT EXISTS desktop_local_acp_sessions (
         conversation_id TEXT PRIMARY KEY, agent_id TEXT,
         runtime_kind TEXT NOT NULL,
@@ -240,15 +232,6 @@ extension WorkspaceDatabaseConnection {
         conversation_id TEXT PRIMARY KEY REFERENCES dashboard_conversations(id) ON DELETE CASCADE,
         imported_at TEXT NOT NULL
       );
-      CREATE TABLE IF NOT EXISTS desktop_openclaw_transcript_entries (
-        conversation_id TEXT NOT NULL, entry_id TEXT NOT NULL,
-        message_id TEXT NOT NULL, payload BLOB NOT NULL,
-        PRIMARY KEY (conversation_id, entry_id)
-      );
-      CREATE TRIGGER IF NOT EXISTS desktop_openclaw_transcript_delete
-      AFTER DELETE ON dashboard_conversations BEGIN
-        DELETE FROM desktop_openclaw_transcript_entries WHERE conversation_id = OLD.id;
-      END;
       CREATE TABLE IF NOT EXISTS desktop_openclaw_run_inputs (
         conversation_id TEXT NOT NULL, local_run_id TEXT NOT NULL, remote_run_id TEXT NOT NULL,
         user_message_id TEXT NOT NULL, assistant_message_id TEXT NOT NULL,
@@ -267,22 +250,6 @@ extension WorkspaceDatabaseConnection {
       AFTER DELETE ON dashboard_conversations BEGIN
         DELETE FROM desktop_openclaw_run_inputs WHERE conversation_id = OLD.id;
       END;
-      CREATE TABLE IF NOT EXISTS desktop_openclaw_gateway_links (
-        agent_id TEXT PRIMARY KEY,
-        location TEXT NOT NULL CHECK (location IN (
-          'local_agent_workspace', 'remote_workspace'
-        )),
-        endpoint_url TEXT NOT NULL,
-        authorization TEXT NOT NULL CHECK (authorization IN (
-          'localService', 'remoteWorkspace'
-        )),
-        status TEXT NOT NULL,
-        openclaw_version TEXT,
-        last_connected_at TEXT,
-        last_error TEXT,
-        linked_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
       CREATE TABLE IF NOT EXISTS desktop_openclaw_gateway_sessions (
         conversation_id TEXT PRIMARY KEY,
         agent_id TEXT NOT NULL,
@@ -293,41 +260,6 @@ extension WorkspaceDatabaseConnection {
         updated_at TEXT NOT NULL,
         FOREIGN KEY (conversation_id) REFERENCES dashboard_conversations(id)
           ON DELETE CASCADE
-      );
-      CREATE TABLE IF NOT EXISTS desktop_openclaw_cron_jobs (
-        agent_id TEXT NOT NULL,
-        remote_job_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        schedule TEXT NOT NULL,
-        enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
-        native_session_id TEXT,
-        native_session_key TEXT,
-        archive_state TEXT NOT NULL CHECK (archive_state IN ('active', 'deleted')),
-        remote_payload BLOB NOT NULL,
-        updated_at TEXT NOT NULL,
-        PRIMARY KEY (agent_id, remote_job_id)
-      );
-      CREATE TABLE IF NOT EXISTS desktop_openclaw_cron_runs (
-        agent_id TEXT NOT NULL,
-        remote_run_id TEXT NOT NULL,
-        remote_job_id TEXT NOT NULL,
-        status TEXT NOT NULL,
-        output TEXT,
-        native_session_id TEXT,
-        native_session_key TEXT,
-        started_at TEXT,
-        completed_at TEXT,
-        remote_payload BLOB NOT NULL,
-        PRIMARY KEY (agent_id, remote_run_id)
-      );
-      CREATE TABLE IF NOT EXISTS desktop_scheduled_result_routes (
-        provider TEXT NOT NULL, agent_id TEXT NOT NULL, job_id TEXT NOT NULL,
-        destination TEXT NOT NULL, PRIMARY KEY(provider, agent_id, job_id)
-      );
-      CREATE TABLE IF NOT EXISTS desktop_scheduled_result_receipts (
-        provider TEXT NOT NULL, agent_id TEXT NOT NULL, job_id TEXT NOT NULL,
-        run_id TEXT NOT NULL, conversation_id TEXT NOT NULL, message_id TEXT NOT NULL,
-        collected_at TEXT NOT NULL, PRIMARY KEY(provider, agent_id, job_id, run_id)
       );
       CREATE TABLE IF NOT EXISTS dashboard_calendar_items (
         id TEXT PRIMARY KEY, user_id TEXT NOT NULL DEFAULT '', kind TEXT NOT NULL DEFAULT '',
@@ -360,12 +292,6 @@ extension WorkspaceDatabaseConnection {
         ON notes(user_id, deleted_at, updated_at DESC);
       CREATE INDEX IF NOT EXISTS desktop_openclaw_gateway_sessions_agent
         ON desktop_openclaw_gateway_sessions(agent_id, updated_at DESC);
-      CREATE INDEX IF NOT EXISTS desktop_openclaw_cron_jobs_state
-        ON desktop_openclaw_cron_jobs(agent_id, archive_state, updated_at DESC);
-      CREATE INDEX IF NOT EXISTS desktop_openclaw_cron_runs_job
-        ON desktop_openclaw_cron_runs(agent_id, remote_job_id, started_at DESC);
-      CREATE INDEX IF NOT EXISTS desktop_openclaw_cron_runs_history
-        ON desktop_openclaw_cron_runs(agent_id, remote_job_id, COALESCE(started_at, completed_at) DESC, remote_run_id DESC);
       """)
   }
 
@@ -383,32 +309,6 @@ extension WorkspaceDatabaseConnection {
   }
 
   private func addCurrentColumnsUnlocked() throws {
-    let traces = try prepareUnlocked("PRAGMA table_info(dashboard_run_trace_events)")
-    defer { sqlite3_finalize(traces) }
-    var hasProjectionApplied = false
-    while true {
-      let code = sqlite3_step(traces)
-      if code == SQLITE_DONE { break }
-      guard code == SQLITE_ROW else { throw stepError() }
-      if optionalText(traces, column: 1) == "projection_applied" { hasProjectionApplied = true }
-    }
-    if !hasProjectionApplied {
-      try executeUnlocked("ALTER TABLE dashboard_run_trace_events ADD COLUMN projection_applied INTEGER NOT NULL DEFAULT 0")
-    }
-
-    let cron = try prepareUnlocked("PRAGMA table_info(desktop_openclaw_cron_runs)")
-    defer { sqlite3_finalize(cron) }
-    var hasFullOutput = false
-    while true {
-      let code = sqlite3_step(cron)
-      if code == SQLITE_DONE { break }
-      guard code == SQLITE_ROW else { throw stepError() }
-      if optionalText(cron, column: 1) == "full_output" { hasFullOutput = true }
-    }
-    if !hasFullOutput {
-      try executeUnlocked("ALTER TABLE desktop_openclaw_cron_runs ADD COLUMN full_output INTEGER NOT NULL DEFAULT 0")
-    }
-
     let statement = try prepareUnlocked(
       "PRAGMA table_info(desktop_local_acp_sessions)"
     )
@@ -452,10 +352,7 @@ extension WorkspaceDatabaseConnection {
       "desktop_local_acp_sessions",
       "desktop_opencode_sessions",
       "desktop_opencode_submissions",
-      "desktop_openclaw_gateway_links",
       "desktop_openclaw_gateway_sessions",
-      "desktop_openclaw_cron_jobs",
-      "desktop_openclaw_cron_runs",
     ] {
       for operation in ["INSERT", "UPDATE", "DELETE"] {
         let trigger = "desktop_dashboard_revision_\(table)_\(operation.lowercased())"

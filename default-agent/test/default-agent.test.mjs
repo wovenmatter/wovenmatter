@@ -1,16 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, readFile, stat, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
-import { writePrivateJSON } from '../src/config.mjs';
-import { searchTools } from '../src/search.mjs';
-import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { DefaultAgentEngine } from '../src/engine.mjs';
-import { createDefaultAgentService } from '../src/service.mjs';
 import { Credentials } from '../src/credentials.mjs';
-import { CredentialVault, sharedAccounts, sharedCredentials } from '../src/vault.mjs';
-import { randomBytes } from 'node:crypto';
-
+import { SessionMCPContext } from '../src/mcp-context.mjs';
+import { sharedAccounts, sharedCredentials } from '../src/vault.mjs';
 
 async function temporary(t) {
   const directory = await mkdtemp('/tmp/woven-default-agent-test-');
@@ -18,13 +12,12 @@ async function temporary(t) {
   return directory;
 }
 
-
 function fixtureEngine({ errors = [], connected = ['openai', 'openrouter'], visible = false, streamEvents = [] } = {}) {
   const engine = new DefaultAgentEngine({ cwd: '/tmp', directory: '/tmp', config: { defaultModel: 'openai/primary', models: ['openrouter/fallback'], fallbackModels: ['openrouter/fallback'] } });
   const selected = [];
   let listener;
   const record = {
-    selected: 'openai/primary', busy: false,
+    selected: 'openai/primary', busy: false, mcp: new SessionMCPContext(),
     manifest: { storeID: 'fixture' }, subagents: { async beginGroup() {} },
     contextLeaf: () => 'before', rewind() {}, saveOptions() {},
     subscribe(fn) { listener = fn; return () => {}; },
@@ -44,8 +37,6 @@ function fixtureEngine({ errors = [], connected = ['openai', 'openrouter'], visi
   return { engine, record, selected };
 }
 
-
-
 test('account fallback follows priority without changing another session credential', async () => {
   const { engine, record } = fixtureEngine({ errors: ['insufficient_quota'] });
   engine.config.fallbackModels = [];
@@ -55,12 +46,11 @@ test('account fallback follows priority without changing another session credent
   ] };
   const used = []; const events = [];
   engine.runtime.getAuth = async () => { used.push((await engine.credentials.read('openai')).key); return {}; };
-  await engine.prompt(record, 'hello', event => events.push(event));
+  await engine.prompt(record, 'hello', event => events.push(event), undefined, { runID: record.runID, inputID: record.inputID });
   assert.deepEqual(used, ['first-secret', 'second-secret']);
   assert.match(events.at(-1)._meta.fallbackReason, /Second/);
   assert.equal((await engine.credentials.read('openai')).key, 'fixture');
 });
-
 
 test('native profile sharing includes only an identifier, never native credentials', () => {
   assert.deepEqual(sharedCredentials({ 'claude-subscription': { type: 'native', accountId: 'profile-1', access: 'must-not-share', refresh: 'must-not-share' } }),

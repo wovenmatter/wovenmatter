@@ -82,7 +82,7 @@ private actor NativeDiskCapture {
     }
     func closeAndValidate() throws {
         try output.close()
-        #expect(hash.finalize().map { String(format: "%02x", $0) }.joined() == expectedHash)
+        #expect(hash.finalize().hexString == expectedHash)
         let row = try #require(reference), value = try HermesValue.decode(Data(row.payload.utf8))
         let offset = try #require(value["byteOffset"].number), length = try #require(value["byteCount"].number)
         let input = try FileHandle(forReadingFrom: file)
@@ -93,6 +93,6 @@ private actor NativeDiskCapture {
             let bytes = try #require(try input.read(upToCount: min(64 * 1_024, remaining)))
             #expect(!bytes.isEmpty); remaining -= bytes.count; recordHash.update(data: bytes)
         }
-        #expect(recordHash.finalize().map { String(format: "%02x", $0) }.joined() == value["recordSHA256"].text)
+        #expect(recordHash.finalize().hexString == value["recordSHA256"].text)
     }
 }

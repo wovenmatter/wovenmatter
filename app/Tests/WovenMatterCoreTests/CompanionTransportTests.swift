@@ -47,9 +47,3 @@ final class CompanionTransportTests: XCTestCase {
   }
 
 }
-
-@MainActor private final class FixtureServingProcess: CompanionServingProcess {
-  var isRunning = false
-  var launches = 0
-  func terminate() { isRunning = false }
-}

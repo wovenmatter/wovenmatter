@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import Foundation
 import Testing
 import WovenMatterCore
@@ -7,10 +8,9 @@ import WovenMatterCore
 struct CalendarReplicaTests {
 
   let device = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
-  private func fixture() async throws -> (WorkspaceDatabase, URL) {
-    let directory = FileManager.default.temporaryDirectory.appendingPathComponent("calendar-replica-" + UUID().uuidString)
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    return (try await WorkspaceDatabase(url: directory.appendingPathComponent("workspace.sqlite")), directory)
+  private func fixture() async throws -> (WorkspaceDatabase, PersistenceFixture) {
+    let persistence = try PersistenceFixture()
+    return (try await persistence.openDatabase(), persistence)
   }
   private func mutation(owner: Bool = false) -> CompanionCalendarMutation {
     .init(deviceID: device, expectedRevision: nil, record: .init(event: .init(id: UUID().uuidString.lowercased(), revision: 0,
@@ -19,7 +19,7 @@ struct CalendarReplicaTests {
   }
 
   @Test func pairingSharesScheduledExecutionAndMigrationRemovesLegacyRestrictions() async throws {
-    let (database, directory) = try await fixture(); defer { try? FileManager.default.removeItem(at: directory) }
+    let (database, directory) = try await fixture(); defer { directory.remove() }
     let identity = try await database.companionLibraryIdentity()
     let workspace = try await database.registerCompanionExecutionWorkspace(.init(workspace: .init(
       id: UUID().uuidString.lowercased(), libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID,
@@ -27,7 +27,7 @@ struct CalendarReplicaTests {
     let device = device
     try await database.write { connection in
       try connection.executeUnlocked("CREATE TABLE companion_workspace_access(device_id TEXT,workspace_id TEXT,enabled INTEGER)")
-      try connection.companionExecuteUnlocked("INSERT INTO companion_workspace_access VALUES (?,?,0)", values: [device, workspace.id])
+      try connection.toolsExecuteUnlocked("INSERT INTO companion_workspace_access VALUES (?,?,0)", [device, workspace.id])
     }
     var request = mutation()
     request.record.event.draft.task = .init(prompt: "Shared central task")
@@ -43,7 +43,7 @@ struct CalendarReplicaTests {
   }
 
   @Test func centralRunnerCannotClaimClientOwnedTasksAndRunReceiptsRemainOwned() async throws {
-    let (database, directory) = try await fixture(); defer { try? FileManager.default.removeItem(at: directory) }
+    let (database, persistence) = try await fixture(); defer { persistence.remove() }
     var request = mutation(owner: true); request.record.event.draft.task?.enabledTools = ["wovenmatter_calendar"]
     let receipt = try await database.companionCalendarMutate(request, deviceID: device)
     #expect(receipt.status == .accepted)

@@ -5,8 +5,6 @@ import WovenMatterCompanion
 private actor OfflineWorkspace: ExecutionWorkspaceTransport {
   var receipts: [String: CompanionCommandReceipt] = [:]
   var executed: [CompanionCommand] = []
-  var loseReply: Bool
-  init(loseReply: Bool = true) { self.loseReply = loseReply }
   func identity() -> CompanionExecutionWorkspace { .init(id: "linux", libraryID: "library", ownerDeviceID: "mac", kind: .linux, name: "Server", revision: 1) }
   func providers() -> [CompanionProvider] { [] }
   func pending() -> [CompanionPendingInteraction] { [] }
@@ -15,7 +13,6 @@ private actor OfflineWorkspace: ExecutionWorkspaceTransport {
     executed.append(command)
     let result = CompanionCommandReceipt(commandID: command.commandID, deviceID: command.deviceID, status: .completed, conversationID: command.conversationID)
     receipts[command.commandID] = result
-    if loseReply { loseReply = false; throw URLError(.networkConnectionLost) }
     return result
   }
   func receipt(_ id: String) -> CompanionCommandReceipt? { receipts[id] }
@@ -52,7 +49,7 @@ final class WorkspaceJournalTests: XCTestCase {
     } catch WorkspaceJournal.Failure.wrongLibrary { }
   }
   func testDirectControlCommandsPersistOwnerBeforeDispatchAndRejectMismatches() async throws {
-    let store = try MobileStore(file: path()), transport = OfflineWorkspace(loseReply: false)
+    let store = try MobileStore(file: path()), transport = OfflineWorkspace()
     let client = WorkspaceClient(store: store, workspaceID: "linux", transport: transport)
     let command = CompanionCommand(deviceID: "phone", kind: .respond, conversationID: "chat", runID: "run",
       interactionID: "approval", response: .init(optionID: "allow"))

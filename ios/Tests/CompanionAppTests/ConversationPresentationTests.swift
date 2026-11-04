@@ -56,8 +56,6 @@ final class ConversationPresentationTests: XCTestCase {
     XCTAssertEqual(turn.content, "## Result\n\nThe file is absent.")
     XCTAssertEqual(turn.commentaryIDs, ["comment"])
     XCTAssertEqual(turn.timeline.entries.count, 2)
-    XCTAssertEqual(turn.timeline.foldedEntries.map(\.id), ["commentary:comment", "failed:group:tool"],
-      "Commentary and failed tools remain visible in the reduced tool-history projection")
   }
   func testMarkdownUsesOneSelectableNativeSurfaceAndDesktopBlocks() throws {
     let content = "# Heading\n\n- One\n  - Two\n\n> Quote\n\n```swift\nlet n = 1\n```\n\n| Name | Value |\n| --- | --- |\n| A | **B** |"
@@ -195,7 +193,6 @@ final class ConversationPresentationTests: XCTestCase {
     XCTAssertEqual(group.activities.map(\.id), ["tool"])
     XCTAssertEqual(reasoning.kind, .thought)
     XCTAssertEqual(reasoning.content, "Checking the result")
-    XCTAssertEqual(turn.timeline.foldedEntries.map(\.id), ["commentary:comment", "activity:reasoning"])
   }
 
   func testDesktopCheckpointsPartitionCumulativeResponseWithoutDuplication() throws {
@@ -250,7 +247,7 @@ final class ConversationPresentationTests: XCTestCase {
           return XCTFail("Expected shared tool presentation for \(title)")
         }
         XCTAssertEqual(group.action, action, "\(transportKind) must retain the \(title) semantic icon")
-        XCTAssertEqual(group.liveLabel(runIsActive: true), label)
+        XCTAssertEqual(group.activities.first.map { $0.workTimelineLabel(active: group.showsProgress($0)) }, label)
         XCTAssertTrue(group.hasActiveActivity, "Static tool presentation must preserve execution state")
       }
     }

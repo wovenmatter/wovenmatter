@@ -60,3 +60,8 @@ public enum GatewayJSONValue: Codable, Equatable, Sendable {
     return nil
   }
 }
+
+extension Sequence where Element == UInt8 {
+  /// Lowercase hexadecimal text of these bytes.
+  public var hexString: String { map { String(format: "%02x", $0) }.joined() }
+}

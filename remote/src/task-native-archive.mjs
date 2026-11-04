@@ -1,12 +1,11 @@
-import { existsSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
+import { defaultAgentModule } from './config.mjs'
 
-const bundled = new URL('../default-agent/src/native-journal.mjs', import.meta.url)
-const { openNativeArchive, sanitizeNativeTransportBytes, nativePresentationUpdates } = await import(
-  existsSync(bundled) ? bundled.href : new URL('../../default-agent/src/native-journal.mjs', import.meta.url).href)
+const { openNativeArchive, sanitizeNativeTransportBytes, publishNativePresentation } = await import(defaultAgentModule('src/native-journal.mjs'))
+export { publishNativePresentation }
 
 // Use the same exact records, large-record chunks, checksums and manifests as
 // Pi Durable transport. This spool belongs only to the current scheduled run.
@@ -15,13 +14,13 @@ export async function createTaskNativeArchive({sourceID, nativeSessionID, runID,
   const archive = await openNativeArchive(join(directory, 'records.jsonl'))
   let pending = Promise.resolve(), after = 0, ordinal = 0
   return {
-    capture(value, {id, kind, contentMode = 'event', completeness = 'observed', currentRun = true, present} = {}) {
+    capture(value, {id, kind, contentMode = 'event', completeness = 'observed', present} = {}) {
       const eventID = id ?? `event:${runID}:${++ordinal}`
       const operation = pending.then(async () => {
         const safe = await sanitizeNativeTransportBytes(JSON.stringify(value))
         const payload = safe.bytes.toString('utf8'), native = JSON.parse(payload)
         const record = {id: eventID, revision: createHash('sha256').update(payload).digest('hex'), kind,
-          payload, contentMode, text: searchableText(native), completeness, ...(currentRun ? {runID} : {}),
+          payload, contentMode, text: searchableText(native), completeness, runID,
           ...(safe.byteFidelity !== 'exact-native-bytes' ? {projectionJSON: JSON.stringify({payloadByteFidelity: safe.byteFidelity, sourcePayloadSHA256: safe.sourceSHA256, payloadSHA256: safe.sha256})} : {})}
         if (archive.identities.has(`${record.id}:${record.revision}`)) return native
         await archive.append([record])
@@ -55,18 +54,6 @@ function searchableText(value, remaining = {characters: 256 * 1024}) {
   if (Array.isArray(value)) return value.map(item => searchableText(item, remaining)).filter(Boolean).join('\n')
   if (!value || typeof value !== 'object') return undefined
   return textKeys.map(key => searchableText(value[key], remaining)).filter(Boolean).join('\n') || undefined
-}
-
-export function publishNativePresentation(update, publish) {
-  let offset=0
-  for (const preview of nativePresentationUpdates(update)) {
-    if ((update._meta?.wovenAssistantSnapshot || update._meta?.wovenThoughtSnapshot) && typeof update.content?.text==='string') {
-      const start=offset===0;offset+=preview.content.text.length
-      preview._meta={...preview._meta, wovenSnapshotStart:start&&(update._meta.wovenSnapshotStart??true),
-        wovenSnapshotEnd:offset===update.content.text.length&&(update._meta.wovenSnapshotEnd??true)}
-    }
-    publish(preview)
-  }
 }
 
 export function isolateTaskEnvironment(environment) {

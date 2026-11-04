@@ -8,6 +8,7 @@ import { createDurableACP } from '../src/durable-acp.mjs'
 import { createClientExecutionRuntime } from '../src/client-execution-runtime.mjs'
 import { createClientExecution } from '../src/client-execution.mjs'
 import { loadRuntimeConfiguration } from '../src/config.mjs'
+import { enroll } from './fixtures/execution.mjs'
 
 const pause=()=>new Promise(resolve=>setTimeout(resolve,25))
 async function until(read,accept){for(let i=0;i<100;i++){const value=await read();if(accept(value))return value;await pause()}throw new Error('fixture timed out')}
@@ -56,8 +57,7 @@ test('direct clients run an actual fixture ACP process, answer approvals and rep
   const runtime=createClientExecutionRuntime({defaultAgent:{status:async()=>({locked:true}),cancelActive:async()=>{}},durableACP:relay,catalog,workspaceRoot,harnessStatus:async()=>({...harness,state:'ready'}),environment:()=>process.env})
   let service=createClientExecution({directory:join(workspaceRoot,'store'),runtime})
   t.after(async()=>{await service.close();rmSync(workspaceRoot,{recursive:true,force:true})})
-  const ids={libraryID:randomUUID(),workspaceID:randomUUID(),ownerDeviceID:randomUUID(),deviceID:randomUUID()}
-  const grant=service.provision({...ids,scopes:['execution']}),principal=service.principal('Bearer '+grant.token,'execution')
+  const {enrollment:ids,principal}=enroll(service)
   const command=(kind,args={})=>({commandID:randomUUID(),deviceID:ids.deviceID,kind,...args})
   const opened=await service.command(command('createSession',{runtimeKind:'fixture'}),principal)
   assert.equal(opened.status,'completed',JSON.stringify(opened))
@@ -121,8 +121,7 @@ for (const stopFails of [false, true]) test(`Stop during Pi Durable setup fences
     workspaceRoot: root, environment: () => process.env, harnessStatus: async () => ({}) });
   const service = createClientExecution({ directory: root, runtime });
   t.after(async () => { release(); await service.close(); rmSync(root, { recursive: true, force: true }) });
-  const deviceID = randomUUID(), grant = service.provision({ libraryID: randomUUID(), workspaceID: randomUUID(), ownerDeviceID: randomUUID(), deviceID, scopes: ['execution'] });
-  const principal = service.principal('Bearer ' + grant.token, 'execution');
+  const { enrollment: { deviceID }, principal } = enroll(service);
   const command = (kind, args = {}) => ({ commandID: randomUUID(), deviceID, kind, ...args });
   const created = await service.command(command('createSession', { providerID: 'default_agent' }), principal);
   hold = true;

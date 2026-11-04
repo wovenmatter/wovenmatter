@@ -88,14 +88,6 @@ public struct RemoteWorkspaceExecTarget: Sendable {
               environment.values.allSatisfy({ !$0.contains("\0") }) else {
             throw RemoteWorkspaceClientError.invalidResponse("The remote process environment is invalid.")
         }
-        if configuration.kind == .container {
-            var result = ["docker", "exec"]
-            if interactive { result.append("--interactive") }
-            if let workingDirectory { result += ["--workdir", workingDirectory] }
-            result.append("wovenmatter-" + configuration.workspaceID)
-            if !environment.isEmpty { result += ["env"] + environment.sorted(by: { $0.key < $1.key }).map { "\($0.key)=\($0.value)" } }
-            return result
-        }
         var result = [try dataRoot + "/current/bin/wm-exec"]
         if let workingDirectory { result += ["--cwd", workingDirectory] }
         for (key, value) in environment.sorted(by: { $0.key < $1.key }) {
@@ -118,7 +110,7 @@ public struct RemoteWorkspaceExecTarget: Sendable {
             .map(Self.quote).joined(separator: " ")
     }
 
-    static func quote(_ value: String) -> String {
+    public static func quote(_ value: String) -> String {
         "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
     }
 

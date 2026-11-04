@@ -15,9 +15,9 @@ struct ACPAssistantStreamWriterTests {
     try await writer.finishSegment()
     try await writer.finishSegment() // Empty/repeated boundaries are no-ops.
     try await writer.finishSegmentAndPause()
-    let steering = try await fixture.database.beginLocalACPSteeringTurn(
-      runID: fixture.run.runID, content: "Continue"
-    )
+    let steering = try await fixture.database.reserveLocalACPSteeringTurn(
+      runID: fixture.run.runID, input: .init(text: "Continue")
+    ).identifiers
     await writer.resumeAfterSegmentBoundary(assistantMessageID: steering.assistantMessageID)
     try await writer.append("draft")
     try await writer.replace("First  \nFinal  \n")
@@ -34,20 +34,19 @@ struct ACPAssistantStreamWriterTests {
 }
 
 private struct WriterFixture {
-  let root: URL
+  let persistence: PersistenceFixture
   let database: WorkspaceDatabase
   let conversationID: String
   let run: LocalACPRunIdentifiers
   let writer: LocalACPAssistantStreamWriter
 
   init(onPersistenceEvent: (@Sendable (LocalACPAssistantStreamWriter.PersistenceEvent) -> Void)? = nil) async throws {
-    root = FileManager.default.temporaryDirectory.appending(path: "acp-writer-\(UUID())")
-    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-    database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
+    persistence = try PersistenceFixture()
+    database = try await persistence.openDatabase()
     conversationID = try await database.createFixtureLocalACPSession(
       runtimeKind: .codex, title: "Writer", ownerDeviceID: UUID()
     )
-    run = try await database.beginLocalACPRun(conversationID: conversationID, content: "Start")
+    run = try await database.beginLocalACPRun(conversationID: conversationID, input: .init(text: "Start"))
     writer = LocalACPAssistantStreamWriter(
       database: database, runID: run.runID, assistantMessageID: run.assistantMessageID,
       conversationID: conversationID, onChange: nil, onPersistenceEvent: onPersistenceEvent
@@ -59,5 +58,5 @@ private struct WriterFixture {
       .filter { $0.role == "assistant" }.map(\.content)
   }
 
-  func remove() { try? FileManager.default.removeItem(at: root) }
+  func remove() { persistence.remove() }
 }

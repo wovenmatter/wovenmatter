@@ -86,9 +86,10 @@ import WovenMatterClient
         canvas.resetInput()
     }
 
-    @Test func nativeSurfaceCollaboratesWithRealBrowserWhenRequested() async throws {
-        guard let endpoint = ProcessInfo.processInfo.environment["WOVENMATTER_BROWSER_INPUT_FIXTURE"],
-              let url = URL(string: endpoint) else { return }
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["WOVENMATTER_BROWSER_INPUT_FIXTURE"] != nil))
+    func nativeSurfaceCollaboratesWithRealBrowserWhenRequested() async throws {
+        let endpoint = try #require(ProcessInfo.processInfo.environment["WOVENMATTER_BROWSER_INPUT_FIXTURE"])
+        let url = try #require(URL(string: endpoint))
         let client = RemoteWorkspaceServiceClient(baseURL: url, token: "fixture")
         let catalog = try await client.browserTabs()
         let tab = try #require(catalog.tabs.first { $0.title == "Shared collaboration fixture" })
@@ -223,10 +224,11 @@ import WovenMatterClient
         await #expect(throws: CancellationError.self) { try await feed.latest(previousFrameID: nil) }
     }
 
-    @Test func measureNativeViewerWhenRequested() async throws {
-        guard ProcessInfo.processInfo.environment["WOVENMATTER_BROWSER_PERFORMANCE"] == "1",
-              let endpoint = ProcessInfo.processInfo.environment["WOVENMATTER_BROWSER_INPUT_FIXTURE"],
-              let url = URL(string: endpoint) else { return }
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["WOVENMATTER_BROWSER_PERFORMANCE"] == "1"
+        && ProcessInfo.processInfo.environment["WOVENMATTER_BROWSER_INPUT_FIXTURE"] != nil))
+    func measureNativeViewerWhenRequested() async throws {
+        let endpoint = try #require(ProcessInfo.processInfo.environment["WOVENMATTER_BROWSER_INPUT_FIXTURE"])
+        let url = try #require(URL(string: endpoint))
         func memory() -> UInt64 {
             var info = mach_task_basic_info()
             var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size / MemoryLayout<natural_t>.size)
@@ -283,8 +285,9 @@ import WovenMatterClient
         viewer.clear()
     }
 
-    @Test func renderViewerWhenRequested() async throws {
-        guard let output = ProcessInfo.processInfo.environment["WOVENMATTER_REMOTE_BROWSER_PREVIEW"] else { return }
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["WOVENMATTER_REMOTE_BROWSER_PREVIEW"] != nil))
+    func renderViewerWhenRequested() async throws {
+        let output = try #require(ProcessInfo.processInfo.environment["WOVENMATTER_REMOTE_BROWSER_PREVIEW"])
         let viewer = RemoteBrowserViewerModel(loadTabs: { .init(running: true, tabs: tabs) }, loadFrame: { id, _ in try frame(id) })
         await viewer.refresh()
         for (theme, appearance, width) in [(DashboardTheme.green, NSAppearance.Name.aqua, 1000), (.cognac, .aqua, 700), (.dark, .darkAqua, 700)] {

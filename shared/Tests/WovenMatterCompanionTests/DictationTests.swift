@@ -2,9 +2,6 @@ import Foundation
 import Testing
 @testable import WovenMatterCompanion
 
-@Suite struct DictationTranscriptTests {
-}
-
 #if os(macOS) || os(iOS)
 import AVFoundation
 import Speech

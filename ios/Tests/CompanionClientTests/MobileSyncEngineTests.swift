@@ -4,11 +4,8 @@ import WovenMatterCompanion
 
 private actor FakeMac: CompanionTransport, FederationTransport, CompanionCalendarTransport, CompanionDictationTransport {
   var dictations: [DictationRecord] = []
-  var loseDictationReceipt = false
-  func loseNextDictationReceipt() { loseDictationReceipt = true }
   func publishDictation(_ record: DictationRecord) throws -> DictationRecord {
     if !dictations.contains(where: { $0.id == record.id }) { dictations.append(record) }
-    if loseDictationReceipt { loseDictationReceipt = false; throw MobileConnectionError.offline }
     return record
   }
   func dictationChanges(after: Int64) -> DictationHistoryPage {
@@ -16,7 +13,6 @@ private actor FakeMac: CompanionTransport, FederationTransport, CompanionCalenda
   }
   var workspace = "mac-a"
   var refusedFolderIDs = Set<String>()
-  var failArtifacts = false
   var journalUploads: [CompanionJournalEntry] = []
   var registeredWorkspaces: [CompanionExecutionWorkspace] = []
   var calendarRecords: [CompanionCalendarRecord] = []
@@ -24,7 +20,6 @@ private actor FakeMac: CompanionTransport, FederationTransport, CompanionCalenda
   var transcriptPages: [String: CompanionTranscript] = [:]
   var conversationIndex: [CompanionConversation] = []
   func refuseFolder(_ id: String) { refusedFolderIDs.insert(id) }
-  func failArtifactTransfers() { failArtifacts = true }
   func seedNotes(_ values: [CompanionNote]) { for note in values { notes[note.id] = note } }
   func seedConversations(_ values: [CompanionConversation], pages: [String: CompanionTranscript]) { conversationIndex = values; transcriptPages = pages }
   func libraryIdentity() -> CompanionLibraryIdentity { .init(libraryID: workspace, hostDeviceID: "central") }
@@ -40,7 +35,6 @@ private actor FakeMac: CompanionTransport, FederationTransport, CompanionCalenda
   }
   func artifactManifests() -> [CompanionArtifactManifest] { [] }
   func registerArtifact(_ registration: CompanionArtifactRegistration) throws -> CompanionArtifactTransfer { throw MobileConnectionError.http(503, "Artifact storage unavailable") }
-  func artifactStatus(_ id: String) throws -> CompanionArtifactTransfer { throw MobileConnectionError.offline }
   func uploadArtifactChunk(_ chunk: CompanionArtifactChunk) throws -> CompanionArtifactTransfer { throw MobileConnectionError.offline }
   func commitArtifact(_ commit: CompanionArtifactCommit) throws -> CompanionArtifactManifest { throw MobileConnectionError.offline }
   func downloadArtifactChunk(_ id: String, revision: Int64, offset: Int64) throws -> CompanionArtifactChunk { throw MobileConnectionError.offline }
@@ -56,19 +50,8 @@ private actor FakeMac: CompanionTransport, FederationTransport, CompanionCalenda
   var folders: [String: CompanionFolder] = [:]
   var mutations: [CompanionMutation] = []
   var results: [String: CompanionMutationResult] = [:]
-  var commands: [CompanionCommand] = []
-  var commandRequests: [CompanionCommand] = []
-  var gatedReceiptID: String?
-  var receiptGate: CheckedContinuation<Void, Never>?
-  var receiptWaiting = false
-  var hiddenReceipts: Set<String> = []
-  var linked: CompanionLinkedData?
-  func gateReceipt(_ id: String, hide: String) { gatedReceiptID = id; hiddenReceipts.insert(hide) }
-  func releaseReceipt() { receiptGate?.resume(); receiptGate = nil }
-  func setLinked(_ value: CompanionLinkedData) { linked = value }
   func linkedData(_ id: String, tableID: String?) async throws -> CompanionLinkedData {
-    guard let linked else { throw MobileConnectionError.http(503, "Remote database data is unavailable on this Mac.") }
-    return linked
+    throw MobileConnectionError.http(503, "Remote database data is unavailable on this Mac.")
   }
   var receipts: [String: CompanionCommandReceipt] = [:]
   var loseMutationAcknowledgement = false
@@ -116,19 +99,13 @@ private actor FakeMac: CompanionTransport, FederationTransport, CompanionCalenda
     return transcriptPages[id + ":" + before] ?? .init(conversationID: id)
   }
   func command(_ command: CompanionCommand) async throws -> CompanionCommandReceipt {
-    commandRequests.append(command)
     if let receipt = receipts[command.commandID] { return receipt }
-    commands.append(command)
     let receipt = CompanionCommandReceipt(commandID: command.commandID, deviceID: command.deviceID, status: .completed, conversationID: command.conversationID, runID: "mac-run")
     receipts[command.commandID] = receipt
     if loseCommandAcknowledgement { loseCommandAcknowledgement = false; throw URLError(.networkConnectionLost) }
     return receipt
   }
-  func receipt(_ id: String) async throws -> CompanionCommandReceipt? {
-    let captured = hiddenReceipts.contains(id) ? nil : receipts[id]
-    if gatedReceiptID == id { gatedReceiptID = nil; receiptWaiting = true; await withCheckedContinuation { receiptGate = $0 } }
-    return captured
-  }
+  func receipt(_ id: String) async throws -> CompanionCommandReceipt? { receipts[id] }
 }
 
 final class MobileSyncEngineTests: XCTestCase {

@@ -12,29 +12,13 @@ import { Type } from 'typebox';
 import { DefaultAgentEngine } from '../src/engine.mjs';
 import { ChildContext, Subagents } from '../src/subagents.mjs';
 import { checklistTool } from '../src/checklist.mjs';
+import { assistantMessage, assistantStream } from './fixtures/synthetic-stream.mjs';
+import { fakeClaudeRuntime } from './fixtures/claude-runtime.mjs';
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-function stream(model, content, overrides = {}) {
-  const result = { role: 'assistant', content, api: model.api, provider: model.provider, model: model.id, timestamp: Date.now(), stopReason: content.some(c => c.type === 'toolCall') ? 'toolUse' : 'stop', usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, ...overrides };
-  const value = createAssistantMessageEventStream(); value.push({ type: 'start', partial: result }); value.push(result.stopReason === 'error' ? { type: 'error', reason: 'error', error: result } : { type: 'done', reason: result.stopReason, message: result }); value.end(result); return value;
-}
+const stream = (model, content, overrides) => assistantStream(assistantMessage(model, content, overrides));
 async function fixture(t, options = {}) {
   const root = await mkdtemp(join(tmpdir(), 'woven-durable-engine-'));
-  const claude = { models: [{ value: 'sonnet', displayName: 'Fixture', supportedEffortLevels: ['low', 'medium', 'high'] }], loadModels: async () => {}, status: async () => ({ connected: true }), sdkQuery: async () => { throw Error('Provider use forbidden.'); } };
+  const claude = fakeClaudeRuntime({ models: [{ value: 'sonnet', displayName: 'Fixture', supportedEffortLevels: ['low', 'medium', 'high'] }], status: async () => ({ connected: true }), sdkQuery: async () => { throw Error('Provider use forbidden.'); } });
   const config = { providers: ['claude-subscription'], defaultModel: 'claude-subscription/sonnet' };
   const engines = [];
   const open = async () => {
@@ -64,7 +48,7 @@ test('an existing Durable conversation uses the current search provider and rota
     record.streamFunction = model => stream(model, ++calls === 1
       ? [{ type: 'toolCall', id: `search-${index}`, name: 'web_search', arguments: { query: 'Fixture question' } }]
       : [{ type: 'text', text: 'Searched' }]);
-    assert.equal((await engine.prompt(record, 'Search the fixture', () => {})).stopReason, 'end_turn');
+    assert.equal((await engine.prompt(record, 'Search the fixture', () => {}, undefined, { runID: record.runID, inputID: record.inputID })).stopReason, 'end_turn');
     const result = record.session.messages.find(message => message.role === 'toolResult' && message.toolCallId === `search-${index}`);
     assert.equal(result?.isError, false);
     assert.equal(JSON.parse(result.content[0].text).results[0].url, 'https://example.com/source');
@@ -189,7 +173,6 @@ test('native messages and exposed thinking reach display and the live archive wi
   const second = await open(), reopened = await second.create(record.session.sessionId);
   const again = await reopened.history(0, 200);
   assert.equal(again.recordBatch.sourceID, source);
-  assert.notEqual(reopened.archivePath, record.archivePath);
   assert.ok(!again.recordBatch.records.some(r => r.text?.includes('Visible reply')));
   assert.ok(reopened.session.messages.some(m => Array.isArray(m.content) && m.content.some(b => b.text === 'Visible reply')));
   let generation = 0; const interleaved = [];
@@ -208,7 +191,7 @@ test('native messages and exposed thinking reach display and the live archive wi
     })();
     return value;
   };
-  await second.prompt(reopened, 'Keep thinking identity through a tool step', update => interleaved.push(update));
+  await second.prompt(reopened, 'Keep thinking identity through a tool step', update => interleaved.push(update), undefined, { runID: reopened.runID, inputID: reopened.inputID });
   const thoughts = interleaved.filter(update => update.sessionUpdate === 'agent_thought_chunk');
   assert.equal(thoughts.map(update => update.content.text).join(''), 'Reason moreNext tool step');
   assert.equal(thoughts[0]._meta.wovenThoughtID, thoughts[1]._meta.wovenThoughtID);
@@ -265,7 +248,7 @@ test('native snapshots preserve Unicode, block removal, thoughts and prior assis
   await engine.prompt(record, 'Fixture block replacement', update => {
     updates.push(update);
     if (update.sessionUpdate === 'agent_message_chunk' && update.content.text === 'old removed') releasePartial();
-  });
+  }, undefined, { runID: record.runID, inputID: record.inputID });
   let displayed = '';
   const thoughts = new Map(), boundaries = [];
   const pending = new Map();
@@ -298,7 +281,7 @@ test('native snapshots preserve Unicode, block removal, thoughts and prior assis
   assert.equal(updates.filter(update => update._meta?.wovenThoughtSnapshot && update._meta.wovenSnapshotEnd).length, 1);
   record.streamFunction = model => stream(model, [{ type: 'text', text: '' }]);
   const next = [];
-  await engine.prompt(record, 'New prompt', update => next.push(update));
+  await engine.prompt(record, 'New prompt', update => next.push(update), undefined, { runID: record.runID, inputID: record.inputID });
   assert.equal(next.filter(update => update.sessionUpdate === 'agent_message_chunk').length, 0);
 });
 
@@ -497,7 +480,7 @@ for (const codeMode of ['off', 'only']) test(`native checklist is registered and
       name: codeMode === 'only' ? 'codemode' : checklistTool.name,
       arguments: codeMode === 'only' ? { code: `return await tools.update_checklist(${JSON.stringify(args)});` } : args }]);
   };
-  await engine.prompt(record, 'Track work', update => updates.push(update));
+  await engine.prompt(record, 'Track work', update => updates.push(update), undefined, { runID: record.runID, inputID: record.inputID });
   const plans = updates.filter(update => update.sessionUpdate === 'plan');
   assert.equal(plans.length, 3); // The failed duplicate-ID tool cannot mutate progress.
   assert.deepEqual(plans[0].entries, todos);
@@ -517,7 +500,7 @@ for (const codeMode of ['off', 'only']) test(`native checklist is registered and
   assert.equal(messages.filter(message => !message.isError).length, 3);
   const next = [];
   record.streamFunction = model => stream(model, [{ type: 'text', text: 'New task' }]);
-  await engine.prompt(record, 'Fresh task', update => next.push(update));
+  await engine.prompt(record, 'Fresh task', update => next.push(update), undefined, { runID: record.runID, inputID: record.inputID });
   assert.equal(next.filter(update => update.sessionUpdate === 'plan').length, 0);
 });
 

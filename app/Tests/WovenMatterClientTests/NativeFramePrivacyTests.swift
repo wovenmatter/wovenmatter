@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 import Testing
 import WovenMatterCore
@@ -60,29 +59,4 @@ private struct NativePrivacyFixture: Sendable {
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
     }
     func remove() { try? FileManager.default.removeItem(at: root) }
-}
-
-private func writeLargeNativePrivacyInput(_ file: URL, prefix: Data, suffix: Data) throws -> (count: Int, sha256: String) {
-    guard FileManager.default.createFile(atPath: file.path, contents: nil, attributes: [.posixPermissions: 0o600]) else {
-        throw CocoaError(.fileWriteUnknown)
-    }
-    let writer = try FileHandle(forWritingTo: file)
-    defer { try? writer.close() }
-    let chunk = Data(repeating: 97, count: 64 * 1_024)
-    var hash = SHA256(), count = 0
-    func write(_ bytes: Data) throws { try writer.write(contentsOf: bytes); hash.update(data: bytes); count += bytes.count }
-    try write(prefix)
-    for _ in 0..<1_025 { try write(chunk) }
-    try write(suffix)
-    return (count, hash.finalize().map { String(format: "%02x", $0) }.joined())
-}
-
-private func hashNativePrivacyFile(_ file: URL) throws -> (count: Int, sha256: String) {
-    let reader = try FileHandle(forReadingFrom: file)
-    defer { try? reader.close() }
-    var hash = SHA256(), count = 0
-    while let bytes = try reader.read(upToCount: 64 * 1_024), !bytes.isEmpty {
-        hash.update(data: bytes); count += bytes.count
-    }
-    return (count, hash.finalize().map { String(format: "%02x", $0) }.joined())
 }

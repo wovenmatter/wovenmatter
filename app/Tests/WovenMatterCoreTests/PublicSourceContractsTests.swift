@@ -7,86 +7,16 @@ import WovenMatterCore
 struct PublicSourceContractsTests {
 
   @Test("enabling one usage account does not probe the others")
-  func scopedUsageAccountEnablement() async throws {
-    let directory = try TemporaryDirectory(prefix: "wovenmatter-usage-consent")
-    defer { directory.remove() }
+  func scopedUsageAccountEnablement() async {
     let accounts = await ProviderLimitCollector.collect(
-      homeDirectory: directory.url,
-      openRouterAPIKey: nil,
       enabledProviders: [.openCodeGo],
+      sharedCredentials: [:],
       now: Date(timeIntervalSince1970: 1_800_000_000)
     )
 
     #expect(accounts.map(\.provider) == [.openCodeGo])
   }
 
-
-  @Test("Codex workspace catalog exposes distinct metadata without credentials")
-  func codexWorkspaceCatalog() throws {
-    try #require(ProcessInfo.processInfo.environment["CODEX_HOME"] == nil,
-      "Run tests with CODEX_HOME unset so fixtures cannot read inherited credentials.")
-    let directory = try TemporaryDirectory(prefix: "wovenmatter-codex-workspaces")
-    defer { directory.remove() }
-    let support = directory.url.appending(
-      path: "Library/Application Support/CodexBar",
-      directoryHint: .isDirectory
-    )
-    let homes = support.appending(path: "managed-codex-homes", directoryHint: .isDirectory)
-    let personalHome = homes.appending(path: "personal", directoryHint: .isDirectory)
-    let businessHome = homes.appending(path: "business", directoryHint: .isDirectory)
-    let liveHome = directory.url.appending(path: ".codex", directoryHint: .isDirectory)
-    for url in [personalHome, businessHome, liveHome] {
-      try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-    }
-    try writeJSON([
-      "tokens": ["account_id": "workspace-personal", "access_token": "not-read"],
-    ], to: personalHome.appending(path: "auth.json"))
-    try writeJSON([
-      "tokens": ["account_id": "workspace-business", "access_token": "not-read"],
-    ], to: businessHome.appending(path: "auth.json"))
-    try writeJSON([
-      "tokens": ["account_id": "workspace-personal", "access_token": "not-read"],
-    ], to: liveHome.appending(path: "auth.json"))
-    try writeJSON([
-      "version": 3,
-      "accounts": [
-        [
-          "id": UUID().uuidString,
-          "email": "same@example.com",
-          "workspaceLabel": "Personal",
-          "workspaceAccountID": "workspace-personal",
-          "managedHomePath": personalHome.path,
-        ],
-        [
-          "id": UUID().uuidString,
-          "email": "same@example.com",
-          "workspaceLabel": "Example Business",
-          "workspaceAccountID": "workspace-business",
-          "managedHomePath": businessHome.path,
-        ],
-      ],
-    ], to: support.appending(path: "managed-codex-accounts.json"))
-
-    let sources = ProviderLimitCollector.codexWorkspaceSources(homeDirectory: directory.url)
-    #expect(sources.map(\.workspace.name) == ["Personal", "Example Business"])
-    #expect(sources.map(\.workspace.email) == ["same@example.com", "same@example.com"])
-    #expect(sources.first?.isLive == true)
-    #expect(ProviderLimitCollector.resolveCodexWorkspaceSource(
-      sources,
-      selectedID: "workspace-business"
-    )?.workspace.name == "Example Business")
-    let selected = ProviderLimitCollector.resolveCodexWorkspaceSource(
-      sources,
-      selectedID: "workspace-business"
-    )
-    #expect(ProviderLimitCollector.codexEnvironmentOverrides(
-      for: selected
-    ) == ["CODEX_HOME": businessHome.path])
-    #expect(ProviderLimitCollector.codexManagedWorkspaceHomeDirectory(
-      homeDirectory: directory.url,
-      workspaceID: "workspace-personal"
-    ) == personalHome)
-  }
 
   @Test("account preferences filter limits but never device analytics")
   func accountPreferencesOnlyFilterLimits() async throws {
@@ -115,7 +45,8 @@ struct PublicSourceContractsTests {
       homeDirectory: directory.url,
       fileManager: RecordingUsageFileManager(recorder: sourceAccess),
       credentialStore: credentials,
-      usageDatabaseURL: databaseURL
+      usageDatabaseURL: databaseURL,
+      sharedConnectionRevision: { 0 }
     )
     let snapshot = try await service.snapshot(
       range: .last30Days,
@@ -153,13 +84,6 @@ struct PublicSourceContractsTests {
 
     preferences.save([])
     #expect(UsageProviderPreferences(defaults: defaults).enabledProviders.isEmpty)
-
-    let workspacePreferences = CodexUsageWorkspacePreferences(defaults: defaults)
-    #expect(workspacePreferences.selectedWorkspaceID == nil)
-    workspacePreferences.save(selectedWorkspaceID: "workspace-business")
-    #expect(CodexUsageWorkspacePreferences(
-      defaults: defaults
-    ).selectedWorkspaceID == "workspace-business")
   }
 
   @Test("provider response fixtures preserve distinct quota semantics")
@@ -203,19 +127,6 @@ struct PublicSourceContractsTests {
     #expect(weeklyCodex.quotaWindows.map(\.id) == ["five-hour"])
     #expect(weeklyCodex.quotaWindows.first?.usedPercent == 63)
     #expect(weeklyCodex.quotaWindows.first?.windowMinutes == 10_080)
-    let scopedCodex = ProviderLimitCollector.scopedCodexAccount(
-      fiveHourCodex,
-      workspace: CodexUsageWorkspace(
-        id: "workspace-business",
-        name: "Example Business",
-        email: "same@example.com"
-      ),
-      showsWorkspaceIdentity: true
-    )
-    #expect(scopedCodex.accountScopeID == "workspace-business")
-    #expect(scopedCodex.accountLabel == "Example Business — same@example.com")
-    #expect(scopedCodex.quotaWindows == fiveHourCodex.quotaWindows)
-
     let claude = ProviderLimitCollector.mapClaudeUsage([
       "five_hour": ["utilization": 12.5, "resets_at": "2027-01-15T08:00:00Z"],
       "seven_day": ["utilization": 33.0],
@@ -317,9 +228,7 @@ private final class RecordingUsageCredentialStore:
     return true
   }
 
-  func authorizeOpenRouterAPIKey() throws -> String? { try loadOpenRouterAPIKey() }
-
-  func loadOpenRouterAPIKey() throws -> String? {
+  func authorizeOpenRouterAPIKey() throws -> String? {
     lock.withLock { reads += 1 }
     return "fixture"
   }
@@ -374,13 +283,4 @@ private struct TemporaryDirectory {
   }
 
   func remove() { try? FileManager.default.removeItem(at: url) }
-}
-
-private func writeJSON(_ object: Any, to url: URL) throws {
-  try FileManager.default.createDirectory(
-    at: url.deletingLastPathComponent(),
-    withIntermediateDirectories: true
-  )
-  try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
-    .write(to: url, options: [.atomic])
 }

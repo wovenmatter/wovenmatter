@@ -49,7 +49,7 @@ public enum RemoteWorkspaceTailnet {
         // reuse of an existing multiplexed connection established outside Tailscale.
         // nc uses tailscaled's DialTCP, so losing Tailscale cannot fall back to LAN.
         return [
-            "-o", "ProxyCommand=exec '\(executable.replacingOccurrences(of: "'", with: "'\\''"))' nc \(address) %p",
+            "-o", "ProxyCommand=exec \(RemoteWorkspaceExecTarget.quote(executable)) nc \(address) %p",
             "-o", "ProxyJump=none", "-o", "Hostname=\(address)",
             "-o", "CanonicalizeHostname=no", "-o", "ControlMaster=no", "-o", "ControlPath=none",
             "-o", "ControlPersist=no", "-o", "Compression=no", "-o", "ForwardAgent=no", "-o", "ForwardX11=no",

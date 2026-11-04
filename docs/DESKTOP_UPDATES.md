@@ -1,8 +1,9 @@
 # Desktop updates
 
-The production Mac app uses Sparkle 2.10.1. `app/Updater/sparkle-version.json`
-records that release, the exact commit the Xcode project requires, and the
-SHA-256 of the signing tools archive; see [the dependency policy](DEPENDENCIES.md).
+The production Mac app uses the Sparkle release recorded in
+`app/Updater/sparkle-version.json`, which also records the exact commit the
+Xcode project requires and the SHA-256 of the signing tools archive; see
+[the dependency policy](DEPENDENCIES.md).
 Settings > General opens its update UI,
 including download progress and cancellation. Update checks remain manual.
 

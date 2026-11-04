@@ -148,7 +148,7 @@ extension WorkspaceDatabaseConnection {
       let encoder = JSONEncoder()
       let identity = try encoder.encode([harness, sourceID, batch.nativeSessionID, record.id,
         record.revision ?? "", record.kind, record.contentMode, payload, projection ?? "", text ?? ""])
-      let eventID = "native:" + SHA256.hash(data: identity).map { String(format: "%02x", $0) }.joined()
+      let eventID = "native:" + SHA256.hash(data: identity).hexString
       if let existing = try historyRowsUnlocked("SELECT conversation_id,run_id,agent_id,source_connection_id FROM workspace_history_events WHERE id=?", values: [eventID]).first?.objectValue {
         if let previous = existing["conversation_id"]?.stringValue, let conversationID, previous != conversationID {
           throw WorkspaceDatabaseError.open("Native archive source belongs to another conversation")

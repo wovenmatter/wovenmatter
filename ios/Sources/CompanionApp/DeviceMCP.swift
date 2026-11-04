@@ -11,17 +11,12 @@ extension CompanionModel {
     WorkspaceToolGroup.configurableCases.map { .init(id: deviceToolSelectionID($0), label: $0.title) }
   }
 
-  /// Settings migration preserves the scope of saved selections without exposing
-  /// the retired command interface or widening an individual note grant.
-  static func migratedDeviceToolSelection(_ selection: [String]?) -> [String]? {
-    MobileToolSupport.migratedMCPSelection(selection)
-  }
   static func deviceToolEnabled(_ name: String, selection: [String]?) -> Bool {
     let definition = WovenMCPCatalog.tools.first { $0.name == name }
     let group = definition?.group ?? WorkspaceToolGroup.allCases.first { deviceToolSelectionID($0) == name }
     if group == .goals || group == .html { return true }
     guard let group else { return !name.hasPrefix("woven_") && !name.hasPrefix("wovenmatter_") && !["list_notes", "read_note", "save_note"].contains(name) }
-    guard let selected = migratedDeviceToolSelection(selection) else { return group != .computer }
+    guard let selected = MobileToolSupport.migratedMCPSelection(selection) else { return group != .computer }
     if selected.contains(deviceToolSelectionID(group)) || selected.contains(name) { return true }
     // Group controls describe an existing partial grant without expanding it.
     return definition == nil && WovenMCPCatalog.tools.contains { $0.group == group && selected.contains($0.name) }
@@ -207,10 +202,6 @@ extension CompanionModel {
     }
     return executionRecords[id]?.goalLedger?.goal
   }
-  func deviceTokenUsage(_ runtime: PiDurableRuntime) async throws -> Int64? {
-    try await runtime.tokenUsage()
-  }
-
   func processDeviceGoals() async throws {
     guard let store else { return }
     let inbox = await store.toolSubmissions()

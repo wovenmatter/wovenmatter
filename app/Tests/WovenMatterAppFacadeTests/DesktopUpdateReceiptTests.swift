@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import Foundation
 import Testing
 import WovenMatterCompanion
@@ -8,15 +9,14 @@ import WovenMatterDashboardStore
 struct DesktopUpdateReceiptTests {
     @Test("installation preparation saves before termination and respects opt-out")
     @MainActor func savesBeforeTermination() async throws {
-        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let persistence = try PersistenceFixture()
         let suite = "wovenmatter.receipt-test." + UUID().uuidString
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer {
             defaults.removePersistentDomain(forName: suite)
-            try? FileManager.default.removeItem(at: directory)
+            persistence.remove()
         }
-        let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+        let database = try await persistence.openDatabase()
         let analytics = ProductAnalyticsModel(defaults: defaults)
         analytics.configure(database: database, publisher: false)
         await analytics.refresh()

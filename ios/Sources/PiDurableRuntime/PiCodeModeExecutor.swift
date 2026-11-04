@@ -4,8 +4,8 @@ import WebKit
 /// Model-authored code runs in a separate WebKit worker, never the SDK's privileged JSContext.
 /// CSP blocks network access; only individually validated tool calls cross into native code.
 @MainActor
-final class PiCodeModeExecutor: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
-  typealias Tool = @MainActor (String, String) async throws -> String
+public final class PiCodeModeExecutor: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
+  public typealias Tool = @MainActor (String, String) async throws -> String
   private var browser: WKWebView?
   private var continuation: CheckedContinuation<String, any Error>?
   private var watchdog: Task<Void, Never>?
@@ -18,7 +18,7 @@ final class PiCodeModeExecutor: NSObject, WKScriptMessageHandler, WKNavigationDe
   private var checkpoint: (@MainActor (String) async throws -> Void)?
   private var policy = PiExecutionPolicy()
 
-  func run(requestJSON: String, timeout: Duration? = nil, policy: PiExecutionPolicy = .init(),
+  public func run(requestJSON: String, policy: PiExecutionPolicy = .init(),
            checkpoint: @escaping @MainActor (String) async throws -> Void = { _ in
              throw PiDurableRuntimeError.unavailable("No durable checkpoint host is available.")
            }, tool: @escaping Tool) async throws -> String {
@@ -43,14 +43,10 @@ final class PiCodeModeExecutor: NSObject, WKScriptMessageHandler, WKNavigationDe
         browser = view; view.navigationDelegate = self
         view.loadHTMLString(Self.html, baseURL: nil)
         watchdog = Task { [weak self] in
-          let started = ContinuousClock.now
           while !Task.isCancelled {
             do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
             guard let self, !self.finished else { return }
             let now = ContinuousClock.now
-            if let timeout, started.duration(to: now) >= timeout {
-              self.finish(.failure(PiDurableRuntimeError.unavailable("Code exceeded its explicit execution limit."))); return
-            }
             if self.lastHeartbeat.duration(to: now) >= .seconds(self.policy.unresponsiveCodeSeconds) {
               self.finish(.failure(PiDurableRuntimeError.unavailable("The code worker stopped responding. Yield during long computations with await yield_control(); saved tool effects have not been replayed."))); return
             }
@@ -62,7 +58,7 @@ final class PiCodeModeExecutor: NSObject, WKScriptMessageHandler, WKNavigationDe
     }
   }
 
-  func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+  public func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
     guard !finished else { return }
     let source = request["source"] as? String ?? ""
     let tools = request["tools"] as? [[String: Any]] ?? []
@@ -72,15 +68,15 @@ final class PiCodeModeExecutor: NSObject, WKScriptMessageHandler, WKNavigationDe
       catch { self?.finish(.failure(error)) }
     }
   }
-  func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: any Error) { finish(.failure(error)) }
-  func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: any Error) { finish(.failure(error)) }
-  func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+  public func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: any Error) { finish(.failure(error)) }
+  public func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: any Error) { finish(.failure(error)) }
+  public func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
     finish(.failure(PiDurableRuntimeError.unavailable("The isolated code process was interrupted.")))
   }
-  func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void) {
+  public func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void) {
     decisionHandler(navigationAction.request.url?.absoluteString == "about:blank" ? .allow : .cancel)
   }
-  func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+  public func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
     guard !finished, message.name == "wovenCodeMode", let body = message.body as? [String: Any],
           let kind = body["type"] as? String else { return }
     if kind == "heartbeat" {

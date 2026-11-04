@@ -14,17 +14,13 @@ import time
 import uuid
 
 
-def choose_mode(root):
-    """Default to the complete, independent app; clients are explicit opt-in."""
-    return "snapshot"
-
-
 def profile(root, instance, mode):
     root = root.resolve()
     instance = instance or (re.sub(r"[^a-z0-9-]", "-", root.parent.name.lower())[:40].strip("-") or "dev") + "-" + hashlib.sha256(os.fsencode(root)).hexdigest()[:10]
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", instance):
         raise ValueError("Use a lowercase instance name of up to 64 letters, digits, and hyphens.")
-    selected = choose_mode(root) if mode == "auto" else mode
+    # Auto defaults to the complete, independent app; clients are explicit opt-in.
+    selected = "snapshot" if mode == "auto" else mode
     support = Path.home() / "Library/Application Support"
     support = support / "Woven Matter" if selected == "live" else support / "Woven Matter Dev" / instance / selected
     return dict(instance=instance, mode=selected,

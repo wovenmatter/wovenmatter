@@ -17,7 +17,7 @@ const failed = (reason, missingLibraries = [], diagnostic) => ({
       : 'Chromium sandbox isolation could not be verified. Browser execution must remain unavailable until this check passes.',
 })
 
-export function missingLibrariesFromLdd(output) {
+function missingLibrariesFromLdd(output) {
   const names = [...String(output).matchAll(/^\s*(\S+)\s+=>\s+not found\s*$/gm)].map(match => match[1])
   for (const match of String(output).matchAll(/error while loading shared libraries:\s*([^:\s]+):/g)) names.push(match[1])
   return [...new Set(names)].sort()

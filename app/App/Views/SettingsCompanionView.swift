@@ -45,9 +45,9 @@ struct SettingsCompanionView: View {
                 if host.pairedDevices.contains(where: { $0.id != host.peerIdentity?.deviceID }) { pairedDevices }
                 if !host.pendingDeviceRevocations.isEmpty { pendingRevocations }
             }
-            SettingsDeviceWorkspaceInventory(workspaces: model.isLibraryClient ? client.executionWorkspaces : host.executionWorkspaces)
+            SettingsDeviceWorkspaceInventory(workspaces: host.executionWorkspaces)
             if !DevelopmentLaunch.isClient {
-                DevicePairingDiscoveryCard(pairing: client.devicePairing, host: host, isCentral: true, canPairWithCentral: true)
+                DevicePairingDiscoveryCard(pairing: client.devicePairing, host: host, canPairWithCentral: true)
                 DevicePairingCodeCard(host: host)
                 SettingsCard(title: "Use a pairing link", detail: "Copy a pairing link from the other Mac’s Apple Devices settings.") {
                     HStack {
@@ -87,28 +87,11 @@ struct SettingsCompanionView: View {
         .task {
             guard !DevelopmentLaunch.isClient else { return }
             while !Task.isCancelled {
-                if !model.isLibraryClient { await host.refreshStatus() }
+                await host.refreshStatus()
                 do { try await Task.sleep(for: .seconds(2)) } catch { return }
             }
         }
 
-    }
-    private var clientDeviceRoster: some View {
-        SettingsCard(title: "Paired devices") {
-            ForEach(client.connectedDevices) { device in
-                HStack(spacing: 12) {
-                    DeviceConnectionIcon(kind: device.metadata.kind)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(device.name).font(.system(size: 13, weight: .medium))
-                        Text(DeviceConnectionIcon.label(device.metadata.kind)).font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
-                        if let seen = device.lastSeenAt {
-                            Text("Last seen \(seen.formatted(date: .abbreviated, time: .shortened))")
-                                .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
-                        }
-                    }
-                }
-            }
-        }
     }
     private var pairingRequests: some View {
         SettingsCard(title: "Pairing requests") {
