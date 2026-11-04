@@ -61,7 +61,6 @@ struct DeviceChatSettings: Codable, Equatable {
 }
 
 struct DeviceExecutionPreferences: Codable {
-  var goalCapabilityVersion: Int? = 1
   var connections: [InferenceConnection] = []
   var selectedConnectionID = ""
   var workspaceID = "local"
@@ -292,10 +291,10 @@ extension CompanionModel {
       deviceAgentDefaults = saved.agentDefaults ?? .init()
       draftDeviceSettings = saved.chatSettings ?? .init(enabledTools: deviceAgentDefaults.enabledTools)
       for (id, record) in executionRecords {
-        executionRecords[id]?.enabledTools = Self.migratedDeviceToolSelection(record.enabledTools)
+        executionRecords[id]?.enabledTools = MobileToolSupport.migratedMCPSelection(record.enabledTools)
       }
-      deviceAgentDefaults.enabledTools = Self.migratedDeviceToolSelection(deviceAgentDefaults.enabledTools)
-      draftDeviceSettings.enabledTools = Self.migratedDeviceToolSelection(draftDeviceSettings.enabledTools)
+      deviceAgentDefaults.enabledTools = MobileToolSupport.migratedMCPSelection(deviceAgentDefaults.enabledTools)
+      draftDeviceSettings.enabledTools = MobileToolSupport.migratedMCPSelection(draftDeviceSettings.enabledTools)
       for id in executionRecords.keys { executionRecords[id]?.goalLedger?.recover() }
       for id in executionRecords.keys where executionRecords[id]?.status == "running" {
         executionRecords[id]?.status = "interrupted"
@@ -385,7 +384,7 @@ extension CompanionModel {
       let requestID = UUID().uuidString.lowercased()
       var prompt = WorkspaceGoalCommand(text)?.agentPrompt ?? text
       executionRecords[id]?.inputAssetID = noteID
-      executionRecords[id]?.goalUsageBaseline = try await deviceTokenUsage(runtime)
+      executionRecords[id]?.goalUsageBaseline = try await runtime.tokenUsage()
       executionRecords[id]?.goalLedger?.enroll(requestID)
       if (try? deviceToolContext(conversationID: id).enabled.contains(.goals)) == true { prompt += WorkspaceGoal.guidance }
       executionRecords[id]?.runID = requestID; executionRecords[id]?.status = "running"
@@ -469,7 +468,7 @@ extension CompanionModel {
           // A persistence error closes this attempt as interrupted rather than losing its ID.
           try await self.completeDeviceToolSubmission(requestID: runID, status: status, error: receipt["reason"] as? String)
           guard self.localRunTokens[id] == token, self.localExecutionAttempts[id] == attemptID else { return }
-          let usage = try await self.deviceTokenUsage(runtime)
+          let usage = try await runtime.tokenUsage()
           let baseline = self.executionRecords[id]?.goalUsageBaseline
           self.executionRecords[id]?.goalLedger?.settle(runID, tokens: usage.flatMap { total in baseline.flatMap { total >= $0 ? total - $0 : nil } }, succeeded: status == "completed")
           self.executionRecords[id]?.status = status
@@ -574,7 +573,7 @@ extension CompanionModel {
     localRunTasks.removeValue(forKey: id)?.cancel()
     try await runtime.abort()
     if let runID = record.runID {
-      let usage = try await deviceTokenUsage(runtime)
+      let usage = try await runtime.tokenUsage()
       executionRecords[id]?.goalLedger?.settle(runID, tokens: usage.flatMap { total in record.goalUsageBaseline.flatMap { total >= $0 ? total - $0 : nil } }, succeeded: false)
       try await completeDeviceToolSubmission(requestID: runID, status: "cancelled")
       finishDeviceExecutionAttempt(id, runID: runID, attemptID: localExecutionAttempts[id], success: false)

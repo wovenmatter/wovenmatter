@@ -4,7 +4,7 @@ import CompanionClient
 import WovenMatterCompanion
 @testable import WovenMatterMobileApp
 
-private actor PairingSettingsMac: CompanionTransport {
+private actor PairingSettingsMac: OfflineCompanionTransport {
   var waitForProviders = false
   var providerRequestWaiting = false
   var providerGate: CheckedContinuation<Void, Never>?
@@ -13,15 +13,12 @@ private actor PairingSettingsMac: CompanionTransport {
   func workspaceIdentity() async throws -> String { "library-a" }
   func snapshot() async throws -> CompanionSnapshot { .init(workspaceID: "library-a", cursor: 1) }
   func changes(after: Int64) async throws -> CompanionChangePage { .init(workspaceID: "library-a", cursor: 1) }
-  func mutate(_ mutation: CompanionMutation) async throws -> CompanionMutationResult { throw MobileConnectionError.offline }
-  func note(_ id: String) async throws -> CompanionNote { throw MobileConnectionError.offline }
   func providers() async throws -> [CompanionProvider] {
     if waitForProviders { providerRequestWaiting = true; await withCheckedContinuation { providerGate = $0 } }
     return []
   }
   func pending() async throws -> [CompanionPendingInteraction] { [] }
   func transcript(_ id: String) async throws -> CompanionTranscript { .init(conversationID: id) }
-  func command(_ command: CompanionCommand) async throws -> CompanionCommandReceipt { throw MobileConnectionError.offline }
   func receipt(_ id: String) async throws -> CompanionCommandReceipt? { nil }
 }
 

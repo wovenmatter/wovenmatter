@@ -13,7 +13,6 @@ final class DeviceBackgroundExecution {
   private var ledger = ContinuedExecutionLedger()
   private var grants: [String: BGTask] = [:]
   private var expirations: [String: Expiration] = [:]
-  private(set) var lastSubmissionFailure: String?
 
   /// Call synchronously from a foreground, user-initiated submit/resume action. The callback must
   /// persist interruption and close that run only; it must not create a new submission or resume.
@@ -114,12 +113,10 @@ final class DeviceBackgroundExecution {
         self.finish(identity, success: false)
       }
     }
-    lastSubmissionFailure = nil
   }
 
   private func submissionFailed(_ identity: ContinuedExecutionLedger.Identity, message: String) {
     guard ledger.entry(conversationID: identity.conversationID)?.identity == identity else { return }
-    lastSubmissionFailure = message
     logger.info("Continued execution unavailable; retaining durable short-task fallback: \(message, privacy: .public)")
     finish(identity, success: false)
   }

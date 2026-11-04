@@ -52,7 +52,7 @@ extension CompanionModel {
             try Task.checkCancellation()
             let input = try Self.toolJSON(["source": code, "tools": available])
             var callIndex = 0
-            let result = try await PiDeviceCodeExecutor.run(requestJSON: input, policy: policy,
+            let result = try await PiCodeModeExecutor().run(requestJSON: input, policy: policy,
               checkpoint: { checkpoint in try await store.saveExecutorCheckpoint(id: id, checkpoint: checkpoint) },
               tool: { [weak self] name, arguments in
                 guard let self else { throw CancellationError() }

@@ -13,41 +13,41 @@ struct WovenMCPTests {
     #expect(WorkspaceToolGroup.computer.automationCancelToolName == "woven_computer_use_cancel")
     #expect(WorkspaceToolGroup.browser.automationCancelToolName == "woven_browser_use_cancel")
     #expect(!names.contains("woven_" + "computer") && !names.contains("woven_" + "browser"))
-    let request = try WovenMCPCatalog.request(name: "woven_computer_use", arguments: [
-      "action": .string("snapshot"), "pid": .number(7), "windowID": .number(9), "treeFormat": .string("elements")])
+    let request = try WovenMCPCatalog.request(name: "woven_computer_use", arguments: .object([
+      "action": .string("snapshot"), "pid": .number(7), "windowID": .number(9), "treeFormat": .string("elements")]))
     let command = try WovenMatterToolCommand(request.arguments)
     #expect(command.group == .computer && command.action == "call")
     let input = try JSONDecoder().decode(GatewayJSONValue.self, from: Data(command.required("json").utf8))
     #expect(input.objectValue?["windowID"] == .number(9))
     for key in ["session", "endpoint", "socket", "screenshot_out_file", "prompt"] {
       #expect(throws: WorkspaceToolError.self) {
-        try WovenMCPCatalog.request(name: "woven_computer_use", arguments: ["action": .string("apps"), key: .string("forged")])
+        try WovenMCPCatalog.request(name: "woven_computer_use", arguments: .object(["action": .string("apps"), key: .string("forged")]))
       }
     }
-    let cancel = try WovenMCPCatalog.request(name: "woven_computer_use_cancel", arguments: ["id": .string("all")])
+    let cancel = try WovenMCPCatalog.request(name: "woven_computer_use_cancel", arguments: .object(["id": .string("all")]))
     #expect(try WovenMatterToolCommand(cancel.arguments).group == .computer)
   }
 
   @Test func inputAuthorityAndSchemaValidation() throws {
     for extra in ["callerID", "contextID", "file", "arguments", "bearerToken"] {
       #expect(throws: WorkspaceToolError.self) {
-        try WovenMCPCatalog.request(name: "woven_goals_get", arguments: [extra: .string("forged")])
+        try WovenMCPCatalog.request(name: "woven_goals_get", arguments: .object([extra: .string("forged")]))
       }
     }
     #expect(throws: WorkspaceToolError.self) {
-      try WovenMCPCatalog.request(name: "woven_notes_read", arguments: ["noteID": .string("n"), "characters": .number(65_537)])
+      try WovenMCPCatalog.request(name: "woven_notes_read", arguments: .object(["noteID": .string("n"), "characters": .number(65_537)]))
     }
     #expect(throws: WorkspaceToolError.self) {
-      try WovenMCPCatalog.request(name: "woven_notes_read", arguments: ["noteID": .number(1)])
+      try WovenMCPCatalog.request(name: "woven_notes_read", arguments: .object(["noteID": .number(1)]))
     }
     #expect(throws: WorkspaceToolError.self) {
-      try WovenMCPCatalog.request(name: "woven_goals_set", arguments: ["objective": .string("goal"), "requestID": .string("not-a-uuid")])
+      try WovenMCPCatalog.request(name: "woven_goals_set", arguments: .object(["objective": .string("goal"), "requestID": .string("not-a-uuid")]))
     }
     #expect(throws: WorkspaceToolError.self) {
-      try WovenMCPCatalog.request(name: "woven_browser_use", arguments: ["action": .string("unknown")])
+      try WovenMCPCatalog.request(name: "woven_browser_use", arguments: .object(["action": .string("unknown")]))
     }
     #expect(throws: WorkspaceToolError.self) {
-      try WovenMCPCatalog.request(name: "woven_goals_set", arguments: [:])
+      try WovenMCPCatalog.request(name: "woven_goals_set", arguments: .object([:]))
     }
   }
 
@@ -58,7 +58,7 @@ struct WovenMCPTests {
     #expect(render.annotations.objectValue?["idempotentHint"] == .bool(false))
     #expect(preview.annotations.objectValue?["idempotentHint"] == .bool(true))
     let html = "<img src='data:image/png;base64," + String(repeating: "A", count: 600_000) + "'>"
-    let request = try WovenMCPCatalog.request(name: render.name, arguments: ["html": .string(html), "title": .string("Chart"), "height": .number(160)])
+    let request = try WovenMCPCatalog.request(name: render.name, arguments: .object(["html": .string(html), "title": .string("Chart"), "height": .number(160)]))
     let command = try WovenMatterToolCommand(request.arguments)
     let page = try JSONDecoder().decode(GatewayJSONValue.self, from: Data(command.required("json").utf8))
     #expect(command.group == .html)
@@ -68,7 +68,7 @@ struct WovenMCPTests {
     #expect(WovenMCPServer.maximumRequestBytes(for: message) == 40 * 1024 * 1024)
     #expect(WovenMCPServer.maximumRequestBytes(for: .object(["method": .string("tools/list")])) == 4 * 1024 * 1024)
     #expect(throws: WorkspaceToolError.self) {
-      try WovenMCPCatalog.request(name: render.name, arguments: ["html": .string("<p>Chart</p>"), "title": .string("Chart"), "height": .number(160), "conversationID": .string("forged")])
+      try WovenMCPCatalog.request(name: render.name, arguments: .object(["html": .string("<p>Chart</p>"), "title": .string("Chart"), "height": .number(160), "conversationID": .string("forged")]))
     }
   }
 
@@ -83,11 +83,11 @@ struct WovenMCPTests {
   }
 
   @Test func browserProfileIsValidatedAndForwarded() throws {
-    let request = try WovenMCPCatalog.request(name: "woven_browser_use", arguments: ["action": .string("tabs"), "profile": .string("work-2")])
+    let request = try WovenMCPCatalog.request(name: "woven_browser_use", arguments: .object(["action": .string("tabs"), "profile": .string("work-2")]))
     #expect(request.arguments.contains(where: { $0.contains("work-2") }))
     for profile in ["../escape", "", "MixedCase", String(repeating: "a", count: 33)] {
       #expect(throws: (any Error).self) {
-        try WovenMCPCatalog.request(name: "woven_browser_use", arguments: ["action": .string("tabs"), "profile": .string(profile)])
+        try WovenMCPCatalog.request(name: "woven_browser_use", arguments: .object(["action": .string("tabs"), "profile": .string(profile)]))
       }
     }
   }

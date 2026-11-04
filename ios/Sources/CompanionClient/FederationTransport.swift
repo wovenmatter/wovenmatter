@@ -9,7 +9,6 @@ public protocol FederationTransport: Sendable {
   func importJournal(_ batch: CompanionJournalBatch) async throws -> CompanionJournalBatchResult
   func artifactManifests() async throws -> [CompanionArtifactManifest]
   func registerArtifact(_ registration: CompanionArtifactRegistration) async throws -> CompanionArtifactTransfer
-  func artifactStatus(_ id: String) async throws -> CompanionArtifactTransfer
   func uploadArtifactChunk(_ chunk: CompanionArtifactChunk) async throws -> CompanionArtifactTransfer
   func commitArtifact(_ commit: CompanionArtifactCommit) async throws -> CompanionArtifactManifest
   func downloadArtifactChunk(_ id: String, revision: Int64, offset: Int64) async throws -> CompanionArtifactChunk
@@ -40,7 +39,6 @@ extension HTTPSCompanionTransport: FederationTransport {
   public func registerArtifact(_ registration: CompanionArtifactRegistration) async throws -> CompanionArtifactTransfer {
     try await request("v1/federation/artifacts/register", method: "POST", body: JSONEncoder().encode(registration))
   }
-  public func artifactStatus(_ id: String) async throws -> CompanionArtifactTransfer { try await request("v1/federation/artifacts/" + TailnetJSONClient.safeID(id)) }
   public func uploadArtifactChunk(_ chunk: CompanionArtifactChunk) async throws -> CompanionArtifactTransfer {
     try await request("v1/federation/artifacts/chunk", method: "POST", body: JSONEncoder().encode(chunk))
   }

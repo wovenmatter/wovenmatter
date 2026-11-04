@@ -14,14 +14,12 @@ public struct WovenMatterToolRequest: Codable, Sendable {
   public var schemaVersion: Int
   public var requestID: String
   public var arguments: [String]
-  public var noteEdit: NoteEditingRequest?
   /// Immutable input binding supplied by the native tool integration.
   public var contextID: String?
-  public init(arguments: [String], requestID: String = UUID().uuidString.lowercased(), noteEdit: NoteEditingRequest? = nil, contextID: String? = nil) {
+  public init(arguments: [String], requestID: String = UUID().uuidString.lowercased(), contextID: String? = nil) {
     self.schemaVersion = 1
     self.requestID = UUID(uuidString: requestID)?.uuidString.lowercased() ?? requestID
     self.arguments = arguments
-    self.noteEdit = noteEdit
     self.contextID = contextID
   }
   /// The transport request ID is separate from the normalized operation.
@@ -72,7 +70,6 @@ public struct WovenMatterToolCommand: Sendable {
   public let action: String
   public let positional: [String]
   public let options: [String: String]
-  public let optionIndices: [String: Int]
   public let operationArguments: [String]
   public let wantsHelp: Bool
 
@@ -107,7 +104,7 @@ public struct WovenMatterToolCommand: Sendable {
     if domain == "context" {
       guard args.isEmpty else { throw WorkspaceToolError.invalid("Context does not accept caller-selected assets or messages.") }
       self.group = nil; self.action = "context"; self.positional = []; self.options = [:]
-      self.optionIndices = [:]; self.operationArguments = arguments; self.wantsHelp = false
+      self.operationArguments = arguments; self.wantsHelp = false
       return
     }
     guard let group = WorkspaceToolGroup(rawValue: domain == "databases" ? "notes" : domain) else {
@@ -130,7 +127,7 @@ public struct WovenMatterToolCommand: Sendable {
     let booleanFlags: Set<String> = ["all-workspace", "independent", "no-notify", "paused", "all-day", "timed", "no-repeat", "regular-event", "json", "header"]
     let valueFlags: Set<String> = ["id", "session", "conversation", "note-id", "folder", "workspace", "directory", "harness", "model", "thinking", "title", "text", "purpose", "request-id", "search", "run", "kind", "sender", "since", "until", "after", "before", "limit", "offset", "characters", "sort", "epoch", "at", "every", "starts-at", "ends-at", "description", "prompt", "time-zone", "repeat-unit", "repeat-interval", "session-mode", "occurrence", "enabled", "revision", "version", "html", "style", "block-id", "table-id", "row", "column", "rows", "columns", "source-id", "native-session-id", "native-record-id", "native-conversation-id", "database-id", "path", "query", "code", "objective", "evidence", "token-budget", "turn-budget"]
     var positional: [String] = [], options: [String: String] = [:]
-    var indices: [String: Int] = [:], operationArguments = Array(arguments.prefix(2))
+    var operationArguments = Array(arguments.prefix(2))
     while !args.isEmpty {
       let item = args.removeFirst()
       if ["--help", "-h"].contains(item) { throw WorkspaceToolError.invalid("Discover Woven tool schemas through MCP tools/list.") }
@@ -139,7 +136,6 @@ public struct WovenMatterToolCommand: Sendable {
       guard booleanFlags.contains(key) || valueFlags.contains(key), options[key] == nil else {
         throw WorkspaceToolError.invalid("Unknown or repeated option '\(item)'.")
       }
-      indices[key] = arguments.count - args.count - 1
       if booleanFlags.contains(key) && !([.notes, .browser, .computer, .html].contains(group) && key == "json") {
         options[key] = "true"; operationArguments.append(item)
       } else {
@@ -152,7 +148,6 @@ public struct WovenMatterToolCommand: Sendable {
     try Self.validate(group: group, action: action, positional: positional, options: options)
     self.positional = positional
     self.options = options
-    self.optionIndices = indices
     self.wantsHelp = false
     self.operationArguments = operationArguments
   }

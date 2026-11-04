@@ -202,28 +202,12 @@ import CompanionInference
       else {
         do { try await store?.recoverPairingTransition(); await reload(); credential = try MobileCredentialVault.load() }
         catch { errorMessage = error.localizedDescription; return }
-        var unpairRequested = false
-        #if DEBUG
-        if CommandLine.arguments.contains("--unpair-devices") {
-          unpairRequested = true
-          await disconnectMac()
-          let result: [String: Any] = ["unpaired": pairingError == nil && credential == nil && workspaceClients.isEmpty,
-            "workspaceDetached": state.workspaceID == nil, "noteCount": state.notes.count,
-            "conversationCount": state.conversations.count]
-
-          if let data = try? JSONSerialization.data(withJSONObject: result, options: [.sortedKeys]) {
-            try? data.write(to: FileManager.default.temporaryDirectory.appendingPathComponent("wovenmatter-unpair-result.json"), options: .atomic)
-          }
-        }
-        #endif
-        if !unpairRequested {
-          do {
-            if let pending = credential, pending.confirmationPending == true {
-              credential = nil
-              try await acceptPairing(pending, allowingLibraryChange: true) { try MobileCredentialVault.save($0) }
-            } else { try configureTransport() }
-          } catch { pairingError = error.localizedDescription; credential = nil }
-        }
+        do {
+          if let pending = credential, pending.confirmationPending == true {
+            credential = nil
+            try await acceptPairing(pending, allowingLibraryChange: true) { try MobileCredentialVault.save($0) }
+          } else { try configureTransport() }
+        } catch { pairingError = error.localizedDescription; credential = nil }
         do { try await store?.interruptExecutorJobs(); try await loadExecutionConfiguration() }
         catch { errorMessage = error.localizedDescription }
       }
