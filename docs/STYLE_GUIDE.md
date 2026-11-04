@@ -49,6 +49,10 @@ when an intentional design change is accepted.
   conversation labels, and actions. Use **Pi Durable SDK** for the underlying SDK
   in technical descriptions and version/update controls. Keep the agent name
   stable across model and provider changes.
+- **Settings navigation:** group Pi Durable, Codex, Claude Code, Grok Build, and
+  OpenCode under **Settings → Agents**. Harness pages return to Agents unless
+  opened from a workspace's settings. Spell **OpenCode** as one word throughout
+  the app.
 - **Harness setup:** use compact rows grouped on the theme-whisper surface for
   both harness installation and Pi Durable setup, with the same typography,
   padding, inset dividers, and quiet actions. Keep provider setup limited to
