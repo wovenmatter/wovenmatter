@@ -338,8 +338,6 @@ final class ApplicationModel {
     private(set) var keychainAccessReady: Bool?
     var isRefreshingLocalUsage: Bool { usage.isRefreshingLocalUsage }
     var hasAcknowledgedCredentialAccessDisclosure: Bool { usage.hasAcknowledgedCredentialAccessDisclosure }
-    var codexUsageWorkspaces: [CodexUsageWorkspace] { usage.codexUsageWorkspaces }
-    var selectedCodexUsageWorkspaceID: String? { usage.selectedCodexUsageWorkspaceID }
     private var currentUsageRange: UsageTimeRange { usage.currentUsageRange }
 
     private(set) var installedLocalACPRuntimeKinds: Set<AgentRuntimeKind> = [.defaultAgent]
@@ -2080,16 +2078,12 @@ final class ApplicationModel {
     func refreshLocalUsage(
         range: UsageTimeRange,
         refreshLimits: Bool = false,
-        reason: UsageRefreshReason = .manual,
-        explicitCredentialAccess: Bool = false,
-        interactiveProvider: ProviderKind? = nil
+        reason: UsageRefreshReason = .manual
     ) async {
         await usage.refreshLocalUsage(
             range: range,
             refreshLimits: refreshLimits,
-            reason: reason,
-            explicitCredentialAccess: explicitCredentialAccess,
-            interactiveProvider: interactiveProvider
+            reason: reason
         )
     }
 
@@ -2194,13 +2188,6 @@ final class ApplicationModel {
         range: UsageTimeRange? = nil
     ) async {
         await usage.enableUsageProvider(provider, range: range ?? currentUsageRange)
-    }
-
-    func selectCodexUsageWorkspace(
-        _ workspaceID: String,
-        range: UsageTimeRange
-    ) async {
-        await usage.selectCodexUsageWorkspace(workspaceID, range: range)
     }
 
     func stageMessageAttachments(

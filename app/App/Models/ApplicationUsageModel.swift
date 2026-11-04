@@ -11,9 +11,6 @@ private struct UsageAnalyticsRefreshKey: Hashable, Sendable {
 private struct UsageLimitsRefreshKey: Hashable, Sendable {
     let enabledProviders: [String]
     let allowsCredentialAccess: Bool
-    let keychainInteraction: String
-    let interactiveProvider: String?
-    let selectedCodexWorkspaceID: String?
     let selectedConnections: [String: String]
 }
 
@@ -29,18 +26,15 @@ struct BackendUsageSnapshot: Codable, Sendable {
     var enabledUsageProviders: Set<ProviderKind>
     var usageConnectionChoices: [UsageConnectionChoice]
     var selectedUsageConnections: [String: String]
-    var codexUsageWorkspaces: [CodexUsageWorkspace]
-    var selectedCodexUsageWorkspaceID: String?
 }
 
 enum BackendUsageCommand: Codable, Sendable {
-    case refresh(range: UsageTimeRange, limits: Bool, reason: UsageRefreshReason, explicit: Bool, provider: ProviderKind?)
+    case refresh(range: UsageTimeRange, limits: Bool, reason: UsageRefreshReason)
     case analyticsSelected(UsageTimeRange)
     case sharedConnectionsChanged
     case acknowledgeDisclosure
     case authorizeSavedCredentials
     case enable(ProviderKind, UsageTimeRange)
-    case selectWorkspace(String, UsageTimeRange)
 }
 
 private struct BackendUsageSamplesRequest: Codable {
@@ -69,8 +63,6 @@ final class ApplicationUsageModel {
     private(set) var enabledUsageProviders: Set<ProviderKind> = []
     private(set) var usageConnectionChoices: [UsageConnectionChoice] = []
     private(set) var selectedUsageConnections: [String: String] = [:]
-    private(set) var codexUsageWorkspaces: [CodexUsageWorkspace] = []
-    private(set) var selectedCodexUsageWorkspaceID: String?
     @ObservationIgnored
     private let localUsageService: LocalUsageService
     @ObservationIgnored
@@ -116,8 +108,7 @@ final class ApplicationUsageModel {
             isAuthorizingUsageCredential: isAuthorizingUsageCredential, isOpenRouterCredentialConfigured: isOpenRouterCredentialConfigured,
             signingInUsageProviders: signingInUsageProviders, hasAcknowledgedCredentialAccessDisclosure: hasAcknowledgedCredentialAccessDisclosure,
             enabledUsageProviders: enabledUsageProviders, usageConnectionChoices: usageConnectionChoices,
-            selectedUsageConnections: selectedUsageConnections, codexUsageWorkspaces: codexUsageWorkspaces,
-            selectedCodexUsageWorkspaceID: selectedCodexUsageWorkspaceID)
+            selectedUsageConnections: selectedUsageConnections)
     }
 
     func applyBackendSnapshot(_ value: BackendUsageSnapshot) {
@@ -126,8 +117,7 @@ final class ApplicationUsageModel {
         isAuthorizingUsageCredential = value.isAuthorizingUsageCredential; isOpenRouterCredentialConfigured = value.isOpenRouterCredentialConfigured
         signingInUsageProviders = value.signingInUsageProviders; hasAcknowledgedCredentialAccessDisclosure = value.hasAcknowledgedCredentialAccessDisclosure
         enabledUsageProviders = value.enabledUsageProviders; usageConnectionChoices = value.usageConnectionChoices
-        selectedUsageConnections = value.selectedUsageConnections; codexUsageWorkspaces = value.codexUsageWorkspaces
-        selectedCodexUsageWorkspaceID = value.selectedCodexUsageWorkspaceID
+        selectedUsageConnections = value.selectedUsageConnections
     }
 
     func refreshBackendSnapshot() async {
@@ -162,8 +152,8 @@ final class ApplicationUsageModel {
         }
         if request.method == "usage.command" {
             switch try JSONDecoder().decode(BackendUsageCommand.self, from: request.payload) {
-            case let .refresh(range, limits, reason, explicit, provider):
-                await refreshLocalUsage(range: range, refreshLimits: limits, reason: reason, explicitCredentialAccess: explicit, interactiveProvider: provider)
+            case let .refresh(range, limits, reason):
+                await refreshLocalUsage(range: range, refreshLimits: limits, reason: reason)
             case let .analyticsSelected(range): await usageAnalyticsSelected(range: range)
             case .sharedConnectionsChanged: await sharedConnectionsChanged()
             case .acknowledgeDisclosure: acknowledgeCredentialAccessDisclosure()
@@ -172,7 +162,6 @@ final class ApplicationUsageModel {
                     try await authorizeSavedCredentials()
                 }
             case let .enable(provider, range): await enableUsageProvider(provider, range: range)
-            case let .selectWorkspace(id, range): await selectCodexUsageWorkspace(id, range: range)
             }
         } else if request.method != "usage.snapshot" { throw BackendRPCError.invalidFrame }
         return try JSONEncoder().encode(backendSnapshot())
@@ -188,21 +177,16 @@ final class ApplicationUsageModel {
         hasAcknowledgedCredentialAccessDisclosure = applicationDefaults.bool(
             forKey: Self.credentialAccessDisclosureDefaultsKey
         )
-        selectedCodexUsageWorkspaceID = CodexUsageWorkspacePreferences(
-            defaults: applicationDefaults
-        ).selectedWorkspaceID
         enabledUsageProviders = Set(ProviderKind.supportedAccounts)
     }
 
     func refreshLocalUsage(
         range: UsageTimeRange,
         refreshLimits: Bool = false,
-        reason: UsageRefreshReason = .manual,
-        explicitCredentialAccess: Bool = false,
-        interactiveProvider: ProviderKind? = nil
+        reason: UsageRefreshReason = .manual
     ) async {
         if isBackendProjection {
-            await forward(.refresh(range: range, limits: refreshLimits, reason: reason, explicit: explicitCredentialAccess, provider: interactiveProvider))
+            await forward(.refresh(range: range, limits: refreshLimits, reason: reason))
             return
         }
         localUsageError = nil
@@ -217,11 +201,6 @@ final class ApplicationUsageModel {
             .refresh
         }
         if refreshLimits {
-            let keychainInteraction = UsageKeychainInteraction.resolve(
-                refreshReason: reason,
-                disclosureAcknowledged: hasAcknowledgedCredentialAccessDisclosure,
-                explicitUserAction: explicitCredentialAccess && interactiveProvider != nil
-            )
             async let analyticsRefresh: Void = refreshUsageAnalytics(
                 range: range,
                 reason: reason,
@@ -229,9 +208,7 @@ final class ApplicationUsageModel {
             )
             async let limitsRefresh: Void = refreshUsageLimits(
                 reason: reason,
-                force: policy == .force,
-                keychainInteraction: keychainInteraction,
-                interactiveProvider: interactiveProvider
+                force: policy == .force
             )
             _ = await (analyticsRefresh, limitsRefresh)
         } else {
@@ -324,20 +301,14 @@ final class ApplicationUsageModel {
 
     private func refreshUsageLimits(
         reason: UsageRefreshReason,
-        force: Bool,
-        keychainInteraction: UsageKeychainInteraction,
-        interactiveProvider: ProviderKind?
+        force: Bool
     ) async {
         let enabledProviders = enabledUsageProviders
         let allowsCredentialAccess = hasAcknowledgedCredentialAccessDisclosure
         let requestedConnections = selectedUsageConnections
-        let requestedCodexWorkspaceID = selectedCodexUsageWorkspaceID
         let key = UsageLimitsRefreshKey(
             enabledProviders: enabledProviders.map(\.rawValue).sorted(),
             allowsCredentialAccess: allowsCredentialAccess,
-            keychainInteraction: keychainInteraction.rawValue,
-            interactiveProvider: interactiveProvider?.rawValue,
-            selectedCodexWorkspaceID: requestedCodexWorkspaceID,
             selectedConnections: requestedConnections
         )
         let requestID = UUID()
@@ -358,13 +329,10 @@ final class ApplicationUsageModel {
             }
             guard usageLimitsRequestID == requestID,
                   enabledUsageProviders == enabledProviders,
-                  selectedUsageConnections == requestedConnections,
-                  selectedCodexUsageWorkspaceID == requestedCodexWorkspaceID else { return }
+                  selectedUsageConnections == requestedConnections else { return }
             try Task.checkCancellation()
             usageConnectionChoices = limits.connectionChoices
             selectedUsageConnections.merge(limits.selectedConnections) { _, new in new }
-            codexUsageWorkspaces = limits.codexWorkspaces
-            selectedCodexUsageWorkspaceID = limits.selectedCodexWorkspaceID
             let existing = localUsage
             localUsage = LocalUsageSnapshot(
                 analytics: existing?.analytics ?? Self.emptyUsageAnalytics(range: currentUsageRange),
@@ -458,28 +426,6 @@ final class ApplicationUsageModel {
         defer { isAuthorizingUsageCredential = false }
         acknowledgeCredentialAccessDisclosure()
         enableUsageProviderPreference(provider)
-        await refreshLocalUsage(
-            range: range,
-            refreshLimits: true,
-            reason: .credentialChanged,
-            explicitCredentialAccess: [.codex, .claude, .grok].contains(provider),
-            interactiveProvider: provider == .openRouter ? nil : provider
-        )
-    }
-
-    func selectCodexUsageWorkspace(
-        _ workspaceID: String,
-        range: UsageTimeRange
-    ) async {
-        if isBackendProjection { await forward(.selectWorkspace(workspaceID, range)); return }
-        guard enabledUsageProviders.contains(.codex),
-              hasAcknowledgedCredentialAccessDisclosure,
-              codexUsageWorkspaces.contains(where: { $0.id == workspaceID }),
-              selectedCodexUsageWorkspaceID != workspaceID
-        else { return }
-        selectedCodexUsageWorkspaceID = workspaceID
-        CodexUsageWorkspacePreferences(defaults: applicationDefaults)
-            .save(selectedWorkspaceID: workspaceID)
         await refreshLocalUsage(
             range: range,
             refreshLimits: true,

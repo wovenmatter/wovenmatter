@@ -14,54 +14,6 @@ public enum UsageRefreshReason: String, Codable, Equatable, Sendable {
   case credentialChanged
 }
 
-public enum UsageKeychainInteraction: String, Equatable, Sendable {
-  case noninteractive
-  case oneShotExplicit
-
-  public static func resolve(
-    refreshReason: UsageRefreshReason,
-    disclosureAcknowledged: Bool,
-    explicitUserAction: Bool
-  ) -> Self {
-    guard refreshReason == .credentialChanged,
-          disclosureAcknowledged,
-          explicitUserAction else { return .noninteractive }
-    return .oneShotExplicit
-  }
-}
-
-public struct CodexUsageWorkspace: Codable, Equatable, Identifiable, Sendable {
-  public let id: String
-  public let name: String
-  public let email: String
-
-  public init(id: String, name: String, email: String) {
-    self.id = id
-    self.name = name
-    self.email = email
-  }
-
-  public var selectionLabel: String { "\(name) — \(email)" }
-}
-
-public struct CodexUsageWorkspacePreferences {
-  private static let selectedWorkspaceKey =
-    "wovenmatter.usage.codex.selected-workspace"
-  private let defaults: UserDefaults
-
-  public init(defaults: UserDefaults = .standard) {
-    self.defaults = defaults
-  }
-
-  public var selectedWorkspaceID: String? {
-    defaults.string(forKey: Self.selectedWorkspaceKey)
-  }
-
-  public func save(selectedWorkspaceID: String) {
-    defaults.set(selectedWorkspaceID, forKey: Self.selectedWorkspaceKey)
-  }
-}
-
 /// A display selection for Usage; it never changes inference account preferences.
 public struct UsageConnectionChoice: Codable, Equatable, Identifiable, Sendable {
   public let provider: ProviderKind
@@ -90,23 +42,17 @@ public struct UsageConnectionChoice: Codable, Equatable, Identifiable, Sendable 
 public struct LocalUsageLimitsSnapshot: Equatable, Sendable {
   public let accounts: [UsageLimitAccount]
   public let hasOpenRouterCredential: Bool
-  public let codexWorkspaces: [CodexUsageWorkspace]
-  public let selectedCodexWorkspaceID: String?
   public let connectionChoices: [UsageConnectionChoice]
   public let selectedConnections: [String: String]
 
   public init(
     accounts: [UsageLimitAccount],
     hasOpenRouterCredential: Bool,
-    codexWorkspaces: [CodexUsageWorkspace] = [],
-    selectedCodexWorkspaceID: String? = nil,
     connectionChoices: [UsageConnectionChoice] = [],
     selectedConnections: [String: String] = [:]
   ) {
     self.accounts = accounts
     self.hasOpenRouterCredential = hasOpenRouterCredential
-    self.codexWorkspaces = codexWorkspaces
-    self.selectedCodexWorkspaceID = selectedCodexWorkspaceID
     self.connectionChoices = connectionChoices
     self.selectedConnections = selectedConnections
   }
@@ -273,13 +219,6 @@ public actor LocalUsageService {
     ProviderLimitCollector.placeholderAccounts(
       enabledProviders: enabledProviders,
       now: now
-    )
-  }
-
-  public func codexWorkspaceHomeDirectory(workspaceID: String) -> URL? {
-    ProviderLimitCollector.codexManagedWorkspaceHomeDirectory(
-      homeDirectory: homeDirectory,
-      workspaceID: workspaceID
     )
   }
 

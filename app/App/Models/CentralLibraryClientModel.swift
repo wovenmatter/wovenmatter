@@ -388,8 +388,6 @@ final class CentralLibraryClientModel {
         guard let client = directClients[workspaceID] else { return }
         do {
             try await client.refresh()
-            _ = try await client.providers()
-            _ = try await client.pending()
             guard directClients[workspaceID] === client else { return }
             if let id = selectedConversationID, executionOwner(for: id) == workspaceID {
                 _ = try await client.refreshTranscript(id)
@@ -478,8 +476,6 @@ final class CentralLibraryClientModel {
                 guard await engine.synchronizationStatus().centralReachable == true else { throw error }
             }
             guard connectionGeneration == expectedConnection else { await directRefresh; return }
-            _ = try await engine.providers()
-            _ = try await engine.pending()
             try await engine.recoverCommandReceipts()
             if let id = selectedConversationID, executionOwner(for: id) == nil {
                 try await engine.refreshTranscript(id)

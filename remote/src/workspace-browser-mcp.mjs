@@ -8,9 +8,11 @@ const interrupted = () => fail(503, 'Browser operation interrupted. Inspect fres
 const text = value => ({ content: [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value) }] })
 
 async function runtime() {
+  // Load both modules from the one default-agent tree that ships the runtime.
+  const runtimeModule = defaultAgentModule('src/browser-runtime.mjs')
   const [{ browserAction }, { chromium }] = await Promise.all([
-    import(defaultAgentModule('src/browser-runtime.mjs')),
-    import(defaultAgentModule('node_modules/playwright-core/index.mjs')),
+    import(runtimeModule),
+    import(new URL('../node_modules/playwright-core/index.mjs', runtimeModule).href),
   ])
   return { browserAction, connect: endpoint => chromium.connectOverCDP(endpoint, { noDefaults: true, timeout: 15000 }) }
 }

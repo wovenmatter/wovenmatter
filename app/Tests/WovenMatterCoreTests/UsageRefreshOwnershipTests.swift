@@ -69,7 +69,6 @@ struct UsageRefreshOwnershipTests {
     let result = try await service.limitsSnapshot(refresh: true, enabledProviders: [.grok], allowCredentialAccess: false)
     #expect(result.accounts.first?.accountLabel == "current-account")
     #expect(result.accounts.first?.status == .unavailable)
-    #expect(result.codexWorkspaces.isEmpty)
   }
 }
 

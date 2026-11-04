@@ -18,56 +18,6 @@ struct PublicSourceContractsTests {
   }
 
 
-  @Test("Managed Codex workspace homes resolve without credentials")
-  func codexWorkspaceCatalog() throws {
-    let directory = try TemporaryDirectory(prefix: "wovenmatter-codex-workspaces")
-    defer { directory.remove() }
-    let support = directory.url.appending(
-      path: "Library/Application Support/CodexBar",
-      directoryHint: .isDirectory
-    )
-    let homes = support.appending(path: "managed-codex-homes", directoryHint: .isDirectory)
-    let personalHome = homes.appending(path: "personal", directoryHint: .isDirectory)
-    let businessHome = homes.appending(path: "business", directoryHint: .isDirectory)
-    for url in [personalHome, businessHome] {
-      try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-    }
-    try writeJSON([
-      "tokens": ["account_id": "workspace-personal", "access_token": "not-read"],
-    ], to: personalHome.appending(path: "auth.json"))
-    try writeJSON([
-      "tokens": ["account_id": "workspace-business", "access_token": "not-read"],
-    ], to: businessHome.appending(path: "auth.json"))
-    try writeJSON([
-      "version": 3,
-      "accounts": [
-        [
-          "id": UUID().uuidString,
-          "email": "same@example.com",
-          "workspaceLabel": "Personal",
-          "workspaceAccountID": "workspace-personal",
-          "managedHomePath": personalHome.path,
-        ],
-        [
-          "id": UUID().uuidString,
-          "email": "same@example.com",
-          "workspaceLabel": "Example Business",
-          "workspaceAccountID": "workspace-business",
-          "managedHomePath": businessHome.path,
-        ],
-      ],
-    ], to: support.appending(path: "managed-codex-accounts.json"))
-
-    #expect(ProviderLimitCollector.codexManagedWorkspaceHomeDirectory(
-      homeDirectory: directory.url,
-      workspaceID: "workspace-personal"
-    ) == personalHome)
-    #expect(ProviderLimitCollector.codexManagedWorkspaceHomeDirectory(
-      homeDirectory: directory.url,
-      workspaceID: "workspace-missing"
-    ) == nil)
-  }
-
   @Test("account preferences filter limits but never device analytics")
   func accountPreferencesOnlyFilterLimits() async throws {
     let directory = try TemporaryDirectory(prefix: "wovenmatter-usage-filtering")
@@ -134,13 +84,6 @@ struct PublicSourceContractsTests {
 
     preferences.save([])
     #expect(UsageProviderPreferences(defaults: defaults).enabledProviders.isEmpty)
-
-    let workspacePreferences = CodexUsageWorkspacePreferences(defaults: defaults)
-    #expect(workspacePreferences.selectedWorkspaceID == nil)
-    workspacePreferences.save(selectedWorkspaceID: "workspace-business")
-    #expect(CodexUsageWorkspacePreferences(
-      defaults: defaults
-    ).selectedWorkspaceID == "workspace-business")
   }
 
   @Test("provider response fixtures preserve distinct quota semantics")
@@ -340,13 +283,4 @@ private struct TemporaryDirectory {
   }
 
   func remove() { try? FileManager.default.removeItem(at: url) }
-}
-
-private func writeJSON(_ object: Any, to url: URL) throws {
-  try FileManager.default.createDirectory(
-    at: url.deletingLastPathComponent(),
-    withIntermediateDirectories: true
-  )
-  try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
-    .write(to: url, options: [.atomic])
 }

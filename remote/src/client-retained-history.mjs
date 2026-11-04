@@ -5,11 +5,14 @@ import { resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { createInterface } from 'node:readline'
 import { durableJSON, read, sha256 as hash } from './durable-json.mjs'
-import { assemblePresentationFrame, textParts } from './presentation-frames.mjs'
+import { assemblePresentationFrame } from './presentation-frames.mjs'
 import { defaultAgentModule } from './config.mjs'
 
 const { sanitizeNativeTransportBytes } = await import(defaultAgentModule('src/native-journal.mjs'))
 const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value)
+// Retained parts back off from any high surrogate at the boundary; IDs derive
+// from these boundaries, so they must stay stable across service builds.
+const textParts = value => { const result=[];for(let start=0;start<value.length;) {let end=Math.min(start+16384,value.length);if(end<value.length&&/[\uD800-\uDBFF]/.test(value[end-1]))end--;result.push(value.slice(start,end));start=end}return result.length?result:[''] }
 const stableID = value => { const h=hash('woven-retained-v1\0'+value); return `${h.slice(0,8)}-${h.slice(8,12)}-5${h.slice(13,16)}-a${h.slice(17,20)}-${h.slice(20,32)}` }
 
 /// Workspace-owned archive bridge for the pre-client RPC and scheduled-task

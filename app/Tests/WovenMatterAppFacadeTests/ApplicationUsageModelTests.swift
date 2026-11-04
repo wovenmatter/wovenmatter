@@ -6,20 +6,18 @@ import WovenMatterCore
 import WovenMatterDashboardStore
 @testable import WovenMatterAppFacade
 
-// This probe exercises only preferences and rejected actions. It never refreshes
+// This probe exercises only preferences and the backend proxy. It never refreshes
 // provider data, accesses credentials or starts a provider CLI.
 @MainActor struct ApplicationUsageModelTests {
-    @Test func preferenceRestorationObservableConsentIdempotentConsentAndRejectedActionGuards() async throws {
+    @Test func preferenceRestorationObservableConsentAndIdempotentConsent() async throws {
         let suite = "wovenmatter-usage-model-tests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
         UsageProviderPreferences(defaults: defaults).save([.codex])
-        CodexUsageWorkspacePreferences(defaults: defaults).save(selectedWorkspaceID: "saved-workspace")
         defaults.set(true, forKey: "wovenmatter.openrouter-credential.configured")
 
         let model = ApplicationUsageModel(applicationDefaults: defaults)
         #expect(model.enabledUsageProviders == Set(ProviderKind.supportedAccounts))
-        #expect(model.selectedCodexUsageWorkspaceID == "saved-workspace")
         #expect(model.isOpenRouterCredentialConfigured)
         #expect(!model.hasAcknowledgedCredentialAccessDisclosure)
         #expect(model.localUsage == nil && !model.isRefreshingLocalUsage)
@@ -36,7 +34,6 @@ import WovenMatterDashboardStore
         let restored = ApplicationUsageModel(applicationDefaults: defaults)
         #expect(restored.hasAcknowledgedCredentialAccessDisclosure)
         #expect(restored.enabledUsageProviders == Set(ProviderKind.supportedAccounts))
-        #expect(restored.selectedCodexUsageWorkspaceID == "saved-workspace")
 
         let repeatedConsentChanges = ChangeRecorder()
         withObservationTracking {
@@ -46,12 +43,6 @@ import WovenMatterDashboardStore
         }
         model.acknowledgeCredentialAccessDisclosure()
         #expect(repeatedConsentChanges.count == 0)
-
-        // An unlisted workspace must not alter the saved selection or start work.
-        await model.selectCodexUsageWorkspace("unlisted-workspace", range: .last30Days)
-        #expect(model.selectedCodexUsageWorkspaceID == "saved-workspace")
-        #expect(CodexUsageWorkspacePreferences(defaults: defaults).selectedWorkspaceID == "saved-workspace")
-        #expect(model.localUsage == nil && !model.isRefreshingLocalUsage)
         let projection = ApplicationUsageModel(applicationDefaults: defaults)
         projection.isBackendProjection = true
         var requests: [String] = []
@@ -60,7 +51,7 @@ import WovenMatterDashboardStore
             requests.append(method)
             if method == "usage.command" {
                 let command = try JSONDecoder().decode(BackendUsageCommand.self, from: data)
-                if case .refresh(.last30Days, true, .manual, false, nil) = command {} else {
+                if case .refresh(.last30Days, true, .manual) = command {} else {
                     Issue.record("Unexpected usage proxy command")
                 }
             }
@@ -69,14 +60,13 @@ import WovenMatterDashboardStore
         await projection.refreshLocalUsage(range: .last30Days, refreshLimits: true)
         #expect(requests == ["usage.command"])
         #expect(projection.enabledUsageProviders == model.enabledUsageProviders)
-        #expect(projection.selectedCodexUsageWorkspaceID == "saved-workspace")
         projection.backendRequest = nil
         await projection.refreshLocalUsage(range: .last30Days)
         #expect(projection.localUsageError == BackendRPCError.unavailable.localizedDescription)
         // Backend snapshots serialize all provider selections without credentials.
         let bytes = try await model.handleBackendRequest(BackendRPCRequest(method: "usage.snapshot"))
         let decoded = try JSONDecoder().decode(BackendUsageSnapshot.self, from: bytes)
-        #expect(decoded.selectedCodexUsageWorkspaceID == "saved-workspace")
+        #expect(decoded.enabledUsageProviders == model.enabledUsageProviders)
     }
 }
 

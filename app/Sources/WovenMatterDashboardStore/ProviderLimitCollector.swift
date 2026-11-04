@@ -2,11 +2,6 @@ import Foundation
 import WovenMatterClient
 import WovenMatterCore
 
-struct CodexWorkspaceSource: Sendable {
-  let workspace: CodexUsageWorkspace
-  let credentialsURL: URL
-}
-
 enum ProviderLimitCollector {
   static func placeholderAccounts(
     enabledProviders: Set<ProviderKind> = Set(ProviderKind.supportedAccounts),
@@ -63,52 +58,6 @@ enum ProviderLimitCollector {
       uniqueKeysWithValues: enabled.map { ($0.provider, $0) }
     )
     return ProviderKind.supportedAccounts.compactMap { accountsByProvider[$0] }
-  }
-
-  static func codexManagedWorkspaceHomeDirectory(
-    homeDirectory: URL,
-    workspaceID: String
-  ) -> URL? {
-    managedCodexWorkspaceSources(homeDirectory: homeDirectory)
-      .first { $0.workspace.id == workspaceID }?
-      .credentialsURL.deletingLastPathComponent()
-  }
-
-  private static func managedCodexWorkspaceSources(
-    homeDirectory: URL
-  ) -> [CodexWorkspaceSource] {
-    let applicationSupport = homeDirectory.appending(
-      path: "Library/Application Support/CodexBar",
-      directoryHint: .isDirectory
-    )
-    let managedHomes = applicationSupport.appending(
-      path: "managed-codex-homes",
-      directoryHint: .isDirectory
-    ).standardizedFileURL
-    let labelsURL = applicationSupport.appending(path: "codex-openai-workspaces.json")
-    let labelObject = (try? localJSONObject(at: labelsURL, maximumBytes: 1_048_576)) ?? [:]
-    let labels = dictionary(labelObject["labelsByWorkspaceAccountID"]) ?? [:]
-    let storeURL = applicationSupport.appending(path: "managed-codex-accounts.json")
-    let store = try? localJSONObject(at: storeURL, maximumBytes: 2_097_152)
-    let rawAccounts = store?["accounts"] as? [[String: Any]] ?? []
-    return rawAccounts.compactMap { raw in
-      guard let homePath = string(raw["managedHomePath"]),
-            let email = string(raw["email"]),
-            let workspaceID = string(raw["workspaceAccountID"] ?? raw["providerAccountID"]),
-            !workspaceID.isEmpty
-      else { return nil }
-      let homeURL = URL(fileURLWithPath: homePath, isDirectory: true).standardizedFileURL
-      guard homeURL.path.hasPrefix(managedHomes.path + "/") else { return nil }
-      let credentialsURL = homeURL.appending(path: "auth.json")
-      guard FileManager.default.fileExists(atPath: credentialsURL.path) else { return nil }
-      let name = string(raw["workspaceLabel"])
-        ?? string(labels[workspaceID])
-        ?? "OpenAI workspace"
-      return CodexWorkspaceSource(
-        workspace: CodexUsageWorkspace(id: workspaceID, name: name, email: email),
-        credentialsURL: credentialsURL
-      )
-    }
   }
 
   static func apiKeyAccount(_ provider: ProviderKind, choice: UsageConnectionChoice, present: Bool, now: Date) -> UsageLimitAccount {
@@ -538,15 +487,6 @@ enum ProviderLimitCollector {
           (200..<300).contains(http.statusCode),
           let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
     else { throw ProviderLimitCollectorError.invalidResponse }
-    return object
-  }
-
-  private static func localJSONObject(at url: URL, maximumBytes: Int) throws -> [String: Any] {
-    let data = try Data(contentsOf: url, options: [.mappedIfSafe])
-    guard data.count <= maximumBytes,
-          let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-      throw ProviderLimitCollectorError.invalidResponse
-    }
     return object
   }
 
