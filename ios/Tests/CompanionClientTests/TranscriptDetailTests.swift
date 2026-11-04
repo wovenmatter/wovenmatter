@@ -170,10 +170,4 @@ final class TranscriptDetailTests: XCTestCase {
   }
 
   private func file() -> URL { FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("store.json") }
-  private func activity(content: String) throws -> CompanionActivity {
-    let object: [String: Any] = ["id":"call", "kind":"tool", "title":"read_file", "status":"completed",
-      "toolName":"read_file", "content":content, "rawOutputJSON":content, "locations":[], "changes":[], "planEntries":[]]
-    return .init(id:"call", runID:"turn", title:"read_file", status:"completed",
-      projectionJSON:String(decoding: try JSONSerialization.data(withJSONObject:object), as:UTF8.self), sequence:1)
-  }
 }

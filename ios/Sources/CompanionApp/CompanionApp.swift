@@ -1,3 +1,4 @@
+import CompanionClient
 import SwiftUI
 import WovenMatterCompanion
 
@@ -511,6 +512,3 @@ private struct WorkspaceSettingsPane: View {
     }.listStyle(.insetGrouped).mobileNavigationPage(workspace.name)
   }
 }
-
-import CompanionClient
-import WovenMatterCompanion

@@ -6,7 +6,6 @@ public struct MobileCalendarConflict: Codable, Equatable, Sendable {
   public var remote: CompanionCalendarRecord?
   public var executionConflict: Bool?
 }
-public typealias MobileCalendarRun = CompanionCalendarRun
 
 /// The UI, native agent tools and command environment share this durable actor.
 /// Writes are local immediately. Network failure never rolls back local edits.
@@ -25,7 +24,7 @@ public actor MobileCalendarStore {
     var outbox: [Pending] = []
     var conflicts: [String: MobileCalendarConflict] = [:]
     var requests: [String: Request] = [:]
-    var runs: [String: MobileCalendarRun] = [:]
+    var runs: [String: CompanionCalendarRun] = [:]
     var through: [String: Date] = [:]
     var dirtyRuns: Set<String>?
     var preparedDrafts: [String: PreparedDraft]?
@@ -278,7 +277,7 @@ public actor MobileCalendarStore {
   }
   /// Claims persist before execution. Only the assigned device can reserve them.
   /// Recurring misses collapse to the latest occurrence; one-offs run late.
-  public func dueRuns(deviceID: String, now: Date = Date()) throws -> [MobileCalendarRun] {
+  public func dueRuns(deviceID: String, now: Date = Date()) throws -> [CompanionCalendarRun] {
     guard deviceID == self.deviceID else { return [] }
     try update { next in
       for record in next.records.values where !record.deleted && record.ownerDeviceID == deviceID && next.conflicts[record.id] == nil {
@@ -289,7 +288,7 @@ public actor MobileCalendarStore {
         guard let event = CompanionCalendarSchedule.occurrence(record, index: index), event.startsAt > (next.through[record.id] ?? .distantPast) else { continue }
         let previous = next.runs.values.filter { $0.eventID == record.id && $0.status != "cancelled" }.max { $0.scheduledAt < $1.scheduledAt }
         let sessionID = !task.newSessionEachTime && record.event.draft.recurrenceUnit != nil ? previous?.sessionID ?? UUID().uuidString.lowercased() : UUID().uuidString.lowercased()
-        let run = MobileCalendarRun(id: UUID().uuidString.lowercased(), eventID: record.id, eventRevision: record.event.revision, ownerDeviceID: deviceID,
+        let run = CompanionCalendarRun(id: UUID().uuidString.lowercased(), eventID: record.id, eventRevision: record.event.revision, ownerDeviceID: deviceID,
           occurrence: index, scheduledAt: event.startsAt, sessionID: sessionID, task: task, title: event.draft.title, status: "pending")
         next.runs[run.id] = run; next.through[record.id] = now
         if next.dirtyRuns == nil { next.dirtyRuns = [] }; next.dirtyRuns?.insert(run.id)
@@ -299,7 +298,7 @@ public actor MobileCalendarStore {
   }
   /// Call immediately before dispatch and use run.id as the durable prompt ID.
   /// Running claims are never automatically retried after an uncertain outcome.
-  public func beginRun(_ id: String) throws -> MobileCalendarRun {
+  public func beginRun(_ id: String) throws -> CompanionCalendarRun {
     guard var run = state.runs[id], run.status == "pending", let event = state.records[run.eventID],
       !event.deleted, event.ownerDeviceID == deviceID, event.event.revision == run.eventRevision,
       !event.excludedOccurrences.contains(run.occurrence), state.conflicts[event.id] == nil else { throw CompanionCalendarError.conflict }
@@ -307,7 +306,7 @@ public actor MobileCalendarStore {
   }
   /// Recover only a claim that has not yet reached the durable prompt inbox.
   /// Already-submitted prompts must reconcile by receipt, not by today's event.
-  public func recoverRun(_ id: String) throws -> MobileCalendarRun? {
+  public func recoverRun(_ id: String) throws -> CompanionCalendarRun? {
     guard let run = state.runs[id], run.status == "running", run.ownerDeviceID == deviceID else { return nil }
     guard let event = state.records[run.eventID], !event.deleted, event.ownerDeviceID == deviceID,
       event.event.revision == run.eventRevision, !event.excludedOccurrences.contains(run.occurrence), state.conflicts[event.id] == nil else {
@@ -329,7 +328,7 @@ public actor MobileCalendarStore {
   public func acknowledgeRuns(_ sent: [CompanionCalendarRun]) throws {
     try update { next in for run in sent where next.runs[run.id] == run { next.dirtyRuns?.remove(run.id) } }
   }
-  public func runs(eventID: String? = nil) -> [MobileCalendarRun] { state.runs.values.filter { eventID == nil || $0.eventID == eventID }.sorted { $0.scheduledAt < $1.scheduledAt } }
+  public func runs() -> [CompanionCalendarRun] { state.runs.values.sorted { $0.scheduledAt < $1.scheduledAt } }
   private func cancelPending(_ id: String, occurrence: Int? = nil, in next: inout State) {
     var cancelled = false
     for key in next.runs.keys where next.runs[key]?.eventID == id && next.runs[key]?.status == "pending" && (occurrence == nil || next.runs[key]?.occurrence == occurrence) {

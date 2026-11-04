@@ -4,17 +4,8 @@ import CompanionInference
 import WovenMatterCompanion
 @testable import WovenMatterMobileApp
 
-private actor ExecutionTestLibrary: CompanionTransport {
-  func workspaceIdentity() async throws -> String { throw MobileConnectionError.offline }
-  func snapshot() async throws -> CompanionSnapshot { throw MobileConnectionError.offline }
-  func changes(after: Int64) async throws -> CompanionChangePage { throw MobileConnectionError.offline }
-  func mutate(_ mutation: CompanionMutation) async throws -> CompanionMutationResult { throw MobileConnectionError.offline }
-  func note(_ id: String) async throws -> CompanionNote { throw MobileConnectionError.offline }
-  func providers() async throws -> [CompanionProvider] { throw MobileConnectionError.offline }
-  func pending() async throws -> [CompanionPendingInteraction] { throw MobileConnectionError.offline }
-  func transcript(_ id: String) async throws -> CompanionTranscript { throw MobileConnectionError.offline }
+private actor ExecutionTestLibrary: OfflineCompanionTransport {
   func command(_ command: CompanionCommand) async throws -> CompanionCommandReceipt { XCTFail("Direct execution must not use the central library"); throw MobileConnectionError.offline }
-  func receipt(_ id: String) async throws -> CompanionCommandReceipt? { throw MobileConnectionError.offline }
 }
 
 private actor ExecutionTestWorkspace: ExecutionWorkspaceTransport {

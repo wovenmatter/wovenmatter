@@ -27,7 +27,6 @@ private actor ArtifactLibrary: FederationTransport {
     if manifest == nil { manifest = registration.manifest; manifest!.revision = 1 }
     return .init(manifest: manifest!, nextOffset: Int64(data.count), complete: complete)
   }
-  func artifactStatus(_ id: String) -> CompanionArtifactTransfer { .init(manifest: manifest!, nextOffset: Int64(data.count), complete: complete) }
   func uploadArtifactChunk(_ chunk: CompanionArtifactChunk) throws -> CompanionArtifactTransfer {
     guard chunk.offset == data.count else { throw SavedArtifactStore.Failure.invalidTransfer }
     data.append(chunk.data)

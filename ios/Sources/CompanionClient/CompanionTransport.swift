@@ -59,9 +59,9 @@ public enum MobileConnectionError: Error, LocalizedError {
 
 /// No cookies, disk response cache or redirects. The bearer never leaves the
 /// endpoint selected during pairing, including a redirect to another tailnet host.
-private final class NoRedirects: NSObject, URLSessionTaskDelegate, Sendable {
-  func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
-                  newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
+public final class NoRedirects: NSObject, URLSessionTaskDelegate, Sendable {
+  public func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                         newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
     completionHandler(nil)
   }
 }
@@ -85,7 +85,7 @@ public final class HTTPSCompanionTransport: CompanionTransport, @unchecked Senda
   private let mcpConnections = CompanionMCPConnections()
   private let deviceMetadata: CompanionDeviceMetadata?
   public init(credential: MobileCredential, metadata: CompanionDeviceMetadata? = nil) throws {
-    guard Self.validEndpoint(credential.endpoint) else { throw MobileConnectionError.insecureEndpoint }
+    guard CompanionPairingPayload.isValidEndpoint(credential.endpoint) else { throw MobileConnectionError.insecureEndpoint }
     self.credential = credential; self.deviceMetadata = metadata
     let configuration = URLSessionConfiguration.ephemeral
     configuration.httpCookieStorage = nil; configuration.urlCache = nil
@@ -235,11 +235,6 @@ public final class HTTPSCompanionTransport: CompanionTransport, @unchecked Senda
   private static func safeID(_ id: String) throws -> String {
     guard !id.isEmpty, id.unicodeScalars.allSatisfy({ CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_")).contains($0) }) else { throw MobileConnectionError.invalidResponse }
     return id
-  }
-  private static func validEndpoint(_ url: URL) -> Bool {
-    guard url.scheme == "https", let host = url.host?.lowercased(), host.hasSuffix(".ts.net"), url.user == nil,
-          url.password == nil, url.query == nil, url.fragment == nil else { return false }
-    return url.path == "/wovenmatter"
   }
 }
 

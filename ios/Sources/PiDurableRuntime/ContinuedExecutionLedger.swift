@@ -26,7 +26,7 @@ public struct ContinuedExecutionLedger: Sendable {
   public init() {}
 
   public func entry(conversationID: String) -> Entry? { entries[conversationID] }
-  public func entry(taskIdentifier: String) -> Entry? {
+  private func entry(taskIdentifier: String) -> Entry? {
     entries.values.first { $0.identity.taskIdentifier == taskIdentifier }
   }
 
