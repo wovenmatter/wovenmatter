@@ -125,7 +125,6 @@ async function runOpenCode({run,config,cwd,instances,read,fetchRequest,nativeSes
         if (!interactive) throw approval()
         for (const request of permissions) {
           const id='permission:'+request.id+':'+createHash('sha256').update(JSON.stringify(request)).digest('hex')
-          interactions.set(id,{kind:'permission',request})
           const category=String(request.action??'').toLowerCase().split(/[.:/_-]/)[0]
           const ordinary=request.id.startsWith('per')&&typeof request.action==='string'&&request.action.length>0&&Array.isArray(request.resources)&&request.resources.every(value=>typeof value==='string')&&request.effect!=='deny'
             && !['auth','authenticate','authentication','login','oauth','credential','credentials','secret','secrets','form','question','questions','ask','askuser','userinput'].includes(category)

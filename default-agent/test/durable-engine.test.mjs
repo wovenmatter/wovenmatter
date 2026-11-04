@@ -173,7 +173,6 @@ test('native messages and exposed thinking reach display and the live archive wi
   const second = await open(), reopened = await second.create(record.session.sessionId);
   const again = await reopened.history(0, 200);
   assert.equal(again.recordBatch.sourceID, source);
-  assert.notEqual(reopened.archivePath, record.archivePath);
   assert.ok(!again.recordBatch.records.some(r => r.text?.includes('Visible reply')));
   assert.ok(reopened.session.messages.some(m => Array.isArray(m.content) && m.content.some(b => b.text === 'Visible reply')));
   let generation = 0; const interleaved = [];

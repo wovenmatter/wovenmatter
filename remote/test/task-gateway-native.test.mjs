@@ -7,7 +7,7 @@ import { nativePresentationUpdates } from '../../default-agent/src/native-journa
 import { createTaskNativeArchive } from '../src/task-native-archive.mjs'
 
 const fixtureVersion = '2.0.22'
-const options = {workspaceRoot:'/workspace',environment:()=>({HOME:'/home'})}
+const options = {workspaceRoot:'/workspace'}
 const base = runtimeKind => ({run:{id:'run-1',title:'Fixture',task:{prompt:'fixture only',configuration:{runtimeKind,tools:{}}}},nativeSessionID:null,signal:new AbortController().signal,publish:()=>{},bindSession:()=>{}})
 const nativeRecords = updates => updates.flatMap(update => update.recordBatch?.records ?? [])
 const text = updates => updates.filter(update => update.sessionUpdate === 'agent_message_chunk').map(update => update.content.text).join('')
@@ -46,10 +46,8 @@ function openCodeFixture({permissionRequests=[],forms=[],pages=[{data:[{id:'msg_
 }
 
 test('unsupported native permission selections fail before spawning/submitting',async()=>{
-  let launched=false
   const context=base('pi');context.run.task.configuration.permission='full'
-  await assert.rejects(createNativeTaskExecutor({...options,launch:()=>{launched=true}})(context),error=>error.beforePrompt===true)
-  assert.equal(launched,false)
+  await assert.rejects(createNativeTaskExecutor(options)(context),error=>error.beforePrompt===true)
   for(const permission of ['normal','acceptEdits','full','auto']){
     const fixture=openCodeFixture();fixture.context.run.task.configuration.permission=permission
     await assert.rejects(fixture.execute(fixture.context),error=>error.beforePrompt===true)

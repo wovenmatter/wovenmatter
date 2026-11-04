@@ -7,13 +7,12 @@ import { randomUUID } from 'node:crypto'
 import { createClientExecution } from '../src/client-execution.mjs'
 import { enroll } from './fixtures/execution.mjs'
 
-const deferred=()=>{let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b});return {promise,resolve,reject}}
 const turn=()=>new Promise(resolve=>setImmediate(resolve))
 function fixture(t) {
   const directory=mkdtempSync(join(tmpdir(),'wm-direct-'))
   const runs=[],calls=[]
   const runtime={providers:async()=>[{id:'default_agent',runtimeKind:'default_agent',available:true,canStart:true}],create:async()=>({sessionID:randomUUID()}),
-    run:async input=>{const done=deferred();runs.push({...input,done});calls.push(input.command.commandID);await done.promise},
+    run:async input=>{const done=Promise.withResolvers();runs.push({...input,done});calls.push(input.command.commandID);await done.promise},
     stop:async({command})=>runs.find(item=>item.command.runID===command.runID)?.done.resolve(),
     respond:async()=>{},steer:async()=>{},close:async()=>{for(const run of runs)run.done.resolve()}}
   const create=()=>createClientExecution({directory,runtime})
@@ -127,7 +126,7 @@ test('device vault grants survive restart encrypted and remain token and identit
 })
 
 test('native adoption has one conversation owner and retries preserve an active run',async t=>{
-  const f=fixture(t),id=randomUUID(),sessionID='existing-native',gate=deferred()
+  const f=fixture(t),id=randomUUID(),sessionID='existing-native',gate=Promise.withResolvers()
   let calls=0
   f.runtime.adopt=async({native})=>{calls++;await gate.promise;return native}
   const body={workspaceID:f.enrollment.workspaceID,conversation:{id,title:'Existing',preview:'',updatedAt:'',runtimeKind:'default_agent'},runtimeKind:'default_agent',nativeSessionID:sessionID,knownRunIDs:[randomUUID()]}
@@ -148,7 +147,7 @@ test('interaction response never overwrites streaming or completion while awaiti
   const sent=await f.service.command(f.command('send',{conversationID:opened.conversationID,text:'work'}),f.principal)
   await turn()
   f.runs[0].interaction({id:'permission-1',kind:'approval',title:'Allow tool?',options:[{id:'once',label:'Allow'}],questions:[]})
-  const ack=deferred();f.runtime.respond=async()=>{await ack.promise}
+  const ack=Promise.withResolvers();f.runtime.respond=async()=>{await ack.promise}
   const responding=f.service.command(f.command('respond',{conversationID:opened.conversationID,runID:sent.runID,interactionID:'permission-1',response:{optionID:'once',answers:{},cancelled:false}}),f.principal)
   await turn();f.runs[0].publish({sessionUpdate:'agent_message_chunk',content:{text:'finished'}});f.runs[0].done.resolve();await turn()
   ack.resolve();await responding

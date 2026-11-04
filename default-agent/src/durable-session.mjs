@@ -19,7 +19,7 @@ import { ProviderCompactionError } from './provider-compaction.mjs';
 import { providerFetch } from './transport.mjs';
 import { searchTools } from './search.mjs';
 import { checklistTool } from './checklist.mjs';
-import { openNativeArchive, nativePresentationUpdates } from './native-journal.mjs';
+import { openNativeArchive, publishNativePresentation } from './native-journal.mjs';
 import { NativeContext, contextOverflowDiagnostic, credentialRouteIdentity, nativeContextBridge, safeAssistantDiagnostic } from './native-context.mjs';
 import { createNativeCompactionRegistry } from './native-compaction-registry.mjs';
 import { createSubagentContext } from './subagent-context.mjs';
@@ -59,7 +59,7 @@ export async function openDurableSession(engine, id, requested) {
     const archiveStore = await openNativeArchive(archivePath);
     const archiveIDs = archiveStore.identities;
     const pendingArchiveIDs = new Set();
-    record = { mcp: new SessionMCPContext(), cwd, busy: false, permission: 'full', ordinaryTools: ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls', 'web_search', 'web_read', checklistTool.name], codeModeState: { value: engine.config.codeMode }, archivePath, manifest, lockError: ownerError, archiveQueue: Promise.resolve(), emit: undefined };
+    record = { mcp: new SessionMCPContext(), cwd, busy: false, permission: 'full', ordinaryTools: ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls', 'web_search', 'web_read', checklistTool.name], codeModeState: { value: engine.config.codeMode }, manifest, lockError: ownerError, archiveQueue: Promise.resolve(), emit: undefined };
     const batch = records => ({ schemaVersion: 1, sourceID: `builtin-pi-durable:${manifest.storeID}`, nativeSessionID: sessionID, records });
     record.nativeRoot = root;
     record.nativeContext = context;
@@ -238,19 +238,7 @@ export async function openDurableSession(engine, id, requested) {
     }
     record.subagentConcurrency = options.subagentConcurrency ?? engine.config.subagentConcurrency;
     const listeners = new Set();
-    const send = update => {
-      let offset = 0;
-      for (const presentation of nativePresentationUpdates(update)) {
-        // Reassemble a snapshot before projecting it. A partial replacement
-        // cannot pass the coordinator's cumulative steering-prefix fence.
-        if (update._meta?.wovenAssistantSnapshot || update._meta?.wovenThoughtSnapshot) {
-          const start = offset === 0;
-          offset += presentation.content.text.length;
-          presentation._meta = { ...presentation._meta, wovenSnapshotStart: start, wovenSnapshotEnd: offset === update.content.text.length };
-        }
-        for (const listener of listeners) listener({ update: presentation });
-      }
-    };
+    const send = update => publishNativePresentation(update, presentation => { for (const listener of listeners) listener({ update: presentation }); });
     const settingsManager = SettingsManager.inMemory({ retry: { enabled: false }, compaction: { enabled: true } });
     const loader = new DefaultResourceLoader({ cwd, agentDir: engine.directory, settingsManager, noExtensions: true, noThemes: true });
     await loader.reload();

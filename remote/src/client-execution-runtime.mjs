@@ -58,7 +58,7 @@ export function createClientExecutionRuntime({ defaultAgent, durableACP, catalog
     let recovered=false
     let page = await durableACP.handle('POST','/v1/durable-acp/attach',{channelID:native.channelID,harnessID:runtimeKind,cwd:native.nativeWorkingDirectory??workspaceRoot,permission:native.permission,attachmentProtocol:1})
     if (page.state === 'stopped' && native.sessionID) {
-      page=await durableACP.handle('POST','/v1/durable-acp/recover',{channelID:native.channelID,harnessID:runtimeKind,cwd:native.nativeWorkingDirectory??workspaceRoot,permission:native.permission,attachmentProtocol:1,nativeSessionID:native.sessionID})
+      page=await durableACP.handle('POST','/v1/durable-acp/recover',{channelID:native.channelID,harnessID:runtimeKind,cwd:native.nativeWorkingDirectory??workspaceRoot,permission:native.permission,attachmentProtocol:1})
       recovered=true
     }
     if (page.state !== 'running') throw fail('This native session was interrupted. Reopen it on the execution host before sending again.')

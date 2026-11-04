@@ -5,8 +5,6 @@ import { createModels } from '@earendil-works/pi-ai/models';
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context';
 import { watchConversation } from '../src/durable-view.mjs';
 
-const deferred = () => { let resolve; const promise = new Promise(accept => { resolve = accept; }); return { promise, resolve }; };
-
 test('state watches recover full history and coalesced window gaps without duplicating progress', { timeout: 15000 }, async t => {
   const harness = await Harness.open(new MemoryStorage(), { models: createModels(), registry: createRegistry() }, context);
   t.after(() => harness.close(context));
@@ -16,7 +14,7 @@ test('state watches recover full history and coalesced window gaps without dupli
   const watch = await watchConversation(root, context);
   t.after(() => watch.stop());
   assert.equal(watch.snapshot.entries.length, 151, 'initial snapshot must page beyond the default 50-entry window');
-  const entered = deferred(), release = deferred(), caughtUp = deferred();
+  const entered = Promise.withResolvers(), release = Promise.withResolvers(), caughtUp = Promise.withResolvers();
   t.after(() => release.resolve());
   const receipts = [];
   watch.start(async events => {
@@ -32,7 +30,7 @@ test('state watches recover full history and coalesced window gaps without dupli
   await watch.stop();
   const reopened = await watchConversation(root, context);
   assert.equal(reopened.snapshot.entries.length, 352);
-  const changed = deferred();
+  const changed = Promise.withResolvers();
   reopened.start(async events => changed.resolve(events));
   await root.submit({ type: 'write', requestId: 'metadata', entry: {kind:'fixture.metadata',data:{index:352}} }, context);
   const events = await changed.promise;

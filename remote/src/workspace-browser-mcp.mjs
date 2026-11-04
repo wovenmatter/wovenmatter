@@ -1,18 +1,16 @@
-import { existsSync } from 'node:fs'
 import { readFile, stat } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { ordered } from './durable-json.mjs'
+import { defaultAgentModule } from './config.mjs'
 
 const fail = (statusCode, message) => Object.assign(new Error(message), { statusCode })
 const interrupted = () => fail(503, 'Browser operation interrupted. Inspect fresh state before repeating input.')
 const text = value => ({ content: [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value) }] })
 
 async function runtime() {
-  const bundled = new URL('../default-agent/src/browser-runtime.mjs', import.meta.url)
-  const root = existsSync(bundled) ? new URL('../default-agent/', import.meta.url) : new URL('../../default-agent/', import.meta.url)
   const [{ browserAction }, { chromium }] = await Promise.all([
-    import(new URL('src/browser-runtime.mjs', root).href),
-    import(new URL('node_modules/playwright-core/index.mjs', root).href),
+    import(defaultAgentModule('src/browser-runtime.mjs')),
+    import(defaultAgentModule('node_modules/playwright-core/index.mjs')),
   ])
   return { browserAction, connect: endpoint => chromium.connectOverCDP(endpoint, { noDefaults: true, timeout: 15000 }) }
 }

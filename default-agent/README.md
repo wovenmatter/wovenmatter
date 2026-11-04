@@ -82,4 +82,4 @@ split text losslessly, so there is no cumulative run-output cap.
 provider services. It covers current execution, native persistence/compaction,
 account isolation, unsafe effects, cancellation, native permission/default behavior,
 exact oversized capture/search/export and credential privacy. Packaging validation
-checks the pinned SDKs and official Claude executable.
+checks the bundled SDKs and official Claude executable.

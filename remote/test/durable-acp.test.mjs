@@ -268,49 +268,47 @@ test('stdio relay distinguishes a lost dispatch receipt from native rejection', 
   assert.equal(result.error.data.deliveryUncertain, true)
 })
 
-for (const harnessID of ['test']) {
-  test(`${harnessID} reconnect waits for restored approval beyond the load deadline`, { timeout: 2000 }, async () => {
-    const { runStdioRelay } = await import('../src/durable-acp-stdio.mjs')
-    const input = new PassThrough(), output = new PassThrough()
-    const approval = { jsonrpc: '2.0', id: 'approval', method: 'session/request_permission', params: { sessionId: 'native' } }
-    const reply = { jsonrpc: '2.0', id: 'approval', result: { outcome: { outcome: 'selected', optionId: 'allow' } } }
-    const state = { session: { sessionId: 'native' }, busy: true, pendingRequests: [approval], recoveredRuns: [{ runID: 'saved-run', content: 'Done' }] }
-    let settle
-    const settled = new Promise(resolve => { settle = resolve })
-    const messages = [], delivered = []
-    output.on('data', data => {
-      for (const line of data.toString().trim().split('\n')) {
-        const message = JSON.parse(line)
-        messages.push(message)
-        if (message.id === 'approval') {
-          // The load deadline is already exhausted before the user responds.
-          setImmediate(() => { if (!input.writableEnded) input.write(JSON.stringify(reply) + '\n') })
-        } else if (message.id === 1) input.end()
-      }
-    })
-    const request = async (url, options) => {
-      if (url.endsWith('/message')) {
-        delivered.push(JSON.parse(options.body).message)
-        state.busy = false; state.pendingRequests = []
-        settle()
-        return { ok: true, json: async () => ({ accepted: true }) }
-      }
-      if (url.endsWith('/poll') && state.busy) {
-        await Promise.race([settled, new Promise((_, reject) => {
-          if (options.signal.aborted) reject(options.signal.reason)
-          else options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true })
-        })])
-      }
-      return { ok: true, json: async () => ({ state: 'running', attachmentToken: 'fixture-attachment', snapshot: structuredClone(state), events: [] }) }
+test('test reconnect waits for restored approval beyond the load deadline', { timeout: 2000 }, async () => {
+  const { runStdioRelay } = await import('../src/durable-acp-stdio.mjs')
+  const input = new PassThrough(), output = new PassThrough()
+  const approval = { jsonrpc: '2.0', id: 'approval', method: 'session/request_permission', params: { sessionId: 'native' } }
+  const reply = { jsonrpc: '2.0', id: 'approval', result: { outcome: { outcome: 'selected', optionId: 'allow' } } }
+  const state = { session: { sessionId: 'native' }, busy: true, pendingRequests: [approval], recoveredRuns: [{ runID: 'saved-run', content: 'Done' }] }
+  let settle
+  const settled = new Promise(resolve => { settle = resolve })
+  const messages = [], delivered = []
+  output.on('data', data => {
+    for (const line of data.toString().trim().split('\n')) {
+      const message = JSON.parse(line)
+      messages.push(message)
+      if (message.id === 'approval') {
+        // The load deadline is already exhausted before the user responds.
+        setImmediate(() => { if (!input.writableEnded) input.write(JSON.stringify(reply) + '\n') })
+      } else if (message.id === 1) input.end()
     }
-    input.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'session/load', params: { sessionId: 'native' } }) + '\n')
-    await runStdioRelay({ channelID: 'approval', harnessID, token: 'fixture', input, output, request, loadTimeout: 0 })
-    assert.deepEqual(delivered, [reply], 'reattachment must only forward the approval, never a new prompt')
-    const result = messages.find(message => message.id === 1)
-    assert.equal(result.error, undefined)
-    assert.deepEqual(result.result._meta.recoveredRuns, state.recoveredRuns)
   })
-}
+  const request = async (url, options) => {
+    if (url.endsWith('/message')) {
+      delivered.push(JSON.parse(options.body).message)
+      state.busy = false; state.pendingRequests = []
+      settle()
+      return { ok: true, json: async () => ({ accepted: true }) }
+    }
+    if (url.endsWith('/poll') && state.busy) {
+      await Promise.race([settled, new Promise((_, reject) => {
+        if (options.signal.aborted) reject(options.signal.reason)
+        else options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true })
+      })])
+    }
+    return { ok: true, json: async () => ({ state: 'running', attachmentToken: 'fixture-attachment', snapshot: structuredClone(state), events: [] }) }
+  }
+  input.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'session/load', params: { sessionId: 'native' } }) + '\n')
+  await runStdioRelay({ channelID: 'approval', harnessID: 'test', token: 'fixture', input, output, request, loadTimeout: 0 })
+  assert.deepEqual(delivered, [reply], 'reattachment must only forward the approval, never a new prompt')
+  const result = messages.find(message => message.id === 1)
+  assert.equal(result.error, undefined)
+  assert.deepEqual(result.result._meta.recoveredRuns, state.recoveredRuns)
+})
 
 test('natural process exit settles interrupted prompts and survives service restart', async t => {
   const f = await fixture(t)

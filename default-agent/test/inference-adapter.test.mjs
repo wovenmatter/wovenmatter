@@ -14,6 +14,7 @@ async function setup(t, stream) {
   const accounts = [{ id: 'first', label: 'First account', credential: { type: 'oauth', access: 'fixture-one', expires: Date.now() + 60000 } }, { id: 'second', label: 'Second account', credential: { type: 'oauth', access: 'fixture-two', expires: Date.now() + 60000 } }];
   const selected = [], calls = [];
   const engine = { directory, config: { providers: ['openai-codex'] }, credentials: { candidates: async () => accounts },
+    browse: async () => {}, ensureModel: async reference => reference === `${model.provider}/${model.id}` ? model : undefined,
     withAccount: async (provider, account, operation) => { selected.push(account.id); return operation(); },
     runtime: { getModels: () => [model], streamSimple: (selectedModel, context, options) => { calls.push({ model: selectedModel, context, options }); return stream?.(options) ?? success(); } } };
   function* success() {

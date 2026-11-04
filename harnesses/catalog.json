@@ -164,7 +164,6 @@
       "command": "opencode",
       "arguments": [],
       "cliCommand": "opencode",
-      "transportCheckCommand": "opencode --version",
       "install": {
         "kind": "npm-global",
         "package": "@opencode/cli@2",

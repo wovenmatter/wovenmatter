@@ -3,6 +3,7 @@ import { mkdir, readFile, rm, readdir, lstat, realpath, chmod } from 'node:fs/pr
 import { randomUUID, createHash } from 'node:crypto'
 import { join, resolve } from 'node:path'
 import { createWorkspaceBrowserMCP } from './workspace-browser-mcp.mjs'
+import { defaultAgentModule } from './config.mjs'
 
 const failure = (statusCode, message) => Object.assign(new Error(message), { statusCode })
 async function deadline(operation, milliseconds = 5000) {
@@ -28,9 +29,7 @@ export function browserLaunchOptions({ runtimeKind = 'host' } = {}) {
 }
 
 async function browserRuntime() {
-  const bundled = new URL('../default-agent/node_modules/playwright-core/index.mjs', import.meta.url)
-  return await import(existsSync(bundled) ? bundled.href
-    : new URL('../../default-agent/node_modules/playwright-core/index.mjs', import.meta.url).href)
+  return await import(defaultAgentModule('node_modules/playwright-core/index.mjs'))
 }
 
 export async function browserExecutablePath() { return (await browserRuntime()).chromium.executablePath() }

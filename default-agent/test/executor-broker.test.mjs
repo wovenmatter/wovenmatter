@@ -10,7 +10,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { ExecutorBroker, validateConfiguration, tailnetSSHOptions } from '../src/executor/broker.mjs';
-const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 test('Executor broker serves IPC when launched through an application symlink', {timeout:5000}, async t => {
   const root = await mkdtemp(join(tmpdir(), 'woven-executor-entrypoint-'));

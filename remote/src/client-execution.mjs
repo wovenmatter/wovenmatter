@@ -1,5 +1,5 @@
 import { updateReasoningDetails, flushReasoningDetails } from './reasoning-details.mjs'
-import { assemblePresentationFrame } from './presentation-frames.mjs'
+import { assemblePresentationFrame, textParts } from './presentation-frames.mjs'
 import { createClientExecutionPublisher } from './client-execution-publisher.mjs'
 import { DatabaseSync } from 'node:sqlite'
 import { mkdirSync, chmodSync } from 'node:fs'
@@ -10,23 +10,12 @@ import { createWorkspaceMCPOrchestration } from './workspace-mcp-orchestration.m
 import { queryWorkspaceMCPHistory } from './workspace-mcp-history.mjs'
 import { databaseOperation } from './database-catalog.mjs'
 import { createHash, randomBytes, randomUUID, timingSafeEqual, createCipheriv, createDecipheriv } from 'node:crypto'
-import { ordered } from './durable-json.mjs'
+import { ordered, sha256 as digest } from './durable-json.mjs'
 
 const fail = (statusCode, message) => Object.assign(new Error(message), { statusCode })
 const identifier = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value)
-const digest = value => createHash('sha256').update(value).digest('hex')
 const copy = structuredClone
 const date = () => new Date().toISOString()
-function textParts(value) {
-  const parts=[]
-  for(let start=0;start<value.length;) {
-    let end=Math.min(start+16384,value.length)
-    const last=value.charCodeAt(end-1),next=value.charCodeAt(end)
-    if(last>=0xd800&&last<=0xdbff&&next>=0xdc00&&next<=0xdfff)end--
-    parts.push(value.slice(start,end));start=end
-  }
-  return parts.length?parts:['']
-}
 function inputMessages(command,runID) {
   return textParts(command.text).map((content,index)=>({id:index?`${command.commandID}-part-${index}`:command.commandID,
     conversationID:command.conversationID,runID,role:'user',content,createdAt:date(),...(command.agentSourceID?{agentSourceID:command.agentSourceID,isAgentAuthored:true,senderSessionTitle:command.senderSessionTitle,senderHarness:command.senderHarness,senderKind:command.senderKind??'message'}:{})}))

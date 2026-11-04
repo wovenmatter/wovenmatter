@@ -16,7 +16,7 @@ import { createWorkspaceInstances } from './workspace-instances.mjs'
 import { createWorkspaceBrowser, streamBrowserFrames } from './workspace-browser.mjs'
 import { browserSelfTest } from './browser-selftest.mjs'
 import { loadWorkspaceMCPCatalog, validateInput, maximumMCPRequestBytes } from './workspace-mcp.mjs'
-import { runtimeConfiguration as configuration, runtimeHarnessEnvironment } from './config.mjs'
+import { runtimeConfiguration as configuration, runtimeHarnessEnvironment, shellQuote } from './config.mjs'
 import { createServer } from 'node:http'
 import { timingSafeEqual, randomUUID, createHash } from 'node:crypto'
 import { readFile, writeFile, mkdir, realpath } from 'node:fs/promises'
@@ -1187,10 +1187,6 @@ function validatedAPIToken(value) {
     throw new Error('WOVENMATTER_API_TOKEN must be a 32-256 character random credential')
   }
   return value
-}
-
-function shellQuote(value) {
-  return `'${String(value).replaceAll("'", "'\\''")}'`
 }
 
 function httpError(statusCode, message) {

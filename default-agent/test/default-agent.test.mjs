@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { DefaultAgentEngine } from '../src/engine.mjs';
 import { Credentials } from '../src/credentials.mjs';
+import { SessionMCPContext } from '../src/mcp-context.mjs';
 import { sharedAccounts, sharedCredentials } from '../src/vault.mjs';
 
 async function temporary(t) {
@@ -16,7 +17,7 @@ function fixtureEngine({ errors = [], connected = ['openai', 'openrouter'], visi
   const selected = [];
   let listener;
   const record = {
-    selected: 'openai/primary', busy: false,
+    selected: 'openai/primary', busy: false, mcp: new SessionMCPContext(),
     manifest: { storeID: 'fixture' }, subagents: { async beginGroup() {} },
     contextLeaf: () => 'before', rewind() {}, saveOptions() {},
     subscribe(fn) { listener = fn; return () => {}; },

@@ -11,7 +11,6 @@ import { registerLocalServers } from './local-servers.mjs';
 import { ClaudeRuntime, isClaude } from './claude-runtime.mjs';
 import { registerClaudeProviders } from './claude-provider.mjs';
 import { modelOption } from './model-presentation.mjs';
-import { SessionMCPContext } from './mcp-context.mjs';
 import { reportProgramStatus } from './program-status.mjs';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -307,7 +306,6 @@ export class DefaultAgentEngine {
     if (record.busy) throw new DefaultAgentError('This Pi Durable session already has an active turn.');
     const nextRunID = identity === undefined ? record.runID : identity.runID;
     record.busy = true;
-    record.mcp ??= new SessionMCPContext();
     let ready;
     record.steeringReady = new Promise(resolve => { ready = resolve; });
     let finished;

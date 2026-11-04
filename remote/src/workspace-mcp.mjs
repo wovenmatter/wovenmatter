@@ -1,9 +1,9 @@
 import { createHash, randomBytes, randomUUID, createCipheriv, createDecipheriv } from 'node:crypto'
 import { readFileSync } from 'node:fs'
+import { sha256 as hash } from './durable-json.mjs'
 
 const fail = (statusCode, message) => Object.assign(new Error(message), {statusCode})
 const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
-const hash = value => createHash('sha256').update(value).digest('hex')
 const groups = new Set(['notes','history','sessions','goals','timers','usage','calendar','library','executor','browser','computer','html'])
 export const maximumMCPRequestBytes = message => message?.method === 'tools/call' && ['woven_html_preview','woven_html_render'].includes(message.params?.name) ? 40*1024*1024 : 4*1024*1024
 const groupFor = name => name === 'woven_context' || name.startsWith('woven_databases_') ? 'notes' : name.split('_')[1]

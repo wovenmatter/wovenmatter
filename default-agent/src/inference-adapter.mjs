@@ -25,7 +25,7 @@ export function createInferenceAdapter(engine) {
   const active = new Map();
   const root = join(engine.directory, 'client-inference');
   async function catalog({ provider, signal } = {}) {
-    if (provider && engine.browse) await engine.browse(provider, { signal });
+    if (provider) await engine.browse(provider, { signal });
     const models = engine.runtime.getModels().filter(model => engine.config.providers.includes(model.provider) && (!provider || model.provider === provider));
     const accounts = [];
     for (const provider of new Set(models.map(model => model.provider))) {
@@ -53,7 +53,7 @@ export function createInferenceAdapter(engine) {
       const previous = await readJSON(join(root, conversationKey, 'selected-model.json'), null);
       if (previous && `${previous.provider}/${previous.id}` === reference) savedModel = previous;
     }
-    const model = engine.ensureModel ? await engine.ensureModel(reference, savedModel) : engine.runtime.getModels().find(model => model.id === request.model?.id && model.provider === request.model?.provider);
+    const model = await engine.ensureModel(reference, savedModel);
     if (!model || !engine.config.providers.includes(model.provider)) throw new DefaultAgentError('The selected model is unavailable. No model fallback was attempted.');
     if (!savedModel) await writePrivateJSON(modelPath, model);
     const account = (await engine.credentials.candidates(model.provider)).find(account => account.id === request.accountID);
