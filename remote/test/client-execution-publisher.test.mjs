@@ -5,12 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { createClientExecution } from '../src/client-execution.mjs'
-
-
-
-
-
-
+import { enroll } from './fixtures/execution.mjs'
 
 const tick=()=>new Promise(resolve=>setTimeout(resolve,5))
 async function until(predicate){for(let n=0;n<200;n++){if(predicate())return;await tick()}assert.fail('owner publisher did not retry')}
@@ -43,8 +38,7 @@ function fixture(t,{automatic=false}={}) {
   const runtime={providers:async()=>[{id:'default_agent',runtimeKind:'default_agent',available:true,canStart:true}],create:async()=>({sessionID:randomUUID()}),run:async()=>{},close:async()=>{}}
   const create=()=>createClientExecution({directory,runtime,publisherKey:secret,publisherFetch:fetchImpl,publisherIntervalMilliseconds:automatic?5:0})
   let service=create()
-  const enrollment={libraryID:randomUUID(),workspaceID:randomUUID(),ownerDeviceID:randomUUID(),deviceID:randomUUID(),scopes:['execution']}
-  const client=service.provision(enrollment),principal=service.principal('Bearer '+client.token,'execution')
+  const {enrollment,grant:client,principal}=enroll(service)
   const grant={grantID:randomUUID(),libraryID:enrollment.libraryID,workspaceID:enrollment.workspaceID,executionDeviceID:client.workspace.executionDeviceID,endpoint:'https://central.tail.ts.net/wovenmatter',token}
   service.configurePublisher(grant)
   const createSession=()=>service.command({commandID:randomUUID(),deviceID:enrollment.deviceID,libraryID:enrollment.libraryID,workspaceID:enrollment.workspaceID,kind:'createSession'},principal)

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
-import { browserSelfTest, verifySandboxProcesses, missingLibrariesFromLdd } from '../src/browser-selftest.mjs'
+import { browserSelfTest, verifySandboxProcesses } from '../src/browser-selftest.mjs'
 
 async function fixture(t, { seccomp = 2, noNewPrivileges = 1, isolated = true, browserUID = 1000, rendererUID = 1000, parent = 101, flattened = false } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'wovenmatter-proc-fixture-'))
@@ -83,7 +83,6 @@ test('self-test classifies blocked namespaces and missing libraries without leak
   const missing = await browserSelfTest({ platform: 'linux', launch: async () => { throw Error('error while loading shared libraries: libnss3.so: cannot open shared object file') } })
   assert.equal(missing.reason, 'missing_libraries'); assert.deepEqual(missing.missingLibraries, ['libnss3.so'])
 })
-
 
 test('CLI runs through the installed current symlink and cannot silently report success', async t => {
   const root = await mkdtemp(join(tmpdir(), 'wovenmatter-selftest-entrypoint-'))

@@ -17,7 +17,7 @@ export function loadWorkspaceMCPCatalog() {
 
 // The public endpoint never accepts a conversation id as caller authority. A
 // session connection or separately created outside-client credential owns it.
-export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localTools,localCall,fetchImpl=globalThis.fetch,catalog=loadWorkspaceMCPCatalog(),now=Date.now,beforeLibraryCall=async()=>{},shouldDelegate=()=>false,scopedHistoryAccess=()=>false}) {
+export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localTools,localCall,fetchImpl=globalThis.fetch,catalog=loadWorkspaceMCPCatalog(),beforeLibraryCall=async()=>{},shouldDelegate=()=>false,scopedHistoryAccess=()=>false}) {
   db.exec(`CREATE TABLE IF NOT EXISTS mcp_external_clients (id TEXT PRIMARY KEY, digest TEXT NOT NULL UNIQUE, body TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS mcp_library_connection (id INTEGER PRIMARY KEY CHECK(id=1), envelope TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS mcp_preferences (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL);`)
@@ -80,14 +80,14 @@ export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localT
   function sessionConnection(conversationID) {
     if(!uuid(conversationID)||stopped)throw fail(409,'Invalid Woven MCP session.')
     let scope=sessions.get(conversationID)
-    if(!scope){scope={id:randomUUID(),conversationID,bearerToken:randomBytes(32).toString('base64url'),lastAliveAt:now()};sessions.set(conversationID,scope)}
-    scope.lastAliveAt=now()
+    if(!scope){scope={id:randomUUID(),conversationID,bearerToken:randomBytes(32).toString('base64url'),lastAliveAt:Date.now()};sessions.set(conversationID,scope)}
+    scope.lastAliveAt=Date.now()
     return {endpointURL:endpoint(),bearerToken:scope.bearerToken,sessionID:conversationID}
   }
   function resolvePrincipal(authorization) {
     if(stopped||typeof authorization!=='string'||!authorization.startsWith('Bearer '))return null
     const digest=hash(authorization.slice(7))
-    for(const scope of sessions.values())if(hash(scope.bearerToken)===digest&&now()-scope.lastAliveAt<=24*3600000){scope.lastAliveAt=now();return scope}
+    for(const scope of sessions.values())if(hash(scope.bearerToken)===digest&&Date.now()-scope.lastAliveAt<=24*3600000){scope.lastAliveAt=Date.now();return scope}
     const row=db.prepare('SELECT body FROM mcp_external_clients WHERE digest=?').get(digest)
     return row?JSON.parse(row.body):null
   }
@@ -96,7 +96,7 @@ export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localT
     policy(body.conversationID)
     const enabledGroups=body.enabledGroups??['notes','history','sessions','goals','usage','calendar','library','html']
     if(!Array.isArray(enabledGroups)||enabledGroups.some(group=>!groups.has(group)))throw fail(400,'Invalid MCP client capabilities.')
-    const bearerToken=randomBytes(32).toString('base64url'),scope={id:randomUUID(),conversationID:body.conversationID,label:body.label.trim(),readOnly:body.readOnly!==false,enabledGroups:[...new Set(enabledGroups)],createdAt:new Date(now()).toISOString()}
+    const bearerToken=randomBytes(32).toString('base64url'),scope={id:randomUUID(),conversationID:body.conversationID,label:body.label.trim(),readOnly:body.readOnly!==false,enabledGroups:[...new Set(enabledGroups)],createdAt:new Date(Date.now()).toISOString()}
     db.prepare('INSERT INTO mcp_external_clients VALUES(?,?,?)').run(scope.id,hash(bearerToken),JSON.stringify(scope))
     const externalEndpoint=own().endpoint?own().endpoint.replace(/\/$/,'')+'/mcp':endpoint()
     return {...scope,connection:{endpointURL:externalEndpoint,bearerToken,sessionID:scope.conversationID}}

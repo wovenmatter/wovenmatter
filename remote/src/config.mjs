@@ -4,9 +4,9 @@ import { fileURLToPath } from 'node:url'
 
 // This is shared by the HTTP service, maintenance and host launch helpers. Keep
 // container defaults stable: persisted volumes and older clients depend on them.
-export function loadRuntimeConfiguration(environment = process.env, options = {}) {
+export function loadRuntimeConfiguration(environment = process.env) {
   const home = environment.HOME ?? homedir()
-  const serviceRoot = options.serviceRoot ?? resolve(dirname(fileURLToPath(import.meta.url)), '..')
+  const serviceRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
   const runtimeKind = environment.WOVENMATTER_RUNTIME_KIND ?? 'container'
   const accessMode = environment.WOVENMATTER_ACCESS_MODE ?? 'user'
   if (!['container', 'host'].includes(runtimeKind)) throw new Error('invalid_runtime_kind')

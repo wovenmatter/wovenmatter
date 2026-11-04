@@ -6,12 +6,6 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createInferenceAdapter } from '../src/inference-adapter.mjs';
 
-
-
-
-
-
-
 const model = { provider: 'openai-codex', id: 'fixture-model', name: 'Fixture', api: 'openai-codex-responses', baseUrl: 'https://fixture.invalid', contextWindow: 16000, maxTokens: 4096 };
 const request = () => ({ model: { ...model }, accountID: 'second', context: { messages: [{ role: 'user', content: 'Inspect fixture' }] }, scope: { conversationID: 'conversation', requestID: 'conversation:task' }, options: { reasoning: 'low' } });
 async function setup(t, stream) {
@@ -19,10 +13,9 @@ async function setup(t, stream) {
   t.after(() => rm(directory, { recursive: true, force: true }));
   const accounts = [{ id: 'first', label: 'First account', credential: { type: 'oauth', access: 'fixture-one', expires: Date.now() + 60000 } }, { id: 'second', label: 'Second account', credential: { type: 'oauth', access: 'fixture-two', expires: Date.now() + 60000 } }];
   const selected = [], calls = [];
-  const engine = { directory, config: { providers: ['openai-codex'] }, credentials: {
-    candidates: async () => accounts,
-    runWithAccount: async (provider, account, operation) => { selected.push(account.id); return operation(); },
-  }, runtime: { getModels: () => [model], streamSimple: (selectedModel, context, options) => { calls.push({ model: selectedModel, context, options }); return stream?.(options) ?? success(); } } };
+  const engine = { directory, config: { providers: ['openai-codex'] }, credentials: { candidates: async () => accounts },
+    withAccount: async (provider, account, operation) => { selected.push(account.id); return operation(); },
+    runtime: { getModels: () => [model], streamSimple: (selectedModel, context, options) => { calls.push({ model: selectedModel, context, options }); return stream?.(options) ?? success(); } } };
   function* success() {
     const message = { role: 'assistant', content: [{ type: 'toolCall', id: 'tool', name: 'write', arguments: { path: 'device-only' } }], stopReason: 'toolUse', wovenNativeAuthIdentity: 'private-hash' };
     yield { type: 'start', partial: message }; yield { type: 'done', reason: 'toolUse', message };

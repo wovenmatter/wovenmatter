@@ -1,11 +1,10 @@
-import { readFileSync, mkdirSync, appendFileSync, openSync, fsyncSync, closeSync, readSync, fstatSync } from 'node:fs'
+import { mkdirSync, appendFileSync, openSync, fsyncSync, closeSync, readSync, fstatSync } from 'node:fs'
 import { resolve, join } from 'node:path'
 import { scratchFolderName } from './projects.mjs'
 import { randomUUID } from 'node:crypto'
-import { durableJSON } from './durable-json.mjs'
+import { durableJSON, read } from './durable-json.mjs'
 
 const fail = (code, message) => Object.assign(new Error(message), { statusCode: code })
-const read = (path, fallback) => { try { return JSON.parse(readFileSync(path, 'utf8')) } catch (e) { if (e.code === 'ENOENT') return fallback; throw e } }
 const validID = value => typeof value === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(value)
 const iso = value => new Date(value).toISOString()
 const instant = value => typeof value === 'string' && Number.isFinite(Date.parse(value))
@@ -65,7 +64,7 @@ function validateSchedule(value) {
   return structuredClone(value)
 }
 
-export function createTaskGateway({ directory, execute, workspaceRoot, now = Date.now, onDisable = async () => {}, maximumConcurrent = 4, availableExecutionSlots=()=>Infinity, syncJournal = fsyncSync }) {
+export function createTaskGateway({ directory, execute, workspaceRoot, now = Date.now, onDisable = async () => {}, availableExecutionSlots=()=>Infinity }) {
   mkdirSync(directory, { recursive:true, mode:0o700 })
   const path = resolve(directory, 'state.json')
   let state = read(path, { enabled:true, schedules:[], knownRuns:[], results:[], claims:{}, publicationIDs:[] })
@@ -166,7 +165,7 @@ export function createTaskGateway({ directory, execute, workspaceRoot, now = Dat
       clearTimeout(journalTimer); journalTimer = null
       if (!journalLines.length) return
       const fd = openSync(resolve(directory, `run-${id}.jsonl`), 'a', 0o600)
-      try { appendFileSync(fd, journalLines.join('')); syncJournal(fd) } finally { closeSync(fd) }
+      try { appendFileSync(fd, journalLines.join('')); fsyncSync(fd) } finally { closeSync(fd) }
       journalLines = []; journalBytes = 0
     }
     const publishUpdate = update => {
@@ -226,7 +225,7 @@ export function createTaskGateway({ directory, execute, workspaceRoot, now = Dat
   function tick() {
     if (closed || !state.enabled || disabling || state.requiresPublication) return
     for (const schedule of state.schedules) {
-      if (active.size >= maximumConcurrent||availableExecutionSlots()<=0) break
+      if (active.size >= 4||availableExecutionSlots()<=0) break
       if (schedule.retryAfter && Date.parse(schedule.retryAfter)>now()) continue
       if (schedule.nextFireAt == null || Date.parse(schedule.nextFireAt) > now()) continue
       if ([...active.values()].some(job => job.eventID === schedule.id)) continue

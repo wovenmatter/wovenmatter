@@ -9,7 +9,7 @@ import { sanitizeNativeTransportBytes } from './native-journal.mjs';
 // https://developers.openai.com/api/docs/guides/compaction
 // https://docs.x.ai/developers/advanced-api-usage/context-compaction
 // Codex uses its current Responses trigger protocol on the ChatGPT route.
-const TOOL_CALL_PROVIDERS = new Set(['openai', 'openai-codex', 'opencode']);
+const TOOL_CALL_PROVIDERS = new Set(['openai', 'openai-codex']);
 const NATIVE_PROVIDERS = new Set(['openai', 'openai-codex', 'xai', 'xai-api']);
 const UNSUPPORTED_CODES = new Set(['unsupported_model', 'model_not_supported', 'unsupported_compaction', 'compaction_not_supported', 'unsupported_endpoint', 'not_implemented']);
 const clone = value => structuredClone(value);
@@ -50,7 +50,7 @@ function responseEndpoint(model, auth) {
   }
   const path = base.pathname.replace(/\/+$/, '');
   if (model.provider === 'openai-codex') {
-    // Match Pi 1.0.3 resolveCodexUrl. A Codex token never goes to api.openai.com.
+    // Match Pi's resolveCodexUrl. A Codex token never goes to api.openai.com.
     if (base.origin !== 'https://chatgpt.com' || !['/backend-api', '/backend-api/codex', '/backend-api/codex/responses'].includes(path)) {
       throw new ProviderCompactionError('route-mismatch', 'The Codex compaction endpoint must stay on its authenticated ChatGPT route.');
     }

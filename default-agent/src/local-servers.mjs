@@ -1,4 +1,4 @@
-export function serverURL(value) {
+function serverURL(value) {
   if (typeof value !== 'string' || value.length > 2048) throw new Error('Enter a valid HTTP or HTTPS server URL.');
   let url;
   try { url = new URL(value.trim()); } catch { throw new Error('Enter a full server URL, such as http://localhost:32100/v1.'); }

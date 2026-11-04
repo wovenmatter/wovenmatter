@@ -7,13 +7,6 @@ import { CredentialVault } from '../src/vault.mjs';
 import { createDefaultAgentService } from '../src/service.mjs';
 import { signInStatuses } from '../src/sign-in-status.mjs';
 
-
-
-
-
-
-
-
 async function temporary(t) {
   const directory = await mkdtemp('/tmp/woven-default-agent-test-');
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -107,7 +100,6 @@ test('active sessions survive credential and settings updates and use the latest
   const restarted = createDefaultAgentService({ cwd: directory, directory });
   await assert.rejects(restarted.engine(), /locked/);
 });
-
 
 for (const provider of ['openai-codex', 'claude-subscription', 'xai']) {
   test(`${provider} exposes one account and never falls back from workspace-owned auth`, async t => {

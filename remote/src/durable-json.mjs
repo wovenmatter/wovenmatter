@@ -1,6 +1,10 @@
 import { randomUUID } from 'node:crypto'
-import { mkdirSync, openSync, writeFileSync, fsyncSync, closeSync, renameSync } from 'node:fs'
+import { mkdirSync, openSync, readFileSync, writeFileSync, fsyncSync, closeSync, renameSync } from 'node:fs'
 import { dirname } from 'node:path'
+
+export const ordered = value => Array.isArray(value) ? value.map(ordered) : value && typeof value === 'object'
+  ? Object.fromEntries(Object.keys(value).sort().map(key => [key, ordered(value[key])])) : value
+export const read = (path, fallback) => { try { return JSON.parse(readFileSync(path, 'utf8')) } catch (e) { if (e.code === 'ENOENT') return fallback; throw e } }
 
 export function durableJSON(path, value) {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 })

@@ -303,7 +303,7 @@ export function createDurableACP({ catalog, workspaceRoot, environment, isEnable
       if (!['attach', 'adopt', 'message', 'poll', 'recover', 'mcp'].includes(operation)) throw new Error('Unknown relay operation')
       const channel = await channelFor(body.channelID, body.harnessID, body.cwd, body.permission, body.nativeSessionID, operation === 'recover')
       if (operation === 'adopt' && (channel.state !== 'running' || channel.snapshot.busy || channel.snapshot.pendingRequests.length)) throw new Error('This session is not idle; client ownership was not changed')
-      if (operation === 'adopt' && (typeof body.expectedNativeSessionID !== 'string' || (channel.snapshot.piState?.sessionId ?? channel.snapshot.session?.sessionId) !== body.expectedNativeSessionID)) throw new Error('The durable channel belongs to a different native session; client ownership was not changed')
+      if (operation === 'adopt' && (typeof body.expectedNativeSessionID !== 'string' || channel.snapshot.session?.sessionId !== body.expectedNativeSessionID)) throw new Error('The durable channel belongs to a different native session; client ownership was not changed')
       if (['attach', 'adopt', 'recover'].includes(operation) && body.attachmentProtocol === 1) {
         // This shares the native admission queue: earlier requests are already
         // accounted for, while delayed requests from the old relay cannot admit.

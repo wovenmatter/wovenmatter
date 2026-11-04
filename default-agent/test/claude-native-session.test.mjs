@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { normalizeContext } from '@earendil-works/pi-ai/utils/transcript';
-import { createClaudeStream, compactClaudeContext, getClaudeNativePrincipal, claudePrincipalIdentity } from '../src/claude-provider.mjs';
+import { createClaudeStream, compactClaudeContext, claudePrincipalIdentity } from '../src/claude-provider.mjs';
 
 const model = { provider: 'anthropic', api: 'woven-claude-native', id: 'sonnet', reasoning: false };
 const tool = { name: 'read', description: 'Read a file', parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } };
@@ -45,7 +45,6 @@ async function fixture(t) {
   return { native, credentials, requests, records, dependencies, scope,
     stream: createClaudeStream(native, credentials, dependencies), setResponse: value => { blocks = value; } };
 }
-
 
 for (const provider of ['anthropic', 'claude-subscription']) test(`${provider} native SDK persistence resumes compaction and rebuilds changed accounts`, { timeout: 60000 }, async t => {
   const f = await fixture(t), selected = { ...model, provider };

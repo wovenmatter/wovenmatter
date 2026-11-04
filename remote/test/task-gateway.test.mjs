@@ -8,14 +8,6 @@ import { createTaskGateway,occurrenceDate,latestOccurrence } from '../src/task-g
 import { applyTaskConfiguration } from '../src/task-gateway-runner.mjs'
 import { loadRuntimeConfiguration } from '../src/config.mjs'
 
-
-
-
-
-
-
-
-
 const task=(changes={})=>({id:'event-1',title:'Test',startsAt:'2026-01-01T14:00:00.000Z',timeZoneID:'America/New_York',recurrence:{unit:'day',interval:1},excludedOccurrences:[],revision:1,nextFireAt:'2026-01-01T14:00:00.000Z',task:{prompt:'hello',sessionMode:'same',configuration:{runtimeKind:'codex',title:'Test',tools:{enabled:[]}}},...changes})
 const settled=async gateway=>{for(let i=0;i<100 && gateway.status().activeRuns;i++)await new Promise(done=>setTimeout(done,5));assert.equal(gateway.status().activeRuns,0)}
 async function fixture(t,options={}) {const directory=await mkdtemp(resolve(tmpdir(),'wm-task-gateway-'));t.after(()=>rm(directory,{recursive:true,force:true}));return {directory,gateway:createTaskGateway({directory,execute:async()=>({}),...options})}}

@@ -20,14 +20,6 @@ test('remote stdio relay executes its fail-closed startup through a symlink', as
   assert.match(result.stderr, /remote session relay disconnected/)
 })
 
-
-
-
-
-
-
-
-
 async function fixture(t) {
   const directory = await mkdtemp(join(tmpdir(), 'durable-acp-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
@@ -320,7 +312,6 @@ for (const harnessID of ['test']) {
   })
 }
 
-
 test('natural process exit settles interrupted prompts and survives service restart', async t => {
   const f = await fixture(t)
   await f.call('attach')
@@ -343,7 +334,6 @@ test('natural process exit settles interrupted prompts and survives service rest
   assert.deepEqual(restored.snapshot.recoveredRuns, stopped.snapshot.recoveredRuns)
   assert.equal(f.launches(), 1)
 })
-
 
 test('native host durable sessions permit linked external folders while containers retain containment', async t => {
   const external = await mkdtemp(join(tmpdir(), 'woven-linked-project-'))

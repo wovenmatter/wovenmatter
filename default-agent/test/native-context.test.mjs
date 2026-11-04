@@ -8,24 +8,16 @@ import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
 import { ProviderCompactionError } from '../src/provider-compaction.mjs';
 import { NativeContext, compatibleCanonicalMessages } from '../src/native-context.mjs';
 import { DefaultAgentEngine } from '../src/engine.mjs';
-
-
-
-
-
-
-
-
-
+import { assistantStream as stream } from './fixtures/synthetic-stream.mjs';
+import { fakeClaudeRuntime } from './fixtures/claude-runtime.mjs';
 
 const usage = { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
 const response = model => ({ role: 'assistant', content: [{ type: 'thinking', thinking: 'Visible reasoning', thinkingSignature: JSON.stringify({ type: 'reasoning', id: 'rs_a', encrypted_content: 'opaque-account-a', summary: [] }) }, { type: 'text', text: 'Answer' }], provider: model.provider, api: model.api, model: model.id, stopReason: 'stop', timestamp: Date.now(), usage });
-function stream(message) { const value = createAssistantMessageEventStream(); value.push({ type: 'start', partial: message }); value.push({ type: 'done', reason: 'stop', message }); value.end(message); return value; }
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), 'woven-native-context-'));
   const accounts = ['a', 'b'].map(id => ({ id, credential: { type: 'api_key', key: 'fixture-' + id } }));
   const calls = [];
-  const engine = await new DefaultAgentEngine({ cwd: root, directory: root, claude: { loadModels: async () => {}, models: [], status: async () => ({ connected: false }) }, credentials: { openai: accounts[0].credential }, credentialAccounts: { openai: accounts }, config: { providers: ['openai'], defaultModel: 'openai/native-fixture' } }).initialize();
+  const engine = await new DefaultAgentEngine({ cwd: root, directory: root, claude: fakeClaudeRuntime({ status: async () => ({ connected: false }) }), credentials: { openai: accounts[0].credential }, credentialAccounts: { openai: accounts }, config: { providers: ['openai'], defaultModel: 'openai/native-fixture' } }).initialize();
   engine.runtime.registerProvider('openai', { baseUrl: 'https://api.openai.com/v1', api: 'openai-responses', authHeader: true, models: [{ id: 'native-fixture', name: 'Fixture', reasoning: true, input: ['text'], contextWindow: 200000, maxTokens: 4096, cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0 } }] });
   engine.runtime.getAuth = async () => ({ auth: { apiKey: (await engine.credentials.read('openai')).key } });
   engine.compactionFetch = async (url, options) => { calls.push({ url, body: JSON.parse(options.body), account: engine.credentials.context.getStore()?.id }); return new Response(JSON.stringify({ model: 'native-fixture', output: [{ type: 'compaction', encrypted_content: 'opaque-window-' + calls.length, future: { keep: true } }, { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'native-retained' }] }], usage: { input_tokens: 100, output_tokens: 3, total_tokens: 103 } })); };

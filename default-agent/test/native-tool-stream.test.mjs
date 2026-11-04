@@ -5,8 +5,6 @@ import { NativeToolStream } from '../src/native-tool-stream.mjs';
 const text = update => update.content?.[0]?.content.text;
 const progress = (stream, fields) => stream.update({type:'tool_execution_update',toolCallId:'shell',...fields});
 
-
-
 test('watch overflow restores live output and settles missing slots from persisted results', () => {
   const stream = new NativeToolStream();
   progress(stream,{output:{set:'old'}});

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, rm, stat } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -54,7 +54,6 @@ async function seedLegacy(options) {
   return {rootID:root.id,childID,taskID,expectedReceipt,expectedConversations,expectedTasks,document,historical,firstSeq};
 }
 
-
 test('failed import rolls back every native table and receipt and can retry from the preserved source',async t=>{
   const options=await fixture(t); await seedLegacy(options);
   await assert.rejects(openWorkspacePiStorage({...options,beforeActivation:()=>{throw Error('fixture failure')}}),/fixture failure/);
@@ -64,8 +63,6 @@ test('failed import rolls back every native table and receipt and can retry from
   database.close();
   const storage=await openWorkspacePiStorage(options); await storage.close(context);
 });
-
-
 
 test('committed SQLite state survives abrupt owner-process death without close or replay',async t=>{
   const options=await fixture(t);

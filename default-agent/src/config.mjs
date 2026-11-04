@@ -1,7 +1,11 @@
+import { createHash } from 'node:crypto';
 import { mkdir, open, readFile, rename, unlink } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { localServers } from './local-servers.mjs';
 
+const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object'
+  ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
+export const canonicalHash = value => createHash('sha256').update(JSON.stringify(canonical(value))).digest('hex');
 export const providers = ['openai-codex', 'openai', 'openrouter', 'opencode-go', 'xai', 'xai-api', 'claude-subscription', 'anthropic'];
 export const searchProviderNames = { exa: 'Exa', brave: 'Brave', firecrawl: 'Firecrawl' };
 export const providerNames = { 'openai-codex': 'OpenAI · ChatGPT subscription', openai: 'OpenAI · API key', openrouter: 'OpenRouter', 'opencode-go': 'OpenCode Go', xai: 'Grok subscription', 'xai-api': 'xAI · API key', 'claude-subscription': 'Claude · Subscription', anthropic: 'Claude · API key' };

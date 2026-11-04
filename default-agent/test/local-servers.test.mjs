@@ -3,9 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { probeServer, serverURL, localServers } from '../src/local-servers.mjs';
+import { probeServer } from '../src/local-servers.mjs';
 import { DefaultAgentEngine } from '../src/engine.mjs';
-
 
 const id = 'local-server-12345678-1234-1234-1234-123456789012';
 const url = 'http://localhost:32100/v1';

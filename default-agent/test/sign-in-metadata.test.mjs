@@ -3,8 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { accountDetails, signInStatuses, readCodexAccount } from '../src/sign-in-status.mjs';
-
+import { readCodexAccount } from '../src/sign-in-status.mjs';
 
 test('Codex account read never refreshes tokens and stops its process', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'woven-account-fixture-'));
