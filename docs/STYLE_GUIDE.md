@@ -52,7 +52,8 @@ when an intentional design change is accepted.
 - **Settings navigation:** group Pi Durable, Codex, Claude Code, Grok Build, and
   OpenCode under **Settings → Agents**. Harness pages return to Agents unless
   opened from a workspace's settings. Spell **OpenCode** as one word throughout
-  the app.
+  the app. Order the main Settings page as General, Agents, Dictation, Local
+  Workspace, Remote Workspaces, Apple Devices, Background Server, then Usage.
 - **Harness setup:** use compact rows grouped on the theme-whisper surface for
   both harness installation and Pi Durable setup, with the same typography,
   padding, inset dividers, and quiet actions. Keep provider setup limited to

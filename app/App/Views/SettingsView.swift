@@ -183,29 +183,16 @@ struct SettingsView: View {
                     action: { section = .general }
                 )
                 SettingsDestinationRow(
-                    title: "Background Server",
-                    detail: "Server controls and managed activity on this Mac and remote workspaces.",
-                    icon: { DashboardLucideIcon(glyph: .terminal, size: 15) },
-                    action: { section = .backgroundServer }
-                )
-                SettingsDestinationRow(
-                    title: "Dictation",
-                    detail: "Read and copy your previous dictations.",
-                    icon: { DashboardLucideIcon(glyph: .mic, size: 15) },
-                    action: { section = .dictation }
-                )
-
-                SettingsDestinationRow(
                     title: "Agents",
                     detail: "Accounts, installation, and chat settings.",
                     icon: { DashboardLucideIcon(glyph: .bot, size: 15) },
                     action: { section = .agents }
                 )
                 SettingsDestinationRow(
-                    title: "Apple Devices",
-                    detail: "Connect Macs, iPhones, and iPads to share your library.",
-                    icon: { DashboardLucideIcon(glyph: .monitor, size: 15) },
-                    action: { section = .companion }
+                    title: "Dictation",
+                    detail: "Read and copy your previous dictations.",
+                    icon: { DashboardLucideIcon(glyph: .mic, size: 15) },
+                    action: { section = .dictation }
                 )
                 SettingsDestinationRow(
                     title: "Local Workspace",
@@ -218,6 +205,18 @@ struct SettingsView: View {
                     detail: "Agents and files on remote Linux machines.",
                     icon: { DashboardLucideIcon(glyph: .container, size: 15) },
                     action: { section = .remoteWorkspaces }
+                )
+                SettingsDestinationRow(
+                    title: "Apple Devices",
+                    detail: "Connect Macs, iPhones, and iPads to share your library.",
+                    icon: { DashboardLucideIcon(glyph: .monitor, size: 15) },
+                    action: { section = .companion }
+                )
+                SettingsDestinationRow(
+                    title: "Background Server",
+                    detail: "Server controls and managed activity on this Mac and remote workspaces.",
+                    icon: { DashboardLucideIcon(glyph: .terminal, size: 15) },
+                    action: { section = .backgroundServer }
                 )
                 SettingsDestinationRow(
                     title: "Usage",
