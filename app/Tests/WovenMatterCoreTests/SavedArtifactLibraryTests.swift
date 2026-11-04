@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import CryptoKit
 import Foundation
 import Testing
@@ -13,7 +14,7 @@ struct SavedArtifactLibraryTests {
     let artifact = try await fixture.save(bytes, title: "../../outside/\\report")
     let service = SavedArtifactLibraryService(database: fixture.database)
     let url = try await service.openURL(id: artifact.id, revision: artifact.revision)
-    #expect(url.path.hasPrefix(fixture.root.appending(path: "saved-artifact-open").path + "/"))
+    #expect(url.path.hasPrefix(fixture.persistence.directory.appending(path: "saved-artifact-open").path + "/"))
     #expect(!url.lastPathComponent.contains("/"))
     #expect(!url.lastPathComponent.contains("\\"))
     try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
@@ -25,20 +26,19 @@ struct SavedArtifactLibraryTests {
 
 
   private struct Fixture {
-    let root: URL
+    let persistence: PersistenceFixture
     let database: WorkspaceDatabase
     let workspaceID: String
     let deviceID: String
     init() async throws {
-      root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-      try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-      database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
+      persistence = try PersistenceFixture()
+      database = try await persistence.openDatabase()
       let identity = try await database.companionLibraryIdentity()
       deviceID = UUID().uuidString.lowercased()
       workspaceID = UUID().uuidString.lowercased()
       _ = try await database.registerCompanionExecutionWorkspace(.init(workspace: .init(id: workspaceID, libraryID: identity.libraryID, ownerDeviceID: deviceID, kind: .ios, name: "My iPhone")), deviceID: deviceID)
     }
-    func remove() { try? FileManager.default.removeItem(at: root) }
+    func remove() { persistence.remove() }
     func save(_ bytes: Data, title: String = "Output.txt") async throws -> CompanionArtifactManifest {
       let manifest = CompanionArtifactManifest(id: UUID().uuidString.lowercased(), workspaceID: workspaceID, title: title, mediaType: "text/plain", byteCount: Int64(bytes.count), sha256: Self.hash(bytes))
       let transfer = try await database.registerCompanionArtifact(.init(manifest: manifest), deviceID: deviceID)

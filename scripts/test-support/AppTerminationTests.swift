@@ -120,12 +120,6 @@ private final class TerminationProbe: NSObject, NSApplicationDelegate {
             && delegate.applicationShouldTerminate(sender) == .terminateLater
         return reply
     }
-
-    @objc private func finished(_ notification: Notification) {
-        let passed = deferredTermination && model.noteEditingSuspended && model.flushCount == 1 && model.cleanupCount == 1 && model.cleanupFinished && model.browserCleanupCount == 1 && model.browserCleanupFinished
-        try! (passed ? "PASS\n" : "FAIL: termination cancelled, cleanup unfinished, or duplicate cleanup\n")
-            .write(to: resultURL, atomically: true, encoding: .utf8)
-    }
 }
 
 @main

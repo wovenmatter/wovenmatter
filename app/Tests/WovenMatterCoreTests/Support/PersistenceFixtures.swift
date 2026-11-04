@@ -1,18 +1,20 @@
 import Foundation
 import SQLite3
+import Testing
 import WovenMatterCore
 @testable import WovenMatterDashboardStore
 
-struct PersistenceFixture {
-  let directory: URL
-  var databaseURL: URL { directory.appending(path: "workspace.sqlite") }
-
-  init() throws {
-    directory = FileManager.default.temporaryDirectory.appending(path: "persistence-\(UUID())")
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+/// A credential store that never holds a key. With `recordsAccess`, every call
+/// records an issue so SQLite import fixtures prove they never touch credentials.
+struct UsageNoCredentials: UsageCredentialStoring {
+  var recordsAccess = false
+  private func accessed() {
+    if recordsAccess { Issue.record("SQLite import fixtures must not access credentials") }
   }
-
-  func remove() { try? FileManager.default.removeItem(at: directory) }
+  func hasOpenRouterAPIKey() throws -> Bool { accessed(); return false }
+  func authorizeOpenRouterAPIKey() throws -> String? { accessed(); return nil }
+  func saveOpenRouterAPIKey(_ key: String) throws { accessed() }
+  func deleteOpenRouterAPIKey() throws { accessed() }
 }
 
 final class PersistenceSQL {

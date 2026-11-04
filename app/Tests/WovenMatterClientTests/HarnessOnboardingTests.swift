@@ -4,13 +4,6 @@ import Testing
 import WovenMatterCore
 
 struct HarnessOnboardingTests {
-
-}
-
-extension HarnessOnboardingTests {
-}
-
-extension HarnessOnboardingTests {
     @Test func nativeStatusCanArriveOnStandardError() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: "harness-status-\(UUID())")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -21,9 +14,7 @@ extension HarnessOnboardingTests {
         let status = await HarnessOnboarding.checkSignIn(.opencode, executable: executable)
         #expect(status.state == "sign_in_required")
     }
-}
 
-extension HarnessOnboardingTests {
     @Test func accountMetadataShowsMethodsAndNamesWithoutSecrets() throws {
         let claude = HarnessOnboarding.parseSignIn(.claudeCode,
             output: #"{"loggedIn":true,"authMethod":"claude.ai","email":"person@example.test","accessToken":"private-secret"}"#, succeeded: true)

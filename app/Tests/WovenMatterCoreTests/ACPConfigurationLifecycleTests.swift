@@ -8,10 +8,8 @@ import WovenMatterCore
 struct ACPConfigurationLifecycleTests {
 
   @Test func executionAdoptionDetachesOnlyItsIdleClientAndRejectsLegacyReopen() async throws {
-    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+    let persistence = try PersistenceFixture(); defer { persistence.remove() }
+    let database = try await persistence.openDatabase()
     let firstID = try await database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Transfer", ownerDeviceID: UUID())
     let secondID = try await database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Unrelated", ownerDeviceID: UUID())
     let first = SelectorDriverState(expectedExistingSessionID: nil)
@@ -20,7 +18,7 @@ struct ACPConfigurationLifecycleTests {
     let coordinator = LocalACPSessionCoordinator(database: database, clientFactory: { _, _ in drivers.next() })
     let launch = LocalACPRuntimeLaunchConfiguration(runtimeKind: .codex,
       executableURL: URL(filePath: "/nonexistent-adoption-fixture"), arguments: [])
-    let workspace = LocalACPWorkspaceLaunchConfiguration(rootURL: directory)
+    let workspace = LocalACPWorkspaceLaunchConfiguration(rootURL: persistence.directory)
     _ = try await coordinator.configuration(conversationID: firstID, launch: launch, workspace: workspace)
     _ = try await coordinator.configuration(conversationID: secondID, launch: launch, workspace: workspace)
     let original = try await database.localACPSession(conversationID: firstID)
@@ -47,44 +45,26 @@ struct ACPConfigurationLifecycleTests {
 private final class SelectorDriverState: @unchecked Sendable {
   private let lock = NSLock()
   private let expectedExistingSessionID: String?
-  private let initial: LocalACPSessionConfiguration
-  private let observedUpdate: LocalACPSessionConfiguration?
   private var current: LocalACPSessionConfiguration
-  private var startCount = 0
-  private var configurationReadCount = 0
   private var shutdownCount = 0
-  private var requests: [String] = []
-  private var initializedDirectories: [String] = []
   private var observer: (@Sendable (LocalACPSessionConfiguration) async -> Void)?
 
-  init(
-    expectedExistingSessionID: String?,
-    modelOptions: [String] = ["default-model", "selected-model"],
-    observedUpdate: LocalACPSessionConfiguration? = nil
-  ) {
+  init(expectedExistingSessionID: String?) {
     self.expectedExistingSessionID = expectedExistingSessionID
-    initial = LocalACPSessionConfiguration(
+    current = LocalACPSessionConfiguration(
       model: "default-model",
       thinking: "low",
-      modelOptions: modelOptions,
+      modelOptions: ["default-model", "selected-model"],
       thinkingOptions: ["low", "high"],
       permission: "ask", permissionOptions: ["ask", "auto"]
     )
-    self.observedUpdate = observedUpdate
-    current = initial
   }
 
-  var starts: Int { lock.withLock { startCount } }
-  var configurationReads: Int { lock.withLock { configurationReadCount } }
   var shutdowns: Int { lock.withLock { shutdownCount } }
-  var setRequests: [String] { lock.withLock { requests } }
-  var directories: [String] { lock.withLock { initializedDirectories } }
 
   func driver() -> LocalACPSessionDriver {
-    lock.withLock { startCount += 1 }
-    return LocalACPSessionDriver(
-      initializeSession: { [self] directory, existing, _, _ in
-        lock.withLock { initializedDirectories.append(directory.path) }
+    LocalACPSessionDriver(
+      initializeSession: { [self] _, existing, _, _ in
         #expect(existing == expectedExistingSessionID)
         return LocalACPInitializedSession(
           sessionID: "fixture-session",
@@ -93,27 +73,16 @@ private final class SelectorDriverState: @unchecked Sendable {
         )
       },
       prompt: { _, _, _, _ in .endTurn },
-      configuration: { [self] in
-        lock.withLock {
-          configurationReadCount += 1
+      configuration: { [self] in lock.withLock { current } },
+      observeConfiguration: { [self] handler in
+        let snapshot = lock.withLock {
+          observer = handler
           return current
         }
-      },
-      observeConfiguration: { [self] handler in
-        let snapshots = lock.withLock {
-          observer = handler
-          var snapshots = [current]
-          if let observedUpdate {
-            current = observedUpdate
-            snapshots.append(observedUpdate)
-          }
-          return snapshots
-        }
-        for snapshot in snapshots { await handler(snapshot) }
+        await handler(snapshot)
       },
       setConfiguration: { [self] model, thinking in
         lock.withLock {
-          requests.append("model=\(model ?? "nil");thinking=\(thinking ?? "nil")")
           current = current.selecting(model: model, thinking: thinking)
           return current
         }

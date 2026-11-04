@@ -761,18 +761,6 @@ extension WorkspaceDatabaseConnection {
 
   public func beginLocalACPSteeringTurn(
     runID: String,
-    content: String,
-    createdAt: Date = Date()
-  ) throws -> LocalACPSteeringIdentifiers {
-    try beginLocalACPSteeringTurn(
-      runID: runID,
-      input: AgentMessageInput(text: content),
-      createdAt: createdAt
-    )
-  }
-
-  public func beginLocalACPSteeringTurn(
-    runID: String,
     input: AgentMessageInput,
     completesPreviousAssistant: Bool = true,
     createdAt: Date = Date()
@@ -1640,14 +1628,6 @@ extension WorkspaceDatabase {
 
   public func activeDeviceOwnedConversationIDs() async throws -> Set<String> {
     try await read { try $0.activeDeviceOwnedConversationIDs() }
-  }
-
-  public func beginLocalACPSteeringTurn(
-    runID: String,
-    content: String,
-    createdAt: Date = Date()
-  ) async throws -> LocalACPSteeringIdentifiers {
-    try await write { try $0.beginLocalACPSteeringTurn(runID: runID, content: content, createdAt: createdAt) }
   }
 
   public func beginLocalACPSteeringTurn(

@@ -1,4 +1,5 @@
 @testable import WovenMatterAppFacade
+import WorkspaceFixtures
 import AppKit
 import Foundation
 import Testing
@@ -27,10 +28,7 @@ import WovenMatterCompanion
 }
 @MainActor @Suite(.serialized) struct DictationTests {
     private func settle(_ condition: () -> Bool) async throws {
-        for _ in 0..<500 {
-            if condition() { return }
-            try await Task.sleep(for: .milliseconds(2))
-        }
+        if try await pollUntil(attempts: 500, interval: .milliseconds(2), { condition() }) { return }
         Issue.record("Dictation did not settle")
     }
     private func editor(_ text: String, id: String, selection: NSRange) -> (DictationEditor, UndoEditor) {

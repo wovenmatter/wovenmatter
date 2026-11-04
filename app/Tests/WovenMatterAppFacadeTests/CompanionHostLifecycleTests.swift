@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import Foundation
 import Testing
 import WovenMatterClient
@@ -7,7 +8,6 @@ import WovenMatterDashboardStore
 
 @MainActor @Suite(.serialized)
 struct CompanionHostLifecycleTests {
-
 
     @Test func restoredCancellationRetainsItsProofUntilTheMacAcknowledges() async throws {
         let identity = CompanionPairingDeviceIdentity(deviceID: UUID().uuidString.lowercased(), deviceName: "Fixture Mac", metadata: .init(kind: .mac))
@@ -172,11 +172,9 @@ struct CompanionHostLifecycleTests {
         // CI can run every package's suites in one process. Bound observations,
         // so unrelated MainActor work cannot consume this fixture's entire wait
         // before its startup task gets another chance to run.
-        for _ in 0..<attempts {
-            if condition() { return }
-            try await Task.sleep(for: .milliseconds(10))
+        guard try await pollUntil(attempts: attempts, interval: .milliseconds(10), { condition() }) else {
+            throw HostFixtureError.timeout
         }
-        throw HostFixtureError.timeout
     }
 }
 
@@ -188,20 +186,14 @@ private enum HostFixtureError: Error { case timeout }
     let defaults: UserDefaults
     let model: ApplicationModel
     lazy var host = makeHost()
-    var existingPorts: Set<Int> = [443]
     var exposureCount = 0
     var children: [HostServingChild] = []
-    var replacementCreatedWhileStopping = false
-    var tailscaleRunning = true
-    var holdFirstStatus = false
-    var firstStatusArrived = false
-    private var firstStatusWaiter: CheckedContinuation<Void, Never>?
 
-    init(isNode: Bool = false) async throws {
+    init() async throws {
         directory = FileManager.default.temporaryDirectory.appending(path: "companion-host-\(UUID())")
         suite = "companion.host.\(UUID())"
         defaults = UserDefaults(suiteName: suite)!
-        defaults.set(isNode, forKey: LocalExecutionRole.libraryClientPreferenceKey)
+        defaults.set(false, forKey: LocalExecutionRole.libraryClientPreferenceKey)
         let store = try await DashboardStore(supportDirectory: directory)
         model = ApplicationModel(applicationDefaults: defaults, dashboardStore: store, startsAutomatically: false)
     }
@@ -242,37 +234,27 @@ private enum HostFixtureError: Error { case timeout }
         return try #require(URL(string: child.target)).appendingPathComponent(path)
     }
     func makeExposure() -> CompanionTailscaleServe {
-        replacementCreatedWhileStopping = replacementCreatedWhileStopping || children.contains { $0.stoppedAt != nil && $0.isRunning }
         exposureCount += 1
-        let attempt = exposureCount
         return CompanionTailscaleServe(executable: URL(fileURLWithPath: "/fixture/tailscale"),
-            probe: { [self] _, arguments in try await probe(arguments, attempt: attempt) },
+            probe: { [self] _, arguments in try await probe(arguments) },
             launch: { [self] _, arguments in
                 let child = HostServingChild(port: Int(arguments[1].dropFirst("--https=".count))!, target: arguments[3])
                 children.append(child)
                 return child
             })
     }
-    func probe(_ arguments: [String], attempt: Int) async throws -> Data {
+    func probe(_ arguments: [String]) async throws -> Data {
         if arguments == ["status", "--json"] {
-            if attempt == 1 && holdFirstStatus {
-                firstStatusArrived = true
-                await withCheckedContinuation { firstStatusWaiter = $0 }
-            }
-            guard tailscaleRunning else { return Data(#"{"BackendState":"Stopped"}"#.utf8) }
             return Data(#"{"BackendState":"Running","Self":{"DNSName":"fixture.test.ts.net."}}"#.utf8)
         }
-        let tcp = Dictionary(uniqueKeysWithValues: existingPorts.map { (String($0), ["HTTPS": true]) })
         var foreground: [String: Any] = [:]
         for (index, child) in children.enumerated() where child.isRunning {
             foreground[String(index)] = ["TCP": [String(child.port): ["HTTPS": true]],
                 "Web": ["fixture.test.ts.net:\(child.port)": ["Handlers": ["/wovenmatter": ["Proxy": child.target]]]]]
         }
-        return try JSONSerialization.data(withJSONObject: ["TCP": tcp, "Foreground": foreground])
+        return try JSONSerialization.data(withJSONObject: ["TCP": ["443": ["HTTPS": true]], "Foreground": foreground])
     }
-    func releaseFirstStatus() { firstStatusWaiter?.resume(); firstStatusWaiter = nil }
     func remove() {
-        releaseFirstStatus()
         host.stopSharing()
         children.forEach { $0.forceStopped = true }
         defaults.removePersistentDomain(forName: suite)
@@ -285,11 +267,9 @@ private enum HostFixtureError: Error { case timeout }
     let target: String
     var stoppedAt: TimeInterval?
     var forceStopped = false
-    var holdCleanup = false
-    var terminationCount = 0
     init(port: Int, target: String) { self.port = port; self.target = target }
     var isRunning: Bool {
-        !forceStopped && stoppedAt.map { holdCleanup || ProcessInfo.processInfo.systemUptime - $0 < 0.4 } ?? !forceStopped
+        !forceStopped && stoppedAt.map { ProcessInfo.processInfo.systemUptime - $0 < 0.4 } ?? !forceStopped
     }
-    func terminate() { terminationCount += 1; stoppedAt = ProcessInfo.processInfo.systemUptime }
+    func terminate() { stoppedAt = ProcessInfo.processInfo.systemUptime }
 }

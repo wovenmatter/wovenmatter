@@ -10,13 +10,13 @@ struct WorkspaceAgentToolTests {
 
 
   @Test func timerRetryPreservesPauseRemovalAndLaterSchedule() async throws {
-    let (db, dir, caller, _) = try await fixture()
-    defer { try? FileManager.default.removeItem(at: dir) }
+    let (db, persistence, caller, _) = try await fixture()
+    defer { persistence.remove() }
     let timer = WorkspaceSessionTimer(sessionID: caller, instruction: "Original", nextFireAt: .distantPast)
     let requestID = UUID().uuidString
     try await db.saveSessionTimer(timer, callerID: caller, requestID: requestID, creating: true)
     try await db.pauseSessionTimer(id: timer.id, paused: true)
-    let reopened = try await WorkspaceDatabase(url: dir.appending(path: "workspace.sqlite"))
+    let reopened = try await persistence.openDatabase()
     try await reopened.saveSessionTimer(timer, callerID: caller, requestID: requestID, creating: true)
     #expect(try await reopened.sessionTimers().first?.isPaused == true)
     var changed = timer; changed.instruction = "Later user instruction"
@@ -41,8 +41,8 @@ struct WorkspaceAgentToolTests {
   }
 
   @Test func coordinationEpochsMakeReleaseAndNotificationRetriesSafe() async throws {
-    let (db, dir, source, target) = try await fixture()
-    defer { try? FileManager.default.removeItem(at: dir) }
+    let (db, persistence, source, target) = try await fixture()
+    defer { persistence.remove() }
     try await db.beginCoordination(sourceID: source, targetID: target, purpose: "First assignment")
     let firstEpoch = try await #require(db.sessionRelationship(target).coordinationEpoch)
     let notificationID = UUID().uuidString
@@ -72,8 +72,8 @@ struct WorkspaceAgentToolTests {
   }
 
   @Test func discoveryPaginationAndRequestIDCanonicalizationAreConsistent() async throws {
-    let (db, dir, caller, _) = try await fixture()
-    defer { try? FileManager.default.removeItem(at: dir) }
+    let (db, persistence, caller, _) = try await fixture()
+    defer { persistence.remove() }
     let expectedFolders = [
       try await db.createFixtureFolder(name: "Discoverable"),
       try await db.createFixtureFolder(name: "Second folder"),
@@ -122,8 +122,8 @@ struct WorkspaceAgentToolTests {
 
   @Test(arguments: [false, true], [false, true])
   func creationConfigurationSurvivesReopenAndKeepsResolvedDefaults(remote: Bool, emptyTools: Bool) async throws {
-    let (db, dir, source, other) = try await fixture()
-    defer { try? FileManager.default.removeItem(at: dir) }
+    let (db, persistence, source, other) = try await fixture()
+    defer { persistence.remove() }
     let remoteWorkspaceID = remote ? UUID() : nil
     let owner = remoteWorkspaceID.map { "remote:" + $0.uuidString.lowercased() } ?? "device:test"
     let folder = try await db.createFolder(name: "Original folder", location: .init(workspaceID: owner, rootPath: "/workspace/original", managed: false))
@@ -151,7 +151,7 @@ struct WorkspaceAgentToolTests {
     laterDefaults.executor = executor
     try await db.saveToolSettings(laterDefaults)
     try await db.setSessionTools(.init(enabled: [.sessions, .calendar]), sessionID: source)
-    let reopened = try await WorkspaceDatabase(url: dir.appending(path: "workspace.sqlite"))
+    let reopened = try await persistence.openDatabase()
     let retry = try await reopened.reserveToolSessionCreation(sourceID: source, requestID: requestID,
       arguments: args, purpose: "Implement", managed: true)
     let json = try #require(retry.objectValue?["configuration_json"]?.stringValue)
@@ -200,8 +200,8 @@ struct WorkspaceAgentToolTests {
 
 
   @Test func indexedTableInsertionsRequireTheRevisionTheyWerePlannedAgainst() async throws {
-    let (db, dir, caller, _) = try await fixture()
-    defer { try? FileManager.default.removeItem(at: dir) }
+    let (db, persistence, caller, _) = try await fixture()
+    defer { persistence.remove() }
     let note = try await db.createNote(folderID: nil, callerConversationID: caller, requestID: UUID().uuidString)
     let table = try await db.applyNoteEdits(.init(command: .apply, noteID: note,
       operations: [.createTable(afterBlockID: nil, rows: 2, columns: 2, headerRow: false)]),
@@ -219,34 +219,12 @@ struct WorkspaceAgentToolTests {
     #expect(appended.success)
   }
 
-  private func fixture() async throws -> (WorkspaceDatabase, URL, String, String) {
-    let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-    let db = try await WorkspaceDatabase(url: dir.appending(path: "workspace.sqlite"))
-    let a = try await db.createFixtureLocalACPSession(runtimeKind: .codex, title: "Coordinator", ownerDeviceID: UUID(), fixtureLocation: .init(workspaceID: "device:test", rootPath: dir.path, managed: false))
-    let b = try await db.createFixtureLocalACPSession(runtimeKind: .claudeCode, title: "Destination", ownerDeviceID: UUID(), fixtureLocation: .init(workspaceID: "device:test", rootPath: dir.path, managed: false))
-    return (db, dir, a, b)
+  private func fixture() async throws -> (WorkspaceDatabase, PersistenceFixture, String, String) {
+    let persistence = try PersistenceFixture()
+    let db = try await persistence.openDatabase()
+    let root = persistence.directory.path
+    let a = try await db.createFixtureLocalACPSession(runtimeKind: .codex, title: "Coordinator", ownerDeviceID: UUID(), fixtureLocation: .init(workspaceID: "device:test", rootPath: root, managed: false))
+    let b = try await db.createFixtureLocalACPSession(runtimeKind: .claudeCode, title: "Destination", ownerDeviceID: UUID(), fixtureLocation: .init(workspaceID: "device:test", rootPath: root, managed: false))
+    return (db, persistence, a, b)
   }
-
-
-}
-
-extension WorkspaceAgentToolTests {
-}
-
-extension WorkspaceAgentToolTests {
-
-}
-
-extension WorkspaceAgentToolTests {
-}
-
-extension WorkspaceAgentToolTests {
-}
-
-extension WorkspaceAgentToolTests {
-}
-
-extension WorkspaceAgentToolTests {
-
 }

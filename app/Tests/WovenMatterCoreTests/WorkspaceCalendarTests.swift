@@ -9,7 +9,7 @@ import WovenMatterClient
 struct WorkspaceCalendarTests {
 
   @Test func remoteDisableRestoresCheckpointBeforeReleasingFence() async throws {
-    let (db,directory) = try await fixture(); defer { try? FileManager.default.removeItem(at:directory) }
+    let (db, persistence) = try await fixture(); defer { persistence.remove() }
     let workspace = UUID(),start = date("2026-09-22T12:00:00Z")
     var remoteTask = task(); remoteTask.configuration.workspaceID = workspace
     let id = try await db.saveCalendarEvent(draft:.init(title:"Remote",startsAt:start,timeZoneID:"UTC",recurrence:.init(unit:.day),task:remoteTask),creating:true,now:start)
@@ -26,7 +26,7 @@ struct WorkspaceCalendarTests {
   }
 
   @Test func allDayAndMultiDayEventsOverlapTheirVisibleDays() async throws {
-    let (db, directory) = try await fixture(); defer { try? FileManager.default.removeItem(at: directory) }
+    let (db, persistence) = try await fixture(); defer { persistence.remove() }
     let draft = WorkspaceCalendarDraft(title: "Trip", startsAt: date("2026-09-20T14:00:00Z"), endsAt: date("2026-09-23T14:00:00Z"),
       allDay: true, timeZoneID: "America/New_York")
     try await db.saveCalendarEvent(draft: draft, creating: true)
@@ -50,7 +50,7 @@ struct WorkspaceCalendarTests {
   }
 
   @Test func pastRunsRemainDistinctFromChangedOccurrencesAndKeepTheirSavedSettings() async throws {
-    let (db, directory) = try await fixture(); defer { try? FileManager.default.removeItem(at: directory) }
+    let (db, persistence) = try await fixture(); defer { persistence.remove() }
     let start = date("2026-09-01T13:00:00Z")
     let id = try await insert(db, start: start, repeatRule: .init(unit: .day))
     let run = try await #require(db.dueCalendarRuns(now: start).first)
@@ -75,7 +75,7 @@ struct WorkspaceCalendarTests {
   }
 
   @Test func remoteReceiptSurvivesDeletedFolderAndReplayAfterReopen() async throws {
-    let (db, directory) = try await fixture(); defer { try? FileManager.default.removeItem(at: directory) }
+    let (db, persistence) = try await fixture(); defer { persistence.remove() }
     let workspace = UUID(), owner = UUID(), start = date("2026-09-22T12:00:00Z")
     let folder = try await db.createFixtureFolder(name: "Remote results")
     var remoteTask = task(); remoteTask.configuration.workspaceID = workspace
@@ -101,7 +101,7 @@ struct WorkspaceCalendarTests {
         nativeSessionID: "native-deleted-folder", updates: updates, error: nil, completedAt: start.addingTimeInterval(5))
     }
     try await importTranscript(db)
-    let reopened = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+    let reopened = try await persistence.openDatabase()
     try await reopened.importRemoteCalendarRun(run, workspaceID: workspace, eventRevision: 0)
     try await importTranscript(reopened)
     let runs = try await reopened.calendarRuns()
@@ -130,10 +130,9 @@ struct WorkspaceCalendarTests {
   }
 
   private func date(_ value: String) -> Date { ISO8601DateFormatter().date(from: value)! }
-  private func fixture() async throws -> (WorkspaceDatabase, URL) {
-    let directory = FileManager.default.temporaryDirectory.appending(path: "wm-calendar-" + UUID().uuidString)
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    return (try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite")), directory)
+  private func fixture() async throws -> (WorkspaceDatabase, PersistenceFixture) {
+    let persistence = try PersistenceFixture()
+    return (try await persistence.openDatabase(), persistence)
   }
   private func task(mode: WorkspaceCalendarTask.SessionMode = .same) -> WorkspaceCalendarTask {
     .init(prompt: "Review the project", configuration: .init(runtimeKind: .codex, title: "Review",
@@ -162,7 +161,7 @@ extension WorkspaceCalendarTests {
 
   @Test(arguments: [WorkspaceCalendarTask.SessionMode.same, .new])
   @MainActor func stopDuringPreparationCancelsOnlySelectedOccurrence(mode: WorkspaceCalendarTask.SessionMode) async throws {
-    let (db, directory) = try await fixture(); defer { try? FileManager.default.removeItem(at: directory) }
+    let (db, persistence) = try await fixture(); defer { persistence.remove() }
     let start = date("2026-09-01T13:00:00Z")
     let selectedID = try await insert(db, start: start, repeatRule: .init(unit: .day), mode: mode)
     let otherID = try await insert(db, start: start.addingTimeInterval(1))
@@ -231,7 +230,7 @@ extension WorkspaceCalendarTests {
     #expect(try await db.calendarRuns().first { $0.id == selected.id }?.status == "cancelled")
     #expect(try await db.toolDelivery(id: selected.id) == nil)
     // Stop consumes this occurrence, not the recurring schedule or a new session.
-    let reopened = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+    let reopened = try await persistence.openDatabase()
     #expect(try await reopened.dueCalendarRuns(now: now).isEmpty)
     let next = try await #require(reopened.dueCalendarRuns(now: start.addingTimeInterval(86_400)).first)
     #expect(next.eventID == selectedID && next.id != selected.id)
@@ -251,29 +250,4 @@ extension WorkspaceCalendarTests {
     #expect(nextDelivered)
   }
 
-}
-
-extension WorkspaceCalendarTests {
-}
-
-extension WorkspaceCalendarTests {
-
-}
-
-extension WorkspaceCalendarTests {
-}
-
-extension WorkspaceCalendarTests {
-
-}
-
-extension WorkspaceCalendarTests {
-
-}
-
-extension WorkspaceCalendarTests {
-
-}
-
-extension WorkspaceCalendarTests {
 }

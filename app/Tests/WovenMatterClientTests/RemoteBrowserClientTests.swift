@@ -17,26 +17,6 @@ struct RemoteBrowserClientTests {
         #expect(try await client.browserMCP(callerID: caller, input: .object(["id": .string(operation)]),
             requestID: operation, cancelling: true).success)
     }
-
-
-
-}
-
-private final class BrowserProfileFixtureProtocol: URLProtocol, @unchecked Sendable {
-    override class func canInit(with request: URLRequest) -> Bool { true }
-    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
-    override func stopLoading() {}
-    override func startLoading() {
-        #expect(request.url?.host == "127.0.0.1")
-        #expect(request.url?.query == "profile=work")
-        #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer fixture")
-        let body = request.url?.path == "/v1/browser/frame"
-            ? #"{"tabID":"tab","imageBase64":"anBlZw=="}"#
-            : #"{"running":true,"tabs":[],"profiles":["default","work"],"profile":"work"}"#
-        client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: Data(body.utf8))
-        client?.urlProtocolDidFinishLoading(self)
-    }
 }
 
 private final class BrowserMCPFixtureProtocol: URLProtocol, @unchecked Sendable {
@@ -65,29 +45,6 @@ private final class BrowserMCPFixtureProtocol: URLProtocol, @unchecked Sendable 
         let response = #"{"success":true,"requestID":"22222222-2222-4222-8222-222222222222","result":{"content":[{"type":"image","mimeType":"image/jpeg","data":"anBlZw=="}]}}"#
         client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: Data(response.utf8))
-        client?.urlProtocolDidFinishLoading(self)
-    }
-}
-
-private final class BrowserFixtureProtocol: URLProtocol, @unchecked Sendable {
-    override class func canInit(with request: URLRequest) -> Bool { true }
-    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
-    override func stopLoading() {}
-    override func startLoading() {
-        #expect(request.url?.host == "127.0.0.1")
-        #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer fixture")
-        #expect(request.timeoutInterval == 10)
-        let old = request.url?.port == 42008
-        let frame = request.url?.path == "/v1/browser/frame"
-        #expect(request.httpMethod == (frame ? "POST" : "GET"))
-        #expect(frame || request.url?.path == "/v1/browser/tabs")
-        #expect(request.url?.query == nil)
-        let body = old ? #"{"error":"not_found"}"# : frame
-            ? #"{"tabID":"tab","imageBase64":"anBlZw=="}"#
-            : #"{"running":true,"tabs":[{"id":"tab","title":"Test","url":"http://localhost:3000"}]}"#
-        client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: old ? 404 : 200,
-            httpVersion: "HTTP/1.1", headerFields: ["Cache-Control": "no-store"])!, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: Data(body.utf8))
         client?.urlProtocolDidFinishLoading(self)
     }
 }

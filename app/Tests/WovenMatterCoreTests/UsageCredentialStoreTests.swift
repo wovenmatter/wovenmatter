@@ -155,7 +155,6 @@ private final class KeychainFixture: @unchecked Sendable {
   private var allowed: Bool
   private var recordedReads: [Read] = []
   private var recordedPolicyChanges: [Bool] = []
-  private var recordedWritePolicies: [Bool] = []
   private let readStatus: OSStatus
   private let secretStatus: OSStatus
   private let policyStatus: OSStatus
@@ -177,7 +176,6 @@ private final class KeychainFixture: @unchecked Sendable {
 
   var reads: [Read] { lock.withLock { recordedReads } }
   var policyChanges: [Bool] { lock.withLock { recordedPolicyChanges } }
-  var writePolicies: [Bool] { lock.withLock { recordedWritePolicies } }
   var interactionAllowed: Bool { lock.withLock { allowed } }
 
   func store() -> UsageCredentialStore {
@@ -206,17 +204,10 @@ private final class KeychainFixture: @unchecked Sendable {
           return errSecSuccess
         }
       },
-      update: { [self] _, _ in recordWrite() },
-      add: { [self] _ in recordWrite() },
-      delete: { [self] _ in recordWrite() }
+      update: { _, _ in errSecSuccess },
+      add: { _ in errSecSuccess },
+      delete: { _ in errSecSuccess }
     ))
-  }
-
-  private func recordWrite() -> OSStatus {
-    lock.withLock {
-      recordedWritePolicies.append(allowed)
-      return errSecSuccess
-    }
   }
 }
 

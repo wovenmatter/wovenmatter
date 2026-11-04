@@ -51,11 +51,5 @@ struct WorkspaceExecutionRootTests {
     func location(_ name: String) -> WorkspaceFolderLocation {
       .init(workspaceID: owner, rootPath: root.appending(path: name).path, managed: false)
     }
-    func draft() async throws -> String {
-      let id = try await db.createFixtureLocalACPSession(runtimeKind: .codex, title: "Draft", ownerDeviceID: UUID(), fixtureLocation: location("Ungrouped"))
-      return id
-    }
   }
-
-
 }

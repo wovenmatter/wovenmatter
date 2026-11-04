@@ -515,14 +515,15 @@ final class ApplicationModel {
 
     #if COMPANION_FACADE_TESTS
     var runtimeMaintenanceFixture: (@Sendable (AgentRuntimeKind) async throws -> RuntimeInventory)?
-    var remoteSSHOptionsFixture: (@Sendable (String) throws -> [String])?
+    /// Facade fixtures launch remote harnesses without tailnet SSH options or MCP bridges.
+    var isCompanionFixture = false
 
     /// Installs explicit inert provider metadata while preserving real routing,
     /// session preferences, tools, persistence and note recovery.
     func configureCompanionFixture(directory: URL) async throws {
         guard let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
         titleGenerationSettings.isEnabled = false
-        remoteSSHOptionsFixture = { _ in [] }
+        isCompanionFixture = true
         let runtimes = AgentRuntimeKind.allCases.filter { $0 != .opencode }
         localACPLaunchConfigurations = Dictionary(uniqueKeysWithValues: runtimes.map {
             ($0, LocalACPRuntimeLaunchConfiguration(runtimeKind: $0,
@@ -539,7 +540,7 @@ final class ApplicationModel {
                 database: dashboardStore.database)
         }
         if agentTools == nil { try await configureAgentTools(store: dashboardStore) }
-        agentTools?.companionFixtureMCPConnection = { _, local, _ in local }
+        agentTools?.isCompanionFixture = true
         await refreshWorkspace()
         state = .ready
     }
@@ -3159,7 +3160,7 @@ final class ApplicationModel {
 
             var sshOptions: @Sendable (String) throws -> [String] = RemoteWorkspaceTailnet.sshOptions
             #if COMPANION_FACADE_TESTS
-            if let fixture = remoteSSHOptionsFixture { sshOptions = fixture }
+            if isCompanionFixture { sshOptions = { _ in [] } }
             #endif
             return try RemoteHarnessLaunchResolver.resolve(
                 configuration: configuration,

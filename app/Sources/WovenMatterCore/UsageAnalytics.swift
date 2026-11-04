@@ -581,30 +581,6 @@ public struct UsageLimitAccount: Codable, Equatable, Identifiable, Sendable {
     self.refreshError = refreshError
     self.dashboardURL = dashboardURL
   }
-
-  public func retainingLastGood(after error: UsageLimitAccount) -> Self {
-    stale(refreshError: error.detail)
-  }
-
-  public func stale(refreshError: String? = nil) -> Self {
-    Self(
-      provider: provider,
-      accountScopeID: accountScopeID,
-      accountLabel: accountLabel,
-      status: status,
-      quotaWindows: quotaWindows,
-      balance: balance,
-      providerBudget: providerBudget,
-      details: details,
-      history: history,
-      source: source,
-      detail: detail,
-      observedAt: observedAt,
-      isStale: true,
-      refreshError: refreshError,
-      dashboardURL: dashboardURL
-    )
-  }
 }
 
 public struct LocalUsageSnapshot: Codable, Equatable, Sendable {

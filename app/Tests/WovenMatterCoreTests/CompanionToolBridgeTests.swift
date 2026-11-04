@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import Foundation
 import Testing
 import WovenMatterCore
@@ -76,17 +77,14 @@ struct CompanionToolBridgeTests {
   }
 
   private struct Fixture {
-    let root: URL
-    let url: URL
+    let persistence: PersistenceFixture
     let database: WorkspaceDatabase
     let deviceID: String
     let conversationID: String
 
     init() async throws {
-      root = FileManager.default.temporaryDirectory.appending(path: "companion-tools-" + UUID().uuidString)
-      try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-      url = root.appending(path: "workspace.sqlite")
-      database = try await WorkspaceDatabase(url: url)
+      persistence = try PersistenceFixture()
+      database = try await persistence.openDatabase()
       deviceID = UUID().uuidString.lowercased()
       conversationID = UUID().uuidString.lowercased()
       try await Self.importSession(database: database, deviceID: deviceID, conversationID: conversationID,
@@ -127,6 +125,6 @@ struct CompanionToolBridgeTests {
       }
       #expect(try await database.companionExecutionOwner(conversationID: conversationID) == workspace.id)
     }
-    func remove() { try? FileManager.default.removeItem(at: root) }
+    func remove() { persistence.remove() }
   }
 }

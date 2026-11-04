@@ -29,11 +29,8 @@ struct WorkspaceAgentToolsServiceTests {
         _ = NSApplication.shared
         let bundle = URL(fileURLWithPath: try #require(ProcessInfo.processInfo.environment["WOVENMATTER_HTML_TEST_BUNDLE"]))
         let resources = bundle.appending(path: "Contents/Resources")
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let url = root.appending(path: "workspace.sqlite")
-        let database = try await WorkspaceDatabase(url: url)
+        let persistence = try PersistenceFixture(); defer { persistence.remove() }
+        let database = try await persistence.openDatabase()
         let caller = try await database.createFixtureLocalACPSession(runtimeKind: runtime, title: "HTML acceptance", ownerDeviceID: UUID(),
             openCodeAssociation: runtime == .opencode ? ("acceptance", "ses_acceptance") : nil)
         var native = OpenCodeSessionSnapshot()
@@ -81,7 +78,7 @@ struct WorkspaceAgentToolsServiceTests {
         #expect(!FileManager.default.fileExists(atPath: try #require(value["deletedSourceImage"] as? String)))
         if let runID { try await database.completeLocalACPRun(runID: runID) }
         else { native.active = false; try await database.saveOpenCodeSnapshot(native, conversationID: caller) }
-        let reopened = try await WorkspaceDatabase(url: url, readOnlyProjection: true)
+        let reopened = try await persistence.openDatabase(readOnlyProjection: true)
         let history = try await reopened.conversationHistoryPage(id: caller, limit: 20, compactActivities: true)
         let pages = history.activities.filter { $0.activity.htmlRender != nil }
         #expect(Set(pages.compactMap { $0.activity.htmlRender?.id }) == Set(published))
@@ -97,10 +94,8 @@ struct WorkspaceAgentToolsServiceTests {
 
     @Test(arguments: AgentRuntimeKind.allCases.filter { $0 != .opencode })
     func htmlPublicationUsesBoundConversationAndPersistsOutsideFoldedWork(runtime: AgentRuntimeKind) async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
+        let persistence = try PersistenceFixture(); defer { persistence.remove() }
+        let database = try await persistence.openDatabase()
         let caller = try await database.createFixtureLocalACPSession(runtimeKind: runtime, title: "HTML", ownerDeviceID: UUID())
         let run = try await database.beginLocalACPRun(conversationID: caller, content: "Visual reply")
         let service = try await WorkspaceAgentToolsModel(database: database,
@@ -192,10 +187,8 @@ struct WorkspaceAgentToolsServiceTests {
 extension WorkspaceAgentToolsServiceTests {
 
     @Test func mutationHistoryIsMetadataOnlyAndNoteReadsAreChunked() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: "mcp-hardening-" + UUID().uuidString)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
+        let persistence = try PersistenceFixture(); defer { persistence.remove() }
+        let database = try await persistence.openDatabase()
         let caller = try await database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Writer", ownerDeviceID: UUID())
         let historian = try await database.createFixtureLocalACPSession(runtimeKind: .claudeCode, title: "Historian", ownerDeviceID: UUID())
         try await database.setSessionTools(.init(enabled: [.history]), sessionID: historian)
@@ -297,16 +290,15 @@ private final class ToolSnapshotChanges: @unchecked Sendable {
 
 @MainActor
 private struct ToolSnapshotFixture {
-    let root: URL
+    let persistence: PersistenceFixture
     let database: WorkspaceDatabase
     let caller: String
     let target: String
     let model: WorkspaceAgentToolsModel
 
     init() async throws {
-        root = FileManager.default.temporaryDirectory.appending(path: "wm-tool-snapshot-" + UUID().uuidString)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
+        persistence = try PersistenceFixture()
+        database = try await persistence.openDatabase()
         caller = try await database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Caller", ownerDeviceID: UUID())
         target = try await database.createFixtureLocalACPSession(runtimeKind: .claudeCode, title: "Target", ownerDeviceID: UUID())
         model = try await WorkspaceAgentToolsModel(database: database,
@@ -318,16 +310,14 @@ private struct ToolSnapshotFixture {
 
     func stop() {
         model.stop()
-        try? FileManager.default.removeItem(at: root)
+        persistence.remove()
     }
 }
 
 extension WorkspaceAgentToolsServiceTests {
     @Test func calendarCommandsShareNativeEventsAndKeepRetriesAndPermissions() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: "calendar-mcp-" + UUID().uuidString)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
+        let persistence = try PersistenceFixture(); defer { persistence.remove() }
+        let database = try await persistence.openDatabase()
         let caller = try await database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Planner", ownerDeviceID: UUID())
         @MainActor final class ResolutionState {
             var count = 0
@@ -423,9 +413,6 @@ extension WorkspaceAgentToolsServiceTests {
 }
 
 extension WorkspaceAgentToolsServiceTests {
-}
-
-extension WorkspaceAgentToolsServiceTests {
 
     @Test(.timeLimit(.minutes(1)))
     func failedQueuedSettingsSavePreservesNewerEditAndLastSuccessfulValue() async throws {
@@ -500,14 +487,4 @@ private final class ToolSettingsSaveGate {
         pending.removeAll()
         remaining.forEach { $0.resume(throwing: CancellationError()) }
     }
-}
-
-extension WorkspaceAgentToolsServiceTests {
-
-}
-
-extension WorkspaceAgentToolsServiceTests {
-}
-
-extension WorkspaceAgentToolsServiceTests {
 }

@@ -151,7 +151,8 @@ private final class MCPHostCalls {
 
 @MainActor
 private struct MCPHostFixture {
-    let directory: URL
+    let persistence: PersistenceFixture
+    var directory: URL { persistence.directory }
     let database: WorkspaceDatabase
     let caller: String
     let otherCaller: String
@@ -159,9 +160,8 @@ private struct MCPHostFixture {
     let calls: MCPHostCalls
 
     init() async throws {
-        directory = FileManager.default.temporaryDirectory.appending(path: "woven-mcp-host-" + UUID().uuidString)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+        persistence = try PersistenceFixture()
+        database = try await persistence.openDatabase()
         caller = try await database.createFixtureLocalACPSession(runtimeKind: .codex, title: "MCP caller", ownerDeviceID: UUID())
         otherCaller = try await database.createFixtureLocalACPSession(runtimeKind: .claudeCode, title: "Other caller", ownerDeviceID: UUID())
         try await database.setSessionTools(.init(enabled: [.notes, .sessions, .browser]), sessionID: caller)
@@ -181,7 +181,7 @@ private struct MCPHostFixture {
 
     func remove() {
         host.stop()
-        try? FileManager.default.removeItem(at: directory)
+        persistence.remove()
     }
 }
 

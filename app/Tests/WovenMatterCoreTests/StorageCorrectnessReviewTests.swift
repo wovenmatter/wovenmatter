@@ -14,7 +14,7 @@ struct StorageCorrectnessReviewTests {
   func hermesPersistedChecklistRemainReadable(clear: Bool) async throws {
     let fixture = try PersistenceFixture()
     defer { fixture.remove() }
-    let db = try await WorkspaceDatabase(url: fixture.databaseURL)
+    let db = try await fixture.openDatabase()
     let todos: HermesValue = .array([["id": "a", "content": "Same label", "status": "completed"],
       ["id": "b", "content": "Same label", "status": "pending"]])
     let args: HermesValue = ["todos": .array([["id": "a", "status": "completed"]]), "merge": .bool(true)]
@@ -40,7 +40,7 @@ struct StorageCorrectnessReviewTests {
       try connection.toolsExecuteUnlocked("DELETE FROM session_execution_roots WHERE conversation_id=?", [conversation])
       try connection.toolsExecuteUnlocked("UPDATE dashboard_conversations SET is_archived=1 WHERE id=?", [conversation])
     } }
-    let reopened = try await WorkspaceDatabase(url: fixture.databaseURL)
+    let reopened = try await fixture.openDatabase()
     let full = try await reopened.conversationHistoryPage(id: conversation, limit: 20)
     let retained = try #require(full.activities.first { $0.activity.kind == .plan }?.activity)
     #expect(retained.planOperation == (clear ? "clear" : "replace"))

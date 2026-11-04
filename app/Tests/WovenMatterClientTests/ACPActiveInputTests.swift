@@ -112,7 +112,7 @@ private struct ActiveInputFixture {
             with open('requests.jsonl','a') as log: log.write(line)
             method=r.get('method'); i=r.get('id'); p=r.get('params',{})
             value=''.join(b.get('text','') for b in p.get('prompt',[])) or p.get('text','')
-            if method=='initialize': result(i,dict(protocolVersion=2,_meta=dict(steering=dict(supported=mode!='unsupported'))))
+            if method=='initialize': result(i,dict(protocolVersion=2,_meta=dict(steering=dict(supported=True))))
             elif method=='session/new': result(i,dict(sessionId='parent'))
             elif method in ['authenticate']: result(i,{})
             elif method=='session/cancel':
@@ -124,8 +124,6 @@ private struct ActiveInputFixture {
                 if mode=='detached-old-idle': status('active'); status('idle')
                 open('ready','w').close()
             elif method in ['_session/steering','_x.ai/interject','session/prompt']:
-                if mode in ['rejected','uncertain']:
-                    send(dict(id=i,error=dict(code=-32602,message='Steer rejected',data=dict(deliveryUncertain=mode=='uncertain')))); continue
                 if mode=='cancel-fallback':
                     if method=='_session/steering': steering=i
                     else: result(i,dict(stopReason='end_turn'))

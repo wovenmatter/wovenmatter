@@ -64,23 +64,20 @@ struct OpenCodeApprovalHandlingTests {
 }
 
 private struct ApprovalContext {
-    let directory: URL
+    let persistence: PersistenceFixture
     let database: WorkspaceDatabase
     let connection: OpenCodeConnection
     let fixture = ApprovalHTTPFixture()
     let session: URLSession
     let a: OpenCodeSessionLink
-    let b: OpenCodeSessionLink
 
     init() async throws {
-        directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+        persistence = try PersistenceFixture()
+        database = try await persistence.openDatabase()
         connection = try OpenCodeConnection(identity: "approval-fixture", url: URL(string: "http://127.0.0.1:1")!, username: "fixture", password: "fixture")
         let first = try await database.createFixtureLocalACPSession(runtimeKind: .opencode, title: "A", ownerDeviceID: UUID(), openCodeAssociation: (connection.identity, "ses_a"), fixtureLocation: .init(workspaceID: "device:test", rootPath: "/fixture", managed: false))
-        let second = try await database.createFixtureLocalACPSession(runtimeKind: .opencode, title: "B", ownerDeviceID: UUID(), openCodeAssociation: (connection.identity, "ses_b"), fixtureLocation: .init(workspaceID: "device:test", rootPath: "/fixture", managed: false))
+        _ = try await database.createFixtureLocalACPSession(runtimeKind: .opencode, title: "B", ownerDeviceID: UUID(), openCodeAssociation: (connection.identity, "ses_b"), fixtureLocation: .init(workspaceID: "device:test", rootPath: "/fixture", managed: false))
         a = .init(conversationID: first, connectionID: connection.identity, sessionID: "ses_a")
-        b = .init(conversationID: second, connectionID: connection.identity, sessionID: "ses_b")
         ApprovalURLProtocol.fixture = fixture
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [ApprovalURLProtocol.self]
@@ -90,57 +87,36 @@ private struct ApprovalContext {
         let session = session
         return .init(database: database, clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
     }
-    func clean() { session.invalidateAndCancel(); try? FileManager.default.removeItem(at: directory) }
+    func clean() { session.invalidateAndCancel(); persistence.remove() }
 }
 
 private actor ApprovalHTTPFixture {
     var replies: [(String, OpenCodeValue)] = []
     private var requests: [String: [OpenCodeValue]] = [:]
     private var forms: [String: [OpenCodeValue]] = [:]
-    private var messages: [String: [OpenCodeValue]] = [:]
-    private var activeSessions: Set<String> = []
-    private var delay: Duration = .zero
     private var nativeRules: [String: [OpenCodeValue]] = [:]
-    private var ignoreNativeWrites = false
-    var nativeWrites: [OpenCodeValue] = []
-    func setNativeRules(_ rules: [OpenCodeValue], session: String) { nativeRules[session] = rules }
-    func setIgnoreNativeWrites(_ ignore: Bool) { ignoreNativeWrites = ignore }
     func setRequests(_ values: [OpenCodeValue], session: String) { requests[session] = values }
     func setForms(_ values: [OpenCodeValue], session: String) { forms[session] = values }
-    func setMessages(_ values: [OpenCodeValue], session: String, active: Bool) {
-        messages[session] = values
-        if active { activeSessions.insert(session) } else { activeSessions.remove(session) }
-    }
-    func setReplyDelay(_ value: Duration) { delay = value }
-    func waitForReplies(_ count: Int) async throws {
-        for _ in 0..<100 {
-            if replies.count >= count { return }
-            try await Task.sleep(for: .milliseconds(5))
-        }
-        Issue.record("Automatic reply did not arrive")
-    }
     func response(_ request: URLRequest) async throws -> (Int, OpenCodeValue) {
         let path = request.url!.path
         if path == "/api/info" { return (200, ["version": .string("2.0.22"), "pid": .number(42)]) }
-        if path == "/api/session/active" { return (200, ["data": .object(Dictionary(uniqueKeysWithValues: activeSessions.map { ($0, OpenCodeValue.bool(true)) }))]) }
+        if path == "/api/session/active" { return (200, ["data": .object([:])]) }
         let parts = path.split(separator: "/").map(String.init)
         let sessionID = parts.count >= 3 ? parts[2] : ""
         if request.httpMethod == "POST", path.hasSuffix("/reply") || path.hasSuffix("/cancel") {
             let body = try requestBody(request)
             replies.append((path, body.isEmpty ? .null : try JSONDecoder().decode(OpenCodeValue.self, from: body)))
-            if delay > .zero { try await Task.sleep(for: delay) }
             return (204, .null)
         }
         if request.httpMethod == "PATCH", parts.count == 3 {
             let body = try requestBody(request)
             let policy = try JSONDecoder().decode(OpenCodeValue.self, from: body)
-            nativeWrites.append(policy)
-            if !ignoreNativeWrites { nativeRules[sessionID] = policy["permissions"].array }
+            nativeRules[sessionID] = policy["permissions"].array
             return (204, .null)
         }
         if path.hasSuffix("/permission") { return (200, ["data": .array(requests[sessionID] ?? [])]) }
         if path.hasSuffix("/form") { return (200, ["data": .array(forms[sessionID] ?? [])]) }
-        if path.hasSuffix("/message") { return (200, ["data": .array(Array((messages[sessionID] ?? []).reversed()))]) }
+        if path.hasSuffix("/message") { return (200, ["data": .array([])]) }
         if path.hasSuffix("/form/form_a") || path.hasSuffix("/form/form_normalized") { return (200, ["data": ["state": ["status": "pending"]]]) }
         if parts.count == 3 {
             var info: OpenCodeValue = ["id": .string(sessionID), "location": ["directory": "/fixture"]]

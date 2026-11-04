@@ -3,6 +3,38 @@ import WovenMatterCore
 import WovenMatterClient
 import WovenMatterDashboardStore
 
+/// A unique temporary directory that owns one workspace database file.
+public struct PersistenceFixture: Sendable {
+  public let directory: URL
+  public var databaseURL: URL { directory.appending(path: "workspace.sqlite") }
+
+  public init() throws {
+    directory = FileManager.default.temporaryDirectory.appending(path: "persistence-\(UUID())")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+  }
+
+  public func openDatabase(readOnlyProjection: Bool = false) async throws -> WorkspaceDatabase {
+    try await WorkspaceDatabase(url: databaseURL, readOnlyProjection: readOnlyProjection)
+  }
+
+  public func remove() { try? FileManager.default.removeItem(at: directory) }
+}
+
+/// Checks `condition` up to `attempts` times, sleeping `interval` between
+/// checks. Returns false when every attempt was exhausted.
+public nonisolated(nonsending) func pollUntil(attempts: Int, interval: Duration,
+    _ condition: () async throws -> Bool) async throws -> Bool {
+  for _ in 0..<attempts {
+    if try await condition() { return true }
+    try await Task.sleep(for: interval)
+  }
+  return false
+}
+
+public func rows(_ value: GatewayJSONValue) -> [GatewayJSONValue] {
+  value.objectValue?["rows"]?.arrayValue ?? []
+}
+
 // Existing suites create provider-free records with explicit fixture locations.
 // These helpers are test-target dependencies only; production requires a root.
 extension WorkspaceDatabase {
