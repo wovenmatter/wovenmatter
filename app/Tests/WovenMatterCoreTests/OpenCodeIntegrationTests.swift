@@ -433,7 +433,6 @@ struct OpenCodeIntegrationTests {
         try await coordinator.connect(connection())
         let receipt = try await coordinator.command(link, name: "review", input: .init(text: "current changes", historyDeliveryID: deliveryID))
         #expect(receipt.nativeUserMessageID == nil)
-        #expect(receipt.identifiers == nil)
         #expect(fixture.commandCount == 1)
         #expect(fixture.lastCommand["name"].text == "review")
         #expect(fixture.lastCommand["text"].text == "current changes")

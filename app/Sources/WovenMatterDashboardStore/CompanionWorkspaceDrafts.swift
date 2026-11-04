@@ -4,7 +4,7 @@ import SQLite3
 
 extension WorkspaceDatabaseConnection {
   static func companionContentFingerprint(_ content: String) -> String {
-    SHA256.hash(data: Data(content.utf8)).map { String(format: "%02x", $0) }.joined()
+    SHA256.hash(data: Data(content.utf8)).hexString
   }
 
   public func companionDraftRevision(operationID: String) throws -> String? {

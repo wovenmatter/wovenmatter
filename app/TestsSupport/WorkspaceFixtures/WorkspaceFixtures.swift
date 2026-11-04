@@ -102,6 +102,18 @@ extension WorkspaceDatabase {
       rootPath: FileManager.default.temporaryDirectory.appending(path: id.uuidString).path, managed: false), createdAt: createdAt)
   }
 
+  /// Managed access the way the sessions tool acquires it: the request is
+  /// approved when the coordinator lacks transcript access to the target.
+  public func coordinateFixtureSession(sourceID: String, targetID: String, purpose: String,
+      notifications: Bool = true) async throws {
+    var request = try await requestCoordinationAccess(sourceID: sourceID, targetID: targetID, purpose: purpose,
+      notifications: notifications, requestID: UUID().uuidString)
+    if request.state == "pending" { request = try await resolveCoordinationAccess(requestID: request.id, allowed: true) }
+    guard request.state == "accepted" else {
+      throw WorkspaceToolError.invalid(request.error ?? "The fixture could not acquire coordination.")
+    }
+  }
+
   private func fixtureCreationRoot(_ id: UUID?, workspaceID: String, explicit: WorkspaceFolderLocation?) async throws -> SessionCreationRoot {
     let configuration: WorkspaceSessionCreationConfiguration?
     if let id { configuration = try await toolSessionCreationConfiguration(targetID: id.uuidString.lowercased()) }

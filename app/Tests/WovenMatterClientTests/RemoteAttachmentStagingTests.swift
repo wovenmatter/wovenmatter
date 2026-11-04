@@ -22,7 +22,7 @@ struct RemoteAttachmentStagingTests {
     }
   }
 
-  private static let hash = SHA256.hash(data: Data("x".utf8)).map { String(format: "%02x", $0) }.joined()
+  private static let hash = SHA256.hash(data: Data("x".utf8)).hexString
   private let configuration = RemoteWorkspaceConfiguration(
     name: "Work", workspaceID: "work-1", hostName: "linux-box", userName: "woven",
     kind: .host, dataRoot: "/home/.local/share/wovenmatter", workspaceRoot: "/home/.woven-matter"

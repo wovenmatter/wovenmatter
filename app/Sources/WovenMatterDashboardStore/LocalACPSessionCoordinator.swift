@@ -355,33 +355,6 @@ public actor LocalACPSessionCoordinator {
     @discardableResult
     public func accept(
         conversationID: String,
-        content: String,
-        deliveryContent: String? = nil,
-        noteContext: AgentNoteContext? = nil,
-        launch: LocalACPRuntimeLaunchConfiguration,
-        workspace: LocalACPWorkspaceLaunchConfiguration,
-        systemPrompt: String? = nil,
-        onPermission: PermissionHandler? = nil,
-        onInteraction: InteractionHandler? = nil,
-        dispatchFence: AgentDispatchFence? = nil
-    ) async throws -> LocalACPRunIdentifiers {
-        try await accept(
-            conversationID: conversationID,
-            input: AgentMessageInput(text: content),
-            deliveryContent: deliveryContent,
-            noteContext: noteContext,
-            launch: launch,
-            workspace: workspace,
-            systemPrompt: systemPrompt,
-            onPermission: onPermission,
-            onInteraction: onInteraction,
-            dispatchFence: dispatchFence
-        )
-    }
-
-    @discardableResult
-    public func accept(
-        conversationID: String,
         input: AgentMessageInput,
         deliveryContent: String? = nil,
         noteContext: AgentNoteContext? = nil,
@@ -1059,21 +1032,6 @@ public actor LocalACPSessionCoordinator {
               failed.nativeSessionID == nativeSessionID,
               failed.remoteWorkspaceID == remoteWorkspaceID else { return }
         failedStopSessionIDs.removeValue(forKey: conversationID)
-    }
-
-    @discardableResult
-    public func sendActiveInput(
-        conversationID: String,
-        content: String,
-        deliveryContent: String? = nil,
-        dispatchFence: AgentDispatchFence? = nil
-    ) async throws -> LocalACPSteeringIdentifiers {
-        try await sendActiveInput(
-            conversationID: conversationID,
-            input: AgentMessageInput(text: content),
-            deliveryContent: deliveryContent,
-            dispatchFence: dispatchFence
-        )
     }
 
     @discardableResult

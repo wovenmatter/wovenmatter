@@ -86,7 +86,7 @@ struct SecondaryMacReplicaToolTests {
         let a = try await replica.artifacts.save(data: Data("a".utf8), workspaceID: phone, title: "Remote file", mediaType: "text/plain", id: "a")
         let b = try await replica.artifacts.save(data: Data("b".utf8), workspaceID: phone, title: "Remote image", mediaType: "image/png", id: "b")
         _ = try await replica.artifacts.save(data: Data("own".utf8), workspaceID: workspace.descriptor.id, title: "Own mirror", mediaType: "text/plain", id: "own")
-        let run = try await fixture.database.beginLocalACPRun(conversationID: caller, content: "https://native.example/resource")
+        let run = try await fixture.database.beginLocalACPRun(conversationID: caller, input: .init(text: "https://native.example/resource"))
         try await fixture.database.completeLocalACPRun(runID: run.runID)
         _ = try await fixture.database.indexLibraryMessages()
         let native = try #require(try await fixture.database.libraryItems().first)

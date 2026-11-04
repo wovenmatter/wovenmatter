@@ -48,6 +48,6 @@ struct SavedArtifactLibraryTests {
       }
       return try await database.commitCompanionArtifact(.init(id: manifest.id, revision: transfer.manifest.revision), deviceID: deviceID)
     }
-    static func hash(_ bytes: Data) -> String { SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined() }
+    static func hash(_ bytes: Data) -> String { SHA256.hash(data: bytes).hexString }
   }
 }

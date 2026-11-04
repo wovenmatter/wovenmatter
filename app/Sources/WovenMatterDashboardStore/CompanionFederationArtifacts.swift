@@ -109,7 +109,7 @@ extension WorkspaceDatabaseConnection {
         guard code == SQLITE_ROW, sqlite3_column_int64(statement, 0) == offset else { throw federationError("chunk_gap", "The artifact transfer has missing data.") }
         let bytes = try blob(statement, column: 1); hash.update(data: bytes); offset += Int64(bytes.count)
       }
-      let digest = hash.finalize().map { String(format: "%02x", $0) }.joined()
+      let digest = hash.finalize().hexString
       guard offset == transfer.manifest.byteCount, digest == transfer.manifest.sha256 else {
         throw federationError("artifact_digest", "The transferred artifact does not match its source digest. Your existing saved revision is preserved.")
       }

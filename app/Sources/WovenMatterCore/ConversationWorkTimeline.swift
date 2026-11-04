@@ -9,12 +9,7 @@ import Foundation
 /// phase. Plans, progress, and agent activity also remain standalone rows.
 /// File changes are excluded and stay with the changed-files card.
 public struct ConversationWorkTimeline: Equatable, Sendable {
-  public static let empty = Self(entries: [])
-
   public let entries: [ConversationWorkTimelineEntry]
-  /// Legacy reduced tool-history projection. Thoughts and commentary always
-  /// remain visible, alongside failed rows and failed calls from tool groups.
-  public let foldedEntries: [ConversationWorkTimelineEntry]
 
   public var hasVisibleActivities: Bool { !entries.isEmpty }
 
@@ -47,20 +42,6 @@ public struct ConversationWorkTimeline: Equatable, Sendable {
 
   init(entries: [ConversationWorkTimelineEntry]) {
     self.entries = entries
-    foldedEntries = entries.compactMap { entry in
-      switch entry.content {
-      case .commentary:
-        return entry
-      case .activity(let activity):
-        return activity.kind == .thought || activity.htmlRender != nil || activity.workTimelineIsFailure ? entry : nil
-      case .group(let group):
-        let failed = group.activities.filter(\.workTimelineIsFailure)
-        guard !failed.isEmpty else { return nil }
-        return ConversationWorkTimelineEntry(
-          content: .group(ConversationWorkGroup(id: "failed:\(group.id)", activities: failed))
-        )
-      }
-    }
   }
 
   /// Merged activities in first-appearance order, excluding cleared items.
@@ -258,24 +239,7 @@ public struct ConversationWorkGroup: Equatable, Identifiable, Sendable {
     return only.kind == .tool && ConversationToolAction(only) == .edit ? nil : only
   }
 
-  /// Label for a group that is still part of the active response: the latest
-  /// running call in the present tense, otherwise the latest call settled.
-  public func liveLabel(runIsActive: Bool) -> String? {
-    guard runIsActive else { return nil }
-    return liveActivity.map { $0.workTimelineLabel(active: showsProgress($0)) }
-  }
-
-  public var liveActivity: AgentRunActivity? {
-    activities.last(where: showsProgress) ?? activities.last
-  }
-
   public var hasActiveActivity: Bool { !activeActivityIDs.isEmpty }
-
-  /// Keep the most recent supplied reasoning visible alongside the live tool.
-  /// It remains available when the provider moves from thinking to execution.
-  public var latestThought: AgentRunActivity? {
-    activities.last { $0.kind == .thought && $0.workTimelineThoughtHasText }
-  }
 
   static func summary(activities: [AgentRunActivity], tools: [AgentRunActivity]) -> String {
     if tools.isEmpty {

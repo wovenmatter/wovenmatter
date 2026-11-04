@@ -13,7 +13,7 @@ struct OpenCodeWireCaptureTests {
     let capture = OpenCodeWireCapture()
     let client = OpenCodeHTTPClient(connection: try OpenCodeConnection(identity: "scope-test", url: URL(string: "http://fixture.invalid")!, password: "credential"), session: session)
       .recording { capture.append($0, $1) }
-    try await client.events("/api/event", sessionID: "ses_fixture") { value in
+    try await client.events("/api/event", accept: { $0["data"]["sessionID"].text == "ses_fixture" }) { value in
       #expect(value["data"]["sessionID"].text == "ses_fixture")
     }
     let native = try capture.values.filter { $0.0 == "native" }.flatMap { try JSONDecoder().decode(WorkspaceNativeRunRecordBatch.self, from: $0.1).records }

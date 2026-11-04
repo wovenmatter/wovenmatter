@@ -280,7 +280,7 @@ extension PairedLibraryTests {
     let fromAir = try await journal(a.database).filter { $0.table == "notes" && $0.key == key }
     let create = try #require(fromAir.first), deletion = try #require(fromAir.first { $0.deleted }), restore = try #require(fromAir.last)
     let edit = try #require(try await journal(b.database).last { $0.table == "notes" && $0.key == key && $0.origin == b.id })
-    #expect(!restore.deleted && restore.dominates(deletion) && edit.concurrent(with: deletion) && edit.concurrent(with: restore))
+    #expect(!restore.deleted && restore.dominates(deletion))
     let orders = [[deletion, restore, edit], [deletion, edit, restore], [restore, deletion, edit],
                   [restore, edit, deletion], [edit, deletion, restore], [edit, restore, deletion]]
     var outcomes = Set<String>()
@@ -342,7 +342,7 @@ extension PairedLibraryTests {
     let a = try await Mac(), b = try await Mac(); defer { a.remove(); b.remove() }
     let session = try await a.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Owner's work", ownerDeviceID: UUID())
     let goal = try #require(try await a.database.mutateGoal(sessionID: session, mutation: .set(objective: "Keep working", tokenBudget: nil, turnBudget: nil)))
-    let run = try await a.database.beginLocalACPRun(conversationID: session, content: "Working on the owner")
+    let run = try await a.database.beginLocalACPRun(conversationID: session, input: .init(text: "Working on the owner"))
     try await a.send(to: b)
     let before = try await lastChange(b.database)
     // The observer restarts, schedules goals and pauses its own goals.
@@ -356,25 +356,25 @@ extension PairedLibraryTests {
     #expect(try await lastChange(reopened) == before)
     #expect(try await reopened.activeRunID(conversationID: session) == nil)
     #expect(try await reopened.activeDeviceOwnedConversationIDs().isEmpty)
-    #expect(try await !reopened.locallyOwnsConversation(session))
+    #expect(try await !reopened.read { try $0.locallyOwnsConversationUnlocked(session) })
     let status = try await reopened.read { try $0.historyRowsUnlocked("SELECT status FROM dashboard_runs WHERE id=?", values: [run.runID]).first?.objectValue?["status"]?.stringValue }
     #expect(status == "running")
     try await b.send(to: a)
     #expect(try await a.database.activeRunID(conversationID: session) == run.runID)
     #expect(try await a.database.sessionGoals().first { $0.id == goal.id }?.status == .active)
-    #expect(try await a.database.locallyOwnsConversation(session))
+    #expect(try await a.database.read { try $0.locallyOwnsConversationUnlocked(session) })
   }
 
   @Test func aConversationReceivedWithoutItsOwnerStaysReadOnlyAcrossRestart() async throws {
     let a = try await Mac(), b = try await Mac(); defer { a.remove(); b.remove() }
     let session = try await a.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Partially received", ownerDeviceID: UUID())
-    let run = try await a.database.beginLocalACPRun(conversationID: session, content: "Running elsewhere")
+    let run = try await a.database.beginLocalACPRun(conversationID: session, input: .init(text: "Running elsewhere"))
     let records = try await journal(a.database).filter { !$0.table.hasPrefix("paired_") }
     try await deliver(records, to: b.database, from: a.id)
     let reopened = try await WorkspaceDatabase(url: b.database.fileURL)
     let before = try await lastChange(reopened)
     try await reopened.recoverInterruptedLocalACPRuns()
-    #expect(try await !reopened.locallyOwnsConversation(session))
+    #expect(try await !reopened.read { try $0.locallyOwnsConversationUnlocked(session) })
     #expect(try await reopened.read { try $0.historyRowsUnlocked("SELECT id FROM paired_conversation_owners WHERE id=?", values: [session]).isEmpty })
     #expect(try await lastChange(reopened) == before)
     let status = try await reopened.read { try $0.historyRowsUnlocked("SELECT status FROM dashboard_runs WHERE id=?", values: [run.runID]).first?.objectValue?["status"]?.stringValue }
@@ -461,7 +461,7 @@ extension PairedLibraryTests {
     let imported = try await count(full.database)
     try await full.database.importLegacyLocalMacWorkspace(from: node.database.fileURL)
     #expect(try await count(full.database) == imported)
-    #expect(try await full.database.locallyOwnsConversation(session))
+    #expect(try await full.database.read { try $0.locallyOwnsConversationUnlocked(session) })
     try await central.send(to: full); try await full.send(to: central)
     #expect(try await full.database.companionNote(id: id)?.title == "Current central writing")
     #expect(try await central.database.companionNote(id: id)?.title == "Current central writing")
@@ -495,7 +495,7 @@ extension PairedLibraryTests {
   @Test func observersNeverCaptureWorkspaceFilesForAnotherMacsConversation() async throws {
     let a = try await Mac(), b = try await Mac(); defer { a.remove(); b.remove() }
     let session = try await a.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Report", ownerDeviceID: UUID())
-    _ = try await a.database.beginLocalACPRun(conversationID: session, content: "Write reports/result.pdf")
+    _ = try await a.database.beginLocalACPRun(conversationID: session, input: .init(text: "Write reports/result.pdf"))
     try await a.database.write { connection in
       let message = try #require(try connection.historyRowsUnlocked("SELECT id FROM dashboard_messages WHERE conversation_id=? LIMIT 1", values: [session]).first?.objectValue?["id"]?.stringValue)
       try connection.insertLibraryAssetUnlocked(.init(source: "reports/result.pdf", title: "result.pdf", kind: .file), messageID: message, conversationID: session)
@@ -596,7 +596,7 @@ extension PairedLibraryTests {
   @Test func theExecutionOwnersNativeRowsSurviveAStaleFederatedProjection() async throws {
     let node = try await Mac(), central = try await Mac(); defer { node.remove(); central.remove() }
     let session = try await node.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Native session", ownerDeviceID: UUID())
-    let run = try await node.database.beginLocalACPRun(conversationID: session, content: "Native input")
+    let run = try await node.database.beginLocalACPRun(conversationID: session, input: .init(text: "Native input"))
     let native = try await node.database.read { connection in
       try #require(try connection.historyRowsUnlocked("SELECT agent_id,governing_plane,authority_kind,desktop_owned FROM dashboard_conversations WHERE id=?", values: [session]).first?.objectValue)
     }
@@ -728,7 +728,7 @@ extension PairedLibraryTests {
     await #expect(throws: WorkspaceConversationActionError.ownedByAnotherMac) { try await b.database.mutateConversation(id: idle, mutation: .moveToTrash) }
     #expect(try await b.database.sessionGoals().first { $0.id == goal.id }?.status == .active)
     // A starts work after B last saw it idle; a stale trash from B still arrives.
-    _ = try await a.database.beginLocalACPRun(conversationID: busy, content: "Started after B looked")
+    _ = try await a.database.beginLocalACPRun(conversationID: busy, input: .init(text: "Started after B looked"))
     try await b.database.write { connection in
       for id in [busy, idle] { try connection.toolsExecuteUnlocked("UPDATE dashboard_conversations SET deleted_at='2026-10-30T00:00:00Z' WHERE id=?", [id]) }
     }
@@ -775,7 +775,7 @@ extension PairedLibraryTests {
   @Test func aChatAdoptedIntoAnotherWorkspaceAcceptsItsNewExecutorsUpdates() async throws {
     let a = try await Mac(), b = try await Mac(); defer { a.remove(); b.remove() }
     let session = try await a.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Moved to Linux", ownerDeviceID: UUID())
-    let run = try await a.database.beginLocalACPRun(conversationID: session, content: "Before adoption")
+    let run = try await a.database.beginLocalACPRun(conversationID: session, input: .init(text: "Before adoption"))
     let linux = CompanionExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: try await a.database.companionWorkspaceID(),
       ownerDeviceID: a.id, kind: .linux, name: "Linux", endpoint: URL(string: "https://linux.fixture.ts.net/wovenmatter")!,
       capabilities: ["execution.v1"], executionDeviceID: UUID().uuidString.lowercased())

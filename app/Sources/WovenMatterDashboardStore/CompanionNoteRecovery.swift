@@ -8,7 +8,7 @@ extension WorkspaceDatabaseConnection {
     public static func recoveryCopyID(sourceID: String, title: String, content: String) -> String {
         let encoder = JSONEncoder()
         let data = (try? encoder.encode([sourceID, title, content])) ?? Data()
-        let hex = SHA256.hash(data: data).prefix(16).map { String(format: "%02x", $0) }.joined()
+        let hex = SHA256.hash(data: data).prefix(16).hexString
         let pieces = [0..<8, 8..<12, 12..<16, 16..<20, 20..<32].map { range in
             String(hex[hex.index(hex.startIndex, offsetBy: range.lowerBound)..<hex.index(hex.startIndex, offsetBy: range.upperBound)])
         }

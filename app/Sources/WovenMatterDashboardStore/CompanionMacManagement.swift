@@ -77,7 +77,7 @@ public struct CompanionMacManagement: Sendable {
         let options = try Self.sshArguments(mac: current, connection: connection, tailscale: executable.path)
         let data: Data
         do {
-            data = try await run(URL(fileURLWithPath: "/usr/bin/ssh"), options + ["/bin/bash -c " + Self.quote(script) + " -- " + arguments.map(Self.quote).joined(separator: " ")], timeout)
+            data = try await run(URL(fileURLWithPath: "/usr/bin/ssh"), options + ["/bin/bash -c " + RemoteWorkspaceExecTarget.quote(script) + " -- " + arguments.map(RemoteWorkspaceExecTarget.quote).joined(separator: " ")], timeout)
         } catch is CancellationError { throw CancellationError() }
         catch {
             throw CompanionAPIError(code: "mac_management_failed", message: "The action on \(mac.name) did not complete. Check its existing SSH connection over Tailscale and try again.")
@@ -88,7 +88,6 @@ public struct CompanionMacManagement: Sendable {
         }
         return data
     }
-    static func quote(_ value: String) -> String { RemoteWorkspaceExecTarget.quote(value) }
     static func sshArguments(mac: CompanionTailnetMac, connection: CompanionMacSSHConnection, tailscale: String) throws -> [String] {
         let alias = connection.alias.isEmpty ? mac.sshName : connection.alias
         guard !alias.isEmpty, alias.utf8.count <= 253, alias.first != "-", !alias.contains(".."),
@@ -98,7 +97,7 @@ public struct CompanionMacManagement: Sendable {
             throw CompanionAPIError(code: "invalid_ssh", message: "Enter a valid SSH host alias and optional user name.")
         }
         return ["-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "-o", "RequestTTY=no",
-            "-o", "ProxyCommand=exec \(quote(tailscale)) nc \(mac.address) %p", "-o", "ProxyJump=none",
+            "-o", "ProxyCommand=exec \(RemoteWorkspaceExecTarget.quote(tailscale)) nc \(mac.address) %p", "-o", "ProxyJump=none",
             "-o", "Hostname=\(mac.address)", "-o", "HostKeyAlias=\(mac.address)", "-o", "StrictHostKeyChecking=yes",
             "-o", "CanonicalizeHostname=no", "-o", "ControlMaster=no", "-o", "ControlPath=none", "-o", "ControlPersist=no",
             "-o", "ForwardAgent=no", "-o", "ForwardX11=no", "-o", "PermitLocalCommand=no",

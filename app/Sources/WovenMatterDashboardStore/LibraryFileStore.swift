@@ -19,7 +19,7 @@ public struct LibraryFileStore: Sendable {
       throw AgentMessageAttachmentError.fileTooLarge(
         name: "File", maximumBytes: AgentMessageAttachmentLimits.maximumFileBytes)
     }
-    let hash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    let hash = SHA256.hash(data: data).hexString
     try FileManager.default.createDirectory(
       at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
     let url = directory.appending(path: hash)

@@ -158,7 +158,7 @@ actor FacadeRecorder {
         deliveries.append(.init(route: route, input: input, delivery: delivery, context: nil))
         let visible = AgentMessageInput(text: delivery ?? input.text, attachments: input.attachments,
             historyDeliveryID: input.historyDeliveryID, visibleWorkspace: input.visibleWorkspace, mcpContext: input.mcpContext)
-        return try await database.beginLocalACPSteeringTurn(runID: runID, input: visible)
+        return try await database.reserveLocalACPSteeringTurn(runID: runID, input: visible).identifiers
     }
     func cancel(_ route: DashboardRunControlAdapters.Route, _ id: String, _ expectedRunID: String?) async throws {
         guard let runID = try await database.activeRunID(conversationID: id) else {

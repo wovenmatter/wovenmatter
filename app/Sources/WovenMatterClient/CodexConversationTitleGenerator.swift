@@ -91,7 +91,7 @@ public actor CodexConversationTitleGenerator {
 
         let response = CodexTitleResponseAccumulator()
         _ = try await client.prompt(
-            "\(Self.titleInstructions)\n\nFirst message:\n\(firstPrompt)",
+            AgentMessageInput(text: "\(Self.titleInstructions)\n\nFirst message:\n\(firstPrompt)"),
             onEvent: { event in
                 if case .assistantChunk(let fragment) = event {
                     await response.append(fragment)

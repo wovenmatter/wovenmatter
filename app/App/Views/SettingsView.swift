@@ -36,8 +36,6 @@ private enum SettingsSection: Equatable {
 struct SettingsView: View {
     @Bindable var model: ApplicationModel
     var reservesRailControlSpace = false
-    var clientContext: CentralLibraryClientModel?
-    var applicationContext: ApplicationModel?
     @AppStorage(DashboardTheme.storageKey) private var storedTheme = DashboardTheme.green.rawValue
     @State private var section: SettingsSection = .landing
     @State private var providerReturnSection: SettingsSection = .openCode
@@ -55,7 +53,7 @@ struct SettingsView: View {
             case .landing:
                 landing
             case .companion:
-                SettingsCompanionView(model: applicationContext ?? model, host: (applicationContext ?? model).companionHost,
+                SettingsCompanionView(model: model, host: model.companionHost,
                     reservesRailControlSpace: reservesRailControlSpace,
                     onBack: { section = .landing })
             case .defaultAgent(let scope, let origin):
@@ -64,9 +62,7 @@ struct SettingsView: View {
                 SettingsBackgroundServerView(model: model, reservesRailControlSpace: reservesRailControlSpace, onBack: { section = .landing })
             case .general:
                 SettingsGeneralView(
-                    model: applicationContext ?? model,
-                    executionModel: model,
-                    clientAnalytics: clientContext?.analytics,
+                    model: model,
                     reservesRailControlSpace: reservesRailControlSpace,
                     onBack: { section = .landing }
                 )
@@ -122,7 +118,7 @@ struct SettingsView: View {
                     onBack: { section = .landing }
                 )
             case .dictation:
-                SettingsDictationView(model: applicationContext ?? model, client: clientContext,
+                SettingsDictationView(model: model,
                     reservesRailControlSpace: reservesRailControlSpace, onBack: { section = .landing })
             case .usage:
                 SettingsUsageView(
@@ -225,14 +221,12 @@ struct SettingsView: View {
                     icon: { DashboardLucideIcon(glyph: .terminal, size: 15) },
                     action: { section = .localWorkspace }
                 )
-                if clientContext == nil {
                 SettingsDestinationRow(
                     title: "Remote Workspaces",
                     detail: "Agents and files on remote Linux machines.",
                     icon: { DashboardLucideIcon(glyph: .container, size: 15) },
                     action: { section = .remoteWorkspaces }
                 )
-                }
                 SettingsDestinationRow(
                     title: "Usage",
                     detail: "Accounts and usage tracking.",

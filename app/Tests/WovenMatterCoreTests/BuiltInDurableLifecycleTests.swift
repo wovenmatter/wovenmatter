@@ -66,7 +66,7 @@ struct BuiltInDurableLifecycleTests {
           throw LocalACPClientError.processExited
         })
     })
-    _ = try await coordinator.accept(conversationID: conversation, content: "Committed work",
+    _ = try await coordinator.accept(conversationID: conversation, input: .init(text: "Committed work"),
       launch: launch(), workspace: .init(rootURL: persistence.directory))
     _ = try await pollUntil(attempts: 100, interval: .milliseconds(10)) {
       guard let status = try await database.conversationContent(id: conversation).runs.first?.status else { return false }
@@ -76,7 +76,7 @@ struct BuiltInDurableLifecycleTests {
     #expect(status == (dispatched ? "uncertain" : "failed"))
     if dispatched {
       await #expect(throws: LocalACPSessionDatabaseError.runAlreadyActive) {
-        try await database.beginLocalACPRun(conversationID: conversation, content: "Duplicate")
+        try await database.beginLocalACPRun(conversationID: conversation, input: .init(text: "Duplicate"))
       }
     }
     await coordinator.shutdown()

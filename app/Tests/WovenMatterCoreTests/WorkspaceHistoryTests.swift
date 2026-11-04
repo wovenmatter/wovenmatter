@@ -19,7 +19,7 @@ struct WorkspaceHistoryTests {
     defer { persistence.remove() }
     let conversation = try await db.createFixtureLocalACPSession(
       runtimeKind: .claudeCode, title: "Pi", ownerDeviceID: UUID())
-    let run = try await db.beginLocalACPRun(conversationID: conversation, content: "research")
+    let run = try await db.beginLocalACPRun(conversationID: conversation, input: .init(text: "research"))
     let raw =
       #"{"type":"tool_execution_end","result":{"text":"unique needle","futureField":[1,2]}}"#
     let event = WorkspaceHistoryEvent(

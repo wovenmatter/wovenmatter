@@ -23,7 +23,7 @@ struct ACPPermissionLifecycleTests {
     await gate.waitUntilEntered()
     await #expect(throws: (any Error).self) {
       try await fixture.coordinator.accept(
-        conversationID: fixture.id, content: "Must not run", launch: fixture.launch, workspace: fixture.workspace
+        conversationID: fixture.id, input: .init(text: "Must not run"), launch: fixture.launch, workspace: fixture.workspace
       )
     }
     await #expect(throws: (any Error).self) {
@@ -151,7 +151,7 @@ struct ACPPermissionLifecycleTests {
     #expect(field != .thinking || changed.thinking == "high")
     #expect(field != .permission || changed.permission == "auto")
     _ = try await fixture.coordinator.accept(
-      conversationID: fixture.id, content: "Recovered fixture", launch: fixture.launch, workspace: fixture.workspace
+      conversationID: fixture.id, input: .init(text: "Recovered fixture"), launch: fixture.launch, workspace: fixture.workspace
     )
     await gate.waitUntilEntered()
     #expect(fixture.factory.drivers.last?.promptCount == 1)

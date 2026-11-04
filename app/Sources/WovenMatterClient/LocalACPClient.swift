@@ -1029,22 +1029,6 @@ public actor LocalACPClient {
     }
 
     public func prompt(
-        _ text: String,
-        onEvent: EventHandler? = nil,
-        onPermission: PermissionHandler? = nil,
-        onInteraction: InteractionHandler? = nil,
-        dispatchFence: AgentDispatchFence? = nil
-    ) async throws -> LocalACPStopReason {
-        try await prompt(
-            AgentMessageInput(text: text),
-            onEvent: onEvent,
-            onPermission: onPermission,
-            onInteraction: onInteraction,
-            dispatchFence: dispatchFence
-        )
-    }
-
-    public func prompt(
         _ input: AgentMessageInput,
         onEvent: EventHandler? = nil,
         onPermission: PermissionHandler? = nil,
@@ -1066,13 +1050,6 @@ public actor LocalACPClient {
     /// Accepts another user message while the session has an active prompt.
     /// Returns on admission; the receipt retains any continuation's completion.
     /// Never cancel the current prompt to simulate steering.
-    public func beginActiveInput(
-        _ text: String,
-        dispatchFence: AgentDispatchFence? = nil
-    ) async throws -> LocalACPActiveInputReceipt {
-        try await beginActiveInput(AgentMessageInput(text: text), dispatchFence: dispatchFence)
-    }
-
     public func beginActiveInput(
         _ input: AgentMessageInput,
         dispatchFence: AgentDispatchFence? = nil

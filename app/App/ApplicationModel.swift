@@ -2579,9 +2579,8 @@ final class ApplicationModel {
                 guard expectedRunID == nil else { throw LocalACPSessionDatabaseError.steeringUnsupported }
                 _ = try await dashboardStore.database.localACPSession(conversationID: conversation.id)
                 try dispatchFence.check()
-                let receipt = try await openCode.send(conversation.id, input: normalized,
+                _ = try await openCode.send(conversation.id, input: normalized,
                     requiresIdle: requiresIdle, dispatchFence: dispatchFence)
-                accepted = receipt.identifiers
             } else if steering {
                 let staged = try await remoteWorkspaces.stagingFiles(of: normalized, in: conversation.remoteWorkspaceID)
                 try await validateCommandTarget()

@@ -508,20 +508,6 @@ extension WorkspaceDatabaseConnection {
 
   public func beginLocalACPRun(
     conversationID: String,
-    content: String,
-    noteContext: AgentNoteContext? = nil,
-    createdAt: Date = Date()
-  ) throws -> LocalACPRunIdentifiers {
-    try beginLocalACPRun(
-      conversationID: conversationID,
-      input: AgentMessageInput(text: content),
-      noteContext: noteContext,
-      createdAt: createdAt
-    )
-  }
-
-  public func beginLocalACPRun(
-    conversationID: String,
     input: AgentMessageInput,
     noteContext: AgentNoteContext? = nil,
     createdAt: Date = Date()
@@ -731,18 +717,6 @@ extension WorkspaceDatabaseConnection {
         guard code == SQLITE_ROW else { throw stepError() }
         conversationIDs.insert(try text(statement, column: 0))
       }
-    }
-  }
-
-  public func beginLocalACPSteeringTurn(
-    runID: String,
-    input: AgentMessageInput,
-    completesPreviousAssistant: Bool = true,
-    createdAt: Date = Date()
-  ) throws -> LocalACPSteeringIdentifiers {
-    try transaction {
-      try beginLocalACPSteeringTurnUnlocked(runID: runID, input: input,
-        completesPreviousAssistant: completesPreviousAssistant, createdAt: createdAt)
     }
   }
 
@@ -1605,15 +1579,6 @@ extension WorkspaceDatabase {
 
   public func beginLocalACPRun(
     conversationID: String,
-    content: String,
-    noteContext: AgentNoteContext? = nil,
-    createdAt: Date = Date()
-  ) async throws -> LocalACPRunIdentifiers {
-    try await write { try $0.beginLocalACPRun(conversationID: conversationID, content: content, noteContext: noteContext, createdAt: createdAt) }
-  }
-
-  public func beginLocalACPRun(
-    conversationID: String,
     input: AgentMessageInput,
     noteContext: AgentNoteContext? = nil,
     createdAt: Date = Date()
@@ -1623,15 +1588,6 @@ extension WorkspaceDatabase {
 
   public func activeDeviceOwnedConversationIDs() async throws -> Set<String> {
     try await read { try $0.activeDeviceOwnedConversationIDs() }
-  }
-
-  public func beginLocalACPSteeringTurn(
-    runID: String,
-    input: AgentMessageInput,
-    completesPreviousAssistant: Bool = true,
-    createdAt: Date = Date()
-  ) async throws -> LocalACPSteeringIdentifiers {
-    try await write { try $0.beginLocalACPSteeringTurn(runID: runID, input: input, completesPreviousAssistant: completesPreviousAssistant, createdAt: createdAt) }
   }
 
   public func appendLocalACPAssistantChunk(

@@ -15,9 +15,9 @@ struct ACPAssistantStreamWriterTests {
     try await writer.finishSegment()
     try await writer.finishSegment() // Empty/repeated boundaries are no-ops.
     try await writer.finishSegmentAndPause()
-    let steering = try await fixture.database.beginLocalACPSteeringTurn(
+    let steering = try await fixture.database.reserveLocalACPSteeringTurn(
       runID: fixture.run.runID, input: .init(text: "Continue")
-    )
+    ).identifiers
     await writer.resumeAfterSegmentBoundary(assistantMessageID: steering.assistantMessageID)
     try await writer.append("draft")
     try await writer.replace("First  \nFinal  \n")
@@ -46,7 +46,7 @@ private struct WriterFixture {
     conversationID = try await database.createFixtureLocalACPSession(
       runtimeKind: .codex, title: "Writer", ownerDeviceID: UUID()
     )
-    run = try await database.beginLocalACPRun(conversationID: conversationID, content: "Start")
+    run = try await database.beginLocalACPRun(conversationID: conversationID, input: .init(text: "Start"))
     writer = LocalACPAssistantStreamWriter(
       database: database, runID: run.runID, assistantMessageID: run.assistantMessageID,
       conversationID: conversationID, onChange: nil, onPersistenceEvent: onPersistenceEvent

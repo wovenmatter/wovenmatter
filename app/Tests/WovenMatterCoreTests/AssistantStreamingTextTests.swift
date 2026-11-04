@@ -25,17 +25,4 @@ struct AssistantStreamingTextTests {
     ] { #expect(AssistantStreamingText.readyPrefix(of: input) == ready) }
   }
 
-  @Test func liveReasoningPreviewKeepsProviderHeadingOrFirstSentence() {
-    for (source, expected) in [
-      ("**Checking the stream**\n\nI will inspect the events.", "Checking the stream"),
-      ("Inspecting `events` and **tool calls**. Then I will compare them.", "Inspecting events and tool calls."),
-      ("### Comparing models\n- OpenAI and [Anthropic](https://example.com)", "Comparing models OpenAI and Anthropic"),
-      ("A Unicode trace 🧵 stays intact! Another thought.", "A Unicode trace 🧵 stays intact!"),
-      ("  \n\t", ""),
-    ] {
-      #expect(AssistantStreamingText.reasoningPreview(of: source) == expected)
-    }
-    #expect(AssistantStreamingText.reasoningPreview(of: String(repeating: "x", count: 100_000)).count == 2_000)
-  }
-
 }

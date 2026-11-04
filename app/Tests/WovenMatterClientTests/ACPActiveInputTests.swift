@@ -13,9 +13,9 @@ struct ACPActiveInputTests {
         let client = try f.client(mode == "fallback" ? .claudeCode : .codex)
         _ = try await client.initializeSession(workingDirectory: f.root, existingSessionID: nil, title: nil)
         let events = ActiveInputEvents()
-        let prompt = Task { try await client.prompt("start", onEvent: { await events.record($0) }) }
+        let prompt = Task { try await client.prompt(.init(text: "start"), onEvent: { await events.record($0) }) }
         try await f.waitForPrompt()
-        let receipt = try await client.beginActiveInput(mode == "command-only" ? "/status" : "continue")
+        let receipt = try await client.beginActiveInput(.init(text: mode == "command-only" ? "/status" : "continue"))
         #expect(try await prompt.value == .endTurn)
         #expect(try await receipt.completion.value == .endTurn)
         #expect(await events.text() == "beforecontinued")
@@ -70,9 +70,9 @@ struct ACPActiveInputTests {
         defer { f.remove() }
         let client = try f.client(kind)
         _ = try await client.initializeSession(workingDirectory: f.root, existingSessionID: nil, title: nil)
-        let prompt = Task { try await client.prompt("start") }
+        let prompt = Task { try await client.prompt(.init(text: "start")) }
         try await f.waitForPrompt()
-        let steering = Task { try await client.beginActiveInput("correction") }
+        let steering = Task { try await client.beginActiveInput(.init(text: "correction")) }
         for _ in 0..<500 {
             if try f.requests().contains(where: { $0["method"] as? String == "_session/steering" }) { break }
             try await Task.sleep(for: .milliseconds(5))

@@ -34,9 +34,3 @@ extension WorkspaceDatabaseConnection {
     try historyRowsUnlocked("SELECT 1 AS owned WHERE " + PairedLibraryOwnership.localConversation("?"), values: [id, id, id]).isEmpty == false
   }
 }
-
-extension WorkspaceDatabase {
-  public func locallyOwnsConversation(_ id: String) async throws -> Bool {
-    try await read { try $0.locallyOwnsConversationUnlocked(id) }
-  }
-}

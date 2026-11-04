@@ -41,7 +41,7 @@ struct LibraryModelTests {
         let database = try await persistence.openDatabase()
         let chat = try await database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Library", ownerDeviceID: UUID())
         func add(_ text: String) async throws {
-            let run = try await database.beginLocalACPRun(conversationID: chat, content: text)
+            let run = try await database.beginLocalACPRun(conversationID: chat, input: .init(text: text))
             try await database.completeLocalACPRun(runID: run.runID)
             try await database.indexLibraryMessages()
         }

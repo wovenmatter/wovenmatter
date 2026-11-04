@@ -18,7 +18,7 @@ struct ACPSteeringLifecycleTests {
             let messages = try await f.messages()
             #expect(messages.last(where: { $0.role == "user" })?.content == text)
         }
-        let input = try await f.coordinator.sendActiveInput(conversationID: f.id, content: text)
+        let input = try await f.coordinator.sendActiveInput(conversationID: f.id, input: .init(text: text))
         #expect(try await f.messages().contains { $0.id == input.userMessageID })
         await f.driver.finishInitial()
         try await f.waitForTerminal()
@@ -42,7 +42,7 @@ private struct SteeringFixture {
         coordinator = LocalACPSessionCoordinator(database: database, clientFactory: { _, _ in driver.makeDriver() })
     }
     func start() async throws -> LocalACPRunIdentifiers {
-        try await coordinator.accept(conversationID: id, content: "start",
+        try await coordinator.accept(conversationID: id, input: .init(text: "start"),
             launch: .init(runtimeKind: .codex, executableURL: URL(filePath: "/fixture"), arguments: []),
             workspace: .init(rootURL: persistence.directory), onPermission: { _ in "allow" })
     }

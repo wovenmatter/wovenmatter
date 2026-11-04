@@ -12,7 +12,7 @@ struct CompanionPublisherTests {
   @Test func retainedPreflightSettlesMultipleStaleRunsButNeverTransfersAnActualActiveRun() async throws {
     let f = try await Fixture(); defer { f.remove() }
     let conversationID = try await f.database.createFixtureRemoteACPSession(runtimeKind: .codex, remoteWorkspaceID: UUID(uuidString: f.workspace.id)!, remoteWorkspaceName: "Linux", title: "Offline history", ownerDeviceID: UUID(uuidString: f.identity.hostDeviceID)!)
-    let firstRun = try await f.database.beginLocalACPRun(conversationID: conversationID, content: "First")
+    let firstRun = try await f.database.beginLocalACPRun(conversationID: conversationID, input: .init(text: "First"))
     try await f.database.updateLocalACPSessionID(conversationID: conversationID, runID: firstRun.runID, sessionID: "native")
     let secondRun = UUID().uuidString.lowercased()
     try await f.database.write { try $0.toolsExecuteUnlocked("INSERT INTO dashboard_runs(id,conversation_id,status,openclaw_session_key) VALUES (?,?,'running','native')", [secondRun, conversationID]) }

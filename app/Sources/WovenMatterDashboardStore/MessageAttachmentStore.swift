@@ -44,7 +44,7 @@ struct MessageAttachmentStore: Sendable {
         maximumBytes: AgentMessageAttachmentLimits.maximumFileBytes
       )
     }
-    let hash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    let hash = SHA256.hash(data: data).hexString
     let storedURL = url(contentHash: hash)
     if !FileManager.default.fileExists(atPath: storedURL.path) {
       try data.write(to: storedURL, options: [.atomic])

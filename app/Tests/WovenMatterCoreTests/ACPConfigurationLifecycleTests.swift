@@ -32,7 +32,7 @@ struct ACPConfigurationLifecycleTests {
     })
     let launch = LocalACPRuntimeLaunchConfiguration(runtimeKind: runtime, executableURL: URL(filePath: "/nonexistent-interruption-fixture"), arguments: [])
     let workspace = LocalACPWorkspaceLaunchConfiguration(rootURL: persistence.directory), fence = AgentDispatchFence()
-    let run = try await coordinator.accept(conversationID: id, content: "First prompt", launch: launch, workspace: workspace, dispatchFence: fence)
+    let run = try await coordinator.accept(conversationID: id, input: .init(text: "First prompt"), launch: launch, workspace: workspace, dispatchFence: fence)
     if outcome == "stop" || outcome == "shutdown" {
       await interruption.waitUntilEntered()
       if outcome == "stop" { try await coordinator.stop(conversationID: id) }
@@ -96,7 +96,7 @@ struct ACPConfigurationLifecycleTests {
     #expect(configured.permission == "auto")
     #expect(permission.shutdowns == 1)
     #expect(try await database.localACPSession(conversationID: id).acpSessionID == nil)
-    _ = try await coordinator.accept(conversationID: id, content: "First prompt", launch: launch, workspace: workspace)
+    _ = try await coordinator.accept(conversationID: id, input: .init(text: "First prompt"), launch: launch, workspace: workspace)
     _ = try await pollUntil(attempts: 500, interval: .milliseconds(10)) { lease.holds == 0 }
     #expect(lease.holds == 0)
     #expect(prompt.shutdowns == 1)
@@ -116,7 +116,7 @@ struct ACPConfigurationLifecycleTests {
     try await database.updateLocalACPSessionID(conversationID: id, sessionID: "older-id")
     try await database.updateLocalACPSessionConfiguration(conversationID: id, model: nil, thinking: nil, permission: "ask")
     if hasPriorRun {
-      let run = try await database.beginLocalACPRun(conversationID: id, content: "Existing prompt")
+      let run = try await database.beginLocalACPRun(conversationID: id, input: .init(text: "Existing prompt"))
       try await database.completeLocalACPRun(runID: run.runID)
     }
     let driver = SelectorDriverState(expectedExistingSessionID: "older-id", sessionID: "replacement", missingExistingSession: true)
@@ -183,7 +183,7 @@ struct ACPConfigurationLifecycleTests {
     #expect(drivers.requests == 2)
     await first.emit(.init(model: "selected-model", modelOptions: ["default-model", "selected-model"]))
     #expect(try await database.localACPSession(conversationID: firstID).model == original.model)
-    let running = try await database.beginLocalACPRun(conversationID: secondID, content: "Other process is busy")
+    let running = try await database.beginLocalACPRun(conversationID: secondID, input: .init(text: "Other process is busy"))
     await #expect(throws: (any Error).self) { try await coordinator.detachForExecutionAdoption(conversationID: secondID) }
     #expect(second.shutdowns == 0)
     try await database.completeLocalACPRun(runID: running.runID)

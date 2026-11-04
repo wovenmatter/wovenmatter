@@ -26,7 +26,7 @@ struct StorageCorrectnessReviewTests {
       ["id": .number(2), "role": "tool", "tool_call_id": "old-todo", "content": .string(result.json)]]
     // Seed the rows an older build already saved; no retired runtime is created or resumed.
     let conversation = try await db.createFixtureLocalACPSession(runtimeKind: .codex, title: "History", ownerDeviceID: UUID())
-    let run = try await db.beginLocalACPRun(conversationID: conversation, content: "Retained history")
+    let run = try await db.beginLocalACPRun(conversationID: conversation, input: .init(text: "Retained history"))
     try await db.upsertDeviceOwnedRunActivity(runID: run.runID, activity: plan)
     try await db.completeLocalACPRun(runID: run.runID)
     for row in rows {

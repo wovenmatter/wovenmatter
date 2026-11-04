@@ -2,6 +2,7 @@ import CryptoKit
 import Foundation
 import Testing
 import WovenMatterCore
+import WovenMatterClient
 @testable import WovenMatterDashboardStore
 
 struct CompanionMacInstallerTests {
@@ -27,21 +28,21 @@ struct CompanionMacInstallerTests {
             let path = root.appendingPathComponent(name)
             try Data(("#!/bin/bash\nset -eu\n" + body).utf8).write(to: path)
             try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: path.path)
-            return CompanionMacManagement.quote(path.path)
+            return RemoteWorkspaceExecTarget.quote(path.path)
         }
         let started = root.appendingPathComponent("download-started")
-        let curl = try tool("curl", "touch \(CompanionMacManagement.quote(started.path))\n" + (scenario == "interrupt" ? "sleep 2\n" : "") + #"while [ "$1" != --output ]; do shift; done; printf payload > "$2""#)
+        let curl = try tool("curl", "touch \(RemoteWorkspaceExecTarget.quote(started.path))\n" + (scenario == "interrupt" ? "sleep 2\n" : "") + #"while [ "$1" != --output ]; do shift; done; printf payload > "$2""#)
         let hdiutil = try tool("hdiutil", """
             if [ "$1" = detach ]; then exit 0; fi
             while [ "$1" != -mountpoint ]; do shift; done
-            /usr/bin/ditto \(CompanionMacManagement.quote(source.path)) "$2/Woven Matter.app"
+            /usr/bin/ditto \(RemoteWorkspaceExecTarget.quote(source.path)) "$2/Woven Matter.app"
             """)
         let signature = try tool("codesign", scenario == "signature" ? "exit 1" : "exit 0")
-        let open = try tool("open", "printf opened > \(CompanionMacManagement.quote(root.appendingPathComponent("opened").path))")
+        let open = try tool("open", "printf opened > \(RemoteWorkspaceExecTarget.quote(root.appendingPathComponent("opened").path))")
         let pass = try tool("spctl", "exit 0")
         var script = CompanionMacRemoteScripts.install
-            .replacingOccurrences(of: "lock_dir=\"$HOME/Library/Caches/WovenMatter/DeviceSetup\"", with: "lock_dir=" + CompanionMacManagement.quote(root.appendingPathComponent("lock").path))
-            .replacingOccurrences(of: "app='/Applications/Woven Matter.app'", with: "app=" + CompanionMacManagement.quote(app.path))
+            .replacingOccurrences(of: "lock_dir=\"$HOME/Library/Caches/WovenMatter/DeviceSetup\"", with: "lock_dir=" + RemoteWorkspaceExecTarget.quote(root.appendingPathComponent("lock").path))
+            .replacingOccurrences(of: "app='/Applications/Woven Matter.app'", with: "app=" + RemoteWorkspaceExecTarget.quote(app.path))
             .replacingOccurrences(of: "$(uname -s)", with: "Darwin")
             .replacingOccurrences(of: "$(uname -m)", with: "arm64")
             .replacingOccurrences(of: "$(sw_vers -productVersion | cut -d. -f1)", with: "27")

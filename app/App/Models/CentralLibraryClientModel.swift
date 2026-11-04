@@ -20,22 +20,14 @@ final class CentralLibraryClientModel {
     private var directFailures: [String: Int] = [:]
     private(set) var refreshing = false
     private(set) var initialized = false
-    private(set) var providers: [CompanionProvider] = []
-    private(set) var pending: [CompanionPendingInteraction] = []
-    private(set) var sending = false
     var errorMessage: String?
     var status = "Not connected"
     var selectedConversationID: String?
-    var selectedProviderID = ""
     var selectedExecutionWorkspaceID = "central"
     private(set) var journal = WorkspaceJournalState()
     private(set) var directOnline: Set<String> = []
     private(set) var artifacts: [CompanionArtifactManifest] = []
-    var clientStore: MobileStore? { store }
     private var directClients: [String: WorkspaceClient] = [:]
-    private var centralProviders: [CompanionProvider] = []
-    private var centralPending: [CompanionPendingInteraction] = []
-    private var directProviders: [String: [CompanionProvider]] = [:]
     /// Workspaces whose direct grant was rejected and not yet replaced. The IDs
     /// (no secrets) persist across launches, bound to this library and device,
     /// bounded by the registered workspaces, and are retried on each reachable
@@ -69,7 +61,6 @@ final class CentralLibraryClientModel {
             } catch { deviceConnectionsError = error.localizedDescription }
         }
     }
-    private var directPending: [String: [CompanionPendingInteraction]] = [:]
     private(set) var localExecution: SecondaryMacExecutionWorkspace?
     private(set) var localExecutionBusy = false
     private(set) var sharingLocalExecution = false
@@ -97,7 +88,6 @@ final class CentralLibraryClientModel {
     private var running = false
     private(set) var preparingTransition = false
     private(set) var localSharingBusy = false
-    private var sessionProviders: [String: CompanionProvider] = [:]
     private let store: MobileStore?
     private var engine: MobileSyncEngine?
     private var transport: HTTPSCompanionTransport?
@@ -336,7 +326,7 @@ final class CentralLibraryClientModel {
         }
     }
     func prepareForRoleChange() async throws {
-        guard !sending, !localExecutionBusy, !localSharingBusy else {
+        guard !localExecutionBusy, !localSharingBusy else {
             throw CompanionAPIError(code: "operation_in_progress", message: "Wait for the current client operation to finish before restarting or quitting.")
         }
         preparingTransition = true
@@ -390,28 +380,19 @@ final class CentralLibraryClientModel {
     }
     func selectExecutionWorkspace(_ id: String) async {
         selectedExecutionWorkspaceID = id
-        selectedConversationID = nil; selectedProviderID = ""
+        selectedConversationID = nil
         await refreshDirectWorkspace()
-        updateExecutionPresentation()
-    }
-    private func updateExecutionPresentation() {
-        providers = selectedExecutionWorkspaceID == "central" ? centralProviders : (directProviders[selectedExecutionWorkspaceID] ?? [])
-        pending = centralPending + directPending.values.flatMap { $0 }
-        if !providers.contains(where: { $0.id == selectedProviderID }) { selectedProviderID = providers.first(where: \.available)?.id ?? "" }
     }
     private func refreshDirectWorkspace(_ requestedID: String? = nil) async {
         let workspaceID = requestedID ?? selectedExecutionWorkspaceID
         guard let client = directClients[workspaceID] else { return }
         do {
             try await client.refresh()
-            let receivedProviders = try await client.providers()
-            let receivedPending = try await client.pending()
+            _ = try await client.providers()
+            _ = try await client.pending()
             guard directClients[workspaceID] === client else { return }
-            directProviders[workspaceID] = receivedProviders
-            directPending[workspaceID] = receivedPending
             if let id = selectedConversationID, executionOwner(for: id) == workspaceID {
                 _ = try await client.refreshTranscript(id)
-                sessionProviders[id] = try? await client.capabilities(id)
             }
             guard directClients[workspaceID] === client else { return }
             directOnline.insert(workspaceID); directFailures[workspaceID] = 0
@@ -421,7 +402,7 @@ final class CentralLibraryClientModel {
             guard directClients[workspaceID] === client else { return }
             directOnline.remove(workspaceID)
             if Self.revokesDirectAccess(error), workspaceID != localExecution?.descriptor.id {
-                directClients[workspaceID] = nil; directProviders[workspaceID] = nil; directPending[workspaceID] = nil
+                directClients[workspaceID] = nil
                 do {
                     try clearWorkspaceCredential(workspaceID)
                     pendingReenrollment.insert(workspaceID)
@@ -431,7 +412,7 @@ final class CentralLibraryClientModel {
             let failures = min((directFailures[workspaceID] ?? 0) + 1, 5); directFailures[workspaceID] = failures
             nextDirectRefresh[workspaceID] = Date().addingTimeInterval(min(60, pow(2, Double(failures))))
         }
-        await reload(); updateExecutionPresentation()
+        await reload()
     }
     /// The execution transport reports a rejected bearer as `.revoked`; older
     /// transports surfaced the raw status.
@@ -497,15 +478,13 @@ final class CentralLibraryClientModel {
                 guard await engine.synchronizationStatus().centralReachable == true else { throw error }
             }
             guard connectionGeneration == expectedConnection else { await directRefresh; return }
-            let receivedProviders = try await engine.providers()
-            let receivedPending = try await engine.pending()
+            _ = try await engine.providers()
+            _ = try await engine.pending()
             try await engine.recoverCommandReceipts()
             if let id = selectedConversationID, executionOwner(for: id) == nil {
                 try await engine.refreshTranscript(id)
-                sessionProviders[id] = try? await transport?.capabilities(id)
             }
             guard connectionGeneration == expectedConnection else { await directRefresh; return }
-            centralProviders = receivedProviders; centralPending = receivedPending
             online = true; status = "Connected"
             try configureDirectClients()
             await retryPendingReenrollments()
@@ -526,7 +505,7 @@ final class CentralLibraryClientModel {
         let hasActiveRuns = state.conversations.values.contains { $0.activeRunID != nil }
         nextCentralRefresh = Date().addingTimeInterval(online ? (hasActiveRuns ? 2 : 15) : min(60, pow(2, Double(centralFailures))))
         await directRefresh
-        await reload(); updateExecutionPresentation()
+        await reload()
     }
     func flushLocalWrites() async throws {
         await writeTask?.value
@@ -560,12 +539,11 @@ final class CentralLibraryClientModel {
         selectedConversationID = id
         guard let id else { return }
         selectedExecutionWorkspaceID = executionOwner(for: id) ?? "central"
-        updateExecutionPresentation()
         do {
             if let owner = executionOwner(for: id), let client = directClients[owner] {
-                _ = try await client.refreshTranscript(id); sessionProviders[id] = try? await client.capabilities(id)
+                _ = try await client.refreshTranscript(id)
             } else if executionOwner(for: id) == nil {
-                try await engine?.refreshTranscript(id); sessionProviders[id] = try? await transport?.capabilities(id)
+                try await engine?.refreshTranscript(id)
             }
             await reload()
         }

@@ -81,7 +81,7 @@ struct WorkspaceAgentToolTests {
   @Test func coordinationEpochsMakeReleaseAndNotificationRetriesSafe() async throws {
     let (db, persistence, source, target) = try await fixture()
     defer { persistence.remove() }
-    try await db.beginCoordination(sourceID: source, targetID: target, purpose: "First assignment")
+    try await db.coordinateFixtureSession(sourceID: source, targetID: target, purpose: "First assignment")
     let firstEpoch = try await #require(db.sessionRelationship(target).coordinationEpoch)
     let notificationID = UUID().uuidString
     let changed = try await db.setAgentCoordinationNotifications(sourceID: source, targetID: target,
@@ -94,7 +94,7 @@ struct WorkspaceAgentToolTests {
     let released = try await db.releaseAgentCoordination(sourceID: source, targetID: target,
       epoch: firstEpoch, requestID: releaseID)
     #expect(!released.replayed)
-    try await db.beginCoordination(sourceID: source, targetID: target, purpose: "New assignment")
+    try await db.coordinateFixtureSession(sourceID: source, targetID: target, purpose: "New assignment")
     let secondEpoch = try await #require(db.sessionRelationship(target).coordinationEpoch)
     #expect(secondEpoch != firstEpoch)
     let replay = try await db.releaseAgentCoordination(sourceID: source, targetID: target,

@@ -15,7 +15,7 @@ struct ActivitySummaryPersistenceTests {
     let database = try await fixture.openDatabase()
     let conversation = try await database.createFixtureLocalACPSession(runtimeKind: .codex,
       title: "Reconcile", ownerDeviceID: UUID())
-    let run = try await database.beginLocalACPRun(conversationID: conversation, content: "Inspect")
+    let run = try await database.beginLocalACPRun(conversationID: conversation, input: .init(text: "Inspect"))
     for id in ["keep", "obsolete"] {
       try await database.upsertDeviceOwnedRunActivity(runID: run.runID,
         activity: .init(id: id, kind: .tool, content: "old", rawOutputJSON: "old detail"))
@@ -101,7 +101,7 @@ struct ActivitySummaryPersistenceTests {
     let database = try await fixture.openDatabase()
     let conversation = try await database.createFixtureLocalACPSession(runtimeKind: .codex,
       title: "Parity", ownerDeviceID: UUID())
-    let run = try await database.beginLocalACPRun(conversationID: conversation, content: "Inspect")
+    let run = try await database.beginLocalACPRun(conversationID: conversation, input: .init(text: "Inspect"))
     let commentary = String(repeating: "Checking café 🧵.\n", count: 80)
     let answer = "```swift\nlet café = 1\n```\n"
     let large = String(repeating: "large output 🧵\n", count: 4_096)

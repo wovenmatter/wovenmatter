@@ -411,7 +411,7 @@ extension CompanionHostLifecycleTests {
         await third.host.peerSync.synchronize(force: true)
         #expect(try await airDB.companionNote(id: second)?.title == "Third offline")
         #expect(try await thirdDB.companionNote(id: first)?.title == "Air offline")
-        #expect(try await airDB.pairedRemoteWorkspaces().contains { $0.id == remote.id.uuidString.lowercased() })
+        #expect(try await airDB.read { try !$0.historyRowsUnlocked("SELECT 1 FROM paired_remote_workspaces WHERE id=?", values: [remote.id.uuidString.lowercased()]).isEmpty })
         // The new phone is listed for display and delegation, but its bearer
         // authenticates only at the Mac it paired with.
         #expect(try await air.host.peerAuthentication().rosterName(for: phoneID) == "New iPhone")
@@ -690,7 +690,7 @@ extension CompanionHostLifecycleTests {
         let air = try await mesh.add("history-air"), mini = try await mesh.add("history-mini")
         let source = try #require(air.model.dashboardStore?.database), other = try #require(mini.model.dashboardStore?.database)
         let id = try await source.createFixtureLocalACPSession(runtimeKind: .codex, title: "Owner's conversation", ownerDeviceID: UUID())
-        let run = try await source.beginLocalACPRun(conversationID: id, content: "Saved native input")
+        let run = try await source.beginLocalACPRun(conversationID: id, input: .init(text: "Saved native input"))
         try await source.completeLocalACPRun(runID: run.runID, error: nil)
         let originalCount = try await source.read { try $0.historyRowsUnlocked("SELECT id FROM workspace_history_events WHERE conversation_id=?", values: [id]).count }
         try await mesh.pair(air, with: mini)
@@ -896,7 +896,7 @@ extension CompanionHostLifecycleTests {
         let session = try await node.createFixtureLocalACPSession(runtimeKind: .codex, title: "Node goal", ownerDeviceID: UUID(),
             fixtureLocation: .init(workspaceID: "local", rootPath: executionDirectory.path, managed: false))
         let goal = try #require(try await node.mutateGoal(sessionID: session, mutation: .set(objective: "Keep going", tokenBudget: nil, turnBudget: nil)))
-        let run = try await node.beginLocalACPRun(conversationID: session, content: "Interrupted by the upgrade")
+        let run = try await node.beginLocalACPRun(conversationID: session, input: .init(text: "Interrupted by the upgrade"))
         try await LegacyMacLibraryUpgrade.prepare(database: database, defaults: fixture.defaults)
         // Without a second restart: the imported run is recovered and the goal
         // cannot continue automatically; the chat stays this Mac's own work.
@@ -904,7 +904,7 @@ extension CompanionHostLifecycleTests {
         #expect(status != nil && status != "running")
         #expect(try await database.sessionGoals().first { $0.id == goal.id }?.status == .paused)
         #expect(try await database.dueGoalDeliveries(running: []).isEmpty)
-        #expect(try await database.locallyOwnsConversation(session))
+        #expect(try await database.read { try $0.locallyOwnsConversationUnlocked(session) })
         // The retained original execution database was not modified.
         #expect(try await node.read { try $0.historyRowsUnlocked("SELECT status FROM dashboard_runs WHERE id=?", values: [run.runID]).first?.objectValue?["status"]?.stringValue } == "running")
     }

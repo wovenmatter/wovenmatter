@@ -39,7 +39,7 @@ struct ConversationHTMLResourceTests {
     let page = try ConversationHTMLPage(html: html, title: "Large image", height: 200)
     let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
     let caller = try await database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Images", ownerDeviceID: UUID())
-    let run = try await database.beginLocalACPRun(conversationID: caller, content: "Images")
+    let run = try await database.beginLocalACPRun(conversationID: caller, input: .init(text: "Images"))
     let reference = try await database.publishConversationHTML(page, callerID: caller, requestID: UUID().uuidString)
     let detail = try #require(try await database.conversationActivityDetails(conversationID: caller, runID: run.runID, activityID: "html-render:" + reference.id))
     #expect(try JSONDecoder().decode(ConversationHTMLPage.self, from: Data(try #require(detail.rawOutputJSON).utf8)) == page)

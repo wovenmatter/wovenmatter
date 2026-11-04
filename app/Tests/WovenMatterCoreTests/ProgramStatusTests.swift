@@ -28,7 +28,7 @@ struct ProgramStatusTests {
         }, configuration: { .empty }, setConfiguration: { _, _ in .empty }, cancel: {}, shutdown: {},
         setRunID: { await identity.set($0) })
     })
-    _ = try await coordinator.accept(conversationID: session, content: "Work",
+    _ = try await coordinator.accept(conversationID: session, input: .init(text: "Work"),
       launch: .init(runtimeKind: kind, executableURL: URL(filePath: "/fixture"), arguments: []),
       workspace: .init(rootURL: directory),
       onPermission: { _ in
@@ -61,8 +61,8 @@ struct ProgramStatusTests {
     let target = access == "self" ? caller : try await database.createFixtureLocalACPSession(runtimeKind: .defaultAgent, title: "Target", ownerDeviceID: owner)
     try await database.setSessionTools(.init(enabled: access == "history" ? [.sessions, .history] : [.sessions]), sessionID: caller)
     if access == "attachment" { try await database.attachConversationReference(sourceID: caller, targetID: target) }
-    if access == "managed" { try await database.recordSessionOrigin(sourceID: caller, targetID: target, purpose: "Fixture") }
-    let run = try await database.beginLocalACPRun(conversationID: target, content: "Private prompt")
+    if access == "managed" { try await database.coordinateFixtureSession(sourceID: caller, targetID: target, purpose: "Fixture") }
+    let run = try await database.beginLocalACPRun(conversationID: target, input: .init(text: "Private prompt"))
     try await database.recordProgramStatus(.init(state: .blocked, id: "children/1", kind: .auth, title: "Private title", message: "Private wait"), runID: run.runID)
     func snapshot() async throws -> ProgramStatusSnapshot {
       let result = try await database.queryAgentHistory(.init(command: "conversations", id: target), callerID: caller)

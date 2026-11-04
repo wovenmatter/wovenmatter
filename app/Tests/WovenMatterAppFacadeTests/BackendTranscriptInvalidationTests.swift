@@ -61,7 +61,7 @@ struct BackendTranscriptInvalidationTests {
             releaseMetadata?.resume()
         }
         try await waitUntil { metadataStarted && !refreshedIDs.isEmpty }
-        let run = try await fixture.database.beginLocalACPRun(conversationID: id, content: "Visible fixture prompt")
+        let run = try await fixture.database.beginLocalACPRun(conversationID: id, input: .init(text: "Visible fixture prompt"))
         await journal.publish(scopes: [.settings, .usage], conversationIDs: [id, "unobserved-session"])
         try await waitUntil { state.content?.messages.contains { $0.role == "user" && $0.content == "Visible fixture prompt" } == true }
         #expect(releaseMetadata != nil, "The metadata gate must still be closed when the prompt appears")

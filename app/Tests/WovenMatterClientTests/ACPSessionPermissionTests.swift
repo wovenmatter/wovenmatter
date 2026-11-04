@@ -56,7 +56,7 @@ struct ACPSessionPermissionTests {
             await client.setConfigurationHandler { await snapshots.append($0) }
             _ = try await client.setSessionPermission("full")
             #expect(await snapshots.values().map(\.permission) == ["default", "full"])
-            _ = try await client.prompt("fixture")
+            _ = try await client.prompt(.init(text: "fixture"))
             let result = await client.sessionConfiguration()
             #expect(result.permission == "default")
             #expect(result.model == "changed-model")
@@ -84,7 +84,7 @@ struct ACPSessionPermissionTests {
             #expect(try fixture.requests(method: "session/prompt").isEmpty)
             #expect(try await client.setSessionPermission("default").permission == target)
             #expect(try fixture.requests(method: "session/set_config_option").count == 1)
-            _ = try await client.prompt("provider-free fixture")
+            _ = try await client.prompt(.init(text: "provider-free fixture"))
             #expect(try fixture.requests(method: "session/prompt").count == 1)
         }
     }

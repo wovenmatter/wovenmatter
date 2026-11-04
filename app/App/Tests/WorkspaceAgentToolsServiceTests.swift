@@ -40,7 +40,7 @@ struct WorkspaceAgentToolsServiceTests {
             native.messages = [["id": "msg_acceptance", "type": "assistant", "time": ["created": .number(1)], "content": .array([])]]
             try await database.saveOpenCodeSnapshot(native, conversationID: caller)
             runID = nil
-        } else { runID = try await database.beginLocalACPRun(conversationID: caller, content: "Provider-free HTML acceptance").runID }
+        } else { runID = try await database.beginLocalACPRun(conversationID: caller, input: .init(text: "Provider-free HTML acceptance")).runID }
         let service = try await WorkspaceAgentToolsModel(database: database,
             sessionHandler: { _, _, _ in throw CancellationError() }, noteHandler: { _, _, _ in throw CancellationError() },
             noteRestoreHandler: { _, _, _, _, _ in throw CancellationError() }, usageHandler: { _ in throw CancellationError() }, onMutation: {})
@@ -82,7 +82,7 @@ struct WorkspaceAgentToolsServiceTests {
         let history = try await reopened.conversationHistoryPage(id: caller, limit: 20, compactActivities: true)
         let pages = history.activities.filter { $0.activity.htmlRender != nil }
         #expect(Set(pages.compactMap { $0.activity.htmlRender?.id }) == Set(published))
-        #expect(ConversationWorkTimeline(records: history.activities, commentaryIDs: []).foldedEntries.count == published.count)
+        #expect(ConversationWorkTimeline(records: history.activities, commentaryIDs: []).entries.count == published.count)
         for row in pages {
             #expect(row.activity.rawOutputJSON == nil)
             let detail = try #require(try await reopened.conversationActivityDetails(conversationID: caller, runID: row.runID, activityID: row.activity.id))
@@ -97,7 +97,7 @@ struct WorkspaceAgentToolsServiceTests {
         let persistence = try PersistenceFixture(); defer { persistence.remove() }
         let database = try await persistence.openDatabase()
         let caller = try await database.createFixtureLocalACPSession(runtimeKind: runtime, title: "HTML", ownerDeviceID: UUID())
-        let run = try await database.beginLocalACPRun(conversationID: caller, content: "Visual reply")
+        let run = try await database.beginLocalACPRun(conversationID: caller, input: .init(text: "Visual reply"))
         let service = try await WorkspaceAgentToolsModel(database: database,
             sessionHandler: { _, _, _ in throw CancellationError() }, noteHandler: { _, _, _ in throw CancellationError() },
             noteRestoreHandler: { _, _, _, _, _ in throw CancellationError() }, usageHandler: { _ in throw CancellationError() }, onMutation: {})
@@ -121,7 +121,7 @@ struct WorkspaceAgentToolsServiceTests {
         #expect(result.result?.objectValue?["htmlRender"]?.objectValue?["title"]?.stringValue == "Calculator")
         let history = try await database.conversationHistoryPage(id: caller, limit: 20, compactActivities: true)
         let timeline = ConversationWorkTimeline(records: history.activities, commentaryIDs: [])
-        #expect(timeline.foldedEntries.count == 1)
+        #expect(timeline.entries.count == 1)
         #expect(history.activities.contains { $0.runID == run.runID && $0.activity.htmlRender?.title == "Calculator" })
         if runtime == .codex {
             #expect(data.count > 4 * 1024 * 1024)
@@ -203,7 +203,7 @@ extension WorkspaceAgentToolsServiceTests {
             noteRestoreHandler: { _, _, _, _, _ in throw CancellationError() },
             usageHandler: { _ in throw CancellationError() }, onMutation: {})
         defer { model.stop() }
-        try await database.beginCoordination(sourceID: caller, targetID: historian, purpose: "Audit")
+        try await database.coordinateFixtureSession(sourceID: caller, targetID: historian, purpose: "Audit")
         let status = await model.handle(.init(arguments: ["sessions", "status", historian]), callerID: caller)
         #expect(status.result?.objectValue?["relationship"]?.objectValue?["coordinationEpoch"]?.stringValue != nil)
         let note = try await database.createNote(folderID: nil, title: "Private", callerConversationID: caller,

@@ -14,11 +14,9 @@ public struct OpenCodeSessionUpdate: Sendable {
 /// Commands acknowledge without a message ID. Neither response invents run IDs.
 public struct OpenCodeSubmissionReceipt: Equatable, Sendable {
     public let nativeUserMessageID: String?
-    public let identifiers: LocalACPRunIdentifiers?
 
-    public init(nativeUserMessageID: String? = nil, identifiers: LocalACPRunIdentifiers? = nil) {
+    public init(nativeUserMessageID: String? = nil) {
         self.nativeUserMessageID = nativeUserMessageID
-        self.identifiers = identifiers
     }
 }
 

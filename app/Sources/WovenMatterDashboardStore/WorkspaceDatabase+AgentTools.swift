@@ -315,10 +315,6 @@ extension WorkspaceDatabaseConnection {
     try toolsExecuteUnlocked("INSERT OR IGNORE INTO workspace_session_grants(source_id,target_id,kind) VALUES(?,?,?)", [sourceID, targetID, kind])
   }
 
-  public func requireTranscriptAccess(sourceID: String, targetID: String) throws {
-    try withLock { try requireTranscriptAccessUnlocked(sourceID: sourceID, targetID: targetID) }
-  }
-
   func requireTranscriptAccessUnlocked(sourceID: String, targetID: String) throws {
     let tools = try sessionToolsUnlocked(sourceID)
     try requireToolSessionUnlocked(targetID)
@@ -356,39 +352,6 @@ extension WorkspaceDatabaseConnection {
       purpose: r["purpose"]?.stringValue, notificationsEnabled: r["notifications_enabled"]?.intValue == 1,
       coordinationEpoch: r["coordination_epoch"]?.stringValue,
       coordinationSince: r["coordination_since"]?.stringValue)
-  }
-
-  /// Called only after app-owned session creation succeeds. Origin cannot be reassigned.
-  public func recordSessionOrigin(sourceID: String, targetID: String, purpose: String, managed: Bool = true) throws {
-    try transaction {
-      try requireToolUnlocked(.sessions, sessionID: sourceID)
-      try requireToolSessionUnlocked(targetID)
-      guard sourceID != targetID else { throw WorkspaceToolError.invalid("A session cannot create itself.") }
-      let relationship = try relationshipUnlocked(targetID)
-      guard relationship.createdBy == nil || relationship.createdBy == sourceID else {
-        throw WorkspaceToolError.invalid("Session origin is permanent.")
-      }
-      if relationship.createdBy == sourceID { return }
-      if managed { try validateCoordinationUnlocked(sourceID: sourceID, targetID: targetID) }
-      try toolsExecuteUnlocked("""
-        INSERT INTO workspace_session_relationships(session_id,created_by,purpose) VALUES(?,?,?)
-        ON CONFLICT(session_id) DO UPDATE SET created_by=excluded.created_by
-        """, [targetID, sourceID, purpose])
-      let inherited = try sessionToolsUnlocked(sourceID)
-      try toolsExecuteUnlocked("UPDATE workspace_session_tools SET enabled_json=?,defaults_applied=1 WHERE session_id=?", [try toolsJSON(inherited.enabled), targetID])
-      try toolsExecuteUnlocked("UPDATE workspace_executor_sessions SET profiles_json=? WHERE session_id=?", [try toolsJSON(inherited.executorProfiles ?? []), targetID])
-      if managed { try beginCoordinationUnlocked(sourceID: sourceID, targetID: targetID, purpose: purpose, notifications: true) }
-    }
-  }
-
-  public func beginCoordination(sourceID: String, targetID: String, purpose: String,
-                                 notifications: Bool = true, userApprovedAccess: Bool = false) throws {
-    try transaction {
-      try requireToolUnlocked(.sessions, sessionID: sourceID)
-      try validateCoordinationUnlocked(sourceID: sourceID, targetID: targetID)
-      if !userApprovedAccess { try requireTranscriptAccessUnlocked(sourceID: sourceID, targetID: targetID) }
-      try beginCoordinationUnlocked(sourceID: sourceID, targetID: targetID, purpose: purpose, notifications: notifications)
-    }
   }
 
   func validateCoordinationUnlocked(sourceID: String, targetID: String) throws {
@@ -661,21 +624,8 @@ extension WorkspaceDatabase {
     try await write { try $0.attachConversationReference(sourceID: sourceID, targetID: targetID) }
   }
 
-  public func requireTranscriptAccess(sourceID: String, targetID: String) async throws {
-    try await read { try $0.requireTranscriptAccess(sourceID: sourceID, targetID: targetID) }
-  }
-
   public func sessionRelationship(_ id: String) async throws -> WorkspaceSessionRelationship {
     try await read { try $0.sessionRelationship(id) }
-  }
-
-  public func recordSessionOrigin(sourceID: String, targetID: String, purpose: String, managed: Bool = true) async throws {
-    try await write { try $0.recordSessionOrigin(sourceID: sourceID, targetID: targetID, purpose: purpose, managed: managed) }
-  }
-
-  public func beginCoordination(sourceID: String, targetID: String, purpose: String,
-                                 notifications: Bool = true, userApprovedAccess: Bool = false) async throws {
-    try await write { try $0.beginCoordination(sourceID: sourceID, targetID: targetID, purpose: purpose, notifications: notifications, userApprovedAccess: userApprovedAccess) }
   }
 
   public func setCoordinationNotifications(sourceID: String, targetID: String, enabled: Bool) async throws {

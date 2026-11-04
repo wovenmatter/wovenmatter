@@ -51,7 +51,7 @@ struct ACPSessionRoutingTests {
         defer { Task { await client.shutdown() } }
         _ = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: nil, title: nil)
         let calls = RoutingPermissions()
-        #expect(try await client.prompt("fixture", onPermission: { request in
+        #expect(try await client.prompt(.init(text: "fixture"), onPermission: { request in
             await calls.record(request)
             return "allow-exact-id"
         }) == .endTurn)

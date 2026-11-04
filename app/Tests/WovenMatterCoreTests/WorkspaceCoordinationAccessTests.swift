@@ -40,15 +40,15 @@ struct WorkspaceCoordinationAccessTests {
       for try await result in group { #expect(result.state == "pending") }
     }
     #expect(try await db.pendingCoordinationAccessRequests().count == 1)
-    await #expect(throws: WorkspaceToolError.accessRequired(target)) { try await db.requireTranscriptAccess(sourceID: source, targetID: target) }
+    await #expect(throws: WorkspaceToolError.accessRequired(target)) { try await db.read { try $0.requireTranscriptAccessUnlocked(sourceID: source, targetID: target) } }
     let reopened = try await persistence.openDatabase()
     #expect(try await reopened.resolveCoordinationAccess(requestID: id, allowed: true).state == "accepted")
     #expect(try await reopened.sessionRelationship(target).coordinatorID == source)
-    try await reopened.requireTranscriptAccess(sourceID: source, targetID: target)
+    try await reopened.read { try $0.requireTranscriptAccessUnlocked(sourceID: source, targetID: target) }
     try await reopened.endCoordination(targetID: target)
     #expect(try await reopened.requestCoordinationAccess(sourceID: source, targetID: target, purpose: "Monitor", requestID: id).state == "accepted")
     #expect(try await reopened.sessionRelationship(target).coordinatorID == nil)
-    await #expect(throws: WorkspaceToolError.accessRequired(target)) { try await reopened.requireTranscriptAccess(sourceID: source, targetID: target) }
+    await #expect(throws: WorkspaceToolError.accessRequired(target)) { try await reopened.read { try $0.requireTranscriptAccessUnlocked(sourceID: source, targetID: target) } }
     await #expect(throws: (any Error).self) {
       _ = try await reopened.requestCoordinationAccess(sourceID: source, targetID: target, purpose: "Changed intent", requestID: id)
     }
@@ -59,7 +59,7 @@ struct WorkspaceCoordinationAccessTests {
     defer { persistence.remove() }
     let pending = try await db.requestCoordinationAccess(sourceID: source, targetID: target, purpose: "Monitor", requestID: UUID().uuidString)
     let other = try await db.createFixtureLocalACPSession(runtimeKind: .claudeCode, title: "Other", ownerDeviceID: UUID())
-    try await db.beginCoordination(sourceID: other, targetID: target, purpose: "Already managing")
+    try await db.coordinateFixtureSession(sourceID: other, targetID: target, purpose: "Already managing")
     let conflict = try await db.resolveCoordinationAccess(requestID: pending.id, allowed: true)
     #expect(conflict.state == "failed")
     #expect(conflict.error?.contains(other) == true)

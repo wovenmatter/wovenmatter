@@ -18,8 +18,8 @@ struct WorkspaceCoordinationEventTests {
   @Test func mutedEventsDoNotReplayAndReacquisitionInvalidatesOldClaim() async throws {
     let (db, persistence, a, b) = try await fixture()
     defer { persistence.remove() }
-    try await db.beginCoordination(sourceID: a, targetID: b, purpose: "Work", notifications: false)
-    let run = try await db.beginLocalACPRun(conversationID: b, content: "Fails")
+    try await db.coordinateFixtureSession(sourceID: a, targetID: b, purpose: "Work", notifications: false)
+    let run = try await db.beginLocalACPRun(conversationID: b, input: .init(text: "Fails"))
     try await db.completeLocalACPRun(runID: run.runID, error: "Fixture failure")
     #expect(try await db.collectCoordinationTurnNotifications().isEmpty)
     try await db.setCoordinationNotifications(sourceID: a, targetID: b, enabled: true)
@@ -30,7 +30,7 @@ struct WorkspaceCoordinationEventTests {
     _ = try await db.claimToolDelivery(id: pending.id)
     try await db.endCoordination(targetID: b, sourceID: a)
     await #expect(throws: (any Error).self) { try await db.validateClaimedToolDelivery(id: pending.id) }
-    try await db.beginCoordination(sourceID: a, targetID: b, purpose: "Different assignment")
+    try await db.coordinateFixtureSession(sourceID: a, targetID: b, purpose: "Different assignment")
     await #expect(throws: (any Error).self) { try await db.validateClaimedToolDelivery(id: pending.id) }
     let new = try await db.recordCoordinationNeedsInput(sessionID: b, requestID: "permission-1", requiresUserApproval: true)
     #expect(new != nil && new?.id != pending.id)
@@ -39,8 +39,8 @@ struct WorkspaceCoordinationEventTests {
   @Test func nativeAuthBlockNotifiesOnceAndCannotFinishItsParent() async throws {
     let (db, persistence, lead, worker) = try await fixture()
     defer { persistence.remove() }
-    try await db.beginCoordination(sourceID: lead, targetID: worker, purpose: "Work")
-    let run = try await db.beginLocalACPRun(conversationID: worker, content: "Work")
+    try await db.coordinateFixtureSession(sourceID: lead, targetID: worker, purpose: "Work")
+    let run = try await db.beginLocalACPRun(conversationID: worker, input: .init(text: "Work"))
     try await db.recordProgramStatus(.init(state: .blocked, id: "children/1", kind: .auth), runID: run.runID)
     let first = try await db.collectCoordinationTurnNotifications()
     #expect(first.count == 1 && first.first?.text.contains("blocked (auth)") == true)

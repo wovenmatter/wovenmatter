@@ -69,7 +69,7 @@ struct WorkspaceLibraryTests {
       try await db.createFixtureLocalACPSession(runtimeKind: kind, title: name, ownerDeviceID: UUID())
     }
     func exchange(_ conversation: String, text: String, reply: String = "Done") async throws -> LocalACPRunIdentifiers {
-      let run = try await db.beginLocalACPRun(conversationID: conversation, content: text)
+      let run = try await db.beginLocalACPRun(conversationID: conversation, input: .init(text: text))
       try await db.replaceLocalACPAssistantMessage(runID: run.runID, content: reply)
       try await db.completeLocalACPRun(runID: run.runID)
       try await db.indexLibraryMessages()

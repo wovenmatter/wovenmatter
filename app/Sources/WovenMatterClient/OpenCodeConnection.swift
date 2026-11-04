@@ -250,7 +250,7 @@ public struct OpenCodeHTTPClient: Sendable {
         }
         return health
     }
-    public func events(_ path: String, query: [String: String] = [:], sessionID: String? = nil,
+    public func events(_ path: String, query: [String: String] = [:],
                        accept: (@Sendable (OpenCodeValue) async -> Bool)? = nil,
                        receive: @escaping @Sendable (OpenCodeValue) async throws -> Void) async throws {
         var request = try request("GET", path, query: query)
@@ -283,10 +283,9 @@ public struct OpenCodeHTTPClient: Sendable {
                     raw.removeAll(keepingCapacity: true)
                 }
                 for value in try parser.append(byte) {
-                    if let sessionID, value["data"]["sessionID"].text != sessionID { continue }
                     if let accept, !(await accept(value)) { continue }
                     ordinal += 1
-                    if let sessionID = sessionID ?? Self.nativeSessionID(path: path)
+                    if let sessionID = Self.nativeSessionID(path: path)
                         ?? (path == "/api/event" ? value["data"]["sessionID"].string : nil) {
                         let identity = value["id"].string ?? value["durable"]["seq"].number.map { String($0) }
                             ?? value["seq"].number.map { String($0) } ?? parser.frameEventID

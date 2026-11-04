@@ -12,7 +12,7 @@ struct WorkspaceNativeRunArchiveTests {
     let (db, persistence) = try await database()
     defer { persistence.remove() }
     let conversation = try await session(db)
-    let run = try await db.beginLocalACPRun(conversationID: conversation, content: "Prompt")
+    let run = try await db.beginLocalACPRun(conversationID: conversation, input: .init(text: "Prompt"))
     let capability = "/private/tmp/wmtools-" + String(repeating: "a", count: 32) + "/" + String(repeating: "b", count: 32) + ".sock"
     let output = "{\"token\":\"retained-lexical-token\",\"toolEndpoint\":\"\(capability)\"}"
     try await db.upsertDeviceOwnedRunActivity(runID: run.runID,

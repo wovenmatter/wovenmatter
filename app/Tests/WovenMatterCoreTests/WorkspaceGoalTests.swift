@@ -36,10 +36,9 @@ struct WorkspaceGoalTests {
     private func fixture(_ kind: AgentRuntimeKind = .defaultAgent) async throws -> (WorkspaceDatabase, PersistenceFixture, String) {
         let persistence = try PersistenceFixture()
         let db = try await persistence.openDatabase()
-        let root = persistence.directory.path
-        let id = try await db.createLocalACPSession(runtimeKind: kind, title: "Goal test", ownerDeviceID: UUID(),
+        let id = try await db.createFixtureLocalACPSession(runtimeKind: kind, title: "Goal test", ownerDeviceID: UUID(),
             openCodeAssociation: kind == .opencode ? ("fixture", "native") : nil,
-            executionRoot: .init(folderID: nil, location: .init(workspaceID: "local", rootPath: root, managed: false), defaultPath: root))
+            fixtureLocation: .init(workspaceID: "local", rootPath: persistence.directory.path, managed: false))
         return (db, persistence, id)
     }
 

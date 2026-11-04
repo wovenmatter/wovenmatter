@@ -14,7 +14,7 @@ struct WorkspaceHistoryTextWindowTests {
     try await database.bindDeviceOwnership(ownerDeviceID: owner)
     let session = try await database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Windows", ownerDeviceID: owner)
     for value in ["\0é🪡z", "é\0🪡z", "é🪡z\0", "e\u{0301}\0🪡z"] {
-      let run = try await database.beginLocalACPRun(conversationID: session, content: value)
+      let run = try await database.beginLocalACPRun(conversationID: session, input: .init(text: value))
       try await database.completeLocalACPRun(runID: run.runID)
       let eventID = UUID().uuidString
       try await database.recordHistory(.init(id: eventID, conversationID: session,
