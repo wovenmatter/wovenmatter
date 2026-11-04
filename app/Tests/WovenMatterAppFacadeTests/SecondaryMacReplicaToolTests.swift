@@ -26,9 +26,9 @@ struct SecondaryMacReplicaToolTests {
             model: "fixture", harness: "Codex", application: "fixture",
             tokens: UsageTokenCounts(inputTokens: 10, outputTokens: 2), costUSD: 0,
             sourceID: "native-fixture", sourceEventID: "native-usage")
-        try await usageStore.replace(sourceID: "native-fixture", sourceName: "Native fixture", location: "fixture",
+        try await usageStore.write { try $0.replace(sourceID: "native-fixture", sourceName: "Native fixture", location: "fixture",
             provider: .codex, harness: "Codex", fingerprint: "fixture", samples: [nativeSample],
-            importedAt: Date(timeIntervalSince1970: 14))
+            importedAt: Date(timeIntervalSince1970: 14)) }
         let tools = try #require(fixture.model.agentTools)
         var ids = Set<String>()
         for offset in 0..<4 {

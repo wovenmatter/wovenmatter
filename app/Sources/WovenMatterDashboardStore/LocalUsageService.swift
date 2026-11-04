@@ -28,8 +28,6 @@ public enum UsageKeychainInteraction: String, Equatable, Sendable {
           explicitUserAction else { return .noninteractive }
     return .oneShotExplicit
   }
-
-  var allowsInteraction: Bool { self == .oneShotExplicit }
 }
 
 public struct CodexUsageWorkspace: Codable, Equatable, Identifiable, Sendable {
@@ -115,27 +113,15 @@ public struct LocalUsageLimitsSnapshot: Equatable, Sendable {
 }
 
 struct UsageLimitsRequest: Sendable {
-  let homeDirectory: URL
   let allowCredentialAccess: Bool
-  let openRouterAPIKey: String?
   let enabledProviders: Set<ProviderKind>
-  let keychainInteraction: UsageKeychainInteraction
-  let interactiveProvider: ProviderKind?
-  let codexWorkspaceSource: CodexWorkspaceSource?
-  let codexWorkspaceCount: Int
   let now: Date
   var selectedConnections: [ProviderKind: UsageConnectionChoice] = [:]
 
-  func collect(sharedCredentials: [String: DefaultAgentCredential]? = nil,
+  func collect(sharedCredentials: [String: DefaultAgentCredential] = [:],
                claudeStatus: BuiltInClaudeSignIn.Status? = nil) async -> [UsageLimitAccount] {
     await ProviderLimitCollector.collect(
-      homeDirectory: homeDirectory,
-      openRouterAPIKey: openRouterAPIKey,
       enabledProviders: enabledProviders,
-      keychainInteraction: keychainInteraction,
-      interactiveProvider: interactiveProvider,
-      codexWorkspaceSource: codexWorkspaceSource,
-      codexWorkspaceCount: codexWorkspaceCount,
       sharedCredentials: sharedCredentials,
       selectedConnections: selectedConnections,
       claudeStatus: claudeStatus,
@@ -155,7 +141,6 @@ public actor LocalUsageService {
   private let fileManager: FileManager
   private let credentialStore: any UsageCredentialStoring
   private let databaseURL: URL
-  private let usesSharedConnections: Bool
   private let importPreparationWorker: DatabaseWorker?
   private let sharedConnectionRevision: @Sendable () -> UInt64
   private let sharedConnectionChoices: @Sendable (Set<ProviderKind>) throws -> [UsageConnectionChoice]
@@ -172,7 +157,6 @@ public actor LocalUsageService {
   private var cachedLimits: (
     date: Date,
     providers: Set<ProviderKind>,
-    codexWorkspaceID: String?,
     connectionRevision: UInt64,
     selectedConnections: [String: String],
     accounts: [UsageLimitAccount]
@@ -181,7 +165,6 @@ public actor LocalUsageService {
   // A successful read or explicit save authorizes this app session. Do not ask
   // Keychain again during the refresh triggered by a one-time Allow response.
   private var openRouterAPIKey: String?
-  private var openRouterCredentialRevision: UInt64
 
   public init(
     homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
@@ -192,7 +175,6 @@ public actor LocalUsageService {
     self.homeDirectory = homeDirectory
     self.fileManager = fileManager
     credentialStore = UsageCredentialStore(service: credentialService)
-    usesSharedConnections = true
     importPreparationWorker = nil
     sharedConnectionRevision = { DefaultAgentSupport.revision }
     sharedConnectionChoices = { providers in
@@ -205,7 +187,6 @@ public actor LocalUsageService {
         }
       }
     }
-    openRouterCredentialRevision = DefaultAgentSupport.revision
     limitCollector = { request in
       guard request.allowCredentialAccess else {
         return request.enabledProviders.map { provider in
@@ -250,11 +231,9 @@ public actor LocalUsageService {
     self.homeDirectory = homeDirectory
     self.fileManager = fileManager
     self.credentialStore = credentialStore
-    self.usesSharedConnections = usesSharedConnections
     self.importPreparationWorker = importPreparationWorker
     self.sharedConnectionRevision = sharedConnectionRevision
     self.sharedConnectionChoices = sharedConnectionChoices
-    openRouterCredentialRevision = sharedConnectionRevision()
     self.limitCollector = limitCollector
     databaseURL = usageDatabaseURL
   }
@@ -310,15 +289,11 @@ public actor LocalUsageService {
     refreshReason: UsageRefreshReason = .manual,
     enabledProviders: Set<ProviderKind> = [],
     allowCredentialAccess: Bool = true,
-    keychainInteraction: UsageKeychainInteraction = .noninteractive,
-    interactiveProvider: ProviderKind? = nil,
-    selectedCodexWorkspaceID: String? = nil,
     selectedConnections: [String: String] = [:],
     now: Date = Date()
   ) async throws -> LocalUsageLimitsSnapshot {
     try Task.checkCancellation()
-    let connectionChoices = usesSharedConnections && allowCredentialAccess
-      ? try sharedConnectionChoices(enabledProviders) : []
+    let connectionChoices = allowCredentialAccess ? try sharedConnectionChoices(enabledProviders) : []
     var resolvedConnections: [ProviderKind: UsageConnectionChoice] = [:]
     for provider in enabledProviders {
       resolvedConnections[provider] = UsageConnectionChoice.resolve(
@@ -328,124 +303,50 @@ public actor LocalUsageService {
     let connectionRevision = sharedConnectionRevision()
     let generation = makeRefreshOwnership()
     limitsGeneration = generation
-    let codexSources = !usesSharedConnections && enabledProviders.contains(.codex)
-      ? ProviderLimitCollector.codexWorkspaceSources(homeDirectory: homeDirectory)
-      : []
-    let selectedCodexSource = ProviderLimitCollector.resolveCodexWorkspaceSource(
-      codexSources,
-      selectedID: selectedCodexWorkspaceID
-    )
-    let resolvedCodexWorkspaceID = selectedCodexSource?.workspace.id
     let accounts: [UsageLimitAccount]
     let mayReuseFreshLimits = refreshReason != .manual
       && refreshReason != .credentialChanged
     if let cachedLimits,
        cachedLimits.providers == enabledProviders,
        cachedLimits.selectedConnections == selectionIDs,
-       (!usesSharedConnections || cachedLimits.connectionRevision == connectionRevision),
-       cachedLimits.codexWorkspaceID == resolvedCodexWorkspaceID,
+       cachedLimits.connectionRevision == connectionRevision,
        (!refresh || (mayReuseFreshLimits
          && now.timeIntervalSince(cachedLimits.date) < 60)) {
       accounts = cachedLimits.accounts
-    } else {
+    } else if refresh {
       // Shared account switches must never inherit a previous account or harness
       // snapshot. Their live limits are cheap to re-fetch; keep only this session
       // cache, fenced by the shared connection revision.
-      let sharedProviders: Set<ProviderKind> = usesSharedConnections ? Set(ProviderKind.supportedAccounts) : []
-      let store = await openUsageStore()
-      try checkCurrentLimits(generation, connectionRevision: connectionRevision)
-      let persistent = (try? await store?.usageLimitAccounts(
-        providers: enabledProviders.subtracting(sharedProviders),
-        accountScopes: resolvedCodexWorkspaceID.map { [.codex: $0] } ?? [:]
-      )) ?? []
-      try checkCurrentLimits(generation, connectionRevision: connectionRevision)
-      let persistentByProvider = Dictionary(
-        uniqueKeysWithValues: persistent.map { ($0.provider, $0) }
-      )
-      if refresh {
-        var openRouterAPIKey: String?
-        var credentialError: String?
-        if !usesSharedConnections && allowCredentialAccess && enabledProviders.contains(.openRouter) {
-          do {
-            openRouterAPIKey = try loadOpenRouterAPIKey()
-          } catch {
-            credentialError = error.localizedDescription
-          }
-        }
-        let refreshed: [UsageLimitAccount]
-        if usesSharedConnections {
-          let requests = enabledProviders.sorted(by: { $0.rawValue < $1.rawValue }).flatMap { provider in
-            let choices = connectionChoices.filter { $0.provider == provider }
-            let selections: [[ProviderKind: UsageConnectionChoice]] = choices.isEmpty
-              ? [[:]] : choices.map { [provider: $0] }
-            return selections.map { selection in
-              UsageLimitsRequest(homeDirectory: homeDirectory, allowCredentialAccess: allowCredentialAccess,
-                openRouterAPIKey: nil, enabledProviders: [provider], keychainInteraction: .noninteractive,
-                interactiveProvider: nil, codexWorkspaceSource: nil, codexWorkspaceCount: 0,
-                now: now, selectedConnections: selection)
-            }
-          }
-          let collector = limitCollector
-          refreshed = try await withThrowingTaskGroup(of: (Int, [UsageLimitAccount]).self) { group in
-            for (index, request) in requests.enumerated() {
-              group.addTask {
-                try generation.check()
-                let accounts = await collector(request)
-                try generation.check()
-                return (index, accounts)
-              }
-            }
-            var results: [(Int, [UsageLimitAccount])] = []
-            for try await value in group { results.append(value) }
-            return results.sorted { $0.0 < $1.0 }.flatMap(\.1)
-          }
-        } else {
-          refreshed = await limitCollector(UsageLimitsRequest(
-          homeDirectory: homeDirectory,
-          allowCredentialAccess: allowCredentialAccess,
-          openRouterAPIKey: openRouterAPIKey,
-          enabledProviders: enabledProviders,
-          keychainInteraction: keychainInteraction,
-          interactiveProvider: interactiveProvider,
-          codexWorkspaceSource: selectedCodexSource,
-          codexWorkspaceCount: codexSources.count,
-          now: now,
-          selectedConnections: resolvedConnections
-        ))
-        }
-        try checkCurrentLimits(generation, connectionRevision: connectionRevision)
-        accounts = refreshed.map { refreshedAccount in
-          let account: UsageLimitAccount
-          if refreshedAccount.provider == .openRouter, let credentialError {
-            account = UsageLimitAccount(
-              provider: .openRouter,
-              accountLabel: refreshedAccount.accountLabel,
-              status: .unavailable,
-              source: "Mac Keychain",
-              detail: credentialError,
-              observedAt: now
-            )
-          } else {
-            account = refreshedAccount
-          }
-          guard account.status == .failed || account.status == .unavailable,
-                let prior = persistentByProvider[account.provider]
-          else { return account }
-          return prior.retainingLastGood(after: account)
-        }
-        if !usesSharedConnections { try? await store?.saveUsageLimitAccounts(accounts, storedAt: now, validating: { try generation.check() }) }
-        try checkCurrentLimits(generation, connectionRevision: connectionRevision)
-        cachedLimits = (now, enabledProviders, resolvedCodexWorkspaceID, connectionRevision, selectionIDs, accounts)
-      } else {
-        let placeholders = ProviderLimitCollector.placeholderAccounts(
-          enabledProviders: enabledProviders,
-          now: now
-        )
-        accounts = placeholders.map { placeholder in
-          persistentByProvider[placeholder.provider]?.stale()
-            ?? placeholder
+      let requests = enabledProviders.sorted(by: { $0.rawValue < $1.rawValue }).flatMap { provider in
+        let choices = connectionChoices.filter { $0.provider == provider }
+        let selections: [[ProviderKind: UsageConnectionChoice]] = choices.isEmpty
+          ? [[:]] : choices.map { [provider: $0] }
+        return selections.map { selection in
+          UsageLimitsRequest(allowCredentialAccess: allowCredentialAccess, enabledProviders: [provider],
+            now: now, selectedConnections: selection)
         }
       }
+      let collector = limitCollector
+      accounts = try await withThrowingTaskGroup(of: (Int, [UsageLimitAccount]).self) { group in
+        for (index, request) in requests.enumerated() {
+          group.addTask {
+            try generation.check()
+            let accounts = await collector(request)
+            try generation.check()
+            return (index, accounts)
+          }
+        }
+        var results: [(Int, [UsageLimitAccount])] = []
+        for try await value in group { results.append(value) }
+        return results.sorted { $0.0 < $1.0 }.flatMap(\.1)
+      }
+      try checkCurrentLimits(generation, connectionRevision: connectionRevision)
+      cachedLimits = (now, enabledProviders, connectionRevision, selectionIDs, accounts)
+    } else {
+      accounts = ProviderLimitCollector.placeholderAccounts(
+        enabledProviders: enabledProviders,
+        now: now
+      )
     }
     try checkCurrentLimits(generation, connectionRevision: connectionRevision)
     return LocalUsageLimitsSnapshot(
@@ -453,8 +354,6 @@ public actor LocalUsageService {
       hasOpenRouterCredential: allowCredentialAccess
         && enabledProviders.contains(.openRouter)
         && (openRouterAPIKey != nil || (try? credentialStore.hasOpenRouterAPIKey()) == true),
-      codexWorkspaces: codexSources.map(\.workspace),
-      selectedCodexWorkspaceID: resolvedCodexWorkspaceID,
       connectionChoices: connectionChoices,
       selectedConnections: selectionIDs
     )
@@ -463,7 +362,7 @@ public actor LocalUsageService {
   private func checkCurrentLimits(_ generation: UsageRefreshOwnership, connectionRevision: UInt64) throws {
     try generation.check()
     guard limitsGeneration === generation, !Task.isCancelled,
-          !usesSharedConnections || connectionRevision == sharedConnectionRevision() else {
+          connectionRevision == sharedConnectionRevision() else {
       throw CancellationError()
     }
   }
@@ -554,7 +453,6 @@ public actor LocalUsageService {
     guard !key.isEmpty else { throw LocalUsageServiceError.emptyCredential }
     try credentialStore.saveOpenRouterAPIKey(key)
     openRouterAPIKey = key
-    openRouterCredentialRevision = sharedConnectionRevision()
     limitsGeneration = UsageRefreshOwnership()
     cachedLimits = nil
   }
@@ -577,14 +475,6 @@ public actor LocalUsageService {
     cachedLimits = nil
   }
 
-  /// Explicit saved-credential recovery. Never launches Claude or a sign-in flow.
-  public func authorizeClaudeCredentialAccess() throws {
-    try ProviderLimitCollector.authorizeClaudeCredentialAccess(
-      credentialsURL: ProviderLimitCollector.claudeCredentialsURL(homeDirectory: homeDirectory)
-    )
-    cachedLimits = nil
-  }
-
   public func authorizeOpenRouterCredentialAccess() throws {
     guard let key = try credentialStore.authorizeOpenRouterAPIKey() else {
       openRouterAPIKey = nil
@@ -593,20 +483,8 @@ public actor LocalUsageService {
       throw LocalUsageServiceError.missingCredential
     }
     openRouterAPIKey = key
-    openRouterCredentialRevision = sharedConnectionRevision()
     limitsGeneration = UsageRefreshOwnership()
     cachedLimits = nil
-  }
-
-  private func loadOpenRouterAPIKey() throws -> String? {
-    let revision = sharedConnectionRevision()
-    if usesSharedConnections && revision != openRouterCredentialRevision {
-      openRouterAPIKey = nil; openRouterCredentialRevision = revision
-    }
-    if let openRouterAPIKey { return openRouterAPIKey }
-    let key = try credentialStore.loadOpenRouterAPIKey()
-    openRouterAPIKey = key
-    return key
   }
 
   private func openUsageStore() async -> AsyncUsageStore? {
@@ -679,8 +557,7 @@ public actor LocalUsageService {
   }
 
   private func makeRefreshOwnership() -> UsageRefreshOwnership {
-    UsageRefreshOwnership(connectionRevision: usesSharedConnections ? sharedConnectionRevision() : nil,
-      currentRevision: sharedConnectionRevision)
+    UsageRefreshOwnership(connectionRevision: sharedConnectionRevision(), currentRevision: sharedConnectionRevision)
   }
 
   private func isCurrentAnalytics(_ generation: UsageRefreshOwnership) -> Bool {

@@ -97,22 +97,20 @@ struct WorkspaceLibraryTests {
               kind: .note, resourceID: "note", titleSnapshot: "Note", contentSnapshot: "https://private-note.example",
               revisionSnapshot: "1")),
         ]))
-    let payload: GatewayJSONValue = .object([
-      "content": .array([
-        .object([
-          "type": .string("image"), "url": .string("./photo.png"), "fileName": .string("photo.png"),
-          "mimeType": .string("image/png"), "data": .string("AQID"),
-        ])
-      ])
-    ])
-    try await f.db.captureGatewayLibraryFiles(payload, messageID: run.userMessageID, conversationID: chat)
+    func captureNativePhoto(messageID: String) async throws {
+      try await f.db.write { connection in try connection.transaction {
+        try connection.captureNativeLibraryFileUnlocked(source: "./photo.png", title: "photo.png", mime: "image/png",
+          base64: "AQID", messageID: messageID, conversationID: chat)
+      } }
+    }
+    try await captureNativePhoto(messageID: run.userMessageID)
     try await f.db.appendLocalACPAssistantChunk(runID: run.runID, chunk: "[Incomplete](https://stream.example")
     try await f.db.indexLibraryMessages()
     #expect(try await f.db.libraryItems().map(\.kind) == [.photo])
     try await f.db.replaceLocalACPAssistantMessage(runID: run.runID, content: "[Complete](https://stream.example) [Image](./photo.png)")
     try await f.db.completeLocalACPRun(runID: run.runID)
     try await f.db.indexLibraryMessages()
-    try await f.db.captureGatewayLibraryFiles(payload, messageID: run.assistantMessageID, conversationID: chat)
+    try await captureNativePhoto(messageID: run.assistantMessageID)
     let rows = try await f.db.libraryItems()
     #expect(rows.count == 3)
     #expect(rows.filter { $0.sender == .me && $0.kind == .photo }.count == 1)
@@ -146,7 +144,6 @@ struct WorkspaceLibraryTests {
         "UPDATE dashboard_conversations SET desktop_owned=1,governing_plane='platform' WHERE id=?", [chat])
      } }
     #expect(try await f.db.libraryItems().isEmpty)
-    #expect(try await f.db.libraryFacets().isEmpty)
     #expect(try await f.db.pendingLibraryFiles().isEmpty)
     #expect(try await f.db.libraryItem(id: file.id) == nil)
     await #expect(throws: WorkspaceToolError.self) { try await f.db.librarySourceMessage(id: file.id) }
@@ -240,7 +237,6 @@ struct WorkspaceLibraryTests {
      } }
     try await f.db.indexLibraryMessages()
     #expect(try await f.db.libraryItems().isEmpty)
-    #expect(try await f.db.retainedLibraryHashes().isEmpty)
   }
 
 }

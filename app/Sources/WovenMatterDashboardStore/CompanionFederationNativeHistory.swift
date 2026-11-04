@@ -66,7 +66,7 @@ extension WorkspaceDatabaseConnection {
     guard size == part.byteCount, hash.finalize().map({ String(format: "%02x", $0) }).joined() == part.sha256 else {
       throw federationError("record_digest", "Native history record integrity failed. The source must retain its unacknowledged history.")
     }
-    try companionExecuteUnlocked("UPDATE companion_native_history SET complete=1 WHERE workspace_id=? AND record_id=?", values: [entry.workspaceID, part.recordID])
+    try toolsExecuteUnlocked("UPDATE companion_native_history SET complete=1 WHERE workspace_id=? AND record_id=?", [entry.workspaceID, part.recordID])
     // Reasoning v2 records are derived disclosure checkpoints/suffixes, not
     // additional source history. Keep verified retrieval without duplicating
     // search hits for every streamed revision. Legacy v1 indexing is unchanged.

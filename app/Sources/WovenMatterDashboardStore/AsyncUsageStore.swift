@@ -44,40 +44,8 @@ final class AsyncUsageStore: Sendable {
     try await read { try $0.source(id) }
   }
 
-  func runtimeSyncState(endpoint: String) async throws -> UsageRuntimeSyncState? {
-    try await read { try $0.runtimeSyncState(endpoint: endpoint) }
-  }
-
-  func ingest(
-    page: UsageIngestionPage,
-    endpoint: String,
-    importedAt: Date
-  ) async throws {
-    try await write { try $0.ingest(page: page, endpoint: endpoint, importedAt: importedAt) }
-  }
-
-  func replace(
-    sourceID: String,
-    sourceName: String,
-    location: String,
-    provider: ProviderKind,
-    harness: String?,
-    fingerprint: String,
-    samples: [UsageSample],
-    importedAt: Date,
-    indexedAfter: Date? = nil,
-    transactional: Bool = true,
-    validating validate: @escaping @Sendable () throws -> Void = {}
-  ) async throws {
-    try await write(validating: validate) { try $0.replace(sourceID: sourceID, sourceName: sourceName, location: location, provider: provider, harness: harness, fingerprint: fingerprint, samples: samples, importedAt: importedAt, indexedAfter: indexedAfter, transactional: transactional) }
-  }
-
   func samples(in interval: DateInterval, sourceID: String? = nil, limit: Int? = nil, offset: Int = 0) async throws -> [UsageSample] {
     try await read { try $0.samples(in: interval, sourceID: sourceID, limit: limit, offset: offset) }
-  }
-
-  func statistics(sourceID: String, in interval: DateInterval) async throws -> UsageSourceStatistics {
-    try await read { try $0.statistics(sourceID: sourceID, in: interval) }
   }
 
   func statistics(sourceIDPrefix: String, in interval: DateInterval) async throws -> UsageSourceStatistics {
@@ -86,26 +54,6 @@ final class AsyncUsageStore: Sendable {
 
   func metadataDate(_ key: String) async throws -> Date? {
     try await read { try $0.metadataDate(key) }
-  }
-
-  func setMetadataDate(_ value: Date, for key: String) async throws {
-    try await write { try $0.setMetadataDate(value, for: key) }
-  }
-
-  func usageLimitAccounts(
-    providers: Set<ProviderKind>,
-    accountScopes: [ProviderKind: String] = [:]
-  ) async throws -> [UsageLimitAccount] {
-    try await read { try $0.usageLimitAccounts(providers: providers, accountScopes: accountScopes) }
-  }
-
-  func saveUsageLimitAccounts(_ accounts: [UsageLimitAccount], storedAt: Date,
-    validating validate: @escaping @Sendable () throws -> Void = {}) async throws {
-    try await write(validating: validate) { try $0.saveUsageLimitAccounts(accounts, storedAt: storedAt) }
-  }
-
-  func prune(before cutoff: Date) async throws {
-    try await write { try $0.prune(before: cutoff) }
   }
 }
 

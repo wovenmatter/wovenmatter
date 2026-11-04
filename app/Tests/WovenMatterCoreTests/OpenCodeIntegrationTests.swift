@@ -282,9 +282,8 @@ struct OpenCodeIntegrationTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
         let source = try await database.createOpenCodeFixtureSession(runtimeKind: .codex, title: "Coordinator", ownerDeviceID: UUID())
-        let target = try await database.createOpenCodeFixtureSession(runtimeKind: .opencode, title: "Work", ownerDeviceID: UUID())
+        let target = try await database.createOpenCodeFixtureSession(runtimeKind: .opencode, title: "Work", ownerDeviceID: UUID(), openCodeAssociation: ("fixture", "ses_fixture"))
         let link = OpenCodeSessionLink(conversationID: target, connectionID: "fixture", sessionID: "ses_fixture")
-        try await database.attachOpenCodeSession(link)
         let deliveryID = UUID().uuidString.lowercased()
         _ = try await database.reserveToolDelivery(sourceID: source, targetID: target, text: "Build this", requestID: deliveryID)
         _ = try await database.claimToolDelivery(id: deliveryID)
@@ -408,9 +407,8 @@ struct OpenCodeIntegrationTests {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
-        let id = try await database.createOpenCodeFixtureSession(runtimeKind: .opencode, title: "fixture", ownerDeviceID: UUID())
+        let id = try await database.createOpenCodeFixtureSession(runtimeKind: .opencode, title: "fixture", ownerDeviceID: UUID(), openCodeAssociation: ("fixture", "ses_fixture"))
         let link = OpenCodeSessionLink(conversationID: id, connectionID: "fixture", sessionID: "ses_fixture")
-        try await database.attachOpenCodeSession(link)
         let session = fixtureSession()
         let coordinator = OpenCodeSessionCoordinator(database: database, clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) })
         let timer = WorkspaceSessionTimer(sessionID: id, instruction: "unknown", nextFireAt: .distantPast)

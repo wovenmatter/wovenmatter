@@ -34,11 +34,11 @@ struct WorkspaceAgentToolsServiceTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let url = root.appending(path: "workspace.sqlite")
         let database = try await WorkspaceDatabase(url: url)
-        let caller = try await database.createFixtureLocalACPSession(runtimeKind: runtime, title: "HTML acceptance", ownerDeviceID: UUID())
+        let caller = try await database.createFixtureLocalACPSession(runtimeKind: runtime, title: "HTML acceptance", ownerDeviceID: UUID(),
+            openCodeAssociation: runtime == .opencode ? ("acceptance", "ses_acceptance") : nil)
         var native = OpenCodeSessionSnapshot()
         let runID: String?
         if runtime == .opencode {
-            try await database.attachOpenCodeSession(.init(conversationID: caller, connectionID: "acceptance", sessionID: "ses_acceptance"))
             native.active = true
             native.messages = [["id": "msg_acceptance", "type": "assistant", "time": ["created": .number(1)], "content": .array([])]]
             try await database.saveOpenCodeSnapshot(native, conversationID: caller)

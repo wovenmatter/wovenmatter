@@ -11,7 +11,6 @@ struct WorkspaceGoalTests {
         let (db, directory, session) = try await fixture(.opencode)
         defer { try? FileManager.default.removeItem(at: directory) }
         _ = try await create(db, session, tokens: 100)
-        try await db.attachOpenCodeSession(.init(conversationID: session, connectionID: "fixture", sessionID: "native"))
         var snapshot = OpenCodeSessionSnapshot()
         snapshot.active = true
         snapshot.messages = [.object(["id": .string("assistant"), "type": .string("assistant"),
@@ -38,6 +37,7 @@ struct WorkspaceGoalTests {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let db = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
         let id = try await db.createLocalACPSession(runtimeKind: kind, title: "Goal test", ownerDeviceID: UUID(),
+            openCodeAssociation: kind == .opencode ? ("fixture", "native") : nil,
             executionRoot: .init(folderID: nil, location: .init(workspaceID: "local", rootPath: directory.path, managed: false), defaultPath: directory.path))
         return (db, directory, id)
     }

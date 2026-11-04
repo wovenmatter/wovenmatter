@@ -90,6 +90,8 @@ import WovenMatterCore
         try await auth.approvePairing(id: approved.requestID, workspaceID: fixture.libraryID)
         let poll = CompanionPairingPoll(requestID: approved.requestID, requestSecret: approved.requestSecret)
         let credential = try #require(try await auth.pairingResult(poll).pairing?.credential)
+        let paired = try #require(try await auth.preparePairingCancellation(poll))
+        try await auth.revoke(deviceID: paired.id, expected: paired)
         try await auth.cancelPairing(poll)
         await #expect(throws: CompanionAPIError.self) { try await auth.authenticate(bearer: credential) }
         let expired = fixture.request()
@@ -111,10 +113,10 @@ import WovenMatterCore
         try await auth.approvePairing(id: approved.requestID, workspaceID: fixture.libraryID)
         let poll = CompanionPairingPoll(requestID: approved.requestID, requestSecret: approved.requestSecret)
         let device = try #require(try await auth.preparePairingCancellation(poll))
-        await #expect(throws: CompanionAPIError.self) { try await auth.cancelPairing(poll, revokeApproved: false) }
+        await #expect(throws: CompanionAPIError.self) { try await auth.cancelPairing(poll) }
         #expect(await auth.isCurrent(device))
         try await auth.revoke(deviceID: device.id, expected: device)
-        try await auth.cancelPairing(poll, revokeApproved: false)
+        try await auth.cancelPairing(poll)
         #expect(try await auth.preparePairingCancellation(poll) == nil)
     }
 

@@ -261,7 +261,7 @@ public final class CompanionWorkspaceAPI {
                 if let principal = try await authentication.preparePairingCancellation(poll) {
                     try await onCancelPairing(principal)
                 }
-                try await authentication.cancelPairing(poll, revokeApproved: false)
+                try await authentication.cancelPairing(poll)
                 await onPair()
                 return try .json(["cancelled": true])
             }

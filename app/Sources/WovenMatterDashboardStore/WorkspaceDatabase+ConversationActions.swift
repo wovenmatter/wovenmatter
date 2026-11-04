@@ -41,7 +41,7 @@ extension WorkspaceDatabaseConnection {
             AND status IN ('queued', 'accepted', 'running', 'uncertain') LIMIT 1
           """, values: [id]).first {
           // A lost continuation receipt is still unresolved native work even if
-          // the original prompt has finished. PR84 owns exact-ID reconciliation.
+          // the original prompt has finished.
           throw run.objectValue?["status"]?.stringValue == "uncertain"
             ? WorkspaceConversationActionError.pendingInput : WorkspaceConversationActionError.running
         }

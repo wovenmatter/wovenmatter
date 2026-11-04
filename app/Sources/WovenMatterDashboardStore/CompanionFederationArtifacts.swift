@@ -49,7 +49,7 @@ extension WorkspaceDatabaseConnection {
           throw federationError("invalid_artifact", "A deletion must reference the committed artifact.")
         }
         try saveCommittedArtifactUnlocked(manifest)
-        try companionExecuteUnlocked("DELETE FROM companion_artifact_chunks WHERE artifact_id=?", values: [manifest.id])
+        try toolsExecuteUnlocked("DELETE FROM companion_artifact_chunks WHERE artifact_id=?", [manifest.id])
         return CompanionArtifactTransfer(manifest: manifest, nextOffset: manifest.byteCount, complete: true)
       }
       let statement = try prepareUnlocked("INSERT INTO companion_artifact_uploads(id,revision,manifest) VALUES (?,?,?)")
@@ -114,7 +114,7 @@ extension WorkspaceDatabaseConnection {
         throw federationError("artifact_digest", "The transferred artifact does not match its source digest. Your existing saved revision is preserved.")
       }
       try saveCommittedArtifactUnlocked(transfer.manifest)
-      try companionExecuteUnlocked("DELETE FROM companion_artifact_uploads WHERE id=?", values: [request.id])
+      try toolsExecuteUnlocked("DELETE FROM companion_artifact_uploads WHERE id=?", [request.id])
       let cleanup = try prepareUnlocked("DELETE FROM companion_artifact_chunks WHERE artifact_id=? AND revision<>?")
       defer { sqlite3_finalize(cleanup) }
       try bind(request.id, at: 1, to: cleanup); sqlite3_bind_int64(cleanup, 2, request.revision); try stepDone(cleanup)

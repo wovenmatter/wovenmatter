@@ -237,33 +237,6 @@ extension WorkspaceDatabaseConnection {
     }
   }
 
-  func captureGatewayLibraryFilesUnlocked(_ payload: GatewayJSONValue, messageID: String, conversationID: String) throws
-  {
-    let body = payload.objectValue?["message"] ?? payload
-    let blocks = body.objectValue?["content"]?.arrayValue ?? []
-    for block in blocks.prefix(LibraryLinkDiscovery.maximumItemsPerMessage) {
-      guard let fields = block.objectValue, let type = fields["type"]?.stringValue,
-        ["image", "audio", "video", "file"].contains(type)
-      else { continue }
-      let nested = fields["source"]?.objectValue
-      let source = fields["url"]?.stringValue ?? fields["path"]?.stringValue ?? nested?["url"]?.stringValue ?? ""
-      let title =
-        fields["fileName"]?.stringValue ?? fields["alt"]?.stringValue ?? URL(string: source)?.lastPathComponent
-        ?? "Attachment"
-      let mime = fields["mimeType"]?.stringValue ?? nested?["media_type"]?.stringValue
-      try captureNativeLibraryFileUnlocked(
-        source: source, title: title, mime: mime,
-        base64: fields["data"]?.stringValue ?? nested?["data"]?.stringValue, messageID: messageID,
-        conversationID: conversationID)
-    }
-  }
-  public func captureGatewayLibraryFiles(_ payload: GatewayJSONValue, messageID: String, conversationID: String) throws
-  {
-    try transaction {
-      try captureGatewayLibraryFilesUnlocked(payload, messageID: messageID, conversationID: conversationID)
-    }
-  }
-
   public func setLibraryLocation(conversationID: String, workspaceName: String, root: String) throws {
     try transaction {
       try toolsExecuteUnlocked(
@@ -379,10 +352,6 @@ extension WorkspaceDatabaseConnection {
       bindings: [id, try localMutationOperatorIDUnlocked()], as: WorkspaceLibraryItem.self
     ).first
   }
-  public func libraryFacets() throws -> [LibraryFacet] {
-    try withLock { try libraryFacetsUnlocked() }
-  }
-
   private func libraryFacetsUnlocked() throws -> [LibraryFacet] {
     try decodeCanonicalRowsUnlocked(
       """
@@ -467,17 +436,6 @@ extension WorkspaceDatabaseConnection {
     }
   }
 
-  public func retainedLibraryHashes() throws -> Set<String> {
-    try withLock {
-      Set(
-        try historyRowsUnlocked(
-          "SELECT DISTINCT content_hash FROM library_items WHERE storage='retained' AND content_hash IS NOT NULL",
-          values: []
-        )
-        .compactMap { $0.objectValue?["content_hash"]?.stringValue })
-    }
-  }
-
   public func librarySourceMessage(id: String) throws -> String {
     try withLock {
       guard
@@ -521,10 +479,6 @@ extension WorkspaceDatabase {
     try await write { try $0.indexLibraryMessages(limit: limit) }
   }
 
-  public func captureGatewayLibraryFiles(_ payload: GatewayJSONValue, messageID: String, conversationID: String) async throws {
-    try await write { try $0.captureGatewayLibraryFiles(payload, messageID: messageID, conversationID: conversationID) }
-  }
-
   public func setLibraryLocation(conversationID: String, workspaceName: String, root: String) async throws {
     try await write { try $0.setLibraryLocation(conversationID: conversationID, workspaceName: workspaceName, root: root) }
   }
@@ -550,10 +504,6 @@ extension WorkspaceDatabase {
     try await read { try $0.libraryItem(id: id) }
   }
 
-  public func libraryFacets() async throws -> [LibraryFacet] {
-    try await read { try $0.libraryFacets() }
-  }
-
   public func pendingLibraryFiles(limit: Int = 8, now: Date = Date()) async throws -> [WorkspaceLibraryItem] {
     try await read { try $0.pendingLibraryFiles(limit: limit, now: now) }
   }
@@ -568,10 +518,6 @@ extension WorkspaceDatabase {
 
   public func recordLibraryOutput(runID: String, asset: LibraryAsset) async throws {
     try await write { try $0.recordLibraryOutput(runID: runID, asset: asset) }
-  }
-
-  public func retainedLibraryHashes() async throws -> Set<String> {
-    try await read { try $0.retainedLibraryHashes() }
   }
 
   public func librarySourceMessage(id: String) async throws -> String {

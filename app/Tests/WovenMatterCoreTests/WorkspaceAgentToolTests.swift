@@ -205,8 +205,10 @@ struct WorkspaceAgentToolTests {
       _ = try await reopened.createFixtureLocalACPSession(runtimeKind: saved.runtimeKind, title: "Provider default",
         ownerDeviceID: UUID(), requestedConversationID: UUID(uuidString: target))
     }
-    try await reopened.saveSessionExecutionRoot(id: target, folderID: folder,
-      location: .init(workspaceID: owner, rootPath: "/workspace/original", managed: false), defaultPath: "/workspace/default")
+    try await reopened.write { connection in try connection.transaction {
+      try connection.saveSessionExecutionRootUnlocked(id: target, folderID: folder,
+        location: .init(workspaceID: owner, rootPath: "/workspace/original", managed: false), defaultPath: "/workspace/default")
+    } }
     let inserted = try await #require(reopened.workspaceOverview().conversations.first { $0.id == target })
     #expect(inserted.title == saved.title && inserted.folderID == folder && inserted.remoteWorkspaceID == saved.workspaceID)
     #expect(try await reopened.sessionTools(target) == saved.tools)

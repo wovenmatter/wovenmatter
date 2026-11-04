@@ -512,7 +512,7 @@ extension WorkspaceDatabaseConnection {
           WHERE user_id = ?
           ORDER BY is_pinned DESC, position, name, id
           """,
-          operatorID: operatorID,
+          bindings: [operatorID],
           as: WorkspaceFolderRecord.self
         )
         conversations = try decodeCanonicalRowsUnlocked(
@@ -555,7 +555,7 @@ extension WorkspaceDatabaseConnection {
             AND governing_plane = 'wovenmatter_macos'
           ORDER BY last_message_at DESC, id DESC
           """,
-          operatorID: operatorID,
+          bindings: [operatorID],
           as: WorkspaceConversationRecord.self
         )
 
@@ -571,7 +571,7 @@ extension WorkspaceDatabaseConnection {
           WHERE user_id = ? AND deleted_at IS NULL
           ORDER BY is_pinned DESC, updated_at DESC, id DESC
           """,
-          operatorID: operatorID,
+          bindings: [operatorID],
           as: WorkspaceNoteRecord.self
         )
       }
@@ -768,10 +768,6 @@ extension WorkspaceDatabaseConnection {
     }
   }
 
-  public func saveSessionExecutionRoot(id: String, folderID: String?, location: WorkspaceFolderLocation, defaultPath: String) throws {
-    try transaction { try saveSessionExecutionRootUnlocked(id: id, folderID: folderID, location: location, defaultPath: defaultPath) }
-  }
-
   func validateExecutionLocation(_ location: WorkspaceFolderLocation) throws {
     guard !location.workspaceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
           !location.workspaceID.contains("\0"), location.rootPath.hasPrefix("/"), !location.rootPath.contains("\0") else {
@@ -826,9 +822,6 @@ extension WorkspaceDatabase {
   }
   public func sessionExecutionRoot(id: String) async throws -> WorkspaceFolderLocation? {
     try await read { try $0.sessionExecutionRoot(id: id) }
-  }
-  public func saveSessionExecutionRoot(id: String, folderID: String?, location: WorkspaceFolderLocation, defaultPath: String) async throws {
-    try await write { try $0.saveSessionExecutionRoot(id: id, folderID: folderID, location: location, defaultPath: defaultPath) }
   }
   public func setFolderReferences(id: String, paths: [String]) async throws {
     try await write { try $0.setFolderReferences(id: id, paths: paths) }

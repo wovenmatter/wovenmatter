@@ -276,19 +276,17 @@ final class FacadeUsageProbe: @unchecked Sendable {
     func expectPassiveLimits(providers: Set<ProviderKind>) {
         lock.withLock { expectedPassiveProviders = providers }
     }
+    /// Shared connections collect one passive request per expected provider.
     func collectLimits(_ request: UsageLimitsRequest) {
-        let expected = lock.withLock {
+        let accepted = lock.withLock {
             requests.append(request)
-            let expected = expectedPassiveProviders
-            expectedPassiveProviders = nil
-            return expected
+            guard var remaining = expectedPassiveProviders, !request.allowCredentialAccess,
+                  request.enabledProviders.isSubset(of: remaining) else { return false }
+            remaining.subtract(request.enabledProviders)
+            expectedPassiveProviders = remaining.isEmpty ? nil : remaining
+            return true
         }
-        guard let expected, request.enabledProviders == expected,
-              !request.allowCredentialAccess, !request.keychainInteraction.allowsInteraction,
-              request.interactiveProvider == nil, request.openRouterAPIKey == nil else {
-            record("unexpected limits policy")
-            return
-        }
+        if !accepted { record("unexpected limits policy") }
     }
     var calls: [String] { lock.withLock { accesses } }
     func record(_ access: String) {
@@ -300,7 +298,6 @@ private struct FacadeNoCredentials: UsageCredentialStoring {
     let probe: FacadeUsageProbe
     func hasOpenRouterAPIKey() throws -> Bool { probe.record("credential existence"); return false }
     func authorizeOpenRouterAPIKey() throws -> String? { probe.record("credential authorization"); return nil }
-    func loadOpenRouterAPIKey() throws -> String? { probe.record("credential load"); return nil }
     func saveOpenRouterAPIKey(_ key: String) throws { probe.record("credential save") }
     func deleteOpenRouterAPIKey() throws { probe.record("credential delete") }
 }

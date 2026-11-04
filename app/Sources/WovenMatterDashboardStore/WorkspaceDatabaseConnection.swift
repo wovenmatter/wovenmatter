@@ -338,34 +338,43 @@ extension WorkspaceDatabaseConnection {
   /// interruption. query_only additionally rejects accidental writes on readers.
   func readSnapshot<T>(context: DatabaseJobContext, _ operation: () throws -> T) throws -> T {
     guard let connection else { throw WorkspaceDatabaseError.execute("Database is closed") }
-    let pointer = Unmanaged.passUnretained(context).toOpaque()
-    sqlite3_progress_handler(connection, 1_000, { pointer in
-      guard let pointer else { return 0 }
-      do { try Unmanaged<DatabaseJobContext>.fromOpaque(pointer).takeUnretainedValue().check(); return 0 }
-      catch { return 1 }
-    }, pointer)
-    sqlite3_busy_handler(connection, { pointer, attempt in
-      guard let pointer, attempt < 500 else { return 0 }
-      do { try Unmanaged<DatabaseJobContext>.fromOpaque(pointer).takeUnretainedValue().check() }
-      catch { return 0 }
-      sqlite3_sleep(10)
-      return 1
-    }, pointer)
-    defer {
-      sqlite3_progress_handler(connection, 0, nil, nil)
-      sqlite3_busy_timeout(connection, 5000)
-    }
-    try executeUnlocked("BEGIN DEFERRED")
-    do {
-      let value = try operation()
-      try context.check()
-      try executeUnlocked("COMMIT")
-      return value
-    } catch {
-      sqlite3_progress_handler(connection, 0, nil, nil)
-      try? executeUnlocked("ROLLBACK")
-      try context.check()
-      throw error
-    }
+    return try withSQLiteReadSnapshot(connection, context: context, execute: executeUnlocked, operation)
+  }
+}
+
+/// Shared by the workspace and usage readers: a deferred read transaction whose
+/// progress and busy handlers cooperate with the worker job's cancellation.
+func withSQLiteReadSnapshot<T>(
+  _ connection: OpaquePointer, context: DatabaseJobContext,
+  execute: (String) throws -> Void, _ operation: () throws -> T
+) throws -> T {
+  let pointer = Unmanaged.passUnretained(context).toOpaque()
+  sqlite3_progress_handler(connection, 1_000, { pointer in
+    guard let pointer else { return 0 }
+    do { try Unmanaged<DatabaseJobContext>.fromOpaque(pointer).takeUnretainedValue().check(); return 0 }
+    catch { return 1 }
+  }, pointer)
+  sqlite3_busy_handler(connection, { pointer, attempt in
+    guard let pointer, attempt < 500 else { return 0 }
+    do { try Unmanaged<DatabaseJobContext>.fromOpaque(pointer).takeUnretainedValue().check() }
+    catch { return 0 }
+    sqlite3_sleep(10)
+    return 1
+  }, pointer)
+  defer {
+    sqlite3_progress_handler(connection, 0, nil, nil)
+    sqlite3_busy_timeout(connection, 5000)
+  }
+  try execute("BEGIN DEFERRED")
+  do {
+    let value = try operation()
+    try context.check()
+    try execute("COMMIT")
+    return value
+  } catch {
+    sqlite3_progress_handler(connection, 0, nil, nil)
+    try? execute("ROLLBACK")
+    try context.check()
+    throw error
   }
 }

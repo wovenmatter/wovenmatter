@@ -86,7 +86,7 @@ struct CompanionRunControlTests {
         #expect(persistedReference.revisionSnapshot == String(note.revision))
         #expect(persistedReference.contentSnapshot == note.content)
         // A later canonical edit cannot rewrite the immutable run reference.
-        _ = try await database.updateNote(id: noteID, title: "Later title", content: note.content, expectedRevision: String(note.revision))
+        _ = try await database.persistNoteDraft(id: noteID, title: "Later title", content: note.content, expectedRevision: String(note.revision))
         #expect(try await database.conversationContent(id: id).references.first(where: { $0.id == reference.id })?.titleSnapshot == "Offline idea")
         #expect(try await database.conversationContent(id: id).runs.first?.status == "running")
         #expect(await coordinator.activeInputCapability(conversationID: id) == LocalACPClient.activeInputRoute(runtimeKind: runtime, steeringSupported: steeringAdvertised))

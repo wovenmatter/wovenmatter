@@ -309,10 +309,6 @@ extension WorkspaceDatabaseConnection {
     try transaction { try grantSessionReadUnlocked(sourceID: sourceID, targetID: targetID, kind: "attachment") }
   }
 
-  public func removeConversationReference(sourceID: String, targetID: String) throws {
-    try transaction { try toolsExecuteUnlocked("DELETE FROM workspace_session_grants WHERE source_id=? AND target_id=? AND kind='attachment'", [sourceID, targetID]) }
-  }
-
   func grantSessionReadUnlocked(sourceID: String, targetID: String, kind: String) throws {
     try requireToolSessionUnlocked(sourceID)
     try requireToolSessionUnlocked(targetID)
@@ -665,16 +661,8 @@ extension WorkspaceDatabase {
     try await write { try $0.attachConversationReference(sourceID: sourceID, targetID: targetID) }
   }
 
-  public func removeConversationReference(sourceID: String, targetID: String) async throws {
-    try await write { try $0.removeConversationReference(sourceID: sourceID, targetID: targetID) }
-  }
-
   public func requireTranscriptAccess(sourceID: String, targetID: String) async throws {
     try await read { try $0.requireTranscriptAccess(sourceID: sourceID, targetID: targetID) }
-  }
-
-  public func sessionRelationships() async throws -> [WorkspaceSessionRelationship] {
-    try await read { try $0.sessionRelationships() }
   }
 
   public func sessionRelationship(_ id: String) async throws -> WorkspaceSessionRelationship {

@@ -201,48 +201,7 @@ final class UsageStore {
       defer { sqlite3_finalize(insertion) }
       for event in page.events {
         let sample = event.sample(sourceID: page.source.id)
-        sqlite3_reset(insertion)
-        sqlite3_clear_bindings(insertion)
-        bind(sample.id, to: 1, in: insertion)
-        bind(page.source.id, to: 2, in: insertion)
-        bind(sample.sourceEventID, to: 3, in: insertion)
-        bind(sample.dedupeKey, to: 4, in: insertion)
-        bind(sample.provider.rawValue, to: 5, in: insertion)
-        bind(sample.billingProvider, to: 6, in: insertion)
-        bind(sample.billingRoute, to: 7, in: insertion)
-        bind(sample.accountLabel, to: 8, in: insertion)
-        bind(sample.model, to: 9, in: insertion)
-        bind(sample.canonicalModel, to: 10, in: insertion)
-        bind(sample.modelFamily, to: 11, in: insertion)
-        bind(sample.modelPublisher, to: 12, in: insertion)
-        bind(sample.modelIdentityConfidence.rawValue, to: 13, in: insertion)
-        sqlite3_bind_double(insertion, 14, sample.timestamp.timeIntervalSince1970)
-        bind(sample.sessionID, to: 15, in: insertion)
-        bind(sample.reasoningLevel, to: 16, in: insertion)
-        bind(sample.harness, to: 17, in: insertion)
-        bind(sample.application, to: 18, in: insertion)
-        bind(sample.agent, to: 19, in: insertion)
-        bind(sample.workspace, to: 20, in: insertion)
-        sqlite3_bind_int64(insertion, 21, Int64(sample.requestCount))
-        sqlite3_bind_int64(insertion, 22, sample.tokens.inputTokens)
-        sqlite3_bind_int64(insertion, 23, sample.tokens.cachedInputTokens)
-        sqlite3_bind_int64(insertion, 24, sample.tokens.cacheCreationTokens)
-        sqlite3_bind_int64(insertion, 25, sample.tokens.outputTokens)
-        sqlite3_bind_int64(insertion, 26, sample.tokens.reasoningTokens)
-        if let total = sample.tokens.reportedTotalTokens {
-          sqlite3_bind_int64(insertion, 27, total)
-        } else {
-          sqlite3_bind_null(insertion, 27)
-        }
-        if let cost = sample.costUSD {
-          sqlite3_bind_double(insertion, 28, cost)
-        } else {
-          sqlite3_bind_null(insertion, 28)
-        }
-        bind(sample.attributionConfidence.rawValue, to: 29, in: insertion)
-        bind(sample.granularity.rawValue, to: 30, in: insertion)
-        sqlite3_bind_double(insertion, 31, importedAt.timeIntervalSince1970)
-        try stepDone(insertion)
+        try bindUsageEvent(sample, eventID: sample.id, sourceID: page.source.id, importedAt: importedAt, to: insertion)
       }
 
       try setRuntimeSyncState(
@@ -337,48 +296,7 @@ final class UsageStore {
         """)
       defer { sqlite3_finalize(insertion) }
       for sample in samples {
-        sqlite3_reset(insertion)
-        sqlite3_clear_bindings(insertion)
-        bind("\(sourceID):\(sample.sourceEventID)", to: 1, in: insertion)
-        bind(sourceID, to: 2, in: insertion)
-        bind(sample.sourceEventID, to: 3, in: insertion)
-        bind(sample.dedupeKey, to: 4, in: insertion)
-        bind(sample.provider.rawValue, to: 5, in: insertion)
-        bind(sample.billingProvider, to: 6, in: insertion)
-        bind(sample.billingRoute, to: 7, in: insertion)
-        bind(sample.accountLabel, to: 8, in: insertion)
-        bind(sample.model, to: 9, in: insertion)
-        bind(sample.canonicalModel, to: 10, in: insertion)
-        bind(sample.modelFamily, to: 11, in: insertion)
-        bind(sample.modelPublisher, to: 12, in: insertion)
-        bind(sample.modelIdentityConfidence.rawValue, to: 13, in: insertion)
-        sqlite3_bind_double(insertion, 14, sample.timestamp.timeIntervalSince1970)
-        bind(sample.sessionID, to: 15, in: insertion)
-        bind(sample.reasoningLevel, to: 16, in: insertion)
-        bind(sample.harness, to: 17, in: insertion)
-        bind(sample.application, to: 18, in: insertion)
-        bind(sample.agent, to: 19, in: insertion)
-        bind(sample.workspace, to: 20, in: insertion)
-        sqlite3_bind_int64(insertion, 21, Int64(sample.requestCount))
-        sqlite3_bind_int64(insertion, 22, sample.tokens.inputTokens)
-        sqlite3_bind_int64(insertion, 23, sample.tokens.cachedInputTokens)
-        sqlite3_bind_int64(insertion, 24, sample.tokens.cacheCreationTokens)
-        sqlite3_bind_int64(insertion, 25, sample.tokens.outputTokens)
-        sqlite3_bind_int64(insertion, 26, sample.tokens.reasoningTokens)
-        if let total = sample.tokens.reportedTotalTokens {
-          sqlite3_bind_int64(insertion, 27, total)
-        } else {
-          sqlite3_bind_null(insertion, 27)
-        }
-        if let cost = sample.costUSD {
-          sqlite3_bind_double(insertion, 28, cost)
-        } else {
-          sqlite3_bind_null(insertion, 28)
-        }
-        bind(sample.attributionConfidence.rawValue, to: 29, in: insertion)
-        bind(sample.granularity.rawValue, to: 30, in: insertion)
-        sqlite3_bind_double(insertion, 31, importedAt.timeIntervalSince1970)
-        try stepDone(insertion)
+        try bindUsageEvent(sample, eventID: "\(sourceID):\(sample.sourceEventID)", sourceID: sourceID, importedAt: importedAt, to: insertion)
       }
       if transactional {
         try execute("COMMIT")
@@ -401,6 +319,51 @@ final class UsageStore {
       }
       throw error
     }
+  }
+
+  private func bindUsageEvent(_ sample: UsageSample, eventID: String, sourceID: String, importedAt: Date, to insertion: OpaquePointer) throws {
+    sqlite3_reset(insertion)
+    sqlite3_clear_bindings(insertion)
+    bind(eventID, to: 1, in: insertion)
+    bind(sourceID, to: 2, in: insertion)
+    bind(sample.sourceEventID, to: 3, in: insertion)
+    bind(sample.dedupeKey, to: 4, in: insertion)
+    bind(sample.provider.rawValue, to: 5, in: insertion)
+    bind(sample.billingProvider, to: 6, in: insertion)
+    bind(sample.billingRoute, to: 7, in: insertion)
+    bind(sample.accountLabel, to: 8, in: insertion)
+    bind(sample.model, to: 9, in: insertion)
+    bind(sample.canonicalModel, to: 10, in: insertion)
+    bind(sample.modelFamily, to: 11, in: insertion)
+    bind(sample.modelPublisher, to: 12, in: insertion)
+    bind(sample.modelIdentityConfidence.rawValue, to: 13, in: insertion)
+    sqlite3_bind_double(insertion, 14, sample.timestamp.timeIntervalSince1970)
+    bind(sample.sessionID, to: 15, in: insertion)
+    bind(sample.reasoningLevel, to: 16, in: insertion)
+    bind(sample.harness, to: 17, in: insertion)
+    bind(sample.application, to: 18, in: insertion)
+    bind(sample.agent, to: 19, in: insertion)
+    bind(sample.workspace, to: 20, in: insertion)
+    sqlite3_bind_int64(insertion, 21, Int64(sample.requestCount))
+    sqlite3_bind_int64(insertion, 22, sample.tokens.inputTokens)
+    sqlite3_bind_int64(insertion, 23, sample.tokens.cachedInputTokens)
+    sqlite3_bind_int64(insertion, 24, sample.tokens.cacheCreationTokens)
+    sqlite3_bind_int64(insertion, 25, sample.tokens.outputTokens)
+    sqlite3_bind_int64(insertion, 26, sample.tokens.reasoningTokens)
+    if let total = sample.tokens.reportedTotalTokens {
+      sqlite3_bind_int64(insertion, 27, total)
+    } else {
+      sqlite3_bind_null(insertion, 27)
+    }
+    if let cost = sample.costUSD {
+      sqlite3_bind_double(insertion, 28, cost)
+    } else {
+      sqlite3_bind_null(insertion, 28)
+    }
+    bind(sample.attributionConfidence.rawValue, to: 29, in: insertion)
+    bind(sample.granularity.rawValue, to: 30, in: insertion)
+    sqlite3_bind_double(insertion, 31, importedAt.timeIntervalSince1970)
+    try stepDone(insertion)
   }
 
   func performTransaction(_ body: () throws -> Void) throws {
@@ -491,23 +454,6 @@ final class UsageStore {
     }
   }
 
-  func statistics(sourceID: String, in interval: DateInterval) throws -> UsageSourceStatistics {
-    let statement = try prepare("""
-      SELECT COUNT(DISTINCT session_id), COUNT(*)
-      FROM usage_events
-      WHERE source_id = ? AND timestamp >= ? AND timestamp < ?
-      """)
-    defer { sqlite3_finalize(statement) }
-    bind(sourceID, to: 1, in: statement)
-    sqlite3_bind_double(statement, 2, interval.start.timeIntervalSince1970)
-    sqlite3_bind_double(statement, 3, interval.end.timeIntervalSince1970.nextUp)
-    guard sqlite3_step(statement) == SQLITE_ROW else { throw stepError() }
-    return UsageSourceStatistics(
-      sessions: Int(sqlite3_column_int64(statement, 0)),
-      events: Int(sqlite3_column_int64(statement, 1))
-    )
-  }
-
   func statistics(sourceIDPrefix: String, in interval: DateInterval) throws -> UsageSourceStatistics {
     let statement = try prepare("""
       SELECT COUNT(DISTINCT source_id || ':' || session_id), COUNT(*)
@@ -549,66 +495,6 @@ final class UsageStore {
     bind(key, to: 1, in: statement)
     bind(String(value.timeIntervalSince1970), to: 2, in: statement)
     try stepDone(statement)
-  }
-
-  func usageLimitAccounts(
-    providers: Set<ProviderKind>,
-    accountScopes: [ProviderKind: String] = [:]
-  ) throws -> [UsageLimitAccount] {
-    guard !providers.isEmpty else { return [] }
-    let decoder = JSONDecoder()
-    decoder.dateDecodingStrategy = .iso8601
-    let statement = try prepare("""
-      SELECT provider, account_scope, snapshot_json
-      FROM usage_limit_account_snapshots
-      ORDER BY provider, account_scope
-      """)
-    defer { sqlite3_finalize(statement) }
-    var accounts: [UsageLimitAccount] = []
-    while true {
-      switch sqlite3_step(statement) {
-      case SQLITE_DONE:
-        return accounts
-      case SQLITE_ROW:
-        guard let provider = ProviderKind(rawValue: text(statement, 0)),
-              providers.contains(provider),
-              text(statement, 1) == (accountScopes[provider] ?? ""),
-              let data = text(statement, 2).data(using: .utf8),
-              let account = try? decoder.decode(UsageLimitAccount.self, from: data)
-        else { continue }
-        accounts.append(account)
-      default:
-        throw stepError()
-      }
-    }
-  }
-
-  func saveUsageLimitAccounts(_ accounts: [UsageLimitAccount], storedAt: Date) throws {
-    let encoder = JSONEncoder()
-    encoder.dateEncodingStrategy = .iso8601
-    encoder.outputFormatting = [.sortedKeys]
-    let statement = try prepare("""
-      INSERT INTO usage_limit_account_snapshots (
-        provider, account_scope, snapshot_json, observed_at, stored_at
-      ) VALUES (?, ?, ?, ?, ?)
-      ON CONFLICT(provider, account_scope) DO UPDATE SET
-        snapshot_json = excluded.snapshot_json,
-        observed_at = excluded.observed_at,
-        stored_at = excluded.stored_at
-      """)
-    defer { sqlite3_finalize(statement) }
-    for account in accounts where account.status == .available {
-      let data = try encoder.encode(account)
-      guard let json = String(data: data, encoding: .utf8) else { continue }
-      sqlite3_reset(statement)
-      sqlite3_clear_bindings(statement)
-      bind(account.provider.rawValue, to: 1, in: statement)
-      bind(account.accountScopeID ?? "", to: 2, in: statement)
-      bind(json, to: 3, in: statement)
-      sqlite3_bind_double(statement, 4, account.observedAt.timeIntervalSince1970)
-      sqlite3_bind_double(statement, 5, storedAt.timeIntervalSince1970)
-      try stepDone(statement)
-    }
   }
 
   func prune(before cutoff: Date) throws {
@@ -716,25 +602,6 @@ final class UsageStore {
         status TEXT NOT NULL,
         detail TEXT NOT NULL
       );
-      CREATE TABLE IF NOT EXISTS usage_limit_snapshots (
-        provider TEXT PRIMARY KEY,
-        snapshot_json TEXT NOT NULL,
-        observed_at REAL NOT NULL,
-        stored_at REAL NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS usage_limit_account_snapshots (
-        provider TEXT NOT NULL,
-        account_scope TEXT NOT NULL,
-        snapshot_json TEXT NOT NULL,
-        observed_at REAL NOT NULL,
-        stored_at REAL NOT NULL,
-        PRIMARY KEY(provider, account_scope)
-      );
-      INSERT OR IGNORE INTO usage_limit_account_snapshots (
-        provider, account_scope, snapshot_json, observed_at, stored_at
-      )
-      SELECT provider, '', snapshot_json, observed_at, stored_at
-      FROM usage_limit_snapshots;
       """)
     try ensureColumn(
       table: "usage_events",
@@ -854,34 +721,6 @@ extension UsageStore {
   /// interruption. query_only additionally rejects accidental writes on readers.
   func readSnapshot<T>(context: DatabaseJobContext, _ operation: () throws -> T) throws -> T {
     guard let connection else { throw UsageStoreError.step("Database is closed") }
-    let pointer = Unmanaged.passUnretained(context).toOpaque()
-    sqlite3_progress_handler(connection, 1_000, { pointer in
-      guard let pointer else { return 0 }
-      do { try Unmanaged<DatabaseJobContext>.fromOpaque(pointer).takeUnretainedValue().check(); return 0 }
-      catch { return 1 }
-    }, pointer)
-    sqlite3_busy_handler(connection, { pointer, attempt in
-      guard let pointer, attempt < 500 else { return 0 }
-      do { try Unmanaged<DatabaseJobContext>.fromOpaque(pointer).takeUnretainedValue().check() }
-      catch { return 0 }
-      sqlite3_sleep(10)
-      return 1
-    }, pointer)
-    defer {
-      sqlite3_progress_handler(connection, 0, nil, nil)
-      sqlite3_busy_timeout(connection, 5000)
-    }
-    try execute("BEGIN DEFERRED")
-    do {
-      let value = try operation()
-      try context.check()
-      try execute("COMMIT")
-      return value
-    } catch {
-      sqlite3_progress_handler(connection, 0, nil, nil)
-      try? execute("ROLLBACK")
-      try context.check()
-      throw error
-    }
+    return try withSQLiteReadSnapshot(connection, context: context, execute: execute, operation)
   }
 }
