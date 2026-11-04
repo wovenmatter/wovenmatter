@@ -23,7 +23,7 @@ struct ProgramStatusTests {
           try await event?(.programStatus(.init(state: .done, id: "foreign"), runID: "other-run"))
           try await event?(.programStatus(.init(state: .working, message: "Working"), runID: await identity.value))
           _ = await permission?(.init(title: "Approve", options: []))
-          _ = await interaction?(.secret(prompt: "Credential"))
+          _ = await interaction?(.questions(.init(questions: [.init(id: "credential", prompt: "Credential", options: [])])))
           return .endTurn
         }, configuration: { .empty }, setConfiguration: { _, _ in .empty }, cancel: {}, shutdown: {},
         setRunID: { await identity.set($0) })
@@ -37,7 +37,7 @@ struct ProgramStatusTests {
         return "allow_once"
       }, onInteraction: { _ in
         let status = try? await database.workspaceOverview().conversations.first { $0.id == session }?.programStatus?.status
-        #expect(status?.state == .blocked && status?.kind == .auth)
+        #expect(status?.state == .blocked && status?.kind == .question)
         return .cancelled
       })
     for _ in 0..<200 {

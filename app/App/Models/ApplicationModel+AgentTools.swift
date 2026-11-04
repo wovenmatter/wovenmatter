@@ -100,9 +100,7 @@ extension ApplicationModel {
             }
             for request in pendingLocalACPInteractions {
                 let kind: ProgramStatus.Kind = switch request.request {
-                case .plan: .permission
                 case .questions, .form: .question
-                case .secret: .auth
                 }
                 if let delivery = try await database.recordCoordinationNeedsInput(sessionID: request.conversationID,
                     requestID: request.id.uuidString, requiresUserApproval: kind == .permission, kind: kind) { notifications.append(delivery) }
