@@ -16,7 +16,6 @@ remote/npm-runtime/**
 !harnesses/
 harnesses/**
 !harnesses/catalog.json
-!harnesses/initialize-workspace.sh
 !harnesses/mcp/
 !harnesses/mcp/**
 !harnesses/woven-instructions.txt

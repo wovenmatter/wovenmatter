@@ -8,7 +8,7 @@ then physical devices and real network transitions.
 
 See [iOS setup](../ios/README.md) for build commands. User acceptance uses the
 normal Dev app and the user's existing data; disposable tests use a distinct
-`WOVENMATTER_DEV_VARIANT` with a separate cache. Never pair or unpair a user's
+`--instance` with a separate cache. Never pair or unpair a user's
 device as part of a build/install. Users complete provider sign-in themselves.
 
 `scripts/test-changes.sh --all` runs source checks, native/runtime/remote fixtures,

@@ -40,40 +40,6 @@ folder moves, user-title preservation, validation and read-only boundaries,
 active-run rejection, trash/restoration, timer/delivery behavior, and complete
 exports with older messages, reference snapshots, and untruncated history events.
 
-## Integration dependency and acceptance
-
-This feature depends on PR #86 (async internal database workers) landing first.
-Its SQL implementation extends `WorkspaceDatabaseConnection`; its public APIs
-queue one complete write transaction or one coherent read snapshot. Export SQL
-and JSON encoding run on a reader worker; staging and destination file I/O use a
-dispatch queue. No full transcript is encoded into the backend RPC response.
-Full-history queries use conversation subqueries instead of one bind parameter
-per message or run.
-
-Trash rejects durable `uncertain` runs until PR84 resolves their exact native
-identity; a lost continuation receipt is not proof that remote work stopped.
-Trash also rejects native OpenCode active snapshots and sending or uncertain
-submissions before a normalized run exists. New submission admission checks chat
-visibility inside its write transaction; terminal receipt settlement stays legal.
-The app's shared send/Trash reservation covers native slash-command preparation.
-After the awaited live-chat check, PR86's `dispatchFence.check()` also rejects Stop
-requests received during that read before control reaches OpenCode's transport.
-
-Regression coverage includes the async worker boundary, queued/accepted/running/uncertain
-and native OpenCode admission, and exports under a reduced SQLite bind limit.
-Tests were deferred during the initial review, then the user authorized full
-validation. At `77843526e6df8ac594f8677d522657c7eb5af28a`,
-`scripts/test-changes.sh --all` passed: 825 Swift tests, 113 Built-in agent tests,
-125 remote tests with one intentional skip, native app build and bundle
-validation, and six CLI tests. This records that exact head; later dependency
-changes and hosted CI require their own final-head results.
-Native acceptance still needs narrow/wide sidebar menus, Rename Save/Cancel and
-errors, concurrent restores, active-work rejection, and both Save dialog formats
-including cancel and a destination write failure, in embedded and separate-backend
-modes. Interrupted delivery of an export response can leave a staged temporary
-export; normal Save,
-Cancel, and error paths remove it.
-
 ## Note menus
 
 Notes expose Pin/Unpin, Rename, Move to Folder, Export note, Export document, and
@@ -117,13 +83,3 @@ never the user-selected destination; selecting the staging path itself transfers
 ownership instead. Staged exports receive owner-only filesystem permissions.
 HTML artifacts preserve their retained HTML verbatim, including scripts, and are
 not opened or executed by export. Linked databases are not queried.
-
-Provider-free regressions cover oversized raw trace fields, empty-row bounds,
-sparse note normalization, cancelled destination replacement, rename validation,
-and folder ownership on restore. After integrating the async persistence and SDK
-prerequisites, all 43 tests in `WorkspaceConversationActionsTests`,
-`WorkspaceNoteActionsTests`, `WorkspaceDatabaseTextTests`,
-`WorkspaceHistoryTextWindowTests`, and `WorkspaceLibraryTests` passed. The foreign
-folder fixture keeps an ordinary local session as its workspace ownership anchor,
-matching app startup's seeded local agent catalog. Native Save-panel behavior,
-final combined-head validation, and hosted CI remain separate acceptance checks.
