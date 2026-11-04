@@ -1,6 +1,8 @@
 import AppKit
 import Foundation
 import SwiftUI
+import Testing
+@testable import WovenMatterAppFacade
 
 @MainActor
 private final class ScrollEventSpy: NSResponder {
@@ -56,44 +58,8 @@ private func scrollEvent(deltaY: Int32) -> NSEvent {
     return NSEvent(cgEvent: cgEvent)!
 }
 
-@MainActor
-private func expect(
-    _ condition: @autoclosure () -> Bool,
-    _ message: String,
-    file: StaticString = #filePath,
-    line: UInt = #line
-) {
-    guard condition() else {
-        fatalError("\(file):\(line): \(message)")
-    }
-}
-
-@main
-@MainActor
-struct DashboardComposerTextEditorTests {
-    static func main() {
-        testAttachmentPasteLeavesTextUntouched()
-        testReturnRouting()
-        testKeyRoutingPreservesMarkedTextAndStandardBindings()
-        testCommandArrowPanelNavigationIsResponderScoped()
-        testTabCompletionIsNarrowAndOptional()
-        testPickerNavigationIsNarrowAndOptional()
-        testCompletionMovesCaretWithoutChangingOrdinarySelection()
-        testTypingBeforeSwiftUIAppliesCompletion()
-        testCaretReportsUseTheLatestNativeSelection()
-        testSelectionAndPasteboardServicesRemainNative()
-        testMultilineOverflowAndScrollRouting()
-        testUnboundedMeasurementsPreserveNativeGeometry()
-        testFiniteMeasurementsWrapAndRespectTheLineCap()
-        testTrailingNewlineMeasurementMatchesNativeLayout()
-        testNativeFocusUpdatesTheBindingImmediately()
-        testStaleBlurDoesNotCancelManualRefocus()
-        testDictationCommandFindsTheUnfocusedComposer()
-        testDictationCommandKeepsItsWindowAndEditorScope()
-        print("Dashboard composer native text behavior passed.")
-    }
-
-    private static func testAttachmentPasteLeavesTextUntouched() {
+@MainActor @Suite(.serialized) struct DashboardComposerTextEditorTests {
+    @Test func attachmentPasteLeavesTextUntouched() throws {
         let textView = DashboardComposerNativeTextView()
         textView.string = "Keep this draft"
         let board = NSPasteboard.withUniqueName()
@@ -102,19 +68,19 @@ struct DashboardComposerTextEditorTests {
         board.writeObjects([file as NSURL])
         var attached: [URL] = []
         textView.onAttachFiles = { attached = $0; return true }
-        expect(textView.attach(from: board), "File paste should use attachment callback")
-        expect(attached == [file], "File URL should preserve spaces")
-        expect(textView.string == "Keep this draft", "File paste must not replace the draft")
+        #expect(textView.attach(from: board), "File paste should use attachment callback")
+        #expect(attached == [file], "File URL should preserve spaces")
+        #expect(textView.string == "Keep this draft", "File paste must not replace the draft")
         board.clearContents()
         let image = NSImage(size: NSSize(width: 4, height: 4))
         image.lockFocus(); NSColor.green.setFill(); NSRect(x: 0, y: 0, width: 4, height: 4).fill(); image.unlockFocus()
         board.writeObjects([image])
-        expect(textView.attach(from: board), "Screenshot paste should create an attachment")
-        expect(attached.first?.pathExtension == "png", "Screenshot must be a real PNG")
+        #expect(textView.attach(from: board), "Screenshot paste should create an attachment")
+        #expect(attached.first?.pathExtension == "png", "Screenshot must be a real PNG")
         if let url = attached.first {
-            expect(NSImage(contentsOf: url) != nil, "Staged screenshot should decode")
+            #expect(NSImage(contentsOf: url) != nil, "Staged screenshot should decode")
             DashboardComposerNativeTextView.releaseTemporaryAttachments([url])
-            expect(!FileManager.default.fileExists(atPath: url.deletingLastPathComponent().path), "Owned paste staging must be cleaned after attachment staging")
+            #expect(!FileManager.default.fileExists(atPath: url.deletingLastPathComponent().path), "Owned paste staging must be cleaned after attachment staging")
         }
         let unrelatedFolder = FileManager.default.temporaryDirectory.appending(path: "wovenmatter-paste-user-" + UUID().uuidString)
         let unrelatedFile = unrelatedFolder.appending(path: "report.txt")
@@ -123,19 +89,18 @@ struct DashboardComposerTextEditorTests {
             defer { try? FileManager.default.removeItem(at: unrelatedFolder) }
             try Data("Keep this user file".utf8).write(to: unrelatedFile)
             DashboardComposerNativeTextView.releaseTemporaryAttachments([unrelatedFile])
-            expect(FileManager.default.fileExists(atPath: unrelatedFile.path), "A matching folder name does not grant ownership of user files")
-        } catch { fatalError("Could not prepare attachment cleanup fixture: \(error)") }
+            #expect(FileManager.default.fileExists(atPath: unrelatedFile.path), "A matching folder name does not grant ownership of user files")
+        }
         var rejectedFile: URL?
         textView.onAttachFiles = { rejectedFile = $0.first; return false }
-        expect(!textView.attach(from: board), "A rejected screenshot attachment must remain rejected")
-        if let rejectedFile {
-            expect(!FileManager.default.fileExists(atPath: rejectedFile.path), "Rejected paste staging must be cleaned immediately")
-        } else { fatalError("Screenshot rejection must reach the attachment callback") }
+        #expect(!textView.attach(from: board), "A rejected screenshot attachment must remain rejected")
+        let rejected = try #require(rejectedFile, "Screenshot rejection must reach the attachment callback")
+        #expect(!FileManager.default.fileExists(atPath: rejected.path), "Rejected paste staging must be cleaned immediately")
         board.clearContents(); board.setString("ordinary text", forType: .string)
-        expect(!textView.attach(from: board), "Text paste should remain native")
+        #expect(!textView.attach(from: board), "Text paste should remain native")
     }
 
-    private static func testReturnRouting() {
+    @Test func returnRouting() {
         for shifted in [false, true] {
             let textView = DashboardComposerNativeTextView()
             var submitCount = 0
@@ -143,21 +108,21 @@ struct DashboardComposerTextEditorTests {
             textView.string = "alpha beta"
             textView.setSelectedRange(NSRange(location: 6, length: 4))
             textView.keyDown(with: keyEvent(keyCode: 36, characters: "\r", modifiers: shifted ? .shift : []))
-            expect(textView.string == (shifted ? "alpha \n" : "alpha beta"), "only Shift-Return edits the draft")
-            expect(textView.selectedRange() == (shifted ? NSRange(location: 7, length: 0) : NSRange(location: 6, length: 4)),
+            #expect(textView.string == (shifted ? "alpha \n" : "alpha beta"), "only Shift-Return edits the draft")
+            #expect(textView.selectedRange() == (shifted ? NSRange(location: 7, length: 0) : NSRange(location: 6, length: 4)),
                 "Shift-Return replaces the selection; plain Return preserves it")
-            expect(submitCount == (shifted ? 0 : 1), "only plain Return submits")
+            #expect(submitCount == (shifted ? 0 : 1), "only plain Return submits")
         }
     }
 
-    private static func testKeyRoutingPreservesMarkedTextAndStandardBindings() {
+    @Test func keyRoutingPreservesMarkedTextAndStandardBindings() {
         let cases: [(UInt16, String?, NSEvent.ModifierFlags, Bool)] = [
             (36, "\r", [], true), (36, "\r", .option, false),
             (125, nil, [], false), (126, nil, [], false),
             (125, nil, .command, false), (126, nil, .command, false),
         ]
         for (code, characters, modifiers, marked) in cases {
-            expect(DashboardComposerKeyAction.resolve(keyCode: code,
+            #expect(DashboardComposerKeyAction.resolve(keyCode: code,
                 charactersIgnoringModifiers: characters, modifierFlags: modifiers, hasMarkedText: marked) == .standard,
                 "marked text, native arrows, and modified Return stay with the text system")
         }
@@ -168,8 +133,8 @@ struct DashboardComposerTextEditorTests {
             selectedRange: NSRange(location: 2, length: 0),
             replacementRange: NSRange(location: NSNotFound, length: 0)
         )
-        expect(markedTextView.hasMarkedText(), "the IME test must establish marked text")
-        expect(
+        #expect(markedTextView.hasMarkedText(), "the IME test must establish marked text")
+        #expect(
             DashboardComposerKeyAction.resolve(
                 keyCode: 36,
                 charactersIgnoringModifiers: "\r",
@@ -180,7 +145,7 @@ struct DashboardComposerTextEditorTests {
         )
     }
 
-    private static func testCommandArrowPanelNavigationIsResponderScoped() {
+    @Test func commandArrowPanelNavigationIsResponderScoped() {
         let textView = DashboardComposerNativeTextView()
         var navigations: [DashboardComposerNavigationDirection] = []
         textView.onCommandNavigation = { direction in
@@ -193,18 +158,18 @@ struct DashboardComposerTextEditorTests {
             characters: "\u{F703}",
             modifiers: .command
         ))
-        expect(navigations == [.right], "Command-Right must reach the active panel navigator")
+        #expect(navigations == [.right], "Command-Right must reach the active panel navigator")
         let cases: [(UInt16, NSEvent.ModifierFlags, Bool, DashboardComposerNavigationDirection?)] = [
             (126, .command, false, .up), (125, [], false, nil), (123, .command, true, nil),
         ]
         for (code, modifiers, marked, expected) in cases {
-            expect(DashboardComposerNavigationDirection.resolve(keyCode: code,
+            #expect(DashboardComposerNavigationDirection.resolve(keyCode: code,
                 modifierFlags: modifiers, hasMarkedText: marked) == expected,
                 "panel navigation requires Command-arrow without marked text")
         }
     }
 
-    private static func testTabCompletionIsNarrowAndOptional() {
+    @Test func tabCompletionIsNarrowAndOptional() {
         let textView = DashboardComposerNativeTextView()
         var completionCount = 0
         textView.onTab = {
@@ -212,17 +177,17 @@ struct DashboardComposerTextEditorTests {
             return true
         }
         textView.keyDown(with: keyEvent(keyCode: 48, characters: "\t"))
-        expect(completionCount == 1, "an available slash completion must consume unmodified Tab")
+        #expect(completionCount == 1, "an available slash completion must consume unmodified Tab")
 
         textView.onTab = {
             completionCount += 1
             return false
         }
         textView.keyDown(with: keyEvent(keyCode: 48, characters: "\t", modifiers: .command))
-        expect(completionCount == 1, "modified Tab must remain a standard responder-chain command")
+        #expect(completionCount == 1, "modified Tab must remain a standard responder-chain command")
     }
 
-    private static func testPickerNavigationIsNarrowAndOptional() {
+    @Test func pickerNavigationIsNarrowAndOptional() {
         let textView = DashboardComposerNativeTextView()
         var moves: [Int] = []
         var dismissals = 0
@@ -237,12 +202,12 @@ struct DashboardComposerTextEditorTests {
         textView.keyDown(with: keyEvent(keyCode: 125, characters: "\u{F701}"))
         textView.keyDown(with: keyEvent(keyCode: 126, characters: "\u{F700}"))
         textView.keyDown(with: keyEvent(keyCode: 53, characters: "\u{1B}"))
-        expect(moves == [1, -1], "plain arrows must navigate an active picker")
-        expect(dismissals == 1, "Escape must dismiss an active picker")
+        #expect(moves == [1, -1], "plain arrows must navigate an active picker")
+        #expect(dismissals == 1, "Escape must dismiss an active picker")
 
         textView.keyDown(with: keyEvent(keyCode: 125, characters: "\u{F701}", modifiers: .shift))
         textView.keyDown(with: keyEvent(keyCode: 126, characters: "\u{F700}", modifiers: .command))
-        expect(moves == [1, -1], "modified arrows must not navigate the picker")
+        #expect(moves == [1, -1], "modified arrows must not navigate the picker")
 
         textView.setMarkedText(
             "候補",
@@ -250,10 +215,10 @@ struct DashboardComposerTextEditorTests {
             replacementRange: NSRange(location: NSNotFound, length: 0)
         )
         textView.keyDown(with: keyEvent(keyCode: 125, characters: "\u{F701}"))
-        expect(moves == [1, -1], "IME candidate navigation must not reach the picker")
+        #expect(moves == [1, -1], "IME candidate navigation must not reach the picker")
     }
 
-    private static func testCompletionMovesCaretWithoutChangingOrdinarySelection() {
+    @Test func completionMovesCaretWithoutChangingOrdinarySelection() {
         var editor = DashboardComposerTextEditor(
             text: .constant("/"),
             isFocused: .constant(true),
@@ -279,20 +244,20 @@ struct DashboardComposerTextEditorTests {
         )
         coordinator.parent = editor
         coordinator.reconcileText(for: textView)
-        expect(textView.string == "/skill 🦞 ", "completion must apply the updated draft")
-        expect(textView.selectedRange() == NSRange(location: textView.string.utf16.count, length: 0), "completion must place the caret after the full UTF16 command")
+        #expect(textView.string == "/skill 🦞 ", "completion must apply the updated draft")
+        #expect(textView.selectedRange() == NSRange(location: textView.string.utf16.count, length: 0), "completion must place the caret after the full UTF16 command")
 
         textView.setSelectedRange(NSRange(location: 1, length: 5))
         coordinator.reconcileText(for: textView)
-        expect(textView.selectedRange() == NSRange(location: 1, length: 5), "ordinary updates must not replay completion or collapse a selection")
+        #expect(textView.selectedRange() == NSRange(location: 1, length: 5), "ordinary updates must not replay completion or collapse a selection")
 
         editor.completionRequest = .constant(2)
         coordinator.parent = editor
         coordinator.reconcileText(for: textView)
-        expect(textView.selectedRange() == NSRange(location: textView.string.utf16.count, length: 0), "a new completion must move the caret even when the draft already matches")
+        #expect(textView.selectedRange() == NSRange(location: textView.string.utf16.count, length: 0), "a new completion must move the caret even when the draft already matches")
     }
 
-    private static func testTypingBeforeSwiftUIAppliesCompletion() {
+    @Test func typingBeforeSwiftUIAppliesCompletion() {
         var draft = "/"
         var completion = 0
         let editor = DashboardComposerTextEditor(
@@ -314,28 +279,30 @@ struct DashboardComposerTextEditorTests {
         completion += 1
         // The next key arrives before updateNSView refreshes coordinator.parent.
         textView.keyDown(with: keyEvent(keyCode: 0, characters: ""))
-        expect(textView.string == "/command11 ", "a pending completion must settle before native input")
+        #expect(textView.string == "/command11 ", "a pending completion must settle before native input")
         // Deliver text separately, as NSTextInputClient does, so the fixture
         // does not depend on a window or the host keyboard input source.
         textView.insertText("a", replacementRange: NSRange(location: NSNotFound, length: 0))
-        expect(textView.string == "/command11 a", "typing must first apply a pending command completion: \(textView.string.debugDescription)")
-        expect(draft == "/command11 a", "the native edit must keep the bound draft current")
+        #expect(textView.string == "/command11 a", "typing must first apply a pending command completion: \(textView.string.debugDescription)")
+        #expect(draft == "/command11 a", "the native edit must keep the bound draft current")
         textView.setSelectedRange(NSRange(location: 2, length: 0))
         coordinator.reconcileText(for: textView)
-        expect(textView.selectedRange().location == 2, "a later SwiftUI update must not apply the same caret move again")
+        #expect(textView.selectedRange().location == 2, "a later SwiftUI update must not apply the same caret move again")
     }
 
-    private static func drainCaretReports() {
+    // Swift Testing already runs this suite inside a main-queue block, so the
+    // main queue only drains while the test suspends rather than spins the run loop.
+    private func drainCaretReports() async {
         var drained = false
         DispatchQueue.main.async { drained = true }
         let deadline = Date(timeIntervalSinceNow: 2)
         while !drained && Date() < deadline {
-            RunLoop.main.run(mode: .default, before: Date(timeIntervalSinceNow: 0.01))
+            try? await Task.sleep(for: .milliseconds(10))
         }
-        expect(drained, "main queue must drain pending caret reports")
+        #expect(drained, "main queue must drain pending caret reports")
     }
 
-    private static func testCaretReportsUseTheLatestNativeSelection() {
+    @Test func caretReportsUseTheLatestNativeSelection() async {
         var reports: [Bool] = []
         let editor = DashboardComposerTextEditor(
             text: .constant("/help 🦞"),
@@ -354,36 +321,36 @@ struct DashboardComposerTextEditorTests {
         textView.setSelectedRange(NSRange(location: 0, length: 0))
         coordinator.scheduleCaretReport(for: textView)
         textView.setSelectedRange(NSRange(location: textView.string.utf16.count, length: 0))
-        expect(reports.isEmpty, "caret reports must not mutate SwiftUI state during an editor update")
-        drainCaretReports()
-        expect(reports == [true], "queued reports must observe the latest caret and discard stale earlier positions")
+        #expect(reports.isEmpty, "caret reports must not mutate SwiftUI state during an editor update")
+        await drainCaretReports()
+        #expect(reports == [true], "queued reports must observe the latest caret and discard stale earlier positions")
 
         textView.setSelectedRange(NSRange(location: 1, length: 0))
-        drainCaretReports()
-        expect(reports == [true, false], "moving into the draft must hide end-of-draft completions")
+        await drainCaretReports()
+        #expect(reports == [true, false], "moving into the draft must hide end-of-draft completions")
 
         textView.setSelectedRange(NSRange(location: 0, length: textView.string.utf16.count))
-        drainCaretReports()
-        expect(reports == [true, false], "selecting text through the end is not an end caret and must not repeat the report")
+        await drainCaretReports()
+        #expect(reports == [true, false], "selecting text through the end is not an end caret and must not repeat the report")
     }
 
-    private static func testSelectionAndPasteboardServicesRemainNative() {
+    @Test func selectionAndPasteboardServicesRemainNative() {
         let textView = DashboardComposerNativeTextView()
         textView.string = "copy paste"
         textView.setSelectedRange(NSRange(location: 0, length: 4))
 
-        expect(textView.isSelectable, "selection and copy must remain enabled")
-        expect(textView.responds(to: #selector(NSText.copy(_:))), "NSTextView copy action must remain on the responder")
-        expect(textView.responds(to: #selector(NSText.paste(_:))), "NSTextView paste action must remain on the responder")
-        expect(textView.selectedRange() == NSRange(location: 0, length: 4), "the requested copy selection must remain intact")
+        #expect(textView.isSelectable, "selection and copy must remain enabled")
+        #expect(textView.responds(to: #selector(NSText.copy(_:))), "NSTextView copy action must remain on the responder")
+        #expect(textView.responds(to: #selector(NSText.paste(_:))), "NSTextView paste action must remain on the responder")
+        #expect(textView.selectedRange() == NSRange(location: 0, length: 4), "the requested copy selection must remain intact")
 
         textView.setSelectedRange(NSRange(location: 5, length: 5))
         textView.insertText("copy", replacementRange: textView.selectedRange())
-        expect(textView.string == "copy copy", "paste must replace the current selection")
-        expect(textView.allowsUndo, "the native editor must retain undo support")
+        #expect(textView.string == "copy copy", "paste must replace the current selection")
+        #expect(textView.allowsUndo, "the native editor must retain undo support")
     }
 
-    private static func testMultilineOverflowAndScrollRouting() {
+    @Test func multilineOverflowAndScrollRouting() {
         let compactView = DashboardComposerScrollView(
             frame: NSRect(x: 0, y: 0, width: 240, height: 1)
         )
@@ -391,7 +358,7 @@ struct DashboardComposerTextEditorTests {
         compactView.composerTextView.string = "one\ntwo\nthree\nfour"
         compactView.frame.size.height = compactView.preferredHeight
         compactView.updateDocumentLayout()
-        expect(
+        #expect(
             compactView.hasVerticalOverflow,
             "a compact composer must scroll after its third visible line"
         )
@@ -402,7 +369,7 @@ struct DashboardComposerTextEditorTests {
         sevenLineView.composerTextView.string = "one\ntwo\nthree\nfour\nfive\nsix\nseven"
         sevenLineView.frame.size.height = sevenLineView.preferredHeight
         sevenLineView.updateDocumentLayout()
-        expect(!sevenLineView.hasVerticalOverflow, "the composer must grow to show seven lines without scrolling")
+        #expect(!sevenLineView.hasVerticalOverflow, "the composer must grow to show seven lines without scrolling")
 
         let scrollView = DashboardComposerScrollView(frame: NSRect(x: 0, y: 0, width: 240, height: 48))
         let spy = ScrollEventSpy()
@@ -412,23 +379,23 @@ struct DashboardComposerTextEditorTests {
         let cappedHeight = scrollView.preferredHeight
         scrollView.frame.size.height = cappedHeight
         scrollView.updateDocumentLayout()
-        expect(scrollView.preferredHeight > DashboardComposerScrollView.minimumHeight, "the composer must grow with multiline content")
-        expect(cappedHeight < scrollView.composerTextView.frame.height, "content after seven lines must exceed the dynamic height cap")
-        expect(scrollView.hasVerticalOverflow, "multiline content taller than the viewport must overflow internally")
-        expect(scrollView.composerTextView.frame.height > scrollView.contentView.bounds.height, "the document view must grow beyond the capped viewport")
+        #expect(scrollView.preferredHeight > DashboardComposerScrollView.minimumHeight, "the composer must grow with multiline content")
+        #expect(cappedHeight < scrollView.composerTextView.frame.height, "content after seven lines must exceed the dynamic height cap")
+        #expect(scrollView.hasVerticalOverflow, "multiline content taller than the viewport must overflow internally")
+        #expect(scrollView.composerTextView.frame.height > scrollView.contentView.bounds.height, "the document view must grow beyond the capped viewport")
         let preciseScrollEvent = scrollEvent(deltaY: -12)
-        expect(preciseScrollEvent.hasPreciseScrollingDeltas, "pixel wheel input must model trackpad routing")
+        #expect(preciseScrollEvent.hasPreciseScrollingDeltas, "pixel wheel input must model trackpad routing")
         scrollView.scrollWheel(with: preciseScrollEvent)
-        expect(spy.eventCount == 0, "wheel and trackpad deltas must stay in an overflowing composer")
+        #expect(spy.eventCount == 0, "wheel and trackpad deltas must stay in an overflowing composer")
 
         scrollView.composerTextView.string = "short"
         scrollView.updateDocumentLayout()
-        expect(!scrollView.hasVerticalOverflow, "short content must not claim vertical scrolling")
+        #expect(!scrollView.hasVerticalOverflow, "short content must not claim vertical scrolling")
         scrollView.scrollWheel(with: scrollEvent(deltaY: -12))
-        expect(spy.eventCount == 1, "a non-scrolling composer must pass wheel events to its responder chain")
+        #expect(spy.eventCount == 1, "a non-scrolling composer must pass wheel events to its responder chain")
     }
 
-    private static func testUnboundedMeasurementsPreserveNativeGeometry() {
+    @Test func unboundedMeasurementsPreserveNativeGeometry() {
         let scrollView = DashboardComposerScrollView(frame: NSRect(x: 0, y: 0, width: 240, height: 80))
         let textView = scrollView.composerTextView
         textView.string = "A draft that stays in the native editor while SwiftUI measures it."
@@ -442,18 +409,18 @@ struct DashboardComposerTextEditorTests {
         let probes: [CGFloat?] = [nil, .infinity, .greatestFiniteMagnitude, 35_184_372_088_832, .nan, 0, -1]
         for width in probes {
             let size = scrollView.fittingSize(for: ProposedViewSize(width: width, height: .infinity))
-            expect(size.width == 240 && size.height.isFinite, "unbounded probes must use the existing finite width")
-            expect(scrollView.frame == frame && textView.frame == documentFrame, "measurement must not resize native views")
-            expect(textView.textContainer!.containerSize == containerSize, "measurement must not reflow the native text container")
-            expect(textView.selectedRange() == selection && textView.string == draft, "measurement must preserve the draft and selection")
+            #expect(size.width == 240 && size.height.isFinite, "unbounded probes must use the existing finite width")
+            #expect(scrollView.frame == frame && textView.frame == documentFrame, "measurement must not resize native views")
+            #expect(textView.textContainer!.containerSize == containerSize, "measurement must not reflow the native text container")
+            #expect(textView.selectedRange() == selection && textView.string == draft, "measurement must preserve the draft and selection")
         }
         let unattached = DashboardComposerScrollView(frame: .zero)
         let initial = unattached.fittingSize(for: ProposedViewSize(width: .greatestFiniteMagnitude, height: nil))
-        expect(initial.width.isFinite && initial.width > 0, "an unattached editor must return a finite initial width")
-        expect(unattached.frame == .zero, "initial measurement must leave native geometry to the layout system")
+        #expect(initial.width.isFinite && initial.width > 0, "an unattached editor must return a finite initial width")
+        #expect(unattached.frame == .zero, "initial measurement must leave native geometry to the layout system")
     }
 
-    private static func testFiniteMeasurementsWrapAndRespectTheLineCap() {
+    @Test func finiteMeasurementsWrapAndRespectTheLineCap() {
         let scrollView = DashboardComposerScrollView(frame: NSRect(x: 0, y: 0, width: 480, height: 80))
         let textView = scrollView.composerTextView
         textView.string = String(repeating: "Words that wrap at the requested width. ", count: 5)
@@ -462,26 +429,26 @@ struct DashboardComposerTextEditorTests {
         let documentFrame = textView.frame
         let wide = scrollView.fittingSize(for: ProposedViewSize(width: 480, height: nil))
         let narrow = scrollView.fittingSize(for: ProposedViewSize(width: 120, height: nil))
-        expect(wide.width == 480 && narrow.width == 120, "finite proposals must keep their requested widths")
-        expect(narrow.height > wide.height, "narrow measurement must wrap without resizing the mounted editor")
+        #expect(wide.width == 480 && narrow.width == 120, "finite proposals must keep their requested widths")
+        #expect(narrow.height > wide.height, "narrow measurement must wrap without resizing the mounted editor")
         scrollView.maximumVisibleLines = 3
         let compact = scrollView.fittingSize(for: ProposedViewSize(width: 120, height: nil))
-        expect(compact.height < narrow.height, "the three-line composer must retain its smaller height cap")
-        expect(scrollView.fittingSize(for: ProposedViewSize(width: 120, height: nil)) == compact, "repeated measurement must stay stable")
-        expect(scrollView.frame == frame && textView.frame == documentFrame, "all layout probes must preserve installed native geometry")
+        #expect(compact.height < narrow.height, "the three-line composer must retain its smaller height cap")
+        #expect(scrollView.fittingSize(for: ProposedViewSize(width: 120, height: nil)) == compact, "repeated measurement must stay stable")
+        #expect(scrollView.frame == frame && textView.frame == documentFrame, "all layout probes must preserve installed native geometry")
 
         scrollView.frame.size = compact
         scrollView.updateDocumentLayout()
-        expect(abs(scrollView.preferredHeight - compact.height) < 0.5, "measured wrapping and the installed editor must agree")
-        expect(scrollView.hasVerticalOverflow, "content beyond the line cap must still scroll natively")
+        #expect(abs(scrollView.preferredHeight - compact.height) < 0.5, "measured wrapping and the installed editor must agree")
+        #expect(scrollView.hasVerticalOverflow, "content beyond the line cap must still scroll natively")
         textView.string = "short"
         let short = scrollView.fittingSize(for: ProposedViewSize(width: 120, height: nil))
-        expect(short.height < compact.height && short.height >= DashboardComposerScrollView.minimumHeight, "changed text must invalidate cached measurement")
+        #expect(short.height < compact.height && short.height >= DashboardComposerScrollView.minimumHeight, "changed text must invalidate cached measurement")
         scrollView.updateDocumentLayout()
-        expect(abs(scrollView.preferredHeight - short.height) < 0.5, "single-line measurement must match native text metrics")
+        #expect(abs(scrollView.preferredHeight - short.height) < 0.5, "single-line measurement must match native text metrics")
     }
 
-    private static func testTrailingNewlineMeasurementMatchesNativeLayout() {
+    @Test func trailingNewlineMeasurementMatchesNativeLayout() {
         let scrollView = DashboardComposerScrollView(frame: NSRect(x: 0, y: 0, width: 240, height: 80))
         let drafts = ["", "one", "one\n", "one\n\n", "\n", "\n\n"]
         var singleLineHeight: CGFloat = 0
@@ -490,16 +457,16 @@ struct DashboardComposerTextEditorTests {
             let size = scrollView.fittingSize(for: ProposedViewSize(width: 240, height: nil))
             scrollView.frame.size = size
             scrollView.updateDocumentLayout()
-            expect(abs(scrollView.preferredHeight - size.height) < 0.5, "empty and trailing lines must measure like the native editor")
-            expect(!scrollView.hasVerticalOverflow, "short trailing blank lines must fit without unnecessary scrolling")
+            #expect(abs(scrollView.preferredHeight - size.height) < 0.5, "empty and trailing lines must measure like the native editor")
+            #expect(!scrollView.hasVerticalOverflow, "short trailing blank lines must fit without unnecessary scrolling")
             if draft == "one" { singleLineHeight = size.height }
             if draft == "one\n" {
-                expect(size.height > singleLineHeight, "a trailing newline must include room for the empty caret line")
+                #expect(size.height > singleLineHeight, "a trailing newline must include room for the empty caret line")
             }
         }
     }
 
-    private static func testStaleBlurDoesNotCancelManualRefocus() {
+    @Test func staleBlurDoesNotCancelManualRefocus() {
         func editor(isFocused: Bool) -> DashboardComposerTextEditor {
             DashboardComposerTextEditor(
                 text: .constant(""),
@@ -523,27 +490,27 @@ struct DashboardComposerTextEditorTests {
         let textView = scrollView.composerTextView
         let coordinator = editor(isFocused: false).makeCoordinator()
 
-        expect(window.makeFirstResponder(textView), "the test editor must accept native focus")
+        #expect(window.makeFirstResponder(textView), "the test editor must accept native focus")
         coordinator.parent = editor(isFocused: true)
         coordinator.applyFocusReconciliation(expectedFocused: false, for: textView)
-        expect(
+        #expect(
             window.firstResponder === textView,
             "a stale false binding must not cancel a mouse-driven native refocus"
         )
-        expect(
+        #expect(
             window.resignationRequestCount == 0,
             "a stale false binding must not request native editor resignation"
         )
 
         coordinator.parent = editor(isFocused: false)
         coordinator.applyFocusReconciliation(expectedFocused: false, for: textView)
-        expect(
+        #expect(
             window.resignationRequestCount == 1,
             "a confirmed false binding must still request native editor resignation"
         )
     }
 
-    private static func testNativeFocusUpdatesTheBindingImmediately() {
+    @Test func nativeFocusUpdatesTheBindingImmediately() {
         final class FocusBox {
             var value = false
         }
@@ -575,14 +542,14 @@ struct DashboardComposerTextEditorTests {
             coordinator.parent.isFocused = true
         }
 
-        expect(window.makeFirstResponder(textView), "the test editor must accept native focus")
-        expect(
+        #expect(window.makeFirstResponder(textView), "the test editor must accept native focus")
+        #expect(
             focus.value,
             "native first-responder acquisition must synchronously update the SwiftUI focus binding"
         )
     }
 
-    private static func testDictationCommandFindsTheUnfocusedComposer() {
+    @Test func dictationCommandFindsTheUnfocusedComposer() {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 320, height: 160),
                               styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -596,28 +563,28 @@ struct DashboardComposerTextEditorTests {
         window.orderBack(nil)
         window.makeFirstResponder(window)
 
-        expect(DictationEditor.commandTarget(in: window, preferred: nil) === editor,
+        #expect(DictationEditor.commandTarget(in: window, preferred: nil) === editor,
                "File dictation must find the sole visible composer before the user places a caret")
-        expect(editor.focusForCommand(), "File dictation must restore native editor focus")
-        expect(window.firstResponder === textView, "the command must target the composer text view")
-        expect(textView.selectedRange() == NSRange(location: 5, length: 4),
+        #expect(editor.focusForCommand(), "File dictation must restore native editor focus")
+        #expect(window.firstResponder === textView, "the command must target the composer text view")
+        #expect(textView.selectedRange() == NSRange(location: 5, length: 4),
                "opening the menu must preserve the insertion selection")
 
         textView.isEditable = false
-        expect(DictationEditor.commandTarget(in: window, preferred: editor) == nil,
+        #expect(DictationEditor.commandTarget(in: window, preferred: editor) == nil,
                "read-only editors cannot become dictation targets")
         textView.isEditable = true
         window.makeFirstResponder(window)
         textView.isHidden = true
-        expect(DictationEditor.commandTarget(in: window, preferred: editor) == nil,
+        #expect(DictationEditor.commandTarget(in: window, preferred: editor) == nil,
                "hidden editors cannot become dictation targets")
         textView.isHidden = false
         window.orderOut(nil)
-        expect(DictationEditor.commandTarget(in: window, preferred: editor) == nil,
+        #expect(DictationEditor.commandTarget(in: window, preferred: editor) == nil,
                "closed or hidden windows must not receive dictation")
     }
 
-    private static func testDictationCommandKeepsItsWindowAndEditorScope() {
+    @Test func dictationCommandKeepsItsWindowAndEditorScope() {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 320, height: 240),
                               styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -631,17 +598,17 @@ struct DashboardComposerTextEditorTests {
         note.bind(noteView, identity: "note")
         window.orderBack(nil)
         window.makeFirstResponder(window)
-        expect(DictationEditor.commandTarget(in: window, preferred: nil) == nil,
+        #expect(DictationEditor.commandTarget(in: window, preferred: nil) == nil,
                "multiple editors without a prior target must not be chosen arbitrarily")
-        expect(DictationEditor.commandTarget(in: window, preferred: composer) === composer,
+        #expect(DictationEditor.commandTarget(in: window, preferred: composer) === composer,
                "menu focus loss must preserve the active editor")
         window.makeFirstResponder(noteView)
-        expect(DictationEditor.commandTarget(in: window, preferred: composer) === note,
+        #expect(DictationEditor.commandTarget(in: window, preferred: composer) === note,
                "the current note caret must take precedence over an earlier composer target")
         window.makeFirstResponder(searchView)
-        expect(DictationEditor.commandTarget(in: window, preferred: composer) == nil,
+        #expect(DictationEditor.commandTarget(in: window, preferred: composer) == nil,
                "an unsupported text field must not send dictation to the prior composer")
-        expect(DictationEditor.commandTarget(in: nil, preferred: composer) == nil,
+        #expect(DictationEditor.commandTarget(in: nil, preferred: composer) == nil,
                "an unavailable window must not reuse a stale editor")
 
         let other = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 120, height: 80),
@@ -649,7 +616,7 @@ struct DashboardComposerTextEditorTests {
         other.isReleasedWhenClosed = false
         defer { other.close() }
         other.orderBack(nil)
-        expect(DictationEditor.commandTarget(in: other, preferred: composer) == nil,
+        #expect(DictationEditor.commandTarget(in: other, preferred: composer) == nil,
                "a Settings or another workspace window must not reuse this window's editor")
     }
 }

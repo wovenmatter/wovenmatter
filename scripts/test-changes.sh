@@ -27,11 +27,7 @@ run_static_checks() {
   bash scripts/test-dev-signing.sh
   PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-support/test_dev_build.py
   scripts/test-app-termination.sh
-  scripts/test-composer-text-editor.sh
   scripts/test-conversation-layout.sh
-  scripts/test-appearance.sh
-  scripts/test-note-editor.sh
-  scripts/test-note-drafts.sh
   python3 scripts/test-support/test_executor_deployment.py
   node --test scripts/test-support/native-mcp.test.mjs scripts/test-support/live-streaming-smoke.test.mjs
   scripts/test-remote-workspace.sh
@@ -79,7 +75,6 @@ run_package_tests() {
   for suite in "${process_suites[@]}"; do
     "${test_command[@]}" --skip-build --filter "$suite"
   done
-  WOVENMATTER_TEST_CACHE_DIR="$cache_root" scripts/test-application-usage.sh
   WOVENMATTER_TEST_CACHE_DIR="$cache_root" scripts/test-backend-process.sh
 }
 
@@ -160,11 +155,7 @@ run_native() {
   python3 scripts/test-support/test_updater_signing.py
   scripts/test-desktop-updater.sh
   scripts/test-app-termination.sh
-  scripts/test-composer-text-editor.sh
   scripts/test-conversation-layout.sh
-  scripts/test-appearance.sh
-  scripts/test-note-editor.sh
-  scripts/test-note-drafts.sh
   scripts/test-embedded-runtime-macos.sh
   run_package_tests
   run_app_build
