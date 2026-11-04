@@ -139,7 +139,7 @@ public enum RuntimeMaintenance {
             _ = try await installer.install(definition, component: .cli, expectedSourceSHA256: preview.sha256)
             return
         }
-        guard [.claudeCode, .grokBuild].contains(kind) else { throw RuntimeMaintenanceError.unavailable }
+        guard kind == .grokBuild else { throw RuntimeMaintenanceError.unavailable }
         let result = try await Task.detached(priority: .utility) {
             try LocalACPProcessRunner.run(executableURL: executable, arguments: ["update"],
                 environment: ProcessInfo.processInfo.environment.merging(["PATH": LocalACPRuntimeResolver.executableSearchPath]) { _, new in new })

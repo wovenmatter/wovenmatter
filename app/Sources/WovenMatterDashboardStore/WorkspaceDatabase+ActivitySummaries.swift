@@ -254,7 +254,7 @@ extension WorkspaceDatabaseConnection {
       data.append(bytes); index += 1
     }
     guard index == count, data.count == size,
-      SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == digest else { throw CompanionActivityDetails.invalid }
+      SHA256.hash(data: data).hexString == digest else { throw CompanionActivityDetails.invalid }
     return (format, data)
   }
 

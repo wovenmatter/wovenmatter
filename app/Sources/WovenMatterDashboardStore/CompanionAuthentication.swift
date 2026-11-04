@@ -27,7 +27,6 @@ public struct CompanionPairedDevice: Codable, Equatable, Sendable, Identifiable 
   /// The immutable explicit-join transcript a peer grant was admitted with.
   fileprivate var transcript: Data? = nil
   fileprivate var origin: String? = nil
-  public var isPeerGrant: Bool { role == .peer }
 }
 
 /// A grant's role is fixed when this Mac issues it.
@@ -138,7 +137,7 @@ public actor CompanionAuthentication {
   /// Normal Dev quit withdraws presence without making the identity permanently
   /// revoked. Explicit Unpair continues to block automatic reenrollment.
   public func suspendLocalDevelopment(deviceID: String, credential: String) throws {
-    guard let index = state.devices.firstIndex(where: { $0.id == deviceID && $0.isDevelopment && $0.revokedAt == nil && Self.constantTimeEqual($0.credentialHash, Self.digest(credential)) }) else { throw Self.unauthorized }
+    guard let index = state.devices.firstIndex(where: { $0.id == deviceID && $0.isDevelopment && $0.revokedAt == nil && CompanionSecrets.constantTimeEqual($0.credentialHash, Self.digest(credential)) }) else { throw Self.unauthorized }
     var next = state; next.devices[index].lastSeenAt = nil
     try persist(next); state = next; lastSeenSaved.removeValue(forKey: deviceID)
   }
@@ -175,7 +174,7 @@ public actor CompanionAuthentication {
   /// A paired-Mac endpoint accepts only a peer grant this Mac issued, for an
   /// identity it still admits. Device metadata and roster entries never count.
   public func isAuthorizedPeer(_ principal: CompanionPairedDevice) -> Bool {
-    guard let grant = state.devices.first(where: { $0.id == principal.id && Self.constantTimeEqual($0.credentialHash, principal.credentialHash) }),
+    guard let grant = state.devices.first(where: { $0.id == principal.id && CompanionSecrets.constantTimeEqual($0.credentialHash, principal.credentialHash) }),
           Self.isActive(grant, in: state), grant.role == .peer, !grant.isDevelopment, grant.id != identity?.deviceID else { return false }
     return Self.isActiveMac(grant.id, in: state, own: nil)
   }
@@ -293,7 +292,7 @@ public actor CompanionAuthentication {
     return Self.events(grant.id, in: state).sorted()
   }
   private func activeGrant(_ principal: CompanionPairedDevice) -> CompanionPairedDevice? {
-    state.devices.first { $0.id == principal.id && Self.constantTimeEqual($0.credentialHash, principal.credentialHash) && Self.isActive($0, in: state) && !$0.isDevelopment }
+    state.devices.first { $0.id == principal.id && CompanionSecrets.constantTimeEqual($0.credentialHash, principal.credentialHash) && Self.isActive($0, in: state) && !$0.isDevelopment }
   }
 
   /// Completes an explicitly approved Mac pairing this Mac issued. The full
@@ -313,7 +312,7 @@ public actor CompanionAuthentication {
       ("reciprocal_revocations", join.reciprocalRevocations.joined(separator: ",")), ("route", join.route.endpoint.absoluteString)
     ], domain: "woven.peer.join.v2")))
     if let existing = grant.transcript {
-      guard Self.constantTimeEqual(existing, transcript) else { throw Self.error("join_conflict", "This pairing already completed with different details. Pair again.") }
+      guard CompanionSecrets.constantTimeEqual(existing, transcript) else { throw Self.error("join_conflict", "This pairing already completed with different details. Pair again.") }
       return
     }
     guard grant.role == .peerCandidate else { throw Self.unauthorized }
@@ -446,7 +445,7 @@ public actor CompanionAuthentication {
           route.deviceID == own.deviceID,
           let grant = state.devices.first(where: {
             $0.id == challenge.deviceID && $0.role == .peer && Self.isActive($0, in: state)
-              && SHA256.hash(data: $0.credentialHash).map { String(format: "%02x", $0) }.joined() == challenge.credentialID
+              && SHA256.hash(data: $0.credentialHash).hexString == challenge.credentialID
           }), isAuthorizedPeer(grant) else { throw Self.unauthorized }
     return .init(route: route, signature: try own.key.signature(for: PairedMacProof.statement(challenge, route: route)))
   }
@@ -561,20 +560,20 @@ public actor CompanionAuthentication {
     devices().map { .init(id: $0.id, name: $0.displayName, metadata: $0.metadata ?? .init(), pairedAt: $0.pairedAt, lastSeenAt: $0.lastSeenAt) }
   }
   public func isCurrent(_ device: CompanionPairedDevice) -> Bool {
-    state.devices.contains { $0.id == device.id && Self.isActive($0, in: state) && Self.constantTimeEqual($0.credentialHash, device.credentialHash) }
+    state.devices.contains { $0.id == device.id && Self.isActive($0, in: state) && CompanionSecrets.constantTimeEqual($0.credentialHash, device.credentialHash) }
   }
   /// Close pending approval atomically, or return the exact approved principal
   /// whose direct-workspace grants the host must durably revoke before closing.
   public func preparePairingCancellation(_ request: CompanionPairingPoll) throws -> CompanionPairedDevice? {
     guard (32...256).contains(request.requestSecret.utf8.count),
           let entry = (state.approvals ?? []).first(where: { $0.request.id == request.requestID }),
-          entry.request.expiresAt > now(), Self.constantTimeEqual(entry.proof, Self.proof(request.requestSecret)) else {
+          entry.request.expiresAt > now(), CompanionSecrets.constantTimeEqual(entry.proof, Self.proof(request.requestSecret)) else {
       throw Self.error("invalid_pairing", "The pairing request is invalid or expired.")
     }
     if entry.state == .approved, let encrypted = entry.encryptedCredential,
        let credential = String(data: try AES.GCM.open(AES.GCM.SealedBox(combined: encrypted), using: Self.key(request.requestSecret)), encoding: .utf8),
        let device = state.devices.first(where: {
-         $0.id == entry.request.identity.deviceID && $0.revokedAt == nil && Self.constantTimeEqual($0.credentialHash, Self.digest(credential))
+         $0.id == entry.request.identity.deviceID && $0.revokedAt == nil && CompanionSecrets.constantTimeEqual($0.credentialHash, Self.digest(credential))
        }) { return device }
     try cancelPairing(request)
     return nil
@@ -583,13 +582,13 @@ public actor CompanionAuthentication {
   public func cancelPairing(_ request: CompanionPairingPoll) throws {
     guard (32...256).contains(request.requestSecret.utf8.count),
           let entry = (state.approvals ?? []).first(where: { $0.request.id == request.requestID }),
-          entry.request.expiresAt > now(), Self.constantTimeEqual(entry.proof, Self.proof(request.requestSecret)) else {
+          entry.request.expiresAt > now(), CompanionSecrets.constantTimeEqual(entry.proof, Self.proof(request.requestSecret)) else {
       throw Self.error("invalid_pairing", "The pairing request is invalid or expired.")
     }
     var next = state
     if entry.state == .approved, let encrypted = entry.encryptedCredential,
        let credential = String(data: try AES.GCM.open(AES.GCM.SealedBox(combined: encrypted), using: Self.key(request.requestSecret)), encoding: .utf8),
-       state.devices.contains(where: { $0.revokedAt == nil && $0.id == entry.request.identity.deviceID && Self.constantTimeEqual($0.credentialHash, Self.digest(credential)) }) {
+       state.devices.contains(where: { $0.revokedAt == nil && $0.id == entry.request.identity.deviceID && CompanionSecrets.constantTimeEqual($0.credentialHash, Self.digest(credential)) }) {
       throw Self.error("revocation_pending", "Finish revoking this device's workspace access before cancelling pairing.")
     }
     if let index = next.approvals?.firstIndex(where: { $0.request.id == request.requestID }) {
@@ -614,10 +613,10 @@ public actor CompanionAuthentication {
       throw Self.error("workspace_mismatch", "The paired library changed. Generate a new pairing code.")
     }
     let proof = Self.digest(request.token)
-    let available = offer.map { $0.expiresAt > now() && Self.constantTimeEqual($0.digest, proof) && ($0.deviceID == nil || $0.deviceID == request.deviceID) } == true
+    let available = offer.map { $0.expiresAt > now() && CompanionSecrets.constantTimeEqual($0.digest, proof) && ($0.deviceID == nil || $0.deviceID == request.deviceID) } == true
     let retry = request.requiresConfirmation == true && (state.pendingQRPairings ?? []).contains {
       $0.expiresAt > now() && $0.workspaceID == workspaceID && $0.device.id == request.deviceID &&
-        $0.device.name == request.deviceName && $0.device.metadata == request.metadata && Self.constantTimeEqual($0.offerProof, proof)
+        $0.device.name == request.deviceName && $0.device.metadata == request.metadata && CompanionSecrets.constantTimeEqual($0.offerProof, proof)
     }
     guard available || retry else { throw Self.error("invalid_pairing", "The pairing code is invalid or expired. Generate another code on the Mac.") }
     return .init(workspaceID: workspaceID)
@@ -627,8 +626,8 @@ public actor CompanionAuthentication {
   /// Confirmation is idempotent when its response is lost after the commit.
   public func confirmPairing(bearer: String, workspaceID: String) throws {
     let hash = Self.digest(bearer)
-    if state.devices.contains(where: { $0.revokedAt == nil && Self.constantTimeEqual($0.credentialHash, hash) }) { return }
-    guard let entry = state.pendingQRPairings?.first(where: { $0.expiresAt > now() && $0.workspaceID == workspaceID && Self.constantTimeEqual($0.device.credentialHash, hash) }),
+    if state.devices.contains(where: { $0.revokedAt == nil && CompanionSecrets.constantTimeEqual($0.credentialHash, hash) }) { return }
+    guard let entry = state.pendingQRPairings?.first(where: { $0.expiresAt > now() && $0.workspaceID == workspaceID && CompanionSecrets.constantTimeEqual($0.device.credentialHash, hash) }),
       !state.devices.contains(where: { $0.revokedAt == nil && $0.id.lowercased() == entry.device.id.lowercased() }) else { throw Self.unauthorized }
     var next = state
     next.devices.append(Self.issued(entry.device, in: next, purpose: entry.purpose))
@@ -641,13 +640,10 @@ public actor CompanionAuthentication {
       throw Self.error("version_mismatch", "Update Woven Matter on both devices before pairing.")
     }
     _ = try previewPairing(request, workspaceID: workspaceID)
-    let instant = now()
-    attempts.removeAll { instant.timeIntervalSince($0) >= 60 }
-    guard attempts.count < 10 else { throw Self.error("rate_limited", "Too many pairing attempts. Wait a minute and try again.") }
-    attempts.append(instant)
+    let instant = try checkPairingRate()
     if request.requiresConfirmation == true, let pending = state.pendingQRPairings?.first(where: {
       $0.expiresAt > instant && $0.workspaceID == workspaceID && $0.device.id == request.deviceID &&
-        $0.device.name == request.deviceName && $0.device.metadata == request.metadata && Self.constantTimeEqual($0.offerProof, Self.digest(request.token))
+        $0.device.name == request.deviceName && $0.device.metadata == request.metadata && CompanionSecrets.constantTimeEqual($0.offerProof, Self.digest(request.token))
     }) {
       let data = try AES.GCM.open(AES.GCM.SealedBox(combined: pending.encryptedCredential), using: Self.key(request.token))
       guard let credential = String(data: data, encoding: .utf8) else { throw Self.unauthorized }
@@ -687,7 +683,7 @@ public actor CompanionAuthentication {
     // Only a grant this Mac issued, still acknowledging every unpair event
     // known for its device, authenticates. Replicated membership never does.
     guard let index = state.devices.firstIndex(where: {
-      Self.isActive($0, in: state) && Self.constantTimeEqual($0.credentialHash, digest)
+      Self.isActive($0, in: state) && CompanionSecrets.constantTimeEqual($0.credentialHash, digest)
     }) else { throw Self.unauthorized }
     try Self.validateMetadata(metadata)
     var next = state
@@ -749,7 +745,7 @@ public actor CompanionAuthentication {
     }
     let proof = Self.proof(request.requestSecret)
     if let existing = (state.approvals ?? []).first(where: { $0.request.id == request.requestID && $0.request.expiresAt > now() }) {
-      guard Self.constantTimeEqual(existing.proof, proof), existing.request.identity == request.identity,
+      guard CompanionSecrets.constantTimeEqual(existing.proof, proof), existing.request.identity == request.identity,
             existing.invitationProof == request.invitationToken.map(Self.digest) else {
         throw Self.error("pairing_conflict", "This pairing request has changed. Start a new request.")
       }
@@ -767,7 +763,7 @@ public actor CompanionAuthentication {
     if let token = request.invitationToken {
       guard let offer, offer.expiresAt > now(), let workspaceID,
             offer.deviceID == request.identity.deviceID,
-            Self.constantTimeEqual(offer.digest, Self.digest(token)) else {
+            CompanionSecrets.constantTimeEqual(offer.digest, Self.digest(token)) else {
         throw Self.error("invalid_pairing", "This invitation is invalid or expired.")
       }
       let credential = try Self.randomToken()
@@ -788,7 +784,7 @@ public actor CompanionAuthentication {
   public func pairingResult(_ request: CompanionPairingPoll) throws -> CompanionPairingApprovalResult {
     guard (32...256).contains(request.requestSecret.utf8.count),
           let entry = (state.approvals ?? []).first(where: { $0.request.id == request.requestID }),
-          entry.request.expiresAt > now(), Self.constantTimeEqual(entry.proof, Self.proof(request.requestSecret)) else {
+          entry.request.expiresAt > now(), CompanionSecrets.constantTimeEqual(entry.proof, Self.proof(request.requestSecret)) else {
       throw Self.error("invalid_pairing", "The pairing request is invalid or expired.")
     }
     let key = Self.key(request.requestSecret)
@@ -796,7 +792,7 @@ public actor CompanionAuthentication {
     guard entry.state == .approved else { return .init(state: entry.state, expiresAt: entry.request.expiresAt) }
     guard let encrypted = entry.encryptedCredential, let workspaceID = entry.workspaceID,
           let credential = String(data: try AES.GCM.open(AES.GCM.SealedBox(combined: encrypted), using: key), encoding: .utf8),
-          state.devices.contains(where: { $0.id == entry.request.identity.deviceID && $0.revokedAt == nil && Self.constantTimeEqual($0.credentialHash, Self.digest(credential)) }) else {
+          state.devices.contains(where: { $0.id == entry.request.identity.deviceID && $0.revokedAt == nil && CompanionSecrets.constantTimeEqual($0.credentialHash, Self.digest(credential)) }) else {
       throw Self.unauthorized
     }
     return .init(state: .approved, expiresAt: entry.request.expiresAt,
@@ -833,11 +829,13 @@ public actor CompanionAuthentication {
     try persist(next); state = next; approvalKeys.removeValue(forKey: id)
   }
 
-  private func checkPairingRate() throws {
+  @discardableResult
+  private func checkPairingRate() throws -> Date {
     let instant = now()
     attempts.removeAll { instant.timeIntervalSince($0) >= 60 }
     guard attempts.count < 10 else { throw Self.error("rate_limited", "Too many pairing attempts. Wait a minute and try again.") }
     attempts.append(instant)
+    return instant
   }
   private static func validateIdentity(_ identity: CompanionPairingDeviceIdentity) throws {
     guard UUID(uuidString: identity.deviceID) != nil, !identity.deviceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
@@ -857,17 +855,46 @@ public actor CompanionAuthentication {
   private static func key(_ secret: String) -> SymmetricKey { SymmetricKey(data: digest("woven-pairing-key\0" + secret)) }
 
   private func persist(_ next: State) throws {
-    let directory = fileURL.deletingLastPathComponent()
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
-      attributes: [.posixPermissions: 0o700])
-    let temporary = directory.appendingPathComponent(".companion-credentials-\(UUID().uuidString)")
-    defer { try? FileManager.default.removeItem(at: temporary) }
     let bytes = try JSONEncoder().encode(next)
     guard bytes.count <= 16_777_216 else { throw Self.error("credential_store", "The paired-device store exceeds its safety limit.") }
-    guard FileManager.default.createFile(atPath: temporary.path, contents: nil,
-      attributes: [.posixPermissions: 0o600]) else {
-      throw Self.error("credential_store", "Could not save paired-device credentials.")
-    }
+    try CompanionSecrets.persist(bytes, to: fileURL, temporaryName: ".companion-credentials-\(UUID().uuidString)",
+      createFailure: Self.error("credential_store", "Could not save paired-device credentials."))
+  }
+
+  private static func randomToken() throws -> String {
+    guard let token = CompanionSecrets.randomToken() else { throw error("random_failed", "Could not securely create a pairing code.") }
+    return token
+  }
+
+  private static func digest(_ value: String) -> Data { Data(SHA256.hash(data: Data(value.utf8))) }
+  private static let unauthorized = error("unauthorized", "This device is not paired or its access was revoked.")
+  private static func error(_ code: String, _ message: String) -> CompanionAPIError {
+    CompanionAPIError(code: code, message: message)
+  }
+}
+
+/// Secret handling shared by the pairing, execution and workspace grant stores.
+enum CompanionSecrets {
+  /// 32 random bytes as unpadded URL-safe base64, or nil when the system
+  /// random source fails.
+  static func randomToken() -> String? {
+    var bytes = [UInt8](repeating: 0, count: 32)
+    guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else { return nil }
+    return Data(bytes).base64EncodedString().replacingOccurrences(of: "+", with: "-")
+      .replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
+  }
+  static func constantTimeEqual(_ lhs: Data, _ rhs: Data) -> Bool {
+    guard lhs.count == rhs.count else { return false }
+    return zip(lhs, rhs).reduce(UInt8(0)) { $0 | ($1.0 ^ $1.1) } == 0
+  }
+  /// Replace-by-rename of a device-only credential file. The bytes reach stable
+  /// storage before the directory entry is updated and the directory is synced.
+  static func persist(_ bytes: Data, to fileURL: URL, temporaryName: String, createFailure: any Error) throws {
+    let directory = fileURL.deletingLastPathComponent()
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+    let temporary = directory.appendingPathComponent(temporaryName)
+    defer { try? FileManager.default.removeItem(at: temporary) }
+    guard FileManager.default.createFile(atPath: temporary.path, contents: nil, attributes: [.posixPermissions: 0o600]) else { throw createFailure }
     let handle = try FileHandle(forWritingTo: temporary)
     do { try handle.write(contentsOf: bytes); try handle.synchronize(); try handle.close() }
     catch { try? handle.close(); throw error }
@@ -876,24 +903,5 @@ public actor CompanionAuthentication {
     guard descriptor >= 0 else { throw POSIXError(.EIO) }
     defer { Darwin.close(descriptor) }
     guard Darwin.fsync(descriptor) == 0 else { throw POSIXError(.EIO) }
-  }
-
-  private static func randomToken() throws -> String {
-    var bytes = [UInt8](repeating: 0, count: 32)
-    guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else {
-      throw error("random_failed", "Could not securely create a pairing code.")
-    }
-    return Data(bytes).base64EncodedString().replacingOccurrences(of: "+", with: "-")
-      .replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
-  }
-
-  private static func digest(_ value: String) -> Data { Data(SHA256.hash(data: Data(value.utf8))) }
-  private static func constantTimeEqual(_ lhs: Data, _ rhs: Data) -> Bool {
-    guard lhs.count == rhs.count else { return false }
-    return zip(lhs, rhs).reduce(UInt8(0)) { $0 | ($1.0 ^ $1.1) } == 0
-  }
-  private static let unauthorized = error("unauthorized", "This device is not paired or its access was revoked.")
-  private static func error(_ code: String, _ message: String) -> CompanionAPIError {
-    CompanionAPIError(code: code, message: message)
   }
 }

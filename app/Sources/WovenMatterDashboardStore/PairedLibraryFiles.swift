@@ -123,5 +123,5 @@ public actor PairedLibraryFiles {
       guard try install(chunk.file, from: temp, to: destination) else { throw invalid }
     }
   }
-  private static func hash(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
+  private static func hash(_ data: Data) -> String { SHA256.hash(data: data).hexString }
 }

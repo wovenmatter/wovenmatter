@@ -58,20 +58,7 @@ extension WorkspaceDatabaseConnection {
           UPDATE dashboard_conversations SET deleted_at = ?, updated_at = ?,
             original_folder_id = folder_id WHERE id = ?
           """, [timestamp, timestamp, id])
-        if var goal = try goalUnlocked(id), goal.status == .active {
-          try captureGoalRunsUnlocked(&goal)
-          try cancelQueuedGoalDeliveryUnlocked(goal)
-          goal.status = .paused; goal.evidence = "This conversation was moved to Trash. Resume to continue."
-          try saveGoalUnlocked(goal)
-        }
-        try toolsExecuteUnlocked("""
-          UPDATE workspace_session_timers SET is_paused = 1, pending_delivery_id = NULL WHERE session_id = ?
-          """, [id])
-        try toolsExecuteUnlocked("""
-          UPDATE workspace_session_deliveries SET status = 'cancelled'
-          WHERE (target_id = ? OR source_id = ?)
-            AND (status = 'queued' OR (status = 'sending' AND transport_started = 0))
-          """, [id, id])
+        try applyOwnerTrashEffectsUnlocked(id, reassertGoal: false)
       case .restore:
         // A folder may have been removed while this chat was in Trash.
         try toolsExecuteUnlocked("""

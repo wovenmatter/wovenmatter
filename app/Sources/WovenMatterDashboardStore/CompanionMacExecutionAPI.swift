@@ -24,9 +24,6 @@ public final class CompanionMacExecutionAPI {
     self.descriptor = descriptor; self.isActive = isActive; self.events = events; self.authorizeDevice = authorizeDevice
     self.authorizeGrant = authorizeGrant
   }
-  public func provision(device: CompanionPairedDevice) async throws -> CompanionExecutionCredential {
-    try await provision(deviceID: device.id)
-  }
   /// App-internal enrollment entry point. HTTP management wrappers must first
   /// authenticate their central-host grant; this method is never a public route.
   public func provision(deviceID: String, provisionedBy: String? = nil) async throws -> CompanionExecutionCredential {

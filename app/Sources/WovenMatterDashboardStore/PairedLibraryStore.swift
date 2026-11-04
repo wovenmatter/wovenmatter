@@ -32,7 +32,7 @@ extension WorkspaceDatabaseConnection {
   }
   private func peerSchema() throws -> String {
     let graph = try peerTables().map { $0.name + ":" + $0.columns.joined(separator: ",") + ":" + $0.keys.joined(separator: ",") }.joined(separator: "\n")
-    return SHA256.hash(data: Data(graph.utf8)).map { String(format: "%02x", $0) }.joined()
+    return SHA256.hash(data: Data(graph.utf8)).hexString
   }
 
   /// Triggers commit a durable change in the same transaction as the content.
@@ -171,7 +171,7 @@ extension WorkspaceDatabaseConnection {
     else { try toolsExecuteUnlocked("DELETE FROM paired_library_state WHERE name=?", [name]) }
   }
   private func peerVersion(_ record: PairedLibraryRecord) throws -> String {
-    SHA256.hash(data: Data(try peerJSON(record.vector).utf8)).map { String(format: "%02x", $0) }.joined()
+    SHA256.hash(data: Data(try peerJSON(record.vector).utf8)).hexString
   }
   private func decodePeerRecord(_ payload: String) throws -> PairedLibraryRecord {
     try JSONDecoder().decode(PairedLibraryRecord.self, from: Data(payload.utf8))
@@ -239,14 +239,8 @@ extension WorkspaceDatabaseConnection {
   }
 
   private func peerCapture(_ table: PeerTable, row: String, deleted: Bool, source: String = "") -> String {
-    func field(_ name: String) -> String { row + "." + Self.peerQuote(name) }
-    let key = "json_array(" + table.keys.map(field).joined(separator: ",") + ")"
-    let fields = table.columns.flatMap { column -> [String] in
-      let value = field(column)
-      return ["'\(column)'", "json_object('type',typeof(\(value)),'value',CASE WHEN typeof(\(value))='blob' THEN hex(\(value)) WHEN typeof(\(value))='real' THEN printf('%!.17g',\(value)) ELSE CAST(\(value) AS TEXT) || '' END)"]
-    }.joined(separator: ",")
-    let tombstone = deleted ? "json('true')" : table.columns.contains("deleted_at") ? "json(CASE WHEN \(field("deleted_at")) IS NOT NULL THEN 'true' ELSE 'false' END)" : table.columns.contains("deleted") ? "json(CASE WHEN \(field("deleted"))<>0 THEN 'true' ELSE 'false' END)" : "json('false')"
-    let payload = "json_object('table','\(table.name)','key',printf('%s',\(key)),'row',json_object(\(fields)),'deleted',\(tombstone),'clock',(SELECT tick FROM paired_library_clock),'origin',(SELECT device_id FROM paired_library_clock),'vector',\(captureVector(table, key: key)))"
+    let key = "json_array(" + table.keys.map { row + "." + Self.peerQuote($0) }.joined(separator: ",") + ")"
+    let payload = capturePayload(table, row: row, deleted: deleted)
     // A local write causally supersedes every version this Mac has applied,
     // so its retained concurrent versions for that identity are obsolete. They
     // are removed after the write's vector has been derived from them.
@@ -285,14 +279,14 @@ extension WorkspaceDatabaseConnection {
   func receivePairedLibrary(_ page: PairedLibraryPage, from peer: String) throws {
     guard UUID(uuidString: peer) != nil, page.entries.count <= 100, page.cursor >= 0,
           page.schema == (try peerSchema()) else { throw peerError("Update both Macs to the same Woven Matter version before synchronizing.") }
-    try applyPeerRecords(page.entries.map { ($0, nil) }, from: peer, cursor: page.cursor, completesBaseline: !page.hasMore)
+    try applyPeerRecords(page.entries.map { ($0, nil) }, from: peer, cursor: page.cursor)
   }
 
   private struct PeerRecordRejected: Error { let message: String }
   private struct ProjectionScope { var conversations = Set<String>(); var owners = Set<String>() }
 
   private func applyPeerRecords(_ entries: [(record: PairedLibraryRecord, pendingID: String?)], from peer: String,
-                                cursor: Int64?, completesBaseline: Bool = false) throws {
+                                cursor: Int64?) throws {
     let tables = Dictionary(uniqueKeysWithValues: try peerTables().map { ($0.name, $0) })
     // Foreign references can arrive in the next bounded page. Preserve them;
     // do not let a transient missing parent discard an offline child edit.
@@ -320,7 +314,7 @@ extension WorkspaceDatabaseConnection {
           guard let hydrated = try hydratePeerValues(received) else {
             if pendingID == nil {
               let payload = try peerJSON(received)
-              let id = SHA256.hash(data: Data(payload.utf8)).map { String(format: "%02x", $0) }.joined()
+              let id = SHA256.hash(data: Data(payload.utf8)).hexString
               // Relay a newly waiting version now, in arrival order, ahead of
               // any later writing that covers it. A Mac that receives that
               // writing from here then also knows this version is outstanding.
@@ -342,7 +336,7 @@ extension WorkspaceDatabaseConnection {
           // Storage and database failures still abort the whole page.
           try executeUnlocked("ROLLBACK TO paired_record"); try executeUnlocked("RELEASE paired_record")
           let payload = try peerJSON(received)
-          let id = SHA256.hash(data: Data(payload.utf8)).map { String(format: "%02x", $0) }.joined()
+          let id = SHA256.hash(data: Data(payload.utf8)).hexString
           try toolsExecuteUnlocked("INSERT OR IGNORE INTO paired_library_quarantine VALUES(?,?,?,?)", [id, peer, payload, rejected.message])
           if let pendingID { try toolsExecuteUnlocked("DELETE FROM paired_library_pending WHERE id=?", [pendingID]) }
           continue
@@ -357,7 +351,6 @@ extension WorkspaceDatabaseConnection {
       try reassertLocalRowsUnlocked(tables)
       if let cursor {
         try toolsExecuteUnlocked("INSERT INTO paired_library_cursors(peer_id,pulled) VALUES(?,?) ON CONFLICT(peer_id) DO UPDATE SET pulled=MAX(pulled,excluded.pulled)", [peer, String(cursor)])
-        if completesBaseline { try setPairedStateUnlocked("baseline." + peer, String(cursor)) }
       }
     }
   }
@@ -431,7 +424,7 @@ extension WorkspaceDatabaseConnection {
     var row = record.row
     for (name, value) in row where ["text", "blob"].contains(value.type) && (value.value?.utf8.count ?? 0) > 262_144 {
       let bytes = Data(value.value!.utf8)
-      let hash = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+      let hash = SHA256.hash(data: bytes).hexString
       let directory = libraryFiles.supportDirectory.appending(path: "paired-records")
       try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
       let file = directory.appending(path: hash)
@@ -455,7 +448,7 @@ extension WorkspaceDatabaseConnection {
       let count = try file.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? Int.max
       guard count <= 256 * 1_024 * 1_024 else { throw PeerRecordRejected(message: "Shared record exceeds its storage limit.") }
       let bytes = try Data(contentsOf: file, options: .mappedIfSafe)
-      guard SHA256.hash(data: bytes).map({ String(format: "%02x", $0) }).joined() == hash,
+      guard SHA256.hash(data: bytes).hexString == hash,
             let text = String(data: bytes, encoding: .utf8) else {
         try? FileManager.default.removeItem(at: file)
         return nil
@@ -492,10 +485,6 @@ extension WorkspaceDatabaseConnection {
       for (peer, entries) in ready.sorted(by: { $0.key < $1.key }) { try applyPeerRecords(entries, from: peer, cursor: nil) }
     }
     try setPairedStateUnlocked("pending.after", after.isEmpty ? nil : after)
-  }
-  func pairedLibraryBaseline(_ peer: String) throws -> Bool {
-    try pairedStateUnlocked("baseline." + peer) != nil
-      && historyRowsUnlocked("SELECT 1 AS present FROM paired_library_pending WHERE peer_id=? LIMIT 1", values: [peer]).isEmpty
   }
   func pairedLibraryQuarantineCount() throws -> Int {
     try historyRowsUnlocked("SELECT count(*) AS count FROM paired_library_quarantine", values: []).first?.objectValue?["count"]?.intValue ?? 0
@@ -588,7 +577,7 @@ extension WorkspaceDatabaseConnection {
       if try !conversationBusyUnlocked(conversation) {
         row["deleted_at"] = .init(type: "text", value: requested)
         row["original_folder_id"] = current.row["folder_id"] ?? .init(type: "null")
-        try applyOwnerTrashEffectsUnlocked(conversation)
+        try applyOwnerTrashEffectsUnlocked(conversation, reassertGoal: true)
       }
     } else if requested == nil, existing != nil {
       row["deleted_at"] = .init(type: "null")
@@ -598,16 +587,16 @@ extension WorkspaceDatabaseConnection {
     return .init(table: record.table, key: record.key, row: row, deleted: row["deleted_at"]?.value != nil, clock: record.clock, origin: record.origin, vector: record.vector)
   }
 
-  /// The owner's trash effects for an accepted remote trash request: pause an
-  /// active goal with the owner's own run sequence, stop timers and cancel
-  /// queued deliveries. The owner republishes its goal.
-  private func applyOwnerTrashEffectsUnlocked(_ id: String) throws {
+  /// The owner's trash effects: pause an active goal with the owner's own run
+  /// sequence, stop timers and cancel queued deliveries. For an accepted remote
+  /// trash request the owner also republishes its goal.
+  func applyOwnerTrashEffectsUnlocked(_ id: String, reassertGoal: Bool) throws {
     if var goal = try goalUnlocked(id), goal.status == .active {
       try captureGoalRunsUnlocked(&goal)
       try cancelQueuedGoalDeliveryUnlocked(goal)
       goal.status = .paused; goal.evidence = "This conversation was moved to Trash. Resume to continue."
       try saveGoalUnlocked(goal)
-      try toolsExecuteUnlocked("INSERT OR IGNORE INTO paired_library_reassert VALUES('workspace_session_goals',?)", [try peerJSON([id])])
+      if reassertGoal { try toolsExecuteUnlocked("INSERT OR IGNORE INTO paired_library_reassert VALUES('workspace_session_goals',?)", [try peerJSON([id])]) }
     }
     try toolsExecuteUnlocked("UPDATE workspace_session_timers SET is_paused=1,pending_delivery_id=NULL WHERE session_id=?", [id])
     try toolsExecuteUnlocked("""
@@ -722,7 +711,7 @@ extension WorkspaceDatabaseConnection {
 
   private func retainPeerConflict(_ record: PairedLibraryRecord, recoverCopy: Bool = true) throws {
     let payload = try peerJSON(record)
-    let id = SHA256.hash(data: Data(payload.utf8)).map { String(format: "%02x", $0) }.joined()
+    let id = SHA256.hash(data: Data(payload.utf8)).hexString
     try toolsExecuteUnlocked("INSERT OR IGNORE INTO paired_library_conflicts VALUES(?,?)", [id, payload])
     // Only live writing gets a visible copy; a losing deletion has no content
     // to recover and must not resurrect a note.
@@ -775,7 +764,4 @@ extension WorkspaceDatabase {
   }
   public func pairedLibraryConflicts() async throws -> [PairedLibraryConflict] { try await read { try $0.pairedLibraryConflicts() } }
   public func pairedLibraryQuarantineCount() async throws -> Int { try await read { try $0.pairedLibraryQuarantineCount() } }
-  /// True after this Mac durably received the peer's complete journal up to a
-  /// page without more records, with no bytes from that peer still waiting.
-  public func pairedLibraryBaseline(_ peer: String) async throws -> Bool { try await read { try $0.pairedLibraryBaseline(peer) } }
 }

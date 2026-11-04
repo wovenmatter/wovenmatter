@@ -21,13 +21,6 @@ enum PairedLibraryOwnership {
     """
   }
 
-  static func localAgent(_ column: String) -> String {
-    """
-    EXISTS(SELECT 1 FROM paired_agent_owners own_a JOIN companion_library_identity own_i ON own_i.singleton=1
-      WHERE own_a.id=\(column) AND own_a.device_id=own_i.host_device_id)
-    """
-  }
-
   static func localCalendarItem(_ column: String) -> String {
     """
     EXISTS(SELECT 1 FROM paired_calendar_owners own_k JOIN companion_library_identity own_i ON own_i.singleton=1
@@ -39,10 +32,6 @@ enum PairedLibraryOwnership {
 extension WorkspaceDatabaseConnection {
   func locallyOwnsConversationUnlocked(_ id: String) throws -> Bool {
     try historyRowsUnlocked("SELECT 1 AS owned WHERE " + PairedLibraryOwnership.localConversation("?"), values: [id, id, id]).isEmpty == false
-  }
-
-  func locallyOwnsAgentUnlocked(_ id: String) throws -> Bool {
-    try historyRowsUnlocked("SELECT 1 AS owned WHERE " + PairedLibraryOwnership.localAgent("?"), values: [id]).isEmpty == false
   }
 }
 

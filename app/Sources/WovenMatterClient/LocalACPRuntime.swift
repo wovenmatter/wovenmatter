@@ -7,7 +7,6 @@ public struct LocalACPRuntimeDefinition: Equatable, Identifiable, Sendable {
     public let commandName: String
     public let alternativeCommandNames: [String]
     public let arguments: [String]
-    public let environment: [String: String]
     public let underlyingCLIName: String?
     public let cliInstallerSource: URL?
     public let cliInstallerInterpreter: String?
@@ -30,7 +29,6 @@ public struct LocalACPRuntimeDefinition: Equatable, Identifiable, Sendable {
         commandName: String,
         alternativeCommandNames: [String] = [],
         arguments: [String],
-        environment: [String: String] = [:],
         underlyingCLIName: String?,
         cliInstallerSource: URL?,
         cliInstallerInterpreter: String?,
@@ -47,7 +45,6 @@ public struct LocalACPRuntimeDefinition: Equatable, Identifiable, Sendable {
         self.commandName = commandName
         self.alternativeCommandNames = alternativeCommandNames
         self.arguments = arguments
-        self.environment = environment
         self.underlyingCLIName = underlyingCLIName
         self.cliInstallerSource = cliInstallerSource
         self.cliInstallerInterpreter = cliInstallerInterpreter
@@ -266,7 +263,7 @@ public struct LocalACPRuntimeResolver: Sendable {
     /// Reuses one search-path discovery within a refresh. Create a new snapshot
     /// for each refresh so subsequent installs and PATH changes remain visible.
     public func snapshottingExecutableSearchDirectories() -> Self {
-        Self(executableSearchDirectories: effectiveSearchDirectories)
+        Self(executableSearchDirectories: searchDirectories())
     }
 
     public func resolve(
@@ -450,7 +447,7 @@ public struct LocalACPRuntimeResolver: Sendable {
     private func resolveExecutable(named name: String) -> URL? {
         Self.resolveExecutable(
             named: name,
-            searchDirectories: effectiveSearchDirectories
+            searchDirectories: searchDirectories()
         )
     }
 
@@ -467,10 +464,6 @@ public struct LocalACPRuntimeResolver: Sendable {
         return nil
     }
 
-    private var effectiveSearchDirectories: [String] {
-        searchDirectories()
-    }
-
     private func launchEnvironment(
         definition: LocalACPRuntimeDefinition,
         executable: URL,
@@ -479,9 +472,9 @@ public struct LocalACPRuntimeResolver: Sendable {
         let directories = (
             [executable.deletingLastPathComponent().path]
                 + [underlyingCLI?.deletingLastPathComponent().path].compactMap { $0 }
-                + effectiveSearchDirectories
+                + searchDirectories()
         ).filter { !$0.isEmpty }.uniqued()
-        var environment = definition.environment
+        var environment: [String: String] = [:]
         environment["PATH"] = directories.joined(separator: ":")
         return environment
     }

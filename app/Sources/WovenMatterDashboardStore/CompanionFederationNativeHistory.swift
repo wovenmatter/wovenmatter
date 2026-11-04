@@ -63,7 +63,7 @@ extension WorkspaceDatabaseConnection {
       let bytes = try blob(chunks, column: 1); size += Int64(bytes.count); hash.update(data: bytes); index += 1
       if searchBytes.count < 256 * 1_024 { searchBytes.append(bytes.prefix(256 * 1_024 - searchBytes.count)) }
     }
-    guard size == part.byteCount, hash.finalize().map({ String(format: "%02x", $0) }).joined() == part.sha256 else {
+    guard size == part.byteCount, hash.finalize().hexString == part.sha256 else {
       throw federationError("record_digest", "Native history record integrity failed. The source must retain its unacknowledged history.")
     }
     try toolsExecuteUnlocked("UPDATE companion_native_history SET complete=1 WHERE workspace_id=? AND record_id=?", [entry.workspaceID, part.recordID])

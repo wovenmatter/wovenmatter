@@ -61,13 +61,21 @@ final class WorkspaceDatabaseConnection {
   }
 
   func backupPairedLibrary(to url: URL) throws {
+    try Self.copyMainDatabase(from: connection, to: url, openFailure: "Could not create the local recovery backup.",
+      copyFailure: "Could not snapshot the local library.", incompleteFailure: "The local recovery backup did not complete.")
+  }
+
+  /// Writes a consistent copy of `source`'s main database, including committed
+  /// WAL content, to a new rollback-journal file at `url` and verifies it.
+  static func copyMainDatabase(from source: OpaquePointer?, to url: URL,
+                               openFailure: String, copyFailure: String, incompleteFailure: String) throws {
     var target: OpaquePointer?
-    guard sqlite3_open(url.path, &target) == SQLITE_OK, let target else { throw WorkspaceDatabaseError.open("Could not create the local recovery backup.") }
+    guard sqlite3_open(url.path, &target) == SQLITE_OK, let target else { sqlite3_close(target); throw WorkspaceDatabaseError.open(openFailure) }
     defer { sqlite3_close(target) }
-    guard let connection, let backup = sqlite3_backup_init(target, "main", connection, "main") else { throw WorkspaceDatabaseError.execute("Could not snapshot the local library.") }
+    guard let source, let backup = sqlite3_backup_init(target, "main", source, "main") else { throw WorkspaceDatabaseError.execute(copyFailure) }
     let status = sqlite3_backup_step(backup, -1), finish = sqlite3_backup_finish(backup)
     guard status == SQLITE_DONE, finish == SQLITE_OK,
-          sqlite3_exec(target, "PRAGMA journal_mode=DELETE", nil, nil, nil) == SQLITE_OK else { throw WorkspaceDatabaseError.execute("The local recovery backup did not complete.") }
+          sqlite3_exec(target, "PRAGMA journal_mode=DELETE", nil, nil, nil) == SQLITE_OK else { throw WorkspaceDatabaseError.execute(incompleteFailure) }
     var check: OpaquePointer?
     guard sqlite3_prepare_v2(target, "PRAGMA integrity_check", -1, &check, nil) == SQLITE_OK, let check else { throw WorkspaceDatabaseError.corruptRow }
     defer { sqlite3_finalize(check) }

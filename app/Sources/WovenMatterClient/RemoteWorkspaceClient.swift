@@ -165,7 +165,7 @@ public enum RemoteHarnessLaunchResolver {
         } ?? false
         let usesDurableRelay = configuration.backgroundExecutionEnabled
             && durableChannelID != nil && runtimeKind != .defaultAgent && supportsDurableRelay
-        let environment = LocalACPRuntimeCatalog.definition(for: runtimeKind)?.environment ?? [:]
+        let environment: [String: String] = [:]
         let workspacePermission = configuration.fullRootPermission(for: runtimeKind)
         let hostSubcommand = usesDurableRelay ? "durable-acp" : runtimeKind == .defaultAgent ? "default-agent" : "harness"
         var command = try target.prefix(workingDirectory: remoteRoot.path, interactive: true,
@@ -1754,9 +1754,9 @@ extension RemoteWorkspaceServiceClient {
 
 // A compromised service must not redirect administrative credentials or request
 // bodies from the loopback tunnel to another origin or another local service.
-final class RemoteWorkspaceRedirectPolicy: NSObject, URLSessionTaskDelegate, Sendable {
-    static let shared = RemoteWorkspaceRedirectPolicy()
-    func urlSession(_ session: URLSession, task: URLSessionTask,
+public final class RemoteWorkspaceRedirectPolicy: NSObject, URLSessionTaskDelegate, Sendable {
+    public static let shared = RemoteWorkspaceRedirectPolicy()
+    public func urlSession(_ session: URLSession, task: URLSessionTask,
                     willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
                     completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
         completionHandler(nil)

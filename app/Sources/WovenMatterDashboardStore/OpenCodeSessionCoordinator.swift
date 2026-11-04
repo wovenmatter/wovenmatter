@@ -704,7 +704,7 @@ public actor OpenCodeSessionCoordinator {
               let credential = proxy["bearerToken"].string, !credential.isEmpty else {
             throw OpenCodeError.message("OpenCode did not confirm the Woven MCP connection.")
         }
-        let server = "woven_" + String(SHA256.hash(data: Data(link.sessionID.utf8)).map { String(format: "%02x", $0) }.joined().prefix(16))
+        let server = "woven_" + String(SHA256.hash(data: Data(link.sessionID.utf8)).hexString.prefix(16))
         _ = try await client.call("PUT", "/api/experimental/mcp/" + server, query: query, body: ["config": [
             "type": .string("remote"), "url": .string(endpoint), "oauth": .bool(false), "codemode": .bool(false),
             "headers": ["Authorization": .string("Bearer " + credential)]

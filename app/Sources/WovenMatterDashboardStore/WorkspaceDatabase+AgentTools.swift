@@ -525,7 +525,7 @@ extension WorkspaceDatabaseConnection {
       try requireToolUnlocked(group, sessionID: callerID, writesCalendar: false)
       let id = try canonicalToolRequestID(request.requestID)
       try requireAutomationNotCancelled(callerID: callerID, requestID: id)
-      let digest = SHA256.hash(data: try JSONEncoder().encode(request.operationArguments)).map { String(format: "%02x", $0) }.joined()
+      let digest = SHA256.hash(data: try JSONEncoder().encode(request.operationArguments)).hexString
       let rows = try historyRowsUnlocked("SELECT input_digest FROM workspace_automation_requests WHERE source_id=? AND request_id=?", values: [callerID, id])
       if let prior = rows.first?.objectValue?["input_digest"]?.stringValue {
         guard prior == digest else { throw WorkspaceToolError.invalid("This request ID was already used for another automation call.") }
@@ -584,7 +584,7 @@ extension WorkspaceDatabaseConnection {
     let requestID = try persistedToolRequestID(rawRequestID, in: .mutations, sourceID: callerID)
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.sortedKeys]
-    let digest = SHA256.hash(data: try encoder.encode(input)).map { String(format: "%02x", $0) }.joined()
+    let digest = SHA256.hash(data: try encoder.encode(input)).hexString
     let rows = try historyRowsUnlocked(
       "SELECT operation,input_digest,result_json FROM workspace_tool_mutations WHERE source_id=? AND request_id=?",
       values: [callerID, requestID])

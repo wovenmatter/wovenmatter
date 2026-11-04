@@ -173,7 +173,7 @@ extension WorkspaceDatabaseConnection {
     throws
   {
     guard try isLibraryMessageUnlocked(messageID, conversationID: conversationID) else { return }
-    let identity = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    let identity = SHA256.hash(data: data).hexString
     let normalized = LibraryAsset(
       source: asset.source.isEmpty ? "embedded:" + identity : asset.source,
       title: asset.title, kind: asset.kind, mimeType: asset.mimeType)
@@ -227,7 +227,7 @@ extension WorkspaceDatabaseConnection {
           source: source, title: title, kind: LibraryLinkDiscovery.kind(source: source, mimeType: mime), mimeType: mime),
         messageID: messageID, conversationID: conversationID)
     } else if let encoded {
-      let identity = SHA256.hash(data: Data(encoded.utf8)).map { String(format: "%02x", $0) }.joined()
+      let identity = SHA256.hash(data: Data(encoded.utf8)).hexString
       try insertLibraryAssetUnlocked(
         .init(
           source: "embedded:" + identity, title: title,

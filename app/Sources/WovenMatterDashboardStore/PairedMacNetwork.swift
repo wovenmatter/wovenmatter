@@ -1,11 +1,7 @@
 import CryptoKit
 import Foundation
+import WovenMatterClient
 import WovenMatterCore
-
-private final class PairedMacRedirectPolicy: NSObject, URLSessionTaskDelegate, Sendable {
-  func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
-                  newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void) { completionHandler(nil) }
-}
 
 /// Discovery/replica addresses are untrusted until they prove possession of an
 /// existing device verifier. Never send a bearer to a learned address first.
@@ -18,7 +14,7 @@ public final class PairedMacNetwork: Sendable {
     let configuration = URLSessionConfiguration.ephemeral
     configuration.httpCookieStorage = nil; configuration.urlCache = nil
     configuration.timeoutIntervalForRequest = 20; configuration.timeoutIntervalForResource = 45
-    session = URLSession(configuration: configuration, delegate: PairedMacRedirectPolicy(), delegateQueue: nil)
+    session = URLSession(configuration: configuration, delegate: RemoteWorkspaceRedirectPolicy.shared, delegateQueue: nil)
   }
   public func request<T: Decodable & Sendable>(_ endpoint: URL, path: String, token: String? = nil, libraryID: String? = nil, body: Data? = nil) async throws -> T {
     guard CompanionPairingPayload.isValidEndpoint(endpoint),
@@ -53,7 +49,7 @@ public final class PairedMacNetwork: Sendable {
     guard pin.libraryID == route.libraryID.lowercased(),
           let key = try? Curve25519.Signing.PublicKey(rawRepresentation: pin.publicKey) else { throw unverified }
     let digest = Data(SHA256.hash(data: Data(token.utf8)))
-    let credentialID = SHA256.hash(data: digest).map { String(format: "%02x", $0) }.joined()
+    let credentialID = SHA256.hash(data: digest).hexString
     let challenge = PairedMacProofChallenge(deviceID: deviceID, credentialID: credentialID, nonce: Self.nonce(),
       targetDeviceID: route.deviceID, targetLibraryID: route.libraryID)
     let proof: PairedMacProof = try await request(route.endpoint, path: "v1/peers/proof", body: JSONEncoder().encode(challenge))

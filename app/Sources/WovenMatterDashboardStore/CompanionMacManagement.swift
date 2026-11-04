@@ -1,4 +1,5 @@
 import Foundation
+import WovenMatterClient
 import WovenMatterCore
 
 public struct CompanionMacSSHConnection: Sendable {
@@ -87,7 +88,7 @@ public struct CompanionMacManagement: Sendable {
         }
         return data
     }
-    static func quote(_ value: String) -> String { "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'" }
+    static func quote(_ value: String) -> String { RemoteWorkspaceExecTarget.quote(value) }
     static func sshArguments(mac: CompanionTailnetMac, connection: CompanionMacSSHConnection, tailscale: String) throws -> [String] {
         let alias = connection.alias.isEmpty ? mac.sshName : connection.alias
         guard !alias.isEmpty, alias.utf8.count <= 253, alias.first != "-", !alias.contains(".."),

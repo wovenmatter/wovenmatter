@@ -48,6 +48,9 @@ public struct WorkspaceFolderLocation: Codable, Equatable, Sendable {
   public init(workspaceID: String, rootPath: String, managed: Bool) {
     self.workspaceID = workspaceID; self.rootPath = rootPath; self.managed = managed
   }
+  /// The workspace ID of a remote execution workspace, as execution roots,
+  /// scratch directories and history sources record it.
+  public static func remoteWorkspaceSourceID(_ id: UUID) -> String { "remote:" + id.uuidString.lowercased() }
 }
 
 public enum WorkspaceFolderMoveDirection: Sendable {

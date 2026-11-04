@@ -1120,7 +1120,7 @@ public actor LocalACPSessionCoordinator {
         try checkActiveInputAdmission(conversationID: conversationID, runID: runID,
             sessionID: active.configurationObservationID, dispatchFence: operationFence)
         await eventBuffer.pause()
-        let reservation: WorkspaceDatabase.SteeringReservation
+        let reservation: LocalACPSteeringReservation
         do {
             try await streamWriter.finishSegmentAndPause()
             try checkActiveInputAdmission(conversationID: conversationID, runID: runID,
@@ -1397,7 +1397,6 @@ public actor LocalACPSessionCoordinator {
         for run in runs {
             _ = try? await run.value
         }
-
     }
 
     private func acquireOperationLease(
@@ -1904,7 +1903,7 @@ public actor LocalACPSessionCoordinator {
         launch.historyRecorder = database.historyWireRecorder(
             conversationID: descriptor.conversationID, harness: descriptor.runtimeKind.rawValue,
             sourceScope: [.defaultAgent, .codex, .claudeCode, .grokBuild].contains(descriptor.runtimeKind)
-                ? nil : descriptor.remoteWorkspaceID.map { "remote:" + $0.uuidString.lowercased() } ?? "local"
+                ? nil : descriptor.remoteWorkspaceID.map(WorkspaceFolderLocation.remoteWorkspaceSourceID) ?? "local"
         )
         let started = try clientFactory(launch, workspace.rootURL)
         do {

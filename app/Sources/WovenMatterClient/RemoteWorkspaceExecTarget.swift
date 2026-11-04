@@ -110,7 +110,7 @@ public struct RemoteWorkspaceExecTarget: Sendable {
             .map(Self.quote).joined(separator: " ")
     }
 
-    static func quote(_ value: String) -> String {
+    public static func quote(_ value: String) -> String {
         "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
     }
 

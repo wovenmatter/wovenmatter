@@ -40,8 +40,12 @@ extension WorkspaceDatabaseConnection {
         guard let json = try historyRowsUnlocked("SELECT value FROM workspace_session_goals WHERE session_id=?", values: [sessionID])
             .first?.objectValue?["value"]?.stringValue else { return nil }
         var goal = try JSONDecoder().decode(WorkspaceGoal.self, from: Data(json.utf8))
-        goal.completedTurns = try historyRowsUnlocked("SELECT count(*) AS count FROM workspace_goal_runs g JOIN dashboard_runs r ON r.id=g.run_id WHERE g.goal_id=? AND r.status='completed'", values: [goal.id]).first?.objectValue?["count"]?.intValue ?? goal.completedTurns
+        goal.completedTurns = try completedTurnsUnlocked(goal.id) ?? goal.completedTurns
         return goal
+    }
+
+    private func completedTurnsUnlocked(_ goalID: String) throws -> Int? {
+        try historyRowsUnlocked("SELECT count(*) AS count FROM workspace_goal_runs g JOIN dashboard_runs r ON r.id=g.run_id WHERE g.goal_id=? AND r.status='completed'", values: [goalID]).first?.objectValue?["count"]?.intValue
     }
 
     func saveGoalUnlocked(_ goal: WorkspaceGoal) throws {
@@ -55,7 +59,7 @@ extension WorkspaceDatabaseConnection {
         goal.enrolledRunSequence = try historyRowsUnlocked("SELECT coalesce(max(rowid),0) AS sequence FROM dashboard_runs WHERE conversation_id=?", values: [goal.sessionID]).first?.objectValue?["sequence"]?.goalInteger ?? goal.enrolledRunSequence
         // Newly enrolled runs may already be complete. Budget checks in this
         // transaction must include them before reserving another continuation.
-        goal.completedTurns = try historyRowsUnlocked("SELECT count(*) AS count FROM workspace_goal_runs g JOIN dashboard_runs r ON r.id=g.run_id WHERE g.goal_id=? AND r.status='completed'", values: [goal.id]).first?.objectValue?["count"]?.intValue ?? goal.completedTurns
+        goal.completedTurns = try completedTurnsUnlocked(goal.id) ?? goal.completedTurns
     }
 
     public func sessionGoals() throws -> [WorkspaceGoal] {
@@ -66,7 +70,7 @@ extension WorkspaceDatabaseConnection {
                 """, values: []).compactMap { row in
                     guard let json = row.objectValue?["value"]?.stringValue else { return nil }
                     var goal = try JSONDecoder().decode(WorkspaceGoal.self, from: Data(json.utf8))
-                    goal.completedTurns = try historyRowsUnlocked("SELECT count(*) AS count FROM workspace_goal_runs g JOIN dashboard_runs r ON r.id=g.run_id WHERE g.goal_id=? AND r.status='completed'", values: [goal.id]).first?.objectValue?["count"]?.intValue ?? goal.completedTurns
+                    goal.completedTurns = try completedTurnsUnlocked(goal.id) ?? goal.completedTurns
                     return goal
                 }
         }

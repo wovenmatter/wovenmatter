@@ -12,8 +12,6 @@ public enum PeerIdentifier {
     guard value.utf8.count == 36, let uuid = UUID(uuidString: value), uuid.uuidString.lowercased() == value else { return nil }
     return value
   }
-  /// Local identities from older stores are normalized once on this Mac.
-  public static func normalized(_ value: String) -> String? { UUID(uuidString: value)?.uuidString.lowercased() }
   static let maximumRevocationsPerDevice = 64
 }
 
