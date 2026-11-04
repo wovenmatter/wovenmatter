@@ -157,8 +157,7 @@ public enum RemoteHarnessLaunchResolver {
             userName: configuration.userName
         )
         let target = RemoteWorkspaceExecTarget(configuration: configuration)
-        let remoteRoot = try workingDirectory ?? (configuration.kind == .host
-            ? URL(fileURLWithPath: target.workspaceRoot) : workspaceRoot)
+        let remoteRoot = try workingDirectory ?? URL(fileURLWithPath: target.workspaceRoot)
         guard remoteRoot.isFileURL, remoteRoot.path.hasPrefix("/"), !remoteRoot.path.contains("\0") else {
             throw WorkspaceToolError.invalid("The remote working directory must be an absolute path.")
         }
@@ -171,20 +170,11 @@ public enum RemoteHarnessLaunchResolver {
         let workspacePermission = configuration.fullRootPermission(for: runtimeKind)
         let hostSubcommand = usesDurableRelay ? "durable-acp" : runtimeKind == .defaultAgent ? "default-agent" : "harness"
         var command = try target.prefix(workingDirectory: remoteRoot.path, interactive: true,
-            environment: configuration.kind == .host ? environment : [:], hostSubcommand: hostSubcommand)
-        if configuration.kind == .container {
-            command += ["env", "HOME=/home",
-                "WOVEN_DEFAULT_AGENT_DIRECTORY=/home/.woven-matter/.wovenmatter/default-agent",
-                "PATH=/home/.local/bin:/home/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"]
-            command += environment.sorted(by: { $0.key < $1.key }).map { "\($0.key)=\($0.value)" }
-        }
+            environment: environment, hostSubcommand: hostSubcommand)
         var harnessArgumentsStartIndex = command.count
         if usesDurableRelay, let durableChannelID {
             guard UUID(uuidString: durableChannelID) != nil else {
                 throw WorkspaceToolError.invalid("The background session identifier is invalid.")
-            }
-            if configuration.kind == .container {
-                command += ["node", "/opt/wovenmatter/src/durable-acp-stdio.mjs"]
             }
             // Invocation wrapping inserts harness defaults immediately before
             // these relay arguments, independently of the transport prefix.
@@ -192,26 +182,17 @@ public enum RemoteHarnessLaunchResolver {
             command += ["--channel-id", durableChannelID, "--harness-id", runtimeKind.rawValue,
                         "--cwd", remoteRoot.path]
             if let workspacePermission { command += ["--permission-mode", workspacePermission] }
-        } else if runtimeKind == .defaultAgent {
-            if configuration.kind == .container {
-                command += ["sh", "-c", #"ulimit -c 0; exec "$@""#, "woven-default-agent", "node", "/opt/wovenmatter/default-agent/src/main.mjs", "--remote"]
-            }
-        } else if let harness {
-            if configuration.kind == .container { command.append(contentsOf: [
-                "bash", "-c",
-                #"mkdir -p /home/.wovenmatter && exec 9>/home/.wovenmatter/runtime-operation.lock && { flock --shared --nonblock 9 || { printf '%s\n' 'Runtime maintenance is in progress. Retry after it finishes.' >&2; exit 75; }; } && exec "$@""#,
-                "woven-runtime",
-            ]) }
+        } else if runtimeKind != .defaultAgent, let harness {
             command.append(harness.command)
             harnessArgumentsStartIndex = command.count
             command.append(contentsOf: harness.arguments)
         }
-        let remoteCommand = command.map(shellQuote).joined(separator: " ")
+        let remoteCommand = command.map(RemoteWorkspaceExecTarget.quote).joined(separator: " ")
         let sshArguments = try tailnetSSHOptions(destination) + [
             "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", destination, remoteCommand,
         ]
         var launchEnvironment = ["WOVEN_EXECUTION_SCOPE": configuration.id.uuidString.lowercased()]
-        if configuration.kind == .host { launchEnvironment["WOVENMATTER_HOST_ACCESS_MODE"] = configuration.accessMode.rawValue }
+        launchEnvironment["WOVENMATTER_HOST_ACCESS_MODE"] = configuration.accessMode.rawValue
         if runtimeKind == .defaultAgent {
             launchEnvironment["WOVEN_DEFAULT_AGENT_SCOPE"] = configuration.id.uuidString.lowercased()
         } else if usesDurableRelay {
@@ -236,10 +217,6 @@ public enum RemoteHarnessLaunchResolver {
                 databasesURL: URL(fileURLWithPath: try target.databasesDirectory, isDirectory: true)
             )
         )
-    }
-
-    private static func shellQuote(_ value: String) -> String {
-        "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
     }
 }
 
@@ -716,7 +693,7 @@ public actor RemoteWorkspaceSSHClient {
         let root = try deploymentRoot ?? Self.loadDeploymentRoot()
         let deployment = try RemoteWorkspaceDeployment(root: root)
         func command(_ action: String) -> String {
-            "exec bash -c " + Self.shellQuote(deployment.script) + " -- " + action + " "
+            "exec bash -c " + RemoteWorkspaceExecTarget.quote(deployment.script) + " -- " + action + " "
                 + deployment.fingerprint + " " + (forceRefresh ? "true" : "false")
         }
         progress("Checking the workspace image on the host…")
@@ -851,13 +828,13 @@ public actor RemoteWorkspaceSSHClient {
                 )
             }
             let command = "IFS= read -r WOVENMATTER_API_TOKEN; export WOVENMATTER_API_TOKEN; exec bash -s -- "
-                + arguments.map(Self.shellQuote).joined(separator: " ")
+                + arguments.map(RemoteWorkspaceExecTarget.quote).joined(separator: " ")
             var input = Data((secret + "\n").utf8)
             input.append(script)
             return try runner(destination, command, input)
         }
         let command = "exec bash -s -- "
-            + arguments.map(Self.shellQuote).joined(separator: " ")
+            + arguments.map(RemoteWorkspaceExecTarget.quote).joined(separator: " ")
         return try runner(destination, command, script)
     }
 
@@ -997,10 +974,6 @@ public actor RemoteWorkspaceSSHClient {
             throw RemoteWorkspaceClientError.commandFailed(result.output)
         }
         return result.data
-    }
-
-    private static func shellQuote(_ value: String) -> String {
-        "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
     }
 }
 
@@ -1892,7 +1865,7 @@ extension RemoteWorkspaceServiceClient {
 
 // A compromised service must not redirect administrative credentials or request
 // bodies from the loopback tunnel to another origin or another local service.
-private final class RemoteWorkspaceRedirectPolicy: NSObject, URLSessionTaskDelegate, Sendable {
+final class RemoteWorkspaceRedirectPolicy: NSObject, URLSessionTaskDelegate, Sendable {
     static let shared = RemoteWorkspaceRedirectPolicy()
     func urlSession(_ session: URLSession, task: URLSessionTask,
                     willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,

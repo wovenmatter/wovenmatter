@@ -82,9 +82,8 @@ public enum HarnessOnboarding {
         case .opencode: arguments = ["auth", "login"]
         default: return nil
         }
-        func quote(_ value: String) -> String { "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'" }
-        return "#!/bin/zsh\nexport PATH=" + quote(searchPath) + "\n"
-            + ([executable.path] + arguments).map(quote).joined(separator: " ") + "\n"
+        return "#!/bin/zsh\nexport PATH=" + RemoteWorkspaceExecTarget.quote(searchPath) + "\n"
+            + ([executable.path] + arguments).map(RemoteWorkspaceExecTarget.quote).joined(separator: " ") + "\n"
     }
 
     static func accountDetails(_ kind: AgentRuntimeKind, text: String) -> [AgentSignInStatus.Account] {

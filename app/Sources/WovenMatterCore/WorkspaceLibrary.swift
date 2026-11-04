@@ -87,7 +87,7 @@ public enum LibraryFileReference {
 
 public struct WorkspaceLibraryItem: Codable, Equatable, Identifiable, Sendable {
   public static func identifier(messageID: String, source: String) -> String {
-    SHA256.hash(data: Data((messageID + "\u{0}" + source).utf8)).map { String(format: "%02x", $0) }.joined()
+    SHA256.hash(data: Data((messageID + "\u{0}" + source).utf8)).hexString
   }
 
   public let id: String
@@ -230,4 +230,9 @@ public enum LibraryLinkDiscovery {
     }
     return results
   }
+}
+
+extension Sequence where Element == UInt8 {
+  /// Lowercase hexadecimal text of these bytes.
+  public var hexString: String { map { String(format: "%02x", $0) }.joined() }
 }

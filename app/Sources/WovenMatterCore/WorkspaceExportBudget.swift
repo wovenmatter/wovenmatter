@@ -44,7 +44,7 @@ public struct WorkspaceExportBudget: Sendable {
 /// cancellation while still queued must not create or replace a destination.
 public enum WorkspaceExportFileIO {
   public static func perform(_ operation: @escaping @Sendable () throws -> Void) async throws {
-    let cancellation = ExportCancellation()
+    let cancellation = CancellationFlag()
     try Task.checkCancellation()
     try await withTaskCancellationHandler {
       try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
@@ -60,13 +60,17 @@ public enum WorkspaceExportFileIO {
   }
 }
 
-private final class ExportCancellation: @unchecked Sendable {
+/// A lock-guarded cancellation flag for blocking work outside structured
+/// concurrency: set from `onCancel`, polled by the operation.
+public final class CancellationFlag: @unchecked Sendable {
   private let lock = NSLock()
   private var cancelled = false
-  func cancel() { lock.lock(); cancelled = true; lock.unlock() }
-  func check() throws {
-    lock.lock()
-    defer { lock.unlock() }
-    if cancelled { throw CancellationError() }
+
+  public init() {}
+
+  public var isCancelled: Bool { lock.withLock { cancelled } }
+  public func cancel() { lock.withLock { cancelled = true } }
+  public func check() throws {
+    if isCancelled { throw CancellationError() }
   }
 }

@@ -80,13 +80,6 @@ public struct OpenCodeConnection: Equatable, Sendable {
     }
 }
 
-/// Server-selected redirects must not move authenticated requests or mutations.
-private final class OpenCodeSessionDelegate: NSObject, URLSessionTaskDelegate, Sendable {
-    func urlSession(_ session: URLSession, task: URLSessionTask,
-                    willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
-                    completionHandler: @escaping @Sendable (URLRequest?) -> Void) { completionHandler(nil) }
-}
-
 public struct OpenCodeHTTPClient: Sendable {
     public let connection: OpenCodeConnection
     private let session: URLSession
@@ -97,7 +90,7 @@ public struct OpenCodeHTTPClient: Sendable {
         config.timeoutIntervalForRequest = 45
         config.timeoutIntervalForResource = 86_400
         config.httpShouldSetCookies = false
-        self.session = session ?? URLSession(configuration: config, delegate: OpenCodeSessionDelegate(), delegateQueue: nil)
+        self.session = session ?? URLSession(configuration: config, delegate: RemoteWorkspaceRedirectPolicy.shared, delegateQueue: nil)
     }
     public static func segment(_ value: String) -> String {
         value.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? ""

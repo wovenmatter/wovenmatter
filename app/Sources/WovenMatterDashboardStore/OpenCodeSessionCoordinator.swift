@@ -735,7 +735,7 @@ public actor OpenCodeSessionCoordinator {
         if interactionFences[link.conversationID]?.isCancelled == true {
             interactionFences[link.conversationID] = AgentDispatchFence()
         }
-        let deliveryText = input.textWithReferenceContext
+        let deliveryText = input.transportText()
         let id = "msg_" + UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
         var files: [OpenCodeValue] = []
         for file in input.files {

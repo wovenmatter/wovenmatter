@@ -7,35 +7,40 @@ import WovenMatterCore
 struct RuntimeCredentialProbeTests {
   private static let kinds: [AgentRuntimeKind] = [.codex, .claudeCode, .grokBuild]
 
-  @Test("discovery stays passive and explicit verification starts only the selected provider", arguments: Self.kinds)
-  func passiveDiscoveryAndScopedExplicitVerification(kind: AgentRuntimeKind) async throws {
+  @Test("discovery reuses the previous resolution until an explicit check selects the runtime", arguments: Self.kinds)
+  func passiveDiscoveryReusesPreviousResolution(kind: AgentRuntimeKind) async throws {
     let definition = try #require(LocalACPRuntimeCatalog.definition(for: kind))
     let discovered = resolution(kind)
     let result = await LocalACPRuntimeVerifier.refresh(
       definition: definition,
       resolution: discovered,
-      workingDirectory: URL(fileURLWithPath: "/fixture"),
-      verification: { _, _, _ in
-        Issue.record("Passive startup, reopen and Settings discovery must not verify credentials")
-        return discovered
-      }
+      workingDirectory: URL(fileURLWithPath: "/fixture")
     )
     #expect(result.availability == discovered.availability)
     #expect(result.launchConfiguration?.executableURL == discovered.launchConfiguration?.executableURL)
-    let calls = RuntimeProbeCalls()
+    let previous = LocalACPRuntimeResolution(
+      availability: .init(runtimeKind: kind, displayName: kind.displayName, state: .authenticationRequired,
+                          detail: "Sign in", executablePath: discovered.availability.executablePath),
+      launchConfiguration: nil
+    )
+    let reused = await LocalACPRuntimeVerifier.refresh(
+      definition: definition,
+      resolution: discovered,
+      workingDirectory: URL(fileURLWithPath: "/fixture"),
+      previousResolution: previous
+    )
+    #expect(reused.availability == previous.availability)
+    #expect(reused.launchConfiguration == nil)
     for selected in Self.kinds {
-      _ = await LocalACPRuntimeVerifier.refresh(
+      let checked = await LocalACPRuntimeVerifier.refresh(
         definition: definition,
         resolution: discovered,
         workingDirectory: URL(fileURLWithPath: "/fixture"),
         credentialCheckRuntimeKinds: [selected],
-        verification: { _, _, _ in
-          await calls.record()
-          return discovered
-        }
+        previousResolution: previous
       )
+      #expect(checked.availability == (selected == kind ? discovered.availability : previous.availability))
     }
-    #expect(await calls.count == 1)
   }
 
 
@@ -47,9 +52,4 @@ struct RuntimeCredentialProbeTests {
       launchConfiguration: .init(runtimeKind: kind, executableURL: URL(fileURLWithPath: path), arguments: [])
     )
   }
-}
-
-private actor RuntimeProbeCalls {
-  var count = 0
-  func record() { count += 1 }
 }

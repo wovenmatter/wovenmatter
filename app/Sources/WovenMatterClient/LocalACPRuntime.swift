@@ -16,7 +16,6 @@ public struct LocalACPRuntimeDefinition: Equatable, Identifiable, Sendable {
     public let adapterPackage: String?
     public let minimumAdapterVersion: String?
     public let adapterDescription: String
-    public let readinessProbe: LocalACPRuntimeReadinessProbe?
 
     public var id: AgentRuntimeKind { runtimeKind }
     public var commandNames: [String] {
@@ -37,8 +36,7 @@ public struct LocalACPRuntimeDefinition: Equatable, Identifiable, Sendable {
         cliNpmPackageSpec: String? = nil,
         adapterPackage: String?,
         minimumAdapterVersion: String? = nil,
-        adapterDescription: String,
-        readinessProbe: LocalACPRuntimeReadinessProbe? = nil
+        adapterDescription: String
     ) {
         self.runtimeKind = runtimeKind
         self.displayName = displayName
@@ -54,26 +52,6 @@ public struct LocalACPRuntimeDefinition: Equatable, Identifiable, Sendable {
         self.adapterPackage = adapterPackage
         self.minimumAdapterVersion = minimumAdapterVersion
         self.adapterDescription = adapterDescription
-        self.readinessProbe = readinessProbe
-    }
-}
-
-public struct LocalACPRuntimeReadinessProbe: Equatable, Sendable {
-    public let expectedAgentName: String?
-    public let setupAuthenticationMethodID: String?
-    public let readyDetail: String
-    public let setupRequiredDetail: String
-
-    public init(
-        expectedAgentName: String? = nil,
-        setupAuthenticationMethodID: String? = nil,
-        readyDetail: String,
-        setupRequiredDetail: String
-    ) {
-        self.expectedAgentName = expectedAgentName
-        self.setupAuthenticationMethodID = setupAuthenticationMethodID
-        self.readyDetail = readyDetail
-        self.setupRequiredDetail = setupRequiredDetail
     }
 }
 
@@ -236,23 +214,16 @@ public struct LocalACPRuntimeResolution: Sendable {
 }
 
 public enum LocalACPRuntimeVerifier {
-    public typealias Verification = @Sendable (
-        LocalACPRuntimeDefinition, LocalACPRuntimeResolution, URL
-    ) async -> LocalACPRuntimeResolution
-
-    /// Discovery can establish installed executables without starting a provider
-    /// session. Reuse this process's last account check until an explicit action
-    /// requests another check for that runtime; user-started sessions still use
+    /// Discovery establishes installed executables without starting a provider
+    /// session. Reuse this process's last resolution for a runtime until an
+    /// explicit action requests a fresh one; user-started sessions still use
     /// the discovered launch configuration normally.
     public static func refresh(
         definition: LocalACPRuntimeDefinition,
         resolution: LocalACPRuntimeResolution,
         workingDirectory: URL,
         credentialCheckRuntimeKinds: Set<AgentRuntimeKind> = [],
-        previousResolution: LocalACPRuntimeResolution? = nil,
-        verification: Verification = { definition, resolution, directory in
-            await verify(definition: definition, resolution: resolution, workingDirectory: directory)
-        }
+        previousResolution: LocalACPRuntimeResolution? = nil
     ) async -> LocalACPRuntimeResolution {
         guard credentialCheckRuntimeKinds.contains(definition.runtimeKind), !Task.isCancelled else {
             guard resolution.launchConfiguration != nil,
@@ -265,81 +236,7 @@ public enum LocalACPRuntimeVerifier {
                     ? nil : resolution.launchConfiguration
             )
         }
-        return await verification(definition, resolution, workingDirectory)
-    }
-
-    public static func verify(
-        definition: LocalACPRuntimeDefinition,
-        resolution: LocalACPRuntimeResolution,
-        workingDirectory: URL
-    ) async -> LocalACPRuntimeResolution {
-        guard let launch = resolution.launchConfiguration else {
-            return resolution
-        }
-        guard let requirement = definition.readinessProbe else {
-            return resolution
-        }
-        do {
-            let probe = try await LocalACPClient.probeConnection(
-                launch: launch,
-                workingDirectory: workingDirectory
-            )
-            if let expectedAgentName = requirement.expectedAgentName,
-               probe.agentName != expectedAgentName {
-                return failedResolution(
-                    definition: definition,
-                    resolution: resolution,
-                    state: .executableUnavailable,
-                    detail: "\(definition.commandName) answered ACP as \(probe.agentName ?? "an unknown agent"), not \(expectedAgentName)."
-                )
-            }
-            if let setupMethodID = requirement.setupAuthenticationMethodID,
-               !probe.authenticationMethodIDs.contains(where: {
-                   $0 != setupMethodID
-               }) {
-                return failedResolution(
-                    definition: definition,
-                    resolution: resolution,
-                    state: .authenticationRequired,
-                    detail: requirement.setupRequiredDetail
-                )
-            }
-            return LocalACPRuntimeResolution(
-                availability: LocalACPRuntimeAvailability(
-                    runtimeKind: definition.runtimeKind,
-                    displayName: definition.displayName,
-                    state: .ready,
-                    detail: requirement.readyDetail,
-                    executablePath: resolution.availability.executablePath
-                ),
-                launchConfiguration: launch
-            )
-        } catch {
-            return failedResolution(
-                definition: definition,
-                resolution: resolution,
-                state: .executableUnavailable,
-                detail: "\(definition.commandName) was found but did not complete the ACP readiness handshake: \(error.localizedDescription)"
-            )
-        }
-    }
-
-    private static func failedResolution(
-        definition: LocalACPRuntimeDefinition,
-        resolution: LocalACPRuntimeResolution,
-        state: LocalACPRuntimeAvailability.State,
-        detail: String
-    ) -> LocalACPRuntimeResolution {
-        LocalACPRuntimeResolution(
-            availability: LocalACPRuntimeAvailability(
-                runtimeKind: definition.runtimeKind,
-                displayName: definition.displayName,
-                state: state,
-                detail: detail,
-                executablePath: resolution.availability.executablePath
-            ),
-            launchConfiguration: nil
-        )
+        return resolution
     }
 }
 
@@ -352,10 +249,6 @@ public struct LocalACPRuntimeResolver: Sendable {
 
     init(executableSearchDirectories: [String]) {
         searchDirectories = { executableSearchDirectories }
-    }
-
-    init(executableSearchDirectoriesProvider: @escaping @Sendable () -> [String]) {
-        searchDirectories = executableSearchDirectoriesProvider
     }
 
     /// Reuses one search-path discovery within a refresh. Create a new snapshot
@@ -575,9 +468,7 @@ public struct LocalACPRuntimeResolver: Sendable {
             [executable.deletingLastPathComponent().path]
                 + [underlyingCLI?.deletingLastPathComponent().path].compactMap { $0 }
                 + effectiveSearchDirectories
-        ).reduce(into: [String]()) { result, item in
-            if !item.isEmpty, !result.contains(item) { result.append(item) }
-        }
+        ).filter { !$0.isEmpty }.uniqued()
         var environment = definition.environment
         environment["PATH"] = directories.joined(separator: ":")
         return environment
@@ -610,10 +501,7 @@ public struct LocalACPRuntimeResolver: Sendable {
                 + environmentPath.split(separator: ":").map(String.init)
                 + loginShellSearchDirectories()
                 + standardDirectories
-        )
-            .reduce(into: [String]()) { result, item in
-                if !item.isEmpty, !result.contains(item) { result.append(item) }
-            }
+        ).filter { !$0.isEmpty }.uniqued()
     }
 
     private static func loginShellSearchDirectories() -> [String] {

@@ -1,6 +1,7 @@
 import CryptoKit
 import Darwin
 import Foundation
+import WovenMatterCore
 
 /// Redact only Woven's generated bearer endpoint paths. The matcher operates
 /// on bytes, including JSON's arbitrarily escaped slashes, without parsing or
@@ -86,7 +87,7 @@ enum NativeFramePrivacy {
             sourceOffset += bytes.count
             await Task.yield()
         }
-        let actualSourceHash = digest(sourceHash.finalize())
+        let actualSourceHash = sourceHash.finalize().hexString
         guard sourceOffset == byteCount, actualSourceHash == expectedSHA256 else {
             throw PiNativeHistoryFrame.Failure.malformed
         }
@@ -127,11 +128,7 @@ enum NativeFramePrivacy {
             await Task.yield()
         }
         guard count == expectedBytes else { throw PiNativeHistoryFrame.Failure.malformed }
-        return digest(hash.finalize())
-    }
-
-    private static func digest(_ value: SHA256.Digest) -> String {
-        value.map { String(format: "%02x", $0) }.joined()
+        return hash.finalize().hexString
     }
 }
 

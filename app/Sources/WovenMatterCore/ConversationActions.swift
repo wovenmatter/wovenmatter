@@ -14,21 +14,27 @@ public enum WorkspaceConversationExportFormat: String, Codable, Sendable {
   public var fileExtension: String { self == .messages ? "md" : "json" }
 
   public func suggestedFilename(title: String) -> String {
-    let clean = title.components(separatedBy: CharacterSet(charactersIn: "/:\\")
-      .union(.controlCharacters)).joined(separator: "-")
-      .trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: ".")))
-    // Bound bytes as well as visible characters, including filesystem normalization.
-    var basename = ""
-    var byteCount = 0
-    for character in clean.prefix(100) {
-      let bytes = String(character).decomposedStringWithCanonicalMapping.utf8.count
-      guard byteCount + bytes <= 200 else { break }
-      basename.append(character)
-      byteCount += bytes
-    }
+    let basename = exportBasename(title: title)
     return (basename.isEmpty ? "Chat" : basename)
       + (self == .fullRun ? "-full-run" : "-messages") + "." + fileExtension
   }
+}
+
+/// A title reduced to a filesystem-safe basename; empty when nothing usable remains.
+func exportBasename(title: String) -> String {
+  let clean = title.components(separatedBy: CharacterSet(charactersIn: "/:\\")
+    .union(.controlCharacters)).joined(separator: "-")
+    .trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: ".")))
+  // Bound bytes as well as visible characters, including filesystem normalization.
+  var basename = ""
+  var byteCount = 0
+  for character in clean.prefix(100) {
+    let bytes = String(character).decomposedStringWithCanonicalMapping.utf8.count
+    guard byteCount + bytes <= 200 else { break }
+    basename.append(character)
+    byteCount += bytes
+  }
+  return basename
 }
 
 public struct WorkspaceTrashedConversation: Codable, Identifiable, Sendable {

@@ -218,14 +218,9 @@ private extension String {
   var nilIfEmpty: String? { isEmpty ? nil : self }
 }
 
-private func saturatedAdd(_ lhs: Int64, _ rhs: Int64) -> Int64 {
+private func saturatedAdd<Value: FixedWidthInteger>(_ lhs: Value, _ rhs: Value) -> Value {
   let (value, overflow) = lhs.addingReportingOverflow(rhs)
-  return overflow ? Int64.max : value
-}
-
-private func saturatedAdd(_ lhs: Int, _ rhs: Int) -> Int {
-  let (value, overflow) = lhs.addingReportingOverflow(rhs)
-  return overflow ? Int.max : value
+  return overflow ? Value.max : value
 }
 
 public struct UsageTokenCounts: Codable, Equatable, Sendable {
