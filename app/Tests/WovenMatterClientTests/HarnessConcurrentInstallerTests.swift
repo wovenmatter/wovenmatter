@@ -5,10 +5,6 @@ import WovenMatterCore
 @testable import WovenMatterClient
 
 struct HarnessConcurrentInstallerTests {
-}
-
-
-extension HarnessConcurrentInstallerTests {
     @Test func separateInstallersShareOneVerifiedNodeBootstrap() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: "node-concurrency-\(UUID())")
         let bin = root.appending(path: "archive/node/bin")

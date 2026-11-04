@@ -71,16 +71,3 @@ private final class CaptureFixtureProtocol: URLProtocol, @unchecked Sendable {
     client?.urlProtocolDidFinishLoading(self)
   }
 }
-
-private actor ApprovalWriteGate {
-  private var waiting: CheckedContinuation<Void, Never>?
-  private var observers: [CheckedContinuation<Void, Never>] = []
-  func pause() async {
-    await withCheckedContinuation { waiting = $0; observers.forEach { $0.resume() }; observers.removeAll() }
-  }
-  func entered() async {
-    if waiting != nil { return }
-    await withCheckedContinuation { observers.append($0) }
-  }
-  func release() { waiting?.resume(); waiting = nil }
-}

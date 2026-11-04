@@ -119,6 +119,6 @@ require the `session.dispatch-epochs` readiness capability. Legacy sends are
 rejected with reconnect guidance; legacy Stop still cancels current work and
 invalidates older versioned sends. No uncertain send is automatically replayed.
 
-`workerMetrics` reports pending/high-water counts, finished and failed jobs,
-cancellation, timeout and rejection counts, and maximum queue/execution time. It
-contains no SQL, document text, credentials, or provider payloads.
+The worker's `metrics` expose only `pending` (queued and running jobs) and
+`rejected` (admissions refused at capacity). They contain no SQL, document text,
+credentials, or provider payloads.

@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import Foundation
 import Testing
 import CompanionClient
@@ -151,7 +152,7 @@ struct CentralLibraryClientTests {
         let model = CentralLibraryClientModel(store: store, transport: transport)
         await model.initialize(); model.selectedConversationID = "A"
         let loading = Task { await model.olderMessages() }
-        for _ in 0..<100 { if await transport.historyWaiting { break }; try await Task.sleep(for: .milliseconds(10)) }
+        _ = try await pollUntil(attempts: 100, interval: .milliseconds(10)) { await transport.historyWaiting }
         #expect(await transport.historyWaiting)
         model.selectedConversationID = "B"
         await transport.releaseHistory(); await loading.value
@@ -455,18 +456,13 @@ private actor MacClientFakeCentral: CompanionTransport {
     var receipts: [String: CompanionCommandReceipt] = [:]
     var sendCount = 0
     var offline = false
-    var dropSend = false
-    var mutationFailure = false
-    func setMutationFailure(_ value: Bool) { mutationFailure = value }
     func setOffline(_ value: Bool) { offline = value }
-    func dropNextSendAcknowledgement() { dropSend = true }
     var libraryID = "00000000-0000-4000-8000-000000000001"
     func setLibraryID(_ value: String) { libraryID = value }
     func workspaceIdentity() throws -> String { if offline { throw MobileConnectionError.offline }; return libraryID }
     func snapshot() -> CompanionSnapshot { .init(workspaceID: libraryID, cursor: Int64(publishedChanges.count), folders: Array(folders.values), notes: Array(notes.values)) }
     func changes(after: Int64) -> CompanionChangePage { .init(workspaceID: libraryID, cursor: Int64(publishedChanges.count), changes: publishedChanges.filter { $0.cursor > after }) }
     func mutate(_ mutation: CompanionMutation) throws -> CompanionMutationResult {
-        if mutationFailure { throw CompanionAPIError(code: "temporary", message: "Fixture mutation failed") }
         if mutation.kind == .createFolder {
             let folder = CompanionFolder(id: mutation.resourceID, name: mutation.title ?? "", revision: 1)
             folders[folder.id] = folder
@@ -484,10 +480,7 @@ private actor MacClientFakeCentral: CompanionTransport {
         if let receipt = receipts[command.commandID] { return receipt }
         let receipt = CompanionCommandReceipt(commandID: command.commandID, deviceID: command.deviceID, status: .completed, conversationID: command.conversationID)
         receipts[command.commandID] = receipt
-        if command.kind == .send {
-            sendCount += 1
-            if dropSend { dropSend = false; throw MobileConnectionError.offline }
-        }
+        if command.kind == .send { sendCount += 1 }
         return receipt
     }
     func receipt(_ id: String) -> CompanionCommandReceipt? { receipts[id] }

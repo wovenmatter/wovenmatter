@@ -138,7 +138,6 @@ import WovenMatterCore
             let encoded = try #require(content.last?.objectValue?["data"]?.stringValue)
             let png = try #require(Data(base64Encoded: encoded))
             #expect(png.count > 1000)
-            try png.write(to: URL(fileURLWithPath: "/private/tmp/wovenmatter-html-\(appearance)-\(width).png"))
         }
         #expect(heights[1] > heights[0])
     }

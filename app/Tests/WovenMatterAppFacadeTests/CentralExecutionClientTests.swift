@@ -128,7 +128,6 @@ private actor CentralExecutionFixtureTransport: ExecutionWorkspaceTransport {
     let conversation: CompanionConversation
     var entries: [CompanionJournalEntry]
     var receipts: [String: CompanionCommandReceipt] = [:]
-    var receivedCommands: [CompanionCommand] = []
     var executions = 0
     var eventRequests = 0
     var requestedCursors: [Int64] = []
@@ -156,7 +155,7 @@ private actor CentralExecutionFixtureTransport: ExecutionWorkspaceTransport {
     }
     func command(_ command: CompanionCommand) throws -> CompanionCommandReceipt {
         if let saved = receipts[command.commandID] { return saved }
-        executions += 1; receivedCommands.append(command)
+        executions += 1
         let receipt = CompanionCommandReceipt(commandID: command.commandID, deviceID: command.deviceID,
             status: .completed, conversationID: conversation.id, workspaceID: workspace.id)
         receipts[command.commandID] = receipt
@@ -166,10 +165,6 @@ private actor CentralExecutionFixtureTransport: ExecutionWorkspaceTransport {
             ])))
         if lostACK { lostACK = false; throw URLError(.networkConnectionLost) }
         return receipt
-    }
-    func startRun(_ id: String) {
-        entries.append(.init(workspaceID: workspace.id, originSequence: Int64(entries.count + 1), conversationID: conversation.id,
-            kind: .transcript, transcript: .init(conversationID: conversation.id, activeRunID: id)))
     }
     func loseNextAcknowledgement() { lostACK = true }
     func breakReplay() { broken = true }

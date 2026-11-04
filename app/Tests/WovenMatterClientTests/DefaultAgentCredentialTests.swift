@@ -252,30 +252,6 @@ extension DefaultAgentCredentialTests {
     }
 }
 
-private actor RejectedCredentialFixture {
-    var access = "old"
-    private(set) var renewals = 0
-    func snapshot(_ scopes: [String]) -> [String: DefaultAgentPayload] {
-        var credential = DefaultAgentCredential(type: "oauth")
-        credential.access = access
-        credential.expires = 9_000_000_000_000
-        return Dictionary(
-            uniqueKeysWithValues: scopes.map {
-                ($0, DefaultAgentPayload(config: .init(), credentials: ["xai": credential], workspace: $0))
-            })
-    }
-    func renew(_ provider: String, access: String) async throws {
-        #expect(provider == "xai")
-        #expect(access == "old")
-        renewals += 1
-        try await Task.sleep(for: .milliseconds(20))
-        self.access = "new"
-    }
-}
-
-extension DefaultAgentCredentialTests {
-}
-
 extension DefaultAgentCredentialTests {
     @Test func interruptedAccountSelectionNeverReassignsSecretsToAnotherIdentity() throws {
         let keychain = DefaultAgentKeychainFixture().access

@@ -82,13 +82,6 @@ private func update(_ kind: String, session: String? = "parent", text: String? =
     return ["jsonrpc": "2.0", "method": "session/update", "params": params]
 }
 
-private func modelUpdate(_ model: String, session: String = "parent") -> [String: Any] {
-    update("config_option_update", session: session, fields: ["configOptions": [[
-        "id": "model", "category": "model", "currentValue": model,
-        "options": [["value": model]],
-    ]]])
-}
-
 private func permission(id: Any, session: String? = "parent") -> [String: Any] {
     var params: [String: Any] = ["toolCall": ["title": "Read fixture"], "options": [
         ["optionId": "reject-exact-id", "kind": "reject_once", "name": "No, and tell Grok what to do differently"],
@@ -96,12 +89,6 @@ private func permission(id: Any, session: String? = "parent") -> [String: Any] {
     ]]
     if let session { params["sessionId"] = session }
     return ["jsonrpc": "2.0", "id": id, "method": "session/request_permission", "params": params]
-}
-
-actor RoutingEvents {
-    private var recorded: [LocalACPEvent] = []
-    func record(_ event: LocalACPEvent) { recorded.append(event) }
-    func values() -> [LocalACPEvent] { recorded }
 }
 
 private actor RoutingPermissions {
@@ -116,8 +103,7 @@ struct SessionRoutingFixture {
     let logURL: URL
 
     init(bootstrapFrames: [[String: Any]] = [], promptFrames: [[String: Any]] = [], permissionResponseCount: Int = 0,
-         missingLoadedSession: Bool = false, historyPages: [String] = [], idleFrames: [[String: Any]] = [],
-         idleResult: String? = nil) throws {
+         historyPages: [String] = [], idleFrames: [[String: Any]] = [], idleResult: String? = nil) throws {
         root = FileManager.default.temporaryDirectory.appending(path: "acp-session-routing-\(UUID().uuidString)")
         executable = root.appending(path: "adapter")
         logURL = root.appending(path: "requests.jsonl")
@@ -141,9 +127,7 @@ struct SessionRoutingFixture {
           case "$request" in
             *'"method":"woven/configure"'*) respond "$id" '{}' ;;
             *'"method":"initialize"'*) respond "$id" '\(initialize)' ;;
-            *'"method":"session/load"'*)
-              \(missingLoadedSession ? "printf '{\"jsonrpc\":\"2.0\",\"id\":%s,\"error\":{\"code\":-32002,\"message\":\"Missing session\"}}\\n' \"$id\"" : try emit(bootstrapFrames) + "\nrespond \"$id\" '{\"sessionId\":\"parent\"}'") ;;
-            *'"method":"session/new"'*)
+            *'"method":"session/load"'*|*'"method":"session/new"'*)
               \(try emit(bootstrapFrames))
               respond "$id" '{"sessionId":"parent"}' ;;
             *'"method":"session/prompt"'*)
@@ -183,10 +167,4 @@ struct SessionRoutingFixture {
     }
 
     func remove() { try? FileManager.default.removeItem(at: root) }
-}
-
-@MainActor private func fixtureAccounts() -> ProviderAccountCoordinator {
-    ProviderAccountCoordinator(refresh: { scopes in
-        Dictionary(uniqueKeysWithValues: scopes.map { ($0, DefaultAgentPayload(config: .init(), credentials: [:], workspace: $0)) })
-    }, version: { 0 }, configurationVersion: { 0 }, scopeVersion: { 0 }, reconfigure: { $0 })
 }

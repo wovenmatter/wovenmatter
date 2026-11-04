@@ -29,11 +29,8 @@ struct ConversationHTMLRenderTests {
   }
 
   @Test func persistenceReplayAndFoldedHistory() async throws {
-    let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: root) }
-    let url = root.appending(path: "workspace.sqlite")
-    let database = try await WorkspaceDatabase(url: url)
+    let persistence = try PersistenceFixture(); defer { persistence.remove() }
+    let database = try await persistence.openDatabase()
     let caller = try await database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Visuals", ownerDeviceID: UUID())
     let other = try await database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Other", ownerDeviceID: UUID())
     let run = try await database.beginLocalACPRun(conversationID: caller, content: "Make a chart")
@@ -49,7 +46,7 @@ struct ConversationHTMLRenderTests {
     #expect(try await database.publishConversationHTML(page, callerID: caller, requestID: id) == reference)
     await #expect(throws: (any Error).self) { try await database.publishConversationHTML(page, callerID: caller, requestID: UUID().uuidString) }
 
-    let reopened = try await WorkspaceDatabase(url: url, readOnlyProjection: true)
+    let reopened = try await persistence.openDatabase(readOnlyProjection: true)
     let history = try await reopened.conversationHistoryPage(id: caller, limit: 20, compactActivities: true)
     let activity = try #require(history.activities.first { $0.activity.htmlRender != nil })
     #expect(activity.activity.htmlRender == reference)

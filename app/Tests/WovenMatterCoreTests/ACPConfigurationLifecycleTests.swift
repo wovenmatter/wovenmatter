@@ -167,17 +167,15 @@ struct ACPConfigurationLifecycleTests {
     case "import": "INSERT INTO desktop_session_imports(conversation_id,imported_at) VALUES (?,'fixture')"
     default: "INSERT INTO retained_execution_history(conversation_id) VALUES (?)"
     }
-    try await database.write { try $0.companionExecuteUnlocked(sql, values: [id]) }
+    try await database.write { try $0.toolsExecuteUnlocked(sql, [id]) }
     let cleared = try await database.write { try $0.discardUnpromptedClaudeDraftSessionID(conversationID: id, expectedSessionID: "native") }
     #expect(!cleared)
     #expect(try await database.localACPSession(conversationID: id).acpSessionID == "native")
   }
 
   @Test func executionAdoptionDetachesOnlyItsIdleClientAndRejectsLegacyReopen() async throws {
-    let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+    let persistence = try PersistenceFixture(); defer { persistence.remove() }
+    let database = try await persistence.openDatabase()
     let firstID = try await database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Transfer", ownerDeviceID: UUID())
     let secondID = try await database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Unrelated", ownerDeviceID: UUID())
     let first = SelectorDriverState(expectedExistingSessionID: nil)
@@ -186,7 +184,7 @@ struct ACPConfigurationLifecycleTests {
     let coordinator = LocalACPSessionCoordinator(database: database, clientFactory: { _, _ in drivers.next() })
     let launch = LocalACPRuntimeLaunchConfiguration(runtimeKind: .codex,
       executableURL: URL(filePath: "/nonexistent-adoption-fixture"), arguments: [])
-    let workspace = LocalACPWorkspaceLaunchConfiguration(rootURL: directory)
+    let workspace = LocalACPWorkspaceLaunchConfiguration(rootURL: persistence.directory)
     _ = try await coordinator.configuration(conversationID: firstID, launch: launch, workspace: workspace)
     _ = try await coordinator.configuration(conversationID: secondID, launch: launch, workspace: workspace)
     let original = try await database.localACPSession(conversationID: firstID)

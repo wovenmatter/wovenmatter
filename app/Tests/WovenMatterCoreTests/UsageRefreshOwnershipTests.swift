@@ -71,19 +71,6 @@ struct UsageRefreshOwnershipTests {
     #expect(result.accounts.first?.status == .unavailable)
     #expect(result.codexWorkspaces.isEmpty)
   }
-
-  private func waitForUsageJob(_ ready: () -> Bool) async throws {
-    let deadline = ContinuousClock.now + .seconds(5)
-    while !ready() {
-      guard ContinuousClock.now < deadline else { throw DatabaseWorkerError.timedOut }
-      try await Task.sleep(for: .milliseconds(1))
-    }
-  }
-
-  private func account(_ label: String, now: Date) -> UsageLimitAccount {
-    UsageLimitAccount(provider: .cursor, accountLabel: label, status: .available,
-      source: "fixture", detail: "synthetic", observedAt: now)
-  }
 }
 
 private actor UsageCompletionGate<Value: Sendable> {
@@ -110,13 +97,6 @@ private actor UsageCompletionGate<Value: Sendable> {
   func release(_ invocation: Int, value: Value) {
     loads.removeValue(forKey: invocation)!.resume(returning: value)
   }
-}
-
-private struct UsageNoCredentials: UsageCredentialStoring {
-  func hasOpenRouterAPIKey() throws -> Bool { false }
-  func authorizeOpenRouterAPIKey() throws -> String? { nil }
-  func saveOpenRouterAPIKey(_ key: String) throws {}
-  func deleteOpenRouterAPIKey() throws {}
 }
 
 private final class UsageOwnershipDirectory: @unchecked Sendable {

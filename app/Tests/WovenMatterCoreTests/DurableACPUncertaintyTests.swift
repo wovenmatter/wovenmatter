@@ -8,10 +8,8 @@ import WovenMatterCore
 @Suite struct DurableACPUncertaintyTests {
     @Test(arguments: [false, true])
     func unknownReceiptSurvivesRestartUntilScopedRecovery(hasTerminalSnapshot: Bool) async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: "durable-uncertain-\(UUID())")
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
+        let persistence = try PersistenceFixture(); defer { persistence.remove() }
+        let database = try await persistence.openDatabase()
         let workspaceID = UUID()
         let conversation = try await database.createFixtureRemoteACPSession(runtimeKind: .codex,
             remoteWorkspaceID: workspaceID, remoteWorkspaceName: "Fixture", title: "Remote", ownerDeviceID: UUID())

@@ -289,17 +289,6 @@ struct ACPSessionPermissionTests {
         ]]
     }
 
-    private func legacyModes() -> [String: Any] {
-        ["modes": ["currentModeId": "default", "availableModes": [
-            ["id": "default", "name": "Native default label"],
-            ["id": "full", "name": "Native full label"],
-        ]]]
-    }
-
-    private func claudeState() -> [String: Any] {
-        ["configOptions": [["id": "mode", "currentValue": "default", "options": [["value": "default"], ["value": "auto"]]]]]
-    }
-
     private func respond(_ result: [String: Any]) -> String {
         "respond \"$id\" \(PermissionFixture.quotedJSON(result))"
     }
@@ -310,28 +299,6 @@ struct ACPSessionPermissionTests {
         let frame: [String: Any] = ["jsonrpc": "2.0", "method": "session/update", "params": params]
         return "printf '%s\\n' \(PermissionFixture.quotedJSON(frame))"
     }
-
-    private func permissionRequest(session: String? = "permission-session", offersOnce: Bool = true) -> String {
-        var options = [["optionId": "always-id", "kind": "allow_always"], ["optionId": "reject-this-request", "kind": "reject_once"]]
-        if offersOnce { options.append(["optionId": "native-once-id", "kind": "allow_once"]) }
-        var params: [String: Any] = ["options": options, "toolCall": ["title": "Fixture shell", "kind": "execute"]]
-        if let session { params["sessionId"] = session }
-        return receiveResponse(to: ["jsonrpc": "2.0", "id": "native-permission-id", "method": "session/request_permission", "params": params])
-    }
-
-    private func receiveResponse(to frame: [String: Any]) -> String {
-        """
-        printf '%s\\n' \(PermissionFixture.quotedJSON(frame))
-        IFS= read -r reply
-        printf '%s\\n' "$reply" >> "$response_log"
-        """
-    }
-}
-
-private actor PermissionHandlerCalls {
-    private var titles: [String] = []
-    func append(_ title: String) { titles.append(title) }
-    func count() -> Int { titles.count }
 }
 
 private actor PermissionSnapshots {
@@ -355,7 +322,6 @@ private struct PermissionFixture {
         let cases = handlers.map { method, body in "*'\"method\":\"\(method)\"'*) \(body) ;;" }.joined(separator: "\n")
         let script = """
         #!/bin/sh
-        response_log='\(root.appending(path: "responses").path)'
         printf '%s\\n' "$@" > '\(root.appending(path: "arguments").path)'
         respond() { printf '{"jsonrpc":"2.0","id":%s,"result":%s}\\n' "$1" "$2"; }
         while IFS= read -r request; do
@@ -391,12 +357,6 @@ private struct PermissionFixture {
 
     func launchArguments() throws -> [String] {
         try String(contentsOf: root.appending(path: "arguments"), encoding: .utf8).split(separator: "\n").map(String.init)
-    }
-
-    func responses() throws -> [[String: Any]] {
-        try String(contentsOf: root.appending(path: "responses"), encoding: .utf8).split(separator: "\n").map {
-            try #require(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any])
-        }
     }
 
     static func quotedJSON(_ object: [String: Any]) -> String {

@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import Foundation
 import Testing
 import WovenMatterCore
@@ -8,8 +9,8 @@ import WovenMatterClient
 struct WorkspaceGoalTests {
 
     @Test func openCodeNativeWorkAndQuestionsPreventContinuationAndUsageIsCaptured() async throws {
-        let (db, directory, session) = try await fixture(.opencode)
-        defer { try? FileManager.default.removeItem(at: directory) }
+        let (db, persistence, session) = try await fixture(.opencode)
+        defer { persistence.remove() }
         _ = try await create(db, session, tokens: 100)
         var snapshot = OpenCodeSessionSnapshot()
         snapshot.active = true
@@ -32,14 +33,14 @@ struct WorkspaceGoalTests {
         #expect(try await db.dueGoalDeliveries(running: []).count == 1)
     }
 
-    private func fixture(_ kind: AgentRuntimeKind = .defaultAgent) async throws -> (WorkspaceDatabase, URL, String) {
-        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let db = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+    private func fixture(_ kind: AgentRuntimeKind = .defaultAgent) async throws -> (WorkspaceDatabase, PersistenceFixture, String) {
+        let persistence = try PersistenceFixture()
+        let db = try await persistence.openDatabase()
+        let root = persistence.directory.path
         let id = try await db.createLocalACPSession(runtimeKind: kind, title: "Goal test", ownerDeviceID: UUID(),
             openCodeAssociation: kind == .opencode ? ("fixture", "native") : nil,
-            executionRoot: .init(folderID: nil, location: .init(workspaceID: "local", rootPath: directory.path, managed: false), defaultPath: directory.path))
-        return (db, directory, id)
+            executionRoot: .init(folderID: nil, location: .init(workspaceID: "local", rootPath: root, managed: false), defaultPath: root))
+        return (db, persistence, id)
     }
 
     private func create(_ db: WorkspaceDatabase, _ session: String, tokens: Int64? = nil, turns: Int? = nil) async throws -> WorkspaceGoal {
@@ -55,8 +56,8 @@ struct WorkspaceGoalTests {
     }
 
     @Test func noProgressAndUncertainDeliveryNeverSpinOrReplay() async throws {
-        let (db, directory, session) = try await fixture()
-        defer { try? FileManager.default.removeItem(at: directory) }
+        let (db, persistence, session) = try await fixture()
+        defer { persistence.remove() }
         let goal = try await create(db, session)
         let delivery = try #require(await db.dueGoalDeliveries(running: []).first)
         _ = try await db.claimToolDelivery(id: delivery.id)

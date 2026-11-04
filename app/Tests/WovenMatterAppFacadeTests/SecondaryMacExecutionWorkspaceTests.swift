@@ -8,16 +8,19 @@ import WovenMatterCore
 
 @MainActor @Suite(.serialized)
 struct SecondaryMacExecutionWorkspaceTests {
-
-
-    @Test func toolCreatedFoldersAndNotesUseStableIDsAndDeletionReturnsToReplica() async throws {
-        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+    private func setup(_ fixture: FacadeFixture) async throws -> (MobileStore, SecondaryMacExecutionWorkspace, String, String) {
         let replica = try MobileStore(file: fixture.directory.appending(path: "client/library.json"))
         let libraryID = UUID().uuidString.lowercased()
         try await replica.verifyWorkspace(libraryID)
         let owner = await replica.snapshot().deviceID
         let workspace = try await SecondaryMacExecutionWorkspace(descriptor: .init(id: owner, libraryID: libraryID,
             ownerDeviceID: owner, kind: .mac, name: "Fixture"), model: fixture.model, replica: replica, directory: fixture.directory)
+        return (replica, workspace, owner, libraryID)
+    }
+
+    @Test func toolCreatedFoldersAndNotesUseStableIDsAndDeletionReturnsToReplica() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        let (replica, workspace, owner, _) = try await setup(fixture)
         let folder = try await fixture.database.createFixtureFolder(name: "Tool folder")
         let content = try NoteDocument(blocks: [.richText(.init(text: "Tool note"))]).encoded()
         let note = try await fixture.database.createNote(folderID: folder, title: "Tool note", content: content)
@@ -53,12 +56,7 @@ struct SecondaryMacExecutionWorkspaceTests {
 
     @Test func managementRequestCannotCrossAHostRestartAtTheSameEndpoint() async throws {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
-        let replica = try MobileStore(file: fixture.directory.appending(path: "client/library.json"))
-        let libraryID = UUID().uuidString.lowercased()
-        try await replica.verifyWorkspace(libraryID)
-        let owner = await replica.snapshot().deviceID
-        let workspace = try await SecondaryMacExecutionWorkspace(descriptor: .init(id: owner, libraryID: libraryID,
-            ownerDeviceID: owner, kind: .mac, name: "Fixture"), model: fixture.model, replica: replica, directory: fixture.directory)
+        let (_, workspace, owner, libraryID) = try await setup(fixture)
         let serving = SecondaryServingFixture()
         let gate = SecondaryManagementGate()
         let host = SecondaryMacExecutionHost(workspace: workspace, directory: fixture.directory,
@@ -77,7 +75,7 @@ struct SecondaryMacExecutionWorkspaceTests {
         gate.hold = true
         let originalRequest = try request(originalGrant, path: "/v1/execution/manage/devices")
         let pending = Task { await oldHandler(originalRequest) }
-        for _ in 0..<300 where !gate.arrived { try await Task.sleep(for: .milliseconds(10)) }
+        _ = try await pollUntil(attempts: 300, interval: .milliseconds(10)) { gate.arrived }
         #expect(gate.arrived)
         host.stop()
         try await host.start()
@@ -104,12 +102,7 @@ struct SecondaryMacExecutionWorkspaceTests {
 
     @Test func directCommandsAreIdempotentAndActiveRunsBlockRoleChanges() async throws {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
-        let replica = try MobileStore(file: fixture.directory.appending(path: "client/library.json"))
-        let libraryID = UUID().uuidString.lowercased()
-        try await replica.verifyWorkspace(libraryID)
-        let owner = await replica.snapshot().deviceID
-        let workspace = try await SecondaryMacExecutionWorkspace(descriptor: .init(id: owner, libraryID: libraryID,
-            ownerDeviceID: owner, kind: .mac, name: "Fixture"), model: fixture.model, replica: replica, directory: fixture.directory)
+        let (replica, workspace, owner, _) = try await setup(fixture)
         let conversation = UUID().uuidString.lowercased()
         let created = try await workspace.command(.init(deviceID: owner, kind: .createSession,
             conversationID: conversation, providerID: "local:codex", workspaceID: owner))

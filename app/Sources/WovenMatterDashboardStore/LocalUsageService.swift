@@ -220,7 +220,6 @@ public actor LocalUsageService {
     fileManager: FileManager,
     credentialStore: any UsageCredentialStoring,
     usageDatabaseURL: URL,
-    usesSharedConnections: Bool = false,
     sharedConnectionRevision: @escaping @Sendable () -> UInt64 = { DefaultAgentSupport.revision },
     sharedConnectionChoices: @escaping @Sendable (Set<ProviderKind>) throws -> [UsageConnectionChoice] = { _ in [] },
     importPreparationWorker: DatabaseWorker? = nil,

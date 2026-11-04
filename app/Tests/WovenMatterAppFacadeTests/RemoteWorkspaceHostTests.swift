@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import Foundation
 import Testing
 import WovenMatterClient
@@ -7,19 +8,14 @@ import WovenMatterCore
 private final class HostInspectionFixture: @unchecked Sendable {
     private let lock = NSLock()
     private var ready = false
-    private var changedPlan = false
-    private var fail = false
     private var commands: [String] = []
 
     func setReady(_ value: Bool) { lock.withLock { ready = value } }
-    func changePlan() { lock.withLock { changedPlan = true } }
-    func failInspection() { lock.withLock { fail = true } }
     var calls: [String] { lock.withLock { commands } }
 
     func run(destination: String, command: String) throws -> Data {
         try lock.withLock {
             commands.append(command)
-            if fail { throw URLError(.cannotConnectToHost) }
             if command.contains("'status'") {
                 return Data(#"{"id":"fixture","name":"Fixture","state":"exited","running":false,"startedAt":"","image":"fixture","memoryBytes":0,"swapBytes":0,"hostPort":7337,"persistentVolume":"fixture","capabilities":{"memory":false,"swap":false},"storageKind":"fixture","hostStorageLow":false,"legacyStorage":false}"#.utf8)
             }
@@ -29,7 +25,7 @@ private final class HostInspectionFixture: @unchecked Sendable {
                 "architecture": "x86_64", "capabilities": ["memory": ready, "swap": ready],
                 "limitations": [], "hostStorageLow": false,
                 "canPrepare": !ready, "preparationRequired": !ready,
-                "preparationActions": ready ? [] : [changedPlan ? "Install Docker." : "Start Docker."],
+                "preparationActions": ready ? [] : ["Start Docker."],
                 "blockingIssues": []
             ]
             return try JSONSerialization.data(withJSONObject: value)
@@ -89,11 +85,8 @@ private final class HostInspectionFixture: @unchecked Sendable {
     }
 
     private func settled(_ model: RemoteWorkspacesModel) async throws {
-        for _ in 0..<300 {
-            if !model.isCheckingHost && !model.isCreating { return }
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        Issue.record("Host operation did not settle")
+        let idle = try await pollUntil(attempts: 300, interval: .milliseconds(10)) { !model.isCheckingHost && !model.isCreating }
+        if !idle { Issue.record("Host operation did not settle") }
     }
 
     @Test func nativeReadinessIsBoundToWorkspaceKindAndAccessLevel() async throws {
@@ -185,10 +178,7 @@ private final class HostInspectionFixture: @unchecked Sendable {
         defaults.set(try JSONEncoder().encode([workspace]), forKey: "wovenmatter.remote-workspaces.v1")
         let model = RemoteWorkspacesModel(defaults: defaults, backendProjection: false, sshClient: fixture.client)
         model.refreshRuntimeMaintenanceAtStartup()
-        for _ in 0..<300 {
-            if !model.busyWorkspaceIDs.contains(workspace.id) { break }
-            try await Task.sleep(for: .milliseconds(10))
-        }
+        _ = try await pollUntil(attempts: 300, interval: .milliseconds(10)) { !model.busyWorkspaceIDs.contains(workspace.id) }
         #expect(model.statuses[workspace.id]?.running == false)
         #expect(model.errorMessage == nil)
         #expect(fixture.calls.count == 1)

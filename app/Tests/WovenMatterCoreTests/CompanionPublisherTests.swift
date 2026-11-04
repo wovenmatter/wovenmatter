@@ -15,7 +15,7 @@ struct CompanionPublisherTests {
     let firstRun = try await f.database.beginLocalACPRun(conversationID: conversationID, content: "First")
     try await f.database.updateLocalACPSessionID(conversationID: conversationID, runID: firstRun.runID, sessionID: "native")
     let secondRun = UUID().uuidString.lowercased()
-    try await f.database.write { try $0.companionExecuteUnlocked("INSERT INTO dashboard_runs(id,conversation_id,status,openclaw_session_key) VALUES (?,?,'running','native')", values: [secondRun, conversationID]) }
+    try await f.database.write { try $0.toolsExecuteUnlocked("INSERT INTO dashboard_runs(id,conversation_id,status,openclaw_session_key) VALUES (?,?,'running','native')", [secondRun, conversationID]) }
     func entry(_ run: String, _ sequence: Int64) -> CompanionJournalEntry {
       .init(workspaceID: f.workspace.id, originSequence: sequence, conversationID: conversationID, runID: run, kind: .conversation,
         conversation: .init(id: conversationID, title: "Offline history", runtimeKind: "codex"),
@@ -33,11 +33,11 @@ struct CompanionPublisherTests {
     var changed = first; changed.entries[0].retainedExecution?.status = "failed"
     await #expect(throws: (any Error).self) { _ = try await f.database.settleCompanionRetainedRuns(changed, deviceID: f.workspace.executionDeviceID!) }
     let active = UUID().uuidString.lowercased()
-    try await f.database.write { try $0.companionExecuteUnlocked("INSERT INTO dashboard_runs(id,conversation_id,status,openclaw_session_key) VALUES (?,?,'running','native')", values: [active, conversationID]) }
+    try await f.database.write { try $0.toolsExecuteUnlocked("INSERT INTO dashboard_runs(id,conversation_id,status,openclaw_session_key) VALUES (?,?,'running','native')", [active, conversationID]) }
     await #expect(throws: (any Error).self) { _ = try await f.database.ingestCompanionJournal(all, deviceID: f.workspace.executionDeviceID!) }
     #expect(try await f.database.read { try $0.companionIDsUnlocked("SELECT status FROM dashboard_runs WHERE id=?", bindings: [active]).first } == "running")
     #expect(try await f.database.companionExecutionOwner(conversationID: conversationID) == nil)
-    try await f.database.write { try $0.companionExecuteUnlocked("UPDATE dashboard_runs SET status='completed' WHERE id=?", values: [active]) }
+    try await f.database.write { try $0.toolsExecuteUnlocked("UPDATE dashboard_runs SET status='completed' WHERE id=?", [active]) }
     _ = try await f.database.ingestCompanionJournal(all, deviceID: f.workspace.executionDeviceID!)
     #expect(try await f.database.companionExecutionOwner(conversationID: conversationID) == f.workspace.id)
     #expect(try await f.database.companionJournal(after: 0).entries.map(\.eventID) == entries.map(\.eventID))
@@ -240,23 +240,18 @@ struct CompanionPublisherTests {
   }
 
   private struct Fixture {
-    let directory: URL, database: WorkspaceDatabase, identity: CompanionLibraryIdentity, workspace: CompanionExecutionWorkspace, grant: CompanionWorkspacePublisherGrant
+    let persistence: PersistenceFixture, database: WorkspaceDatabase, identity: CompanionLibraryIdentity, workspace: CompanionExecutionWorkspace, grant: CompanionWorkspacePublisherGrant
     init() async throws {
-      directory = FileManager.default.temporaryDirectory.appending(path: "wm-publisher-" + UUID().uuidString)
-      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-      database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+      persistence = try PersistenceFixture()
+      database = try await persistence.openDatabase()
       identity = try await database.companionLibraryIdentity()
       workspace = try await database.registerCompanionExecutionWorkspace(.init(workspace: .init(id: UUID().uuidString.lowercased(), libraryID: identity.libraryID,
         ownerDeviceID: identity.hostDeviceID, kind: .linux, name: "Linux", executionDeviceID: UUID().uuidString.lowercased(), journalDeviceIDs: [identity.hostDeviceID, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"])), deviceID: identity.hostDeviceID)
       grant = try await database.issueCompanionWorkspacePublisher(workspaceID: workspace.id, endpoint: URL(string: "https://central.tail.ts.net/wovenmatter")!, deviceID: identity.hostDeviceID)
     }
-    func remove() { try? FileManager.default.removeItem(at: directory) }
+    func remove() { persistence.remove() }
     func request<T: Encodable>(_ path: String, _ value: T, libraryID: String? = nil) throws -> CompanionHTTPRequest {
       .init(method: "POST", target: path, headers: ["authorization": "Bearer " + grant.token, "x-woven-workspace": libraryID ?? identity.libraryID], body: try JSONEncoder().encode(value))
-    }
-    func batch() -> CompanionJournalBatch {
-      let id = UUID().uuidString.lowercased()
-      return .init(libraryID: identity.libraryID, entries: [.init(workspaceID: workspace.id, originSequence: 1, conversationID: id, kind: .conversation, conversation: .init(id: id, title: "Owner history"))])
     }
   }
 

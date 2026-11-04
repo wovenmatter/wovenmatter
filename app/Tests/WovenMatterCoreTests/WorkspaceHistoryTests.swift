@@ -1,6 +1,5 @@
 import WorkspaceFixtures
 import Foundation
-import SQLite3
 import Testing
 import WovenMatterClient
 import WovenMatterCore
@@ -10,18 +9,14 @@ import WovenMatterCore
 @Suite("Workspace history and bounded versions")
 struct WorkspaceHistoryTests {
 
-  private func database() async throws -> (WorkspaceDatabase, URL) {
-    let url = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-    try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-    return (try await WorkspaceDatabase(url: url.appending(path: "workspace.sqlite")), url)
-  }
-  private func rows(_ value: GatewayJSONValue) -> [GatewayJSONValue] {
-    value.objectValue?["rows"]?.arrayValue ?? []
+  private func database() async throws -> (WorkspaceDatabase, PersistenceFixture) {
+    let persistence = try PersistenceFixture()
+    return (try await persistence.openDatabase(), persistence)
   }
 
   @Test func nativePayloadsSurviveReopenAndSearchWithStablePagination() async throws {
-    let (db, url) = try await database()
-    defer { try? FileManager.default.removeItem(at: url) }
+    let (db, persistence) = try await database()
+    defer { persistence.remove() }
     let conversation = try await db.createFixtureLocalACPSession(
       runtimeKind: .claudeCode, title: "Pi", ownerDeviceID: UUID())
     let run = try await db.beginLocalACPRun(conversationID: conversation, content: "research")
@@ -41,7 +36,7 @@ struct WorkspaceHistoryTests {
     #expect(rows(first).first?.objectValue?["payload"]?.stringValue == raw)
     #expect(rows(first).first?.objectValue?["run_id"]?.stringValue == run.runID)
     #expect(first.objectValue?["hasMore"]?.boolValue == true)
-    let reopened = try await WorkspaceDatabase(url: url.appending(path: "workspace.sqlite"))
+    let reopened = try await persistence.openDatabase()
     var next = query
     next.after = Int64(first.objectValue?["nextCursor"]?.intValue ?? 0)
     #expect(

@@ -7,18 +7,17 @@ import WovenMatterClient
 
 @Suite("Durable coordinator notifications")
 struct WorkspaceCoordinationEventTests {
-  private func fixture() async throws -> (WorkspaceDatabase, URL, String, String) {
-    let dir = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-    let db = try await WorkspaceDatabase(url: dir.appending(path: "workspace.sqlite"))
+  private func fixture() async throws -> (WorkspaceDatabase, PersistenceFixture, String, String) {
+    let persistence = try PersistenceFixture()
+    let db = try await persistence.openDatabase()
     let a = try await db.createFixtureLocalACPSession(runtimeKind: .codex, title: "Coordinator", ownerDeviceID: UUID())
     let b = try await db.createFixtureLocalACPSession(runtimeKind: .claudeCode, title: "Worker", ownerDeviceID: UUID())
-    return (db, dir, a, b)
+    return (db, persistence, a, b)
   }
 
   @Test func mutedEventsDoNotReplayAndReacquisitionInvalidatesOldClaim() async throws {
-    let (db, dir, a, b) = try await fixture()
-    defer { try? FileManager.default.removeItem(at: dir) }
+    let (db, persistence, a, b) = try await fixture()
+    defer { persistence.remove() }
     try await db.beginCoordination(sourceID: a, targetID: b, purpose: "Work", notifications: false)
     let run = try await db.beginLocalACPRun(conversationID: b, content: "Fails")
     try await db.completeLocalACPRun(runID: run.runID, error: "Fixture failure")
@@ -38,8 +37,8 @@ struct WorkspaceCoordinationEventTests {
   }
 
   @Test func nativeAuthBlockNotifiesOnceAndCannotFinishItsParent() async throws {
-    let (db, dir, lead, worker) = try await fixture()
-    defer { try? FileManager.default.removeItem(at: dir) }
+    let (db, persistence, lead, worker) = try await fixture()
+    defer { persistence.remove() }
     try await db.beginCoordination(sourceID: lead, targetID: worker, purpose: "Work")
     let run = try await db.beginLocalACPRun(conversationID: worker, content: "Work")
     try await db.recordProgramStatus(.init(state: .blocked, id: "children/1", kind: .auth), runID: run.runID)
@@ -52,7 +51,4 @@ struct WorkspaceCoordinationEventTests {
     try await db.completeLocalACPRun(runID: run.runID)
     #expect(try await db.collectCoordinationTurnNotifications().first?.text.contains("done.") == true)
   }
-}
-
-extension WorkspaceCoordinationEventTests {
 }

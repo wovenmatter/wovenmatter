@@ -129,10 +129,6 @@ extension WorkspaceDatabaseConnection {
     }
   }
 
-  func companionExecuteUnlocked(_ sql: String, values: [String?]) throws {
-    try toolsExecuteUnlocked(sql, values)
-  }
-
   func companionFingerprint<Value: Encodable>(_ value: Value) throws -> Data {
     let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
     return Data(SHA256.hash(data: try encoder.encode(value)))
