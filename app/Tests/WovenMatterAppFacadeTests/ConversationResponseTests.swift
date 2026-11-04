@@ -79,11 +79,11 @@ import Testing
         ]
         for sample in formattedLines {
             inlineView.apply(content: sample.source, document: nil, isStreaming: false)
-            require(inlineView.string == sample.text, "Multiline formatting or hard-break text changed: \(sample.source)")
+            #expect(inlineView.string == sample.text, "Multiline formatting or hard-break text changed: \(sample.source)")
             let inlineStorage = inlineView.textStorage!
             inlineStorage.enumerateAttribute(.font, in: NSRange(location: 0, length: inlineStorage.length)) { font, range, _ in
                 if inlineStorage.attributedSubstring(from: range).string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return }
-                require((font as? NSFont).map { NSFontManager.shared.traits(of: $0).contains(sample.trait) } == true,
+                #expect((font as? NSFont).map { NSFontManager.shared.traits(of: $0).contains(sample.trait) } == true,
                     "Inline formatting stopped at a line boundary: \(sample.source)")
             }
         }
@@ -98,24 +98,24 @@ import Testing
             ("`a `", "a "),
         ] {
             inlineView.apply(content: source, document: nil, isStreaming: false)
-            require(inlineView.string == expected, "Inline whitespace or literal escape changed: \(source)")
+            #expect(inlineView.string == expected, "Inline whitespace or literal escape changed: \(source)")
             if source.hasPrefix("`") {
                 let font = inlineView.textStorage!.attribute(.font, at: 0, effectiveRange: nil) as! NSFont
-                require(font.isFixedPitch, "Multiline inline code lost its monospaced font")
+                #expect(font.isFixedPitch, "Multiline inline code lost its monospaced font")
             }
         }
         for destination in ["https://example.com/path", "javascript:alert"] {
             let source = "[Link first\nlink second](\(destination))"
             inlineView.apply(content: source, document: nil, isStreaming: false)
-            require(inlineView.string == "Link first\nlink second", "A multiline link exposed its Markdown syntax")
+            #expect(inlineView.string == "Link first\nlink second", "A multiline link exposed its Markdown syntax")
             let inlineStorage = inlineView.textStorage!
             var linkedLength = 0
             inlineStorage.enumerateAttribute(.link, in: NSRange(location: 0, length: inlineStorage.length)) { link, range, _ in
                 guard let url = link as? URL else { return }
-                require(url.absoluteString == "https://example.com/path", "Multiline parsing bypassed link safety")
+                #expect(url.absoluteString == "https://example.com/path", "Multiline parsing bypassed link safety")
                 linkedLength += range.length
             }
-            require(linkedLength == (destination.hasPrefix("https:") ? inlineStorage.length : 0),
+            #expect(linkedLength == (destination.hasPrefix("https:") ? inlineStorage.length : 0),
                 "A multiline safe link lost part of its target or an unsafe link became clickable")
         }
 

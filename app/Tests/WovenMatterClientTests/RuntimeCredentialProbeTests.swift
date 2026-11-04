@@ -52,8 +52,7 @@ struct RuntimeCredentialProbeTests {
       let previous = LocalACPRuntimeResolution(availability: .init(runtimeKind: kind, displayName: kind.displayName,
         state: state, detail: "Previous installation failure", executablePath: discovered.availability.executablePath), launchConfiguration: nil)
       let refreshed = await LocalACPRuntimeVerifier.refresh(definition: definition, resolution: discovered,
-        workingDirectory: URL(fileURLWithPath: "/fixture"), previousResolution: previous,
-        verification: { _, _, _ in Issue.record("Repair discovery must not start a provider"); return discovered })
+        workingDirectory: URL(fileURLWithPath: "/fixture"), previousResolution: previous)
       #expect(refreshed.availability == discovered.availability)
       #expect(refreshed.launchConfiguration?.executableURL == discovered.launchConfiguration?.executableURL)
     }
@@ -67,19 +66,16 @@ struct RuntimeCredentialProbeTests {
       let previous = LocalACPRuntimeResolution(availability: .init(runtimeKind: kind, displayName: kind.displayName,
         state: state, detail: "Explicit readiness failure", executablePath: discovered.availability.executablePath), launchConfiguration: nil)
       let retained = await LocalACPRuntimeVerifier.refresh(definition: definition, resolution: discovered,
-        workingDirectory: URL(fileURLWithPath: "/fixture"), previousResolution: previous,
-        verification: { _, _, _ in Issue.record("Passive discovery must not recheck readiness"); return discovered })
+        workingDirectory: URL(fileURLWithPath: "/fixture"), previousResolution: previous)
       #expect(retained.availability == previous.availability)
       #expect(retained.launchConfiguration == nil)
       let rechecked = await LocalACPRuntimeVerifier.refresh(definition: definition, resolution: discovered,
-        workingDirectory: URL(fileURLWithPath: "/fixture"), credentialCheckRuntimeKinds: [kind], previousResolution: previous,
-        verification: { _, _, _ in discovered })
+        workingDirectory: URL(fileURLWithPath: "/fixture"), credentialCheckRuntimeKinds: [kind], previousResolution: previous)
       #expect(rechecked.availability == discovered.availability)
       #expect(rechecked.launchConfiguration != nil)
       let moved = resolution(kind, path: "/fixture/replaced/\(kind.rawValue)")
       let changed = await LocalACPRuntimeVerifier.refresh(definition: definition, resolution: moved,
-        workingDirectory: URL(fileURLWithPath: "/fixture"), previousResolution: previous,
-        verification: { _, _, _ in Issue.record("Path discovery must not recheck readiness"); return moved })
+        workingDirectory: URL(fileURLWithPath: "/fixture"), previousResolution: previous)
       #expect(changed.availability == moved.availability)
       #expect(changed.launchConfiguration != nil)
     }

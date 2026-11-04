@@ -82,5 +82,32 @@ struct ConversationMessageLayoutTests {
         scroll.conversationChanged(to: "second")
         let switched = scroll.contentChanged(conversationID: "second", hasMessages: true, isPrependingHistory: false)
         #expect(switched == .jumpToBottom, "Switching chats retained another conversation's reading position")
+        var workScroll = ConversationWorkScrollState()
+        #expect(workScroll.shouldFollowAppend(from: ["thought", "read"], to: ["thought", "read", "command"]),
+            "A new live work row did not follow from the live edge")
+        #expect(!workScroll.shouldFollowAppend(from: ["thought", "read"], to: ["thought", "read"]),
+            "A tool status/detail update moved the work list")
+        #expect(!workScroll.shouldFollowAppend(from: ["thought", "read"], to: ["thought", "replacement", "command"]),
+            "A work correction was treated as a new append")
+        workScroll.setAtBottom(false)
+        #expect(workScroll.shouldFollowAppend(from: ["read"], to: ["read", "command"], wasAtBottom: true),
+            "Post-layout geometry lost the pre-append live edge")
+        #expect(!workScroll.shouldFollowTextAppend(from: "A trace.", to: "A trace.\n\nNext thought."),
+            "Growing reasoning interrupted a reader above the live edge")
+        #expect(!workScroll.shouldFollowAppend(from: ["read"], to: ["read", "command"]),
+            "Streaming work interrupted a reader inspecting earlier calls")
+        workScroll.setAtBottom(true)
+        #expect(workScroll.shouldFollowTextAppend(from: "A trace.", to: "A trace.\n\nNext thought."),
+            "Growing reasoning did not follow from its live edge")
+        for (before, after) in [("e", "e\u{301}"), ("👩", "👩‍💻"), ("क", "कि")] {
+            #expect(workScroll.shouldFollowTextAppend(from: before, to: after),
+                "Appending to an existing grapheme did not follow the live edge")
+            #expect(!workScroll.shouldFollowTextAppend(from: before, to: after, wasAtBottom: false),
+                "Appending to a grapheme moved a reader above the live edge")
+        }
+        #expect(!workScroll.shouldFollowTextAppend(from: "Old trace.", to: "Corrected trace."),
+            "A reasoning replacement unexpectedly moved reading position")
+        #expect(workScroll.shouldFollowAppend(from: ["read"], to: ["read", "command"]),
+            "Returning to the live edge did not resume following new work")
     }
 }

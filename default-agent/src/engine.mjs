@@ -305,7 +305,7 @@ export class DefaultAgentEngine {
   }
   async prompt(record, text, emit, mcpContext, identity) {
     if (record.busy) throw new DefaultAgentError('This Pi Durable session already has an active turn.');
-    const nextRunID = identity.runID;
+    const nextRunID = identity === undefined ? record.runID : identity.runID;
     record.busy = true;
     record.mcp ??= new SessionMCPContext();
     let ready;
@@ -327,7 +327,7 @@ export class DefaultAgentEngine {
       try { await record.subagents.beginGroup(nextRunID); }
       catch (error) { throw runtimeStageError('runPreparation', error); }
       record.runID = nextRunID;
-      record.inputID = identity.inputID;
+      if (identity !== undefined) record.inputID = identity.inputID;
       record.emit = emit;
       statusStarted = true;
       reportProgramStatus(record, { state: 'clear' });

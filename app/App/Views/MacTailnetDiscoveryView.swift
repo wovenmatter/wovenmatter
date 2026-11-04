@@ -151,8 +151,8 @@ private struct MacTailnetDeviceRow: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Checking, downloading, and opening apps uses this Mac’s existing SSH access over Tailscale. Configure SSH on the other Mac first if access is unavailable.")
                             .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
-                        TextField("SSH host alias", text: $row.connection.alias).settingsInput()
-                        TextField("SSH user (optional)", text: $row.connection.user).settingsInput()
+                        TextField("SSH host alias", text: $row.connection.alias).dashboardInput()
+                        TextField("SSH user (optional)", text: $row.connection.user).dashboardInput()
                         Button("Check installation", action: onInspect).buttonStyle(SettingsQuietButtonStyle())
                     }.disabled(row.busy || row.checking)
                 }.font(.system(size: 12))

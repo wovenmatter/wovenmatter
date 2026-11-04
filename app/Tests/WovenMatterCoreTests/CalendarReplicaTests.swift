@@ -19,7 +19,7 @@ struct CalendarReplicaTests {
   }
 
   @Test func pairingSharesScheduledExecutionAndMigrationRemovesLegacyRestrictions() async throws {
-    let (database, directory) = try await fixture(); defer { try? FileManager.default.removeItem(at: directory) }
+    let (database, directory) = try await fixture(); defer { directory.remove() }
     let identity = try await database.companionLibraryIdentity()
     let workspace = try await database.registerCompanionExecutionWorkspace(.init(workspace: .init(
       id: UUID().uuidString.lowercased(), libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID,
@@ -27,7 +27,7 @@ struct CalendarReplicaTests {
     let device = device
     try await database.write { connection in
       try connection.executeUnlocked("CREATE TABLE companion_workspace_access(device_id TEXT,workspace_id TEXT,enabled INTEGER)")
-      try connection.companionExecuteUnlocked("INSERT INTO companion_workspace_access VALUES (?,?,0)", values: [device, workspace.id])
+      try connection.toolsExecuteUnlocked("INSERT INTO companion_workspace_access VALUES (?,?,0)", [device, workspace.id])
     }
     var request = mutation()
     request.record.event.draft.task = .init(prompt: "Shared central task")

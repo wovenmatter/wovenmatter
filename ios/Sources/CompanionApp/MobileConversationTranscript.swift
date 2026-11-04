@@ -121,7 +121,7 @@ struct MobileConversationProjection {
         // before applying the device-message ordering rule.
         let partition = ConversationWorkTimeline.displayPartition(
           AssistantTranscriptProjection(messageID: message.id, content: message.content, activities: activities),
-          activities: activities, isLive: isRunning)
+          activities: activities)
         commentaryIDs.formUnion(partition.commentaryIDs)
         let hasSegments = activities.contains { $0.kind == .assistant && $0.assistantMessageID == message.id }
         if !hasSegments, let lastWork, let order = message.sequence, order < lastWork, !partition.body.isEmpty {

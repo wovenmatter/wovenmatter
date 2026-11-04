@@ -10,13 +10,13 @@ struct WorkspaceAgentToolTests {
 
 
   @Test func outsideTimersDispatchIndependentlyOfConversationToolSelection() async throws {
-    let (db, dir, _, target) = try await fixture()
-    defer { try? FileManager.default.removeItem(at: dir) }
+    let (db, persistence, _, target) = try await fixture()
+    defer { persistence.remove() }
     try await db.updateExternalMCP(enabled: true)
     try await db.setSessionTools(.init(enabled: []), sessionID: target)
     let timer = WorkspaceSessionTimer(sessionID: target, instruction: "Outside follow-up", nextFireAt: .distantPast)
     try await db.saveSessionTimer(timer, callerID: WovenMCPCaller.outside, requestID: UUID().uuidString, creating: true)
-    let reopened = try await WorkspaceDatabase(url: dir.appending(path: "workspace.sqlite"))
+    let reopened = try await WorkspaceDatabase(url: persistence.databaseURL)
     let due = try #require(await reopened.dueSessionTimers().first { $0.id == timer.id })
     let occurrence = try #require(due.pendingDeliveryID)
     #expect(try await reopened.isTimerOccurrenceActive(id: timer.id, deliveryID: occurrence))
@@ -36,8 +36,8 @@ struct WorkspaceAgentToolTests {
   }
 
   @Test func outsideResumeCanAdoptANativeTimerWithInternalTimersDisabled() async throws {
-    let (db, dir, _, target) = try await fixture()
-    defer { try? FileManager.default.removeItem(at: dir) }
+    let (db, persistence, _, target) = try await fixture()
+    defer { persistence.remove() }
     let timer = WorkspaceSessionTimer(sessionID: target, instruction: "Resume through outside MCP", nextFireAt: .distantPast, isPaused: true)
     try await db.saveSessionTimer(timer, callerID: target)
     try await db.setSessionTools(.init(enabled: []), sessionID: target)

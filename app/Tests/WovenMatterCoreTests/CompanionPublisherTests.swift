@@ -249,6 +249,7 @@ struct CompanionPublisherTests {
         ownerDeviceID: identity.hostDeviceID, kind: .linux, name: "Linux", executionDeviceID: UUID().uuidString.lowercased(), journalDeviceIDs: [identity.hostDeviceID, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"])), deviceID: identity.hostDeviceID)
       grant = try await database.issueCompanionWorkspacePublisher(workspaceID: workspace.id, endpoint: URL(string: "https://central.tail.ts.net/wovenmatter")!, deviceID: identity.hostDeviceID)
     }
+    var directory: URL { persistence.directory }
     func remove() { persistence.remove() }
     func request<T: Encodable>(_ path: String, _ value: T, libraryID: String? = nil) throws -> CompanionHTTPRequest {
       .init(method: "POST", target: path, headers: ["authorization": "Bearer " + grant.token, "x-woven-workspace": libraryID ?? identity.libraryID], body: try JSONEncoder().encode(value))

@@ -543,7 +543,7 @@ final class ApplicationModel {
                 database: dashboardStore.database)
         }
         if agentTools == nil { try await configureAgentTools(store: dashboardStore) }
-        agentTools?.isCompanionFixture = true
+        agentTools?.companionFixtureMCPConnection = { _, local, _ in local }
         await refreshWorkspace()
         state = .ready
     }
