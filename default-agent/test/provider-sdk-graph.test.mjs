@@ -169,6 +169,31 @@ test('Pi and current Bedrock/Smithy SDKs decode actual event-stream text, tools 
   assert.equal(f.requests[0].body.toolConfig.tools[0].toolSpec.name, 'lookup');
 });
 
+test('Bedrock preserves Smithy idle timeout errors after response headers', { timeout: 10000 }, async t => {
+  const { NodeHttpHandler } = fromPi('@smithy/node-http-handler');
+  const { BedrockRuntimeClient, ConverseStreamCommand } = fromPi('@aws-sdk/client-bedrock-runtime');
+  const f = await fixture(t, response => {
+    response.writeHead(200, { 'content-type': 'application/vnd.amazon.eventstream' });
+    response.write(awsEvent('messageStart', { role: 'assistant' }));
+    // Keep the response body incomplete after sending valid headers and an event.
+  });
+  const handler = new NodeHttpHandler({ socketTimeout: 100 });
+  const client = new BedrockRuntimeClient({ endpoint: f.baseUrl, region: 'us-east-1', maxAttempts: 1,
+    credentials: { accessKeyId: 'fixture-key', secretAccessKey: 'fixture-secret' }, requestHandler: handler });
+  t.after(() => client.destroy());
+  // Bound a regressed transport independently of the timeout being tested.
+  const watchdog = setTimeout(() => client.destroy(), 2000);
+  t.after(() => clearTimeout(watchdog));
+  const response = await client.send(new ConverseStreamCommand({ modelId: 'fixture-model',
+    messages: [{ role: 'user', content: [{ text: 'Offline timeout fixture' }] }] }));
+  const events = [];
+  await assert.rejects(async () => {
+    for await (const event of response.stream) events.push(event);
+  }, error => error.name === 'TimeoutError');
+  assert.deepEqual(events, [{ messageStart: { role: 'assistant' } }]);
+  assert.equal(f.requests.length, 1, 'a started stream must not be retried');
+});
+
 test('Anthropic SDK v1 still aborts an in-flight Pi stream without completing its message', { timeout: 10000 }, async t => {
   const controller = new AbortController();
   const f = await fixture(t, response => {
