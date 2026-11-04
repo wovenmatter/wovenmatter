@@ -71,7 +71,7 @@ extension WorkspaceDatabaseConnection {
         throw CompanionAPIError(code: "invalid_request", message: "--request-id must match the request envelope.")
       }
     }
-    if !command.wantsHelp, command.action != "context", let group = command.group {
+    if command.action != "context", let group = command.group {
       // Cleanup retains device/caller ownership, including after revocation.
       if group.isAutomation, command.action == "cancel" { return }
       guard group == .html || value.enabledGroups.contains(group) else { throw WorkspaceToolError.disabled(group) }

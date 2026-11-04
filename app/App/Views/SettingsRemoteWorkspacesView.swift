@@ -16,8 +16,6 @@ struct SettingsRemoteWorkspacesView: View {
     @State private var hostName = ""
     @State private var userName = ""
     @State private var port = 7337
-    @State private var memoryLimit = ""
-    @State private var swapLimit = ""
     private let workspaceKind: RemoteWorkspaceKind = .host
     @State private var accessMode: RemoteWorkspaceAccessMode = .fullRoot
     @State private var acknowledgedHostAccess = false

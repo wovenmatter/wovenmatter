@@ -337,7 +337,6 @@ import CompanionInference
     } catch { errorMessage = error.localizedDescription }
   }
   func openNote(_ id: String) async {
-    await store?.protectOpenNote(id)
     selectedNoteID = id; tab = .note
     if state.uncachedNoteIDs.contains(id), online, let store, let transport {
       do { try await store.cacheNote(transport.asset(id)); await reload() }

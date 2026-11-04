@@ -67,21 +67,17 @@ struct ConversationWorkTimelineTests {
     let activities = records.map(\.activity)
     let transcript = AssistantTranscriptProjection(messageID: "m", content: "Let me check.\n", activities: activities)
 
-    let live = ConversationWorkTimeline.displayPartition(transcript, activities: activities, isLive: true)
+    let live = ConversationWorkTimeline.displayPartition(transcript, activities: activities)
     #expect(live.commentaryIDs == ["s"])
     #expect(live.body.allSatisfy { $0.isWhitespace })
     #expect(ConversationWorkTimeline(records: records, commentaryIDs: live.commentaryIDs).entries.map(\.id)
       == ["commentary:s", "group:a"])
 
-    let settled = ConversationWorkTimeline.displayPartition(transcript, activities: activities, isLive: false)
-    #expect(settled.commentaryIDs == ["s"])
-    #expect(settled.body.allSatisfy { $0.isWhitespace })
-
-    let unfollowed = ConversationWorkTimeline.displayPartition(transcript, activities: [segment], isLive: true)
+    let unfollowed = ConversationWorkTimeline.displayPartition(transcript, activities: [segment])
     #expect(unfollowed.commentaryIDs.isEmpty)
     let checklistOnly = ConversationWorkTimeline.displayPartition(transcript,
       activities: [segment, AgentRunActivity(id: "p", kind: .plan, planKind: "checklist"),
-        tool("update", "update_plan")], isLive: true)
+        tool("update", "update_plan")])
     #expect(checklistOnly.commentaryIDs.isEmpty)
     #expect(checklistOnly.body == transcript.body)
   }

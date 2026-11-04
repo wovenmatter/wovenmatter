@@ -12,7 +12,7 @@ public struct BackendInvalidationCursor: Codable, Equatable, Sendable {
 }
 
 public enum BackendInvalidationScope: String, Codable, Sendable, Hashable {
-    case gatewaySettings, openCode, workspace, calendar, runtime, remoteWorkspaces, permissions, settings, usage, databases
+    case openCode, workspace, calendar, runtime, remoteWorkspaces, permissions, settings, usage, databases
 }
 
 public struct BackendInvalidations: Codable, Equatable, Sendable {

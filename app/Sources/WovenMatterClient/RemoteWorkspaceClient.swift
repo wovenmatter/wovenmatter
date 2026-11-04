@@ -138,7 +138,6 @@ public enum RemoteHarnessLaunchResolver {
         configuration: RemoteWorkspaceConfiguration,
         runtimeKind: AgentRuntimeKind,
         processWorkingDirectory: URL,
-        workspaceRoot: URL = URL(fileURLWithPath: "/home/.woven-matter"),
         workingDirectory: URL? = nil,
         durableChannelID: String? = nil,
         tailnetSSHOptions: @Sendable (String) throws -> [String] = RemoteWorkspaceTailnet.sshOptions
@@ -655,68 +654,6 @@ public actor RemoteWorkspaceSSHClient {
         )
     }
 
-    public func create(
-        configuration: RemoteWorkspaceConfiguration,
-        token: String,
-        imageID: String? = nil
-    ) throws -> RemoteWorkspaceStatus {
-        if configuration.kind == .host { return try deployHost(configuration: configuration, token: token) }
-        let resources = try RemoteWorkspaceResourceLimits.commandValues(
-            for: configuration
-        )
-        return try decode(
-            RemoteWorkspaceStatus.self,
-            from: runScript(
-                hostName: configuration.hostName,
-                userName: configuration.userName,
-                arguments: [
-                    "create",
-                    configuration.workspaceID,
-                    String(configuration.remotePort),
-                    resources.memoryBytes,
-                    resources.memoryAndSwapBytes,
-                    imageID ?? "",
-                ],
-                secret: token
-            )
-        )
-    }
-
-    @discardableResult
-    public func deployService(
-        hostName: String,
-        userName: String?,
-        forceRefresh: Bool = false,
-        progress: @escaping @Sendable (String) -> Void = { _ in }
-    ) throws -> String {
-        let destination = try Self.validatedDestination(hostName: hostName, userName: userName)
-        let root = try deploymentRoot ?? Self.loadDeploymentRoot()
-        let deployment = try RemoteWorkspaceDeployment(root: root)
-        func command(_ action: String) -> String {
-            "exec bash -c " + RemoteWorkspaceExecTarget.quote(deployment.script) + " -- " + action + " "
-                + deployment.fingerprint + " " + (forceRefresh ? "true" : "false")
-        }
-        progress("Checking the workspace image on the host…")
-        if !forceRefresh {
-            let result = try runner(destination, command("inspect"), nil)
-            if let image = RemoteWorkspaceDeployment.imageID(result) {
-                progress("Reusing the up-to-date workspace image…")
-                return image
-            }
-            guard String(decoding: result, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines) == "build" else {
-                throw RemoteWorkspaceClientError.invalidResponse("The host returned an invalid image check.")
-            }
-        }
-        progress("Preparing workspace files for the image build…")
-        let archive = try Self.loadDeploymentArchive(root: root)
-        let updates = RemoteWorkspaceBuildProgress(report: progress)
-        let output = try streamingRunner(destination, command("build"), archive) { updates.receive($0) }
-        guard let image = RemoteWorkspaceDeployment.imageID(output) else {
-            throw RemoteWorkspaceClientError.invalidResponse("Docker did not return a verified image identity.")
-        }
-        return image
-    }
-
     public func status(
         configuration: RemoteWorkspaceConfiguration
     ) throws -> RemoteWorkspaceStatus {
@@ -742,31 +679,6 @@ public actor RemoteWorkspaceSSHClient {
                 userName: configuration.userName,
                 arguments: [action.rawValue, configuration.workspaceID],
                 kind: configuration.kind
-            )
-        )
-    }
-
-    public func update(
-        configuration: RemoteWorkspaceConfiguration,
-        imageID: String? = nil
-    ) throws -> RemoteWorkspaceStatus {
-        if configuration.kind == .host { return try deployHost(configuration: configuration, update: true) }
-        let resources = try RemoteWorkspaceResourceLimits.commandValues(
-            for: configuration
-        )
-        return try decode(
-            RemoteWorkspaceStatus.self,
-            from: runScript(
-                hostName: configuration.hostName,
-                userName: configuration.userName,
-                arguments: [
-                    "update",
-                    configuration.workspaceID,
-                    imageID ?? "wovenmatter/workspace:latest",
-                    resources.memoryBytes,
-                    resources.memoryAndSwapBytes,
-                    String(configuration.remotePort),
-                ]
             )
         )
     }
@@ -951,29 +863,6 @@ public actor RemoteWorkspaceSSHClient {
             throw RemoteWorkspaceClientError.deploymentBundleUnavailable
         }
         return root
-    }
-
-    private static func loadDeploymentArchive(root: URL) throws -> Data {
-        let result = try RemoteWorkspaceProcess.run(
-            executable: "/usr/bin/tar",
-            arguments: [
-                "--no-mac-metadata", "-czf", "-",
-                "--exclude=.DS_Store",
-                "--exclude=*/node_modules",
-                "--exclude=*/.env",
-                "--exclude=*/.env.*",
-                "--exclude=remote/test",
-                "--exclude=remote/.env.example",
-                "--exclude=remote/compose.yaml",
-                "-C", root.path,
-                "remote", "harnesses",
-                "default-agent/package.json", "default-agent/package-lock.json", "default-agent/src",
-            ]
-        )
-        guard result.status == 0 else {
-            throw RemoteWorkspaceClientError.commandFailed(result.output)
-        }
-        return result.data
     }
 }
 

@@ -71,7 +71,6 @@ public struct WovenMatterToolCommand: Sendable {
   public let positional: [String]
   public let options: [String: String]
   public let operationArguments: [String]
-  public let wantsHelp: Bool
 
   public var isDatabaseCommand: Bool { operationArguments.first == "databases" }
 
@@ -104,7 +103,7 @@ public struct WovenMatterToolCommand: Sendable {
     if domain == "context" {
       guard args.isEmpty else { throw WorkspaceToolError.invalid("Context does not accept caller-selected assets or messages.") }
       self.group = nil; self.action = "context"; self.positional = []; self.options = [:]
-      self.operationArguments = arguments; self.wantsHelp = false
+      self.operationArguments = arguments
       return
     }
     guard let group = WorkspaceToolGroup(rawValue: domain == "databases" ? "notes" : domain) else {
@@ -148,7 +147,6 @@ public struct WovenMatterToolCommand: Sendable {
     try Self.validate(group: group, action: action, positional: positional, options: options)
     self.positional = positional
     self.options = options
-    self.wantsHelp = false
     self.operationArguments = operationArguments
   }
 

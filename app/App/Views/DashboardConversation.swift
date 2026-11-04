@@ -1150,7 +1150,7 @@ struct DashboardMessageRow: View {
         let work = activities.map(\.activity)
         return ConversationWorkTimeline.displayPartition(
             AssistantTranscriptProjection(messageID: message.id, content: message.content, activities: work),
-            activities: work, isLive: message.status == "streaming")
+            activities: work)
     }
 
     var body: some View {

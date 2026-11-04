@@ -577,7 +577,6 @@ final class CentralLibraryClientModel {
     }
     func selectNote(_ id: String) async {
         selectedNoteID = id; section = .notes
-        await store?.protectOpenNote(id)
         guard let transport, state.uncachedNoteIDs.contains(id) else { return }
         do { try await store?.cacheNote(transport.note(id)); await reload() }
         catch { errorMessage = "This note is not saved on this Mac yet. Reconnect to download it." }

@@ -206,7 +206,6 @@ final class CompanionCommandService: CompanionCommandServing {
     /// access. Existing session destinations always come from stored ownership.
     private func requireToolExecutionAccess(_ request: WovenMatterToolRequest, callerID: String, deviceID: String) async throws {
         let tool = try WovenMatterToolCommand(request.arguments)
-        guard !tool.wantsHelp else { return }
         let command: CompanionCommand
         switch (tool.group, tool.action) {
         case (.sessions, "create"):

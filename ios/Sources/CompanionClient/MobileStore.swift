@@ -82,7 +82,6 @@ public actor MobileStore {
   public nonisolated let artifacts: SavedArtifactStore
   private let file: URL
   var state: MobileStoreState
-  private var protectedNoteID: String?
   public init(file: URL) throws {
     self.file = file
     dictations = try MobileDictationStore(file: file.appendingPathExtension("dictations.sqlite"))
@@ -99,7 +98,6 @@ public actor MobileStore {
     calendar = try MobileCalendarStore(file: file.appendingPathExtension("calendar"), deviceID: state.deviceID)
   }
   public func snapshot() -> MobileStoreState { state }
-  public func protectOpenNote(_ id: String?) { protectedNoteID = id }
   public func setTranscriptPinned(_ id: String, _ pinned: Bool) throws {
     try transaction { next in
       if next.pinnedTranscriptIDs == nil { next.pinnedTranscriptIDs = [] }

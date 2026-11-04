@@ -148,7 +148,6 @@ extension ApplicationModel {
             }
             launch = try RemoteHarnessLaunchResolver.resolve(configuration: remote, runtimeKind: config.runtimeKind,
                 processWorkingDirectory: localACPWorkspaceLaunchConfiguration?.rootURL ?? FileManager.default.homeDirectoryForCurrentUser,
-                workspaceRoot: URL(fileURLWithPath: remoteWorkspaces.remoteWorkspaceRoot(for: remote)),
                 workingDirectory: URL(fileURLWithPath: directory)).launch
         } else {
             guard let local = localACPLaunchConfigurations[config.runtimeKind] else { throw ApplicationModelError.localACPRuntimeUnavailable }

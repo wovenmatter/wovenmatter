@@ -14,7 +14,7 @@ public struct MobileToolContext: Sendable {
     self.enabled = enabled.union([.html]); self.nativeToolIDs = nativeToolIDs
   }
   public func authorize(_ command: WovenMatterToolCommand) throws {
-    guard let group = command.group, !command.wantsHelp else { return }
+    guard let group = command.group else { return }
     if group.isAutomation, command.action == "cancel" { return }
     guard enabled.contains(group) else { throw WorkspaceToolError.disabled(group) }
   }

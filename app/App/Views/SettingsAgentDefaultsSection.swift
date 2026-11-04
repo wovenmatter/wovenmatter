@@ -32,7 +32,7 @@ struct SettingsAgentDefaultsSection: View {
     private var workspaceID: UUID? { UUID(uuidString: scope) }
     private var workspaceScope: String? {
         if scope == "global" { return nil }
-        if let workspaceID { return "remote:" + workspaceID.uuidString.lowercased() }
+        if let workspaceID { return ApplicationModel.remoteDatabaseSourceID(workspaceID) }
         return model.localACPWorkspaceLaunchConfiguration.map { "local:" + $0.rootURL.standardizedFileURL.path }
     }
     private var scopeAvailable: Bool { scope != "local" || workspaceScope != nil }

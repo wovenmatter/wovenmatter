@@ -271,17 +271,3 @@ extension ApplicationModel {
         }
     }
 }
-
-extension LocalACPSessionMetadata {
-    init(sessionKey: String, configuration: LocalACPSessionConfiguration) {
-        self.init(sessionKey: sessionKey, model: configuration.model, thinking: configuration.thinking,
-            modelOptions: configuration.modelOptions, thinkingLevels: configuration.thinkingOptions,
-            slashCommands: configuration.slashCommands,
-            modelOptionMetadata: configuration.modelOptionMetadata,
-            thinkingOptionMetadata: configuration.thinkingOptionMetadata,
-            permission: configuration.permission,
-            permissionOptions: configuration.permissionOptions,
-            permissionOptionMetadata: configuration.permissionOptionMetadata,
-            workingDirectory: configuration.workingDirectory)
-    }
-}

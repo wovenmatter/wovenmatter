@@ -416,12 +416,8 @@ struct WorkspaceView: View {
                     attachmentTargetConversationID = nil
                     attachmentPicker = nil
                     Task { @MainActor in
-                        do {
-                            if let conversationID = targetConversationID {
-                                appendAttachment(try await model.conversationAttachmentDraft(conversation), conversationID: conversationID)
-                            }
-                        } catch {
-                            showNotice(error.localizedDescription)
+                        if let conversationID = targetConversationID {
+                            appendAttachment(model.conversationAttachmentDraft(conversation), conversationID: conversationID)
                         }
                     }
                 }

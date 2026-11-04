@@ -1470,7 +1470,7 @@ final class ApplicationModel {
             let partition = ConversationWorkTimeline.displayPartition(
                 AssistantTranscriptProjection(messageID: message.id,
                     content: message.content, activities: workActivities),
-                activities: workActivities, isLive: message.status == "streaming")
+                activities: workActivities)
             let candidateBody = message.status == "streaming"
                 ? AssistantStreamingText.readyPrefix(of: partition.body) : partition.body
             let existing = previous[message.id]
@@ -2231,7 +2231,7 @@ final class ApplicationModel {
 
     func conversationAttachmentDraft(
         _ conversation: WorkspaceConversationRecord
-    ) async throws -> AgentMessageAttachmentDraft {
+    ) -> AgentMessageAttachmentDraft {
         return .reference(AgentMessageReferenceDraft(
             kind: .conversation,
             resourceID: conversation.id,
@@ -3169,7 +3169,6 @@ final class ApplicationModel {
                 configuration: configuration,
                 runtimeKind: runtimeKind,
                 processWorkingDirectory: processDirectory,
-                workspaceRoot: URL(fileURLWithPath: remoteWorkspaces.remoteWorkspaceRoot(for: configuration)),
                 workingDirectory: inheritedRoot,
                 durableChannelID: conversation.id,
                 tailnetSSHOptions: sshOptions

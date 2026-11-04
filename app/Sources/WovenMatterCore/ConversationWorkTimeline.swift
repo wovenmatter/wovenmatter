@@ -137,8 +137,7 @@ public struct ConversationWorkTimeline: Equatable, Sendable {
   /// checklist mutations never displace the response.
   public static func displayPartition(
     _ transcript: AssistantTranscriptProjection,
-    activities: [AgentRunActivity],
-    isLive _: Bool
+    activities: [AgentRunActivity]
   ) -> (body: String, commentaryIDs: Set<String>) {
     var commentaryIDs = Set(transcript.commentary.map(\.id))
     guard let index = activities.lastIndex(where: { activity in

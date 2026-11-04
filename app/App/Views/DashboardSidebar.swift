@@ -448,7 +448,7 @@ struct DashboardSidebarNavigationPage: View {
     }
 
     private var unavailableFolderOwnerIDs: [String] {
-        let known = Set(remoteWorkspaceLinks.map { "remote:" + $0.id.uuidString.lowercased() }
+        let known = Set(remoteWorkspaceLinks.map { ApplicationModel.remoteDatabaseSourceID($0.id) }
             + [localExecutionWorkspaceID].compactMap { $0 })
         return Set(folders.compactMap { $0.executionWorkspaceID }.filter { !$0.isEmpty }).subtracting(known).sorted()
     }
@@ -538,7 +538,7 @@ struct DashboardSidebarNavigationPage: View {
         _ workspace: DashboardRemoteWorkspaceSidebarLink
     ) -> some View {
         let key = DashboardAgentDisclosureKey.workspace(workspace.id)
-        let ownerID = "remote:" + workspace.id.uuidString.lowercased()
+        let ownerID = ApplicationModel.remoteDatabaseSourceID(workspace.id)
         // Remote workspace names deliberately align with the local heading.
         agentDisclosureHeading(title: workspace.configuration.name, key: key)
             .contextMenu {
@@ -567,7 +567,7 @@ struct DashboardSidebarNavigationPage: View {
             newChatButton(label: "New chat with \(target.harness.presentationName) in \(target.configuration.name)") {
                 actions.onStartRemoteChat(target)
             }
-            .disabled(!canCreateChat(workspaceID: "remote:" + target.configuration.id.uuidString.lowercased()))
+            .disabled(!canCreateChat(workspaceID: ApplicationModel.remoteDatabaseSourceID(target.configuration.id)))
         }
     }
 
@@ -651,7 +651,7 @@ struct DashboardSidebarNavigationPage: View {
             }
             newChatButton(label: "New chat with \(presentation.displayName)") { actions.onCreateAgentChat(agent.id) }
                 .disabled(!canCreateChat(workspaceID: agent.governingPlane == .remoteWorkspace
-                    ? agent.runtimeDeviceID.map { "remote:" + $0.uuidString.lowercased() } : localExecutionWorkspaceID))
+                    ? agent.runtimeDeviceID.map { ApplicationModel.remoteDatabaseSourceID($0) } : localExecutionWorkspaceID))
         }
     }
 
@@ -1333,7 +1333,7 @@ struct DashboardNewChatDrawer: View {
 
     private var remoteChatTargets: [RemoteHarnessChatTarget] {
         model.remoteWorkspaces.readyChatTargets.filter {
-            folderOwnerID == nil || folderOwnerID == "remote:" + $0.configuration.id.uuidString.lowercased()
+            folderOwnerID == nil || folderOwnerID == ApplicationModel.remoteDatabaseSourceID($0.configuration.id)
         }
     }
 
