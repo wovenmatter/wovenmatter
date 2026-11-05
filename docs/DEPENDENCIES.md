@@ -182,8 +182,8 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   peer validation. Real local WebSocket streaming/cancellation fixtures and the
   Chord/Durable suites validate this selection; review it on each Chord refresh.
   Pi AI 1.5.0 also pins older provider clients. Consumer-scoped minimum-only
-  overrides select the tested OpenAI 7.50.0, Anthropic 1.4.0, Google GenAI 2.32.0,
-  Bedrock Runtime 3.1161.0 and Smithy Node HTTP handler 4.14.1 releases without
+  overrides select the tested OpenAI 7.50.0, Anthropic 1.5.0, Google GenAI 2.32.0,
+  Bedrock Runtime 3.1162.0 and Smithy Node HTTP handler 4.14.2 releases without
   changing vendor manifests. Keeping these clients current is required for
   provider API and transport compatibility, including Anthropic's 2026-10-21
   Messages API. Maintenance reviews each upstream requirement and removes an
