@@ -78,6 +78,8 @@ struct SettingsBotsView: View {
             if runtime.phase == .ready, runtime.canEmbed {
                 wovenCard
                 settingsCard
+            } else if runtime.phase == .ready {
+                SettingsNote("Update this Pi Bot to see its settings here.")
             } else if runtime.target != nil {
                 SettingsNote("Pi Bot's own settings appear here once it is running.")
             }
@@ -101,7 +103,7 @@ struct SettingsBotsView: View {
     private var deploymentCard: some View {
         SettingsCard(title: "Running on", detail: runtime.target == nil
             ? "Bots run on one device. Choose it below."
-            : "Closing this window leaves bots running. Their data stays on this device.") {
+            : "Closing this window leaves bots running. Their data stays on the device that runs them.") {
             VStack(alignment: .leading, spacing: 10) {
                 if let target = runtime.target {
                     HStack(spacing: 10) {
@@ -279,10 +281,6 @@ struct SettingsBotsView: View {
             }
             .buttonStyle(SettingsQuietButtonStyle())
             .disabled(!runtime.bundleAvailable)
-        } else {
-            Button("Check") { inspect(id: id, target: target) }
-                .buttonStyle(SettingsQuietButtonStyle())
-                .disabled(checking.contains(id))
         }
     }
 
