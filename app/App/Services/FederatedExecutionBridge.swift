@@ -189,7 +189,13 @@ extension ApplicationModel {
             prompt += "\n\nReferenced note: \(note.title)\n\(note.content)"
         }
         _ = try await client.send(conversationID: conversationID, text: prompt, expectedRunID: expectedRunID ?? active,
-            beforeDispatch: { try dispatchFence.claimDispatch() })
+            beforeDispatch: {
+                if let id = input.historyDeliveryID {
+                    try await database.validateClaimedToolDelivery(id: id)
+                    try await database.markToolDeliveryTransportStarted(id: id, targetID: conversationID)
+                }
+                try dispatchFence.claimDispatch()
+            })
         return true
     }
 }

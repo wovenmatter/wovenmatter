@@ -192,6 +192,11 @@ extension WorkspaceDatabaseConnection {
     try settings.validate()
     try transaction {
       try toolsExecuteUnlocked("UPDATE workspace_tool_settings SET value=? WHERE id=1", [try toolsJSON(settings)])
+      if !settings.botMCP.enabledGroups.contains(.sessions) {
+        try executeUnlocked("UPDATE workspace_session_relationships SET coordinator_id=NULL,coordination_epoch=NULL,coordination_since=NULL WHERE coordinator_id IN (SELECT id FROM workspace_mcp_callers WHERE installation_id IS NOT NULL)")
+        try executeUnlocked("DELETE FROM workspace_session_grants WHERE kind='approved' AND source_id IN (SELECT id FROM workspace_mcp_callers WHERE installation_id IS NOT NULL)")
+        try executeUnlocked("UPDATE workspace_session_deliveries SET status='cancelled' WHERE status='queued' AND (source_id IN (SELECT id FROM workspace_mcp_callers WHERE installation_id IS NOT NULL) OR target_id IN (SELECT id FROM workspace_mcp_callers WHERE installation_id IS NOT NULL))")
+      }
       if settings.externalMCP?.enabledGroups.contains(.sessions) != true {
         try toolsExecuteUnlocked("UPDATE workspace_session_relationships SET coordinator_id=NULL,coordination_epoch=NULL,coordination_since=NULL WHERE coordinator_id=?", [WovenMCPCaller.outside])
         try toolsExecuteUnlocked("DELETE FROM workspace_session_grants WHERE source_id=? AND kind='approved'", [WovenMCPCaller.outside])
@@ -215,9 +220,10 @@ extension WorkspaceDatabaseConnection {
   }
 
   func sessionToolsUnlocked(_ id: String) throws -> WorkspaceSessionTools {
-    if id == WovenMCPCaller.outside {
+    if WovenMCPCaller.isAppWide(id) {
       let settings = try toolSettingsUnlocked()
-      let access = settings.externalMCP ?? .init()
+      try requireActiveBotUnlocked(id)
+      let access = WovenMCPCaller.parseBot(id) != nil ? settings.botMCP : settings.externalMCP ?? .init()
       guard access.isEnabled else { throw WorkspaceToolError.invalid("Outside MCP access is disabled.") }
       return .init(enabled: access.enabledGroups, executorProfiles: settings.executor?.defaultProfiles ?? [])
     }
@@ -287,14 +293,16 @@ extension WorkspaceDatabaseConnection {
 
   func requireToolUnlocked(_ group: WorkspaceToolGroup, sessionID: String, writesCalendar: Bool = false) throws {
     guard try sessionToolsUnlocked(sessionID).enabled.contains(group) else { throw WorkspaceToolError.disabled(group) }
-    if group == .calendar, writesCalendar, sessionID != WovenMCPCaller.outside, try toolSettingsUnlocked().calendarAccess != .full {
+    if group == .calendar, writesCalendar, !WovenMCPCaller.isAppWide(sessionID), try toolSettingsUnlocked().calendarAccess != .full {
       throw WorkspaceToolError.invalid("Calendar is read only. Change its access in General settings.")
     }
   }
 
   func requireToolSessionUnlocked(_ id: String) throws {
-    if id == WovenMCPCaller.outside {
-      guard try toolSettingsUnlocked().externalMCP?.isEnabled == true else {
+    if WovenMCPCaller.isAppWide(id) {
+      try requireActiveBotUnlocked(id)
+      let settings = try toolSettingsUnlocked()
+      guard WovenMCPCaller.parseBot(id) != nil ? settings.botMCP.isEnabled : settings.externalMCP?.isEnabled == true else {
         throw WorkspaceToolError.invalid("Outside MCP access is disabled.")
       }
       return

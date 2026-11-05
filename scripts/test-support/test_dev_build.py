@@ -90,6 +90,35 @@ class DevelopmentBuildTests(unittest.TestCase):
         self.assertEqual(other["support"], production)
         self.assertNotEqual(other["bundle"], profiles["live"]["bundle"])
 
+    def test_snapshot_discards_bot_grants_and_coordination(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); source = root / "source"; source.mkdir()
+            with sqlite3.connect(source / "workspace.sqlite") as db:
+                db.executescript("""
+                  CREATE TABLE workspace_mcp_bot_installations(installation_id TEXT,active INTEGER);
+                  INSERT INTO workspace_mcp_bot_installations VALUES('fixture',1);
+                  CREATE TABLE workspace_session_relationships(session_id TEXT,coordinator_id TEXT,coordination_epoch TEXT,coordination_since TEXT);
+                  INSERT INTO workspace_session_relationships VALUES('session','woven:bot:fixture:bot','epoch','since');
+                  CREATE TABLE workspace_session_grants(source_id TEXT,kind TEXT);
+                  INSERT INTO workspace_session_grants VALUES('woven:bot:fixture:bot','approved');
+                  CREATE TABLE workspace_session_deliveries(id TEXT,status TEXT);
+                  INSERT INTO workspace_session_deliveries VALUES('event','queued');
+                  CREATE TABLE workspace_coordination_access_requests(source_id TEXT,state TEXT);
+                  INSERT INTO workspace_coordination_access_requests VALUES('woven:bot:fixture:bot','pending');
+                """)
+            (source / "mcp-access.json").write_text(json.dumps({"port": 12345, "botGrants": {"fixture": "fixture-digest"}}))
+            target = root / "snapshot"
+            dev.snapshot(source, target)
+            self.assertFalse((target / "mcp-access.json").exists())
+            with sqlite3.connect(target / "workspace.sqlite") as db:
+                self.assertEqual(db.execute("SELECT active FROM workspace_mcp_bot_installations").fetchone(), (0,))
+                self.assertEqual(db.execute("SELECT coordinator_id,coordination_epoch,coordination_since FROM workspace_session_relationships").fetchone(), (None, None, None))
+                self.assertEqual(db.execute("SELECT count(*) FROM workspace_session_grants").fetchone(), (0,))
+                self.assertEqual(db.execute("SELECT status FROM workspace_session_deliveries").fetchone(), ('cancelled',))
+                self.assertEqual(db.execute("SELECT state FROM workspace_coordination_access_requests").fetchone(), ('cancelled',))
+            with sqlite3.connect(source / "workspace.sqlite") as db:
+                self.assertEqual(db.execute("SELECT active FROM workspace_mcp_bot_installations").fetchone(), (1,))
+
     def test_snapshot_includes_wal_and_assets_without_changing_source(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); source = root / "production"; source.mkdir()

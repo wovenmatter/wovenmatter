@@ -4,8 +4,8 @@ import WovenMatterClient
 
 extension WorkspaceAgentToolsModel {
     func goal(_ command: WovenMatterToolCommand, callerID: String, requestID: String, targetID: String? = nil) async throws -> WovenMatterToolResponse {
-        let target = callerID == WovenMCPCaller.outside ? targetID ?? callerID : callerID
-        guard target != WovenMCPCaller.outside else { throw WorkspaceToolError.invalid("Outside agents must supply sessionID for goals.") }
+        let target = WovenMCPCaller.isAppWide(callerID) ? targetID ?? callerID : callerID
+        guard !WovenMCPCaller.isAppWide(target) else { throw WorkspaceToolError.invalid("App-wide callers must supply sessionID for goals.") }
         if command.action == "get" {
             return try .value(await database.sessionGoals().first { $0.sessionID == target })
         }

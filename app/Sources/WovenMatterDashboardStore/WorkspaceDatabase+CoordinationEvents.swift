@@ -52,10 +52,10 @@ extension WorkspaceDatabaseConnection {
         let replied = replies.contains { $0.objectValue?["status"]?.stringValue == "accepted" }
         let detail: String
         if status == "completed" {
-          detail = "done."
+          detail = "completed; done."
         } else {
           let error = row["error"]?.stringValue.map { " " + String(WorkspaceHistoryPrivacy.redactingToolEndpoints($0).prefix(2_000)) } ?? ""
-          detail = "\(status == "failed" ? "error" : "idle (cancelled)").\(error)"
+          detail = "\(status == "failed" ? "failed (error)" : "idle (cancelled)").\(error)"
         }
         if let delivery = try recordCoordinationObservationUnlocked(sessionID: session, eventID: "run:" + id,
             detail: detail + " Run: " + id + ".", suppress: notificationOnly || replied) {
@@ -124,7 +124,7 @@ extension WorkspaceDatabaseConnection {
     let predicate = """
       coordinator_id IS NOT NULL AND (? IS NULL OR session_id=?) AND (
         NOT EXISTS (SELECT 1 FROM dashboard_conversations c WHERE c.id=workspace_session_relationships.session_id AND c.deleted_at IS NULL)
-        OR (coordinator_id != 'woven:tailnet' AND NOT EXISTS (SELECT 1 FROM dashboard_conversations c WHERE c.id=workspace_session_relationships.coordinator_id AND c.deleted_at IS NULL)))
+        OR (coordinator_id != 'woven:tailnet' AND NOT EXISTS (SELECT 1 FROM workspace_mcp_callers b JOIN workspace_mcp_bot_installations i ON i.installation_id=b.installation_id AND i.active=1 WHERE b.id=workspace_session_relationships.coordinator_id) AND NOT EXISTS (SELECT 1 FROM dashboard_conversations c WHERE c.id=workspace_session_relationships.coordinator_id AND c.deleted_at IS NULL)))
       """
     try toolsExecuteUnlocked("DELETE FROM workspace_session_grants WHERE kind='approved' AND target_id IN (SELECT session_id FROM workspace_session_relationships WHERE " + predicate + ")", [sessionID, sessionID])
     try toolsExecuteUnlocked("UPDATE workspace_session_relationships SET coordinator_id=NULL,coordination_epoch=NULL,coordination_since=NULL WHERE " + predicate, [sessionID, sessionID])

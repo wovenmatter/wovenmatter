@@ -2969,7 +2969,8 @@ final class ApplicationModel {
         return .localACPRuntimeUnavailable
     }
 
-    func createPairedMacSession(agentID: UUID, conversationID: UUID, folderID: String?) async throws -> String {
+    func createPairedMacSession(agentID: UUID, conversationID: UUID, folderID: String?,
+                                beforeDispatch: @escaping @MainActor () async throws -> Void = {}) async throws -> String {
         if isBackendFrontend {
             let result = try await sendBackendCommand(.createPeerSession(agentID: agentID, conversationID: conversationID, folderID: folderID))
             guard let id = result.conversationID else { throw ApplicationModelError.dashboardStoreUnavailable }
@@ -2982,7 +2983,7 @@ final class ApplicationModel {
         }
         let client = try centralExecutionClient()
         _ = try await client.createSession(workspace: workspace, runtimeKind: agent.runtimeKind,
-            conversationID: conversationID.uuidString.lowercased(), folderID: folderID)
+            conversationID: conversationID.uuidString.lowercased(), folderID: folderID, beforeDispatch: beforeDispatch)
         try await database.installPairedConversationPlaceholder(id: conversationID.uuidString.lowercased(), agentID: agentID,
             workspace: workspace, runtimeKind: agent.runtimeKind.rawValue)
         await refreshWorkspace()

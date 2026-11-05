@@ -1487,7 +1487,7 @@
       "openWorldHint" : true,
       "readOnlyHint" : false
     },
-    "description" : "Create a conversation and normally begin coordination. Inherit destination defaults unless overridden. Permissions and enabled tools come only from user controls. Pending approval is not approval; retry the identical requestID after the user resolves it. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
+    "description" : "Create a conversation and normally begin coordination. Choose workspace and harness from woven_sessions_harnesses, including paired Macs. Paired Macs use the owner's working directory; directory overrides are rejected. Other destinations inherit defaults unless overridden. Permissions and enabled tools come only from user controls. Pending approval is not approval; retry the identical requestID after the user resolves it. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
     "inputSchema" : {
       "additionalProperties" : false,
       "properties" : {
@@ -1718,7 +1718,7 @@
       "openWorldHint" : true,
       "readOnlyHint" : true
     },
-    "description" : "Sessions Harnesses using the authenticated caller's current Woven permissions.",
+    "description" : "Discover local, remote-workspace and paired-Mac destinations. Pass the returned workspace and harness unchanged to woven_sessions_create.",
     "inputSchema" : {
       "additionalProperties" : false,
       "properties" : {

@@ -326,8 +326,33 @@ final class WorkspaceAgentToolsModel {
             guard let self else { return .init(success: false, error: "Woven MCP stopped.", code: "unavailable") }
             return await self.handle(request, callerID: callerID)
         }
+        host.botNotificationSink = botNotificationSink
         mcpHost = host
         return host
+    }
+
+    var botNotificationSink: (@MainActor (WovenBotNotification) async throws -> Void)? {
+        didSet { mcpHost?.botNotificationSink = botNotificationSink }
+    }
+
+    func issueBotGrant(installationID: String) async throws -> WovenBotMCPGrant {
+        try await ensureMCPHost().issueBotGrant(installationID: installationID)
+    }
+
+    func revokeBotGrants(installationID: String) {
+        do { try ensureMCPHost().revokeBotGrants(installationID: installationID) }
+        catch { self.error = error.localizedDescription }
+    }
+
+    func trackBotDispatch(callerID: String, fence: AgentDispatchFence) throws -> UUID? {
+        guard WovenMCPCaller.parseBot(callerID) != nil else { return nil }
+        return try ensureMCPHost().trackBotDispatch(callerID: callerID, fence: fence)
+    }
+
+    func finishBotDispatch(_ id: UUID?) { mcpHost?.finishBotDispatch(id) }
+
+    func deliverBotNotification(_ delivery: WorkspaceSessionDelivery) async throws -> Bool {
+        try await ensureMCPHost().deliverBotNotification(delivery)
     }
 
     func mcpAccess(_ action: WovenMCPAccessAction) async throws -> WovenMCPAccessSnapshot {
@@ -404,7 +429,7 @@ final class WorkspaceAgentToolsModel {
                 throw WorkspaceToolError.invalid("This tool request exceeds its size limit.")
             }
             parsedCommand = command
-            if request.targetSessionID != nil, callerID != WovenMCPCaller.outside {
+            if request.targetSessionID != nil, !WovenMCPCaller.isAppWide(callerID) {
                 throw WorkspaceToolError.invalid("Conversation callers cannot choose another chat as their tool identity.")
             }
             if let suppliedRequestID = command.options["request-id"] {
@@ -413,7 +438,7 @@ final class WorkspaceAgentToolsModel {
                     throw WorkspaceToolError.invalid("--request-id must match the request envelope.")
                 }
             }
-            if command.action == "context", callerID == WovenMCPCaller.outside {
+            if command.action == "context", WovenMCPCaller.isAppWide(callerID) {
                 try await database.requireTool(.notes, sessionID: callerID)
                 return .init(result: .null, requestID: request.requestID)
             }
@@ -651,10 +676,10 @@ final class WorkspaceAgentToolsModel {
 
     private func timer(_ command: WovenMatterToolCommand, callerID: String, requestID: String, targetID: String? = nil) async throws -> WovenMatterToolResponse {
         let target = targetID ?? command.options["session"] ?? callerID
-        if callerID == WovenMCPCaller.outside, target == callerID {
-            throw WorkspaceToolError.invalid("Outside agents must supply sessionID for timers.")
+        if WovenMCPCaller.isAppWide(callerID), target == callerID {
+            throw WorkspaceToolError.invalid("App-wide callers must supply sessionID for timers.")
         }
-        if target != callerID && callerID != WovenMCPCaller.outside {
+        if target != callerID && !WovenMCPCaller.isAppWide(callerID) {
             try await database.requireTool(.sessions, sessionID: callerID)
             guard try await database.sessionRelationship(target).coordinatorID == callerID else { throw WorkspaceToolError.accessRequired(target) }
         }

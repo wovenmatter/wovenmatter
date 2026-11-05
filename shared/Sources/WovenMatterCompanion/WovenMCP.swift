@@ -77,7 +77,7 @@ public enum WovenMCPServer {
           var required = schema["required"]?.arrayValue ?? []
           if !required.contains(.string("sessionID")) { required.append(.string("sessionID")) }
           schema["required"] = .array(required); object["inputSchema"] = .object(schema)
-          object["description"] = .string((tool.description) + " Outside agents must choose the target chat with sessionID.")
+          object["description"] = .string((tool.description) + " App-wide callers must choose the target chat with sessionID.")
           json = .object(object)
         }
         return json

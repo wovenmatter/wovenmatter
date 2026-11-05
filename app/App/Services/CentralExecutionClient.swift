@@ -195,7 +195,8 @@ final class CentralExecutionClient {
     }
 
     func createSession(workspace: CompanionExecutionWorkspace, runtimeKind: AgentRuntimeKind,
-                       conversationID: String, folderID: String?) async throws -> CompanionCommandReceipt {
+                       conversationID: String, folderID: String?,
+                       beforeDispatch: @escaping @MainActor () async throws -> Void = {}) async throws -> CompanionCommandReceipt {
         let identity = try await database.companionLibraryIdentity()
         let providers = try await transport(for: workspace).providers()
         guard let provider = providers.first(where: { $0.runtimeKind == runtimeKind.rawValue && $0.available && $0.canStart }) else {
@@ -203,12 +204,12 @@ final class CentralExecutionClient {
         }
         return try await submit(.init(commandID: conversationID, deviceID: identity.hostDeviceID, kind: .createSession,
             conversationID: conversationID, providerID: provider.id, runtimeKind: runtimeKind.rawValue, folderID: folderID,
-            libraryID: workspace.libraryID, workspaceID: workspace.id), workspace: workspace)
+            libraryID: workspace.libraryID, workspaceID: workspace.id), workspace: workspace, beforeDispatch: beforeDispatch)
     }
 
     @discardableResult
     func send(conversationID: String, text: String, expectedRunID: String? = nil,
-              beforeDispatch: @escaping @MainActor () throws -> Void = {}) async throws -> CompanionCommandReceipt {
+              beforeDispatch: @escaping @MainActor () async throws -> Void = {}) async throws -> CompanionCommandReceipt {
         let workspace = try await requiredWorkspace(conversationID)
         let identity = try await database.companionLibraryIdentity()
         let kind: CompanionCommand.Kind = expectedRunID == nil ? .send : .steer
@@ -259,11 +260,12 @@ final class CentralExecutionClient {
         return value
     }
     @discardableResult
-    func perform(conversationID: String, action: CompanionWorkspaceAction) async throws -> CompanionCommandReceipt {
+    func perform(conversationID: String, action: CompanionWorkspaceAction,
+                 beforeDispatch: @escaping @MainActor () async throws -> Void = {}) async throws -> CompanionCommandReceipt {
         let workspace = try await requiredWorkspace(conversationID)
         let identity = try await database.companionLibraryIdentity()
         return try await submit(.init(deviceID: identity.hostDeviceID, kind: .workspace, conversationID: conversationID,
-            workspaceAction: action, libraryID: workspace.libraryID, workspaceID: workspace.id), workspace: workspace)
+            workspaceAction: action, libraryID: workspace.libraryID, workspaceID: workspace.id), workspace: workspace, beforeDispatch: beforeDispatch)
     }
     private func requiredWorkspace(_ id: String) async throws -> CompanionExecutionWorkspace {
         guard let workspace = try await workspace(conversationID: id), !workspace.deleted else {
@@ -272,7 +274,7 @@ final class CentralExecutionClient {
         return workspace
     }
     private func submit(_ requested: CompanionCommand, workspace: CompanionExecutionWorkspace,
-                        beforeDispatch: @MainActor () throws -> Void = {}) async throws -> CompanionCommandReceipt {
+                        beforeDispatch: @MainActor () async throws -> Void = {}) async throws -> CompanionCommandReceipt {
         let unresolved = await commandJournal.commandRecords(workspaceID: workspace.id).first {
             ($0.receipt == nil || $0.receipt?.status == .outcomeUnknown) &&
             $0.command.kind == requested.kind && $0.command.conversationID == requested.conversationID &&
@@ -284,7 +286,7 @@ final class CentralExecutionClient {
         let transport = try await transport(for: workspace)
         let receipt: CompanionCommandReceipt
         if let existing = try await transport.receipt(command.commandID) { receipt = existing }
-        else { try beforeDispatch(); receipt = try await transport.command(command) }
+        else { try await beforeDispatch(); receipt = try await transport.command(command) }
         guard receipt.commandID == command.commandID, receipt.deviceID == command.deviceID,
               receipt.workspaceID == nil || receipt.workspaceID == workspace.id else { throw MobileConnectionError.invalidResponse }
         try await commandJournal.rememberReceipt(receipt, workspaceID: workspace.id)

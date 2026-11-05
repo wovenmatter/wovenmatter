@@ -86,6 +86,54 @@ status and receipts. Usage remains read-only; enabling Calendar grants writes
 independently of the Calendar access default for Woven chats. Goals and visual
 replies remain included with exposure, matching Woven's always-available tools.
 
+## Bot callers and cross-device sessions
+
+Pi Bot uses an installation grant issued by `WorkspaceAgentToolsModel.issueBotGrant`.
+Issuing another grant rotates the previous one; Woven stores only its SHA-256
+digest in `mcp-access.json`. Revocation rejects subsequent calls and cancels that
+installation's pending deliveries and coordination. Preparation fences are cancelled
+immediately, before the serialized database cleanup. Dev snapshots discard grants
+and bot coordination. No conversation is created to represent a bot.
+
+With Session management enabled, bots can manage existing sessions under the
+same app-wide authority as outside callers. A request supplies the bearer grant, a UUID in `x-woven-bot-id`, and a
+percent-encoded `x-woven-bot-name`. The host validates the grant and UUID, bounds
+and sanitizes the name, and registers `woven:bot:<installation>:<bot>` before
+persisting any source reference. Names appear on delivery receipts and incoming
+messages. The bot headers provide attribution within an installation's shared
+trust domain; they cannot turn an unauthenticated request into a bot caller.
+
+`WorkspaceToolSettings.botMCP` is independent of **Expose Woven MCP** and starts
+on, with Computer Use and Executor off. Old settings acquire these defaults.
+The host exposes `setBotsEnabled` and `setBotsGroup` through its access API and
+returns `botSettings` in its snapshot. Bots use the loopback HTTP endpoint even
+when outside exposure is off. Remote bot hosts reach it through an existing SSH
+reverse forward; issuing a grant does not create a network exposure route.
+
+Bots can explicitly target sessions for goals, timers and HTML, just as outside
+callers do. `woven_context` returns null. Bot-created sessions are managed by
+that bot unless `independent` is true, and notification controls remain available.
+Completion, failure and needs-input observations reserve durable deliveries whose
+text contains the session ID, title and status. `botNotificationSink` receives
+`WovenBotNotification` values with a stable delivery `id`. Missing or throwing
+sinks leave deliveries queued with a 30-second backoff without blocking other
+recipients. Successful deliveries do not replay, including after restart. The
+sink must use `id` as a durable receiver deduplication key: a throw after remote
+acceptance retries that same ID, as does recovery after an interrupted dispatch.
+Explicit worker replies to a bot coordinator use the same sink and delivery IDs.
+
+`woven_sessions_harnesses` lists local harnesses, configured remote workspaces,
+and paired Macs. Pass a returned `workspace` and `harness` unchanged to
+`woven_sessions_create`; discovery appends paired destinations in stable agent-ID
+order. This routing applies to permitted conversation, outside and bot callers.
+Paired-Mac creation uses the existing paired execution client and leaves runtime
+ownership on the destination. Its command uses that Mac's working directory; directory overrides are rejected
+explicitly. Model and thinking selections use the owner's existing configuration API. Title,
+folder and coordination are recorded through the existing shared conversation
+and source registries. Sending rechecks delivery authorization at the federated
+transport boundary. Status/history reads use the existing replica adapter, which
+accepts app-wide principals without requiring a native source conversation.
+
 ## Open asset context
 
 `woven_context` returns the asset ID captured when the human sent the consumed
