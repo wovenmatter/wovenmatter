@@ -202,21 +202,36 @@ fi
 lock_held=no; scratch_pid=; scratch=; stage=; guard_held=no; child_pid=
 # Bash runs a signal trap only between foreground commands, so anything slow runs in the
 # background under wait. Cancelling then takes effect now instead of when npm finishes.
+# Job control gives it a process group of its own, covering whatever it starts in turn.
 run_child() {
   local directory="$1" status=0
   shift
+  set -m
   ( cd -P "$directory" && exec "$@" ) >&2 &
   child_pid=$!
+  set +m
   wait "$child_pid" || status=$?
   child_pid=
   return "$status"
+}
+stop_child() {
+  [ -n "$child_pid" ] || return 0
+  local attempt
+  kill -TERM -- "-$child_pid" 2>/dev/null
+  for ((attempt=0; attempt<40; attempt++)); do
+    kill -0 -- "-$child_pid" 2>/dev/null || break
+    sleep 0.25
+  done
+  kill -KILL -- "-$child_pid" 2>/dev/null
+  wait "$child_pid" 2>/dev/null
+  child_pid=
 }
 promotion_pending=no; new_release=no; service_attempted=no; tooling_replaced=no
 cleanup() {
   local result=$?
   trap - EXIT
   set +e
-  if [ -n "$child_pid" ]; then kill "$child_pid" 2>/dev/null; wait "$child_pid" 2>/dev/null; child_pid=; fi
+  stop_child
   if [ "$result" -ne 0 ] && [ "$promotion_pending" = yes ]; then
     if [ "$service_attempted" = yes ]; then service_action stop; fi
     if [ -n "$current_commit" ]; then swap_current "$current_commit"; else rm -f "$root/current"; fi

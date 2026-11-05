@@ -108,9 +108,6 @@ final class PiBotRuntimeSupervisor {
             return .init(snapshot: snapshot, devices: peers)
         case .inspect(let target):
             return .init(snapshot: snapshot, inspection: try await runner.inspect(target, script: try scriptData()))
-        case .applyMCPPolicy:
-            await ensureWovenConnection(force: true)
-            return .init(snapshot: snapshot)
         default:
             try begin(command)
             return .init(snapshot: snapshot)
@@ -195,7 +192,11 @@ final class PiBotRuntimeSupervisor {
             update(.stopped, message: "Removing Pi Bot from \(target.displayName)…")
             try await runner.uninstall(target, deleteData: deleteData, script: try scriptData())
             clearDeployment()
-        case .status, .discoverDevices, .inspect, .applyMCPPolicy:
+        case .applyMCPPolicy:
+            // An operation like any other, so it can never run during a disconnect and issue
+            // a grant after that disconnect's revocation.
+            await ensureWovenConnection(force: true)
+        case .status, .discoverDevices, .inspect:
             break
         }
     }

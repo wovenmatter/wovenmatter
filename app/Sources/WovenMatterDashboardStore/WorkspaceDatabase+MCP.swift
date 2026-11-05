@@ -42,6 +42,20 @@ extension WorkspaceDatabaseConnection {
         if let sql = index.objectValue?["sql"]?.stringValue { try executeUnlocked(sql) }
       }
     }
+    // These tables synchronize between paired Macs and the caller registry does not, so a
+    // bot hosted elsewhere arrives with no row here. This placeholder satisfies the reference
+    // and authorizes nothing: it has no installation, so it can neither call nor be retired.
+    // It never conflicts, because an outer statement's conflict policy would override the trigger's.
+    for (table, column) in [("workspace_session_relationships", "created_by"), ("workspace_session_relationships", "coordinator_id"), ("workspace_session_grants", "source_id")]
+    where try !historyRowsUnlocked("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", values: [table]).isEmpty {
+      for (name, event) in [("insert", "INSERT"), ("update", "UPDATE OF " + column)] {
+        try executeUnlocked("""
+          CREATE TRIGGER IF NOT EXISTS \(table)_\(column)_bot_\(name) BEFORE \(event) ON \(table)
+          WHEN NEW.\(column) LIKE 'woven:bot:%'
+          BEGIN INSERT INTO workspace_mcp_callers(id) SELECT NEW.\(column) WHERE NOT EXISTS (SELECT 1 FROM workspace_mcp_callers WHERE id=NEW.\(column)); END;
+          """)
+      }
+    }
   }
 
   func requireActiveBotUnlocked(_ callerID: String) throws {

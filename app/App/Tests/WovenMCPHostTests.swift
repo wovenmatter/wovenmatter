@@ -447,6 +447,19 @@ extension WovenMCPHostTests {
             requestID: "elsewhere-input", requiresUserApproval: true) == nil)
         #expect(try await fixture.database.sessionRelationship(fixture.caller).coordinatorID == caller)
 
+        // A relationship that arrives through paired sync names a caller this Mac never saw.
+        let foreign = WovenMCPCaller.bot(installationID: UUID().uuidString, botID: UUID().uuidString)
+        let violations = try await fixture.database.write { connection -> Int in
+            try connection.toolsExecuteUnlocked("UPDATE workspace_session_relationships SET coordinator_id=? WHERE session_id=?", [foreign, fixture.caller])
+            return try connection.historyRowsUnlocked("PRAGMA foreign_key_check(workspace_session_relationships)", values: []).count
+        }
+        #expect(violations == 0)
+        #expect(try await fixture.database.collectCoordinationTurnNotifications().isEmpty)
+        #expect(try await fixture.database.sessionRelationship(fixture.caller).coordinatorID == foreign)
+        try await fixture.database.write { connection in
+            try connection.toolsExecuteUnlocked("UPDATE workspace_session_relationships SET coordinator_id=? WHERE session_id=?", [caller, fixture.caller])
+        }
+
         // A local revocation still retires it.
         _ = try await fixture.host.issueBotGrant(installationID: installation)
         try await fixture.database.setBotInstallation(installation, active: false)

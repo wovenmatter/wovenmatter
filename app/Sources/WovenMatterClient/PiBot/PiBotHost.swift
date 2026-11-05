@@ -174,12 +174,14 @@ public struct PiBotHostRunner: Sendable {
         var started: @Sendable (pid_t) -> Void {
             { [self] value in
                 let stop = lock.withLock { () -> Bool in pid = value; return cancelled }
-                if stop { kill(value, SIGTERM) }
+                if stop { terminate(value) }
             }
         }
         func cancel() {
             let value = lock.withLock { () -> pid_t? in cancelled = true; return pid }
-            guard let value else { return }
+            if let value { terminate(value) }
+        }
+        private func terminate(_ value: pid_t) {
             kill(value, SIGTERM)
             DispatchQueue.global().asyncAfter(deadline: .now() + 15) { [self] in
                 if lock.withLock({ !finished }) { kill(value, SIGKILL) }

@@ -15,7 +15,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 NODE = shutil.which('node')
 STUB = r'''#!/usr/bin/env python3
-import json, os, re, shutil, signal, sys, time
+import json, os, re, shutil, signal, subprocess, sys, time
 from pathlib import Path
 name = Path(sys.argv[0]).name
 args = sys.argv[1:]
@@ -33,6 +33,9 @@ elif name == 'npm':
     assert args == ['ci', '--no-audit', '--no-fund'], args
     if os.environ.get('PIBOT_TEST_HANG_NPM') == '1':
         (base/'npm-started').write_text(str(os.getpid()))
+        # A grandchild, as npm's own scripts would be, which ignores nothing and outlives no one.
+        grandchild = subprocess.Popen(['sleep', '60'])
+        (base/'npm-grandchild').write_text(str(grandchild.pid))
         time.sleep(60)
     bin = Path('node_modules/.bin'); bin.mkdir(parents=True)
     (bin/'pnpm').symlink_to(base/'bin/pnpm')
@@ -272,7 +275,7 @@ class HostTests(unittest.TestCase):
         installer = subprocess.Popen(command, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         started = self.base/'npm-started'
         for _ in range(100):
-            if started.exists(): break
+            if (self.base/'npm-grandchild').exists(): break
             time.sleep(0.1)
         self.assertTrue(started.exists())
         self.assertEqual(self.run_host('cancel-install')['action'], 'cancel-install')
@@ -281,6 +284,7 @@ class HostTests(unittest.TestCase):
         self.assertFalse((self.root/'.install-lock').exists())
         self.assertFalse((self.root/'current').exists())
         with self.assertRaises(ProcessLookupError): os.kill(int(started.read_text()), 0)
+        with self.assertRaises(ProcessLookupError): os.kill(int((self.base/'npm-grandchild').read_text()), 0)
 
     def test_cancel_install_without_an_installer_is_a_no_op(self):
         self.install()

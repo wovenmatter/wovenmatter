@@ -83,10 +83,8 @@ final class BotWebSession: NSObject, WKScriptMessageHandler, WKNavigationDelegat
     }
 
     func navigate(_ hash: String) {
-        guard hash != lastRoute || !ready else {
-            requestedHash = nil
-            return
-        }
+        // Already there, unless a request elsewhere is still on its way: then this supersedes it.
+        if ready, hash == lastRoute, requestedHash == nil { return }
         requestedHash = hash
         guard ready else { return }
         navigationToken += 1
