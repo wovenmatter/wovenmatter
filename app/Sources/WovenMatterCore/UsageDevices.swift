@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 public enum UsageDeviceKind: String, Codable, Sendable {
@@ -35,7 +36,8 @@ public struct UsageDeviceSummary: Codable, Equatable, Identifiable, Sendable {
   public let syncedAt: Date?
   public let detail: String?
 
-  public var id: String { identity.id }
+  /// Matches `UsageSample.usageDeviceID`, so filters and totals find this device's rows.
+  public var id: String { UsageDeviceSource.storedID(identity.id) }
 
   public init(
     identity: UsageDeviceIdentity,
@@ -56,8 +58,13 @@ public enum UsageDeviceSource {
   private static let prefix = "device:"
   private static let liveRunsSuffix = ":wovenmatter:local"
 
+  /// A device ID as stored, since `:` separates the parts of a source ID.
+  public static func storedID(_ deviceID: String) -> String {
+    deviceID.replacingOccurrences(of: ":", with: "-")
+  }
+
   public static func sourceID(deviceID: String) -> String {
-    prefix + deviceID.replacingOccurrences(of: ":", with: "-")
+    prefix + storedID(deviceID)
   }
 
   public static func liveRunsSourceID(deviceID: String) -> String {
@@ -128,7 +135,9 @@ public struct UsageDeviceRecord: Codable, Equatable, Sendable {
   public let dedupeKey: String?
 
   public init(sample: UsageSample) {
-    id = sample.sourceID + ":" + sample.sourceEventID
+    // Hashed because a source ID can hold a transcript's full path.
+    id = SHA256.hash(data: Data((sample.sourceID + ":" + sample.sourceEventID).utf8))
+      .prefix(16).map { String(format: "%02x", $0) }.joined()
     device = sample.usageDeviceID == UsageDeviceSource.localDeviceID ? nil : sample.usageDeviceID
     timestamp = sample.timestamp.timeIntervalSince1970
     provider = sample.provider.rawValue
@@ -252,6 +261,9 @@ public struct UsageDeviceEndpoint: Sendable {
   public let identity: UsageDeviceIdentity
   /// Set for sources without a usable time filter, such as records already on this Mac.
   public let alwaysFull: Bool
+  /// Set when the device keeps its own lasting index, so its report is complete even
+  /// after the original files are gone. Row IDs from other devices must stay stable.
+  public let keepsLastingHistory: Bool
   /// Devices this Mac reads directly, so a relayed copy of them is ignored.
   public let excludedRelays: Set<String>
   public let fetch: @Sendable (UsageDeviceExportRequest) async throws -> UsageDeviceExportPage
@@ -259,11 +271,13 @@ public struct UsageDeviceEndpoint: Sendable {
   public init(
     identity: UsageDeviceIdentity,
     alwaysFull: Bool = false,
+    keepsLastingHistory: Bool = false,
     excludedRelays: Set<String> = [],
     fetch: @escaping @Sendable (UsageDeviceExportRequest) async throws -> UsageDeviceExportPage
   ) {
     self.identity = identity
     self.alwaysFull = alwaysFull
+    self.keepsLastingHistory = keepsLastingHistory
     self.excludedRelays = excludedRelays
     self.fetch = fetch
   }

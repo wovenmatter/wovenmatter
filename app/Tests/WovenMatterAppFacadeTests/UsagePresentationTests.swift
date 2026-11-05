@@ -114,6 +114,19 @@ struct UsagePresentationTests {
     #expect(UsageChartScale.nice(peak: 0).maximum > 0)
   }
 
+  @Test("a bad old timestamp keeps its total without stretching All time across decades")
+  func allTimeIgnoresImplausibleStart() {
+    let stray = sample(.codex, daysAgo: Int(Self.now.timeIntervalSince1970 / 86_400), tokens: 5)
+    let data = UsageChartData.build(
+      samples: [stray, sample(.codex, daysAgo: 0, tokens: 7)],
+      range: .allTime,
+      now: Self.now,
+      calendar: Self.calendar
+    ) { group in Double(group.reduce(.zero) { $0 + $1.tokens }.totalTokens) }
+    #expect(data.columns.first.map { $0.start.timeIntervalSince1970 > 1_500_000_000 } == true)
+    #expect(data.columns.reduce(0) { $0 + $1.total } == 12)
+  }
+
   @Test("filters narrow samples, and hidden providers can still report their totals")
   func filters() {
     let codex = sample(.codex, daysAgo: 0, tokens: 1)

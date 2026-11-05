@@ -119,6 +119,27 @@ test('a changed file is read again and an unchanged one is reused', async () => 
   } finally { rmSync(home, { recursive: true, force: true }) }
 })
 
+test('a very large OpenCode database reads without overflowing a call', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'usage-scan-'))
+  try {
+    const directory = join(home, '.local/share/opencode')
+    mkdirSync(directory, { recursive: true })
+    const { DatabaseSync } = await import('node:sqlite')
+    const database = new DatabaseSync(join(directory, 'opencode.db'))
+    database.exec(`CREATE TABLE session(id TEXT, directory TEXT); CREATE TABLE message(id TEXT, data TEXT); CREATE TABLE part(session_id TEXT, message_id TEXT, data TEXT);
+      INSERT INTO session VALUES ('s', '/srv/project');
+      INSERT INTO message VALUES ('m', '${JSON.stringify({ providerID: 'opencode', modelID: 'm', time: { completed: 1_790_000_000_000 } })}');
+      WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 200000)
+      INSERT INTO part SELECT 's', 'm', '${JSON.stringify({ type: 'step-finish', tokens: { input: 1 } })}' FROM n;`)
+    database.close()
+    const scanner = createUsageScanner({ env: {}, home })
+    await scanner.start()
+    const { records } = await scanner.page()
+    assert.equal(records.length, 1)
+    assert.equal(records[0].requestCount, 200_000)
+  } finally { rmSync(home, { recursive: true, force: true }) }
+})
+
 test('toRecord uses the field names the desktop decodes', () => {
   const record = toRecord({ timestamp: 3_700, provider: 'codex', sessionID: 's', model: 'm', billingProvider: 'p', billingRoute: 'r', reasoningLevel: null, harness: 'h', application: 'a', agent: null, workspace: null, input: 1, cached: 2, created: 3, output: 4, reasoning: 0, total: 10, requests: 1, cost: null })
   for (const key of ['id', 'timestamp', 'provider', 'sessionID', 'accountLabel', 'model', 'billingProvider', 'billingRoute', 'harness', 'application', 'inputTokens', 'cachedInputTokens', 'cacheCreationTokens', 'outputTokens', 'reasoningTokens', 'totalTokens', 'requestCount']) assert.ok(key in record, key)

@@ -6,6 +6,7 @@ import { createReadStream, promises as fs } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
 import { createInterface } from 'node:readline'
+import { setImmediate as nextTurn } from 'node:timers/promises'
 import { createZstdDecompress } from 'node:zlib'
 
 const PAGE_SIZE = 2_000
@@ -196,9 +197,18 @@ async function readOpenCode(path) {
   try {
     const { DatabaseSync } = await import('node:sqlite')
     database = new DatabaseSync(path, { readOnly: true })
-    return database.prepare(`SELECT p.session_id AS session, m.data AS message, p.data AS part, s.directory AS directory
+    const rows = database.prepare(`SELECT p.session_id AS session, m.data AS message, p.data AS part, s.directory AS directory
       FROM part p JOIN message m ON m.id=p.message_id LEFT JOIN session s ON s.id=p.session_id
-      WHERE json_valid(p.data) AND json_valid(m.data) AND json_extract(p.data,'$.type')='step-finish'`).all().map(parseOpenCodeRow).filter(Boolean)
+      WHERE json_valid(p.data) AND json_valid(m.data) AND json_extract(p.data,'$.type')='step-finish'`).iterate()
+    const events = []
+    let read = 0
+    for (const row of rows) {
+      const parsed = parseOpenCodeRow(row)
+      if (parsed) events.push(parsed)
+      // This service also runs live work, so a large database can't hold it up.
+      if (++read % 500 === 0) await nextTurn()
+    }
+    return events
   } catch { return [] } finally { try { database?.close() } catch {} }
 }
 
@@ -238,18 +248,20 @@ export function createUsageScanner({ env = process.env, home = homedir(), refres
 
   async function scan() {
     const events = []
+    // One source can hold more rows than a call can take as arguments.
+    const add = found => { for (const value of found) events.push(value) }
     for (const path of withoutCopies(await walk(roots.codex, isTranscript))) {
       // Codex writes an event per turn, so hold each file's hourly totals.
-      events.push(...await cached(path, async file => { const parse = codexParser(); return aggregate(await readFile(file, line => parse(line))) }))
+      add(await cached(path, async file => { const parse = codexParser(); return aggregate(await readFile(file, line => parse(line))) }))
     }
-    for (const path of withoutCopies(await walk(roots.claude, isTranscript))) events.push(...await cached(path, file => readFile(file, parseClaudeLine)))
+    for (const path of withoutCopies(await walk(roots.claude, isTranscript))) add(await cached(path, file => readFile(file, parseClaudeLine)))
     for (const path of await walk(roots.grok, file => basename(file) === 'updates.jsonl')) {
-      events.push(...await cached(path, async file => {
+      add(await cached(path, async file => {
         const summary = object(await fs.readFile(join(file, '../summary.json'), 'utf8').catch(() => '')) ?? {}
         return readFile(file, (line, number) => parseGrokLine(line, number, summary))
       }))
     }
-    events.push(...await cached(roots.opencode, readOpenCode))
+    add(await cached(roots.opencode, readOpenCode))
     // A resumed transcript repeats earlier messages, which must only count once.
     const seen = new Set()
     const unique = events.filter(value => {
@@ -264,7 +276,9 @@ export function createUsageScanner({ env = process.env, home = homedir(), refres
   }
 
   function start() {
-    running ??= scan().catch(() => { snapshot ??= []; scannedAt = now() }).finally(() => { running = null })
+    // A failed scan keeps what was last read. With nothing read yet it stays "scanning",
+    // because an empty report would look like a host with no usage.
+    running ??= scan().catch(() => { scannedAt = now() }).finally(() => { running = null })
     return running
   }
 

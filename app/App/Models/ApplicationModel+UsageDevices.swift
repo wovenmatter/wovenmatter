@@ -22,6 +22,7 @@ extension ApplicationModel {
         var endpoints = peerSync.routes.filter { $0.deviceID != ownDeviceID }.map { route in
             UsageDeviceEndpoint(
                 identity: .init(id: route.deviceID, name: route.name, kind: .mac),
+                keepsLastingHistory: true,
                 excludedRelays: managed
             ) { request in
                 try await peerSync.requestUsage(route: route, request: request)

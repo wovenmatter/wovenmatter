@@ -182,7 +182,8 @@ public struct UsageRateTable: Codable, Equatable, Sendable {
   private func estimate(_ sample: UsageSample, rate: UsageTokenRate?) -> UsageCostEstimate {
     var estimate = UsageCostEstimate()
     let tokens = sample.tokens
-    let reported = sample.costUSD.flatMap { $0.isFinite && $0 >= 0 ? $0 : nil }
+    // A cost of zero means no charge on this plan, not that the model has no list price.
+    let reported = sample.costUSD.flatMap { $0.isFinite && $0 > 0 ? $0 : nil }
     guard let rate else {
       if let reported {
         estimate.reported = reported

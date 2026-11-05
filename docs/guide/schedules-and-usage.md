@@ -80,6 +80,8 @@ labels, session IDs, and folder names, never prompts, responses, or file paths. 
 remote workspace reports all usage for its account on that host, including command
 line runs outside Woven Matter. It needs a service update in **Settings** before its
 usage can appear, and a device that can't report says so rather than showing zero.
+If you added the same host separately on two Macs, it appears as two devices and counts
+twice, so hide one of them.
 
 Use the column on the left to search, choose a time range up to **All**, and narrow by
 model, harness, or reasoning level. Click a provider to show or hide it.

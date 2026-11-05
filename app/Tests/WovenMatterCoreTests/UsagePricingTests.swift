@@ -107,6 +107,16 @@ struct UsagePricingTests {
     #expect(abs(estimate.output / estimate.input - 6) < 0.000_001)
   }
 
+  @Test("a reported cost of zero means no charge, not a zero list price")
+  func zeroReportedCost() throws {
+    let table = try UsageRateTable.parseLiteLLM(Self.document)
+    let tokens = UsageTokenCounts(inputTokens: 1_000_000)
+    let listed = table.estimate(sample(model: "gpt-test", tokens: tokens))
+    #expect(listed.total > 0)
+    #expect(table.estimate(sample(model: "gpt-test", tokens: tokens, costUSD: 0)).total == listed.total)
+    #expect(table.estimate(sample(model: "no-such-model", tokens: tokens, costUSD: 0)).unpricedTokens == tokens.totalTokens)
+  }
+
   @Test("a reported cost without a list price stays unsplit")
   func reportedOnly() throws {
     let table = try UsageRateTable.parseLiteLLM(Self.document)

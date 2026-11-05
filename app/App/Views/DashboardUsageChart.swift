@@ -38,6 +38,8 @@ struct UsageChartColumn: Identifiable, Equatable {
 }
 
 struct UsageChartData: Equatable {
+    private static let earliestPlausibleUsage = Date(timeIntervalSince1970: 1_577_836_800) // 2020-01-01
+
     let columns: [UsageChartColumn]
     /// Providers with usage, in fixed order so a filter never repaints the others.
     let providers: [ProviderKind]
@@ -58,8 +60,11 @@ struct UsageChartData: Equatable {
             calendar.dateInterval(of: unit, for: date)?.start ?? date
         }
         let interval = range.interval(relativeTo: now, calendar: calendar)
-        // All time starts at the first record rather than at the start of the index.
-        let earliest = range == .allTime ? samples.map(\.timestamp).min() ?? now : interval.start
+        // All time starts at the first record rather than at the start of the index,
+        // and a bad old timestamp can't stretch the axis across decades of empty days.
+        let earliest = range == .allTime
+            ? max(samples.map(\.timestamp).min() ?? now, min(earliestPlausibleUsage, now))
+            : interval.start
         let first = bucket(earliest)
         // The interval's end is exclusive, so the period holding it may not be in range.
         let last = max(first, bucket(interval.end.addingTimeInterval(-1)))

@@ -387,6 +387,7 @@ public actor LocalUsageService {
   // MARK: - Linked devices
 
   private static let deviceExportPageSize = 2_000
+  private static let deviceRecentWindow: TimeInterval = 3 * 24 * 60 * 60
 
   /// This Mac's usage for another device to read: counts and labels per hour, with
   /// no transcript content or file paths. Account-wide sources are left out because
@@ -399,7 +400,9 @@ public actor LocalUsageService {
     guard let store = await openUsageStore() else {
       throw WorkspaceToolError.invalid(usageStoreFailure ?? "The recorded usage index is unavailable.")
     }
-    let since = Date(timeIntervalSince1970: max(0, request.since))
+    // Whole hours only. A partial hour would replace the complete total stored for it.
+    let requested = Date(timeIntervalSince1970: max(0, request.since))
+    let since = max(Calendar.current.dateInterval(of: .hour, for: requested)?.start ?? requested, .usageHistoryStart)
     let records: [UsageDeviceRecord]
     if request.offset > 0, let cached = deviceExportCache, cached.since == since {
       records = cached.records
@@ -420,11 +423,13 @@ public actor LocalUsageService {
     }
     let offset = max(0, request.offset)
     let page = records.dropFirst(offset).prefix(Self.deviceExportPageSize)
+    let hasMore = offset + page.count < records.count
+    if !hasMore { deviceExportCache = nil }
     return UsageDeviceExportPage(
       state: .ready,
       generatedAt: now.timeIntervalSince1970,
       records: Array(page),
-      hasMore: offset + page.count < records.count,
+      hasMore: hasMore,
       nextOffset: offset + page.count,
       devices: relayed
     )
@@ -450,7 +455,10 @@ public actor LocalUsageService {
     let lastFull = try? await store.metadataDate(fullKey)
     // Recent days can still change as sessions finish. A daily full pass catches the rest.
     let isFull = endpoint.alwaysFull || (lastFull ?? nil).map { now.timeIntervalSince($0) >= 24 * 60 * 60 } ?? true
-    let since = isFull ? Date.usageHistoryStart : (previous ?? nil).map { $0.addingTimeInterval(-3 * 24 * 60 * 60) } ?? .usageHistoryStart
+    let since = isFull ? Date.usageHistoryStart : (previous ?? nil).map { $0.addingTimeInterval(-Self.deviceRecentWindow) } ?? .usageHistoryStart
+    // A Mac's index is a lasting record, so its report replaces everything. Hosts and
+    // phones report only what they still hold, so older rows here outlive their copies.
+    let replaceFrom = endpoint.keepsLastingHistory ? since : max(since, now.addingTimeInterval(-Self.deviceRecentWindow))
     do {
       var records: [UsageDeviceRecord] = []
       var relayed: [UsageDeviceIdentity] = []
@@ -477,7 +485,7 @@ public actor LocalUsageService {
         guard let target, !endpoint.excludedRelays.contains(id) else { continue }
         let samples = (byDevice[id] ?? []).compactMap { $0.sample(deviceID: target.id) }
         try await store.write { connection in
-          try connection.replaceDeviceEvents(device: target, since: since, samples: samples, importedAt: now)
+          try connection.replaceDeviceEvents(device: target, since: replaceFrom, samples: samples, importedAt: now)
           if isFull { try connection.setMetadataDate(now, for: fullKey) }
         }
       }
@@ -506,7 +514,8 @@ public actor LocalUsageService {
     guard let store = await openUsageStore() else {
       throw WorkspaceToolError.invalid(usageStoreFailure ?? "The recorded usage index is unavailable.")
     }
-    // Agents and phones read this Mac's own records; other devices keep their own.
+    // Agents and phones read what this Mac recorded, including runs it watched on a
+    // remote workspace. Usage reported by other devices stays on the Usage page.
     return try await store.samples(in: DateInterval(start: start, end: end), limit: limit, offset: offset, excludingDevices: true)
   }
 

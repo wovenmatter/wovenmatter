@@ -48,10 +48,16 @@ struct UsageDeviceCollectionTests {
 
   private func endpoint(
     _ identity: UsageDeviceIdentity = mac,
+    keepsLastingHistory: Bool = false,
     excludedRelays: Set<String> = [],
     fetch: @escaping @Sendable (UsageDeviceExportRequest) async throws -> UsageDeviceExportPage
   ) -> UsageDeviceEndpoint {
-    UsageDeviceEndpoint(identity: identity, excludedRelays: excludedRelays, fetch: fetch)
+    UsageDeviceEndpoint(
+      identity: identity,
+      keepsLastingHistory: keepsLastingHistory,
+      excludedRelays: excludedRelays,
+      fetch: fetch
+    )
   }
 
   @Test("a device's usage arrives across pages and stays attributed to it")
@@ -160,6 +166,83 @@ struct UsageDeviceCollectionTests {
     #expect(sample("x", source: live, harness: "Codex").usageDeviceID == "host-1")
     #expect(sample("x", source: "wovenmatter:local", harness: "Codex").usageDeviceID == UsageDeviceSource.localDeviceID)
     #expect(!sample("x", source: "wovenmatter:local", harness: "Codex").isRemoteLiveRun)
+  }
+
+  @Test("usage stays after a host deletes its old transcripts, while a Mac's report is complete")
+  func retainsHistory() async throws {
+    try await withService { service in
+      let first = [self.record("old", daysAgo: 60), self.record("recent", daysAgo: 1)]
+      let second = [self.record("new", daysAgo: 0.5)]
+      let nextDay = Self.now.addingTimeInterval(25 * 60 * 60)
+      // The second pass is a full one, reporting neither earlier row.
+      _ = await service.collectDeviceUsage(from: endpoint(Self.host) { _ in
+        .paged(first, request: .init(since: 0, offset: 0))
+      }, now: Self.now)
+      _ = await service.collectDeviceUsage(from: endpoint(Self.host) { _ in
+        .paged(second, request: .init(since: 0, offset: 0))
+      }, now: nextDay)
+      #expect(Set(try await analytics(service).map(\.sessionID)) == ["session-old", "session-new"])
+
+      _ = await service.collectDeviceUsage(from: endpoint(keepsLastingHistory: true) { _ in
+        .paged(first, request: .init(since: 0, offset: 0))
+      }, now: Self.now)
+      _ = await service.collectDeviceUsage(from: endpoint(keepsLastingHistory: true) { _ in
+        .paged(second, request: .init(since: 0, offset: 0))
+      }, now: nextDay)
+      let fromMac = try await analytics(service).filter { $0.usageDeviceID == Self.mac.id }
+      #expect(fromMac.map(\.sessionID) == ["session-new"])
+    }
+  }
+
+  @Test("a partial pull exports whole hours, so it can't replace an hour with part of its total")
+  func exportsWholeHours() async throws {
+    let directory = FileManager.default.temporaryDirectory.appending(path: "usage-devices-\(UUID())")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let database = directory.appending(path: "usage.sqlite")
+    let recorder = try await UsageRunRecorder(databaseURL: database)
+    let hour = try #require(Calendar.current.dateInterval(of: .hour, for: Self.now.addingTimeInterval(-7_200))).start
+    for (run, minutes) in [("early", 10.0), ("late", 40.0)] {
+      try await recorder.record(.init(
+        runID: run, timestamp: hour.addingTimeInterval(minutes * 60), runtimeKind: .codex, sessionID: "s", model: "gpt-5.5",
+        reasoningLevel: nil, agent: nil, workspace: nil, tokens: UsageTokenCounts(inputTokens: 9), costUSD: nil
+      ))
+    }
+    let service = LocalUsageService(homeDirectory: directory, usageDatabaseURL: database)
+    let since = hour.addingTimeInterval(30 * 60).timeIntervalSince1970
+    let page = try await service.deviceExport(.init(since: since, offset: 0), now: Self.now)
+    #expect(page.records.map(\.inputTokens) == [18])
+  }
+
+  @Test("a record's ID is stable and never carries the transcript's path")
+  func recordIDsHidePaths() {
+    #expect(!record("a").id.contains("secret"))
+    #expect(record("a").id == record("a").id)
+    #expect(record("a").id != record("b").id)
+  }
+
+  @Test("a device's row finds its usage even when its ID holds a separator")
+  func summaryMatchesSamples() throws {
+    let identity = UsageDeviceIdentity(id: "ios:device", name: "iPad", kind: .ios)
+    let sample = try #require(record("a").sample(deviceID: identity.id))
+    #expect(UsageDeviceSummary(identity: identity, state: .synced).id == sample.usageDeviceID)
+  }
+
+  @Test("tools and phones still see runs this Mac watched on a remote workspace")
+  func recordedSamplesKeepWatchedRuns() async throws {
+    let directory = FileManager.default.temporaryDirectory.appending(path: "usage-devices-\(UUID())")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let database = directory.appending(path: "usage.sqlite")
+    let recorder = try await UsageRunRecorder(databaseURL: database)
+    try await recorder.record(.init(
+      runID: "watched", timestamp: Self.now.addingTimeInterval(-60), runtimeKind: .codex, sessionID: "s", model: "gpt-5.5",
+      reasoningLevel: nil, agent: nil, workspace: nil, tokens: UsageTokenCounts(inputTokens: 9), costUSD: nil,
+      remoteWorkspaceID: Self.host.id
+    ))
+    let service = LocalUsageService(homeDirectory: directory, usageDatabaseURL: database)
+    let recorded = try await service.recordedSamples(from: .usageHistoryStart, to: Self.now)
+    #expect(recorded.map(\.sessionID) == ["s"])
   }
 
   @Test("tools and phones keep reading only this Mac's records")

@@ -382,8 +382,8 @@ final class UsageStore {
     }
   }
 
-  /// Replaces one device's rows from `since` onward with what it just reported.
-  /// Earlier rows stay, so a device's retained history survives a partial pull.
+  /// Replaces one device's rows from `since` onward and adds what it just reported.
+  /// Earlier rows stay unless a report carries the same ID, so retained history survives.
   func replaceDeviceEvents(
     device: UsageDeviceIdentity,
     since: Date,
@@ -482,7 +482,7 @@ final class UsageStore {
       FROM usage_events
       WHERE timestamp >= ? AND timestamp < ?
       \(sourceID == nil ? "" : "AND source_id = ?")
-      \(excludingDevices ? "AND source_id NOT LIKE 'device:%'" : "")
+      \(excludingDevices ? "AND (source_id NOT LIKE 'device:%' OR source_id LIKE '%:wovenmatter:local')" : "")
       ORDER BY timestamp, event_id
       \(limit == nil ? "" : "LIMIT ? OFFSET ?")
       """)
