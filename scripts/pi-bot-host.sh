@@ -27,8 +27,9 @@ fail() { printf '{"error":'; json "$1"; printf ',"detail":'; json "$2"; printf '
 abort() { failure_reported=yes; fail "$1" "$2"; exit "${3:-1}"; }
 progress() { printf 'WM_PROGRESS %s\n' "$1" >&2; }
 sha256() {
-  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d ' ' -f1
-  else shasum -a 256 "$1" | cut -d ' ' -f1; fi
+  # Hash stdin: GNU sha256sum prefixes the hash with a backslash for a path containing one.
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum < "$1" | cut -d ' ' -f1
+  else shasum -a 256 < "$1" | cut -d ' ' -f1; fi
 }
 command_name="${1:-}"
 [ "$#" -gt 0 ] && shift
