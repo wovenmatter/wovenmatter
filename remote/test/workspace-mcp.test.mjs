@@ -35,6 +35,31 @@ test('workspace browser runs locally without library authority and returns inlin
   assert.equal((await f.call('woven_browser_use_cancel',{id:'all'})).result.structuredContent.result.cancelled,1)
 })
 
+test('Board tools follow the Notes permission and delegate to the library that owns the document',async t=>{
+  const requests=[],f=await fixture(t,{fetchImpl:async(url,options)=>{requests.push({url,body:JSON.parse(options.body),headers:options.headers});return {ok:true,status:200,text:async()=>JSON.stringify({jsonrpc:'2.0',id:'forwarded',result:{content:[{type:'text',text:'board'}]}})}}})
+  const listed=await f.service.mcp.handle(f.scope,{jsonrpc:'2.0',id:'discover',method:'tools/list'})
+  const names=listed.result.tools.map(tool=>tool.name)
+  for(const name of ['list','create','read','update','add_item','update_item','remove_item','link_session','edit_layout'])assert.ok(names.includes('woven_boards_'+name),name)
+  assert.ok(!names.includes('woven_notes_canvas'))
+  // Without a library connection a Board is unavailable, never served from a local copy.
+  assert.equal((await f.call('woven_boards_list')).error.code,-32602)
+  const own=f.service.descriptor()
+  f.service.mcp.configureLibrary({grantID:randomUUID(),libraryID:own.libraryID,workspaceID:own.id,executionDeviceID:own.executionDeviceID,endpointURL:'https://central.example.ts.net/wovenmatter/mcp/workspace',bearerToken:'private-library-mcp-grant'.repeat(2)})
+  const requestID=randomUUID()
+  const input={boardID:randomUUID(),itemID:'card',itemRevision:'r',status:'done',requestID}
+  assert.equal((await f.call('woven_boards_update_item',input)).result.content[0].text,'board')
+  assert.equal(requests.length,1)
+  assert.equal(requests[0].body.params.name,'woven_boards_update_item')
+  assert.deepEqual(requests[0].body.params.arguments,input)
+  assert.equal(requests[0].headers['x-woven-conversation-id'],f.id)
+  assert.ok(requests[0].headers['x-woven-enabled-groups'].split(',').includes('notes'))
+  // Attribution comes from the host, so the schema refuses it before anything is sent.
+  assert.equal((await f.call('woven_boards_update_item',{...input,updatedBy:{kind:'user'}})).error.code,-32602)
+  await f.command('workspace',{conversationID:f.id,workspaceAction:{sessionTools:{id:f.id,enabled:['goals']}}})
+  assert.equal((await f.call('woven_boards_read',{boardID:randomUUID()})).error.code,-32602)
+  assert.equal(requests.length,1)
+})
+
 test('session and outside-agent MCP credentials preserve caller scope, readonly access, and current tool policy',async t=>{
   const f=await fixture(t)
   assert.equal(f.service.mcp.resolvePrincipal('Bearer unrelated'),null)

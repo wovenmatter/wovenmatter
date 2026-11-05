@@ -2,6 +2,7 @@ import SwiftUI
 import WovenMatterCore
 
 struct DashboardCanvasViewState {
+    enum NavigatorFilter: String, CaseIterable { case all = "All items", tasks = "Tasks", review = "Needs review", instructions = "Instructions" }
     var zoom = 1.0
     var isPanning = false
     var origin = CGPoint(x: -24, y: -24)
@@ -10,10 +11,12 @@ struct DashboardCanvasViewState {
     var error: String?
     var showsInspector = false
     var showsNavigator = false
+    var navigatorFilter = NavigatorFilter.all
     var revealCardID: String?
     var undoStack: [NoteDocument] = []
     var redoStack: [NoteDocument] = []
-    var restoring = false
+    private var pendingLocalDocument: NoteDocument?
+    private var lastKnownDocument: NoteDocument?
 
     var context: CanvasViewportContext {
         .init(x: origin.x, y: origin.y, width: viewport.width / zoom, height: viewport.height / zoom,
@@ -28,18 +31,59 @@ struct DashboardCanvasViewState {
     }
     mutating func observe(_ old: NoteDocument, _ new: NoteDocument) {
         selected.formIntersection(Set(new.blocks.map(\.id)))
-        if restoring { restoring = false; return }
+        if pendingLocalDocument == new {
+            pendingLocalDocument = nil
+            lastKnownDocument = new
+            return
+        }
+        // Incoming work is a history boundary. Undo must never restore an old
+        // whole-document snapshot over another participant's changes.
+        undoStack.removeAll(); redoStack.removeAll()
+        pendingLocalDocument = nil
+        lastKnownDocument = new
+    }
+    mutating func recordLocalChange(from old: NoteDocument, to new: NoteDocument) {
+        guard old != new else { return }
+        if let lastKnownDocument, lastKnownDocument != old {
+            undoStack.removeAll(); redoStack.removeAll()
+        }
         undoStack.append(old)
         if undoStack.count > 30 { undoStack.removeFirst() }
         redoStack.removeAll()
+        pendingLocalDocument = new; lastKnownDocument = new
     }
     mutating func undo(_ document: inout NoteDocument) {
-        guard let previous = undoStack.popLast() else { return }
-        redoStack.append(document); restoring = true; document = previous
+        guard historyMatches(document), let previous = undoStack.last,
+              let restored = restored(previous, from: document) else { return }
+        undoStack.removeLast(); redoStack.append(document)
+        pendingLocalDocument = restored; lastKnownDocument = restored; document = restored
     }
     mutating func redo(_ document: inout NoteDocument) {
-        guard let next = redoStack.popLast() else { return }
-        undoStack.append(document); restoring = true; document = next
+        guard historyMatches(document), let next = redoStack.last,
+              let restored = restored(next, from: document) else { return }
+        redoStack.removeLast(); undoStack.append(document)
+        pendingLocalDocument = restored; lastKnownDocument = restored; document = restored
+    }
+    private mutating func historyMatches(_ document: NoteDocument) -> Bool {
+        guard lastKnownDocument == nil || lastKnownDocument == document else {
+            undoStack.removeAll(); redoStack.removeAll(); pendingLocalDocument = nil
+            lastKnownDocument = document
+            error = "The Board changed. Local undo history has been cleared to preserve incoming work."
+            return false
+        }
+        return true
+    }
+    private mutating func restored(_ snapshot: NoteDocument, from current: NoteDocument) -> NoteDocument? {
+        do {
+            var value = snapshot
+            value.stampBoardChanges(from: current, actor: .init(kind: .user))
+            value = value.normalized()
+            try value.validateEditableShape()
+            let bytes = try value.encoded().utf8.count, previousBytes = try current.encoded().utf8.count
+            guard bytes <= NoteDocument.maximumBoardBytes || bytes < previousBytes else { throw NoteDocumentSafetyError.tooLarge }
+            error = nil
+            return value
+        } catch { self.error = error.localizedDescription; return nil }
     }
     mutating func fit(_ document: NoteDocument, selectionOnly: Bool = false) {
         let cards = document.blocks.filter { !selectionOnly || selected.contains($0.id) }
@@ -71,11 +115,64 @@ func canvasColor(_ name: String?) -> Color {
 /// Shared UI mutations use the same validator and edit semantics as agent batches.
 func commitCanvas(_ edits: [CanvasEdit], document: Binding<NoteDocument>, state: Binding<DashboardCanvasViewState>) {
     do {
-        var value = document.wrappedValue
+        let before = document.wrappedValue
+        var value = before
         let operations = edits.map(NoteEditOperation.canvas)
-        try RemoteNoteEditEnvelope.validate(operations: operations, applyingTo: value)
+        // A retained development Board may predate the shared byte limit. Let
+        // its user shrink it in steps; new Boards keep the transport limit.
+        guard !operations.isEmpty, operations.count <= RemoteNoteEditEnvelope.maximumOperationCount else {
+            throw RemoteNoteEditError.invalidEnvelope
+        }
+        let previousBytes = try before.encoded().utf8.count
+        if previousBytes <= NoteDocument.maximumBoardBytes {
+            try RemoteNoteEditEnvelope.validate(operations: operations, applyingTo: value)
+        }
         _ = try value.apply(operations)
+        value.stampBoardChanges(from: before, actor: .init(kind: .user))
+        try value.validateEditableShape()
+        let bytes = try value.encoded().utf8.count
+        guard bytes <= NoteDocument.maximumBoardBytes || bytes < previousBytes else { throw NoteDocumentSafetyError.tooLarge }
+        state.wrappedValue.recordLocalChange(from: before, to: value)
         document.wrappedValue = value
         state.wrappedValue.error = nil
     } catch { state.wrappedValue.error = error.localizedDescription }
+}
+
+/// Read the current value for each focused edit; never save an inspector snapshot.
+func commitBoard(document: Binding<NoteDocument>, state: Binding<DashboardCanvasViewState>,
+                 change: (inout NoteDocument) -> Void) {
+    do {
+        let before = document.wrappedValue
+        var value = before
+        change(&value)
+        value.stampBoardChanges(from: before, actor: .init(kind: .user))
+        try value.validateEditableShape()
+        let bytes = try value.encoded().utf8.count
+        let previousBytes = try before.encoded().utf8.count
+        guard bytes <= NoteDocument.maximumBoardBytes || bytes < previousBytes else {
+            throw NoteDocumentSafetyError.tooLarge
+        }
+        state.wrappedValue.recordLocalChange(from: before, to: value)
+        document.wrappedValue = value
+        state.wrappedValue.error = nil
+    } catch { state.wrappedValue.error = error.localizedDescription }
+}
+
+func addBoardTask(document: Binding<NoteDocument>, state: Binding<DashboardCanvasViewState>) {
+    let block = NoteRichTextBlock(text: "New task")
+    let placement = document.wrappedValue.nextBoardPlacement()
+    commitBoard(document: document, state: state) { value in
+        value.blocks.append(.richText(block))
+        if value.canvas == nil { value.canvas = [:] }
+        value.canvas?[block.id] = placement
+        if value.boardItems == nil { value.boardItems = [:] }
+        var item = BoardItem()
+        item.task = BoardTask()
+        value.boardItems?[block.id] = item
+    }
+    if state.wrappedValue.error == nil {
+        state.wrappedValue.selected = [block.id]
+        state.wrappedValue.revealCardID = block.id
+        state.wrappedValue.showsInspector = true
+    }
 }

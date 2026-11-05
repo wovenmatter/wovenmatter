@@ -23,7 +23,7 @@ struct DashboardCanvasEditor: View {
                     viewState.origin.x -= delta.width / viewState.zoom
                     viewState.origin.y -= delta.height / viewState.zoom
                 }, zoom: { viewState.setZoom(viewState.zoom * $0) }, select: { viewState.selected.removeAll() })
-                    .accessibilityLabel("Canvas board. Drag or scroll to pan; pinch or Command-scroll to zoom.")
+                    .accessibilityLabel("Board. Drag or scroll to pan; pinch or Command-scroll to zoom.")
                 decorations(placements)
                     .allowsHitTesting(false)
                 ForEach(document.canvasSections ?? []) { section in
@@ -44,12 +44,12 @@ struct DashboardCanvasEditor: View {
                         viewState.origin.x -= delta.width / viewState.zoom
                         viewState.origin.y -= delta.height / viewState.zoom
                     }, zoom: { viewState.setZoom(viewState.zoom * $0) }, select: {})
-                        .accessibilityLabel("Pan tool active. Drag anywhere to move around the canvas.")
+                        .accessibilityLabel("Pan tool active. Drag anywhere to move around the board.")
                 }
                 if document.blocks.isEmpty {
                     VStack(spacing: 8) {
-                        Text("Room for your next idea").font(.title3)
-                        Text("Add an asset or ask your agent to create and arrange work here.\nDrag the background to explore. Pinch to zoom.")
+                        Text("A place for your shared work").font(.title3)
+                        Text("Add a task, leave project context, or link an existing asset.\nYour agents can find and update this board through Woven MCP.")
                             .font(.callout).multilineTextAlignment(.center).foregroundStyle(.secondary)
                     }.frame(width: geometry.size.width, height: geometry.size.height).allowsHitTesting(false)
                 }
@@ -93,7 +93,16 @@ struct DashboardCanvasEditor: View {
             }, onDelete: { apply([.init(action: .remove, id: block.id)]) },
             onOpen: { if let id = placement.assetID { onOpenAsset?(id) } },
             onEditAsset: { value in if let id = placement.assetID { onEditAsset?(id, value) } },
-            canEditAsset: onEditAsset != nil, onInspect: { viewState.selected = [block.id]; viewState.showsInspector = true })
+            canEditAsset: onEditAsset != nil, onInspect: { viewState.selected = [block.id]; viewState.showsInspector = true },
+            item: document.boardItems?[block.id], onSetStatus: { status in
+                commitBoard(document: $document, state: $viewState) { value in
+                    var item = value.boardItems?[block.id] ?? BoardItem()
+                    if item.task == nil { item.task = BoardTask() }
+                    item.task?.status = status
+                    if value.boardItems == nil { value.boardItems = [:] }
+                    value.boardItems?[block.id] = item
+                }
+            })
             .frame(width: placement.width, height: placement.height)
             .scaleEffect(viewState.zoom, anchor: .topLeading)
             .frame(width: placement.width * viewState.zoom, height: placement.height * viewState.zoom, alignment: .topLeading)
@@ -149,9 +158,14 @@ struct DashboardCanvasEditor: View {
     }
     private func commit(_ value: NoteDocument) {
         do {
-            try value.validateEditableShape()
-            guard try value.encoded().utf8.count <= CompanionProtocol.maximumNoteBytes else { throw NoteDocumentSafetyError.tooLarge }
-            document = value; viewState.error = nil
+            var updated = value
+            updated.stampBoardChanges(from: document, actor: .init(kind: .user))
+            try updated.validateEditableShape()
+            let bytes = try updated.encoded().utf8.count
+            let previousBytes = try document.encoded().utf8.count
+            guard bytes <= NoteDocument.maximumBoardBytes || bytes < previousBytes else { throw NoteDocumentSafetyError.tooLarge }
+            viewState.recordLocalChange(from: document, to: updated)
+            document = updated; viewState.error = nil
         } catch { viewState.error = error.localizedDescription }
     }
     private func blockDocument(_ block: NoteBlock) -> Binding<NoteDocument> {

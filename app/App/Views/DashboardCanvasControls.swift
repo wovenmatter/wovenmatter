@@ -11,23 +11,26 @@ struct DashboardCanvasControls: View {
     var canOpenAssets = false
     var compact = true
     var onCreateAsset: ((NoteArtifactKind, String, String?) async -> String?)?
+    var conversations: [WorkspaceConversationRecord] = []
+    var onSendItem: ((String, String) async throws -> Void)?
+    var onOpenSession: ((String) -> Void)?
     @State private var creating = false
 
     private var fullControls: some View {
         HStack(spacing: 2) {
-            control("Undo Canvas change", "arrow.uturn.backward") { viewState.undo(&document) }
+            control("Undo Board change", "arrow.uturn.backward") { viewState.undo(&document) }
                 .disabled(viewState.undoStack.isEmpty).keyboardShortcut("z", modifiers: .command)
-            control("Redo Canvas change", "arrow.uturn.forward") { viewState.redo(&document) }
+            control("Redo Board change", "arrow.uturn.forward") { viewState.redo(&document) }
                 .disabled(viewState.redoStack.isEmpty).keyboardShortcut("z", modifiers: [.command, .shift])
             addMenu
             organizeMenu
             control("Pan tool · drag across cards", "hand.draw") { viewState.isPanning.toggle() }
                 .background(viewState.isPanning ? Color.secondary.opacity(0.12) : .clear).clipShape(RoundedRectangle(cornerRadius: 6))
-            control("Canvas navigator", "list.bullet.rectangle") { viewState.showsNavigator.toggle() }
+            control("Board navigator", "list.bullet.rectangle") { viewState.showsNavigator.toggle() }
                 .popover(isPresented: $viewState.showsNavigator) { navigator }
             control("Customize selection", "slider.horizontal.3") { viewState.showsInspector.toggle() }
                 .popover(isPresented: $viewState.showsInspector) {
-                    DashboardCanvasInspector(document: $document, viewState: $viewState).frame(width: 300).padding(16)
+                    inspector
                 }
             control("Zoom out", "minus.magnifyingglass") { viewState.setZoom(viewState.zoom / 1.25) }
             Menu {
@@ -36,7 +39,7 @@ struct DashboardCanvasControls: View {
                 Button("Actual size") { viewState.setZoom(1) }
                 Button("Return to origin") { viewState.origin = CGPoint(x: -24, y: -24); viewState.zoom = 1 }
             } label: { Text("\(Int(viewState.zoom * 100))%").monospacedDigit() }
-            .accessibilityLabel("Canvas zoom and fit")
+            .accessibilityLabel("Board zoom and fit")
             control("Zoom in", "plus.magnifyingglass") { viewState.setZoom(viewState.zoom * 1.25) }
         }.buttonStyle(DashboardIconButtonStyle()).fixedSize(horizontal: true, vertical: false)
     }
@@ -46,8 +49,8 @@ struct DashboardCanvasControls: View {
             else { HStack(spacing: 2) {
                 addMenu
                 Menu {
-                    Button("Undo Canvas change") { viewState.undo(&document) }.disabled(viewState.undoStack.isEmpty).keyboardShortcut("z", modifiers: .command)
-                    Button("Redo Canvas change") { viewState.redo(&document) }.disabled(viewState.redoStack.isEmpty).keyboardShortcut("z", modifiers: [.command, .shift])
+                    Button("Undo Board change") { viewState.undo(&document) }.disabled(viewState.undoStack.isEmpty).keyboardShortcut("z", modifiers: .command)
+                    Button("Redo Board change") { viewState.redo(&document) }.disabled(viewState.redoStack.isEmpty).keyboardShortcut("z", modifiers: [.command, .shift])
                     Divider()
                     organizeMenu
                     Button("Customize selection") { viewState.showsInspector = true }
@@ -60,24 +63,25 @@ struct DashboardCanvasControls: View {
                     Button("Fit selection") { viewState.fit(document, selectionOnly: true) }.disabled(viewState.selected.isEmpty)
                     Button("Actual size") { viewState.setZoom(1) }
                 } label: { Image(systemName: "ellipsis").frame(width: 28, height: 28) }
-                .accessibilityLabel("Canvas controls")
+                .accessibilityLabel("Board controls")
             }.buttonStyle(DashboardIconButtonStyle()).fixedSize()
                 .popover(isPresented: $viewState.showsNavigator) { navigator }
                 .popover(isPresented: $viewState.showsInspector) {
-                    DashboardCanvasInspector(document: $document, viewState: $viewState).frame(width: 300).padding(16)
+                    inspector
                 }
             }
         }.fixedSize(horizontal: true, vertical: false)
     }
     private var addMenu: some View {
             Menu {
+                Button("Task") { addTask() }
                 Button("Text card") { add(.richText(NoteRichTextBlock())) }
                 Button("Table card") { add(.table(NoteTableBlock(rows: 4, columns: 3, headerRow: true))) }
                 if onCreateAsset != nil {
                     Divider()
-                    Button("New document") { create(.note, title: "Canvas document") }
-                    Button("New spreadsheet") { create(.spreadsheet, title: "Canvas spreadsheet") }
-                    Button("New HTML artifact") { create(.html, title: "Canvas artifact") }
+                    Button("New note") { create(.note, title: "Board note") }
+                    Button("New sheet") { create(.spreadsheet, title: "Board sheet") }
+                    Button("New page") { create(.html, title: "Board page") }
                     Button("Image from file…", action: importImage)
                 }
                 if canOpenAssets {
@@ -94,6 +98,10 @@ struct DashboardCanvasControls: View {
                 }
             } label: { Image(systemName: "plus").frame(width: 28, height: 28) }
             .accessibilityLabel("Add card").help("Add cards, assets, images, or sections").disabled(creating)
+    }
+    private var inspector: some View {
+        DashboardCanvasInspector(document: $document, viewState: $viewState, conversations: conversations,
+            onSendItem: onSendItem, onOpenSession: onOpenSession).frame(width: 320).padding(16)
     }
     private var organizeMenu: some View {
             Menu {
@@ -118,11 +126,19 @@ struct DashboardCanvasControls: View {
     }
     private var navigator: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Canvas · \(document.blocks.count) cards").font(.headline)
+            Text("Board · \(document.blocks.count) cards").font(.headline)
+            Picker("Show", selection: $viewState.navigatorFilter) {
+                ForEach(DashboardCanvasViewState.NavigatorFilter.allCases, id: \.self) { filter in
+                    Text(filter.rawValue).tag(filter)
+                }
+            }.pickerStyle(.menu)
             Text("Shift-click card headers to select a group.").font(.caption).foregroundStyle(.secondary)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 8) {
-                    ForEach(document.blocks, id: \.id) { block in
+                    if document.blocks.filter(matchesNavigator).isEmpty {
+                        Text("No items match this filter.").font(.callout).foregroundStyle(.secondary)
+                    }
+                    ForEach(document.blocks.filter(matchesNavigator), id: \.id) { block in
                         Button {
                             viewState.selected = [block.id]; viewState.fit(document, selectionOnly: true); viewState.showsNavigator = false
                         } label: {
@@ -135,7 +151,19 @@ struct DashboardCanvasControls: View {
             }.scrollIndicators(.never).frame(height: 280)
         }.padding(16).frame(width: 280)
     }
+    private func matchesNavigator(_ block: NoteBlock) -> Bool {
+        let item = document.boardItems?[block.id]
+        switch viewState.navigatorFilter {
+        case .all: return true
+        case .tasks: return item?.task != nil
+        case .review: return item?.review == .needed
+        case .instructions: return item?.role == .instructions
+        }
+    }
     private func apply(_ edits: [CanvasEdit]) { commitCanvas(edits, document: $document, state: $viewState) }
+    private func addTask() {
+        addBoardTask(document: $document, state: $viewState)
+    }
     private func add(_ block: NoteBlock, assetID: String? = nil) {
         var placement = CanvasCardPlacement(x: viewState.origin.x + 48, y: viewState.origin.y + 48,
                                             width: assetID == nil ? 360 : 560, height: assetID == nil ? 300 : 420, assetID: assetID)
@@ -188,7 +216,7 @@ struct DashboardCanvasControls: View {
                 }
                 guard bytes.count <= 650_000 else { throw NoteDocumentSafetyError.tooLarge }
                 create(.html, title: url.deletingPathExtension().lastPathComponent,
-                       html: "<style>body{padding:0;display:grid;place-items:center}img{max-width:100%;height:auto}</style><img alt=\"Canvas image\" src=\"data:\(mime);base64,\(bytes.base64EncodedString())\">")
+                       html: "<style>body{padding:0;display:grid;place-items:center}img{max-width:100%;height:auto}</style><img alt=\"Board image\" src=\"data:\(mime);base64,\(bytes.base64EncodedString())\">")
             } catch { viewState.error = "This image could not be prepared. Choose a PNG, JPEG, or GIF smaller than 20 MB." }
         }
     }

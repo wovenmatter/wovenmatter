@@ -10,6 +10,7 @@ struct DashboardNotePane: View {
     let onInitialFocusHandled: () -> Void
     let onOpenNote: (String) -> Void
     var onCanvasContext: ((CanvasViewportContext) -> Void)?
+    var onOpenSession: ((String) -> Void)?
     @FocusState private var titleFocused: Bool
     @State private var editorController = DashboardNoteEditorController()
     @State private var dictationEditor = DictationEditor()
@@ -134,7 +135,10 @@ struct DashboardNotePane: View {
                             if let html { value.html = html }
                             model.updateNoteDraft(note: asset, title: title, content: try? value.encoded())
                             return id
-                        })
+                        }, conversations: model.workspaceOverview?.conversations ?? [],
+                        onSendItem: { itemID, conversationID in
+                            try await model.sendBoardItem(boardID: note.id, itemID: itemID, to: conversationID)
+                        }, onOpenSession: onOpenSession)
                         .disabled(model.noteEditingSuspended)
                 }
                 Button { showsVersionHistory = true } label: {
@@ -175,6 +179,18 @@ struct DashboardNotePane: View {
             .padding(.horizontal, 12)
             .frame(height: 56)
 
+            if currentDocument.kind == .canvas && documentIsEditable {
+                DashboardBoardPurposeBar(purpose: Binding(get: { document.wrappedValue.boardPurpose ?? "" }, set: { purpose in
+                    commitBoard(document: document, state: $canvasViewState) { $0.boardPurpose = purpose.isEmpty ? nil : purpose }
+                }), taskCount: currentDocument.boardItems?.values.filter { $0.task != nil }.count ?? 0,
+                completedCount: currentDocument.boardItems?.values.filter { $0.task?.status == .done }.count ?? 0,
+                needsReviewCount: currentDocument.boardItems?.values.filter { $0.review == .needed }.count ?? 0,
+                onAddTask: { addBoardTask(document: document, state: $canvasViewState) }, onReview: {
+                    canvasViewState.navigatorFilter = .review
+                    canvasViewState.showsNavigator = true
+                }).disabled(model.noteEditingSuspended)
+            }
+
             if showsFormatting && currentDocument.kind == .note && documentIsEditable {
                 DashboardNoteFormattingBar(controller: editorController)
                     .padding(.horizontal, 32)
@@ -214,13 +230,13 @@ struct DashboardNotePane: View {
                                 }, viewState: $canvasViewState, onContext: onCanvasContext)
                         case .spreadsheet:
                             DashboardSpreadsheetEditor(document: document)
-                                .accessibilityLabel("Spreadsheet")
+                                .accessibilityLabel("Sheet")
                         case .html:
                             DashboardHTMLArtifactView(
                                 html: currentDocument.html,
                                 linkedDataJSON: linkedDataJSON
                             )
-                            .accessibilityLabel("HTML artifact")
+                            .accessibilityLabel("Page")
                         }
                     }
                 }

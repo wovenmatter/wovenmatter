@@ -74,19 +74,35 @@ struct NotePane: View {
         if model.online { Button("Download document") { Task { await model.openNote(note.id) } }.buttonStyle(DashboardPrimaryButtonStyle()).padding() }
       } else if let document {
         if document.kind == .html {
-          Text("HTML asset · read only").font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+          Text("Page · read only").font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
           if document.databaseLink != nil {
             LinkedArtifactPreview(model: model, note: note, tableID: nil, html: document.html)
           } else { SafeHTMLPreview(html: document.html) }
         } else {
           ScrollView {
             LazyVStack(alignment: .leading, spacing: 12) {
-              if document.kind != .note { Text(document.kind == .canvas ? "Canvas · read only · arrange cards on your Mac" : "Spreadsheet · read only").font(.caption).foregroundStyle(DashboardPalette.mutedForeground) }
+              if document.kind != .note { Text(document.kind == .canvas ? "Board · read only · edit on your Mac" : "Sheet · read only").font(.caption).foregroundStyle(DashboardPalette.mutedForeground) }
               else if !editable { Text("Read only · unsupported attributes preserved").font(.caption).foregroundStyle(DashboardPalette.mutedForeground) }
+              if document.kind == .canvas, let purpose = document.boardPurpose, !purpose.isEmpty {
+                Text(purpose).font(.callout).textSelection(.enabled)
+              }
               if document.kind == .spreadsheet, document.databaseLink != nil, document.blocks.isEmpty {
                 LinkedArtifactPreview(model: model, note: note, tableID: nil, html: nil)
               }
               ForEach(document.blocks, id: \.id) { block in
+                if document.kind == .canvas, let item = document.boardItems?[block.id] {
+                  MobileBoardItemSummary(item: item)
+                }
+                if document.kind == .canvas, let assetID = document.canvasPlacement(for: block.id).assetID {
+                  if let asset = model.state.notes[assetID], !model.state.deletedNotes.contains(assetID) {
+                    Button { Task { await model.openNote(assetID) } } label: {
+                      Label("Open original: \(asset.title)", systemImage: "link")
+                    }.buttonStyle(DashboardQuietButtonStyle()).frame(minHeight: 44)
+                  } else {
+                    Text("Original asset unavailable on this device. Its reference is retained.")
+                      .font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+                  }
+                } else {
                 switch block {
                 case .richText(let text):
                   HStack(alignment: .top, spacing: 9) {
@@ -109,6 +125,8 @@ struct NotePane: View {
                     LinkedArtifactPreview(model: model, note: note, tableID: table.databaseLink != nil ? table.id : nil, html: nil)
                   } else { NativeTablePreview(table: table) }
                 }
+                }
+                if document.kind == .canvas { Divider() }
               }
               if editable {
                 Button { change { try RichDocumentEditing.appendingParagraph(to: content) } } label: { Label("Add paragraph", glyph: .plus).font(.caption).foregroundStyle(DashboardPalette.mutedForeground) }.frame(minHeight: 44).padding(.top, 12)
@@ -392,5 +410,37 @@ private struct LinkedArtifactPreview: View {
       guard !Task.isCancelled, requestKey == key else { return }
       data = result
     } catch is CancellationError {} catch { if requestKey == key { self.error = error.localizedDescription } }
+  }
+}
+
+private struct MobileBoardItemSummary: View {
+  let item: BoardItem
+  private var stateLabel: String {
+    switch item.task?.status {
+    case .todo: "To do"
+    case .doing: "In progress"
+    case .blocked: "Blocked"
+    case .done: "Done"
+    case .canceled: "Canceled"
+    case nil: ""
+    }
+  }
+  var body: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      HStack(spacing: 8) {
+        if let task = item.task {
+          Label(stateLabel, systemImage: task.status == .done ? "checkmark.circle.fill" : "circle")
+          if !task.assignee.isEmpty { Text(task.assignee).foregroundStyle(.secondary) }
+        }
+        if item.role == .instructions { Label("Reference instructions", systemImage: "book.closed") }
+        if item.review == .needed { Label("Needs review", systemImage: "tray") }
+      }.font(.caption)
+      if let task = item.task, !task.outcome.isEmpty {
+        Text(task.outcome).font(.callout).textSelection(.enabled)
+      }
+      if let summary = item.lastChange, !summary.isEmpty {
+        Text(summary).font(.caption).foregroundStyle(.secondary)
+      }
+    }
   }
 }

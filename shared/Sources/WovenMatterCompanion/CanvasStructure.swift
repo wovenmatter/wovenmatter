@@ -58,10 +58,14 @@ public struct CanvasEdit: Codable, Equatable, Sendable {
 
 public extension NoteDocument {
   func validateCanvasStructure() throws {
-    guard canvasSections != nil || canvasConnections != nil || canvas != nil else { return }
+    guard canvasSections != nil || canvasConnections != nil || canvas != nil || boardPurpose != nil || boardItems != nil else { return }
     guard kind == .canvas else { throw NoteDocumentSafetyError.unsupportedFormat }
     let sections = canvasSections ?? [], connections = canvasConnections ?? []
     let blockIDs = Set(blocks.map(\.id)), sectionIDs = Set(sections.map(\.id))
+    guard (boardPurpose?.utf8.count ?? 0) <= Self.maximumBoardPurposeBytes,
+          (boardItems ?? [:]).allSatisfy({ blockIDs.contains($0.key) && $0.value.isValid }) else {
+      throw NoteDocumentSafetyError.unsupportedFormat
+    }
     guard sections.count <= 1000, connections.count <= 20_000,
           sectionIDs.count == sections.count, sectionIDs.isDisjoint(with: blockIDs), sections.allSatisfy(\.isValid),
           Set(connections.map(\.id)).count == connections.count,
@@ -90,12 +94,15 @@ public extension NoteDocument {
       }
       if canvas == nil { canvas = [:] }
       var updated = placement
-      // Layout edits cannot silently unlink or retarget an independent asset.
-      updated.assetID = canvasPlacement(for: id).assetID
+      // Layout edits cannot silently unlink or retarget an independent asset,
+      // or drop a task's title. The editor clears a title with an empty string.
+      let current = canvasPlacement(for: id)
+      updated.assetID = current.assetID
+      if updated.title == nil { updated.title = current.title }
       canvas?[id] = updated
     case .remove:
       guard let id = edit.id, blocks.contains(where: { $0.id == id }) else { throw NoteDocumentSafetyError.unsupportedFormat }
-      blocks.removeAll { $0.id == id }; canvas?.removeValue(forKey: id)
+      blocks.removeAll { $0.id == id }; canvas?.removeValue(forKey: id); boardItems?.removeValue(forKey: id)
       canvasConnections?.removeAll { $0.from == id || $0.to == id }
     case .section:
       guard let section = edit.section, section.isValid else { throw NoteDocumentSafetyError.unsupportedFormat }

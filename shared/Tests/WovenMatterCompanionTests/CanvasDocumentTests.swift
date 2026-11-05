@@ -19,14 +19,14 @@ struct CanvasDocumentTests {
     #expect(decoded.canvasPlacement(for: decoded.blocks[1].id) == .automatic(index: 1))
   }
 
-  @Test func replacementTransfersPlacementAndDeletionRemovesIt() throws {
+  @Test func replacementKeepsPlacementAndDeletionRemovesIt() throws {
     let original = NoteRichTextBlock(text: "Old")
-    let replacement = NoteRichTextBlock(text: "Revised")
+    let replacement = NoteRichTextBlock(id: original.id, text: "Revised")
     let placement = CanvasCardPlacement(x: 80, y: 160)
     var document = NoteDocument(kind: .canvas, blocks: [.richText(original)], canvas: [original.id: placement])
     _ = try document.apply([.replaceBlock(id: original.id, block: .richText(replacement))])
-    #expect(document.canvas?[original.id] == nil)
-    #expect(document.canvas?[replacement.id] == placement)
+    #expect(document.canvas?[original.id] == placement)
+    #expect(document.plainText == "Revised")
     _ = try document.apply([.deleteBlock(id: replacement.id)])
     #expect(document.canvas?.isEmpty == true)
     try document.validateEditableShape()

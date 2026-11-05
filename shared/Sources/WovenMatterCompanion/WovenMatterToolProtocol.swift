@@ -76,6 +76,7 @@ public struct WovenMatterToolCommand: Sendable {
   public let operationArguments: [String]
 
   public var isDatabaseCommand: Bool { operationArguments.first == "databases" }
+  public var isBoardCommand: Bool { operationArguments.first == "boards" }
 
   public var subaction: String? { group == .notes && action == "table" ? positional.first : nil }
   public var commandPath: String {
@@ -83,7 +84,7 @@ public struct WovenMatterToolCommand: Sendable {
   }
   public var isMutation: Bool {
     switch group {
-    case .notes: return !["database-list", "database-query", "list", "folders", "read", "versions", "version"].contains(action)
+    case .notes: return !["database-list", "database-query", "board-list", "board-read", "list", "folders", "read", "versions", "version"].contains(action)
     case .history, .usage, .library: return false
     case .sessions: return ["create", "send", "manage", "release", "notifications"].contains(action)
     case .executor: return action == "execute" || action == "cancel"
@@ -109,14 +110,14 @@ public struct WovenMatterToolCommand: Sendable {
       self.operationArguments = arguments
       return
     }
-    guard let group = WorkspaceToolGroup(rawValue: domain == "databases" ? "notes" : domain) else {
+    guard let group = WorkspaceToolGroup(rawValue: ["databases", "boards"].contains(domain) ? "notes" : domain) else {
       throw WorkspaceToolError.invalid("Unknown Woven tool group '\(domain)'.")
     }
     self.group = group
     guard !args.isEmpty else { throw WorkspaceToolError.invalid("Choose a \(domain) operation.") }
-    self.action = (domain == "databases" ? "database-" : "") + args.removeFirst()
+    self.action = (domain == "databases" ? "database-" : domain == "boards" ? "board-" : "") + args.removeFirst()
     let allowedActions: [WorkspaceToolGroup: Set<String>] = [
-      .notes: ["database-list", "database-create", "database-query", "database-execute", "list", "folders", "create", "read", "append", "insert", "replace-block", "delete-block", "format", "set-title", "table", "set-html", "link", "unlink", "canvas", "apply", "versions", "version", "restore"],
+      .notes: ["database-list", "database-create", "database-query", "database-execute", "board-list", "board-create", "board-read", "board-update", "board-add-item", "board-update-item", "board-remove-item", "board-link-session", "board-edit-layout", "list", "folders", "create", "read", "append", "insert", "replace-block", "delete-block", "format", "set-title", "table", "set-html", "link", "unlink", "apply", "versions", "version", "restore"],
       .history: ["search", "conversations", "conversation", "message", "runs", "trace", "events", "event"],
       .sessions: ["list", "status", "create", "send", "manage", "release", "notifications", "receipts", "folders", "harnesses"],
       .goals: ["get", "set", "pause", "resume", "clear", "complete", "block", "checkpoint"],
@@ -126,8 +127,8 @@ public struct WovenMatterToolCommand: Sendable {
       .usage: ["read"], .calendar: ["list", "read", "occurrences", "create", "update", "remove", "copy", "detach"], .library: ["list", "read"]
     ]
     guard allowedActions[group]?.contains(action) == true else { throw WorkspaceToolError.invalid("Unknown \(domain) command '\(action)'.") }
-    let booleanFlags: Set<String> = ["all-workspace", "independent", "no-notify", "paused", "all-day", "timed", "no-repeat", "regular-event", "json", "header"]
-    let valueFlags: Set<String> = ["id", "session", "conversation", "note-id", "folder", "workspace", "directory", "harness", "model", "thinking", "title", "text", "purpose", "request-id", "search", "run", "kind", "sender", "since", "until", "after", "before", "limit", "offset", "characters", "sort", "epoch", "at", "every", "starts-at", "ends-at", "description", "prompt", "time-zone", "repeat-unit", "repeat-interval", "session-mode", "occurrence", "enabled", "revision", "version", "html", "style", "block-id", "table-id", "row", "column", "rows", "columns", "source-id", "native-session-id", "native-record-id", "native-conversation-id", "database-id", "path", "query", "code", "objective", "evidence", "token-budget", "turn-budget"]
+    let booleanFlags: Set<String> = ["all-workspace", "independent", "no-notify", "paused", "all-day", "timed", "no-repeat", "regular-event", "json", "header", "clear-task", "clear-review", "needs-review", "include-layout"]
+    let valueFlags: Set<String> = ["item-revision", "status", "role", "assignee", "outcome", "review", "last-change", "asset-id", "changed-since", "id", "session", "conversation", "note-id", "folder", "workspace", "directory", "harness", "model", "thinking", "title", "text", "purpose", "request-id", "search", "run", "kind", "sender", "since", "until", "after", "before", "limit", "offset", "characters", "sort", "epoch", "at", "every", "starts-at", "ends-at", "description", "prompt", "time-zone", "repeat-unit", "repeat-interval", "session-mode", "occurrence", "enabled", "revision", "version", "html", "style", "block-id", "table-id", "row", "column", "rows", "columns", "source-id", "native-session-id", "native-record-id", "native-conversation-id", "database-id", "path", "query", "code", "objective", "evidence", "token-budget", "turn-budget"]
     var positional: [String] = [], options: [String: String] = [:]
     var operationArguments = Array(arguments.prefix(2))
     while !args.isEmpty {
@@ -171,6 +172,15 @@ public struct WovenMatterToolCommand: Sendable {
     case (.notes, "database-list"): allowed = []; maximumPositionals = 0
     case (.notes, "database-create"): allowed = ["title"] + request; maximumPositionals = 0
     case (.notes, "database-query"), (.notes, "database-execute"): allowed = ["database-id", "query"] + request; maximumPositionals = 0
+    case (.notes, "board-list"): allowed = ["search", "folder"] + pagination; maximumPositionals = 0
+    case (.notes, "board-create"): allowed = ["title", "purpose", "folder"] + request; maximumPositionals = 0
+    case (.notes, "board-read"): allowed = ["note-id", "status", "role", "needs-review", "changed-since", "include-layout", "offset", "limit"]; maximumPositionals = 0
+    case (.notes, "board-update"): allowed = ["note-id", "title", "purpose"] + revision + request; maximumPositionals = 0
+    case (.notes, "board-add-item"): allowed = ["note-id", "title", "text", "asset-id", "json", "role", "status", "assignee", "outcome", "review", "last-change"] + request; maximumPositionals = 0
+    case (.notes, "board-update-item"): allowed = ["note-id", "id", "item-revision", "title", "text", "role", "status", "assignee", "outcome", "clear-task", "review", "clear-review", "last-change"] + request; maximumPositionals = 0
+    case (.notes, "board-remove-item"): allowed = ["note-id", "id", "item-revision"] + request; maximumPositionals = 0
+    case (.notes, "board-link-session"): allowed = ["note-id", "id", "session"] + request; maximumPositionals = 0
+    case (.notes, "board-edit-layout"): allowed = ["note-id", "json"] + revision + request; maximumPositionals = 0
     case (.notes, "list"): allowed = ["search", "folder", "sort"] + pagination; maximumPositionals = 0
     case (.notes, "folders"): allowed = pagination; maximumPositionals = 0
     case (.notes, "create"): allowed = ["title", "kind", "folder"] + request; maximumPositionals = 0
@@ -184,7 +194,7 @@ public struct WovenMatterToolCommand: Sendable {
     case (.notes, "set-html"): allowed = ["note-id", "html"] + revision + request; maximumPositionals = 0
     case (.notes, "link"): allowed = ["note-id", "source-id", "database-id", "path", "query", "table-id"] + revision + request; maximumPositionals = 0
     case (.notes, "unlink"): allowed = ["note-id", "table-id"] + revision + request; maximumPositionals = 0
-    case (.notes, "apply"), (.notes, "canvas"): allowed = ["note-id", "json"] + revision + request; maximumPositionals = 0
+    case (.notes, "apply"): allowed = ["note-id", "json"] + revision + request; maximumPositionals = 0
     case (.notes, "versions"): allowed = pagination + ["note-id"]; maximumPositionals = 1
     case (.notes, "version"): allowed = bodyChunk + ["id", "version"]; maximumPositionals = 1
     case (.notes, "restore"): allowed = ["note-id", "version", "revision"] + request; maximumPositionals = 1

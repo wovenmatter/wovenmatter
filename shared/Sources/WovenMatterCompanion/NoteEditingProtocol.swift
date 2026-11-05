@@ -180,6 +180,8 @@ public struct RemoteNoteEditEnvelope: Codable, Equatable, Sendable {
   public static func requiresRevision(_ operations: [NoteEditOperation]) -> Bool {
     operations.contains { operation in
       switch operation {
+      // Item edits carry their own item revision; only the purpose is Board-wide.
+      case .board(let edit): edit.action == .setPurpose
       case .appendText, .insertText, .createTable: false
       case .addTableRow(_, let after), .addTableColumn(_, let after): after != nil
       case .setTitle, .replaceBlock, .deleteBlock, .setParagraphStyle, .setTableCell,
@@ -222,7 +224,7 @@ public struct RemoteNoteEditEnvelope: Codable, Equatable, Sendable {
         throw RemoteNoteEditError.operationTooLarge
       }
       switch operation {
-      case .canvas:
+      case .canvas, .board:
         guard noteKind == .canvas else { throw RemoteNoteEditError.operationNotAllowed }
       case .setTitle(let title):
         guard noteKind != .html, title.utf8.count <= 1_024 else {
@@ -388,6 +390,7 @@ public struct NoteEditingResponse: Codable, Equatable, Sendable {
 
 public enum NoteEditOperation: Codable, Equatable, Sendable {
   case canvas(CanvasEdit)
+  case board(BoardEdit)
   case setTitle(String)
   case appendText(String, NoteParagraphStyle)
   case insertText(afterBlockID: String?, text: String, style: NoteParagraphStyle)
@@ -411,7 +414,7 @@ public enum NoteEditOperation: Codable, Equatable, Sendable {
   }
 
   private enum Kind: String, Codable {
-    case canvas, setTitle, appendText, insertText, replaceBlock, deleteBlock
+    case canvas, board, setTitle, appendText, insertText, replaceBlock, deleteBlock
     case setParagraphStyle, createTable, setTableCell
     case addTableRow, removeTableRow, addTableColumn, removeTableColumn
     case setHTML, setArtifactDatabaseLink, setTableDatabaseLink
@@ -422,6 +425,8 @@ public enum NoteEditOperation: Codable, Equatable, Sendable {
     switch try values.decode(Kind.self, forKey: .type) {
     case .canvas:
       self = .canvas(try values.decode(CanvasEdit.self, forKey: .edit))
+    case .board:
+      self = .board(try values.decode(BoardEdit.self, forKey: .edit))
     case .setTitle:
       self = .setTitle(try values.decode(String.self, forKey: .title))
     case .appendText:
@@ -500,6 +505,9 @@ public enum NoteEditOperation: Codable, Equatable, Sendable {
     switch self {
     case .canvas(let edit):
       try values.encode(Kind.canvas, forKey: .type)
+      try values.encode(edit, forKey: .edit)
+    case .board(let edit):
+      try values.encode(Kind.board, forKey: .type)
       try values.encode(edit, forKey: .edit)
     case .setTitle(let title):
       try values.encode(Kind.setTitle, forKey: .type)
@@ -582,6 +590,8 @@ public extension NoteDocument {
       switch operation {
       case .canvas(let edit):
         try applyCanvasEdit(edit)
+      case .board(let edit):
+        try applyBoardEdit(edit)
       case .setTitle(let value):
         guard value.utf8.count <= 4096 else { throw NoteDocumentSafetyError.tooLarge }
         title = value
@@ -594,22 +604,16 @@ public extension NoteDocument {
         guard let index = blocks.firstIndex(where: { $0.id == id }) else {
           throw NoteEditError.blockNotFound(id)
         }
-        if let placement = canvas?.removeValue(forKey: id) { canvas?[block.id] = placement }
+        // A Board card's ID is what placements, links, tasks and agents refer to.
+        guard kind != .canvas || block.id == id else { throw NoteEditError.boardCardIDChanged(id) }
         blocks[index] = block
-        if id != block.id {
-          canvasConnections = canvasConnections?.map { connection in
-            var value = connection
-            if value.from == id { value.from = block.id }
-            if value.to == id { value.to = block.id }
-            return value
-          }
-        }
       case .deleteBlock(let id):
         guard let index = blocks.firstIndex(where: { $0.id == id }) else {
           throw NoteEditError.blockNotFound(id)
         }
         blocks.remove(at: index)
         canvas?.removeValue(forKey: id)
+        boardItems?.removeValue(forKey: id)
         canvasConnections?.removeAll { $0.from == id || $0.to == id }
       case .setParagraphStyle(let blockID, let style):
         guard let index = blocks.firstIndex(where: { $0.id == blockID }),
@@ -707,9 +711,25 @@ public enum NoteEditError: Error, Equatable, LocalizedError {
   case tableNotFound(String)
   case tableCoordinateOutOfRange
   case artifactKindMismatch
+  case boardItemConflict(id: String, currentRevision: String)
+  case boardItemExists(String)
+  case boardLinkedAssetText(String)
+  case boardItemNotText(String)
+  case boardSessionLimit(String)
+  case boardConflictingPatch(String)
+  case boardCardIDChanged(String)
 
   public var errorDescription: String? {
     switch self {
+    case .boardItemConflict(let id, let current):
+      current.isEmpty ? "Board item \(id) was removed since it was read."
+        : "Board item \(id) changed since it was read. Read it again and apply your intended change to the current item."
+    case .boardItemExists(let id): "A Board item already exists with ID \(id)."
+    case .boardLinkedAssetText(let id): "Board item \(id) shows a linked original. Edit the original asset, not the card."
+    case .boardItemNotText(let id): "Board item \(id) is a table. Use the table tools to change it."
+    case .boardSessionLimit(let id): "Board item \(id) already links \(BoardItem.maximumSessions) sessions."
+    case .boardConflictingPatch(let message): message
+    case .boardCardIDChanged(let id): "A Board card keeps its ID. Replace the content of \(id) without changing its ID."
     case .blockNotFound(let id): "Note block not found: \(id)"
     case .tableNotFound(let id): "Note table not found: \(id)"
     case .tableCoordinateOutOfRange: "The table row or column is out of range."

@@ -19,6 +19,8 @@ struct DashboardCanvasCard: View {
     let onEditAsset: (NoteDocument) -> Void
     let canEditAsset: Bool
     let onInspect: () -> Void
+    var item: BoardItem?
+    var onSetStatus: ((BoardTaskStatus) -> Void)?
     @GestureState private var translation = CGSize.zero
     @GestureState private var resizeTranslation = CGSize.zero
 
@@ -27,11 +29,21 @@ struct DashboardCanvasCard: View {
         if let asset { return asset.title.isEmpty ? "Untitled asset" : asset.title }
         if placement.assetID != nil { return block.plainText.isEmpty ? "Unavailable asset" : block.plainText }
         if case .table = block { return "Table" }
+        if item?.task != nil { return block.plainText.isEmpty ? "New task" : String(block.plainText.prefix(80)) }
         return "Text"
     }
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 6) {
+                if let task = item?.task {
+                    Button { onSetStatus?(task.status == .done ? .todo : .done) } label: {
+                        Image(systemName: task.status == .done ? "checkmark.circle.fill" : "circle")
+                            .foregroundStyle(task.status == .done ? DashboardPalette.success : DashboardPalette.mutedForeground)
+                    }.buttonStyle(.plain).accessibilityLabel(task.status == .done ? "Reopen task" : "Complete task")
+                }
+                if item?.role == .instructions {
+                    Image(systemName: "book.closed").help("Instructions or skill reference; nothing runs automatically")
+                }
                 Text(label).font(.system(size: 12, weight: .medium)).lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
                     .onTapGesture { onSelect(NSEvent.modifierFlags.contains(.shift)) }
@@ -41,8 +53,15 @@ struct DashboardCanvasCard: View {
                         .onEnded { value in onMove(value.translation.width / zoom, value.translation.height / zoom) })
                     .help("Drag to move. Shift-click to select multiple cards.")
                 if placement.assetID != nil {
+                    Label("Original", systemImage: "link")
+                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                        .help("This card references the original library asset. Editing its note or sheet updates every reference.")
                     Button(action: onOpen) { Image(systemName: "arrow.up.right.square") }
-                        .buttonStyle(.plain).help("Open original asset").disabled(asset == nil)
+                        .buttonStyle(.plain).help("Open original asset").accessibilityLabel("Open original asset").disabled(asset == nil)
+                }
+                if item?.review == .needed {
+                    Button(action: onInspect) { Image(systemName: "tray") }
+                        .buttonStyle(.plain).help("Needs review").accessibilityLabel("Review this item")
                 }
                 Menu {
                     Button("Customize card", action: onInspect)
@@ -61,6 +80,25 @@ struct DashboardCanvasCard: View {
                 .background(canvasColor(placement.color).opacity(placement.color == nil || placement.color == "neutral" ? 0 : 0.10))
             Divider()
             content
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if let task = item?.task {
+                Divider()
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Menu(task.status.boardTitle) {
+                            ForEach([BoardTaskStatus.todo, .doing, .blocked, .done, .canceled], id: \.self) { status in
+                                Button(status.boardTitle) { onSetStatus?(status) }
+                            }
+                        }.fixedSize().accessibilityLabel("Task state: \(task.status.boardTitle)")
+                        Spacer(minLength: 0)
+                        if !task.assignee.isEmpty { Text(task.assignee).lineLimit(1).foregroundStyle(.secondary) }
+                    }
+                    if !task.outcome.isEmpty {
+                        Text(task.outcome).lineLimit(3).textSelection(.enabled).foregroundStyle(.secondary)
+                            .help("Outcome: \(task.outcome)")
+                    }
+                }.font(.system(size: 11)).padding(10)
+            }
         }
         .frame(width: max(200, placement.width + resizeTranslation.width / zoom),
                height: max(120, placement.height + resizeTranslation.height / zoom), alignment: .topLeading)
@@ -93,7 +131,7 @@ struct DashboardCanvasCard: View {
             case .richText:
                 TextEditor(text: Binding(get: { tableDocument.blocks.first?.plainText ?? "" }, set: { onText($0) }))
                     .font(.system(size: 14)).scrollContentBackground(.hidden)
-                    .scrollIndicators(.never).padding(10).accessibilityLabel("Canvas text card")
+                    .scrollIndicators(.never).padding(10).accessibilityLabel("Board text card")
             case .table: DashboardSpreadsheetEditor(document: $tableDocument)
             }
         }
@@ -104,7 +142,23 @@ struct DashboardCanvasAssetPreview: View {
     @Binding var document: NoteDocument
     var editable: Bool
     @State private var controller = DashboardNoteEditorController()
+    private var hasLinkedData: Bool {
+        document.databaseLink != nil || document.blocks.contains { block in
+            switch block {
+            case .table(let table): table.databaseLink != nil
+            case .richText(let text): text.runs.contains { $0.databaseLink != nil }
+            }
+        }
+    }
     var body: some View {
+      if hasLinkedData {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("Linked data", systemImage: "externaldrive")
+            Text("Open the original to refresh its database data. The board keeps the same asset reference.")
+                .font(.callout).foregroundStyle(.secondary)
+            Spacer()
+        }.padding(16).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+      } else {
         switch document.kind {
         case .html:
             DashboardHTMLArtifactView(html: document.html, linkedDataJSON: nil)
@@ -114,12 +168,13 @@ struct DashboardCanvasAssetPreview: View {
             DashboardNoteEditor(document: $document, controller: controller).disabled(!editable)
         case .canvas:
             VStack(alignment: .leading, spacing: 8) {
-                Label("Canvas", systemImage: "square.grid.2x2")
+                Label("Board", systemImage: "square.grid.2x2")
                 Text("\(document.blocks.count) cards · \(document.canvasSections?.count ?? 0) sections")
                 Text("Open the original to explore this board.").foregroundStyle(.secondary)
                 Spacer()
             }.padding(16).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
+      }
     }
 }
 

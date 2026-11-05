@@ -336,7 +336,7 @@ struct WorkspaceView: View {
             }
         }
         .sheet(item: $noteToRename) { note in
-            DashboardRenameSheet(heading: "Rename note", placeholder: "Note name", initialTitle: model.noteDraft(for: note).title) { title in
+            DashboardRenameSheet(heading: "Rename asset", placeholder: "Asset name", initialTitle: model.noteDraft(for: note).title) { title in
                 try await model.mutateNote(id: note.id, mutation: .rename(title))
             }
         }
@@ -703,6 +703,7 @@ struct WorkspaceView: View {
                         onAddPanel: addPanel,
                         onClosePanel: closePanel,
                         onNavigatePanel: navigatePanel,
+                        onOpenBoardSession: selectConversation,
                         onSend: send,
                         onAttachmentAction: handleAttachmentAction,
                         onRemoveAttachment: removeAttachment,
@@ -1463,6 +1464,7 @@ struct DashboardWorkspaceSurface: View {
     let onAddPanel: (DashboardChatPanelID) -> Void
     let onClosePanel: (DashboardChatPanelID) -> Void
     let onNavigatePanel: (DashboardChatPanelDirection) -> Bool
+    let onOpenBoardSession: (String) -> Void
     let onSend: (DashboardChatPanelID) -> Void
     let onAttachmentAction: (DashboardChatPanelID, DashboardComposerAttachmentAction) -> Void
     let onRemoveAttachment: (String, DashboardChatPanelID) -> Void
@@ -1532,7 +1534,7 @@ struct DashboardWorkspaceSurface: View {
             reservesLeadingRailControlSpace: reservesLeadingRailControlSpace,
             reservesTrailingRailControlSpace: reservesTrailingRailControlSpace,
             newlyCreatedNoteID: newlyCreatedNoteID, onNewNoteFocusHandled: onNewNoteFocusHandled,
-            onBack: { compactPane = .chat }
+            onBack: { compactPane = .chat }, onOpenSession: onOpenBoardSession
         )
     }
 

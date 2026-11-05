@@ -4,18 +4,29 @@ import WovenMatterCore
 struct DashboardCanvasInspector: View {
     @Binding var document: NoteDocument
     @Binding var viewState: DashboardCanvasViewState
+    var conversations: [WorkspaceConversationRecord] = []
+    var onSendItem: ((String, String) async throws -> Void)?
+    var onOpenSession: ((String) -> Void)?
     @State private var title = ""
     @State private var width = ""
     @State private var height = ""
     @State private var connectionLabel = ""
     private var ids: [String] { viewState.selected.sorted() }
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        ScrollView {
+          VStack(alignment: .leading, spacing: 12) {
             Text(ids.isEmpty ? "Select a card to customize" : "\(ids.count) selected").font(.headline)
+            if let error = viewState.error {
+                Text(error).font(.caption).foregroundStyle(DashboardPalette.danger)
+            }
             if !ids.isEmpty {
                 if ids.count == 1 {
                     TextField("Card title", text: $title).dashboardQuietTextInput()
                     Button("Set title") { change { $0.title = title } }
+                    DashboardBoardItemInspector(document: $document, viewState: $viewState, itemID: ids[0],
+                        conversations: conversations, onSend: onSendItem, onOpenSession: onOpenSession)
+                        .id(ids[0])
+                    Divider()
                 }
                 HStack {
                     TextField("Width", text: $width).dashboardQuietTextInput()
@@ -58,8 +69,9 @@ struct DashboardCanvasInspector: View {
                     }
                 }.scrollIndicators(.never).frame(maxHeight: 100)
             }
-        }.buttonStyle(DashboardQuietButtonStyle())
+          }.buttonStyle(DashboardQuietButtonStyle())
             .onAppear { load() }.onChange(of: ids) { _, _ in load() }
+        }.scrollIndicators(.never).frame(maxHeight: 650)
     }
     private func load() {
         guard let id = ids.first else { return }

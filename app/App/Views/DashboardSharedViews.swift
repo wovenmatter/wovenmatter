@@ -214,7 +214,7 @@ struct DashboardNewArtifactButton: View {
                 DashboardLucideIcon(glyph: .fileText, size: 13)
                     .foregroundStyle(DashboardPalette.foreground)
                     .frame(width: 15, height: 15)
-                Text("New note")
+                Text("New asset")
                     .lineLimit(1)
                 Spacer()
             }
@@ -934,7 +934,7 @@ struct DashboardFolderContentCounts: Equatable {
     var notes = 0
     var total: Int { chats + notes }
     var summary: String {
-        "\(chats) \(chats == 1 ? "chat" : "chats") · \(notes) \(notes == 1 ? "note" : "notes")"
+        "\(chats) \(chats == 1 ? "chat" : "chats") · \(notes) \(notes == 1 ? "asset" : "assets")"
     }
 }
 

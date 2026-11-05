@@ -42,14 +42,99 @@ enum NoteToolEdits {
             else { operations = [.setArtifactDatabaseLink(nil)] }
         case "table":
             operations = [try tableOperation(command)]
-        case "canvas":
-            operations = try decode([CanvasEdit].self, command: command, label: "canvas edits").map(NoteEditOperation.canvas)
         case "apply":
             operations = try decode([NoteEditOperation].self, command: command, label: "operations")
         default:
             throw WorkspaceToolError.invalid("Unsupported note edit operation: \(command.action).")
         }
         return .init(command: .apply, noteID: noteID, expectedRevision: revision, operations: operations)
+    }
+
+    /// Maps `woven_boards_*` writes to one revision-checked note mutation. No field
+    /// here can carry attribution; the database stamps the caller it authorized.
+    static func boardRequest(_ command: WovenMatterToolCommand, requestID: String) throws -> NoteEditingRequest {
+        guard command.group == .notes, command.isBoardCommand else {
+            throw WorkspaceToolError.invalid("Choose a Board operation.")
+        }
+        let boardID = try command.required("note-id")
+        let operations: [NoteEditOperation]
+        var revision: String?
+        switch command.action {
+        case "board-update":
+            revision = try command.required("revision")
+            var changes: [NoteEditOperation] = [.board(.init(action: .requireBoard))]
+            if let title = command.options["title"] {
+                guard !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, title.utf8.count <= 1_024 else {
+                    throw WorkspaceToolError.invalid("A Board title must contain text and be at most 1,024 bytes.")
+                }
+                changes.append(.setTitle(title))
+            }
+            if let purpose = command.options["purpose"] {
+                try requirePurpose(purpose)
+                changes.append(.board(.init(action: .setPurpose, purpose: purpose)))
+            }
+            guard changes.count > 1 else { throw WorkspaceToolError.invalid("Supply a title or purpose to change.") }
+            operations = changes
+        case "board-add-item":
+            let patch = try boardPatch(command)
+            let assetID = command.options["asset-id"]
+            let placement: CanvasCardPlacement? = command.options["json"] == nil ? nil
+                : try decode(CanvasCardPlacement.self, command: command, label: "placement")
+            // Refuse rather than ignore it, or a requested link becomes an empty inline card.
+            guard placement?.assetID == nil else { throw WorkspaceToolError.invalid("Link an original with assetID, not placement.assetID.") }
+            operations = [.board(.init(action: .addItem, id: requestID, patch: patch, assetID: assetID, placement: placement))]
+        case "board-update-item":
+            let patch = try boardPatch(command)
+            guard patch != BoardItemPatch() else { throw WorkspaceToolError.invalid("Supply at least one field to change.") }
+            operations = [.board(.init(action: .updateItem, id: try command.required("id"),
+                                       expectedRevision: try command.required("item-revision"), patch: patch))]
+        case "board-remove-item":
+            operations = [.board(.init(action: .removeItem, id: try command.required("id"),
+                                       expectedRevision: try command.required("item-revision")))]
+        case "board-link-session":
+            let sessionID = try command.required("session")
+            guard let uuid = UUID(uuidString: sessionID) else { throw WorkspaceToolError.invalid("sessionID must be a conversation UUID.") }
+            operations = [.board(.init(action: .linkSession, id: try command.required("id"), sessionID: uuid.uuidString.lowercased()))]
+        case "board-edit-layout":
+            revision = try command.required("revision")
+            let edits = try decode([CanvasEdit].self, command: command, label: "layout edits")
+            guard !edits.isEmpty else { throw WorkspaceToolError.invalid("Supply at least one layout edit.") }
+            // Cards change through item operations, so attribution and item revisions apply.
+            guard !edits.contains(where: { $0.action == .add || $0.action == .remove }) else {
+                throw WorkspaceToolError.invalid("Use woven_boards_add_item and woven_boards_remove_item to change cards.")
+            }
+            operations = edits.map(NoteEditOperation.canvas)
+        default:
+            throw WorkspaceToolError.invalid("Unsupported Board operation: \(command.action).")
+        }
+        return .init(command: .apply, noteID: boardID, expectedRevision: revision, operations: operations)
+    }
+
+    static func requirePurpose(_ purpose: String) throws {
+        guard purpose.utf8.count <= NoteDocument.maximumBoardPurposeBytes else {
+            throw WorkspaceToolError.invalid("A Board purpose must be at most \(NoteDocument.maximumBoardPurposeBytes) bytes.")
+        }
+    }
+
+    private static func boardPatch(_ command: WovenMatterToolCommand) throws -> BoardItemPatch {
+        func bounded(_ key: String, _ label: String, _ limit: Int) throws -> String? {
+            guard let value = command.options[key] else { return nil }
+            guard value.utf8.count <= limit else { throw WorkspaceToolError.invalid("\(label) must be at most \(limit) bytes.") }
+            return value
+        }
+        func choice<T: RawRepresentable>(_ key: String, _ type: T.Type) throws -> T? where T.RawValue == String {
+            guard let raw = command.options[key] else { return nil }
+            guard let value = T(rawValue: raw) else { throw WorkspaceToolError.invalid("Unsupported \(key): \(raw).") }
+            return value
+        }
+        return BoardItemPatch(title: try bounded("title", "A card title", 1_024), text: try bounded("text", "Card text", 256 * 1_024),
+                              role: try choice("role", BoardItemRole.self), status: try choice("status", BoardTaskStatus.self),
+                              assignee: try bounded("assignee", "An assignee", 1_024),
+                              outcome: try bounded("outcome", "An outcome", BoardTask.maximumOutcomeBytes),
+                              clearTask: command.options["clear-task"] != nil ? true : nil,
+                              review: try choice("review", BoardReviewState.self),
+                              clearReview: command.options["clear-review"] != nil ? true : nil,
+                              lastChange: try bounded("last-change", "lastChange", BoardItem.maximumLastChangeBytes))
     }
 
     private static func tableOperation(_ command: WovenMatterToolCommand) throws -> NoteEditOperation {

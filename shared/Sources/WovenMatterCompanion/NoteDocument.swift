@@ -11,6 +11,10 @@ public struct NoteDocument: Codable, Equatable, Sendable {
   public var canvasConnections: [CanvasConnection]?
   public var html: String
   public var databaseLink: DatabaseArtifactLink?
+  /// What a Board is for. Project text read as data, never as authorization.
+  public var boardPurpose: String?
+  /// Collaboration metadata keyed by stable card (block) ID.
+  public var boardItems: [String: BoardItem]?
 
   public init(
     version: Int = currentVersion,
@@ -20,7 +24,9 @@ public struct NoteDocument: Codable, Equatable, Sendable {
     canvas: [String: CanvasCardPlacement]? = nil,
     canvasSections: [CanvasSection]? = nil,
     canvasConnections: [CanvasConnection]? = nil,
-    databaseLink: DatabaseArtifactLink? = nil
+    databaseLink: DatabaseArtifactLink? = nil,
+    boardPurpose: String? = nil,
+    boardItems: [String: BoardItem]? = nil
   ) {
     self.version = version
     self.kind = kind
@@ -36,10 +42,12 @@ public struct NoteDocument: Codable, Equatable, Sendable {
     self.canvasConnections = canvasConnections
     self.html = html
     self.databaseLink = databaseLink
+    self.boardPurpose = boardPurpose
+    self.boardItems = boardItems
   }
 
   private enum CodingKeys: String, CodingKey {
-    case version, kind, blocks, html, databaseLink, canvas, canvasSections, canvasConnections
+    case version, kind, blocks, html, databaseLink, canvas, canvasSections, canvasConnections, boardPurpose, boardItems
   }
 
   public init(from decoder: any Decoder) throws {
@@ -63,6 +71,8 @@ public struct NoteDocument: Codable, Equatable, Sendable {
       DatabaseArtifactLink.self,
       forKey: .databaseLink
     )
+    boardPurpose = try values.decodeIfPresent(String.self, forKey: .boardPurpose)
+    boardItems = try values.decodeIfPresent([String: BoardItem].self, forKey: .boardItems)
   }
 
   public static func decode(_ content: String) -> NoteDocument {
@@ -98,7 +108,9 @@ public struct NoteDocument: Codable, Equatable, Sendable {
       canvas: canvas,
       canvasSections: canvasSections,
       canvasConnections: canvasConnections,
-      databaseLink: databaseLink
+      databaseLink: databaseLink,
+      boardPurpose: boardPurpose,
+      boardItems: boardItems
     )
   }
 

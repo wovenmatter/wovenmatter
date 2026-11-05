@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		B1F674635460DD7CD908D3BE /* ApplicationModel+Boards.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58AF79E0D198DB9D0CD834B4 /* ApplicationModel+Boards.swift */; };
+		4E22CDDAA6EDB5EF58AD7284 /* DashboardBoardItemInspector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 365A001AABC65B97F0703FEF /* DashboardBoardItemInspector.swift */; };
+		A5CF4422D994F69BAE030A3E /* DashboardBoardPurposeBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = F75FE6FB9097603C86167199 /* DashboardBoardPurposeBar.swift */; };
 		CA4A50000000000000000051 /* DashboardCanvasInspector.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA4A50000000000000000052 /* DashboardCanvasInspector.swift */; };
 		CA4A50000000000000000041 /* DashboardCanvasControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA4A50000000000000000042 /* DashboardCanvasControls.swift */; };
 		CA4A50000000000000000031 /* DashboardCanvasCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA4A50000000000000000032 /* DashboardCanvasCard.swift */; };
@@ -177,6 +180,9 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		58AF79E0D198DB9D0CD834B4 /* ApplicationModel+Boards.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+Boards.swift"; sourceTree = "<group>"; };
+		365A001AABC65B97F0703FEF /* DashboardBoardItemInspector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DashboardBoardItemInspector.swift"; sourceTree = "<group>"; };
+		F75FE6FB9097603C86167199 /* DashboardBoardPurposeBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DashboardBoardPurposeBar.swift"; sourceTree = "<group>"; };
 		CA4A50000000000000000052 /* DashboardCanvasInspector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardCanvasInspector.swift; sourceTree = "<group>"; };
 		CA4A50000000000000000042 /* DashboardCanvasControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardCanvasControls.swift; sourceTree = "<group>"; };
 		CA4A50000000000000000032 /* DashboardCanvasCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardCanvasCard.swift; sourceTree = "<group>"; };
@@ -447,6 +453,7 @@
 				753DF034EE6D727B6091929D /* BackendLibraryService.swift */,
 				C131C0A00000000000000001 /* ApplicationModel+ConversationActions.swift */,
 				C131C0B00000000000000001 /* ApplicationModel+NoteActions.swift */,
+				58AF79E0D198DB9D0CD834B4 /* ApplicationModel+Boards.swift */,
 				B88F25850147F01B163EDF7E /* ApplicationModel+Calendar.swift */,
 				20E807F893654CD4A1F24D40 /* WorkspaceAgentToolsModel.swift */,
 				7C678F616FB535F772A00598 /* WorkspaceAgentToolsModel+Calendar.swift */,
@@ -487,6 +494,8 @@
 				C04200000000000000000002 /* DashboardConversationPopover.swift */,
 				52C822631EDF91C6FE39C754 /* DashboardNotePane.swift */,
 				CA4A50000000000000000002 /* DashboardCanvasEditor.swift */,
+				365A001AABC65B97F0703FEF /* DashboardBoardItemInspector.swift */,
+				F75FE6FB9097603C86167199 /* DashboardBoardPurposeBar.swift */,
 				CA4A50000000000000000052 /* DashboardCanvasInspector.swift */,
 				CA4A50000000000000000042 /* DashboardCanvasControls.swift */,
 				CA4A50000000000000000032 /* DashboardCanvasCard.swift */,
@@ -773,6 +782,8 @@
 				C04200000000000000000001 /* DashboardConversationPopover.swift in Sources */,
 				2350EC32F0F50FD3DB4069F3 /* DashboardNotePane.swift in Sources */,
 				CA4A50000000000000000001 /* DashboardCanvasEditor.swift in Sources */,
+				4E22CDDAA6EDB5EF58AD7284 /* DashboardBoardItemInspector.swift in Sources */,
+				A5CF4422D994F69BAE030A3E /* DashboardBoardPurposeBar.swift in Sources */,
 				CA4A50000000000000000051 /* DashboardCanvasInspector.swift in Sources */,
 				CA4A50000000000000000041 /* DashboardCanvasControls.swift in Sources */,
 				CA4A50000000000000000031 /* DashboardCanvasCard.swift in Sources */,
@@ -812,6 +823,7 @@
 				281F6DF22C3AE19CCE3FC99D /* BackendLibraryService.swift in Sources */,
 				C131C0A00000000000000002 /* ApplicationModel+ConversationActions.swift in Sources */,
 				C131C0B00000000000000002 /* ApplicationModel+NoteActions.swift in Sources */,
+				B1F674635460DD7CD908D3BE /* ApplicationModel+Boards.swift in Sources */,
 				A13EC094A3DEA4F302868640 /* ApplicationModel+Calendar.swift in Sources */,
 				5C84BF439B9047118002DD70 /* WorkspaceAgentToolsModel.swift in Sources */,
 				E9A58E7B05C5C2726FA4EE82 /* WorkspaceAgentToolsModel+Calendar.swift in Sources */,

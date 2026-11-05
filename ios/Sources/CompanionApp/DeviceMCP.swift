@@ -125,6 +125,15 @@ extension CompanionModel {
       let context = try deviceToolContext(conversationID: conversationID)
       let command = try WovenMatterToolCommand(request.arguments)
       try context.authorize(command)
+      if command.isMutation, command.group == .notes {
+        let snapshot = await store.snapshot()
+        let noteID = command.options["note-id"] ?? command.positional.first
+        let editsLocalBoard = noteID.flatMap { snapshot.notes[$0] }
+          .map { NoteDocument.decode($0.content).kind == .canvas } ?? false
+        if command.isBoardCommand || editsLocalBoard {
+          throw WorkspaceToolError.invalid("Board writes use the paired Mac. Retry with target central. This device has not changed the Board.")
+        }
+      }
       if command.isMutation, command.group?.isAutomation != true {
         try await store.reserveToolInvocation(request, context: context)
         if command.group != .goals || ["set", "resume"].contains(command.action) {

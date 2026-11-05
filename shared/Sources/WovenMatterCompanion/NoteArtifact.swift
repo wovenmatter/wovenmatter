@@ -31,9 +31,9 @@ public enum NoteArtifactKind: String, Codable, CaseIterable, Sendable {
   public var displayName: String {
     switch self {
     case .note: "Note"
-    case .spreadsheet: "Spreadsheet"
-    case .html: "HTML artifact"
-    case .canvas: "Canvas"
+    case .spreadsheet: "Sheet"
+    case .html: "Page"
+    case .canvas: "Board"
     }
   }
 }

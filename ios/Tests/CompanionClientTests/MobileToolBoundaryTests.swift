@@ -19,6 +19,51 @@ struct MobileToolBoundaryTests {
     }
     try context.authorize(WovenMatterToolCommand(["computer", "cancel", "--id", "all"]))
   }
+  @Test func boardReadsWorkLocallyAndEveryBoardWriteRequiresTheCentralTarget() async throws {
+    let (store, root, context) = try fixture()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let document = NoteDocument(kind: .canvas, blocks: [.richText(.init(id: "card", text: "Task")), .richText(.init(id: "link", text: ""))],
+      canvas: ["link": .init(x: 500, y: 0, assetID: "missing-asset")], boardPurpose: "Launch",
+      boardItems: ["card": .init(task: .init(status: .doing), review: .needed)])
+    let board = try await store.createNote(folderID: nil, title: "Plan", content: document.encoded())
+    let before = try #require(await store.snapshot().notes[board.id])
+
+    let read = await call(store, ["boards", "read", "--note-id", board.id], context: context)
+    #expect(read.success)
+    #expect(read.result?.objectValue?["purpose"]?.stringValue == "Launch")
+    let cards = try #require(read.result?.objectValue?["cards"]?.arrayValue).compactMap(\.objectValue)
+    #expect(cards[0]["itemRevision"]?.stringValue == document.boardItemRevision(for: "card"))
+    #expect(cards[1]["asset"]?.objectValue?["available"]?.boolValue == false)
+    let filtered = await call(store, ["boards", "read", "--note-id", board.id, "--needs-review"], context: context)
+    #expect(filtered.result?.objectValue?["cards"]?.arrayValue?.count == 1)
+    let listed = await call(store, ["boards", "list"], context: context)
+    #expect(listed.result?.objectValue?["rows"]?.arrayValue?.first?.objectValue?["purpose"]?.stringValue == "Launch")
+    #expect(listed.result?.objectValue?["rows"]?.arrayValue?.first?.objectValue?["needsReview"]?.intValue == 1)
+
+    let revision = document.boardItemRevision(for: "card")
+    let writes: [[String]] = [
+      ["boards", "create", "--title", "Other"],
+      ["boards", "update", "--note-id", board.id, "--revision", "r", "--title", "New"],
+      ["boards", "add-item", "--note-id", board.id, "--text", "New"],
+      ["boards", "update-item", "--note-id", board.id, "--id", "card", "--item-revision", revision, "--status", "done"],
+      ["boards", "remove-item", "--note-id", board.id, "--id", "card", "--item-revision", revision],
+      ["boards", "link-session", "--note-id", board.id, "--id", "card", "--session", UUID().uuidString],
+      ["boards", "edit-layout", "--note-id", board.id, "--revision", "r", "--json", "[]"],
+      ["notes", "append", "--note-id", board.id, "--text", "Whole-document write"],
+    ]
+    for arguments in writes {
+      let response = await call(store, arguments, context: context)
+      #expect(!response.success, "\(arguments)")
+      #expect(response.error?.contains("target central") == true, "\(arguments)")
+    }
+    #expect(await store.snapshot().notes[board.id] == before)
+    let created = await call(store, ["notes", "create", "--title", "Board", "--kind", "canvas"], context: context)
+    #expect(!created.success)
+
+    var disabled = context; disabled.enabled.remove(.notes)
+    let denied = await call(store, ["boards", "read", "--note-id", board.id], context: disabled)
+    #expect(!denied.success && denied.code == "tool_disabled")
+  }
   private func fixture() throws -> (MobileStore, URL, MobileToolContext) {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent("wm-tool-boundary-" + UUID().uuidString)
     return (try MobileStore(file: root.appendingPathComponent("library.json")), root,

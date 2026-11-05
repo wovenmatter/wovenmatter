@@ -106,7 +106,7 @@ The composer has a Tools menu with independent groups:
 
 | Group | MCP tools and contract |
 | --- | --- |
-| Notes and managed data | `woven_notes_*`, `woven_databases_*`: discover, read, create and edit notes, spreadsheets, HTML and workspace-owned SQLite datasets; retained note versions |
+| Notes and managed data | `woven_notes_*`, `woven_boards_*`, `woven_databases_*`: discover, read, create and edit Notes, Sheets, Pages, Boards and workspace-owned SQLite datasets; retained asset versions |
 | Conversation history | `woven_history_*`: search and selectively read conversations and full observed traces |
 | Session management | `woven_sessions_*`: discover metadata, create sessions, send messages and manage coordination |
 | Goals | `woven_goals_*`: inspect and maintain the calling conversation's explicitly requested objective |
@@ -125,6 +125,12 @@ controls change only that conversation. Calendar defaults to Full access, with
 Read only configurable in General. Usage is always read-only.
 
 ## Visual replies
+
+Boards provide persistent tasks, purpose, instruction references, review markers,
+outcomes and linked chats through `woven_boards_*`. Item revisions protect focused
+patches on one host; paired Macs still synchronize whole documents and can retain
+concurrent writing as a recovered Board. Board text never grants authorization.
+See [Boards workflows, tools, and sharing limits](BOARDS.md).
 
 Use `woven_html_preview` to inspect a screenshot, content height and console output,
 then `woven_html_render` to publish an interactive page directly in the thread.
@@ -347,7 +353,7 @@ history remains readable without reintroducing its execution integration. Exclud
 coverage for older data; never invent unobserved historical frames.
 
 Use the existing workspace database with transactional migrations and bounded
-reads. Note versions cover notes, spreadsheets and HTML, with before/after agent
+reads. Note versions cover Notes, Sheets, Pages and Boards, with before/after agent
 edits, coalesced editor checkpoints, conflict-safe restore and count/byte budgets.
 Do not version externally linked data files. Reference retention remains separate
 from event journal retention and should be described honestly.

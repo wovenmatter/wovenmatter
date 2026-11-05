@@ -190,12 +190,14 @@ extension WorkspaceDatabaseConnection {
         throw WorkspaceNoteMutationError.revisionConflict
       }
       try envelope.validateApplying(to: NoteDocument.editableDocument(from: note.content))
+      let runConversation = try historyRowsUnlocked("SELECT conversation_id FROM dashboard_runs WHERE id=?", values: [pending.runID])
+        .first?.objectValue?["conversation_id"]?.stringValue
       let response = try applyNoteEditsUnlocked(NoteEditingRequest(
         command: .apply,
         noteID: pending.noteID,
         expectedRevision: pending.expectedRevision,
         operations: envelope.operations
-      ))
+      ), actor: boardActorUnlocked(callerConversationID: runConversation))
       let timestamp = Self.timestamp(Date())
       let message = try prepareUnlocked("""
         UPDATE dashboard_messages SET content = ?, updated_at = ?
@@ -410,7 +412,13 @@ extension WorkspaceDatabaseConnection {
       // bytes so a title-only change can retain an unsupported future document.
       if content != note.content {
         _ = try NoteDocument.editableDocument(from: note.content)
-        _ = try NoteDocument.editableDocument(from: content)
+        let candidate = try NoteDocument.editableDocument(from: content)
+        // Every participant must still be able to change a Board. A larger
+        // existing Board can shrink, but it cannot grow further out of reach.
+        if candidate.kind == .canvas, content.utf8.count > NoteDocument.maximumBoardBytes,
+           content.utf8.count > note.content.utf8.count {
+          throw NoteDocumentSafetyError.tooLarge
+        }
       }
       try checkpointNoteUnlocked(id: id, source: "editor", force: false)
       try toolsExecuteUnlocked(
@@ -454,13 +462,42 @@ extension WorkspaceDatabaseConnection {
              request.expectedRevision == nil {
             throw WorkspaceToolError.revisionRequired("This note operation requires --revision. Read the note again and pass its current revision.")
           }
-          return try applyNoteEditsUnlocked(request)
+          return try applyNoteEditsUnlocked(request, actor: boardActorUnlocked(callerConversationID: callerConversationID))
         }.result
     }
   }
 
+  /// Attribution comes from the caller this transaction authorized, never from
+  /// tool arguments. No caller means the user's own app.
+  private func boardActorUnlocked(callerConversationID: String?) throws -> BoardActor {
+    guard let id = callerConversationID else { return BoardActor(kind: .user) }
+    if id == WovenMCPCaller.outside { return BoardActor(kind: .outside) }
+    let title = try historyRowsUnlocked("SELECT title FROM dashboard_conversations WHERE id=?", values: [id])
+      .first?.objectValue?["title"]?.stringValue
+    return BoardActor(kind: .session, sessionID: id, label: title.map { String($0.prefix(160)) })
+  }
+
+  /// A newly linked original must exist now. A link that already existed is kept
+  /// even if its original is gone, and reads report it as unavailable.
+  private func requireNewBoardAssetsUnlocked(old: NoteDocument, new: NoteDocument, boardID: String, operatorID: String) throws {
+    // Compare per card: a new card must not inherit another card's retained missing link.
+    let added = Set((new.canvas ?? [:]).compactMap { id, placement -> String? in
+      placement.assetID == old.canvas?[id]?.assetID ? nil : placement.assetID
+    })
+    guard !added.isEmpty else { return }
+    guard !added.contains(boardID) else { throw WorkspaceToolError.invalid("A Board cannot link to itself.") }
+    let ids = String(decoding: try JSONEncoder().encode(added.sorted()), as: UTF8.self)
+    let found = Set(try historyRowsUnlocked(
+      "SELECT id FROM notes WHERE user_id=? AND deleted_at IS NULL AND id IN (SELECT value FROM json_each(?))",
+      values: [operatorID, ids]).compactMap { $0.objectValue?["id"]?.stringValue })
+    if let missing = added.subtracting(found).sorted().first {
+      throw WorkspaceToolError.notFound("The linked asset \(missing) is not available. Create it first, then link its ID.")
+    }
+  }
+
   private func applyNoteEditsUnlocked(
-    _ request: NoteEditingRequest
+    _ request: NoteEditingRequest,
+    actor: BoardActor
   ) throws -> NoteEditingResponse {
     let operatorID = try localMutationOperatorIDUnlocked()
     let note = try noteForEditingUnlocked(id: request.noteID, operatorID: operatorID)
@@ -475,7 +512,12 @@ extension WorkspaceDatabaseConnection {
     }
     let currentDocument = try NoteDocument.editableDocument(from: note.content)
     try RemoteNoteEditEnvelope.validate(operations: request.operations, applyingTo: currentDocument)
-    try checkpointNoteUnlocked(id: request.noteID, source: "before-agent-edit", force: true)
+    // Task updates are frequent and small. Coalesce their retained versions so a
+    // busy Board keeps a usable span of history and does not crowd out other notes.
+    let forceCheckpoint = !request.operations.allSatisfy {
+      if case .board(let edit) = $0 { edit.action != .setPurpose } else { false }
+    }
+    try checkpointNoteUnlocked(id: request.noteID, source: "before-agent-edit", force: forceCheckpoint)
     var document = currentDocument
     if document.kind == .html,
        request.operations.contains(where: {
@@ -484,7 +526,18 @@ extension WorkspaceDatabaseConnection {
       throw NoteEditError.artifactKindMismatch
     }
     let updatedTitle = try document.apply(request.operations) ?? note.title
+    // Repeating an idempotent Board edit must not make other writers' revisions stale.
+    if document.kind == .canvas, updatedTitle == note.title, document == currentDocument.normalized() {
+      return NoteEditingResponse(success: true, noteID: request.noteID, title: note.title, revision: note.revision, document: document)
+    }
+    if document.kind == .canvas {
+      try requireNewBoardAssetsUnlocked(old: currentDocument, new: document, boardID: request.noteID, operatorID: operatorID)
+      document.stampBoardChanges(from: currentDocument, actor: actor, at: Self.timestamp(Date()))
+    }
     let content = try document.encoded()
+    if document.kind == .canvas, content.utf8.count > NoteDocument.maximumBoardBytes {
+      throw RemoteNoteEditError.operationTooLarge
+    }
     let updatedAt = try nextNoteUpdatedAtUnlocked(id: request.noteID)
     let update = try prepareUnlocked("""
       UPDATE notes SET title = ?, content = ?, snippet = ?, updated_at = ?
@@ -501,7 +554,7 @@ extension WorkspaceDatabaseConnection {
     guard changedRowCountUnlocked == 1 else {
       throw WorkspaceNoteMutationError.noteNotFound
     }
-    try checkpointNoteUnlocked(id: request.noteID, source: "agent", force: true)
+    try checkpointNoteUnlocked(id: request.noteID, source: "agent", force: forceCheckpoint)
     return NoteEditingResponse(
       success: true, noteID: request.noteID, title: updatedTitle,
       revision: try noteForEditingUnlocked(id: request.noteID, operatorID: operatorID).revision, document: document

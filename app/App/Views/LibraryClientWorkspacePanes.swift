@@ -316,6 +316,9 @@ struct LibraryClientNotePane: View {
           }.buttonStyle(DashboardQuietButtonStyle()).padding(.horizontal, 22)
           DashboardNoteEditor(document: document, controller: editor).padding(.horizontal, 22)
         case .spreadsheet: DashboardSpreadsheetEditor(document: document)
+        case .canvas:
+          ContentUnavailableView("Open this Board from Assets", systemImage: "rectangle.3.group",
+            description: Text("Use the workspace Board editor for tasks, references, and layout."))
         case .html:
           VSplitView {
             TextEditor(text: Binding(get: { document.wrappedValue.html }, set: { var value = document.wrappedValue; value.html = $0; document.wrappedValue = value }))
