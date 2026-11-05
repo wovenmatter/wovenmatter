@@ -467,6 +467,36 @@ extension WovenMCPHostTests {
         #expect(try await fixture.database.sessionRelationship(fixture.caller).coordinatorID == nil)
     }
 
+    /// A bot first seen through paired sync can later be attached here. Disconnecting must then
+    /// clear what it coordinates, and reattaching must not bring that access back.
+    @Test func aSyncedBotThatAttachesHereIsClearedByItsRevocation() async throws {
+        let fixture = try await MCPHostFixture(); defer { fixture.remove() }
+        let installation = UUID().uuidString.lowercased()
+        let caller = WovenMCPCaller.bot(installationID: installation, botID: UUID().uuidString)
+        let other = UUID().uuidString.lowercased()
+        _ = try await fixture.host.issueBotGrant(installationID: other)
+        let setup = WovenMCPCaller.bot(installationID: other, botID: UUID().uuidString)
+        try await fixture.database.registerBotCaller(setup, displayName: "Setup")
+        _ = try await fixture.database.requestCoordinationAccess(sourceID: setup, targetID: fixture.caller,
+            purpose: "Fixture", requestID: UUID().uuidString)
+        try await fixture.database.write { connection in
+            // The synced row names a caller this Mac has never registered.
+            try connection.toolsExecuteUnlocked("UPDATE workspace_session_relationships SET coordinator_id=? WHERE session_id=?", [caller, fixture.caller])
+        }
+        #expect(try await fixture.database.sessionRelationship(fixture.caller).coordinatorID == caller)
+
+        _ = try await fixture.host.issueBotGrant(installationID: installation)
+        try await fixture.database.registerBotCaller(caller, displayName: "Attached")
+        #expect(try await fixture.database.sessionRelationship(fixture.caller).coordinatorID == caller)
+
+        try await fixture.database.setBotInstallation(installation, active: false)
+        #expect(try await fixture.database.sessionRelationship(fixture.caller).coordinatorID == nil)
+
+        _ = try await fixture.host.issueBotGrant(installationID: installation)
+        try await fixture.database.registerBotCaller(caller, displayName: "Attached")
+        #expect(try await fixture.database.sessionRelationship(fixture.caller).coordinatorID == nil)
+    }
+
     @Test func botNotificationsRetryWithoutReobservingOrDuplicatingAcceptedEvents() async throws {
         let fixture = try await MCPHostFixture(); defer { fixture.remove() }
         let installation = UUID().uuidString, botID = UUID().uuidString

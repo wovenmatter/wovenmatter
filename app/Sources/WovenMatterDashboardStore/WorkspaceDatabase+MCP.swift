@@ -115,7 +115,7 @@ extension WorkspaceDatabase {
       try connection.transaction {
         guard let bot = WovenMCPCaller.parseBot(callerID) else { throw WorkspaceToolError.invalid("Invalid bot caller.") }
         try connection.requireActiveBotUnlocked(callerID)
-        try connection.toolsExecuteUnlocked("INSERT INTO workspace_mcp_callers(id,display_name,installation_id) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET display_name=excluded.display_name", [callerID, displayName, bot.installationID])
+        try connection.toolsExecuteUnlocked("INSERT INTO workspace_mcp_callers(id,display_name,installation_id) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET display_name=excluded.display_name,installation_id=excluded.installation_id", [callerID, displayName, bot.installationID])
       }
     }
   }
