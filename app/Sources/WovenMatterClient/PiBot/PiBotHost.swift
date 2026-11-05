@@ -229,6 +229,7 @@ public struct PiBotHostRunner: Sendable {
         }
         let lines = output.split(whereSeparator: \.isNewline).filter { !$0.hasPrefix("WM_PROGRESS ") }
         let text = lines.joined(separator: "\n")
+        if text.contains("remote port forwarding failed") { return "remote port forwarding failed" }
         if text.contains("Host key verification failed") {
             return "This Mac has not trusted that device's SSH host key yet. Connect once from Terminal over Tailscale, then try again."
         }
@@ -243,15 +244,12 @@ public struct PiBotHostRunner: Sendable {
 
     static func progressMessage(_ phase: String) -> String {
         switch phase {
-        case "waiting": "Waiting for another Pi Bot install to finish…"
-        case "verifying": "Verifying Pi Bot…"
+        case "staging": "Verifying Pi Bot…"
         case "node": "Installing the verified Node runtime…"
-        case "tooling": "Installing package tooling…"
-        case "dependencies": "Installing Pi Bot's dependencies…"
-        case "checking": "Checking the new Pi Bot…"
-        case "activating": "Starting Pi Bot…"
-        case "rollback": "Restoring the previous Pi Bot…"
-        case "ready": "Pi Bot is ready."
+        case "dependencies": "Installing Pi Bot's dependencies. This can take a few minutes…"
+        case "health": "Checking the new Pi Bot…"
+        case "backup": "Backing up your bots' database…"
+        case "activating", "caller-supervises": "Starting Pi Bot…"
         default: "Installing Pi Bot…"
         }
     }

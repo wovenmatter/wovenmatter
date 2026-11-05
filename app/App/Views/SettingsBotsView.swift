@@ -263,7 +263,7 @@ struct SettingsBotsView: View {
                 confirmation = .init(title: "Run bots on \(name)?", action: inspection?.managed.installed == true ? "Use This Device" : "Install",
                     message: replacementNote(leaving: runtime.target) + (inspection?.managed.installed == true
                         ? "Woven Matter reconnects to the Pi Bot it installed there, with its existing bots and data."
-                        : "This downloads about 500 MB of runtime and dependencies to \(name) and starts Pi Bot there, private to that device."),
+                        : "This installs about 1.7 GB of runtime and dependencies on \(name) and starts Pi Bot there, private to that device."),
                     destructive: false, command: .deploy(target))
             }
             .buttonStyle(SettingsQuietButtonStyle())

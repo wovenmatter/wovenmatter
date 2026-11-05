@@ -45,6 +45,7 @@ final class PiBotRuntimeSupervisor {
     var mcpEnabled: (@MainActor () async -> Bool)?
 
     private let root: URL
+    private let stateDirectory: URL
     private let stateFile: URL
     private let runner: PiBotHostRunner
     private let bundleLoader: () throws -> PiBotBundle
@@ -61,8 +62,10 @@ final class PiBotRuntimeSupervisor {
     init(supportDirectory: URL, instance: String,
          bundleLoader: @escaping () throws -> PiBotBundle = { try PiBotBundle.bundled() },
          healthProbe: @escaping @Sendable (URL) async -> PiBotHealth? = { await PiBotHealthProbe.check($0) }) {
+        // The host script requires its root to be its own, so this type's files sit beside it.
         root = supportDirectory.appending(path: "PiBot", directoryHint: .isDirectory)
-        stateFile = root.appending(path: "deployment.json")
+        stateDirectory = supportDirectory.appending(path: "PiBotRuntime", directoryHint: .isDirectory)
+        stateFile = stateDirectory.appending(path: "deployment.json")
         runner = PiBotHostRunner(instance: instance, localRoot: root)
         self.bundleLoader = bundleLoader
         self.healthProbe = healthProbe
@@ -449,7 +452,7 @@ final class PiBotRuntimeSupervisor {
 
     private func save() {
         do {
-            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            try FileManager.default.createDirectory(at: stateDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             try JSONEncoder().encode(persisted).write(to: stateFile, options: [.atomic])
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: stateFile.path)
         } catch {
@@ -459,17 +462,16 @@ final class PiBotRuntimeSupervisor {
 
     // MARK: This Mac's server process
 
-    private var pidFile: URL { root.appending(path: "server.pid") }
-    private var logFile: URL { root.appending(path: "logs/server.log") }
+    private var pidFile: URL { stateDirectory.appending(path: "server.pid") }
+    private var logFile: URL { stateDirectory.appending(path: "logs/server.log") }
 
     private func launchLocalServer() async throws {
         await stopStrayServer()
-        let current = root.appending(path: "current", directoryHint: .isDirectory)
-        let entry = current.appending(path: "packages/server/dist/cli.js")
-        let config = root.appending(path: "config.toml")
-        let node = try Self.nodeBinary(root: root)
-        guard FileManager.default.isReadableFile(atPath: entry.path), FileManager.default.isReadableFile(atPath: config.path) else {
-            throw PiBotHostError.command("The Pi Bot install on this Mac is incomplete. Use Update to reinstall it.")
+        let runner = root.appending(path: "run-server")
+        guard FileManager.default.isExecutableFile(atPath: runner.path) else {
+            persisted.installedCommit = nil
+            save()
+            throw PiBotHostError.command("The Pi Bot install on this Mac is incomplete.")
         }
         try FileManager.default.createDirectory(at: logFile.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         Self.rotateLog(logFile)
@@ -479,10 +481,11 @@ final class PiBotRuntimeSupervisor {
         let log = try FileHandle(forWritingTo: logFile)
         try log.seekToEnd()
         let process = Process()
-        process.executableURL = node
-        process.arguments = [entry.path, "serve", "--config", config.path]
-        process.currentDirectoryURL = current
-        process.environment = Self.serverEnvironment(home: FileManager.default.homeDirectoryForCurrentUser.path, node: node)
+        // The host script's runner follows `current`, including that release's Node.
+        process.executableURL = URL(fileURLWithPath: "/bin/bash")
+        process.arguments = [runner.path]
+        process.currentDirectoryURL = root
+        process.environment = Self.serverEnvironment(home: FileManager.default.homeDirectoryForCurrentUser.path)
         process.standardOutput = log
         process.standardError = log
         process.standardInput = FileHandle.nullDevice
@@ -535,21 +538,10 @@ final class PiBotRuntimeSupervisor {
         try? FileManager.default.moveItem(at: url, to: previous)
     }
 
-    static func nodeBinary(root: URL) throws -> URL {
-        let versions = root.appending(path: "node", directoryHint: .isDirectory)
-        let entries = (try? FileManager.default.contentsOfDirectory(at: versions, includingPropertiesForKeys: nil)) ?? []
-        let candidates = entries.map { $0.appending(path: "bin/node") }.filter { FileManager.default.isExecutableFile(atPath: $0.path) }
-        guard let node = candidates.sorted(by: { $0.path.localizedStandardCompare($1.path) == .orderedDescending }).first else {
-            throw PiBotHostError.command("The Pi Bot runtime is missing on this Mac. Use Update to reinstall it.")
-        }
-        return node
-    }
-
     /// Provider credentials live in Pi Bot's own store; nothing is inherited from this app's environment.
-    static func serverEnvironment(home: String, node: URL) -> [String: String] {
+    static func serverEnvironment(home: String) -> [String: String] {
         ["HOME": home,
-         "PATH": [node.deletingLastPathComponent().path, "/usr/bin", "/bin", "/usr/sbin", "/sbin", "/usr/local/bin", "/opt/homebrew/bin"].joined(separator: ":"),
-         "PIBOT_RESTART_EXIT_CODE": "75",
+         "PATH": ["/usr/bin", "/bin", "/usr/sbin", "/sbin", "/usr/local/bin", "/opt/homebrew/bin"].joined(separator: ":"),
          "LANG": "en_US.UTF-8"]
     }
 }

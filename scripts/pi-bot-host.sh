@@ -74,6 +74,8 @@ case "$os" in
     elif getconf GNU_LIBC_VERSION >/dev/null 2>&1; then libc=glibc
     else libc=unknown; fi
     command -v systemctl >/dev/null 2>&1 && manager=systemd
+    # A plain SSH session may not carry the user manager's bus address.
+    export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
     default_root="$HOME/.local/share/wovenmatter/pi-bot/$instance" ;;
   *) abort platform "Unsupported operating system: $os" ;;
 esac
@@ -127,12 +129,12 @@ if [ "$command_name" = inspect ]; then
   if [ -n "$current_commit" ]; then printf true; else printf false; fi
   printf ',"commit":'; if [ -n "$current_commit" ]; then json "$current_commit"; else printf null; fi
   printf ',"running":%s,"port":%s,"root":' "$running" "${managed_port:-null}"; json "$root"; printf '},"existing":['
+  # Only where a standalone Pi Bot listens: other ports on this host belong to other apps.
   listener_ports() {
     printf '4317\n'
-    if command -v lsof >/dev/null 2>&1; then
-      lsof -nP -iTCP@127.0.0.1 -sTCP:LISTEN -Fn 2>/dev/null | sed -n 's/^n127\.0\.0\.1:\([0-9]*\)$/\1/p' || true
-    elif command -v ss >/dev/null 2>&1; then
-      ss -H -ltn 2>/dev/null | awk '$4 ~ /^127\.0\.0\.1:/ {sub(/^.*:/,"",$4); print $4}' || true
+    standalone_config="$HOME/.config/pi-bot/config.toml"
+    if [ -r "$standalone_config" ]; then
+      sed -n '/^\[server\]/,/^\[/s/^[[:space:]]*port[[:space:]]*=[[:space:]]*\([0-9]*\)[[:space:]]*$/\1/p' "$standalone_config"
     fi
   }
   separator=
@@ -148,7 +150,8 @@ if [ "$command_name" = inspect ]; then
     printf ',"installationId":'; installation_id="$(health_field "$existing" installationId)"
     if [ -n "$installation_id" ]; then json "$installation_id"; else printf null; fi
     printf ',"service":'
-    if [ "$existing_port" = 4317 ]; then json pi-bot.service; else printf null; fi
+    # Only its unit file is read. Nothing here ever asks systemd about pi-bot.service.
+    if [ "$os" = linux ] && [ -f "$HOME/.config/systemd/user/pi-bot.service" ]; then json pi-bot.service; else printf null; fi
     printf '}'
     separator=,
   done < <(listener_ports | sort -un)
@@ -429,6 +432,19 @@ UNIT
 PLIST
   fi
 }
+# A code update can migrate the database, and rollback cannot undo that. Take a
+# consistent copy first; the running server keeps serving during VACUUM INTO.
+if [ -f "$root/data/pi-bot.sqlite" ] && [ -n "$current_commit" ] && [ "$current_commit" != "$commit" ]; then
+  progress backup
+  mkdir -p "$root/data/backups"; chmod 700 "$root/data/backups"
+  backup="$root/data/backups/before-$commit.sqlite"
+  rm -f "$backup"
+  "$node" -e 'const {DatabaseSync}=require("node:sqlite");const db=new DatabaseSync(process.argv[1],{readOnly:true});db.prepare("VACUUM INTO ?").run(process.argv[2]);db.close()' "$root/data/pi-bot.sqlite" "$backup" >&2 \
+    || abort backup 'The database could not be backed up, so the update was not applied.'
+  chmod 600 "$backup"
+  # Retain the two most recent update backups.
+  ls -1t "$root/data/backups"/before-*.sqlite 2>/dev/null | tail -n +3 | while IFS= read -r stale; do rm -f "$stale"; done
+fi
 progress activating
 promotion_pending=yes
 if [ "$previous_service" = yes ]; then service_attempted=yes; service_action stop; fi

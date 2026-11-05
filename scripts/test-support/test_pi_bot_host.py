@@ -23,7 +23,6 @@ with (base/'calls').open('a') as log: log.write(json.dumps([name, *args])+'\n')
 def port(config): return re.search(r'^port = (\d+)', config.read_text(), re.M)[1]
 def mark(p, value): (base/('port-'+p)).write_text(json.dumps(value))
 if name == 'uname': print(os.environ.get('PIBOT_TEST_OS', 'Linux') if args == ['-s'] else 'x86_64')
-elif name == 'lsof': print('n127.0.0.1:47333')
 elif name == 'getconf': print('glibc 2.39')
 elif name == 'ldd':
     print(os.environ.get('PIBOT_TEST_LIBC', 'glibc'))
@@ -109,7 +108,7 @@ class HostTests(unittest.TestCase):
         self.home.mkdir()
         self.bin = self.base/'bin'
         self.bin.mkdir()
-        for name in ('node', 'npm', 'pnpm', 'systemctl', 'launchctl', 'curl', 'uname', 'ldd', 'getconf', 'loginctl', 'lsof'):
+        for name in ('node', 'npm', 'pnpm', 'systemctl', 'launchctl', 'curl', 'uname', 'ldd', 'getconf', 'loginctl'):
             file = self.bin/name
             file.write_text(STUB)
             file.chmod(0o755)
@@ -237,14 +236,21 @@ class HostTests(unittest.TestCase):
         self.assertEqual(unit.read_text(), 'foreign service')
 
     def test_inspect_is_read_only_and_reports_foreign_standalone(self):
-        (self.base/'port-47333').write_text(json.dumps({'version':'0.3.0','protocol':1,'installationId':'other-managed'}))
+        # A standalone server on its configured port is found. Unrelated listeners are never probed.
+        (self.base/'port-47333').write_text(json.dumps({'version':'0.3.0','protocol':1,'installationId':'other-standalone'}))
+        (self.base/'port-47444').write_text(json.dumps({'version':'0.3.0','protocol':1,'installationId':'unrelated'}))
+        (self.home/'.config/systemd/user').mkdir(parents=True)
+        (self.home/'.config/systemd/user/pi-bot.service').write_text('standalone')
+        (self.home/'.config/pi-bot').mkdir(parents=True)
+        (self.home/'.config/pi-bot/config.toml').write_text('[server]\nhost = "127.0.0.1"\nport = 47333\n')
         value = self.run_host('inspect', PIBOT_TEST_EXISTING='1')
         self.assertFalse(self.root.exists())
         self.assertEqual(value['serviceManager'], 'systemd')
         self.assertEqual(value['existing'][0]['service'], 'pi-bot.service')
         self.assertEqual(value['existing'][0]['installationId'], 'foreign-id')
         self.assertEqual(value['existing'][1]['port'], 47333)
-        self.assertEqual(value['existing'][1]['installationId'], 'other-managed')
+        self.assertEqual(value['existing'][1]['installationId'], 'other-standalone')
+        self.assertEqual(len(value['existing']), 2)
         self.assertFalse(value['lingering'])
         self.assertEqual(self.calls('systemctl'), [])
 
