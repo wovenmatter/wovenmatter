@@ -49,7 +49,7 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   newest patch and Debian security updates on every image build. Workspace
   creation may reuse matching local contents for less than 24 hours; an explicit
   container update always rebuilds. See [image reuse](reference/REMOTE_WORKSPACES.md#image-reuse-and-build-progress). The workspace
-  image also raises npm to its tested current stable minimum (`>=12.2.1`), since
+  image also raises npm to its tested current stable minimum (`>=12.2.2`), since
   Node's bundled npm may lag. Dependency maintenance reviews that Dockerfile
   floor; locked installs and the container smoke test validate CLI compatibility.
   Unused bundled Yarn is removed from the workspace image.
@@ -102,9 +102,12 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   Build provenance is retained in the image. Maintenance must remove each local
   rebuild when Debian stable ships an equal or newer fix, refresh exact sources
   and patch checksums together, and validate both amd64 and arm64 images.
-  npm 12.2.1 still bundles affected undici 6.29.0. The workspace image replaces
-  that vendored module with the current, independently locked security selection
-  in `remote/npm-runtime` (tested undici 8.12.3, ip-address 10.7.6 and minimatch 11.0.4), addressing CVE-2026-111997,
+  npm 12.2.2 vendors undici 6.29.1, ip-address 10.7.5 and minimatch 10.2.5.
+  Its bundled graph still needs the IP parser and glob security repairs below.
+  The workspace image retains the same reviewed current HTTP dispatcher across
+  Mac and Linux tooling, with tuple-header redirect credential stripping covered
+  by provider-free fixtures. It applies the independently locked security selection
+  in `remote/npm-runtime` (tested undici 8.12.4, ip-address 10.7.6 and minimatch 11.0.4), addressing CVE-2026-111997,
   GHSA-xjj6-f33q-929c and the
   related denial-of-service advisories. npm ignores overrides for its bundled
   dependencies, so this replacement is explicit in the image definition.
@@ -171,7 +174,7 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   and mobile bridges share their data contracts. A partially published release
   is skipped.
   A scoped npm override raises Pi Coding Agent's pinned `undici` to the tested
-  `>=8.12.3` security floor, addressing GHSA-4qv8-2p9j-2685,
+  `>=8.12.4` security floor, addressing GHSA-4qv8-2p9j-2685,
   GHSA-f72v-6w45-q472, and GHSA-xjj6-f33q-929c. Review this override on every
   Pi refresh and remove it once Pi's own requirement excludes the affected
   releases. Provider-free HTTP security fixtures and the coding-agent suites
@@ -182,7 +185,7 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   peer validation. Real local WebSocket streaming/cancellation fixtures and the
   Chord/Durable suites validate this selection; review it on each Chord refresh.
   Pi AI 1.5.0 also pins older provider clients. Consumer-scoped minimum-only
-  overrides select the tested OpenAI 7.50.0, Anthropic 1.5.0, Google GenAI 2.32.0,
+  overrides select the tested OpenAI 7.51.0, Anthropic 1.5.0, Google GenAI 2.32.0,
   Bedrock Runtime 3.1162.0 and Smithy Node HTTP handler 4.14.2 releases without
   changing vendor manifests. Keeping these clients current is required for
   provider API and transport compatibility, including Anthropic's 2026-10-21

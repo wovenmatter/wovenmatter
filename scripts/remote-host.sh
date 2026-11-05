@@ -486,11 +486,11 @@ def prepare_npm_tooling(node_root,release,environment):
     npm_cli=npm_root/'bin/npm-cli.js'
     node=node_root/'bin/node'
     run([node,node_root/'lib/node_modules/npm/bin/npm-cli.js','install','--global','--prefix',tooling,
-         '--ignore-scripts','--no-audit','--no-fund','npm@>=12.2.1'],check=True,timeout=600,env=environment)
+         '--ignore-scripts','--no-audit','--no-fund','npm@>=12.2.2'],check=True,timeout=600,env=environment)
     try:
         npm_version=json.loads((npm_root/'package.json').read_text())['version']
         parts=re.fullmatch(r'(\d+)\.(\d+)\.(\d+)',npm_version)
-        if not parts or tuple(map(int,parts.groups()))<(12,2,1): raise ValueError()
+        if not parts or tuple(map(int,parts.groups()))<(12,2,2): raise ValueError()
     except (OSError,ValueError,KeyError,TypeError):
         fail('npm_security_verification_failed','The private npm installer does not meet its security floor.',78)
     run([node,npm_cli,'ci','--prefix',release/'npm-runtime','--omit=dev','--ignore-scripts','--no-audit','--no-fund'],check=True,timeout=600,env=environment)

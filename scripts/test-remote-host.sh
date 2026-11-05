@@ -40,7 +40,7 @@ const npmRoot=realpathSync(join(root,'current/tooling/lib/node_modules/npm'));
 assert.equal(realpathSync(join(root,'current/default-agent/lib/npm')),npmRoot,'SDK updates must use the private patched npm.');
 const npmVersion=JSON.parse(readFileSync(join(npmRoot,'package.json'),'utf8')).version;
 const npmNumbers=npmVersion.split('.').map(Number);
-assert.ok(npmNumbers[0]>12||(npmNumbers[0]===12&&(npmNumbers[1]>2||(npmNumbers[1]===2&&npmNumbers[2]>=1))),'Private npm is below its security floor.');
+assert.ok(npmNumbers[0]>12||(npmNumbers[0]===12&&(npmNumbers[1]>2||(npmNumbers[1]===2&&npmNumbers[2]>=2))),'Private npm is below its security floor.');
 const npmGraph=JSON.parse(readFileSync(join(root,'current/npm-runtime/package-lock.json'),'utf8')).packages;
 for(const name of Object.keys(npmGraph).filter(key=>key.startsWith('node_modules/')&&!key.slice(13).includes('/node_modules/')).map(key=>key.slice(13))) assert.equal(JSON.parse(readFileSync(join(npmRoot,'node_modules',name,'package.json'),'utf8')).version,npmGraph['node_modules/'+name].version);
 const require=createRequire(join(npmRoot,'bin/npm-cli.js'));
