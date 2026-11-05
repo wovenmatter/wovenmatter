@@ -1,0 +1,9 @@
+{
+  "name": "wovenmatter-pi-bot-tooling",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Exact pnpm for the recorded Pi Bot workspace lockfile; maintained with selection.json.",
+  "dependencies": {
+    "pnpm": "12.16.1"
+  }
+}
