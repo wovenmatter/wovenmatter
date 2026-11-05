@@ -335,6 +335,8 @@ final class WorkspaceAgentToolsModel {
         didSet { mcpHost?.botNotificationSink = botNotificationSink }
     }
 
+    func mcpEndpoint() async throws -> String { try await ensureMCPHost().start() }
+
     func issueBotGrant(installationID: String) async throws -> WovenBotMCPGrant {
         try await ensureMCPHost().issueBotGrant(installationID: installationID)
     }

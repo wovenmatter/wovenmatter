@@ -45,7 +45,7 @@ extension ApplicationModel {
             self?.agentTools?.revokeBotGrants(installationID: installation)
         }
         supervisor.mcpEnabled = { [weak self] in
-            (try? await self?.agentTools?.database.toolSettings())?.botMCP?.isEnabled ?? true
+            (try? await self?.agentTools?.database.toolSettings())?.botMCP.isEnabled ?? true
         }
         supervisor.mcpLocalPort = { [weak self] in
             guard let endpoint = try? await self?.agentTools?.mcpEndpoint() else { return nil }
