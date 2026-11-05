@@ -6,6 +6,7 @@ struct SettingsDefaultAgentView: View {
     @Bindable var model: ApplicationModel
     var initialScope = "global"
     var reservesRailControlSpace = false
+    var backTitle = "Settings"
     let onBack: () -> Void
     private var agent: DefaultAgentSettingsModel { model.connections }
     @State private var area: HarnessSettingsArea = .accounts
@@ -51,7 +52,7 @@ struct SettingsDefaultAgentView: View {
     }
 
     private var settingsPage: some View {
-        SettingsPage(title: AgentRuntimeKind.defaultAgent.displayName, detail: "An agent for every workspace, powered by the Pi Durable SDK.", reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
+        SettingsPage(title: AgentRuntimeKind.defaultAgent.displayName, detail: "An agent for every workspace, powered by the Pi Durable SDK.", reservesRailControlSpace: reservesRailControlSpace, backTitle: backTitle, onBack: onBack) {
             SettingsHarnessAreaPicker(selection: $area).disabled(agent.busy || savingScope)
             if area == .accounts {
                 SettingsAccountWorkspacePicker(scope: Binding(get: { accountScope }, set: {

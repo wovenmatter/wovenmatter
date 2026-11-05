@@ -27,15 +27,15 @@
   },
   "overrides": {
     "@earendil-works/pi-coding-agent": {
-      "undici": ">=8.12.3",
+      "undici": ">=8.12.4",
       "minimatch": ">=11.0.4"
     },
     "@earendil-works/pi-ai": {
-      "openai": ">=7.50.0",
-      "@anthropic-ai/sdk": ">=1.4.0",
+      "openai": ">=7.51.0",
+      "@anthropic-ai/sdk": ">=1.5.0",
       "@google/genai": ">=2.32.0",
-      "@aws-sdk/client-bedrock-runtime": ">=3.1161.0",
-      "@smithy/node-http-handler": ">=4.14.1"
+      "@aws-sdk/client-bedrock-runtime": ">=3.1162.0",
+      "@smithy/node-http-handler": ">=4.14.2"
     },
     "@earendil-works/chord": {
       "ws": "$ws"
