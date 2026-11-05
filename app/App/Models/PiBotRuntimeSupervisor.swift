@@ -357,31 +357,31 @@ final class PiBotRuntimeSupervisor {
         await ensureWovenConnection()
         update(.ready, message: nil)
         var misses = 0
+        var tick = 0
         while !Task.isCancelled {
-            try await Task.sleep(for: .seconds(10))
+            try await Task.sleep(for: .seconds(1))
+            tick += 1
+            // A process or tunnel exit is cheap to notice, and Pi Bot's own Restart exits on purpose.
             if target.kind == .tailnet, await !tunnel.isRunning {
-                snapshot.baseURL = nil
                 throw PiBotHostError.command(await tunnel.failureDetail() ?? "The connection to \(target.displayName) was lost.")
             }
             if target.kind == .thisMac, target.ownership == .managed, server?.isRunning != true {
-                snapshot.baseURL = nil
                 throw PiBotHostError.command("Pi Bot stopped on this Mac.")
             }
-            let latest = await healthProbe(base)
-            if let latest {
-                misses = 0
-                if latest != health {
-                    health = latest
-                    snapshot.health = latest
-                    onChange?()
-                }
-            } else {
-                misses += 1
-                if misses >= 3 {
-                    snapshot.baseURL = nil
-                    throw PiBotHostError.command("Pi Bot stopped answering on \(target.displayName).")
+            if tick.isMultiple(of: 10) {
+                if let latest = await healthProbe(base) {
+                    misses = 0
+                    if latest != health {
+                        health = latest
+                        snapshot.health = latest
+                        onChange?()
+                    }
+                } else {
+                    misses += 1
+                    if misses >= 3 { throw PiBotHostError.command("Pi Bot stopped answering on \(target.displayName).") }
                 }
             }
+            if tick.isMultiple(of: 60) { await refreshWovenConnection() }
         }
     }
 
@@ -432,6 +432,16 @@ final class PiBotRuntimeSupervisor {
         onChange?()
     }
 
+    /// A failed call leaves the connection marked unavailable, and a grant can be revoked.
+    private func refreshWovenConnection() async {
+        guard let control, let status = try? await control.wovenStatus() else { return }
+        if status != snapshot.woven {
+            snapshot.woven = status
+            onChange?()
+        }
+        if status.state != "ready" { await ensureWovenConnection() }
+    }
+
     /// nil means this Mac: the grant's own loopback endpoint is reachable from the server.
     private func expectedMCPEndpoint() -> String? {
         guard persisted.target?.kind == .tailnet, let port = persisted.mcpRemotePort else { return nil }
@@ -446,7 +456,7 @@ final class PiBotRuntimeSupervisor {
         snapshot.error = error
         snapshot.target = persisted.target
         snapshot.installedCommit = persisted.installedCommit
-        if phase != .ready { snapshot.baseURL = phase == .reconnecting ? nil : snapshot.baseURL }
+        if phase != .ready { snapshot.baseURL = nil }
         onChange?()
     }
 

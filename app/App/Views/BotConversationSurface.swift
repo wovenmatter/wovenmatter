@@ -23,6 +23,7 @@ final class BotWebSession: NSObject, WKScriptMessageHandler, WKNavigationDelegat
     private var pendingTheme: String?
     private var pendingContext: String??
     private var pendingFocus = false
+    private var headerInsets: (left: CGFloat, right: CGFloat)?
     private var theme = DashboardTheme.green.rawValue
     var onRoute: ((Route) -> Void)?
     var onOpenExternal: ((URL) -> Void)?
@@ -97,6 +98,12 @@ final class BotWebSession: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         call("setContext", argument: context)
     }
 
+    func setHeaderInsets(left: CGFloat, right: CGFloat) {
+        headerInsets = (left, right)
+        guard ready else { return }
+        webView.evaluateJavaScript("window.wovenPiBotHost?.setHeaderInsets?.(\(Int(left)),\(Int(right)))", completionHandler: nil)
+    }
+
     func focusComposer() {
         guard ready else { pendingFocus = true; return }
         webView.window?.makeFirstResponder(webView)
@@ -118,6 +125,7 @@ final class BotWebSession: NSObject, WKScriptMessageHandler, WKNavigationDelegat
             if let value = pendingTheme { pendingTheme = nil; setTheme(value) }
             if let context = pendingContext { pendingContext = nil; setContext(context) }
             if pendingFocus { pendingFocus = false; focusComposer() }
+            if let headerInsets { setHeaderInsets(left: headerInsets.left, right: headerInsets.right) }
         case "route":
             let hash = body["hash"] as? String ?? ""
             lastRoute = hash
@@ -257,6 +265,7 @@ struct BotConversationSurface: View {
     let panelID: DashboardChatPanelID
     let target: DashboardBotTarget
     let context: String?
+    let headerInsets: BotHeaderInsets
     let focusGeneration: Int?
     let showsClosePanel: Bool
     let showsAddPanel: Bool
@@ -283,6 +292,7 @@ struct BotConversationSurface: View {
         .simultaneousGesture(TapGesture().onEnded { onActivate() })
         .task(id: BotSurfaceTask(base: base, target: target, theme: theme.rawValue)) { present() }
         .onChange(of: context) { _, value in session.setContext(value) }
+        .onChange(of: headerInsets) { _, value in session.setHeaderInsets(left: value.left, right: value.right) }
         .onChange(of: focusGeneration) { _, value in if value != nil { session.focusComposer() } }
     }
 
@@ -292,6 +302,7 @@ struct BotConversationSurface: View {
             if let next = route.target, next != target { onRoute(next) }
         }
         session.onOpenExternal = { onOpenLink($0) }
+        session.setHeaderInsets(left: headerInsets.left, right: headerInsets.right)
         guard let base else { return }
         session.show(base: base, hash: BotWebSession.hash(for: target), theme: theme.rawValue)
         session.setContext(context)
@@ -316,6 +327,12 @@ struct BotConversationSurface: View {
             }
         }
     }
+}
+
+/// Room for native controls floating over Pi Bot's conversation header.
+struct BotHeaderInsets: Equatable {
+    var left: CGFloat
+    var right: CGFloat
 }
 
 private struct BotSurfaceTask: Hashable {

@@ -166,6 +166,9 @@ struct WorkspaceView: View {
         .onChange(of: assets.notice) { _, message in
             if let message { showNotice(message); assets.notice = nil }
         }
+        .onChange(of: model.bots.notice) { _, message in
+            if let message { showNotice(message); model.bots.notice = nil }
+        }
         .onChange(of: model.pendingDefaultAgentSettingsScope) { _, scope in
             if scope != nil { openUtility(.settings) }
         }
@@ -1603,6 +1606,16 @@ struct DashboardWorkspaceSurface: View {
         }
     }
 
+    /// The reveal-rail and assets buttons float over the panels at the window's top edges.
+    private func botHeaderInsets(for panelID: DashboardChatPanelID) -> BotHeaderInsets {
+        let reachesLeadingEdge = panelID == .primary && !(assets.tabs.isPresented && noteOnLeft)
+        let reachesTrailingEdge = panelID == .primary ? !chatPanels.hasAuxiliaryPanels && !(assets.tabs.isPresented && !noteOnLeft) : true
+        return BotHeaderInsets(
+            left: reachesLeadingEdge && reservesLeadingRailControlSpace ? 44 : 0,
+            right: !reachesTrailingEdge ? 0 : (reservesTrailingRailControlSpace ? 88 : 44)
+        )
+    }
+
     private func botPanel(
         _ panelID: DashboardChatPanelID,
         target: DashboardBotTarget,
@@ -1614,6 +1627,7 @@ struct DashboardWorkspaceSurface: View {
                 panelID: panelID,
                 target: target,
                 context: botContext(for: panelID),
+                headerInsets: botHeaderInsets(for: panelID),
                 focusGeneration: chatPanels.focusRequest?.panelID == panelID ? chatPanels.focusRequest?.generation : nil,
                 showsClosePanel: chatPanels.canClosePanel(panelID),
                 showsAddPanel: chatPanels.canAddPanel(from: panelID),

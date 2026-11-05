@@ -118,11 +118,13 @@ uninstall --instance NAME [--root DIR] [--delete-data]
 }
 ```
 
-`existing` lists Pi Bot servers answering on loopback that this instance does not manage.
+`existing` lists standalone Pi Bot servers answering on loopback, probing only port 4317 and
+the port in `~/.config/pi-bot/config.toml`. Other ports on a host belong to other apps.
 `inspect` never reads credentials, config secrets or conversations.
 
-`install` is atomic: it stages `releases/<commit>`, installs, health-checks on a scratch port,
-swaps `current`, starts the service, and restores the previous `current` on failure. It returns
+`install` is atomic: it stages `releases/<commit>`, installs, health-checks on a scratch port
+against scratch data, backs up the database with `VACUUM INTO` when updating, swaps `current`,
+starts the service, and restores the previous `current` on failure. It returns
 `{"schema":1,"commit":"…","port":47310,"root":"…","node":"<path>","entry":"<path>","config":"<path>"}`.
 
 ## Protocol additions
@@ -175,6 +177,7 @@ Native to web, on `window.wovenPiBotHost`:
 
 ```
 setTheme(theme)        navigate(hashRoute)        setContext(string | null)        focusComposer()
+setHeaderInsets(left, right)
 ```
 
 Web to native, through `window.webkit.messageHandlers.wovenBots.postMessage`, each with `v: 1`:

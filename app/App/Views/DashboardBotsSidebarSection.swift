@@ -51,12 +51,30 @@ struct DashboardBotsSidebarSection: View {
             ) {
                 DashboardAgentDisclosureStore.toggle(Self.sectionKey, in: &disclosureRaw)
             }
+            .contextMenu {
+                if bots.supportsGroups {
+                    Button("New group…") {
+                        newGroupName = ""
+                        creatingGroup = true
+                    }
+                    .disabled(!bots.isConnected)
+                }
+                Button("Bot settings…", action: onOpenSettings)
+            }
+            .popover(isPresented: $creatingGroup, arrowEdge: .trailing) {
+                BotNamePopover(title: "New group", placeholder: "Group name", actionTitle: "Create", name: $newGroupName,
+                               onCancel: { creatingGroup = false }) {
+                    let name = trimmed(newGroupName)
+                    creatingGroup = false
+                    Task { await bots.createGroup(name: name) }
+                }
+            }
             if DashboardAgentDisclosureStore.isExpanded(Self.sectionKey, in: disclosureRaw) {
                 content
             }
         }
         .padding(.bottom, 10)
-        .task(id: selectedTarget?.botID) {
+        .task(id: selectedTarget) {
             // A thread opened from chat must be visible in the sidebar.
             if let target = selectedTarget, target.conversationID != nil { setExpanded(target.botID, true) }
         }
