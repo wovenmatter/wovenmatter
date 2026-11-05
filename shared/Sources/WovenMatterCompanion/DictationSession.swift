@@ -55,7 +55,7 @@ import Observation
   @ObservationIgnored private let preferences: UserDefaults
   @ObservationIgnored private let permission: () async -> Bool
   @ObservationIgnored private let makeEngine: () -> any DictationEngine
-  @ObservationIgnored private let finishingTimeout: Duration
+  @ObservationIgnored private let finishingTimeout: Duration = .seconds(20)
   @ObservationIgnored private var engine: (any DictationEngine)?
   @ObservationIgnored private var generation = UUID()
   @ObservationIgnored private var task: Task<Void, Never>?
@@ -67,10 +67,8 @@ import Observation
 
   public init(preferences: UserDefaults = .standard,
               permission: @escaping () async -> Bool = DictationSession.microphonePermission,
-              makeEngine: @escaping () -> any DictationEngine = { AppleDictationEngine() },
-              finishingTimeout: Duration = .seconds(20)) {
+              makeEngine: @escaping () -> any DictationEngine = { AppleDictationEngine() }) {
     self.preferences = preferences; self.permission = permission; self.makeEngine = makeEngine
-    self.finishingTimeout = finishingTimeout
     languageIdentifier = preferences.string(forKey: "wovenmatter.dictation.language") ?? ""
   }
 

@@ -690,11 +690,7 @@ extension WorkspaceDatabaseConnection {
   // Optimistic revision tokens come from companion_versions, never this timestamp.
   func nextNoteUpdatedAtUnlocked(id: String, now: Date = Date()) throws -> String {
     let rows = try historyRowsUnlocked("SELECT updated_at FROM notes WHERE id=?", values: [id])
-    let formatter = ISO8601DateFormatter()
-    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    let previous = rows.first?.objectValue?["updated_at"]?.stringValue.flatMap {
-      formatter.date(from: $0)
-    }
+    let previous = rows.first?.objectValue?["updated_at"]?.stringValue.flatMap(Self.date)
     return Self.timestamp(max(now, (previous ?? .distantPast).addingTimeInterval(0.002)))
   }
 }

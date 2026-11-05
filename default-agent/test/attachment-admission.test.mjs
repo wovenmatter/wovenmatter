@@ -8,16 +8,10 @@ import { fileURLToPath } from 'node:url';
 import { createDefaultAgentService } from '../src/service.mjs';
 import { writePrivateJSON } from '../src/config.mjs';
 
-function gate() {
-  let release;
-  const promise = new Promise(resolve => { release = resolve; });
-  return { promise, release };
-}
-
 async function fixture(t, { holdAdmission = false } = {}) {
   const directory = await mkdtemp('/tmp/woven-attachment-test-');
   t.after(() => rm(directory, { recursive: true, force: true }));
-  const writing = gate(), written = gate(), execution = gate();
+  const writing = Promise.withResolvers(), written = Promise.withResolvers(), execution = Promise.withResolvers();
   const calls = [];
   const engine = {
     sessions: new Map(), create: async () => ({}), configuration: () => ({}),
@@ -33,7 +27,7 @@ async function fixture(t, { holdAdmission = false } = {}) {
   };
   const service = createDefaultAgentService({ cwd: directory, directory, engineFactory: async () => engine,
     writeState: async (path, value) => {
-      writing.release();
+      writing.resolve();
       if (holdAdmission) await written.promise;
       return writePrivateJSON(path, value);
     } });
@@ -53,7 +47,7 @@ test('replacement load follows queued admission and fences the previous attachme
   // Another session has its own queue, even while this journal write waits.
   const other = await f.service.invoke({ method: 'session/load', attachmentProtocol: 1, params: { sessionId: 'other' } });
   assert.ok(other.result._meta.attachmentToken);
-  f.written.release();
+  f.written.resolve();
   await accepted;
   const loading = await replacing;
   assert.equal(loading.result.sessionId, 'native');
@@ -61,7 +55,7 @@ test('replacement load follows queued admission and fences the previous attachme
   const late = f.prompt(old);
   await assert.rejects(f.service.invoke(late), /attachment was replaced/);
   await assert.rejects(access(join(f.directory, `accepted-${late.operationID}.json`)));
-  f.execution.release();
+  f.execution.resolve();
   while (!(await f.service.poll(request.operationID)).done) await new Promise(resolve => setImmediate(resolve));
   assert.equal(f.calls.filter(call => call.method === 'session/prompt').length, 1);
 });
@@ -89,7 +83,7 @@ for (const trusted of [false, true]) test(`Stop during admission prevents a late
   await f.writing.promise;
   if (trusted) await f.service.cancelSession('native');
   else await f.service.invoke({ method: 'session/cancel', attachmentToken: token, params: { sessionId: 'native' } });
-  f.written.release();
+  f.written.resolve();
   await rejected;
   assert.equal(f.calls.some(call => call.method === 'session/prompt'), false);
   assert.ok((await f.load()).result._meta.attachmentToken);

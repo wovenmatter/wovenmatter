@@ -4,7 +4,6 @@ import WovenMatterCompanion
 
 struct SettingsDictationView: View {
     let model: ApplicationModel
-    var client: CentralLibraryClientModel?
     var reservesRailControlSpace = false
     let onBack: () -> Void
     @State private var records: [DictationRecord] = []
@@ -70,14 +69,8 @@ struct SettingsDictationView: View {
     private func reload() async {
         let requestedPage = page
         do {
-            let fetched: [DictationRecord]
-            if let client {
-                guard let store = client.clientStore else { throw ApplicationModelError.dashboardStoreUnavailable }
-                fetched = try await store.dictations.records(limit: pageSize + 1, offset: requestedPage * pageSize)
-            } else {
-                guard let database = model.dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
-                fetched = try await database.dictationHistory(limit: pageSize + 1, offset: requestedPage * pageSize)
-            }
+            guard let database = model.dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
+            let fetched = try await database.dictationHistory(limit: pageSize + 1, offset: requestedPage * pageSize)
             guard !Task.isCancelled, page == requestedPage else { return }
             records = Array(fetched.prefix(pageSize)); hasNextPage = fetched.count > pageSize
             loaded = true; error = nil

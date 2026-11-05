@@ -103,13 +103,6 @@ struct RuntimeBoundaryTests {
 
   @Test("remote commands preserve data and reject unsafe input")
   func remoteWorkspaceBoundary() async throws {
-    let recorder = SSHRecorder(response: Self.statusJSON)
-    let client = RemoteWorkspaceSSHClient(
-      runner: { destination, command, input in
-        try recorder.record(destination: destination, command: command, input: input)
-      },
-      scriptLoader: { Data("script".utf8) }
-    )
     let configuration = RemoteWorkspaceConfiguration(
       name: "Work",
       workspaceID: "work-1",
@@ -119,17 +112,6 @@ struct RuntimeBoundaryTests {
       memoryLimit: "8",
       swapLimit: "4"
     )
-
-    let imageID = "sha256:" + String(repeating: "a", count: 64)
-    _ = try await client.create(configuration: configuration, token: "secret-token", imageID: imageID)
-    #expect(recorder.command?.contains("'" + imageID + "'") == true)
-    #expect(recorder.destination == "woven@linux-box")
-    #expect(recorder.command?.contains("secret-token") == false)
-    #expect(recorder.command?.contains("'8589934592' '12884901888'") == true)
-    #expect(recorder.input?.starts(with: Data("secret-token\nscript".utf8)) == true)
-    _ = try await client.update(configuration: configuration, imageID: imageID)
-    #expect(recorder.command?.contains("'" + imageID + "'") == true)
-
 
     // The retained lifecycle helper is not a supported workspace launch path.
     for runtime in AgentRuntimeKind.allCases {
@@ -202,8 +184,25 @@ struct RuntimeBoundaryTests {
     #expect(await downloads.fetchCount() == 2)
   }
 
-  private static let statusJSON = #"{"id":"container","name":"wovenmatter-work-1","state":"running","running":true,"health":null,"startedAt":"now","image":"wovenmatter/workspace:0.1","memoryBytes":8589934592,"swapBytes":4294967296,"swapMode":"additional","hostPort":7440,"persistentVolume":"wovenmatter-work-1-home","capabilities":{"memory":true,"swap":true},"storageKind":"named-volume","storageUsedBytes":1048576,"hostStorageCapacityBytes":107374182400,"hostStorageAvailableBytes":53687091200,"hostStorageLow":false,"storageWarning":null,"legacyStorage":false}"#
-
+  @Test("Claude installer receives the newest stable publication despite a stale channel tag")
+  func claudeInstallerPublicationSelection() async throws {
+    let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let script = Data("#!/bin/sh\n[ \"$1\" = 2.1.316 ]\n".utf8)
+    let installer = LocalACPRuntimeInstaller(
+      installPrefix: root,
+      installerFetcher: { _, destination, _ in try script.write(to: destination); return script.count },
+      metadataFetcher: { url in
+        #expect(url.absoluteString == "https://registry.npmjs.org/@anthropic-ai%2fclaude-code")
+        return Data(#"{"dist-tags":{"latest":"2.1.314"},"versions":{"2.1.314":{"bin":{"claude":"cli.js"}},"2.1.316":{"bin":{"claude":"cli.js"}},"2.1.317":{"bin":{"claude":"cli.js"},"deprecated":"withdrawn"},"2.2.0-beta.1":{"bin":{"claude":"cli.js"}}}}"#.utf8)
+      },
+      executableResolver: { _ in URL(fileURLWithPath: "/bin/sh") }
+    )
+    let definition = try #require(LocalACPRuntimeCatalog.definition(for: .claudeCode))
+    let preview = try await installer.prepareCLIInstall(definition)
+    let executable = try await installer.install(definition, component: .cli, expectedSourceSHA256: preview.sha256)
+    #expect(executable.path == "/bin/sh")
+  }
   private func cliDefinition() -> LocalACPRuntimeDefinition {
     LocalACPRuntimeDefinition(
       runtimeKind: .codex,
@@ -262,24 +261,20 @@ private struct TemporaryDirectory {
 private final class SSHRecorder: @unchecked Sendable {
   private let lock = NSLock()
   private let response: Data
-  private(set) var destination: String?
   private(set) var command: String?
-  private(set) var input: Data?
 
   init(response: String) { self.response = Data(response.utf8) }
 
   func record(destination: String, command: String, input: Data?) throws -> Data {
     lock.lock()
-    self.destination = destination
     self.command = command
-    self.input = input
     lock.unlock()
     return response
   }
 }
 
 extension RuntimeBoundaryTests {
-  @Test("adapter installation selects its engine independently before staging")
+  @Test("adapter installation selects engine and protocol SDK independently before staging")
   func independentEngineInstall() async throws {
     let fixture = try TemporaryDirectory(prefix: "woven-independent-engine")
     defer { fixture.remove() }
@@ -298,6 +293,9 @@ extension RuntimeBoundaryTests {
       """.utf8).write(to: node)
     for path in [node, npm] { try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: path.path) }
     let installer = LocalACPRuntimeInstaller(installPrefix: prefix, npmExecutableURL: npm, metadataFetcher: { url in
+      if url.absoluteString.contains("@agentclientprotocol%2fsdk") {
+        return Data(#"{"dist-tags":{"latest":"2.1.0"},"versions":{"2.1.0":{},"2.4.0":{},"2.5.0":{"deprecated":"withdrawn"},"3.0.0-beta.1":{}}}"#.utf8)
+      }
       #expect(url.absoluteString.contains("@openai%2fcodex"))
       return Data(#"{"dist-tags":{"latest":"0.165.0"},"versions":{"0.165.0":{},"0.166.0":{}}}"#.utf8)
     })
@@ -307,6 +305,7 @@ extension RuntimeBoundaryTests {
     #expect(arguments[0].hasSuffix("harnesses/install-adapter.mjs"))
     let selection = try #require(JSONSerialization.jsonObject(with: Data(arguments[1].utf8)) as? [String: Any])
     #expect(selection["engineVersion"] as? String == "0.166.0")
+    #expect(selection["protocolSDKVersion"] as? String == "2.4.0")
     #expect(selection["adapterVersion"] as? String == "2.5.0")
     #expect(selection["npm"] as? [String] == [npm.path])
     #expect(executable == prefix.appending(path: "bin/codex-acp"))

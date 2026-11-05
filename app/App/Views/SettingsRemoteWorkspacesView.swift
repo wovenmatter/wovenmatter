@@ -15,15 +15,17 @@ struct SettingsRemoteWorkspacesView: View {
     @State private var workspaceID = ""
     @State private var hostName = ""
     @State private var userName = ""
-    @State private var port = 7337
-    @State private var memoryLimit = ""
-    @State private var swapLimit = ""
-    private let workspaceKind: RemoteWorkspaceKind = .host
     @State private var accessMode: RemoteWorkspaceAccessMode = .fullRoot
     @State private var acknowledgedHostAccess = false
     @State private var pendingDeletion: RemoteWorkspaceConfiguration?
     @State private var browserWorkspace: RemoteWorkspaceConfiguration?
     @State private var logsWorkspace: RemoteWorkspaceConfiguration?
+
+    private var sharedWorkspaces: [CompanionExecutionWorkspace] {
+        application.companionHost.executionWorkspaces.filter {
+            $0.kind == .linux && !$0.deleted && $0.ownerDeviceID != application.companionHost.peerIdentity?.deviceID
+        }.sorted { $0.name < $1.name }
+    }
 
     private func deploymentProgress(_ message: String) -> some View {
         HStack(spacing: 8) {
@@ -59,6 +61,18 @@ struct SettingsRemoteWorkspacesView: View {
                     }
                 } else {
                     workspacesCard
+                    if !sharedWorkspaces.isEmpty {
+                        SettingsCard(title: "Shared workspaces", detail: "Workspaces added on your paired Macs are available here after synchronization. Agents keep running on their own workspace.") {
+                            ForEach(sharedWorkspaces) { workspace in
+                                HStack {
+                                    Text(workspace.name).font(.system(size: 13, weight: .medium))
+                                    Spacer()
+                                    Text("Added on " + (application.companionHost.connectedPeerRoutes.first(where: { $0.deviceID == workspace.ownerDeviceID })?.name ?? "a paired Mac"))
+                                        .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
+                                }
+                            }
+                        }
+                    }
                     hostCard
                     if currentPreflight?.ready == true { createCard }
                     if let progress = model.progress { deploymentProgress(progress) }
@@ -104,7 +118,7 @@ struct SettingsRemoteWorkspacesView: View {
             .padding(24).frame(width: 760, height: 520)
             .foregroundStyle(DashboardPalette.foreground).background(DashboardPalette.background)
         }
-        .onChange(of: hostName + userName + workspaceKind.rawValue + accessMode.rawValue) { _, _ in
+        .onChange(of: hostName + userName + accessMode.rawValue) { _, _ in
             acknowledgedHostAccess = false
         }
         .onChange(of: model.workspaces.map(\.id)) { _, workspaceIDs in
@@ -236,7 +250,7 @@ struct SettingsRemoteWorkspacesView: View {
     private var currentPreflight: RemoteWorkspacePreflight? {
         model.preflight(
             hostName: hostName,
-            userName: userName, kind: workspaceKind, accessMode: accessMode
+            userName: userName, kind: .host, accessMode: accessMode
         )
     }
 
@@ -386,17 +400,15 @@ struct SettingsRemoteWorkspacesView: View {
 
     private var hostCard: some View {
         SettingsCard(title: "Host", detail: "Choose a machine, then check that it can run a workspace. Remote workspaces run Woven Matter directly on Linux.") {
-            if workspaceKind == .host {
-                SettingsField("Workspace access") {
-                    Picker("Workspace access", selection: $accessMode) {
-                        Text("Full root access").tag(RemoteWorkspaceAccessMode.fullRoot)
-                        Text("Normal user permissions").tag(RemoteWorkspaceAccessMode.user)
-                    }.labelsHidden()
-                }
-                SettingsNote(accessMode == .fullRoot
-                    ? "Agents can administer this machine without approval for each elevated command. The access level applies to the entire workspace."
-                    : "Agents use this Linux account's normal permissions. The access level applies to the entire workspace.")
+            SettingsField("Workspace access") {
+                Picker("Workspace access", selection: $accessMode) {
+                    Text("Full root access").tag(RemoteWorkspaceAccessMode.fullRoot)
+                    Text("Normal user permissions").tag(RemoteWorkspaceAccessMode.user)
+                }.labelsHidden()
             }
+            SettingsNote(accessMode == .fullRoot
+                ? "Agents can administer this machine without approval for each elevated command. The access level applies to the entire workspace."
+                : "Agents use this Linux account's normal permissions. The access level applies to the entire workspace.")
             SettingsField("Tailnet machines") {
                 VStack(alignment: .leading, spacing: 8) {
                     let onlineMachines = model.machineCandidates.filter(\.online)
@@ -408,7 +420,7 @@ struct SettingsRemoteWorkspacesView: View {
                     ForEach(onlineMachines) { machine in
                         Button {
                             hostName = machine.hostName
-                            model.checkHost(hostName: hostName, userName: userName, kind: workspaceKind, accessMode: accessMode)
+                            model.checkHost(hostName: hostName, userName: userName, kind: .host, accessMode: accessMode)
                         } label: {
                             HStack(spacing: 8) {
                                 Text(machine.displayName)
@@ -429,18 +441,18 @@ struct SettingsRemoteWorkspacesView: View {
 
             SettingsField("Tailscale machine") {
                 TextField("machine.tailnet-name.ts.net", text: $hostName)
-                    .settingsInput()
-                    .onSubmit { model.checkHost(hostName: hostName, userName: userName, kind: workspaceKind, accessMode: accessMode) }
+                    .dashboardInput()
+                    .onSubmit { model.checkHost(hostName: hostName, userName: userName, kind: .host, accessMode: accessMode) }
             }
             SettingsField("Remote username (optional)") {
                 TextField("Resolved by SSH config", text: $userName)
-                    .settingsInput()
+                    .dashboardInput()
             }
             SettingsNote("Requires connected Tailscale on both machines. Uses your SSH agent; Woven Matter does not store SSH keys.")
             Button(model.isCheckingHost ? "Inspecting host…" : "Inspect host") {
                 model.checkHost(
                     hostName: hostName,
-                    userName: userName, kind: workspaceKind, accessMode: accessMode
+                    userName: userName, kind: .host, accessMode: accessMode
                 )
             }
             .buttonStyle(SettingsQuietButtonStyle())
@@ -491,7 +503,7 @@ struct SettingsRemoteWorkspacesView: View {
                         }
                         if preflight.canPrepare == true {
                             Button(model.isCreating ? "Preparing host…" : "Prepare host") {
-                                model.prepareHost(hostName: hostName, userName: userName, kind: workspaceKind, accessMode: accessMode)
+                                model.prepareHost(hostName: hostName, userName: userName, kind: .host, accessMode: accessMode)
                             }
                             .buttonStyle(DashboardPrimaryButtonStyle())
                         }
@@ -506,18 +518,16 @@ struct SettingsRemoteWorkspacesView: View {
         SettingsCard(title: "Create workspace", detail: "On \(hostName.trimmingCharacters(in: .whitespacesAndNewlines))") {
             SettingsField("Name") {
                 TextField("Remote workspace name", text: $name)
-                    .settingsInput()
+                    .dashboardInput()
             }
             SettingsField("Workspace ID") {
                 TextField("remote-workspace-id", text: $workspaceID)
-                    .settingsInput()
+                    .dashboardInput()
             }
             SettingsNote("Files use available disk space on the remote machine.")
-            if workspaceKind == .host {
-                SettingsNote(hostWarning(user: userName.isEmpty ? nil : userName, host: hostName))
-                Toggle("I understand this workspace's access to the host", isOn: $acknowledgedHostAccess)
-                    .toggleStyle(DashboardSwitchToggleStyle())
-            }
+            SettingsNote(hostWarning(user: userName.isEmpty ? nil : userName, host: hostName))
+            Toggle("I understand this workspace's access to the host", isOn: $acknowledgedHostAccess)
+                .toggleStyle(DashboardSwitchToggleStyle())
 
             Button(model.isCreating ? "Creating…" : "Create workspace") {
                 model.create(
@@ -525,14 +535,13 @@ struct SettingsRemoteWorkspacesView: View {
                     workspaceID: workspaceID,
                     hostName: hostName,
                     userName: userName,
-                    port: port,
-                    memoryLimit: memoryLimit,
-                    swapLimit: swapLimit, kind: workspaceKind, accessMode: accessMode
+                    port: 7337,
+                    kind: .host, accessMode: accessMode
                 )
             }
             .buttonStyle(DashboardPrimaryButtonStyle())
             .disabled(model.isCreating || currentPreflight?.ready != true
-                || (workspaceKind == .host && !acknowledgedHostAccess)
+                || !acknowledgedHostAccess
                 || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 || workspaceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
@@ -647,10 +656,6 @@ struct SettingsRemoteWorkspacesView: View {
         return "\(component.displayName) \(installed)" + (newer.map { " → \($0)" } ?? "")
     }
 
-    private func resourceLabel(_ bytes: Int64) -> String {
-        bytes > 0 ? ByteCountFormatter.string(fromByteCount: bytes, countStyle: .memory) : "Unlimited"
-    }
-
     private func remoteValueRow(label: String, value: String) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(label)
@@ -662,39 +667,6 @@ struct SettingsRemoteWorkspacesView: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.vertical, 2)
-    }
-
-    private func resourceInputValue(_ value: String?) -> String {
-        guard let value else { return "" }
-        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard normalized.lowercased().hasSuffix("g"),
-              normalized.dropLast().allSatisfy(\.isNumber) else {
-            return normalized
-        }
-        return String(normalized.dropLast())
-    }
-
-    private func swapLabel(_ status: RemoteWorkspaceStatus) -> String {
-        switch status.swapMode {
-        case "default": return "Host default"
-        case "disabled": return "Disabled"
-        case "unlimited": return "Unlimited"
-        case "additional": return resourceLabel(status.swapBytes)
-        default: break
-        }
-        if status.swapBytes < 0 { return "Unlimited" }
-        if status.memoryBytes > 0, status.swapBytes == 0 { return "Disabled" }
-        return resourceLabel(status.swapBytes)
-    }
-
-    private func inspectionCapabilityLabel(
-        _ supported: Bool,
-        preflight: RemoteWorkspacePreflight
-    ) -> String {
-        if supported { return "Supported" }
-        return preflight.preparationRequired == true
-            ? "Verify after preparation"
-            : "Unavailable"
     }
 
     private func workspaceUsageLabel(_ status: RemoteWorkspaceStatus) -> String {

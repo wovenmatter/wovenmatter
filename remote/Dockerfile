@@ -32,8 +32,8 @@ RUN export DEBIAN_FRONTEND=noninteractive \
 # The official image now publishes the required Python security release for both
 # native architectures. Record its verified manifest index; maintenance refreshes
 # this runtime selection together with docs/DEPENDENCIES.md.
-FROM python:3.15.2-slim-trixie@sha256:c4158543ecb725b99e57d129dfd43d761d4c43e4577b5e23326aabb223cf7f4e AS workspace-python
-RUN python3 -m pip install --no-cache-dir --upgrade 'pip>=26.2.2' 'setuptools>=84.2.1' \
+FROM python:3.15.2-slim-trixie@sha256:8c13a3f37a6a5b71498228e902c4b9f51c1f7900d49fabf71f9a650c6120e0d0 AS workspace-python
+RUN python3 -m pip install --no-cache-dir --upgrade 'pip>=26.3' 'setuptools>=84.2.1' \
     && find /usr/local -type f -executable ! -name '*tkinter*' -exec ldd '{}' ';' 2>/dev/null \
       | awk '/=>/ { so = $(NF-1); if (index(so, "/usr/local/") == 1) next; gsub("^/(usr/)?", "", so); printf "*%s\n", so }' \
       | sort -u | xargs -r dpkg-query --search \
@@ -104,16 +104,15 @@ COPY --from=workspace-security-build /archive-tar-install/usr/local/share/perl/ 
 WORKDIR /opt/wovenmatter
 COPY remote/npm-runtime/package*.json ./npm-runtime/
 COPY --chown=woven:woven default-agent/package*.json ./default-agent/
-# npm bundles an affected undici even in its current release. Replace that
-# vendored module with the locked current API-compatible security selection.
+# npm bundles affected vendor modules even in its current release. Replace
+# the complete locked security graph, including each replacement dependency.
 # The workspace Playwright CLI matches playwright-core in the tested lockfile.
 # Keep browsers outside /home so persistent volumes cannot hide image updates.
 RUN export npm_config_cache=/tmp/wovenmatter-npm-build-cache \
-    && npm install --global --ignore-scripts --no-audit --no-fund 'npm@>=12.2.1' \
+    && npm install --global --ignore-scripts --no-audit --no-fund 'npm@>=12.2.2' \
     && npm ci --prefix npm-runtime --omit=dev --ignore-scripts --no-audit --no-fund \
-    && rm -rf /usr/local/lib/node_modules/npm/node_modules/undici /usr/local/lib/node_modules/npm/node_modules/ip-address /opt/yarn-* /usr/local/bin/yarn /usr/local/bin/yarnpkg \
-    && cp -a /opt/wovenmatter/npm-runtime/node_modules/undici /usr/local/lib/node_modules/npm/node_modules/undici \
-    && cp -a /opt/wovenmatter/npm-runtime/node_modules/ip-address /usr/local/lib/node_modules/npm/node_modules/ip-address \
+    && node -e 'const fs=require("node:fs"), path=require("node:path"); const root="/opt/wovenmatter/npm-runtime", vendor="/usr/local/lib/node_modules/npm/node_modules"; for(const [key,record] of Object.entries(require(root+"/package-lock.json").packages)){if(!key.startsWith("node_modules/")||key.slice(13).includes("/node_modules/"))continue; const target=path.join(vendor,key.slice(13)); fs.rmSync(target,{recursive:true,force:true}); fs.mkdirSync(path.dirname(target),{recursive:true}); fs.cpSync(path.join(root,key),target,{recursive:true}); if(require(target+"/package.json").version!==record.version)throw Error("npm vendor graph differs from lock")} const npm=require("node:module").createRequire("/usr/local/lib/node_modules/npm/package.json"); if(typeof npm("undici").request!=="function"||typeof npm("ip-address").Address6!=="function"||typeof npm("minimatch").minimatch!=="function")throw Error("npm security API verification failed")' \
+    && rm -rf /opt/yarn-* /usr/local/bin/yarn /usr/local/bin/yarnpkg \
     && npm install --global --ignore-scripts --no-audit --no-fund \
       "playwright@$(node -p 'require("./default-agent/package-lock.json").packages["node_modules/playwright-core"].version')" \
     && playwright install --with-deps chromium \

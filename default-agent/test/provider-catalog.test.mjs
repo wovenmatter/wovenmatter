@@ -2,10 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { ProviderCatalog, parseProviderModels, refreshInterval } from '../src/provider-catalog.mjs';
+import { ProviderCatalog, parseProviderModels } from '../src/provider-catalog.mjs';
 import { DefaultAgentEngine } from '../src/engine.mjs';
-import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
 import { ClaudeRuntime } from '../src/claude-runtime.mjs';
+import { assistantMessage, assistantStream } from './fixtures/synthetic-stream.mjs';
+import { fakeClaudeRuntime } from './fixtures/claude-runtime.mjs';
 
 const descriptor = (patch = {}) => ({ id: 'fixture-chat', name: 'Fixture chat', provider: 'openai', api: 'openai-responses',
   baseUrl: 'https://api.openai.com/v1', reasoning: true, input: ['text', 'image'], contextWindow: 16384, maxTokens: 4096,
@@ -16,14 +17,11 @@ async function directory(t) {
 }
 const reply = (models = [descriptor()], headers = {}) => new Response(JSON.stringify(models), { headers: { etag: '"fixture"', 'last-modified': 'Thu, 01 Oct 2026 12:00:00 GMT', ...headers } });
 
-
-
 test('OpenCode Go cold startup and ID-only session restore pin current metadata for offline reopening', async t => {
   const root = await directory(t), reference = 'opencode-go/glm-5.3-flash'; let requests = 0;
   const model = descriptor({ id: 'glm-5.3-flash', provider: 'opencode-go', api: 'openai-completions', baseUrl: 'https://opencode.ai/inference/go/v1' });
   const config = { providers: ['opencode-go'], defaultModel: reference };
-  const makeEngine = catalog => new DefaultAgentEngine({ cwd: root, directory: root, config, catalog,
-    claude: { models: [], loadModels: async () => {} } }).initialize();
+  const makeEngine = catalog => new DefaultAgentEngine({ cwd: root, directory: root, config, catalog, claude: fakeClaudeRuntime() }).initialize();
   const catalog = () => new ProviderCatalog(root, { fetchCatalog: async () => { requests++; return reply([model]); } });
   const engine = await makeEngine(catalog());
   assert.equal(requests, 0);
@@ -58,7 +56,6 @@ test('foreign destinations, provider mismatches, malformed fields and oversized 
 
 });
 
-
 test('Claude starts unavailable, discovers without a prompt, retains only valid discovered metadata across restart', async t => {
   const root = await directory(t); let fail = true, closed = 0;
   const models = [{ value: 'fixture-native', displayName: 'Native fixture', supportedEffortLevels: ['high'] }];
@@ -73,13 +70,11 @@ test('Claude starts unavailable, discovers without a prompt, retains only valid 
   const restarted = new ClaudeRuntime(root); await restarted.loadModels(); assert.deepEqual(restarted.models, models);
 });
 
-
 test('an attached child keeps its configured saved model when refresh removes that catalog entry', { timeout: 15000 }, async t => {
   const root = await directory(t);
   const config = { providers: ['openai'], defaultModel: 'openai/fixture-chat' };
   const engine = await new DefaultAgentEngine({ cwd: root, directory: root, config,
-    credentials: { openai: { type: 'api_key', key: 'offline-test-only' } },
-    claude: { models: [], loadModels: async () => {} } }).initialize();
+    credentials: { openai: { type: 'api_key', key: 'offline-test-only' } }, claude: fakeClaudeRuntime() }).initialize();
   engine.publishProviderModels('openai', [descriptor()]);
   await writeFile(join(root, 'fixture.txt'), 'fixture');
   const record = await engine.create();
@@ -92,20 +87,16 @@ test('an attached child keeps its configured saved model when refresh removes th
     const content = child && call === 1 ? [{ type: 'toolCall', id: 'read-fixture', name: 'read', arguments: { path: 'fixture.txt' } }]
       : !child && call === 1 ? [{ type: 'toolCall', id: 'delegate', name: 'subagent', arguments: followUp ? { action: 'message', name: 'reader', message: 'Use your pinned model again.' } : { action: 'spawn', name: 'reader', task: 'Read the fixture.' } }]
       : [{ type: 'text', text: 'Completed' }];
-    const message = { role: 'assistant', content, provider: model.provider, api: model.api, model: model.id, timestamp: Date.now(), stopReason: content[0].type === 'toolCall' ? 'toolUse' : 'stop',
-      usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
-    const output = createAssistantMessageEventStream();
-    output.push({ type: 'start', partial: message }); output.push({ type: 'done', reason: message.stopReason, message }); output.end(message);
-    return output;
+    return assistantStream(assistantMessage(model, content));
   };
-  await engine.prompt(record, 'Delegate the fixture reading', () => {});
+  await engine.prompt(record, 'Delegate the fixture reading', () => {}, undefined, { runID: record.runID, inputID: record.inputID });
   assert.equal(childCalls, 2);
   assert.equal(record.session.model.id, 'fixture-chat');
   followUp = true; parentCalls = 0;
-  await engine.prompt(record, 'Follow up with the existing child', () => {});
+  await engine.prompt(record, 'Follow up with the existing child', () => {}, undefined, { runID: record.runID, inputID: record.inputID });
   assert.equal(childCalls, 3);
   await engine.apply({ config: { ...config, providers: [] } });
   parentCalls = 0;
-  await assert.rejects(engine.prompt(record, 'Follow up after disabling the connection', () => {}), /No configured connection/);
+  await assert.rejects(engine.prompt(record, 'Follow up after disabling the connection', () => {}, undefined, { runID: record.runID, inputID: record.inputID }), /No configured connection/);
   assert.equal(childCalls, 3);
 });

@@ -1,5 +1,5 @@
 import { updateReasoningDetails, flushReasoningDetails } from './reasoning-details.mjs'
-import { assemblePresentationFrame } from './presentation-frames.mjs'
+import { assemblePresentationFrame, textParts } from './presentation-frames.mjs'
 import { createClientExecutionPublisher } from './client-execution-publisher.mjs'
 import { DatabaseSync } from 'node:sqlite'
 import { mkdirSync, chmodSync } from 'node:fs'
@@ -10,24 +10,12 @@ import { createWorkspaceMCPOrchestration } from './workspace-mcp-orchestration.m
 import { queryWorkspaceMCPHistory } from './workspace-mcp-history.mjs'
 import { databaseOperation } from './database-catalog.mjs'
 import { createHash, randomBytes, randomUUID, timingSafeEqual, createCipheriv, createDecipheriv } from 'node:crypto'
+import { ordered, sha256 as digest } from './durable-json.mjs'
 
 const fail = (statusCode, message) => Object.assign(new Error(message), { statusCode })
 const identifier = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value)
-const digest = value => createHash('sha256').update(value).digest('hex')
-const ordered = value => Array.isArray(value) ? value.map(ordered) : value && typeof value === 'object'
-  ? Object.fromEntries(Object.keys(value).sort().map(key => [key, ordered(value[key])])) : value
 const copy = structuredClone
 const date = () => new Date().toISOString()
-function textParts(value) {
-  const parts=[]
-  for(let start=0;start<value.length;) {
-    let end=Math.min(start+16384,value.length)
-    const last=value.charCodeAt(end-1),next=value.charCodeAt(end)
-    if(last>=0xd800&&last<=0xdbff&&next>=0xdc00&&next<=0xdfff)end--
-    parts.push(value.slice(start,end));start=end
-  }
-  return parts.length?parts:['']
-}
 function inputMessages(command,runID) {
   return textParts(command.text).map((content,index)=>({id:index?`${command.commandID}-part-${index}`:command.commandID,
     conversationID:command.conversationID,runID,role:'user',content,createdAt:date(),...(command.agentSourceID?{agentSourceID:command.agentSourceID,isAgentAuthored:true,senderSessionTitle:command.senderSessionTitle,senderHarness:command.senderHarness,senderKind:command.senderKind??'message'}:{})}))
@@ -35,7 +23,7 @@ function inputMessages(command,runID) {
 
 // This store is owned by the workspace service (the existing host lock fences
 // competing owners). Neither a phone nor an SSH attachment owns these runs.
-export function createClientExecution({ directory, runtime, kind = 'linux', name = 'Workspace', publisherKey, publisherFetch, publisherIntervalMilliseconds, goalIntervalMilliseconds = 1000, mcpEndpointURL = 'http://127.0.0.1:7337/mcp', managedDataRoot = resolve(directory, '../databases'), mcpCatalog,externalRunningSessions=()=>0,workspaceBrowser }) {
+export function createClientExecution({ directory, runtime, kind = 'linux', name = 'Workspace', publisherKey, publisherFetch, publisherIntervalMilliseconds, goalIntervalMilliseconds = 1000, mcpEndpointURL = 'http://127.0.0.1:7337/mcp', managedDataRoot = resolve(directory, '../databases'), externalRunningSessions=()=>0,workspaceBrowser }) {
   mkdirSync(directory, { recursive: true, mode: 0o700 })
   const path = resolve(directory, 'execution.sqlite')
   const db = new DatabaseSync(path)
@@ -595,8 +583,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
   const mcp=createWorkspaceMCP({db,identity:descriptor,secret:publisherKey,endpointURL:mcpEndpointURL,
     policy:id=>getRecord(id).enabledTools??mcp.settings().enabledByDefault,localTools:localMCPTools,localCall:performMCP,fetchImpl:publisherFetch,beforeLibraryCall:()=>publisher.syncNow(),
     shouldDelegate:(scope,name,input)=>name==='woven_sessions_create'&&input.workspace!=null&&![identity.id,'current'].includes(input.workspace),
-    scopedHistoryAccess:scope=>orchestration.readableConversationIDs(scope.conversationID).size>0,
-    ...(mcpCatalog?{catalog:mcpCatalog}:{})})
+    scopedHistoryAccess:scope=>orchestration.readableConversationIDs(scope.conversationID).size>0})
   const orchestration=createWorkspaceMCPOrchestration({db,identity:descriptor,getRecord,command:(body,device)=>command(body,device,{internal:true}),runtime,settings:()=>mcp.settings(),runningSessions:()=>Number(db.prepare("SELECT count(*) AS count FROM conversations WHERE json_extract(body,'$.conversation.activeRunID') IS NOT NULL").get().count)+externalRunningSessions(),policy:id=>getRecord(id).enabledTools??mcp.settings().enabledByDefault,notifyApproval:setInteraction})
   async function performMCP(scope,name,input,{signal}={}) {
     const caller=name==='woven_context'||name.startsWith('woven_databases_')||name.startsWith('woven_browser_use')?null:getRecord(scope.conversationID),requestID=input.requestID

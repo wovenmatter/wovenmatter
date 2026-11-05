@@ -33,22 +33,20 @@ enum BackendApplicationCommand: Codable, Sendable {
     case loadAgentDefaults(runtime: AgentRuntimeKind, workspace: String?)
     case saveAgentDefault(runtime: AgentRuntimeKind, workspace: String?, field: SessionSelectionField, selections: SessionSelections)
     case setAgentDefaultsSharing(runtime: AgentRuntimeKind, workspace: String, shared: Bool)
-    case recordSelections(conversationID: String, metadata: LocalACPSessionMetadata)
     case workspaceMutation(BackendWorkspaceMutation)
     case exportConversation(id: String, format: WorkspaceConversationExportFormat)
     case trashedConversations
     case trashedNotes
     case exportNote(id: String, format: WorkspaceNoteExportFormat, expectedRevision: String)
     case sessionMetadata(conversationID: String)
+    case createPeerSession(agentID: UUID, conversationID: UUID, folderID: String?)
     case createSession(runtime: AgentRuntimeKind, workspaceID: UUID?, conversationID: UUID,
                        workingDirectory: URL?, title: String?, nativeWorkspaceID: String?, folderID: String?)
-    case sendMessage(conversationID: String, input: AgentMessageInput, noteID: String?)
     case sendMessageFenced(conversationID: String, input: AgentMessageInput, noteID: String?, admission: AgentDispatchAdmission)
     case cancelSessionFenced(conversationID: String, admission: AgentDispatchAdmission)
     case goalMutationFenced(conversationID: String, mutation: WorkspaceGoalMutation, admission: AgentDispatchAdmission)
     case configureSession(conversationID: String, model: String?, thinking: String?, permission: String?)
     case subagentHistory(BuiltInSubagentArchiveRequest)
-    case setSessionTools(conversationID: String, tools: WorkspaceSessionTools, confirmedPausingTimers: Bool)
     case cancelSession(conversationID: String)
     case resolveSessionAccess(id: String, allowed: Bool)
     case resolvePermission(id: UUID, optionID: String?)
@@ -210,10 +208,13 @@ final class BackendApplicationService {
             let host = model.companionHost
             switch action {
             case .status: await host.refreshStatus()
+            case .pairAtEndpoint(let endpoint): await host.pairAtEndpoint(endpoint)
+            case .pairWithPeer(let peer): await host.pairWithPeer(peer)
+            case .pairUsingLink(let link): await host.pairUsingLink(link)
+            case .cancelPeerPairing: await host.cancelPeerPairing()
             case .discover: await host.refreshDiscovery()
             case .approvePairing(let id): await host.approvePairing(id: id)
             case .denyPairing(let id): await host.denyPairing(id: id)
-            case .invitePairing(let peer): await host.invitePairing(peer: peer)
             case .start: await host.start()
             case .stop: host.stopSharing()
             case .createCode: await host.createPairingCode()
@@ -242,8 +243,6 @@ final class BackendApplicationService {
         case let .setAgentDefaultsSharing(runtime, workspace, shared):
             let values = try await model.setAgentDefaultsSharing(runtime: runtime, workspace: workspace, shared: shared)
             return .init(selections: values.stored, resolvedSelections: values.resolved, usesSharedDefaults: values.usesShared)
-        case let .recordSelections(id, metadata):
-            await model.recordConfirmedSessionSelections(conversationID: id, metadata: metadata)
         case let .exportConversation(id, format):
             return try await .init(exportURL: model.exportConversation(id: id, format: format))
         case .trashedConversations:
@@ -259,6 +258,8 @@ final class BackendApplicationService {
             return .init(metadata: model.localACPSessionMetadata[id])
         case let .workspaceMutation(mutation):
             return try await executeWorkspaceMutation(mutation)
+        case let .createPeerSession(agentID, conversationID, folderID):
+            return try await .init(conversationID: model.createPairedMacSession(agentID: agentID, conversationID: conversationID, folderID: folderID))
         case let .createSession(runtime, workspaceID, conversationID, directory, title, nativeWorkspaceID, folderID):
             let id: String?
             if let workspaceID {
@@ -288,9 +289,6 @@ final class BackendApplicationService {
             _ = try await model.mutateConversationGoal(id: id, mutation: mutation)
             await invalidations.publish(scopes: [.settings, .runtime], conversationIDs: [id])
             return .init()
-        case .sendMessage:
-            // An unversioned request cannot prove that it predates or follows Stop.
-            throw AgentDispatchAdmissionError.invalid
         case let .sendMessageFenced(id, input, noteID, admission):
             if try dispatchAdmissions.prepareSend(admission, conversationID: id) {
                 model.beginAgentStop(conversationID: id)
@@ -323,13 +321,6 @@ final class BackendApplicationService {
         case let .subagentHistory(request):
             _ = try await conversation(request.conversationID)
             return .init(history: try await model.builtInSubagentHistory(request))
-        case let .setSessionTools(id, tools, confirmed):
-            _ = try await conversation(id)
-            guard let database = model.dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
-            let previous = try await database.sessionTools(id)
-            try await database.setSessionTools(tools, sessionID: id, confirmedPausingTimers: confirmed)
-            if !previous.enabled.subtracting(tools.enabled).isDisjoint(with: [.browser, .computer]) { await model.cancelAutomation(callerID: id) }
-            try await model.agentTools?.reload()
         case let .cancelSession(id):
             // Keep legacy Stop useful for an older client and scheduled work.
             // At capacity Stop still reaches native work; future unknown sends fail closed.

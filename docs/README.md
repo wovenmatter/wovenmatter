@@ -34,6 +34,12 @@ in your installed version.
 - [Runtime installation and updates](RUNTIME_MAINTENANCE.md)
 - [OpenCode integration](opencode-v2/PARITY.md) and [testing](opencode-v2/TESTING.md)
 - [Native Woven instructions](NATIVE_INSTRUCTIONS.md)
+- [Internal database concurrency](architecture/ASYNC_DATABASE.md)
+- [Chat and note menu actions](CHAT_MENU_ACTIONS.md)
+- [Active-run steering](architecture/active-run-steering.md)
+- [Conversation streaming](CONVERSATION_STREAMING.md)
+- [Program status](program-status.md)
+- [Document preview tabs](DOCUMENT_PREVIEWS.md)
 
 ## Build and contribute
 

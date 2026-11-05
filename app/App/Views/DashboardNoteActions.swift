@@ -45,57 +45,6 @@ struct DashboardNoteContextMenu: ViewModifier {
     }
 }
 
-struct DashboardRenameNoteSheet: View {
-    let note: WorkspaceNoteRecord
-    let model: ApplicationModel
-    @Environment(\.dismiss) private var dismiss
-    @State private var title: String
-    @State private var error: String?
-    @State private var saving = false
-    @FocusState private var titleFocused: Bool
-
-    init(note: WorkspaceNoteRecord, model: ApplicationModel) {
-        self.note = note
-        self.model = model
-        _title = State(initialValue: model.noteDraft(for: note).title)
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Rename note").font(.headline)
-            TextField("Note name", text: $title)
-                .focused($titleFocused)
-                .onSubmit(save)
-                .disabled(saving)
-            if let error { Text(error).font(.callout).foregroundStyle(DashboardPalette.danger) }
-            HStack {
-                Spacer()
-                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction).disabled(saving)
-                Button("Save", action: save)
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(saving || title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-        }
-        .padding(24)
-        .frame(width: 400)
-        .interactiveDismissDisabled(saving)
-        .onAppear { titleFocused = true }
-    }
-
-    private func save() {
-        guard !saving, !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        saving = true
-        error = nil
-        Task {
-            do {
-                try await model.mutateNote(id: note.id, mutation: .rename(title))
-                dismiss()
-            } catch { self.error = error.localizedDescription }
-            saving = false
-        }
-    }
-}
-
 @MainActor
 enum DashboardNoteExport {
     static func save(_ export: WorkspaceNoteExport) async throws -> Bool {

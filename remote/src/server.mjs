@@ -16,7 +16,7 @@ import { createWorkspaceInstances } from './workspace-instances.mjs'
 import { createWorkspaceBrowser, streamBrowserFrames } from './workspace-browser.mjs'
 import { browserSelfTest } from './browser-selftest.mjs'
 import { loadWorkspaceMCPCatalog, validateInput, maximumMCPRequestBytes } from './workspace-mcp.mjs'
-import { runtimeConfiguration as configuration, runtimeHarnessEnvironment } from './config.mjs'
+import { runtimeConfiguration as configuration, runtimeHarnessEnvironment, shellQuote } from './config.mjs'
 import { createServer } from 'node:http'
 import { timingSafeEqual, randomUUID, createHash } from 'node:crypto'
 import { readFile, writeFile, mkdir, realpath } from 'node:fs/promises'
@@ -552,7 +552,7 @@ async function harnessStatus(harness) {
   }
 }
 
-export function probeHarnessTransport(harness, timeoutMilliseconds, spawnProcess = spawn) {
+function probeHarnessTransport(harness, timeoutMilliseconds) {
   return new Promise((resolvePromise) => {
     const probeID = `woven-matter-readiness-${randomUUID()}`
     const request = {
@@ -567,7 +567,7 @@ export function probeHarnessTransport(harness, timeoutMilliseconds, spawnProcess
             clientInfo: { name: 'Woven Matter Readiness Probe', version: '1.0' },
           },
         }
-    const child = spawnProcess(harness.command, harness.arguments ?? [], {
+    const child = spawn(harness.command, harness.arguments ?? [], {
       cwd: workspaceRoot,
       env: harnessRuntimeEnvironment(harness),
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -964,20 +964,15 @@ async function downloadInstaller(harness) {
 export async function downloadInstallerSource(source, options = {}) {
   const fetchImplementation = options.fetchImplementation ?? globalThis.fetch
   const maximumBytes = options.maximumBytes ?? maximumInstallerBytes
-  const timeoutMilliseconds = options.timeoutMilliseconds
-    ?? installerDownloadTimeoutMilliseconds
   if (typeof fetchImplementation !== 'function') throw new TypeError('fetchImplementation')
   if (!Number.isSafeInteger(maximumBytes) || maximumBytes <= 0) {
     throw new TypeError('maximumBytes')
-  }
-  if (!Number.isSafeInteger(timeoutMilliseconds) || timeoutMilliseconds <= 0) {
-    throw new TypeError('timeoutMilliseconds')
   }
 
   const initialURL = requireHTTPSInstallerURL(source)
   const controller = new AbortController()
   const timeoutError = httpError(502, 'installer_download_timed_out')
-  const timeout = setTimeout(() => controller.abort(timeoutError), timeoutMilliseconds)
+  const timeout = setTimeout(() => controller.abort(timeoutError), installerDownloadTimeoutMilliseconds)
   try {
     const response = await fetchInstallerResponse(
       initialURL,
@@ -1192,10 +1187,6 @@ function validatedAPIToken(value) {
     throw new Error('WOVENMATTER_API_TOKEN must be a 32-256 character random credential')
   }
   return value
-}
-
-function shellQuote(value) {
-  return `'${String(value).replaceAll("'", "'\\''")}'`
 }
 
 function httpError(statusCode, message) {

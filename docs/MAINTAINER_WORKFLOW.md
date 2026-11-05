@@ -112,70 +112,18 @@ without dispatching source validation or looking for removed main CI runs.
 Immutable tags, signing, notarization,
 artifact verification, and exact approved release-copy gates still apply.
 
-An explicit release request authorizes building and verifying a private draft.
-A supplied version is used as given. Otherwise the release agent chooses one from
-the change range: the next unused patch version for a maintenance-only release,
-or the unused semantic version that new capabilities or compatibility changes
-call for. It states the version and starts the build without a separate
-confirmation, asking only about a material version-policy or compatibility
-ambiguity. Publication requires Trey's explicit manual approval of the exact
-release description, including its version and download badge. A tag push only
-stages a draft. For version `X.Y.Z`, the identities are:
+The release skill owns version selection, the release description and its
+approval gate, draft verification, and publication; a tag push only stages a
+private draft. For version `X.Y.Z`, the identities are:
 
 - Tag: `vX.Y.Z`
 - Title: `Woven Matter vX.Y.Z`
 - Disk image: `WovenMatter_X.Y.Z_arm64.dmg`
 
 The draft contains the disk image, its checksum file, and `latest-mac.json`.
-`scripts/publish-release.sh` independently verifies the exact commit, workflow,
-asset set, checksums, manifest, signature, notarization, and Gatekeeper before
-publishing. The default invocation and `--verify-only` both leave the draft private.
-Downloaded bytes are kept privately and rehashed on reuse; publication refuses
-any draft or asset changed after verification. See
+`scripts/publish-release.sh` verifies the draft before publishing; its default
+invocation and `--verify-only` leave the draft private. See
 [Desktop updates](DESKTOP_UPDATES.md#release-performance-and-cache-trust).
-
-While the hosted build runs, the release agent lists the PRs merged since the
-previous public release and drafts a user-facing description of the material
-changes, so review does not wait for packaging. Approval of that exact text
-persists for the release; publication still follows a successful workflow and
-artifact verification. Use this structure for every release:
-
-1. A short opening explanation of the release and its biggest changes.
-2. The README-style download badge directly below the opening paragraph.
-3. **New capabilities**, with bullet points for major new features.
-4. **Improvements and fixes**, with bullet points for noticeable improvements
-   and meaningful fixes.
-5. A **Full changelog** comparison link.
-6. **How to update** as the final section, with the exact text:
-   "Go to Settings > General to check for and install the update."
-
-Use the same badge image, label, and Apple logo as the README, but link directly
-to this release's DMG, never `/releases/latest`. For version `X.Y.Z`:
-
-```markdown
-[![Download Woven Matter for Apple silicon](https://img.shields.io/badge/Download-Woven_Matter_for_Apple_silicon-000000?logo=apple&logoColor=white)](https://github.com/wovenmatter/wovenmatter/releases/download/vX.Y.Z/WovenMatter_X.Y.Z_arm64.dmg)
-```
-
-Verify the link matches an asset on the release. Include the badge in the full
-description presented for approval. An explicitly requested description edit to
-an already-published release can use `gh release edit --notes-file`; it does not
-require rebuilding or changing the tag or assets.
-
-Use plain, natural language that explains what users can now do or what works
-better. Omit implementation details unless they materially affect users. Put any
-required upgrade action in the relevant feature or improvement bullet, keeping
-the final update instructions consistent. Describe agent tools and conversation
-permissions separately; do not blur them with an ambiguous "Full access" label.
-Save the exact text in a Markdown file and present the complete description to
-Trey; stage it on the private draft once the draft exists. Unless that exact text
-is already approved, pause for edits or explicit approval; changed descriptions
-or release commits need new approval.
-
-Only after that approval, run
-`scripts/publish-release.sh --approved-notes /absolute/path/to/notes.md vX.Y.Z EXPECTED_COMMIT_SHA`.
-The flag attests to manual approval and publishes that file's text after repeating
-verification. The script cannot establish conversational consent; the release
-operator must enforce it and must not bypass it with direct publication commands.
 GitHub Releases is the canonical binary distribution channel.
 
 The production app uses `latest-mac.json` to discover updates and can install a

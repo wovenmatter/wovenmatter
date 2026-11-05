@@ -338,7 +338,7 @@ public actor LocalACPManagedNodeRuntime {
             if data.isEmpty { break }
             hash.update(data: data)
         }
-        return hash.finalize().map { String(format: "%02x", $0) }.joined()
+        return hash.finalize().hexString
     }
 }
 
@@ -671,9 +671,14 @@ public struct LocalACPRuntimeInstaller: Sendable {
         guard actualSHA256 == expectedSourceSHA256.lowercased() else {
             throw LocalACPRuntimeInstallError.sourceDigestChanged
         }
+        // The native channel pointer can lag a stable npm publication. Pass the
+        // independently resolved release to the unchanged official installer.
+        let arguments = definition.runtimeKind == .claudeCode
+            ? [try await RuntimeMaintenance.registryVersion("@anthropic-ai/claude-code", fetch: metadataFetcher)]
+            : definition.cliInstallerArguments
         let result = try LocalACPProcessRunner.run(
             executableURL: URL(fileURLWithPath: "/bin/\(interpreter)"),
-            arguments: [file.path] + definition.cliInstallerArguments,
+            arguments: [file.path] + arguments,
             currentDirectoryURL: FileManager.default.homeDirectoryForCurrentUser
         )
         guard result.succeeded else {
@@ -736,8 +741,13 @@ public struct LocalACPRuntimeInstaller: Sendable {
                 URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appending(path: "../harnesses/install-adapter.mjs")].compactMap { $0 }
             guard let script = candidates.first(where: { FileManager.default.isReadableFile(atPath: $0.path) }) else { throw RuntimeMaintenanceError.verification }
             let node = npm.deletingLastPathComponent().appending(path: "node")
-            let selection: [String: Any] = ["prefix": installPrefix.path, "adapter": definition.adapterPackage!,
+            var selection: [String: Any] = ["prefix": installPrefix.path, "adapter": definition.adapterPackage!,
                 "adapterVersion": String(packageSpec.split(separator: "@").last!), "engineVersion": version, "npm": [npm.path]]
+            if let minimum = definition.minimumProtocolSDKVersion {
+                let sdk = try await RuntimeMaintenance.registryVersion("@agentclientprotocol/sdk", executableRequired: false, fetch: metadataFetcher)
+                guard !RuntimeMaintenance.version(sdk, precedes: minimum) else { throw RuntimeMaintenanceError.unavailable }
+                selection["protocolSDKVersion"] = sdk
+            }
             let data = try JSONSerialization.data(withJSONObject: selection)
             var environment = ProcessInfo.processInfo.environment
             environment["PATH"] = node.deletingLastPathComponent().path + ":" + LocalACPRuntimeResolver.executableSearchPath
@@ -1049,7 +1059,7 @@ enum LocalACPProcessRunner {
     }
 }
 
-private extension Array where Element: Equatable {
+extension Array where Element: Equatable {
     func uniqued() -> [Element] {
         reduce(into: []) { result, element in
             if !result.contains(element) {

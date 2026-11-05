@@ -1,8 +1,9 @@
+import { watchConversation } from './durable-view.mjs';
 import { runtimeStageError } from './runtime-stage-error.mjs';
 import { withReasoningSummaries } from './reasoning-stream-options.mjs';
 import { wovenInstructions } from './woven-instructions.mjs';
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -11,14 +12,14 @@ import { ownNativeStore } from './native-owner.mjs';
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context';
 import { getSupportedThinkingLevels } from '@earendil-works/pi-ai/models';
 import { createCodingTools, createGrepTool, createFindTool, createLsTool, createCodemodeExtension, DefaultResourceLoader, SettingsManager } from '@earendil-works/pi-coding-agent';
-import { AgentDoc, CompactionTask, Harness, LiveDoc, ProviderDoc, ToolTask, defineDoc, defineExtension, section, watchEvents } from '@earendil-works/pi-durable';
+import { AgentDoc, CompactionTask, Harness, LiveDoc, ProviderDoc, ToolTask, defineDoc, defineExtension, section } from '@earendil-works/pi-durable';
 import { openWorkspacePiStorage } from './sqlite-storage.mjs';
-import { DefaultAgentError, accessFailure, operationErrorMessage, readJSON, writePrivateJSON } from './config.mjs';
+import { DefaultAgentError, accessFailure, canonicalHash, operationErrorMessage, readJSON, writePrivateJSON } from './config.mjs';
 import { ProviderCompactionError } from './provider-compaction.mjs';
 import { providerFetch } from './transport.mjs';
 import { searchTools } from './search.mjs';
 import { checklistTool } from './checklist.mjs';
-import { openNativeArchive, nativePresentationUpdates } from './native-journal.mjs';
+import { openNativeArchive, publishNativePresentation } from './native-journal.mjs';
 import { NativeContext, contextOverflowDiagnostic, credentialRouteIdentity, nativeContextBridge, safeAssistantDiagnostic } from './native-context.mjs';
 import { createNativeCompactionRegistry } from './native-compaction-registry.mjs';
 import { createSubagentContext } from './subagent-context.mjs';
@@ -32,8 +33,6 @@ import { recoverNativeRuns, validateRecoveryRuns } from './native-recovery.mjs';
 const context = BACKGROUND_CONTEXT;
 const Requests = defineDoc({ kind: 'woven.requests', version: 1, scope: 'conversation', checkpointWhen: () => false, history: 'latest', fork: 'initial', initial: () => ({ requests: {} }) });
 const Options = defineDoc({ kind: 'woven.options', version: 1, scope: 'conversation', checkpointWhen: () => false, history: 'latest', fork: 'current', initial: () => ({ permission: 'full' }) });
-const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(k => [k, canonical(value[k])])) : value;
-const digest = value => createHash('sha256').update(JSON.stringify(canonical(value))).digest('hex');
 const textOf = messages => (messages ?? []).flatMap(m => typeof m.content === 'string' ? [m.content] : (m.content ?? []).flatMap(b => b.type === 'text' ? [b.text] : b.type === 'thinking' ? [b.thinking] : [])).join('\n');
 const safeNativeFailure = error => ({ message: error instanceof DefaultAgentError || error instanceof ProviderCompactionError ? error.message : accessFailure(error) ?? contextOverflowDiagnostic(error) ?? operationErrorMessage(error), ...(error instanceof ProviderCompactionError ? { code: error.code } : {}) });
 // AgentSession is deliberately absent: the coding package supplies the existing
@@ -60,7 +59,7 @@ export async function openDurableSession(engine, id, requested) {
     const archiveStore = await openNativeArchive(archivePath);
     const archiveIDs = archiveStore.identities;
     const pendingArchiveIDs = new Set();
-    record = { mcp: new SessionMCPContext(), cwd, busy: false, permission: 'full', ordinaryTools: ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls', 'web_search', 'web_read', checklistTool.name], codeModeState: { value: engine.config.codeMode }, archivePath, manifest, lockError: ownerError, archiveQueue: Promise.resolve(), emit: undefined };
+    record = { mcp: new SessionMCPContext(), cwd, busy: false, permission: 'full', ordinaryTools: ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls', 'web_search', 'web_read', checklistTool.name], codeModeState: { value: engine.config.codeMode }, manifest, lockError: ownerError, archiveQueue: Promise.resolve(), emit: undefined };
     const batch = records => ({ schemaVersion: 1, sourceID: `builtin-pi-durable:${manifest.storeID}`, nativeSessionID: sessionID, records });
     record.nativeRoot = root;
     record.nativeContext = context;
@@ -132,7 +131,7 @@ export async function openDurableSession(engine, id, requested) {
       return account;
     };
     const withAccount = (model, account, operation, scope = record) => engine.programStatusContext.run({ record, scope }, () =>
-      engine.credentials.runWithAccount(model.provider, account, () => model.provider === 'claude-subscription' && engine.claude.withProfile ? engine.claude.withProfile(account.credential?.accountId, operation) : operation()));
+      engine.withAccount(model.provider, account, operation));
     const currentRoute = async (api, ctx) => {
       const scope = await prepareScope(api, ctx);
       const reference = (await api.snapshot(AgentDoc, api.conversationId, ctx)).model;
@@ -196,7 +195,7 @@ export async function openDurableSession(engine, id, requested) {
     const harness = await Harness.open(storage, { models, registry, settings: { retry: { enabled: false, maxRetries: 0 }, stream: { transport: 'sse', maxRetries: 0 }, toolExecution: 'sequential', compaction: { backgroundTokens: 0 } } }, context);
     record.harness = harness; record.storage = storage; record.registry = registry;
     openingStage = 'nativeSession';
-    record.unsubscribeCommits = harness.subscribeCommits(publication => {
+    const commitObservation = harness.observeCommits({ advance: publication => {
       const records = [];
       const changedGroup = publication.changes.find(change => change.type === 'document' && change.record.kind === Subagents.definition.kind && change.conversationId === record.conversation?.id);
       const reportEntries = new Set(publication.changes.filter(change => change.type === 'submission' && change.value.requestId?.startsWith('woven-subagent-report:')).map(change => change.value.entry));
@@ -223,7 +222,8 @@ export async function openDurableSession(engine, id, requested) {
           ...(messages ? { text: textOf(messages) } : {}) });
       });
       record.appendArchive(records);
-    });
+    }, end: () => {} });
+    record.unsubscribeCommits = () => commitObservation.detach();
     const conversation = await harness.root(context, { init: async tx => { await tx.doc(Requests, 1); await tx.doc(Options, 1); await tx.doc(NativeContext, 1); } });
     record.conversation = conversation;
     record.nativeBridge = nativeContextBridge(record, engine, context);
@@ -238,19 +238,7 @@ export async function openDurableSession(engine, id, requested) {
     }
     record.subagentConcurrency = options.subagentConcurrency ?? engine.config.subagentConcurrency;
     const listeners = new Set();
-    const send = update => {
-      let offset = 0;
-      for (const presentation of nativePresentationUpdates(update)) {
-        // Reassemble a snapshot before projecting it. A partial replacement
-        // cannot pass the coordinator's cumulative steering-prefix fence.
-        if (update._meta?.wovenAssistantSnapshot || update._meta?.wovenThoughtSnapshot) {
-          const start = offset === 0;
-          offset += presentation.content.text.length;
-          presentation._meta = { ...presentation._meta, wovenSnapshotStart: start, wovenSnapshotEnd: offset === update.content.text.length };
-        }
-        for (const listener of listeners) listener({ update: presentation });
-      }
-    };
+    const send = update => publishNativePresentation(update, presentation => { for (const listener of listeners) listener({ update: presentation }); });
     const settingsManager = SettingsManager.inMemory({ retry: { enabled: false }, compaction: { enabled: true } });
     const loader = new DefaultResourceLoader({ cwd, agentDir: engine.directory, settingsManager, noExtensions: true, noThemes: true });
     await loader.reload();
@@ -263,7 +251,7 @@ export async function openDurableSession(engine, id, requested) {
     const mcpClient = new WovenMCPClient();
     createCodemodeExtension({ models: false })( { registerTool: tool => { codemode = tool; }, getSettings: () => ({ codemode: { mode: (toolScopes.getStore() ?? record).codeModeState.value } }), getAllTools: () => tools, appendEntry: (customType, data) => { toolScopes.getStore().pendingStoreWrites.push({ customType, data }); } });
     // Retain the native receipts/recovery for synthetic nested model calls,
-    // and project progress because watchEvents has no live slot for them.
+    // and project progress because the root view has no live slot for them.
     const nestedProgress = new Set();
     const adaptTool = tool => ({ ...tool, replay: tool.replay ?? (['read', 'grep', 'find', 'ls', 'web_search', 'web_read', checklistTool.name].includes(tool.name) ? 'safe' : 'unsafe'), execute: async (args, api, ctx) => {
       const scope = await scopeFor(api.conversationId);
@@ -281,8 +269,8 @@ export async function openDurableSession(engine, id, requested) {
       }));
       await detailsQueue;
       if (detailsError) throw detailsError;
-      // Preserve the classic coding-tool result for retained 1.1 generations;
-      // Durable 1.2 reads the same model-visible blocks from output.
+      // Keep the classic coding-tool result alongside output, which Durable
+      // reads for the same model-visible blocks.
       return { ...result, output: result.content ?? [], ...(result.structuredContent === undefined ? {} : { details: { ...result.details, structuredContent: result.structuredContent } }) };
     } });
     const adapted = tools.map(adaptTool);
@@ -447,14 +435,14 @@ export async function openDurableSession(engine, id, requested) {
         if (opts.streamingBehavior !== 'steer') await record.subagents.beginGroup(record.runID);
         const manual = typeof content === 'string' && content.match(/^\/compact(?:\s+([\s\S]*))?$/);
         if (manual) {
-          const fingerprint = digest({ content });
+          const fingerprint = canonicalHash({ content });
           const taskID = await conversation.commit(async tx => {
             const state = await tx.doc(Requests, conversation.id), prior = state.requests[logicalID];
             if (prior && prior.fingerprint !== fingerprint) throw new DefaultAgentError('This run identifier belongs to a different request.');
             if (prior?.compactionTaskID !== undefined) return prior.compactionTaskID;
             engine.sessions.get(sessionID)?.promptController?.signal.throwIfAborted();
             const taskID = await tx.createTask(CompactionTask, { reason: 'manual', ...(manual[1] ? { instructions: manual[1] } : {}) }, { ownership: { kind: 'conversation' }, conversationId: conversation.id, background: false });
-            const live = await tx.doc(LiveDoc, conversation.id); live.compactions ??= []; live.compactions.push({ taskId: taskID, reason: 'manual', blocking: false, attempt: 1 });
+            const live = await tx.doc(LiveDoc, conversation.id); live.compactions ??= []; live.compactions.push({ taskId: taskID, trigger: 'manual', blocking: false, attempt: 1 });
             state.requests[logicalID] = { fingerprint, compactionTaskID: taskID };
             return taskID;
           }, context);
@@ -471,7 +459,7 @@ export async function openDurableSession(engine, id, requested) {
         const priorReceipt = (await harness.snapshot(Requests, conversation.id, context))?.requests?.[logicalID];
         if (priorReceipt?.nativeRequestIDs?.length && !record.allowFallback) requestId = priorReceipt.nativeRequestIDs.at(-1);
         else requestId = `${logicalID}:attempt:${priorReceipt?.nativeRequestIDs?.length ?? 0}`;
-        const fingerprint = digest({ content });
+        const fingerprint = canonicalHash({ content });
         engine.sessions.get(sessionID)?.promptController?.signal.throwIfAborted();
         const settled = await conversation.commit(async tx => { const receipts = await tx.doc(Requests, conversation.id); const existing = receipts.requests[logicalID]; if (existing && existing.fingerprint !== fingerprint) throw new DefaultAgentError('This run identifier belongs to a different request.'); receipts.requests[logicalID] ??= { fingerprint };
           const receipt = receipts.requests[logicalID]; receipt.nativeRequestIDs ??= []; if (!receipt.nativeRequestIDs.includes(requestId)) receipt.nativeRequestIDs.push(requestId);
@@ -491,7 +479,7 @@ export async function openDurableSession(engine, id, requested) {
     };
     record.session = session;
     await session.refreshContext();
-    eventStream = await watchEvents(harness, conversation.id, context);
+    eventStream = await watchConversation(conversation, context);
     void eventStream.closed.then(() => { record.eventClosed = true; });
     const knownEntries = new Set(eventStream.snapshot.entries.map(e => e.id));
     const toolStream = new NativeToolStream();
@@ -506,7 +494,7 @@ export async function openDurableSession(engine, id, requested) {
           if (message.usage) for (const listener of listeners) listener({ usage: message.usage });
           if (['error', 'aborted'].includes(message.stopReason)) for (const update of toolStream.finishPending()) send(update);
         }
-        // watchEvents is scoped to the root conversation. Child results remain
+        // The conversation watch is scoped to the root conversation. Child results remain
         // in their native archive/subagent activity and cannot update this plan.
         if (message.role === 'toolResult' && message.toolName === checklistTool.name && message.isError === false && Array.isArray(message.details?.wovenChecklist)) {
           const entries = message.details.wovenChecklist;

@@ -24,7 +24,9 @@ A remote workspace has its own installations and credentials.
 
 ## Harness settings
 
-Open the harness's **Settings** for its connection and maintenance controls.
+Open **Settings → Agents** and choose Pi Durable, Codex, Claude Code, Grok Build,
+or OpenCode for its accounts, installation, and chat settings. You can also open
+the harness's **Settings** directly from a workspace.
 OpenCode includes model selection and server controls; configure its provider
 accounts through OpenCode.
 

@@ -12,7 +12,6 @@ function fixture() {
   return { submissions, entries, requests, tx, runs, recover: () => recoverNativeRuns(runs, requests, 1, tx) };
 }
 
-
 test('recovers only the latest answer segment while proving every input', async () => {
   const f = fixture();
   f.requests.steer = { nativeRequestIDs: ['steer:attempt:0'] };

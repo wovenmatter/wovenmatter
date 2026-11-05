@@ -49,7 +49,7 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   newest patch and Debian security updates on every image build. Workspace
   creation may reuse matching local contents for less than 24 hours; an explicit
   container update always rebuilds. See [image reuse](reference/REMOTE_WORKSPACES.md#image-reuse-and-build-progress). The workspace
-  image also raises npm to its tested current stable minimum (`>=12.2.1`), since
+  image also raises npm to its tested current stable minimum (`>=12.2.2`), since
   Node's bundled npm may lag. Dependency maintenance reviews that Dockerfile
   floor; locked installs and the container smoke test validate CLI compatibility.
   Unused bundled Yarn is removed from the workspace image.
@@ -61,7 +61,7 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   multi-architecture image, now published for amd64 and arm64. Its manifest-index
   digest is recorded in `remote/Dockerfile` to preserve the verified interpreter,
   native modules, and Debian ABI together. The current image rebuild uses the
-  October 27 Debian base refresh for both amd64 and arm64, retaining the same
+  current official Debian base refresh for both amd64 and arm64, retaining the same
   Python source checksum, build options, and runtime entry points. This replaces
   the temporary source build used while the registry lagged the expedited
   security release.
@@ -69,7 +69,7 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   both platform configurations, and image digest; refresh all records together.
   The final image still upgrades its Debian runtime libraries at build time.
   Tested minimums are
-  pip 26.2.2 and setuptools 84.2.1, instead of Debian's older interpreter and
+  pip 26.3 and setuptools 84.2.1, instead of Debian's older interpreter and
   vulnerable bundled venv wheel. The SQLite, TLS, and isolated execution paths
   are exercised on native amd64 and arm64 hosts in the container tests. Local
   checks without Docker validate the recipe but cannot replace those builds.
@@ -102,16 +102,21 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   Build provenance is retained in the image. Maintenance must remove each local
   rebuild when Debian stable ships an equal or newer fix, refresh exact sources
   and patch checksums together, and validate both amd64 and arm64 images.
-  npm 12.2.1 still bundles affected undici 6.29.0. The workspace image replaces
-  that vendored module with the current, independently locked security selection
-  in `remote/npm-runtime` (tested undici 8.12.3 and ip-address 10.7.5), addressing CVE-2026-111997,
+  npm 12.2.2 vendors undici 6.29.1, ip-address 10.7.5 and minimatch 10.2.5.
+  Its bundled graph still needs the IP parser and glob security repairs below.
+  The workspace image retains the same reviewed current HTTP dispatcher across
+  Mac and Linux tooling, with tuple-header redirect credential stripping covered
+  by provider-free fixtures. It applies the independently locked security selection
+  in `remote/npm-runtime` (tested undici 8.12.4, ip-address 10.7.6 and minimatch 11.0.4), addressing CVE-2026-111997,
   GHSA-xjj6-f33q-929c and the
   related denial-of-service advisories. npm ignores overrides for its bundled
   dependencies, so this replacement is explicit in the image definition.
   Maintenance reviews npm's vendored selections on every refresh and removes
   the replacement once npm ships a secure version. Image construction tests
   actual npm registry installation and `npm ci`; container validation checks
-  that npm resolves the intended module. Audit both lockfiles separately.
+  that npm resolves the intended module. The 10.7.6 IP parser also escapes
+  invalid IPv6 characters in HTML error diagnostics; provider-free fixtures retain address classification and verify
+  that escaping. Audit both lockfiles separately.
   The Executor image consumes the same npm runtime lock, plus
   `remote/executor-runtime/package-lock.json` for sharp 0.35.5 and its native
   libvips packages. This exact overlay is required because the newest supported
@@ -120,9 +125,15 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   Executor also selects only the ncurses, acl, and util-linux source repairs it
   needs; do not install the workspace browser-library repairs into that smaller
   image without a runtime dependency.
+  npm also vendors minimatch 10.2.5, affected by GHSA-g3hv-75wg-m249. The
+  same graph replaces minimatch with 11.0.4 and its locked dependency closure.
+  Mac, native Linux and both container paths copy and verify every graph module,
+  including scoped dependencies; npm's actual install/ci behavior and bounded
+  glob-pattern fixtures validate this major migration. Keep this replacement
+  until npm's bundled graph excludes affected minimatch releases.
 - **Mac npm** is selected independently of the Node archive, whose bundled npm
   may lag. `harnesses/prepare-npm.mjs` verifies the recorded npm archive integrity,
-  applies the same locked `undici` and `ip-address` repairs used by Linux, verifies
+  applies the same locked vendor repairs used by Linux, verifies
   their APIs, and retains provenance. Immutable cached selections supply
   managed CLI installs, the locked bundle SDK installation, and the bundled SDK
   updater; bootstrap npm only unpacks the verified archive/security graph. The
@@ -163,14 +174,19 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   and mobile bridges share their data contracts. A partially published release
   is skipped.
   A scoped npm override raises Pi Coding Agent's pinned `undici` to the tested
-  `>=8.12.3` security floor, addressing GHSA-4qv8-2p9j-2685,
+  `>=8.12.4` security floor, addressing GHSA-4qv8-2p9j-2685,
   GHSA-f72v-6w45-q472, and GHSA-xjj6-f33q-929c. Review this override on every
   Pi refresh and remove it once Pi's own requirement excludes the affected
   releases. Provider-free HTTP security fixtures and the coding-agent suites
   validate the overridden Node dependency; it is not part of the mobile bundle.
-  Pi AI 1.4.0 also pins older provider clients. Consumer-scoped minimum-only
-  overrides select the tested OpenAI 7.45.1, Anthropic 1.3.0, Google GenAI 2.32.0,
-  Bedrock Runtime 3.1160.0 and Smithy Node HTTP handler 4.14.0 releases without
+  Chord 1.5.0 declares an optional exact ws 8.21.0 peer, which conflicts with
+  the app's current ws 8.22.1 transport. A scoped `$ws` override shares the
+  app's tested current transport without editing vendor manifests or ignoring
+  peer validation. Real local WebSocket streaming/cancellation fixtures and the
+  Chord/Durable suites validate this selection; review it on each Chord refresh.
+  Pi AI 1.5.0 also pins older provider clients. Consumer-scoped minimum-only
+  overrides select the tested OpenAI 7.51.0, Anthropic 1.5.0, Google GenAI 2.32.0,
+  Bedrock Runtime 3.1162.0 and Smithy Node HTTP handler 4.14.2 releases without
   changing vendor manifests. Keeping these clients current is required for
   provider API and transport compatibility, including Anthropic's 2026-10-21
   Messages API. Maintenance reviews each upstream requirement and removes an
@@ -180,6 +196,17 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   serialization, streaming text/tools, usage and cancellation. They do not
   establish authenticated provider acceptance. The iOS bundle excludes these
   network clients; its generated provenance still follows the shared lock.
+  Pi Coding Agent 1.5.0 now selects minimatch 11.0.3, which includes the
+  GHSA-g3hv-75wg-m249 repair. The consumer-scoped floor advances to the current
+  `>=11.0.4` patch without changing the named matching API. Provider-free
+  model-scope matching and bounded adversarial-pattern fixtures validate this
+  selection; review the override on every refresh and remove it when Pi itself
+  selects the current tested release.
+  Pi Durable 1.5 replaces event streams with conversation state watches and
+  batches storage commits. The desktop and iOS bridge use state snapshots,
+  recover transcript window gaps, and derive progress receipts only from new
+  committed entries. Archive/subagent observers use `observeCommits`; SQLite
+  migration verifies each batched commit receipt before activation.
 - **Pyodide and esbuild** produce the offline iOS resources and their
   provenance. They refresh together with the generated files.
 
@@ -207,15 +234,29 @@ Agent CLIs, ACP connectors, and connector-owned engines are checked independentl
 An up-to-date connector does not establish that its engine or sign-in CLI is current.
 Settings selects the newest nondeprecated stable publication for each component;
 a stale npm dist-tag cannot hide a newer stable version. Claude's native installer
-and updater explicitly select `latest`, rather than retaining an older configured
-release channel. OpenCode and Executor retain the documented v2 API boundary;
+and updater receive the newest nondeprecated stable CLI version explicitly,
+resolved from publication metadata. Native `latest` and `stable` pointers can lag
+that publication; unavailable metadata refuses installation rather than retaining
+an older configured channel. OpenCode and Executor retain the documented v2 API boundary;
 maintenance must review a newer stable API major and implement its migration.
 
 `harnesses/catalog.json` records tested connector and engine minimums separately:
-Codex ACP 2.5.0 with Codex 0.166.0, and Claude ACP 0.99.1 with Claude SDK 0.3.314
-(native Claude Code 2.1.314). The standalone Codex and Claude sign-in CLIs use their
-official current stable release channels. Codex ACP's `^0.165.0` engine range and
-Claude ACP's exact SDK 0.3.312 selection otherwise keep the chat engines behind.
+Codex ACP 2.5.0 with Codex 0.166.0, and Claude ACP 0.100.0 with Claude SDK 0.3.318
+(native Claude Code 2.1.318). The standalone Codex and Claude sign-in CLIs use their
+official current stable release channels. Codex ACP's `^0.165.0` engine range
+otherwise keeps its chat engine behind; its ACP TypeScript SDK also retains 2.1
+through a restrictive range. Claude ACP 0.100.0 pins SDK 0.3.316; the consumer-scoped override raises
+its engine to 0.3.318 without changing the connector. Transcript-write loss
+invalidates the native resume marker and refuses tool dispatch/continuation commits;
+config-only write loss leaves a valid response intact. Provider-free persistence
+fixtures verify canonical replay after recovery. The connector selects protocol SDK
+2.4.0 directly. The catalog's independent ACP SDK floor is 2.4.0. Mac and native
+Linux/container explicit updates resolve its newest nondeprecated stable
+publication independently, retain the vendor manifests, and verify the exact
+consumer graph and ACP v1 handshake before activation. SDK-only updates appear
+in inventory even when connector and engine are current. Failed candidates
+leave the active generation intact. The 2.4 SDK retains stable v1;
+its v2 changes remain experimental and do not change Woven Matter's wire API.
 The consumer graph created by `harnesses/install-adapter.mjs` therefore declares
 the independently selected engine and scopes an npm override to that connector.
 This core-function exception keeps the engine used for chat current; it does not
@@ -244,8 +285,7 @@ background updater.
 
 Maintenance belongs in an owner-run agent task or a manual session. Do not add
 Dependabot or GitHub-hosted dependency proposal schedules. The former monolithic
-refresh script has been removed. External maintenance jobs are configured separately; this PR does not create
-or alter them.
+refresh script has been removed. External maintenance jobs are configured separately.
 
 - Scan the complete dependency declarations and runtime records against current
   upstream releases, including ordinary npm packages, coordinated SDK families,

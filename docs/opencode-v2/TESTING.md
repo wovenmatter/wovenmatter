@@ -1,15 +1,17 @@
 # OpenCode v2 testing
 
-Build the current checkout with the repository script. A named variant keeps
-its WovenMatter database and process separate from other development builds:
+Build the current checkout with the repository script. A named snapshot
+instance keeps its WovenMatter database and process separate from other
+development builds:
 
 ```sh
-WOVENMATTER_DEV_VARIANT=OpenCode \
-WOVENMATTER_DEV_CACHE_DIR=/private/tmp/wovenmatter-opencode-dev \
-  scripts/build_and_run.sh
+scripts/build_and_run.sh --mode snapshot --instance opencode
 ```
 
-The app is `Woven Matter OpenCode Dev.app` under that cache's `DerivedData/Build/Products/Debug` folder. The variant isolates only Woven Matter's database/settings; it connects to the standard local OpenCode service and data, not an isolated OpenCode test server.
+The app is `Woven Matter opencode snapshot Dev.app` under
+`/private/tmp/wovenmatter-development/opencode/snapshot/DerivedData/Build/Products/Debug`
+(`WOVENMATTER_DEV_CACHE_DIR` replaces the `/private/tmp/wovenmatter-development`
+base). The instance isolates only Woven Matter's database/settings; it connects to the standard local OpenCode service and data, not an isolated OpenCode test server.
 
 ## Manual acceptance
 
@@ -19,7 +21,7 @@ The app is `Woven Matter OpenCode Dev.app` under that cache's `DerivedData/Build
    **Hide/Show** controls. The server settings page may show **Download** when
    the local CLI is missing.
 2. Confirm installed OpenCode appears in the sidebar without an Enable step. Open its runtime **Settings**, or choose the local
-   workspace from **Settings → Open Code**. **Connect** reuses the standard local
+   workspace from **Settings → Agents → OpenCode**. **Connect** reuses the standard local
    service or starts it if absent. **Open in browser** opens that service without
    a manual sign-in prompt. Configure provider accounts in OpenCode itself.
 3. Use New chat → OpenCode. The session must use the Woven Matter workspace root (`~/.woven-matter` by default). The default model must appear before the first message.

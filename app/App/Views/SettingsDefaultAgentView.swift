@@ -6,6 +6,7 @@ struct SettingsDefaultAgentView: View {
     @Bindable var model: ApplicationModel
     var initialScope = "global"
     var reservesRailControlSpace = false
+    var backTitle = "Settings"
     let onBack: () -> Void
     private var agent: DefaultAgentSettingsModel { model.connections }
     @State private var area: HarnessSettingsArea = .accounts
@@ -51,7 +52,7 @@ struct SettingsDefaultAgentView: View {
     }
 
     private var settingsPage: some View {
-        SettingsPage(title: AgentRuntimeKind.defaultAgent.displayName, detail: "An agent for every workspace, powered by the Pi Durable SDK.", reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
+        SettingsPage(title: AgentRuntimeKind.defaultAgent.displayName, detail: "An agent for every workspace, powered by the Pi Durable SDK.", reservesRailControlSpace: reservesRailControlSpace, backTitle: backTitle, onBack: onBack) {
             SettingsHarnessAreaPicker(selection: $area).disabled(agent.busy || savingScope)
             if area == .accounts {
                 SettingsAccountWorkspacePicker(scope: Binding(get: { accountScope }, set: {
@@ -68,10 +69,10 @@ struct SettingsDefaultAgentView: View {
                 SettingsDefaultAgentSDKView(connections: agent, remoteWorkspaces: model.remoteWorkspaces)
                 Text("Provider accounts").font(.headline)
                 SettingsConnectionsView(model: model, focus: .providers, embedded: true,
-                    onConnected: connected, onManageShared: manageSharedAccounts, onBack: {})
+                    onConnected: connected, onManageShared: manageSharedAccounts)
                 Text("Web search accounts").font(.headline)
                 SettingsConnectionsView(model: model, focus: .webSearch, embedded: true,
-                    onManageShared: manageSharedAccounts, onBack: {})
+                    onManageShared: manageSharedAccounts)
                 DisclosureGroup("Local model servers · Shared connections") { LocalModelServerConnections(agent: agent) }
             } else {
             scopeSection
@@ -401,7 +402,7 @@ private struct SettingsAgentModelsView: View {
                 requested: browsingAllModels, includesAllModels: agent.catalogIncludesAllModels,
                 loading: agent.busy, error: agent.error, setBrowsingAllModels: setBrowsingAllModels)
             if showingAllModels {
-                TextField("Find a model or provider", text: $filter.query).settingsInput()
+                TextField("Find a model or provider", text: $filter.query).dashboardInput()
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: 12) { modelFilters }
                     VStack(alignment: .leading, spacing: 8) { modelFilters }

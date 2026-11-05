@@ -9,7 +9,7 @@ struct CompanionFederationTests {
   let owner = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
   let observer = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
   func uuid() -> String { UUID().uuidString.lowercased() }
-  func digest(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
+  func digest(_ data: Data) -> String { SHA256.hash(data: data).hexString }
   func fixture() throws -> URL {
     let url = FileManager.default.temporaryDirectory.appendingPathComponent("federation-\(UUID())", isDirectory: true)
     try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
@@ -172,7 +172,7 @@ struct CompanionFederationTests {
       remoteWorkspaceName: "Remote", title: "Existing conversation", ownerDeviceID: UUID(),
       executionRoot: .init(folderID: nil, location: .init(workspaceID: "remote:" + descriptor.id, rootPath: "/workspace/projects/existing", managed: false), defaultPath: "/workspace"))
     try await db.updateLocalACPSessionID(conversationID: conversationID, sessionID: "native-existing")
-    let run = try await db.beginLocalACPRun(conversationID: conversationID, content: "Preserve this history")
+    let run = try await db.beginLocalACPRun(conversationID: conversationID, input: .init(text: "Preserve this history"))
     await #expect(throws: CompanionAPIError.self) {
       try await db.prepareCompanionExecutionAdoption(conversationID: conversationID, workspaceID: descriptor.id, deviceID: identity.hostDeviceID)
     }
@@ -186,7 +186,7 @@ struct CompanionFederationTests {
     #expect(transfer.nativeWorkingDirectory == "/workspace/projects/existing")
     #expect(try await db.companionExecutionOwner(conversationID: conversationID) == descriptor.id)
     await #expect(throws: CompanionAPIError.self) {
-      try await db.beginLocalACPRun(conversationID: conversationID, content: "Legacy execution must stay fenced")
+      try await db.beginLocalACPRun(conversationID: conversationID, input: .init(text: "Legacy execution must stay fenced"))
     }
     #expect(try await db.companionFederatedTranscript(conversationID: conversationID)?.messages.contains(where: { $0.content == "Preserve this history" }) == true)
     #expect(try await db.localACPSession(conversationID: conversationID).acpSessionID == "native-existing")
@@ -203,7 +203,7 @@ struct CompanionFederationTests {
     #expect(try await db.companionExecutionOriginCursor(workspaceID: descriptor.id) == 1)
     try await db.write { connection in
       try connection.transaction {
-        try connection.companionExecuteUnlocked("UPDATE dashboard_runs SET status='running' WHERE id=?", values: [run.runID])
+        try connection.toolsExecuteUnlocked("UPDATE dashboard_runs SET status='running' WHERE id=?", [run.runID])
       }
     }
     let reopened = try await WorkspaceDatabase(url: directory.appendingPathComponent("workspace.sqlite"))
@@ -223,7 +223,7 @@ struct CompanionFederationTests {
     let content = String(decoding: try JSONEncoder().encode(legacy), as: UTF8.self)
     try await db.write { connection in
       try connection.transaction {
-        try connection.companionExecuteUnlocked("UPDATE companion_execution_conversations SET transcript=? WHERE id=?", values: [content, first.conversationID])
+        try connection.toolsExecuteUnlocked("UPDATE companion_execution_conversations SET transcript=? WHERE id=?", [content, first.conversationID])
       }
     }
     let page = try #require(try await db.companionFederatedTranscript(conversationID: first.conversationID))
@@ -238,7 +238,7 @@ struct CompanionFederationTests {
     _ = try await db.ingestCompanionJournal(.init(libraryID: workspace.libraryID, entries: [first]), deviceID: owner)
     try await db.write { connection in
       try connection.transaction {
-        try connection.companionExecuteUnlocked("UPDATE dashboard_conversations SET title='Central title',deleted_at='deleted' WHERE id=?", values: [first.conversationID])
+        try connection.toolsExecuteUnlocked("UPDATE dashboard_conversations SET title='Central title',deleted_at='deleted' WHERE id=?", [first.conversationID])
       }
     }
     var replay = first; replay.eventID = uuid(); replay.originSequence = 2; replay.conversation?.title = "Stale title"

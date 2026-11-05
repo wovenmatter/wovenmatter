@@ -1,5 +1,4 @@
 import CryptoKit
-import Darwin
 import Foundation
 import Testing
 import WovenMatterCore
@@ -23,7 +22,7 @@ struct RemoteAttachmentStagingTests {
     }
   }
 
-  private static let hash = SHA256.hash(data: Data("x".utf8)).map { String(format: "%02x", $0) }.joined()
+  private static let hash = SHA256.hash(data: Data("x".utf8)).hexString
   private let configuration = RemoteWorkspaceConfiguration(
     name: "Work", workspaceID: "work-1", hostName: "linux-box", userName: "woven",
     kind: .host, dataRoot: "/home/.local/share/wovenmatter", workspaceRoot: "/home/.woven-matter"
@@ -64,29 +63,4 @@ struct RemoteAttachmentStagingTests {
     // Inner quoting closes the path literal; outer quoting re-escapes it for bash -c.
     #expect(command.contains("it'\\''\\'\\'''\\''s fine.pdf"))
   }
-
-  private final class SpawnCancellation: @unchecked Sendable {
-    private let lock = NSLock()
-    private var task: Task<RemoteWorkspaceProcess.Result, any Error>?
-    private var startedPID: pid_t?
-
-    var processID: pid_t? { lock.withLock { startedPID } }
-
-    func install(_ task: Task<RemoteWorkspaceProcess.Result, any Error>) {
-      let hasStarted = lock.withLock {
-        self.task = task
-        return startedPID != nil
-      }
-      if hasStarted { task.cancel() }
-    }
-
-    func processStarted(_ pid: pid_t) {
-      let task = lock.withLock {
-        startedPID = pid
-        return self.task
-      }
-      task?.cancel()
-    }
-  }
-
 }

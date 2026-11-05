@@ -6,7 +6,8 @@
     "node": ">=26"
   },
   "dependencies": {
-    "undici": ">=8.12.3",
-    "ip-address": ">=10.7.5"
+    "undici": ">=8.12.4",
+    "ip-address": ">=10.7.6",
+    "minimatch": ">=11.0.4"
   }
 }

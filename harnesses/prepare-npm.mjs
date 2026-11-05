@@ -15,12 +15,13 @@ export async function prepareNPM({ prefix, node, bootstrap, securityGraph = reso
   const record = JSON.parse(recordBytes);
   const lockBytes = await readFile(join(securityGraph, 'package-lock.json'));
   const lock = JSON.parse(lockBytes);
+  const modules = Object.keys(lock.packages).filter(path => path.startsWith('node_modules/') && !path.slice(13).includes('/node_modules/')).map(path => path.slice(13));
   const key = createHash('sha256').update(recordBytes).update(lockBytes).update(node).digest('hex');
   prefix = resolve(prefix, key);
   async function verified(at) {
     try {
       if ((await json(join(at, 'lib/node_modules/npm/package.json'))).version !== record.version) return false;
-      for (const name of ['undici', 'ip-address']) if ((await json(join(at, 'lib/node_modules/npm/node_modules', name, 'package.json'))).version !== lock.packages['node_modules/' + name].version) return false;
+      for (const name of modules) if ((await json(join(at, 'lib/node_modules/npm/node_modules', name, 'package.json'))).version !== lock.packages['node_modules/' + name].version) return false;
       const npm = join(at, 'lib/node_modules/npm/bin/npm-cli.js');
       const version = await run(node, [npm, '--version']);
       return version.trim() === record.version;
@@ -42,12 +43,12 @@ export async function prepareNPM({ prefix, node, bootstrap, securityGraph = reso
     const repairs = join(stage, 'security'); await mkdir(repairs, { mode: 0o700 });
     for (const name of ['package.json', 'package-lock.json']) await cp(join(securityGraph, name), join(repairs, name));
     await run(bootstrap[0], [...bootstrap.slice(1), 'ci', '--prefix', repairs, '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: repairs });
-    for (const name of ['undici', 'ip-address']) {
+    for (const name of modules) {
       const destination = join(stage, 'lib/node_modules/npm/node_modules', name);
       await rm(destination, { force: true, recursive: true }); await cp(join(repairs, 'node_modules', name), destination, { recursive: true });
     }
     const require = createRequire(join(stage, 'lib/node_modules/npm/bin/npm-cli.js'));
-    if (typeof require('undici').request !== 'function' || typeof require('ip-address').Address6 !== 'function') throw new Error('Private npm security API verification failed.');
+    if (typeof require('undici').request !== 'function' || typeof require('ip-address').Address6 !== 'function' || typeof require('minimatch').minimatch !== 'function') throw new Error('Private npm security API verification failed.');
     await symlink(node, join(stage, 'bin/node'));
     if (!await verified(stage)) throw new Error('Private npm selection failed verification.');
     await rm(file); await rm(join(repairs, 'node_modules'), { recursive: true, force: true });

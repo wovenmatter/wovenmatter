@@ -15,14 +15,7 @@ public enum DatabaseWorkerError: Error, LocalizedError, Equatable, Sendable {
 /// Metadata only: never records SQL, document bodies, or provider payloads.
 public struct DatabaseWorkerMetrics: Sendable {
   public var pending = 0
-  public var highWaterMark = 0
-  public var completed: UInt64 = 0
-  public var failed: UInt64 = 0
-  public var cancelled: UInt64 = 0
-  public var timedOut: UInt64 = 0
   public var rejected: UInt64 = 0
-  public var maximumQueueWait: TimeInterval = 0
-  public var maximumExecutionTime: TimeInterval = 0
 }
 
 /// Cancellation of a queued job is definitive. Once a write starts, it must
@@ -50,9 +43,8 @@ final class DatabaseJobContext: @unchecked Sendable {
 final class DatabaseWorker: @unchecked Sendable {
   private struct Job {
     let id: UUID
-    let submitted: UInt64
     let context: DatabaseJobContext
-    let run: @Sendable () -> (any Error)?
+    let run: @Sendable () -> Void
     let fail: @Sendable (any Error) -> Void
   }
   private let lock = NSLock()
@@ -87,15 +79,14 @@ final class DatabaseWorker: @unchecked Sendable {
     return try await withTaskCancellationHandler {
       try Task.checkCancellation()
       return try await withCheckedThrowingContinuation { continuation in
-        let job = Job(id: id, submitted: DispatchTime.now().uptimeNanoseconds, context: context,
+        let job = Job(id: id, context: context,
           run: {
             do {
               try context.check()
               let value = try operation(context)
               if interruptible { try context.check() }
               continuation.resume(returning: value)
-              return nil
-            } catch { continuation.resume(throwing: error); return error }
+            } catch { continuation.resume(throwing: error) }
           }, fail: { continuation.resume(throwing: $0) })
         enqueue(job)
       }
@@ -117,7 +108,6 @@ final class DatabaseWorker: @unchecked Sendable {
       }
       jobs.append(job)
       counters.pending += 1
-      counters.highWaterMark = max(counters.highWaterMark, counters.pending)
       if !scheduled { scheduled = true; start = true }
     }
     if let failure { job.fail(failure) }
@@ -128,7 +118,6 @@ final class DatabaseWorker: @unchecked Sendable {
     let removed: Job? = lock.withLock {
       guard let index = jobs.firstIndex(where: { $0.id == id }) else { return nil }
       counters.pending -= 1
-      counters.cancelled += 1
       return jobs.remove(at: index)
     }
     removed?.fail(CancellationError())
@@ -142,8 +131,6 @@ final class DatabaseWorker: @unchecked Sendable {
         catch {
           expired.append((job, error))
           counters.pending -= 1
-          if error is CancellationError { counters.cancelled += 1 }
-          else { counters.timedOut += 1 }
           return true
         }
       }
@@ -158,24 +145,13 @@ final class DatabaseWorker: @unchecked Sendable {
         guard !jobs.isEmpty else { scheduled = false; return nil }
         let job = jobs.removeFirst()
         running = job.id
-        counters.maximumQueueWait = max(counters.maximumQueueWait,
-          Double(DispatchTime.now().uptimeNanoseconds - job.submitted) / 1_000_000_000)
         return job
       }
       guard let next else { return }
-      let began = DispatchTime.now().uptimeNanoseconds
-      let failure = next.run()
+      next.run()
       lock.withLock {
-        if let failure {
-          counters.failed += 1
-          if failure is CancellationError { counters.cancelled += 1 }
-          if (failure as? DatabaseWorkerError) == .timedOut { counters.timedOut += 1 }
-        }
         running = nil
         counters.pending -= 1
-        counters.completed += 1
-        counters.maximumExecutionTime = max(counters.maximumExecutionTime,
-          Double(DispatchTime.now().uptimeNanoseconds - began) / 1_000_000_000)
       }
     }
   }

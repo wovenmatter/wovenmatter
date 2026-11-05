@@ -46,17 +46,7 @@ public struct LocalACPRunIdentifiers: Equatable, Sendable {
   }
 }
 
-public struct LocalACPSteeringIdentifiers: Equatable, Sendable {
-  public let runID: String
-  public let userMessageID: String
-  public let assistantMessageID: String
-
-  public init(runID: String, userMessageID: String, assistantMessageID: String) {
-    self.runID = runID
-    self.userMessageID = userMessageID
-    self.assistantMessageID = assistantMessageID
-  }
-}
+public typealias LocalACPSteeringIdentifiers = LocalACPRunIdentifiers
 
 public enum LocalACPSessionDatabaseError: LocalizedError, Equatable, Sendable {
   case runtimeUnavailable
@@ -245,7 +235,7 @@ extension WorkspaceDatabaseConnection {
     allowMissingCalendarFolder: Bool = false,
     executionRoot: SessionCreationRoot
   ) throws -> String {
-    guard executionRoot.location.workspaceID == "remote:" + remoteWorkspaceID.uuidString.lowercased() else {
+    guard executionRoot.location.workspaceID == WorkspaceFolderLocation.remoteWorkspaceSourceID(remoteWorkspaceID) else {
       throw WorkspaceToolError.invalid("Create this chat in its owning execution workspace.")
     }
     return try transaction {
@@ -518,20 +508,6 @@ extension WorkspaceDatabaseConnection {
 
   public func beginLocalACPRun(
     conversationID: String,
-    content: String,
-    noteContext: AgentNoteContext? = nil,
-    createdAt: Date = Date()
-  ) throws -> LocalACPRunIdentifiers {
-    try beginLocalACPRun(
-      conversationID: conversationID,
-      input: AgentMessageInput(text: content),
-      noteContext: noteContext,
-      createdAt: createdAt
-    )
-  }
-
-  public func beginLocalACPRun(
-    conversationID: String,
     input: AgentMessageInput,
     noteContext: AgentNoteContext? = nil,
     createdAt: Date = Date()
@@ -582,59 +558,15 @@ extension WorkspaceDatabaseConnection {
         userMessageID: UUID().uuidString.lowercased(),
         assistantMessageID: UUID().uuidString.lowercased()
       )
-      let latestMessage = try prepareUnlocked("""
-        SELECT created_at
-        FROM dashboard_messages
-        WHERE conversation_id = ?
-        ORDER BY created_at DESC
-        LIMIT 1
-        """)
-      defer { sqlite3_finalize(latestMessage) }
-      try bind(conversationID, at: 1, to: latestMessage)
-      let minimumCreatedAt: Date?
-      let latestMessageCode = sqlite3_step(latestMessage)
-      if latestMessageCode == SQLITE_ROW {
-        minimumCreatedAt = Self.date(
-          try text(latestMessage, column: 0)
-        )?.addingTimeInterval(0.001)
-      } else if latestMessageCode == SQLITE_DONE {
-        minimumCreatedAt = nil
-      } else {
-        throw stepError()
-      }
-      let orderedCreatedAt = max(createdAt, minimumCreatedAt ?? createdAt)
-      let userTimestamp = Self.timestamp(orderedCreatedAt)
-      let assistantTimestamp = Self.timestamp(
-        orderedCreatedAt.addingTimeInterval(0.001)
+      let (orderedCreatedAt, userTimestamp, assistantTimestamp) = try orderedTurnTimestampsUnlocked(
+        conversationID: conversationID, createdAt: createdAt
       )
-
-      let message = try prepareUnlocked("""
-        INSERT INTO dashboard_messages (
-          id, conversation_id, run_id, role, message_source, content,
-          status, governing_plane, authority_kind, authority_device_id,
-          authority_agent_id, created_at, updated_at, desktop_owned
-        ) VALUES (?, ?, ?, ?, 'local_acp', ?, ?, 'wovenmatter_macos',
-          'device_owned', ?, ?, ?, ?, 1)
-        """)
-      defer { sqlite3_finalize(message) }
-      for (id, role, body, status, timestamp) in [
-        (identifiers.userMessageID, "user", input.text, "completed", userTimestamp),
-        (identifiers.assistantMessageID, "assistant", "", "streaming", assistantTimestamp),
-      ] {
-        sqlite3_reset(message)
-        sqlite3_clear_bindings(message)
-        try bind(id, at: 1, to: message)
-        try bind(conversationID, at: 2, to: message)
-        try bind(identifiers.runID, at: 3, to: message)
-        try bind(role, at: 4, to: message)
-        try bind(body, at: 5, to: message)
-        try bind(status, at: 6, to: message)
-        try bind(ownerDeviceID.uuidString.lowercased(), at: 7, to: message)
-        try bind(agentID, at: 8, to: message)
-        try bind(timestamp, at: 9, to: message)
-        try bind(timestamp, at: 10, to: message)
-        try stepDone(message)
-      }
+      try insertLocalACPTurnMessagesUnlocked(
+        conversationID: conversationID, runID: identifiers.runID,
+        userMessageID: identifiers.userMessageID, assistantMessageID: identifiers.assistantMessageID,
+        text: input.text, ownerDeviceID: ownerDeviceID, agentID: agentID,
+        userTimestamp: userTimestamp, assistantTimestamp: assistantTimestamp
+      )
 
       let run = try prepareUnlocked("""
         INSERT INTO dashboard_runs (
@@ -686,17 +618,8 @@ extension WorkspaceDatabaseConnection {
         createdAt: orderedCreatedAt
       )
 
-      let conversation = try prepareUnlocked("""
-        UPDATE dashboard_conversations
-        SET last_message_preview = ?, last_message_at = MAX(?, COALESCE((SELECT imported_at FROM desktop_session_imports WHERE conversation_id=dashboard_conversations.id), '')), updated_at = ?
-        WHERE id = ? AND desktop_owned = 1
-        """)
-      defer { sqlite3_finalize(conversation) }
-      try bind(Self.localPreview(input.previewText), at: 1, to: conversation)
-      try bind(userTimestamp, at: 2, to: conversation)
-      try bind(userTimestamp, at: 3, to: conversation)
-      try bind(conversationID, at: 4, to: conversation)
-      try stepDone(conversation)
+      try updateConversationPreviewUnlocked(conversationID: conversationID,
+        preview: Self.localPreview(input.previewText), timestamp: userTimestamp)
 
       return identifiers
     }
@@ -784,6 +707,7 @@ extension WorkspaceDatabaseConnection {
         FROM dashboard_runs
         WHERE desktop_owned = 1 AND authority_kind = 'device_owned'
           AND status IN ('running', 'uncertain')
+          AND \(PairedLibraryOwnership.localConversation("dashboard_runs.conversation_id"))
         """)
       defer { sqlite3_finalize(statement) }
       var conversationIDs: Set<String> = []
@@ -793,30 +717,6 @@ extension WorkspaceDatabaseConnection {
         guard code == SQLITE_ROW else { throw stepError() }
         conversationIDs.insert(try text(statement, column: 0))
       }
-    }
-  }
-
-  public func beginLocalACPSteeringTurn(
-    runID: String,
-    content: String,
-    createdAt: Date = Date()
-  ) throws -> LocalACPSteeringIdentifiers {
-    try beginLocalACPSteeringTurn(
-      runID: runID,
-      input: AgentMessageInput(text: content),
-      createdAt: createdAt
-    )
-  }
-
-  public func beginLocalACPSteeringTurn(
-    runID: String,
-    input: AgentMessageInput,
-    completesPreviousAssistant: Bool = true,
-    createdAt: Date = Date()
-  ) throws -> LocalACPSteeringIdentifiers {
-    try transaction {
-      try beginLocalACPSteeringTurnUnlocked(runID: runID, input: input,
-        completesPreviousAssistant: completesPreviousAssistant, createdAt: createdAt)
     }
   }
 
@@ -891,6 +791,100 @@ extension WorkspaceDatabaseConnection {
     }
   }
 
+  /// Timestamps for a new turn: the user message follows every message the
+  /// conversation already has, and the assistant message follows the user's.
+  private func orderedTurnTimestampsUnlocked(
+    conversationID: String, createdAt: Date
+  ) throws -> (orderedCreatedAt: Date, userTimestamp: String, assistantTimestamp: String) {
+    let latestMessage = try prepareUnlocked("""
+      SELECT created_at
+      FROM dashboard_messages
+      WHERE conversation_id = ?
+      ORDER BY created_at DESC
+      LIMIT 1
+      """)
+    defer { sqlite3_finalize(latestMessage) }
+    try bind(conversationID, at: 1, to: latestMessage)
+    let minimumCreatedAt: Date?
+    let latestMessageCode = sqlite3_step(latestMessage)
+    if latestMessageCode == SQLITE_ROW {
+      minimumCreatedAt = Self.date(
+        try text(latestMessage, column: 0)
+      )?.addingTimeInterval(0.001)
+    } else if latestMessageCode == SQLITE_DONE {
+      minimumCreatedAt = nil
+    } else {
+      throw stepError()
+    }
+    let orderedCreatedAt = max(createdAt, minimumCreatedAt ?? createdAt)
+    return (orderedCreatedAt, Self.timestamp(orderedCreatedAt), Self.timestamp(orderedCreatedAt.addingTimeInterval(0.001)))
+  }
+
+  /// The completed user message and streaming assistant placeholder every
+  /// local ACP turn starts with.
+  private func insertLocalACPTurnMessagesUnlocked(
+    conversationID: String, runID: String, userMessageID: String, assistantMessageID: String,
+    text: String, ownerDeviceID: UUID, agentID: String, userTimestamp: String, assistantTimestamp: String
+  ) throws {
+    let message = try prepareUnlocked("""
+      INSERT INTO dashboard_messages (
+        id, conversation_id, run_id, role, message_source, content,
+        status, governing_plane, authority_kind, authority_device_id,
+        authority_agent_id, created_at, updated_at, desktop_owned
+      ) VALUES (?, ?, ?, ?, 'local_acp', ?, ?, 'wovenmatter_macos',
+        'device_owned', ?, ?, ?, ?, 1)
+      """)
+    defer { sqlite3_finalize(message) }
+    for (id, role, body, status, timestamp) in [
+      (userMessageID, "user", text, "completed", userTimestamp),
+      (assistantMessageID, "assistant", "", "streaming", assistantTimestamp),
+    ] {
+      sqlite3_reset(message)
+      sqlite3_clear_bindings(message)
+      try bind(id, at: 1, to: message)
+      try bind(conversationID, at: 2, to: message)
+      try bind(runID, at: 3, to: message)
+      try bind(role, at: 4, to: message)
+      try bind(body, at: 5, to: message)
+      try bind(status, at: 6, to: message)
+      try bind(ownerDeviceID.uuidString.lowercased(), at: 7, to: message)
+      try bind(agentID, at: 8, to: message)
+      try bind(timestamp, at: 9, to: message)
+      try bind(timestamp, at: 10, to: message)
+      try stepDone(message)
+    }
+  }
+
+  private func updateConversationPreviewUnlocked(conversationID: String, preview: String, timestamp: String) throws {
+    let conversation = try prepareUnlocked("""
+      UPDATE dashboard_conversations
+      SET last_message_preview = ?, last_message_at = MAX(?, COALESCE((SELECT imported_at FROM desktop_session_imports WHERE conversation_id=dashboard_conversations.id), '')), updated_at = ?
+      WHERE id = ? AND desktop_owned = 1
+      """)
+    defer { sqlite3_finalize(conversation) }
+    try bind(preview, at: 1, to: conversation)
+    try bind(timestamp, at: 2, to: conversation)
+    try bind(timestamp, at: 3, to: conversation)
+    try bind(conversationID, at: 4, to: conversation)
+    try stepDone(conversation)
+  }
+
+  private func updateConversationPreviewUnlocked(runID: String, preview: String, timestamp: String) throws {
+    let conversation = try prepareUnlocked("""
+      UPDATE dashboard_conversations
+      SET last_message_preview = ?, last_message_at = MAX(?, COALESCE((SELECT imported_at FROM desktop_session_imports WHERE conversation_id=dashboard_conversations.id), '')), updated_at = ?
+      WHERE id = (
+        SELECT conversation_id FROM dashboard_runs WHERE id = ?
+      ) AND desktop_owned = 1
+      """)
+    defer { sqlite3_finalize(conversation) }
+    try bind(preview, at: 1, to: conversation)
+    try bind(timestamp, at: 2, to: conversation)
+    try bind(timestamp, at: 3, to: conversation)
+    try bind(runID, at: 4, to: conversation)
+    try stepDone(conversation)
+  }
+
   private func beginLocalACPSteeringTurnUnlocked(
     runID: String, input: AgentMessageInput, completesPreviousAssistant: Bool, createdAt: Date
   ) throws -> LocalACPSteeringIdentifiers {
@@ -906,30 +900,8 @@ extension WorkspaceDatabaseConnection {
         throw LocalACPSessionDatabaseError.runNotFound
       }
 
-      let latestMessage = try prepareUnlocked("""
-        SELECT created_at
-        FROM dashboard_messages
-        WHERE conversation_id = ?
-        ORDER BY created_at DESC
-        LIMIT 1
-        """)
-      defer { sqlite3_finalize(latestMessage) }
-      try bind(authority.conversationID, at: 1, to: latestMessage)
-      let latestCode = sqlite3_step(latestMessage)
-      let minimumCreatedAt: Date?
-      if latestCode == SQLITE_ROW {
-        minimumCreatedAt = Self.date(
-          try text(latestMessage, column: 0)
-        )?.addingTimeInterval(0.001)
-      } else if latestCode == SQLITE_DONE {
-        minimumCreatedAt = nil
-      } else {
-        throw stepError()
-      }
-      let orderedCreatedAt = max(createdAt, minimumCreatedAt ?? createdAt)
-      let userTimestamp = Self.timestamp(orderedCreatedAt)
-      let assistantTimestamp = Self.timestamp(
-        orderedCreatedAt.addingTimeInterval(0.001)
+      let (orderedCreatedAt, userTimestamp, assistantTimestamp) = try orderedTurnTimestampsUnlocked(
+        conversationID: authority.conversationID, createdAt: createdAt
       )
       let identifiers = LocalACPSteeringIdentifiers(
         runID: runID,
@@ -952,33 +924,12 @@ extension WorkspaceDatabaseConnection {
         }
       }
 
-      let message = try prepareUnlocked("""
-        INSERT INTO dashboard_messages (
-          id, conversation_id, run_id, role, message_source, content,
-          status, governing_plane, authority_kind, authority_device_id,
-          authority_agent_id, created_at, updated_at, desktop_owned
-        ) VALUES (?, ?, ?, ?, 'local_acp', ?, ?, 'wovenmatter_macos',
-          'device_owned', ?, ?, ?, ?, 1)
-        """)
-      defer { sqlite3_finalize(message) }
-      for (id, role, body, status, timestamp) in [
-        (identifiers.userMessageID, "user", input.text, "completed", userTimestamp),
-        (identifiers.assistantMessageID, "assistant", "", "streaming", assistantTimestamp),
-      ] {
-        sqlite3_reset(message)
-        sqlite3_clear_bindings(message)
-        try bind(id, at: 1, to: message)
-        try bind(authority.conversationID, at: 2, to: message)
-        try bind(runID, at: 3, to: message)
-        try bind(role, at: 4, to: message)
-        try bind(body, at: 5, to: message)
-        try bind(status, at: 6, to: message)
-        try bind(authority.ownerDeviceID.uuidString.lowercased(), at: 7, to: message)
-        try bind(authority.agentID, at: 8, to: message)
-        try bind(timestamp, at: 9, to: message)
-        try bind(timestamp, at: 10, to: message)
-        try stepDone(message)
-      }
+      try insertLocalACPTurnMessagesUnlocked(
+        conversationID: authority.conversationID, runID: runID,
+        userMessageID: identifiers.userMessageID, assistantMessageID: identifiers.assistantMessageID,
+        text: input.text, ownerDeviceID: authority.ownerDeviceID, agentID: authority.agentID,
+        userTimestamp: userTimestamp, assistantTimestamp: assistantTimestamp
+      )
 
       if let deliveryID=input.historyDeliveryID {
         try attachSessionMessageUnlocked(requestID:deliveryID,messageID:identifiers.userMessageID)
@@ -1008,17 +959,8 @@ extension WorkspaceDatabaseConnection {
         throw LocalACPSessionDatabaseError.runNotFound
       }
 
-      let conversation = try prepareUnlocked("""
-        UPDATE dashboard_conversations
-        SET last_message_preview = ?, last_message_at = MAX(?, COALESCE((SELECT imported_at FROM desktop_session_imports WHERE conversation_id=dashboard_conversations.id), '')), updated_at = ?
-        WHERE id = ? AND desktop_owned = 1
-        """)
-      defer { sqlite3_finalize(conversation) }
-      try bind(Self.localPreview(input.previewText), at: 1, to: conversation)
-      try bind(userTimestamp, at: 2, to: conversation)
-      try bind(userTimestamp, at: 3, to: conversation)
-      try bind(authority.conversationID, at: 4, to: conversation)
-      try stepDone(conversation)
+      try updateConversationPreviewUnlocked(conversationID: authority.conversationID,
+        preview: Self.localPreview(input.previewText), timestamp: userTimestamp)
 
       return identifiers
   }
@@ -1048,19 +990,8 @@ extension WorkspaceDatabaseConnection {
         throw LocalACPSessionDatabaseError.runNotFound
       }
 
-      let conversation = try prepareUnlocked("""
-        UPDATE dashboard_conversations
-        SET last_message_preview = ?, last_message_at = MAX(?, COALESCE((SELECT imported_at FROM desktop_session_imports WHERE conversation_id=dashboard_conversations.id), '')), updated_at = ?
-        WHERE id = (
-          SELECT conversation_id FROM dashboard_runs WHERE id = ?
-        ) AND desktop_owned = 1
-        """)
-      defer { sqlite3_finalize(conversation) }
-      try bind(try localAssistantPreviewUnlocked(runID: runID), at: 1, to: conversation)
-      try bind(timestamp, at: 2, to: conversation)
-      try bind(timestamp, at: 3, to: conversation)
-      try bind(runID, at: 4, to: conversation)
-      try stepDone(conversation)
+      try updateConversationPreviewUnlocked(runID: runID,
+        preview: try localAssistantPreviewUnlocked(runID: runID), timestamp: timestamp)
     }
   }
 
@@ -1089,19 +1020,8 @@ extension WorkspaceDatabaseConnection {
         throw LocalACPSessionDatabaseError.runNotFound
       }
 
-      let conversation = try prepareUnlocked("""
-        UPDATE dashboard_conversations
-        SET last_message_preview = ?, last_message_at = MAX(?, COALESCE((SELECT imported_at FROM desktop_session_imports WHERE conversation_id=dashboard_conversations.id), '')), updated_at = ?
-        WHERE id = ? AND desktop_owned = 1
-        """)
-      defer { sqlite3_finalize(conversation) }
-      try bind(Self.localPreview(
-        RemoteNoteEditEnvelope.redactingEnvelopes(in: content)
-      ), at: 1, to: conversation)
-      try bind(timestamp, at: 2, to: conversation)
-      try bind(timestamp, at: 3, to: conversation)
-      try bind(authority.conversationID, at: 4, to: conversation)
-      try stepDone(conversation)
+      try updateConversationPreviewUnlocked(conversationID: authority.conversationID,
+        preview: Self.localPreview(RemoteNoteEditEnvelope.redactingEnvelopes(in: content)), timestamp: timestamp)
     }
   }
 
@@ -1403,15 +1323,14 @@ extension WorkspaceDatabaseConnection {
   ) throws {
     try transaction {
       let timestamp = Self.timestamp(completedAt)
-      let runStatus = error == nil ? "completed" : "failed"
-      let messageStatus = error == nil ? "completed" : "failed"
+      let status = error == nil ? "completed" : "failed"
       let run = try prepareUnlocked("""
         UPDATE dashboard_runs
         SET status = ?, error = ?, completed_at = ?, updated_at = ?
         WHERE id = ? AND desktop_owned = 1 AND status = 'running'
         """)
       defer { sqlite3_finalize(run) }
-      try bind(runStatus, at: 1, to: run)
+      try bind(status, at: 1, to: run)
       try bindNullable(error, at: 2, to: run)
       try bind(timestamp, at: 3, to: run)
       try bind(timestamp, at: 4, to: run)
@@ -1434,12 +1353,10 @@ extension WorkspaceDatabaseConnection {
       defer { sqlite3_finalize(message) }
       try bindNullable(error, at: 1, to: message)
       try bindNullable(error, at: 2, to: message)
-      try bind(messageStatus, at: 3, to: message)
+      try bind(status, at: 3, to: message)
       try bind(timestamp, at: 4, to: message)
       try bind(runID, at: 5, to: message)
       try stepDone(message)
-
-
     }
   }
 
@@ -1529,7 +1446,7 @@ extension WorkspaceDatabaseConnection {
       // native run. Do not manufacture terminal truth for the latter.
       let durable = try historyRowsUnlocked("""
         SELECT r.id FROM dashboard_runs r JOIN desktop_local_acp_durable_runs d ON d.run_id=r.id
-        WHERE r.desktop_owned=1 AND r.status='running'
+        WHERE r.desktop_owned=1 AND r.status='running' AND \(PairedLibraryOwnership.localConversation("r.conversation_id"))
           AND r.conversation_id NOT IN (SELECT conversation_id FROM desktop_openclaw_gateway_sessions)
           AND r.conversation_id NOT IN (SELECT conversation_id FROM desktop_opencode_sessions)
         """, values: [])
@@ -1550,6 +1467,7 @@ extension WorkspaceDatabaseConnection {
           WHERE desktop_owned = 1 AND status = 'running'
             AND conversation_id NOT IN (SELECT conversation_id FROM desktop_openclaw_gateway_sessions)
           AND conversation_id NOT IN (SELECT conversation_id FROM desktop_opencode_sessions)
+          AND \(PairedLibraryOwnership.localConversation("dashboard_runs.conversation_id"))
         )
         """)
       defer { sqlite3_finalize(message) }
@@ -1564,6 +1482,7 @@ extension WorkspaceDatabaseConnection {
         WHERE desktop_owned = 1 AND status = 'running'
           AND conversation_id NOT IN (SELECT conversation_id FROM desktop_openclaw_gateway_sessions)
           AND conversation_id NOT IN (SELECT conversation_id FROM desktop_opencode_sessions)
+          AND \(PairedLibraryOwnership.localConversation("dashboard_runs.conversation_id"))
         """)
       defer { sqlite3_finalize(run) }
       try bind(timestamp, at: 1, to: run)
@@ -1660,15 +1579,6 @@ extension WorkspaceDatabase {
 
   public func beginLocalACPRun(
     conversationID: String,
-    content: String,
-    noteContext: AgentNoteContext? = nil,
-    createdAt: Date = Date()
-  ) async throws -> LocalACPRunIdentifiers {
-    try await write { try $0.beginLocalACPRun(conversationID: conversationID, content: content, noteContext: noteContext, createdAt: createdAt) }
-  }
-
-  public func beginLocalACPRun(
-    conversationID: String,
     input: AgentMessageInput,
     noteContext: AgentNoteContext? = nil,
     createdAt: Date = Date()
@@ -1678,23 +1588,6 @@ extension WorkspaceDatabase {
 
   public func activeDeviceOwnedConversationIDs() async throws -> Set<String> {
     try await read { try $0.activeDeviceOwnedConversationIDs() }
-  }
-
-  public func beginLocalACPSteeringTurn(
-    runID: String,
-    content: String,
-    createdAt: Date = Date()
-  ) async throws -> LocalACPSteeringIdentifiers {
-    try await write { try $0.beginLocalACPSteeringTurn(runID: runID, content: content, createdAt: createdAt) }
-  }
-
-  public func beginLocalACPSteeringTurn(
-    runID: String,
-    input: AgentMessageInput,
-    completesPreviousAssistant: Bool = true,
-    createdAt: Date = Date()
-  ) async throws -> LocalACPSteeringIdentifiers {
-    try await write { try $0.beginLocalACPSteeringTurn(runID: runID, input: input, completesPreviousAssistant: completesPreviousAssistant, createdAt: createdAt) }
   }
 
   public func appendLocalACPAssistantChunk(

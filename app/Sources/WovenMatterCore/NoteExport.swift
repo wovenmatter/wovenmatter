@@ -161,16 +161,7 @@ extension NoteDocument {
   }
 
   private static func exportFilename(title: String, extension suffix: String) -> String {
-    let clean = title.components(separatedBy: CharacterSet(charactersIn: "/:\\")
-      .union(.controlCharacters)).joined(separator: "-")
-      .trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: ".")))
-    var name = ""
-    var bytes = 0
-    for character in clean.prefix(100) {
-      let count = String(character).decomposedStringWithCanonicalMapping.utf8.count
-      guard bytes + count <= 200 else { break }
-      name.append(character); bytes += count
-    }
+    let name = exportBasename(title: title)
     return (name.isEmpty ? "Note" : name) + "." + suffix
   }
 }

@@ -8,10 +8,8 @@ import WovenMatterCore
 struct CompanionRunControlTests {
 
     @Test func recoveryCopyRetainsUnknownBytesAndRetryCannotResurrectDeletedCopy() async throws {
-        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+        let persistence = try PersistenceFixture(); defer { persistence.remove() }
+        let database = try await persistence.openDatabase()
         let sourceID = UUID().uuidString.lowercased()
         let raw = #"{"version":999,"blocks":[{"type":"future","unknown":{"value":"Do not flatten"}}]}"#
         let copyID = try await database.preserveRecoveryCopy(sourceID: sourceID, title: "Preserved", content: raw, folderID: nil)
@@ -34,14 +32,12 @@ struct CompanionRunControlTests {
     // OpenCodeIntegrationTests rather than this injected ACP driver matrix.
     @Test(arguments: AgentRuntimeKind.allCases.filter { $0 != .opencode }, [true, false])
     func acceptedRunSurvivesCallerDisconnectAndControlsAreRunTargeted(runtime: AgentRuntimeKind, steeringAdvertised: Bool) async throws {
-        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+        let persistence = try PersistenceFixture(); defer { persistence.remove() }
+        let database = try await persistence.openDatabase()
         let requestedConversationID = UUID()
         let id = requestedConversationID.uuidString.lowercased()
         let conversationID = try await database.createFixtureLocalACPSession(runtimeKind: runtime, title: "Companion fixture", ownerDeviceID: UUID(), requestedConversationID: requestedConversationID,
-            fixtureLocation: .init(workspaceID: "device:fixture", rootPath: directory.path, managed: false))
+            fixtureLocation: .init(workspaceID: "device:fixture", rootPath: persistence.directory.path, managed: false))
         #expect(conversationID == id)
         let gate = CompanionPromptGate()
         let coordinator = LocalACPSessionCoordinator(database: database, clientFactory: { _, _ in
@@ -62,7 +58,7 @@ struct CompanionRunControlTests {
             cancel: { await gate.release() }, shutdown: { await gate.release() })
         })
         let launch = LocalACPRuntimeLaunchConfiguration(runtimeKind: runtime, executableURL: URL(filePath: "/nonexistent-fake-provider"), arguments: [])
-        let workspace = LocalACPWorkspaceLaunchConfiguration(rootURL: directory)
+        let workspace = LocalACPWorkspaceLaunchConfiguration(rootURL: persistence.directory)
         let noteID = try await database.createNote(folderID: nil, title: "Offline idea", content: "Capture once")
         let note = try #require(try await database.companionNote(id: noteID))
         let reference = AgentMessageReferenceDraft(kind: .note, resourceID: noteID,
@@ -73,10 +69,7 @@ struct CompanionRunControlTests {
             launch: launch, workspace: workspace) }
         let run = try await caller.value
         caller.cancel()
-        for _ in 0..<200 {
-            if await gate.started { break }
-            try await Task.sleep(for: .milliseconds(10))
-        }
+        _ = try await pollUntil(attempts: 200, interval: .milliseconds(10)) { await gate.started }
         #expect(await gate.started)
         #expect(await gate.input?.references.first?.resourceID == noteID)
         #expect(await gate.input?.references.first?.revisionSnapshot == String(note.revision))
@@ -86,7 +79,7 @@ struct CompanionRunControlTests {
         #expect(persistedReference.revisionSnapshot == String(note.revision))
         #expect(persistedReference.contentSnapshot == note.content)
         // A later canonical edit cannot rewrite the immutable run reference.
-        _ = try await database.updateNote(id: noteID, title: "Later title", content: note.content, expectedRevision: String(note.revision))
+        _ = try await database.persistNoteDraft(id: noteID, title: "Later title", content: note.content, expectedRevision: String(note.revision))
         #expect(try await database.conversationContent(id: id).references.first(where: { $0.id == reference.id })?.titleSnapshot == "Offline idea")
         #expect(try await database.conversationContent(id: id).runs.first?.status == "running")
         #expect(await coordinator.activeInputCapability(conversationID: id) == LocalACPClient.activeInputRoute(runtimeKind: runtime, steeringSupported: steeringAdvertised))
@@ -107,9 +100,8 @@ struct CompanionRunControlTests {
             #expect(steering.runID == run.runID)
         }
         try await coordinator.cancel(conversationID: id, expectedRunID: run.runID)
-        for _ in 0..<200 {
-            if try await database.conversationContent(id: id).runs.first?.status != "running" { break }
-            try await Task.sleep(for: .milliseconds(10))
+        _ = try await pollUntil(attempts: 200, interval: .milliseconds(10)) {
+            try await database.conversationContent(id: id).runs.first?.status != "running"
         }
         #expect(try await database.conversationContent(id: id).runs.count == 1)
         #expect(try await database.conversationContent(id: id).runs.first?.status != "running")

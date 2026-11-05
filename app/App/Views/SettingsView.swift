@@ -3,21 +3,30 @@ import WovenMatterClient
 import WovenMatterCore
 
 private enum HarnessSettingsOrigin: Equatable {
-    case landing
+    case agents
     case localWorkspace
     case remoteWorkspaces
 
     var section: SettingsSection {
         switch self {
-        case .landing: .landing
+        case .agents: .agents
         case .localWorkspace: .localWorkspace
         case .remoteWorkspaces: .remoteWorkspaces
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .agents: "Agents"
+        case .localWorkspace: "Local Workspace"
+        case .remoteWorkspaces: "Remote Workspaces"
         }
     }
 }
 
 private enum SettingsSection: Equatable {
     case landing
+    case agents
     case general
     case backgroundServer
     case connections(String)
@@ -36,9 +45,6 @@ private enum SettingsSection: Equatable {
 struct SettingsView: View {
     @Bindable var model: ApplicationModel
     var reservesRailControlSpace = false
-    var executionOnly = false
-    var clientContext: CentralLibraryClientModel?
-    var applicationContext: ApplicationModel?
     @AppStorage(DashboardTheme.storageKey) private var storedTheme = DashboardTheme.green.rawValue
     @State private var section: SettingsSection = .landing
     @State private var providerReturnSection: SettingsSection = .openCode
@@ -55,41 +61,46 @@ struct SettingsView: View {
             switch section {
             case .landing:
                 landing
+            case .agents:
+                agents
             case .companion:
-                SettingsCompanionView(model: applicationContext ?? model, host: (applicationContext ?? model).companionHost,
+                SettingsCompanionView(model: model, host: model.companionHost,
                     reservesRailControlSpace: reservesRailControlSpace,
                     onBack: { section = .landing })
             case .defaultAgent(let scope, let origin):
-                SettingsDefaultAgentView(model: model, initialScope: scope, reservesRailControlSpace: reservesRailControlSpace, onBack: { section = origin.section })
+                SettingsDefaultAgentView(model: model, initialScope: scope,
+                    reservesRailControlSpace: reservesRailControlSpace, backTitle: origin.title,
+                    onBack: { section = origin.section })
             case .backgroundServer:
                 SettingsBackgroundServerView(model: model, reservesRailControlSpace: reservesRailControlSpace, onBack: { section = .landing })
             case .general:
                 SettingsGeneralView(
-                    model: applicationContext ?? model,
-                    executionModel: model,
-                    clientAnalytics: clientContext?.analytics,
+                    model: model,
                     reservesRailControlSpace: reservesRailControlSpace,
                     onBack: { section = .landing }
                 )
             case .connections(let scope):
                 SettingsDefaultAgentView(model: model, initialScope: scope,
-                    reservesRailControlSpace: reservesRailControlSpace, onBack: { section = .landing })
+                    reservesRailControlSpace: reservesRailControlSpace, backTitle: "Agents",
+                    onBack: { section = .agents })
             case .harness(let runtimeKind, let workspaceID, let origin):
                 SettingsHarnessView(
                     model: model,
                     runtimeKind: runtimeKind,
                     workspaceID: workspaceID,
-                    isWorkspaceScoped: origin != .landing,
+                    isWorkspaceScoped: origin != .agents,
                     reservesRailControlSpace: reservesRailControlSpace,
+                    backTitle: origin.title,
                     onBack: { section = origin.section }
                 )
             case .openCode:
                 SettingsOpenCodeView(model: model, reservesRailControlSpace: reservesRailControlSpace,
-                    onBack: { section = .landing },
+                    backTitle: "Agents", onBack: { section = .agents },
                     onOpenAgent: { providerReturnSection = .openCode; section = .openCodeAgent($0) })
             case .openCodeWorkspace(let workspaceID):
                 SettingsOpenCodeView(model: model, workspaceID: workspaceID, isWorkspaceScoped: true,
                     reservesRailControlSpace: reservesRailControlSpace,
+                    backTitle: workspaceID == nil ? "Local Workspace" : "Remote Workspaces",
                     onBack: { section = workspaceID == nil ? .localWorkspace : .remoteWorkspaces },
                     onOpenAgent: { providerReturnSection = .openCodeWorkspace(workspaceID); section = .openCodeAgent($0) })
             case .openCodeAgent(let workspaceID):
@@ -123,7 +134,7 @@ struct SettingsView: View {
                     onBack: { section = .landing }
                 )
             case .dictation:
-                SettingsDictationView(model: applicationContext ?? model, client: clientContext,
+                SettingsDictationView(model: model,
                     reservesRailControlSpace: reservesRailControlSpace, onBack: { section = .landing })
             case .usage:
                 SettingsUsageView(
@@ -151,7 +162,7 @@ struct SettingsView: View {
 
     private func openPendingDefaultAgentSettings() {
         guard let scope = model.pendingDefaultAgentSettingsScope else { return }
-        section = .defaultAgent(scope, .landing)
+        section = .defaultAgent(scope, .agents)
         model.pendingDefaultAgentSettingsScope = nil
     }
     private func openPendingConnections() {
@@ -165,12 +176,41 @@ struct SettingsView: View {
             reservesRailControlSpace: reservesRailControlSpace
         ) {
             VStack(spacing: 2) {
-                if !executionOnly {
                 SettingsDestinationRow(
                     title: "General",
                     detail: "Theme, sidebar layout, and conversation titles.",
                     icon: { DashboardLucideIcon(glyph: .settings, size: 15) },
                     action: { section = .general }
+                )
+                SettingsDestinationRow(
+                    title: "Agents",
+                    detail: "Accounts, installation, and chat settings.",
+                    icon: { DashboardLucideIcon(glyph: .bot, size: 15) },
+                    action: { section = .agents }
+                )
+                SettingsDestinationRow(
+                    title: "Dictation",
+                    detail: "Read and copy your previous dictations.",
+                    icon: { DashboardLucideIcon(glyph: .mic, size: 15) },
+                    action: { section = .dictation }
+                )
+                SettingsDestinationRow(
+                    title: "Local Workspace",
+                    detail: "Agents and files on this Mac.",
+                    icon: { DashboardLucideIcon(glyph: .terminal, size: 15) },
+                    action: { section = .localWorkspace }
+                )
+                SettingsDestinationRow(
+                    title: "Remote Workspaces",
+                    detail: "Agents and files on remote Linux machines.",
+                    icon: { DashboardLucideIcon(glyph: .container, size: 15) },
+                    action: { section = .remoteWorkspaces }
+                )
+                SettingsDestinationRow(
+                    title: "Apple Devices",
+                    detail: "Connect Macs, iPhones, and iPads to share your library.",
+                    icon: { DashboardLucideIcon(glyph: .monitor, size: 15) },
+                    action: { section = .companion }
                 )
                 SettingsDestinationRow(
                     title: "Background Server",
@@ -179,73 +219,52 @@ struct SettingsView: View {
                     action: { section = .backgroundServer }
                 )
                 SettingsDestinationRow(
-                    title: "Dictation",
-                    detail: "Read and copy your previous dictations.",
-                    icon: { DashboardLucideIcon(glyph: .mic, size: 15) },
-                    action: { section = .dictation }
-                )
-                }
-
-                SettingsDestinationRow(
-                    title: AgentRuntimeKind.defaultAgent.displayName,
-                    detail: "Conversation defaults, subagents, providers, and models.",
-                    icon: { DashboardHarnessLogoIcon(logo: .defaultAgent, size: 15) },
-                    action: { section = .defaultAgent("global", .landing) }
-                )
-                SettingsDestinationRow(
-                    title: "Codex",
-                    detail: "Local runtime status and workspace settings.",
-                    icon: { DashboardHarnessLogoIcon(logo: .codex, size: 15) },
-                    action: { section = .harness(.codex, nil, .landing) }
-                )
-                SettingsDestinationRow(
-                    title: "Claude Code",
-                    detail: "Local runtime status and workspace settings.",
-                    icon: { DashboardHarnessLogoIcon(logo: .claude, size: 15) },
-                    action: { section = .harness(.claudeCode, nil, .landing) }
-                )
-                SettingsDestinationRow(
-                    title: "Grok Build",
-                    detail: "Local runtime status and workspace settings.",
-                    icon: { DashboardHarnessLogoIcon(logo: .grok, size: 15) },
-                    action: { section = .harness(.grokBuild, nil, .landing) }
-                )
-                SettingsDestinationRow(
-                    title: "Open Code",
-                    detail: "Agent names and connections.",
-                    icon: { DashboardHarnessLogoIcon(logo: .openCode, size: 15) },
-                    action: { section = .openCode }
-                )
-                if !executionOnly {
-                SettingsDestinationRow(
-                    title: "Apple Devices",
-                    detail: "Connect Macs, iPhones, and iPads to share your library.",
-                    icon: { DashboardLucideIcon(glyph: .monitor, size: 15) },
-                    action: { section = .companion }
-                )
-                }
-                SettingsDestinationRow(
-                    title: "Local Workspace",
-                    detail: "Agents and files on this Mac.",
-                    icon: { DashboardLucideIcon(glyph: .terminal, size: 15) },
-                    action: { section = .localWorkspace }
-                )
-                if !executionOnly && clientContext == nil {
-                SettingsDestinationRow(
-                    title: "Remote Workspaces",
-                    detail: "Agents and files on remote Linux machines.",
-                    icon: { DashboardLucideIcon(glyph: .container, size: 15) },
-                    action: { section = .remoteWorkspaces }
-                )
-                }
-                if !executionOnly {
-                SettingsDestinationRow(
                     title: "Usage",
                     detail: "Accounts and usage tracking.",
                     icon: { DashboardLucideIcon(glyph: .barChart, size: 15) },
                     action: { section = .usage }
                 )
-                }
+            }
+        }
+    }
+
+    private var agents: some View {
+        SettingsPage(
+            title: "Agents",
+            reservesRailControlSpace: reservesRailControlSpace,
+            onBack: { section = .landing }
+        ) {
+            VStack(spacing: 2) {
+                SettingsDestinationRow(
+                    title: AgentRuntimeKind.defaultAgent.displayName,
+                    detail: "Conversation defaults, subagents, providers, and models.",
+                    icon: { DashboardHarnessLogoIcon(logo: .defaultAgent, size: 15) },
+                    action: { section = .defaultAgent("global", .agents) }
+                )
+                SettingsDestinationRow(
+                    title: "Codex",
+                    detail: "Local runtime status and workspace settings.",
+                    icon: { DashboardHarnessLogoIcon(logo: .codex, size: 15) },
+                    action: { section = .harness(.codex, nil, .agents) }
+                )
+                SettingsDestinationRow(
+                    title: "Claude Code",
+                    detail: "Local runtime status and workspace settings.",
+                    icon: { DashboardHarnessLogoIcon(logo: .claude, size: 15) },
+                    action: { section = .harness(.claudeCode, nil, .agents) }
+                )
+                SettingsDestinationRow(
+                    title: "Grok Build",
+                    detail: "Local runtime status and workspace settings.",
+                    icon: { DashboardHarnessLogoIcon(logo: .grok, size: 15) },
+                    action: { section = .harness(.grokBuild, nil, .agents) }
+                )
+                SettingsDestinationRow(
+                    title: AgentRuntimeKind.opencode.displayName,
+                    detail: "Agent names and connections.",
+                    icon: { DashboardHarnessLogoIcon(logo: .openCode, size: 15) },
+                    action: { section = .openCode }
+                )
             }
         }
     }
@@ -269,6 +288,7 @@ private struct SettingsHarnessView: View {
     var workspaceID: UUID?
     var isWorkspaceScoped = false
     var reservesRailControlSpace = false
+    var backTitle = "Settings"
     let onBack: () -> Void
     @Environment(\.dashboardTheme) private var theme
 
@@ -290,6 +310,7 @@ private struct SettingsHarnessView: View {
                 ? remoteWorkspace.map { "\(runtimeKind.displayName) in \($0.name)." } ?? "\(runtimeKind.displayName) in the local workspace."
                 : "Conversation defaults and runtime settings.",
             reservesRailControlSpace: reservesRailControlSpace,
+            backTitle: backTitle,
             onBack: onBack
         ) {
             SettingsAgentDefaultsSection(model: model, runtime: runtimeKind, includesHarnessSetup: true,

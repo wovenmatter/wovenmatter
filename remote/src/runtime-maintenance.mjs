@@ -1,16 +1,14 @@
 import { existsSync } from 'node:fs'
-const bundledVersions = new URL('../default-agent/src/package-versions.mjs', import.meta.url)
-const { latestSupportedPackage } = await import(existsSync(bundledVersions) ? bundledVersions.href : new URL('../../default-agent/src/package-versions.mjs', import.meta.url).href)
 import { spawn } from 'node:child_process'
 import { readFile, writeFile, mkdir, rename, realpath, lstat, readlink } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { supportsOpenCodeVersion, openCodeCommands } from './opencode-compatibility.mjs'
-import { loadRuntimeConfiguration, runtimeNPMCommand } from './config.mjs'
+import { loadRuntimeConfiguration, runtimeNPMCommand, shellQuote as quote, defaultAgentModule } from './config.mjs'
 import { withInstallerGuard } from './installer-guard.mjs'
 
-const quote = value => `'${String(value).replaceAll("'", "'\\''")}'`
+const { latestSupportedPackage } = await import(defaultAgentModule('src/package-versions.mjs'))
 const failure = message => Object.assign(new Error(message), { statusCode: 409 })
 export const normalizedVersion = value => String(value ?? '').match(/\d+\.\d+\.\d+(?:[-+][a-zA-Z0-9.-]+)?/)?.[0] ?? null
 export function precedes(a, b) {
@@ -172,6 +170,12 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
       const result = engine ? await run(`${quote(engine)} --version`) : null
       components.push({ id: 'bundled', displayName: 'Bundled ' + dependency, path: engine, source: main.source, installedVersion: normalizedVersion(object?.version), latestVersion: null, required: true, installed: Boolean(object?.version && result?.code === 0 && normalizedVersion(result.output)) })
       if (h.id === 'claude_code') components.push({ id: 'engine', displayName: 'Bundled Claude Code', path: engine, source: main.source, installedVersion: normalizedVersion(result?.output), latestVersion: null, required: true, installed: result?.code === 0 && Boolean(normalizedVersion(result.output)) })
+      if (h.minimumProtocolSDKVersion) {
+        const sdk = root ? await packageRoot(root, '@agentclientprotocol/sdk', true) : null
+        const version = sdk ? normalizedVersion((await packageAt(sdk))?.version) : null
+        components.push({ id: 'protocol-sdk', displayName: 'Bundled ACP SDK', path: sdk, source: main.source,
+          installedVersion: version, latestVersion: null, required: true, installed: version !== null })
+      }
       const key = h.id === 'codex' ? 'CODEX_PATH' : 'CLAUDE_CODE_EXECUTABLE'
       if (environment()[key]) components.push(await component('override', key + ' override', environment()[key]))
     }
@@ -187,6 +191,8 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
       if (h.adapterPackage) {
         components[1].latestVersion = await latest(h.id === 'codex' ? '@openai/codex' : '@anthropic-ai/claude-code')
         const bundled = components.find(c => c.id === 'bundled')
+        const sdk = components.find(c => c.id === 'protocol-sdk')
+        if (sdk) sdk.latestVersion = await latest('@agentclientprotocol/sdk')
         bundled.latestVersion = await latest(dependencyName)
         bundled.updateTargetVersion = h.minimumEngineVersion ? bundled.latestVersion : null
         // npm performs the semver selection using the adapter's declared dependency
@@ -197,7 +203,7 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
         }
       }
     } else for (const c of components) { const cached = previous.find(p => p.id === c.id); c.latestVersion = cached?.latestVersion ?? null; if (c.id === 'bundled') c.updateTargetVersion = cached?.updateTargetVersion ?? null }
-    if (checkLatest) s.versionCheckAvailable = components.filter(c => ['runtime', 'signin', 'bundled'].includes(c.id)).every(c => c.latestVersion !== null && (c.id !== 'bundled' || c.updateTargetVersion !== null))
+    if (checkLatest) s.versionCheckAvailable = components.filter(c => ['runtime', 'signin', 'bundled', 'protocol-sdk'].includes(c.id)).every(c => c.latestVersion !== null && (c.id !== 'bundled' || c.updateTargetVersion !== null))
     for (const c of components) c.updateAvailable = c.source !== 'system' && precedes(c.installedVersion, updateTarget(c))
     s.components = components
     const storedOperation = operations.get(h.id) ?? null
@@ -257,6 +263,11 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
       adapterVersion: spec.slice(h.adapterPackage.length + 1), engineVersion,
       npm: configuration.runtimeKind === 'host'
         ? [process.execPath, resolve(configuration.serviceRoot, 'tooling/lib/node_modules/npm/bin/npm-cli.js')] : ['npm'] }
+    if (h.minimumProtocolSDKVersion) {
+      const sdk = await latest('@agentclientprotocol/sdk')
+      if (!sdk || precedes(sdk, h.minimumProtocolSDKVersion)) throw failure('latest_protocol_sdk_version_unavailable')
+      selection.protocolSDKVersion = sdk
+    }
     return `${quote(process.execPath)} ${quote(script)} ${quote(JSON.stringify(selection))}`
   }
   async function protectInstallDestination(command, component) {
@@ -264,6 +275,13 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
     const target = resolve(configuration.home, '.local/bin', command)
     try { await lstat(target) } catch (error) { if (error.code === 'ENOENT') return; throw error }
     throw failure('unmanaged_install_destination')
+  }
+  async function installerArguments(h) {
+    if (h.id !== 'claude_code') return h.install.arguments ?? []
+    // Native latest/stable channel pointers can lag the published stable CLI.
+    const version = await latest('@anthropic-ai/claude-code')
+    if (!version) throw failure('latest_cli_version_unavailable')
+    return [version]
   }
   async function hostInstallation(h, action, body, before) {
     const commands = [], installedCommands = []
@@ -276,7 +294,7 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
       } else {
         if (typeof body.sourceSHA256 !== 'string') throw failure('source_digest_required')
         const installer = await verifiedInstaller(h, body.sourceSHA256)
-        commands.push(`${quote(h.install.interpreter)} ${quote(installer.path)} ${(h.install.arguments ?? []).map(quote).join(' ')}`)
+        commands.push(`${quote(h.install.interpreter)} ${quote(installer.path)} ${(await installerArguments(h)).map(quote).join(' ')}`)
       }
       installedCommands.push(['signin', h.cliCommand ?? h.command])
       if (!h.adapterPackage) installedCommands.push(['runtime', h.command])
@@ -330,7 +348,7 @@ export function createRuntimeMaintenance({ catalog, workspaceRoot, environment, 
           else {
             if (typeof body.sourceSHA256 !== 'string') throw failure('source_digest_required')
             const installer = await verifiedInstaller(h, body.sourceSHA256)
-            command = `${quote(h.install.interpreter)} ${quote(installer.path)} ${(h.install.arguments ?? []).map(quote).join(' ')}${adapter}`
+            command = `${quote(h.install.interpreter)} ${quote(installer.path)} ${(await installerArguments(h)).map(quote).join(' ')}${adapter}`
           }
         }
         if (await busy(h, maintainedNames)) throw failure('runtime_active_stop_conversations_or_server_first')

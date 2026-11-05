@@ -9,7 +9,7 @@ const checks = {
 };
 // No login, model prompt, transport startup, or credential writes. Nonzero
 // status alone cannot distinguish a network failure from a signed-out account.
-export async function signInStatuses(harnesses, execute = exec, readAccount = readCodexAccount) {
+export async function signInStatuses(harnesses, execute = exec) {
   return Promise.all(harnesses.map(async harness => {
     const base = { id: harness.id, name: harness.name ?? harness.displayName };
     if (harness.enabled === false) return { ...base, state: 'not_checked', detail: 'Enable credential access for this harness to check its sign-in.' };
@@ -48,7 +48,7 @@ export async function signInStatuses(harnesses, execute = exec, readAccount = re
       sign_in_required: 'The harness reports that sign-in is required.', not_installed: 'This harness is not installed.',
       check_failed: 'Could not confirm sign-in. A failed check does not mean the account is signed out.' };
     if (state === 'verified' && harness.id === 'codex') {
-      const account = await readAccount(harness.executable);
+      const account = await readCodexAccount(harness.executable);
       if (account.length) accounts.splice(0, accounts.length, ...account);
     }
     return { ...base, state, detail: details[state], accounts:

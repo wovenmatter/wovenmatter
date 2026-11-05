@@ -788,12 +788,6 @@ struct DashboardUsageView: View {
                         .font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
                 }
 
-                if account.provider == .codex,
-                   account.accountScopeID?.hasPrefix("wovenmatter.shared.") != true,
-                   model.codexUsageWorkspaces.count > 1 {
-                    codexWorkspaceSelector
-                }
-
                 if account.quotaWindows.isEmpty,
                    account.balance == nil,
                    account.providerBudget == nil {
@@ -895,45 +889,6 @@ struct DashboardUsageView: View {
             maxHeight: pinsFooter ? .infinity : nil,
             alignment: .topLeading
         )
-    }
-
-    private var codexWorkspaceSelector: some View {
-        HStack(spacing: 8) {
-            Text("Workspace")
-                .font(.system(size: 10.5))
-                .foregroundStyle(DashboardPalette.mutedForeground)
-            Spacer()
-            Menu {
-                ForEach(model.codexUsageWorkspaces) { workspace in
-                    Button {
-                        Task {
-                            await model.selectCodexUsageWorkspace(
-                                workspace.id,
-                                range: range
-                            )
-                        }
-                    } label: {
-                        if workspace.id == model.selectedCodexUsageWorkspaceID {
-                            Label(workspace.selectionLabel, systemImage: "checkmark")
-                        } else {
-                            Text(workspace.selectionLabel)
-                        }
-                    }
-                }
-            } label: {
-                Text(selectedCodexWorkspace?.name ?? "Choose workspace")
-                    .lineLimit(1)
-            }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
-            .disabled(model.isRefreshingUsageLimits)
-        }
-    }
-
-    private var selectedCodexWorkspace: CodexUsageWorkspace? {
-        model.codexUsageWorkspaces.first {
-            $0.id == model.selectedCodexUsageWorkspaceID
-        }
     }
 
     private func tableHeading(

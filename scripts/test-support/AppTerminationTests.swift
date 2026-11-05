@@ -33,7 +33,6 @@ private struct RestartRefused: LocalizedError {
 final class ApplicationModel {
     var isPreparedForExecutionRestart = false
     var isBackendFrontend = !CommandLine.arguments.contains("--standalone-update")
-    var isLibraryClient = false
     var stopsBackendOnQuit = CommandLine.arguments.contains("--dev")
     var noteEditingSuspended = false
     func suspendNoteEditing() { noteEditingSuspended = true }
@@ -85,7 +84,6 @@ final class ApplicationModel {
     func refreshRuntimeMaintenanceAtStartup() {}
     func restoreOpenCodeInstances() async {}
     func shutdownLocalACPSessions() { sessionShutdownCount += 1 }
-    func prepareLibraryClientForQuit() async throws {}
     func flushNotesBeforeBackendClientQuit() async -> Bool {
         if noteSaveFailures > 0 {
             noteSaveFailures -= 1
@@ -440,10 +438,6 @@ private struct AppTerminationTests {
         precondition(LocalExecutionRole.resolve(arguments: []) == .frontend)
         precondition(!LocalExecutionRole.frontend.ownsExecution)
         precondition(LocalExecutionRole.resolve(arguments: ["--backend"]) == .backend)
-        precondition(LocalExecutionRole.resolve(arguments: [], libraryClientEnabled: true) == .libraryClient)
-        precondition(!LocalExecutionRole.libraryClient.ownsExecution)
-        precondition(LocalExecutionRole.libraryClient.leaseFileName != LocalExecutionRole.developmentHost.leaseFileName)
-        precondition(LocalExecutionRole.resolve(arguments: ["--backend"], libraryClientEnabled: true) == .backend)
         precondition(LocalExecutionRole.backend.leaseFileName == LocalExecutionRole.developmentHost.leaseFileName)
         precondition(LocalExecutionRole.frontend.leaseFileName != LocalExecutionRole.backend.leaseFileName)
         let endpoint = LocalExecutionRole.backendSocketURL(workspaceDirectory: URL(fileURLWithPath: "/private/tmp/" + String(repeating: "long", count: 100)))

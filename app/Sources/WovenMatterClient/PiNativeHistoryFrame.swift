@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import WovenMatterCore
 
 /// Scan native history on disk without constructing the entire array in memory; each native
 /// entry is validated and handed off separately with storage backpressure.
@@ -102,7 +103,7 @@ enum PiNativeHistoryFrame {
                             if collectEntries {
                                 if oversized {
                                     if !hashChunk.isEmpty { entryHash.update(data: hashChunk) }
-                                    let sha = entryHash.finalize().map { String(format: "%02x", $0) }.joined()
+                                    let sha = entryHash.finalize().hexString
                                     try await consume(.reference(byteOffset: entryOffset, byteCount: entryBytes,
                                         sha256: sha, scalars: fields.values, nativeID: fields.id, kind: fields.kind), count)
                                 } else {
@@ -158,7 +159,7 @@ enum PiNativeHistoryFrame {
         let container = arrayDepth == 1 ? object : object["data"] as? [String: Any]
         guard container?[arrayKey] is [Any] else { throw Failure.malformed }
         return Metadata(envelope: envelope, arrayKey: arrayKey, count: count,
-            sha256: hash.finalize().map { String(format: "%02x", $0) }.joined())
+            sha256: hash.finalize().hexString)
     }
 
     /// Observe bounded root scalar identities even when they follow a huge

@@ -1047,8 +1047,8 @@ private enum NoteAttributedDocument {
                 bold: traits.contains(.boldFontMask),
                 italic: traits.contains(.italicFontMask),
                 underline: (attributes[.underlineStyle] as? Int ?? 0) != 0,
-                foregroundHex: colorHex(attributes[.foregroundColor] as? NSColor),
-                highlightHex: colorHex(attributes[.backgroundColor] as? NSColor),
+                foregroundHex: DashboardColors.documentColorHex(attributes[.foregroundColor] as? NSColor),
+                highlightHex: DashboardColors.documentColorHex(attributes[.backgroundColor] as? NSColor),
                 link: (attributes[.link] as? URL)?.absoluteString
                     ?? attributes[.link] as? String,
                 databaseLink: databaseLink,
@@ -1167,10 +1167,6 @@ private func color(from hex: String?) -> NSColor? {
         blue: CGFloat(number & 0xff) / 255,
         alpha: 1
     )
-}
-
-private func colorHex(_ color: NSColor?) -> String? {
-    DashboardColors.documentColorHex(color)
 }
 
 private extension NSTextStorage {

@@ -125,6 +125,7 @@ struct SettingsOpenCodeView: View {
     var workspaceID: UUID?
     var isWorkspaceScoped = false
     var reservesRailControlSpace = false
+    var backTitle = "Settings"
     var onBack: () -> Void
     var onOpenAgent: (UUID?) -> Void
     @State private var selectedScope = "local"
@@ -137,7 +138,7 @@ struct SettingsOpenCodeView: View {
     }
 
     var body: some View {
-        SettingsPage(title: "OpenCode", reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
+        SettingsPage(title: "OpenCode", reservesRailControlSpace: reservesRailControlSpace, backTitle: backTitle, onBack: onBack) {
             SettingsAgentDefaultsSection(model: model, runtime: .opencode, includesHarnessSetup: true,
                 initialScope: isWorkspaceScoped ? workspaceID?.uuidString.lowercased() ?? "local" : "global",
                 onScopeChange: { selectedScope = $0 }, onAreaChange: { area = $0 })
@@ -187,7 +188,7 @@ struct SettingsOpenCodeAgentView: View {
     }
     var body: some View {
         SettingsPage(title: name.isEmpty ? "OpenCode" : name,
-            reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
+            reservesRailControlSpace: reservesRailControlSpace, backTitle: "OpenCode", onBack: onBack) {
             if let instance {
                 SettingsCard(title: "Woven Matter name", detail: "This name is shown only in Woven Matter.") {
                     Text("Agent name").font(.system(size: 11, weight: .medium)).foregroundStyle(DashboardPalette.mutedForeground)

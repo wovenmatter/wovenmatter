@@ -12,6 +12,9 @@ struct RuntimeMaintenanceTests {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let adapter = root.appending(path: "lib/node_modules/@agentclientprotocol/codex-acp")
+        let sdk = adapter.appending(path: "node_modules/@agentclientprotocol/sdk")
+        try FileManager.default.createDirectory(at: sdk, withIntermediateDirectories: true)
+        try Data(#"{"name":"@agentclientprotocol/sdk","version":"2.1.0"}"#.utf8).write(to: sdk.appending(path: "package.json"))
         let engine = adapter.appending(path: "node_modules/@openai/codex")
         try FileManager.default.createDirectory(at: root.appending(path: "bin"), withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: adapter.appending(path: "dist"), withIntermediateDirectories: true)
@@ -36,7 +39,10 @@ struct RuntimeMaintenanceTests {
         #expect(inventory.components[1].installed == "0.148.0")
         #expect(inventory.components[1].latest == "99.0.0")
         #expect(inventory.components[1].outdated)
-        #expect(inventory.components[2].installed == "0.154.0")
+        #expect(inventory.components.first { $0.name == "codex (sign-in CLI)" }?.installed == "0.154.0")
+        let protocolSDK = try #require(inventory.components.first { $0.package == "@agentclientprotocol/sdk" })
+        #expect(protocolSDK.installed == "2.1.0")
+        #expect(protocolSDK.outdated)
         #expect(inventory.outdated)
         try FileManager.default.removeItem(at: engine.appending(path: "bin/codex.js"))
         let broken = await RuntimeMaintenance.inspect(.codex, checkLatest: false, resolver: resolver)
@@ -48,6 +54,40 @@ struct RuntimeMaintenanceTests {
         #expect(!diagnostic.contains(root.path))
     }
 
+    @Test func sdkOnlyUpdateIsVisibleWhenConnectorAndEngineAreCurrent() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let adapter = root.appending(path: "node_modules/@agentclientprotocol/codex-acp")
+        let engine = root.appending(path: "node_modules/@openai/codex")
+        let sdk = root.appending(path: "node_modules/@agentclientprotocol/sdk")
+        for directory in [adapter, engine.appending(path: "bin"), sdk, root.appending(path: "bin")] {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        for (directory, name, version) in [(adapter, "@agentclientprotocol/codex-acp", "2.5.0"),
+            (engine, "@openai/codex", "0.166.0"), (sdk, "@agentclientprotocol/sdk", "2.1.0")] {
+            try JSONSerialization.data(withJSONObject: ["name": name, "version": version]).write(to: directory.appending(path: "package.json"))
+        }
+        let script = adapter.appending(path: "index.js")
+        try Data("fixture".utf8).write(to: script)
+        try FileManager.default.createSymbolicLink(at: root.appending(path: "bin/codex-acp"), withDestinationURL: script)
+        try Data("fixture".utf8).write(to: root.appending(path: "bin/codex"))
+        for executable in [script, root.appending(path: "bin/codex")] {
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+        }
+        let binary = engine.appending(path: "bin/codex.js")
+        try Data("fixture".utf8).write(to: binary)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: binary.path)
+        let inventory = await RuntimeMaintenance.inspect(.codex, checkLatest: true,
+            resolver: LocalACPRuntimeResolver(executableSearchDirectories: [root.appending(path: "bin").path]),
+            fetch: { url in
+                let version = url.absoluteString.hasSuffix("%2fsdk") ? "2.4.0" : url.absoluteString.contains("codex-acp") ? "2.5.0" : "0.166.0"
+                return try JSONSerialization.data(withJSONObject: ["versions": [version: ["bin": ["cli": "index.js"]]]])
+            }, probe: { url in url.path.contains("codex-acp") ? "2.5.0" : "0.166.0" })
+        #expect(inventory.isInstalled)
+        #expect(inventory.components.filter(\.outdated).map(\.name) == ["Bundled ACP SDK"])
+        #expect(inventory.updateAvailable)
+    }
+
     @Test func releaseSelectionDoesNotHideNewerStableCLIOrSDKBehindAnOldTag() async throws {
         let metadata = Data(#"{"dist-tags":{"latest":"0.165.0"},"versions":{"0.165.0":{"bin":{"codex":"index.js"}},"0.166.0":{"bin":{"codex":"index.js"}},"0.167.0":{"deprecated":"withdrawn","bin":{"codex":"index.js"}},"1.0.0-beta.1":{"bin":{"codex":"index.js"}}}}"#.utf8)
         let cli = try await RuntimeMaintenance.registryVersion("@openai/codex", fetch: { _ in metadata })
@@ -56,7 +96,9 @@ struct RuntimeMaintenanceTests {
             fetch: { _ in Data(#"{"versions":{"0.3.312":{},"0.3.314":{}}}"#.utf8) })
         #expect(sdk == "0.3.314")
         #expect(LocalACPRuntimeCatalog.definition(for: .codex)?.minimumEngineVersion == "0.166.0")
-        #expect(LocalACPRuntimeCatalog.definition(for: .claudeCode)?.minimumEngineVersion == "0.3.314")
+        #expect(LocalACPRuntimeCatalog.definition(for: .claudeCode)?.minimumEngineVersion == "0.3.318")
+        #expect(LocalACPRuntimeCatalog.definition(for: .codex)?.minimumProtocolSDKVersion == "2.4.0")
+        #expect(LocalACPRuntimeCatalog.definition(for: .claudeCode)?.minimumProtocolSDKVersion == "2.4.0")
         #expect(LocalACPRuntimeCatalog.definition(for: .claudeCode)?.cliInstallerArguments == ["latest"])
     }
 

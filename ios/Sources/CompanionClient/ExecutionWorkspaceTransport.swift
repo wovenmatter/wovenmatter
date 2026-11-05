@@ -7,6 +7,19 @@ import FoundationNetworking
 import Security
 #endif
 
+/// Whether a saved or newly issued direct workspace credential belongs to this
+/// phone: its own device, and either its paired Mac's library or the workspace's
+/// own registered namespace and endpoint (a workspace another paired Mac owns).
+public enum WorkspaceCredentialPolicy {
+  public static func accepts(_ credential: DirectWorkspaceCredential, deviceID: String, libraryID: String?,
+                             registered: CompanionExecutionWorkspace?) -> Bool {
+    guard credential.deviceID == deviceID else { return false }
+    if credential.libraryID == libraryID { return true }
+    guard let registered, !registered.deleted, registered.id == credential.workspaceID else { return false }
+    return registered.libraryID == credential.libraryID && registered.endpoint == credential.endpoint
+  }
+}
+
 public struct DirectWorkspaceCredential: Codable, Equatable, Sendable {
   public var endpoint: URL
   public var libraryID: String
@@ -90,11 +103,6 @@ public final class HTTPSExecutionWorkspaceTransport: ExecutionWorkspaceTransport
   }
 }
 
-private final class RejectExecutionRedirects: NSObject, URLSessionTaskDelegate, Sendable {
-  func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
-    newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void) { completionHandler(nil) }
-}
-
 final class TailnetJSONClient: @unchecked Sendable {
   private let endpoint: URL
   private let token: String
@@ -108,7 +116,7 @@ final class TailnetJSONClient: @unchecked Sendable {
     let configuration = URLSessionConfiguration.ephemeral
     configuration.httpCookieStorage = nil; configuration.urlCache = nil
     configuration.timeoutIntervalForRequest = 30; configuration.timeoutIntervalForResource = 60
-    session = URLSession(configuration: configuration, delegate: RejectExecutionRedirects(), delegateQueue: nil)
+    session = URLSession(configuration: configuration, delegate: NoRedirects(), delegateQueue: nil)
   }
   static func safeID(_ value: String) throws -> String {
     guard !value.isEmpty, value.utf8.count <= 200, value.unicodeScalars.allSatisfy({ CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_")).contains($0) }) else { throw MobileConnectionError.invalidResponse }

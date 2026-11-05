@@ -20,7 +20,7 @@ extension WorkspaceDatabaseConnection {
       guard let row = try historyRowsUnlocked("SELECT operation,input_digest,result_json FROM workspace_tool_mutations WHERE source_id=? AND request_id=?",
         values: [callerID, requestID]).first?.objectValue else { return nil }
       let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
-      let digest = SHA256.hash(data: try encoder.encode(input)).map { String(format: "%02x", $0) }.joined()
+      let digest = SHA256.hash(data: try encoder.encode(input)).hexString
       guard row["operation"]?.stringValue?.hasPrefix("calendar.") == true, row["input_digest"]?.stringValue == digest,
             let json = row["result_json"]?.stringValue else { throw WorkspaceToolError.invalid("This request ID was already used for a different mutation.") }
       return try JSONDecoder().decode(String.self, from: Data(json.utf8))
@@ -91,7 +91,7 @@ extension WorkspaceDatabaseConnection {
         'starts_at',starts_at,'ends_at',ends_at,'all_day',all_day,'status',status,'source',source,
         'created_at',created_at,'updated_at',updated_at,'calendar',json(calendar_json))
       FROM dashboard_calendar_items WHERE user_id=? \(includeDeleted ? "" : "AND deleted_at IS NULL") ORDER BY starts_at,id
-      """, operatorID: operatorID, as: WorkspaceCalendarItemRecord.self)
+      """, bindings: [operatorID], as: WorkspaceCalendarItemRecord.self)
   }
 
   private struct CalendarMutationInput: Codable {
@@ -313,7 +313,7 @@ extension WorkspaceDatabaseConnection {
   /// Retain a pending occurrence through preparation errors and process restarts.
   public func dueCalendarRuns(now: Date = Date()) throws -> [WorkspaceCalendarRun] {
     try transaction {
-      let dueIDs = Set(try historyRowsUnlocked("SELECT id FROM dashboard_calendar_items WHERE next_fire_at<=? AND deleted_at IS NULL",
+      let dueIDs = Set(try historyRowsUnlocked("SELECT id FROM dashboard_calendar_items WHERE next_fire_at<=? AND deleted_at IS NULL AND \(PairedLibraryOwnership.localCalendarItem("dashboard_calendar_items.id"))",
         values: [String(now.timeIntervalSince1970)]).compactMap { $0.objectValue?["id"]?.stringValue })
       let delegated = try remoteCalendarWorkspaceIDsUnlocked()
       let clientOwned = try calendarForeignExecutionEventIDs()
@@ -374,7 +374,8 @@ extension WorkspaceDatabaseConnection {
       SELECT 1 FROM workspace_calendar_runs r JOIN dashboard_calendar_items e ON e.id=r.event_id
       WHERE r.id=? AND r.status='pending' AND e.deleted_at IS NULL AND json_extract(e.calendar_json,'$.task') IS NOT NULL
       AND NOT EXISTS(SELECT 1 FROM companion_calendar_execution_conflicts c WHERE c.event_id=e.id)
-        AND NOT EXISTS(SELECT 1 FROM companion_calendar_owners c WHERE c.event_id=e.id AND c.device_id != COALESCE((SELECT workspace_id FROM companion_calendar_execution_context WHERE singleton=1), ''))
+      AND \(PairedLibraryOwnership.localCalendarItem("e.id"))
+        AND NOT EXISTS(SELECT 1 FROM companion_calendar_owners c WHERE c.event_id=e.id AND c.device_id != COALESCE((SELECT workspace_id FROM companion_calendar_execution_context WHERE singleton=1), (SELECT host_device_id FROM companion_library_identity WHERE singleton=1)))
       AND NOT EXISTS(SELECT 1 FROM workspace_calendar_remote_ownership o
         WHERE o.workspace_id=lower(json_extract(e.calendar_json,'$.task.configuration.workspaceID')))
       """, values: [id])).isEmpty
@@ -603,7 +604,7 @@ extension WorkspaceDatabaseConnection {
     guard let path = configuration.nativeWorkingDirectory, path.hasPrefix("/"), !path.contains("\0") else {
       throw WorkspaceToolError.invalid("The scheduled session has no captured execution directory.")
     }
-    let location = WorkspaceFolderLocation(workspaceID: "remote:" + workspaceID.uuidString.lowercased(), rootPath: path, managed: false)
+    let location = WorkspaceFolderLocation(workspaceID: WorkspaceFolderLocation.remoteWorkspaceSourceID(workspaceID), rootPath: path, managed: false)
     let directory = URL(fileURLWithPath: path)
     if configuration.folderID == nil, directory.deletingLastPathComponent().lastPathComponent == "scratch" {
       let base = directory.deletingLastPathComponent().deletingLastPathComponent().path
@@ -637,7 +638,7 @@ extension WorkspaceDatabaseConnection {
     // expose historical records whose run association remains unknown.
     try toolsExecuteUnlocked("UPDATE workspace_history_events SET run_id=? WHERE sequence>? AND conversation_id=? AND source_id=? AND run_id IS NULL",
       [run.id, String(previousSequence), run.sessionID,
-        "remote:" + workspaceID.uuidString.lowercased() + ":calendar"])
+        WorkspaceFolderLocation.remoteWorkspaceSourceID(workspaceID) + ":calendar"])
     guard receipt == nil, complete else { return }
     try toolsExecuteUnlocked("""
       UPDATE desktop_local_acp_sessions SET model=?,thinking=?,permission=?,updated_at=?,revision=revision+1
@@ -816,7 +817,7 @@ extension WorkspaceDatabaseConnection {
       SELECT projection_json FROM workspace_history_events
       WHERE conversation_id=? AND source_id=? AND substr(native_record_id,1,?)=?
       ORDER BY CAST(substr(native_record_id,?) AS INTEGER),sequence
-      """, values: [conversationID, "remote:" + workspaceID.uuidString.lowercased() + ":calendar",
+      """, values: [conversationID, WorkspaceFolderLocation.remoteWorkspaceSourceID(workspaceID) + ":calendar",
         String(prefix.count), prefix, String(prefix.count + 1)]) { row in
       guard let raw = row.objectValue?["projection_json"]?.stringValue else { return }
       try body(JSONDecoder().decode(GatewayJSONValue.self, from: Data(raw.utf8)))
@@ -829,7 +830,7 @@ extension WorkspaceDatabaseConnection {
   private func archiveRemoteCalendarUpdatesUnlocked(receiptID: String, workspaceID: UUID,
       conversationID: String, nativeSessionID: String?, harness: String,
       runID: String?, updates: [GatewayJSONValue], updateOffset: Int) throws {
-    let host = "remote:" + workspaceID.uuidString.lowercased()
+    let host = WorkspaceFolderLocation.remoteWorkspaceSourceID(workspaceID)
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.sortedKeys]
     // The transport has already decoded these values. Canonicalize the JSON
@@ -869,8 +870,6 @@ extension WorkspaceDatabaseConnection {
         sourceConnectionID: workspaceID.uuidString.lowercased())
     }
   }
-
-
 }
 
 extension WorkspaceDatabaseConnection {

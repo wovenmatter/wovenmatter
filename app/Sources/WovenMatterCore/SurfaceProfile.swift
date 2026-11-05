@@ -22,11 +22,6 @@ public enum DashboardSurface: String, Codable, CaseIterable, Sendable {
     default: return nil
     }
   }
-
-  public func encode(to encoder: any Encoder) throws {
-    var container = encoder.singleValueContainer()
-    try container.encode(rawValue)
-  }
 }
 
 /// A surface-scoped preference projection. Web and Mac rows intentionally use

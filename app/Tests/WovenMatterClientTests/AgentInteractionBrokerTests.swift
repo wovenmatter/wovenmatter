@@ -14,7 +14,7 @@ struct AgentInteractionBrokerTests {
         ]))
         let answer = await withCheckedContinuation { continuation in
             broker.registerInteraction(id: id, request: request, continuation: continuation)
-            #expect(!broker.resolveInteraction(id: id, response: .planAccepted(true)))
+            #expect(!broker.resolveInteraction(id: id, response: .formValues([:])))
             #expect(!broker.resolveInteraction(id: id, response: .answers(["a": .single("yes")])))
             #expect(!broker.resolveInteraction(id: id, response: .answers([
                 "a": .multiple(["one", "two"]), "b": .single("text")

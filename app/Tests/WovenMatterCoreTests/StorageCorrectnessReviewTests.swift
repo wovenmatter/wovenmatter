@@ -14,7 +14,7 @@ struct StorageCorrectnessReviewTests {
   func hermesPersistedChecklistRemainReadable(clear: Bool) async throws {
     let fixture = try PersistenceFixture()
     defer { fixture.remove() }
-    let db = try await WorkspaceDatabase(url: fixture.databaseURL)
+    let db = try await fixture.openDatabase()
     let todos: HermesValue = .array([["id": "a", "content": "Same label", "status": "completed"],
       ["id": "b", "content": "Same label", "status": "pending"]])
     let args: HermesValue = ["todos": .array([["id": "a", "status": "completed"]]), "merge": .bool(true)]
@@ -26,7 +26,7 @@ struct StorageCorrectnessReviewTests {
       ["id": .number(2), "role": "tool", "tool_call_id": "old-todo", "content": .string(result.json)]]
     // Seed the rows an older build already saved; no retired runtime is created or resumed.
     let conversation = try await db.createFixtureLocalACPSession(runtimeKind: .codex, title: "History", ownerDeviceID: UUID())
-    let run = try await db.beginLocalACPRun(conversationID: conversation, content: "Retained history")
+    let run = try await db.beginLocalACPRun(conversationID: conversation, input: .init(text: "Retained history"))
     try await db.upsertDeviceOwnedRunActivity(runID: run.runID, activity: plan)
     try await db.completeLocalACPRun(runID: run.runID)
     for row in rows {
@@ -40,7 +40,7 @@ struct StorageCorrectnessReviewTests {
       try connection.toolsExecuteUnlocked("DELETE FROM session_execution_roots WHERE conversation_id=?", [conversation])
       try connection.toolsExecuteUnlocked("UPDATE dashboard_conversations SET is_archived=1 WHERE id=?", [conversation])
     } }
-    let reopened = try await WorkspaceDatabase(url: fixture.databaseURL)
+    let reopened = try await fixture.openDatabase()
     let full = try await reopened.conversationHistoryPage(id: conversation, limit: 20)
     let retained = try #require(full.activities.first { $0.activity.kind == .plan }?.activity)
     #expect(retained.planOperation == (clear ? "clear" : "replace"))

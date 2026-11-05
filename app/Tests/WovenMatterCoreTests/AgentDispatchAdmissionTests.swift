@@ -39,10 +39,3 @@ struct AgentDispatchAdmissionTests {
     }
 
 }
-
-@Suite("Native Stop barriers", .serialized)
-@MainActor
-struct AgentStopCoordinatorTests {
-    private enum Failure: Error { case stop }
-
-}

@@ -725,16 +725,6 @@ struct SettingsThemePreview: View {
     }
 }
 
-struct SettingsInputModifier: ViewModifier {
-    func body(content: Content) -> some View { content.dashboardInput() }
-}
-
-extension View {
-    func settingsInput() -> some View {
-        modifier(SettingsInputModifier())
-    }
-}
-
 struct SettingsQuietButtonStyle: ButtonStyle {
     var horizontalPadding: CGFloat = 12
     var minimumHeight: CGFloat = 36

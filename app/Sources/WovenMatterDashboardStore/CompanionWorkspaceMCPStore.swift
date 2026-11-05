@@ -1,6 +1,5 @@
 import CryptoKit
 import Foundation
-import Security
 import SQLite3
 import WovenMatterCore
 
@@ -117,12 +116,9 @@ extension WorkspaceDatabaseConnection {
             let executor = workspace.executionDeviceID, federationID(executor) else {
         throw federationError("wrong_owner", "Only the central library host can authorize a registered Linux execution owner.")
       }
-      var bytes = [UInt8](repeating: 0, count: 32)
-      guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else {
+      guard let token = CompanionSecrets.randomToken() else {
         throw federationError("unavailable", "Unable to create a library MCP grant.")
       }
-      let token = Data(bytes).base64EncodedString().replacingOccurrences(of: "+", with: "-")
-        .replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
       let url = endpoint.appending(path: "mcp/workspace").absoluteString
       let record = WorkspaceMCPRecord(grantID: UUID().uuidString.lowercased(), libraryID: identity.libraryID,
         workspaceID: workspaceID, executionDeviceID: executor, endpointURL: url)

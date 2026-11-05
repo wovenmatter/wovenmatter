@@ -1,6 +1,5 @@
 import AppKit
 import SwiftUI
-import UniformTypeIdentifiers
 import WovenMatterClient
 import WovenMatterCore
 
@@ -60,7 +59,6 @@ struct DashboardCloudConversation: View {
     let onRemoveAttachment: (String) -> Void
     let onDropFiles: ([URL]) -> Bool
     let onCommandNavigation: (DashboardComposerNavigationDirection) -> Bool
-    let onUnavailableComposerAction: (String) -> Void
     private var workspaceOpenCode: OpenCodeModel? {
         guard let conversation, !conversation.isArchived else { return nil }
         return model.openCodeModel(for: conversation.id)
@@ -565,7 +563,6 @@ struct DashboardCloudConversation: View {
                                 guard conversation?.isArchived != true else { return false }
                                 return onDropFiles(urls)
                             },
-                            onUnavailableAction: onUnavailableComposerAction,
                             onCommandNavigation: onCommandNavigation,
                             onSend: {
                                 guard conversation?.isArchived != true else { return }
@@ -942,10 +939,6 @@ struct DashboardLocalInteractionCard: View {
             DashboardLocalFormCard(request: request, onResolve: onResolve)
         case .questions(let request):
             DashboardLocalQuestionCard(request: request, onResolve: onResolve)
-        case .plan(let request):
-            DashboardLocalPlanCard(request: request, onResolve: onResolve)
-        case .secret(let prompt):
-            DashboardLocalSecretCard(prompt: prompt, onResolve: onResolve)
         }
     }
 }
@@ -1088,52 +1081,6 @@ struct DashboardLocalQuestionCard: View {
     }
 }
 
-struct DashboardLocalPlanCard: View {
-    @Environment(\.dashboardTheme) private var theme
-    let request: LocalACPPlanRequest
-    let onResolve: (LocalACPInteractionResponse) -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 11) {
-            Text(dashboardNonemptyString(request.name) ?? "The agent proposed a plan")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(DashboardPalette.mutedForeground)
-                .textCase(.uppercase)
-                .tracking(0.8)
-            if let overview = dashboardNonemptyString(request.overview) {
-                Text(overview)
-                    .font(.system(size: 12.5))
-                    .foregroundStyle(DashboardPalette.mutedForeground)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            ScrollView {
-                ConversationMarkdown(
-                    document: ConversationMarkdownDocument(request.markdown),
-                    isStreaming: false
-                )
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .textSelection(.enabled)
-            }
-            .scrollIndicators(.never)
-            .frame(maxHeight: 260)
-
-            HStack(spacing: 8) {
-                Button("Accept plan") { onResolve(.planAccepted(true)) }
-                    .buttonStyle(DashboardPrimaryButtonStyle())
-                Button("Reject", role: .cancel) { onResolve(.planAccepted(false)) }
-                    .buttonStyle(DashboardQuietButtonStyle())
-            }
-        }
-        .padding(13)
-        .frame(maxWidth: 768, alignment: .leading)
-        .background(theme.palette.themeWhisper)
-        .clipShape(DashboardShapes.card)
-        .overlay {
-            DashboardShapes.card.stroke(theme.palette.border, lineWidth: 1)
-        }
-    }
-}
-
 func dashboardNonemptyString(_ value: String?) -> String? {
     guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
           !trimmed.isEmpty else { return nil }
@@ -1149,8 +1096,8 @@ struct DashboardMessageRow: View {
     let runPresentation: DashboardRunPresentation?
     let activities: [WorkspaceRunActivityRecord]
     let onOpenAttachment: (WorkspaceMessageAttachmentRecord) -> Void
-    var resolveFile: ((String) async throws -> URL)? = nil
-    var layout: ConversationMessageLayout.Row? = nil
+    let resolveFile: (String) async throws -> URL
+    let layout: ConversationMessageLayout.Row
     var displayedBody: String? = nil
     var commentaryIDs: Set<String>? = nil
     var workTimeline: ConversationWorkTimeline? = nil
@@ -1168,7 +1115,7 @@ struct DashboardMessageRow: View {
         let work = activities.map(\.activity)
         return ConversationWorkTimeline.displayPartition(
             AssistantTranscriptProjection(messageID: message.id, content: message.content, activities: work),
-            activities: work, isLive: isStreaming)
+            activities: work)
     }
 
     var body: some View {
@@ -1180,7 +1127,7 @@ struct DashboardMessageRow: View {
             }
             .font(.system(size: 12))
             .foregroundStyle(DashboardPalette.mutedForeground)
-        } else if layout?.content == .fileChanges {
+        } else if layout.content == .fileChanges {
             HStack {
                 ConversationChangedFilesCard(records: activities, topSpacing: {
                     if showsAssistantBody { return 18 }
@@ -1222,12 +1169,9 @@ struct DashboardMessageRow: View {
                         )
                         .padding(.horizontal, 4)
                         .padding(.vertical, 2)
-                        if let resolveFile, !isStreaming {
+                        if !isStreaming {
                             ConversationFilePreviews(content: assistantBody, messageID: message.id, resolveFile: resolveFile)
                         }
-                    }
-                    if !isUser, layout == nil {
-                        ConversationChangedFilesCard(records: activities)
                     }
                 }
                 .frame(maxWidth: isUser ? nil : .infinity, alignment: isUser ? .trailing : .leading)

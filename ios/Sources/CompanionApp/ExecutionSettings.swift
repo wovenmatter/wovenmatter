@@ -96,7 +96,7 @@ struct DeviceAgentSettingsPane: View {
       Section {
         ForEach(toolDefinitions, id: \.id) { tool in
           Toggle(tool.label, isOn: Binding(get: { CompanionModel.deviceToolEnabled(tool.id, selection: defaults.enabledTools) }, set: { enabled in
-            var selected = Set(CompanionModel.migratedDeviceToolSelection(defaults.enabledTools) ?? toolDefinitions.map(\.id).filter { CompanionModel.deviceToolEnabled($0, selection: nil) })
+            var selected = Set(MobileToolSupport.migratedMCPSelection(defaults.enabledTools) ?? toolDefinitions.map(\.id).filter { CompanionModel.deviceToolEnabled($0, selection: nil) })
             if enabled { selected.insert(tool.id) } else {
               selected.remove(tool.id)
               selected.subtract(CompanionModel.deviceMCPTools.compactMap { $0["name"] as? String }.filter { name in

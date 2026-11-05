@@ -72,7 +72,6 @@ public struct LocalACPSessionMetadata: Codable, Equatable, Sendable {
     public let permissionOptionMetadata: [String: SessionOptionMetadata]?
     public let modelOptions: [String]?
     public let excludedModels: [String]?
-    public let allowedModels: [String]?
     public let thinkingLevels: [String]?
     public let modelOptionMetadata: [String: SessionOptionMetadata]?
     public let thinkingOptionMetadata: [String: SessionOptionMetadata]?
@@ -83,7 +82,6 @@ public struct LocalACPSessionMetadata: Codable, Equatable, Sendable {
         model: String?,
         thinking: String?,
         modelOptions: [String]? = nil,
-        allowedModels: [String]? = nil,
         excludedModels: [String]? = nil,
         thinkingLevels: [String]? = nil,
         slashCommands: [LocalACPSlashCommand] = [],
@@ -101,7 +99,6 @@ public struct LocalACPSessionMetadata: Codable, Equatable, Sendable {
         self.permissionOptions = permissionOptions
         self.permissionOptionMetadata = permissionOptionMetadata
         self.modelOptions = modelOptions
-        self.allowedModels = allowedModels
         self.excludedModels = excludedModels
         self.thinkingLevels = thinkingLevels
         self.slashCommands = slashCommands
@@ -120,7 +117,7 @@ public struct LocalACPSessionMetadata: Codable, Equatable, Sendable {
     }
 
     public var selectableModels: [String] {
-        let options = Self.unique((modelOptions ?? allowedModels ?? []) + [model].compactMap { $0 })
+        let options = Self.unique((modelOptions ?? []) + [model].compactMap { $0 })
             .filter { !(excludedModels ?? []).contains($0) }
         var result: [String] = []
         var groupIndices: [String: Int] = [:]
@@ -148,12 +145,26 @@ public struct LocalACPSessionMetadata: Codable, Equatable, Sendable {
         Self.unique(thinkingLevels ?? [])
     }
 
-    private static func unique(_ values: [String]) -> [String] {
+    static func unique(_ values: [String]) -> [String] {
         var seen: Set<String> = []
         return values.compactMap {
             let value = $0.trimmingCharacters(in: .whitespacesAndNewlines)
             return !value.isEmpty && seen.insert(value).inserted ? value : nil
         }
+    }
+}
+
+extension LocalACPSessionMetadata {
+    public init(sessionKey: String, configuration: LocalACPSessionConfiguration) {
+        self.init(sessionKey: sessionKey, model: configuration.model, thinking: configuration.thinking,
+            modelOptions: configuration.modelOptions, thinkingLevels: configuration.thinkingOptions,
+            slashCommands: configuration.slashCommands,
+            modelOptionMetadata: configuration.modelOptionMetadata,
+            thinkingOptionMetadata: configuration.thinkingOptionMetadata,
+            permission: configuration.permission,
+            permissionOptions: configuration.permissionOptions,
+            permissionOptionMetadata: configuration.permissionOptionMetadata,
+            workingDirectory: configuration.workingDirectory)
     }
 }
 

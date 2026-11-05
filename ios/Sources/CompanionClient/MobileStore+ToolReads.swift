@@ -119,7 +119,7 @@ extension MobileStore {
             guard let native = part.nativeRecord, native.partIndex == index, native.partCount == metadata.partCount, native.byteCount == metadata.byteCount, native.sha256 == metadata.sha256 else { throw MobileConnectionError.invalidResponse }
             bytes.append(native.data)
           }
-          guard bytes.count == metadata.byteCount, SHA256.hash(data: bytes).map({ String(format: "%02x", $0) }).joined() == metadata.sha256, let text = String(data: bytes, encoding: .utf8) else { throw MobileConnectionError.invalidResponse }
+          guard bytes.count == metadata.byteCount, SHA256.hash(data: bytes).hexString == metadata.sha256, let text = String(data: bytes, encoding: .utf8) else { throw MobileConnectionError.invalidResponse }
           content = text
           var recordedAt = eventDate(event), nativeKind: String?
           if let raw = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any] {

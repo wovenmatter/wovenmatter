@@ -20,10 +20,6 @@ public enum WovenMCPCatalog {
   }
   public static let tools: [WovenMCPToolDefinition] = entries.map(\.definition)
 
-  public static func request(name: String, arguments: [String: GatewayJSONValue], contextID: String? = nil) throws -> WovenMatterToolRequest {
-    try request(name: name, arguments: .object(arguments), contextID: contextID)
-  }
-
   public static func request(name: String, arguments: GatewayJSONValue, contextID: String? = nil,
                              metadata: GatewayJSONValue? = nil) throws -> WovenMatterToolRequest {
     guard let entry = entries.first(where: { $0.definition.name == name }) else { throw invalid("Unknown Woven tool: \(name).") }

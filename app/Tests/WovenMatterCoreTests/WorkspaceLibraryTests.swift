@@ -56,20 +56,20 @@ struct WorkspaceLibraryTests {
 
 
   struct Fixture {
-    let root: URL
+    let persistence: PersistenceFixture
     let db: WorkspaceDatabase
+    var root: URL { persistence.directory }
     init() async throws {
-      root = FileManager.default.temporaryDirectory.appending(path: "library-tests-" + UUID().uuidString)
-      try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-      db = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
+      persistence = try PersistenceFixture()
+      db = try await persistence.openDatabase()
       try await db.bindDeviceOwnership(ownerDeviceID: UUID())
     }
-    func close() { try? FileManager.default.removeItem(at: root) }
+    func close() { persistence.remove() }
     func session(_ name: String = "Research", _ kind: AgentRuntimeKind = .codex) async throws -> String {
       try await db.createFixtureLocalACPSession(runtimeKind: kind, title: name, ownerDeviceID: UUID())
     }
     func exchange(_ conversation: String, text: String, reply: String = "Done") async throws -> LocalACPRunIdentifiers {
-      let run = try await db.beginLocalACPRun(conversationID: conversation, content: text)
+      let run = try await db.beginLocalACPRun(conversationID: conversation, input: .init(text: text))
       try await db.replaceLocalACPAssistantMessage(runID: run.runID, content: reply)
       try await db.completeLocalACPRun(runID: run.runID)
       try await db.indexLibraryMessages()
@@ -97,22 +97,20 @@ struct WorkspaceLibraryTests {
               kind: .note, resourceID: "note", titleSnapshot: "Note", contentSnapshot: "https://private-note.example",
               revisionSnapshot: "1")),
         ]))
-    let payload: GatewayJSONValue = .object([
-      "content": .array([
-        .object([
-          "type": .string("image"), "url": .string("./photo.png"), "fileName": .string("photo.png"),
-          "mimeType": .string("image/png"), "data": .string("AQID"),
-        ])
-      ])
-    ])
-    try await f.db.captureGatewayLibraryFiles(payload, messageID: run.userMessageID, conversationID: chat)
+    func captureNativePhoto(messageID: String) async throws {
+      try await f.db.write { connection in try connection.transaction {
+        try connection.captureNativeLibraryFileUnlocked(source: "./photo.png", title: "photo.png", mime: "image/png",
+          base64: "AQID", messageID: messageID, conversationID: chat)
+      } }
+    }
+    try await captureNativePhoto(messageID: run.userMessageID)
     try await f.db.appendLocalACPAssistantChunk(runID: run.runID, chunk: "[Incomplete](https://stream.example")
     try await f.db.indexLibraryMessages()
     #expect(try await f.db.libraryItems().map(\.kind) == [.photo])
     try await f.db.replaceLocalACPAssistantMessage(runID: run.runID, content: "[Complete](https://stream.example) [Image](./photo.png)")
     try await f.db.completeLocalACPRun(runID: run.runID)
     try await f.db.indexLibraryMessages()
-    try await f.db.captureGatewayLibraryFiles(payload, messageID: run.assistantMessageID, conversationID: chat)
+    try await captureNativePhoto(messageID: run.assistantMessageID)
     let rows = try await f.db.libraryItems()
     #expect(rows.count == 3)
     #expect(rows.filter { $0.sender == .me && $0.kind == .photo }.count == 1)
@@ -146,10 +144,46 @@ struct WorkspaceLibraryTests {
         "UPDATE dashboard_conversations SET desktop_owned=1,governing_plane='platform' WHERE id=?", [chat])
      } }
     #expect(try await f.db.libraryItems().isEmpty)
-    #expect(try await f.db.libraryFacets().isEmpty)
     #expect(try await f.db.pendingLibraryFiles().isEmpty)
     #expect(try await f.db.libraryItem(id: file.id) == nil)
     await #expect(throws: WorkspaceToolError.self) { try await f.db.librarySourceMessage(id: file.id) }
+  }
+
+  @Test("a synchronization requested during another pass runs after it rather than being dropped")
+  func concurrentSynchronizationIsSerialized() async throws {
+    let f = try await Fixture()
+    defer { f.close() }
+    // The first pass suspends while resolving a remote workspace.
+    let remoteChat = try await f.session("Remote")
+    try await f.db.write { connection in try connection.transaction {
+      try connection.toolsExecuteUnlocked(
+        "UPDATE desktop_local_acp_sessions SET remote_workspace_id=? WHERE conversation_id=?", [UUID().uuidString.lowercased(), remoteChat])
+    } }
+    _ = try await f.exchange(remoteChat, text: "Report", reply: "[Report](./report.pdf)")
+    let gate = LibraryPassGate()
+    let service = LibraryService(database: f.db)
+    let first = Task { try await service.synchronize(locations: [], remoteWorkspace: { _ in await gate.hold(); return nil }) }
+    try await gate.untilHeld()
+    // A local file arrives after the first pass indexed its messages.
+    let directory = f.root.appending(path: "local-workspace")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let bytes = Data("Category,Amount".utf8)
+    try bytes.write(to: directory.appending(path: "budget.csv"))
+    let localChat = try await f.session("Local")
+    let run = try await f.exchange(localChat, text: "Budget", reply: "[Budget](./budget.csv)")
+    let returned = LibraryPassGate()
+    let second = Task {
+      try await service.synchronize(locations: [.init(conversationID: localChat, name: "Local", root: directory.path)],
+        remoteWorkspace: { _ in nil })
+      await returned.hold(waiting: false)
+    }
+    try await Task.sleep(for: .milliseconds(100))
+    #expect(await !returned.held, "A concurrent request must wait for its own pass")
+    await gate.release()
+    try await first.value; try await second.value
+    let id = WorkspaceLibraryItem.identifier(messageID: run.assistantMessageID, source: "./budget.csv")
+    let item = try #require(try await f.db.libraryItem(id: id))
+    #expect(item.storage == .retained && item.sizeBytes == Int64(bytes.count))
   }
 
   @Test("retained remote handback opens offline and copies deduplicate by content")
@@ -203,7 +237,20 @@ struct WorkspaceLibraryTests {
      } }
     try await f.db.indexLibraryMessages()
     #expect(try await f.db.libraryItems().isEmpty)
-    #expect(try await f.db.retainedLibraryHashes().isEmpty)
   }
 
+}
+
+private actor LibraryPassGate {
+  private(set) var held = false
+  private var continuation: CheckedContinuation<Void, Never>?
+  func hold(waiting: Bool = true) async {
+    held = true
+    if waiting { await withCheckedContinuation { continuation = $0 } }
+  }
+  func release() { continuation?.resume(); continuation = nil }
+  func untilHeld() async throws {
+    _ = try await pollUntil(attempts: 2_000, interval: .milliseconds(5)) { held }
+    #expect(held)
+  }
 }

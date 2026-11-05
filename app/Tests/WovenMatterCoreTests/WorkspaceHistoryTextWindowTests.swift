@@ -8,15 +8,13 @@ import WovenMatterCore
 @Suite("History text windows")
 struct WorkspaceHistoryTextWindowTests {
   @Test func NULAndUnicodeScalarWindowsRetainSuffixAndReportPagination() async throws {
-    let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: root) }
-    let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
+    let persistence = try PersistenceFixture(); defer { persistence.remove() }
+    let database = try await persistence.openDatabase()
     let owner = UUID()
     try await database.bindDeviceOwnership(ownerDeviceID: owner)
     let session = try await database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Windows", ownerDeviceID: owner)
     for value in ["\0é🪡z", "é\0🪡z", "é🪡z\0", "e\u{0301}\0🪡z"] {
-      let run = try await database.beginLocalACPRun(conversationID: session, content: value)
+      let run = try await database.beginLocalACPRun(conversationID: session, input: .init(text: value))
       try await database.completeLocalACPRun(runID: run.runID)
       let eventID = UUID().uuidString
       try await database.recordHistory(.init(id: eventID, conversationID: session,

@@ -61,19 +61,6 @@ final class TranscriptDetailTests: XCTestCase {
           .init(id: "trace", runID: "run", title: "Thinking", status: "completed", projectionJSON: "{\"id\":\"trace\",\"detailVersion\":3}", detailsRecordID: $0)
         ]) }, nativeRecord: part))
     }
-    func parts(_ recordID: String, _ text: String, previous: String? = nil,
-      id: String = "trace", version: Int = 3) throws -> [CompanionNativeRecordPart] {
-      let value: [String: Any] = ["id": id, "kind": "thought", "title": "Newest metadata", "content": text,
-        "contentIsDelta": previous != nil, "detailVersion": version, "detailsAvailable": true]
-      var envelope: [String: Any] = ["activity": value]
-      if let previous { envelope["previousDetailsRecordID"] = previous }
-      let bytes = try JSONSerialization.data(withJSONObject: envelope), chunk = 131_072
-      let count = (bytes.count + chunk - 1) / chunk
-      let digest = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
-      return (0..<count).map { .init(recordID: recordID, format: "wovenmatter.activity.v2", partIndex: $0,
-        partCount: count, byteCount: Int64(bytes.count), sha256: digest,
-        data: bytes.subdata(in: $0 * chunk..<min(bytes.count, ($0 + 1) * chunk))) }
-    }
     func expectError(_ code: String) async throws {
       do {
         _ = try await journal.activityDetails(conversationID: "chat", activityID: "trace")
@@ -130,23 +117,13 @@ final class TranscriptDetailTests: XCTestCase {
         kind: .transcript, transcript: .init(conversationID: "chat", activities: [
           .init(id: "trace", runID: "run", title: "Thinking", status: "completed", detailsRecordID: "head")
         ])))
-      func parts(_ id: String, content: String, previous: String? = nil) throws -> [CompanionNativeRecordPart] {
-        var envelope: [String: Any] = ["activity": ["id": "trace", "kind": "thought", "title": "Thinking",
-          "content": content, "contentIsDelta": previous != nil, "detailVersion": previous == nil ? 1 : 2]]
-        if let previous { envelope["previousDetailsRecordID"] = previous }
-        let bytes = try JSONSerialization.data(withJSONObject: envelope), chunk = 131_072
-        let count = (bytes.count + chunk - 1) / chunk
-        let digest = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
-        return (0..<count).map { .init(recordID: id, format: "wovenmatter.activity.v2", partIndex: $0,
-          partCount: count, byteCount: Int64(bytes.count), sha256: digest,
-          data: bytes.subdata(in: $0 * chunk..<min(bytes.count, ($0 + 1) * chunk))) }
-      }
       func record(_ journal: WorkspaceJournal, _ part: CompanionNativeRecordPart, runID: String = "run") async throws {
         sequence += 1
         try await journal.record(.init(workspaceID: "owner", originSequence: sequence, conversationID: "chat",
           runID: runID, kind: .nativeRecord, nativeRecord: part))
       }
-      let originalParts = try parts("base", content: base) + parts("head", content: "Fresh suffix 🧵", previous: "base")
+      let originalParts = try parts("base", base, version: 1, title: "Thinking", detailsAvailable: false)
+        + parts("head", "Fresh suffix 🧵", previous: "base", version: 2, title: "Thinking", detailsAvailable: false)
       XCTAssertGreaterThan(originalParts.count, 2)
       for part in originalParts { try await record(journal, part) }
       // New event IDs and sequences are legitimate retries of immutable parts.
@@ -170,10 +147,19 @@ final class TranscriptDetailTests: XCTestCase {
   }
 
   private func file() -> URL { FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("store.json") }
-  private func activity(content: String) throws -> CompanionActivity {
-    let object: [String: Any] = ["id":"call", "kind":"tool", "title":"read_file", "status":"completed",
-      "toolName":"read_file", "content":content, "rawOutputJSON":content, "locations":[], "changes":[], "planEntries":[]]
-    return .init(id:"call", runID:"turn", title:"read_file", status:"completed",
-      projectionJSON:String(decoding: try JSONSerialization.data(withJSONObject:object), as:UTF8.self), sequence:1)
-  }
+}
+
+private func parts(_ recordID: String, _ text: String, previous: String? = nil, id: String = "trace",
+  version: Int = 3, title: String = "Newest metadata", detailsAvailable: Bool = true) throws -> [CompanionNativeRecordPart] {
+  var value: [String: Any] = ["id": id, "kind": "thought", "title": title, "content": text,
+    "contentIsDelta": previous != nil, "detailVersion": version]
+  if detailsAvailable { value["detailsAvailable"] = true }
+  var envelope: [String: Any] = ["activity": value]
+  if let previous { envelope["previousDetailsRecordID"] = previous }
+  let bytes = try JSONSerialization.data(withJSONObject: envelope), chunk = 131_072
+  let count = (bytes.count + chunk - 1) / chunk
+  let digest = SHA256.hash(data: bytes).hexString
+  return (0..<count).map { .init(recordID: recordID, format: "wovenmatter.activity.v2", partIndex: $0,
+    partCount: count, byteCount: Int64(bytes.count), sha256: digest,
+    data: bytes.subdata(in: $0 * chunk..<min(bytes.count, ($0 + 1) * chunk))) }
 }

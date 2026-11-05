@@ -12,6 +12,9 @@ extension WorkspaceDatabaseConnection {
           AND deleted_at IS \(restoring ? "NOT NULL" : "NULL")
         """, values: [id])
       guard !rows.isEmpty else { throw WorkspaceConversationActionError.unavailable }
+      // Trash and restore have runtime effects (goals, timers, deliveries) that
+      // only the execution owner may apply. Another Mac's chat is routed to it.
+      if !(mutation.isPresentationOnly) { try requireProtectedConversationMutationUnlocked(id) }
       let timestamp = Self.timestamp(Date())
       switch mutation {
       case .setPinned(let pinned):
@@ -38,7 +41,7 @@ extension WorkspaceDatabaseConnection {
             AND status IN ('queued', 'accepted', 'running', 'uncertain') LIMIT 1
           """, values: [id]).first {
           // A lost continuation receipt is still unresolved native work even if
-          // the original prompt has finished. PR84 owns exact-ID reconciliation.
+          // the original prompt has finished.
           throw run.objectValue?["status"]?.stringValue == "uncertain"
             ? WorkspaceConversationActionError.pendingInput : WorkspaceConversationActionError.running
         }
@@ -55,20 +58,7 @@ extension WorkspaceDatabaseConnection {
           UPDATE dashboard_conversations SET deleted_at = ?, updated_at = ?,
             original_folder_id = folder_id WHERE id = ?
           """, [timestamp, timestamp, id])
-        if var goal = try goalUnlocked(id), goal.status == .active {
-          try captureGoalRunsUnlocked(&goal)
-          try cancelQueuedGoalDeliveryUnlocked(goal)
-          goal.status = .paused; goal.evidence = "This conversation was moved to Trash. Resume to continue."
-          try saveGoalUnlocked(goal)
-        }
-        try toolsExecuteUnlocked("""
-          UPDATE workspace_session_timers SET is_paused = 1, pending_delivery_id = NULL WHERE session_id = ?
-          """, [id])
-        try toolsExecuteUnlocked("""
-          UPDATE workspace_session_deliveries SET status = 'cancelled'
-          WHERE (target_id = ? OR source_id = ?)
-            AND (status = 'queued' OR (status = 'sending' AND transport_started = 0))
-          """, [id, id])
+        try applyOwnerTrashEffectsUnlocked(id, reassertGoal: false)
       case .restore:
         // A folder may have been removed while this chat was in Trash.
         try toolsExecuteUnlocked("""
@@ -106,5 +96,36 @@ extension WorkspaceDatabase {
 
   public func trashedConversations() async throws -> [WorkspaceTrashedConversation] {
     try await read { try $0.trashedConversations() }
+  }
+}
+
+extension WorkspaceConversationMutation {
+  /// Rename and pin are shared presentation; they never change runtime state.
+  public var isPresentationOnly: Bool {
+    switch self { case .rename, .setPinned: true; case .moveToTrash, .restore: false }
+  }
+}
+
+extension WorkspaceDatabaseConnection {
+  /// Trash, restore and draft moves need positive authority here: this Mac
+  /// executes the chat natively, or the chat belongs to a known independent
+  /// Linux or iOS workspace whose projection this library has always managed.
+  /// Unknown ownership (for example a chat received before its owner record)
+  /// is unavailable; a chat another paired Mac runs is routed to that Mac.
+  func requireProtectedConversationMutationUnlocked(_ id: String) throws {
+    if try locallyOwnsConversationUnlocked(id) { return }
+    if try historyRowsUnlocked("""
+      SELECT 1 AS independent FROM companion_execution_conversations x JOIN companion_execution_workspaces w ON w.id=x.workspace_id
+      WHERE x.id=? AND w.deleted=0 AND json_extract(CAST(w.payload AS TEXT),'$.kind') IN ('linux','ios')
+      """, values: [id]).isEmpty == false { return }
+    throw try pairedForeignOwnerUnlocked(id) != nil ? WorkspaceConversationActionError.ownedByAnotherMac : WorkspaceConversationActionError.unavailable
+  }
+
+  /// The paired Mac that owns this chat when it is not this Mac.
+  func pairedForeignOwnerUnlocked(_ id: String) throws -> String? {
+    try historyRowsUnlocked("""
+      SELECT o.device_id FROM paired_conversation_owners o JOIN companion_library_identity i ON i.singleton=1
+      WHERE o.id=? AND o.device_id<>i.host_device_id
+      """, values: [id]).first?.objectValue?["device_id"]?.stringValue
   }
 }

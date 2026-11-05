@@ -30,7 +30,7 @@ enum DashboardCalendarColor: String, CaseIterable {
     var color: Color {
         switch self {
         case .cognac: DashboardPalette.calendarRecurringTask
-        case .britishRacingGreen: DashboardPalette.calendarEvent
+        case .britishRacingGreen: DashboardPalette.primary
         case .green: .hex(0x84CC16)
         case .blue: DashboardPalette.calendarTask
         case .purple: DashboardPalette.calendarRecurringEvent

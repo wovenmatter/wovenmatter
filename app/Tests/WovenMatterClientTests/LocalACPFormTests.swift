@@ -29,7 +29,7 @@ struct LocalACPFormTests {
         defer { fixture.remove() }
         let client = try fixture.client(runtimeKind: .claudeCode)
         _ = try await client.initializeSession(workingDirectory: fixture.root, existingSessionID: nil, title: nil)
-        let stopReason = try await client.prompt("fixture", onInteraction: { request in
+        let stopReason = try await client.prompt(.init(text: "fixture"), onInteraction: { request in
             guard case .form(let form) = request else { Issue.record("Expected form"); return .cancelled }
             #expect(form.fields.first(where: { $0.id == "question_0" })?.options.first?.id == "raw-id")
             return .formValues(["question_0": .string("raw-id")])

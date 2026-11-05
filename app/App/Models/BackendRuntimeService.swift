@@ -12,7 +12,6 @@ enum BackendRuntimeCommand: Codable, Sendable {
     case cancelInstall
     case refreshRuntimes(Set<AgentRuntimeKind>)
     case refreshSignIn
-    case setUpWorkspace(URL)
     case titleEnabled(Bool)
     case titleModel(String)
     case titleThinking(String)

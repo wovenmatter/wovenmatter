@@ -148,6 +148,6 @@ struct ConversationOuterScrollTests {
             startsComposerCollapsed: false, usesCompactPanelSpacing: false, showsClosePanel: false, showsAddPanel: false,
             focusRequestGeneration: nil, onActivatePanel: {}, onClosePanel: {}, onAddPanel: {}, onSend: {},
             onAttachmentAction: { _ in }, onRemoveAttachment: { _ in }, onDropFiles: { _ in false },
-            onCommandNavigation: { _ in false }, onUnavailableComposerAction: { _ in })
+            onCommandNavigation: { _ in false })
     }
 }

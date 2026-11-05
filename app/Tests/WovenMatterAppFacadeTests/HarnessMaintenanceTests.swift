@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import Foundation
 import Testing
 import WovenMatterClient
@@ -119,10 +120,7 @@ struct HarnessMaintenanceTests {
     }
 
     private func eventually(_ condition: () async -> Bool) async throws {
-        for _ in 0..<500 {
-            if await condition() { return }
-            try await Task.sleep(for: .milliseconds(10))
-        }
+        if try await pollUntil(attempts: 500, interval: .milliseconds(10), { await condition() }) { return }
         Issue.record("Maintenance did not reach the expected state")
         throw RuntimeMaintenanceError.timeout
     }
@@ -141,7 +139,7 @@ private actor HeldHarnessUpdates {
         if fail { waiter?.resume(throwing: RuntimeMaintenanceError.verification) }
         else {
             let inventory = try JSONDecoder().decode(RuntimeInventory.self, from: Data("""
-                {"kind":"\(kind.rawValue)","components":[],"detectedUpdateAvailable":false}
+                {"kind":"\(kind.rawValue)","components":[]}
                 """.utf8))
             waiter?.resume(returning: inventory)
         }

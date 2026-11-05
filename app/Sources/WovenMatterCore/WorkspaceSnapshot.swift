@@ -48,6 +48,9 @@ public struct WorkspaceFolderLocation: Codable, Equatable, Sendable {
   public init(workspaceID: String, rootPath: String, managed: Bool) {
     self.workspaceID = workspaceID; self.rootPath = rootPath; self.managed = managed
   }
+  /// The workspace ID of a remote execution workspace, as execution roots,
+  /// scratch directories and history sources record it.
+  public static func remoteWorkspaceSourceID(_ id: UUID) -> String { "remote:" + id.uuidString.lowercased() }
 }
 
 public enum WorkspaceFolderMoveDirection: Sendable {
@@ -66,7 +69,6 @@ public struct WorkspaceConversationRecord: Codable, Equatable, Identifiable, Sen
   public let title: String
   public let unread: Bool
   public let lastMessagePreview: String?
-  public let openClawSessionKey: String?
   public let importedAt: String?
   public let isScheduledTask: Bool
   public let lastMessageAt: String?
@@ -84,7 +86,6 @@ public struct WorkspaceConversationRecord: Codable, Equatable, Identifiable, Sen
     case localRuntimeKind = "local_runtime_kind"
     case remoteWorkspaceID = "remote_workspace_id"
     case lastMessagePreview = "last_message_preview"
-    case openClawSessionKey = "openclaw_session_key"
     case importedAt = "imported_at"
     case isScheduledTask = "is_scheduled_task"
     case lastMessageAt = "last_message_at"
@@ -115,7 +116,6 @@ public struct WorkspaceConversationRecord: Codable, Equatable, Identifiable, Sen
     title = try values.decode(String.self, forKey: .title)
     unread = try values.sqliteBool(forKey: .unread)
     lastMessagePreview = try values.decodeIfPresent(String.self, forKey: .lastMessagePreview)
-    openClawSessionKey = try values.decodeIfPresent(String.self, forKey: .openClawSessionKey)
     importedAt = try values.decodeIfPresent(String.self, forKey: .importedAt)
     isScheduledTask = try values.sqliteBoolIfPresent(forKey: .isScheduledTask) ?? false
     lastMessageAt = try values.decodeIfPresent(String.self, forKey: .lastMessageAt)

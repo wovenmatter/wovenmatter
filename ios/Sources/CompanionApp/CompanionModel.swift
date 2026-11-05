@@ -118,11 +118,19 @@ import CompanionInference
   var executionWorkspaceRefreshInProgress = false
   var remotePending: [String: [CompanionPendingInteraction]] = [:]
   var workspaceAuthorizationRetryAt: [String: Date] = [:]
+  /// One in-flight credential issuance per workspace. Each issuance replaces
+  /// the device's earlier token there, so concurrent requests share it.
+  @ObservationIgnored var workspaceIssuances: [String: (generation: UUID, task: Task<DirectWorkspaceCredential, any Error>)] = [:]
+  /// The latest inference binding per workspace; each binding waits for the
+  /// one before it, so binders of one workspace never interleave.
+  @ObservationIgnored var workspaceBindings: [String: Task<Void, any Error>] = [:]
   var workspaceProblems: [String: String] = [:]
   var inferenceProblem: String?
   var executionDirectory: URL?
   var executionRefreshTasks: [String: Task<Void, Never>] = [:]
-  var executionCredentialStore = InferenceCredentialStore()
+  var executionCredentialStore: any InferenceCredentialUpdating = InferenceCredentialStore()
+  /// Device-only storage for direct workspace credentials; tests inject memory.
+  var workspaceCredentials = WorkspaceCredentialStorage.keychain
   let deviceBackgroundExecution = DeviceBackgroundExecution()
   var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
   var backgroundFallbackToken: UUID?
@@ -202,28 +210,12 @@ import CompanionInference
       else {
         do { try await store?.recoverPairingTransition(); await reload(); credential = try MobileCredentialVault.load() }
         catch { errorMessage = error.localizedDescription; return }
-        var unpairRequested = false
-        #if DEBUG
-        if CommandLine.arguments.contains("--unpair-devices") {
-          unpairRequested = true
-          await disconnectMac()
-          let result: [String: Any] = ["unpaired": pairingError == nil && credential == nil && workspaceClients.isEmpty,
-            "workspaceDetached": state.workspaceID == nil, "noteCount": state.notes.count,
-            "conversationCount": state.conversations.count]
-
-          if let data = try? JSONSerialization.data(withJSONObject: result, options: [.sortedKeys]) {
-            try? data.write(to: FileManager.default.temporaryDirectory.appendingPathComponent("wovenmatter-unpair-result.json"), options: .atomic)
-          }
-        }
-        #endif
-        if !unpairRequested {
-          do {
-            if let pending = credential, pending.confirmationPending == true {
-              credential = nil
-              try await acceptPairing(pending, allowingLibraryChange: true) { try MobileCredentialVault.save($0) }
-            } else { try configureTransport() }
-          } catch { pairingError = error.localizedDescription; credential = nil }
-        }
+        do {
+          if let pending = credential, pending.confirmationPending == true {
+            credential = nil
+            try await acceptPairing(pending, allowingLibraryChange: true) { try MobileCredentialVault.save($0) }
+          } else { try configureTransport() }
+        } catch { pairingError = error.localizedDescription; credential = nil }
         do { try await store?.interruptExecutorJobs(); try await loadExecutionConfiguration() }
         catch { errorMessage = error.localizedDescription }
       }
@@ -353,7 +345,6 @@ import CompanionInference
     } catch { errorMessage = error.localizedDescription }
   }
   func openNote(_ id: String) async {
-    await store?.protectOpenNote(id)
     selectedNoteID = id; tab = .note
     if state.uncachedNoteIDs.contains(id), online, let store, let transport {
       do { try await store.cacheNote(transport.asset(id)); await reload() }

@@ -52,6 +52,10 @@ public struct CompanionPairingPayload: Codable, Equatable, Sendable {
   }
 }
 
+public enum CompanionPairingPurpose {
+  public static let peerMac = "library.peers.v2"
+}
+
 public struct CompanionPairRequest: Codable, Equatable, Sendable {
   public let token: String
   public let deviceID: String
@@ -60,11 +64,15 @@ public struct CompanionPairRequest: Codable, Equatable, Sendable {
   public let protocolVersion: Int
   public let expectedWorkspaceID: String?
   public let requiresConfirmation: Bool?
+  /// Explicit pairing purpose. Only `CompanionPairingPurpose.peerMac` can
+  /// become a paired-Mac grant; device metadata never selects that role.
+  public let purpose: String?
   public init(token: String, deviceID: String, deviceName: String, protocolVersion: Int = CompanionProtocol.version,
-              metadata: CompanionDeviceMetadata? = nil, expectedWorkspaceID: String? = nil, requiresConfirmation: Bool? = nil) {
+              metadata: CompanionDeviceMetadata? = nil, expectedWorkspaceID: String? = nil, requiresConfirmation: Bool? = nil,
+              purpose: String? = nil) {
     self.token = token; self.deviceID = deviceID; self.deviceName = deviceName
     self.protocolVersion = protocolVersion; self.metadata = metadata
-    self.expectedWorkspaceID = expectedWorkspaceID; self.requiresConfirmation = requiresConfirmation
+    self.expectedWorkspaceID = expectedWorkspaceID; self.requiresConfirmation = requiresConfirmation; self.purpose = purpose
   }
 }
 

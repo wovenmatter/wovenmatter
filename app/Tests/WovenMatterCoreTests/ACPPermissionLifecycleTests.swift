@@ -23,7 +23,7 @@ struct ACPPermissionLifecycleTests {
     await gate.waitUntilEntered()
     await #expect(throws: (any Error).self) {
       try await fixture.coordinator.accept(
-        conversationID: fixture.id, content: "Must not run", launch: fixture.launch, workspace: fixture.workspace
+        conversationID: fixture.id, input: .init(text: "Must not run"), launch: fixture.launch, workspace: fixture.workspace
       )
     }
     await #expect(throws: (any Error).self) {
@@ -57,7 +57,7 @@ struct ACPPermissionLifecycleTests {
     )
     #expect(result.permission == "auto")
     #expect(fixture.factory.drivers.map(\.launchPermission) == ["auto"])
-    let reopened = try await WorkspaceDatabase(url: fixture.databaseURL)
+    let reopened = try await fixture.persistence.openDatabase()
     #expect(try await reopened.localACPSession(conversationID: fixture.id).permission == "auto")
     #expect(try await reopened.localACPSession(conversationID: fixture.id).acpSessionID == "native-0")
     await fixture.coordinator.shutdown()
@@ -101,7 +101,7 @@ struct ACPPermissionLifecycleTests {
       runtimeKind: .grokBuild, executableURL: fixture.launch.executableURL,
       arguments: ["host", "--", "quoted-command"], environment: ["OUTER": "kept"],
       environmentKeysToRemove: ["REMOVE"], environmentKeyPrefixesToRemove: ["TOKEN_"],
-      processWorkingDirectoryURL: fixture.directory,
+      processWorkingDirectoryURL: fixture.persistence.directory,
       wrappedCommand: wrapped
     )
     _ = try await fixture.coordinator.configuration(
@@ -151,7 +151,7 @@ struct ACPPermissionLifecycleTests {
     #expect(field != .thinking || changed.thinking == "high")
     #expect(field != .permission || changed.permission == "auto")
     _ = try await fixture.coordinator.accept(
-      conversationID: fixture.id, content: "Recovered fixture", launch: fixture.launch, workspace: fixture.workspace
+      conversationID: fixture.id, input: .init(text: "Recovered fixture"), launch: fixture.launch, workspace: fixture.workspace
     )
     await gate.waitUntilEntered()
     #expect(fixture.factory.drivers.last?.promptCount == 1)
@@ -229,8 +229,7 @@ struct ACPPermissionLifecycleTests {
 private enum PermissionFixtureError: Error { case launchFailed }
 
 private struct PermissionLifecycleFixture: Sendable {
-  let directory: URL
-  let databaseURL: URL
+  let persistence: PersistenceFixture
   let database: WorkspaceDatabase
   let id: String
   let launch: LocalACPRuntimeLaunchConfiguration
@@ -240,7 +239,6 @@ private struct PermissionLifecycleFixture: Sendable {
 
   init(
     runtime: AgentRuntimeKind,
-    remote: Bool = false,
     failingLaunchPermission: String? = nil,
     forkedLaunchPermission: String? = nil,
     unconfirmedPermission: String? = nil,
@@ -248,21 +246,14 @@ private struct PermissionLifecycleFixture: Sendable {
     gatedLaunchPermission: String? = nil,
     launchGate: PermissionLifecycleGate? = nil
   ) async throws {
-    directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    databaseURL = directory.appending(path: "workspace.sqlite")
-    database = try await WorkspaceDatabase(url: databaseURL)
-    if remote {
-      id = try await database.createFixtureRemoteACPSession(runtimeKind: runtime, remoteWorkspaceID: UUID(),
-        remoteWorkspaceName: "Fixture remote", title: "Permission fixture", ownerDeviceID: UUID())
-    } else {
-      id = try await database.createFixtureLocalACPSession(runtimeKind: runtime, title: "Permission fixture", ownerDeviceID: UUID())
-    }
+    persistence = try PersistenceFixture()
+    database = try await persistence.openDatabase()
+    id = try await database.createFixtureLocalACPSession(runtimeKind: runtime, title: "Permission fixture", ownerDeviceID: UUID())
     launch = LocalACPRuntimeLaunchConfiguration(
       runtimeKind: runtime, executableURL: URL(filePath: "/nonexistent-permission-fixture"), arguments: [],
       requestedPermission: "bypassPermissions"
     )
-    workspace = LocalACPWorkspaceLaunchConfiguration(rootURL: directory)
+    workspace = LocalACPWorkspaceLaunchConfiguration(rootURL: persistence.directory)
     let factory = PermissionLifecycleFactory(
       failingLaunchPermission: failingLaunchPermission, forkedLaunchPermission: forkedLaunchPermission,
       unconfirmedPermission: unconfirmedPermission, promptGate: promptGate,
@@ -276,7 +267,7 @@ private struct PermissionLifecycleFixture: Sendable {
     )
   }
 
-  func cleanUp() { try? FileManager.default.removeItem(at: directory) }
+  func cleanUp() { persistence.remove() }
 }
 
 private final class PermissionLifecycleFactory: @unchecked Sendable {
@@ -340,7 +331,6 @@ private final class PermissionLifecycleFactory: @unchecked Sendable {
       observeConfiguration: { handler in driver.observe(handler) },
       setConfiguration: { model, thinking in driver.select(model: model, thinking: thinking) },
       setPermission: { [self] permission in
-        driver.recordPermission(permission)
         guard driver.configuration.permissionOptions.contains(permission) else {
           throw LocalACPClientError.invalidConfigurationValue(field: "permission", value: permission)
         }
@@ -367,7 +357,6 @@ private final class PermissionLifecycleDriver: @unchecked Sendable {
   private var existingID: String?
   private var shutdowns = 0
   private var prompts = 0
-  private var permissions: [String] = []
   private var observer: (@Sendable (LocalACPSessionConfiguration) async -> Void)?
 
   init(index: Int, launch: LocalACPRuntimeLaunchConfiguration) {
@@ -386,11 +375,9 @@ private final class PermissionLifecycleDriver: @unchecked Sendable {
   var existingSessionID: String? { lock.withLock { existingID } }
   var shutdownCount: Int { lock.withLock { shutdowns } }
   var promptCount: Int { lock.withLock { prompts } }
-  var permissionRequests: [String] { lock.withLock { permissions } }
   func recordExisting(_ id: String?) { lock.withLock { existingID = id } }
   func recordShutdown() { lock.withLock { shutdowns += 1 } }
   func recordPrompt() { lock.withLock { prompts += 1 } }
-  func recordPermission(_ value: String) { lock.withLock { permissions.append(value) } }
   func observe(_ handler: @escaping @Sendable (LocalACPSessionConfiguration) async -> Void) {
     lock.withLock { observer = handler }
   }

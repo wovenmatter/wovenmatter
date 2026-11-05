@@ -49,6 +49,11 @@ when an intentional design change is accepted.
   conversation labels, and actions. Use **Pi Durable SDK** for the underlying SDK
   in technical descriptions and version/update controls. Keep the agent name
   stable across model and provider changes.
+- **Settings navigation:** group Pi Durable, Codex, Claude Code, Grok Build, and
+  OpenCode under **Settings → Agents**. Harness pages return to Agents unless
+  opened from a workspace's settings. Spell **OpenCode** as one word throughout
+  the app. Order the main Settings page as General, Agents, Dictation, Local
+  Workspace, Remote Workspaces, Apple Devices, Background Server, then Usage.
 - **Harness setup:** use compact rows grouped on the theme-whisper surface for
   both harness installation and Pi Durable setup, with the same typography,
   padding, inset dividers, and quiet actions. Keep provider setup limited to
@@ -165,8 +170,8 @@ when an intentional design change is accepted.
   and disabled states without making quiet or icon actions look primary. Do not
   add persistent colored focus rings. Preserve keyboard navigation and accessible
   labels and states, and respect Reduce Motion and Reduce Transparency.
-- **Text inputs:** use `DashboardSearchField` for search, `.dashboardInput()` for
-  new text/secure fields, and `.settingsInput()` in desktop settings. These use
+- **Text inputs:** use `DashboardSearchField` for search and `.dashboardInput()` for
+  new text/secure fields, including desktop settings. These use
   plain native editing on the theme-whisper surface, matching sidebar chat search.
   Never use `.textFieldStyle(.roundedBorder)`, native blue focus outlines, or a
   custom bright focus border on app forms. Do not disable focus or keyboard

@@ -14,17 +14,13 @@ import time
 import uuid
 
 
-def choose_mode(root):
-    """Default to the complete, independent app; clients are explicit opt-in."""
-    return "snapshot"
-
-
 def profile(root, instance, mode):
     root = root.resolve()
     instance = instance or (re.sub(r"[^a-z0-9-]", "-", root.parent.name.lower())[:40].strip("-") or "dev") + "-" + hashlib.sha256(os.fsencode(root)).hexdigest()[:10]
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", instance):
         raise ValueError("Use a lowercase instance name of up to 64 letters, digits, and hyphens.")
-    selected = choose_mode(root) if mode == "auto" else mode
+    # Auto defaults to the complete, independent app; clients are explicit opt-in.
+    selected = "snapshot" if mode == "auto" else mode
     support = Path.home() / "Library/Application Support"
     support = support / "Woven Matter" if selected == "live" else support / "Woven Matter Dev" / instance / selected
     return dict(instance=instance, mode=selected,
@@ -129,9 +125,15 @@ def disconnect_snapshot(file, *, device_id, execution_root, published_root):
                             "companion_execution_conversations", "companion_execution_runs", "companion_native_history",
                             "companion_native_history_parts", "companion_saved_artifacts", "companion_artifact_chunks",
                             "companion_message_provenance"}
+        # Execution ownership is durable metadata, not sync state. Keep it so a
+        # snapshot's new identity owns nothing it copied and never runs another
+        # Mac's (or the source's) schedules; drop routes, cursors and journals.
+        retained_paired = {"paired_conversation_owners", "paired_agent_owners", "paired_calendar_owners", "paired_library_state"}
         for name in tables:
-            if name in transient or (name.startswith("companion_") and name not in retained_content):
+            if name in transient or (name.startswith("paired_") and name not in retained_paired) or (name.startswith("companion_") and name not in retained_content):
                 db.execute("DELETE FROM " + quote(name))
+        if "paired_library_state" in tables:
+            db.execute("DELETE FROM paired_library_state WHERE name<>'owners.bootstrap'")
         # A new device identity seeds its own local harness catalog at startup.
         # Keep copied agent rows for history references, but retire them from the
         # active catalog so they cannot appear as duplicate runnable harnesses.

@@ -100,13 +100,6 @@ public actor LocalACPWorkspaceConfigurationStore {
         self.databasesDirectory = databasesDirectory ?? homeDirectory.appendingPathComponent("Library/Application Support/Woven Matter/ManagedDatabases", isDirectory: true)
     }
 
-    public func setUpWorkspace(in homeDirectory: URL) throws {
-        guard homeDirectory.standardizedFileURL == self.homeDirectory.standardizedFileURL else {
-            throw LocalACPWorkspaceError.selectHomeDirectory
-        }
-        try LocalACPWorkspaceProvisioner.ensureWorkspace(at: root)
-    }
-
     private var root: URL {
         homeDirectory.appendingPathComponent(LocalACPWorkspaceProvisioner.rootDirectoryName, isDirectory: true)
     }
@@ -127,14 +120,11 @@ public actor LocalACPWorkspaceConfigurationStore {
 }
 
 public enum LocalACPWorkspaceError: LocalizedError, Equatable, Sendable {
-    case selectHomeDirectory
     case invalidProjectName
     case projectAlreadyExists
 
     public var errorDescription: String? {
         switch self {
-        case .selectHomeDirectory:
-            "Woven Matter can create its managed workspace only in the current macOS home directory."
         case .invalidProjectName:
             "Use a directory name without slashes or a leading period. Scratch is reserved for Ungrouped chats."
         case .projectAlreadyExists:

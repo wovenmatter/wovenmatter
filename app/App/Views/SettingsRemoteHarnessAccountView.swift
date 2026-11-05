@@ -191,11 +191,11 @@ struct SettingsRemoteHarnessAccountView: View {
         let label = session.credentialInputLabel ?? "Authorization code"
         if session.credentialInputSecret == true {
             SecureField(label, text: $authorizationCode)
-                .settingsInput()
+                .dashboardInput()
                 .onSubmit { submitAuthorizationCode(workspace) }
         } else {
             TextField(label, text: $authorizationCode)
-                .settingsInput()
+                .dashboardInput()
                 .onSubmit { submitAuthorizationCode(workspace) }
         }
     }

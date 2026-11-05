@@ -14,21 +14,27 @@ public enum WorkspaceConversationExportFormat: String, Codable, Sendable {
   public var fileExtension: String { self == .messages ? "md" : "json" }
 
   public func suggestedFilename(title: String) -> String {
-    let clean = title.components(separatedBy: CharacterSet(charactersIn: "/:\\")
-      .union(.controlCharacters)).joined(separator: "-")
-      .trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: ".")))
-    // Bound bytes as well as visible characters, including filesystem normalization.
-    var basename = ""
-    var byteCount = 0
-    for character in clean.prefix(100) {
-      let bytes = String(character).decomposedStringWithCanonicalMapping.utf8.count
-      guard byteCount + bytes <= 200 else { break }
-      basename.append(character)
-      byteCount += bytes
-    }
+    let basename = exportBasename(title: title)
     return (basename.isEmpty ? "Chat" : basename)
       + (self == .fullRun ? "-full-run" : "-messages") + "." + fileExtension
   }
+}
+
+/// A title reduced to a filesystem-safe basename; empty when nothing usable remains.
+func exportBasename(title: String) -> String {
+  let clean = title.components(separatedBy: CharacterSet(charactersIn: "/:\\")
+    .union(.controlCharacters)).joined(separator: "-")
+    .trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: ".")))
+  // Bound bytes as well as visible characters, including filesystem normalization.
+  var basename = ""
+  var byteCount = 0
+  for character in clean.prefix(100) {
+    let bytes = String(character).decomposedStringWithCanonicalMapping.utf8.count
+    guard byteCount + bytes <= 200 else { break }
+    basename.append(character)
+    byteCount += bytes
+  }
+  return basename
 }
 
 public struct WorkspaceTrashedConversation: Codable, Identifiable, Sendable {
@@ -44,7 +50,7 @@ public struct WorkspaceTrashedConversation: Codable, Identifiable, Sendable {
 }
 
 public enum WorkspaceConversationActionError: LocalizedError, Equatable, Sendable {
-  case unavailable, emptyTitle, invalidTitle, running, pendingInput
+  case unavailable, emptyTitle, invalidTitle, running, pendingInput, ownedByAnotherMac
 
   public var errorDescription: String? {
     switch self {
@@ -53,6 +59,7 @@ public enum WorkspaceConversationActionError: LocalizedError, Equatable, Sendabl
     case .invalidTitle: "This name contains unsupported characters or is too long."
     case .running: "Stop this chat before moving it to Trash."
     case .pendingInput: "Resolve this chat’s pending input before moving it to Trash."
+    case .ownedByAnotherMac: "This chat runs on another Mac. Connect to it to move the chat to Trash, restore it or move it."
     }
   }
 }

@@ -8,7 +8,7 @@ const HTML_MAX_BYTES = 40 * 1024 * 1024
 
 // This is an HTTP transport for an already-authorized Woven session. SSH only
 // carries framed MCP requests; it never supplies model-visible shell commands.
-export async function runMCPRelay({input = process.stdin, output = process.stdout, host = '127.0.0.1', maximumConnections = 4, timeoutMilliseconds = 120000} = {}) {
+export async function runMCPRelay({input = process.stdin, output = process.stdout, timeoutMilliseconds = 120000} = {}) {
   let tokenHash, stopped = false, reading=0
   const calls = new Map(), reader = createInterface({input, crlfDelay: Infinity})
   const send = packet => output.write(JSON.stringify(packet) + '\n')
@@ -27,7 +27,7 @@ export async function runMCPRelay({input = process.stdin, output = process.stdou
     if (!allowedHosts.has(request.headers.host) || !originAllowed) {
       response.writeHead(403); response.end(); return
     }
-    if (calls.size + reading >= maximumConnections) { response.writeHead(429); response.end(); return }
+    if (calls.size + reading >= 4) { response.writeHead(429); response.end(); return }
     reading++
     const id = randomUUID(), chunks = []
     let bytes = 0
@@ -65,7 +65,7 @@ export async function runMCPRelay({input = process.stdin, output = process.stdou
         if (packet.type === 'configure') {
           if (tokenHash || typeof packet.bearerToken !== 'string' || packet.bearerToken.length < 32) throw new Error('Invalid relay binding')
           tokenHash = digest(packet.bearerToken)
-          server.listen(0, host, () => send({type: 'ready', endpointURL: `http://${host}:${server.address().port}/mcp`}))
+          server.listen(0, '127.0.0.1', () => send({type: 'ready', endpointURL: `http://127.0.0.1:${server.address().port}/mcp`}))
         } else if (packet.type === 'response') {
           const call = calls.get(packet.id)
           if (!call) return

@@ -97,11 +97,11 @@ private final class UsageSQLFixture: @unchecked Sendable {
   init() throws { try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true) }
   deinit { try? FileManager.default.removeItem(at: url) }
 
-  func service(sharedAccounts: Bool = false, revision: @escaping @Sendable () -> UInt64 = { 0 },
+  func service(revision: @escaping @Sendable () -> UInt64 = { 0 },
     preparationWorker: DatabaseWorker? = nil) -> LocalUsageService {
     LocalUsageService(homeDirectory: url, fileManager: .default,
-      credentialStore: UsageImportNoCredentials(), usageDatabaseURL: indexURL,
-      usesSharedConnections: sharedAccounts, sharedConnectionRevision: revision,
+      credentialStore: UsageNoCredentials(recordsAccess: true), usageDatabaseURL: indexURL,
+      sharedConnectionRevision: revision,
       importPreparationWorker: preparationWorker ?? DatabaseWorker(label: "usage.import.fixture", capacity: 4))
   }
 
@@ -133,13 +133,4 @@ private final class UsageSQLFixture: @unchecked Sendable {
       throw UsageStoreError.step(String(cString: sqlite3_errmsg(connection)))
     }
   }
-}
-
-private struct UsageImportNoCredentials: UsageCredentialStoring {
-  private func unexpectedAccess() { Issue.record("SQLite import fixtures must not access credentials") }
-  func hasOpenRouterAPIKey() throws -> Bool { unexpectedAccess(); return false }
-  func authorizeOpenRouterAPIKey() throws -> String? { unexpectedAccess(); return nil }
-  func loadOpenRouterAPIKey() throws -> String? { unexpectedAccess(); return nil }
-  func saveOpenRouterAPIKey(_ key: String) throws { unexpectedAccess() }
-  func deleteOpenRouterAPIKey() throws { unexpectedAccess() }
 }

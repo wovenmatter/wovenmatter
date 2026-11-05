@@ -37,13 +37,11 @@ struct LibraryModelTests {
     }
 
     @Test func loadMoreReconcilesNewItemsAndPreservesActionErrors() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
+        let persistence = try PersistenceFixture(); defer { persistence.remove() }
+        let database = try await persistence.openDatabase()
         let chat = try await database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Library", ownerDeviceID: UUID())
         func add(_ text: String) async throws {
-            let run = try await database.beginLocalACPRun(conversationID: chat, content: text)
+            let run = try await database.beginLocalACPRun(conversationID: chat, input: .init(text: text))
             try await database.completeLocalACPRun(runID: run.runID)
             try await database.indexLibraryMessages()
         }

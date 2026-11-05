@@ -23,9 +23,8 @@ public struct RuntimeInventory: Codable, Equatable, Sendable {
     public let kind: AgentRuntimeKind
     public let components: [RuntimeComponent]
     public let limitation: String?
-    public var detectedUpdateAvailable = false
     public var versionCheckAvailable: Bool? = nil
-    public var updateAvailable: Bool { outdated || detectedUpdateAvailable }
+    public var updateAvailable: Bool { outdated }
     public var isInstalled: Bool { !components.isEmpty && components.allSatisfy { !$0.required || ($0.present && $0.verified) } }
     public var outdated: Bool { components.contains(where: \.outdated) }
     public var summary: String {
@@ -91,6 +90,13 @@ public enum RuntimeMaintenance {
                     installed: engineVersion, latest: nil, package: nil, required: true,
                     present: present, verified: engineVersion != nil))
             }
+            if let minimum = definition.minimumProtocolSDKVersion {
+                let sdk = root.flatMap { dependencyRoot(from: $0, name: "@agentclientprotocol/sdk") }
+                let installed = sdk.flatMap { packageVersion(at: $0) }
+                components.append(RuntimeComponent(name: "Bundled ACP SDK", executable: nil,
+                    installed: installed, latest: checkLatest ? try? await registryVersion("@agentclientprotocol/sdk", executableRequired: false, fetch: fetch) : minimum,
+                    package: "@agentclientprotocol/sdk", required: true, present: sdk != nil, verified: installed != nil))
+            }
             if let cliName = definition.underlyingCLIName {
                 let cli = resolver.executable(named: cliName)
                 let cliPackage = kind == .codex ? "@openai/codex" : "@anthropic-ai/claude-code"
@@ -133,7 +139,7 @@ public enum RuntimeMaintenance {
             _ = try await installer.install(definition, component: .cli, expectedSourceSHA256: preview.sha256)
             return
         }
-        guard [.claudeCode, .grokBuild].contains(kind) else { throw RuntimeMaintenanceError.unavailable }
+        guard kind == .grokBuild else { throw RuntimeMaintenanceError.unavailable }
         let result = try await Task.detached(priority: .utility) {
             try LocalACPProcessRunner.run(executableURL: executable, arguments: ["update"],
                 environment: ProcessInfo.processInfo.environment.merging(["PATH": LocalACPRuntimeResolver.executableSearchPath]) { _, new in new })

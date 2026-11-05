@@ -80,7 +80,7 @@ extension WorkspaceDatabaseConnection {
         guard owner == nil || owner == workspace.id + "/" + entry.conversationID else {
           throw federationError("wrong_owner", "This retained run belongs to another workspace or conversation.")
         }
-        try companionExecuteUnlocked("UPDATE dashboard_runs SET status=?,updated_at=?,completed_at=COALESCE(completed_at,?) WHERE id=?", values: [proof.status, Self.timestamp(Date()), Self.timestamp(Date()), proof.runID])
+        try toolsExecuteUnlocked("UPDATE dashboard_runs SET status=?,updated_at=?,completed_at=COALESCE(completed_at,?) WHERE id=?", [proof.status, Self.timestamp(Date()), Self.timestamp(Date()), proof.runID])
         let insert = try prepareUnlocked("INSERT INTO companion_retained_settlements VALUES (?,?,?)")
         defer { sqlite3_finalize(insert) }
         try bind(entry.eventID, at: 1, to: insert); try bind(workspace.id, at: 2, to: insert); try bind(fingerprint, at: 3, to: insert); try stepDone(insert)
@@ -110,8 +110,8 @@ extension WorkspaceDatabaseConnection {
     guard runOwner == nil || runOwner == workspace.id + "/" + entry.conversationID else {
       throw federationError("wrong_owner", "Retained run identity belongs to another execution workspace or conversation.")
     }
-    try companionExecuteUnlocked("INSERT OR IGNORE INTO companion_execution_runs(id,workspace_id,conversation_id) VALUES (?,?,?)", values: [proof.runID, workspace.id, entry.conversationID])
-    try companionExecuteUnlocked("UPDATE dashboard_runs SET status=?,updated_at=?,completed_at=COALESCE(completed_at,?) WHERE id=?", values: [proof.status, Self.timestamp(Date()), Self.timestamp(Date()), proof.runID])
+    try toolsExecuteUnlocked("INSERT OR IGNORE INTO companion_execution_runs(id,workspace_id,conversation_id) VALUES (?,?,?)", [proof.runID, workspace.id, entry.conversationID])
+    try toolsExecuteUnlocked("UPDATE dashboard_runs SET status=?,updated_at=?,completed_at=COALESCE(completed_at,?) WHERE id=?", [proof.status, Self.timestamp(Date()), Self.timestamp(Date()), proof.runID])
   }
 }
 extension WorkspaceDatabase {

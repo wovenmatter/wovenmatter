@@ -49,7 +49,7 @@ extension WorkspaceDatabaseConnection {
           throw federationError("invalid_artifact", "A deletion must reference the committed artifact.")
         }
         try saveCommittedArtifactUnlocked(manifest)
-        try companionExecuteUnlocked("DELETE FROM companion_artifact_chunks WHERE artifact_id=?", values: [manifest.id])
+        try toolsExecuteUnlocked("DELETE FROM companion_artifact_chunks WHERE artifact_id=?", [manifest.id])
         return CompanionArtifactTransfer(manifest: manifest, nextOffset: manifest.byteCount, complete: true)
       }
       let statement = try prepareUnlocked("INSERT INTO companion_artifact_uploads(id,revision,manifest) VALUES (?,?,?)")
@@ -109,12 +109,12 @@ extension WorkspaceDatabaseConnection {
         guard code == SQLITE_ROW, sqlite3_column_int64(statement, 0) == offset else { throw federationError("chunk_gap", "The artifact transfer has missing data.") }
         let bytes = try blob(statement, column: 1); hash.update(data: bytes); offset += Int64(bytes.count)
       }
-      let digest = hash.finalize().map { String(format: "%02x", $0) }.joined()
+      let digest = hash.finalize().hexString
       guard offset == transfer.manifest.byteCount, digest == transfer.manifest.sha256 else {
         throw federationError("artifact_digest", "The transferred artifact does not match its source digest. Your existing saved revision is preserved.")
       }
       try saveCommittedArtifactUnlocked(transfer.manifest)
-      try companionExecuteUnlocked("DELETE FROM companion_artifact_uploads WHERE id=?", values: [request.id])
+      try toolsExecuteUnlocked("DELETE FROM companion_artifact_uploads WHERE id=?", [request.id])
       let cleanup = try prepareUnlocked("DELETE FROM companion_artifact_chunks WHERE artifact_id=? AND revision<>?")
       defer { sqlite3_finalize(cleanup) }
       try bind(request.id, at: 1, to: cleanup); sqlite3_bind_int64(cleanup, 2, request.revision); try stepDone(cleanup)

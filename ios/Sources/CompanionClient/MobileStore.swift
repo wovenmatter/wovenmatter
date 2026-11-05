@@ -62,16 +62,8 @@ public struct MobileStoreState: Codable, Equatable, Sendable {
 }
 
 public actor MobileStore {
-  public struct Budget: Sendable {
-    public var transcriptCount: Int
-    public var transcriptBytes: Int
-    public var noteBytes: Int
-    public init(transcriptCount: Int = .max, transcriptBytes: Int = .max, noteBytes: Int = .max) {
-      self.transcriptCount = transcriptCount; self.transcriptBytes = transcriptBytes; self.noteBytes = noteBytes
-    }
-  }
   public enum Failure: Error, LocalizedError {
-    case incompatibleStore, wrongWorkspace, missingNote, conflictingNote, noteTooLarge, storageBudget, malformedAcknowledgement
+    case incompatibleStore, wrongWorkspace, missingNote, conflictingNote, noteTooLarge, malformedAcknowledgement
     public var errorDescription: String? {
       switch self {
       case .incompatibleStore: "This local library needs a newer version of Woven Matter."
@@ -79,7 +71,6 @@ public actor MobileStore {
       case .missingNote: "The note is no longer available."
       case .conflictingNote: "Resolve this note’s saved conflict before sending it to an agent."
       case .noteTooLarge: "This note exceeds the 4 MB document limit. Your previous saved version is safe."
-      case .storageBudget: "The local note library is full. Your saved writing is safe. Free storage before adding more notes."
       case .malformedAcknowledgement: "The Mac returned an incomplete acknowledgement. The pending change has been kept."
       }
     }
@@ -90,11 +81,9 @@ public actor MobileStore {
   public nonisolated let journal: WorkspaceJournal
   public nonisolated let artifacts: SavedArtifactStore
   private let file: URL
-  private let budget: Budget
   var state: MobileStoreState
-  private var protectedNoteID: String?
-  public init(file: URL, budget: Budget = .init()) throws {
-    self.file = file; self.budget = budget
+  public init(file: URL) throws {
+    self.file = file
     dictations = try MobileDictationStore(file: file.appendingPathExtension("dictations.sqlite"))
     analytics = try MobileProductAnalytics(file: file.appendingPathExtension("analytics"))
     journal = try WorkspaceJournal(file: file.appendingPathExtension("execution"))
@@ -109,7 +98,6 @@ public actor MobileStore {
     calendar = try MobileCalendarStore(file: file.appendingPathExtension("calendar"), deviceID: state.deviceID)
   }
   public func snapshot() -> MobileStoreState { state }
-  public func protectOpenNote(_ id: String?) { protectedNoteID = id }
   public func setTranscriptPinned(_ id: String, _ pinned: Bool) throws {
     try transaction { next in
       if next.pinnedTranscriptIDs == nil { next.pinnedTranscriptIDs = [] }
@@ -213,20 +201,15 @@ public actor MobileStore {
   public func cacheNote(_ note: CompanionNote) throws {
     try transaction { next in
       Self.remoteNote(note, state: &next)
-      try enforceNoteBudget(&next, protecting: note.id)
     }
   }
 
   public func notesToCache() -> [String] {
-    var remaining = max(0, budget.noteBytes - state.notes.values.filter { state.isDirty($0.id) }.reduce(0) { $0 + $1.content.utf8.count * 4 })
     var result: [String] = state.conflicts.values.compactMap { conflict in
       guard let remote = conflict.remote, !remote.contentIncluded else { return nil }
       return remote.id
     }
     for note in state.notes.values.sorted(by: { $0.updatedAt > $1.updatedAt }) where !state.isDirty(note.id) && (note.kind == nil || note.kind == .note) {
-      let bytes = max(note.contentByteCount, note.content.utf8.count) * 2
-      guard bytes <= remaining else { continue }
-      remaining -= bytes
       if state.uncachedNoteIDs.contains(note.id) { result.append(note.id) }
     }
     return result
@@ -263,7 +246,6 @@ public actor MobileStore {
     try transaction { next in
       next.notes[note.id] = note
       next.outbox.append(.init(mutation: Self.mutation(for: note, kind: .createNote, deviceID: next.deviceID)))
-      try enforceNoteBudget(&next, protecting: note.id)
     }
     return note
   }
@@ -319,7 +301,6 @@ public actor MobileStore {
         next.conflicts[note.id] = .init(base: base, local: note, remote: nil,
           reason: "This note was deleted from the central library. The execution workspace's writing is preserved.")
         next.outbox.removeAll { $0.mutation.resourceID == note.id }
-        try enforceNoteBudget(&next, protecting: note.id)
       }
     } else if let current = state.notes[note.id], let base,
       (current.title != base.title || current.content != base.content || current.folderID != base.folderID),
@@ -329,7 +310,6 @@ public actor MobileStore {
           reason: "The note was edited on this device while its workspace was running. Both versions have been preserved.")
         next.notes[note.id] = note
         next.outbox.removeAll { $0.mutation.resourceID == note.id }
-        try enforceNoteBudget(&next, protecting: note.id)
       }
     } else if state.notes[note.id] != nil {
       try editNote(id: note.id, title: note.title, content: note.content, folderID: note.folderID, base: base)
@@ -366,7 +346,6 @@ public actor MobileStore {
       } else if !next.outbox.contains(where: { $0.mutation.resourceID == id }) {
         next.outbox.append(.init(mutation: Self.mutation(for: note, kind: .updateNote, deviceID: next.deviceID)))
       }
-      try enforceNoteBudget(&next, protecting: id)
     }
   }
   /// Marking submitted is itself durable. A retry must resend exactly these bytes and ID.
@@ -446,7 +425,6 @@ public actor MobileStore {
       next.conversations = Dictionary(uniqueKeysWithValues: snapshot.conversations.map { ($0.id, $0) }).merging(execution) { _, local in local }
       next.cursor = snapshot.cursor
       next.hasLibrarySnapshot = true
-      try enforceNoteBudget(&next)
     }
   }
   public func apply(_ page: CompanionChangePage) throws {
@@ -477,7 +455,6 @@ public actor MobileStore {
         }
       }
       next.cursor = max(next.cursor, page.cursor)
-      try enforceNoteBudget(&next)
     }
   }
   /// Rebuild the disposable UI projection after any interrupted replay. The
@@ -544,24 +521,9 @@ public actor MobileStore {
       // Tool output must not evict the surrounding conversation. Detailed
       // projections are durable in the workspace journal and loaded on demand.
       bounded.activities = bounded.activities.map { CompanionTranscriptCompaction.activity($0) }
-      // Evict old turns coherently only after compacting tool details.
-      while try budget.transcriptBytes != .max && !protectedIDs.contains(transcript.conversationID) && JSONEncoder().encode(bounded).count > budget.transcriptBytes && !bounded.messages.isEmpty {
-        let removed = bounded.messages.removeFirst()
-        if let runID = removed.runID, !bounded.messages.contains(where: { $0.runID == runID }) {
-          bounded.activities.removeAll { $0.runID == runID }
-          bounded.runs?.removeAll { $0.id == runID }
-        }
-      }
-      while try budget.transcriptBytes != .max && !protectedIDs.contains(transcript.conversationID) && JSONEncoder().encode(bounded).count > budget.transcriptBytes && !bounded.activities.isEmpty { bounded.activities.removeFirst() }
-      while try budget.transcriptBytes != .max && !protectedIDs.contains(transcript.conversationID) && JSONEncoder().encode(bounded).count > budget.transcriptBytes && bounded.runs?.isEmpty == false { bounded.runs?.removeFirst() }
       next.transcripts[transcript.conversationID] = bounded
       next.transcriptRecency.removeAll { $0 == transcript.conversationID }
       next.transcriptRecency.insert(transcript.conversationID, at: 0)
-      while try next.transcriptRecency.count > budget.transcriptCount || (budget.transcriptBytes != .max && JSONEncoder().encode(next.transcripts).count > budget.transcriptBytes) {
-        guard let index = next.transcriptRecency.lastIndex(where: { !protectedIDs.contains($0) }) else { break }
-        let removed = next.transcriptRecency.remove(at: index)
-        next.transcripts.removeValue(forKey: removed)
-      }
     }
   }
   public func saveChatDraft(key: String, draft: MobileChatDraft) throws {
@@ -670,28 +632,6 @@ public actor MobileStore {
       state.outbox.removeAll { $0.mutation.resourceID == id }
     } else { state.notes.removeValue(forKey: id) }
   }
-  func enforceNoteBudget(_ next: inout MobileStoreState, protecting: String? = nil) throws {
-    guard budget.noteBytes != .max else { return }
-    func bytes(_ state: MobileStoreState) -> Int {
-      let documents = state.notes.values.reduce(0) { $0 + $1.content.utf8.count }
-        + state.bases.values.reduce(0) { $0 + $1.content.utf8.count }
-      let conflicts = state.conflicts.values.reduce(0) { $0 + $1.local.content.utf8.count + ($1.base?.content.utf8.count ?? 0) + ($1.remote?.content.utf8.count ?? 0) }
-      let pendingDeletes = state.pendingNoteDeletions?.values.reduce(0) { $0 + $1.content.utf8.count } ?? 0
-      return documents + conflicts + pendingDeletes + state.outbox.reduce(0) { $0 + ($1.mutation.content?.utf8.count ?? 0) }
-    }
-    var total = bytes(next)
-    guard total > budget.noteBytes else { return }
-    for note in next.notes.values.sorted(by: { $0.updatedAt < $1.updatedAt }) where note.id != protecting && note.id != protectedNoteID && !next.isDirty(note.id) {
-      // Keep folder/title/ID/revision discoverable; fetch the exact document online.
-      next.notes[note.id]?.content = ""; next.bases[note.id]?.content = ""
-      next.notes[note.id]?.contentIncluded = false; next.bases[note.id]?.contentIncluded = false
-      next.uncachedNoteIDs.insert(note.id)
-      total = bytes(next)
-      if total <= budget.noteBytes { return }
-    }
-    guard total <= budget.noteBytes else { throw Failure.storageBudget }
-  }
-
   func transaction(_ operation: (inout MobileStoreState) throws -> Void) throws {
     var next = state
     try operation(&next)

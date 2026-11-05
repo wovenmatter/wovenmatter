@@ -227,10 +227,3 @@ private struct ConversationSubagentArchiveEvent: View {
 }
 
 #endif
-
-private extension String {
-    var nonempty: String? {
-        let value = trimmingCharacters(in: .whitespacesAndNewlines)
-        return value.isEmpty ? nil : self
-    }
-}

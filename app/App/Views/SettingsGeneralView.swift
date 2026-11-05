@@ -1,15 +1,10 @@
 import AppKit
-import CompanionClient
 import SwiftUI
 import WovenMatterClient
 import WovenMatterCore
 
 struct SettingsGeneralView: View {
     @Bindable var model: ApplicationModel
-    // A secondary Mac's library client owns app settings, while its local
-    // execution workspace owns sleep policies and live protection state.
-    var executionModel: ApplicationModel?
-    var clientAnalytics: MobileAnalyticsModel?
     var reservesRailControlSpace = false
     var onBack: () -> Void
 
@@ -19,8 +14,6 @@ struct SettingsGeneralView: View {
     @AppStorage(DashboardSidebarStyle.storageKey) private var storedSidebarStyle = DashboardSidebarStyle.defaultStyle.rawValue
     @State private var showsCredentialDisclosure = false
     @State private var closedLidHelperSetup: ClosedLidHelperSetup = .unavailable
-
-    private var sleepModel: ApplicationModel { executionModel ?? model }
 
     private var sidebarStyleBinding: Binding<DashboardSidebarStyle> {
         Binding(
@@ -47,16 +40,12 @@ struct SettingsGeneralView: View {
                 WorkspaceToolDefaultsCard(tools: tools)
                 DisclosureGroup("Connected apps · Executor") { ExecutorConnectionsCard(model: model, tools: tools) }
             }
-            SettingsMCPAccessSection(model: sleepModel)
+            SettingsMCPAccessSection(model: model)
             dictationCard
             conversationTitlesCard
             idleSleepProtectionCard
             closedLidProtectionCard
-            if let clientAnalytics {
-                MobileAnalyticsSettingsCard(analytics: clientAnalytics)
-            } else {
-                ProductAnalyticsSettingsCard(analytics: model.analytics)
-            }
+            ProductAnalyticsSettingsCard(analytics: model.analytics)
         }
         .task { await model.checkSavedCredentialAccess() }
         .onReceive(NotificationCenter.default.publisher(for: KeychainAccess.accessNeedsAttention).receive(on: DispatchQueue.main)) { _ in
@@ -92,26 +81,26 @@ struct SettingsGeneralView: View {
                 .toggleStyle(DashboardSwitchToggleStyle())
             Text("The screen can turn off and lock while work continues. At this level, closing the lid or choosing Sleep can still pause work.")
                 .font(.caption).foregroundStyle(.secondary)
-            if let message = sleepModel.idleSleepSettingsError {
+            if let message = model.idleSleepSettingsError {
                 Text(message).font(.caption).foregroundStyle(.red)
             }
         }
-        .disabled(sleepModel.isChangingIdleSleepPolicy)
+        .disabled(model.isChangingIdleSleepPolicy)
     }
 
     private func idleSleepBinding(externalPower: Bool) -> Binding<Bool> {
         Binding(get: {
-            let policy = sleepModel.activeWorkSleepPrevention.snapshot.policy
+            let policy = model.activeWorkSleepPrevention.snapshot.policy
             return externalPower ? policy.externalPower : policy.batteryPower
         }, set: { enabled in
-            var policy = sleepModel.activeWorkSleepPrevention.snapshot.policy
+            var policy = model.activeWorkSleepPrevention.snapshot.policy
             if externalPower { policy.externalPower = enabled } else { policy.batteryPower = enabled }
-            Task { await sleepModel.setIdleSleepPolicyFromSettings(policy) }
+            Task { await model.setIdleSleepPolicyFromSettings(policy) }
         })
     }
 
     private var closedLidProtectionCard: some View {
-        let snapshot = sleepModel.closedLidProtection.snapshot
+        let snapshot = model.closedLidProtection.snapshot
         return SettingsCard(title: "Keep working when the lid is closed",
                             detail: "Keep this Mac awake during active work, even with the lid closed.") {
             Toggle("When connected to external power", isOn: closedLidBinding(externalPower: true))
@@ -136,19 +125,19 @@ struct SettingsGeneralView: View {
                     }
                 } else if closedLidHelperSetup == .notRegistered {
                     Button("Set up closed-lid protection") {
-                        Task { await sleepModel.setClosedLidPolicyFromSettings(snapshot.policy) }
+                        Task { await model.setClosedLidPolicyFromSettings(snapshot.policy) }
                     }.buttonStyle(SettingsQuietButtonStyle())
-                } else if snapshot.message == nil && sleepModel.closedLidSettingsError == nil {
+                } else if snapshot.message == nil && model.closedLidSettingsError == nil {
                     Text(snapshot.isProtecting ? "Closed-lid protection is active."
                          : "Protection will activate during work on the selected power sources.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
-            if let message = sleepModel.closedLidSettingsError ?? snapshot.message {
+            if let message = model.closedLidSettingsError ?? snapshot.message {
                 Text(message).font(.caption).foregroundStyle(.red)
             }
         }
-        .disabled(sleepModel.isChangingClosedLidPolicy)
+        .disabled(model.isChangingClosedLidPolicy)
         .task {
             while !Task.isCancelled {
                 closedLidHelperSetup = ClosedLidHelperRegistration.status
@@ -159,12 +148,12 @@ struct SettingsGeneralView: View {
 
     private func closedLidBinding(externalPower: Bool) -> Binding<Bool> {
         Binding(get: {
-            let policy = sleepModel.closedLidProtection.snapshot.policy
+            let policy = model.closedLidProtection.snapshot.policy
             return externalPower ? policy.externalPower : policy.batteryPower
         }, set: { enabled in
-            var policy = sleepModel.closedLidProtection.snapshot.policy
+            var policy = model.closedLidProtection.snapshot.policy
             if externalPower { policy.externalPower = enabled } else { policy.batteryPower = enabled }
-            Task { await sleepModel.setClosedLidPolicyFromSettings(policy) }
+            Task { await model.setClosedLidPolicyFromSettings(policy) }
         })
     }
 

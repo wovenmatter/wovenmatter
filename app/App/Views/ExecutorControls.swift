@@ -84,9 +84,9 @@ struct ExecutorConnectionsCard: View {
                         }
                         Button("Refresh machines") { model.remoteWorkspaces.discoverMachines() }
                     }.buttonStyle(SettingsQuietButtonStyle())
-                    SettingsField("Tailscale machine") { TextField("machine.tailnet.ts.net", text: $draft.host).settingsInput() }
-                    SettingsField("SSH username") { TextField("From SSH config", text: $draft.user).settingsInput() }
-                    SettingsField("Private HTTPS origin") { TextField("https://machine.tailnet.ts.net:8443", text: $draft.origin).settingsInput() }
+                    SettingsField("Tailscale machine") { TextField("machine.tailnet.ts.net", text: $draft.host).dashboardInput() }
+                    SettingsField("SSH username") { TextField("From SSH config", text: $draft.user).dashboardInput() }
+                    SettingsField("Private HTTPS origin") { TextField("https://machine.tailnet.ts.net:8443", text: $draft.origin).dashboardInput() }
                     HStack {
                         Button("Inspect host") { model.remoteWorkspaces.checkHost(hostName: draft.host, userName: draft.user) }
                         if model.remoteWorkspaces.isCheckingHost { ProgressView().controlSize(.small) }

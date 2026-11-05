@@ -12,10 +12,10 @@ struct ActivitySummaryPersistenceTests {
   func directReconciliationAndTombstones() async throws {
     let fixture = try PersistenceFixture()
     defer { fixture.remove() }
-    let database = try await WorkspaceDatabase(url: fixture.databaseURL)
+    let database = try await fixture.openDatabase()
     let conversation = try await database.createFixtureLocalACPSession(runtimeKind: .codex,
       title: "Reconcile", ownerDeviceID: UUID())
-    let run = try await database.beginLocalACPRun(conversationID: conversation, content: "Inspect")
+    let run = try await database.beginLocalACPRun(conversationID: conversation, input: .init(text: "Inspect"))
     for id in ["keep", "obsolete"] {
       try await database.upsertDeviceOwnedRunActivity(runID: run.runID,
         activity: .init(id: id, kind: .tool, content: "old", rawOutputJSON: "old detail"))
@@ -58,7 +58,7 @@ struct ActivitySummaryPersistenceTests {
   func openCodeReplacementAndEmptyParts(emptyMessages: Bool) async throws {
     let fixture = try PersistenceFixture()
     defer { fixture.remove() }
-    let database = try await WorkspaceDatabase(url: fixture.databaseURL)
+    let database = try await fixture.openDatabase()
     let conversation = try await database.createFixtureLocalACPSession(runtimeKind: .opencode,
       title: "Snapshot", ownerDeviceID: UUID(), openCodeAssociation: ("fixture", "native"))
     let first: OpenCodeValue = ["id": "first", "type": "text", "text": "Checking\n"]
@@ -90,7 +90,7 @@ struct ActivitySummaryPersistenceTests {
     if emptyMessages { #expect(empty.messages.isEmpty) }
     else { #expect(empty.messages.first?.content == "") }
     #expect(empty.activityReadMetrics == .init())
-    let reopened = try await WorkspaceDatabase(url: fixture.databaseURL, readOnlyProjection: true)
+    let reopened = try await fixture.openDatabase(readOnlyProjection: true)
     #expect(try await reopened.conversationHistoryPage(id: conversation, limit: 20, compactActivities: true).activities.isEmpty)
   }
 
@@ -98,10 +98,10 @@ struct ActivitySummaryPersistenceTests {
   func summaryAndFullHistoryParity() async throws {
     let fixture = try PersistenceFixture()
     defer { fixture.remove() }
-    let database = try await WorkspaceDatabase(url: fixture.databaseURL)
+    let database = try await fixture.openDatabase()
     let conversation = try await database.createFixtureLocalACPSession(runtimeKind: .codex,
       title: "Parity", ownerDeviceID: UUID())
-    let run = try await database.beginLocalACPRun(conversationID: conversation, content: "Inspect")
+    let run = try await database.beginLocalACPRun(conversationID: conversation, input: .init(text: "Inspect"))
     let commentary = String(repeating: "Checking café 🧵.\n", count: 80)
     let answer = "```swift\nlet café = 1\n```\n"
     let large = String(repeating: "large output 🧵\n", count: 4_096)
@@ -159,7 +159,7 @@ struct ActivitySummaryPersistenceTests {
       #expect(try await database.conversationActivityDetails(conversationID: conversation,
         runID: run.runID, activityID: record.activity.id) == record.activity)
     }
-    let reopened = try await WorkspaceDatabase(url: fixture.databaseURL, readOnlyProjection: true)
+    let reopened = try await fixture.openDatabase(readOnlyProjection: true)
     #expect(try await reopened.conversationHistoryPage(id: conversation, limit: 20, compactActivities: true) == compact)
   }
 

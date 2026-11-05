@@ -1,5 +1,6 @@
 import Foundation
 import Darwin
+import WovenMatterCore
 
 public struct DefaultAgentSDKStatus: Codable, Equatable, Sendable {
     public struct SDK: Codable, Equatable, Identifiable, Sendable {
@@ -42,7 +43,7 @@ public enum DefaultAgentSDKControl {
     // Injectable only for local process-lifecycle fixtures. This starts no account/runtime session.
     static func run(_ request: DefaultAgentSDKRequest, executable: URL,
                     arguments: [String], timeout: TimeInterval) async throws -> DefaultAgentSDKStatus {
-        let cancellation = CancellationState()
+        let cancellation = CancellationFlag()
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 // poll/read/waitpid can block for an entire installation. Own
@@ -71,15 +72,8 @@ public enum DefaultAgentSDKControl {
         } onCancel: { cancellation.cancel() }
     }
 
-    private final class CancellationState: @unchecked Sendable {
-        private let lock = NSLock()
-        private var cancelled = false
-        var isCancelled: Bool { lock.withLock { cancelled } }
-        func cancel() { lock.withLock { cancelled = true } }
-    }
-
     private static func execute(_ request: DefaultAgentSDKRequest, executable: URL,
-                                arguments: [String], timeout: TimeInterval, cancellation: CancellationState) throws -> Data {
+                                arguments: [String], timeout: TimeInterval, cancellation: CancellationFlag) throws -> Data {
         guard !cancellation.isCancelled else { throw CancellationError() }
         let input = Pipe(), output = Pipe()
         let inputRead = input.fileHandleForReading, inputWrite = input.fileHandleForWriting

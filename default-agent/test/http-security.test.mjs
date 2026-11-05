@@ -68,3 +68,94 @@ test('MCP body parser survives trailing compressed bytes and continues parsing J
     } finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
   `], { timeout: 10000, env: { PATH: process.env.PATH } });
 });
+
+test('Pi model globs retain matching semantics and reject amplification patterns within a bounded child', { timeout: 15000 }, async () => {
+  await execute(process.execPath, ['--max-old-space-size=96', '--input-type=module', '-e', `
+    import assert from 'node:assert/strict';
+    import { createRequire } from 'node:module';
+    import { resolveModelScopeWithDiagnostics } from '@earendil-works/pi-coding-agent';
+    const fromPi = createRequire(${JSON.stringify(piEntry)});
+    const { Minimatch, minimatch } = fromPi('minimatch');
+    const models = [{ id: 'alpha', provider: 'fixture' }, { id: 'beta', provider: 'fixture' }];
+    const scope = await resolveModelScopeWithDiagnostics(['FIXTURE/a*:high', 'b[ae]ta'], { getAvailable: async () => models });
+    assert.deepEqual(scope.scopedModels.map(x => [x.model.id, x.thinkingLevel]), [['alpha', 'high'], ['beta', undefined]]);
+    assert.deepEqual(scope.diagnostics, []);
+    assert.equal(minimatch('skills/nested/SKILL.md', 'skills/**/SKILL.md'), true);
+    assert.equal(minimatch('skills/private/SKILL.md', 'skills/!(private)/**'), false);
+    // GHSA-g3hv-75wg-m249: globstar/parent preprocessing used to amplify
+    // entries exponentially at optimization level 2. Failure kills only this child.
+    const pattern = '**/../a/b/'.repeat(24) + 'fixture';
+    const matcher = new Minimatch(pattern, { optimizationLevel: 2, braceExpandMax: 64 });
+    assert.equal(typeof matcher.match('fixture'), 'boolean');
+  `], { timeout: 10000, cwd: new URL('..', import.meta.url), env: { PATH: process.env.PATH } });
+});
+
+test('effective IP parser escapes invalid IPv6 characters while retaining address classification', { timeout: 10000 }, async () => {
+  await execute(process.execPath, ['--input-type=module', '-e', `
+    import assert from 'node:assert/strict';
+    import { createRequire } from 'node:module';
+    const { Address6 } = createRequire(${JSON.stringify(import.meta.url)})('ip-address');
+    assert.equal(new Address6('2001:db8::1').correctForm(), '2001:db8::1');
+    assert.equal(new Address6('::ffff:127.0.0.1').isLoopback(), true);
+    for (const character of ['<', '>', '&', '"', "'"]) {
+      assert.throws(() => new Address6('2001:db8::' + character), error => {
+        assert.equal(error.name, 'AddressError');
+        const encoded = { '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;' }[character];
+        assert.ok(error.parseMessage.includes('<span class="parse-error">' + encoded + '</span>'), error.parseMessage);
+        return true;
+      });
+    }
+  `], { timeout: 5000, env: { PATH: process.env.PATH } });
+});
+
+test('Pi HTTP redirects strip tuple-form credentials across origins and preserve same-origin headers', { timeout: 15000 }, async () => {
+  await execute(process.execPath, ['--input-type=module', '-e', `
+    import assert from 'node:assert/strict';
+    import { createServer } from 'node:http';
+    import { createRequire } from 'node:module';
+    const { Agent, request, interceptors } = createRequire(${JSON.stringify(piEntry)})('undici');
+    const received = [];
+    const target = createServer((input, output) => {
+      received.push(input.headers);
+      output.end('cross-origin');
+    });
+    await new Promise(resolve => target.listen(0, '127.0.0.1', resolve));
+    const source = createServer((input, output) => {
+      if (input.url === '/same') {
+        received.push(input.headers);
+        output.end('same-origin');
+      } else {
+        output.writeHead(302, { location: input.url === '/local' ? '/same'
+          : 'http://127.0.0.1:' + target.address().port + '/target' });
+        output.end();
+      }
+    });
+    await new Promise(resolve => source.listen(0, '127.0.0.1', resolve));
+    // The socket dispatcher consumes flat arrays; the redirect interceptor's
+    // public header input also accepts tuples. Normalize only at the socket
+    // boundary so redirect handling still receives the original representation.
+    const flattenHeaders = dispatch => function (options, handler) {
+      return dispatch({ ...options, headers: Array.isArray(options.headers?.[0])
+        ? options.headers.flat() : options.headers }, handler);
+    };
+    const dispatcher = new Agent().compose(flattenHeaders, interceptors.redirect({ maxRedirections: 2 }));
+    const headers = [['authorization', 'Bearer fixture'], ['cookie', 'fixture=secret'], ['x-fixture', 'retained']];
+    try {
+      const origin = 'http://127.0.0.1:' + source.address().port;
+      assert.equal(await (await request(origin + '/local', { dispatcher, headers })).body.text(), 'same-origin');
+      assert.equal(await (await request(origin + '/remote', { dispatcher, headers })).body.text(), 'cross-origin');
+      assert.equal(received[0].authorization, 'Bearer fixture');
+      assert.equal(received[0].cookie, 'fixture=secret');
+      assert.equal(received[0]['x-fixture'], 'retained');
+      assert.equal(received[1].authorization, undefined);
+      assert.equal(received[1].cookie, undefined);
+      assert.equal(received[1]['x-fixture'], 'retained');
+    } finally {
+      await dispatcher.close();
+      for (const server of [source, target]) {
+        server.closeAllConnections();
+        await new Promise(resolve => server.close(resolve));
+      }
+    }
+  `], { timeout: 10000, env: { PATH: process.env.PATH } });
+});

@@ -1,8 +1,8 @@
 import { createHash, randomBytes, createCipheriv, createDecipheriv, randomUUID } from 'node:crypto'
+import { sha256 as hash } from './durable-json.mjs'
 
 const fail = (statusCode, message) => Object.assign(new Error(message), { statusCode })
 const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value)
-const hash = value => createHash('sha256').update(value).digest('hex')
 const sameArtifact = (a,b) => ['id','workspaceID','title','mediaType','byteCount','sha256','deleted'].every(key=>a[key]===b[key])
 
 // This is an origin outbox, not a client relay. Its only source is the service's

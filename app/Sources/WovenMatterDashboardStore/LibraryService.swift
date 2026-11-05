@@ -22,6 +22,7 @@ public actor LibraryService {
   private let files: LibraryFileStore
   private let remoteFiles: RemoteLibraryFiles
   private var synchronizing = false
+  private var waitingPasses: [CheckedContinuation<Void, Never>] = []
   private var knownLocations: [String: LibraryLocation] = [:]
   private var lastCleanup = Date.distantPast
 
@@ -42,9 +43,15 @@ public actor LibraryService {
 
   public func synchronize(locations: [LibraryLocation], remoteWorkspace: RemoteWorkspaceLookup) async throws {
     guard !database.isReadOnlyProjection else { throw WorkspaceDatabaseError.readOnlyProjection }
-    guard !synchronizing else { return }
+    // Passes are serialized, never dropped: a caller arriving during another
+    // pass runs its own pass, with its locations, once that one finishes.
+    while synchronizing { await withCheckedContinuation { waitingPasses.append($0) } }
     synchronizing = true
-    defer { synchronizing = false }
+    defer {
+      synchronizing = false
+      if !waitingPasses.isEmpty { waitingPasses.removeFirst().resume() }
+    }
+    try Task.checkCancellation()
 
     for location in locations where knownLocations[location.conversationID] != location {
       try await database.setLibraryLocation(

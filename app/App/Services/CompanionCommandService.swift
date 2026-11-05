@@ -9,7 +9,7 @@ import WovenMatterDashboardStore
 final class CompanionCommandService: CompanionCommandServing {
     enum CommandError: LocalizedError {
         case unavailable, invalidCommand, unknownProvider, unknownConversation
-        case noteRevisionChanged, activeNoteBindingUnsupported, interactionResolved
+        case noteRevisionChanged, interactionResolved
         case creationFailed(String)
         var errorDescription: String? {
             switch self {
@@ -18,7 +18,6 @@ final class CompanionCommandService: CompanionCommandServing {
             case .unknownProvider: "This agent route is unavailable. Configure it on the Mac."
             case .unknownConversation: "This conversation no longer exists. Refresh the workspace."
             case .noteRevisionChanged: "The note changed on the Mac. Sync and review it before starting this run."
-            case .activeNoteBindingUnsupported: "Wait for this run to finish before binding a note on this route."
             case .interactionResolved: "This request was already answered, ended, or the response is invalid."
             case .creationFailed(let message): message
             }
@@ -47,25 +46,6 @@ final class CompanionCommandService: CompanionCommandServing {
 
     func provisionExecutionWorkspace(id: String, device: CompanionPairedDevice) async throws -> CompanionExecutionCredential {
         try await model.companionHost.provisionExecutionWorkspace(id: id, device: device)
-    }
-
-    func send(
-        conversation: WorkspaceConversationRecord,
-        input: AgentMessageInput,
-        note: WorkspaceNoteRecord? = nil,
-        expectedRunID: String? = nil,
-        requiresIdle: Bool = false,
-        expectedNoteRevision: String? = nil
-    ) async throws -> LocalACPRunIdentifiers? {
-        try await model.acceptCanonicalAgentMessage(
-            conversation: conversation, input: input, note: note,
-            expectedRunID: expectedRunID, requiresIdle: requiresIdle,
-            expectedNoteRevision: expectedNoteRevision
-        )
-    }
-
-    func stop(conversationID: String, runID: String) async throws {
-        try await model.cancelCanonicalRun(conversationID: conversationID, runID: runID)
     }
 
     func providers() -> [CompanionProvider] {
@@ -168,20 +148,6 @@ final class CompanionCommandService: CompanionCommandServing {
                               allowsMultiple: question.allowsMultiple, allowsFreeText: true)
                     }
                 )
-            case .secret:
-                CompanionPendingInteraction(
-                    id: pending.id.uuidString.lowercased(), conversationID: pending.conversationID,
-                    runID: pending.runID, kind: .approval, title: "Continue on your Mac",
-                    detail: "This agent needs a secret. Enter it in Woven Matter on your Mac.")
-            case .plan(let request):
-                CompanionPendingInteraction(
-                    id: pending.id.uuidString.lowercased(), conversationID: pending.conversationID,
-                    runID: pending.runID, kind: .approval, title: request.name ?? "Review agent plan",
-                    detail: request.markdown, options: [
-                        .init(id: "accept", label: "Accept plan"),
-                        .init(id: "decline", label: "Decline plan")
-                    ]
-                )
             }
         }
         if let client = model.federatedExecutionClient {
@@ -194,13 +160,7 @@ final class CompanionCommandService: CompanionCommandServing {
         guard command.deviceID == deviceID, UUID(uuidString: command.commandID) != nil,
               (command.text?.utf8.count ?? 0) <= 256 * 1_024 else { throw CommandError.invalidCommand }
         if command.kind == .respond {
-            guard nativeInteractionResponseIsSafeToJournal(command) else { throw CommandError.invalidCommand }
-            if let rawID = command.interactionID, let id = UUID(uuidString: rawID),
-               let pending = model.pendingLocalACPInteractions.first(where: { $0.id == id }),
-               case .secret = pending.request {
-                guard let response = command.response, response.cancelled,
-                      response.optionID == nil, response.answers.isEmpty else { throw CommandError.invalidCommand }
-            }
+            guard CompanionNativeInteractionProjection.responseIsSafeToJournal(command) else { throw CommandError.invalidCommand }
         }
         guard let store = model.dashboardStore else { throw CommandError.unavailable }
         return try await dispatcher(for: store).execute(command) { [self] original in
@@ -279,7 +239,7 @@ final class CompanionCommandService: CompanionCommandServing {
                 note = nil
                 input = AgentMessageInput(text: text)
             }
-            let ids = try await send(
+            let ids = try await model.acceptCanonicalAgentMessage(
                 conversation: conversation, input: input, note: note,
                 expectedRunID: command.kind == .steer ? command.runID : nil,
                 requiresIdle: command.kind == .send,
@@ -288,7 +248,7 @@ final class CompanionCommandService: CompanionCommandServing {
             receipt.conversationID = id; receipt.runID = ids?.runID
         case .stop:
             guard let id = command.conversationID, let runID = command.runID else { throw CommandError.invalidCommand }
-            try await stop(conversationID: id, runID: runID)
+            try await model.cancelCanonicalRun(conversationID: id, runID: runID)
             receipt.conversationID = id; receipt.runID = runID
         case .respond:
             try await respond(command)
@@ -325,13 +285,6 @@ final class CompanionCommandService: CompanionCommandServing {
             resolution = .cancelled
         } else {
             switch pending.request {
-            case .secret:
-                // Secret values must not enter the durable phone command journal.
-                throw CommandError.invalidCommand
-            case .plan:
-                guard response.answers.isEmpty, let optionID = response.optionID,
-                      ["accept", "decline"].contains(optionID) else { throw CommandError.invalidCommand }
-                resolution = .planAccepted(response.optionID == "accept")
             case .form(let request):
                 guard response.optionID == nil, Set(response.answers.keys).isSubset(of: Set(request.fields.map(\.id))) else {
                     throw CommandError.invalidCommand

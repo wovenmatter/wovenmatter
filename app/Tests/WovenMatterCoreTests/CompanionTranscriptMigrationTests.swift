@@ -1,3 +1,4 @@
+import WorkspaceFixtures
 import Foundation
 import SQLite3
 import Testing
@@ -25,16 +26,15 @@ struct CompanionTranscriptMigrationTests {
   }
 
   private struct Fixture {
-    let root: URL
+    let persistence: PersistenceFixture
     let database: WorkspaceDatabase
     let workspaceID: String
     let conversationID: String
     let deviceID: String
     let libraryID: String
     init() async throws {
-      root = FileManager.default.temporaryDirectory.appending(path: "transcript-migration-" + UUID().uuidString)
-      try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-      database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
+      persistence = try PersistenceFixture()
+      database = try await persistence.openDatabase()
       libraryID = try await database.companionLibraryIdentity().libraryID
       deviceID = UUID().uuidString.lowercased()
       workspaceID = UUID().uuidString.lowercased()
@@ -60,6 +60,6 @@ struct CompanionTranscriptMigrationTests {
         ["id": 3, "model": [["role": "toolResult", "toolCallId": "files", "content": [["type": "text", "text": "[]"]], "timestamp": 3_000]]]
       ]], conversationID: conversationID)
     }
-    func remove() { try? FileManager.default.removeItem(at: root) }
+    func remove() { persistence.remove() }
   }
 }

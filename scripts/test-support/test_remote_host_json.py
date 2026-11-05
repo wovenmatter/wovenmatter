@@ -28,7 +28,7 @@ class HostFixtures(unittest.TestCase):
         self.m.HOME=self.home; self.m.ROOT=self.home/'.local/share/wovenmatter'
         self.m.CONFIG=self.home/'.config/wovenmatter'; self.m.ENV_FILE=self.m.CONFIG/'service.env'
         self.m.UNIT=self.home/'.config/systemd/user/wovenmatter.service'; self.m.RECORD=self.m.ROOT/'installation.json'
-        self.calls=[]; self.active=True; self.enabled=True; self.fail_selftest=False; self.bad_npm_vendor=False; self.tail_operator=self.m.pwd.getpwuid(self.actual_uid).pw_name
+        self.calls=[]; self.active=True; self.enabled=True; self.fail_selftest=False; self.bad_npm_vendor=False; self.npm_version='12.2.2'; self.tail_operator=self.m.pwd.getpwuid(self.actual_uid).pw_name
         self.patchers=[mock.patch.object(self.m,'run',side_effect=self.command),
             mock.patch.object(self.m.platform,'system',return_value='Linux'),mock.patch.object(self.m.platform,'machine',return_value='x86_64'),
             mock.patch.object(self.m.os,'getuid',return_value=self.actual_uid),mock.patch.object(self.m,'inventory',return_value=[])]
@@ -58,14 +58,16 @@ class HostFixtures(unittest.TestCase):
             elif args[1:3]==['serve','status']: output=b'{}'
             elif args[1:3]==['debug','prefs']: output=json.dumps({'OperatorUser':self.tail_operator}).encode()
         elif args[0]=='journalctl': output=('one '+TOKEN+' line').encode()
-        elif 'install' in args and '--global' in args and 'npm@>=12.2.1' in args:
+        elif 'install' in args and '--global' in args and 'npm@>=12.2.2' in args:
             prefix=Path(args[args.index('--prefix')+1]); npm=prefix/'lib/node_modules/npm'
             (npm/'bin').mkdir(parents=True); (npm/'node_modules/undici').mkdir(parents=True)
-            (npm/'package.json').write_text(json.dumps({'version':'12.2.1'})); (npm/'bin/npm-cli.js').write_text('fixture')
+            (npm/'package.json').write_text(json.dumps({'version':self.npm_version})); (npm/'bin/npm-cli.js').write_text('fixture')
             (npm/'node_modules/undici/package.json').write_text(json.dumps({'version':'6.29.0'}))
         elif 'ci' in args and '--prefix' in args and args[args.index('--prefix')+1].endswith('/npm-runtime'):
             prefix=Path(args[args.index('--prefix')+1]); graph=json.loads((prefix/'package-lock.json').read_text())['packages']
-            for name in ('undici','ip-address'):
+            for key in graph:
+                if not key.startswith('node_modules/') or '/node_modules/' in key[13:]: continue
+                name=key[13:]
                 target=prefix/'node_modules'/name; target.mkdir(parents=True)
                 (target/'package.json').write_text(json.dumps({'version':'0.0.0' if self.bad_npm_vendor else graph['node_modules/'+name]['version']}))
         elif args[-1]=='--version': output=b'v26.12.1\n'
@@ -248,13 +250,15 @@ class HostFixtures(unittest.TestCase):
             self.assertIn(b'NoNewPrivileges=no',before[self.m.UNIT])
             tooling=self.m.ROOT/'current/tooling/lib/node_modules/npm'
             graph=json.loads((ROOT/'remote/npm-runtime/package-lock.json').read_text())['packages']
-            for name in ('undici','ip-address'):
+            for key in graph:
+                if not key.startswith('node_modules/') or '/node_modules/' in key[13:]: continue
+                name=key[13:]
                 self.assertEqual(json.loads((tooling/'node_modules'/name/'package.json').read_text())['version'],graph['node_modules/'+name]['version'])
             self.assertEqual((self.m.ROOT/'current/default-agent/lib/npm').resolve(),tooling.resolve())
             node_file=self.m.ROOT/'node/26.12.1/bin/node'; before_node=node_file.read_bytes()
             before_tooling=(self.m.ROOT/'current/tooling/security.json').read_bytes()
             for call in self.calls:
-                if 'npm@>=12.2.1' in call: self.assertNotIn(str(self.m.ROOT/'node/26.12.1'),call[call.index('--prefix')+1])
+                if 'npm@>=12.2.2' in call: self.assertNotIn(str(self.m.ROOT/'node/26.12.1'),call[call.index('--prefix')+1])
             # Update may reuse the existing credential with an empty first line.
             stream.write_bytes(b'\n'+self.home.joinpath('bundle.tar').read_bytes()); source.seek(0); self.m.TOKEN=''; self.fail_selftest=True
             with self.assertRaises(self.m.Failure) as error: self.m.install('fixture','7337','fullRoot',fp,True)
@@ -272,6 +276,14 @@ class HostFixtures(unittest.TestCase):
         finally:
             if saved_fd is not None: os.dup2(saved_fd,3); os.close(saved_fd)
             source.close()
+    def test_outdated_private_npm_is_rejected_before_vendor_installation(self):
+        release=self.home/'candidate'; release.mkdir()
+        self.npm_version='12.2.1'
+        with self.assertRaises(self.m.Failure) as error:
+            self.m.prepare_npm_tooling(self.home/'immutable-node',release,{})
+        self.assertEqual(error.exception.code,'npm_security_verification_failed')
+        self.assertFalse(any('ci' in call for call in self.calls))
+        self.assertFalse((self.m.ROOT/'current').exists())
     def test_incorrect_npm_vendor_is_rejected_before_activation(self):
         release=self.home/'candidate'; release.mkdir()
         prefix=release/'npm-runtime'; prefix.mkdir()

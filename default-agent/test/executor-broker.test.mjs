@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, stat, writeFile, symlink } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile, symlink } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { createInterface } from 'node:readline';
@@ -9,8 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { ExecutorBroker, validateConfiguration, supportsExecutorVersion, latestExecutorVersion, tailnetSSHOptions } from '../src/executor/broker.mjs';
-const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+import { ExecutorBroker, validateConfiguration, tailnetSSHOptions } from '../src/executor/broker.mjs';
 
 test('Executor broker serves IPC when launched through an application symlink', {timeout:5000}, async t => {
   const root = await mkdtemp(join(tmpdir(), 'woven-executor-entrypoint-'));
@@ -45,7 +44,6 @@ async function fixture(t, run) {
   scope.grant = { token: 'scoped-secret', expires: Date.now() + 3600000 };
   return { broker, scope, calls, scopes, directory };
 }
-
 
 test('cloud/public/insecure origins and shell injection are rejected', () => {
   const config = { id: randomUUID(), location: 'remote', origin: 'https://machine.tailnet.ts.net:8443', host: 'machine.tailnet.ts.net', user: 'trey' };
@@ -87,7 +85,6 @@ test('remote Executor deployment passes only the resolved Tailscale transport to
   assert.equal(invocation[1].at(-2), 'trey@workstation');
 });
 
-
 test('corrupt manager keys fail before runtime startup without replacing storage', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'woven-executor-corrupt-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -95,7 +92,6 @@ test('corrupt manager keys fail before runtime startup without replacing storage
   await writeFile(path, JSON.stringify({ servers: { broken: { location: 'local', apiKey: 'old', encryptionKey: 'old', port: 4312 } }, scopes: {}, jobs: {} }));
   await assert.rejects(new ExecutorBroker(directory).load(), /Existing credentials were retained/);
 });
-
 
 test('an in-flight grant stays bound to its original origin and is discarded after replacement', async t => {
   const { broker, scope } = await fixture(t, async () => ({}));
@@ -245,7 +241,6 @@ test('inventory reads linked account targets and never creates profiles or expos
   ]);
   assert.deepEqual(calls, [['/dashboard/api/overview', undefined]]);
 });
-
 
 test('remote deployment waits for its private endpoint to become ready', async t => {
   let attempts = 0;

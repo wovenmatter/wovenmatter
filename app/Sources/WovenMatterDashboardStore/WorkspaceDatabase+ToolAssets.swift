@@ -66,18 +66,6 @@ extension WorkspaceDatabaseConnection {
       return .object(["rows": .array(rows), "hasMore": .bool(more), "nextCursor": rows.last?.objectValue?["sequence"] ?? .number(Double(after))])
     }
   }
-
-  public func saveAgentCalendar(callerID: String, id: String = UUID().uuidString.lowercased(),
-                                 creating: Bool, title: String, details: String?,
-                                 startsAt: Date, endsAt: Date?, allDay: Bool, requestID: String? = nil) throws -> String {
-    try saveCalendarEvent(id: id, draft: .init(title: title, details: details ?? "",
-      startsAt: startsAt, endsAt: endsAt, allDay: allDay), creating: creating,
-      callerID: callerID, requestID: requestID)
-  }
-
-  public func removeAgentCalendar(callerID: String, id: String, requestID: String? = nil) throws {
-    try deleteCalendarEvent(id: id, callerID: callerID, requestID: requestID)
-  }
 }
 
 // MARK: - Async worker boundary
@@ -97,15 +85,5 @@ extension WorkspaceDatabase {
   public func listAgentCalendar(callerID: String, since: Date? = nil, until: Date? = nil,
                                  after: Int64 = 0, limit: Int = 100) async throws -> GatewayJSONValue {
     try await read { try $0.listAgentCalendar(callerID: callerID, since: since, until: until, after: after, limit: limit) }
-  }
-
-  public func saveAgentCalendar(callerID: String, id: String = UUID().uuidString.lowercased(),
-                                 creating: Bool, title: String, details: String?,
-                                 startsAt: Date, endsAt: Date?, allDay: Bool, requestID: String? = nil) async throws -> String {
-    try await write { try $0.saveAgentCalendar(callerID: callerID, id: id, creating: creating, title: title, details: details, startsAt: startsAt, endsAt: endsAt, allDay: allDay, requestID: requestID) }
-  }
-
-  public func removeAgentCalendar(callerID: String, id: String, requestID: String? = nil) async throws {
-    try await write { try $0.removeAgentCalendar(callerID: callerID, id: id, requestID: requestID) }
   }
 }

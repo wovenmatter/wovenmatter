@@ -61,8 +61,6 @@ test('guard audits credential files behind an existing harness directory symlink
   await assert.rejects(withInstallerGuard(home, () => writeFile(resolve(target, 'auth.json'), 'changed account!')), /installer_modified_harness_config/)
 })
 
-
-
 test('runtime exclusions do not permit changed config, extensions or unknown lookalike paths', async t => {
   for (const relative of ['.codex/auth.json', '.codex/config.toml', '.codex/skills/tmp/config.json', '.codex/state_config.sqlite', '.codex/logs-custom.json', '.claude/logs/settings.json', '.config/opencode/config.json', '.grok/agent_id', '.grok/config.json']) {
     const home = await fixture(t), path = resolve(home, relative)

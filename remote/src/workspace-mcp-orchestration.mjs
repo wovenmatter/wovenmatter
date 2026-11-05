@@ -1,10 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { ordered } from './durable-json.mjs'
 
 const fail=(statusCode,message)=>Object.assign(new Error(message),{statusCode})
 const stamp=()=>new Date().toISOString()
 const uuid=value=>typeof value==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
 const stableID=value=>{const h=createHash('sha256').update('woven-mcp-orchestration-v1\0'+value).digest('hex');return `${h.slice(0,8)}-${h.slice(8,12)}-5${h.slice(13,16)}-a${h.slice(17,20)}-${h.slice(20,32)}`}
-const ordered=value=>Array.isArray(value)?value.map(ordered):value&&typeof value==='object'?Object.fromEntries(Object.keys(value).sort().map(key=>[key,ordered(value[key])])):value
 const permissionRank=value=> {
   if(value==null)return undefined
   const key=String(value).replaceAll(/[-_\s]/g,'').toLowerCase()

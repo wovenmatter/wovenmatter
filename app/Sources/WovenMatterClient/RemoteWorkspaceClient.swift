@@ -138,7 +138,6 @@ public enum RemoteHarnessLaunchResolver {
         configuration: RemoteWorkspaceConfiguration,
         runtimeKind: AgentRuntimeKind,
         processWorkingDirectory: URL,
-        workspaceRoot: URL = URL(fileURLWithPath: "/home/.woven-matter"),
         workingDirectory: URL? = nil,
         durableChannelID: String? = nil,
         tailnetSSHOptions: @Sendable (String) throws -> [String] = RemoteWorkspaceTailnet.sshOptions
@@ -157,8 +156,7 @@ public enum RemoteHarnessLaunchResolver {
             userName: configuration.userName
         )
         let target = RemoteWorkspaceExecTarget(configuration: configuration)
-        let remoteRoot = try workingDirectory ?? (configuration.kind == .host
-            ? URL(fileURLWithPath: target.workspaceRoot) : workspaceRoot)
+        let remoteRoot = try workingDirectory ?? URL(fileURLWithPath: target.workspaceRoot)
         guard remoteRoot.isFileURL, remoteRoot.path.hasPrefix("/"), !remoteRoot.path.contains("\0") else {
             throw WorkspaceToolError.invalid("The remote working directory must be an absolute path.")
         }
@@ -167,24 +165,15 @@ public enum RemoteHarnessLaunchResolver {
         } ?? false
         let usesDurableRelay = configuration.backgroundExecutionEnabled
             && durableChannelID != nil && runtimeKind != .defaultAgent && supportsDurableRelay
-        let environment = LocalACPRuntimeCatalog.definition(for: runtimeKind)?.environment ?? [:]
+        let environment: [String: String] = [:]
         let workspacePermission = configuration.fullRootPermission(for: runtimeKind)
         let hostSubcommand = usesDurableRelay ? "durable-acp" : runtimeKind == .defaultAgent ? "default-agent" : "harness"
         var command = try target.prefix(workingDirectory: remoteRoot.path, interactive: true,
-            environment: configuration.kind == .host ? environment : [:], hostSubcommand: hostSubcommand)
-        if configuration.kind == .container {
-            command += ["env", "HOME=/home",
-                "WOVEN_DEFAULT_AGENT_DIRECTORY=/home/.woven-matter/.wovenmatter/default-agent",
-                "PATH=/home/.local/bin:/home/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"]
-            command += environment.sorted(by: { $0.key < $1.key }).map { "\($0.key)=\($0.value)" }
-        }
+            environment: environment, hostSubcommand: hostSubcommand)
         var harnessArgumentsStartIndex = command.count
         if usesDurableRelay, let durableChannelID {
             guard UUID(uuidString: durableChannelID) != nil else {
                 throw WorkspaceToolError.invalid("The background session identifier is invalid.")
-            }
-            if configuration.kind == .container {
-                command += ["node", "/opt/wovenmatter/src/durable-acp-stdio.mjs"]
             }
             // Invocation wrapping inserts harness defaults immediately before
             // these relay arguments, independently of the transport prefix.
@@ -192,26 +181,17 @@ public enum RemoteHarnessLaunchResolver {
             command += ["--channel-id", durableChannelID, "--harness-id", runtimeKind.rawValue,
                         "--cwd", remoteRoot.path]
             if let workspacePermission { command += ["--permission-mode", workspacePermission] }
-        } else if runtimeKind == .defaultAgent {
-            if configuration.kind == .container {
-                command += ["sh", "-c", #"ulimit -c 0; exec "$@""#, "woven-default-agent", "node", "/opt/wovenmatter/default-agent/src/main.mjs", "--remote"]
-            }
-        } else if let harness {
-            if configuration.kind == .container { command.append(contentsOf: [
-                "bash", "-c",
-                #"mkdir -p /home/.wovenmatter && exec 9>/home/.wovenmatter/runtime-operation.lock && { flock --shared --nonblock 9 || { printf '%s\n' 'Runtime maintenance is in progress. Retry after it finishes.' >&2; exit 75; }; } && exec "$@""#,
-                "woven-runtime",
-            ]) }
+        } else if runtimeKind != .defaultAgent, let harness {
             command.append(harness.command)
             harnessArgumentsStartIndex = command.count
             command.append(contentsOf: harness.arguments)
         }
-        let remoteCommand = command.map(shellQuote).joined(separator: " ")
+        let remoteCommand = command.map(RemoteWorkspaceExecTarget.quote).joined(separator: " ")
         let sshArguments = try tailnetSSHOptions(destination) + [
             "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", destination, remoteCommand,
         ]
         var launchEnvironment = ["WOVEN_EXECUTION_SCOPE": configuration.id.uuidString.lowercased()]
-        if configuration.kind == .host { launchEnvironment["WOVENMATTER_HOST_ACCESS_MODE"] = configuration.accessMode.rawValue }
+        launchEnvironment["WOVENMATTER_HOST_ACCESS_MODE"] = configuration.accessMode.rawValue
         if runtimeKind == .defaultAgent {
             launchEnvironment["WOVEN_DEFAULT_AGENT_SCOPE"] = configuration.id.uuidString.lowercased()
         } else if usesDurableRelay {
@@ -236,10 +216,6 @@ public enum RemoteHarnessLaunchResolver {
                 databasesURL: URL(fileURLWithPath: try target.databasesDirectory, isDirectory: true)
             )
         )
-    }
-
-    private static func shellQuote(_ value: String) -> String {
-        "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
     }
 }
 
@@ -678,68 +654,6 @@ public actor RemoteWorkspaceSSHClient {
         )
     }
 
-    public func create(
-        configuration: RemoteWorkspaceConfiguration,
-        token: String,
-        imageID: String? = nil
-    ) throws -> RemoteWorkspaceStatus {
-        if configuration.kind == .host { return try deployHost(configuration: configuration, token: token) }
-        let resources = try RemoteWorkspaceResourceLimits.commandValues(
-            for: configuration
-        )
-        return try decode(
-            RemoteWorkspaceStatus.self,
-            from: runScript(
-                hostName: configuration.hostName,
-                userName: configuration.userName,
-                arguments: [
-                    "create",
-                    configuration.workspaceID,
-                    String(configuration.remotePort),
-                    resources.memoryBytes,
-                    resources.memoryAndSwapBytes,
-                    imageID ?? "",
-                ],
-                secret: token
-            )
-        )
-    }
-
-    @discardableResult
-    public func deployService(
-        hostName: String,
-        userName: String?,
-        forceRefresh: Bool = false,
-        progress: @escaping @Sendable (String) -> Void = { _ in }
-    ) throws -> String {
-        let destination = try Self.validatedDestination(hostName: hostName, userName: userName)
-        let root = try deploymentRoot ?? Self.loadDeploymentRoot()
-        let deployment = try RemoteWorkspaceDeployment(root: root)
-        func command(_ action: String) -> String {
-            "exec bash -c " + Self.shellQuote(deployment.script) + " -- " + action + " "
-                + deployment.fingerprint + " " + (forceRefresh ? "true" : "false")
-        }
-        progress("Checking the workspace image on the host…")
-        if !forceRefresh {
-            let result = try runner(destination, command("inspect"), nil)
-            if let image = RemoteWorkspaceDeployment.imageID(result) {
-                progress("Reusing the up-to-date workspace image…")
-                return image
-            }
-            guard String(decoding: result, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines) == "build" else {
-                throw RemoteWorkspaceClientError.invalidResponse("The host returned an invalid image check.")
-            }
-        }
-        progress("Preparing workspace files for the image build…")
-        let archive = try Self.loadDeploymentArchive(root: root)
-        let updates = RemoteWorkspaceBuildProgress(report: progress)
-        let output = try streamingRunner(destination, command("build"), archive) { updates.receive($0) }
-        guard let image = RemoteWorkspaceDeployment.imageID(output) else {
-            throw RemoteWorkspaceClientError.invalidResponse("Docker did not return a verified image identity.")
-        }
-        return image
-    }
-
     public func status(
         configuration: RemoteWorkspaceConfiguration
     ) throws -> RemoteWorkspaceStatus {
@@ -765,31 +679,6 @@ public actor RemoteWorkspaceSSHClient {
                 userName: configuration.userName,
                 arguments: [action.rawValue, configuration.workspaceID],
                 kind: configuration.kind
-            )
-        )
-    }
-
-    public func update(
-        configuration: RemoteWorkspaceConfiguration,
-        imageID: String? = nil
-    ) throws -> RemoteWorkspaceStatus {
-        if configuration.kind == .host { return try deployHost(configuration: configuration, update: true) }
-        let resources = try RemoteWorkspaceResourceLimits.commandValues(
-            for: configuration
-        )
-        return try decode(
-            RemoteWorkspaceStatus.self,
-            from: runScript(
-                hostName: configuration.hostName,
-                userName: configuration.userName,
-                arguments: [
-                    "update",
-                    configuration.workspaceID,
-                    imageID ?? "wovenmatter/workspace:latest",
-                    resources.memoryBytes,
-                    resources.memoryAndSwapBytes,
-                    String(configuration.remotePort),
-                ]
             )
         )
     }
@@ -851,13 +740,13 @@ public actor RemoteWorkspaceSSHClient {
                 )
             }
             let command = "IFS= read -r WOVENMATTER_API_TOKEN; export WOVENMATTER_API_TOKEN; exec bash -s -- "
-                + arguments.map(Self.shellQuote).joined(separator: " ")
+                + arguments.map(RemoteWorkspaceExecTarget.quote).joined(separator: " ")
             var input = Data((secret + "\n").utf8)
             input.append(script)
             return try runner(destination, command, input)
         }
         let command = "exec bash -s -- "
-            + arguments.map(Self.shellQuote).joined(separator: " ")
+            + arguments.map(RemoteWorkspaceExecTarget.quote).joined(separator: " ")
         return try runner(destination, command, script)
     }
 
@@ -974,33 +863,6 @@ public actor RemoteWorkspaceSSHClient {
             throw RemoteWorkspaceClientError.deploymentBundleUnavailable
         }
         return root
-    }
-
-    private static func loadDeploymentArchive(root: URL) throws -> Data {
-        let result = try RemoteWorkspaceProcess.run(
-            executable: "/usr/bin/tar",
-            arguments: [
-                "--no-mac-metadata", "-czf", "-",
-                "--exclude=.DS_Store",
-                "--exclude=*/node_modules",
-                "--exclude=*/.env",
-                "--exclude=*/.env.*",
-                "--exclude=remote/test",
-                "--exclude=remote/.env.example",
-                "--exclude=remote/compose.yaml",
-                "-C", root.path,
-                "remote", "harnesses",
-                "default-agent/package.json", "default-agent/package-lock.json", "default-agent/src",
-            ]
-        )
-        guard result.status == 0 else {
-            throw RemoteWorkspaceClientError.commandFailed(result.output)
-        }
-        return result.data
-    }
-
-    private static func shellQuote(_ value: String) -> String {
-        "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
     }
 }
 
@@ -1892,9 +1754,9 @@ extension RemoteWorkspaceServiceClient {
 
 // A compromised service must not redirect administrative credentials or request
 // bodies from the loopback tunnel to another origin or another local service.
-private final class RemoteWorkspaceRedirectPolicy: NSObject, URLSessionTaskDelegate, Sendable {
-    static let shared = RemoteWorkspaceRedirectPolicy()
-    func urlSession(_ session: URLSession, task: URLSessionTask,
+public final class RemoteWorkspaceRedirectPolicy: NSObject, URLSessionTaskDelegate, Sendable {
+    public static let shared = RemoteWorkspaceRedirectPolicy()
+    public func urlSession(_ session: URLSession, task: URLSessionTask,
                     willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
                     completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
         completionHandler(nil)

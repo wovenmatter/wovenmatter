@@ -1,5 +1,4 @@
 import Foundation
-import Network
 import SQLite3
 import Testing
 import WorkspaceFixtures
@@ -45,7 +44,7 @@ struct WovenMCPHostTests {
 
     @Test(.enabled(if: mcpSDKFixtureAvailable(), "Run npm ci --prefix default-agent for the native HTTP MCP SDK fixture; --all installs this dependency."), .timeLimit(.minutes(1)), arguments: [false, true])
     func actualSDKInitializesDiscoversAndCallsTheNativeHTTPHost(outside: Bool) async throws {
-        let serving = MCPServingFixture()
+        let serving = FixtureTailscaleServe(dnsName: "mcp.test.ts.net")
         let fixture = try await MCPHostFixture(exposure: serving.exposure())
         defer { fixture.remove() }
         let connection: WovenMCPConnection
@@ -102,7 +101,7 @@ struct WovenMCPHostTests {
     }
 
     @Test func exposureTogglePublishesPrivateEndpointAndBlocksTheSameConnectionWhenDisabled() async throws {
-        let serving = MCPServingFixture()
+        let serving = FixtureTailscaleServe(dnsName: "mcp.test.ts.net")
         let fixture = try await MCPHostFixture(exposure: serving.exposure())
         defer { fixture.remove() }
         let enabled = try await fixture.host.access(.setEnabled(true))
@@ -128,7 +127,7 @@ struct WovenMCPHostTests {
     }
 
     @Test func restartingOutsideExposureRecoversWhenItsSavedPortIsOccupied() async throws {
-        let serving = MCPServingFixture()
+        let serving = FixtureTailscaleServe(dnsName: "mcp.test.ts.net")
         let fixture = try await MCPHostFixture(exposure: serving.exposure())
         defer { fixture.remove() }
         let first = try await fixture.host.access(.setEnabled(true))
@@ -188,7 +187,7 @@ struct WovenMCPHostTests {
           ALTER TABLE workspace_tool_mutations_legacy RENAME TO workspace_tool_mutations;
           """
         #expect(sqlite3_exec(connection, sql, nil, nil, nil) == SQLITE_OK)
-        let reopened = try await WorkspaceDatabase(url: fixture.directory.appending(path: "workspace.sqlite"))
+        let reopened = try await fixture.persistence.openDatabase()
         let replay = try await reopened.createNote(folderID: nil, title: "Before upgrade", callerConversationID: fixture.caller, requestID: requestID)
         #expect(replay == note)
         #expect(try await reopened.sessionTools(fixture.caller).enabled.contains(.notes))
@@ -230,7 +229,7 @@ struct WovenMCPHostTests {
         #expect(try await fixture.database.workspaceOverview().conversations.count == before)
         let timer = WorkspaceSessionTimer(sessionID: fixture.caller, instruction: "Follow up", nextFireAt: Date().addingTimeInterval(60))
         _ = try await fixture.database.saveSessionTimer(timer, callerID: WovenMCPCaller.outside, requestID: UUID().uuidString)
-        #expect(try await fixture.database.querySessionTimers(callerID: WovenMCPCaller.outside, sessionID: fixture.caller).objectValue?["rows"]?.arrayValue?.count == 1)
+        #expect(try await rows(fixture.database.querySessionTimers(callerID: WovenMCPCaller.outside, sessionID: fixture.caller)).count == 1)
         let goal = try await fixture.database.mutateGoal(sessionID: fixture.caller,
             mutation: .set(objective: "Outside goal", tokenBudget: nil, turnBudget: nil),
             callerID: WovenMCPCaller.outside, requestID: UUID().uuidString)
@@ -264,19 +263,17 @@ private final class MCPHostCalls {
 
 @MainActor
 private struct MCPHostFixture {
-    let directory: URL
+    let persistence: PersistenceFixture
+    var directory: URL { persistence.directory }
     let database: WorkspaceDatabase
     let caller: String
-    let otherCaller: String
     let host: WovenMCPHost
     let calls: MCPHostCalls
 
     init(exposure: CompanionTailscaleServe = CompanionTailscaleServe()) async throws {
-        directory = FileManager.default.temporaryDirectory.appending(path: "woven-mcp-host-" + UUID().uuidString)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
+        persistence = try PersistenceFixture()
+        database = try await persistence.openDatabase()
         caller = try await database.createFixtureLocalACPSession(runtimeKind: .codex, title: "MCP caller", ownerDeviceID: UUID())
-        otherCaller = try await database.createFixtureLocalACPSession(runtimeKind: .claudeCode, title: "Other caller", ownerDeviceID: UUID())
         try await database.setSessionTools(.init(enabled: [.notes, .sessions, .browser]), sessionID: caller)
         let calls = MCPHostCalls()
         self.calls = calls
@@ -294,7 +291,7 @@ private struct MCPHostFixture {
 
     func remove() {
         host.stop()
-        try? FileManager.default.removeItem(at: directory)
+        persistence.remove()
     }
 }
 
@@ -303,35 +300,4 @@ private func mcpHostRequest(token: String?, name: String, arguments: [String: Ga
         "method": .string("tools/call"), "params": .object(["name": .string(name), "arguments": .object(arguments)])])
     return .init(method: "POST", target: "/mcp", headers: token.map { ["authorization": "Bearer " + $0] } ?? [:],
                  body: try JSONEncoder().encode(message))
-}
-
-@MainActor private final class MCPServingFixture {
-    var existingPorts: Set<Int> = []
-    var child: MCPServingChild?
-    func exposure() -> CompanionTailscaleServe {
-        CompanionTailscaleServe(executable: URL(fileURLWithPath: "/fixture/tailscale"),
-            probe: { [self] _, arguments in try await probe(arguments) },
-            launch: { [self] _, arguments in
-                let value = MCPServingChild(port: Int(arguments[1].dropFirst("--https=".count))!, target: arguments[3])
-                child = value; return value
-            })
-    }
-    func probe(_ arguments: [String]) throws -> Data {
-        if arguments == ["status", "--json"] {
-            return Data(#"{"BackendState":"Running","Self":{"DNSName":"mcp.test.ts.net."}}"#.utf8)
-        }
-        let tcp = Dictionary(uniqueKeysWithValues: existingPorts.map { (String($0), ["HTTPS": true]) })
-        guard let child, child.isRunning else { return try JSONSerialization.data(withJSONObject: ["TCP": tcp]) }
-        return try JSONSerialization.data(withJSONObject: ["TCP": tcp, "Foreground": ["fixture": [
-            "TCP": [String(child.port): ["HTTPS": true]],
-            "Web": ["mcp.test.ts.net:\(child.port)": ["Handlers": ["/wovenmatter": ["Proxy": child.target]]]]]]])
-    }
-}
-
-@MainActor private final class MCPServingChild: CompanionServingProcess {
-    let port: Int
-    let target: String
-    var isRunning = true
-    init(port: Int, target: String) { self.port = port; self.target = target }
-    func terminate() { isRunning = false }
 }

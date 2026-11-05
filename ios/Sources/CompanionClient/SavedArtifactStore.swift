@@ -183,7 +183,7 @@ public actor SavedArtifactStore {
   private static func sameContent(_ a: CompanionArtifactManifest, _ b: CompanionArtifactManifest) -> Bool {
     a.id == b.id && a.workspaceID == b.workspaceID && a.sha256 == b.sha256 && a.byteCount == b.byteCount && a.deleted == b.deleted && a.title == b.title && a.mediaType == b.mediaType
   }
-  private static func digest(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
+  private static func digest(_ data: Data) -> String { SHA256.hash(data: data).hexString }
   private func blob(_ manifest: CompanionArtifactManifest) -> URL { directory.appendingPathComponent(manifest.sha256 + ".blob") }
   private func part(_ manifest: CompanionArtifactManifest) -> URL { directory.appendingPathComponent(Self.digest(Data((manifest.id + ":" + String(manifest.revision)).utf8)) + ".partial") }
   private func update(_ id: String, _ record: Record) throws {

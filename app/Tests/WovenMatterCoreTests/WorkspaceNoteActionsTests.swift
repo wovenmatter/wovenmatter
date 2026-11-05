@@ -39,7 +39,8 @@ struct WorkspaceNoteActionsTests {
     let original = NoteDocument(blocks: [.richText(.init(id: "original", text: "Original content"))])
     let id = try await f.db.createNote(folderID: nil, title: "Original", content: original.encoded())
     let stale = try await f.db.noteActionRevision(id: id)
-    _ = try await f.db.updateNote(id: id, title: "Nested", content: document.encoded())
+    _ = try await f.db.persistNoteDraft(id: id, title: "Nested", content: document.encoded(),
+                                        expectedRevision: try await f.db.readNoteForEditing(id: id).revision)
     let stored = try await f.db.readNoteForEditing(id: id)
     #expect(stored.document == document && stored.title == "Nested")
     for mutation in [WorkspaceNoteMutation.rename("Stale name"), .moveToTrash] {

@@ -3,9 +3,6 @@ import Foundation
 import WovenMatterCore
 
 struct DashboardNoteJournalEntry: Codable, Equatable, Sendable {
-    static let currentVersion = 4
-
-    let version: Int
     let writerSessionID: String?
     let mutationID: String?
     let noteID: String
@@ -31,7 +28,6 @@ struct DashboardNoteJournalEntry: Codable, Equatable, Sendable {
         baseContent: String? = nil,
         baseTitle: String? = nil
     ) {
-        version = Self.currentVersion
         self.writerSessionID = writerSessionID
         self.mutationID = mutationID
         self.noteID = noteID
@@ -43,27 +39,6 @@ struct DashboardNoteJournalEntry: Codable, Equatable, Sendable {
         self.expectedRevision = expectedRevision
         self.baseContent = baseContent
         self.baseTitle = baseTitle
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case version, writerSessionID, mutationID
-        case noteID, title, content, revision, folderID, createdAt, expectedRevision, baseContent, baseTitle
-    }
-
-    init(from decoder: any Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        version = try values.decodeIfPresent(Int.self, forKey: .version) ?? 1
-        writerSessionID = try values.decodeIfPresent(String.self, forKey: .writerSessionID)
-        mutationID = try values.decodeIfPresent(String.self, forKey: .mutationID)
-        noteID = try values.decode(String.self, forKey: .noteID)
-        title = try values.decode(String.self, forKey: .title)
-        content = try values.decode(String.self, forKey: .content)
-        revision = try values.decode(UInt64.self, forKey: .revision)
-        folderID = try values.decodeIfPresent(String.self, forKey: .folderID)
-        createdAt = try values.decodeIfPresent(String.self, forKey: .createdAt)
-        expectedRevision = try values.decodeIfPresent(String.self, forKey: .expectedRevision)
-        baseContent = try values.decodeIfPresent(String.self, forKey: .baseContent)
-        baseTitle = try values.decodeIfPresent(String.self, forKey: .baseTitle)
     }
 
     func rebased(revision: String, content: String, title: String) -> DashboardNoteJournalEntry {

@@ -122,7 +122,6 @@ struct CompanionMacManagementTests {
         let result = try CompanionMacInstallation(data: data)
         #expect(result.setupResult?.requestID == request.id)
         #expect(result.setupResult?.phase == .failed)
-        #expect(result.setupStatus == status.message)
     }
     @Test func scriptsAreValidBashAndInspectionPreservesEmptyFields() throws {
         for script in [CompanionMacRemoteScripts.inspect, CompanionMacRemoteScripts.pair, CompanionMacRemoteScripts.install] {

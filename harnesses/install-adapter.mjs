@@ -65,18 +65,24 @@ export async function verifyAdapter(executable, adapterVersion, environment) {
   });
 }
 
-export async function installAdapter({ prefix, adapter, adapterVersion, engineVersion, npm }) {
+export async function installAdapter({ prefix, adapter, adapterVersion, engineVersion, protocolSDKVersion, npm }) {
   const selection = engines[adapter];
   if (!selection || !exact(adapterVersion) || !exact(engineVersion) || !Array.isArray(npm) || !npm.length || npm.some(x => typeof x !== 'string')) throw new Error('Invalid adapter selection.');
+  if (protocolSDKVersion !== undefined && !exact(protocolSDKVersion)) throw new Error('Invalid ACP SDK selection.');
   prefix = resolve(prefix);
   await mkdir(join(prefix, 'Installations'), { recursive: true, mode: 0o700 });
   const generation = await realpath(await mkdtemp(join(prefix, 'Installations', 'adapter-')));
   const temporary = join(prefix, 'bin', '.' + selection.command + '-' + randomUUID());
   let promoted = false;
   try {
+    const dependencies = { [adapter]: adapterVersion, [selection.package]: engineVersion };
+    const overrides = { [selection.package]: '$' + selection.package };
+    if (protocolSDKVersion) {
+      dependencies['@agentclientprotocol/sdk'] = protocolSDKVersion;
+      overrides['@agentclientprotocol/sdk'] = '$@agentclientprotocol/sdk';
+    }
     await writeFile(join(generation, 'package.json'), JSON.stringify({ private: true,
-      dependencies: { [adapter]: adapterVersion, [selection.package]: engineVersion },
-      overrides: { [adapter]: { [selection.package]: '$' + selection.package } },
+      dependencies, overrides: { [adapter]: overrides },
     }, null, 2) + '\n', { mode: 0o600 });
     await run(npm[0], [...npm.slice(1), 'install', '--prefix', generation, '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: generation });
     const modules = join(generation, 'node_modules');
@@ -88,6 +94,12 @@ export async function installAdapter({ prefix, adapter, adapterVersion, engineVe
     if (!selected || await realpath(selected) !== await realpath(join(engine, 'package.json'))) throw new Error('Adapter resolves a different engine graph.');
     if (engineManifest.version !== engineVersion
       || (await object(join(modules, adapter, 'package.json'))).version !== adapterVersion) throw new Error('Installed adapter graph differs from its selection.');
+    if (protocolSDKVersion) {
+      const name = '@agentclientprotocol/sdk';
+      const selected = createRequire(adapterManifest).resolve.paths(name).map(path => join(path, name, 'package.json')).find(existsSync);
+      if (!selected || await realpath(selected) !== await realpath(join(modules, name, 'package.json'))
+        || (await object(selected)).version !== protocolSDKVersion) throw new Error('Adapter resolves a different ACP SDK graph.');
+    }
     // Do not inherit credentials, user configuration, or executable overrides
     // for the provider-free probe. Only initialize is sent, never a prompt.
     const probeHome = join(generation, 'verification-home');
@@ -108,7 +120,7 @@ export async function installAdapter({ prefix, adapter, adapterVersion, engineVe
     }
     const executable = join(modules, '.bin', selection.command);
     await verifyAdapter(executable, adapterVersion, env);
-    await writeFile(join(generation, 'verification.json'), JSON.stringify({ adapter, adapterVersion, engine: selection.package, engineVersion, protocolVersion: 1 }) + '\n', { mode: 0o600 });
+    await writeFile(join(generation, 'verification.json'), JSON.stringify({ adapter, adapterVersion, engine: selection.package, engineVersion, protocolSDKVersion, protocolVersion: 1 }) + '\n', { mode: 0o600 });
     await rm(probeHome, { recursive: true, force: true });
     await mkdir(join(prefix, 'bin'), { recursive: true, mode: 0o700 });
     await symlink(executable, temporary);

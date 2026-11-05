@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { createClientExecution } from '../src/client-execution.mjs'
+import { enroll } from './fixtures/execution.mjs'
 const turn=()=>new Promise(resolve=>setImmediate(resolve))
 function fixture(t, runtimeKind='default_agent') {
   const directory=mkdtempSync(join(tmpdir(),'wm-goals-')),runs=[]
@@ -13,8 +14,7 @@ function fixture(t, runtimeKind='default_agent') {
     run:async input=>{let end;const completion=new Promise(resolve_=>{end=resolve_});runs.push({...input,end});await completion},
     stop:async({command})=>runs.find(run=>run.command.runID===command.runID)?.end(),close:async()=>{for(const run of runs)run.end()}}
   let service=createClientExecution({directory,runtime,goalIntervalMilliseconds:3600000})
-  const enrollment={libraryID:randomUUID(),workspaceID:randomUUID(),ownerDeviceID:randomUUID(),deviceID:randomUUID(),scopes:['execution']}
-  const grant=service.provision(enrollment),principal=service.principal('Bearer '+grant.token,'execution')
+  const {principal}=enroll(service)
   const command=(kind,values={})=>({commandID:randomUUID(),deviceID:principal.id,kind,...values})
   const read=async id=>(await service.readWorkspace({session:{id}})).session._0.goal
   const mutate=(id,mutation)=>service.command(command('workspace',{conversationID:id,workspaceAction:{goal:{id,mutation}}}),principal)

@@ -11,7 +11,6 @@ extension MobileStore {
       let command = try WovenMatterToolCommand(request.arguments)
       if let id = command.options["request-id"], UUID(uuidString: id) != uuid { throw WorkspaceToolError.invalid("--request-id must match the request envelope.") }
       try context.authorize(command)
-      guard !command.wantsHelp else { throw WorkspaceToolError.invalid("Use a named Woven MCP tool with structured arguments.") }
       if command.action == "context" { return .init(result: request.contextID.map(GatewayJSONValue.string) ?? .null) }
       let key = context.sessionID + ":" + uuid.uuidString.lowercased()
       if command.isMutation, let receipt = state.toolReceipts?[key] {
@@ -30,7 +29,6 @@ extension MobileStore {
             receipts[key] = .init(requestID: uuid.uuidString.lowercased(), sessionID: context.sessionID, arguments: command.operationArguments,
               response: .init(result: response, requestID: uuid.uuidString.lowercased()))
             next.toolReceipts = receipts
-            if let id = response.objectValue?["id"]?.stringValue { try enforceNoteBudget(&next, protecting: id) }
           }
         }
         result = response
@@ -220,15 +218,5 @@ extension MobileStore {
       timer.pendingFireID = nil; timer.pendingFireAt = nil; next.toolTimers?[id] = timer
     }
     return result
-  }
-  public func acknowledgeToolTimer(id: String, fireID: String, now: Date = Date()) throws {
-    try transaction { next in
-      guard var timer = next.toolTimers?[id], timer.pendingFireID == fireID else { throw WorkspaceToolError.invalid("This timer firing is no longer current.") }
-      if let interval = timer.intervalSeconds {
-        let missed = floor(max(0, now.timeIntervalSince(timer.nextFireAt)) / interval) + 1
-        timer.nextFireAt = timer.nextFireAt.addingTimeInterval(missed * interval)
-      } else { timer.isPaused = true }
-      timer.pendingFireID = nil; timer.pendingFireAt = nil; next.toolTimers?[id] = timer
-    }
   }
 }

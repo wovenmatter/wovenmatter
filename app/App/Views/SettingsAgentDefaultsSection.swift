@@ -10,10 +10,6 @@ struct SettingsAgentDefaultsSection: View {
     let runtime: AgentRuntimeKind
     var fixedScope: String? = nil
     var showsModel = true
-    var showsThinking = true
-    var showsTools = true
-    var showsPermissions = true
-    var title = "Defaults for new chats"
     var includesHarnessSetup = false
     var initialScope = "global"
     var onScopeChange: ((String) -> Void)?
@@ -36,7 +32,7 @@ struct SettingsAgentDefaultsSection: View {
     private var workspaceID: UUID? { UUID(uuidString: scope) }
     private var workspaceScope: String? {
         if scope == "global" { return nil }
-        if let workspaceID { return "remote:" + workspaceID.uuidString.lowercased() }
+        if let workspaceID { return ApplicationModel.remoteDatabaseSourceID(workspaceID) }
         return model.localACPWorkspaceLaunchConfiguration.map { "local:" + $0.rootURL.standardizedFileURL.path }
     }
     private var scopeAvailable: Bool { scope != "local" || workspaceScope != nil }
@@ -66,32 +62,32 @@ struct SettingsAgentDefaultsSection: View {
                         : "Defaults apply only to this workspace.")
                     .disabled(saving || !defaultsReady)
             }
-            SettingsCard(title: title,
+            SettingsCard(title: "Defaults for new chats",
                 detail: "Starting settings for \(runtime.displayName). You can change them in each chat.") {
                 VStack(alignment: .leading, spacing: 14) {
-                    if showsPermissions { selectionRow("Permissions", field: .permission, value: stored.permission,
+                    selectionRow("Permissions", field: .permission, value: stored.permission,
                         effective: resolved.permission, options: metadata?.permissionOptions ?? [],
-                        labels: metadata?.permissionOptionMetadata ?? [:]) }
+                        labels: metadata?.permissionOptionMetadata ?? [:])
                     if showsModel { selectionRow("Model", field: .model, value: stored.model,
                         effective: resolved.model, options: metadata?.selectableModels ?? [],
                         labels: metadata?.modelOptionMetadata ?? [:]) }
-                    if showsThinking { selectionRow("Thinking level", field: .thinking, value: stored.thinking,
+                    selectionRow("Thinking level", field: .thinking, value: stored.thinking,
                         effective: resolved.thinking, options: metadata?.selectableThinkingLevels ?? [],
-                        labels: metadata?.thinkingOptionMetadata ?? [:]) }
+                        labels: metadata?.thinkingOptionMetadata ?? [:])
                     HStack(spacing: 10) {
                         Button(loading ? "Refreshing…" : "Refresh options") { Task { await loadOptions() } }
                             .buttonStyle(SettingsQuietButtonStyle()).disabled(loading || saving || !scopeAvailable)
                         if loading { ProgressView().controlSize(.small) }
                     }
-                    if showsPermissions, metadata != nil, metadata?.permissionOptions?.isEmpty != false {
+                    if metadata != nil, metadata?.permissionOptions?.isEmpty != false {
                         SettingsNote("Permissions are managed by this agent.")
                     }
-                    if showsThinking, metadata != nil, metadata?.selectableThinkingLevels.isEmpty != false {
+                    if metadata != nil, metadata?.selectableThinkingLevels.isEmpty != false {
                         SettingsNote("This model has no thinking-level options.")
                     }
                 }
             }.disabled(!scopeAvailable || inheritsDefaults)
-            if showsTools { SettingsCard(title: "Woven MCP", detail: "Tools available in new chats. Adjust them from Tools in any chat.") {
+            SettingsCard(title: "Woven MCP", detail: "Tools available in new chats. Adjust them from Tools in any chat.") {
                 VStack(alignment: .leading, spacing: 12) {
                     Toggle("Enable Woven MCP", isOn: Binding(get: { !enabledTools.subtracting(["goals"]).isEmpty }, set: { enabled in
                         save(.tools, selections: SessionSelections(tools: enabled
@@ -113,7 +109,6 @@ struct SettingsAgentDefaultsSection: View {
                     SettingsNote("Calendar access, session limits, and connected apps use shared settings.")
                 }
             }.disabled(!scopeAvailable || inheritsDefaults)
-            }
             if let error { SettingsError(error) }
             }
         }
@@ -131,7 +126,7 @@ struct SettingsAgentDefaultsSection: View {
             if runtime == .defaultAgent { Task { await loadDefaults() } }
         }
         .onChange(of: model.connections.configuration.defaultModel) { _, _ in
-            if runtime == .defaultAgent, showsThinking { Task { await loadDefaults() } }
+            if runtime == .defaultAgent { Task { await loadDefaults() } }
         }
     }
 
@@ -189,7 +184,7 @@ struct SettingsAgentDefaultsSection: View {
             guard requestID == request, !Task.isCancelled else { return }
             stored = defaults.stored; resolved = defaults.resolved; usesShared = defaults.usesShared
             defaultsReady = true
-            if showsThinking, runtime != .defaultAgent || model.connections.configuration.defaultModel != nil { await loadOptions() }
+            if runtime != .defaultAgent || model.connections.configuration.defaultModel != nil { await loadOptions() }
         } catch {
             guard requestID == request, !Task.isCancelled else { return }
             self.error = error.localizedDescription

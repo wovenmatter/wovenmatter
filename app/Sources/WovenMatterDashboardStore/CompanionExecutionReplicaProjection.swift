@@ -21,7 +21,7 @@ extension WorkspaceDatabaseConnection {
           throw CompanionAPIError(code: "wrong_replica", message: "This execution database already projects a different library or workspace.")
         }
       } else if code == SQLITE_DONE {
-        try companionExecuteUnlocked("INSERT INTO companion_execution_replica_context(singleton,library_id,workspace_id) VALUES(1,?,?)", values: [libraryID, workspaceID])
+        try toolsExecuteUnlocked("INSERT INTO companion_execution_replica_context(singleton,library_id,workspace_id) VALUES(1,?,?)", [libraryID, workspaceID])
       } else { throw stepError() }
       let operatorID = try localMutationOperatorIDUnlocked()
       let now = Self.timestamp(Date())
@@ -40,13 +40,13 @@ extension WorkspaceDatabaseConnection {
           return .init(operationID: request.operationID, status: .conflict, note: existing, message: "The execution note changed during projection.")
         }
         if existing == nil, try companionVersionUnlocked(kind: "note", id: request.resourceID) == nil {
-          try companionExecuteUnlocked("INSERT INTO notes(id,user_id,folder_id,title,content,snippet,position,created_at,updated_at) VALUES(?,?,?,?,?,?,0,?,?)",
-            values: [request.resourceID, operatorID, request.folderID, title, content, Self.noteSnippet(content), now, now])
+          try toolsExecuteUnlocked("INSERT INTO notes(id,user_id,folder_id,title,content,snippet,position,created_at,updated_at) VALUES(?,?,?,?,?,?,0,?,?)",
+            [request.resourceID, operatorID, request.folderID, title, content, Self.noteSnippet(content), now, now])
         } else {
           try checkpointNoteUnlocked(id: request.resourceID, source: "before-replica-projection", force: true)
           let updatedAt = try nextNoteUpdatedAtUnlocked(id: request.resourceID)
-          try companionExecuteUnlocked("UPDATE notes SET title=?,content=?,snippet=?,folder_id=?,deleted_at=NULL,updated_at=? WHERE id=? AND user_id=?",
-            values: [title, content, Self.noteSnippet(content), request.folderID, updatedAt, request.resourceID, operatorID])
+          try toolsExecuteUnlocked("UPDATE notes SET title=?,content=?,snippet=?,folder_id=?,deleted_at=NULL,updated_at=? WHERE id=? AND user_id=?",
+            [title, content, Self.noteSnippet(content), request.folderID, updatedAt, request.resourceID, operatorID])
         }
         try checkpointNoteUnlocked(id: request.resourceID, source: "replica-projection", force: true)
         guard let note = try companionNoteUnlocked(id: request.resourceID) else { throw WorkspaceDatabaseError.corruptRow }
@@ -61,10 +61,10 @@ extension WorkspaceDatabaseConnection {
         }
         let location = WorkspaceFolderLocation(workspaceID: binding.workspaceID, rootPath: binding.rootPath, managed: false)
         try validateExecutionLocation(location)
-        try companionExecuteUnlocked("INSERT INTO folders(id,user_id,name,position,created_at,updated_at) VALUES(?,?,?,(SELECT COALESCE(MAX(position),-1)+1 FROM folders),?,?)",
-          values: [request.resourceID, operatorID, title, now, now])
-        try companionExecuteUnlocked("INSERT INTO folder_execution_roots(folder_id,workspace_id,root_path,managed) VALUES(?,?,?,0)",
-          values: [request.resourceID, binding.workspaceID, binding.rootPath])
+        try toolsExecuteUnlocked("INSERT INTO folders(id,user_id,name,position,created_at,updated_at) VALUES(?,?,?,(SELECT COALESCE(MAX(position),-1)+1 FROM folders),?,?)",
+          [request.resourceID, operatorID, title, now, now])
+        try toolsExecuteUnlocked("INSERT INTO folder_execution_roots(folder_id,workspace_id,root_path,managed) VALUES(?,?,?,0)",
+          [request.resourceID, binding.workspaceID, binding.rootPath])
         return .init(operationID: request.operationID, status: .accepted, folder: try companionFolderUnlocked(id: request.resourceID))
       }
       if request.kind == .renameFolder || request.kind == .deleteFolder {
@@ -72,13 +72,13 @@ extension WorkspaceDatabaseConnection {
           return .init(operationID: request.operationID, status: .conflict, message: "The execution folder changed during projection.")
         }
         if request.kind == .deleteFolder {
-          try companionExecuteUnlocked("DELETE FROM folders WHERE id=? AND user_id=?", values: [request.resourceID, operatorID])
+          try toolsExecuteUnlocked("DELETE FROM folders WHERE id=? AND user_id=?", [request.resourceID, operatorID])
           return .init(operationID: request.operationID, status: .accepted)
         }
         guard let title = request.title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty, title.utf8.count <= 4_096 else {
           throw CompanionAPIError(code: "invalid_replica", message: "The projected folder needs a valid name.")
         }
-        try companionExecuteUnlocked("UPDATE folders SET name=?,updated_at=? WHERE id=? AND user_id=?", values: [title, now, request.resourceID, operatorID])
+        try toolsExecuteUnlocked("UPDATE folders SET name=?,updated_at=? WHERE id=? AND user_id=?", [title, now, request.resourceID, operatorID])
         return .init(operationID: request.operationID, status: .accepted, folder: try companionFolderUnlocked(id: request.resourceID))
       }
       if request.kind == .deleteNote {
@@ -86,7 +86,7 @@ extension WorkspaceDatabaseConnection {
           return .init(operationID: request.operationID, status: .conflict, message: "The execution note changed during projection.")
         }
         try checkpointNoteUnlocked(id: request.resourceID, source: "before-replica-delete", force: true)
-        try companionExecuteUnlocked("UPDATE notes SET deleted_at=?,updated_at=? WHERE id=? AND user_id=?", values: [now, now, request.resourceID, operatorID])
+        try toolsExecuteUnlocked("UPDATE notes SET deleted_at=?,updated_at=? WHERE id=? AND user_id=?", [now, now, request.resourceID, operatorID])
         return .init(operationID: request.operationID, status: .accepted)
       }
       return .init(operationID: request.operationID, status: .conflict, message: "The projected resource already exists.")

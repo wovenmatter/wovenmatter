@@ -28,9 +28,6 @@ struct CompanionFacadeTests {
         #expect(await fixture.recorder.deliveries.count == 1)
     }
 
-    // OpenCode uses its native coordinator, covered by OpenCodeCoordinatorTests.
-    // Every remaining runtime still traverses the real facade and launch routing.
-
     @Test(arguments: ["local", "remote"])
     func folderDeletedDuringCreateAwaitLeavesNoSessionAndRetryIsStable(route: String) async throws {
         let fixture = try await FacadeFixture()
@@ -111,9 +108,6 @@ struct CompanionFacadeTests {
         model.remoteWorkspaces.configureCompanionFixture(remote, status: status, harnesses: harnesses, maintenance: maintenance)
         try await model.configureCompanionFixture(directory: directory)
     }
-    func providerID(_ route: String) -> String {
-        route == "remote" ? "remote:\(remote.id.uuidString.lowercased()):codex" : "local:codex"
-    }
     func createConversation() async throws -> String {
         return try await database.createRemoteACPSession(runtimeKind: .codex, remoteWorkspaceID: remote.id,
             remoteWorkspaceName: remote.name, title: "Remote", ownerDeviceID: UUID(),
@@ -128,7 +122,7 @@ struct CompanionFacadeTests {
     private func decode<T: Decodable>(_ value: String) throws -> T { try JSONDecoder().decode(T.self, from: Data(value.utf8)) }
 }
 
-private enum FixtureError: Error { case configurationRejected, creationTimedOut }
+private enum FixtureError: Error { case configurationRejected }
 
 actor FacadeRecorder {
     struct Delivery: Sendable {
@@ -144,16 +138,13 @@ actor FacadeRecorder {
     }
     var deliveries: [Delivery] = []
     var configurations: [Configuration] = []
-    private var confirmedModel: String?
     private var configurationRejected = false
     private var database: WorkspaceDatabase!
     nonisolated let creationGate = FacadeGate()
     nonisolated let configurationGate = FacadeGate()
-    nonisolated let acceptGate = FacadeGate()
     func configure(database: WorkspaceDatabase) { self.database = database }
     func accept(_ route: DashboardRunControlAdapters.Route, _ id: String, _ input: AgentMessageInput,
                 _ delivery: String?, _ context: AgentNoteContext?) async throws -> LocalACPRunIdentifiers {
-        await acceptGate.pass()
         deliveries.append(.init(route: route, input: input, delivery: delivery, context: context))
         let visible = AgentMessageInput(text: delivery ?? input.text, attachments: input.attachments,
             historyDeliveryID: input.historyDeliveryID, visibleWorkspace: input.visibleWorkspace, mcpContext: input.mcpContext)
@@ -167,7 +158,7 @@ actor FacadeRecorder {
         deliveries.append(.init(route: route, input: input, delivery: delivery, context: nil))
         let visible = AgentMessageInput(text: delivery ?? input.text, attachments: input.attachments,
             historyDeliveryID: input.historyDeliveryID, visibleWorkspace: input.visibleWorkspace, mcpContext: input.mcpContext)
-        return try await database.beginLocalACPSteeringTurn(runID: runID, input: visible)
+        return try await database.reserveLocalACPSteeringTurn(runID: runID, input: visible).identifiers
     }
     func cancel(_ route: DashboardRunControlAdapters.Route, _ id: String, _ expectedRunID: String?) async throws {
         guard let runID = try await database.activeRunID(conversationID: id) else {
@@ -177,7 +168,6 @@ actor FacadeRecorder {
         guard expectedRunID == nil || expectedRunID == runID else { throw LocalACPSessionDatabaseError.runNotFound }
         try await database.cancelLocalACPRun(runID: runID)
     }
-    func confirmModelAs(_ value: String?) { confirmedModel = value }
     func rejectConfiguration(_ value: Bool) { configurationRejected = value }
     func sessionConfiguration(_ id: String) async throws -> LocalACPSessionConfiguration {
         let native = try await database.localACPSession(conversationID: id)
@@ -189,7 +179,7 @@ actor FacadeRecorder {
         configurations.append(.init(conversationID: id, selections: selections, directory: directory))
         if configurationRejected { throw FixtureError.configurationRejected }
         let prior = try await database.localACPSession(conversationID: id)
-        let confirmed = LocalACPSessionConfiguration(model: confirmedModel ?? selections.model ?? prior.model,
+        let confirmed = LocalACPSessionConfiguration(model: selections.model ?? prior.model,
             thinking: selections.thinking ?? prior.thinking, permission: selections.permission ?? prior.permission,
             workingDirectory: directory)
         try await database.updateLocalACPSessionConfiguration(conversationID: id,
@@ -202,8 +192,6 @@ actor FacadeRecorder {
     func releaseCreation() { creationGate.open() }
     func holdConfiguration() { configurationGate.hold() }
     func waitForConfiguration() async { await configurationGate.waitForArrival() }
-    func releaseConfiguration() { configurationGate.open() }
-
 }
 
 final class SQLTrace: @unchecked Sendable {
@@ -276,19 +264,17 @@ final class FacadeUsageProbe: @unchecked Sendable {
     func expectPassiveLimits(providers: Set<ProviderKind>) {
         lock.withLock { expectedPassiveProviders = providers }
     }
+    /// Shared connections collect one passive request per expected provider.
     func collectLimits(_ request: UsageLimitsRequest) {
-        let expected = lock.withLock {
+        let accepted = lock.withLock {
             requests.append(request)
-            let expected = expectedPassiveProviders
-            expectedPassiveProviders = nil
-            return expected
+            guard var remaining = expectedPassiveProviders, !request.allowCredentialAccess,
+                  request.enabledProviders.isSubset(of: remaining) else { return false }
+            remaining.subtract(request.enabledProviders)
+            expectedPassiveProviders = remaining.isEmpty ? nil : remaining
+            return true
         }
-        guard let expected, request.enabledProviders == expected,
-              !request.allowCredentialAccess, !request.keychainInteraction.allowsInteraction,
-              request.interactiveProvider == nil, request.openRouterAPIKey == nil else {
-            record("unexpected limits policy")
-            return
-        }
+        if !accepted { record("unexpected limits policy") }
     }
     var calls: [String] { lock.withLock { accesses } }
     func record(_ access: String) {
@@ -300,7 +286,6 @@ private struct FacadeNoCredentials: UsageCredentialStoring {
     let probe: FacadeUsageProbe
     func hasOpenRouterAPIKey() throws -> Bool { probe.record("credential existence"); return false }
     func authorizeOpenRouterAPIKey() throws -> String? { probe.record("credential authorization"); return nil }
-    func loadOpenRouterAPIKey() throws -> String? { probe.record("credential load"); return nil }
     func saveOpenRouterAPIKey(_ key: String) throws { probe.record("credential save") }
     func deleteOpenRouterAPIKey() throws { probe.record("credential delete") }
 }

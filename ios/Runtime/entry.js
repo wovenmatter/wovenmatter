@@ -1,9 +1,11 @@
+// Install JavaScriptCore's host primitives before SDK module initialization.
 import { nativeSync } from './platform.js';
+import { watchConversation } from '../../default-agent/src/durable-view.mjs';
 import { forwardInferenceStream } from './inference-stream.js';
 import { createSubagents } from './subagents.js';
 import { createCodeMode } from './codemode.js';
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context';
-import { Harness, createRegistry, defineExtension, defineTool, watchEvents } from '@earendil-works/pi-durable';
+import { Harness, createRegistry, defineExtension, defineTool } from '@earendil-works/pi-durable';
 import { JsonlStorage } from '@earendil-works/pi-durable/storage/jsonl';
 import { createModels, createProvider } from '@earendil-works/pi-ai/models';
 import { AssistantMessageEventStream } from '@earendil-works/pi-ai/utils/event-stream';
@@ -88,9 +90,12 @@ const methods = {
     root = await harness.root(context,{agent:{model:{provider:model.provider,modelId:model.id},instructions:config.instructions}});
     // Configure before resuming saved tasks: account selection is device local.
     await root.configure({model:{provider:model.provider,modelId:model.id},instructions:config.instructions,thinkingLevel:config.thinkingLevel??'off'},context);
-    watch = await watchEvents(harness,root.id,context);
+    watch = await watchConversation(root,context);
     globalThis.__wmEvents(JSON.stringify({conversationID:config.conversationID,events:[watch.snapshot]}));
-    watch.start(async events => globalThis.__wmEvents(JSON.stringify({conversationID:config.conversationID,events})));
+    // Native consumers read snapshots separately; progress/refresh notifications
+    // must not serialize the full historical transcript on every streamed edit.
+    watch.start(async events => globalThis.__wmEvents(JSON.stringify({conversationID:config.conversationID,events:events.map(event =>
+      event.type === 'snapshot' ? {type:'view_changed'} : event.entry ? {type:event.type,entryID:event.entry.id} : event)})));
     return watch.snapshot;
   },
   async submit({text,requestID}) {
@@ -115,7 +120,7 @@ const methods = {
   },
   async usage() { return harness.usage(context); },
   async snapshot() {
-    const temporaryWatch = await watchEvents(harness,root.id,context);
+    const temporaryWatch = await watchConversation(root,context);
     const snapshot = temporaryWatch.snapshot; await temporaryWatch.stop(); return snapshot;
   },
   async configure({modelJSON,instructions,thinkingLevel}) {

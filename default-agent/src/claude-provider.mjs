@@ -33,7 +33,7 @@ export function claudePrincipalIdentity(principal, scope) {
     credentialIdentity: scope.authIdentity ?? null, principal: principalMetadata(principal) })).digest('hex');
 }
 
-export async function getClaudeNativePrincipal(claude, { signal, environment, cwd, executable } = {}) {
+export async function getClaudeNativePrincipal(claude, { signal, cwd, executable } = {}) {
   signal?.throwIfAborted();
   const controller = new AbortController(), abort = () => controller.abort(signal?.reason);
   signal?.addEventListener('abort', abort, { once: true });
@@ -43,7 +43,7 @@ export async function getClaudeNativePrincipal(claude, { signal, environment, cw
     async function* input() { if (!controller.signal.aborted) await new Promise(resolve => controller.signal.addEventListener('abort', resolve, { once: true })); }
     session = await claude.sdkQuery({ prompt: input(), options: {
       cwd: cwd ?? claude.directory, pathToClaudeCodeExecutable: executable ?? claudeExecutable(),
-      env: { ...environment ?? await claude.environment(undefined), CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_TELEMETRY: '1', DISABLE_ERROR_REPORTING: '1' },
+      env: { ...await claude.environment(undefined), CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_TELEMETRY: '1', DISABLE_ERROR_REPORTING: '1' },
       tools: [], skills: [], settingSources: [], strictMcpConfig: true, mcpServers: {}, persistSession: false, abortController: controller,
     } });
     if (typeof session.accountInfo !== 'function') throw new DefaultAgentError('Claude native account identity is unavailable. Update or refresh its connection before continuing.');
@@ -303,7 +303,7 @@ export function createClaudeStream(claude, credentials, dependencies = {}) {
             let waiting;
             if (replay) waiting = new Promise(resolve => { acknowledge = resolve; acknowledgementKind = 'replay'; });
             yield { ...frame, client_composed: true, ...(replay ? { shouldQuery: false } : {}) };
-            // SDK 0.3.278 passes native assistant frames unchanged. Historical
+            // The SDK passes native assistant frames unchanged. Historical
             // users require their zero-turn ack before the next replay frame.
             if (waiting) {
               let cancel;
@@ -347,6 +347,10 @@ export function createClaudeStream(claude, credentials, dependencies = {}) {
             resetTimeout();
             options.signal?.throwIfAborted();
             if (event.type === 'system' && event.subtype === 'mirror_error') captureFailure = new DefaultAgentError('Claude transcript archive failed. Its native local transcript remains intact.');
+            if (event.type === 'system' && event.subtype === 'session_writes_lost' && event.lost?.includes('transcript')) {
+              captureFailure = new DefaultAgentError('Claude could not save its native transcript because storage is full or its quota was reached. Free storage before retrying; the next turn will rebuild from conversation history.');
+              await native.invalidate();
+            }
             if (event.type === 'system' && event.subtype === 'compact_boundary') { compactBoundary = event; compactionCount++; }
             if (nativeContext.archive && event.type !== 'auth_status') await nativeContext.archive([{ id: `claude-sdk:event:${event.uuid ?? createHash('sha256').update(JSON.stringify(event)).digest('hex')}`,
               kind: `claude.sdk.event.${event.subtype ?? event.type}`, payload: JSON.stringify(event), contentMode: 'event', ...(nativeContext.runID ? { runID: nativeContext.runID } : {}) }]);

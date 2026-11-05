@@ -1,15 +1,9 @@
-import { createHash } from 'node:crypto'
 import { existsSync, readFileSync, mkdirSync, openSync, writeSync, readSync, fsyncSync, closeSync, fstatSync, ftruncateSync } from 'node:fs'
 import { resolve, dirname } from 'node:path'
-import { durableJSON } from './durable-json.mjs'
+import { durableJSON, read, sha256 as hash } from './durable-json.mjs'
 
-const hash = value => createHash('sha256').update(value).digest('hex')
 const statePath = (directory, activity) => resolve(directory, 'activity-details', hash(activity.id) + '.json')
 const recordPath = (directory, sha256) => resolve(directory, 'activity-details', 'records', sha256 + '.json')
-function read(path) {
-  try { return JSON.parse(readFileSync(path, 'utf8')) }
-  catch (error) { if (error.code !== 'ENOENT') throw error }
-}
 function preview(value) {
   let end = Math.min(2048, value.length)
   if (/[\uD800-\uDBFF]/.test(value[end - 1] ?? '')) end--

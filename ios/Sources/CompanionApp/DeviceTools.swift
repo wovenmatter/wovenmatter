@@ -7,11 +7,6 @@ import CryptoKit
 import CompanionClient
 import WovenMatterCompanion
 
-private final class DeviceToolNetworkDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
-  func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
-                  newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void) { completionHandler(nil) }
-}
-
 extension CompanionModel {
   private static let deviceFileToolsJSON = #"""
   [
@@ -99,7 +94,7 @@ extension CompanionModel {
       try await requireDeviceApproval(id: toolCallID, conversationID: conversationID, title: "Open web address", detail: address)
       let configuration = URLSessionConfiguration.ephemeral; configuration.httpCookieStorage = nil; configuration.urlCache = nil
       configuration.timeoutIntervalForRequest = 30
-      let session = URLSession(configuration: configuration, delegate: DeviceToolNetworkDelegate(), delegateQueue: nil)
+      let session = URLSession(configuration: configuration, delegate: NoRedirects(), delegateQueue: nil)
       defer { session.invalidateAndCancel() }
       let (bytes, response) = try await session.bytes(from: url)
       guard let response = response as? HTTPURLResponse, (200..<300).contains(response.statusCode) else { throw DeviceExecutionError.unavailable("The website did not return a successful response. Redirects need a separate approved request.") }

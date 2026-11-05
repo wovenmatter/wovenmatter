@@ -139,52 +139,44 @@ public enum AgentDatabaseCatalog {
             guard try catalog(root).contains(where: { $0.id == id }), sql.utf8.count <= 65_536 else { throw AgentDatabaseCatalogError.databaseUnavailable }
             return try connection(try file(id, root), writable: false) { db in
                 sqlite3_limit(db, SQLITE_LIMIT_LENGTH, 1_048_576)
-                        var deadline = Date().timeIntervalSinceReferenceDate + 5
-                return try withUnsafeMutablePointer(to: &deadline) { limit in
-                    sqlite3_progress_handler(db, 1000, { context in
-                        guard let context else { return 1 }
-                        return Date().timeIntervalSinceReferenceDate > context.assumingMemoryBound(to: Double.self).pointee ? 1 : 0
-                    }, limit)
-                    defer { sqlite3_progress_handler(db, 0, nil, nil) }
-                    sqlite3_set_authorizer(db, { _, action, _, detail, _, _ in
-                        let allowed = [SQLITE_SELECT, SQLITE_READ, SQLITE_FUNCTION, SQLITE_RECURSIVE]
-                        if !allowed.contains(action) { return SQLITE_DENY }
-                        if action == SQLITE_FUNCTION, let detail, String(cString: detail) == "load_extension" { return SQLITE_DENY }
-                        return SQLITE_OK
-                    }, nil)
-                    var stmt: OpaquePointer?
-                    defer { sqlite3_finalize(stmt) }
-                    let prepared = sql.withCString { pointer -> Bool in
-                        var tail: UnsafePointer<CChar>?
-                        let result = sqlite3_prepare_v2(db, pointer, -1, &stmt, &tail)
-                        return result == SQLITE_OK && (tail.map { String(cString: $0).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ?? true)
-                    }
-                    guard prepared, let stmt, sqlite3_stmt_readonly(stmt) == 1 else { throw AgentDatabaseCatalogError.sql(String(cString: sqlite3_errmsg(db))) }
-                    let columns = (0..<sqlite3_column_count(stmt)).map { String(cString: sqlite3_column_name(stmt, $0)) }
-                    guard !columns.isEmpty, columns.count <= 128, Set(columns).count == columns.count else { throw AgentDatabaseCatalogError.sql("Use unique query column names.") }
-                    var rows: [[String]] = [], bytes = 0
-                    while rows.count < 1000 {
-                        let code = sqlite3_step(stmt)
-                        if code == SQLITE_DONE { break }
-                        guard code == SQLITE_ROW else { throw AgentDatabaseCatalogError.sql(String(cString: sqlite3_errmsg(db))) }
-                        var row: [String] = []
-                        for column in 0..<sqlite3_column_count(stmt) {
-                            let count = Int(sqlite3_column_bytes(stmt, column))
-                            bytes += count + columns[Int(column)].utf8.count + 8
-                            guard bytes <= 1_048_576 else { throw AgentDatabaseCatalogError.dataFileTooLarge }
-                            if sqlite3_column_type(stmt, column) == SQLITE_BLOB, let value = sqlite3_column_blob(stmt, column) {
-                                row.append(Data(bytes: value, count: count).map { String(format: "%02x", $0) }.joined())
-                            } else if let value = sqlite3_column_text(stmt, column) {
-                                row.append(String(decoding: UnsafeBufferPointer(start: value, count: count), as: UTF8.self))
-                            } else { row.append("") }
-                        }
-                        rows.append(row)
-                    }
-                    let values = rows.map { row in Dictionary(uniqueKeysWithValues: columns.enumerated().map { ($0.element,row[$0.offset]) }) }
-                    let json = try JSONSerialization.data(withJSONObject: values, options: [.sortedKeys])
-                    guard json.count <= 1_048_576 else { throw AgentDatabaseCatalogError.dataFileTooLarge }
-                    return .init(columns: columns, rows: rows, json: String(decoding: json, as: UTF8.self))
+                sqlite3_set_authorizer(db, { _, action, _, detail, _, _ in
+                    let allowed = [SQLITE_SELECT, SQLITE_READ, SQLITE_FUNCTION, SQLITE_RECURSIVE]
+                    if !allowed.contains(action) { return SQLITE_DENY }
+                    if action == SQLITE_FUNCTION, let detail, String(cString: detail) == "load_extension" { return SQLITE_DENY }
+                    return SQLITE_OK
+                }, nil)
+                var stmt: OpaquePointer?
+                defer { sqlite3_finalize(stmt) }
+                let prepared = sql.withCString { pointer -> Bool in
+                    var tail: UnsafePointer<CChar>?
+                    let result = sqlite3_prepare_v2(db, pointer, -1, &stmt, &tail)
+                    return result == SQLITE_OK && (tail.map { String(cString: $0).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ?? true)
                 }
+                guard prepared, let stmt, sqlite3_stmt_readonly(stmt) == 1 else { throw AgentDatabaseCatalogError.sql(String(cString: sqlite3_errmsg(db))) }
+                let columns = (0..<sqlite3_column_count(stmt)).map { String(cString: sqlite3_column_name(stmt, $0)) }
+                guard !columns.isEmpty, columns.count <= 128, Set(columns).count == columns.count else { throw AgentDatabaseCatalogError.sql("Use unique query column names.") }
+                var rows: [[String]] = [], bytes = 0
+                while rows.count < 1000 {
+                    let code = sqlite3_step(stmt)
+                    if code == SQLITE_DONE { break }
+                    guard code == SQLITE_ROW else { throw AgentDatabaseCatalogError.sql(String(cString: sqlite3_errmsg(db))) }
+                    var row: [String] = []
+                    for column in 0..<sqlite3_column_count(stmt) {
+                        let count = Int(sqlite3_column_bytes(stmt, column))
+                        bytes += count + columns[Int(column)].utf8.count + 8
+                        guard bytes <= 1_048_576 else { throw AgentDatabaseCatalogError.dataFileTooLarge }
+                        if sqlite3_column_type(stmt, column) == SQLITE_BLOB, let value = sqlite3_column_blob(stmt, column) {
+                            row.append(Data(bytes: value, count: count).hexString)
+                        } else if let value = sqlite3_column_text(stmt, column) {
+                            row.append(String(decoding: UnsafeBufferPointer(start: value, count: count), as: UTF8.self))
+                        } else { row.append("") }
+                    }
+                    rows.append(row)
+                }
+                let values = rows.map { row in Dictionary(uniqueKeysWithValues: columns.enumerated().map { ($0.element,row[$0.offset]) }) }
+                let json = try JSONSerialization.data(withJSONObject: values, options: [.sortedKeys])
+                guard json.count <= 1_048_576 else { throw AgentDatabaseCatalogError.dataFileTooLarge }
+                return .init(columns: columns, rows: rows, json: String(decoding: json, as: UTF8.self))
             }
         }
     }

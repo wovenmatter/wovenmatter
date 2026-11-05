@@ -194,8 +194,7 @@ def tailscale_operator_ready():
     except (ValueError,AttributeError): return None
 
 def dependency_packages(distro):
-    # Kept in sync with remote/host/deps/apt-{ubuntu,debian}.txt. Bootstrap
-    # inspect/prepare are self-contained and cannot trust an installed release.
+    # Bootstrap inspect/prepare are self-contained and cannot trust an installed release.
     common='libasound2 libatk-bridge2.0-0 libatk1.0-0 libatspi2.0-0 libcairo2 libcups2 libdbus-1-3 libdrm2 libgbm1 libglib2.0-0 libnspr4 libnss3 libpango-1.0-0 libwayland-client0 libx11-6 libxcb1 libxcomposite1 libxdamage1 libxext6 libxfixes3 libxkbcommon0 libxrandr2 libfontconfig1 libfreetype6 fonts-liberation fonts-noto-color-emoji util-linux python3 ca-certificates curl'.split()
     identity=distro.get('ID','')
     if identity in ('ubuntu','debian'):
@@ -487,24 +486,27 @@ def prepare_npm_tooling(node_root,release,environment):
     npm_cli=npm_root/'bin/npm-cli.js'
     node=node_root/'bin/node'
     run([node,node_root/'lib/node_modules/npm/bin/npm-cli.js','install','--global','--prefix',tooling,
-         '--ignore-scripts','--no-audit','--no-fund','npm@>=12.2.1'],check=True,timeout=600,env=environment)
+         '--ignore-scripts','--no-audit','--no-fund','npm@>=12.2.2'],check=True,timeout=600,env=environment)
     try:
         npm_version=json.loads((npm_root/'package.json').read_text())['version']
         parts=re.fullmatch(r'(\d+)\.(\d+)\.(\d+)',npm_version)
-        if not parts or tuple(map(int,parts.groups()))<(12,2,1): raise ValueError()
+        if not parts or tuple(map(int,parts.groups()))<(12,2,2): raise ValueError()
     except (OSError,ValueError,KeyError,TypeError):
         fail('npm_security_verification_failed','The private npm installer does not meet its security floor.',78)
     run([node,npm_cli,'ci','--prefix',release/'npm-runtime','--omit=dev','--ignore-scripts','--no-audit','--no-fund'],check=True,timeout=600,env=environment)
     try:
         graph=json.loads((release/'npm-runtime/package-lock.json').read_text())['packages']
         installed={'npmVersion':npm_version}
-        for name in ('undici','ip-address'):
+        for key in graph:
+            if not key.startswith('node_modules/') or '/node_modules/' in key[13:]: continue
+            name=key[13:]
             source=release/'npm-runtime/node_modules'/name
             expected=graph['node_modules/'+name]['version']
             if source.is_symlink() or not source.is_dir() or json.loads((source/'package.json').read_text())['version']!=expected: raise ValueError()
             destination=npm_root/'node_modules'/name
             if destination.is_symlink(): destination.unlink()
             elif destination.exists(): shutil.rmtree(destination)
+            destination.parent.mkdir(parents=True,exist_ok=True)
             shutil.copytree(source,destination)
             if json.loads((destination/'package.json').read_text())['version']!=expected: raise ValueError()
             installed[name]=expected
@@ -512,7 +514,7 @@ def prepare_npm_tooling(node_root,release,environment):
         fail('npm_security_verification_failed','The private npm vendor packages differ from the committed security graph.',78)
     # Exercise the replaced modules under the actual pinned Node executable.
     # Keep credentials out of arguments and verification output.
-    probe="import {createRequire} from 'node:module'; const require=createRequire(process.argv[1]); const undici=require('undici'); const ip=require('ip-address'); if(typeof undici.request!=='function'||typeof ip.Address6!=='function') process.exit(1)"
+    probe="import {createRequire} from 'node:module'; const require=createRequire(process.argv[1]); const undici=require('undici'); const ip=require('ip-address'); if(typeof undici.request!=='function'||typeof ip.Address6!=='function'||typeof require('minimatch').minimatch!=='function') process.exit(1)"
     checked=run([node,'--input-type=module','-e',probe,npm_cli],timeout=30,env=environment)
     if checked.returncode: fail('npm_security_verification_failed','The private npm security packages failed their runtime API check.',78)
     # SDK maintenance already prefers this bundled location over Node's stock

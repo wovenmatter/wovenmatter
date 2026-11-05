@@ -103,7 +103,11 @@ extension CompanionCommandService {
         switch action {
         case let .conversation(id, action, title, folderID):
             if action == "move" {
-                guard try await store.moveConversation(id: id, toFolderID: folderID) else { throw CommandError.unknownConversation }
+                // The full draft move: the native draft workspace moves with the
+                // folder, or the request continues to the Mac that runs the chat.
+                guard await model.moveConversation(id: id, toFolderID: folderID) else {
+                    throw CompanionAPIError(code: "rejected", message: model.folderMutationError ?? "The chat could not be moved.")
+                }
             } else {
                 let mutation: WorkspaceConversationMutation
                 switch action {

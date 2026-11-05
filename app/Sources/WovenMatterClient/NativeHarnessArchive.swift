@@ -13,7 +13,7 @@ enum NativeHarnessArchive {
     }
 
     static func digest(_ data: Data) -> String {
-        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        SHA256.hash(data: data).hexString
     }
 
     static func record(id: String, runID: String? = nil, kind: String, data: Data, contentMode: String = "snapshot",
@@ -116,7 +116,7 @@ enum NativeHarnessArchive {
             parts.append(FilePart(byteOffset: offset, byteCount: bytes.count, chunkID: chunkID))
             offset += bytes.count
         }
-        let actualHash = hash.finalize().map { String(format: "%02x", $0) }.joined()
+        let actualHash = hash.finalize().hexString
         guard offset == safe.byteCount, actualHash == safe.sha256 else { throw PiNativeHistoryFrame.Failure.malformed }
         let manifest = FileManifest(sha256: safe.sha256, byteFidelity: safe.redacted ? "tool-endpoint-redacted" : "exact-native-bytes", totalBytes: safe.byteCount, parts: parts)
         try await capture(sourceID: sourceID, sessionID: sessionID,
@@ -164,7 +164,7 @@ enum NativeHarnessArchive {
             tail = Data(decoded.suffix(512)); offset += bytes.count
         }
         try projector.finish()
-        guard hash.finalize().map({ String(format: "%02x", $0) }).joined() == sha256 else {
+        guard hash.finalize().hexString == sha256 else {
             throw PiNativeHistoryFrame.Failure.malformed
         }
     }

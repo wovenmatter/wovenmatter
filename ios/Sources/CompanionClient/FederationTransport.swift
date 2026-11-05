@@ -9,7 +9,6 @@ public protocol FederationTransport: Sendable {
   func importJournal(_ batch: CompanionJournalBatch) async throws -> CompanionJournalBatchResult
   func artifactManifests() async throws -> [CompanionArtifactManifest]
   func registerArtifact(_ registration: CompanionArtifactRegistration) async throws -> CompanionArtifactTransfer
-  func artifactStatus(_ id: String) async throws -> CompanionArtifactTransfer
   func uploadArtifactChunk(_ chunk: CompanionArtifactChunk) async throws -> CompanionArtifactTransfer
   func commitArtifact(_ commit: CompanionArtifactCommit) async throws -> CompanionArtifactManifest
   func downloadArtifactChunk(_ id: String, revision: Int64, offset: Int64) async throws -> CompanionArtifactChunk
@@ -24,8 +23,12 @@ extension HTTPSCompanionTransport: FederationTransport {
     let value: CompanionExecutionCredential = try await request("v1/federation/workspaces/" + TailnetJSONClient.safeID(workspaceID) + "/credential", method: "POST", body: Data("{}".utf8))
     guard value.workspace.id == workspaceID, value.deviceID == credential.deviceID, let endpoint = value.workspace.endpoint else { throw MobileConnectionError.invalidResponse }
     let identity = try await workspaceIdentity()
-    guard value.workspace.libraryID == identity else { throw MobileStore.Failure.wrongWorkspace }
-    return .init(endpoint: endpoint, libraryID: identity, workspaceID: workspaceID, deviceID: value.deviceID, token: value.token)
+    if value.workspace.libraryID != identity {
+      guard let known = try await executionWorkspaces().first(where: { $0.id == workspaceID }),
+            known.libraryID == value.workspace.libraryID, known.ownerDeviceID == value.workspace.ownerDeviceID,
+            known.endpoint == endpoint else { throw MobileStore.Failure.wrongWorkspace }
+    }
+    return .init(endpoint: endpoint, libraryID: value.workspace.libraryID, workspaceID: workspaceID, deviceID: value.deviceID, token: value.token)
   }
   public func libraryIdentity() async throws -> CompanionLibraryIdentity { try await request("v1/federation/identity") }
   public func executionWorkspaces() async throws -> [CompanionExecutionWorkspace] { try await request("v1/federation/workspaces") }
@@ -40,7 +43,6 @@ extension HTTPSCompanionTransport: FederationTransport {
   public func registerArtifact(_ registration: CompanionArtifactRegistration) async throws -> CompanionArtifactTransfer {
     try await request("v1/federation/artifacts/register", method: "POST", body: JSONEncoder().encode(registration))
   }
-  public func artifactStatus(_ id: String) async throws -> CompanionArtifactTransfer { try await request("v1/federation/artifacts/" + TailnetJSONClient.safeID(id)) }
   public func uploadArtifactChunk(_ chunk: CompanionArtifactChunk) async throws -> CompanionArtifactTransfer {
     try await request("v1/federation/artifacts/chunk", method: "POST", body: JSONEncoder().encode(chunk))
   }

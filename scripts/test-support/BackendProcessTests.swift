@@ -23,7 +23,7 @@ private actor FixtureOwner {
                 let id = try await database.createLocalACPSession(runtimeKind: .codex,
                     title: "Streaming fixture", ownerDeviceID: UUID(), executionRoot: .init(folderID: nil,
                         location: .init(workspaceID: "local", rootPath: root.path, managed: false), defaultPath: root.path))
-                let run = try await database.beginLocalACPRun(conversationID: id, content: "Fixture only")
+                let run = try await database.beginLocalACPRun(conversationID: id, input: .init(text: "Fixture only"))
                 streamingRun = (id, run.runID)
                 try await database.upsertDeviceOwnedRunActivity(runID: run.runID,
                     activity: .init(id: "shell", kind: .tool, phase: "update", title: "Shell",

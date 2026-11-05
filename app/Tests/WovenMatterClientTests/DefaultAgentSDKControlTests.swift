@@ -55,15 +55,6 @@ struct DefaultAgentSDKControlTests {
         let pid = try #require(Int32(text))
         #expect(kill(pid, 0) == -1 && errno == ESRCH)
     }
-    private let hangingScript = #"""
-    trap '' TERM
-    printf '%s' "$$" > "$1/parent"
-    /bin/sh -c 'trap "" TERM; printf "%s" "$$" > "$1/child"; while :; do /bin/sleep 1; done' fixture "$1" &
-    while :; do wait; done
-    """#
-
-
-
 }
 
 extension DefaultAgentSDKControlTests {
@@ -103,8 +94,7 @@ extension DefaultAgentSDKControlTests {
                 arguments: ["-c", launch, "fixture", root.path, script, mode], timeout: 30)
         }
         defer { operation.cancel() }
-        // This checks pipe teardown after a confirmed result, not Python's
-        // cold startup speed. Timeout behavior has its own shell fixture above.
+        // This checks pipe teardown after a confirmed result, not Python's cold startup speed.
         try await awaitReady(root, operation: operation)
         let start = ContinuousClock.now
         if mode == "wait" { operation.cancel() }
@@ -115,47 +105,5 @@ extension DefaultAgentSDKControlTests {
         // It deliberately remains alive until fixture cleanup removes its directory.
         let child = try #require(Int32(String(contentsOf: root.appending(path: "child"), encoding: .utf8)))
         #expect(kill(child, 0) == 0)
-    }
-}
-
-private final class UtilityPoolPressure: @unchecked Sendable {
-    private let gate = DispatchSemaphore(value: 0)
-    private let jobs = DispatchGroup()
-    private let watchdog = DispatchSemaphore(value: 0)
-    private let released = NSLock()
-    private var isReleased = false
-    let probe = DispatchSemaphore(value: 0)
-    private let count = 256
-
-    init() {
-        for _ in 0..<count {
-            jobs.enter()
-            DispatchQueue.global(qos: .utility).async { [gate, jobs] in
-                gate.wait()
-                jobs.leave()
-            }
-        }
-        DispatchQueue.global(qos: .utility).async { [probe] in probe.signal() }
-        let recovery = Thread { [weak self, watchdog] in
-            if watchdog.wait(timeout: .now() + .seconds(5)) == .timedOut {
-                self?.release()
-            }
-        }
-        recovery.start()
-    }
-
-    func probeRemainsQueued() -> Bool {
-        probe.wait(timeout: .now()) == .timedOut
-    }
-
-    func release() {
-        guard released.withLock({
-            if isReleased { return false }
-            isReleased = true
-            return true
-        }) else { return }
-        watchdog.signal()
-        for _ in 0..<count { gate.signal() }
-        jobs.wait()
     }
 }

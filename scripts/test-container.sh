@@ -104,7 +104,7 @@ printf '%s\n' 'Checking API authentication and persistent home ownership.'
 [ "$(docker inspect -f '{{.Config.User}}' "$container_a")" = 10001:10001 ]
 [ "$(docker exec "$container_a" stat -c '%a' /home/.woven-matter)" = 700 ]
 docker exec "$container_a" ssh -V
-docker exec "$container_a" node -e 'const {createRequire}=require("node:module"); const npm=createRequire("/usr/local/lib/node_modules/npm/package.json"); for(const name of ["undici","ip-address"]){const expected=require("/opt/wovenmatter/npm-runtime/node_modules/"+name+"/package.json").version; if(npm(name+"/package.json").version!==expected)process.exit(1)}'
+docker exec "$container_a" node -e 'const {createRequire}=require("node:module"); const npm=createRequire("/usr/local/lib/node_modules/npm/package.json"); for(const [key,record] of Object.entries(require("/opt/wovenmatter/npm-runtime/package-lock.json").packages)){if(!key.startsWith("node_modules/")||key.slice(13).includes("/node_modules/"))continue; const name=key.slice(13), expected=record.version; if(npm(name+"/package.json").version!==expected)process.exit(1)}'
 printf '%s\n' 'Checking patched system runtimes and excluded vulnerable components.'
 docker exec "$container_a" sh -ec '
   python3 -c "import sqlite3, ssl, sys; assert sys.version_info >= (3, 15, 2)"

@@ -60,10 +60,8 @@ public final class AgentInteractionBroker {
         for request: LocalACPInteractionRequest
     ) -> Bool {
         switch (request, response) {
-        case (_, .cancelled), (.plan, .planAccepted):
+        case (_, .cancelled):
             return true
-        case let (.secret, .secret(value)):
-            return !value.isEmpty && value.utf8.count <= 32_768
         case let (.questions(request), .answers(answers)):
             guard Set(answers.keys) == Set(request.questions.map(\.id)) else { return false }
             return request.questions.allSatisfy { question in
