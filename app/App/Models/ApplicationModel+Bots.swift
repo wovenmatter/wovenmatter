@@ -6,11 +6,7 @@ extension ApplicationModel {
     /// Routes the window's commands to the process that owns execution.
     func controlBots(_ command: BotsCommand) async throws -> BotsCommandResult {
         if isBackendFrontend {
-            guard let client = backendRPCClient else { throw BackendRPCError.remote("The background service is not connected.") }
-            // Device commands run over SSH, and removing an install deletes a large tree.
-            let data = try await client.call(method: "application.command",
-                                             payload: JSONEncoder().encode(BackendApplicationCommand.bots(command)), timeout: 300)
-            guard let result = try JSONDecoder().decode(BackendApplicationResult.self, from: data).bots else {
+            guard let result = try await sendBackendCommand(.bots(command)).bots else {
                 throw ApplicationModelError.dashboardStoreUnavailable
             }
             return result

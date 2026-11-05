@@ -217,8 +217,11 @@ public actor PiBotClient {
         try decode(try await call("woven.connect", ["endpointURL": .string(endpointURL), "bearerToken": .string(bearerToken)]))
     }
     public func wovenDisconnect() async throws -> PiBotWovenStatus { try decode(try await call("woven.disconnect")) }
-    public func send(botID: String, text: String) async throws {
-        _ = try await call("message.send", ["botId": .string(botID), "text": .string(text)])
+    /// `deliveryID` makes a retry after a lost acknowledgement safe.
+    public func send(botID: String, text: String, deliveryID: String? = nil) async throws {
+        var fields: [String: GatewayJSONValue] = ["botId": .string(botID), "text": .string(text)]
+        if let deliveryID { fields["deliveryId"] = .string(deliveryID) }
+        _ = try await call("message.send", fields)
     }
 }
 

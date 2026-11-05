@@ -51,6 +51,19 @@ final class BotsModel {
 
     func apply(_ snapshot: PiBotRuntimeSnapshot) {
         let base = snapshot.phase == .ready ? snapshot.baseURL : nil
+        // Each device has its own bots, so its sidebar must not outlive the switch. A
+        // reconnect to the same place keeps what is on screen.
+        let moved = snapshot.target.map { next in runtime.target.map { !$0.isSameDevice(as: next) || $0.ownership != next.ownership } ?? false } ?? (runtime.target != nil)
+        let replaced = snapshot.health?.installationId != nil && runtime.health?.installationId != nil
+            && snapshot.health?.installationId != runtime.health?.installationId
+        if moved || replaced {
+            disconnect()
+            bots = []
+            groups = []
+            threadsByBot = [:]
+            loadedThreads = []
+            webSessions.unloadAll()
+        }
         runtime = snapshot
         guard base != clientBase else { return }
         disconnect()

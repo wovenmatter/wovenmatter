@@ -702,7 +702,7 @@ struct WorkspaceView: View {
                         onBotRoute: { target, panelID in
                             _ = chatPanels.setBot(target, in: panelID)
                         },
-                        onOpenBotLink: openBotLink,
+                        onOpenBotLink: { url, panelID in openBotLink(url, from: panelID) },
                         onOpenBotSettings: openBotSettings
                     )
                 case .calendar:
@@ -926,10 +926,14 @@ struct WorkspaceView: View {
     }
 
     /// Links from a bot open beside it, the same way a chat's browser tabs do.
-    private func openBotLink(_ url: URL) {
+    private func openBotLink(_ url: URL, from panelID: DashboardChatPanelID) {
         guard assets.openBrowser(url: url.absoluteString) != nil else {
             NSWorkspace.shared.open(url)
             return
+        }
+        // The side area sits beside the primary panel, so the bot that was reading moves there.
+        if panelID != .primary, let target = chatPanels.panel(id: panelID)?.botTarget {
+            _ = chatPanels.setBot(target, in: .primary)
         }
         chatPanels.presentAsset()
         destination = .workspace
@@ -1494,7 +1498,7 @@ struct DashboardWorkspaceSurface: View {
     let onRemoveAttachment: (String, DashboardChatPanelID) -> Void
     let onDropFiles: ([URL], DashboardChatPanelID) -> Bool
     let onBotRoute: (DashboardBotTarget, DashboardChatPanelID) -> Void
-    let onOpenBotLink: (URL) -> Void
+    let onOpenBotLink: (URL, DashboardChatPanelID) -> Void
     let onOpenBotSettings: () -> Void
 
     var body: some View {
@@ -1635,7 +1639,7 @@ struct DashboardWorkspaceSurface: View {
                 onClosePanel: { onClosePanel(panelID) },
                 onAddPanel: { onAddPanel(panelID) },
                 onRoute: { onBotRoute($0, panelID) },
-                onOpenLink: onOpenBotLink,
+                onOpenLink: { onOpenBotLink($0, panelID) },
                 onOpenSettings: onOpenBotSettings
             )
             if showNoteButton { compactAssetsButton }

@@ -273,14 +273,19 @@ public struct PiBotRuntimeSnapshot: Codable, Equatable, Sendable {
     public var bundleAvailable: Bool
     public var woven: PiBotWovenStatus?
     public var lingeringDisabled: Bool
+    /// A device command is still running; its outcome arrives in a later snapshot.
+    public var busy: Bool
 
     public init(phase: Phase = .notConfigured, message: String? = nil, error: String? = nil, target: PiBotDeploymentTarget? = nil,
                 baseURL: URL? = nil, health: PiBotHealth? = nil, installedCommit: String? = nil, bundledCommit: String? = nil,
-                bundleAvailable: Bool = false, woven: PiBotWovenStatus? = nil, lingeringDisabled: Bool = false) {
+                bundleAvailable: Bool = false, woven: PiBotWovenStatus? = nil, lingeringDisabled: Bool = false, busy: Bool = false) {
         self.phase = phase; self.message = message; self.error = error; self.target = target; self.baseURL = baseURL
         self.health = health; self.installedCommit = installedCommit; self.bundledCommit = bundledCommit
-        self.bundleAvailable = bundleAvailable; self.woven = woven; self.lingeringDisabled = lingeringDisabled
+        self.bundleAvailable = bundleAvailable; self.woven = woven; self.lingeringDisabled = lingeringDisabled; self.busy = busy
     }
+
+    /// Pi Bot's client can run inside this app only from this capability on.
+    public var canEmbed: Bool { health?.supports("host.embed") == true }
 
     public var updateAvailable: Bool {
         guard target?.ownership == .managed, let installedCommit, let bundledCommit else { return false }

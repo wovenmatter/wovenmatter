@@ -19,11 +19,11 @@ final class BotWebSession: NSObject, WKScriptMessageHandler, WKNavigationDelegat
     private(set) var loadedBase: URL?
     private(set) var ready = false
     private(set) var lastRoute: String?
-    private var pendingHash: String?
-    private var pendingTheme: String?
-    private var pendingContext: String??
+    private var requestedHash: String?
+    private var requestedAt: ContinuousClock.Instant?
     private var pendingFocus = false
     private var headerInsets: (left: CGFloat, right: CGFloat)?
+    private var context: String?
     private var theme = DashboardTheme.green.rawValue
     var onRoute: ((Route) -> Void)?
     var onOpenExternal: ((URL) -> Void)?
@@ -57,14 +57,14 @@ final class BotWebSession: NSObject, WKScriptMessageHandler, WKNavigationDelegat
 
     func reload() {
         guard let loadedBase else { return }
-        load(base: loadedBase, hash: lastRoute ?? pendingHash ?? "#/")
+        load(base: loadedBase, hash: requestedHash ?? lastRoute ?? "#/")
     }
 
     func unload() {
         ready = false
         loadedBase = nil
         lastRoute = nil
-        pendingHash = nil
+        requestedHash = nil
         webView.stopLoading()
         webView.loadHTMLString("", baseURL: nil)
     }
@@ -73,7 +73,8 @@ final class BotWebSession: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         ready = false
         loadedBase = base
         lastRoute = nil
-        pendingHash = nil
+        requestedHash = hash
+        requestedAt = nil
         guard var components = URLComponents(url: base, resolvingAgainstBaseURL: false) else { return }
         components.path = "/"
         components.queryItems = [.init(name: "host", value: "woven"), .init(name: "theme", value: theme)]
@@ -82,20 +83,26 @@ final class BotWebSession: NSObject, WKScriptMessageHandler, WKNavigationDelegat
     }
 
     func navigate(_ hash: String) {
-        guard ready else { pendingHash = hash; return }
-        guard hash != lastRoute else { return }
+        guard hash != lastRoute || !ready else {
+            requestedHash = nil
+            return
+        }
+        requestedHash = hash
+        guard ready else { return }
+        requestedAt = .now
         call("navigate", argument: hash)
     }
 
     func setTheme(_ value: String) {
         theme = value
-        guard ready else { pendingTheme = value; return }
+        guard ready else { return }
         call("setTheme", argument: value)
     }
 
-    func setContext(_ context: String?) {
-        guard ready else { pendingContext = .some(context); return }
-        call("setContext", argument: context)
+    func setContext(_ value: String?) {
+        context = value
+        guard ready else { return }
+        call("setContext", argument: value)
     }
 
     func setHeaderInsets(left: CGFloat, right: CGFloat) {
@@ -120,15 +127,27 @@ final class BotWebSession: NSObject, WKScriptMessageHandler, WKNavigationDelegat
               let body = message.body as? [String: Any], body["v"] as? Int == 1, let kind = body["kind"] as? String else { return }
         switch kind {
         case "ready":
+            // Also after a reconnect or content-process restart, which begin with empty state.
             ready = true
-            if let hash = pendingHash { pendingHash = nil; navigate(hash) }
-            if let value = pendingTheme { pendingTheme = nil; setTheme(value) }
-            if let context = pendingContext { pendingContext = nil; setContext(context) }
+            setTheme(theme)
+            setContext(context)
+            if let requestedHash, requestedHash != lastRoute { navigate(requestedHash) }
             if pendingFocus { pendingFocus = false; focusComposer() }
             if let headerInsets { setHeaderInsets(left: headerInsets.left, right: headerInsets.right) }
         case "route":
             let hash = body["hash"] as? String ?? ""
             lastRoute = hash
+            // The client reports where it is, which can still be where it was before a
+            // newer selection here reached it. Only the requested route settles that.
+            if let requestedHash {
+                if hash == requestedHash {
+                    self.requestedHash = nil
+                } else if !ready || requestedAt.map({ $0.duration(to: .now) < .seconds(2) }) ?? true {
+                    return
+                } else {
+                    self.requestedHash = nil
+                }
+            }
             onRoute?(Route(hash: hash, target: Self.target(from: body)))
         case "openExternal":
             if let raw = body["url"] as? String, let url = URL(string: raw),
@@ -214,11 +233,10 @@ final class BotWebSession: NSObject, WKScriptMessageHandler, WKNavigationDelegat
     }
 }
 
-/// One web view per panel, plus one for Settings, all retained across navigation.
+/// One web view per panel, retained across navigation.
 @MainActor
 final class BotWebSessionStore {
     private var panels: [DashboardChatPanelID: BotWebSession] = [:]
-    let settings = BotWebSession()
 
     func session(for panelID: DashboardChatPanelID) -> BotWebSession {
         if let existing = panels[panelID] { return existing }
@@ -233,7 +251,6 @@ final class BotWebSessionStore {
 
     func unloadAll() {
         for session in panels.values { session.unload() }
-        settings.unload()
     }
 }
 
@@ -278,7 +295,7 @@ struct BotConversationSurface: View {
     @Environment(\.dashboardTheme) private var theme
 
     private var session: BotWebSession { bots.webSessions.session(for: panelID) }
-    private var base: URL? { bots.runtime.phase == .ready ? bots.runtime.baseURL : nil }
+    private var base: URL? { bots.runtime.phase == .ready && bots.runtime.canEmbed ? bots.runtime.baseURL : nil }
 
     var body: some View {
         ZStack {
@@ -291,6 +308,11 @@ struct BotConversationSurface: View {
         }
         .simultaneousGesture(TapGesture().onEnded { onActivate() })
         .task(id: BotSurfaceTask(base: base, target: target, theme: theme.rawValue)) { present() }
+        .onDisappear {
+            let session = self.session
+            session.onRoute = nil
+            session.onOpenExternal = nil
+        }
         .onChange(of: context) { _, value in session.setContext(value) }
         .onChange(of: headerInsets) { _, value in session.setHeaderInsets(left: value.left, right: value.right) }
         .onChange(of: focusGeneration) { _, value in if value != nil { session.focusComposer() } }
@@ -372,7 +394,7 @@ struct BotsUnavailableView: View {
         case .reconnecting: "Reconnecting to your bots"
         case .stopped: "Pi Bot is stopped"
         case .failed: "Pi Bot could not start"
-        case .ready: "Connecting…"
+        case .ready: runtime.health == nil || runtime.canEmbed ? "Connecting…" : "Update this Pi Bot"
         }
     }
 
@@ -380,6 +402,8 @@ struct BotsUnavailableView: View {
         switch runtime.phase {
         case .notConfigured: "Bots run on one device: this Mac, or a Mac or Linux box on your Tailscale network."
         case .failed, .reconnecting: runtime.error ?? runtime.message
+        case .ready where runtime.health != nil && !runtime.canEmbed:
+            "Its version is older than this app can show. Update Pi Bot on \(runtime.target?.displayName ?? "that device"), then reconnect."
         default: runtime.message
         }
     }

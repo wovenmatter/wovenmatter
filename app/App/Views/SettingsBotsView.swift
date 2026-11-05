@@ -75,7 +75,7 @@ struct SettingsBotsView: View {
         ) {
             deploymentCard
             devicesCard
-            if runtime.phase == .ready {
+            if runtime.phase == .ready, runtime.canEmbed {
                 wovenCard
                 settingsCard
             } else if runtime.target != nil {
@@ -132,7 +132,7 @@ struct SettingsBotsView: View {
         HStack(spacing: 8) {
             if target.ownership == .managed {
                 if runtime.phase == .stopped || runtime.phase == .failed {
-                    Button("Start") { perform(.start) }
+                    Button("Start") { perform(runtime.installedCommit == nil ? .update : .start) }
                 } else if [.ready, .reconnecting].contains(runtime.phase) {
                     Button("Restart") { perform(.restart) }
                     Button("Stop") {
@@ -149,8 +149,15 @@ struct SettingsBotsView: View {
                 confirmation = .init(title: "Disconnect from \(target.displayName)?", action: "Disconnect",
                     message: target.ownership == .managed
                         ? "Pi Bot stops there. Its bots, sign-ins, and history stay on that device, and you can reconnect later."
-                        : "Woven Matter stops using this Pi Bot and leaves it running exactly as it was.",
-                    destructive: false, command: .forget)
+                        : "Woven Matter stops using this Pi Bot, removes its Woven MCP access, and leaves it otherwise as it was.",
+                    destructive: false, command: .forget(abandon: false))
+            }
+            if target.kind == .tailnet, target.ownership == .managed, runtime.error != nil {
+                Button("Disconnect Anyway") {
+                    confirmation = .init(title: "Disconnect without stopping Pi Bot?", action: "Disconnect Anyway",
+                        message: "Woven Matter could not reach \(target.displayName). Pi Bot may keep running there until you stop it on that device.",
+                        destructive: true, command: .forget(abandon: true))
+                }
             }
             if target.ownership == .managed {
                 Button("Remove…") {
@@ -161,7 +168,7 @@ struct SettingsBotsView: View {
             }
         }
         .buttonStyle(SettingsQuietButtonStyle())
-        .disabled(working)
+        .disabled(working || runtime.busy)
     }
 
     private func deploymentSummary(_ target: PiBotDeploymentTarget) -> String {
@@ -230,6 +237,9 @@ struct SettingsBotsView: View {
                         Text("Pi Bot \(existing.version ?? "") already runs on port \(existing.port)" + (existing.service.map { " (\($0))" } ?? ""))
                             .font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground)
                         Spacer(minLength: 8)
+                        if existing.protocol == nil {
+                            Text("Update it to connect").font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
+                        } else {
                         Button("Connect") {
                             var attached = target
                             attached.ownership = .attached
@@ -239,6 +249,7 @@ struct SettingsBotsView: View {
                                 destructive: false, command: .attach(attached))
                         }
                         .buttonStyle(SettingsQuietButtonStyle())
+                        }
                     }
                 }
             }
@@ -254,7 +265,7 @@ struct SettingsBotsView: View {
             }
         }
         .padding(.vertical, 4)
-        .disabled(working)
+        .disabled(working || runtime.busy)
     }
 
     @ViewBuilder private func deviceActions(id: String, name: String, target: PiBotDeploymentTarget, inspection: PiBotHostInspection?) -> some View {
@@ -314,11 +325,11 @@ struct SettingsBotsView: View {
                     }
                     .padding(.leading, 38)
                 }
-                if let woven = runtime.woven {
+                if runtime.health?.supports("woven.mcp") == false {
+                    SettingsNote("This Pi Bot version does not support Woven MCP yet. Update it to connect.")
+                } else if let woven = runtime.woven {
                     SettingsValueRow(label: "Connection", value: wovenDescription(woven))
                     if let failure = woven.error { SettingsNote(failure) }
-                } else if runtime.health?.supports("woven.mcp") == false {
-                    SettingsNote("This Pi Bot version does not support Woven MCP yet. Update it to connect.")
                 }
             }
             .font(.system(size: 13))
@@ -428,6 +439,8 @@ struct SettingsBotsWebPage: View {
     let onBack: () -> Void
     let onOpenLink: (URL) -> Void
     @Environment(\.dashboardTheme) private var theme
+    /// Owned by this page: the main window and the Settings window can each show one.
+    @State private var session = BotWebSession()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -437,15 +450,14 @@ struct SettingsBotsWebPage: View {
             }
             .padding(.horizontal, 24)
             .padding(.top, reservesRailControlSpace ? 76 : 28)
-            if bots.runtime.phase == .ready, bots.runtime.baseURL != nil {
-                BotWebView(session: bots.webSessions.settings)
+            if bots.runtime.phase == .ready, bots.runtime.baseURL != nil, bots.runtime.canEmbed {
+                BotWebView(session: session)
             } else {
                 BotsUnavailableView(runtime: bots.runtime, onOpenSettings: onBack)
             }
         }
         .task(id: BotSettingsTask(base: bots.runtime.baseURL, section: section, theme: theme.rawValue)) {
-            guard let base = bots.runtime.baseURL, bots.runtime.phase == .ready else { return }
-            let session = bots.webSessions.settings
+            guard let base = bots.runtime.baseURL, bots.runtime.phase == .ready, bots.runtime.canEmbed else { return }
             session.onOpenExternal = onOpenLink
             session.show(base: base, hash: section.hash, theme: theme.rawValue)
         }

@@ -116,7 +116,9 @@ public struct PiBotHostRunner: Sendable {
     /// `<application support>/PiBot` for this Mac. Remote roots are the script's defaults.
     public let localRoot: URL
     private static let installTimeLimit: TimeInterval = 20 * 60
-    private static let commandTimeLimit: TimeInterval = 60
+    private static let commandTimeLimit: TimeInterval = 120
+    /// Inspection answers the window directly, within one backend RPC.
+    private static let inspectTimeLimit: TimeInterval = 25
 
     public init(instance: String, localRoot: URL) {
         self.instance = instance
@@ -124,7 +126,7 @@ public struct PiBotHostRunner: Sendable {
     }
 
     public func inspect(_ target: PiBotDeploymentTarget, script: Data) async throws -> PiBotHostInspection {
-        try JSONDecoder().decode(PiBotHostInspection.self, from: try await run(target, script: script, command: ["inspect"]))
+        try JSONDecoder().decode(PiBotHostInspection.self, from: try await run(target, script: script, command: ["inspect"], timeLimit: Self.inspectTimeLimit))
     }
 
     public func lifecycle(_ action: String, _ target: PiBotDeploymentTarget, script: Data) async throws {
@@ -141,24 +143,52 @@ public struct PiBotHostRunner: Sendable {
         return arguments
     }
 
-    private func run(_ target: PiBotDeploymentTarget, script: Data, command: [String]) async throws -> Data {
+    private func run(_ target: PiBotDeploymentTarget, script: Data, command: [String],
+                     timeLimit: TimeInterval = PiBotHostRunner.commandTimeLimit) async throws -> Data {
         let verb = command[0], rest = Array(command.dropFirst())
         let arguments = [verb] + baseArguments(target) + rest
-        return try await Task.detached(priority: .userInitiated) {
+        return try await Self.cancellable { handle in
             switch target.kind {
             case .thisMac:
                 let file = FileManager.default.temporaryDirectory.appending(path: "pi-bot-host-\(UUID().uuidString).sh")
                 try script.write(to: file, options: [.atomic])
                 defer { try? FileManager.default.removeItem(at: file) }
-                return try Self.finish(RemoteWorkspaceProcess.run(executable: "/bin/bash", arguments: [file.path] + arguments, timeLimit: Self.commandTimeLimit))
+                return try Self.finish(RemoteWorkspaceProcess.run(executable: "/bin/bash", arguments: [file.path] + arguments, timeLimit: timeLimit, onProcessStarted: handle.started))
             case .tailnet:
                 guard let peer = target.peer else { throw PiBotHostError.invalidConnection }
                 let current = try PiBotTailnet.current(peer)
                 let ssh = try PiBotTailnet.sshArguments(peer: current, user: target.sshUser, tailscale: PiBotTailnet.executable())
                 let remote = "bash -s -- " + arguments.map(RemoteWorkspaceExecTarget.quote).joined(separator: " ")
-                return try Self.finish(RemoteWorkspaceProcess.run(executable: "/usr/bin/ssh", arguments: ssh + [remote], input: script, timeLimit: Self.commandTimeLimit))
+                return try Self.finish(RemoteWorkspaceProcess.run(executable: "/usr/bin/ssh", arguments: ssh + [remote], input: script, timeLimit: timeLimit, onProcessStarted: handle.started))
             }
-        }.value
+        }
+    }
+
+    /// The child process stops with the task, so a cancelled install cannot finish
+    /// later and write its result over a newer deployment.
+    private final class ProcessHandle: @unchecked Sendable {
+        private let lock = NSLock()
+        private var pid: pid_t?
+        private var cancelled = false
+        var started: @Sendable (pid_t) -> Void {
+            { [self] value in
+                let stop = lock.withLock { () -> Bool in pid = value; return cancelled }
+                if stop { kill(value, SIGTERM) }
+            }
+        }
+        func cancel() {
+            let value = lock.withLock { () -> pid_t? in cancelled = true; return pid }
+            if let value { kill(value, SIGTERM) }
+        }
+    }
+
+    private static func cancellable(_ body: @escaping @Sendable (ProcessHandle) throws -> Data) async throws -> Data {
+        let handle = ProcessHandle()
+        let data = try await withTaskCancellationHandler {
+            try await Task.detached(priority: .userInitiated) { try body(handle) }.value
+        } onCancel: { handle.cancel() }
+        try Task.checkCancellation()
+        return data
     }
 
     public func install(_ target: PiBotDeploymentTarget, bundle: PiBotBundle, inspection: PiBotHostInspection,
@@ -171,7 +201,7 @@ public struct PiBotHostRunner: Sendable {
                 progress(Self.progressMessage(String(line.dropFirst(12))))
             }
         }
-        func arguments(archive: String, tooling: String) -> [String] {
+        @Sendable func arguments(archive: String, tooling: String) -> [String] {
             var values = ["install"] + baseArguments(target) + [
                 "--commit", bundle.selection.commit,
                 "--node-version", bundle.selection.node.version, "--node-sha256", checksum,
@@ -182,12 +212,12 @@ public struct PiBotHostRunner: Sendable {
             if let port { values += ["--port", String(port)] }
             return values
         }
-        let output: Data = try await Task.detached(priority: .userInitiated) {
+        let output: Data = try await Self.cancellable { handle in
             switch target.kind {
             case .thisMac:
                 let values = arguments(archive: bundle.archive.path, tooling: bundle.tooling.path)
                 return try Self.finish(RemoteWorkspaceProcess.run(executable: "/bin/bash", arguments: [bundle.script.path] + values,
-                    timeLimit: Self.installTimeLimit, onStandardError: report))
+                    timeLimit: Self.installTimeLimit, onProcessStarted: handle.started, onStandardError: report))
             case .tailnet:
                 guard let peer = target.peer else { throw PiBotHostError.invalidConnection }
                 let current = try PiBotTailnet.current(peer)
@@ -200,7 +230,7 @@ public struct PiBotHostRunner: Sendable {
                 guard archive.status == 0 else { throw PiBotHostError.command("Pi Bot could not be prepared for upload.") }
                 let staged = try Self.finish(RemoteWorkspaceProcess.run(executable: "/usr/bin/ssh", arguments: ssh + [
                     "umask 077 && d=$(mktemp -d) && tar -xzf - -C \"$d\" && printf '%s' \"$d\"",
-                ], input: archive.data, timeLimit: 300))
+                ], input: archive.data, timeLimit: 300, onProcessStarted: handle.started))
                 let directory = String(decoding: staged, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
                 guard directory.hasPrefix("/"), !directory.contains("\n") else { throw PiBotHostError.response("The device did not confirm the upload.") }
                 let root = directory + "/" + bundle.directory.lastPathComponent
@@ -208,9 +238,9 @@ public struct PiBotHostRunner: Sendable {
                     .map(RemoteWorkspaceExecTarget.quote).joined(separator: " ")
                 let remote = install + "; status=$?; rm -rf " + RemoteWorkspaceExecTarget.quote(directory) + "; exit $status"
                 return try Self.finish(RemoteWorkspaceProcess.run(executable: "/usr/bin/ssh", arguments: ssh + [remote],
-                    timeLimit: Self.installTimeLimit, onStandardError: report))
+                    timeLimit: Self.installTimeLimit, onProcessStarted: handle.started, onStandardError: report))
             }
-        }.value
+        }
         return try JSONDecoder().decode(PiBotInstallResult.self, from: output)
     }
 

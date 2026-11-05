@@ -14,7 +14,7 @@ struct WorkspaceToolCallerSource {
         remoteWorkspaceID = conversation.remoteWorkspaceID; folderID = conversation.folderID
     }
     init(callerID: String = WovenMCPCaller.outside) {
-        id = callerID; localRuntimeKind = .pi; remoteWorkspaceID = nil; folderID = nil
+        id = callerID; localRuntimeKind = .defaultAgent; remoteWorkspaceID = nil; folderID = nil
     }
 }
 
@@ -433,7 +433,7 @@ extension ApplicationModel {
         if let raw = command.options["harness"], AgentRuntimeKind(rawValue: raw) == nil {
             throw WorkspaceToolError.invalid("Unknown harness.")
         }
-        guard let runtime = command.options["harness"].flatMap(AgentRuntimeKind.init(rawValue:)) ?? source.localRuntimeKind ?? (WovenMCPCaller.isAppWide(source.id) ? .pi : nil) else {
+        guard let runtime = command.options["harness"].flatMap(AgentRuntimeKind.init(rawValue:)) ?? source.localRuntimeKind ?? (WovenMCPCaller.isAppWide(source.id) ? .defaultAgent : nil) else {
             throw WorkspaceToolError.invalid("Choose a configured harness.")
         }
         guard AgentRuntimeKind.allCases.contains(runtime) else { throw WorkspaceToolError.invalid("This harness has been retired.") }
@@ -455,7 +455,7 @@ extension ApplicationModel {
                 tools: .init(enabled: settings.enabledByDefault, executorProfiles: settings.executor?.defaultProfiles ?? []))
         }
         let workspaceID: UUID?
-        if workspace == "local" { workspaceID = nil }
+        if workspace == "local" { workspaceID = source.remoteWorkspaceID }
         else {
             guard let id = UUID(uuidString: workspace) else { throw WorkspaceToolError.invalid("The destination workspace is unavailable.") }
             workspaceID = id

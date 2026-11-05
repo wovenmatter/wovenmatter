@@ -129,7 +129,8 @@ starts the service, and restores the previous `current` on failure. It returns
 
 ## Protocol additions
 
-Every addition is capability-gated so an older instance keeps working for chat.
+Every addition is capability-gated. The embedded client needs `host.embed`, so Woven Matter
+asks the user to update an older attached instance rather than show a broken page.
 
 `hello` and `GET /health` gain `protocol: 1`, `installationId` (a UUID stored once in the
 database) and `capabilities`: `host.embed`, `groups`, `woven.mcp`, `message.context`.
@@ -165,7 +166,8 @@ host. The model sees it ahead of that user turn. The transcript and chat strip i
 same approach as the fallback note.
 
 Bot notifications from Woven Matter arrive through ordinary `message.send` to the bot's main
-channel, labelled as coming from Woven Matter.
+channel, with an optional `deliveryId`. Pi Bot remembers it, so a retry after a lost
+acknowledgement cannot submit the same work twice.
 
 ## Host bridge
 
