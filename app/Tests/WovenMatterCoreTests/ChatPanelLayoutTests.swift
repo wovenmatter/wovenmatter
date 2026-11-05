@@ -78,3 +78,45 @@ struct ChatPanelLayoutTests {
   }
 
 }
+
+struct ChatPanelBotTargetTests {
+    @Test func aPanelHoldsEitherABotOrAConversationNeverBoth() {
+        var state = DashboardChatPanelState(primaryConversationID: "chat")
+        let target = DashboardBotTarget(botID: "bot", conversationID: 7)
+        state.replaceActiveBot(with: target)
+        #expect(state.activeBotTarget == target)
+        #expect(state.activeConversationID == nil)
+        state.replaceActiveConversation(with: "other")
+        #expect(state.activeBotTarget == nil)
+        #expect(state.activeConversationID == "other")
+    }
+
+    @Test func botSelectionFollowsTheActivePanel() throws {
+        var state = DashboardChatPanelState(primaryConversationID: "chat")
+        state.replaceActiveBot(with: DashboardBotTarget(botID: "bot"))
+        let added = DashboardChatPanelID(rawValue: "added")
+        #expect(state.addPanel(from: .primary, newPanelID: added, conversationID: "second"))
+        #expect(state.activeBotTarget == nil)
+        #expect(state.activeConversationID == "second")
+        state.activatePanel(.primary)
+        #expect(state.activeBotTarget?.botID == "bot")
+    }
+
+    @Test func routingAnAuxiliaryPanelLeavesThePrimaryAlone() {
+        var state = DashboardChatPanelState(primaryConversationID: "chat")
+        let added = DashboardChatPanelID(rawValue: "added")
+        state.addPanel(from: .primary, newPanelID: added, conversationID: nil)
+        state.setBot(DashboardBotTarget(botID: "bot", conversationID: 3, showsThreadBesideMain: true), in: added)
+        #expect(state.panel(id: added)?.botTarget?.conversationID == 3)
+        #expect(state.primary.conversationID == "chat")
+        #expect(state.primary.botTarget == nil)
+    }
+
+    @Test func showingTheSideAreaKeepsThePrimaryBot() {
+        var state = DashboardChatPanelState()
+        state.replaceActiveBot(with: DashboardBotTarget(botID: "bot"))
+        state.presentAsset()
+        #expect(state.assetPresented)
+        #expect(state.primary.botTarget?.botID == "bot")
+    }
+}

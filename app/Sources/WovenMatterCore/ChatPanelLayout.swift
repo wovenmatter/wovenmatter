@@ -12,13 +12,32 @@ public struct DashboardChatPanelID: Hashable, Codable, Sendable, Identifiable {
   }
 }
 
+/// A Pi Bot channel or thread shown in a chat panel. Pi Bot owns the conversation;
+/// the panel only records which one is on screen.
+public struct DashboardBotTarget: Hashable, Codable, Sendable {
+  public var botID: String
+  /// nil is the bot's main channel.
+  public var conversationID: Int?
+  /// Show the thread beside the main channel, inside Pi Bot's own layout.
+  public var showsThreadBesideMain: Bool
+
+  public init(botID: String, conversationID: Int? = nil, showsThreadBesideMain: Bool = false) {
+    self.botID = botID
+    self.conversationID = conversationID
+    self.showsThreadBesideMain = showsThreadBesideMain
+  }
+}
+
 public struct DashboardChatPanel: Equatable, Sendable, Identifiable {
   public let id: DashboardChatPanelID
   public var conversationID: String?
+  /// Mutually exclusive with `conversationID`.
+  public var botTarget: DashboardBotTarget?
 
-  public init(id: DashboardChatPanelID, conversationID: String?) {
+  public init(id: DashboardChatPanelID, conversationID: String?, botTarget: DashboardBotTarget? = nil) {
     self.id = id
     self.conversationID = conversationID
+    self.botTarget = botTarget
   }
 }
 
@@ -99,6 +118,10 @@ public struct DashboardChatPanelState: Equatable, Sendable {
 
   public var activeConversationID: String? {
     panel(id: activePanelID)?.conversationID
+  }
+
+  public var activeBotTarget: DashboardBotTarget? {
+    panel(id: activePanelID)?.botTarget
   }
 
   public func panel(id: DashboardChatPanelID) -> DashboardChatPanel? {
@@ -197,12 +220,38 @@ public struct DashboardChatPanelState: Equatable, Sendable {
     _ conversationID: String?,
     in panelID: DashboardChatPanelID
   ) -> Bool {
+    updatePanel(panelID) {
+      $0.conversationID = conversationID
+      $0.botTarget = nil
+    }
+  }
+
+  @discardableResult
+  public mutating func replaceActiveBot(with target: DashboardBotTarget?) -> Bool {
+    setBot(target, in: activePanelID)
+  }
+
+  @discardableResult
+  public mutating func setBot(
+    _ target: DashboardBotTarget?,
+    in panelID: DashboardChatPanelID
+  ) -> Bool {
+    updatePanel(panelID) {
+      $0.botTarget = target
+      $0.conversationID = nil
+    }
+  }
+
+  private mutating func updatePanel(
+    _ panelID: DashboardChatPanelID,
+    _ change: (inout DashboardChatPanel) -> Void
+  ) -> Bool {
     if panelID == .primary {
-      primary.conversationID = conversationID
+      change(&primary)
       return true
     }
     guard let location = auxiliaryLocation(of: panelID) else { return false }
-    auxiliaryRows[location.row][location.column].conversationID = conversationID
+    change(&auxiliaryRows[location.row][location.column])
     return true
   }
 

@@ -164,7 +164,14 @@
 		CD6C65D104529DB4126B59E2 /* NoteToolEdits.swift in Sources */ = {isa = PBXBuildFile; fileRef = 798B2F37DA2436C439B4BC89 /* NoteToolEdits.swift */; };
 		2D11BF999DCFCAD843281985 /* ApplicationModel+MCPAccess.swift in Sources */ = {isa = PBXBuildFile; fileRef = 392AA3B531FF25C552C29E12 /* ApplicationModel+MCPAccess.swift */; };
 		DE6A299C4400AB55B5D0CE55 /* BackendMCPService.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC1EEBCD8EBF7AD5965C8DF8 /* BackendMCPService.swift */; };
+		E28499E4C2D5B48EEE8DC498 /* ApplicationModel+Bots.swift in Sources */ = {isa = PBXBuildFile; fileRef = 969567647C35836A4EB30551 /* ApplicationModel+Bots.swift */; };
+		BEDC6AB2114D9EEA07B99418 /* BackendBotsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A603D65A1C1E75AAB8AF89D /* BackendBotsService.swift */; };
+		E88A8C82622D17428EA4D912 /* BotsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A01C0BFDB37FC20485E98D8 /* BotsModel.swift */; };
+		443D5D95EA55098A1F2F5F5C /* PiBotRuntimeSupervisor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F8D1F1FEDB47370162C9C14 /* PiBotRuntimeSupervisor.swift */; };
 		E71AABCCC66026E6318FBD29 /* SettingsMCPAccessSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74C188D9E69C4993381D98D1 /* SettingsMCPAccessSection.swift */; };
+		9751CD46C4F44301F5724297 /* SettingsBotsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FCFD40BE16F23BEF01EC54C /* SettingsBotsView.swift */; };
+		07CA66F71A1C7A036C6CF8F4 /* DashboardBotsSidebarSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE4243B3E426F7661EAE7064 /* DashboardBotsSidebarSection.swift */; };
+		1292F0F1EA444D9BD6ED6194 /* BotConversationSurface.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3CC5476EE428BA0767248F7E /* BotConversationSurface.swift */; };
 		FBC100000000000000000001 /* SettingsBackgroundServerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBC100000000000000000002 /* SettingsBackgroundServerView.swift */; };
 		FBC100000000000000000003 /* ApplicationModel+RuntimeInspection.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBC100000000000000000004 /* ApplicationModel+RuntimeInspection.swift */; };
 		FBC100000000000000000005 /* RuntimeInspectionInventoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBC100000000000000000006 /* RuntimeInspectionInventoryView.swift */; };
@@ -326,7 +333,14 @@
 		798B2F37DA2436C439B4BC89 /* NoteToolEdits.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "NoteToolEdits.swift"; sourceTree = "<group>"; };
 		392AA3B531FF25C552C29E12 /* ApplicationModel+MCPAccess.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+MCPAccess.swift"; sourceTree = "<group>"; };
 		DC1EEBCD8EBF7AD5965C8DF8 /* BackendMCPService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendMCPService.swift"; sourceTree = "<group>"; };
+		969567647C35836A4EB30551 /* ApplicationModel+Bots.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+Bots.swift"; sourceTree = "<group>"; };
+		7A603D65A1C1E75AAB8AF89D /* BackendBotsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendBotsService.swift"; sourceTree = "<group>"; };
+		4A01C0BFDB37FC20485E98D8 /* BotsModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BotsModel.swift"; sourceTree = "<group>"; };
+		3F8D1F1FEDB47370162C9C14 /* PiBotRuntimeSupervisor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PiBotRuntimeSupervisor.swift"; sourceTree = "<group>"; };
 		74C188D9E69C4993381D98D1 /* SettingsMCPAccessSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsMCPAccessSection.swift"; sourceTree = "<group>"; };
+		3FCFD40BE16F23BEF01EC54C /* SettingsBotsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsBotsView.swift"; sourceTree = "<group>"; };
+		DE4243B3E426F7661EAE7064 /* DashboardBotsSidebarSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DashboardBotsSidebarSection.swift"; sourceTree = "<group>"; };
+		3CC5476EE428BA0767248F7E /* BotConversationSurface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BotConversationSurface.swift"; sourceTree = "<group>"; };
 		FBC100000000000000000002 /* SettingsBackgroundServerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Views/SettingsBackgroundServerView.swift"; sourceTree = SOURCE_ROOT; };
 		FBC100000000000000000004 /* ApplicationModel+RuntimeInspection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Models/ApplicationModel+RuntimeInspection.swift"; sourceTree = SOURCE_ROOT; };
 		FBC100000000000000000006 /* RuntimeInspectionInventoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Views/RuntimeInspectionInventoryView.swift"; sourceTree = SOURCE_ROOT; };
@@ -426,6 +440,10 @@
 				E7E000000000000000000002 /* ApplicationModel+Executor.swift */,
 				392AA3B531FF25C552C29E12 /* ApplicationModel+MCPAccess.swift */,
 				DC1EEBCD8EBF7AD5965C8DF8 /* BackendMCPService.swift */,
+				969567647C35836A4EB30551 /* ApplicationModel+Bots.swift */,
+				7A603D65A1C1E75AAB8AF89D /* BackendBotsService.swift */,
+				4A01C0BFDB37FC20485E98D8 /* BotsModel.swift */,
+				3F8D1F1FEDB47370162C9C14 /* PiBotRuntimeSupervisor.swift */,
 				D84D7A0E10812D5E772A19B5 /* BackendToolsService.swift */,
 				F178B05B2AE0D773B0C59957 /* BackendOpenCodeService.swift */,
 				A176B05B2AE0D773B0C59957 /* BackendRuntimeService.swift */,
@@ -510,6 +528,9 @@
 				E7E000000000000000000004 /* ExecutorControls.swift */,
 				D472AB9160464F1FAB826C21 /* WorkspaceToolControls.swift */,
 				74C188D9E69C4993381D98D1 /* SettingsMCPAccessSection.swift */,
+				3FCFD40BE16F23BEF01EC54C /* SettingsBotsView.swift */,
+				DE4243B3E426F7661EAE7064 /* DashboardBotsSidebarSection.swift */,
+				3CC5476EE428BA0767248F7E /* BotConversationSurface.swift */,
 				5E7A00000000000000000004 /* SettingsGeneralView.swift */,
 				FBC100000000000000000002 /* SettingsBackgroundServerView.swift */,
 				FBC100000000000000000006 /* RuntimeInspectionInventoryView.swift */,
@@ -696,7 +717,14 @@
 			buildActionMask = 2147483647;
 			files = (
 				E71AABCCC66026E6318FBD29 /* SettingsMCPAccessSection.swift in Sources */,
+				9751CD46C4F44301F5724297 /* SettingsBotsView.swift in Sources */,
+				07CA66F71A1C7A036C6CF8F4 /* DashboardBotsSidebarSection.swift in Sources */,
+				1292F0F1EA444D9BD6ED6194 /* BotConversationSurface.swift in Sources */,
 				DE6A299C4400AB55B5D0CE55 /* BackendMCPService.swift in Sources */,
+				E28499E4C2D5B48EEE8DC498 /* ApplicationModel+Bots.swift in Sources */,
+				BEDC6AB2114D9EEA07B99418 /* BackendBotsService.swift in Sources */,
+				E88A8C82622D17428EA4D912 /* BotsModel.swift in Sources */,
+				443D5D95EA55098A1F2F5F5C /* PiBotRuntimeSupervisor.swift in Sources */,
 				2D11BF999DCFCAD843281985 /* ApplicationModel+MCPAccess.swift in Sources */,
 				CD6C65D104529DB4126B59E2 /* NoteToolEdits.swift in Sources */,
 				F6B4787FBD7B038B70D58B68 /* WovenMCPHost.swift in Sources */,
