@@ -342,12 +342,14 @@ struct DashboardPalette {
     static let success = Color(dashboardColor: DashboardColors.success)
     static let warning = Color(dashboardColor: DashboardColors.warning)
     static let danger = Color(dashboardColor: DashboardColors.danger)
-    static let usageBlue = Color.adaptiveHex(0x4D69D8, dark: 0x96A7EE)
-    static let usageOrange = Color.adaptiveHex(0xC46B3C, dark: 0xE3A07A)
-    static let usageGray = Color.adaptiveHex(0x535A63, dark: 0xA4ACB7)
-    static let usagePurple = Color.adaptiveHex(0x8B5CF6, dark: 0xB69BF4)
-    static let usagePink = Color.adaptiveHex(0xE05D8B, dark: 0xED98B6)
-    static let usageYellow = Color.adaptiveHex(0xC28A20, dark: 0xE3B95A)
+    // Fixed provider series for Usage. These were checked for separation against each
+    // theme's workspace surface; rows and tooltips also name each provider.
+    static let usageGreen = Color.adaptiveHex(0x0D8F5A, dark: 0x45AB7F)
+    static let usageOrange = Color.adaptiveHex(0xC46B3C, dark: 0xD98852)
+    static let usageTeal = Color.adaptiveHex(0x0B93A8, dark: 0x36A9B4)
+    static let usageBlue = Color.adaptiveHex(0x4D69D8, dark: 0x6F86E2)
+    static let usagePurple = Color.adaptiveHex(0x8E2F9E, dark: 0xDDA0E4)
+    static let usagePink = Color.adaptiveHex(0xE05D8B, dark: 0xE8789F)
     static let usageUnknown = Color.adaptiveHex(0x8A8F98, dark: 0xB0B5BE)
 
     let workspace: Color
@@ -448,14 +450,16 @@ struct DashboardSearchField: View {
     @Environment(\.dashboardSidebarForeground) private var sidebarForeground
     @Binding var text: String
     let prompt: String
+    /// A smaller field for dense filter columns.
+    var compact = false
 
     var body: some View {
-        HStack(spacing: 8) {
-            DashboardLucideIcon(glyph: .searchControl, size: 14)
+        HStack(spacing: compact ? 6 : 8) {
+            DashboardLucideIcon(glyph: .searchControl, size: compact ? 12 : 14)
                 .foregroundStyle(sidebarForeground ?? DashboardPalette.mutedForeground)
             TextField(prompt, text: $text, prompt: Text(prompt).foregroundStyle(sidebarForeground ?? Color.secondary))
                 .textFieldStyle(.plain)
-                .font(DashboardControlMetrics.inputFont)
+                .font(compact ? .system(size: 12) : DashboardControlMetrics.inputFont)
                 .foregroundStyle(DashboardPalette.foreground)
             if !text.isEmpty {
                 Button("Clear") { text = "" }
@@ -465,8 +469,8 @@ struct DashboardSearchField: View {
                     .foregroundStyle(sidebarForeground ?? DashboardPalette.mutedForeground)
             }
         }
-        .padding(.horizontal, 12)
-        .frame(minHeight: DashboardControlMetrics.searchHeight)
+        .padding(.horizontal, compact ? 8 : 12)
+        .frame(minHeight: compact ? 28 : DashboardControlMetrics.searchHeight)
         .frame(maxWidth: .infinity)
         .background(theme.palette.themeWhisper)
         .clipShape(

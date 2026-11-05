@@ -44,8 +44,20 @@ final class AsyncUsageStore: Sendable {
     try await read { try $0.source(id) }
   }
 
-  func samples(in interval: DateInterval, sourceID: String? = nil, limit: Int? = nil, offset: Int = 0) async throws -> [UsageSample] {
-    try await read { try $0.samples(in: interval, sourceID: sourceID, limit: limit, offset: offset) }
+  func samples(
+    in interval: DateInterval,
+    sourceID: String? = nil,
+    limit: Int? = nil,
+    offset: Int = 0,
+    excludingDevices: Bool = false
+  ) async throws -> [UsageSample] {
+    try await read {
+      try $0.samples(in: interval, sourceID: sourceID, limit: limit, offset: offset, excludingDevices: excludingDevices)
+    }
+  }
+
+  func storedDevices() async throws -> [(identity: UsageDeviceIdentity, syncedAt: Date)] {
+    try await read { try $0.storedDevices() }
   }
 
   func statistics(sourceIDPrefix: String, in interval: DateInterval) async throws -> UsageSourceStatistics {

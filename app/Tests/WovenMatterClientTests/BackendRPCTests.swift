@@ -11,6 +11,20 @@ struct BackendRPCTests {
         } catch BackendRPCError.unavailable { }
     }
 
+    @Test func anOversizedResponseReportsItsSizeInsteadOfDroppingTheConnection() async throws {
+        let url = endpoint()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let server = BackendRPCServer(socketURL: url)
+        try server.start { BackendRPCResponse(id: $0.id, result: Data(count: 64 * 1024 * 1024)) }
+        defer { server.stop() }
+        do {
+            _ = try await BackendRPCClient(socketURL: url).call(method: "large")
+            Issue.record("An oversized response was delivered")
+        } catch let BackendRPCError.remote(message) {
+            #expect(message.contains("too large"))
+        }
+    }
+
     @Test func endpointRejectsSharedAndSymlinkedDirectories() async throws {
         let url = endpoint(), alias = endpoint()
         defer {

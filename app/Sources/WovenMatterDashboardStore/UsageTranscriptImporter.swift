@@ -69,7 +69,8 @@ actor UsageTranscriptImporter {
         let usageMarker = Data("\"token_count\"".utf8)
         let contextMarker = Data("\"turn_context\"".utf8)
         let metadataMarker = Data("\"session_meta\"".utf8)
-        try Self.forEachLineData(in: url, check: check) { data, lineNumber in
+        let markers = ["\"token_count\"", "\"turn_context\"", "\"session_meta\""]
+        try Self.forEachLineData(in: url, markers: markers, check: check) { data, lineNumber in
           guard data.range(of: usageMarker) != nil
                   || data.range(of: contextMarker) != nil
                   || data.range(of: metadataMarker) != nil else { return }
@@ -100,7 +101,7 @@ actor UsageTranscriptImporter {
       ) { url, check in
         var records: [UsageSample] = []
         let usageMarker = Data("\"usage\"".utf8)
-        try Self.forEachLineData(in: url, check: check) { data, lineNumber in
+        try Self.forEachLineData(in: url, markers: ["\"usage\""], check: check) { data, lineNumber in
           guard data.range(of: usageMarker) != nil else { return }
           if let parsed = LocalUsageTranscriptParser.parseClaude(
             line: String(decoding: data, as: UTF8.self),
@@ -170,7 +171,7 @@ actor UsageTranscriptImporter {
     store: AsyncUsageStore,
     cutoff: Date,
     now: Date,
-    predicate: @escaping @Sendable (URL) -> Bool = { $0.pathExtension == "jsonl" },
+    predicate: @escaping @Sendable (URL) -> Bool = { UsageCompressedTranscript.isTranscript($0) },
     fingerprint: (@Sendable (URL) throws -> String)? = nil,
     parser: @escaping @Sendable (URL, @escaping @Sendable () throws -> Void) throws -> [UsageSample]
   ) async throws -> Outcome {
@@ -181,7 +182,7 @@ actor UsageTranscriptImporter {
     for file in files {
       try ownership.check()
       do {
-        let sourceID = prefix + file.path
+        let sourceID = prefix + UsageCompressedTranscript.identityPath(file)
         let stored = try await store.source(sourceID)
         let prepared = try await prepare { check -> PreparedSource? in
           let currentFingerprint = try (fingerprint?(file) ?? Self.fileFingerprint(file)) + ":" + providerFilterSignature
@@ -355,14 +356,21 @@ actor UsageTranscriptImporter {
             (values.contentModificationDate ?? .distantPast) >= cutoff else { continue }
       result.append(url)
     }
-    return result.sorted { $0.path < $1.path }
+    return UsageCompressedTranscript.preferred(result, node: UsageCompressedTranscript.bundledNode)
+      .sorted { $0.path < $1.path }
   }
 
   nonisolated private static func forEachLineData(
     in url: URL,
+    markers: [String] = [],
     check: () throws -> Void,
     body: (Data.SubSequence, Int) throws -> Void
   ) throws {
+    if UsageCompressedTranscript.isCompressed(url) {
+      guard let node = UsageCompressedTranscript.bundledNode else { return }
+      try UsageCompressedTranscript.forEachMarkedLine(in: url, markers: markers, node: node, check: check, body: body)
+      return
+    }
     let data = try Data(contentsOf: url, options: [.mappedIfSafe, .uncached])
     try data.withUnsafeBytes { rawBuffer in
       guard let base = rawBuffer.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }

@@ -26,6 +26,17 @@ struct BackendUsageSnapshot: Codable, Sendable {
     var enabledUsageProviders: Set<ProviderKind>
     var usageConnectionChoices: [UsageConnectionChoice]
     var selectedUsageConnections: [String: String]
+    /// Optional so a service from an earlier build can still answer.
+    var usageDevices: [UsageDeviceSummary]?
+}
+
+/// Model prices for the optional API estimate. They are public data, so each
+/// process showing Usage loads its own copy instead of asking the backend.
+struct UsagePriceState: Equatable {
+    var table: UsageRateTable?
+    var fetchedAt: Date?
+    var isLoading = false
+    var error: String?
 }
 
 enum BackendUsageCommand: Codable, Sendable {
@@ -63,8 +74,26 @@ final class ApplicationUsageModel {
     private(set) var enabledUsageProviders: Set<ProviderKind> = []
     private(set) var usageConnectionChoices: [UsageConnectionChoice] = []
     private(set) var selectedUsageConnections: [String: String] = [:]
+    private(set) var usagePrices = UsagePriceState()
+    /// This Mac first, then every device with usage or a connection.
+    private(set) var usageDevices: [UsageDeviceSummary] = [ApplicationUsageModel.thisDevice]
+    /// Lists the devices this Mac can read now. Only the process that owns execution collects.
+    @ObservationIgnored
+    var usageDeviceEndpoints: (@MainActor () async -> [UsageDeviceEndpoint])?
+    @ObservationIgnored
+    private var isCollectingDeviceUsage = false
+    @ObservationIgnored
+    private var lastDeviceCollection: Date?
+    @ObservationIgnored
+    private var deviceCollectionTask: Task<Void, Never>?
+    @ObservationIgnored
+    private var pendingDeviceRefresh = false
+    @ObservationIgnored
+    private var lastAnalyticsRange: UsageTimeRange?
     @ObservationIgnored
     private let localUsageService: LocalUsageService
+    @ObservationIgnored
+    private let usagePriceService: UsagePriceService
     @ObservationIgnored
     var backendRequest: (@MainActor (String, Data) async throws -> Data)?
     @ObservationIgnored
@@ -108,7 +137,7 @@ final class ApplicationUsageModel {
             isAuthorizingUsageCredential: isAuthorizingUsageCredential, isOpenRouterCredentialConfigured: isOpenRouterCredentialConfigured,
             signingInUsageProviders: signingInUsageProviders, hasAcknowledgedCredentialAccessDisclosure: hasAcknowledgedCredentialAccessDisclosure,
             enabledUsageProviders: enabledUsageProviders, usageConnectionChoices: usageConnectionChoices,
-            selectedUsageConnections: selectedUsageConnections)
+            selectedUsageConnections: selectedUsageConnections, usageDevices: usageDevices)
     }
 
     func applyBackendSnapshot(_ value: BackendUsageSnapshot) {
@@ -118,6 +147,7 @@ final class ApplicationUsageModel {
         signingInUsageProviders = value.signingInUsageProviders; hasAcknowledgedCredentialAccessDisclosure = value.hasAcknowledgedCredentialAccessDisclosure
         enabledUsageProviders = value.enabledUsageProviders; usageConnectionChoices = value.usageConnectionChoices
         selectedUsageConnections = value.selectedUsageConnections
+        usageDevices = value.usageDevices ?? [Self.thisDevice]
     }
 
     func refreshBackendSnapshot() async {
@@ -133,7 +163,11 @@ final class ApplicationUsageModel {
 
     private func forward(_ command: BackendUsageCommand) async {
         do { try await forwardThrowing(command) }
-        catch { localUsageError = error.localizedDescription }
+        catch BackendRPCError.timedOut {
+            // A first full import can outlast one request. The service keeps working
+            // and publishes its result, so this is progress rather than a failure.
+            await refreshBackendSnapshot()
+        } catch { localUsageError = error.localizedDescription }
     }
 
     private func forwardThrowing(_ command: BackendUsageCommand) async throws {
@@ -167,8 +201,13 @@ final class ApplicationUsageModel {
         return try JSONEncoder().encode(backendSnapshot())
     }
 
-    init(applicationDefaults: UserDefaults, localUsageService: LocalUsageService = LocalUsageService()) {
+    init(
+        applicationDefaults: UserDefaults,
+        localUsageService: LocalUsageService = LocalUsageService(),
+        usagePriceService: UsagePriceService = UsagePriceService()
+    ) {
         self.localUsageService = localUsageService
+        self.usagePriceService = usagePriceService
         self.applicationDefaults = applicationDefaults
         selectedUsageConnections = applicationDefaults.dictionary(forKey: "wovenmatter.usage.selected-connections") as? [String: String] ?? [:]
         isOpenRouterCredentialConfigured = applicationDefaults.bool(
@@ -178,6 +217,91 @@ final class ApplicationUsageModel {
             forKey: Self.credentialAccessDisclosureDefaultsKey
         )
         enabledUsageProviders = Set(ProviderKind.supportedAccounts)
+    }
+
+    private static let thisDevice = UsageDeviceSummary(
+        identity: .init(id: UsageDeviceSource.localDeviceID, name: "This Mac", kind: .mac),
+        state: .thisDevice
+    )
+
+    /// Keeps every linked device's usage current while the app runs, whether or not Usage is open.
+    func startDeviceCollection() {
+        guard deviceCollectionTask == nil, !isBackendProjection else { return }
+        deviceCollectionTask = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.collectDeviceUsage(force: true)
+                try? await Task.sleep(for: .seconds(15 * 60))
+            }
+        }
+    }
+
+    func collectDeviceUsage(force: Bool = false) async {
+        guard !isBackendProjection, !isCollectingDeviceUsage, let usageDeviceEndpoints else { return }
+        if !force, let lastDeviceCollection, Date().timeIntervalSince(lastDeviceCollection) < 5 * 60 { return }
+        isCollectingDeviceUsage = true
+        defer { isCollectingDeviceUsage = false }
+        lastDeviceCollection = Date()
+        let endpoints = await usageDeviceEndpoints()
+        let stored = await localUsageService.storedDeviceSummaries()
+        var summaries: [String: UsageDeviceSummary] = [:]
+        for device in stored {
+            summaries[device.identity.id] = .init(identity: device.identity, state: .synced, syncedAt: device.syncedAt)
+        }
+        for endpoint in endpoints where summaries[endpoint.identity.id] == nil {
+            summaries[endpoint.identity.id] = .init(identity: endpoint.identity, state: .waiting)
+        }
+        publishDevices(summaries)
+        var received = false
+        for endpoint in endpoints {
+            let result = await localUsageService.collectDeviceUsage(from: endpoint)
+            summaries[endpoint.identity.id] = result
+            received = received || result.state == .synced
+            // A Mac may have passed on remote workspaces, which appear as their own devices.
+            for device in await localUsageService.storedDeviceSummaries() where summaries[device.identity.id] == nil {
+                summaries[device.identity.id] = .init(identity: device.identity, state: .synced, syncedAt: device.syncedAt)
+            }
+            publishDevices(summaries)
+        }
+        guard received else { return }
+        if isRefreshingUsageAnalytics {
+            pendingDeviceRefresh = true
+        } else if let lastAnalyticsRange {
+            // No transcript scan is needed to show what the devices just reported.
+            await refreshUsageAnalytics(range: lastAnalyticsRange, reason: .rangeChanged, policy: .force)
+        }
+    }
+
+    private func publishDevices(_ summaries: [String: UsageDeviceSummary]) {
+        usageDevices = [Self.thisDevice] + summaries.values.sorted {
+            $0.identity.name.localizedCaseInsensitiveCompare($1.identity.name) == .orderedAscending
+        }
+    }
+
+    /// Answers another Mac from the existing index, and refreshes the index
+    /// afterward if it's stale, so a long import never holds up that Mac's request.
+    func exportDeviceUsage(
+        _ request: UsageDeviceExportRequest,
+        relaying relayed: [UsageDeviceIdentity]
+    ) async throws -> UsageDeviceExportPage {
+        if request.offset == 0, !isRefreshingUsageAnalytics, let lastAnalyticsRange {
+            Task { await refreshUsageAnalytics(range: lastAnalyticsRange, reason: .periodic, policy: .refresh) }
+        }
+        return try await localUsageService.deviceExport(request, relaying: relayed)
+    }
+
+    /// Runs only when the person asks for API estimates.
+    func loadUsagePrices(force: Bool = false) async {
+        guard !usagePrices.isLoading else { return }
+        usagePrices.isLoading = true
+        usagePrices.error = nil
+        defer { usagePrices.isLoading = false }
+        do {
+            let prices = try await usagePriceService.prices(force: force)
+            usagePrices.table = prices.table
+            usagePrices.fetchedAt = prices.fetchedAt
+        } catch {
+            usagePrices.error = error.localizedDescription
+        }
     }
 
     func refreshLocalUsage(
@@ -191,6 +315,9 @@ final class ApplicationUsageModel {
         }
         localUsageError = nil
         prepareUsageSnapshot(range: range)
+        if reason == .manual || reason == .viewAppeared {
+            Task { await collectDeviceUsage(force: reason == .manual) }
+        }
         let policy: UsageRefreshCoordinator<
             UsageAnalyticsRefreshKey,
             UsageAnalyticsSnapshot
@@ -263,6 +390,7 @@ final class ApplicationUsageModel {
         let enabledProviders = Set(ProviderKind.allCases)
         let key = UsageAnalyticsRefreshKey(range: range.rawValue)
         let requestID = UUID()
+        lastAnalyticsRange = range
         usageAnalyticsRequestID = requestID
         isRefreshingUsageAnalytics = true
         do {
@@ -270,10 +398,12 @@ final class ApplicationUsageModel {
                 for: key,
                 policy: policy
             ) { [localUsageService] in
+                // Only this page reads these samples. Tools read recorded samples separately.
                 try await localUsageService.analyticsSnapshot(
                     range: range,
                     refreshReason: reason
                 )
+                .compactedForDisplay()
             }
             guard usageAnalyticsRequestID == requestID else { return }
             try Task.checkCancellation()
@@ -296,6 +426,10 @@ final class ApplicationUsageModel {
         let isRefreshing = await usageAnalyticsRefreshCoordinator.isRefreshing
         if usageAnalyticsRequestID == requestID {
             isRefreshingUsageAnalytics = isRefreshing
+            if !isRefreshing, pendingDeviceRefresh {
+                pendingDeviceRefresh = false
+                await refreshUsageAnalytics(range: range, reason: .rangeChanged, policy: .force)
+            }
         }
     }
 

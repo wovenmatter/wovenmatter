@@ -152,7 +152,7 @@ public final class BackendRPCServer: @unchecked Sendable {
                             DispatchQueue.global(qos: .userInitiated).async {
                                 defer { Darwin.close(client); self.slots.signal() }
                                 // Fail closed; never log payloads or credentials.
-                                try? BackendSocket.writeFrame(JSONEncoder().encode(response), fd: client, deadline: deadline)
+                                try? BackendSocket.writeFrame(BackendSocket.encodedResponse(response), fd: client, deadline: deadline)
                             }
                         }
                     } catch { Darwin.close(client); self.slots.signal() }
@@ -175,6 +175,16 @@ private enum BackendSocket {
     // HTML activity details and previews include up to 25 MiB of embedded data,
     // plus JSON/base64 framing. Individual RPC handlers retain their own bounds.
     static let maximumFrame = 64 * 1024 * 1024
+    /// A reply over the limit says so, rather than closing the connection and
+    /// reading to the client like a service that has stopped.
+    static func encodedResponse(_ response: BackendRPCResponse) throws -> Data {
+        let data = try JSONEncoder().encode(response)
+        guard data.count > maximumFrame else { return data }
+        return try JSONEncoder().encode(BackendRPCResponse(
+            id: response.id,
+            error: "This response was too large for the background service to send."
+        ))
+    }
     static func validateDirectory(_ url: URL, create: Bool) throws {
         if create { try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700]) }
         var info = stat()

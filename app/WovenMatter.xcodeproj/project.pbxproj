@@ -41,6 +41,7 @@
 		D472AB9160464F1FAB826C32 /* WorkspaceSessionActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = D472AB9160464F1FAB826C31 /* WorkspaceSessionActivity.swift */; };
 		D472AB9160464F1FAB826C22 /* WorkspaceToolControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = D472AB9160464F1FAB826C21 /* WorkspaceToolControls.swift */; };
 		D472AB9160464F1FAB826C12 /* ApplicationModel+AgentTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = D472AB9160464F1FAB826C11 /* ApplicationModel+AgentTools.swift */; };
+		D45400000000000000000009 /* ApplicationModel+UsageDevices.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4540000000000000000000A /* ApplicationModel+UsageDevices.swift */; };
 		C06300000000000000000001 /* ApplicationUsageModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C06300000000000000000002 /* ApplicationUsageModel.swift */; };
 		AA1900000000000000000001 /* WovenMatterLifecycleDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA1900000000000000000002 /* WovenMatterLifecycleDelegate.swift */; };
 		0C11E0000000000000000001 /* WovenMatterClient in Frameworks */ = {isa = PBXBuildFile; productRef = 0C11E0000000000000000004 /* WovenMatterClient */; };
@@ -63,6 +64,9 @@
 		D57100000000000000000001 /* DashboardStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = D57100000000000000000002 /* DashboardStyle.swift */; };
 		D45300000000000000000001 /* DashboardCalendarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D45300000000000000000002 /* DashboardCalendarView.swift */; };
 		D45400000000000000000001 /* DashboardUsageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D45400000000000000000002 /* DashboardUsageView.swift */; };
+		D45400000000000000000003 /* DashboardUsageAnalytics.swift in Sources */ = {isa = PBXBuildFile; fileRef = D45400000000000000000004 /* DashboardUsageAnalytics.swift */; };
+		D45400000000000000000005 /* DashboardUsageChart.swift in Sources */ = {isa = PBXBuildFile; fileRef = D45400000000000000000006 /* DashboardUsageChart.swift */; };
+		D45400000000000000000007 /* DashboardUsageLimits.swift in Sources */ = {isa = PBXBuildFile; fileRef = D45400000000000000000008 /* DashboardUsageLimits.swift */; };
 		D49000000000000000000001 /* ConversationMarkdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = D49000000000000000000003 /* ConversationMarkdown.swift */; };
 		D49100000000000000000001 /* ConversationMarkdownDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = D49100000000000000000003 /* ConversationMarkdownDocument.swift */; };
 		D49300000000000000000001 /* ConversationMessageLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = D49300000000000000000003 /* ConversationMessageLayout.swift */; };
@@ -203,6 +207,7 @@
 		D472AB9160464F1FAB826C31 /* WorkspaceSessionActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WorkspaceSessionActivity.swift"; sourceTree = "<group>"; };
 		D472AB9160464F1FAB826C21 /* WorkspaceToolControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WorkspaceToolControls.swift"; sourceTree = "<group>"; };
 		D472AB9160464F1FAB826C11 /* ApplicationModel+AgentTools.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+AgentTools.swift"; sourceTree = "<group>"; };
+		D4540000000000000000000A /* ApplicationModel+UsageDevices.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+UsageDevices.swift"; sourceTree = "<group>"; };
 		C06300000000000000000002 /* ApplicationUsageModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApplicationUsageModel.swift; sourceTree = "<group>"; };
 		AA1900000000000000000002 /* WovenMatterLifecycleDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WovenMatterLifecycleDelegate.swift; sourceTree = "<group>"; };
 		A11C00000000000000000002 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -225,6 +230,9 @@
 		D57100000000000000000002 /* DashboardStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardStyle.swift; sourceTree = "<group>"; };
 		D45300000000000000000002 /* DashboardCalendarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardCalendarView.swift; sourceTree = "<group>"; };
 		D45400000000000000000002 /* DashboardUsageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardUsageView.swift; sourceTree = "<group>"; };
+		D45400000000000000000004 /* DashboardUsageAnalytics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardUsageAnalytics.swift; sourceTree = "<group>"; };
+		D45400000000000000000006 /* DashboardUsageChart.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardUsageChart.swift; sourceTree = "<group>"; };
+		D45400000000000000000008 /* DashboardUsageLimits.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardUsageLimits.swift; sourceTree = "<group>"; };
 		D49000000000000000000003 /* ConversationMarkdown.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationMarkdown.swift; sourceTree = "<group>"; };
 		D49100000000000000000003 /* ConversationMarkdownDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationMarkdownDocument.swift; sourceTree = "<group>"; };
 		D49300000000000000000003 /* ConversationMessageLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationMessageLayout.swift; sourceTree = "<group>"; };
@@ -417,6 +425,7 @@
 				A14000000000000000000002 /* ApplicationModel+SessionSelections.swift */,
 				3CE258FB55B3D55A39972D5B /* OpenCodeModel.swift */,
 				D472AB9160464F1FAB826C11 /* ApplicationModel+AgentTools.swift */,
+				D4540000000000000000000A /* ApplicationModel+UsageDevices.swift */,
 				848A38FA567146749E61538D /* ApplicationModel+Goals.swift */,
 				FBC100000000000000000004 /* ApplicationModel+RuntimeInspection.swift */,
 				58C9C50BA69858EC448D4F19 /* BackendInvalidationConsumer.swift */,
@@ -495,6 +504,9 @@
 				8AA41DB8B4A4AF41CCC355A1 /* DashboardCalendarEventSheet.swift */,
 				A71B00000000000000000002 /* DashboardLibraryView.swift */,
 				D45400000000000000000002 /* DashboardUsageView.swift */,
+				D45400000000000000000004 /* DashboardUsageAnalytics.swift */,
+				D45400000000000000000006 /* DashboardUsageChart.swift */,
+				D45400000000000000000008 /* DashboardUsageLimits.swift */,
 				D45100000000000000000002 /* DashboardDesign.swift */,
 				D57100000000000000000002 /* DashboardStyle.swift */,
 				DA4C00000000000000000004 /* DashboardHTMLArtifactDocument.swift */,
@@ -773,6 +785,7 @@
 				F10100000000000000000001 /* ArtifactEditor.swift in Sources */,
 				F10200000000000000000001 /* DashboardDatabasesView.swift in Sources */,
 				D472AB9160464F1FAB826C12 /* ApplicationModel+AgentTools.swift in Sources */,
+				D45400000000000000000009 /* ApplicationModel+UsageDevices.swift in Sources */,
 				A7EAFACF3F974117B37965CC /* ApplicationModel+Goals.swift in Sources */,
 				95C7998809D0EDB0A8E1C327 /* BackendInvalidationConsumer.swift in Sources */,
 				CE19449AB0FFF6A1E12E4D48 /* BackendApplicationService.swift in Sources */,
@@ -815,6 +828,9 @@
 				F4743517D41721ACB550EE94 /* DashboardCalendarEventSheet.swift in Sources */,
 				A71B00000000000000000001 /* DashboardLibraryView.swift in Sources */,
 				D45400000000000000000001 /* DashboardUsageView.swift in Sources */,
+				D45400000000000000000003 /* DashboardUsageAnalytics.swift in Sources */,
+				D45400000000000000000005 /* DashboardUsageChart.swift in Sources */,
+				D45400000000000000000007 /* DashboardUsageLimits.swift in Sources */,
 				D45100000000000000000001 /* DashboardDesign.swift in Sources */,
 				D57100000000000000000001 /* DashboardStyle.swift in Sources */,
 				DA4C00000000000000000003 /* DashboardHTMLArtifactDocument.swift in Sources */,
