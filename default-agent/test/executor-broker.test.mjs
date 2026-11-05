@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, writeFile, symlink } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile, symlink, readdir } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { createInterface } from 'node:readline';
@@ -132,7 +132,7 @@ test('an in-flight grant stays bound to its original origin and is discarded aft
 });
 
 test('local updates stage before retirement and roll back failed startup', async t => {
-  for (const outcome of ['registry', 'npm', 'startup', 'success']) {
+  for (const outcome of ['registry', 'npm', 'native', 'startup', 'success']) {
     const { broker, directory } = await fixture(t, async () => ({}));
     const root = join(directory, 'runtime');
     await mkdir(join(root, 'node_modules/executor'), { recursive: true });
@@ -149,7 +149,8 @@ test('local updates stage before retirement and roll back failed startup', async
       actions.push('stage'); if (outcome === 'npm') throw Error('download failed');
       const stage = args[args.indexOf('--prefix') + 1];
       await mkdir(join(stage, 'node_modules/executor'), { recursive: true });
-      await writeFile(join(stage, 'node_modules/executor/package.json'), JSON.stringify({ version: '2.0.0-beta.12' }));
+      await writeFile(join(stage, 'node_modules/executor/package.json'), JSON.stringify({ version: '2.0.0-beta.12',
+        ...(outcome === 'native' ? { runtimes: {} } : {}) }));
     };
     broker.spawnProcess = (_, args) => { actions.push(args[0].includes('/generations/') ? 'new' : 'old'); return child(outcome !== 'startup' || !args[0].includes('/generations/')); };
     broker.request = async () => { if (outcome === 'startup' && broker.runtimeVersion === '2.0.0-beta.12') throw Error('not ready'); return { body: {} }; };
@@ -161,6 +162,7 @@ test('local updates stage before retirement and roll back failed startup', async
       assert.equal(broker.runtimeVersion, '2.0.0-beta.7'); assert.equal(broker.server.runtimeGeneration, undefined);
       if (outcome !== 'startup') assert.equal(broker.child, original);
       else assert.ok(actions.includes('old'));
+      assert.deepEqual(await readdir(join(root, 'generations')).catch(error => error.code === 'ENOENT' ? [] : Promise.reject(error)), []);
     }
     if (actions.includes('retire')) assert.ok(actions.indexOf('stage') < actions.indexOf('retire'));
     await broker.stop();

@@ -164,7 +164,12 @@ test('Pi and current Bedrock/Smithy SDKs decode actual event-stream text, tools 
   checkResult(await bedrock(model('bedrock-converse-stream', 'amazon-bedrock', f.baseUrl), context, {
     maxRetries: 0, env: { AWS_BEDROCK_SKIP_AUTH: '1', AWS_BEDROCK_FORCE_HTTP1: '1', AWS_REGION: 'us-east-1' },
   }).result());
-  assert.equal(f.requests.length, 1);
+  checkResult(await bedrock(model('bedrock-converse-stream', 'amazon-bedrock', f.baseUrl), context, {
+    apiKey: 'fixture-bedrock-token', maxRetries: 0,
+    env: { AWS_BEDROCK_FORCE_HTTP1: '1', AWS_REGION: 'us-east-1' },
+  }).result());
+  assert.equal(f.requests.length, 2);
+  assert.equal(f.requests[1].headers.authorization, 'Bearer fixture-bedrock-token');
   assert.match(f.requests[0].url, /converse-stream/);
   assert.equal(f.requests[0].body.toolConfig.tools[0].toolSpec.name, 'lookup');
 });
