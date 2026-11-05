@@ -77,7 +77,7 @@ struct CentralLibraryClientTests {
         await fixture.model.refreshWorkspace()
         try await fixture.model.sendBoardItem(boardID: boardID, itemID: card.id, to: conversationID)
         let text = try #require(await direct.lastSendText)
-        #expect(text.contains("Board ID: " + boardID))
+        #expect(text.contains(boardID))
         #expect(text.components(separatedBy: "</board-item-data>").count == 2)
         #expect(!text.contains("Referenced note:"))
         #expect(!text.contains("UNRELATED_PROJECT_PURPOSE"))

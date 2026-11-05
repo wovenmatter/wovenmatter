@@ -52,6 +52,23 @@ import WovenMatterCore
         #expect(state.undoStack.isEmpty)
         #expect(state.error != nil)
     }
+    @Test func normalizedTextTypingRetainsLocalUndoHistory() throws {
+        var state = DashboardCanvasViewState()
+        let block = NoteRichTextBlock(id: "text", text: "Before")
+        let before = NoteDocument(kind: .canvas, blocks: [.richText(block)])
+        var edited = before
+        var text = block
+        text.runs = [NoteTextRun(text: "Bef"), NoteTextRun(text: "ore typing")]
+        edited.blocks = [.richText(text)]
+        edited.stampBoardChanges(from: before, actor: .init(kind: .user))
+        state.recordLocalChange(from: before, to: edited)
+        var saved = edited.normalized()
+        state.observe(before, saved)
+        #expect(state.undoStack.count == 1)
+        state.undo(&saved)
+        #expect(saved.blocks[0].plainText == "Before")
+        #expect(saved.boardItems?[block.id]?.updatedBy?.kind == .user)
+    }
     @Test func zoomKeepsViewportCenterAndFitFindsNegativeCoordinates() {
         var state = DashboardCanvasViewState()
         state.viewport = CGSize(width: 800, height: 600)

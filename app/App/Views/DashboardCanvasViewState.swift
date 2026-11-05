@@ -43,14 +43,17 @@ struct DashboardCanvasViewState {
         lastKnownDocument = new
     }
     mutating func recordLocalChange(from old: NoteDocument, to new: NoteDocument) {
-        guard old != new else { return }
-        if let lastKnownDocument, lastKnownDocument != old {
+        // The binding saves a normalized document. Track that exact shape so
+        // merging adjacent text runs is never mistaken for incoming work.
+        let before = old.normalized(), after = new.normalized()
+        guard before != after else { return }
+        if let lastKnownDocument, lastKnownDocument != before {
             undoStack.removeAll(); redoStack.removeAll()
         }
-        undoStack.append(old)
+        undoStack.append(before)
         if undoStack.count > 30 { undoStack.removeFirst() }
         redoStack.removeAll()
-        pendingLocalDocument = new; lastKnownDocument = new
+        pendingLocalDocument = after; lastKnownDocument = after
     }
     mutating func undo(_ document: inout NoteDocument) {
         guard historyMatches(document), let previous = undoStack.last,
@@ -65,7 +68,7 @@ struct DashboardCanvasViewState {
         pendingLocalDocument = restored; lastKnownDocument = restored; document = restored
     }
     private mutating func historyMatches(_ document: NoteDocument) -> Bool {
-        guard lastKnownDocument == nil || lastKnownDocument == document else {
+        guard lastKnownDocument == nil || lastKnownDocument == document.normalized() else {
             undoStack.removeAll(); redoStack.removeAll(); pendingLocalDocument = nil
             lastKnownDocument = document
             error = "The Board changed. Local undo history has been cleared to preserve incoming work."
