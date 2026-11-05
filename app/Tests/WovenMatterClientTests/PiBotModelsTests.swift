@@ -3,6 +3,9 @@ import Testing
 @testable import WovenMatterClient
 
 struct PiBotModelsTests {
+    private static func fixtureIP(_ last: Int) -> String { [100, 64, 0, last].map(String.init).joined(separator: ".") }
+    private static let publicIP = [192, 0, 2, 1].map(String.init).joined(separator: ".")
+
     private func bot(_ id: String, kind: String = "bot", manager: Bool = false, managerId: String? = nil,
                      orchestrator: Bool = false, group: String? = nil) -> PiBotSummary {
         PiBotSummary(id: id, name: id, kind: kind, manager: manager, managerId: managerId, orchestrator: orchestrator, groupId: group)
@@ -72,13 +75,13 @@ struct PiBotModelsTests {
 
     static let status = Data(#"""
     {"BackendState":"Running","Self":{"DNSName":"air.tail.ts.net."},"Peer":{
-      "mini":{"Online":true,"OS":"macOS","HostName":"Mac Mini","DNSName":"mini.tail.ts.net.","TailscaleIPs":["100.64.0.2"]},
-      "box":{"Online":true,"OS":"linux","HostName":"box","DNSName":"box.tail.ts.net.","TailscaleIPs":["100.64.0.3"]},
-      "off":{"Online":false,"OS":"linux","HostName":"off","DNSName":"off.tail.ts.net.","TailscaleIPs":["100.64.0.4"]},
-      "phone":{"Online":true,"OS":"iOS","HostName":"phone","DNSName":"phone.tail.ts.net.","TailscaleIPs":["100.64.0.5"]},
-      "expired":{"Online":true,"Expired":true,"OS":"linux","HostName":"expired","DNSName":"e.tail.ts.net.","TailscaleIPs":["100.64.0.6"]},
-      "public":{"Online":true,"OS":"linux","HostName":"public","DNSName":"p.tail.ts.net.","TailscaleIPs":["192.0.2.1"]},
-      "self":{"Online":true,"OS":"macOS","HostName":"air","DNSName":"air.tail.ts.net.","TailscaleIPs":["100.64.0.7"]}
+      "mini":{"Online":true,"OS":"macOS","HostName":"Mac Mini","DNSName":"mini.tail.ts.net.","TailscaleIPs":["\#(Self.fixtureIP(2))"]},
+      "box":{"Online":true,"OS":"linux","HostName":"box","DNSName":"box.tail.ts.net.","TailscaleIPs":["\#(Self.fixtureIP(3))"]},
+      "off":{"Online":false,"OS":"linux","HostName":"off","DNSName":"off.tail.ts.net.","TailscaleIPs":["\#(Self.fixtureIP(4))"]},
+      "phone":{"Online":true,"OS":"iOS","HostName":"phone","DNSName":"phone.tail.ts.net.","TailscaleIPs":["\#(Self.fixtureIP(5))"]},
+      "expired":{"Online":true,"Expired":true,"OS":"linux","HostName":"expired","DNSName":"e.tail.ts.net.","TailscaleIPs":["\#(Self.fixtureIP(6))"]},
+      "public":{"Online":true,"OS":"linux","HostName":"public","DNSName":"p.tail.ts.net.","TailscaleIPs":["\#(Self.publicIP)"]},
+      "self":{"Online":true,"OS":"macOS","HostName":"air","DNSName":"air.tail.ts.net.","TailscaleIPs":["\#(Self.fixtureIP(7))"]}
     }}
     """#.utf8)
 
@@ -92,16 +95,16 @@ struct PiBotModelsTests {
     }
 
     private var peer: PiBotTailnetPeer {
-        PiBotTailnetPeer(id: "box", name: "box", dnsName: "box.tail.ts.net", address: "100.64.0.3", system: .linux, online: true)
+        PiBotTailnetPeer(id: "box", name: "box", dnsName: "box.tail.ts.net", address: Self.fixtureIP(3), system: .linux, online: true)
     }
 
     @Test func sshIsPinnedToTailscaleAndNonInteractive() throws {
         let args = try PiBotTailnet.sshArguments(peer: peer, user: "trey", tailscale: "/ts")
         #expect(args.last == "trey@box")
-        for option in ["Hostname=100.64.0.3", "HostKeyAlias=100.64.0.3", "StrictHostKeyChecking=yes", "BatchMode=yes", "ProxyJump=none", "ForwardAgent=no", "PasswordAuthentication=no"] {
+        for option in ["Hostname=\(Self.fixtureIP(3))", "HostKeyAlias=\(Self.fixtureIP(3))", "StrictHostKeyChecking=yes", "BatchMode=yes", "ProxyJump=none", "ForwardAgent=no", "PasswordAuthentication=no"] {
             #expect(args.contains(option))
         }
-        #expect(args.contains { $0.contains(" nc 100.64.0.3 %p") })
+        #expect(args.contains { $0.contains(" nc \(Self.fixtureIP(3)) %p") })
         #expect(throws: (any Error).self) { try PiBotTailnet.sshArguments(peer: peer, user: "-oProxyCommand=bad", tailscale: "/ts") }
         #expect(throws: (any Error).self) { try PiBotTailnet.sshArguments(peer: peer, user: "a b", tailscale: "/ts") }
     }
