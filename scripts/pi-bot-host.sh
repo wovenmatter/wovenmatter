@@ -32,8 +32,8 @@ sha256() {
 }
 command_name="${1:-}"
 [ "$#" -gt 0 ] && shift
-case "$command_name" in inspect|install|start|stop|restart|status|uninstall) ;;
-  *) abort arguments 'Expected inspect, install, start, stop, restart, status or uninstall.' 64 ;; esac
+case "$command_name" in inspect|install|cancel-install|start|stop|restart|status|uninstall) ;;
+  *) abort arguments 'Expected inspect, install, cancel-install, start, stop, restart, status or uninstall.' 64 ;; esac
 instance= root= commit= node_version= node_sha= pnpm_version= bundle= tooling= port= service=yes delete_data=no
 seen=' '
 while [ "$#" -gt 0 ]; do
@@ -104,7 +104,9 @@ if [ "$owned" = yes ] && [ -L "$root/current" ]; then
   target="$(readlink "$root/current")"
   if [[ "$target" =~ ^releases/[a-f0-9]{40}$ ]] && [ -d "$root/$target" ]; then current_commit="${target#releases/}"; fi
 fi
-config_port() { sed -n '/^\[server\]/,/^\[/s/^[[:space:]]*port[[:space:]]*=[[:space:]]*\([0-9]*\)[[:space:]]*$/\1/p' "$root/config.toml"; }
+# Pi Bot's Config page saves this file as written, so a trailing comment is ordinary.
+toml_port() { sed -n '/^\[server\]/,/^\[/s/^[[:space:]]*port[[:space:]]*=[[:space:]]*\([0-9]*\)[[:space:]]*\(#.*\)\{0,1\}$/\1/p' "$1"; }
+config_port() { toml_port "$root/config.toml"; }
 valid_port() { [[ "$1" =~ ^[1-9][0-9]{3,4}$ ]] && [ "$1" -ge 1024 ] && [ "$1" -le 65535 ] && [ "$1" -ne 4317 ]; }
 managed_port=
 if [ "$owned" = yes ] && [ -f "$root/config.toml" ]; then managed_port="$(config_port)"; fi
@@ -134,7 +136,7 @@ if [ "$command_name" = inspect ]; then
     printf '4317\n'
     standalone_config="$HOME/.config/pi-bot/config.toml"
     if [ -r "$standalone_config" ]; then
-      sed -n '/^\[server\]/,/^\[/s/^[[:space:]]*port[[:space:]]*=[[:space:]]*\([0-9]*\)[[:space:]]*$/\1/p' "$standalone_config"
+      toml_port "$standalone_config"
     fi
   }
   separator=
@@ -156,6 +158,20 @@ if [ "$command_name" = inspect ]; then
     separator=,
   done < <(listener_ports | sort -un)
   printf ']}\n'; exit
+fi
+# An installer whose SSH client is gone can outlive it, so cancelling is explicit and waits.
+if [ "$command_name" = cancel-install ]; then
+  owner="$(cat "$root/.install-lock/pid" 2>/dev/null || true)"
+  if [[ "$owner" =~ ^[0-9]+$ ]] && kill -0 "$owner" 2>/dev/null; then
+    kill -TERM "$owner" 2>/dev/null || true
+    # The installer releases its lock as its last act; an unreaped process still looks alive.
+    for ((attempt=0; attempt<60; attempt++)); do
+      [ -d "$root/.install-lock" ] && kill -0 "$owner" 2>/dev/null || break
+      sleep 0.5
+    done
+    if [ -d "$root/.install-lock" ] && kill -0 "$owner" 2>/dev/null; then abort locked 'The running install did not stop.'; fi
+  fi
+  printf '{"schema":1,"action":"cancel-install"}\n'; exit
 fi
 [ "$command_name" = install ] || [ -n "$current_commit" ] || { [ "$command_name" = uninstall ] && [ "$owned" = yes ]; } || abort not_installed 'No managed installation exists at this root.'
 if [ "$command_name" = status ]; then
@@ -183,12 +199,24 @@ done
 if [ "$owned" != yes ]; then
   [ -z "$(ls -A "$root")" ] || abort foreign_root 'Root is nonempty and is not owned by this instance.'
 fi
-lock_held=no; scratch_pid=; scratch=; stage=; guard_held=no
+lock_held=no; scratch_pid=; scratch=; stage=; guard_held=no; child_pid=
+# Bash runs a signal trap only between foreground commands, so anything slow runs in the
+# background under wait. Cancelling then takes effect now instead of when npm finishes.
+run_child() {
+  local directory="$1" status=0
+  shift
+  ( cd -P "$directory" && exec "$@" ) >&2 &
+  child_pid=$!
+  wait "$child_pid" || status=$?
+  child_pid=
+  return "$status"
+}
 promotion_pending=no; new_release=no; service_attempted=no; tooling_replaced=no
 cleanup() {
   local result=$?
   trap - EXIT
   set +e
+  if [ -n "$child_pid" ]; then kill "$child_pid" 2>/dev/null; wait "$child_pid" 2>/dev/null; child_pid=; fi
   if [ "$result" -ne 0 ] && [ "$promotion_pending" = yes ]; then
     if [ "$service_attempted" = yes ]; then service_action stop; fi
     if [ -n "$current_commit" ]; then swap_current "$current_commit"; else rm -f "$root/current"; fi
@@ -294,7 +322,7 @@ progress node
 archive_name="node-v$node_version-$os-$arch.tar.gz"
 archive="$root/node/$archive_name"
 if [ ! -f "$archive" ]; then
-  curl --fail --location --silent --show-error "https://nodejs.org/dist/v$node_version/$archive_name" -o "$stage/node.tar.gz" >&2
+  run_child "$stage" curl --fail --location --silent --show-error "https://nodejs.org/dist/v$node_version/$archive_name" -o "$stage/node.tar.gz"
   [ "$(sha256 "$stage/node.tar.gz")" = "$node_sha" ] || abort checksum 'Node archive SHA-256 mismatch.'
   mv "$stage/node.tar.gz" "$archive"
 fi
@@ -328,10 +356,10 @@ const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json')));
 const lock = JSON.parse(fs.readFileSync(path.join(root, 'package-lock.json')));
 if (pkg.dependencies.pnpm !== version || lock.packages['node_modules/pnpm'].version !== version) throw Error('Tooling does not lock the requested pnpm version.');
 JS
-(cd -P "$stage/tooling" && npm ci --no-audit --no-fund) >&2
+run_child "$stage/tooling" npm ci --no-audit --no-fund
 pnpm="$stage/tooling/node_modules/.bin/pnpm"
 [ "$("$pnpm" --version)" = "$pnpm_version" ] || abort tooling 'Installed pnpm version mismatch.'
-(cd -P "$stage/release" && "$pnpm" install --prod --frozen-lockfile --filter '@wovenmatter/pi-bot...' --store-dir "$root/pnpm-store") >&2
+run_child "$stage/release" "$pnpm" install --prod --frozen-lockfile --filter '@wovenmatter/pi-bot...' --store-dir "$root/pnpm-store"
 printf '%s\n' "$node_version" > "$stage/release/.node-version"
 port_busy() { (echo > "/dev/tcp/127.0.0.1/$1") >/dev/null 2>&1; }
 free_port() {

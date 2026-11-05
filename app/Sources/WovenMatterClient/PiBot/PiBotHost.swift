@@ -170,6 +170,7 @@ public struct PiBotHostRunner: Sendable {
         private let lock = NSLock()
         private var pid: pid_t?
         private var cancelled = false
+        private var finished = false
         var started: @Sendable (pid_t) -> Void {
             { [self] value in
                 let stop = lock.withLock { () -> Bool in pid = value; return cancelled }
@@ -178,14 +179,22 @@ public struct PiBotHostRunner: Sendable {
         }
         func cancel() {
             let value = lock.withLock { () -> pid_t? in cancelled = true; return pid }
-            if let value { kill(value, SIGTERM) }
+            guard let value else { return }
+            kill(value, SIGTERM)
+            DispatchQueue.global().asyncAfter(deadline: .now() + 15) { [self] in
+                if lock.withLock({ !finished }) { kill(value, SIGKILL) }
+            }
         }
+        func finish() { lock.withLock { finished = true } }
     }
 
     private static func cancellable(_ body: @escaping @Sendable (ProcessHandle) throws -> Data) async throws -> Data {
         let handle = ProcessHandle()
         let data = try await withTaskCancellationHandler {
-            try await Task.detached(priority: .userInitiated) { try body(handle) }.value
+            try await Task.detached(priority: .userInitiated) {
+                defer { handle.finish() }
+                return try body(handle)
+            }.value
         } onCancel: { handle.cancel() }
         try Task.checkCancellation()
         return data

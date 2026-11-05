@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import tarfile
 import tempfile
 import unittest
 
@@ -12,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[2]
 NODE = shutil.which('node')
 PACKAGE = '''import hashlib, io, json, os, pathlib, subprocess, sys, tarfile
 root = pathlib.Path.cwd()
-commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+commit = os.environ.get('PI_BOT_PACKAGE_COMMIT') or subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
 lock = (root/'pnpm-lock.yaml').read_bytes()
 manifest = dict(commit=commit, protocol=1, version='0.1.0', lockSha256=hashlib.sha256(lock).hexdigest())
 with tarfile.open(sys.argv[2], 'w:gz') as output:
@@ -94,8 +95,17 @@ esac
         self.assertEqual((self.repo/'calls').read_text().count('package\n'), 3)
         self.assertFalse((self.source/'node_modules').exists())
         self.assertTrue((output/'pi-bot-host.sh').exists())
-        self.assertEqual(json.loads((output/'selection.json').read_text())['commit'],
-            subprocess.check_output(['git', '-C', str(self.source), 'rev-parse', 'HEAD'], text=True).strip())
+        # Uncommitted source names its content: HEAD would look already installed.
+        head = subprocess.check_output(['git', '-C', str(self.source), 'rev-parse', 'HEAD'], text=True).strip()
+        dirty = json.loads((output/'selection.json').read_text())['commit']
+        self.assertNotEqual(dirty, head)
+        self.assertRegex(dirty, r'^[a-f0-9]{40}$')
+        with tarfile.open(output/'pi-bot-bundle.tar.gz') as bundle:
+            self.assertEqual(json.load(bundle.extractfile('manifest.json'))['commit'], dirty)
+        (self.source/'untracked.txt').unlink()
+        subprocess.run(['git', '-C', str(self.source), 'checkout', '--', '.'], check=True)
+        self.prepare()
+        self.assertEqual(json.loads((output/'selection.json').read_text())['commit'], head)
         self.assertTrue((output/'tooling/package-lock.json').exists())
 
     def test_release_refuses_override_and_missing_packager_fails_clearly(self):

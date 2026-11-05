@@ -20,7 +20,7 @@ final class BotWebSession: NSObject, WKScriptMessageHandler, WKNavigationDelegat
     private(set) var ready = false
     private(set) var lastRoute: String?
     private var requestedHash: String?
-    private var requestedAt: ContinuousClock.Instant?
+    private var navigationToken = 0
     private var pendingFocus = false
     private var headerInsets: (left: CGFloat, right: CGFloat)?
     private var context: String?
@@ -74,7 +74,7 @@ final class BotWebSession: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         loadedBase = base
         lastRoute = nil
         requestedHash = hash
-        requestedAt = nil
+        navigationToken = 0
         guard var components = URLComponents(url: base, resolvingAgainstBaseURL: false) else { return }
         components.path = "/"
         components.queryItems = [.init(name: "host", value: "woven"), .init(name: "theme", value: theme)]
@@ -89,8 +89,9 @@ final class BotWebSession: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         }
         requestedHash = hash
         guard ready else { return }
-        requestedAt = .now
-        call("navigate", argument: hash)
+        navigationToken += 1
+        let encoded = (try? JSONEncoder().encode(hash)).map { String(decoding: $0, as: UTF8.self) } ?? "null"
+        webView.evaluateJavaScript("window.wovenPiBotHost?.navigate?.(\(encoded),\(navigationToken))", completionHandler: nil)
     }
 
     func setTheme(_ value: String) {
@@ -137,17 +138,12 @@ final class BotWebSession: NSObject, WKScriptMessageHandler, WKNavigationDelegat
         case "route":
             let hash = body["hash"] as? String ?? ""
             lastRoute = hash
-            // The client reports where it is, which can still be where it was before a
-            // newer selection here reached it. Only the requested route settles that.
-            if let requestedHash {
-                if hash == requestedHash {
-                    self.requestedHash = nil
-                } else if !ready || requestedAt.map({ $0.duration(to: .now) < .seconds(2) }) ?? true {
-                    return
-                } else {
-                    self.requestedHash = nil
-                }
-            }
+            // A report can describe where the client was before a newer selection here reached
+            // it. Its token says which request it follows, so only the latest counts. Before
+            // the first request of a load, only the route that load asked for does.
+            guard body["navigation"] as? Int ?? 0 == navigationToken else { return }
+            if navigationToken == 0, let requestedHash, hash != requestedHash { return }
+            requestedHash = nil
             onRoute?(Route(hash: hash, target: Self.target(from: body)))
         case "openExternal":
             if let raw = body["url"] as? String, let url = URL(string: raw),

@@ -71,6 +71,12 @@ for (const file of [selection, path.join(tooling, 'package.json'), path.join(too
 console.log(hash.digest('hex'));
 JS
 )"
+# HEAD does not identify uncommitted source, so a Debug build of it names its content.
+# Otherwise a rebuild would look already installed, or conflict with what is.
+if [ -n "$source_override" ] && [ -n "$(git -C "$source_root" status --porcelain)" ]; then
+  commit="$(printf '%s' "$fingerprint" | cut -c1-40)"
+  export PI_BOT_PACKAGE_COMMIT="$commit"
+fi
 key="$commit-$version-$node_os-$node_arch-$fingerprint"
 dependency_root="${TMPDIR:-/tmp}/wovenmatter-pi-bot-dependencies-$key"
 # Every producer owns a unique stage; a completed cache contains no dependencies.

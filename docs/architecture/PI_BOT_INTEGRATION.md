@@ -102,7 +102,7 @@ inspect   --instance NAME [--root DIR]
 install   --instance NAME [--root DIR] --commit SHA --node-version V --node-sha256 H
           --pnpm-version V --bundle FILE|- --tooling-lock-dir DIR|- [--service|--no-service]
           [--port P]
-start | stop | restart | status   --instance NAME [--root DIR]
+cancel-install | start | stop | restart | status   --instance NAME [--root DIR]
 uninstall --instance NAME [--root DIR] [--delete-data]
 ```
 
@@ -167,7 +167,8 @@ same approach as the fallback note.
 
 Bot notifications from Woven Matter arrive through ordinary `message.send` to the bot's main
 channel, with an optional `deliveryId`. Pi Bot remembers it, so a retry after a lost
-acknowledgement cannot submit the same work twice.
+acknowledgement cannot submit the same work twice. Delivery is at-least-once: a crash between
+submitting and recording acceptance repeats a notification rather than losing it.
 
 ## Host bridge
 
@@ -178,7 +179,7 @@ with no tab row, because Woven provides that navigation. The standalone client i
 Native to web, on `window.wovenPiBotHost`:
 
 ```
-setTheme(theme)        navigate(hashRoute)        setContext(string | null)        focusComposer()
+setTheme(theme)        navigate(hashRoute, token)        setContext(string | null)        focusComposer()
 setHeaderInsets(left, right)
 ```
 
@@ -186,10 +187,13 @@ Web to native, through `window.webkit.messageHandlers.wovenBots.postMessage`, ea
 
 ```
 { kind: "ready", protocol, installationId }
-{ kind: "route", hash, botId?, conversationId?, threadView?, settings?, section? }
+{ kind: "route", hash, navigation, botId?, conversationId?, threadView?, settings?, section? }
 { kind: "connection", state }
 { kind: "openExternal", url }
 ```
+
+`navigation` echoes the latest `navigate` token. A report carrying an older token describes a
+route from before the host's newest selection, so the host ignores it.
 
 Native code validates the main frame and origin on every message. The bridge exposes no RPC,
 files or credentials. Drafts survive bot switches, keyed by bot and conversation.

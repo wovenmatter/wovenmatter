@@ -59,6 +59,10 @@ final class PiBotRuntimeSupervisor {
     /// Device commands can outlast one backend RPC, so they run here and report through the snapshot.
     private var operation: Task<Void, Never>?
     private var generation = 0
+    /// Grants are only issued here, one at a time, so leaving a device can wait them out.
+    private var wovenSetup: Task<Void, Never>?
+    /// SSH ending does not stop a remote installer, which has to be told.
+    private var remoteInstall: PiBotDeploymentTarget?
     private var server: Process?
     private var expectedExit = false
     private let tunnel = PiBotTunnel()
@@ -122,7 +126,10 @@ final class PiBotRuntimeSupervisor {
             guard let self else { return }
             do { try await self.execute(command) }
             catch is CancellationError {}
-            catch { self.snapshot.error = error.localizedDescription }
+            catch {
+                self.snapshot.error = error.localizedDescription
+                self.snapshot.message = nil
+            }
             self.operation = nil
             self.snapshot.busy = false
             self.onChange?()
@@ -148,20 +155,27 @@ final class PiBotRuntimeSupervisor {
             save()
             supervise()
         case .start:
+            try await remoteLifecycle("start")
             persisted.stopped = false
             save()
-            try await remoteLifecycle("start")
             supervise()
         case .stop:
             // Stop on the device first: failing here must leave everything as it was.
-            try await remoteLifecycle("stop")
+            await stopSupervision()
+            do { try await remoteLifecycle("stop") }
+            catch {
+                await closeTransport()
+                supervise()
+                throw error
+            }
             persisted.stopped = true
             save()
-            await halt()
+            await closeTransport()
             update(.stopped, message: nil)
         case .restart:
-            await halt()
+            // On a device this can fail while everything still works, so it goes first.
             try await remoteLifecycle("restart")
+            await halt()
             persisted.stopped = false
             save()
             supervise()
@@ -171,14 +185,13 @@ final class PiBotRuntimeSupervisor {
             save()
             supervise(install: true)
         case .forget(let abandon):
-            do { try await leaveCurrentTarget() }
-            catch where abandon { await disconnectLocally() }
+            try await leaveCurrentTarget(abandon: abandon)
             clearDeployment()
         case .remove(let deleteData):
             guard let target = persisted.target, target.ownership == .managed else {
                 throw PiBotHostError.command("Woven Matter did not install this Pi Bot, so it cannot remove it.")
             }
-            await disconnectLocally()
+            try await leaveCurrentTarget(abandon: true)
             update(.stopped, message: "Removing Pi Bot from \(target.displayName)…")
             try await runner.uninstall(target, deleteData: deleteData, script: try scriptData())
             clearDeployment()
@@ -237,26 +250,45 @@ final class PiBotRuntimeSupervisor {
         save()
     }
 
-    /// Bots keep their data where they are. A managed remote service stops first, so the
-    /// old device does not keep running bots nobody can see, and a failure there changes nothing.
-    private func leaveCurrentTarget() async throws {
-        try await remoteLifecycle("stop")
-        await disconnectLocally()
-    }
-
-    /// An attached server keeps running after this, so its Woven access must end here.
-    private func disconnectLocally() async {
+    /// Bots keep their data where they are, and each step leaves nothing able to undo the
+    /// next: supervision ends so no grant can follow the revocation, and a managed remote
+    /// service stops so the old device does not keep running bots nobody can see. If it
+    /// cannot be stopped nothing has changed for the user, unless they chose to abandon it.
+    private func leaveCurrentTarget(abandon: Bool = false) async throws {
+        await stopSupervision()
         if let control, await control.state == .open { _ = try? await control.wovenDisconnect() }
+        do { try await remoteLifecycle("stop") }
+        catch {
+            guard abandon else {
+                await closeTransport()
+                supervise()
+                throw error
+            }
+        }
         if let installation = persisted.installationID ?? snapshot.health?.installationId { revokeMCPGrants?(installation) }
-        await halt()
+        await closeTransport()
     }
 
     private func halt() async {
+        await stopSupervision()
+        await closeTransport()
+    }
+
+    /// When this returns, nothing is installing, reconnecting or issuing a grant.
+    private func stopSupervision() async {
         let running = supervision
         supervision = nil
         generation += 1
         running?.cancel()
         await running?.value
+        await wovenSetup?.value
+        if let target = remoteInstall, let script = try? scriptData() {
+            remoteInstall = nil
+            try? await runner.lifecycle("cancel-install", target, script: script)
+        }
+    }
+
+    private func closeTransport() async {
         if let control { await control.invalidate() }
         control = nil; controlBase = nil
         await tunnel.stop()
@@ -344,8 +376,10 @@ final class PiBotRuntimeSupervisor {
                 self.update(.installing, message: message)
             }
         }
+        if target.kind == .tailnet { remoteInstall = target }
         let result = try await runner.install(target, bundle: bundle, inspection: inspection,
             service: target.kind == .tailnet, port: inspection.managed.port ?? persisted.serverPort, progress: progress)
+        remoteInstall = nil
         try Task.checkCancellation()
         persisted.installedCommit = result.commit
         persisted.serverPort = result.port
@@ -484,12 +518,27 @@ final class PiBotRuntimeSupervisor {
     /// Bots keep working if this fails; only Woven tools are unavailable, and the next
     /// reconnect or policy change retries. `force` also refreshes discovered tools.
     private func ensureWovenConnection(force: Bool = false) async {
-        guard let control, let target = persisted.target, let health = snapshot.health,
+        let previous = wovenSetup
+        let current = generation
+        let setup = Task { [weak self] in
+            await previous?.value
+            await self?.connectWoven(force: force, generation: current)
+        }
+        wovenSetup = setup
+        await setup.value
+    }
+
+    /// Every suspension can straddle the user leaving this deployment, and a grant issued
+    /// after that revocation would outlive it, so each one rechecks before going on.
+    private func connectWoven(force: Bool, generation current: Int) async {
+        guard current == generation, let control, let target = persisted.target, let health = snapshot.health,
               health.supports("woven.mcp"), let installation = health.installationId else { return }
         // The socket may still be completing its hello.
         for _ in 0..<40 where await control.state != .open { try? await Task.sleep(for: .milliseconds(100)) }
         do {
-            guard await mcpEnabled?() == true else {
+            let enabled = await mcpEnabled?() == true
+            guard current == generation else { return }
+            guard enabled else {
                 snapshot.woven = try await control.wovenDisconnect()
                 revokeMCPGrants?(installation)
                 onChange?()
@@ -497,12 +546,15 @@ final class PiBotRuntimeSupervisor {
             }
             // Pi Bot resolves this address itself: this Mac's own loopback is not reachable
             // from another device, so only that device's end of the reverse forward will do.
-            guard let endpoint = await reachableMCPEndpoint(for: target) else {
-                snapshot.woven = PiBotWovenStatus(state: "unavailable", error: "Woven MCP is not reachable from \(target.displayName) yet.")
-                onChange?()
+            guard let endpoint = await reachableMCPEndpoint(for: target), current == generation else {
+                if current == generation {
+                    snapshot.woven = PiBotWovenStatus(state: "unavailable", error: "Woven MCP is not reachable from \(target.displayName) yet.")
+                    onChange?()
+                }
                 return
             }
             let status = try await control.wovenStatus()
+            guard current == generation else { return }
             if !force, status.endpointURL == endpoint, status.state == "ready" || status.state == "connecting" {
                 snapshot.woven = status
                 onChange?()
@@ -510,8 +562,12 @@ final class PiBotRuntimeSupervisor {
             }
             guard let issue = issueMCPGrant else { return }
             let grant = try await issue(installation)
-            snapshot.woven = try await control.wovenConnect(endpointURL: endpoint, bearerToken: grant.bearerToken)
+            guard current == generation else { return }
+            let connected = try await control.wovenConnect(endpointURL: endpoint, bearerToken: grant.bearerToken)
+            guard current == generation else { return }
+            snapshot.woven = connected
         } catch {
+            guard current == generation else { return }
             snapshot.woven = PiBotWovenStatus(state: "unavailable", error: error.localizedDescription)
         }
         onChange?()

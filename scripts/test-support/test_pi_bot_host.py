@@ -9,6 +9,7 @@ import socket
 import subprocess
 import tarfile
 import tempfile
+import time
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -30,6 +31,9 @@ elif name == 'ldd':
 elif name == 'loginctl': print(os.environ.get('PIBOT_TEST_LINGER', 'no'))
 elif name == 'npm':
     assert args == ['ci', '--no-audit', '--no-fund'], args
+    if os.environ.get('PIBOT_TEST_HANG_NPM') == '1':
+        (base/'npm-started').write_text(str(os.getpid()))
+        time.sleep(60)
     bin = Path('node_modules/.bin'); bin.mkdir(parents=True)
     (bin/'pnpm').symlink_to(base/'bin/pnpm')
     print('fake npm ci')
@@ -253,6 +257,34 @@ class HostTests(unittest.TestCase):
         self.assertEqual(len(value['existing']), 2)
         self.assertFalse(value['lingering'])
         self.assertEqual(self.calls('systemctl'), [])
+
+    def test_config_port_tolerates_a_trailing_comment(self):
+        self.install()
+        config = self.root/'config.toml'
+        config.write_text(config.read_text().replace('port = ', 'port = 47399 # chosen\nignored = ', 1))
+        self.assertEqual(self.run_host('inspect')['managed']['port'], 47399)
+
+    def test_cancel_install_stops_a_slow_child_now_and_releases_the_lock(self):
+        env = dict(self.env, PIBOT_TEST_HANG_NPM='1')
+        command = ['/bin/bash', str(ROOT/'scripts/pi-bot-host.sh'), 'install', '--instance', 'fixture', '--root', str(self.root),
+            '--commit', 'a'*40, '--node-version', '26.13.0', '--node-sha256', self.checksum, '--pnpm-version', '12.16.1',
+            '--bundle', str(self.bundle), '--tooling-lock-dir', str(self.tooling), '--no-service']
+        installer = subprocess.Popen(command, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        started = self.base/'npm-started'
+        for _ in range(100):
+            if started.exists(): break
+            time.sleep(0.1)
+        self.assertTrue(started.exists())
+        self.assertEqual(self.run_host('cancel-install')['action'], 'cancel-install')
+        installer.communicate(timeout=20)
+        self.assertNotEqual(installer.returncode, 0)
+        self.assertFalse((self.root/'.install-lock').exists())
+        self.assertFalse((self.root/'current').exists())
+        with self.assertRaises(ProcessLookupError): os.kill(int(started.read_text()), 0)
+
+    def test_cancel_install_without_an_installer_is_a_no_op(self):
+        self.install()
+        self.assertEqual(self.run_host('cancel-install')['action'], 'cancel-install')
 
     def test_json_and_config_escape_paths(self):
         self.root = self.base/'managed "quote" \\ slash\t unicode-é'

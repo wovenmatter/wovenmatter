@@ -27,7 +27,11 @@ struct PiBotRuntimeSupervisorTests {
         Issue.record("Still \(supervisor.snapshot.phase)")
     }
 
-    private func attached(port: Int) -> PiBotDeploymentTarget {
+    /// A port nothing listens on: these tests must never reach a real Pi Bot, such as one
+    /// on its standard port, because disconnecting would delete its Woven connection.
+    private let port = PiBotLoopback.freePort()!
+
+    private func attached() -> PiBotDeploymentTarget {
         PiBotDeploymentTarget(kind: .thisMac, ownership: .attached, remotePort: port)
     }
 
@@ -40,23 +44,23 @@ struct PiBotRuntimeSupervisorTests {
 
     @Test func anAttachedServerUsesThePortTheUserChose() async throws {
         let supervisor = make()
-        _ = try await supervisor.perform(.attach(attached(port: 4317)))
+        _ = try await supervisor.perform(.attach(attached()))
         try await settled(supervisor, [.ready])
-        #expect(supervisor.snapshot.baseURL?.port == 4317)
+        #expect(supervisor.snapshot.baseURL?.port == port)
         #expect(supervisor.snapshot.health?.installationId == Self.installation)
         await supervisor.shutdown()
     }
 
     @Test func aSavedDeploymentResumesWithItsPortAfterRelaunch() async throws {
         let first = make()
-        _ = try await first.perform(.attach(attached(port: 4317)))
+        _ = try await first.perform(.attach(attached()))
         try await settled(first, [.ready])
         await first.shutdown()
         let second = make()
-        #expect(second.snapshot.target?.remotePort == 4317)
+        #expect(second.snapshot.target?.remotePort == port)
         second.start()
         try await settled(second, [.ready])
-        #expect(second.snapshot.baseURL?.port == 4317)
+        #expect(second.snapshot.baseURL?.port == port)
         await second.shutdown()
     }
 
@@ -64,7 +68,7 @@ struct PiBotRuntimeSupervisorTests {
         let supervisor = make()
         var revoked: [String] = []
         supervisor.revokeMCPGrants = { revoked.append($0) }
-        _ = try await supervisor.perform(.attach(attached(port: 4317)))
+        _ = try await supervisor.perform(.attach(attached()))
         try await settled(supervisor, [.ready])
         _ = try await supervisor.perform(.forget(abandon: false))
         try await settled(supervisor, [.notConfigured])
@@ -77,7 +81,7 @@ struct PiBotRuntimeSupervisorTests {
 
     @Test func aServerThatNeverAnswersKeepsRetryingInsteadOfClaimingReady() async throws {
         let supervisor = make(health: nil)
-        _ = try await supervisor.perform(.attach(attached(port: 4317)))
+        _ = try await supervisor.perform(.attach(attached()))
         try await Task.sleep(for: .milliseconds(150))
         #expect(supervisor.snapshot.phase != .ready)
         #expect(supervisor.snapshot.baseURL == nil)
@@ -94,7 +98,7 @@ struct PiBotRuntimeSupervisorTests {
 
     @Test func aSecondActionWaitsForTheFirst() async throws {
         let supervisor = make()
-        _ = try await supervisor.perform(.attach(attached(port: 4317)))
+        _ = try await supervisor.perform(.attach(attached()))
         await #expect(throws: (any Error).self) { _ = try await supervisor.perform(.restart) }
         try await settled(supervisor, [.ready])
         await supervisor.shutdown()
@@ -102,7 +106,7 @@ struct PiBotRuntimeSupervisorTests {
 
     @Test func removingIsRefusedForAServerWovenDidNotInstall() async throws {
         let supervisor = make()
-        _ = try await supervisor.perform(.attach(attached(port: 4317)))
+        _ = try await supervisor.perform(.attach(attached()))
         try await settled(supervisor, [.ready])
         _ = try await supervisor.perform(.remove(deleteData: true))
         try await settled(supervisor, [.ready])

@@ -428,6 +428,32 @@ extension WovenMCPHostTests {
         #expect(history.activities.contains { $0.runID == run.runID && $0.activity.htmlRender?.title == "Bot page" })
     }
 
+    /// Relationships synchronize between paired Macs and bot grants do not. A Mac that does
+    /// not host this bot must neither clear its coordination nor consume its events.
+    @Test func aBotHostedByAnotherMacKeepsItsCoordinationHere() async throws {
+        let fixture = try await MCPHostFixture(); defer { fixture.remove() }
+        let installation = UUID().uuidString.lowercased()
+        _ = try await fixture.host.issueBotGrant(installationID: installation)
+        let caller = WovenMCPCaller.bot(installationID: installation, botID: UUID().uuidString)
+        try await fixture.database.registerBotCaller(caller, displayName: "Elsewhere")
+        _ = try await fixture.database.requestCoordinationAccess(sourceID: caller, targetID: fixture.caller,
+            purpose: "Coordinate", requestID: UUID().uuidString)
+        try await fixture.database.write { connection in
+            try connection.toolsExecuteUnlocked("DELETE FROM workspace_mcp_bot_installations WHERE installation_id=?", [installation])
+        }
+        #expect(try await fixture.database.collectCoordinationTurnNotifications().isEmpty)
+        #expect(try await fixture.database.sessionRelationship(fixture.caller).coordinatorID == caller)
+        #expect(try await fixture.database.recordCoordinationNeedsInput(sessionID: fixture.caller,
+            requestID: "elsewhere-input", requiresUserApproval: true) == nil)
+        #expect(try await fixture.database.sessionRelationship(fixture.caller).coordinatorID == caller)
+
+        // A local revocation still retires it.
+        _ = try await fixture.host.issueBotGrant(installationID: installation)
+        try await fixture.database.setBotInstallation(installation, active: false)
+        #expect(try await fixture.database.collectCoordinationTurnNotifications().isEmpty)
+        #expect(try await fixture.database.sessionRelationship(fixture.caller).coordinatorID == nil)
+    }
+
     @Test func botNotificationsRetryWithoutReobservingOrDuplicatingAcceptedEvents() async throws {
         let fixture = try await MCPHostFixture(); defer { fixture.remove() }
         let installation = UUID().uuidString, botID = UUID().uuidString
