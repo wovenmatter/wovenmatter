@@ -14,19 +14,18 @@ struct SettingsDictationView: View {
     @State private var error: String?
 
     var body: some View {
-        SettingsPage(title: "Dictation", detail: "Your completed dictations. Click on an entry to see it in full.",
+        SettingsPage(title: "Dictation", detail: "Dictate into conversations and notes with Apple on-device speech. Use ⇧⌘D to start or stop in the focused editor.",
             reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
+            languageSection
+            SettingsSection(title: "History", detail: "Your completed dictations. Click an entry to see it in full.") {
             if let problem = DictationSession.shared.historyError {
-                Text(problem).font(.system(size: 13)).foregroundStyle(DashboardPalette.danger)
+                Text(problem).font(.settingsText).foregroundStyle(DashboardPalette.danger)
                 Button("Retry saving") { DictationSession.shared.retrySavingHistory() }.buttonStyle(SettingsQuietButtonStyle())
             }
-            if let error { Text(error).font(.system(size: 13)).foregroundStyle(DashboardPalette.danger) }
+            if let error { Text(error).font(.settingsText).foregroundStyle(DashboardPalette.danger) }
             if !loaded { ProgressView() }
             else if records.isEmpty {
-                SettingsCard(title: "No dictations yet") {
-                    Text("Completed dictations will appear here when you stop recording.")
-                        .font(.system(size: 13)).foregroundStyle(DashboardPalette.mutedForeground)
-                }
+                SettingsEmpty("Completed dictations will appear here when you stop recording.")
             }
             LazyVStack(spacing: 8) {
                 ForEach(records) { record in DictationHistoryRow(record: record) }
@@ -43,7 +42,7 @@ struct SettingsDictationView: View {
                     Button { changePage(to: page - 1) } label: {
                         DashboardLucideIcon(glyph: .arrowLeft, size: 16).frame(width: 32, height: 32)
                     }.disabled(page == 0).accessibilityLabel("Previous page").help("Previous page")
-                    Text("Page \(page + 1)").font(.system(size: 12)).monospacedDigit()
+                    Text("Page \(page + 1)").font(.settingsBody).monospacedDigit()
                         .foregroundStyle(DashboardPalette.mutedForeground).fixedSize()
                     Button { changePage(to: page + 1) } label: {
                         DashboardLucideIcon(glyph: .arrowRight, size: 16).frame(width: 32, height: 32)
@@ -51,6 +50,7 @@ struct SettingsDictationView: View {
                     // Balance the first-page slot so the page number stays centered.
                     Color.clear.frame(width: 32, height: 32).accessibilityHidden(true)
                 }.buttonStyle(DashboardIconButtonStyle()).frame(maxWidth: .infinity)
+            }
             }
         }
         .id(page)
@@ -62,6 +62,23 @@ struct SettingsDictationView: View {
         }
         .onChange(of: DictationSession.shared.historyRevision) { _, _ in Task { await reload() } }
     }
+    private var languageSection: some View {
+        @Bindable var dictation = DictationModel.shared
+        return SettingsSection {
+            SettingsRow(title: "Language", detail: dictation.availability) {
+                SettingsPicker("Dictation language", selection: $dictation.languageIdentifier,
+                    options: [""] + dictation.session.availableLanguages) { identifier in
+                    identifier.isEmpty ? "Automatic" : Locale.current.localizedString(forIdentifier: identifier) ?? identifier
+                }
+                .disabled(dictation.isBusy)
+            }
+            SettingsHelp {
+                SettingsNote("Audio stays on this Mac. Apple may download language support the first time you dictate. Transcripts remain drafts for review.")
+            }
+        }
+        .task { await dictation.refreshAvailability() }
+    }
+
     private func changePage(to newPage: Int) {
         records = []; loaded = false; hasNextPage = false; error = nil
         page = newPage
@@ -85,18 +102,17 @@ private struct DictationHistoryRow: View {
     let record: DictationRecord
     @State private var expanded = false
     @State private var copied = false
-    @Environment(\.dashboardTheme) private var theme
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(record.createdAt.formatted(date: .abbreviated, time: .shortened))
-                .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
+                .font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground)
             if expanded {
-                Text(record.text).font(.system(size: 13)).textSelection(.enabled)
+                Text(record.text).font(.settingsText).textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
                 Button("Show less") { expanded = false }.buttonStyle(SettingsQuietButtonStyle())
             } else {
                 Button { expanded = true } label: {
-                    Text(record.text).font(.system(size: 13)).lineLimit(3)
+                    Text(record.text).font(.settingsText).lineLimit(3)
                         .multilineTextAlignment(.leading).frame(maxWidth: .infinity, alignment: .leading)
                 }.buttonStyle(.plain).help("Read full dictation")
                     .accessibilityHint("Show full dictation")
@@ -106,7 +122,7 @@ private struct DictationHistoryRow: View {
                 copied = NSPasteboard.general.setString(record.text, forType: .string)
             } label: {
                 Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                    .font(.system(size: 11.5, weight: .medium))
+                    .font(.settingsSecondary.weight(.medium))
                     .frame(width: 28, height: 28)
                     .contentShape(Rectangle())
             }.buttonStyle(DashboardIconButtonStyle())
@@ -117,8 +133,6 @@ private struct DictationHistoryRow: View {
                     do { try await Task.sleep(for: .seconds(2)); copied = false } catch { }
                 }
         }.frame(maxWidth: .infinity, alignment: .leading)
-            // The 8-point row gap plus this 8-point top inset gives 16 points from copy button to next date.
-            .padding(.horizontal, 16).padding(.top, 8)
-            .background(theme.palette.workspace).clipShape(DashboardShapes.card)
+            .padding(.top, 8)
     }
 }

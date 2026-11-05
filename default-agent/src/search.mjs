@@ -19,9 +19,9 @@ export function searchTools(configuration = {}, fetchRequest = fetch) {
     const current = typeof configuration === 'function' ? await configuration() : configuration;
     const provider = current.provider ?? 'exa';
     const name = typeof provider === 'string' && Object.hasOwn(searchProviderNames, provider) ? searchProviderNames[provider] : undefined;
-    if (!name) throw new Error('Choose Exa, Brave, or Firecrawl in Settings → Pi Durable → Chat settings → Web search.');
-    if (action === 'read' && provider === 'brave') throw new Error('Brave supports web search, but not direct webpage reading. Use the browser tool, or choose Exa or Firecrawl in Settings → Pi Durable → Chat settings → Web search.');
-    if (!current.key) throw new Error(`Add ${name === 'Exa' ? 'an' : 'a'} ${name} API key in Settings → Pi Durable → Accounts → Web search.`);
+    if (!name) throw new Error('Choose Exa, Brave, or Firecrawl in Settings → Accounts → Web search.');
+    if (action === 'read' && provider === 'brave') throw new Error('Brave supports web search, but not direct webpage reading. Use the browser tool, or choose Exa or Firecrawl in Settings → Accounts → Web search.');
+    if (!current.key) throw new Error(`Add ${name === 'Exa' ? 'an' : 'a'} ${name} API key in Settings → Accounts → Web search.`);
     const limit = Number.isFinite(parameters.numResults) ? Math.min(maxResults, Math.max(1, Math.floor(parameters.numResults))) : 5;
     let url, body, headers;
     if (provider === 'exa') {
@@ -54,7 +54,7 @@ export function searchTools(configuration = {}, fetchRequest = fetch) {
       // Fetch/JSON errors and provider response bodies can contain credentials.
       throw new Error(`${name} request failed. Check the connection and try again.`);
     }
-    if (!response.ok || data?.success === false) throw new Error(`${name} request failed (HTTP ${response.status}). Check the search key and available credits in Settings → Pi Durable.`);
+    if (!response.ok || data?.success === false) throw new Error(`${name} request failed (HTTP ${response.status}). Check the search key and available credits in Settings → Accounts.`);
     if (provider === 'exa') return resultContent(data.results, action === 'read' ? 1 : limit);
     if (provider === 'brave') return resultContent(data.grounding?.generic?.map(r => ({ ...r, text: r.snippets?.join('\n\n') })), limit);
     if (action === 'read') return resultContent([{ title: data.data?.metadata?.title,

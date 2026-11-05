@@ -55,7 +55,7 @@ with native local dispatch for its downloaded/offline content and device
 workspace. Central-library and explicit remote operations use its authenticated
 paired connection. The phone does not need a persistent background HTTP listener.
 
-Outside agents use **Settings → General → Outside agents · Woven MCP**. Turn
+Outside agents use **Settings → Woven MCP → Outside agents**. Turn
 on **Expose Woven MCP**, then choose the same optional tool groups offered to
 Woven agents. Exposure starts off. Any agent permitted by the user's Tailnet
 network policy to reach the displayed private HTTPS endpoint can discover and
@@ -120,7 +120,7 @@ The composer has a Tools menu with independent groups:
 
 Browser Use initially defaults to enabled, including existing chats. Computer Use
 and Executor initially default to disabled; the other selectable groups default
-to enabled. General settings defines defaults for new conversations. Session
+to enabled. Settings → Woven MCP defines defaults for new conversations. Session
 controls change only that conversation. Calendar defaults to Full access, with
 Read only configurable in General. Usage is always read-only.
 
@@ -297,7 +297,7 @@ Disabling the Timers group with active timers asks the user to confirm pausing
 them. Ordinary in-session timers remain distinct from provider Cron Jobs and
 Calendar tasks that create or reuse a configured session.
 
-General settings provides these independent limits:
+Settings → Woven MCP provides these independent limits:
 
 | Setting | Default | Range |
 | --- | --- | --- |

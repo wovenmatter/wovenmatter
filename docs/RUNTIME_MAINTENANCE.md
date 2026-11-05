@@ -4,16 +4,16 @@ Technical reference. For everyday setup, start with [Agent setup](guide/agents.m
 
 ## Runtime controls
 
-**Settings → Local Agent Workspace** shows the executable and components used
-by each harness. Missing components show **Install**; verified installations
+Each page under **Settings → Agents** shows the executable and components used
+by that harness. Missing components show **Install**; verified installations
 appear in the sidebar automatically. **Sign in…** opens the native harness's
 account flow in Terminal, and returning to Woven Matter refreshes its status.
 Opening settings refreshes the inventory and available versions, without a
-repeating timer. **Settings → General → Set up harnesses** reopens the first-launch
+repeating timer. **Settings → Agents → Set up harnesses** reopens the first-launch
 guide, including optional Pi Durable provider and Exa setup. The provider page
 contains only OpenAI, Anthropic, Grok, OpenRouter, and OpenCode; the web-search
-page contains the Exa key form. These focused pages are also available from
-**Settings → Pi Durable**.
+page contains the Exa key form. Both are also available from
+**Settings → Accounts**.
 
 **Check for updates** reports available versions. **Update** installs an observed
 update. Network failures leave the latest version unknown. Both actions remain

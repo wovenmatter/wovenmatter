@@ -45,8 +45,8 @@ choices: change the **Entire series**, or **Detach this occurrence** into an
 independent one-time event. Detaching retains its settings and removes that
 occurrence from the series.
 
-Local tasks run while Woven Matter is open, or in its background service when
-**Background execution** is enabled in **Settings → Local agent workspace**.
+Local tasks run in the background server on this Mac, which you can check in
+**Settings → Background Server**.
 Remote workspaces run their own tasks with background execution enabled by
 default; the remote host and workspace service must remain running. Pi Durable may
 wait for the Mac to reconnect and unlock credentials after a remote restart.
@@ -71,8 +71,8 @@ It needs no account setup or provider switches. OpenCode activity includes all
 billing routes; account-wide API activity is excluded from device totals.
 
 **Usage limits** shows each saved account, its sign-in state, and the limits the
-provider makes available. Use **Go to Usage settings** to add or manage accounts
-in **Settings → Usage**. These accounts are shared with Pi Durable. Providers
+provider makes available. Use **Manage accounts** to add or manage accounts
+in **Settings → Accounts**. These accounts are shared with Pi Durable. Providers
 without a supported limits response link to their usage dashboard; unavailable
 data is never shown as zero usage or a full allowance.
 

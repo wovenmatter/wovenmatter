@@ -33,7 +33,7 @@ struct ExecutorAppsList: View {
                     }
                 }
             }
-            if apps.isEmpty { Text("Add apps and link their accounts in the Executor dashboard, then refresh.").font(.callout).foregroundStyle(.secondary) }
+            if apps.isEmpty { Text("Add apps and link their accounts in the Executor dashboard, then refresh.").font(.settingsBody).foregroundStyle(DashboardPalette.mutedForeground) }
         }
     }
 }
@@ -59,11 +59,13 @@ struct ExecutorConnectionsCard: View {
         }
     }
     var body: some View {
-        SettingsCard(title: "Executor", detail: "One connection shared by every agent through Woven MCP, powered by Executor.\nSet app-access defaults globally and adjust access within each conversation between turns.") {
+        SettingsSection(title: "Connected apps", detail: "One Executor connection shared by every agent through Woven MCP.") {
             if tools.settings.executor == nil || editing {
-                Picker("Run Executor", selection: $draft.location) {
-                    Text("On this Mac").tag(ExecutorConfiguration.Location.local)
-                    Text("On a Linux host").tag(ExecutorConfiguration.Location.remote)
+                SettingsRow(title: "Run Executor") {
+                    SettingsPicker("Run Executor", selection: $draft.location,
+                        options: [ExecutorConfiguration.Location.local, .remote]) {
+                        $0 == .local ? "On this Mac" : "On a Linux host"
+                    }
                 }
                 if draft.location == .remote {
                     HStack {
@@ -91,8 +93,7 @@ struct ExecutorConnectionsCard: View {
                         Button("Inspect host") { model.remoteWorkspaces.checkHost(hostName: draft.host, userName: draft.user) }
                         if model.remoteWorkspaces.isCheckingHost { ProgressView().controlSize(.small) }
                     }.buttonStyle(SettingsQuietButtonStyle())
-                    Text("Uses Woven’s SSH inspection and Docker deployment. Prepare an unready host in Remote workspaces. Deployment adds one standalone container and a private Tailscale HTTPS route on port 8443.")
-                        .font(.callout).foregroundStyle(.secondary)
+                    SettingsNote("Uses Woven’s SSH inspection and Docker deployment. Prepare an unready host in Settings → Workspaces. Deployment adds one standalone container and a private Tailscale HTTPS route on port 8443.")
                 }
                 HStack {
                     Button(draft.location == .local ? "Install and start Executor" : "Deploy Executor") { var value = draft
@@ -106,30 +107,27 @@ struct ExecutorConnectionsCard: View {
                     if editing { Button("Cancel") { editing = false } }
                 }.buttonStyle(SettingsQuietButtonStyle())
             } else if let config = tools.settings.executor {
-                HStack {
-                    Text(config.location == .local ? "Local runtime · This Mac" : "Linux · \(config.host)")
-                    Spacer()
+                SettingsRow(title: "Executor", detail: config.location == .local ? "Local runtime · This Mac" : "Linux · \(config.host)") {
                     Button("Open dashboard") { perform(.dashboard) }
                     Button("Refresh apps") { perform(.refresh) }
                 }.buttonStyle(SettingsQuietButtonStyle()).disabled(preparing)
-                Text("Accounts are connected in Executor’s dashboard. Full access accepts action approvals; requested input still appears in the conversation. App selection remains enforced in every permission mode.")
-                    .font(.callout).foregroundStyle(.secondary)
-                DisclosureGroup("Default apps for new conversations") {
+                SettingsSummaryRow("Default apps", value: "\(config.defaultProfiles.count) selected") {
                     ExecutorAppsList(targets: config.apps, selection: config.defaultProfiles) { selected in
                         var settings = tools.settings; settings.executor?.defaultProfiles = selected
                         tools.saveSettingsFromUI(settings)
-                    }.padding(.top, 8)
+                    }
                 }
                 Button("Reinstall or reconnect") { draft = config; editing = true }.buttonStyle(SettingsQuietButtonStyle())
             }
-            if preparing { HStack { ProgressView().controlSize(.small); Text("Preparing Executor…") }.font(.callout) }
+            if preparing { HStack { ProgressView().controlSize(.small); Text("Preparing Executor…") }.font(.settingsBody) }
             if let error = error ?? tools.settings.executorSetup?.error { SettingsError(error) }
-            VStack(alignment: .leading, spacing: 4) {
+            SettingsHelp {
+                SettingsNote("Set app-access defaults here and adjust access within each conversation between turns. Accounts are connected in Executor’s dashboard. Full access accepts action approvals; requested input still appears in the conversation. App selection remains enforced in every permission mode.")
                 Link("Learn more about Executor ↗", destination: URL(string: "https://executor.sh")!)
-                    .font(.system(size: 12.5))
+                    .font(.settingsBody)
                     .foregroundStyle(DashboardPalette.success)
                 Text("Copyright 2026 Rhys Sullivan.")
-                    .font(.system(size: 12))
+                    .font(.settingsSecondary)
                     .foregroundStyle(DashboardPalette.mutedForeground)
             }
         }
@@ -178,8 +176,8 @@ struct ExecutorConversationApps: View {
                         Task { do { try await tools.controlExecutor(.refresh) } catch { self.error = error.localizedDescription } }
                     }
                 }.buttonStyle(SettingsQuietButtonStyle())
-            } else { Text("Set up Executor in Settings → General.").foregroundStyle(.secondary) }
-            if let error { Text(error).font(.callout).foregroundStyle(.secondary) }
+            } else { Text("Set up Executor in Settings → Woven MCP.").foregroundStyle(DashboardPalette.mutedForeground) }
+            if let error { Text(error).font(.settingsBody).foregroundStyle(DashboardPalette.mutedForeground) }
         }
         .disabled(tools.executorBusy || tools.settings.executorSetup?.running == true)
         .sheet(isPresented: $dashboard) {

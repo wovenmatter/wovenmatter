@@ -15,7 +15,7 @@ struct SettingsRemoteHarnessAccountView: View {
     var body: some View {
         Group {
             if embedded { accountContent }
-            else { SettingsCard(title: "Account", detail: workspace.name) { accountContent } }
+            else { SettingsSection(title: "Account", detail: workspace.name) { accountContent } }
         }.id(workspace.id.uuidString + runtimeKind.rawValue)
         .task { await model.refreshSignInStatus(workspace) }
         .onChange(of: model.authenticationSessions[workspace.id]?.state) { _, state in
@@ -30,9 +30,12 @@ struct SettingsRemoteHarnessAccountView: View {
                     SettingsNote("Using \(path) (installed on host)")
                 }
                 HStack {
-                    SettingsHarnessAccountDetails(
-                        status: model.signInStatuses[workspace.id]?.first { $0.id == runtimeKind.rawValue },
-                        fallback: HarnessAccountPresentation.remoteLabel(harness))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Account").font(.settingsRow)
+                        SettingsHarnessAccountDetails(
+                            status: model.signInStatuses[workspace.id]?.first { $0.id == runtimeKind.rawValue },
+                            fallback: HarnessAccountPresentation.remoteLabel(harness))
+                    }
                     Spacer()
                     harnessButtons(harness, workspace: workspace)
                         .disabled(model.busyWorkspaceIDs.contains(workspace.id))
@@ -55,7 +58,7 @@ struct SettingsRemoteHarnessAccountView: View {
         workspace: RemoteWorkspaceConfiguration
     ) -> some View {
         if harness.installationStatus.map({ $0 != "installed" }) ?? ["cli_missing", "adapter_missing"].contains(harness.state) {
-            Text("Install the harness first").font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+            Text("Install the harness first").font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground)
         } else if harness.authenticationStatus != "verified" && harness.authenticationStatus != "configured" {
             if harness.setupMethods.count == 1,
                let method = harness.setupMethods.first {
@@ -74,7 +77,7 @@ struct SettingsRemoteHarnessAccountView: View {
                 .buttonStyle(DashboardPrimaryButtonStyle())
             } else {
                 Text("No supported sign-in methods")
-                    .font(.system(size: 11.5))
+                    .font(.settingsSecondary)
                     .foregroundStyle(DashboardPalette.mutedForeground)
             }
         } else {
@@ -116,9 +119,9 @@ struct SettingsRemoteHarnessAccountView: View {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
                     Text(session.methodName)
-                        .font(.system(size: 12.5, weight: .semibold))
+                        .font(.settingsBody.weight(.semibold))
                     Spacer()
-                    SettingsPill(
+                    SettingsStatus(
                         session.state.replacingOccurrences(of: "_", with: " ").capitalized,
                         tone: session.state == "waiting_for_user" ? .warning : .neutral
                     )
@@ -130,7 +133,7 @@ struct SettingsRemoteHarnessAccountView: View {
                     }
                 }
                 Text(session.message)
-                    .font(.system(size: 11.5))
+                    .font(.settingsSecondary)
                     .foregroundStyle(DashboardPalette.mutedForeground)
 
                 if let notice = session.notice {
@@ -148,7 +151,7 @@ struct SettingsRemoteHarnessAccountView: View {
                     HStack {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("One-time code")
-                                .font(.system(size: 11))
+                                .font(.settingsSecondary)
                                 .foregroundStyle(DashboardPalette.mutedForeground)
                             Text(userCode)
                                 .font(.system(size: 13, weight: .semibold, design: .monospaced))

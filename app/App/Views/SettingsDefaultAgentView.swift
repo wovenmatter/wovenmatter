@@ -8,172 +8,137 @@ struct SettingsDefaultAgentView: View {
     var reservesRailControlSpace = false
     var backTitle = "Settings"
     let onBack: () -> Void
+    var onOpenAccounts: (String) -> Void = { _ in }
     private var agent: DefaultAgentSettingsModel { model.connections }
-    @State private var area: HarnessSettingsArea = .accounts
-    @State private var accountScope = "global"
     @State private var settingsScope = "global"
     @State private var syncError: String?
     @State private var browsingAllModels = false
     @State private var setupProvider: String?
     @State private var setupRequest = UUID()
-    @State private var showsWorkspaceOverrides = false
     @State private var savingScope = false
-    @Environment(\.dashboardTheme) private var theme
-    @AppStorage(DashboardPiDurableLogoStyle.storageKey) private var storedPiDurableLogoStyle =
-        DashboardPiDurableLogoStyle.defaultStyle.rawValue
 
-    private var piDurableLogoStyle: DashboardPiDurableLogoStyle {
-        DashboardPiDurableLogoStyle(rawValue: storedPiDurableLogoStyle) ?? .defaultStyle
-    }
-
+    private var workspaces: [RemoteWorkspaceConfiguration] { model.remoteWorkspaces.workspaces }
     private var remote: RemoteWorkspaceConfiguration? {
-        model.remoteWorkspaces.workspaces.first { $0.id.uuidString.lowercased() == agent.scope }
+        workspaces.first { $0.id.uuidString.lowercased() == agent.scope }
     }
     private var editable: Bool { !agent.inherits }
+    /// With no remote workspace there is nothing to choose, unless this Mac keeps its own settings.
+    private var showsWorkspacePicker: Bool {
+        !workspaces.isEmpty || settingsScope != "global" || agent.settings.workspaces["local"] != nil
+    }
+
     var body: some View {
-        ScrollViewReader { proxy in
-            settingsPage
-                .task {
-                    accountScope = initialScope
-                    settingsScope = initialScope
-                    selectScope(initialScope)
-                    if let provider = model.pendingDefaultAgentModelProvider {
-                        model.pendingDefaultAgentModelProvider = nil
-                        connected(provider)
-                    }
+        settingsPage
+            .task {
+                settingsScope = initialScope
+                selectScope(initialScope)
+                requestSDKStatus()
+                if let provider = model.pendingDefaultAgentModelProvider {
+                    model.pendingDefaultAgentModelProvider = nil
+                    connected(provider)
                 }
-                .onChange(of: setupRequest) { _, _ in proxy.scrollTo("pi-models", anchor: .top) }
-        }
-        .onChange(of: area) { _, area in
-            let target = area == .accounts ? accountScope : settingsScope
-            if agent.scope != target { selectScope(target) }
-        }
-        .onDisappear { agent.cancel() }
+            }
+            .onDisappear { agent.cancel() }
     }
 
     private var settingsPage: some View {
-        SettingsPage(title: AgentRuntimeKind.defaultAgent.displayName, detail: "An agent for every workspace, powered by the Pi Durable SDK.", reservesRailControlSpace: reservesRailControlSpace, backTitle: backTitle, onBack: onBack) {
-            SettingsHarnessAreaPicker(selection: $area).disabled(agent.busy || savingScope)
-            if area == .accounts {
-                SettingsAccountWorkspacePicker(scope: Binding(get: { accountScope }, set: {
-                    accountScope = $0; selectScope($0)
-                }), workspaces: model.remoteWorkspaces.workspaces, supportsSharedAccounts: true)
-                    .disabled(agent.busy)
-                SettingsNote(accountScope == "global"
-                    ? "Shared API keys and supported subscription accounts are available to Pi Durable in connected workspaces."
-                    : "Workspace accounts take priority for each provider. Shared Pi Durable accounts fill in when none are saved here.")
-                DisclosureGroup("Account sharing") {
-                    SettingsNote("API keys and Pi Durable’s ChatGPT and Grok sign-ins can be shared. Claude requires a native sign-in on each machine. These connections do not sign in the standalone Codex, Claude Code, Grok Build, or OpenCode harnesses.")
-                    SettingsNote("Chat-settings sharing never changes which accounts are used. Offline workspaces receive shared account changes when they reconnect.")
+        SettingsPage(
+            title: AgentRuntimeKind.defaultAgent.displayName,
+            detail: "An agent for every workspace, powered by the Pi Durable SDK.",
+            reservesRailControlSpace: reservesRailControlSpace,
+            backTitle: backTitle,
+            onBack: onBack
+        ) {
+            if showsWorkspacePicker { scopeSection }
+            SettingsSection {
+                SettingsSummaryLink(title: "Accounts", value: accountsSummary,
+                    tone: agent.availableModelProviderIDs.isEmpty ? .warning : .good) {
+                    onOpenAccounts(agent.scope)
                 }
-                SettingsDefaultAgentSDKView(connections: agent, remoteWorkspaces: model.remoteWorkspaces)
-                Text("Provider accounts").font(.headline)
-                SettingsConnectionsView(model: model, focus: .providers, embedded: true,
-                    onConnected: connected, onManageShared: manageSharedAccounts)
-                Text("Web search accounts").font(.headline)
-                SettingsConnectionsView(model: model, focus: .webSearch, embedded: true,
-                    onManageShared: manageSharedAccounts)
-                DisclosureGroup("Local model servers · Shared connections") { LocalModelServerConnections(agent: agent) }
-            } else {
-            scopeSection
-            if agent.availableModelProviderIDs.isEmpty {
-                Button("Set up accounts") { area = .accounts }
-                    .buttonStyle(SettingsQuietButtonStyle())
             }
-            VStack(alignment: .leading, spacing: 12) {
-                if let provider = setupProvider {
-                    SettingsNote("Connected. Choose models for chat from \(ProviderConnectionID(rawValue: provider)?.name ?? provider).")
-                }
-                SettingsAgentModelsView(agent: agent, editable: editable,
-                    browsingAllModels: browsingAllModels, setBrowsingAllModels: { showCatalog($0) },
-                    selectDefault: selectDefault)
-            }.id("pi-models")
-            SettingsAgentDefaultsSection(model: model, runtime: .defaultAgent, fixedScope: agent.scope,
+            SettingsAgentModelsView(agent: agent, editable: editable,
+                browsingAllModels: browsingAllModels, setupProvider: setupProvider, setupRequest: setupRequest,
+                setBrowsingAllModels: { showCatalog($0) },
+                selectDefault: selectDefault)
+            SettingsAgentDefaultsSection(model: model, runtime: .defaultAgent, scope: agent.scope,
                 showsModel: false)
-            SettingsCard(title: "Web search") {
-                Picker("Search provider", selection: Binding(get: { agent.configuration.searchProvider }, set: {
-                    var config = agent.configuration; config.searchProvider = $0; agent.configuration = config
-                })) {
-                    ForEach(ProviderConnectionID.searchProviders) { provider in
-                        Text(provider.name).tag(provider.id)
-                    }
-                }.disabled(!editable)
-                Text("Exa and Firecrawl search the web and read pages. Brave returns search context; use the browser to read pages. Add keys in Accounts → Web search accounts.")
-                    .font(.callout).foregroundStyle(.secondary)
+            moreSection
+            if let error = syncError { SettingsError(error) }
+        }
+    }
+
+    private var accountsSummary: String {
+        let count = agent.availableModelProviderIDs.count
+        return count == 0 ? "None connected" : "\(count) connected"
+    }
+
+    private var moreSection: some View {
+        SettingsSection(title: "More") {
+            SettingsSummaryRow("Code mode", value: agent.configuration.resolvedCodeMode.title) {
+                SettingsRow(title: "Mode") {
+                    SettingsPicker("Code mode", selection: Binding(get: { agent.configuration.resolvedCodeMode }, set: {
+                        var config = agent.configuration; config.codeMode = $0; agent.configuration = config
+                    }), options: BuiltInCodeMode.allCases) { $0.title }
+                    .disabled(!editable)
+                }
+                SettingsNote("Runs JavaScript that calls the agent’s tools, and each call keeps its normal permissions. On adds code mode alongside the other tools. Only routes all tool calls through code mode. Off uses standard tool calls. Changes apply between turns.")
             }
-            SettingsCard(title: "Code mode", detail: "Run JavaScript that calls the agent’s tools. Each call keeps its normal permissions.") {
-                Picker("Code mode", selection: Binding(get: { agent.configuration.resolvedCodeMode }, set: {
-                    var config = agent.configuration; config.codeMode = $0; agent.configuration = config
-                })) {
-                    ForEach(BuiltInCodeMode.allCases, id: \.self) { Text($0.title).tag($0) }
-                }.disabled(!editable)
-                Text("On adds code mode as a tool alongside the agent’s other tools. Only routes all tool calls through code mode. Off disables code mode and uses standard tool calls. Changes apply between turns.")
-                    .font(.callout).foregroundStyle(.secondary)
-            }
-            SettingsCard(title: "Subagents", detail: "Pi Durable can delegate tasks when useful.") {
-                HStack {
-                    Text("Maximum active subagents per conversation")
-                    Spacer(minLength: 12)
-                    Picker("Maximum active subagents per conversation", selection: Binding(
+            SettingsSummaryRow("Subagents", value: "Up to \(agent.configuration.resolvedSubagentConcurrency)") {
+                SettingsRow(title: "Active per conversation", detail: "Applies to new conversations. The parent agent does not count.") {
+                    SettingsPicker("Maximum active subagents per conversation", selection: Binding(
                         get: { agent.configuration.resolvedSubagentConcurrency },
                         set: {
                             var config = agent.configuration
                             config.subagentConcurrency = $0
                             agent.configuration = config
                         }
-                    )) {
-                        ForEach(DefaultAgentSettings.subagentConcurrencyRange, id: \.self) {
-                            Text(String($0)).tag($0)
-                        }
-                    }.labelsHidden().frame(width: 78).disabled(!editable)
-                }.font(.system(size: 13)).foregroundStyle(DashboardPalette.foreground)
-                Text("Choose 2–24. This setting applies to new conversations. The parent agent does not count toward the limit.")
-                    .font(.callout).foregroundStyle(.secondary)
+                    ), options: Array(DefaultAgentSettings.subagentConcurrencyRange), popoverWidth: 120) { String($0) }
+                    .disabled(!editable)
+                }
             }
+            SettingsSummaryRow("Software", value: softwareSummary) {
+                SettingsDefaultAgentSDKView(connections: agent, remoteWorkspaces: model.remoteWorkspaces)
             }
-            piDurableIconCard
-            if let error = syncError { SettingsError(error) }
-            DisclosureGroup("Workspace synchronization") {
-                SettingsNote("Shared settings synchronize automatically. Offline workspaces receive changes when they reconnect.")
-                Button("Retry synchronization") { synchronize() }.buttonStyle(SettingsQuietButtonStyle())
+            SettingsSummaryRow("Synchronization", value: syncError == nil ? "Automatic" : "Needs attention",
+                tone: syncError == nil ? nil : .warning) {
+                SettingsRow(title: "Shared settings", detail: "Offline workspaces receive changes when they reconnect.") {
+                    Button("Retry synchronization") { synchronize() }.buttonStyle(SettingsQuietButtonStyle())
+                }
             }
+        }
+    }
 
-        }
-        .disclosureGroupStyle(SettingsDisclosureGroupStyle())
+    private var softwareSummary: String {
+        let state = agent.sdks.state(for: agent.scope == "global" ? "local" : agent.scope)
+        if state.busy { return "Checking" }
+        guard let sdks = state.status?.sdks else { return "Not checked" }
+        return sdks.contains { $0.updateAvailable || $0.consistent == false } ? "Update available" : "Up to date"
     }
-    private var piDurableIconCard: some View {
-        HStack(alignment: .center, spacing: 16) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Pi Durable icon")
-                    .font(.system(size: 14, weight: .semibold))
-                Text("Choose the icon used for Pi Durable throughout the app.")
-                    .font(.system(size: 12.5))
-                    .foregroundStyle(DashboardPalette.mutedForeground)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 12)
-            DashboardHarnessLogoIcon(logo: .defaultAgent, size: 24)
-            Button("Change icon") {
-                storedPiDurableLogoStyle = piDurableLogoStyle.next.rawValue
-            }
-            .buttonStyle(SettingsQuietButtonStyle())
-            .help("Switch Pi Durable to the \(piDurableLogoStyle.next.displayName) icon")
-            .accessibilityLabel("Change Pi Durable icon")
-            .accessibilityValue(piDurableLogoStyle.displayName)
-            .accessibilityHint("Switches to the \(piDurableLogoStyle.next.displayName) icon")
-        }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(theme.palette.workspace)
-        .clipShape(DashboardShapes.card)
+
+    private func requestSDKStatus() {
+        let target = agent.scope == "global" ? "local" : agent.scope
+        let state = agent.sdks.state(for: target)
+        guard state.status == nil, !state.busy else { return }
+        agent.sdks.request(.init(workspaceID: UUID(uuidString: target), request: .init(action: .status)),
+                           connections: agent, remoteWorkspaces: model.remoteWorkspaces)
     }
+
     private var scopeSection: some View {
-        SettingsWorkspaceScope(scope: Binding(get: { settingsScope }, set: { settingsScope = $0; selectScope($0) }),
-            expanded: $showsWorkspaceOverrides, workspaces: model.remoteWorkspaces.workspaces,
-            inherits: Binding(get: { agent.inherits }, set: { setSharing($0) }), detail: agent.inherits
-                ? "Model, thinking, permissions, and tool preferences follow shared chat settings. Accounts stay independent."
-                : "Chat settings apply only to this workspace. Accounts stay independent.")
-            .disabled(savingScope)
+        SettingsSection {
+            SettingsWorkspacePicker(title: "Applies to",
+                scope: Binding(get: { settingsScope }, set: { settingsScope = $0; selectScope($0) }),
+                workspaces: workspaces)
+            if settingsScope != "global" {
+                SettingsToggleRow(
+                    title: "Use shared chat settings",
+                    detail: agent.inherits
+                        ? "Model, thinking, permissions, and tool preferences follow All workspaces. Accounts stay independent."
+                        : "Chat settings apply only to this workspace. Accounts stay independent.",
+                    isOn: Binding(get: { agent.inherits }, set: { setSharing($0) })
+                )
+            }
+        }
+        .disabled(savingScope)
     }
 
     private func setSharing(_ shared: Bool) {
@@ -194,20 +159,16 @@ struct SettingsDefaultAgentView: View {
         }
     }
 
-    private func manageSharedAccounts() {
-        accountScope = "global"
-        selectScope("global")
-    }
     private func connected(_ provider: String) {
-        settingsScope = agent.inherits ? "global" : accountScope
+        settingsScope = agent.inherits ? "global" : settingsScope
         if agent.scope != settingsScope { agent.changeScope(settingsScope) }
-        area = .defaults
         setupProvider = nil
         browsingAllModels = true
         agent.loadCatalog(remote: remote, includeAllModels: true, provider: provider)
         setupProvider = provider
         setupRequest = UUID()
     }
+
     private func selectDefault(_ id: String?) {
         let targetScope = agent.scope
         let workspace = targetScope == "global" ? nil : targetScope == "local"
@@ -229,14 +190,18 @@ struct SettingsDefaultAgentView: View {
     private func selectScope(_ scope: String) {
         browsingAllModels = false
         setupProvider = nil
-        showsWorkspaceOverrides = true
         agent.changeScope(scope)
+        agent.loadAccounts()
         agent.loadCatalog(remote: remote, includeAllModels: false)
+        requestSDKStatus()
     }
+
     private func showCatalog(_ includeAllModels: Bool) {
         browsingAllModels = includeAllModels
+        if !includeAllModels { setupProvider = nil }
         agent.loadCatalog(remote: remote, includeAllModels: includeAllModels)
     }
+
     private func synchronize() {
         syncError = nil
         model.refreshLocalACPRuntimesNow()
@@ -292,10 +257,14 @@ private struct SettingsAgentCatalogIndex {
     }
 }
 
+/// The default model, the models offered in the composer, and fallbacks. The full provider
+/// catalog loads only when the person opens Add models.
 private struct SettingsAgentModelsView: View {
     let agent: DefaultAgentSettingsModel
     let editable: Bool
     let browsingAllModels: Bool
+    let setupProvider: String?
+    let setupRequest: UUID
     let setBrowsingAllModels: (Bool) -> Void
     let selectDefault: (String?) -> Void
     @State private var index = SettingsAgentCatalogIndex()
@@ -303,9 +272,10 @@ private struct SettingsAgentModelsView: View {
     @State private var rows: [Row] = []
     @State private var matches: [Row] = []
     @State private var page = 0
+    @State private var enabledPage = 0
     @State private var choosingDefault = false
     @State private var fallbackPage = 0
-    @State private var showsFallbacks = false
+    @State private var showsBrowser = false
     // Pagination bounds the browser's data. The lazy section and row stacks below
     // defer offscreen native controls within SettingsPage's existing scroll viewport.
     private let pageSize = 40
@@ -342,6 +312,7 @@ private struct SettingsAgentModelsView: View {
         return Inputs(scope: agent.scope, catalog: displayedCatalog, configuration: configuration,
                       effectiveDefaultModel: defaultID)
     }
+    private var enabledRows: [Row] { rows.filter(\.visible) }
     private var pageRows: ArraySlice<Row> {
         matches.dropFirst(page * pageSize).prefix(pageSize)
     }
@@ -349,16 +320,23 @@ private struct SettingsAgentModelsView: View {
         guard let id = agent.configuration.defaultModel else { return "First available model" }
         return index.byID[id].map { "\($0.model.name) · \($0.model.providerName)" } ?? id
     }
+    private func modelName(_ id: String) -> String {
+        index.byID[id].map { "\($0.model.name) · \($0.model.providerName)" } ?? id
+    }
+    private var fallbackSummary: String {
+        let count = agent.configuration.fallbackModels.count
+        return count == 0 ? "None" : count == 1 ? "1 model" : "\(count) models"
+    }
 
     var body: some View {
-        LazyVStack(alignment: .leading, spacing: 12) {
-            Text(showingAllModels ? "Models" : "Enabled models").font(.headline)
-            HStack {
-                Text("Default model")
+        SettingsSection(title: "Models") {
+            SettingsRow(title: "Default model") {
                 Button { choosingDefault = true } label: {
                     HStack(spacing: 8) {
                         Text(defaultLabel).lineLimit(1)
-                        Image(systemName: "chevron.up.chevron.down").font(.caption)
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.settingsSecondary.weight(.semibold))
+                            .foregroundStyle(DashboardPalette.mutedForeground)
                     }
                 }
                 .buttonStyle(SettingsQuietButtonStyle())
@@ -376,54 +354,163 @@ private struct SettingsAgentModelsView: View {
                     }
                 }
             }
-            DisclosureGroup("Fallback models", isExpanded: $showsFallbacks) {
-            SettingsNote("Used in this order if the current model loses access or reaches its limit.")
-            if agent.configuration.fallbackModels.count > pageSize {
-                SettingsAgentCatalogPageControls(count: agent.configuration.fallbackModels.count, pageSize: pageSize, page: $fallbackPage)
+            SettingsSummaryRow("In the composer", value: enabledRows.count == 1 ? "1 model" : "\(enabledRows.count) models") {
+                composerModels
             }
-            ForEach(agent.configuration.fallbackModels.dropFirst(fallbackPage * pageSize).prefix(pageSize), id: \.self) { id in
-                HStack {
-                    Text(index.byID[id].map { "\($0.model.name) · \($0.model.providerName)" } ?? id).font(.callout)
-                    Spacer()
-                    Button { agent.moveFallback(id, by: -1) } label: { Image(systemName: "arrow.up") }
-                        .accessibilityLabel("Move \(index.byID[id]?.model.name ?? id) earlier")
-                        .disabled(agent.configuration.fallbackModels.first == id)
-                    Button { agent.moveFallback(id, by: 1) } label: { Image(systemName: "arrow.down") }
-                        .accessibilityLabel("Move \(index.byID[id]?.model.name ?? id) later")
-                        .disabled(agent.configuration.fallbackModels.last == id)
-                }.buttonStyle(SettingsQuietButtonStyle()).disabled(!editable)
-            }
-            }
-            Text(showingAllModels
-                 ? "Your default model is always available in the composer. Turn on any other models you want to include."
-                 : "Your default model is always available in the composer. Browse provider models to add more.")
-                .font(.callout).foregroundStyle(.secondary)
-            SettingsAgentCatalogBrowseControls(agent: agent,
-                requested: browsingAllModels, includesAllModels: agent.catalogIncludesAllModels,
-                loading: agent.busy, error: agent.error, setBrowsingAllModels: setBrowsingAllModels)
-            if showingAllModels {
-                TextField("Find a model or provider", text: $filter.query).dashboardInput()
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 12) { modelFilters }
-                    VStack(alignment: .leading, spacing: 8) { modelFilters }
-                }
-            }
-            if matches.isEmpty {
-                Text(showingAllModels ? "No models match these filters." : "No enabled models to display.")
-                    .font(.callout).foregroundStyle(.secondary)
-            } else {
-                SettingsAgentCatalogPageControls(count: matches.count, pageSize: pageSize, page: $page)
-                LazyVStack(spacing: 8) {
-                    ForEach(pageRows) { row in modelRow(row) }
-                }
-                if matches.count > pageSize {
-                    SettingsAgentCatalogPageControls(count: matches.count, pageSize: pageSize, page: $page)
-                }
+            SettingsSummaryRow("Fallbacks", value: fallbackSummary) {
+                fallbacks
             }
         }
         .onChange(of: inputs, initial: true) { old, value in updatePresentation(from: old, to: value) }
         .onChange(of: filter) { _, _ in page = 0; filterRows() }
         .onChange(of: browsingAllModels) { _, _ in filter = Filter(); page = 0; filterRows() }
+        .onChange(of: setupRequest) { _, _ in showsBrowser = true }
+        .sheet(isPresented: $showsBrowser, onDismiss: { setBrowsingAllModels(false) }) {
+            modelBrowser
+        }
+    }
+
+    @ViewBuilder private var composerModels: some View {
+        SettingsNote("Your default model is always available in the composer.")
+        if enabledRows.count > pageSize {
+            SettingsAgentCatalogPageControls(count: enabledRows.count, pageSize: pageSize, page: $enabledPage)
+        }
+        LazyVStack(spacing: 2) {
+            ForEach(enabledRows.dropFirst(enabledPage * pageSize).prefix(pageSize)) { row in enabledRow(row) }
+        }
+        Button("Add models…") {
+            showsBrowser = true
+            setBrowsingAllModels(true)
+        }
+        .buttonStyle(SettingsQuietButtonStyle())
+        .disabled(!editable || agent.busy)
+    }
+
+    private func enabledRow(_ row: Row) -> some View {
+        let item = row.entry.model
+        return HStack(spacing: 6) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.name).font(.settingsRow)
+                Text(row.isDefault ? "\(item.providerName) · Default" : item.providerName)
+                    .font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground)
+            }
+            Spacer(minLength: 8)
+            Button { agent.move(item.id, by: -1) } label: { Image(systemName: "chevron.up") }
+                .accessibilityLabel("Move \(item.name) earlier").disabled(!row.canMoveEarlier)
+            Button { agent.move(item.id, by: 1) } label: { Image(systemName: "chevron.down") }
+                .accessibilityLabel("Move \(item.name) later").disabled(!row.canMoveLater)
+            if !row.isDefault {
+                Button("Remove") { agent.setVisible(item.id, visible: false) }
+                    .accessibilityLabel("Remove \(item.name) from the composer")
+            }
+        }
+        .frame(minHeight: SettingsMetrics.rowHeight)
+        .buttonStyle(SettingsQuietButtonStyle())
+        .disabled(!editable)
+    }
+
+    @ViewBuilder private var fallbacks: some View {
+        SettingsNote("Used in this order if the current model loses access or reaches its limit.")
+        if agent.configuration.fallbackModels.count > pageSize {
+            SettingsAgentCatalogPageControls(count: agent.configuration.fallbackModels.count, pageSize: pageSize, page: $fallbackPage)
+        }
+        ForEach(agent.configuration.fallbackModels.dropFirst(fallbackPage * pageSize).prefix(pageSize), id: \.self) { id in
+            HStack(spacing: 6) {
+                Text(modelName(id)).font(.settingsRow)
+                Spacer()
+                Button { agent.moveFallback(id, by: -1) } label: { Image(systemName: "chevron.up") }
+                    .accessibilityLabel("Move \(index.byID[id]?.model.name ?? id) earlier")
+                    .disabled(agent.configuration.fallbackModels.first == id)
+                Button { agent.moveFallback(id, by: 1) } label: { Image(systemName: "chevron.down") }
+                    .accessibilityLabel("Move \(index.byID[id]?.model.name ?? id) later")
+                    .disabled(agent.configuration.fallbackModels.last == id)
+                Button("Remove") { agent.setFallback(id, enabled: false) }
+                    .accessibilityLabel("Remove \(index.byID[id]?.model.name ?? id) from fallbacks")
+            }
+            .frame(minHeight: SettingsMetrics.rowHeight)
+            .buttonStyle(SettingsQuietButtonStyle())
+            .disabled(!editable)
+        }
+        let available = enabledRows.filter { $0.fallback == nil }
+        Menu("Add fallback") {
+            ForEach(available) { row in
+                Button("\(row.entry.model.name) · \(row.entry.model.providerName)") {
+                    agent.setFallback(row.entry.id, enabled: true)
+                }
+            }
+        }
+        .menuStyle(.button)
+        .fixedSize()
+        .buttonStyle(SettingsQuietButtonStyle())
+        .disabled(!editable || available.isEmpty)
+    }
+
+    /// Filters, paging and every provider model live here, out of the settings page itself.
+    private var modelBrowser: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Add models").font(.settingsTitle)
+                Spacer()
+                Button("Done") { showsBrowser = false }
+                    .buttonStyle(DashboardPrimaryButtonStyle())
+                    .keyboardShortcut(.defaultAction)
+            }
+            if let provider = setupProvider {
+                SettingsNote("Connected. Choose models for chat from \(ProviderConnectionID(rawValue: provider)?.name ?? provider).")
+            }
+            SettingsAgentCatalogBrowseControls(agent: agent,
+                requested: browsingAllModels, includesAllModels: agent.catalogIncludesAllModels,
+                loading: agent.busy, error: agent.error, setBrowsingAllModels: setBrowsingAllModels)
+            if showingAllModels {
+                TextField("Find a model or provider", text: $filter.query).dashboardQuietTextInput()
+                HStack(spacing: 8) {
+                    SettingsPicker("Connection", selection: $filter.connection, options: [""] + index.providers) {
+                        $0.isEmpty ? "All connection types" : connectionName($0)
+                    }
+                    SettingsPicker("Lab", selection: $filter.lab, options: [""] + index.labs) {
+                        $0.isEmpty ? "All labs" : $0
+                    }
+                    Spacer(minLength: 8)
+                    Toggle("Subscriptions only", isOn: $filter.subscriptionsOnly).fixedSize()
+                }
+            }
+            ScrollView {
+                if matches.isEmpty {
+                    if showingAllModels {
+                        Text("No models match these filters.")
+                            .font(.settingsBody).foregroundStyle(DashboardPalette.mutedForeground)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                } else {
+                    LazyVStack(spacing: 2) {
+                        ForEach(pageRows) { row in browserRow(row) }
+                    }
+                }
+            }
+            .scrollIndicators(.never)
+            if matches.count > pageSize {
+                SettingsAgentCatalogPageControls(count: matches.count, pageSize: pageSize, page: $page)
+            }
+        }
+        .padding(24)
+        .frame(width: 600, height: 620)
+        .foregroundStyle(DashboardPalette.foreground)
+        .background(DashboardPalette.background)
+        .toggleStyle(SettingsSwitchToggleStyle())
+        .environment(\.settingsFilledControls, true)
+    }
+
+    private func browserRow(_ row: Row) -> some View {
+        let item = row.entry.model
+        return Toggle(isOn: Binding(get: { row.visible }, set: { agent.setVisible(item.id, visible: $0) })) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.name).font(.settingsRow)
+                Text(row.isDefault ? "\(item.providerName) · Default" : item.providerName)
+                    .font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground)
+            }
+        }
+        .frame(minHeight: SettingsMetrics.rowHeight)
+        .disabled(row.isDefault || !editable)
     }
 
     private func updatePresentation(from old: Inputs, to value: Inputs) {
@@ -453,22 +540,12 @@ private struct SettingsAgentModelsView: View {
                        fallback: fallbacks[entry.id], canMoveEarlier: position.map { $0 > 0 } ?? false,
                        canMoveLater: position.map { $0 + 1 < visibleIDs.count } ?? false)
         }
-        if old.scope != value.scope { page = 0; fallbackPage = 0; choosingDefault = false }
+        if old.scope != value.scope { page = 0; enabledPage = 0; fallbackPage = 0; choosingDefault = false }
         fallbackPage = min(fallbackPage, max(0, (value.configuration.fallbackModels.count - 1) / pageSize))
+        enabledPage = min(enabledPage, max(0, (enabledRows.count - 1) / pageSize))
         filterRows()
     }
 
-    @ViewBuilder private var modelFilters: some View {
-        Picker("Connection", selection: $filter.connection) {
-            Text("All connection types").tag("")
-            ForEach(index.providers, id: \.self) { provider in Text(connectionName(provider)).tag(provider) }
-        }
-        Picker("Lab", selection: $filter.lab) {
-            Text("All labs").tag("")
-            ForEach(index.labs, id: \.self) { lab in Text(lab).tag(lab) }
-        }
-        Toggle("Subscriptions only", isOn: $filter.subscriptionsOnly).fixedSize()
-    }
     private func filterRows() {
         matches = rows.filter { row in
             guard showingAllModels else { return row.visible }
@@ -479,6 +556,7 @@ private struct SettingsAgentModelsView: View {
         }
         page = min(page, max(0, (matches.count - 1) / pageSize))
     }
+
     private func connectionName(_ provider: String) -> String {
         switch provider {
         case "openai-codex": "ChatGPT subscription"
@@ -492,23 +570,6 @@ private struct SettingsAgentModelsView: View {
         default: agent.localServers.first { $0.id == provider }.map { "Local · \($0.name)" } ?? provider
         }
     }
-    private func modelRow(_ row: Row) -> some View {
-        let item = row.entry.model
-        return HStack(spacing: 10) {
-            Toggle(isOn: Binding(get: { row.visible }, set: { agent.setVisible(item.id, visible: $0) })) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(item.name).font(.callout)
-                    Text(row.isDefault ? "\(item.providerName) · Default" : item.providerName).font(.caption).foregroundStyle(.secondary)
-                }
-            }.disabled(row.isDefault)
-            Spacer(minLength: 8)
-            if showsFallbacks { Toggle(row.fallback.map { "Fallback \($0 + 1)" } ?? "Fallback", isOn: Binding(get: { row.fallback != nil }, set: { agent.setFallback(item.id, enabled: $0) })).fixedSize().disabled(!row.visible) }
-            Button { agent.move(item.id, by: -1) } label: { Image(systemName: "chevron.up") }
-                .accessibilityLabel("Move \(item.name) earlier").disabled(!row.canMoveEarlier)
-            Button { agent.move(item.id, by: 1) } label: { Image(systemName: "chevron.down") }
-                .accessibilityLabel("Move \(item.name) later").disabled(!row.canMoveLater)
-        }.buttonStyle(SettingsQuietButtonStyle()).disabled(!editable)
-    }
 }
 
 /// Loading the full inventory is always an explicit user action, including when
@@ -519,6 +580,7 @@ private struct SettingsAgentCatalogBrowseControls: View {
     let includesAllModels: Bool
     let loading: Bool
     let error: String?
+    var offersEnabledModels = false
     let setBrowsingAllModels: (Bool) -> Void
 
     private var availableProviders: [String] {
@@ -530,25 +592,23 @@ private struct SettingsAgentCatalogBrowseControls: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if availableProviders.isEmpty {
-                SettingsNote("Add an account in Accounts & installation to browse models.")
+                SettingsNote("Add an account in Settings → Accounts to browse models.")
             } else {
-            Picker("Provider", selection: Binding(get: { agent.browsingProvider }, set: {
-                agent.browsingProvider = $0
-                setBrowsingAllModels(true)
-            })) {
-                ForEach(availableProviders, id: \.self) { provider in
-                    Text(ProviderConnectionID.allCases.first { $0.id == provider }?.name ?? provider).tag(provider)
+                SettingsPicker("Provider", selection: Binding(get: { agent.browsingProvider }, set: {
+                    agent.browsingProvider = $0
+                    setBrowsingAllModels(true)
+                }), options: availableProviders) { provider in
+                    ProviderConnectionID.allCases.first { $0.id == provider }?.name ?? provider
                 }
-            }.frame(maxWidth: 360)
             }
             HStack(spacing: 8) {
                 if requested {
                     Button("Refresh models") { agent.refreshCatalog() }.disabled(loading)
-                    Button("Show enabled models") { setBrowsingAllModels(false) }
+                    if offersEnabledModels { Button("Show enabled models") { setBrowsingAllModels(false) } }
                     if !includesAllModels {
                         if loading {
                             ProgressView().controlSize(.small)
-                            Text("Loading models…").font(.callout).foregroundStyle(.secondary)
+                            Text("Loading models…").font(.settingsBody).foregroundStyle(DashboardPalette.mutedForeground)
                         } else {
                             Button("Retry") { setBrowsingAllModels(true) }
                         }
@@ -558,7 +618,7 @@ private struct SettingsAgentCatalogBrowseControls: View {
                 }
             }.buttonStyle(SettingsQuietButtonStyle())
             if requested && !includesAllModels && !loading, let error {
-                Text(error).font(.callout).foregroundStyle(.red).textSelection(.enabled)
+                SettingsError(error)
             }
         }
     }
@@ -571,7 +631,7 @@ private struct SettingsAgentCatalogPageControls: View {
     var body: some View {
         HStack {
             Text("\(min(page * pageSize + 1, count))–\(min((page + 1) * pageSize, count)) of \(count) models")
-                .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                .font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground).monospacedDigit()
             Spacer()
             if count > pageSize {
                 Button("Previous") { page -= 1 }.disabled(page == 0)
@@ -603,24 +663,24 @@ private struct SettingsAgentDefaultModelChooser: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Default model").font(.headline)
+            Text("Default model").font(.settingsSection)
             Button("Use first available model") { select(nil) }.buttonStyle(SettingsQuietButtonStyle())
             SettingsAgentCatalogBrowseControls(agent: agent,
                 requested: browsingAllModels, includesAllModels: includesAllModels,
-                loading: loading, error: error, setBrowsingAllModels: setBrowsingAllModels)
+                loading: loading, error: error, offersEnabledModels: true, setBrowsingAllModels: setBrowsingAllModels)
             if browsingAllModels && includesAllModels {
-                TextField("Find a model or provider", text: $query).textFieldStyle(.roundedBorder)
+                TextField("Find a model or provider", text: $query).dashboardQuietTextInput()
             }
             if matches.isEmpty {
                 Text(browsingAllModels && includesAllModels ? "No models match this search." : "No enabled models to display.")
-                    .font(.callout).foregroundStyle(.secondary)
+                    .font(.settingsBody).foregroundStyle(DashboardPalette.mutedForeground)
                     .frame(maxWidth: .infinity, minHeight: 260)
             } else {
                 List(selection: $selectedID) {
                     ForEach(matches.dropFirst(page * pageSize).prefix(pageSize)) { entry in
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(entry.model.name).font(.callout)
-                            Text(entry.model.providerName).font(.caption).foregroundStyle(.secondary)
+                            Text(entry.model.name).font(.settingsBody)
+                            Text(entry.model.providerName).font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground)
                         }
                         .tag(entry.id)
                     }

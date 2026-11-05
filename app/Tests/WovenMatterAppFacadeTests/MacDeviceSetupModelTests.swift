@@ -78,7 +78,7 @@ struct MacDeviceSetupModelTests {
         for theme in DashboardTheme.allCases {
             for width: CGFloat in [440, 920] {
                 let view = SettingsPage(title: "Apple Devices") {
-                    SettingsCard(title: "Find devices", detail: "Find other Macs on your Tailscale network, even when Woven Matter is closed.") {
+                    SettingsSection(title: "Find devices", detail: "Find other Macs on your Tailscale network, even when Woven Matter is closed.") {
                         MacTailnetDiscoveryView(devices: devices, pairing: pairing, host: application.companionHost, canPairWithCentral: false)
                     }
                 }.background(theme.palette.workspace).environment(\.dashboardTheme, theme).preferredColorScheme(theme.colorScheme)

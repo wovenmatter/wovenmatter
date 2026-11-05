@@ -2,8 +2,8 @@
 
 | Problem | Start here |
 | --- | --- |
-| No agent in New chat | Check the correct workspace's runtime row; install, enable, and show the agent, then complete sign-in or connection setup. |
-| Installed but not ready | Installation, transport readiness, and authentication are separate; inspect the agent's Settings. |
+| No agent in New chat | Check the agent in Settings → Agents or the remote workspace in Settings → Workspaces; install it, then complete sign-in or connection setup. |
+| Installed but not ready | Installation, transport readiness, and authentication are separate; inspect the agent's page in Settings → Agents. |
 | A project folder cannot be created | Connect its owning workspace, choose a valid unused directory name, and check the reported filesystem error. For a local existing project, choose Link Existing. |
 | A draft cannot use a folder | Choose a folder owned by the selected agent's execution workspace or Ungrouped. After the first message, start a new chat to use another folder. |
 | An earlier chat cannot resume | Sessions from the former workspace layout are archived history. Their messages remain readable; start a new chat for further work. |

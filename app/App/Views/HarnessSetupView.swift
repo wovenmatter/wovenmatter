@@ -169,7 +169,7 @@ struct HarnessSetupView: View {
             }
             .background(theme.palette.themeWhisper)
             .clipShape(DashboardShapes.card)
-            SettingsNote("Both steps are optional. Reopen this guide from Settings → General → Set up harnesses. Provider connections and web search are also available in Settings → Pi Durable.")
+            SettingsNote("Both steps are optional. Reopen this guide from Settings → Agents. Provider connections and web search are also available in Settings → Accounts.")
         }
     }
 

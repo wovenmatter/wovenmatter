@@ -1,10 +1,10 @@
 # Accounts and dictation
 
-Open **Settings → Pi Durable** or **Settings → Usage** to manage shared
-accounts. Account/status links in Usage and Pi Durable lead here.
+Open **Settings → Accounts** to manage shared accounts. Account links in Usage and
+Pi Durable lead here.
 
-The page groups **Model providers**, **Web search**, and **Local models**.
-Expand a provider, then its subscription or API-key section. OpenAI, Anthropic,
+The page groups **Model providers**, **Web search**, and **Local model servers**.
+Expand a provider to see its subscription, with API keys folded below it. OpenAI, Anthropic,
 Grok/xAI, OpenRouter, and OpenCode connections power Pi Durable.
 
 Save up to four connections per type. Saved rows show account identity or a key
@@ -23,7 +23,7 @@ accounts. **Use shared sign-in** removes that independent override.
 
 Workspace overrides apply to Pi Durable. Usage uses global accounts.
 **Usage → Usage limits** shows a separate card for each saved account, plus providers
-that need sign-in. Use **Go to Usage settings** to add or reconnect an account.
+that need sign-in. Use **Manage accounts** to add or reconnect an account.
 Device analytics imports Woven Matter and local harness history without account
 setup, provider enable switches, or Keychain access. It excludes account-wide
 OpenRouter API history from device totals and includes all OpenCode billing routes.
@@ -34,7 +34,7 @@ features using it.
 
 ## Executor
 
-**Settings → General → Connected apps · Executor** manages one local or remote Linux Executor runtime, shared by
+**Settings → Woven MCP → Connected apps** manages one local or remote Linux Executor runtime, shared by
 every agent through Woven MCP. Configure apps in its dashboard, choose defaults,
 and select apps per conversation. See [Executor apps](executor.md) for setup,
 permissions and recovery.
@@ -51,7 +51,7 @@ first time; the app shows preparation progress and lets you cancel. Once languag
 support is installed, speech recognition works offline. Audio and live previews
 are not written to files or sent to a workspace, provider, or agent.
 
-Dictation is always available. **Settings → General → Dictation** on Mac has a
+Dictation is always available. **Settings → Dictation** on Mac has a
 language selector. Automatic follows your preferred
 languages. On iPhone, touch and hold the microphone to choose a language. Language
 changes apply to the next recording. Standard keyboard dictation remains available.
@@ -93,7 +93,7 @@ accessing providers, Keychain, or the microphone.
 
 ## Local Model Server
 
-In **Settings → Pi Durable → Local model servers**, enter a **Server URL** and **API key**, then click
+In **Settings → Accounts → Local model servers**, choose **Add model server**, enter a **Server URL** and **API key**, then click
 **Connect**. Use an OpenAI Responses-compatible base URL, such as
 `http://localhost:32100/v1`, or the server's address on your Tailscale network.
 No advanced settings are needed. Add up to 12 servers.

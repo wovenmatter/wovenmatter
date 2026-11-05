@@ -5,7 +5,7 @@ your local agent workspace or a remote workspace.
 It includes Pi's file and shell tools, Woven Matter's existing note/workspace
 integration, and web search. You do not need to install Pi, Node, or Claude Code.
 
-Open **Settings → Pi Durable** to connect providers:
+Open **Settings → Accounts** to connect providers:
 
 - **OpenAI:** connect a ChatGPT subscription, an OpenAI API key, or both.
 - **OpenRouter / OpenCode Go:** add an API key. The global OpenRouter key is
@@ -13,17 +13,17 @@ Open **Settings → Pi Durable** to connect providers:
 - **Claude:** use your Claude subscription through Anthropic’s native sign-in,
   an Anthropic API key, or both. They appear as separate model connections.
 - **Grok/xAI:** connect a Grok subscription or a separately billed xAI API key.
-- **Web search:** add Exa, Brave, or Firecrawl keys under **Accounts → Web search
-  accounts**, then choose a **Search provider** under **Chat settings → Web search**.
+- **Web search:** add Exa, Brave, or Firecrawl keys under **Web search**, then select
+  the provider to use on its row.
   Exa remains the default. Exa and Firecrawl also read webpages; Brave returns
   search context, with the browser available for page reading. Chat and workspace
   tools work without a search key.
 - **Local Model Server:** connect up to 12 OpenAI Responses-compatible servers.
   Their models appear in the existing Pi Durable model picker.
 
-Open **Settings → Pi Durable** to choose a default, show or hide models,
+Open **Settings → Agents → Pi Durable** to choose a default, show or hide models,
 change their selector order, and choose an ordered list of fallback models.
-After connecting an account, the page opens its model browser. Choose the models
+After connecting an account, choose **Choose chat models** to open the model browser. Choose the models
 you want in chat; the first selection becomes the default. The default is always shown. Filter
 the catalog by connection type, model lab across connections, or subscriptions.
 
@@ -67,7 +67,7 @@ running. Reopening the conversation recovers the completed response; reconnectin
 to an unfinished response waits for that remote turn to finish. A container or
 service restart interrupts active work and requires an explicit retry.
 
-Pi Durable and Usage settings manage the same saved provider accounts.
+Pi Durable and Usage use the same saved provider accounts, managed in Settings → Accounts.
 Dictation uses on-device speech and needs no account. Subscription connections remain distinct from separately billed API
 keys. Signing in here does not sign in
 Codex, Claude Code, Grok Build, or OpenCode, and their
@@ -118,9 +118,8 @@ Crash dumps are disabled for managed helpers/containers; host swap and memory
 snapshots remain host responsibilities. Removing stored credentials does not
 revoke copies already obtained elsewhere; revoke those through the provider.
 
-Open **Local Agent Workspace** or a specific **Remote agent workspace** in
-Settings and select **Refresh sign-in status**. It checks Pi Durable and
-independent harnesses without starting login. Results distinguish stored
+Open **Settings → Agents** or a remote workspace in **Settings → Workspaces** to see
+sign-in status. It checks Pi Durable and independent harnesses without starting login. Results distinguish stored
 credentials, a harness reporting sign-in, missing sign-in, unsupported checks,
 and failures. These checks do not verify remaining usage. Local harnesses whose
 credential access is disabled stay unchecked.
@@ -132,7 +131,7 @@ a separate boundary: interrupted sends are not automatically repeated. See
 
 ## Claude models
 
-In **Settings → Pi Durable → Anthropic**, expand **Claude subscription** and click
+In **Settings → Accounts**, expand **Anthropic** and click
 **Sign in with Claude**. Open the inline link and complete Anthropic’s sign-in flow.
 Paste the full code returned by Claude into the sign-in form and click **Continue**.
 The account list refreshes when sign-in completes. Woven Matter bundles the unmodified

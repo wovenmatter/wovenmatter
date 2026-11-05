@@ -10,11 +10,11 @@ A **harness** is the software that runs the agent. Settings also calls it a
 
 ## Set up a harness
 
-1. Open **Settings → Local Agent Workspace**, or select a workspace under
-   **Remote Agent Workspaces**.
-2. Find the harness under **Runtimes**. If it is missing, select **Install**
-   and review the installer before confirming.
-3. Installed local harnesses appear in the sidebar automatically. Choose **Sign in…** if its native account is not connected. Remote workspaces retain their own Enable controls.
+1. Open **Settings → Agents** and choose the harness. For a remote workspace, choose
+   it under **Applies to**, or open it from **Settings → Workspaces**.
+2. If the harness is missing, select **Install** and review the installer before
+   confirming.
+3. Installed harnesses appear in the sidebar automatically. Choose **Sign in…** if its native account is not connected.
 4. Choose **New chat** and select the agent in that workspace.
 
 Start with a harness you already use and have provider access for. WovenMatter
@@ -25,8 +25,8 @@ A remote workspace has its own installations and credentials.
 ## Harness settings
 
 Open **Settings → Agents** and choose Pi Durable, Codex, Claude Code, Grok Build,
-or OpenCode for its accounts, installation, and chat settings. You can also open
-the harness's **Settings** directly from a workspace.
+or OpenCode for its account, software, and defaults for new chats. You can also open
+it from a remote workspace in **Settings → Workspaces**.
 OpenCode includes model selection and server controls; configure its provider
 accounts through OpenCode.
 
@@ -36,14 +36,13 @@ using that service.
 
 ## Updates and visibility
 
-Use **Check for updates** or **Update** in the runtime row. A check reports
+Use **Check for updates** or **Update** in the harness’s **Software** row. A check reports
 available updates without installing them. Finish active work before updating;
 a busy runtime may block maintenance. Remote updates apply to the selected workspace.
 
-**Hide** controls sidebar visibility. **Disable** turns off the integration
-without uninstalling the software or deleting its data. For OpenCode, disabling
-disconnects WovenMatter while leaving the shared server running; use **Stop server**
-to stop it.
+**Settings → General → Sidebar sections** controls which workspace groups the sidebar
+shows. For OpenCode, use **Stop server** under its service on the agent page to stop
+the shared server.
 
 For adapter details, component versions, and update behavior, see
 [Runtime installation and updates](../RUNTIME_MAINTENANCE.md).

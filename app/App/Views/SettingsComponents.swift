@@ -3,6 +3,23 @@ import SwiftUI
 import WovenMatterClient
 import WovenMatterCore
 
+/// The type scale for settings. Pages use these tokens instead of literal sizes.
+extension Font {
+    static let settingsTitle = Font.system(size: 22, weight: .semibold)
+    static let settingsSection = Font.system(size: 14, weight: .semibold)
+    static let settingsRow = Font.system(size: 13, weight: .medium)
+    static let settingsText = Font.system(size: 13)
+    static let settingsBody = Font.system(size: 12.5)
+    static let settingsSecondary = Font.system(size: 11.5)
+}
+
+enum SettingsMetrics {
+    static let pageWidth: CGFloat = 720
+    static let sectionSpacing: CGFloat = 28
+    static let rowHeight: CGFloat = 40
+    static let summaryTitleWidth: CGFloat = 148
+}
+
 struct SettingsPage<Content: View>: View {
     let title: String
     var detail: String? = nil
@@ -29,25 +46,25 @@ struct SettingsPage<Content: View>: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: SettingsMetrics.sectionSpacing) {
                 VStack(alignment: .leading, spacing: 8) {
                     if let onBack {
                         SettingsBackButton(title: backTitle, action: onBack)
                     }
                     Text(title)
-                        .font(.system(size: 22, weight: .semibold))
+                        .font(.settingsTitle)
                         .tracking(-0.35)
                     if let detail {
                         Text(detail)
-                            .font(.system(size: 13))
+                            .font(.settingsText)
                             .foregroundStyle(DashboardPalette.mutedForeground)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
-                .padding(.bottom, 4)
                 content
             }
-            .frame(maxWidth: 1_080, alignment: .leading)
+            .font(.settingsText)
+            .frame(maxWidth: SettingsMetrics.pageWidth, alignment: .leading)
             .padding(.horizontal, 24)
             .padding(.top, reservesRailControlSpace ? 76 : 28)
             .padding(.bottom, 28)
@@ -55,34 +72,11 @@ struct SettingsPage<Content: View>: View {
         }
         .scrollIndicators(.never)
         .disclosureGroupStyle(SettingsDisclosureGroupStyle())
+        .toggleStyle(SettingsSwitchToggleStyle())
+        .environment(\.settingsFilledControls, true)
         .contentShape(Rectangle())
         .onTapGesture {
             NSApp.keyWindow?.makeFirstResponder(nil)
-        }
-    }
-}
-
-struct SettingsWorkspaceSidebarVisibilityControl: View {
-    let workspace: DashboardWorkspaceSidebarVisibility
-    @AppStorage private var isShown: Bool
-
-    init(_ workspace: DashboardWorkspaceSidebarVisibility) {
-        self.workspace = workspace
-        _isShown = AppStorage(wrappedValue: true, workspace.storageKey)
-    }
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Text("Sidebar visibility")
-                .font(.system(size: 13))
-                .foregroundStyle(DashboardPalette.mutedForeground)
-            Button(isShown ? "Hide" : "Show") {
-                isShown.toggle()
-            }
-            .buttonStyle(SettingsQuietButtonStyle())
-            .accessibilityLabel("\(isShown ? "Hide" : "Show") \(workspace.title) in the sidebar")
-            .accessibilityValue(isShown ? "Shown" : "Hidden")
-            .help("Hides or shows this section. Workspaces and chats stay active.")
         }
     }
 }
@@ -93,8 +87,9 @@ struct SettingsBackButton: View {
 
     var body: some View {
         Button(action: action) {
-            DashboardLucideIcon(glyph: .panelLeftClose, size: 16)
+            DashboardLucideIcon(glyph: .arrowLeft, size: 16)
                 .frame(width: 32, height: 32)
+                .contentShape(Rectangle())
         }
         .buttonStyle(DashboardIconButtonStyle())
         .environment(\.dashboardSidebarForeground, DashboardPalette.foreground)
@@ -104,10 +99,13 @@ struct SettingsBackButton: View {
     }
 }
 
+/// A row that opens another settings page. Its icon aligns with the page's left edge.
 struct SettingsDestinationRow<Icon: View>: View {
     @Environment(\.dashboardTheme) private var theme
     let title: String
     let detail: String?
+    let status: String?
+    let statusTone: SettingsStatusTone
     @ViewBuilder var icon: Icon
     let action: () -> Void
     @State private var isHovering = false
@@ -115,11 +113,15 @@ struct SettingsDestinationRow<Icon: View>: View {
     init(
         title: String,
         detail: String? = nil,
+        status: String? = nil,
+        statusTone: SettingsStatusTone = .neutral,
         @ViewBuilder icon: () -> Icon,
         action: @escaping () -> Void
     ) {
         self.title = title
         self.detail = detail
+        self.status = status
+        self.statusTone = statusTone
         self.icon = icon()
         self.action = action
     }
@@ -132,22 +134,24 @@ struct SettingsDestinationRow<Icon: View>: View {
                     .foregroundStyle(DashboardPalette.mutedForeground)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.settingsRow)
                         .foregroundStyle(DashboardPalette.foreground)
                     if let detail {
                         Text(detail)
-                            .font(.system(size: 11.5))
+                            .font(.settingsSecondary)
                             .foregroundStyle(DashboardPalette.mutedForeground)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
                 Spacer(minLength: 12)
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(DashboardPalette.mutedForeground.opacity(0.55))
+                if let status { SettingsStatus(status, tone: statusTone) }
+                DashboardLucideIcon(glyph: .chevronDown, size: 12)
+                    .rotationEffect(.degrees(-90))
+                    .foregroundStyle(DashboardPalette.mutedForeground.opacity(0.7))
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, 10)
+            .padding(.vertical, 8)
+            .frame(minHeight: SettingsMetrics.rowHeight)
             .background(isHovering ? theme.palette.themeWhisper : Color.clear)
             .clipShape(
                 RoundedRectangle(
@@ -158,6 +162,7 @@ struct SettingsDestinationRow<Icon: View>: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .padding(.horizontal, -12)
         .onHover { isHovering = $0 }
     }
 }
@@ -175,11 +180,11 @@ struct SettingsDisclosureGroupStyle: DisclosureGroupStyle {
                     configuration.label
                     Spacer(minLength: 0)
                 }
-                .font(.body)
+                .font(.settingsText)
                 .frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
                 .contentShape(Rectangle())
             }
-            .buttonStyle(SettingsQuietButtonStyle(horizontalPadding: 0, minimumHeight: 30))
+            .buttonStyle(SettingsQuietButtonStyle(horizontalPadding: 0, minimumHeight: 30, idleFill: false))
             .accessibilityValue(configuration.isExpanded ? "Expanded" : "Collapsed")
 
             if configuration.isExpanded {
@@ -191,77 +196,244 @@ struct SettingsDisclosureGroupStyle: DisclosureGroupStyle {
     }
 }
 
-struct SettingsCard<Content: View>: View {
-    @Environment(\.dashboardTheme) private var theme
-    let title: String
+/// A heading, at most one sentence, then rows. Spacing separates sections.
+struct SettingsSection<Content: View>: View {
+    var title: String? = nil
     var detail: String? = nil
     @ViewBuilder var content: Content
 
-    init(title: String, detail: String? = nil, @ViewBuilder content: () -> Content) {
+    init(title: String? = nil, detail: String? = nil, @ViewBuilder content: () -> Content) {
         self.title = title
         self.detail = detail
         self.content = content()
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 13) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title)
-                    .font(.system(size: 14, weight: .semibold))
+        VStack(alignment: .leading, spacing: 6) {
+            if title != nil || detail != nil {
+                VStack(alignment: .leading, spacing: 4) {
+                    if let title {
+                        Text(title).font(.settingsSection)
+                    }
+                    if let detail {
+                        Text(detail)
+                            .font(.settingsBody)
+                            .foregroundStyle(DashboardPalette.mutedForeground)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(.bottom, 2)
+            }
+            content
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// The one settings row: title and optional secondary line on the left, control on the right.
+/// When both cannot fit on one line, the control moves below the title so neither gets crushed.
+struct SettingsRow<Accessory: View>: View {
+    let title: String
+    var detail: String? = nil
+    @ViewBuilder var accessory: Accessory
+
+    init(title: String, detail: String? = nil, @ViewBuilder accessory: () -> Accessory) {
+        self.title = title
+        self.detail = detail
+        self.accessory = accessory()
+    }
+
+    private var label: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title).font(.settingsRow)
+            if let detail {
+                Text(detail)
+                    .font(.settingsSecondary)
+                    .foregroundStyle(DashboardPalette.mutedForeground)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .center, spacing: 12) {
+                label
+                Spacer(minLength: 12)
+                accessory
+            }
+            .frame(maxWidth: .infinity, minHeight: SettingsMetrics.rowHeight, alignment: .leading)
+            VStack(alignment: .leading, spacing: 6) {
+                label
+                HStack(spacing: 8) { accessory }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 4)
+        }
+    }
+}
+
+/// A switch on the right edge of its row, like every other settings control.
+struct SettingsSwitchToggleStyle: ToggleStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 12) {
+            configuration.label
+                .font(.settingsRow)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+                .onTapGesture { if isEnabled { configuration.isOn.toggle() } }
+            Toggle(isOn: configuration.$isOn) { configuration.label }
+                .labelsHidden()
+                .toggleStyle(SwitchToggleStyle(tint: DashboardPalette.primary))
+                .controlSize(.mini)
+                .fixedSize()
+                .scaleEffect(0.8)
+                .frame(width: 28, height: 16)
+        }
+        .frame(minHeight: 32)
+        .accessibilityRepresentation {
+            Toggle(isOn: configuration.$isOn) { configuration.label }
+                .toggleStyle(.switch)
+        }
+    }
+}
+
+/// A switch with an optional secondary line.
+struct SettingsToggleRow: View {
+    let title: String
+    var detail: String? = nil
+    @Binding var isOn: Bool
+
+    var body: some View {
+        Toggle(isOn: $isOn) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.settingsRow)
                 if let detail {
                     Text(detail)
-                        .font(.system(size: 12.5))
+                        .font(.settingsSecondary)
                         .foregroundStyle(DashboardPalette.mutedForeground)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            content
         }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(theme.palette.workspace)
-        .clipShape(DashboardShapes.card)
+        .frame(minHeight: SettingsMetrics.rowHeight)
     }
 }
 
-/// One compact harness header; maintenance controls stay in labeled rows below it.
-struct SettingsHarnessDisclosure<Content: View>: View {
-    @Environment(\.dashboardTheme) private var theme
-    let runtime: AgentRuntimeKind
-    let status: String
-    var tone: SettingsPillTone = .neutral
+private struct SettingsSummaryLabel: View {
+    let title: String
+    let value: String?
+    let tone: SettingsStatusTone?
+    let chevronRotation: Double
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(title)
+                .font(.settingsRow)
+                .foregroundStyle(DashboardPalette.foreground)
+                .lineLimit(1)
+                .frame(minWidth: SettingsMetrics.summaryTitleWidth, alignment: .leading)
+            if let value {
+                HStack(spacing: 6) {
+                    if let tone { SettingsStatusDot(tone: tone) }
+                    Text(value)
+                        .font(.settingsBody)
+                        .foregroundStyle(DashboardPalette.mutedForeground)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+            }
+            Spacer(minLength: 8)
+            DashboardLucideIcon(glyph: .chevronDown, size: 12)
+                .foregroundStyle(DashboardPalette.mutedForeground)
+                .rotationEffect(.degrees(chevronRotation))
+        }
+        .padding(.horizontal, 8)
+        .frame(maxWidth: .infinity, minHeight: SettingsMetrics.rowHeight, alignment: .leading)
+        .contentShape(Rectangle())
+    }
+}
+
+/// Title, current value, and chevron. Details open only on request.
+struct SettingsSummaryRow<Content: View>: View {
+    let title: String
+    var value: String? = nil
+    var tone: SettingsStatusTone? = nil
+    @State private var isExpanded: Bool
     @ViewBuilder var content: Content
+
+    init(
+        _ title: String,
+        value: String? = nil,
+        tone: SettingsStatusTone? = nil,
+        initiallyExpanded: Bool = false,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.title = title
+        self.value = value
+        self.tone = tone
+        _isExpanded = State(initialValue: initiallyExpanded)
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button { isExpanded.toggle() } label: {
+                SettingsSummaryLabel(title: title, value: value, tone: tone, chevronRotation: isExpanded ? 0 : -90)
+            }
+            .buttonStyle(SettingsQuietButtonStyle(horizontalPadding: 0, minimumHeight: SettingsMetrics.rowHeight, idleFill: false))
+            .padding(.horizontal, -8)
+            .accessibilityLabel(title)
+            .accessibilityValue((value ?? "") + (isExpanded ? ", expanded" : ", collapsed"))
+            if isExpanded {
+                VStack(alignment: .leading, spacing: 6) { content }
+                    .padding(.leading, 12)
+                    .padding(.top, 2)
+                    .padding(.bottom, 10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+}
+
+/// The same row as `SettingsSummaryRow`, opening another page instead of expanding.
+struct SettingsSummaryLink: View {
+    let title: String
+    var value: String? = nil
+    var tone: SettingsStatusTone? = nil
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            SettingsSummaryLabel(title: title, value: value, tone: tone, chevronRotation: -90)
+        }
+        .buttonStyle(SettingsQuietButtonStyle(horizontalPadding: 0, minimumHeight: SettingsMetrics.rowHeight, idleFill: false))
+        .padding(.horizontal, -8)
+        .accessibilityLabel(title)
+        .accessibilityValue(value ?? "")
+    }
+}
+
+/// Longer explanations stay folded until asked for.
+struct SettingsHelp<Content: View>: View {
+    var title = "How it works"
+    @ViewBuilder var content: Content
+
+    init(title: String = "How it works", @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.content = content()
+    }
 
     var body: some View {
         DisclosureGroup {
-            VStack(alignment: .leading, spacing: 10) { content }
-                .padding(.top, 10)
+            VStack(alignment: .leading, spacing: 6) { content }
+                .padding(.top, 4)
+                .padding(.bottom, 6)
         } label: {
-            HStack(spacing: 10) {
-                DashboardHarnessLogoIcon(logo: DashboardHarnessLogo(runtimeKind: runtime), size: 22)
-                Text(runtime.displayName).font(.system(size: 13, weight: .medium))
-                Spacer(minLength: 8)
-                SettingsPill(status, tone: tone)
-            }
+            Text(title).font(.settingsBody).foregroundStyle(DashboardPalette.mutedForeground)
         }
-        .disclosureGroupStyle(SettingsDisclosureGroupStyle())
-        .padding(12)
-        .background(theme.palette.themeWhisper)
-        .clipShape(DashboardShapes.card)
-    }
-}
-
-struct SettingsHarnessControlRow<Content: View>: View {
-    let title: String
-    @ViewBuilder var content: Content
-
-    var body: some View {
-        HStack(alignment: .center, spacing: 12) {
-            Text(title).font(.system(size: 12.5)).foregroundStyle(DashboardPalette.mutedForeground)
-            Spacer(minLength: 8)
-            content
-        }
-        .frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
     }
 }
 
@@ -276,34 +448,59 @@ struct SettingsLocalRuntimeInventoryRow: View {
     }
 
     var body: some View {
-        SettingsRuntimeSummaryRow(runtimeKind: runtimeKind,
+        SettingsRuntimeSummaryRow(
             summary: model.runtimeInventories[runtimeKind]?.summary ?? "Checking installed components…",
-            status: status, tone: model.runtimeInventories[runtimeKind]?.isInstalled == true ? .neutral : .warning) {
-            SettingsLocalRuntimeUpdateButton(model: model, runtimeKind: runtimeKind)
+            status: status, tone: model.runtimeInventories[runtimeKind]?.isInstalled == true ? .good : .warning) {
+            if model.runtimeInventories[runtimeKind]?.isInstalled == false {
+                SettingsLocalRuntimeInstallButton(model: model, runtimeKind: runtimeKind)
+            } else {
+                SettingsLocalRuntimeUpdateButton(model: model, runtimeKind: runtimeKind)
+            }
         }
     }
 }
 
 struct SettingsRuntimeSummaryRow<Actions: View>: View {
-    let runtimeKind: AgentRuntimeKind
+    var title = "Software"
     let summary: String
     let status: String
-    var tone: SettingsPillTone = .neutral
+    var tone: SettingsStatusTone = .neutral
     @ViewBuilder var actions: Actions
 
     var body: some View {
-        SettingsInset {
-            HStack(spacing: 12) {
-                DashboardHarnessLogoIcon(logo: DashboardHarnessLogo(runtimeKind: runtimeKind), size: 20)
-                    .frame(width: 28, height: 28)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(runtimeKind.displayName).font(.system(size: 13, weight: .medium))
-                    Text(summary).font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
-                }.frame(maxWidth: .infinity, alignment: .leading)
-                SettingsPill(status, tone: tone)
-                actions
-            }
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.settingsRow)
+                Text(summary)
+                    .font(.settingsSecondary)
+                    .foregroundStyle(DashboardPalette.mutedForeground)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            }.frame(maxWidth: .infinity, alignment: .leading)
+            SettingsStatus(status, tone: tone)
+            actions
         }
+        .frame(minHeight: SettingsMetrics.rowHeight)
+    }
+}
+
+struct SettingsLocalRuntimeInstallButton: View {
+    @Bindable var model: ApplicationModel
+    let runtimeKind: AgentRuntimeKind
+
+    var body: some View {
+        let inventory = model.runtimeInventories[runtimeKind]
+        let installing = model.installingLocalACPRuntimeKinds.contains(runtimeKind)
+            || (runtimeKind == .opencode && model.openCode?.isInstalling == true)
+        Button(installing ? "Installing…" : inventory == nil ? "Checking…" : "Install") {
+            model.installLocalACPRuntimeComponent(runtimeKind)
+        }
+        .buttonStyle(SettingsQuietButtonStyle())
+        .disabled(inventory == nil || model.runtimeMaintenanceBusy(runtimeKind) || model.checkingRuntimeInventory
+            || !model.installingLocalACPRuntimeKinds.isEmpty
+            || model.preparedLocalACPRuntimeInstall != nil
+            || model.localRuntimeMaintenanceHasActiveConversation)
+        .accessibilityLabel("Install " + runtimeKind.displayName)
     }
 }
 
@@ -485,60 +682,75 @@ struct SettingsNote: View {
 
 // MARK: - Dropdown picker
 
-/// Compact dropdown styled and sized exactly like a SettingsQuietButtonStyle
-/// button so it aligns with neighboring action buttons. Uses a Button +
-/// popover instead of Menu/Picker: native menu styles add internal padding
-/// that breaks edge alignment and tint the label with the accent color.
-struct SettingsMenuPicker: View {
+/// The settings dropdown, styled and sized like a `SettingsQuietButtonStyle` button
+/// so it aligns with neighboring actions. Uses a button and popover instead of
+/// `Picker`: native menu styles add padding and tint the label with the accent color.
+struct SettingsPicker<Value: Hashable>: View {
     @State private var isPresented = false
 
-    let selection: String
-    let options: [String]
-    var capitalizeOptions: Bool = false
-    var width: CGFloat = 180
-    let onSelect: (String) -> Void
+    let title: String
+    @Binding var selection: Value
+    let options: [Value]
+    var popoverWidth: CGFloat = 260
+    let label: (Value) -> String
+
+    init(
+        _ title: String,
+        selection: Binding<Value>,
+        options: [Value],
+        popoverWidth: CGFloat = 260,
+        label: @escaping (Value) -> String
+    ) {
+        self.title = title
+        _selection = selection
+        self.options = options
+        self.popoverWidth = popoverWidth
+        self.label = label
+    }
 
     var body: some View {
         Button {
             isPresented.toggle()
         } label: {
             HStack(spacing: 8) {
-                Text(selection.isEmpty ? "Select…" : label(for: selection))
-                    .font(.system(size: 12.5, weight: .medium))
+                Text(label(selection))
+                    .font(.settingsBody.weight(.medium))
                     .foregroundStyle(DashboardPalette.foreground)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                Spacer(minLength: 4)
                 Image(systemName: "chevron.up.chevron.down")
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(DashboardPalette.mutedForeground)
             }
-            .padding(.horizontal, 12)
-            .frame(width: width, height: 36, alignment: .leading)
             .contentShape(RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
         }
-        .buttonStyle(SettingsQuietButtonStyle(horizontalPadding: 0, isActive: isPresented))
-        .accessibilityValue(selection.isEmpty ? "No selection" : label(for: selection))
+        .buttonStyle(SettingsQuietButtonStyle(isActive: isPresented))
+        .accessibilityLabel(title)
+        .accessibilityValue(label(selection))
         .accessibilityHint(isPresented ? "Options are open" : "Shows available options")
         .popover(isPresented: $isPresented, arrowEdge: .bottom) {
-            VStack(alignment: .leading, spacing: 2) {
-                if options.isEmpty {
-                    Text("No options available")
-                        .font(.system(size: 12.5))
-                        .foregroundStyle(DashboardPalette.mutedForeground)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                } else {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 2) {
+                    if options.isEmpty {
+                        Text("No options available")
+                            .font(.settingsBody)
+                            .foregroundStyle(DashboardPalette.mutedForeground)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                    }
                     ForEach(options, id: \.self) { option in
                         Button {
-                            onSelect(option)
+                            // Choosing the current value is not a change; native pickers don't report it either.
+                            if option != selection { selection = option }
                             isPresented = false
                         } label: {
                             HStack {
-                                Text(label(for: option))
-                                    .font(.system(size: 13))
+                                Text(label(option))
+                                    .font(.settingsText)
                                     .foregroundStyle(DashboardPalette.foreground)
-                                Spacer()
+                                    .multilineTextAlignment(.leading)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                Spacer(minLength: 8)
                                 if option == selection {
                                     Image(systemName: "checkmark")
                                         .font(.system(size: 11, weight: .semibold))
@@ -554,15 +766,14 @@ struct SettingsMenuPicker: View {
                         .accessibilityAddTraits(option == selection ? .isSelected : [])
                     }
                 }
+                .padding(6)
             }
-            .padding(6)
-            .frame(minWidth: width)
+            .scrollIndicators(.never)
+            .frame(width: popoverWidth)
+            .frame(maxHeight: 340)
+            .fixedSize(horizontal: false, vertical: true)
             .onExitCommand { isPresented = false }
         }
-    }
-
-    private func label(for option: String) -> String {
-        capitalizeOptions ? option.capitalized : option
     }
 }
 
@@ -634,7 +845,7 @@ struct SettingsValueRow: View {
                 .foregroundStyle(DashboardPalette.mutedForeground)
             Spacer(minLength: 12)
             Text(value)
-                .font(.system(size: 13, weight: .medium))
+                .font(.settingsBody.weight(.medium))
                 .multilineTextAlignment(.trailing)
                 .textSelection(.enabled)
         }
@@ -642,96 +853,69 @@ struct SettingsValueRow: View {
     }
 }
 
-enum SettingsPillTone {
+enum SettingsStatusTone {
     case neutral
+    case good
     case warning
 }
 
-struct SettingsPill: View {
-    @Environment(\.dashboardTheme) private var theme
-    let text: String
-    let tone: SettingsPillTone
+struct SettingsStatusDot: View {
+    let tone: SettingsStatusTone
 
-    init(_ text: String, tone: SettingsPillTone) {
+    var body: some View {
+        Circle()
+            .fill(tone == .warning ? DashboardPalette.warning
+                : tone == .good ? DashboardPalette.success : DashboardPalette.mutedForeground.opacity(0.6))
+            .frame(width: 6, height: 6)
+            .accessibilityHidden(true)
+    }
+}
+
+/// A status dot and text. Settings use this one treatment for readiness.
+struct SettingsStatus: View {
+    let text: String
+    let tone: SettingsStatusTone
+
+    init(_ text: String, tone: SettingsStatusTone = .neutral) {
         self.text = text
         self.tone = tone
     }
 
     var body: some View {
-        Text(text)
-            .font(.system(size: 10.5, weight: .semibold))
-            .foregroundStyle(tone == .warning ? DashboardPalette.warning : DashboardPalette.mutedForeground)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(tone == .warning ? DashboardPalette.warning.opacity(0.1) : theme.palette.themeSoft)
-            .clipShape(Capsule())
+        HStack(spacing: 6) {
+            SettingsStatusDot(tone: tone)
+            Text(text)
+                .font(.settingsSecondary)
+                .foregroundStyle(DashboardPalette.mutedForeground)
+        }
+        .fixedSize()
+        .accessibilityElement(children: .combine)
     }
 }
 
-struct SettingsThemePreview: View {
-    let theme: DashboardTheme
+private struct SettingsFilledControlsKey: EnvironmentKey {
+    static let defaultValue = false
+}
 
-    private var railFill: Color {
-        switch theme {
-        case .green: .hex(0x004225, opacity: 0.16)
-        case .cognac: .hex(0xFFFFFF, opacity: 0.96)
-        case .dark: .hex(DashboardColors.darkRail)
-        }
-    }
-
-    var body: some View {
-        HStack(spacing: 8) {
-            previewRail
-            VStack(alignment: .leading, spacing: 5) {
-                Spacer()
-                Capsule()
-                    .fill(DashboardPalette.primary)
-                    .frame(width: 32, height: 6)
-                Capsule()
-                    .fill(theme == .dark ? .hex(DashboardColors.darkMutedForeground, opacity: 0.18) : Color.black.opacity(0.06))
-                    .frame(height: 6)
-            }
-            .padding(8)
-            .frame(maxWidth: .infinity)
-            .background {
-                theme.palette.workspace
-                    .overlay(theme.palette.themeWhisper)
-            }
-            .clipShape(
-                RoundedRectangle(
-                    cornerRadius: DashboardMetrics.controlRadius,
-                    style: .continuous
-                )
-            )
-            previewRail
-        }
-        .padding(8)
-        .frame(height: 80)
-        .background(theme.palette.workspace)
-        .environment(\.colorScheme, theme.colorScheme)
-        .clipShape(DashboardShapes.card)
-        .shadow(color: .hex(0x0A1F16, opacity: 0.07), radius: 6, y: 2)
-    }
-
-    private var previewRail: some View {
-        RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous)
-            .fill(railFill)
-            .frame(width: 32)
-            .shadow(
-                color: theme == .cognac ? Color.hex(0x4D2D15, opacity: 0.08) : .clear,
-                radius: 7,
-                y: 3
-            )
+extension EnvironmentValues {
+    /// Settings pages give quiet actions a subtle resting fill so they read as controls
+    /// beside plain values. Other surfaces keep their clear resting state.
+    var settingsFilledControls: Bool {
+        get { self[SettingsFilledControlsKey.self] }
+        set { self[SettingsFilledControlsKey.self] = newValue }
     }
 }
 
 struct SettingsQuietButtonStyle: ButtonStyle {
     var horizontalPadding: CGFloat = 12
-    var minimumHeight: CGFloat = 36
+    var minimumHeight: CGFloat? = nil
     var isActive = false
+    /// Row-wide buttons such as disclosures stay clear until hovered.
+    var idleFill = true
     @Environment(\.dashboardTheme) private var theme
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.settingsFilledControls) private var filledControls
     @State private var isHovering = false
 
     func makeBody(configuration: Configuration) -> some View {
@@ -739,10 +923,11 @@ struct SettingsQuietButtonStyle: ButtonStyle {
             .font(.system(size: 12.5, weight: .medium))
             .foregroundStyle(DashboardPalette.foreground)
             .padding(.horizontal, horizontalPadding)
-            .frame(minHeight: minimumHeight)
+            .frame(minHeight: minimumHeight ?? (filledControls ? 32 : 36))
             .background(
                 theme.palette.themeSoft.opacity(
-                    configuration.isPressed || isActive ? 1 : (isEnabled && isHovering ? 0.72 : 0)
+                    configuration.isPressed || isActive ? 1
+                        : (isEnabled && isHovering ? 0.72 : (idleFill && filledControls ? 0.45 : 0))
                 )
             )
             .clipShape(RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
@@ -830,6 +1015,13 @@ struct SettingsHarnessSignInControl: View {
     let runtimeKind: AgentRuntimeKind
     var compact = false
 
+    private func accountDetails(fallback: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("Account").font(.settingsRow)
+            SettingsHarnessAccountDetails(status: signIn.statuses[runtimeKind], fallback: fallback)
+        }
+    }
+
     private var signIn: HarnessSignInModel { model.harnessSignIn }
     private var hasCredentials: Bool {
         ["verified", "credentials_present"].contains(signIn.statuses[runtimeKind]?.state ?? "")
@@ -843,7 +1035,7 @@ struct SettingsHarnessSignInControl: View {
                         Text(signIn.statuses[runtimeKind]?.label ?? "Signed in")
                             .font(.system(size: 11.5)).foregroundStyle(DashboardPalette.mutedForeground)
                     } else {
-                        SettingsHarnessAccountDetails(status: signIn.statuses[runtimeKind], fallback: "Signed in")
+                        accountDetails(fallback: "Signed in")
                     }
                     if !compact {
                         Spacer()
@@ -853,7 +1045,7 @@ struct SettingsHarnessSignInControl: View {
                     }
                 } else {
                     if !compact {
-                        SettingsHarnessAccountDetails(status: signIn.statuses[runtimeKind], fallback: "Checking sign-in…")
+                        accountDetails(fallback: "Checking sign-in…")
                         Spacer()
                     }
                     Button(signIn.opening.contains(runtimeKind) ? "Opening…" : "Sign in…") {
@@ -868,6 +1060,7 @@ struct SettingsHarnessSignInControl: View {
             }
             if let message = signIn.messages[runtimeKind], !compact { SettingsNote(message) }
         }
+        .frame(minHeight: compact ? nil : SettingsMetrics.rowHeight)
         .task { await model.refreshHarnessSignIn(runtimeKind) }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             Task { await model.refreshHarnessSignIn(runtimeKind) }
@@ -875,73 +1068,36 @@ struct SettingsHarnessSignInControl: View {
     }
 }
 
-enum HarnessSettingsArea: String, CaseIterable {
-    case accounts = "Accounts & installation"
-    case defaults = "Chat settings"
-}
-
-struct SettingsHarnessAreaPicker: View {
-    @Environment(\.dashboardTheme) private var theme
-    @Binding var selection: HarnessSettingsArea
-    var body: some View {
-        DashboardSegmentedSelector(options: HarnessSettingsArea.allCases, selection: $selection,
-            accentSelection: theme != .dark) { $0.rawValue }
-            .frame(maxWidth: 440)
-    }
-}
-
-/// Account location is independent of preference inheritance.
-struct SettingsAccountWorkspacePicker: View {
+/// One workspace selector per page. Hidden when a page has only one thing to apply to.
+struct SettingsWorkspacePicker: View {
+    let title: String
     @Binding var scope: String
     let workspaces: [RemoteWorkspaceConfiguration]
-    var supportsSharedAccounts = false
-    var body: some View {
-        Picker("Accounts for", selection: $scope) {
-            if supportsSharedAccounts { Text("Shared Pi Durable accounts").tag("global") }
-            Text("Local workspace").tag("local")
-            ForEach(workspaces) { Text($0.name).tag($0.id.uuidString.lowercased()) }
-        }.frame(maxWidth: 480, alignment: .leading)
-    }
-}
+    var sharedLabel = "All workspaces"
 
-/// Only chat preferences inherit; accounts have their own location selector.
-struct SettingsWorkspaceScope: View {
-    @Binding var scope: String
-    @Binding var expanded: Bool
-    let workspaces: [RemoteWorkspaceConfiguration]
-    var inherits: Binding<Bool>?
-    var detail: String?
-
-    private var label: String {
-        scope == "global" ? "Shared" : scope == "local" ? "Local workspace"
-            : workspaces.first { $0.id.uuidString.lowercased() == scope }?.name ?? "Workspace"
+    private var options: [String] {
+        ["global", "local"] + workspaces.map { $0.id.uuidString.lowercased() }
     }
+
     var body: some View {
-        DisclosureGroup("Chat settings · \(label)", isExpanded: $expanded) {
-            VStack(alignment: .leading, spacing: 8) {
-                Picker("Settings for", selection: $scope) {
-                    Text("Shared chat settings").tag("global")
-                    Text("Local workspace").tag("local")
-                    ForEach(workspaces) { Text($0.name).tag($0.id.uuidString.lowercased()) }
-                }.frame(maxWidth: 440, alignment: .leading)
-                if scope != "global", let inherits {
-                    Toggle("Use shared chat settings", isOn: inherits)
-                    if let detail { SettingsNote(detail) }
-                } else if scope == "global" {
-                    SettingsNote("Used by workspaces with shared chat settings enabled. Accounts are managed separately.")
+        SettingsRow(title: title) {
+            SettingsPicker(title, selection: $scope, options: options) { option in
+                switch option {
+                case "global": sharedLabel
+                case "local": "Local workspace"
+                default: workspaces.first { $0.id.uuidString.lowercased() == option }?.name ?? "Workspace"
                 }
-            }.padding(.top, 8)
+            }
         }
     }
 }
-
 
 struct SettingsHarnessAccountDetails: View {
     let status: AgentSignInStatus?
     let fallback: String
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
-            Text(status?.label ?? fallback).font(.system(size: 11.5))
+            Text(status?.label ?? fallback).font(.settingsSecondary)
                 .foregroundStyle(DashboardPalette.mutedForeground)
             if let accounts = status?.accounts, !accounts.isEmpty {
                 ForEach(Array(accounts.enumerated()), id: \.offset) { _, account in
