@@ -1,5 +1,11 @@
 # Third-party notices
 
+## Pi Bot
+
+Woven Matter delivers the source-built [Pi Bot](https://github.com/wovenmatter/pi-bot)
+revision recorded in `pi-bot/selection.json`, under the MIT License in that repository.
+Its npm dependencies install on the device that runs it, under their own licenses.
+
 ## Executor
 
 Woven Matter integrates [Executor](https://executor.sh), created by Rhys Sullivan,

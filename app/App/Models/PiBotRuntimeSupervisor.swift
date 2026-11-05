@@ -372,16 +372,18 @@ final class PiBotRuntimeSupervisor {
                 save()
             }
         }
+        // An attached server's port is part of what the user chose; only a managed one can move.
+        let serverPort = target.ownership == .attached ? target.remotePort : persisted.serverPort
         switch target.kind {
         case .thisMac:
-            guard let port = persisted.serverPort else { throw PiBotHostError.command("Pi Bot has not been installed on this Mac.") }
+            guard let port = serverPort else { throw PiBotHostError.command("Pi Bot has not been installed on this Mac.") }
             if target.ownership == .managed, server?.isRunning != true { try await launchLocalServer() }
             let base = Self.baseURL(port: port)
             try await waitForHealth(base, seconds: 60)
             return base
         case .tailnet:
             guard let peer = target.peer else { throw PiBotHostError.invalidConnection }
-            guard let remotePort = persisted.serverPort else { throw PiBotHostError.command("Pi Bot has not been installed on \(peer.name).") }
+            guard let remotePort = serverPort else { throw PiBotHostError.command("Pi Bot has not been installed on \(peer.name).") }
             guard let localPort = PiBotLoopback.freePort(preferred: persisted.tunnelPort) else {
                 throw PiBotHostError.command("No free local port is available.")
             }
