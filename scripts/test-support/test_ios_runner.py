@@ -36,6 +36,61 @@ if name == 'xcodebuild':
 '''
 
 
+# Plain bash: on a Mac, /usr/bin/python3 is itself an xcrun shim that a fixture DEVELOPER_DIR breaks.
+XCODE_STUB = '''#!/bin/bash
+case "${0##*/}" in
+  xcode-select) printf '%s\\n' "$WM_SELECTED_XCODE" ;;
+  plutil) sed -n "s/^$2=//p" "${@: -1}" ;;  # plutil -extract KEY raw -o - FILE
+  swift) printf '%s' "${DEVELOPER_DIR:-}" > "$WM_DEVELOPER_DIR" ;;
+esac
+'''
+
+
+class XcodeSelectionTests(unittest.TestCase):
+    def developer_dir(self, selected, release, **environment):
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = Path(temporary)
+            binary = fixture / 'bin'
+            binary.mkdir()
+            for name in ['xcode-select', 'plutil', 'swift']:
+                path = binary / name
+                path.write_text(XCODE_STUB)
+                path.chmod(0o755)
+            developers = {}
+            for name, (version, build) in {'Selected': selected, 'Release': release}.items():
+                developers[name] = fixture / name / 'Contents/Developer'
+                developers[name].mkdir(parents=True)
+                (developers[name].parent / 'version.plist').write_text(
+                    f'CFBundleVersion={version}\nProductBuildVersion={build}\n')
+            seen = fixture / 'developer-dir'
+            env = {key: value for key, value in os.environ.items()
+                   if not key.startswith('WOVENMATTER_IOS_') and key != 'DEVELOPER_DIR'}
+            env.update(PATH=str(binary) + os.pathsep + os.environ['PATH'],
+                       WM_SELECTED_XCODE=str(developers['Selected']), WM_DEVELOPER_DIR=str(seen),
+                       WOVENMATTER_IOS_RELEASE_XCODE=str(developers['Release']),
+                       WOVENMATTER_IOS_TEST_CACHE_DIR=str(fixture / 'cache'), **environment)
+            result = subprocess.run(['bash', str(ROOT / 'scripts/test-ios.sh'), '--package'],
+                                    env=env, capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return seen.read_text(), developers
+
+    def test_a_superseded_beta_gives_way_to_the_installed_release(self):
+        used, developers = self.developer_dir(('24500.1', '27A5194q'), ('24600.2', '27B52'))
+        self.assertEqual(used, str(developers['Release']))
+
+    def test_a_newer_beta_stays_selected(self):
+        used, _ = self.developer_dir(('24700.1', '27C5001a'), ('24600.2', '27B52'))
+        self.assertEqual(used, '')
+
+    def test_a_selected_release_stays_selected(self):
+        used, _ = self.developer_dir(('24500.1', '27A200'), ('24600.2', '27B52'))
+        self.assertEqual(used, '')
+
+    def test_an_explicit_developer_dir_always_wins(self):
+        used, _ = self.developer_dir(('24500.1', '27A5194q'), ('24600.2', '27B52'), DEVELOPER_DIR='/fixture/Xcode')
+        self.assertEqual(used, '/fixture/Xcode')
+
+
 class IOSRunnerTests(unittest.TestCase):
     def run_script(self, mode, **overrides):
         with tempfile.TemporaryDirectory() as temporary:

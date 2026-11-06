@@ -41,8 +41,10 @@ the 90-second watchdog. Linux credential-storage tests inject filesystem probes
 for rejection cases, then exercise real tmpfs storage separately. Never assume
 `/tmp` is disk-backed; Ubuntu runners may mount it as tmpfs.
 
-`scripts/test-ios.sh` creates and boots disposable simulators and waits for first
-boot before XCTest runs. When the selected Xcode includes standalone Simulator,
+`scripts/test-ios.sh` prefers `/Applications/Xcode.app` over a selected beta it supersedes,
+because a newer macOS can kill that beta's `DTServiceHub`, which leaves the test host stopped until
+XCTest reports a hung runner. `DEVELOPER_DIR` overrides this. It creates and boots disposable
+simulators and waits for first boot before XCTest runs. When the selected Xcode includes standalone Simulator,
 it launches an owned display process and terminates it after testing. Xcode 27's
 Device Hub toolchain leaves display management to XCTest. Cleanup deletes only
 devices created by the runner; existing Simulator instances remain untouched. An explicit
