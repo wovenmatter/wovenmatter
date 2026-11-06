@@ -120,7 +120,14 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   The Executor image consumes the same npm runtime lock, plus
   `remote/executor-runtime/package-lock.json` for sharp 0.35.5 and its native
   libvips packages. This exact overlay is required because the newest supported
-  Executor V2 package embeds affected sharp 0.35.4. The image verifies the
+  Executor V2 package embeds affected sharp 0.35.4. Since beta.37 the npm
+  package is a launcher that downloads its separately checksummed native archive.
+  Mac installation materializes that archive in a private candidate generation
+  before retiring the active runtime, verifies its executable version, and retains
+  the archive digest with provenance. It never uses or prunes the user's shared
+  launcher cache. The Linux image materializes the same selected archive during
+  construction, then repairs its `native/runtime/node_modules` tree and starts
+  the prepared native executable directly. The image verifies the
   replacement loads, then runs the unchanged provider-free V2 behavior suite.
   Executor also selects only the ncurses, acl, and util-linux source repairs it
   needs; do not install the workspace browser-library repairs into that smaller
@@ -185,13 +192,16 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   peer validation. Real local WebSocket streaming/cancellation fixtures and the
   Chord/Durable suites validate this selection; review it on each Chord refresh.
   Pi AI 1.5.0 also pins older provider clients. Consumer-scoped minimum-only
-  overrides select the tested OpenAI 7.51.0, Anthropic 1.5.0, Google GenAI 2.32.0,
-  Bedrock Runtime 3.1162.0 and Smithy Node HTTP handler 4.14.2 releases without
+  overrides select the tested OpenAI 7.52.0, Anthropic 1.6.0, Google GenAI 2.32.0,
+  Bedrock Runtime and token providers 3.1163.0, and Smithy Node HTTP handler
+  4.14.2 releases without
   changing vendor manifests. Keeping these clients current is required for
   provider API and transport compatibility, including Anthropic's 2026-10-21
   Messages API. Maintenance reviews each upstream requirement and removes an
   override when Pi itself selects an equal or newer client. The committed lock
   records the effective graph; Settings SDK generations retain these overrides.
+  The token-provider floor also applies below the SSO credential provider, whose
+  current upstream package still pins the previous patch.
   Provider-free loopback fixtures exercise Pi's actual SDK clients, request
   serialization, streaming text/tools, usage and cancellation. They do not
   establish authenticated provider acceptance. The iOS bundle excludes these
@@ -241,12 +251,12 @@ an older configured channel. OpenCode and Executor retain the documented v2 API 
 maintenance must review a newer stable API major and implement its migration.
 
 `harnesses/catalog.json` records tested connector and engine minimums separately:
-Codex ACP 2.5.0 with Codex 0.166.0, and Claude ACP 0.100.0 with Claude SDK 0.3.318
+Codex ACP 2.5.0 with Codex 0.166.0, and Claude ACP 0.101.0 with Claude SDK 0.3.318
 (native Claude Code 2.1.318). The standalone Codex and Claude sign-in CLIs use their
 official current stable release channels. Codex ACP's `^0.165.0` engine range
 otherwise keeps its chat engine behind; its ACP TypeScript SDK also retains 2.1
-through a restrictive range. Claude ACP 0.100.0 pins SDK 0.3.316; the consumer-scoped override raises
-its engine to 0.3.318 without changing the connector. Transcript-write loss
+through a restrictive range. Claude ACP 0.101.0 now selects SDK 0.3.318 directly; the consumer-scoped override
+keeps its independently selected engine current on later explicit updates. Transcript-write loss
 invalidates the native resume marker and refuses tool dispatch/continuation commits;
 config-only write loss leaves a valid response intact. Provider-free persistence
 fixtures verify canonical replay after recovery. The connector selects protocol SDK

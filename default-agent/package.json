@@ -17,7 +17,7 @@
     "@earendil-works/pi-durable": ">=1.5.0",
     "@modelcontextprotocol/client": ">=2.4.0",
     "@modelcontextprotocol/server": ">=2.4.0",
-    "playwright-core": ">=1.64.1",
+    "playwright-core": ">=1.65.0",
     "proper-lockfile": ">=4.1.2",
     "typebox": ">=1.4.4",
     "ws": ">=8.22.1"
@@ -31,11 +31,12 @@
       "minimatch": ">=11.0.4"
     },
     "@earendil-works/pi-ai": {
-      "openai": ">=7.51.0",
-      "@anthropic-ai/sdk": ">=1.5.0",
+      "openai": ">=7.52.0",
+      "@anthropic-ai/sdk": ">=1.6.0",
       "@google/genai": ">=2.32.0",
-      "@aws-sdk/client-bedrock-runtime": ">=3.1162.0",
-      "@smithy/node-http-handler": ">=4.14.2"
+      "@aws-sdk/client-bedrock-runtime": ">=3.1163.0",
+      "@smithy/node-http-handler": ">=4.14.2",
+      "@aws-sdk/token-providers": ">=3.1163.0"
     },
     "@earendil-works/chord": {
       "ws": "$ws"
