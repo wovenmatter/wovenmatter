@@ -28,6 +28,7 @@ struct BackendUsageSnapshot: Codable, Sendable {
     var selectedUsageConnections: [String: String]
     /// Optional so a service from an earlier build can still answer.
     var usageDevices: [UsageDeviceSummary]?
+    var usageHistoryImport: UsageHistoryImportProgress?
 }
 
 /// Model prices for the optional API estimate. They are public data, so each
@@ -77,6 +78,8 @@ final class ApplicationUsageModel {
     private(set) var usagePrices = UsagePriceState()
     /// This Mac first, then every device with usage or a connection.
     private(set) var usageDevices: [UsageDeviceSummary] = [ApplicationUsageModel.thisDevice]
+    /// Set while a full history import is running, so the page can say how far it has got.
+    private(set) var usageHistoryImport: UsageHistoryImportProgress?
     /// Lists the devices this Mac can read now. Only the process that owns execution collects.
     @ObservationIgnored
     var usageDeviceEndpoints: (@MainActor () async -> [UsageDeviceEndpoint])?
@@ -137,7 +140,8 @@ final class ApplicationUsageModel {
             isAuthorizingUsageCredential: isAuthorizingUsageCredential, isOpenRouterCredentialConfigured: isOpenRouterCredentialConfigured,
             signingInUsageProviders: signingInUsageProviders, hasAcknowledgedCredentialAccessDisclosure: hasAcknowledgedCredentialAccessDisclosure,
             enabledUsageProviders: enabledUsageProviders, usageConnectionChoices: usageConnectionChoices,
-            selectedUsageConnections: selectedUsageConnections, usageDevices: usageDevices)
+            selectedUsageConnections: selectedUsageConnections, usageDevices: usageDevices,
+            usageHistoryImport: usageHistoryImport)
     }
 
     func applyBackendSnapshot(_ value: BackendUsageSnapshot) {
@@ -148,6 +152,7 @@ final class ApplicationUsageModel {
         enabledUsageProviders = value.enabledUsageProviders; usageConnectionChoices = value.usageConnectionChoices
         selectedUsageConnections = value.selectedUsageConnections
         usageDevices = value.usageDevices ?? [Self.thisDevice]
+        usageHistoryImport = value.usageHistoryImport
     }
 
     func refreshBackendSnapshot() async {
@@ -393,17 +398,26 @@ final class ApplicationUsageModel {
         lastAnalyticsRange = range
         usageAnalyticsRequestID = requestID
         isRefreshingUsageAnalytics = true
+        let onHistoryProgress: @Sendable (UsageHistoryImportProgress, UsageAnalyticsSnapshot?) async -> Void = { [weak self] progress, snapshot in
+            let compact = snapshot?.compactedForDisplay()
+            await self?.applyHistoryProgress(progress, snapshot: compact, range: range)
+        }
+        let onHistoryFinished: @Sendable () async -> Void = { [weak self] in
+            await self?.finishHistoryImport()
+        }
         do {
             let analytics = try await usageAnalyticsRefreshCoordinator.value(
                 for: key,
                 policy: policy
             ) { [localUsageService] in
                 // Only this page reads these samples. Tools read recorded samples separately.
-                try await localUsageService.analyticsSnapshot(
+                let analytics = try await localUsageService.analyticsSnapshot(
                     range: range,
-                    refreshReason: reason
+                    refreshReason: reason,
+                    onHistoryProgress: onHistoryProgress
                 )
-                .compactedForDisplay()
+                await onHistoryFinished()
+                return analytics.compactedForDisplay()
             }
             guard usageAnalyticsRequestID == requestID else { return }
             try Task.checkCancellation()
@@ -426,11 +440,33 @@ final class ApplicationUsageModel {
         let isRefreshing = await usageAnalyticsRefreshCoordinator.isRefreshing
         if usageAnalyticsRequestID == requestID {
             isRefreshingUsageAnalytics = isRefreshing
+            if !isRefreshing { usageHistoryImport = nil }
             if !isRefreshing, pendingDeviceRefresh {
                 pendingDeviceRefresh = false
                 await refreshUsageAnalytics(range: range, reason: .rangeChanged, policy: .force)
             }
         }
+    }
+
+    /// Shows each finished batch without waiting for the rest of the history.
+    private func applyHistoryProgress(
+        _ progress: UsageHistoryImportProgress,
+        snapshot: UsageAnalyticsSnapshot?,
+        range: UsageTimeRange
+    ) {
+        guard lastAnalyticsRange == range else { return }
+        usageHistoryImport = progress
+        guard let snapshot else { return }
+        let existing = localUsage
+        localUsage = LocalUsageSnapshot(
+            analytics: snapshot,
+            limits: existing?.limits ?? LocalUsageService.placeholderLimits(enabledProviders: enabledUsageProviders),
+            hasOpenRouterCredential: existing?.hasOpenRouterCredential ?? isOpenRouterCredentialConfigured
+        )
+    }
+
+    private func finishHistoryImport() {
+        usageHistoryImport = nil
     }
 
     private func refreshUsageLimits(

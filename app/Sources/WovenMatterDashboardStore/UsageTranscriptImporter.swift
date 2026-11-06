@@ -18,6 +18,14 @@ actor UsageTranscriptImporter {
   private let preparationWorker: DatabaseWorker
   private(set) var importOutcomes: [String: Outcome]
   private var hadSourceFailures = false
+  private var batch: Batch?
+
+  /// Limits one pass to files last changed in this window. A file's whole history is
+  /// read at once, so widening the window never reads the same file twice.
+  struct Batch: Sendable {
+    let modifiedAfter: Date
+    let modifiedBefore: Date?
+  }
 
   init(homeDirectory: URL, outcomes: [String: Outcome], ownership: UsageRefreshOwnership,
     preparationWorker: DatabaseWorker? = nil) {
@@ -30,9 +38,11 @@ actor UsageTranscriptImporter {
     store: AsyncUsageStore,
     cutoff: Date,
     enabledProviders: Set<ProviderKind>,
-    now: Date
+    now: Date,
+    batch: Batch? = nil
   ) async throws -> Bool {
     hadSourceFailures = false
+    self.batch = batch
     try await importLocalSources(store: store, cutoff: cutoff, enabledProviders: enabledProviders, now: now)
     importOutcomes.removeValue(forKey: "wovenmatter:index")
     // A failed or concurrently changed source must not advance range coverage.
@@ -135,7 +145,8 @@ actor UsageTranscriptImporter {
         harness: "OpenCode",
         providerFilterSignature: providerFilterSignature,
         store: store,
-        cutoff: retentionCutoff,
+        // A database has no files to batch, so its read window widens instead.
+        cutoff: max(batch?.modifiedAfter ?? retentionCutoff, retentionCutoff),
         now: now
       ) { indexedAfter, check in
         try OpenCodeUsageDatabase(databaseURL: openCodeDatabase)
@@ -175,8 +186,15 @@ actor UsageTranscriptImporter {
     fingerprint: (@Sendable (URL) throws -> String)? = nil,
     parser: @escaping @Sendable (URL, @escaping @Sendable () throws -> Void) throws -> [UsageSample]
   ) async throws -> Outcome {
+    let batch = batch
     let files = try await prepare { check in
-      try Self.files(root: root, cutoff: cutoff, predicate: predicate, check: check)
+      try Self.files(
+        root: root,
+        cutoff: batch?.modifiedAfter ?? cutoff,
+        before: batch?.modifiedBefore,
+        predicate: predicate,
+        check: check
+      )
     }
     var failures = 0
     for file in files {
@@ -337,6 +355,7 @@ actor UsageTranscriptImporter {
   nonisolated private static func files(
     root: URL,
     cutoff: Date,
+    before: Date? = nil,
     predicate: (URL) -> Bool,
     check: () throws -> Void
   ) throws -> [URL] {
@@ -352,8 +371,9 @@ actor UsageTranscriptImporter {
       try check()
       guard predicate(url) else { continue }
       guard let values = try? url.resourceValues(forKeys: keys),
-            values.isRegularFile == true,
-            (values.contentModificationDate ?? .distantPast) >= cutoff else { continue }
+            values.isRegularFile == true else { continue }
+      let modified = values.contentModificationDate ?? .distantPast
+      guard modified >= cutoff, before.map({ modified < $0 }) ?? true else { continue }
       result.append(url)
     }
     return UsageCompressedTranscript.preferred(result, node: UsageCompressedTranscript.bundledNode)

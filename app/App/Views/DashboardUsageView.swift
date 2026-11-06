@@ -32,47 +32,48 @@ struct DashboardUsageView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            Rectangle()
-                .fill(theme.palette.border)
-                .frame(height: 1)
             if let error = model.localUsageError {
                 UsageErrorBanner(text: error)
                     .padding(.horizontal, 20)
                     .padding(.top, 12)
             }
-            if let snapshot = model.localUsage {
-                switch page {
-                case .analytics:
-                    UsageAnalyticsPage(
-                        snapshot: snapshot.analytics,
-                        filters: $filters,
-                        range: rangeSelectionBinding,
-                        chartStyle: $chartStyle,
-                        chartMetric: $chartMetric,
-                        devices: model.usageDevices,
-                        prices: model.usagePrices,
-                        isRefreshing: model.isRefreshingLocalUsage,
-                        retryPrices: { Task { await model.loadUsagePrices(force: true) } }
-                    )
-                case .limits:
-                    ScrollView {
-                        UsageLimitsPage(
-                            accounts: UsageLimitsPage.accounts(
-                                from: snapshot,
-                                isRefreshingLimits: model.isRefreshingUsageLimits,
-                                error: model.localUsageError
+            switch page {
+            case .analytics:
+                // Before the first snapshot arrives, the full layout shows with placeholders.
+                UsageAnalyticsPage(
+                    snapshot: model.localUsage?.analytics
+                        ?? UsageAnalyticsSnapshot(range: range, generatedAt: Date(), samples: [], sources: []),
+                    filters: $filters,
+                    range: rangeSelectionBinding,
+                    chartStyle: $chartStyle,
+                    chartMetric: $chartMetric,
+                    devices: model.usageDevices,
+                    prices: model.usagePrices,
+                    isRefreshing: model.isRefreshingLocalUsage || model.localUsage == nil,
+                    historyImport: model.usageHistoryImport,
+                    retryPrices: { Task { await model.loadUsagePrices(force: true) } }
+                )
+            case .limits:
+                ScrollView {
+                    Group {
+                        if let snapshot = model.localUsage {
+                            UsageLimitsPage(
+                                accounts: UsageLimitsPage.accounts(
+                                    from: snapshot,
+                                    isRefreshingLimits: model.isRefreshingUsageLimits,
+                                    error: model.localUsageError
+                                )
                             )
-                        )
-                        .frame(maxWidth: 880, alignment: .leading)
-                        .padding(.horizontal, 24)
-                        .padding(.vertical, 20)
-                        .frame(maxWidth: .infinity)
+                        } else {
+                            UsageLimitsPlaceholder()
+                        }
                     }
-                    .scrollIndicators(.never)
+                    .frame(maxWidth: 880, alignment: .leading)
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 20)
+                    .frame(maxWidth: .infinity)
                 }
-            } else {
-                UsageLoadingCard(isLoading: model.isRefreshingLocalUsage)
-                Spacer(minLength: 0)
+                .scrollIndicators(.never)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -99,8 +100,9 @@ struct DashboardUsageView: View {
             Spacer(minLength: 8)
             if page == .limits {
                 UsageSettingsLink()
-            } else if let generatedAt = model.localUsage?.analytics.generatedAt {
-                Text("Updated \(generatedAt, format: .relative(presentation: .named))")
+            } else if let analytics = model.localUsage?.analytics, !analytics.sources.isEmpty {
+                // An empty placeholder has no sources, and hasn't really been updated.
+                Text("Updated \(analytics.generatedAt, format: .relative(presentation: .named))")
                     .font(.system(size: 11))
                     .foregroundStyle(DashboardPalette.mutedForeground)
                     .lineLimit(1)
@@ -203,20 +205,6 @@ private struct UsageErrorBanner: View {
         .padding(12)
         .background(DashboardPalette.danger.opacity(0.07))
         .clipShape(RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
-    }
-}
-
-private struct UsageLoadingCard: View {
-    let isLoading: Bool
-
-    var body: some View {
-        HStack(spacing: 10) {
-            if isLoading { ProgressView().controlSize(.small) }
-            Text(isLoading ? "Updating the persistent usage index…" : "Usage has not been loaded yet.")
-                .font(.system(size: 12.5))
-                .foregroundStyle(DashboardPalette.mutedForeground)
-        }
-        .frame(maxWidth: .infinity, minHeight: 120, alignment: .center)
     }
 }
 

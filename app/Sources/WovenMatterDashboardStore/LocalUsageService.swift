@@ -308,7 +308,8 @@ public actor LocalUsageService {
   public func analyticsSnapshot(
     range: UsageTimeRange,
     refreshReason: UsageRefreshReason = .manual,
-    now: Date = Date()
+    now: Date = Date(),
+    onHistoryProgress: (@Sendable (UsageHistoryImportProgress, UsageAnalyticsSnapshot?) async -> Void)? = nil
   ) async throws -> UsageAnalyticsSnapshot {
     try Task.checkCancellation()
     let generation = UsageRefreshOwnership()
@@ -346,13 +347,43 @@ public actor LocalUsageService {
       now: now
     ) {
       guard isCurrentAnalytics(generation) else { throw CancellationError() }
-      if await importLocalSources(
-        store: store,
-        cutoff: requestedImportCutoff,
-        enabledProviders: localProviders,
-        generation: generation,
-        now: now
-      ) {
+      let indexedAfter = try? await store.metadataDate("usage.local-indexed-after")
+      let isFirstFullImport = (indexedAfter ?? nil).map { $0 > requestedImportCutoff } ?? true
+      var batches = [UsageTranscriptImporter.Batch?.none]
+      if isFirstFullImport {
+        // Newest files first, so usage appears quickly and fills in going back.
+        var newer: Date?
+        batches = (UsageHistoryImportProgress.stages.map { $0.duration ?? 0 } + [nil]).map { duration in
+          let after = duration.map { now.addingTimeInterval(-$0) } ?? requestedImportCutoff
+          defer { newer = after }
+          return .init(modifiedAfter: after, modifiedBefore: newer)
+        }
+        await onHistoryProgress?(.init(covered: nil), nil)
+        guard isCurrentAnalytics(generation) else { throw CancellationError() }
+      }
+      var isComplete = true
+      for (index, batch) in batches.enumerated() {
+        let finished = await importLocalSources(
+          store: store,
+          cutoff: requestedImportCutoff,
+          enabledProviders: localProviders,
+          generation: generation,
+          now: now,
+          batch: batch
+        )
+        isComplete = isComplete && finished
+        guard isCurrentAnalytics(generation) else { throw CancellationError() }
+        // The whole import lane is unavailable, so the next refresh picks up from here.
+        if importOutcomes["wovenmatter:index"] != nil { break }
+        if isFirstFullImport, index < UsageHistoryImportProgress.stages.count {
+          await onHistoryProgress?(
+            .init(covered: UsageHistoryImportProgress.stages[index]),
+            await storedAnalytics(store: store, range: range, interval: interval, providers: localProviders, now: now)
+          )
+          guard isCurrentAnalytics(generation) else { throw CancellationError() }
+        }
+      }
+      if isComplete {
         guard isCurrentAnalytics(generation) else { throw CancellationError() }
         try? await store.write(validating: { try generation.check() }) { connection in
           try connection.performTransaction {
@@ -365,6 +396,19 @@ public actor LocalUsageService {
       }
     }
     guard isCurrentAnalytics(generation) else { throw CancellationError() }
+    let snapshot = await storedAnalytics(store: store, range: range, interval: interval, providers: localProviders, now: now)
+    guard isCurrentAnalytics(generation) else { throw CancellationError() }
+    return snapshot
+  }
+
+  /// What the index holds for this range right now.
+  private func storedAnalytics(
+    store: AsyncUsageStore,
+    range: UsageTimeRange,
+    interval: DateInterval,
+    providers: Set<ProviderKind>,
+    now: Date
+  ) async -> UsageAnalyticsSnapshot {
     let storedSamples = ((try? await store.samples(in: interval)) ?? []).filter {
       // Legacy account-wide API imports are not activity on this device.
       !$0.sourceID.hasPrefix("openrouter:activity:")
@@ -374,13 +418,7 @@ public actor LocalUsageService {
     ).sorted { lhs, rhs in
       lhs.timestamp == rhs.timestamp ? lhs.id < rhs.id : lhs.timestamp < rhs.timestamp
     }
-    guard isCurrentAnalytics(generation) else { throw CancellationError() }
-    let sources = await coverage(
-      store: store,
-      interval: interval,
-      enabledProviders: localProviders
-    )
-    guard isCurrentAnalytics(generation) else { throw CancellationError() }
+    let sources = await coverage(store: store, interval: interval, enabledProviders: providers)
     return UsageAnalyticsSnapshot(range: range, generatedAt: now, samples: samples, sources: sources)
   }
 
@@ -589,13 +627,14 @@ public actor LocalUsageService {
   }
 
   private func importLocalSources(store: AsyncUsageStore, cutoff: Date,
-    enabledProviders: Set<ProviderKind>, generation: UsageRefreshOwnership, now: Date) async -> Bool {
+    enabledProviders: Set<ProviderKind>, generation: UsageRefreshOwnership, now: Date,
+    batch: UsageTranscriptImporter.Batch? = nil) async -> Bool {
     let home = homeDirectory
     let outcomes = importOutcomes
     do {
       let importer = UsageTranscriptImporter(homeDirectory: home, outcomes: outcomes, ownership: generation,
         preparationWorker: importPreparationWorker)
-      let complete = try await importer.run(store: store, cutoff: cutoff, enabledProviders: enabledProviders, now: now)
+      let complete = try await importer.run(store: store, cutoff: cutoff, enabledProviders: enabledProviders, now: now, batch: batch)
       let updatedOutcomes = await importer.importOutcomes
       guard isCurrentAnalytics(generation) else { return false }
       importOutcomes = updatedOutcomes

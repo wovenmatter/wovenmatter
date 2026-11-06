@@ -73,6 +73,24 @@ public enum UsageTimeRange: String, CaseIterable, Codable, Identifiable, Sendabl
 
 }
 
+/// How far a full history import has reached. History is read newest first in widening
+/// batches, so recent usage appears within moments and older usage follows.
+public struct UsageHistoryImportProgress: Codable, Equatable, Sendable {
+  public static let stages: [UsageTimeRange] = [.last24Hours, .last7Days, .last30Days, .last90Days]
+
+  /// The widest period fully read so far. Nil before the first batch finishes.
+  public let covered: UsageTimeRange?
+
+  public init(covered: UsageTimeRange?) {
+    self.covered = covered
+  }
+
+  public func covers(_ range: UsageTimeRange, now: Date = Date(), calendar: Calendar = .current) -> Bool {
+    guard let duration = covered?.duration else { return false }
+    return range.interval(relativeTo: now, calendar: calendar).start >= now.addingTimeInterval(-duration)
+  }
+}
+
 public extension Date {
   /// Earlier than any usage record, so All time and full imports cover everything.
   static let usageHistoryStart = Date(timeIntervalSince1970: 0)

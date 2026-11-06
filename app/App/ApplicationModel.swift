@@ -332,6 +332,7 @@ final class ApplicationModel {
     var localUsage: LocalUsageSnapshot? { usage.localUsage }
     var usagePrices: UsagePriceState { usage.usagePrices }
     var usageDevices: [UsageDeviceSummary] { usage.usageDevices }
+    var usageHistoryImport: UsageHistoryImportProgress? { usage.usageHistoryImport }
     func exportDeviceUsage(_ request: UsageDeviceExportRequest) async throws -> UsageDeviceExportPage {
         try await usage.exportDeviceUsage(request, relaying: managedRemoteUsageDevices)
     }

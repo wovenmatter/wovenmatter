@@ -66,7 +66,9 @@ when an intentional design change is accepted.
 - **Usage:** account setup lives in Usage settings. A fixed header holds the title,
   the Analytics/Limits switch, and refresh. Device analytics never depends on
   limits-account switches or credentials.
-  Analytics keeps a fixed filter column to the left of its scrolling report: search,
+  No rule lines separate the header, filter column, and report; spacing does that.
+  While a range has no data yet, the page keeps its full layout with muted placeholders
+  and never reads as zero. Analytics keeps a fixed filter column to the left of its scrolling report: search,
   range, device rows, provider rows, then compact Model, Harness, and Reasoning
   dropdowns. Device and provider rows are an intentional exception to switches for
   multi-select toggles: click a row to show or hide it; a hidden row keeps its place

@@ -67,6 +67,7 @@
 		D45400000000000000000003 /* DashboardUsageAnalytics.swift in Sources */ = {isa = PBXBuildFile; fileRef = D45400000000000000000004 /* DashboardUsageAnalytics.swift */; };
 		D45400000000000000000005 /* DashboardUsageChart.swift in Sources */ = {isa = PBXBuildFile; fileRef = D45400000000000000000006 /* DashboardUsageChart.swift */; };
 		D45400000000000000000007 /* DashboardUsageLimits.swift in Sources */ = {isa = PBXBuildFile; fileRef = D45400000000000000000008 /* DashboardUsageLimits.swift */; };
+		09C447491BD8CE01BF01568C /* DashboardUsageLoading.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5609000D516C815CA5DA026A /* DashboardUsageLoading.swift */; };
 		D49000000000000000000001 /* ConversationMarkdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = D49000000000000000000003 /* ConversationMarkdown.swift */; };
 		D49100000000000000000001 /* ConversationMarkdownDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = D49100000000000000000003 /* ConversationMarkdownDocument.swift */; };
 		D49300000000000000000001 /* ConversationMessageLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = D49300000000000000000003 /* ConversationMessageLayout.swift */; };
@@ -233,6 +234,7 @@
 		D45400000000000000000004 /* DashboardUsageAnalytics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardUsageAnalytics.swift; sourceTree = "<group>"; };
 		D45400000000000000000006 /* DashboardUsageChart.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardUsageChart.swift; sourceTree = "<group>"; };
 		D45400000000000000000008 /* DashboardUsageLimits.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardUsageLimits.swift; sourceTree = "<group>"; };
+		5609000D516C815CA5DA026A /* DashboardUsageLoading.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardUsageLoading.swift; sourceTree = "<group>"; };
 		D49000000000000000000003 /* ConversationMarkdown.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationMarkdown.swift; sourceTree = "<group>"; };
 		D49100000000000000000003 /* ConversationMarkdownDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationMarkdownDocument.swift; sourceTree = "<group>"; };
 		D49300000000000000000003 /* ConversationMessageLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationMessageLayout.swift; sourceTree = "<group>"; };
@@ -507,6 +509,7 @@
 				D45400000000000000000004 /* DashboardUsageAnalytics.swift */,
 				D45400000000000000000006 /* DashboardUsageChart.swift */,
 				D45400000000000000000008 /* DashboardUsageLimits.swift */,
+				5609000D516C815CA5DA026A /* DashboardUsageLoading.swift */,
 				D45100000000000000000002 /* DashboardDesign.swift */,
 				D57100000000000000000002 /* DashboardStyle.swift */,
 				DA4C00000000000000000004 /* DashboardHTMLArtifactDocument.swift */,
@@ -831,6 +834,7 @@
 				D45400000000000000000003 /* DashboardUsageAnalytics.swift in Sources */,
 				D45400000000000000000005 /* DashboardUsageChart.swift in Sources */,
 				D45400000000000000000007 /* DashboardUsageLimits.swift in Sources */,
+				09C447491BD8CE01BF01568C /* DashboardUsageLoading.swift in Sources */,
 				D45100000000000000000001 /* DashboardDesign.swift in Sources */,
 				D57100000000000000000001 /* DashboardStyle.swift in Sources */,
 				DA4C00000000000000000003 /* DashboardHTMLArtifactDocument.swift in Sources */,

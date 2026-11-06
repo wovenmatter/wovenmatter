@@ -72,7 +72,8 @@ all billing routes; account-wide API activity is excluded from device totals.
 
 Woven Matter keeps its own lasting record of usage, including Codex's compressed
 archives, so history stays even after a harness deletes old transcripts. The first
-full import can take a few minutes and runs in the background.
+full import can take a few minutes and runs in the background, newest usage first:
+the last 24 hours appear within moments, followed by 7, 30, and 90 days, then the rest.
 
 Other Macs, remote workspaces, and iPhones and iPads appear under **Devices**. Click
 a device to show or hide its usage. Devices share only token counts, model and billing

@@ -131,7 +131,6 @@ struct UsageSessionRow: Identifiable {
 
 /// The analytics page: a fixed filter column beside the scrolling report.
 struct UsageAnalyticsPage: View {
-    @Environment(\.dashboardTheme) private var theme
     let snapshot: UsageAnalyticsSnapshot
     @Binding var filters: UsageAnalyticsFilters
     @Binding var range: UsageTimeRange
@@ -140,7 +139,15 @@ struct UsageAnalyticsPage: View {
     let devices: [UsageDeviceSummary]
     let prices: UsagePriceState
     let isRefreshing: Bool
+    let historyImport: UsageHistoryImportProgress?
     let retryPrices: () -> Void
+
+    /// Nothing has been read yet for this range, as opposed to a range with no usage.
+    private var isAwaitingData: Bool {
+        guard snapshot.samples.isEmpty else { return false }
+        if let historyImport { return !historyImport.covers(snapshot.range) }
+        return isRefreshing && snapshot.sources.isEmpty
+    }
 
     var body: some View {
         let table = chartMetric == .apiEstimate ? prices.table : nil
@@ -153,12 +160,10 @@ struct UsageAnalyticsPage: View {
                 devices: devices,
                 deviceTotals: Self.deviceTotals(snapshot.samples, filters: filters, table: table),
                 metric: table == nil ? .tokens : .apiEstimate,
+                isAwaitingData: isAwaitingData,
                 filters: $filters,
                 range: $range
             )
-            Rectangle()
-                .fill(theme.palette.border)
-                .frame(width: 1)
             ScrollView {
                 UsageAnalyticsReport(
                     snapshot: snapshot,
@@ -169,7 +174,8 @@ struct UsageAnalyticsPage: View {
                     ),
                     table: table,
                     prices: prices,
-                    isRefreshing: isRefreshing,
+                    isAwaitingData: isAwaitingData,
+                    historyImport: historyImport,
                     retryPrices: retryPrices,
                     chartStyle: $chartStyle,
                     chartMetric: $chartMetric
@@ -212,6 +218,7 @@ private struct UsageFilterColumn: View {
     let devices: [UsageDeviceSummary]
     let deviceTotals: [String: String]
     let metric: UsageChartMetric
+    let isAwaitingData: Bool
     @Binding var filters: UsageAnalyticsFilters
     @Binding var range: UsageTimeRange
 
@@ -249,6 +256,9 @@ private struct UsageFilterColumn: View {
                             }
                         }
                     }
+                }
+                if isAwaitingData, providers.isEmpty {
+                    group("Providers") { UsageFilterRowsPlaceholder() }
                 }
                 if !providers.isEmpty {
                     group("Providers") {
@@ -538,7 +548,8 @@ private struct UsageAnalyticsReport: View {
     let deviceNames: [String: String]
     let table: UsageRateTable?
     let prices: UsagePriceState
-    let isRefreshing: Bool
+    let isAwaitingData: Bool
+    let historyImport: UsageHistoryImportProgress?
     let retryPrices: () -> Void
     @Binding var chartStyle: UsageChartStyle
     @Binding var chartMetric: UsageChartMetric
@@ -549,9 +560,32 @@ private struct UsageAnalyticsReport: View {
     var body: some View {
         let summary = UsageAnalyticsSummary(samples: samples)
         let estimate = table?.estimate(samples)
+        if isAwaitingData {
+            UsageReportPlaceholder(style: chartStyle) { chartControls }
+        } else {
+            report(summary: summary, estimate: estimate)
+        }
+    }
+
+    /// Set when part of the selected range is still being read.
+    private var importNotice: String? {
+        guard let historyImport, !historyImport.covers(snapshot.range) else { return nil }
+        guard let covered = historyImport.covered else { return "Older usage is still loading." }
+        return "Showing the last \(covered.label) so far. Older usage is still loading."
+    }
+
+    private func report(summary: UsageAnalyticsSummary, estimate: UsageCostEstimate?) -> some View {
         VStack(alignment: .leading, spacing: 26) {
             VStack(alignment: .leading, spacing: 12) {
                 heroRow(summary: summary, estimate: estimate)
+                if let importNotice {
+                    HStack(spacing: 7) {
+                        ProgressView().controlSize(.mini)
+                        Text(importNotice)
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(DashboardPalette.mutedForeground)
+                    }
+                }
                 if chartMetric == .apiEstimate, table == nil {
                     UsagePriceUnavailable(prices: prices, retry: retryPrices)
                 } else if samples.isEmpty {
@@ -665,22 +699,13 @@ private struct UsageAnalyticsReport: View {
     }
 
     private var emptyState: some View {
-        // An empty snapshot during a refresh means data is still arriving, not that there is none.
-        let isWaiting = isRefreshing && snapshot.samples.isEmpty
-        return VStack(spacing: 5) {
-            if isWaiting { ProgressView().controlSize(.small).padding(.bottom, 4) }
-            Text(
-                isWaiting
-                    ? "Loading your usage history"
-                    : snapshot.samples.isEmpty ? "No attributable usage in this range" : "No usage matches these filters"
-            )
+        VStack(spacing: 5) {
+            Text(snapshot.samples.isEmpty ? "No attributable usage in this range" : "No usage matches these filters")
             .font(.system(size: 13, weight: .semibold))
             Text(
-                isWaiting
-                    ? "The first full import can take a few minutes. You can keep working."
-                    : snapshot.samples.isEmpty
-                        ? "Source coverage below shows what Woven Matter found on this Mac."
-                        : "Clear filters or broaden the time range."
+                snapshot.samples.isEmpty
+                    ? "Source coverage below shows what Woven Matter found on this Mac."
+                    : "Clear filters or broaden the time range."
             )
             .font(.system(size: 11.5))
             .foregroundStyle(DashboardPalette.mutedForeground)
