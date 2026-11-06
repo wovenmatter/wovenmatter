@@ -9,7 +9,37 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocket } from 'ws';
+import { chromium } from 'playwright-core';
 import { browserAction, createCEFBridge } from '../src/browser-runtime.mjs';
+
+test('the published Playwright client connects to the single-page CEF bridge without browser defaults', { timeout: 10000 }, async t => {
+  let receive;
+  const calls = [];
+  const bridge = await createCEFBridge({ target: { id: 'owned', url: 'https://fixture.test/', title: 'Fixture' }, version: '156.0.8078.80',
+    receiveNative: callback => { receive = callback; return () => {}; },
+    sendNative: packet => {
+      calls.push(packet);
+      const result = packet.method === 'Page.getFrameTree'
+        ? { frameTree: { frame: { id: 'owned', url: 'https://fixture.test/', securityOrigin: 'https://fixture.test', mimeType: 'text/html' } } }
+        : packet.method === 'Page.createIsolatedWorld' ? { executionContextId: 2 }
+        : ['Runtime.evaluate', 'Runtime.callFunctionOn'].includes(packet.method) ? { result: { type: 'number', value: 42 } } : {};
+      queueMicrotask(() => {
+        receive({ id: packet.id, result });
+        if (packet.method === 'Runtime.enable') receive({ method: 'Runtime.executionContextCreated', params: { context: {
+          id: 1, origin: 'https://fixture.test', name: '', auxData: { isDefault: true, frameId: 'owned' },
+        } } });
+      });
+    } });
+  t.after(() => bridge.close());
+  const browser = await chromium.connectOverCDP(bridge.endpoint, { noDefaults: true, timeout: 5000 });
+  t.after(() => browser.close());
+  const pages = browser.contexts()[0].pages();
+  assert.equal(pages.length, 1);
+  assert.equal(pages[0].url(), 'https://fixture.test/');
+  assert.deepEqual(await browserAction(pages[0], { action: 'evaluate', code: '6 * 7' }), { content: [{ type: 'text', text: '42' }] });
+  assert.ok(calls.some(packet => packet.method === 'Runtime.evaluate'));
+  assert.equal(calls.some(packet => packet.method === 'Target.createTarget'), false);
+});
 
 test('browser helper launches through a symlink and waits for the host to acknowledge its terminal result', { timeout: 5000 }, async t => {
   const root = await mkdtemp(join(tmpdir(), 'woven-browser-entrypoint-'));

@@ -154,7 +154,7 @@ Executor binary. The fixture uses synthetic apps and disposable accounts with no
 services. The same test runs on macOS with a published Executor entrypoint:
 
 ```sh
-node scripts/test-support/test-executor-runtime.mjs /path/to/executor/bin.mjs
+node scripts/test-support/test-executor-runtime.mjs /path/to/native/executor
 ```
 
 Before release, test local installation/dashboard and remote Linux deployment
