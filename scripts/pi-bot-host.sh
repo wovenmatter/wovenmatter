@@ -136,6 +136,34 @@ container_cli="$(find_runtime container)"
 # Apple's services are per user and can't run twice, so every installation on a Mac shares one
 # copy and one set of images, and each records its use of them in instances/.
 shared_runtime="$HOME/Library/Application Support/Woven Matter Pi Bot/runtime"
+runtime_lock_held=no; runtime_registered_now=no
+# Recording a use and retiring the runtime can't interleave across installations.
+lock_runtime() {
+  local attempt owner
+  mkdir -p "$shared_runtime"
+  chmod 700 "$shared_runtime"
+  for ((attempt=0; attempt<1200; attempt++)); do
+    if mkdir "$shared_runtime/.lock" 2>/dev/null; then
+      printf '%s\n' "$$" > "$shared_runtime/.lock/pid"
+      runtime_lock_held=yes
+      return 0
+    fi
+    owner="$(cat "$shared_runtime/.lock/pid" 2>/dev/null || true)"
+    if [[ "$owner" =~ ^[0-9]+$ ]] && ! kill -0 "$owner" 2>/dev/null; then
+      rm -f "$shared_runtime/.lock/pid"
+      rmdir "$shared_runtime/.lock" 2>/dev/null || true
+      continue
+    fi
+    sleep 0.5
+  done
+  abort locked 'Another installation is changing the shared container runtime. Try again in a few minutes.'
+}
+unlock_runtime() {
+  [ "$runtime_lock_held" = yes ] || return 0
+  runtime_lock_held=no
+  rm -f "$shared_runtime/.lock/pid"
+  rmdir "$shared_runtime/.lock" 2>/dev/null || true
+}
 apple_container_supported=no
 if [ "$os" = darwin ] && [ "$arch" = arm64 ]; then
   macos_major="$(sw_vers -productVersion 2>/dev/null | cut -d . -f 1 || true)"
@@ -279,6 +307,9 @@ cleanup() {
   if [ -n "$scratch_pid" ]; then kill "$scratch_pid" 2>/dev/null || true; wait "$scratch_pid" 2>/dev/null || true; fi
   [ -z "$scratch" ] || rm -rf "$scratch"
   [ -z "$stage" ] || rm -rf "$stage"
+  unlock_runtime
+  # An install that never finished isn't using the runtime, and nothing later would say so.
+  if [ "$result" -ne 0 ] && [ "$runtime_registered_now" = yes ]; then rm -f "$shared_runtime/instances/$root_hash"; fi
   if [ "$lock_held" = yes ]; then rm -f "$root/.install-lock/pid"; rmdir "$root/.install-lock"; fi
   if [ "$guard_held" = yes ]; then rmdir "$root/.lock-guard"; fi
   if [ "${remove_root:-no}" = yes ]; then rm -f "$root/.woven-instance" "$root/server.log"; rmdir "$root" 2>/dev/null || true; fi
@@ -373,35 +404,43 @@ JS
 # Apple's CLI reaches its services through its launchd domain, which an SSH session doesn't share
 # with the agent that started them. A one-shot job in that domain runs what can't run from here.
 remove_apple_containers() {
-  local job result retire=no helper others attempt id
+  local job result retire=no helper attempt id shared=no others_recorded
   local valid=()
   for id in $ids; do [[ "$id" =~ ^[A-Za-z0-9_-]+$ ]] && valid+=("$id"); done
   case "$binary" in
     "$shared_runtime"/*)
-      rm -f "$shared_runtime/instances/$root_hash"
-      if [ -z "$(ls -A "$shared_runtime/instances" 2>/dev/null || true)" ]; then retire=yes; fi ;;
+      shared=yes
+      lock_runtime
+      others_recorded="$(ls -A "$shared_runtime/instances" 2>/dev/null | grep -vx "$root_hash" || true)"
+      if [ -z "$others_recorded" ]; then retire=yes; fi ;;
   esac
   job="$(mktemp -d "$root/.runtime.XXXXXX")"
   result="$job/result"
   cat > "$job/run.sh" <<'SCRIPT'
 binary="$1"; install_root="$2"; app_root="$3"; retire="$4"; result="$5"; shift 5
+fail() { echo "failed ${1%%$'\n'*}"; }
 {
   if ! "$binary" system status >/dev/null 2>&1; then
     start=(system start --disable-kernel-install)
     [ -z "$install_root" ] || start+=(--install-root "$install_root")
     [ -z "$app_root" ] || start+=(--app-root "$app_root")
-    "$binary" "${start[@]}" >/dev/null 2>&1 || echo "failed Apple's container services would not start."
+    "$binary" "${start[@]}" >/dev/null 2>&1 || fail "Apple's container services would not start."
   fi
   for id in "$@"; do
-    output="$("$binary" delete --force "pi-bot-$id" 2>&1)" || case "$output" in *ot\ found*|*otFound*) ;; *) echo "failed ${output%%$'\n'*}" ;; esac
-    if "$binary" volume inspect "pi-bot-$id-workspace" >/dev/null 2>&1; then
-      output="$("$binary" volume delete "pi-bot-$id-workspace" 2>&1)" || echo "failed ${output%%$'\n'*}"
+    output="$("$binary" delete --force "pi-bot-$id" 2>&1)" || case "$output" in *ot\ found*|*otFound*) ;; *) fail "$output" ;; esac
+    # Its delete doesn't say why it failed, so a volume still listed is the failure.
+    if ! output="$("$binary" volume delete "pi-bot-$id-workspace" 2>&1)"; then
+      if ! volumes="$("$binary" volume list --quiet 2>&1)"; then fail "$volumes"
+      elif printf '%s\n' "$volumes" | grep -qx "pi-bot-$id-workspace"; then fail "$output"; fi
     fi
   done
   # Anything still here belongs to someone else, as does the runtime it needs.
-  others="$("$binary" list --all --quiet 2>/dev/null | grep -cvx buildkit || true)"
-  echo "others $others"
-  if [ "$retire" = yes ] && [ "$others" = 0 ]; then "$binary" system stop >/dev/null 2>&1 || true; fi
+  if listing="$("$binary" list --all --quiet 2>&1)"; then
+    others="$(printf '%s\n' "$listing" | awk 'NF && $0 != "buildkit" {n++} END {print n+0}')"
+    if [ "$retire" = yes ] && [ "$others" = 0 ] && "$binary" system stop >/dev/null 2>&1; then echo retired; fi
+  else
+    fail "$listing"
+  fi
 } > "$result.partial" 2>&1
 mv "$result.partial" "$result"
 SCRIPT
@@ -425,13 +464,19 @@ SCRIPT
     return 0
   fi
   failures="$(sed -n 's/^failed //p' "$result" | head -1)"
-  others="$(sed -n 's/^others //p' "$result")"
+  retire="$(grep -cx retired "$result" || true)"
   rm -rf "$job"
-  if [ -z "$failures" ] && [ "$retire" = yes ] && [ "$others" = 0 ]; then
+  # Kept until now, so a failure above leaves this installation still counted.
+  [ -z "$failures" ] && [ "$shared" = yes ] || return 0
+  rm -f "$shared_runtime/instances/$root_hash"
+  if [ "$retire" = 1 ]; then
     launchctl list 2>/dev/null | awk '$3 ~ /^com\.apple\.container\./ {print $3}' | while IFS= read -r helper; do
       launchctl bootout "$domain/$helper" >/dev/null 2>&1 || true
     done
+    runtime_lock_held=no
     rm -rf "$shared_runtime"
+  else
+    unlock_runtime
   fi
 }
 if [ "$command_name" != install ]; then
@@ -445,6 +490,8 @@ if [ "$command_name" != install ]; then
       if [ "$os" = linux ]; then systemctl --user daemon-reload >&2; fi
     fi
     remove_bot_runtimes
+    # A cancelled install has no database or release to get here through, but it was still recorded.
+    if [ "$delete_data" = yes ]; then rm -f "$shared_runtime/instances/$root_hash"; fi
     rm -f "$root/current" "$root/run-server" "$root/.service-mode"
     rm -rf "$root/releases" "$root/node" "$root/tooling" "$root/pnpm-store"
     if [ "$delete_data" = yes ]; then rm -rf "$root/data"; rm -f "$root/config.toml"; remove_root=yes; fi
@@ -494,6 +541,7 @@ fi
 if [ "$environment" = container ] && [ -z "$container_cli" ]; then
   if [ -n "$container_version" ]; then
     container_private="$shared_runtime/container/$container_version"
+    lock_runtime
     if [ ! -x "$container_private/bin/container" ]; then
       progress container
       run_child "$stage" curl --fail --location --silent --show-error "https://github.com/apple/container/releases/download/$container_version/container-$container_version-installer-signed.pkg" -o "$stage/container.pkg"
@@ -502,13 +550,13 @@ if [ "$environment" = container ] && [ -z "$container_cli" ]; then
       pkgutil --expand-full "$stage/container.pkg" "$stage/container-package" >/dev/null || abort container 'Apple container package could not be read.'
       [ -x "$stage/container-package/Payload/bin/container" ] || abort container 'Apple container package has no CLI.'
       mkdir -p "$shared_runtime/container"
-      chmod 700 "$shared_runtime"
-      # Another installation can get here first with the same verified package.
-      mv "$stage/container-package/Payload" "$container_private" 2>/dev/null || [ -x "$container_private/bin/container" ] || abort container 'Apple container could not be installed.'
+      mv "$stage/container-package/Payload" "$container_private"
       rm -rf "$stage/container.pkg" "$stage/container-package"
     fi
     mkdir -p "$shared_runtime/instances"
+    if [ ! -e "$shared_runtime/instances/$root_hash" ]; then runtime_registered_now=yes; fi
     : > "$shared_runtime/instances/$root_hash"
+    unlock_runtime
     container_cli="$container_private/bin/container"
   elif [ -n "$docker_cli" ]; then environment=docker
   else environment=none; fi

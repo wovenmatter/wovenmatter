@@ -421,12 +421,14 @@ class HostTests(unittest.TestCase):
         self.run_host('uninstall')
         self.assertFalse((self.base/'runtime-docker').exists())
 
-    def scripted_private_cli(self, others=''):
+    def scripted_private_cli(self, others='', fails=''):
         # Answers as the runtime would, and records what it's asked.
         cli = self.shared_runtime/'container/1.6.1/bin/container'
         calls = self.base/'private-calls'
+        failing = f'case "$*" in {fails}) echo "Error: storage failure" >&2; exit 1 ;; esac' if fails else ''
         cli.write_text(f"""#!/bin/sh
 printf '%s\\n' "$*" >> {str(calls)!r}
+{failing}
 case "$*" in "list --all --quiet") printf '%b' {others!r} ;; esac
 """)
         return calls
@@ -468,6 +470,72 @@ case "$*" in "list --all --quiet") printf '%b' {others!r} ;; esac
         self.run_host('uninstall', '--delete-data', **self.mac())
         self.assertNotIn('system stop', calls.read_text().splitlines())
         self.assertTrue(self.shared_runtime.exists())
+
+    def registration(self):
+        return self.shared_runtime/'instances'/hashlib.sha256(str(self.root).encode()).hexdigest()
+
+    def prepared_removal(self, **cli):
+        self.mac_archive()
+        self.install(extra=self.container_args(), **self.mac())
+        self.seed_bots('bot-a')
+        return self.scripted_private_cli(**cli)
+
+    def test_a_container_that_cannot_be_removed_keeps_everything(self):
+        self.prepared_removal(fails='"delete --force pi-bot-bot-a"')
+        self.assertEqual(self.run_host('uninstall', '--delete-data', success=False, **self.mac())['error'], 'runtime')
+        self.assertTrue((self.root/'data/pi-bot.sqlite').exists())
+        self.assertTrue(self.registration().exists())
+        self.assertFalse((self.shared_runtime/'.lock').exists())
+
+    def test_a_volume_still_listed_after_a_failed_delete_keeps_everything(self):
+        calls = self.prepared_removal(fails='"volume delete pi-bot-bot-a-workspace"')
+        cli = self.shared_runtime/'container/1.6.1/bin/container'
+        cli.write_text(cli.read_text().replace('"list --all --quiet")', '"volume list --quiet") echo pi-bot-bot-a-workspace ;; "list --all --quiet")'))
+        self.assertEqual(self.run_host('uninstall', '--delete-data', success=False, **self.mac())['error'], 'runtime')
+        self.assertTrue(self.registration().exists())
+        self.assertIn('volume list --quiet', calls.read_text().splitlines())
+
+    def test_a_volume_already_gone_is_not_a_failure(self):
+        self.prepared_removal(fails='"volume delete pi-bot-bot-a-workspace"')
+        self.run_host('uninstall', '--delete-data', **self.mac())
+        self.assertFalse(self.shared_runtime.exists())
+
+    def test_a_failed_listing_never_retires_the_runtime(self):
+        calls = self.prepared_removal(fails='"list --all --quiet"')
+        self.assertEqual(self.run_host('uninstall', '--delete-data', success=False, **self.mac())['error'], 'runtime')
+        self.assertNotIn('system stop', calls.read_text().splitlines())
+        self.assertTrue(self.shared_runtime.exists())
+
+    def test_a_runtime_that_will_not_stop_is_not_deleted(self):
+        self.prepared_removal(fails='"system stop"')
+        self.run_host('uninstall', '--delete-data', **self.mac())
+        self.assertFalse(self.root.exists())
+        self.assertTrue((self.shared_runtime/'container/1.6.1/bin/container').exists())
+        self.assertFalse(self.registration().exists())
+        self.assertFalse((self.shared_runtime/'.lock').exists())
+
+    def test_a_failed_first_install_is_not_recorded_as_using_the_runtime(self):
+        self.mac_archive()
+        self.assertEqual(self.install(extra=self.container_args(), success=False, PIBOT_TEST_BAD_HEALTH='1', **self.mac())['error'], 'health')
+        self.assertFalse(self.registration().exists())
+        self.assertFalse((self.shared_runtime/'.lock').exists())
+
+    def test_a_cancelled_install_stops_counting_when_removed(self):
+        self.mac_archive()
+        self.registration().parent.mkdir(parents=True)
+        self.registration().write_text('')
+        (self.root/'data').mkdir(parents=True)
+        (self.root/'.woven-instance').write_text('fixture\n')
+        self.run_host('uninstall', '--delete-data', **self.mac())
+        self.assertFalse(self.registration().exists())
+
+    def test_a_lock_left_by_a_dead_installer_is_recovered(self):
+        self.mac_archive()
+        lock = self.shared_runtime/'.lock'
+        lock.mkdir(parents=True)
+        (lock/'pid').write_text('2147483647')
+        self.install(extra=self.container_args(), **self.mac())
+        self.assertFalse(lock.exists())
 
     def test_an_installed_runtime_is_never_stopped(self):
         self.mac_archive()

@@ -17,7 +17,8 @@ extension DashboardStore {
     try Task.checkCancellation()
     do {
       try await WorkspaceExportFileIO.perform {
-        try content.data.write(to: stagedURL, options: [.atomic, .completeFileProtection])
+        // Full protection refuses new files while the Mac is locked, when background work still runs.
+        try content.data.write(to: stagedURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: stagedURL.path)
       }
     } catch {
