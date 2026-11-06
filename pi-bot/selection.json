@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "repository": "https://github.com/wovenmatter/pi-bot.git",
-  "commit": "791f6adf88470baac910dea0f85c2459e54dcf02",
+  "commit": "00957dbeaead40ed4652eb032ecf96e0a30e9a36",
   "protocol": 1,
   "pnpm": "12.16.1",
   "node": {
@@ -12,5 +12,9 @@
       "linux-x64": "5848553868b402d3fabb5b09270649977780a390f832155721025a08b5104455",
       "linux-arm64": "439e9c438acdf6a6ffe47418da709153d66c4bed812e30a473faacb107dd2791"
     }
+  },
+  "container": {
+    "version": "1.6.1",
+    "sha256": "cd47846819f06478d067060efe21e516b562ac0a9af8eecad6d5fea0b556b200"
   }
 }

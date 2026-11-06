@@ -23,7 +23,7 @@ for every package update. Three separate mechanisms do that:
 | --- | --- | --- |
 | `package.json` minimum-only ranges (`>=version`) | Declaration. The floor is the current tested release; there is no upper cap on stable releases. | Maintenance PRs raise floors, including majors |
 | `default-agent/package-lock.json`, `ios/EmbeddedRuntime/package-lock.json` | Exact tested snapshot with integrity hashes, installed with `npm ci` | The same PRs |
-| `pi-bot/selection.json` | Exact Pi Bot repository commit, protocol, pnpm and the shared Node archive checksums | `scripts/update-pi-bot.sh` in a maintenance PR; update Node records together |
+| `pi-bot/selection.json` | Exact Pi Bot repository commit, protocol, pnpm, the shared Node archive checksums, and Apple's `container` package | `scripts/update-pi-bot.sh` in a maintenance PR; update Node records together |
 | `pi-bot/tooling/package-lock.json` | Integrity-locked pnpm executable and platform packages, installed with private Node and `npm ci` | Regenerate with npm when refreshing the pnpm selection |
 | `app/Package.resolved` | Shared SwiftPM/Xcode graph: Sparkle and any transitive packages | Native package-manager tooling during maintenance |
 | `default-agent/.node-version` and the Node checksums in `scripts/prepare-default-agent.sh` and `LocalACPManagedRuntime.swift` | One current stable Node release and its official archive SHA-256 values | Maintenance PR, all copies together |
@@ -70,6 +70,9 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   and `pi-bot/tooling/package.json`, then run
   `npm install --package-lock-only --ignore-scripts --no-audit --no-fund --prefix pi-bot/tooling`.
   Refresh all Node records and checksums together when Node changes.
+  Apple's `container` is recorded by version and the SHA-256 of its signed package. It reaches
+  a Mac only when bots are installed there and it has none of its own, and the installer also
+  checks Apple's signature. Refresh both fields from `gh release view -R apple/container`.
   `scripts/prepare-pi-bot.sh OUTPUT` fetches only the recorded SHA over HTTPS,
   installs the frozen graph in temporary storage, and runs Pi Bot's
   `package:woven`. Debug source overrides fingerprint tracked and nonignored

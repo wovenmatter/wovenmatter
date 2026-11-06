@@ -74,10 +74,12 @@ public struct PiBotHealth: Codable, Equatable, Sendable {
     public let `protocol`: Int?
     public let installationId: String?
     public let capabilities: [String]?
+    /// Where this server runs bots' tools: `container`, `docker`, or `none`.
+    public let environment: String?
 
-    public init(ok: Bool, version: String, protocol: Int? = nil, installationId: String? = nil, capabilities: [String]? = nil) {
+    public init(ok: Bool, version: String, protocol: Int? = nil, installationId: String? = nil, capabilities: [String]? = nil, environment: String? = nil) {
         self.ok = ok; self.version = version; self.protocol = `protocol`
-        self.installationId = installationId; self.capabilities = capabilities
+        self.installationId = installationId; self.capabilities = capabilities; self.environment = environment
     }
 
     public func supports(_ capability: String) -> Bool { capabilities?.contains(capability) == true }
@@ -167,10 +169,18 @@ public struct PiBotSelection: Codable, Equatable, Sendable {
     public let `protocol`: Int
     public let pnpm: String
     public let node: Node
+    /// Apple's signed `container` package, for Macs that don't have it installed.
+    public let container: Container?
 
-    public init(schema: Int = 1, repository: String, commit: String, protocol: Int, pnpm: String, node: Node) {
+    public struct Container: Codable, Equatable, Sendable {
+        public let version: String
+        public let sha256: String
+        public init(version: String, sha256: String) { self.version = version; self.sha256 = sha256 }
+    }
+
+    public init(schema: Int = 1, repository: String, commit: String, protocol: Int, pnpm: String, node: Node, container: Container? = nil) {
         self.schema = schema; self.repository = repository; self.commit = commit
-        self.protocol = `protocol`; self.pnpm = pnpm; self.node = node
+        self.protocol = `protocol`; self.pnpm = pnpm; self.node = node; self.container = container
     }
 }
 
@@ -196,6 +206,8 @@ public struct PiBotHostInspection: Codable, Equatable, Sendable {
     public let arch: String
     public let libc: String?
     public let serviceManager: String
+    /// Where bots' tools would run after an install here: `container`, `docker`, or `none`.
+    public let environment: String?
     public let docker: Bool
     public let lingering: Bool?
     public let managed: Managed

@@ -109,15 +109,32 @@ struct PiBotModelsTests {
         #expect(throws: (any Error).self) { try PiBotTailnet.sshArguments(peer: peer, user: "a b", tailscale: "/ts") }
     }
 
-    @Test func tunnelForwardsLoopbackOnlyAndKeepsTheDestinationLast() throws {
+    @Test func tunnelRunsOneCommandAndKeepsItLastWithoutPortForwards() throws {
         let ssh = try PiBotTailnet.sshArguments(peer: peer, user: "", tailscale: "/ts")
-        let args = PiBotTunnel.arguments(ssh: ssh, forward: .init(localPort: 40001, remotePort: 47310, mcpRemotePort: 47500, mcpLocalPort: 51000))
-        #expect(args.last == "box")
-        #expect(args.contains("127.0.0.1:40001:127.0.0.1:47310"))
-        #expect(args.contains("127.0.0.1:47500:127.0.0.1:51000"))
-        #expect(args.contains("ExitOnForwardFailure=yes"))
-        let noMCP = PiBotTunnel.arguments(ssh: ssh, forward: .init(localPort: 40001, remotePort: 47310))
-        #expect(!noMCP.contains("-R"))
+        let command = PiBotTunnel.remoteCommand(instance: "dev", relaySource: "source", forward: .init(localPort: 40001, remotePort: 47310, mcpRemotePort: 47500, mcpLocalPort: 51000))
+        let args = PiBotTunnel.arguments(ssh: ssh, remoteCommand: command)
+        #expect(args.last == command)
+        #expect(args[args.count - 2] == "box")
+        #expect(!args.contains("-L") && !args.contains("-R") && !args.contains("-N"))
+        #expect(command.hasSuffix("'dev' 'source' '47310' '47500'"))
+        let noMCP = PiBotTunnel.remoteCommand(instance: "dev", relaySource: "source", forward: .init(localPort: 40001, remotePort: 47310))
+        #expect(noMCP.hasSuffix("'47310' 'none'"))
+        let firstUse = PiBotTunnel.remoteCommand(instance: "dev", relaySource: "source", forward: .init(localPort: 40001, remotePort: 47310, mcpLocalPort: 51000))
+        #expect(firstUse.hasSuffix("'47310' '0'"))
+    }
+
+    @Test func aDeviceWithALiveTunnelIsReachableEvenWhenTheCoordinationServerLostIt() throws {
+        let formatter = ISO8601DateFormatter()
+        func decode(online: Bool, active: Bool, handshake: Date) throws -> Bool {
+            let json: [String: Any] = ["BackendState": "Running", "Self": ["DNSName": "me.tail.ts.net."], "Peer": ["key": [
+                "HostName": "box", "DNSName": "box.tail.ts.net.", "OS": "linux", "TailscaleIPs": [Self.fixtureIP(3)],
+                "Online": online, "Active": active, "LastHandshake": formatter.string(from: handshake)]]]
+            return try #require(try PiBotTailnet.decode(JSONSerialization.data(withJSONObject: json)).first).online
+        }
+        #expect(try decode(online: true, active: false, handshake: .distantPast))
+        #expect(try decode(online: false, active: true, handshake: Date()))
+        #expect(try !decode(online: false, active: true, handshake: Date().addingTimeInterval(-3600)))
+        #expect(try !decode(online: false, active: false, handshake: Date()))
     }
 
     @Test func scriptFailuresPreferTheirDetailOverRawOutput() {

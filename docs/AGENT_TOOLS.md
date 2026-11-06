@@ -107,8 +107,8 @@ trust domain; they cannot turn an unauthenticated request into a bot caller.
 on, with Computer Use and Executor off. Old settings acquire these defaults.
 The host exposes `setBotsEnabled` and `setBotsGroup` through its access API and
 returns `botSettings` in its snapshot. Bots use the loopback HTTP endpoint even
-when outside exposure is off. Remote bot hosts reach it through an existing SSH
-reverse forward; issuing a grant does not create a network exposure route.
+when outside exposure is off. Remote bot hosts reach it through the SSH relay
+that carries their connection; issuing a grant does not create a network exposure route.
 
 Bots can explicitly target sessions for goals, timers and HTML, just as outside
 callers do. `woven_context` returns null. Bot-created sessions are managed by

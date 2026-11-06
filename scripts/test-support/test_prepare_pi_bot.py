@@ -30,7 +30,7 @@ class PrepareTests(unittest.TestCase):
         self.repo = self.base/'woven'
         for directory in ('scripts', 'pi-bot/tooling', 'tmp', 'bin', 'source'):
             (self.repo/directory).mkdir(parents=True)
-        for name in ('prepare-pi-bot.sh', 'pi-bot-host.sh', 'update-pi-bot.sh'):
+        for name in ('prepare-pi-bot.sh', 'pi-bot-host.sh', 'pi-bot-relay.mjs', 'update-pi-bot.sh'):
             shutil.copy2(ROOT/'scripts'/name, self.repo/'scripts'/name)
         shutil.copy2(ROOT/'pi-bot/selection.json', self.repo/'pi-bot/selection.json')
         for name in ('package.json', 'package-lock.json'):
@@ -95,6 +95,7 @@ esac
         self.assertEqual((self.repo/'calls').read_text().count('package\n'), 3)
         self.assertFalse((self.source/'node_modules').exists())
         self.assertTrue((output/'pi-bot-host.sh').exists())
+        self.assertTrue((output/'pi-bot-relay.mjs').exists())
         # Uncommitted source names its content: HEAD would look already installed.
         head = subprocess.check_output(['git', '-C', str(self.source), 'rev-parse', 'HEAD'], text=True).strip()
         dirty = json.loads((output/'selection.json').read_text())['commit']

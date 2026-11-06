@@ -112,4 +112,5 @@ record.commit = process.argv[4];
 fs.writeFileSync(process.argv[3], JSON.stringify(record, null, 2) + '\n');
 JS
 cp -p "$repo_root/scripts/pi-bot-host.sh" "$output/pi-bot-host.sh"
+cp "$repo_root/scripts/pi-bot-relay.mjs" "$output/pi-bot-relay.mjs"
 cp "$repo_root/pi-bot/tooling/package.json" "$repo_root/pi-bot/tooling/package-lock.json" "$output/tooling/"

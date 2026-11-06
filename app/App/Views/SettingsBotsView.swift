@@ -177,6 +177,7 @@ struct SettingsBotsView: View {
         var parts: [String] = [target.ownership == .attached ? "Existing Pi Bot" : "Managed by Woven Matter"]
         if let version = runtime.health?.version { parts.append("Pi Bot " + version) }
         if let commit = runtime.installedCommit { parts.append(String(commit.prefix(8))) }
+        if let environment = runtime.health?.environment { parts.append(Self.environmentLabel(environment)) }
         return parts.joined(separator: " · ")
     }
 
@@ -276,7 +277,7 @@ struct SettingsBotsView: View {
                 confirmation = .init(title: "Run bots on \(name)?", action: inspection?.managed.installed == true ? "Use This Device" : "Install",
                     message: replacementNote(leaving: runtime.target) + (inspection?.managed.installed == true
                         ? "Woven Matter reconnects to the Pi Bot it installed there, with its existing bots and data."
-                        : "This installs about 1.7 GB of runtime and dependencies on \(name) and starts Pi Bot there, private to that device."),
+                        : "This installs about 1.7 GB of runtime and dependencies on \(name) and starts Pi Bot there, private to that device. Bots' tools need about 5 GB more the first time they run."),
                     destructive: false, command: .deploy(target))
             }
             .buttonStyle(SettingsQuietButtonStyle())
@@ -295,9 +296,17 @@ struct SettingsBotsView: View {
         if !online { parts.append("Offline") }
         if let inspection {
             if inspection.managed.installed { parts.append(inspection.managed.running ? "Pi Bot running" : "Pi Bot installed") }
-            parts.append(inspection.docker ? "Docker available" : "No Docker: bots have no shell tools")
+            parts.append(Self.environmentLabel(inspection.environment ?? (inspection.docker ? "docker" : "none")))
         }
         return parts.joined(separator: " · ")
+    }
+
+    private static func environmentLabel(_ environment: String) -> String {
+        switch environment {
+        case "container": "Bots' tools use Apple containers"
+        case "docker": "Bots' tools use Docker"
+        default: "No container runtime: bots have no shell tools"
+        }
     }
 
     private func deviceIcon(_ system: PiBotTailnetPeer.System) -> some View {

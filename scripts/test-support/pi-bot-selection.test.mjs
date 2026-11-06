@@ -27,6 +27,12 @@ test('Pi Bot shares the recorded Node release and all official checksums', () =>
   }
 });
 
+test('Apple container is a recorded release with a checksum', () => {
+  const { container } = json('pi-bot/selection.json');
+  assert.match(container.version, /^\d+\.\d+\.\d+$/);
+  assert.match(container.sha256, /^[a-f0-9]{64}$/);
+});
+
 test('npm tooling locks the same pnpm selection with registry integrity', () => {
   const selection = json('pi-bot/selection.json');
   const tooling = json('pi-bot/tooling/package.json');

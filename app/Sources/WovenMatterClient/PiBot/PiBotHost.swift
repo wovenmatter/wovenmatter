@@ -8,6 +8,7 @@ public struct PiBotBundle: Equatable, Sendable {
     public var script: URL { directory.appending(path: "pi-bot-host.sh") }
     public var archive: URL { directory.appending(path: "pi-bot-bundle.tar.gz") }
     public var tooling: URL { directory.appending(path: "tooling", directoryHint: .isDirectory) }
+    public var relay: URL { directory.appending(path: "pi-bot-relay.mjs") }
 
     public init(directory: URL) throws {
         self.directory = directory
@@ -19,7 +20,8 @@ public struct PiBotBundle: Equatable, Sendable {
         let directory = resources.appending(path: "pi-bot", directoryHint: .isDirectory)
         guard FileManager.default.isReadableFile(atPath: directory.appending(path: "selection.json").path),
               FileManager.default.isReadableFile(atPath: directory.appending(path: "pi-bot-bundle.tar.gz").path),
-              FileManager.default.isReadableFile(atPath: directory.appending(path: "pi-bot-host.sh").path) else {
+              FileManager.default.isReadableFile(atPath: directory.appending(path: "pi-bot-host.sh").path),
+              FileManager.default.isReadableFile(atPath: directory.appending(path: "pi-bot-relay.mjs").path) else {
             throw PiBotHostError.bundleMissing
         }
         return try PiBotBundle(directory: directory)
@@ -57,8 +59,19 @@ public enum PiBotTailnet {
             let safe = !reported.isEmpty && reported.utf8.count <= 120
                 && !reported.unicodeScalars.contains { $0.value < 32 || (127...159).contains($0.value) }
             return PiBotTailnetPeer(id: key, name: safe ? reported : fallback, dnsName: dns, address: address,
-                                    system: system, online: peer["Online"] as? Bool == true)
+                                    system: system, online: reachable(peer))
         }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    /// `Online` is what the coordination server last heard, which can lag or drop while
+    /// the device still answers through a relay. A live tunnel proves it is reachable.
+    private static func reachable(_ peer: [String: Any], now: Date = Date()) -> Bool {
+        if peer["Online"] as? Bool == true { return true }
+        guard peer["Active"] as? Bool == true, let text = peer["LastHandshake"] as? String else { return false }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        guard let handshake = formatter.date(from: text) ?? ISO8601DateFormatter().date(from: text) else { return false }
+        return now.timeIntervalSince(handshake) < 300
     }
 
     private static func system(of peer: [String: Any]) -> PiBotTailnetPeer.System? {
@@ -221,6 +234,9 @@ public struct PiBotHostRunner: Sendable {
                 service ? "--service" : "--no-service",
             ]
             if let port { values += ["--port", String(port)] }
+            if inspection.nodePlatform == "darwin-arm64", let container = bundle.selection.container {
+                values += ["--container-version", container.version, "--container-sha256", container.sha256]
+            }
             return values
         }
         let output: Data = try await Self.cancellable { handle in
@@ -247,7 +263,7 @@ public struct PiBotHostRunner: Sendable {
                 let root = directory + "/" + bundle.directory.lastPathComponent
                 let install = (["bash", root + "/pi-bot-host.sh"] + arguments(archive: root + "/pi-bot-bundle.tar.gz", tooling: root + "/tooling"))
                     .map(RemoteWorkspaceExecTarget.quote).joined(separator: " ")
-                let remote = install + "; status=$?; rm -rf " + RemoteWorkspaceExecTarget.quote(directory) + "; exit $status"
+                let remote = install + "; code=$?; rm -rf " + RemoteWorkspaceExecTarget.quote(directory) + "; exit $code"
                 return try Self.finish(RemoteWorkspaceProcess.run(executable: "/usr/bin/ssh", arguments: ssh + [remote],
                     timeLimit: Self.installTimeLimit, onProcessStarted: handle.started, onStandardError: report))
             }
@@ -287,6 +303,7 @@ public struct PiBotHostRunner: Sendable {
         switch phase {
         case "staging": "Verifying Pi Bot…"
         case "node": "Installing the verified Node runtime…"
+        case "container": "Installing Apple's container runtime…"
         case "dependencies": "Installing Pi Bot's dependencies. This can take a few minutes…"
         case "health": "Checking the new Pi Bot…"
         case "backup": "Backing up your bots' database…"
@@ -296,12 +313,15 @@ public struct PiBotHostRunner: Sendable {
     }
 }
 
-/// The SSH transport to a remote Pi Bot: a local forward for the UI and control
-/// socket, and a reverse forward so bots can reach this Mac's loopback MCP endpoint.
+/// The transport to a remote Pi Bot: one SSH command running `pi-bot-relay.mjs`, which
+/// carries the UI and control socket to this Mac, and a loopback port on the device back
+/// to this Mac's MCP endpoint. Like remote workspaces, it needs only SSH command execution,
+/// so it works on servers that turn off port forwarding.
 public actor PiBotTunnel {
     public struct Forward: Equatable, Sendable {
         public let localPort: Int
         public let remotePort: Int
+        /// The device-side port to prefer; the relay reports the one it got.
         public let mcpRemotePort: Int?
         public let mcpLocalPort: Int?
         public init(localPort: Int, remotePort: Int, mcpRemotePort: Int? = nil, mcpLocalPort: Int? = nil) {
@@ -310,50 +330,83 @@ public actor PiBotTunnel {
         }
     }
 
-    private var process: Process?
+    private var relay: PiBotRelay?
     private var errorLog: URL?
     public init() {}
 
-    public var isRunning: Bool { process?.isRunning == true }
+    public var isRunning: Bool { relay?.isRunning == true }
 
-    static func arguments(ssh: [String], forward: Forward) -> [String] {
-        // The destination stays last in `ssh`; ssh accepts options before it only.
-        var options = Array(ssh.dropLast())
-        options += ["-N", "-o", "ExitOnForwardFailure=yes", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3",
-                    "-L", "127.0.0.1:\(forward.localPort):127.0.0.1:\(forward.remotePort)"]
-        if let remote = forward.mcpRemotePort, let local = forward.mcpLocalPort {
-            options += ["-R", "127.0.0.1:\(remote):127.0.0.1:\(local)"]
-        }
-        return options + [ssh[ssh.count - 1]]
+    /// Finds the Node that runs Pi Bot, because this has to work before anything else does.
+    /// An attached server's Node is whichever one the account can reach.
+    static let launcher = #"""
+    instance="$1"; source="$2"; shift 2
+    case "$(uname -s)" in
+      Darwin) root="$HOME/Library/Application Support/Woven Matter Pi Bot/$instance" ;;
+      *) root="$HOME/.local/share/wovenmatter/pi-bot/$instance" ;;
+    esac
+    node=""
+    if [ -r "$root/current/.node-version" ]; then node="$root/node/$(cat "$root/current/.node-version")/bin/node"; fi
+    if [ ! -x "$node" ]; then node="$(command -v node 2>/dev/null || true)"; fi
+    if [ ! -x "$node" ]; then node="$(bash -lc 'command -v node' 2>/dev/null | tail -n 1 || true)"; fi
+    if [ ! -x "$node" ]; then
+      for candidate in /opt/homebrew/bin/node /usr/local/bin/node /usr/bin/node; do
+        if [ -x "$candidate" ]; then node="$candidate"; break; fi
+      done
+    fi
+    if [ ! -x "$node" ]; then echo 'No Node runtime was found on that device.' >&2; exit 69; fi
+    exec "$node" --input-type=module -e "$source" -- "$@"
+    """#
+
+    static func remoteCommand(instance: String, relaySource: String, forward: Forward) -> String {
+        var values = [instance, relaySource, String(forward.remotePort)]
+        if forward.mcpLocalPort != nil { values.append(String(forward.mcpRemotePort ?? 0)) } else { values.append("none") }
+        return "exec bash -c " + RemoteWorkspaceExecTarget.quote(launcher) + " -- "
+            + values.map(RemoteWorkspaceExecTarget.quote).joined(separator: " ")
     }
 
-    public func start(peer: PiBotTailnetPeer, user: String, forward: Forward) throws {
+    static func arguments(ssh: [String], remoteCommand: String) -> [String] {
+        // The destination stays last in `ssh`; ssh accepts options before it only.
+        Array(ssh.dropLast()) + ["-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", ssh[ssh.count - 1], remoteCommand]
+    }
+
+    public func start(peer: PiBotTailnetPeer, user: String, forward: Forward, instance: String, relaySource: String) throws {
         stop()
         let current = try PiBotTailnet.current(peer)
         let ssh = try PiBotTailnet.sshArguments(peer: current, user: user, tailscale: PiBotTailnet.executable())
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-        task.arguments = Self.arguments(ssh: ssh, forward: forward)
         let log = FileManager.default.temporaryDirectory.appending(path: "pi-bot-tunnel-\(UUID().uuidString).log")
         FileManager.default.createFile(atPath: log.path, contents: nil, attributes: [.posixPermissions: 0o600])
-        task.standardError = try FileHandle(forWritingTo: log)
-        task.standardOutput = FileHandle.nullDevice
-        task.standardInput = FileHandle.nullDevice
-        try task.run()
-        process = task
+        let relay = PiBotRelay(
+            executable: URL(fileURLWithPath: "/usr/bin/ssh"),
+            arguments: Self.arguments(ssh: ssh, remoteCommand: Self.remoteCommand(instance: instance, relaySource: relaySource, forward: forward)),
+            errorLog: try FileHandle(forWritingTo: log), localPort: forward.localPort, reverseTargetPort: forward.mcpLocalPort)
         errorLog = log
+        try relay.start()
+        self.relay = relay
     }
 
-    /// What SSH reported, once it has exited.
+    /// The device-side MCP port, once the device is listening. Polls so that cancelling
+    /// the caller never leaves it waiting on a device that does not answer.
+    public func ready(seconds: Int = 30) async throws -> Int? {
+        for _ in 0..<(seconds * 10) {
+            try Task.checkCancellation()
+            guard let relay else { break }
+            if let hello = relay.hello { return hello.reversePort }
+            if !relay.isRunning { break }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        throw PiBotHostError.command(failureDetail() ?? "The device did not answer.")
+    }
+
+    /// What SSH or the relay reported, once it has exited.
     public func failureDetail() -> String? {
-        guard process?.isRunning != true, let errorLog,
+        guard relay?.isRunning != true, let errorLog,
               let text = try? String(contentsOf: errorLog, encoding: .utf8) else { return nil }
         return PiBotHostRunner.failureMessage(text)
     }
 
     public func stop() {
-        process?.terminate()
-        process = nil
+        relay?.stop()
+        relay = nil
         if let errorLog { try? FileManager.default.removeItem(at: errorLog) }
         errorLog = nil
     }

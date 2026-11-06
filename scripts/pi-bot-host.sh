@@ -36,13 +36,14 @@ command_name="${1:-}"
 case "$command_name" in inspect|install|cancel-install|start|stop|restart|status|uninstall) ;;
   *) abort arguments 'Expected inspect, install, cancel-install, start, stop, restart, status or uninstall.' 64 ;; esac
 instance= root= commit= node_version= node_sha= pnpm_version= bundle= tooling= port= service=yes delete_data=no
+container_version= container_sha=
 seen=' '
 while [ "$#" -gt 0 ]; do
   option="$1"; shift
   case "$seen" in *" $option "*) abort arguments "Repeated option: $option" 64 ;; esac
   seen="$seen$option "
   case "$option" in
-    --instance|--root|--commit|--node-version|--node-sha256|--pnpm-version|--bundle|--tooling-lock-dir|--port)
+    --instance|--root|--commit|--node-version|--node-sha256|--pnpm-version|--bundle|--tooling-lock-dir|--port|--container-version|--container-sha256)
       [ "$#" -gt 0 ] && [ -n "$1" ] || abort arguments "Missing value for $option" 64
       value="$1"; shift
       case "$option" in
@@ -50,6 +51,7 @@ while [ "$#" -gt 0 ]; do
         --node-version) node_version="$value" ;; --node-sha256) node_sha="$value" ;;
         --pnpm-version) pnpm_version="$value" ;; --bundle) bundle="$value" ;;
         --tooling-lock-dir) tooling="$value" ;; --port) port="$value" ;;
+        --container-version) container_version="$value" ;; --container-sha256) container_sha="$value" ;;
       esac ;;
     --service) service=yes ;; --no-service) service=no ;; --delete-data) delete_data=yes ;;
     *) abort arguments "Unknown option: $option" 64 ;;
@@ -59,7 +61,7 @@ done
 for option in $seen; do
   case "$option" in --instance|--root) continue ;; esac
   case "$command_name:$option" in
-    install:--commit|install:--node-version|install:--node-sha256|install:--pnpm-version|install:--bundle|install:--tooling-lock-dir|install:--port|install:--service|install:--no-service|uninstall:--delete-data) ;;
+    install:--commit|install:--node-version|install:--node-sha256|install:--pnpm-version|install:--bundle|install:--tooling-lock-dir|install:--port|install:--container-version|install:--container-sha256|install:--service|install:--no-service|uninstall:--delete-data) ;;
     *) abort arguments "Option $option is not valid for $command_name." 64 ;;
   esac
 done
@@ -124,11 +126,26 @@ if [ "$os" = linux ]; then
   lingering=false
   if command -v loginctl >/dev/null 2>&1 && [ "$(loginctl show-user "$(id -u)" --property=Linger --value 2>/dev/null || true)" = yes ]; then lingering=true; fi
 fi
+# Where bots' tools will run. On a Mac that can use it, Apple's `container` keeps no shared VM
+# running, so an idle Mac holds almost no memory for bots; see docs/architecture/PI_BOT_INTEGRATION.md.
+runtime_search="${PI_BOT_RUNTIME_SEARCH_PATH:-$PATH:/usr/local/bin:/opt/homebrew/bin:/Applications/Docker.app/Contents/Resources/bin}"
+find_runtime() { PATH="$runtime_search" command -v "$1" 2>/dev/null || true; }
+docker_cli="$(find_runtime docker)"
+container_cli="$(find_runtime container)"
+apple_container_supported=no
+if [ "$os" = darwin ] && [ "$arch" = arm64 ]; then
+  macos_major="$(sw_vers -productVersion 2>/dev/null | cut -d . -f 1 || true)"
+  if [[ "$macos_major" =~ ^[0-9]+$ ]] && [ "$macos_major" -ge 26 ]; then apple_container_supported=yes; fi
+fi
+if [ "$apple_container_supported" = yes ]; then environment=container
+elif [ -n "$docker_cli" ]; then environment=docker
+else environment=none; fi
 if [ "$command_name" = inspect ]; then
-  docker=false; command -v docker >/dev/null 2>&1 && docker=true
+  docker=false; [ -n "$docker_cli" ] && docker=true
   printf '{"schema":1,"os":'; json "$os"; printf ',"arch":'; json "$arch"
   printf ',"libc":'; if [ "$libc" = null ]; then printf null; else json "$libc"; fi
-  printf ',"serviceManager":'; json "$manager"; printf ',"docker":%s,"lingering":%s,"managed":{"installed":' "$docker" "$lingering"
+  printf ',"serviceManager":'; json "$manager"; printf ',"environment":'; json "$environment"
+  printf ',"docker":%s,"lingering":%s,"managed":{"installed":' "$docker" "$lingering"
   if [ -n "$current_commit" ]; then printf true; else printf false; fi
   printf ',"commit":'; if [ -n "$current_commit" ]; then json "$current_commit"; else printf null; fi
   printf ',"running":%s,"port":%s,"root":' "$running" "${managed_port:-null}"; json "$root"; printf '},"existing":['
@@ -174,6 +191,10 @@ if [ "$command_name" = cancel-install ]; then
   fi
   printf '{"schema":1,"action":"cancel-install"}\n'; exit
 fi
+# Stopping what isn't installed has nothing to do, as after cancelling a first install.
+if [ "$command_name" = stop ] && [ -z "$current_commit" ]; then
+  printf '{"schema":1,"action":"stop","supervisor":null}\n'; exit
+fi
 [ "$command_name" = install ] || [ -n "$current_commit" ] || { [ "$command_name" = uninstall ] && [ "$owned" = yes ]; } || abort not_installed 'No managed installation exists at this root.'
 if [ "$command_name" = status ]; then
   printf '{"schema":1,"running":%s,"port":%s,"root":' "$running" "${managed_port:-null}"; json "$root"
@@ -188,6 +209,7 @@ if [ "$command_name" = install ]; then
   [ -n "$bundle" ] && [ -n "$tooling" ] || abort arguments 'Bundle and tooling lock directory are required.' 64
   [ "$bundle" != - ] || [ "$tooling" != - ] || abort arguments 'Only one input can use stdin.' 64
   [ -z "$port" ] || valid_port "$port" || abort arguments 'Invalid or reserved port.' 64
+  [ -z "$container_version$container_sha" ] || { [[ "$container_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] && [[ "$container_sha" =~ ^[a-f0-9]{64}$ ]]; } || abort arguments 'Invalid Apple container selection.' 64
   [ "$os" != linux ] || [ "$libc" = glibc ] || abort libc 'Official Node Linux archives require glibc; musl and unknown libc are unsupported.'
 fi
 # Every mutation uses the same lock. A separate, short-held guard serializes stale
@@ -255,6 +277,7 @@ cleanup() {
   [ -z "$stage" ] || rm -rf "$stage"
   if [ "$lock_held" = yes ]; then rm -f "$root/.install-lock/pid"; rmdir "$root/.install-lock"; fi
   if [ "$guard_held" = yes ]; then rmdir "$root/.lock-guard"; fi
+  if [ "${remove_root:-no}" = yes ]; then rm -f "$root/.woven-instance" "$root/server.log"; rmdir "$root" 2>/dev/null || true; fi
   if [ "$result" -ne 0 ] && [ "${failure_reported:-no}" != yes ]; then fail operation_failed "$command_name failed; current and persistent data have been retained."; fi
   exit "$result"
 }
@@ -290,11 +313,65 @@ service_action() {
   else
     select_domain
     case "$action" in
-      stop) launchctl bootout "$domain/$label" >/dev/null 2>&1 || ! launchctl print "$domain/$label" >/dev/null 2>&1 ;;
+      stop)
+        launchctl bootout "$domain/$label" >/dev/null 2>&1 || true
+        # launchd still lists a service while it exits, and a start in that moment would be lost.
+        for ((attempt=0; attempt<60; attempt++)); do
+          launchctl print "$domain/$label" >/dev/null 2>&1 || return 0
+          sleep 0.5
+        done
+        return 1 ;;
       start) launchctl print "$domain/$label" >/dev/null 2>&1 || launchctl bootstrap "$domain" "$service_file" >&2 ;;
       restart) service_action stop && service_action start ;;
     esac
   fi
+}
+# Removing data includes each bot's container and workspace. Only this installation's bots are
+# named, because a Docker daemon can also serve a standalone Pi Bot. A private copy of Apple's
+# runtime stops with this installation, because its helpers are about to go away.
+remove_bot_runtimes() {
+  local current_node listing backend binary ids id
+  current_node="$root/node/$(cat "$root/current/.node-version" 2>/dev/null || true)/bin/node"
+  [ -x "$current_node" ] && [ -f "$root/config.toml" ] || return 0
+  listing="$("$current_node" - "$root/config.toml" "$root/data/pi-bot.sqlite" 2>/dev/null <<'JS' || true
+const fs = require('node:fs');
+const text = fs.readFileSync(process.argv[2], 'utf8');
+const section = /^\[environment\]\n((?:(?!\[).*\n)*)/m.exec(text)?.[1] ?? '';
+const value = (key) => { const m = new RegExp(`^${key} = (".*")$`, 'm').exec(section); return m ? JSON.parse(m[1]) : ''; };
+console.log(value('backend')); console.log(value('binary'));
+if (fs.existsSync(process.argv[3])) {
+  const { DatabaseSync } = require('node:sqlite');
+  const db = new DatabaseSync(process.argv[3], { readOnly: true });
+  for (const row of db.prepare('SELECT id FROM pibot_bots').all()) console.log(row.id);
+}
+JS
+)"
+  backend="$(printf '%s\n' "$listing" | sed -n 1p)"; binary="$(printf '%s\n' "$listing" | sed -n 2p)"
+  ids="$(printf '%s\n' "$listing" | sed -n '3,$p')"
+  case "$backend" in docker) binary="${binary:-docker}" ;; container) ;; *) return 0 ;; esac
+  case "$binary" in
+    "$root"/*) # Its data goes with the root.
+      "$binary" system stop >/dev/null 2>&1 || true
+      # Started by a launchd agent, these live in its domain, which an SSH session's CLI can't see.
+      if [ "$os" = darwin ]; then
+        select_domain
+        launchctl list 2>/dev/null | awk '$3 ~ /^com\.apple\.container\./ {print $3}' | while IFS= read -r helper; do
+          launchctl bootout "$domain/$helper" >/dev/null 2>&1 || true
+        done
+      fi
+      return 0 ;;
+  esac
+  [ "$delete_data" = yes ] || return 0
+  for id in $ids; do
+    [[ "$id" =~ ^[A-Za-z0-9_-]+$ ]] || continue
+    if [ "$backend" = docker ]; then
+      "$binary" rm -f "pi-bot-$id" >/dev/null 2>&1 || true
+      "$binary" volume rm "pi-bot-$id-workspace" >/dev/null 2>&1 || true
+    else
+      "$binary" delete --force "pi-bot-$id" >/dev/null 2>&1 || true
+      "$binary" volume delete "pi-bot-$id-workspace" >/dev/null 2>&1 || true
+    fi
+  done
 }
 if [ "$command_name" != install ]; then
   service_mode="$(cat "$root/.service-mode" 2>/dev/null || printf no)"
@@ -306,9 +383,10 @@ if [ "$command_name" != install ]; then
       rm -f "$service_file"
       if [ "$os" = linux ]; then systemctl --user daemon-reload >&2; fi
     fi
+    remove_bot_runtimes
     rm -f "$root/current" "$root/run-server" "$root/.service-mode"
-    rm -rf "$root/releases" "$root/node" "$root/tooling" "$root/pnpm-store"
-    if [ "$delete_data" = yes ]; then rm -rf "$root/data"; rm -f "$root/config.toml"; fi
+    rm -rf "$root/releases" "$root/node" "$root/tooling" "$root/pnpm-store" "$root/runtime/container"
+    if [ "$delete_data" = yes ]; then rm -rf "$root/data" "$root/runtime"; rm -f "$root/config.toml"; remove_root=yes; fi
   elif [ "$service_mode" = yes ]; then service_action "$command_name"
   else progress caller-supervises; fi
   printf '{"schema":1,"action":'; json "$command_name"; printf ',"supervisor":'
@@ -349,6 +427,26 @@ if [ ! -x "$node" ]; then
   tar -xzf "$archive" --strip-components=1 -C "$stage/node"
   "$stage/node/bin/node" --version >/dev/null 2>&1 || abort node 'Verified Node archive cannot execute on this host.'
   mv "$stage/node" "$root/node/$node_version"
+fi
+# Apple signs this package and needs no administrator to run it from here, so a Mac needs neither
+# an admin password nor Docker. An installed `container` stays the user's own and is used as it is.
+if [ "$environment" = container ] && [ -z "$container_cli" ]; then
+  if [ -n "$container_version" ]; then
+    container_private="$root/runtime/container/$container_version"
+    if [ ! -x "$container_private/bin/container" ]; then
+      progress container
+      run_child "$stage" curl --fail --location --silent --show-error "https://github.com/apple/container/releases/download/$container_version/container-$container_version-installer-signed.pkg" -o "$stage/container.pkg"
+      [ "$(sha256 "$stage/container.pkg")" = "$container_sha" ] || abort checksum 'Apple container package SHA-256 mismatch.'
+      pkgutil --check-signature "$stage/container.pkg" 2>/dev/null | grep -q 'Developer ID Installer: Apple Inc\.' || abort container 'Apple container package is not signed by Apple.'
+      pkgutil --expand-full "$stage/container.pkg" "$stage/container-package" >/dev/null || abort container 'Apple container package could not be read.'
+      [ -x "$stage/container-package/Payload/bin/container" ] || abort container 'Apple container package has no CLI.'
+      mkdir -p "$root/runtime/container"
+      mv "$stage/container-package/Payload" "$container_private"
+      rm -rf "$stage/container.pkg" "$stage/container-package"
+    fi
+    container_cli="$container_private/bin/container"
+  elif [ -n "$docker_cli" ]; then environment=docker
+  else environment=none; fi
 fi
 export PATH="$(dirname "$node"):$PATH"
 # Node is now verified and private. Use it to validate the source-only manifest
@@ -394,12 +492,21 @@ else port="$(free_port)" || abort port 'No free loopback port is available.'; fi
 write_config() {
   printf '[server]\nhost = "127.0.0.1"\nport = %s\nweb_dir = ' "$2"; json "$1/apps/web/dist"
   printf '\n\n[storage]\ndata_dir = '; json "$3"
-  printf '\n\n[credentials]\nbackend = "encrypted-sqlite"\n\n[environment]\nbackend = "none"\n\n[models]\ndefault_profile = "default"\n\n[profiles.default]\nname = "Default"\nmain = "openai/gpt-6-sol"\n'
+  printf '\n\n[credentials]\nbackend = "encrypted-sqlite"\n\n[environment]\nbackend = "%s"\n' "$4"
+  case "$4" in
+    docker) printf 'binary = '; json "$docker_cli"; printf '\n' ;;
+    container)
+      printf 'binary = '; json "$container_cli"; printf '\n'
+      case "$container_cli" in
+        "$root"/*) printf 'install_root = '; json "${container_cli%/bin/container}"; printf '\napp_root = '; json "$root/runtime/container-data"; printf '\n' ;;
+      esac ;;
+  esac
+  printf '\n[models]\ndefault_profile = "default"\n\n[profiles.default]\nname = "Default"\nmain = "openai/gpt-6-sol"\n'
 }
 progress health
 scratch_port="$(free_port)" || abort port 'No scratch port is available.'
 mkdir "$scratch/data"
-write_config "$stage/release" "$scratch_port" "$scratch/data" > "$scratch/config.toml"
+write_config "$stage/release" "$scratch_port" "$scratch/data" none > "$scratch/config.toml"
 PIBOT_RESTART_EXIT_CODE=75 "$node" "$stage/release/packages/server/dist/cli.js" serve --config "$scratch/config.toml" > "$scratch/server.log" 2>&1 &
 scratch_pid=$!
 wait_health() {
@@ -422,7 +529,7 @@ else
   mv "$stage/release" "$root/releases/$commit"
   new_release=yes
 fi
-if [ ! -f "$root/config.toml" ]; then write_config "$root/current" "$port" "$root/data" > "$root/config.toml"; fi
+if [ ! -f "$root/config.toml" ]; then write_config "$root/current" "$port" "$root/data" "$environment" > "$root/config.toml"; fi
 chmod 600 "$root/config.toml"
 previous_service="$(cat "$root/.service-mode" 2>/dev/null || printf no)"
 if [ "$service" = yes ] || [ "$previous_service" = yes ]; then

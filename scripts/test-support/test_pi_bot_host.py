@@ -23,7 +23,14 @@ base = Path(os.environ['PIBOT_TEST_BASE'])
 with (base/'calls').open('a') as log: log.write(json.dumps([name, *args])+'\n')
 def port(config): return re.search(r'^port = (\d+)', config.read_text(), re.M)[1]
 def mark(p, value): (base/('port-'+p)).write_text(json.dumps(value))
-if name == 'uname': print(os.environ.get('PIBOT_TEST_OS', 'Linux') if args == ['-s'] else 'x86_64')
+if name == 'uname': print(os.environ.get('PIBOT_TEST_OS', 'Linux') if args == ['-s'] else os.environ.get('PIBOT_TEST_ARCH', 'x86_64'))
+elif name == 'sw_vers': print(os.environ.get('PIBOT_TEST_MACOS', '27.2'))
+elif name == 'pkgutil':
+    if args[0] == '--check-signature': print(os.environ.get('PIBOT_TEST_PKG_SIGNER', 'Developer ID Installer: Apple Inc. - Containerization (UPBK2H6LZM)'))
+    else:
+        assert args[0] == '--expand-full', args
+        cli = Path(args[2])/'Payload/bin/container'; cli.parent.mkdir(parents=True); shutil.copyfile(base/'bin/container-stub', cli); cli.chmod(0o755)
+elif name in ('docker', 'container'): pass
 elif name == 'getconf': print('glibc 2.39')
 elif name == 'ldd':
     print(os.environ.get('PIBOT_TEST_LIBC', 'glibc'))
@@ -62,7 +69,7 @@ elif name == 'node':
         mark(port(config), {'pid':os.getpid(), 'version':'0.1.0', 'protocol':1, 'installationId':'fixture-id'})
         while True: time.sleep(.05)
 elif name == 'curl':
-    if '-o' in args: shutil.copyfile(base/'node.tar.gz', args[args.index('-o')+1])
+    if '-o' in args: shutil.copyfile(base/('container.pkg' if 'apple/container' in ' '.join(args) else 'node.tar.gz'), args[args.index('-o')+1])
     else:
         p = args[-1].split(':')[-1].split('/')[0]
         if p == '4317':
@@ -87,10 +94,20 @@ elif name == 'systemctl':
 elif name == 'launchctl':
     root = Path(os.environ['PIBOT_TEST_ROOT'])
     if args[0] == 'print':
-        if '/' in args[1].split('/',1)[-1]: sys.exit(1)
+        if '/' in args[1].split('/',1)[-1]:
+            lag = base/'bootout-lag'
+            left = int(lag.read_text()) if lag.exists() else 0
+            if left > 0:
+                lag.write_text(str(left-1))
+                sys.exit(0)
+            sys.exit(1)
         if args[1].startswith('gui/') and os.environ.get('PIBOT_TEST_NO_GUI') == '1': sys.exit(1)
     elif args[0] == 'bootstrap': mark(port(root/'config.toml'), {'version':'0.1.0'})
-    elif args[0] == 'bootout': (base/('port-'+port(root/'config.toml'))).unlink(missing_ok=True)
+    elif args[0] == 'list': print('PID\tStatus\tLabel\n7\t0\tcom.apple.container.apiserver\n8\t0\tcom.example.other')
+    elif args[0] == 'bootout' and 'com.apple.container' in args[1]: pass
+    elif args[0] == 'bootout':
+        (base/('port-'+port(root/'config.toml'))).unlink(missing_ok=True)
+        if os.environ.get('PIBOT_TEST_BOOTOUT_LAG'): (base/'bootout-lag').write_text(os.environ['PIBOT_TEST_BOOTOUT_LAG'])
     else: sys.exit(91)
 else: sys.exit(92)
 '''
@@ -115,17 +132,20 @@ class HostTests(unittest.TestCase):
         self.home.mkdir()
         self.bin = self.base/'bin'
         self.bin.mkdir()
-        for name in ('node', 'npm', 'pnpm', 'systemctl', 'launchctl', 'curl', 'uname', 'ldd', 'getconf', 'loginctl'):
+        for name in ('node', 'npm', 'pnpm', 'systemctl', 'launchctl', 'curl', 'uname', 'ldd', 'getconf', 'loginctl', 'sw_vers', 'pkgutil', 'container-stub'):
             file = self.bin/name
             file.write_text(STUB)
             file.chmod(0o755)
+        self.runtimes = self.base/'runtimes'
+        self.runtimes.mkdir()
         archive(self.base/'node.tar.gz', {'node-v26.13.0-linux-x64/bin/node':STUB,
             'node-v26.13.0-linux-x64/bin/npm':STUB})
         self.checksum = hashlib.sha256((self.base/'node.tar.gz').read_bytes()).hexdigest()
         self.bundle = self.base/'bundle.tar.gz'
         self.tooling = ROOT/'pi-bot/tooling'
         self.env = dict(os.environ, HOME=str(self.home), PATH=str(self.bin)+os.pathsep+os.environ['PATH'],
-            PIBOT_TEST_BASE=str(self.base), PIBOT_TEST_REAL_NODE=NODE, PIBOT_TEST_ROOT=str(self.root))
+            PIBOT_TEST_BASE=str(self.base), PIBOT_TEST_REAL_NODE=NODE, PIBOT_TEST_ROOT=str(self.root),
+            PI_BOT_RUNTIME_SEARCH_PATH=str(self.runtimes))
         self.make_bundle('a'*40)
 
     def tearDown(self):
@@ -289,6 +309,125 @@ class HostTests(unittest.TestCase):
     def test_cancel_install_without_an_installer_is_a_no_op(self):
         self.install()
         self.assertEqual(self.run_host('cancel-install')['action'], 'cancel-install')
+
+    def add_runtime(self, name):
+        # Records what it's asked, unlike the other stubs: this is what removal must leave alone.
+        file = self.runtimes/name
+        file.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> ' + repr(str(self.base/('runtime-'+name))) + '\n')
+        file.chmod(0o755)
+        return file
+
+    def environment_of(self):
+        text = (self.root/'config.toml').read_text()
+        return text[text.index('[environment]'):text.index('[models]')]
+
+    def test_linux_without_docker_has_no_bot_tools(self):
+        self.install()
+        self.assertIn('backend = "none"', self.environment_of())
+        self.assertEqual(self.run_host('inspect')['environment'], 'none')
+
+    def test_linux_with_docker_runs_bot_tools_there(self):
+        docker = self.add_runtime('docker')
+        self.assertEqual(self.run_host('inspect')['environment'], 'docker')
+        self.install()
+        self.assertIn('backend = "docker"', self.environment_of())
+        self.assertIn('binary = ' + json.dumps(str(docker)), self.environment_of())
+
+    def test_the_health_check_never_starts_a_container_runtime(self):
+        self.add_runtime('docker')
+        self.install()
+        for config in map(json.loads, (self.base/'configs').read_text().splitlines()):
+            self.assertIn('[environment]\nbackend = "none"', config)
+
+    def mac(self, **env):
+        return dict(PIBOT_TEST_OS='Darwin', PIBOT_TEST_ARCH='arm64', **env)
+
+    def mac_archive(self):
+        archive(self.base/'node.tar.gz', {'node-v26.13.0-darwin-arm64/bin/node':STUB, 'node-v26.13.0-darwin-arm64/bin/npm':STUB})
+        self.checksum = hashlib.sha256((self.base/'node.tar.gz').read_bytes()).hexdigest()
+
+    def container_args(self, payload=b'not a real package'):
+        (self.base/'container.pkg').write_bytes(payload)
+        return ('--container-version', '1.6.1', '--container-sha256', hashlib.sha256(payload).hexdigest())
+
+    def test_a_current_mac_gets_a_private_apple_container_without_admin(self):
+        self.mac_archive()
+        self.assertEqual(self.run_host('inspect', **self.mac())['environment'], 'container')
+        self.install(extra=self.container_args(), **self.mac())
+        env = self.environment_of()
+        self.assertIn('backend = "container"', env)
+        private = self.root/'runtime/container/1.6.1'
+        self.assertTrue((private/'bin/container').exists())
+        self.assertIn('install_root = ' + json.dumps(str(private)), env)
+        self.assertIn('app_root = ' + json.dumps(str(self.root/'runtime/container-data')), env)
+        self.assertTrue(any('apple/container/releases/download/1.6.1/container-1.6.1-installer-signed.pkg' in ' '.join(call) for call in self.calls('curl')))
+
+    def test_an_installed_apple_container_is_used_as_it_is(self):
+        self.mac_archive()
+        container = self.add_runtime('container')
+        self.install(extra=self.container_args(), **self.mac())
+        env = self.environment_of()
+        self.assertIn('binary = ' + json.dumps(str(container)), env)
+        self.assertNotIn('install_root', env)
+        self.assertFalse((self.root/'runtime').exists())
+
+    def test_apple_package_must_match_and_be_signed_by_apple(self):
+        self.mac_archive()
+        args = list(self.container_args())
+        args[3] = 'a'*64
+        self.assertEqual(self.install(extra=tuple(args), success=False, **self.mac())['error'], 'checksum')
+        self.assertEqual(self.install(extra=self.container_args(), success=False, PIBOT_TEST_PKG_SIGNER='Developer ID Installer: Someone Else', **self.mac())['error'], 'container')
+
+    def test_older_and_intel_macs_fall_back_to_docker(self):
+        self.add_runtime('docker')
+        for env in (dict(PIBOT_TEST_OS='Darwin', PIBOT_TEST_ARCH='arm64', PIBOT_TEST_MACOS='15.6'), dict(PIBOT_TEST_OS='Darwin', PIBOT_TEST_ARCH='x86_64')):
+            self.assertEqual(self.run_host('inspect', **env)['environment'], 'docker')
+
+    def seed_bots(self, *ids):
+        script = "const {DatabaseSync}=require('node:sqlite');const d=new DatabaseSync(process.argv[1]);d.exec('CREATE TABLE pibot_bots (id TEXT)');for(const i of process.argv.slice(2))d.prepare('INSERT INTO pibot_bots VALUES (?)').run(i);d.close()"
+        subprocess.run([NODE, '-e', script, str(self.root/'data/pi-bot.sqlite'), *ids], check=True)
+
+    def test_removing_data_removes_only_this_installations_bot_containers(self):
+        self.add_runtime('docker')
+        self.install()
+        self.seed_bots('bot-a', 'bot-b')
+        self.run_host('uninstall', '--delete-data')
+        calls = (self.base/'runtime-docker').read_text().splitlines()
+        self.assertEqual(sorted(calls), sorted(['rm -f pi-bot-bot-a', 'volume rm pi-bot-bot-a-workspace', 'rm -f pi-bot-bot-b', 'volume rm pi-bot-bot-b-workspace']))
+
+    def test_keeping_data_keeps_bot_containers(self):
+        self.add_runtime('docker')
+        self.install()
+        self.seed_bots('bot-a')
+        self.run_host('uninstall')
+        self.assertFalse((self.base/'runtime-docker').exists())
+
+    def test_removal_stops_a_private_runtime_before_its_files_go(self):
+        self.mac_archive()
+        self.install(extra=self.container_args(), **self.mac())
+        self.seed_bots('bot-a')
+        cli = self.root/'runtime/container/1.6.1/bin/container'
+        cli.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> ' + repr(str(self.base/'private-calls')) + '\n')
+        self.run_host('uninstall', '--delete-data', **self.mac())
+        self.assertEqual((self.base/'private-calls').read_text().splitlines(), ['system stop'])
+        booted = [call[2] for call in self.calls('launchctl') if call[1] == 'bootout']
+        self.assertTrue(any(label.endswith('/com.apple.container.apiserver') for label in booted), booted)
+        self.assertFalse(any('com.example.other' in label for label in booted), booted)
+        self.assertFalse(self.root.exists())
+
+    def test_stop_with_nothing_installed_is_already_done(self):
+        self.assertEqual(self.run_host('stop')['action'], 'stop')
+        self.assertEqual(self.run_host('start', success=False)['error'], 'not_installed')
+
+    def test_macos_restart_waits_for_launchd_to_let_go(self):
+        self.mac_archive()
+        self.install(service=True, extra=self.container_args(), **self.mac())
+        (self.base/'calls').write_text('')
+        self.run_host('restart', PIBOT_TEST_BOOTOUT_LAG='2', **self.mac())
+        verbs = [call[1] for call in self.calls('launchctl')]
+        self.assertEqual(verbs.count('bootout'), 1)
+        self.assertEqual(verbs.count('bootstrap'), 1, verbs)
+        self.assertGreater(verbs.index('bootstrap'), verbs.index('bootout'))
 
     def test_json_and_config_escape_paths(self):
         self.root = self.base/'managed "quote" \\ slash\t unicode-é'

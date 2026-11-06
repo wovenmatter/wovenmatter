@@ -52,6 +52,7 @@ final class PiBotRuntimeSupervisor {
     private let stateDirectory: URL
     private let stateFile: URL
     private let runner: PiBotHostRunner
+    private let instance: String
     private let bundleLoader: () throws -> PiBotBundle
     private let healthProbe: @Sendable (URL) async -> PiBotHealth?
     private var persisted = Persisted()
@@ -78,6 +79,7 @@ final class PiBotRuntimeSupervisor {
         stateDirectory = supportDirectory.appending(path: "PiBotRuntime", directoryHint: .isDirectory)
         stateFile = stateDirectory.appending(path: "deployment.json")
         runner = PiBotHostRunner(instance: instance, localRoot: root)
+        self.instance = instance
         self.bundleLoader = bundleLoader
         self.healthProbe = healthProbe
         if let data = try? Data(contentsOf: stateFile), let saved = try? JSONDecoder().decode(Persisted.self, from: data) {
@@ -233,6 +235,7 @@ final class PiBotRuntimeSupervisor {
     }
 
     private func scriptData() throws -> Data { try Data(contentsOf: try bundleLoader().script) }
+    private func relaySource() throws -> String { try String(contentsOf: try bundleLoader().relay, encoding: .utf8) }
 
     private func remoteLifecycle(_ action: String) async throws {
         guard let target = persisted.target, target.kind == .tailnet, target.ownership == .managed else { return }
@@ -406,6 +409,11 @@ final class PiBotRuntimeSupervisor {
                 persisted.serverPort = port
                 save()
             }
+            // Nobody asked it to stop, so a service that isn't up should be. A running one ignores this.
+            if target.kind == .tailnet, !inspection.managed.running {
+                try? await runner.lifecycle("start", target, script: try scriptData())
+                try Task.checkCancellation()
+            }
         }
         // An attached server's port is part of what the user chose; only a managed one can move.
         let serverPort = target.ownership == .attached ? target.remotePort : persisted.serverPort
@@ -425,9 +433,11 @@ final class PiBotRuntimeSupervisor {
             // Present even while MCP is off: the endpoint still requires a bearer grant,
             // and turning MCP on must not have to rebuild the transport.
             let local = await mcpLocalPort?()
-            let reverse = local == nil ? nil : (persisted.mcpRemotePort ?? Int.random(in: 47_400...48_400))
             try await tunnel.start(peer: peer, user: target.sshUser,
-                forward: .init(localPort: localPort, remotePort: remotePort, mcpRemotePort: reverse, mcpLocalPort: local))
+                forward: .init(localPort: localPort, remotePort: remotePort, mcpRemotePort: persisted.mcpRemotePort, mcpLocalPort: local),
+                instance: instance, relaySource: try relaySource())
+            let reverse = try await tunnel.ready()
+            try Task.checkCancellation()
             persisted.tunnelPort = localPort
             persisted.mcpRemotePort = reverse
             save()
@@ -437,14 +447,7 @@ final class PiBotRuntimeSupervisor {
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
-                if let detail = await tunnel.failureDetail() {
-                    // A taken reverse port is the only forward failure a new port can fix.
-                    if detail.contains("remote port forwarding failed") {
-                        persisted.mcpRemotePort = nil
-                        save()
-                    }
-                    throw PiBotHostError.command(detail)
-                }
+                if let detail = await tunnel.failureDetail() { throw PiBotHostError.command(detail) }
                 throw error
             }
             return base

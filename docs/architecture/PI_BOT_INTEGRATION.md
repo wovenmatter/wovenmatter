@@ -20,8 +20,9 @@ changes a standalone Pi Bot deployment, which keeps working without this app.
 | Device choice | One Pi Bot server on one device, chosen in Settings → Bots | A deployment hosts many bots. Changing devices connects to that device's own bots; it does not move data. |
 | Local process owner | The Woven background server | Closing the window must not stop bots. |
 | Remote process owner | systemd user service (Linux) or launchd agent (Mac), installed over existing Tailnet SSH | Same transport and trust as remote workspaces and Apple device setup. No Woven Matter install is needed on the target. |
-| Reaching a remote server | SSH local forward, from the background server | Pi Bot has no app-level auth and stays bound to loopback on the target. |
-| Bots reaching Woven MCP | Bearer grant to a dedicated bot principal. Local: loopback `/mcp`. Remote: SSH reverse forward to that same endpoint. | Keeps MCP loopback-only with no new Tailscale Serve route, and works whatever the tailnet ACLs allow in the Mac-bound direction. |
+| Reaching a remote server | One SSH command running `pi-bot-relay.mjs`, from the background server | Pi Bot has no app-level auth and stays bound to loopback on the target. Like remote workspaces, it needs only SSH command execution, so it works on servers that turn off port forwarding, as hardened Macs do. |
+| Bots reaching Woven MCP | Bearer grant to a dedicated bot principal. Local: loopback `/mcp`. Remote: a loopback port the relay opens on the device, carried back to that same endpoint. | Keeps MCP loopback-only with no new Tailscale Serve route. |
+| Where bots' tools run | Apple's `container` on Apple silicon Macs with macOS 26 or later; Docker elsewhere, when it is installed | See [below](#bot-tools-on-a-mac). |
 
 ## Layout on a device
 
@@ -35,6 +36,8 @@ changes a standalone Pi Bot deployment, which keeps working without this app.
   tooling/               locked pnpm, installed with npm ci
   pnpm-store/
   data/                  pi-bot.sqlite, credentials.key
+  runtime/container/<version>/   Apple's container, when the Mac doesn't have it installed
+  runtime/container-data/        that copy's images, containers and volumes
   config.toml            written once if missing, then owned by Pi Bot settings
 ```
 
@@ -51,6 +54,37 @@ service is `wovenmatter-pi-bot-<instance>.service` or the launchd label
 An install never touches `pi-bot.service`, `~/.config/pi-bot`, `~/.local/share/pi-bot`,
 port 4317, or another instance's files. Managed configs use `backend = "encrypted-sqlite"`,
 because the Keychain store uses one global service name that would cross instances.
+
+## Bot tools on a Mac
+
+Each bot's `bash`, `read`, `write` and `edit` tools run in its own Linux container, from the image
+in Pi Bot's `packages/server/docker`. On a Mac, Docker Desktop and Apple's
+[`container`](https://github.com/apple/container) were measured with that image on a Mac mini
+(12 cores, 32 GB, macOS 27.2). Memory is the physical footprint of the runtime and its VMs.
+
+| | Docker Desktop 29.9 | Apple `container` 1.6 |
+| --- | --- | --- |
+| Started, no containers | 3.8 GB | 22 MB |
+| After building the image, no containers | 6.9 GB, until it quits | 22 MB, once the builder is removed |
+| One idle bot | 6.9 GB, shared | 0.5 GB |
+| After a bot's npm install, 2 GB of files and 2 GB of allocations | 8.7 GB, shared | 3.2 GB, until it stops |
+| All bots stopped | 8.7 GB | 22 MB |
+| Container start to first command | 0.49 s | 0.64 s |
+| Each later command | 31 ms | 64 ms |
+| 20,000 small files, write / read / delete | 0.36 / 0.18 / 0.14 s | 0.28 / 0.16 / 0.10 s |
+| 2 GB sequential write | 1.04 s | 0.94 s |
+| SHA-256, 4 CPUs | 13.5 GB/s | 13.4 GB/s |
+| Needs | An app to install and keep running, with its own license terms | Nothing: it runs from a user folder, with no administrator |
+
+So a Mac uses Apple's. The speeds are about equal, and the memory decides it: Docker Desktop's
+shared VM holds 4 to 9 GB whether or not a bot is working, which a 16 GB Mac can't spare. Apple's VMs keep the memory
+they have touched until they stop, so Pi Bot starts them on first use and stops them when idle;
+see Pi Bot's `docs/environments.md`. Docker stays the choice on Linux, where it needs no VM.
+
+Woven Matter installs Apple's signed package into `runtime/container/<version>` with no administrator,
+after checking its SHA-256 and that Apple signed it. It doesn't touch an installed `container`, which
+is used as it is. Its services are per-user and can't run twice, so if a Mac later gets its own,
+whichever started first answers both.
 
 ## Selection record and bundle
 
@@ -101,7 +135,7 @@ print `{"error":"code","detail":"message"}` to stderr.
 inspect   --instance NAME [--root DIR]
 install   --instance NAME [--root DIR] --commit SHA --node-version V --node-sha256 H
           --pnpm-version V --bundle FILE|- --tooling-lock-dir DIR|- [--service|--no-service]
-          [--port P]
+          [--port P] [--container-version V --container-sha256 H]
 cancel-install | start | stop | restart | status   --instance NAME [--root DIR]
 uninstall --instance NAME [--root DIR] [--delete-data]
 ```
@@ -112,7 +146,7 @@ uninstall --instance NAME [--root DIR] [--delete-data]
 {
   "schema": 1,
   "os": "linux", "arch": "x64", "libc": "glibc",
-  "serviceManager": "systemd", "docker": true,
+  "serviceManager": "systemd", "environment": "docker", "docker": true,
   "managed": { "installed": true, "commit": "…", "running": true, "port": 47310, "root": "…" },
   "existing": [{ "port": 4317, "version": "0.1.0", "protocol": null, "installationId": null, "service": "pi-bot.service" }]
 }
@@ -250,7 +284,10 @@ var botSettings: WorkspaceExternalMCPSettings
 ## Known limits
 
 - Provider sign-ins are the user's to perform, in Pi Bot's own settings.
-- Bots use Docker for shell and file tools. Without Docker they have messaging, web and Woven MCP
-  tools, and do coding work by launching Woven sessions.
+- Without a container runtime, bots have messaging, web and Woven MCP tools, and do coding work
+  by launching Woven sessions. That means Linux without Docker, and Intel Macs or Macs before
+  macOS 26 without Docker.
+- Apple's `container` has no restart policy, so a bot's background job ends if its server restarts
+  or the Mac does. Docker's containers come back on their own.
 - Woven dictation is not bridged into the embedded composer.
 - iPhone and iPad do not show bots.
