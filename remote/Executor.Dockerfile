@@ -67,8 +67,11 @@ RUN test -n "$EXECUTOR_VERSION" \
     && node -e 'const fs=require("node:fs"), path=require("node:path"); const root="/opt/wovenmatter/npm-runtime", vendor="/usr/local/lib/node_modules/npm/node_modules"; for(const [key,record] of Object.entries(require(root+"/package-lock.json").packages)){if(!key.startsWith("node_modules/")||key.slice(13).includes("/node_modules/"))continue; const target=path.join(vendor,key.slice(13)); fs.rmSync(target,{recursive:true,force:true}); fs.mkdirSync(path.dirname(target),{recursive:true}); fs.cpSync(path.join(root,key),target,{recursive:true}); if(require(target+"/package.json").version!==record.version)throw Error("npm vendor graph differs from lock")} const npm=require("node:module").createRequire("/usr/local/lib/node_modules/npm/package.json"); if(typeof npm("undici").request!=="function"||typeof npm("ip-address").Address6!=="function"||typeof npm("minimatch").minimatch!=="function")throw Error("npm security API verification failed")' \
     && npm ci --prefix /opt/wovenmatter/executor-runtime --omit=dev --ignore-scripts --no-audit --no-fund \
     && npm install --prefix /opt/executor --ignore-scripts --no-audit --no-fund --save-exact "executor@$EXECUTOR_VERSION" \
-    && runtime_modules="$(find /opt/executor/node_modules -type d -path '*/runtime/node_modules' -print -quit)" \
-    && test -n "$runtime_modules" \
+    && HOME=/opt/executor EXECUTOR_NO_UPDATE_CHECK=1 node /opt/executor/node_modules/executor/bin.mjs --version \
+    && mv "/opt/executor/.executor/v2/launcher/$EXECUTOR_VERSION" /opt/executor/native \
+    && rm -rf /opt/executor/.executor \
+    && runtime_modules=/opt/executor/native/runtime/node_modules \
+    && test -d "$runtime_modules" \
     && rm -rf "$runtime_modules/sharp" "$runtime_modules/@img/colour" "$runtime_modules/@img"/sharp-* "$runtime_modules/detect-libc" "$runtime_modules/semver" \
     && cp -a /opt/wovenmatter/executor-runtime/node_modules/sharp "$runtime_modules/sharp" \
     && mkdir -p "$runtime_modules/@img" \
@@ -81,4 +84,4 @@ RUN test -n "$EXECUTOR_VERSION" \
 ENV NODE_ENV=production HOME=/home/node
 USER node
 EXPOSE 4312
-CMD ["node", "/opt/executor/node_modules/executor/bin.mjs", "serve"]
+CMD ["/opt/executor/native/executor", "serve"]

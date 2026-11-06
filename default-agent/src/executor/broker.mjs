@@ -1,5 +1,6 @@
 import { realpathSync } from 'node:fs';
 import { latestSupportedPackage, releaseVersion } from '../package-versions.mjs';
+import { executorCommand, materializeExecutor } from './materialize.mjs';
 // Trusted, background-service-only IPC. No manager credentials or resume tokens
 // cross the session MCP boundary. Executor is used unchanged through its public local API.
 import { AjvJsonSchemaValidator } from '@modelcontextprotocol/client/validators/ajv';
@@ -7,7 +8,7 @@ import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/cli
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { execFile, spawn } from 'node:child_process';
 import { constants as fsConstants } from 'node:fs';
-import { readFile, mkdir, chmod, access } from 'node:fs/promises';
+import { readFile, mkdir, chmod, access, rm } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
@@ -163,13 +164,20 @@ export class ExecutorBroker {
       generation = randomUUID(); root = join(this.directory, 'runtime/generations', generation);
       await mkdir(root, { recursive: true, mode: 0o700 });
       const npm = resolve(dirname(fileURLToPath(import.meta.url)), '../../lib/npm/bin/npm-cli.js');
-      await this.run(process.execPath, [npm, 'install', '--prefix', root, '--ignore-scripts', '--no-audit', '--no-fund', '--save-exact', `executor@${version}`], undefined,
-        { ...process.env, PATH: `${dirname(process.execPath)}:/usr/bin:/bin:/usr/sbin:/sbin` });
-      const staged = JSON.parse(await readFile(join(root, 'node_modules/executor/package.json'), 'utf8'));
-      if (staged.version !== version) throw new Error('Executor installation did not match the selected release. Existing runtime was retained.');
+      try {
+        await this.run(process.execPath, [npm, 'install', '--prefix', root, '--ignore-scripts', '--no-audit', '--no-fund', '--save-exact', `executor@${version}`], undefined,
+          { ...process.env, PATH: `${dirname(process.execPath)}:/usr/bin:/bin:/usr/sbin:/sbin` });
+        const staged = JSON.parse(await readFile(join(root, 'node_modules/executor/package.json'), 'utf8'));
+        if (staged.version !== version) throw new Error('Executor installation did not match the selected release. Existing runtime was retained.');
+        await materializeExecutor(root);
+      } catch (error) {
+        await rm(root, { recursive: true, force: true });
+        throw error;
+      }
     }
     const packageJSON = JSON.parse(await readFile(join(root, 'node_modules/executor/package.json'), 'utf8').catch(() => { throw new Error('Install Executor in Settings → General first.'); }));
     if (!supportsExecutorVersion(packageJSON.version)) throw new Error('This Executor runtime version is unsupported. Reinstall it in Settings → General → Executor.');
+    const command = await executorCommand(root);
     const hadRunningRuntime = this.child?.exitCode === null && this.child.signalCode === null;
     if (hadRunningRuntime) {
       await this.shutdownClients();
@@ -177,7 +185,7 @@ export class ExecutorBroker {
     }
     try {
       this.runtimeVersion = packageJSON.version;
-      this.child = this.spawnProcess(process.execPath, [join(root, 'node_modules/executor/bin.mjs'), 'serve'], { stdio: 'ignore', env: {
+      this.child = this.spawnProcess(command.executable, [...command.args, 'serve'], { stdio: 'ignore', env: {
         ...process.env, PATH: `${dirname(process.execPath)}:/usr/bin:/bin:/usr/sbin:/sbin`, EXECUTOR_DATA_DIR: join(this.directory, 'data'),
         EXECUTOR_PORT: String(this.server.port), EXECUTOR_API_KEY: this.server.apiKey, EXECUTOR_ENCRYPTION_KEY: this.server.encryptionKey, EXECUTOR_NO_UPDATE_CHECK: '1',
       } });
@@ -191,6 +199,7 @@ export class ExecutorBroker {
       if (install) { this.server.runtimeGeneration = generation; await this.save(); }
     } catch (error) {
       await this.retireLocalChild();
+      if (install) await rm(root, { recursive: true, force: true });
       this.server.runtimeGeneration = previousGeneration;
       this.runtimeVersion = null;
       if (install && hadRunningRuntime) {
