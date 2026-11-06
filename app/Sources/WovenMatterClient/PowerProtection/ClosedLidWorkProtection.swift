@@ -161,7 +161,7 @@ public final class ClosedLidWorkProtection {
             case .approvalRequired:
                 snapshot.message = "Approve the power helper in macOS Login Items & Extensions to enable closed-lid protection."
             case .notRegistered:
-                snapshot.message = "Set up closed-lid protection in General settings."
+                snapshot.message = "Set up closed-lid protection in Background Server settings."
             case .unavailable:
                 snapshot.message = "Closed-lid protection is unavailable in this build."
             case .ready:

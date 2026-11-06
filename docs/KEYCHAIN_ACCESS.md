@@ -16,9 +16,9 @@ No credentials or Keychain values are returned to the presentation layer.
 | Credential or activity | Background behavior | Deliberate access |
 | --- | --- | --- |
 | OpenRouter usage key | Attributes-only presence checks; noninteractive secret reads; successful reads cached for the session and used by limits; device analytics does not read credentials | Saving/removing the key stays silent; General recovery may authorize access |
-| Claude subscriptions | Usage reads the saved Pi Durable profile; native Claude owns its credential permissions | Sign-in lives in Pi Durable and Usage settings; General does not probe unrelated native profiles |
+| Claude subscriptions | Usage reads the saved Pi Durable profile; native Claude owns its credential permissions | Sign-in lives in Settings → Accounts; General does not probe unrelated native profiles |
 | Remote workspace API token | Cached by workspace; noninteractive on service calls; denied reads are not repeated; disabling access clears the cache | General recovery; provisioning, reconnect and deletion stay noninteractive |
-| Codex/Grok usage limits | Saved account API reads only; no native CLI fallback during refresh | Account management lives in Usage settings; the limits page has no authentication controls |
+| Codex/Grok usage limits | Saved account API reads only; no native CLI fallback during refresh | Account management lives in Settings → Accounts; the limits page has no authentication controls |
 | Browser encryption key and website passwords | Consent-gated, noninteractive preflight before CEF starts; exact-origin password vault cached in memory; writes suppress UI | General recovery preauthorizes Chromium Safe Storage and the website-password vault |
 | Local runtime readiness | Startup, reopen, Settings, and passive refresh resolve installed executables without starting credential-sensitive provider sessions | Installed harnesses are available without an Enable step; explicit Sign in opens only the chosen native CLI flow |
 | Codex title options | No automatic session solely to discover models | Existing Refresh options action |

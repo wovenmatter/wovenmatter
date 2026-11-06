@@ -72,7 +72,7 @@ export class Credentials extends InMemoryCredentialStore {
       let next;
       const update = async stored => {
         const current = stored.owned?.[provider] ?? stored.shared?.[provider];
-        if (!this.signingIn && current?.borrowed) throw new Error('Authentication required. Reconnect Woven Matter or sign in in Settings → Pi Durable.');
+        if (!this.signingIn && current?.borrowed) throw new Error('Authentication required. Reconnect Woven Matter or sign in in Settings → Accounts.');
         next = await fn(current) ?? current;
         if (!this.signingIn && next && current?.displayName && !next.displayName) next = { ...next, displayName: current.displayName };
         return { ...stored, owned: { ...stored.owned, ...(next ? { [provider]: next } : {}) } };

@@ -66,8 +66,8 @@ notes. Changes are relayed with their original identity and causal context, so
 connected peers converge without choosing a central Mac. Background retries are
 bounded and ordinary disconnection is quiet.
 
-Settings → Apple Devices presents this Mac, pairing, the devices paired with
-this Mac and one workspace inventory. It has no database-role selector. Notes with concurrent
+Settings → Apple Devices presents this Mac, pairing and the devices paired with
+this Mac; Settings → Workspaces holds the workspace inventory. It has no database-role selector. Notes with concurrent
 writing have visible **Recovered edit** copies. Existing pre-upgrade writing and
 original databases are preserved; see [upgrade and recovery](PAIRED_MAC_LIBRARIES.md#upgrade-and-recovery).
 

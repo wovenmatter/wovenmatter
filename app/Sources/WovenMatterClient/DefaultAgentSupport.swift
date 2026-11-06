@@ -48,7 +48,7 @@ public enum DefaultAgentSupport {
                 runtimeKind: .defaultAgent, displayName: AgentRuntimeKind.defaultAgent.displayName,
                 state: ready ? .ready : .executableUnavailable,
                 detail: ready
-                    ? "Included with Woven Matter. Manage connections in Settings → Pi Durable."
+                    ? "Included with Woven Matter. Manage connections in Settings → Accounts."
                     : "The bundled Pi Durable helper is missing. Rebuild or reinstall Woven Matter.",
                 executablePath: executable?.path),
             launchConfiguration: ready

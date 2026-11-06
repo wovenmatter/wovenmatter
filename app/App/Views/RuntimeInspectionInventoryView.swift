@@ -22,7 +22,7 @@ struct RuntimeInspectionInventoryView: View {
             section("Agent activity") {
                 if inventory.agents.isEmpty {
                     Text(connected ? "No active agent sessions. Chats and their agent processes appear here when they run." : "No agent sessions in the last observation.")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground)
                 } else {
                     ForEach(inventory.agents) { agent in
                         VStack(alignment: .leading, spacing: 10) {
@@ -50,7 +50,7 @@ struct RuntimeInspectionInventoryView: View {
 
     private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(title).font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
+            Text(title).font(.settingsBody.weight(.semibold)).foregroundStyle(DashboardPalette.mutedForeground)
             content()
         }
         .padding(14)
@@ -66,27 +66,27 @@ struct RuntimeInspectionInventoryView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         row(item)
                         if let parent = items.first(where: { $0.id == item.parentID }) {
-                            Text("Managed by \(parent.title)").font(.caption).foregroundStyle(.secondary)
+                            Text("Managed by \(parent.title)").font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground)
                         }
                     }
                 }
             }.padding(.top, 8)
         } label: {
-            Text(title).font(.caption).foregroundStyle(.secondary)
+            Text(title).font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground)
         }
     }
 
     private func row(_ item: RuntimeInspection.Item) -> some View {
         HStack(alignment: .top, spacing: 9) {
-            Image(systemName: icon(item.kind)).font(.system(size: 13))
-                .foregroundStyle(.secondary).frame(width: 16, height: 18).accessibilityHidden(true)
+            Image(systemName: icon(item.kind)).font(.settingsText)
+                .foregroundStyle(DashboardPalette.mutedForeground).frame(width: 16, height: 18).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .firstTextBaseline, spacing: 12) {
-                    Text(item.title).font(.system(size: 13, weight: .medium))
+                    Text(item.title).font(.settingsRow)
                         .lineLimit(2).fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 8)
                     Text(connected ? item.state.capitalized : "Last: \(item.state)")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground)
                 }
                 if item.kind != "connection" {
                     ViewThatFits(in: .horizontal) {
@@ -95,10 +95,10 @@ struct RuntimeInspectionInventoryView: View {
                             resources(item)
                         }
                         VStack(alignment: .leading, spacing: 3) { identity(item); resources(item) }
-                    }.font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                    }.font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground).monospacedDigit()
                 }
                 if let detail = item.detail, !detail.isEmpty {
-                    Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(3).textSelection(.enabled)
+                    Text(detail).font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground).lineLimit(3).textSelection(.enabled)
                 }
             }
         }

@@ -16,7 +16,7 @@ export const emptyConfig = { providers, models: [], defaultModel: null, fallback
 export class DefaultAgentError extends Error {}
 export function operationErrorMessage(error) {
   return error instanceof DefaultAgentError ? error.message
-    : 'Pi Durable could not complete this operation. Check its connections and workspace unlock state in Settings → Pi Durable.';
+    : 'Pi Durable could not complete this operation. Check its connections and workspace unlock state in Settings → Accounts.';
 }
 
 // Only fixed, app-authored diagnostics cross the provider/native-state boundary.
@@ -25,7 +25,7 @@ export function providerFailure(statusOrMessage) {
   const messages = {
     400: 'The provider rejected the model request (HTTP 400).',
     403: 'The connection does not have access to this model (HTTP 403).',
-    404: 'The provider could not find the selected model or endpoint (HTTP 404). Refresh models in Settings → Pi Durable.',
+    404: 'The provider could not find the selected model or endpoint (HTTP 404). Refresh models in Settings → Agents → Pi Durable.',
     408: 'The provider timed out while processing the model request (HTTP 408). Try again.',
     422: 'The provider rejected the model request (HTTP 422).',
     429: 'The provider is rate limiting this connection (HTTP 429). Wait and try again.',

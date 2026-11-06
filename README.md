@@ -118,9 +118,9 @@ API keys; model availability and costs depend on your providers.
 
 1. [Download Woven Matter](https://github.com/wovenmatter/wovenmatter/releases/latest)
    and move it into Applications.
-2. Open **Settings → Local agent workspace** to see the harnesses discovered
-   on your Mac, or install one you want to try.
-3. Enable it and complete its sign-in or connection setup.
+2. Open **Settings → Agents** to see the harnesses discovered on your Mac, or
+   install one you want to try.
+3. Complete its sign-in or connection setup.
 4. Choose **New chat**, select your agent, and give it a task.
 
 Start with a harness you already use and have provider access for. If you're

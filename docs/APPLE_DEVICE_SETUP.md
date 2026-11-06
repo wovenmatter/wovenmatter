@@ -1,6 +1,6 @@
 # Finding and setting up Macs
 
-Settings → Apple Devices → Find devices lists other macOS peers reported by the
+Settings → Apple Devices → Pair a device → Find on your network lists other macOS peers reported by the
 connected Tailscale client. Woven Matter does not need to be running or installed
 on those Macs. Offline Macs remain visible. A successful search with no matching
 peers shows **No Macs found**; Tailscale failures show an error instead.

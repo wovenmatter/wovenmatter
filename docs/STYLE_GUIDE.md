@@ -49,32 +49,55 @@ when an intentional design change is accepted.
   conversation labels, and actions. Use **Pi Durable SDK** for the underlying SDK
   in technical descriptions and version/update controls. Keep the agent name
   stable across model and provider changes.
+- **Settings pages:** keep the landing list and drill-down navigation; do not add a
+  tab row or segmented control that switches between pages or page areas. Pages use a
+  720-point column. `SettingsSection` is a 14-point heading, at most one sentence,
+  then rows, separated by spacing without cards or divider lines. `SettingsRow` puts
+  a 13-point title and 11.5-point secondary line on the left and the control on the
+  right. `SettingsSummaryRow` shows a title, its current value, and a chevron, and
+  opens details on request; `SettingsSummaryLink` is the same row for navigation.
+  Collapse related options into one summary row rather than listing switches on the
+  page, and prefer one dropdown to a pair of switches. Use `SettingsPicker` for
+  dropdowns and `SettingsStatus` (dot and text) for readiness. Use the `Font.settings*`
+  tokens and palette tokens, not literal sizes, `.secondary`, or `.red`. Longer
+  explanations fold into `SettingsHelp`. Hide what does not apply. Each capability
+  has one home; other pages show status and link to it.
 - **Settings navigation:** group Pi Durable, Codex, Claude Code, Grok Build, and
-  OpenCode under **Settings → Agents**. Harness pages return to Agents unless
-  opened from a workspace's settings. Spell **OpenCode** as one word throughout
-  the app. Order the main Settings page as General, Agents, Dictation, Local
-  Workspace, Remote Workspaces, Apple Devices, Background Server, then Usage.
+  OpenCode under **Settings → Agents**. Agent pages return to Agents unless
+  opened from a remote workspace's page. Spell **OpenCode** as one word throughout
+  the app. Order the main Settings page as General, Accounts, Agents, Woven MCP,
+  Workspaces, Apple Devices, Background Server, then Dictation.
+- **General:** Appearance, Software, and Privacy only. Other settings live on the
+  page for what they affect.
 - **Harness setup:** use compact rows grouped on the theme-whisper surface for
   both harness installation and Pi Durable setup, with the same typography,
   padding, inset dividers, and quiet actions. Keep provider setup limited to
   OpenAI, Anthropic, Grok, OpenRouter, and OpenCode; web-search setup shows only
-  the Exa key form. Both are optional and also accessible from Pi Durable settings.
-- **Agent setup:** Pi Durable uses the same grouped provider rows as Harness setup,
-  inline below SDK management. Web search follows accounts, then the model browser
-  and its single default-model choice. Successful sign-in/key addition opens that
-  provider's model browser. Fallback ordering and workspace overrides are disclosures.
-- **Usage:** account setup lives in Usage settings. Limits show each saved account
-  and signed-out providers, with Go to Usage settings. Device analytics never depends
-  on limits-account switches or credentials.
+  the Exa key form. Both are optional and also accessible from Settings → Accounts.
+- **Accounts:** provider sign-ins, API keys, web search keys, and local model servers
+  have one home, **Settings → Accounts**, used by both Pi Durable and Usage. Each
+  provider is one summary row showing what is connected. Choose the web search
+  provider on its row, beside its key. A new account offers Choose chat models, and
+  connecting one in the shared scope turns on its limit checks. Keep the Accounts
+  for selector visible, since saved workspace accounts take priority and must stay reachable. Native harnesses sign
+  in on their own agent pages.
+- **Agent setup:** Pi Durable links to Accounts, then shows Models, Defaults for new
+  chats, and More. Models holds the default model, In the composer, and Fallbacks. Add
+  models opens the provider catalog with its filters and paging in a sheet. Guided
+  setup opens that sheet after a successful sign-in or key addition.
+- **Usage:** limits show each saved account and signed-out providers, with Manage
+  accounts. Device analytics never depends on limits-account switches or credentials.
 - **Tool defaults:** settings say Woven MCP and show effective defaults,
   rather than an off-looking inheritance switch. Composer controls retain Tools.
+  **Settings → Woven MCP** holds tool defaults, connected apps, and outside agents;
+  agent pages show one Woven MCP summary row for their own defaults.
 - **Keychain:** General uses Keychain access, Enable/Restore Keychain access,
-  Access ready, and Access needs attention. Keep one storage sentence, a status
-  pill, and an action; show the Always Allow hint only when access is not ready.
+  Access ready, and Access needs attention. Keep one storage sentence, a status,
+  and an action; show the Always Allow hint only when access is not ready.
   Consent is not verification.
-- **Harness lists:** local and remote workspaces use compact expandable harness
-  rows. Keep versions and labeled maintenance controls inside the expanded row,
-  rather than a horizontal strip of actions. Remote workspaces have no global
+- **Harness lists:** Agents and remote workspace pages use flat rows: logo, name,
+  status, and a chevron to the agent page. Versions, installation, sign-in, updates,
+  and diagnostics live only on the agent page. Remote workspaces have no global
   enable switch; saved workspaces reconnect using silent Keychain reads.
   Installed harnesses are available automatically in local and remote workspaces.
   Do not add harness enable/disable, Use harness, or per-harness sidebar visibility
@@ -89,23 +112,18 @@ when an intentional design change is accepted.
   selected by default; additional installations retain installer source review.
 - **Chat defaults:** use Defaults for new chats on every harness page. Group
   thinking level and permissions together, with one short explanation.
-- **Harness settings areas:** separate Accounts & installation from Chat settings.
-  Use DashboardSegmentedSelector for the area control so padding, hover, press,
-  and accessibility behavior match Sidebar layout. Use the quiet standard selection
-  in Dark; retain the existing primary selection color in Green and Cognac.
-  Give accounts their own Local workspace / named remote workspace selector;
-  only Pi Durable exposes Shared Pi Durable accounts. Keep chat inheritance controls
-  inside Chat settings, never above accounts or software. Changing chat inheritance
-  must not change credential selection. Workspace Pi Durable accounts take priority
-  per provider, with shared accounts as fallback; show their source and labels.
-  Explain native harness capability differences in the Account sharing disclosure:
-  reusable API keys are not the same as automatic credential sync, and native
-  subscription sign-ins stay with their installation. Never show key/token values
-  or infer names that a harness does not expose.
-- **Pi Durable updates:** use the same compact runtime row as other harnesses:
-  logo, harness name, embedded SDK versions on one summary line, installed status,
-  and one Check for updates / Update action per
-  workspace. Update all outdated components in one staged activation. Shared scope
+- **Agent pages:** one page with no area switcher: Account and software, then Defaults
+  for new chats, using the same layout for every harness. Pages have one Applies to
+  selector, hidden when there is no remote workspace or local override. Keep Use shared
+  chat settings inside Defaults for new chats. Changing chat inheritance must not
+  change credential selection. Workspace Pi Durable accounts take priority per provider,
+  with shared accounts as fallback; show their source and labels. Explain native
+  harness capability differences under How it works: reusable API keys are not the
+  same as automatic credential sync, and native subscription sign-ins stay with their
+  installation. Never show key/token values or infer names that a harness does not expose.
+- **Pi Durable updates:** use the same compact Software row as other harnesses:
+  embedded SDK versions on one summary line, installed status, and one Check for
+  updates / Update action per workspace. Update all outdated components in one staged activation. Shared scope
   lists local and remote installations; an individual scope shows that installation.
   Keep progress and errors with their workspace and preserve operation state when
   a remote row is collapsed.
@@ -116,8 +134,9 @@ when an intentional design change is accepted.
   The style propagates to nested provider, credential, account, and Executor
   defaults disclosures, workspace overrides, local model servers, fallback models,
   and workspace synchronization.
-  OpenAI, Anthropic, and Grok retain separate subscription and API-key groups.
-  Each subscription group shows one account with Reconnect/Remove, without
+  OpenAI, Anthropic, and Grok show their subscription first, with API keys folded
+  under a Use an API key disclosure that opens when a key is saved.
+  Each subscription shows one account with Reconnect/Remove, without
   Add account, priority labels, or ordering controls. Show the subscription identity
   without primary/backup wording. API-key lists show Primary followed by numbered
   backups. Mobile permits one subscription connection per provider per device,
@@ -141,15 +160,20 @@ when an intentional design change is accepted.
   black. Choices persist and may be reused across categories.
 - **Sidebar foregrounds:** use `DashboardPalette.foreground` (`#0A1F16` in Green and Cognac, cream in Dark) for text and interface icons in both rails, including section headings, metadata, and pinned indicators. Keep colored agent/harness logos in their original colors; monochrome marks use a contrasting foreground in Dark. Shared controls use the sidebar foreground environment only inside the rails.
 - **Workspace naming:** use Local workspace and Remote workspaces in the sidebar,
-  and Local Workspace, Remote Workspaces, and Apple Devices for Settings pages.
+  and Workspaces and Apple Devices for Settings pages.
   Describe local workspaces as agents and files on this Mac, remote workspaces as
   agents and files on remote Linux machines, and Apple devices as Macs, iPhones,
   and iPads that share the library.
-- **Apple devices:** show the shared Workspaces inventory once in its own card,
-  separate from Paired devices. Pairing grants access to all available workspaces;
-  do not add per-device workspace permissions or execution-sharing switches.
+- **Workspaces:** one list with the local workspace as a status row, remote workspaces
+  as rows that open their detail, and workspaces from other devices. Forms for adding
+  a workspace open from Add workspace. A remote workspace shows status with a Manage
+  menu, its agents, and Details; do not lay actions out as a strip of buttons.
   Dev workspaces include `(Dev)` and their instance name. Hide retained snapshot
   owners and stopped Dev connections from the active inventory.
+- **Apple devices:** show this Mac, pairing requests, and paired devices, then Pair a
+  device with its three methods closed until needed. Pairing grants access to all
+  available workspaces; do not add per-device workspace permissions or
+  execution-sharing switches.
 - **Workspace sidebar:** group Agents and Folders within each owning workspace.
   Pinned agents and folders lead their respective lists without a separate Pinned
   section. Each Folders section starts with New folder, scoped to that workspace.
@@ -161,7 +185,7 @@ when an intentional design change is accepted.
 - **Sidebar headers:** in Single and Adaptive layouts, mirror the header button
   order when the sidebar moves to the right, and point the workspace back arrow
   toward the navigation rail. Keep titles and list content in normal reading order.
-- **Switches:** use `DashboardSwitchToggleStyle` for boolean controls and multi-select toggles. It supplies compact native switches in a 28 × 16-point control frame before their labels on the left, in the shared forest-green action color and is the default at the app root. iPhone Tools popouts keep native switches at 65% scale inside 44 × 44-point touch frames, with labels on the left and padding around the scroll content. Markdown task-list markers remain document content.
+- **Switches:** settings pages use `SettingsSwitchToggleStyle`, with the switch on the right edge of its row like every other control. Elsewhere, use `DashboardSwitchToggleStyle` for boolean controls and multi-select toggles. It supplies compact native switches in a 28 × 16-point control frame before their labels on the left, in the shared forest-green action color and is the default at the app root. iPhone Tools popouts keep native switches at 65% scale inside 44 × 44-point touch frames, with labels on the left and padding around the scroll content. Markdown task-list markers remain document content.
 - **Interaction:** keep controls compact, selection fills restrained, and focus
   styling quiet. Popover and sheet text inputs use `dashboardQuietTextInput()`
   for a neutral border without a colored focus ring. Clicking noninteractive
