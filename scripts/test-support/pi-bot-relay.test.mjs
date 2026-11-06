@@ -97,6 +97,37 @@ test("the reverse port accepts clients on loopback, and a taken port falls back 
   taken.close();
 });
 
+test("a client that finishes sending still gets its reply, in both directions", async () => {
+  const halfOpen = net.createServer({ allowHalfOpen: true }, (socket) => {
+    socket.on("end", () => socket.end("reply-after-eof"));
+    socket.resume();
+  });
+  await new Promise((r) => halfOpen.listen(0, "127.0.0.1", r));
+  const relay = startRelay(halfOpen.address().port, 0);
+  const { reversePort } = JSON.parse((await relay.next(T.hello)).payload);
+  // The Mac's client finishes first, as `nc` or a one-shot request does.
+  relay.send(T.connect, 1);
+  relay.send(T.data, 1, Buffer.from("request"));
+  relay.send(T.close, 1);
+  assert.equal((await relay.next(T.data, 1)).payload.toString(), "reply-after-eof");
+  await relay.next(T.close, 1);
+  // A client on the device does the same through the reverse port.
+  const client = net.connect({ host: "127.0.0.1", port: reversePort, allowHalfOpen: true });
+  const chunks = [];
+  client.on("data", (d) => chunks.push(d));
+  const accepted = await relay.next(T.accept);
+  client.end("tools");
+  assert.equal((await relay.next(T.data, accepted.id)).payload.toString(), "tools");
+  await relay.next(T.close, accepted.id);
+  relay.send(T.data, accepted.id, Buffer.from("mcp-reply"));
+  relay.send(T.close, accepted.id);
+  await new Promise((resolve) => client.on("close", resolve));
+  assert.equal(Buffer.concat(chunks).toString(), "mcp-reply");
+  relay.child.stdin.end();
+  await exited(relay.child);
+  halfOpen.close();
+});
+
 test("a large transfer survives a slow reader intact in both directions", async () => {
   const size = 32 * 1024 * 1024;
   const payload = Buffer.alloc(1024 * 1024, 7);

@@ -26,6 +26,7 @@ json() {
 fail() { printf '{"error":'; json "$1"; printf ',"detail":'; json "$2"; printf '}\n'; } >&2
 abort() { failure_reported=yes; fail "$1" "$2"; exit "${3:-1}"; }
 progress() { printf 'WM_PROGRESS %s\n' "$1" >&2; }
+xml() { printf '%s' "$1" | sed -e 's/\&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g' -e "s/'/\&apos;/g"; }
 sha256() {
   # Hash stdin: GNU sha256sum prefixes the hash with a backslash for a path containing one.
   if command -v sha256sum >/dev/null 2>&1; then sha256sum < "$1" | cut -d ' ' -f1
@@ -132,6 +133,9 @@ runtime_search="${PI_BOT_RUNTIME_SEARCH_PATH:-$PATH:/usr/local/bin:/opt/homebrew
 find_runtime() { PATH="$runtime_search" command -v "$1" 2>/dev/null || true; }
 docker_cli="$(find_runtime docker)"
 container_cli="$(find_runtime container)"
+# Apple's services are per user and can't run twice, so every installation on a Mac shares one
+# copy and one set of images, and each records its use of them in instances/.
+shared_runtime="$HOME/Library/Application Support/Woven Matter Pi Bot/runtime"
 apple_container_supported=no
 if [ "$os" = darwin ] && [ "$arch" = arm64 ]; then
   macos_major="$(sw_vers -productVersion 2>/dev/null | cut -d . -f 1 || true)"
@@ -327,51 +331,108 @@ service_action() {
   fi
 }
 # Removing data includes each bot's container and workspace. Only this installation's bots are
-# named, because a Docker daemon can also serve a standalone Pi Bot. A private copy of Apple's
-# runtime stops with this installation, because its helpers are about to go away.
+# named, because a Docker daemon or Apple's shared services can also serve other Pi Bots. The
+# database is what names them, so nothing is deleted if they can't be removed: run this again.
 remove_bot_runtimes() {
-  local current_node listing backend binary ids id
+  local current_node listing backend binary install_root app_root ids id output failures=
   current_node="$root/node/$(cat "$root/current/.node-version" 2>/dev/null || true)/bin/node"
-  [ -x "$current_node" ] && [ -f "$root/config.toml" ] || return 0
-  listing="$("$current_node" - "$root/config.toml" "$root/data/pi-bot.sqlite" 2>/dev/null <<'JS' || true
-const fs = require('node:fs');
-const text = fs.readFileSync(process.argv[2], 'utf8');
-const section = /^\[environment\]\n((?:(?!\[).*\n)*)/m.exec(text)?.[1] ?? '';
-const value = (key) => { const m = new RegExp(`^${key} = (".*")$`, 'm').exec(section); return m ? JSON.parse(m[1]) : ''; };
-console.log(value('backend')); console.log(value('binary'));
-if (fs.existsSync(process.argv[3])) {
-  const { DatabaseSync } = require('node:sqlite');
-  const db = new DatabaseSync(process.argv[3], { readOnly: true });
-  for (const row of db.prepare('SELECT id FROM pibot_bots').all()) console.log(row.id);
-}
+  [ "$delete_data" = yes ] && [ -x "$current_node" ] && [ -f "$root/config.toml" ] || return 0
+  listing="$("$current_node" - "$root/config.toml" "$root/current/packages/server/dist/config.js" 2>/dev/null <<'JS'
+const fs = require('node:fs'), path = require('node:path'), { pathToFileURL } = require('node:url');
+const [configPath, parser] = process.argv.slice(2);
+import(pathToFileURL(parser).href).then(({ parseConfig }) => {
+  const config = parseConfig(fs.readFileSync(configPath, 'utf8'), path.dirname(configPath), configPath);
+  const environment = config.environment;
+  for (const value of [environment.backend, environment.binary, environment.install_root, environment.app_root]) console.log(value ?? '');
+  if (fs.existsSync(config.paths.database)) {
+    const { DatabaseSync } = require('node:sqlite');
+    const db = new DatabaseSync(config.paths.database, { readOnly: true });
+    for (const row of db.prepare('SELECT id FROM pibot_bots').all()) console.log(row.id);
+    db.close();
+  }
+}).catch(() => { process.exitCode = 1; });
 JS
-)"
+)" || abort config "Pi Bot's config could not be read, so its bots' containers could not be removed. Nothing was deleted."
   backend="$(printf '%s\n' "$listing" | sed -n 1p)"; binary="$(printf '%s\n' "$listing" | sed -n 2p)"
-  ids="$(printf '%s\n' "$listing" | sed -n '3,$p')"
-  case "$backend" in docker) binary="${binary:-docker}" ;; container) ;; *) return 0 ;; esac
+  install_root="$(printf '%s\n' "$listing" | sed -n 3p)"; app_root="$(printf '%s\n' "$listing" | sed -n 4p)"
+  ids="$(printf '%s\n' "$listing" | sed -n '5,$p')"
+  case "$backend" in docker) binary="${binary:-docker}" ;; container) binary="${binary:-container}" ;; *) return 0 ;; esac
+  # With its CLI gone there is nothing left to ask, and nothing here can reach its containers.
+  command -v "$binary" >/dev/null 2>&1 || return 0
+  if [ "$backend" = docker ]; then
+    for id in $ids; do
+      [[ "$id" =~ ^[A-Za-z0-9_-]+$ ]] || continue
+      output="$("$binary" rm -f "pi-bot-$id" 2>&1)" || case "$output" in *[Nn]o\ such*) ;; *) failures="$output" ;; esac
+      output="$("$binary" volume rm "pi-bot-$id-workspace" 2>&1)" || case "$output" in *[Nn]o\ such*) ;; *) failures="$output" ;; esac
+    done
+  else
+    remove_apple_containers
+  fi
+  [ -z "$failures" ] || abort runtime "Bots' containers could not be removed, so nothing was deleted: ${failures:0:300}"
+}
+# Apple's CLI reaches its services through its launchd domain, which an SSH session doesn't share
+# with the agent that started them. A one-shot job in that domain runs what can't run from here.
+remove_apple_containers() {
+  local job result retire=no helper others attempt id
+  local valid=()
+  for id in $ids; do [[ "$id" =~ ^[A-Za-z0-9_-]+$ ]] && valid+=("$id"); done
   case "$binary" in
-    "$root"/*) # Its data goes with the root.
-      "$binary" system stop >/dev/null 2>&1 || true
-      # Started by a launchd agent, these live in its domain, which an SSH session's CLI can't see.
-      if [ "$os" = darwin ]; then
-        select_domain
-        launchctl list 2>/dev/null | awk '$3 ~ /^com\.apple\.container\./ {print $3}' | while IFS= read -r helper; do
-          launchctl bootout "$domain/$helper" >/dev/null 2>&1 || true
-        done
-      fi
-      return 0 ;;
+    "$shared_runtime"/*)
+      rm -f "$shared_runtime/instances/$root_hash"
+      if [ -z "$(ls -A "$shared_runtime/instances" 2>/dev/null || true)" ]; then retire=yes; fi ;;
   esac
-  [ "$delete_data" = yes ] || return 0
-  for id in $ids; do
-    [[ "$id" =~ ^[A-Za-z0-9_-]+$ ]] || continue
-    if [ "$backend" = docker ]; then
-      "$binary" rm -f "pi-bot-$id" >/dev/null 2>&1 || true
-      "$binary" volume rm "pi-bot-$id-workspace" >/dev/null 2>&1 || true
-    else
-      "$binary" delete --force "pi-bot-$id" >/dev/null 2>&1 || true
-      "$binary" volume delete "pi-bot-$id-workspace" >/dev/null 2>&1 || true
+  job="$(mktemp -d "$root/.runtime.XXXXXX")"
+  result="$job/result"
+  cat > "$job/run.sh" <<'SCRIPT'
+binary="$1"; install_root="$2"; app_root="$3"; retire="$4"; result="$5"; shift 5
+{
+  if ! "$binary" system status >/dev/null 2>&1; then
+    start=(system start --disable-kernel-install)
+    [ -z "$install_root" ] || start+=(--install-root "$install_root")
+    [ -z "$app_root" ] || start+=(--app-root "$app_root")
+    "$binary" "${start[@]}" >/dev/null 2>&1 || echo "failed Apple's container services would not start."
+  fi
+  for id in "$@"; do
+    output="$("$binary" delete --force "pi-bot-$id" 2>&1)" || case "$output" in *ot\ found*|*otFound*) ;; *) echo "failed ${output%%$'\n'*}" ;; esac
+    if "$binary" volume inspect "pi-bot-$id-workspace" >/dev/null 2>&1; then
+      output="$("$binary" volume delete "pi-bot-$id-workspace" 2>&1)" || echo "failed ${output%%$'\n'*}"
     fi
   done
+  # Anything still here belongs to someone else, as does the runtime it needs.
+  others="$("$binary" list --all --quiet 2>/dev/null | grep -cvx buildkit || true)"
+  echo "others $others"
+  if [ "$retire" = yes ] && [ "$others" = 0 ]; then "$binary" system stop >/dev/null 2>&1 || true; fi
+} > "$result.partial" 2>&1
+mv "$result.partial" "$result"
+SCRIPT
+  {
+    printf '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict><key>Label</key><string>%s</string><key>RunAtLoad</key><true/><key>ProgramArguments</key><array>' "$label.cleanup"
+    for argument in /bin/bash "$job/run.sh" "$binary" "$install_root" "$app_root" "$retire" "$result" ${valid[@]+"${valid[@]}"}; do
+      printf '<string>%s</string>' "$(xml "$argument")"
+    done
+    printf '</array></dict></plist>\n'
+  } > "$job/job.plist"
+  select_domain
+  launchctl bootstrap "$domain" "$job/job.plist" >/dev/null 2>&1 || true
+  for ((attempt=0; attempt<240; attempt++)); do
+    [ ! -f "$result" ] || break
+    sleep 0.5
+  done
+  launchctl bootout "$domain/$label.cleanup" >/dev/null 2>&1 || true
+  if [ ! -f "$result" ]; then
+    rm -rf "$job"
+    failures="Apple's container services did not answer."
+    return 0
+  fi
+  failures="$(sed -n 's/^failed //p' "$result" | head -1)"
+  others="$(sed -n 's/^others //p' "$result")"
+  rm -rf "$job"
+  if [ -z "$failures" ] && [ "$retire" = yes ] && [ "$others" = 0 ]; then
+    launchctl list 2>/dev/null | awk '$3 ~ /^com\.apple\.container\./ {print $3}' | while IFS= read -r helper; do
+      launchctl bootout "$domain/$helper" >/dev/null 2>&1 || true
+    done
+    rm -rf "$shared_runtime"
+  fi
 }
 if [ "$command_name" != install ]; then
   service_mode="$(cat "$root/.service-mode" 2>/dev/null || printf no)"
@@ -385,8 +446,8 @@ if [ "$command_name" != install ]; then
     fi
     remove_bot_runtimes
     rm -f "$root/current" "$root/run-server" "$root/.service-mode"
-    rm -rf "$root/releases" "$root/node" "$root/tooling" "$root/pnpm-store" "$root/runtime/container"
-    if [ "$delete_data" = yes ]; then rm -rf "$root/data" "$root/runtime"; rm -f "$root/config.toml"; remove_root=yes; fi
+    rm -rf "$root/releases" "$root/node" "$root/tooling" "$root/pnpm-store"
+    if [ "$delete_data" = yes ]; then rm -rf "$root/data"; rm -f "$root/config.toml"; remove_root=yes; fi
   elif [ "$service_mode" = yes ]; then service_action "$command_name"
   else progress caller-supervises; fi
   printf '{"schema":1,"action":'; json "$command_name"; printf ',"supervisor":'
@@ -432,7 +493,7 @@ fi
 # an admin password nor Docker. An installed `container` stays the user's own and is used as it is.
 if [ "$environment" = container ] && [ -z "$container_cli" ]; then
   if [ -n "$container_version" ]; then
-    container_private="$root/runtime/container/$container_version"
+    container_private="$shared_runtime/container/$container_version"
     if [ ! -x "$container_private/bin/container" ]; then
       progress container
       run_child "$stage" curl --fail --location --silent --show-error "https://github.com/apple/container/releases/download/$container_version/container-$container_version-installer-signed.pkg" -o "$stage/container.pkg"
@@ -440,10 +501,14 @@ if [ "$environment" = container ] && [ -z "$container_cli" ]; then
       pkgutil --check-signature "$stage/container.pkg" 2>/dev/null | grep -q 'Developer ID Installer: Apple Inc\.' || abort container 'Apple container package is not signed by Apple.'
       pkgutil --expand-full "$stage/container.pkg" "$stage/container-package" >/dev/null || abort container 'Apple container package could not be read.'
       [ -x "$stage/container-package/Payload/bin/container" ] || abort container 'Apple container package has no CLI.'
-      mkdir -p "$root/runtime/container"
-      mv "$stage/container-package/Payload" "$container_private"
+      mkdir -p "$shared_runtime/container"
+      chmod 700 "$shared_runtime"
+      # Another installation can get here first with the same verified package.
+      mv "$stage/container-package/Payload" "$container_private" 2>/dev/null || [ -x "$container_private/bin/container" ] || abort container 'Apple container could not be installed.'
       rm -rf "$stage/container.pkg" "$stage/container-package"
     fi
+    mkdir -p "$shared_runtime/instances"
+    : > "$shared_runtime/instances/$root_hash"
     container_cli="$container_private/bin/container"
   elif [ -n "$docker_cli" ]; then environment=docker
   else environment=none; fi
@@ -498,7 +563,7 @@ write_config() {
     container)
       printf 'binary = '; json "$container_cli"; printf '\n'
       case "$container_cli" in
-        "$root"/*) printf 'install_root = '; json "${container_cli%/bin/container}"; printf '\napp_root = '; json "$root/runtime/container-data"; printf '\n' ;;
+        "$shared_runtime"/*) printf 'install_root = '; json "${container_cli%/bin/container}"; printf '\napp_root = '; json "$shared_runtime/container-data"; printf '\n' ;;
       esac ;;
   esac
   printf '\n[models]\ndefault_profile = "default"\n\n[profiles.default]\nname = "Default"\nmain = "openai/gpt-6-sol"\n'
@@ -548,7 +613,6 @@ swap_current() {
   # -f alone follows directory symlinks on BSD; rename through Node instead.
   "$node" -e 'require("node:fs").renameSync(process.argv[1],process.argv[2])' "$root/.current-next" "$root/current"
 }
-xml() { printf '%s' "$1" | sed -e 's/\&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g' -e "s/'/\&apos;/g"; }
 write_service() {
   mkdir -p "$(dirname "$service_file")"
   if [ "$os" = linux ]; then

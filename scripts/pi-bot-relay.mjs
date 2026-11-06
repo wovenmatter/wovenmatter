@@ -48,16 +48,37 @@ function adopt(id, socket) {
   streams.set(id, socket);
   socket.setNoDelay(true);
   if (outputBlocked) socket.pause();
+  let announced = false;
+  const finished = () => {
+    if (announced) return;
+    announced = true;
+    send(TYPE.close, id);
+  };
   socket.on("data", (chunk) => send(TYPE.data, id, chunk));
   socket.on("error", () => {});
+  // Half-open on purpose: a client can finish sending and still wait for its reply.
+  socket.on("end", finished);
   socket.on("close", () => {
-    if (streams.delete(id)) send(TYPE.close, id);
+    streams.delete(id);
+    finished();
   });
+}
+
+// One slow socket is enough to stop reading from the Mac, until it drains or goes away.
+function waitForDrain(socket) {
+  process.stdin.pause();
+  const resume = () => {
+    socket.off("drain", resume);
+    socket.off("close", resume);
+    process.stdin.resume();
+  };
+  socket.on("drain", resume);
+  socket.on("close", resume);
 }
 
 function receive(type, id, payload) {
   if (type === TYPE.connect) {
-    adopt(id, net.connect({ host: "127.0.0.1", port: targetPort }));
+    adopt(id, net.connect({ host: "127.0.0.1", port: targetPort, allowHalfOpen: true }));
     return;
   }
   const socket = streams.get(id);
@@ -65,9 +86,7 @@ function receive(type, id, payload) {
   if (type === TYPE.close) {
     socket.end();
   } else if (type === TYPE.data && socket.write(payload) === false) {
-    process.stdin.pause();
-    socket.once("drain", () => process.stdin.resume());
-    socket.once("close", () => process.stdin.resume());
+    waitForDrain(socket);
   }
 }
 
@@ -105,7 +124,7 @@ function hello(reversePort) {
 if (!wantsReverse) {
   hello(null);
 } else {
-  const server = net.createServer((socket) => {
+  const server = net.createServer({ allowHalfOpen: true }, (socket) => {
     const id = nextAccept;
     nextAccept += 2;
     send(TYPE.accept, id);

@@ -102,14 +102,29 @@ elif name == 'launchctl':
                 sys.exit(0)
             sys.exit(1)
         if args[1].startswith('gui/') and os.environ.get('PIBOT_TEST_NO_GUI') == '1': sys.exit(1)
+    elif args[0] == 'bootstrap' and '.cleanup' in Path(args[2]).read_text():
+        import html
+        job = [html.unescape(value) for value in re.findall(r'<string>(.*?)</string>', Path(args[2]).read_text())][1:]
+        subprocess.run(job, check=True)
     elif args[0] == 'bootstrap': mark(port(root/'config.toml'), {'version':'0.1.0'})
     elif args[0] == 'list': print('PID\tStatus\tLabel\n7\t0\tcom.apple.container.apiserver\n8\t0\tcom.example.other')
-    elif args[0] == 'bootout' and 'com.apple.container' in args[1]: pass
+    elif args[0] == 'bootout' and ('com.apple.container' in args[1] or args[1].endswith('.cleanup')): pass
     elif args[0] == 'bootout':
         (base/('port-'+port(root/'config.toml'))).unlink(missing_ok=True)
         if os.environ.get('PIBOT_TEST_BOOTOUT_LAG'): (base/'bootout-lag').write_text(os.environ['PIBOT_TEST_BOOTOUT_LAG'])
     else: sys.exit(91)
 else: sys.exit(92)
+'''
+
+
+# Stands in for Pi Bot's own parser, which its repository tests.
+CONFIG_MODULE = r'''export function parseConfig(text) {
+  if (text.includes('UNREADABLE')) throw new Error('invalid');
+  const section = /^\[environment\]\n((?:(?!\[).*\n)*)/m.exec(text)[1];
+  const value = (key) => { const m = new RegExp(`^${key} = (".*")$`, 'm').exec(section); return m ? JSON.parse(m[1]) : undefined; };
+  return { environment: { backend: value('backend'), binary: value('binary'), install_root: value('install_root'), app_root: value('app_root') },
+           paths: { database: JSON.parse(/^data_dir = (".*")$/m.exec(text)[1]) + '/pi-bot.sqlite' } };
+}
 '''
 
 
@@ -157,7 +172,7 @@ class HostTests(unittest.TestCase):
             'protocol':1, 'lockSha256':hashlib.sha256(lock.encode()).hexdigest()}),
             'package.json':'{"private":true}', 'pnpm-lock.yaml':lock,
             'pnpm-workspace.yaml':'packages: []', 'packages/server/dist/cli.js':'fixture',
-            'apps/web/dist/index.html':'fixture'})
+            'apps/web/dist/index.html':'fixture', 'packages/server/dist/config.js':CONFIG_MODULE})
 
     def run_host(self, command, *args, success=True, input=None, **env):
         result = subprocess.run(['bash', str(ROOT/'scripts/pi-bot-host.sh'), command,
@@ -350,16 +365,20 @@ class HostTests(unittest.TestCase):
         (self.base/'container.pkg').write_bytes(payload)
         return ('--container-version', '1.6.1', '--container-sha256', hashlib.sha256(payload).hexdigest())
 
+    @property
+    def shared_runtime(self):
+        return self.home/'Library/Application Support/Woven Matter Pi Bot/runtime'
+
     def test_a_current_mac_gets_a_private_apple_container_without_admin(self):
         self.mac_archive()
         self.assertEqual(self.run_host('inspect', **self.mac())['environment'], 'container')
         self.install(extra=self.container_args(), **self.mac())
         env = self.environment_of()
         self.assertIn('backend = "container"', env)
-        private = self.root/'runtime/container/1.6.1'
+        private = self.shared_runtime/'container/1.6.1'
         self.assertTrue((private/'bin/container').exists())
         self.assertIn('install_root = ' + json.dumps(str(private)), env)
-        self.assertIn('app_root = ' + json.dumps(str(self.root/'runtime/container-data')), env)
+        self.assertIn('app_root = ' + json.dumps(str(self.shared_runtime/'container-data')), env)
         self.assertTrue(any('apple/container/releases/download/1.6.1/container-1.6.1-installer-signed.pkg' in ' '.join(call) for call in self.calls('curl')))
 
     def test_an_installed_apple_container_is_used_as_it_is(self):
@@ -369,7 +388,7 @@ class HostTests(unittest.TestCase):
         env = self.environment_of()
         self.assertIn('binary = ' + json.dumps(str(container)), env)
         self.assertNotIn('install_root', env)
-        self.assertFalse((self.root/'runtime').exists())
+        self.assertFalse(self.shared_runtime.exists())
 
     def test_apple_package_must_match_and_be_signed_by_apple(self):
         self.mac_archive()
@@ -402,18 +421,100 @@ class HostTests(unittest.TestCase):
         self.run_host('uninstall')
         self.assertFalse((self.base/'runtime-docker').exists())
 
-    def test_removal_stops_a_private_runtime_before_its_files_go(self):
+    def scripted_private_cli(self, others=''):
+        # Answers as the runtime would, and records what it's asked.
+        cli = self.shared_runtime/'container/1.6.1/bin/container'
+        calls = self.base/'private-calls'
+        cli.write_text(f"""#!/bin/sh
+printf '%s\\n' "$*" >> {str(calls)!r}
+case "$*" in "list --all --quiet") printf '%b' {others!r} ;; esac
+""")
+        return calls
+
+    def test_removing_the_last_installation_removes_the_shared_runtime(self):
         self.mac_archive()
         self.install(extra=self.container_args(), **self.mac())
         self.seed_bots('bot-a')
-        cli = self.root/'runtime/container/1.6.1/bin/container'
-        cli.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> ' + repr(str(self.base/'private-calls')) + '\n')
+        calls = self.scripted_private_cli()
         self.run_host('uninstall', '--delete-data', **self.mac())
-        self.assertEqual((self.base/'private-calls').read_text().splitlines(), ['system stop'])
+        asked = calls.read_text().splitlines()
+        self.assertIn('delete --force pi-bot-bot-a', asked)
+        self.assertIn('volume delete pi-bot-bot-a-workspace', asked)
+        self.assertEqual(asked[-1], 'system stop')
         booted = [call[2] for call in self.calls('launchctl') if call[1] == 'bootout']
         self.assertTrue(any(label.endswith('/com.apple.container.apiserver') for label in booted), booted)
         self.assertFalse(any('com.example.other' in label for label in booted), booted)
         self.assertFalse(self.root.exists())
+        self.assertFalse(self.shared_runtime.exists())
+
+    def test_removing_one_installation_keeps_the_runtime_another_uses(self):
+        self.mac_archive()
+        self.install(extra=self.container_args(), **self.mac())
+        self.seed_bots('bot-a')
+        (self.shared_runtime/'instances/another-installation').write_text('')
+        calls = self.scripted_private_cli()
+        self.run_host('uninstall', '--delete-data', **self.mac())
+        asked = calls.read_text().splitlines()
+        self.assertIn('delete --force pi-bot-bot-a', asked)
+        self.assertNotIn('system stop', asked)
+        self.assertTrue((self.shared_runtime/'container/1.6.1/bin/container').exists())
+        self.assertFalse((self.shared_runtime/'instances'/hashlib.sha256(str(self.root).encode()).hexdigest()).exists())
+
+    def test_containers_it_does_not_know_keep_the_runtime(self):
+        self.mac_archive()
+        self.install(extra=self.container_args(), **self.mac())
+        self.seed_bots('bot-a')
+        calls = self.scripted_private_cli('buildkit\\nsomeone-elses\\n')
+        self.run_host('uninstall', '--delete-data', **self.mac())
+        self.assertNotIn('system stop', calls.read_text().splitlines())
+        self.assertTrue(self.shared_runtime.exists())
+
+    def test_an_installed_runtime_is_never_stopped(self):
+        self.mac_archive()
+        self.add_runtime('container')
+        self.install(extra=self.container_args(), **self.mac())
+        self.seed_bots('bot-a')
+        self.run_host('uninstall', '--delete-data', **self.mac())
+        asked = (self.base/'runtime-container').read_text().splitlines()
+        self.assertIn('delete --force pi-bot-bot-a', asked)
+        self.assertNotIn('system stop', asked)
+
+    def test_docker_being_down_keeps_the_data_that_names_the_containers(self):
+        docker = self.add_runtime('docker')
+        self.install()
+        self.seed_bots('bot-a')
+        working = docker.read_text()
+        docker.write_text('#!/bin/sh\necho "Cannot connect to the Docker daemon" >&2\nexit 1\n')
+        self.assertEqual(self.run_host('uninstall', '--delete-data', success=False)['error'], 'runtime')
+        self.assertTrue((self.root/'data/pi-bot.sqlite').exists())
+        self.assertTrue((self.root/'config.toml').exists())
+        docker.write_text(working)
+        self.run_host('uninstall', '--delete-data')
+        self.assertFalse(self.root.exists())
+
+    def test_missing_containers_are_already_removed(self):
+        docker = self.add_runtime('docker')
+        self.install()
+        self.seed_bots('bot-a')
+        docker.write_text('#!/bin/sh\necho "Error response from daemon: No such container" >&2\nexit 1\n')
+        self.run_host('uninstall', '--delete-data')
+        self.assertFalse(self.root.exists())
+
+    def test_a_docker_that_was_uninstalled_does_not_block_removal(self):
+        docker = self.add_runtime('docker')
+        self.install()
+        self.seed_bots('bot-a')
+        docker.unlink()
+        self.run_host('uninstall', '--delete-data')
+        self.assertFalse(self.root.exists())
+
+    def test_an_unreadable_config_deletes_nothing(self):
+        self.add_runtime('docker')
+        self.install()
+        self.seed_bots('bot-a')
+        with (self.root/'config.toml').open('a') as config: config.write('# UNREADABLE\n')
+        self.assertEqual(self.run_host('uninstall', '--delete-data', success=False)['error'], 'config')
+        self.assertTrue((self.root/'data/pi-bot.sqlite').exists())
 
     def test_stop_with_nothing_installed_is_already_done(self):
         self.assertEqual(self.run_host('stop')['action'], 'stop')

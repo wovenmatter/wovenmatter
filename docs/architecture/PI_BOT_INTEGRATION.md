@@ -36,8 +36,6 @@ changes a standalone Pi Bot deployment, which keeps working without this app.
   tooling/               locked pnpm, installed with npm ci
   pnpm-store/
   data/                  pi-bot.sqlite, credentials.key
-  runtime/container/<version>/   Apple's container, when the Mac doesn't have it installed
-  runtime/container-data/        that copy's images, containers and volumes
   config.toml            written once if missing, then owned by Pi Bot settings
 ```
 
@@ -81,10 +79,16 @@ shared VM holds 4 to 9 GB whether or not a bot is working, which a 16 GB Mac can
 they have touched until they stop, so Pi Bot starts them on first use and stops them when idle;
 see Pi Bot's `docs/environments.md`. Docker stays the choice on Linux, where it needs no VM.
 
-Woven Matter installs Apple's signed package into `runtime/container/<version>` with no administrator,
-after checking its SHA-256 and that Apple signed it. It doesn't touch an installed `container`, which
-is used as it is. Its services are per-user and can't run twice, so if a Mac later gets its own,
-whichever started first answers both.
+Woven Matter installs Apple's signed package with no administrator, after checking its SHA-256 and
+that Apple signed it. It doesn't touch an installed `container`, which is used as it is. Otherwise
+the copy goes in `~/Library/Application Support/Woven Matter Pi Bot/runtime`, outside any one
+installation, because Apple's services are per user and can't run twice: every installation on a Mac
+shares them. Each records its use in `runtime/instances/`.
+
+Removing an installation deletes only its own bots' containers and volumes, named from its database.
+If they can't be removed, nothing is deleted, so the database can name them next time. The shared
+runtime goes only when no installation uses it and no containers remain. An SSH session can't see
+services started by a launchd agent, so this runs as a one-shot job in that agent's domain.
 
 ## Selection record and bundle
 

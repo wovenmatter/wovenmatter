@@ -96,7 +96,13 @@ final class PiBotRelay: @unchecked Sendable {
         listener.stateUpdateHandler = { [weak self] state in
             if case .failed = state { self?.stop() }
         }
-        lock.withLock { self.listener = listener }
+        // SSH can already have exited, and a listener started after that would hold the port.
+        let open = lock.withLock { () -> Bool in
+            guard !stopped else { return false }
+            self.listener = listener
+            return true
+        }
+        guard open else { return }
         listener.start(queue: network)
     }
 
