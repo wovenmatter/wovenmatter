@@ -1,5 +1,5 @@
 // Provider-free acceptance against the unchanged published Executor executable.
-// Usage: node scripts/test-support/test-executor-runtime.mjs /path/to/executor/bin.mjs
+// Usage: node scripts/test-support/test-executor-runtime.mjs /path/to/native/executor
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { mkdtemp, mkdir, rm } from 'node:fs/promises';
@@ -9,7 +9,7 @@ import { createServer } from 'node:net';
 import { randomUUID, randomBytes } from 'node:crypto';
 import { ExecutorBroker } from '../../default-agent/src/executor/broker.mjs';
 const executable = process.argv[2];
-if (!executable) throw new Error('Pass the unchanged published Executor bin.mjs path.');
+if (!executable) throw new Error('Pass the unchanged published Executor executable path.');
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 const root = await mkdtemp(join(tmpdir(), 'woven-executor-acceptance-'));
 const listener = createServer(); await new Promise(resolve => listener.listen(0, '127.0.0.1', resolve));
@@ -17,7 +17,8 @@ const port = listener.address().port; await new Promise(resolve => listener.clos
 const config = { id: randomUUID(), location: 'local' };
 const server = { location: 'local', apiKey: randomBytes(32).toString('hex'), encryptionKey: randomBytes(32).toString('hex'), port };
 await mkdir(join(root, 'data'));
-const child = spawn(process.execPath, [resolve(executable), 'serve'], { stdio: ['ignore', 'pipe', 'pipe'], env: {
+const child = spawn(executable.endsWith('.mjs') ? process.execPath : resolve(executable),
+  [...(executable.endsWith('.mjs') ? [resolve(executable)] : []), 'serve'], { stdio: ['ignore', 'pipe', 'pipe'], env: {
   ...process.env, PATH: process.env.PATH, EXECUTOR_DATA_DIR: join(root, 'data'), EXECUTOR_PORT: String(port),
   EXECUTOR_API_KEY: server.apiKey, EXECUTOR_ENCRYPTION_KEY: server.encryptionKey, EXECUTOR_NO_UPDATE_CHECK: '1',
 } });

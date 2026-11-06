@@ -10,7 +10,7 @@ dpkg --compare-versions "$(dpkg-query -W -f='${Version}' util-linux)" ge 2.41.5-
 perl -MArchive::Tar -e 'exit(Archive::Tar->VERSION ge q(3.14) ? 0 : 1)'
 npm --version | awk -F. '$1 > 12 || ($1 == 12 && ($2 > 2 || ($2 == 2 && $3 >= 2))) { ok=1 } END { exit !ok }'
 node -e 'const {createRequire}=require("node:module"); const npm=createRequire("/usr/local/lib/node_modules/npm/package.json"); if(npm("undici/package.json").version!=="8.12.4"||npm("ip-address/package.json").version!=="10.7.6")process.exit(1)'
-runtime_modules="$(find /opt/executor/node_modules -type d -path '*/runtime/node_modules' -print -quit)"
+runtime_modules=/opt/executor/native/runtime/node_modules
 node -e 'const sharp=require(process.argv[1]); if(sharp.versions.sharp!=="0.35.5"||sharp.versions.rsvg!=="2.63.2")process.exit(1)' "$runtime_modules/sharp"
 test -z "$(find /usr -xdev -type f -perm /6000 -print -quit)"
 
