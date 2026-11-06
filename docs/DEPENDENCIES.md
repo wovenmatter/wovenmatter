@@ -81,7 +81,7 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   repository (tested minimum 2.103.3), with the published keyring SHA-256 checked
   before trusting it. Debian's older CLI retains CVE-2026-48501. Maintenance
   reviews both the floor and signing-key record against upstream.
-  OpenSSH clients are built from the current 10.6p1 source in a separate image
+  OpenSSH clients are built from the current 10.6p2 source in a separate image
   stage: the Dockerfile records the exact release/SHA-256 and verifies its
   detached signature against the upstream release-key fingerprint. This
   security exception replaces Debian's client, which retains CVE-2026-60002
@@ -107,7 +107,7 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   The workspace image retains the same reviewed current HTTP dispatcher across
   Mac and Linux tooling, with tuple-header redirect credential stripping covered
   by provider-free fixtures. It applies the independently locked security selection
-  in `remote/npm-runtime` (tested undici 8.12.4, ip-address 10.7.6 and minimatch 11.0.4), addressing CVE-2026-111997,
+  in `remote/npm-runtime` (tested undici 8.12.4, ip-address 10.7.6 and minimatch 11.0.5), addressing CVE-2026-111997,
   GHSA-xjj6-f33q-929c and the
   related denial-of-service advisories. npm ignores overrides for its bundled
   dependencies, so this replacement is explicit in the image definition.
@@ -133,7 +133,7 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   needs; do not install the workspace browser-library repairs into that smaller
   image without a runtime dependency.
   npm also vendors minimatch 10.2.5, affected by GHSA-g3hv-75wg-m249. The
-  same graph replaces minimatch with 11.0.4 and its locked dependency closure.
+  same graph replaces minimatch with 11.0.5 and its locked dependency closure.
   Mac, native Linux and both container paths copy and verify every graph module,
   including scoped dependencies; npm's actual install/ci behavior and bounded
   glob-pattern fixtures validate this major migration. Keep this replacement
@@ -192,7 +192,7 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   peer validation. Real local WebSocket streaming/cancellation fixtures and the
   Chord/Durable suites validate this selection; review it on each Chord refresh.
   Pi AI 1.5.0 also pins older provider clients. Consumer-scoped minimum-only
-  overrides select the tested OpenAI 7.52.0, Anthropic 1.6.0, Google GenAI 2.32.0,
+  overrides select the tested OpenAI 7.53.0, Anthropic 1.6.0, Google GenAI 3.0.0,
   Bedrock Runtime and token providers 3.1163.0, and Smithy Node HTTP handler
   4.14.2 releases without
   changing vendor manifests. Keeping these clients current is required for
@@ -206,9 +206,15 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   serialization, streaming text/tools, usage and cancellation. They do not
   establish authenticated provider acceptance. The iOS bundle excludes these
   network clients; its generated provenance still follows the shared lock.
+  GenAI 3 requires Node 22 or newer and defaults the Gemini Developer API to
+  `v1`. The recorded Node 26 satisfies that requirement. Pi supplies each model's
+  complete versioned base URL with an explicit empty SDK API version, preserving
+  existing `v1beta` models and custom endpoints even when the new
+  `GOOGLE_GENAI_API_VERSION` environment variable is set. Loopback fixtures cover
+  exact versioned paths, streaming tools/usage, and cancellation with GenAI 3.
   Pi Coding Agent 1.5.0 now selects minimatch 11.0.3, which includes the
   GHSA-g3hv-75wg-m249 repair. The consumer-scoped floor advances to the current
-  `>=11.0.4` patch without changing the named matching API. Provider-free
+  `>=11.0.5` patch without changing the named matching API. Provider-free
   model-scope matching and bounded adversarial-pattern fixtures validate this
   selection; review the override on every refresh and remove it when Pi itself
   selects the current tested release.
@@ -251,12 +257,12 @@ an older configured channel. OpenCode and Executor retain the documented v2 API 
 maintenance must review a newer stable API major and implement its migration.
 
 `harnesses/catalog.json` records tested connector and engine minimums separately:
-Codex ACP 2.5.0 with Codex 0.166.0, and Claude ACP 0.101.0 with Claude SDK 0.3.318
-(native Claude Code 2.1.318). The standalone Codex and Claude sign-in CLIs use their
+Codex ACP 2.5.0 with Codex 0.167.0, and Claude ACP 0.101.0 with Claude SDK 0.3.319
+(native Claude Code 2.1.319). The standalone Codex and Claude sign-in CLIs use their
 official current stable release channels. Codex ACP's `^0.165.0` engine range
 otherwise keeps its chat engine behind; its ACP TypeScript SDK also retains 2.1
-through a restrictive range. Claude ACP 0.101.0 now selects SDK 0.3.318 directly; the consumer-scoped override
-keeps its independently selected engine current on later explicit updates. Transcript-write loss
+through a restrictive range. Claude ACP 0.101.0 pins SDK 0.3.318; the consumer-scoped
+override selects 0.3.319 independently so engine-only updates remain eligible. Transcript-write loss
 invalidates the native resume marker and refuses tool dispatch/continuation commits;
 config-only write loss leaves a valid response intact. Provider-free persistence
 fixtures verify canonical replay after recovery. The connector selects protocol SDK

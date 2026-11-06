@@ -85,8 +85,17 @@ test('Pi model globs retain matching semantics and reject amplification patterns
     // GHSA-g3hv-75wg-m249: globstar/parent preprocessing used to amplify
     // entries exponentially at optimization level 2. Failure kills only this child.
     const pattern = '**/../a/b/'.repeat(24) + 'fixture';
-    const matcher = new Minimatch(pattern, { optimizationLevel: 2, braceExpandMax: 64 });
-    assert.equal(typeof matcher.match('fixture'), 'boolean');
+    // 11.0.5 refuses the whole over-budget pattern instead of returning a
+    // partially optimized match whose result can depend on traversal order.
+    assert.throws(() => new Minimatch(pattern, { optimizationLevel: 2, braceExpandMax: 64 }),
+      error => error instanceof RangeError && error.message.includes('too many patterns'));
+    // Large numeric ranges use one matcher, without expanding a billion rows.
+    const numeric = new Minimatch('model-{1..1000000000}', { braceExpandMax: 64 });
+    assert.equal(numeric.match('model-999999999'), true);
+    assert.equal(numeric.match('model-1000000001'), false);
+    const numericScope = await resolveModelScopeWithDiagnostics(['fixture/model-{1..1000000000}*'],
+      { getAvailable: async () => [{ id: 'model-999999999', provider: 'fixture' }] });
+    assert.deepEqual(numericScope.scopedModels.map(x => x.model.id), ['model-999999999']);
   `], { timeout: 10000, cwd: new URL('..', import.meta.url), env: { PATH: process.env.PATH } });
 });
 

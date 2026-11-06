@@ -3,8 +3,8 @@
 # Debian's current/backports OpenSSH clients retain CVE-2026-60002. Build
 # current upstream clients separately; only verified binaries enter the image.
 FROM node:26-trixie-slim AS workspace-ssh-build
-ARG OPENSSH_VERSION=10.6p1
-ARG OPENSSH_SHA256=a9dc9565dffe8640f64d863cd29a32bc4a3dbdec0566a7fc44c5d6ee767d5f39
+ARG OPENSSH_VERSION=10.6p2
+ARG OPENSSH_SHA256=9ae44872090cf2f06b3cf9ff147e7f16f309671340763ed2f99248398ae29d5b
 RUN export DEBIAN_FRONTEND=noninteractive \
     && echo 'deb http://deb.debian.org/debian trixie-backports main' > /etc/apt/sources.list.d/wovenmatter-backports.list \
     && apt-get update && apt-get upgrade -y \

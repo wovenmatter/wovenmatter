@@ -130,14 +130,37 @@ test('Pi and current OpenAI SDK preserve compatible Chat Completions tool stream
 });
 
 test('Pi and current Google SDK preserve streaming function calls and token accounting', { timeout: 10000 }, async t => {
+  const previousVersion = process.env.GOOGLE_GENAI_API_VERSION;
+  process.env.GOOGLE_GENAI_API_VERSION = 'v1alpha';
+  t.after(() => {
+    if (previousVersion === undefined) delete process.env.GOOGLE_GENAI_API_VERSION;
+    else process.env.GOOGLE_GENAI_API_VERSION = previousVersion;
+  });
   const f = await fixture(t, response => {
     response.writeHead(200, { 'content-type': 'text/event-stream' });
     response.end(sse([['', { responseId: 'google_fixture', candidates: [{ content: { role: 'model', parts: [{ text: 'Offline text' }, { functionCall: { name: 'lookup', args: { key: 'fixture' } } }] }, finishReason: 'STOP' }], usageMetadata: { promptTokenCount: 11, candidatesTokenCount: 7, totalTokenCount: 18 } }]]));
   });
-  checkResult(await google(model('google-generative-ai', 'google', f.baseUrl), context, { apiKey: 'fixture-key', maxRetries: 0 }).result());
+  // GenAI 3 defaults to v1 and adds an environment override. Pi supplies the
+  // complete versioned endpoint, so neither may replace or append to its path.
+  checkResult(await google(model('google-generative-ai', 'google', f.baseUrl + '/v1beta'), context, { apiKey: 'fixture-key', maxRetries: 0 }).result());
   assert.equal(f.requests.length, 1);
-  assert.match(f.requests[0].url, /streamGenerateContent/);
+  assert.equal(f.requests[0].url, '/v1beta/models/fixture-model:streamGenerateContent?alt=sse');
+  assert.equal(f.requests[0].headers['x-goog-api-key'], 'fixture-key');
   assert.equal(f.requests[0].body.tools[0].functionDeclarations[0].name, 'lookup');
+});
+
+test('Pi and GenAI 3 cancel an unfinished response on the configured versioned endpoint', { timeout: 10000 }, async t => {
+  const controller = new AbortController();
+  const f = await fixture(t, response => {
+    response.writeHead(200, { 'content-type': 'text/event-stream' });
+    response.write(sse([['', { candidates: [{ content: { role: 'model', parts: [{ text: 'Partial fixture' }] } }] }]]));
+  });
+  const stream = google(model('google-generative-ai', 'google', f.baseUrl + '/v1'), context,
+    { apiKey: 'fixture-key', signal: controller.signal, maxRetries: 0 });
+  for await (const event of stream) if (event.type === 'text_delta') { controller.abort(); break; }
+  assert.equal((await stream.result()).stopReason, 'aborted');
+  assert.equal(f.requests.length, 1);
+  assert.equal(f.requests[0].url, '/v1/models/fixture-model:streamGenerateContent?alt=sse');
 });
 
 // AWS EventStream wire encoding, including both CRCs; the real Smithy transport

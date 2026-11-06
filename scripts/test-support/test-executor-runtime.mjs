@@ -9,7 +9,7 @@ import { createServer } from 'node:net';
 import { randomUUID, randomBytes } from 'node:crypto';
 import { ExecutorBroker } from '../../default-agent/src/executor/broker.mjs';
 const executable = process.argv[2];
-if (!executable) throw new Error('Pass the unchanged published Executor bin.mjs path.');
+if (!executable) throw new Error('Pass the unchanged published Executor executable path.');
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 const root = await mkdtemp(join(tmpdir(), 'woven-executor-acceptance-'));
 const listener = createServer(); await new Promise(resolve => listener.listen(0, '127.0.0.1', resolve));
