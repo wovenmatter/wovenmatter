@@ -1,3 +1,4 @@
+import { createUsageScanner } from './usage-scan.mjs'
 import { existsSync } from 'node:fs'
 const defaultAgentModule = new URL('../default-agent/src/managed-service.mjs', import.meta.url)
 const { createManagedDefaultAgentService } = await import(existsSync(defaultAgentModule) ? defaultAgentModule.href : new URL('../../default-agent/src/managed-service.mjs', import.meta.url).href)
@@ -100,6 +101,8 @@ const retainedExecution = runningAsService ? createRetainedExecutionCapture({
   defaultDirectory:resolve(workspaceRoot,'.wovenmatter/default-agent'),taskGateway,defaultAgent,execution:clientExecution,
   resolveAssociation:request=>clientExecution.resolveRetainedAssociation(request),
 }) : null
+
+const usageScanner = createUsageScanner()
 
 const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
   requestTimeout: 30_000, connectionsCheckingInterval: 1_000 }, async (request, response) => {
@@ -276,6 +279,10 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
       return json(response,200,await workspaceBrowser.forProfile(url.searchParams.get('profile') ?? body.profile ?? 'default').frame(body.tabID, body.previousFrameID))
     }
 
+    if (url.pathname === '/v1/usage/export' && request.method === 'GET') {
+      if (!administrator) return json(response,403,{error:'administrator_required'})
+      return json(response,200,await usageScanner.page({since:Number(url.searchParams.get('since'))||0,offset:Number(url.searchParams.get('offset'))||0}))
+    }
     if (url.pathname === '/v1/task-gateway' && request.method === 'GET') return json(response,200,taskGateway.status())
     if (url.pathname === '/v1/task-gateway' && request.method === 'PATCH') return json(response,200,await taskGateway.configure(await readJSON(request)))
     if (url.pathname === '/v1/task-gateway/schedules' && request.method === 'GET') return json(response,200,taskGateway.schedules())

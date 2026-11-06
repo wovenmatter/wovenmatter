@@ -18,6 +18,14 @@ actor UsageTranscriptImporter {
   private let preparationWorker: DatabaseWorker
   private(set) var importOutcomes: [String: Outcome]
   private var hadSourceFailures = false
+  private var batch: Batch?
+
+  /// Limits one pass to files last changed in this window. A file's whole history is
+  /// read at once, so widening the window never reads the same file twice.
+  struct Batch: Sendable {
+    let modifiedAfter: Date
+    let modifiedBefore: Date?
+  }
 
   init(homeDirectory: URL, outcomes: [String: Outcome], ownership: UsageRefreshOwnership,
     preparationWorker: DatabaseWorker? = nil) {
@@ -30,9 +38,11 @@ actor UsageTranscriptImporter {
     store: AsyncUsageStore,
     cutoff: Date,
     enabledProviders: Set<ProviderKind>,
-    now: Date
+    now: Date,
+    batch: Batch? = nil
   ) async throws -> Bool {
     hadSourceFailures = false
+    self.batch = batch
     try await importLocalSources(store: store, cutoff: cutoff, enabledProviders: enabledProviders, now: now)
     importOutcomes.removeValue(forKey: "wovenmatter:index")
     // A failed or concurrently changed source must not advance range coverage.
@@ -69,7 +79,8 @@ actor UsageTranscriptImporter {
         let usageMarker = Data("\"token_count\"".utf8)
         let contextMarker = Data("\"turn_context\"".utf8)
         let metadataMarker = Data("\"session_meta\"".utf8)
-        try Self.forEachLineData(in: url, check: check) { data, lineNumber in
+        let markers = ["\"token_count\"", "\"turn_context\"", "\"session_meta\""]
+        try Self.forEachLineData(in: url, markers: markers, check: check) { data, lineNumber in
           guard data.range(of: usageMarker) != nil
                   || data.range(of: contextMarker) != nil
                   || data.range(of: metadataMarker) != nil else { return }
@@ -100,7 +111,7 @@ actor UsageTranscriptImporter {
       ) { url, check in
         var records: [UsageSample] = []
         let usageMarker = Data("\"usage\"".utf8)
-        try Self.forEachLineData(in: url, check: check) { data, lineNumber in
+        try Self.forEachLineData(in: url, markers: ["\"usage\""], check: check) { data, lineNumber in
           guard data.range(of: usageMarker) != nil else { return }
           if let parsed = LocalUsageTranscriptParser.parseClaude(
             line: String(decoding: data, as: UTF8.self),
@@ -134,7 +145,8 @@ actor UsageTranscriptImporter {
         harness: "OpenCode",
         providerFilterSignature: providerFilterSignature,
         store: store,
-        cutoff: retentionCutoff,
+        // A database has no files to batch, so its read window widens instead.
+        cutoff: max(batch?.modifiedAfter ?? retentionCutoff, retentionCutoff),
         now: now
       ) { indexedAfter, check in
         try OpenCodeUsageDatabase(databaseURL: openCodeDatabase)
@@ -170,18 +182,25 @@ actor UsageTranscriptImporter {
     store: AsyncUsageStore,
     cutoff: Date,
     now: Date,
-    predicate: @escaping @Sendable (URL) -> Bool = { $0.pathExtension == "jsonl" },
+    predicate: @escaping @Sendable (URL) -> Bool = { UsageCompressedTranscript.isTranscript($0) },
     fingerprint: (@Sendable (URL) throws -> String)? = nil,
     parser: @escaping @Sendable (URL, @escaping @Sendable () throws -> Void) throws -> [UsageSample]
   ) async throws -> Outcome {
+    let batch = batch
     let files = try await prepare { check in
-      try Self.files(root: root, cutoff: cutoff, predicate: predicate, check: check)
+      try Self.files(
+        root: root,
+        cutoff: batch?.modifiedAfter ?? cutoff,
+        before: batch?.modifiedBefore,
+        predicate: predicate,
+        check: check
+      )
     }
     var failures = 0
     for file in files {
       try ownership.check()
       do {
-        let sourceID = prefix + file.path
+        let sourceID = prefix + UsageCompressedTranscript.identityPath(file)
         let stored = try await store.source(sourceID)
         let prepared = try await prepare { check -> PreparedSource? in
           let currentFingerprint = try (fingerprint?(file) ?? Self.fileFingerprint(file)) + ":" + providerFilterSignature
@@ -336,6 +355,7 @@ actor UsageTranscriptImporter {
   nonisolated private static func files(
     root: URL,
     cutoff: Date,
+    before: Date? = nil,
     predicate: (URL) -> Bool,
     check: () throws -> Void
   ) throws -> [URL] {
@@ -351,18 +371,26 @@ actor UsageTranscriptImporter {
       try check()
       guard predicate(url) else { continue }
       guard let values = try? url.resourceValues(forKeys: keys),
-            values.isRegularFile == true,
-            (values.contentModificationDate ?? .distantPast) >= cutoff else { continue }
+            values.isRegularFile == true else { continue }
+      let modified = values.contentModificationDate ?? .distantPast
+      guard modified >= cutoff, before.map({ modified < $0 }) ?? true else { continue }
       result.append(url)
     }
-    return result.sorted { $0.path < $1.path }
+    return UsageCompressedTranscript.preferred(result, node: UsageCompressedTranscript.bundledNode)
+      .sorted { $0.path < $1.path }
   }
 
   nonisolated private static func forEachLineData(
     in url: URL,
+    markers: [String] = [],
     check: () throws -> Void,
     body: (Data.SubSequence, Int) throws -> Void
   ) throws {
+    if UsageCompressedTranscript.isCompressed(url) {
+      guard let node = UsageCompressedTranscript.bundledNode else { return }
+      try UsageCompressedTranscript.forEachMarkedLine(in: url, markers: markers, node: node, check: check, body: body)
+      return
+    }
     let data = try Data(contentsOf: url, options: [.mappedIfSafe, .uncached])
     try data.withUnsafeBytes { rawBuffer in
       guard let base = rawBuffer.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }

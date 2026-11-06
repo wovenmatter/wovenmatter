@@ -297,6 +297,17 @@ v1 until the stable protocol and implemented session APIs migrate together.
 Updates start only from Settings or explicit workspace actions; there is no
 background updater.
 
+## Runtime data
+
+Usage API estimates read LiteLLM's public model price file at runtime, only after
+someone turns them on. It is display data, not code: it is parsed as untrusted JSON,
+size-limited, cached for a day, and never bundled or used for billing. There is no
+pinned selection to maintain. A failed download keeps the last saved prices.
+
+Usage also reads Codex's `.jsonl.zst` archives with the Zstandard support in the
+bundled Node (`node:zlib`), so there is no separate compression dependency. Remote
+hosts do the same, which the remote service's Node 24 minimum guarantees.
+
 ## Source maintenance
 
 Maintenance belongs in an owner-run agent task or a manual session. Do not add

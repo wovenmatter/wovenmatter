@@ -588,6 +588,10 @@ final class RemoteWorkspacesModel {
         try await databaseRequest(configuration) { try await $0.taskGatewaySchedules() }
     }
 
+    func usageExport(_ request: UsageDeviceExportRequest, for configuration: RemoteWorkspaceConfiguration) async throws -> UsageDeviceExportPage {
+        try await databaseRequest(configuration) { try await $0.usageExport(request) }
+    }
+
     func taskGatewayResults(after cursor: String = "0", for configuration: RemoteWorkspaceConfiguration) async throws -> RemoteTaskGatewayResults {
         try await databaseRequest(configuration) { try await $0.taskGatewayResults(after: cursor) }
     }
