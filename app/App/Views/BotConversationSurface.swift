@@ -1,276 +1,11 @@
 import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
-import WebKit
 import WovenMatterClient
 import WovenMatterCore
 
-/// Pi Bot's own client in a retained web view, so drafts, streams and scroll survive
-/// moving between bots, chats and utility screens. The bridge carries navigation,
-/// theme and link events only: no RPC, no files, no credentials.
-@MainActor
-final class BotWebSession: NSObject, WKScriptMessageHandler, WKNavigationDelegate, WKUIDelegate {
-    struct Route: Equatable {
-        var hash: String
-        var target: DashboardBotTarget?
-    }
-
-    let webView: WKWebView
-    private(set) var loadedBase: URL?
-    private(set) var ready = false
-    private(set) var lastRoute: String?
-    private var requestedHash: String?
-    private var navigationToken = 0
-    private var pendingFocus = false
-    private var headerInsets: (left: CGFloat, right: CGFloat)?
-    private var context: String?
-    private var theme = DashboardTheme.green.rawValue
-    var onRoute: ((Route) -> Void)?
-    var onOpenExternal: ((URL) -> Void)?
-    var onConnectionState: ((String) -> Void)?
-
-    override init() {
-        let configuration = WKWebViewConfiguration()
-        configuration.websiteDataStore = .nonPersistent()
-        configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
-        webView = WKWebView(frame: .zero, configuration: configuration)
-        super.init()
-        configuration.userContentController.add(WeakBridge(self), name: "wovenBots")
-        webView.navigationDelegate = self
-        webView.uiDelegate = self
-        webView.setValue(false, forKey: "drawsBackground")
-        webView.allowsBackForwardNavigationGestures = false
-        #if DEBUG
-        webView.isInspectable = true
-        #endif
-    }
-
-    func show(base: URL, hash: String, theme: String) {
-        self.theme = theme
-        if loadedBase != base {
-            load(base: base, hash: hash)
-            return
-        }
-        setTheme(theme)
-        navigate(hash)
-    }
-
-    func reload() {
-        guard let loadedBase else { return }
-        load(base: loadedBase, hash: requestedHash ?? lastRoute ?? "#/")
-    }
-
-    func unload() {
-        ready = false
-        loadedBase = nil
-        lastRoute = nil
-        requestedHash = nil
-        webView.stopLoading()
-        webView.loadHTMLString("", baseURL: nil)
-    }
-
-    private func load(base: URL, hash: String) {
-        ready = false
-        loadedBase = base
-        lastRoute = nil
-        requestedHash = hash
-        navigationToken = 0
-        guard var components = URLComponents(url: base, resolvingAgainstBaseURL: false) else { return }
-        components.path = "/"
-        components.queryItems = [.init(name: "host", value: "woven"), .init(name: "theme", value: theme)]
-        components.fragment = hash.hasPrefix("#") ? String(hash.dropFirst()) : hash
-        if let url = components.url { webView.load(URLRequest(url: url)) }
-    }
-
-    func navigate(_ hash: String) {
-        // Already there, unless a request elsewhere is still on its way: then this supersedes it.
-        if ready, hash == lastRoute, requestedHash == nil { return }
-        requestedHash = hash
-        guard ready else { return }
-        navigationToken += 1
-        let encoded = (try? JSONEncoder().encode(hash)).map { String(decoding: $0, as: UTF8.self) } ?? "null"
-        webView.evaluateJavaScript("window.wovenPiBotHost?.navigate?.(\(encoded),\(navigationToken))", completionHandler: nil)
-    }
-
-    func setTheme(_ value: String) {
-        theme = value
-        guard ready else { return }
-        call("setTheme", argument: value)
-    }
-
-    func setContext(_ value: String?) {
-        context = value
-        guard ready else { return }
-        call("setContext", argument: value)
-    }
-
-    func setHeaderInsets(left: CGFloat, right: CGFloat) {
-        headerInsets = (left, right)
-        guard ready else { return }
-        webView.evaluateJavaScript("window.wovenPiBotHost?.setHeaderInsets?.(\(Int(left)),\(Int(right)))", completionHandler: nil)
-    }
-
-    func focusComposer() {
-        guard ready else { pendingFocus = true; return }
-        webView.window?.makeFirstResponder(webView)
-        webView.evaluateJavaScript("window.wovenPiBotHost?.focusComposer?.()", completionHandler: nil)
-    }
-
-    private func call(_ method: String, argument: String?) {
-        let encoded = argument.flatMap { try? JSONEncoder().encode($0) }.map { String(decoding: $0, as: UTF8.self) } ?? "null"
-        webView.evaluateJavaScript("window.wovenPiBotHost?.\(method)?.(\(encoded))", completionHandler: nil)
-    }
-
-    func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard message.frameInfo.isMainFrame, isTrusted(origin: message.frameInfo.securityOrigin),
-              let body = message.body as? [String: Any], body["v"] as? Int == 1, let kind = body["kind"] as? String else { return }
-        switch kind {
-        case "ready":
-            // Also after a reconnect or content-process restart, which begin with empty state.
-            ready = true
-            setTheme(theme)
-            setContext(context)
-            if let requestedHash, requestedHash != lastRoute { navigate(requestedHash) }
-            if pendingFocus { pendingFocus = false; focusComposer() }
-            if let headerInsets { setHeaderInsets(left: headerInsets.left, right: headerInsets.right) }
-        case "route":
-            let hash = body["hash"] as? String ?? ""
-            lastRoute = hash
-            // A report can describe where the client was before a newer selection here reached
-            // it. Its token says which request it follows, so only the latest counts. Before
-            // the first request of a load, only the route that load asked for does.
-            guard body["navigation"] as? Int ?? 0 == navigationToken else { return }
-            if navigationToken == 0, let requestedHash, hash != requestedHash { return }
-            requestedHash = nil
-            onRoute?(Route(hash: hash, target: Self.target(from: body)))
-        case "openExternal":
-            if let raw = body["url"] as? String, let url = URL(string: raw),
-               ["http", "https"].contains(url.scheme?.lowercased() ?? "") { onOpenExternal?(url) }
-        case "connection":
-            if let state = body["state"] as? String { onConnectionState?(state) }
-        default: break
-        }
-    }
-
-    static func target(from body: [String: Any]) -> DashboardBotTarget? {
-        guard body["settings"] as? Bool != true, let botID = body["botId"] as? String, !botID.isEmpty else { return nil }
-        return DashboardBotTarget(botID: botID, conversationID: body["conversationId"] as? Int,
-                                  showsThreadBesideMain: body["threadView"] as? String == "split")
-    }
-
-    static func hash(for target: DashboardBotTarget) -> String {
-        guard let conversation = target.conversationID else { return "#/\(target.botID)" }
-        return "#/\(target.botID)/\(conversation)" + (target.showsThreadBesideMain ? "?view=split" : "")
-    }
-
-    private func isTrusted(origin: WKSecurityOrigin) -> Bool {
-        guard let loadedBase else { return false }
-        return origin.protocol == loadedBase.scheme && origin.host == loadedBase.host && origin.port == loadedBase.port ?? 0
-    }
-
-    private func isOwnOrigin(_ url: URL) -> Bool {
-        guard let loadedBase else { return false }
-        return url.scheme == loadedBase.scheme && url.host == loadedBase.host && url.port == loadedBase.port
-    }
-
-    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
-        guard let url = navigationAction.request.url else { return .cancel }
-        if url.scheme == "about" || isOwnOrigin(url) { return .allow }
-        if navigationAction.targetFrame?.isMainFrame == true,
-           ["http", "https"].contains(url.scheme?.lowercased() ?? "") { onOpenExternal?(url) }
-        return .cancel
-    }
-
-    func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction,
-                 windowFeatures: WKWindowFeatures) -> WKWebView? {
-        if let url = navigationAction.request.url, ["http", "https"].contains(url.scheme?.lowercased() ?? "") { onOpenExternal?(url) }
-        return nil
-    }
-
-    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) { reload() }
-
-    // Pi Bot asks before deleting; WebKit shows nothing unless the host presents it.
-    func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo) async {
-        let alert = NSAlert()
-        alert.messageText = message
-        alert.addButton(withTitle: "OK")
-        _ = await present(alert)
-    }
-
-    func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo) async -> Bool {
-        let alert = NSAlert()
-        alert.messageText = message
-        alert.addButton(withTitle: "OK")
-        alert.addButton(withTitle: "Cancel")
-        return await present(alert) == .alertFirstButtonReturn
-    }
-
-    func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters, initiatedByFrame frame: WKFrameInfo) async -> [URL]? {
-        let panel = NSOpenPanel()
-        panel.allowsMultipleSelection = parameters.allowsMultipleSelection
-        panel.canChooseDirectories = parameters.allowsDirectories
-        panel.canChooseFiles = true
-        return panel.runModal() == .OK ? panel.urls : nil
-    }
-
-    private func present(_ alert: NSAlert) async -> NSApplication.ModalResponse {
-        guard let window = webView.window else { return alert.runModal() }
-        return await alert.beginSheetModal(for: window)
-    }
-
-    private final class WeakBridge: NSObject, WKScriptMessageHandler {
-        weak var target: BotWebSession?
-        init(_ target: BotWebSession) { self.target = target }
-        func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
-            MainActor.assumeIsolated { target?.userContentController(controller, didReceive: message) }
-        }
-    }
-}
-
-/// One web view per panel, retained across navigation.
-@MainActor
-final class BotWebSessionStore {
-    private var panels: [DashboardChatPanelID: BotWebSession] = [:]
-
-    func session(for panelID: DashboardChatPanelID) -> BotWebSession {
-        if let existing = panels[panelID] { return existing }
-        let created = BotWebSession()
-        panels[panelID] = created
-        return created
-    }
-
-    func release(panelID: DashboardChatPanelID) {
-        panels.removeValue(forKey: panelID)?.unload()
-    }
-
-    func unloadAll() {
-        for session in panels.values { session.unload() }
-    }
-}
-
-struct BotWebView: NSViewRepresentable {
-    let session: BotWebSession
-
-    func makeNSView(context: Context) -> NSView {
-        let container = NSView()
-        attach(to: container)
-        return container
-    }
-
-    func updateNSView(_ container: NSView, context: Context) {
-        if session.webView.superview !== container { attach(to: container) }
-    }
-
-    private func attach(to container: NSView) {
-        let view = session.webView
-        view.removeFromSuperview()
-        view.translatesAutoresizingMaskIntoConstraints = true
-        view.autoresizingMask = [.width, .height]
-        view.frame = container.bounds
-        container.addSubview(view)
-    }
-}
-
+/// A Pi Bot channel or thread in a chat panel. Pi Bot's server owns the conversation; this
+/// is Woven's own chat UI over its protocol, with Pi Bot's thread behavior.
 struct BotConversationSurface: View {
     @Bindable var bots: BotsModel
     let panelID: DashboardChatPanelID
@@ -278,6 +13,7 @@ struct BotConversationSurface: View {
     let context: String?
     let headerInsets: BotHeaderInsets
     let focusGeneration: Int?
+    let startsComposerCollapsed: Bool
     let showsClosePanel: Bool
     let showsAddPanel: Bool
     let onActivate: () -> Void
@@ -286,42 +22,54 @@ struct BotConversationSurface: View {
     let onRoute: (DashboardBotTarget) -> Void
     let onOpenLink: (URL) -> Void
     let onOpenSettings: () -> Void
-    @Environment(\.dashboardTheme) private var theme
 
-    private var session: BotWebSession { bots.webSessions.session(for: panelID) }
-    private var base: URL? { bots.runtime.phase == .ready && bots.runtime.canEmbed ? bots.runtime.baseURL : nil }
+    private var bot: PiBotSummary? { bots.bots.first { $0.id == target.botID } }
+    private var available: Bool { bots.runtime.phase == .ready && (bots.runtime.health == nil || bots.runtime.isCompatible) }
 
     var body: some View {
-        ZStack {
-            if base != nil {
-                BotWebView(session: session)
+        Group {
+            if !available {
+                unavailable
+            } else if bots.onboarding?.needed == true {
+                ZStack {
+                    BotOnboardingView(bots: bots, onOpenLink: onOpenLink)
+                    controls
+                }
+            } else if let bot {
+                BotConversationWorkspace(
+                    bots: bots,
+                    bot: bot,
+                    target: target,
+                    context: context,
+                    headerInsets: headerInsets,
+                    focusGeneration: focusGeneration,
+                    startsComposerCollapsed: startsComposerCollapsed,
+                    showsClosePanel: showsClosePanel,
+                    showsAddPanel: showsAddPanel,
+                    onActivate: onActivate,
+                    onClosePanel: onClosePanel,
+                    onAddPanel: onAddPanel,
+                    onRoute: onRoute,
+                    onOpenLink: onOpenLink
+                )
+            } else if bots.hasLoadedBots {
+                ZStack {
+                    DashboardConversationEmptyState(icon: .bot, title: "This bot was deleted",
+                        detail: "Restore it from Settings → Bots, or choose another bot.")
+                    controls
+                }
             } else {
-                BotsUnavailableView(runtime: bots.runtime, onOpenSettings: onOpenSettings)
+                unavailable
             }
-            controls
         }
         .simultaneousGesture(TapGesture().onEnded { onActivate() })
-        .task(id: BotSurfaceTask(base: base, target: target, theme: theme.rawValue)) { present() }
-        .onDisappear {
-            let session = self.session
-            session.onRoute = nil
-            session.onOpenExternal = nil
-        }
-        .onChange(of: context) { _, value in session.setContext(value) }
-        .onChange(of: headerInsets) { _, value in session.setHeaderInsets(left: value.left, right: value.right) }
-        .onChange(of: focusGeneration) { _, value in if value != nil { session.focusComposer() } }
     }
 
-    private func present() {
-        let session = self.session
-        session.onRoute = { route in
-            if let next = route.target, next != target { onRoute(next) }
+    private var unavailable: some View {
+        ZStack {
+            BotsUnavailableView(runtime: bots.runtime, onOpenSettings: onOpenSettings)
+            controls
         }
-        session.onOpenExternal = { onOpenLink($0) }
-        session.setHeaderInsets(left: headerInsets.left, right: headerInsets.right)
-        guard let base else { return }
-        session.show(base: base, hash: BotWebSession.hash(for: target), theme: theme.rawValue)
-        session.setContext(context)
     }
 
     /// The same side-of-composer placement regular chats use for panel controls.
@@ -331,7 +79,7 @@ struct BotConversationSurface: View {
                 Spacer()
                 HStack {
                     if showsClosePanel {
-                        DashboardPanelControlButton(glyph: .close, accessibilityLabel: "Close panel", help: "Close panel", action: onClosePanel)
+                        DashboardPanelControlButton(glyph: .panelRightOpen, accessibilityLabel: "Remove panel", help: "Remove panel", action: onClosePanel)
                     }
                     Spacer()
                     if showsAddPanel {
@@ -345,16 +93,777 @@ struct BotConversationSurface: View {
     }
 }
 
-/// Room for native controls floating over Pi Bot's conversation header.
+/// The main channel and, on wide panels, a thread beside it. Narrow panels show one at a time.
+private struct BotConversationWorkspace: View {
+    private static let wideWidth: CGFloat = 760
+    private static let minimumThreadWidth: CGFloat = 340
+    private static let minimumMainWidth: CGFloat = 360
+
+    @Bindable var bots: BotsModel
+    let bot: PiBotSummary
+    let target: DashboardBotTarget
+    let context: String?
+    let headerInsets: BotHeaderInsets
+    let focusGeneration: Int?
+    let startsComposerCollapsed: Bool
+    let showsClosePanel: Bool
+    let showsAddPanel: Bool
+    let onActivate: () -> Void
+    let onClosePanel: () -> Void
+    let onAddPanel: () -> Void
+    let onRoute: (DashboardBotTarget) -> Void
+    let onOpenLink: (URL) -> Void
+    @State private var threadWidth: CGFloat = 440
+    @State private var dragStartWidth: CGFloat?
+
+    var body: some View {
+        GeometryReader { geometry in
+            let wide = geometry.size.width >= Self.wideWidth
+            let split = target.conversationID != nil && target.showsThreadBesideMain && wide
+            HStack(spacing: 0) {
+                if split {
+                    pane(conversationID: nil, insets: BotHeaderInsets(left: headerInsets.left, right: 0),
+                         showsClose: showsClosePanel, showsAdd: false)
+                    resizer(available: geometry.size.width)
+                    threadPane(wide: wide, split: true, insets: BotHeaderInsets(left: 0, right: headerInsets.right), showsClose: false, showsAdd: showsAddPanel)
+                        .frame(width: clampedThreadWidth(available: geometry.size.width))
+                } else if target.conversationID != nil {
+                    threadPane(wide: wide, split: false, insets: headerInsets, showsClose: showsClosePanel, showsAdd: showsAddPanel)
+                } else {
+                    pane(conversationID: nil, insets: headerInsets, showsClose: showsClosePanel, showsAdd: showsAddPanel)
+                }
+            }
+        }
+    }
+
+    private func clampedThreadWidth(available: CGFloat) -> CGFloat {
+        max(Self.minimumThreadWidth, min(available - Self.minimumMainWidth, threadWidth))
+    }
+
+    private func pane(conversationID: Int?, insets: BotHeaderInsets, showsClose: Bool, showsAdd: Bool,
+                      actions: [BotPaneAction] = []) -> some View {
+        BotConversationPane(
+            bots: bots,
+            bot: bot,
+            controller: bots.conversation(botID: bot.id, conversationID: conversationID),
+            context: context,
+            headerInsets: insets,
+            headerActions: actions,
+            focusGeneration: focusGeneration,
+            startsComposerCollapsed: startsComposerCollapsed,
+            showsClosePanel: showsClose,
+            showsAddPanel: showsAdd,
+            onActivate: onActivate,
+            onClosePanel: onClosePanel,
+            onAddPanel: onAddPanel,
+            onOpenThread: { onRoute(DashboardBotTarget(botID: bot.id, conversationID: $0, showsThreadBesideMain: true)) },
+            onOpenLink: onOpenLink
+        )
+        .id(BotConversationKey(botID: bot.id, conversationID: conversationID))
+    }
+
+    private func threadPane(wide: Bool, split: Bool, insets: BotHeaderInsets, showsClose: Bool, showsAdd: Bool) -> some View {
+        let conversationID = target.conversationID
+        var actions: [BotPaneAction] = []
+        if wide {
+            actions.append(BotPaneAction(glyph: split ? .maximize : .columns,
+                title: split ? "Expand thread" : "Show beside Main") {
+                onRoute(DashboardBotTarget(botID: bot.id, conversationID: conversationID, showsThreadBesideMain: !split))
+            })
+        }
+        actions.append(BotPaneAction(glyph: .close, title: "Back to Main") {
+            onRoute(DashboardBotTarget(botID: bot.id))
+        })
+        return pane(conversationID: conversationID, insets: insets, showsClose: showsClose, showsAdd: showsAdd, actions: actions)
+    }
+
+    private func resizer(available: CGFloat) -> some View {
+        Rectangle()
+            .fill(DashboardPalette.foreground.opacity(0.08))
+            .frame(width: 1)
+            .overlay {
+                Color.clear
+                    .frame(width: 9)
+                    .contentShape(Rectangle())
+                    .onHover { hovering in
+                        if hovering { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
+                    }
+                    .gesture(DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                        .onChanged { value in
+                            let start = dragStartWidth ?? clampedThreadWidth(available: available)
+                            dragStartWidth = start
+                            threadWidth = max(Self.minimumThreadWidth, min(available - Self.minimumMainWidth, start - value.translation.width))
+                        }
+                        .onEnded { _ in dragStartWidth = nil })
+            }
+            .accessibilityElement()
+            .accessibilityLabel("Resize thread pane")
+            .accessibilityValue("\(Int(clampedThreadWidth(available: available))) points")
+            .accessibilityAdjustableAction { direction in
+                let step: CGFloat = direction == .increment ? 24 : -24
+                threadWidth = max(Self.minimumThreadWidth, min(available - Self.minimumMainWidth, threadWidth + step))
+            }
+    }
+}
+
+private struct BotPaneAction: Identifiable {
+    let glyph: DashboardLucideGlyph
+    let title: String
+    let action: () -> Void
+    var id: String { title }
+}
+
+/// Room for native controls floating over the header at the window's edges.
 struct BotHeaderInsets: Equatable {
     var left: CGFloat
     var right: CGFloat
 }
 
-private struct BotSurfaceTask: Hashable {
-    let base: URL?
-    let target: DashboardBotTarget
-    let theme: String
+private struct BotConversationPane: View {
+    /// The window of recent messages rendered at once, like a regular chat's message page.
+    private static let messagePage = 60
+    private static let endID = "bot-chat-end"
+
+    @Bindable var bots: BotsModel
+    let bot: PiBotSummary
+    let controller: BotConversationController
+    let context: String?
+    let headerInsets: BotHeaderInsets
+    let headerActions: [BotPaneAction]
+    let focusGeneration: Int?
+    let startsComposerCollapsed: Bool
+    let showsClosePanel: Bool
+    let showsAddPanel: Bool
+    let onActivate: () -> Void
+    let onClosePanel: () -> Void
+    let onAddPanel: () -> Void
+    let onOpenThread: (Int) -> Void
+    let onOpenLink: (URL) -> Void
+
+    @Environment(\.dashboardTheme) private var theme
+    @State private var attached: BotConversationController?
+    @State private var following = true
+    @State private var isUserScrolling = false
+    @State private var shownMessages = BotConversationPane.messagePage
+    @State private var bottomStackHeight: CGFloat = 0
+    @State private var composerCollapseOverride: Bool?
+    @State private var dismissedStatus: String?
+
+    private var key: BotConversationKey { controller.key }
+    private var threads: [PiBotThread] { bots.threads(for: bot.id) }
+    private var thread: PiBotThread? { threads.first { $0.conversationId == controller.viewedID } }
+    private var isThread: Bool { controller.isThread }
+    private var fromThread: Bool { thread.map { $0.parentConversationId != controller.mainID } ?? false }
+    private var entries: [PiBotDisplayEntry] { controller.visibleEntries }
+    private var state: PiBotConversationState { controller.state }
+    private var startingMessage: PiBotDisplayEntry? {
+        guard isThread else { return nil }
+        return controller.origin ?? thread.flatMap { thread in state.entries.first { $0.id == thread.forkedAt } }
+    }
+
+    /// Threads hang off the message they were forked from, like replies.
+    private func replies(to entry: PiBotDisplayEntry) -> [PiBotThread] {
+        threads.filter { candidate in
+            (candidate.parentConversationId == controller.viewedID || candidate.parentConversationId == entry.conversationId)
+                && candidate.forkedAt == entry.id && candidate.conversationId != controller.viewedID
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            if let status = bot.modelStatus, let statusKey = statusKey(status), statusKey != dismissedStatus {
+                BotModelStatusBanner(text: PiBotModelStatusText(status: status, botName: bot.name)) { dismissedStatus = statusKey }
+                    .frame(maxWidth: 768)
+                    .padding(.horizontal, 32)
+                    .padding(.bottom, 8)
+            }
+            ZStack(alignment: .bottom) {
+                transcript
+                bottomStack
+            }
+        }
+        .environment(\.conversationLinkHandler, onOpenLink)
+        .onAppear {
+            guard attached == nil else { return }
+            controller.attach()
+            attached = controller
+        }
+        .onDisappear {
+            attached?.detach()
+            attached = nil
+        }
+    }
+
+    private func statusKey(_ status: PiBotSummary.ModelStatus) -> String? {
+        "\(bot.id):\(status.kind):\(status.at ?? 0)"
+    }
+
+    // MARK: Header
+
+    private var header: some View {
+        HStack(spacing: 8) {
+            Text(isThread ? (thread?.label ?? "Untitled thread") : bot.name)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(isThread && thread?.title?.isEmpty != false ? DashboardPalette.mutedForeground : DashboardPalette.foreground)
+                .lineLimit(1)
+            if isThread {
+                Text(fromThread ? "in a thread" : "in \(bot.name)")
+                    .font(.system(size: 12))
+                    .foregroundStyle(DashboardPalette.mutedForeground)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            if let profile = bot.profileName, !profile.isEmpty {
+                Text(profile)
+                    .font(.system(size: 12))
+                    .foregroundStyle(DashboardPalette.mutedForeground)
+                    .lineLimit(1)
+                    .help("Profile")
+            }
+            ForEach(headerActions) { item in
+                Button(action: item.action) {
+                    DashboardLucideIcon(glyph: item.glyph, size: 14)
+                        .frame(width: 28, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(DashboardIconButtonStyle())
+                .accessibilityLabel(item.title)
+                .help(item.title)
+            }
+        }
+        .padding(.leading, 16 + headerInsets.left)
+        .padding(.trailing, 10 + headerInsets.right)
+        .frame(height: 44)
+        .padding(.top, 8)
+    }
+
+    // MARK: Transcript
+
+    private var transcript: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(spacing: 0) {
+                    if let startingMessage {
+                        BotThreadOrigin(entry: startingMessage, botName: bot.name)
+                            .padding(.bottom, 20)
+                    }
+                    transcriptContent(proxy)
+                    Color.clear
+                        .frame(height: bottomClearance)
+                        .padding(.top, 24)
+                        .id(Self.endID)
+                }
+                .frame(maxWidth: 768)
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 32)
+                .padding(.top, 16)
+            }
+            .scrollIndicators(.never)
+            .defaultScrollAnchor(.bottom, for: .initialOffset)
+            .defaultScrollAnchor(.top, for: .sizeChanges)
+            .onScrollPhaseChange { _, phase in
+                isUserScrolling = phase == .interacting || phase == .tracking || phase == .decelerating
+            }
+            .onScrollGeometryChange(for: DashboardConversationGeometry.self) { geometry in
+                DashboardConversationGeometry(
+                    contentHeight: geometry.contentSize.height,
+                    isNearBottom: geometry.visibleRect.maxY >= geometry.contentSize.height - 90,
+                    viewportHeight: geometry.containerSize.height
+                )
+            } action: { old, new in
+                let resized = old.contentHeight != new.contentHeight || old.viewportHeight != new.viewportHeight
+                if resized, following, !isUserScrolling {
+                    Task { @MainActor in
+                        await Task.yield()
+                        guard following, !isUserScrolling else { return }
+                        proxy.scrollTo(Self.endID, anchor: .bottom)
+                    }
+                } else if !resized || isUserScrolling {
+                    // Any movement of the reader's own decides whether the newest reply stays in view.
+                    following = new.isNearBottom
+                }
+            }
+            .onChange(of: controller.loading) { _, loading in
+                guard !loading, following else { return }
+                jumpToEnd(proxy)
+            }
+            .overlay(alignment: .bottomTrailing) {
+                if !following {
+                    Button("Latest reply", systemImage: "arrow.down") {
+                        following = true
+                        jumpToEnd(proxy)
+                    }
+                    .buttonStyle(DashboardQuietButtonStyle())
+                    .padding(.trailing, 32)
+                    .padding(.bottom, bottomClearance)
+                }
+            }
+        }
+        .simultaneousGesture(TapGesture().onEnded { onActivate() })
+    }
+
+    private func jumpToEnd(_ proxy: ScrollViewProxy) {
+        Task { @MainActor in
+            await Task.yield()
+            proxy.scrollTo(Self.endID, anchor: .bottom)
+        }
+    }
+
+    @ViewBuilder private func transcriptContent(_ proxy: ScrollViewProxy) -> some View {
+        if controller.loading && entries.isEmpty && state.pending.isEmpty {
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text("Loading…").font(.system(size: 13)).foregroundStyle(DashboardPalette.mutedForeground)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.top, 40)
+        } else if entries.isEmpty && state.pending.isEmpty && !state.running && state.streaming == nil {
+            DashboardConversationEmptyState(
+                icon: isThread ? .gitBranch : .bot,
+                title: isThread ? "New thread" : "Say hello to \(bot.name)",
+                detail: isThread ? "It picks up from the message you chose." : "This is its main conversation. Start a thread from any message."
+            )
+        } else {
+            let hidden = max(0, entries.count - shownMessages)
+            if hidden > 0, let firstShown = entries[hidden...].first {
+                Button("Show earlier messages") {
+                    following = false
+                    shownMessages += Self.messagePage
+                    Task { @MainActor in
+                        await Task.yield()
+                        proxy.scrollTo(firstShown.id, anchor: .top)
+                    }
+                }
+                .buttonStyle(SettingsQuietButtonStyle())
+                .padding(.bottom, 24)
+            }
+            VStack(spacing: 12) {
+                ForEach(entries[hidden...]) { entry in
+                    BotMessageRow(
+                        entry: entry,
+                        botName: bot.name,
+                        replies: replies(to: entry),
+                        canStartThread: controller.isReady,
+                        onStartThread: { startThread(from: entry) },
+                        onOpenThread: onOpenThread
+                    )
+                    .id(entry.id)
+                }
+                ForEach(state.pending) { item in
+                    BotPendingMessage(text: item.text)
+                }
+                if state.streaming != nil || state.running {
+                    BotStreamingMessage(botName: bot.name, text: state.streaming)
+                }
+            }
+        }
+    }
+
+    private func startThread(from entry: PiBotDisplayEntry) {
+        Task {
+            if let thread = await controller.startThread(from: entry) {
+                onOpenThread(thread.conversationId)
+            }
+        }
+    }
+
+    // MARK: Composer
+
+    private var bottomClearance: CGFloat {
+        CGFloat(ConversationBottomOverlayLayout.scrollClearance(stackHeight: Double(bottomStackHeight)))
+    }
+
+    private var bottomStack: some View {
+        VStack(spacing: 8) {
+            if let error = controller.error {
+                BotDismissibleError(text: error) { controller.error = nil }
+                    .frame(maxWidth: 768)
+            }
+            HStack(alignment: .bottom, spacing: 8) {
+                Group {
+                    if showsClosePanel {
+                        DashboardPanelControlButton(glyph: .panelRightOpen, accessibilityLabel: "Remove panel", help: "Remove panel", action: onClosePanel)
+                    } else if showsAddPanel {
+                        Color.clear
+                            .frame(width: DashboardPanelControlButton.size, height: DashboardPanelControlButton.size)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                    }
+                }
+                .padding(.bottom, DashboardComposer.verticalPadding)
+                composer
+                Group {
+                    if showsAddPanel {
+                        DashboardPanelControlButton(glyph: .panelLeftOpen, accessibilityLabel: "Add panel", help: "Add panel", action: onAddPanel)
+                    } else if showsClosePanel {
+                        Color.clear
+                            .frame(width: DashboardPanelControlButton.size, height: DashboardPanelControlButton.size)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                    }
+                }
+                .padding(.bottom, DashboardComposer.verticalPadding)
+            }
+            .frame(maxWidth: 768 + (showsClosePanel || showsAddPanel ? 2 * (DashboardPanelControlButton.size + 8) : 0))
+        }
+        .padding(.horizontal, showsClosePanel || showsAddPanel ? 6 : 24)
+        .padding(.bottom, 16)
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { bottomStackHeight = $0 }
+    }
+
+    private var draftBinding: Binding<String> {
+        let key = key
+        let drafts = bots.drafts
+        return Binding(get: { drafts[key].text }, set: { drafts[key].text = $0 })
+    }
+
+    private var composerAttachments: [AgentMessageAttachmentDraft] {
+        bots.drafts[key].attachments.map { file in
+            .file(AgentFileAttachmentDraft(id: file.id, kind: .file, fileName: file.name, mimeType: "text/plain",
+                sizeBytes: Int64(file.text.utf8.count), contentHash: "", localURL: file.url))
+        }
+    }
+
+    private var stopAction: (() -> Void)? {
+        guard state.running, controller.isReady, !controller.stopping else { return nil }
+        return { stop() }
+    }
+
+    private var escapeAction: (() -> Bool)? {
+        guard state.running, controller.isReady else { return nil }
+        return {
+            stop()
+            return true
+        }
+    }
+
+    private var composer: some View {
+        let ready = controller.isReady
+        let placeholder = !ready ? "Connecting…" : isThread ? "Reply in thread…" : "Message \(bot.name)…"
+        return DashboardComposer(
+            placeholder: placeholder,
+            draft: draftBinding,
+            attachedNoteTitle: nil,
+            attachments: composerAttachments,
+            agentTools: nil,
+            sessionID: nil,
+            supportsGoals: false,
+            showsSessionControls: false,
+            showsPermissionControl: false,
+            sessionMetadataLoading: false,
+            sessionMetadata: nil,
+            sessionControlsDisabled: true,
+            sendDisabled: !ready || controller.sending,
+            startsCollapsed: startsComposerCollapsed,
+            collapseOverride: $composerCollapseOverride,
+            focusRequestGeneration: focusGeneration,
+            onActivate: onActivate,
+            onSelectModel: nil,
+            onSelectThinking: nil,
+            onSelectPermission: nil,
+            onAttachmentAction: { _ in chooseFiles() },
+            onRemoveAttachment: { id in bots.drafts[key].attachments.removeAll { $0.id == id } },
+            onOpenAttachment: { NSWorkspace.shared.open($0.localURL) },
+            onDropFiles: attach,
+            onCommandNavigation: { _ in false },
+            onSend: send,
+            onStop: stopAction,
+            directAttachmentLabel: "Attach text or code files",
+            onEscapeKey: escapeAction
+        )
+    }
+
+    private func chooseFiles() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.allowedContentTypes = [.text, .sourceCode, .json, .xml, .yaml, .commaSeparatedText, .html, .shellScript]
+        panel.message = "Choose text or code files, each smaller than 80 KB."
+        panel.begin { response in
+            guard response == .OK else { return }
+            _ = attach(panel.urls)
+        }
+    }
+
+    private func attach(_ urls: [URL]) -> Bool {
+        do {
+            let added = try urls.map(PiBotAttachmentDraft.read)
+            bots.drafts[key].attachments += added
+            controller.error = nil
+            return true
+        } catch {
+            controller.error = error.localizedDescription
+            return false
+        }
+    }
+
+    private func send() {
+        let draft = bots.drafts[key]
+        let text = PiBotAttachmentDraft.message(draft: draft.text, attachments: draft.attachments)
+        guard !text.isEmpty, controller.isReady, !controller.sending else { return }
+        following = true
+        // Cleared on the way out so typing keeps working; put back if the server refuses it.
+        bots.drafts[key] = BotDraftStore.Draft()
+        let drafts = bots.drafts
+        let key = key
+        Task {
+            let sent = await controller.send(text: text, context: context)
+            if !sent {
+                var restored = drafts[key]
+                restored.text = restored.text.isEmpty ? draft.text : draft.text + "\n" + restored.text
+                restored.attachments = draft.attachments + restored.attachments
+                drafts[key] = restored
+            }
+        }
+    }
+
+    private func stop() {
+        Task { await controller.stop() }
+    }
+}
+
+private struct BotMessageRow: View {
+    let entry: PiBotDisplayEntry
+    let botName: String
+    let replies: [PiBotThread]
+    let canStartThread: Bool
+    let onStartThread: () -> Void
+    let onOpenThread: (Int) -> Void
+    @State private var hovering = false
+    @State private var copied = false
+
+    var body: some View {
+        HStack(spacing: 0) {
+            if entry.isUser { Spacer(minLength: 72) }
+            VStack(alignment: entry.isUser ? .trailing : .leading, spacing: 6) {
+                if !entry.isUser {
+                    Text(botName)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(DashboardPalette.foreground)
+                        .padding(.horizontal, 4)
+                }
+                if !entry.text.isEmpty {
+                    if entry.isUser {
+                        ConversationUserBubble(content: entry.text) { EmptyView() }
+                    } else {
+                        ConversationResponse(content: entry.text, isStreaming: false, showsCopyButton: false)
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 2)
+                    }
+                }
+                if entry.isStopped {
+                    Text("Stopped")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(DashboardPalette.mutedForeground)
+                        .padding(.horizontal, 4)
+                }
+                if let error = entry.error {
+                    DashboardInlineError(text: error)
+                }
+                if !replies.isEmpty {
+                    BotThreadReplies(replies: replies, onOpen: onOpenThread)
+                }
+                actions
+            }
+            .frame(maxWidth: entry.isUser ? nil : .infinity, alignment: entry.isUser ? .trailing : .leading)
+            if !entry.isUser { Spacer(minLength: 0) }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+    }
+
+    private var actions: some View {
+        HStack(spacing: 4) {
+            Button {
+                NSPasteboard.general.clearContents()
+                copied = NSPasteboard.general.setString(entry.text, forType: .string)
+            } label: {
+                DashboardLucideIcon(glyph: copied ? .check : .copy, size: 13)
+                    .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(DashboardIconButtonStyle())
+            .help("Copy message")
+            .accessibilityLabel(copied ? "Message copied" : "Copy message")
+            if canStartThread {
+                Button(action: onStartThread) {
+                    HStack(spacing: 5) {
+                        DashboardLucideIcon(glyph: .gitBranch, size: 12)
+                        Text("Start thread").font(.system(size: 11.5, weight: .medium))
+                    }
+                    .padding(.horizontal, 6)
+                    .frame(height: 24)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(DashboardIconButtonStyle())
+            }
+        }
+        .opacity(hovering ? 1 : 0)
+        .allowsHitTesting(hovering)
+        .accessibilityHidden(!hovering)
+        .onChange(of: hovering) { _, isHovering in if !isHovering { copied = false } }
+    }
+}
+
+private struct BotThreadReplies: View {
+    let replies: [PiBotThread]
+    let onOpen: (Int) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(replies) { reply in
+                Button { onOpen(reply.conversationId) } label: {
+                    HStack(spacing: 6) {
+                        DashboardLucideIcon(glyph: .messageSquareReply, size: 12)
+                        Text(reply.label)
+                            .font(.system(size: 12, weight: .medium))
+                            .lineLimit(1)
+                    }
+                    .foregroundStyle(reply.title?.isEmpty == false ? DashboardPalette.success : DashboardPalette.mutedForeground)
+                    .padding(.horizontal, 6)
+                    .frame(height: 24)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Open thread: \(reply.label)")
+            }
+        }
+    }
+}
+
+private struct BotThreadOrigin: View {
+    let entry: PiBotDisplayEntry
+    let botName: String
+    @Environment(\.dashboardTheme) private var theme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Started from")
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundStyle(DashboardPalette.mutedForeground)
+            if entry.isUser {
+                Text(entry.text)
+                    .font(.system(size: 13))
+                    .lineLimit(8)
+                    .textSelection(.enabled)
+            } else {
+                Text(botName).font(.system(size: 12, weight: .medium))
+                ConversationResponse(content: entry.text, isStreaming: false, showsCopyButton: false)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(theme.palette.themeWhisper, in: RoundedRectangle(cornerRadius: DashboardMetrics.cardRadius, style: .continuous))
+    }
+}
+
+private struct BotPendingMessage: View {
+    let text: String
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Spacer(minLength: 72)
+            ConversationUserBubble(content: text) { EmptyView() }
+                .opacity(0.6)
+        }
+        .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+private struct BotStreamingMessage: View {
+    let botName: String
+    let text: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(botName)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(DashboardPalette.foreground)
+                .padding(.horizontal, 4)
+            if let text, !text.isEmpty {
+                ConversationResponse(content: text, isStreaming: true, showsCopyButton: false)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 2)
+            } else {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Thinking…")
+                        .font(.system(size: 13))
+                        .foregroundStyle(DashboardPalette.mutedForeground)
+                }
+                .padding(.horizontal, 4)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+private struct BotModelStatusBanner: View {
+    let text: PiBotModelStatusText
+    let onDismiss: () -> Void
+
+    private var tint: Color {
+        switch text.tone {
+        case .success: DashboardPalette.success
+        case .warning: DashboardPalette.warning
+        case .error: DashboardPalette.danger
+        }
+    }
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 9) {
+            DashboardLucideIcon(glyph: text.tone == .success ? .circleCheck : .alertCircle, size: 15)
+                .foregroundStyle(tint)
+                .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 2 }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(text.title).font(.system(size: 12.5, weight: .medium))
+                ForEach(text.lines, id: \.self) { line in
+                    Text(line)
+                        .font(.system(size: 12))
+                        .foregroundStyle(DashboardPalette.mutedForeground)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer(minLength: 8)
+            Button("Dismiss", action: onDismiss)
+                .buttonStyle(SettingsQuietButtonStyle())
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(tint.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
+        .accessibilityElement(children: .contain)
+    }
+}
+
+private struct BotDismissibleError: View {
+    let text: String
+    let onDismiss: () -> Void
+
+    var body: some View {
+        HStack(spacing: 9) {
+            DashboardLucideIcon(glyph: .alertCircle, size: 15)
+            Text(text).lineLimit(3)
+            Spacer(minLength: 8)
+            Button(action: onDismiss) {
+                DashboardLucideIcon(glyph: .close, size: 12)
+                    .frame(width: 22, height: 22)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Dismiss")
+        }
+        .font(.system(size: 12))
+        .foregroundStyle(DashboardPalette.danger)
+        .padding(.leading, 12)
+        .padding(.trailing, 6)
+        .padding(.vertical, 6)
+        .background(DashboardPalette.danger.opacity(0.07))
+        .clipShape(RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
+    }
 }
 
 struct BotsUnavailableView: View {
@@ -388,7 +897,7 @@ struct BotsUnavailableView: View {
         case .reconnecting: "Reconnecting to your bots"
         case .stopped: "Pi Bot is stopped"
         case .failed: "Pi Bot could not start"
-        case .ready: runtime.health == nil || runtime.canEmbed ? "Connecting…" : "Update this Pi Bot"
+        case .ready: runtime.health == nil || runtime.isCompatible ? "Connecting…" : "Update this Pi Bot"
         }
     }
 
@@ -396,8 +905,8 @@ struct BotsUnavailableView: View {
         switch runtime.phase {
         case .notConfigured: "Bots run on one device: this Mac, or a Mac or Linux box on your Tailscale network."
         case .failed, .reconnecting: runtime.error ?? runtime.message
-        case .ready where runtime.health != nil && !runtime.canEmbed:
-            "Its version is older than this app can show. Update Pi Bot on \(runtime.target?.displayName ?? "that device"), then reconnect."
+        case .ready where runtime.health != nil && !runtime.isCompatible:
+            "Its version is older than this app can use. Update Pi Bot on \(runtime.target?.displayName ?? "that device"), then reconnect."
         default: runtime.message
         }
     }

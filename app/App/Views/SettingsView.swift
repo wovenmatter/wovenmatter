@@ -152,7 +152,7 @@ struct SettingsView: View {
                     onOpenSection: { section = .botsSection($0) }
                 )
             case .botsSection(let botSection):
-                SettingsBotsWebPage(
+                SettingsBotsSectionPage(
                     bots: model.bots,
                     section: botSection,
                     reservesRailControlSpace: reservesRailControlSpace,

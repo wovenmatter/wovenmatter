@@ -1287,7 +1287,6 @@ struct WorkspaceView: View {
 
     private func closePanel(_ panelID: DashboardChatPanelID) {
         guard chatPanels.closePanel(panelID) else { return }
-        model.bots.webSessions.release(panelID: panelID)
         synchronizeSelectionToActivePanel()
     }
 
@@ -1633,6 +1632,7 @@ struct DashboardWorkspaceSurface: View {
                 context: botContext(for: panelID),
                 headerInsets: botHeaderInsets(for: panelID),
                 focusGeneration: chatPanels.focusRequest?.panelID == panelID ? chatPanels.focusRequest?.generation : nil,
+                startsComposerCollapsed: panelID != .primary,
                 showsClosePanel: chatPanels.canClosePanel(panelID),
                 showsAddPanel: chatPanels.canAddPanel(from: panelID),
                 onActivate: { onActivatePanel(panelID) },

@@ -13,6 +13,9 @@ final class BotsModel {
     private(set) var groups: [PiBotGroup] = []
     private(set) var threadsByBot: [String: [PiBotThread]] = [:]
     private(set) var capabilities: Set<String> = []
+    private(set) var onboarding: PiBotOnboardingStatus?
+    /// The bot list has arrived from this server at least once.
+    private(set) var hasLoadedBots = false
     private(set) var loadError: String?
     var notice: String?
 
@@ -22,8 +25,17 @@ final class BotsModel {
     @ObservationIgnored private var eventTask: Task<Void, Never>?
     @ObservationIgnored private var loadedThreads = Set<String>()
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
+    @ObservationIgnored private var conversations: [BotConversationKey: BotConversationController] = [:]
+    @ObservationIgnored private var loginObservers: [String: (PiBotLoginEvent) -> Void] = [:]
+    @ObservationIgnored private var memoryObservers: [UUID: (String) -> Void] = [:]
+    /// Bumped when the server says its bots, or the settings behind them, changed.
+    private(set) var settingsRevision = 0
 
-    let webSessions = BotWebSessionStore()
+    /// Unsent text and attachments, by bot and conversation. Closing a pane keeps them.
+    let drafts = BotDraftStore()
+
+    /// The socket Settings and conversations use. Nil until a server is ready.
+    var connectedClient: PiBotClient? { connection == .open ? client : nil }
 
     var layout: PiBotSidebarLayout { PiBotSidebarLayout(bots: bots, groups: groups) }
     var isConnected: Bool { connection == .open }
@@ -62,7 +74,9 @@ final class BotsModel {
             groups = []
             threadsByBot = [:]
             loadedThreads = []
-            webSessions.unloadAll()
+            onboarding = nil
+            hasLoadedBots = false
+            forgetConversations()
         }
         runtime = snapshot
         guard base != clientBase else { return }
@@ -82,21 +96,86 @@ final class BotsModel {
         eventTask?.cancel(); eventTask = nil
         if let client { Task { await client.invalidate() } }
         client = nil; clientBase = nil
-        connection = .closed
+        setConnection(.closed)
         capabilities = []
+    }
+
+    private func setConnection(_ state: PiBotClient.ConnectionState) {
+        guard connection != state else { return }
+        connection = state
+        if state != .open { conversations.values.forEach { $0.connectionLost() } }
+    }
+
+    // MARK: Conversations
+
+    /// The one state for a conversation, shared by every panel showing it.
+    func conversation(botID: String, conversationID: Int?) -> BotConversationController {
+        let key = BotConversationKey(botID: botID, conversationID: conversationID)
+        if let existing = conversations[key] { return existing }
+        // Conversations nobody is looking at don't accumulate over a long session.
+        if conversations.count >= 16 {
+            for (other, controller) in conversations where !controller.isAttached { conversations[other] = nil }
+        }
+        let controller = BotConversationController(bots: self, key: key)
+        conversations[key] = controller
+        return controller
+    }
+
+    private func forgetConversations() {
+        conversations.values.forEach { $0.forget() }
+        conversations = [:]
+    }
+
+    /// Asks a client that has been told to restart to come back promptly.
+    func expectRestart() { if let client { Task { await client.expectRestart() } } }
+
+    /// Runs `body` until cancelled with each login event for `loginID`.
+    func observeLogin(_ loginID: String, _ observer: @escaping (PiBotLoginEvent) -> Void) { loginObservers[loginID] = observer }
+    func stopObservingLogin(_ loginID: String) { loginObservers[loginID] = nil }
+
+    func observeMemory(_ observer: @escaping (String) -> Void) -> UUID {
+        let token = UUID()
+        memoryObservers[token] = observer
+        return token
+    }
+    func stopObservingMemory(_ token: UUID) { memoryObservers[token] = nil }
+
+    func refreshOnboarding() async {
+        guard let client = connectedClient else { return }
+        do {
+            let status = try await client.onboardingStatus()
+            guard client === self.client else { return }
+            onboarding = status
+        } catch {
+            guard client === self.client else { return }
+            loadError = error.localizedDescription
+        }
     }
 
     private func handle(_ event: PiBotClient.Event) {
         switch event {
         case .state(let state):
-            connection = state
+            setConnection(state)
         case .hello(let health):
             capabilities = Set(health.capabilities ?? [])
             scheduleRefresh()
-        case .botsChanged, .groupsChanged:
+            conversations.values.forEach { $0.connectionOpened() }
+            Task { await refreshOnboarding() }
+        case .botsChanged:
+            settingsRevision += 1
+            scheduleRefresh()
+        case .groupsChanged:
             scheduleRefresh()
         case .threadsChanged(let botID):
             if loadedThreads.contains(botID) { Task { await loadThreads(botID: botID) } }
+        case .memoryChanged(let botID):
+            memoryObservers.values.forEach { $0(botID) }
+        case .conversation(let botID, let conversationID, let event):
+            for controller in conversations.values where controller.key.botID == botID && controller.viewedID == conversationID {
+                controller.receive(event)
+            }
+        case .login(let loginID, let event):
+            loginObservers[loginID]?(event)
         }
     }
 
@@ -117,6 +196,7 @@ final class BotsModel {
             let latestGroups = capabilities.contains("groups") ? try await client.groups() : []
             guard client === self.client else { return }
             bots = latest
+            hasLoadedBots = true
             groups = latestGroups
             loadError = nil
             let present = Set(latest.map(\.id))
@@ -143,13 +223,13 @@ final class BotsModel {
     }
 
     private func attempt(_ work: (PiBotClient) async throws -> Void) async {
-        guard let client else { notice = "Bots are not connected."; return }
+        guard let client = connectedClient else { notice = "Bots are not connected."; return }
         do { try await work(client) }
         catch { notice = error.localizedDescription }
     }
 
     func createBot(name: String) async -> PiBotSummary? {
-        guard let client else { notice = "Bots are not connected."; return nil }
+        guard let client = connectedClient else { notice = "Bots are not connected."; return nil }
         do {
             let bot = try await client.createBot(name: name)
             await reload()

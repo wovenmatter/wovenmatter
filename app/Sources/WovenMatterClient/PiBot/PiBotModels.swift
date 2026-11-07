@@ -1,14 +1,27 @@
 import Foundation
 
-/// Wire shapes from Pi Bot's WebSocket protocol. Pi Bot owns them; decode only what
-/// the native sidebar needs and tolerate fields added upstream.
+/// Wire shapes from Pi Bot's WebSocket protocol. Pi Bot owns them; decode what the
+/// native client shows and tolerate fields added upstream.
 public struct PiBotSummary: Codable, Equatable, Identifiable, Sendable {
     public struct ModelStatus: Codable, Equatable, Sendable {
+        /// A provider limit the server observed. Only what the provider said.
+        public struct Limit: Codable, Equatable, Sendable {
+            public let model: String
+            public let account: String
+            public let kind: String
+            public let resetsAt: Double?
+            public let retryAt: Double
+            public init(model: String, account: String, kind: String, resetsAt: Double? = nil, retryAt: Double = 0) {
+                self.model = model; self.account = account; self.kind = kind; self.resetsAt = resetsAt; self.retryAt = retryAt
+            }
+        }
         public let kind: String
+        public let at: Double?
         public let primary: String?
         public let active: String?
-        public init(kind: String, primary: String? = nil, active: String? = nil) {
-            self.kind = kind; self.primary = primary; self.active = active
+        public let limits: [Limit]?
+        public init(kind: String, at: Double? = nil, primary: String? = nil, active: String? = nil, limits: [Limit]? = nil) {
+            self.kind = kind; self.at = at; self.primary = primary; self.active = active; self.limits = limits
         }
     }
 
@@ -20,10 +33,15 @@ public struct PiBotSummary: Codable, Equatable, Identifiable, Sendable {
     public let managerId: String?
     public let orchestrator: Bool
     public let groupId: String?
+    public let profileId: String?
+    public let profileName: String?
+    public let defaultProfile: Bool?
     public let modelStatus: ModelStatus?
 
     public init(id: String, name: String, createdAt: String = "", kind: String = "bot", manager: Bool = false,
-                managerId: String? = nil, orchestrator: Bool = false, groupId: String? = nil, modelStatus: ModelStatus? = nil) {
+                managerId: String? = nil, orchestrator: Bool = false, groupId: String? = nil, profileId: String? = nil,
+                profileName: String? = nil, defaultProfile: Bool? = nil, modelStatus: ModelStatus? = nil) {
+        self.profileId = profileId; self.profileName = profileName; self.defaultProfile = defaultProfile
         self.id = id; self.name = name; self.createdAt = createdAt; self.kind = kind; self.manager = manager
         self.managerId = managerId; self.orchestrator = orchestrator; self.groupId = groupId; self.modelStatus = modelStatus
     }
@@ -33,12 +51,16 @@ public struct PiBotSummary: Codable, Equatable, Identifiable, Sendable {
 
 public struct PiBotThread: Codable, Equatable, Identifiable, Sendable {
     public let conversationId: Int
+    public let parentConversationId: Int?
+    public let forkedAt: Int?
     public let title: String?
     public let createdAt: String
     public let pinned: Bool?
 
-    public init(conversationId: Int, title: String?, createdAt: String, pinned: Bool? = nil) {
-        self.conversationId = conversationId; self.title = title; self.createdAt = createdAt; self.pinned = pinned
+    public init(conversationId: Int, parentConversationId: Int? = nil, forkedAt: Int? = nil, title: String?,
+                createdAt: String, pinned: Bool? = nil) {
+        self.conversationId = conversationId; self.parentConversationId = parentConversationId; self.forkedAt = forkedAt
+        self.title = title; self.createdAt = createdAt; self.pinned = pinned
     }
 
     public var id: Int { conversationId }
@@ -297,7 +319,8 @@ public struct PiBotRuntimeSnapshot: Codable, Equatable, Sendable {
     }
 
     /// Pi Bot's client can run inside this app only from this capability on.
-    public var canEmbed: Bool { health?.supports("host.embed") == true }
+    /// Old enough servers lack the protocol Woven's bot UI runs on.
+    public var isCompatible: Bool { health?.supports("groups") == true && health?.supports("message.context") == true }
 
     public var updateAvailable: Bool {
         guard target?.ownership == .managed, let installedCommit, let bundledCommit else { return false }

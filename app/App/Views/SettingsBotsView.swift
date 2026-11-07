@@ -39,7 +39,6 @@ enum PiBotSettingsSection: String, CaseIterable, Identifiable, Sendable {
         case .general: .cpu
         }
     }
-    var hash: String { self == .general ? "#/settings" : "#/settings/" + rawValue }
 }
 
 struct SettingsBotsView: View {
@@ -75,7 +74,7 @@ struct SettingsBotsView: View {
         ) {
             deploymentCard
             devicesCard
-            if runtime.phase == .ready, runtime.canEmbed {
+            if runtime.phase == .ready, runtime.isCompatible {
                 wovenCard
                 settingsCard
             } else if runtime.phase == .ready {
@@ -436,43 +435,4 @@ private struct BotsConfirmation {
     let message: String
     let destructive: Bool
     let command: BotsCommand
-}
-
-/// One Pi Bot settings section, embedded, under Woven Matter's own back navigation.
-struct SettingsBotsWebPage: View {
-    @Bindable var bots: BotsModel
-    let section: PiBotSettingsSection
-    var reservesRailControlSpace = false
-    let onBack: () -> Void
-    let onOpenLink: (URL) -> Void
-    @Environment(\.dashboardTheme) private var theme
-    /// Owned by this page: the main window and the Settings window can each show one.
-    @State private var session = BotWebSession()
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            VStack(alignment: .leading, spacing: 8) {
-                SettingsBackButton(title: "Bots", action: onBack)
-                Text(section.title).font(.system(size: 22, weight: .semibold)).tracking(-0.35)
-            }
-            .padding(.horizontal, 24)
-            .padding(.top, reservesRailControlSpace ? 76 : 28)
-            if bots.runtime.phase == .ready, bots.runtime.baseURL != nil, bots.runtime.canEmbed {
-                BotWebView(session: session)
-            } else {
-                BotsUnavailableView(runtime: bots.runtime, onOpenSettings: onBack)
-            }
-        }
-        .task(id: BotSettingsTask(base: bots.runtime.baseURL, section: section, theme: theme.rawValue)) {
-            guard let base = bots.runtime.baseURL, bots.runtime.phase == .ready, bots.runtime.canEmbed else { return }
-            session.onOpenExternal = onOpenLink
-            session.show(base: base, hash: section.hash, theme: theme.rawValue)
-        }
-    }
-}
-
-private struct BotSettingsTask: Hashable {
-    let base: URL?
-    let section: PiBotSettingsSection
-    let theme: String
 }

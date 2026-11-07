@@ -114,16 +114,3 @@ struct PiBotRuntimeSupervisorTests {
         await supervisor.shutdown()
     }
 }
-
-struct BotWebRouteTests {
-    @Test @MainActor func routesRoundTripBetweenTargetsAndHashes() {
-        #expect(BotWebSession.hash(for: DashboardBotTarget(botID: "a")) == "#/a")
-        #expect(BotWebSession.hash(for: DashboardBotTarget(botID: "a", conversationID: 7)) == "#/a/7")
-        #expect(BotWebSession.hash(for: DashboardBotTarget(botID: "a", conversationID: 7, showsThreadBesideMain: true)) == "#/a/7?view=split")
-        #expect(BotWebSession.target(from: ["botId": "a", "conversationId": 7, "threadView": "split"])
-            == DashboardBotTarget(botID: "a", conversationID: 7, showsThreadBesideMain: true))
-        #expect(BotWebSession.target(from: ["botId": "a"]) == DashboardBotTarget(botID: "a"))
-        #expect(BotWebSession.target(from: ["settings": true, "botId": "a"]) == nil)
-        #expect(BotWebSession.target(from: [:]) == nil)
-    }
-}
