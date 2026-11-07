@@ -27,6 +27,7 @@ final class BotsModel {
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
     @ObservationIgnored private var conversations: [BotConversationKey: BotConversationController] = [:]
     @ObservationIgnored private var loginObservers: [String: (PiBotLoginEvent) -> Void] = [:]
+    @ObservationIgnored private var loginBacklog = PiBotLoginBacklog()
     @ObservationIgnored private var memoryObservers: [UUID: (String) -> Void] = [:]
     /// Bumped when the server says its bots, or the settings behind them, changed.
     private(set) var settingsRevision = 0
@@ -96,6 +97,8 @@ final class BotsModel {
         eventTask?.cancel(); eventTask = nil
         if let client { Task { await client.invalidate() } }
         client = nil; clientBase = nil
+        loginObservers = [:]
+        loginBacklog.removeAll()
         setConnection(.closed)
         capabilities = []
     }
@@ -130,7 +133,10 @@ final class BotsModel {
     func expectRestart() { if let client { Task { await client.expectRestart() } } }
 
     /// Runs `body` until cancelled with each login event for `loginID`.
-    func observeLogin(_ loginID: String, _ observer: @escaping (PiBotLoginEvent) -> Void) { loginObservers[loginID] = observer }
+    func observeLogin(_ loginID: String, _ observer: @escaping (PiBotLoginEvent) -> Void) {
+        loginObservers[loginID] = observer
+        for event in loginBacklog.take(loginID: loginID) { observer(event) }
+    }
     func stopObservingLogin(_ loginID: String) { loginObservers[loginID] = nil }
 
     func observeMemory(_ observer: @escaping (String) -> Void) -> UUID {
@@ -140,7 +146,7 @@ final class BotsModel {
     }
     func stopObservingMemory(_ token: UUID) { memoryObservers[token] = nil }
 
-    func refreshOnboarding() async {
+    func refreshOnboarding(onError: ((String) -> Void)? = nil) async {
         guard let client = connectedClient else { return }
         do {
             let status = try await client.onboardingStatus()
@@ -149,6 +155,7 @@ final class BotsModel {
         } catch {
             guard client === self.client else { return }
             loadError = error.localizedDescription
+            onError?(error.localizedDescription)
         }
     }
 
@@ -175,7 +182,8 @@ final class BotsModel {
                 controller.receive(event)
             }
         case .login(let loginID, let event):
-            loginObservers[loginID]?(event)
+            if let observer = loginObservers[loginID] { observer(event) }
+            else { loginBacklog.append(event, loginID: loginID) }
         }
     }
 

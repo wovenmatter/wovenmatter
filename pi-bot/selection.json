@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "repository": "https://github.com/wovenmatter/pi-bot.git",
-  "commit": "5b09e43da06a8dd2168c89168afc4a04107eb94d",
+  "commit": "3c73d3dc0c6436a68b862355fdb467ecf9f40a00",
   "protocol": 1,
   "pnpm": "12.16.1",
   "node": {

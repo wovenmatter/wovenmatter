@@ -604,8 +604,7 @@ if [ -n "$managed_port" ]; then
 elif [ -n "$port" ]; then ! port_busy "$port" || abort port 'Requested port is in use.'
 else port="$(free_port)" || abort port 'No free loopback port is available.'; fi
 write_config() {
-  printf '[server]\nhost = "127.0.0.1"\nport = %s\nweb_dir = ' "$2"; json "$1/apps/web/dist"
-  printf '\n\n[storage]\ndata_dir = '; json "$3"
+  printf '[server]\nhost = "127.0.0.1"\nport = %s\n\n[storage]\ndata_dir = ' "$2"; json "$3"
   printf '\n\n[credentials]\nbackend = "encrypted-sqlite"\n\n[environment]\nbackend = "%s"\n' "$4"
   case "$4" in
     docker) printf 'binary = '; json "$docker_cli"; printf '\n' ;;

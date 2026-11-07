@@ -1633,6 +1633,7 @@ struct DashboardWorkspaceSurface: View {
                 headerInsets: botHeaderInsets(for: panelID),
                 focusGeneration: chatPanels.focusRequest?.panelID == panelID ? chatPanels.focusRequest?.generation : nil,
                 startsComposerCollapsed: panelID != .primary,
+                usesCompactSpacing: chatPanels.hasAuxiliaryPanels,
                 showsClosePanel: chatPanels.canClosePanel(panelID),
                 showsAddPanel: chatPanels.canAddPanel(from: panelID),
                 onActivate: { onActivatePanel(panelID) },

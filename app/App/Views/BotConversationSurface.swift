@@ -14,6 +14,7 @@ struct BotConversationSurface: View {
     let headerInsets: BotHeaderInsets
     let focusGeneration: Int?
     let startsComposerCollapsed: Bool
+    let usesCompactSpacing: Bool
     let showsClosePanel: Bool
     let showsAddPanel: Bool
     let onActivate: () -> Void
@@ -32,7 +33,8 @@ struct BotConversationSurface: View {
                 unavailable
             } else if bots.onboarding?.needed == true {
                 ZStack {
-                    BotOnboardingView(bots: bots, onOpenLink: onOpenLink)
+                    // A provider's sign-in page belongs in the browser that has the user's accounts.
+                    BotOnboardingView(bots: bots, onOpenLink: { NSWorkspace.shared.open($0) })
                     controls
                 }
             } else if let bot {
@@ -44,6 +46,7 @@ struct BotConversationSurface: View {
                     headerInsets: headerInsets,
                     focusGeneration: focusGeneration,
                     startsComposerCollapsed: startsComposerCollapsed,
+                    usesCompactSpacing: usesCompactSpacing,
                     showsClosePanel: showsClosePanel,
                     showsAddPanel: showsAddPanel,
                     onActivate: onActivate,
@@ -106,6 +109,7 @@ private struct BotConversationWorkspace: View {
     let headerInsets: BotHeaderInsets
     let focusGeneration: Int?
     let startsComposerCollapsed: Bool
+    let usesCompactSpacing: Bool
     let showsClosePanel: Bool
     let showsAddPanel: Bool
     let onActivate: () -> Void
@@ -123,7 +127,7 @@ private struct BotConversationWorkspace: View {
             HStack(spacing: 0) {
                 if split {
                     pane(conversationID: nil, insets: BotHeaderInsets(left: headerInsets.left, right: 0),
-                         showsClose: showsClosePanel, showsAdd: false)
+                         showsClose: showsClosePanel, showsAdd: false, compact: true)
                     resizer(available: geometry.size.width)
                     threadPane(wide: wide, split: true, insets: BotHeaderInsets(left: 0, right: headerInsets.right), showsClose: false, showsAdd: showsAddPanel)
                         .frame(width: clampedThreadWidth(available: geometry.size.width))
@@ -141,7 +145,7 @@ private struct BotConversationWorkspace: View {
     }
 
     private func pane(conversationID: Int?, insets: BotHeaderInsets, showsClose: Bool, showsAdd: Bool,
-                      actions: [BotPaneAction] = []) -> some View {
+                      compact: Bool = false, actions: [BotPaneAction] = []) -> some View {
         BotConversationPane(
             bots: bots,
             bot: bot,
@@ -151,6 +155,7 @@ private struct BotConversationWorkspace: View {
             headerActions: actions,
             focusGeneration: focusGeneration,
             startsComposerCollapsed: startsComposerCollapsed,
+            usesCompactSpacing: usesCompactSpacing || compact,
             showsClosePanel: showsClose,
             showsAddPanel: showsAdd,
             onActivate: onActivate,
@@ -174,7 +179,7 @@ private struct BotConversationWorkspace: View {
         actions.append(BotPaneAction(glyph: .close, title: "Back to Main") {
             onRoute(DashboardBotTarget(botID: bot.id))
         })
-        return pane(conversationID: conversationID, insets: insets, showsClose: showsClose, showsAdd: showsAdd, actions: actions)
+        return pane(conversationID: conversationID, insets: insets, showsClose: showsClose, showsAdd: showsAdd, compact: split, actions: actions)
     }
 
     private func resizer(available: CGFloat) -> some View {
@@ -232,6 +237,7 @@ private struct BotConversationPane: View {
     let headerActions: [BotPaneAction]
     let focusGeneration: Int?
     let startsComposerCollapsed: Bool
+    let usesCompactSpacing: Bool
     let showsClosePanel: Bool
     let showsAddPanel: Bool
     let onActivate: () -> Void
@@ -256,6 +262,8 @@ private struct BotConversationPane: View {
     private var fromThread: Bool { thread.map { $0.parentConversationId != controller.mainID } ?? false }
     private var entries: [PiBotDisplayEntry] { controller.visibleEntries }
     private var state: PiBotConversationState { controller.state }
+    private var isEmpty: Bool { entries.isEmpty && state.pending.isEmpty && !state.running && state.streaming == nil }
+    private var isNewThread: Bool { key.conversationID != nil && isEmpty }
     private var startingMessage: PiBotDisplayEntry? {
         guard isThread else { return nil }
         return controller.origin ?? thread.flatMap { thread in state.entries.first { $0.id == thread.forkedAt } }
@@ -283,6 +291,7 @@ private struct BotConversationPane: View {
                 bottomStack
             }
         }
+        .background(theme.palette.workspace)
         .environment(\.conversationLinkHandler, onOpenLink)
         .onAppear {
             guard attached == nil else { return }
@@ -360,7 +369,14 @@ private struct BotConversationPane: View {
                 .padding(.top, 16)
             }
             .scrollIndicators(.never)
-            .defaultScrollAnchor(.bottom, for: .initialOffset)
+            // Text fades under the header instead of being cut off at it.
+            .mask {
+                VStack(spacing: 0) {
+                    LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: 14)
+                    Color.black
+                }
+            }
+            .defaultScrollAnchor(isNewThread ? .top : .bottom, for: .initialOffset)
             .defaultScrollAnchor(.top, for: .sizeChanges)
             .onScrollPhaseChange { _, phase in
                 isUserScrolling = phase == .interacting || phase == .tracking || phase == .decelerating
@@ -373,7 +389,9 @@ private struct BotConversationPane: View {
                 )
             } action: { old, new in
                 let resized = old.contentHeight != new.contentHeight || old.viewportHeight != new.viewportHeight
-                if resized, following, !isUserScrolling {
+                if isNewThread {
+                    // A new thread opens at the top, with its starting message in view.
+                } else if resized, following, !isUserScrolling {
                     Task { @MainActor in
                         await Task.yield()
                         guard following, !isUserScrolling else { return }
@@ -385,7 +403,12 @@ private struct BotConversationPane: View {
                 }
             }
             .onChange(of: controller.loading) { _, loading in
-                guard !loading, following else { return }
+                guard !loading, following, !isNewThread else { return }
+                jumpToEnd(proxy)
+            }
+            // A conversation already loaded opens at its newest message, too.
+            .onAppear {
+                guard !controller.loading, following, !isNewThread else { return }
                 jumpToEnd(proxy)
             }
             .overlay(alignment: .bottomTrailing) {
@@ -418,7 +441,17 @@ private struct BotConversationPane: View {
             }
             .frame(maxWidth: .infinity)
             .padding(.top, 40)
-        } else if entries.isEmpty && state.pending.isEmpty && !state.running && state.streaming == nil {
+        } else if isEmpty, startingMessage != nil {
+            VStack(spacing: 4) {
+                Text("New thread").font(.system(size: 15, weight: .semibold))
+                Text("It picks up from the message you chose.")
+                    .font(.system(size: 13))
+                    .foregroundStyle(DashboardPalette.mutedForeground)
+            }
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: .infinity)
+            .padding(.top, 12)
+        } else if isEmpty {
             DashboardConversationEmptyState(
                 icon: isThread ? .gitBranch : .bot,
                 title: isThread ? "New thread" : "Say hello to \(bot.name)",
@@ -476,9 +509,11 @@ private struct BotConversationPane: View {
 
     private var bottomStack: some View {
         VStack(spacing: 8) {
-            if let error = controller.error {
+            // A failed reply already shows its error on the message itself.
+            if let error = controller.error, error != entries.last?.error {
                 BotDismissibleError(text: error) { controller.error = nil }
                     .frame(maxWidth: 768)
+                    .padding(.horizontal, showsClosePanel || showsAddPanel ? DashboardPanelControlButton.size + 8 : 0)
             }
             HStack(alignment: .bottom, spacing: 8) {
                 Group {
@@ -493,6 +528,7 @@ private struct BotConversationPane: View {
                 }
                 .padding(.bottom, DashboardComposer.verticalPadding)
                 composer
+                    .frame(maxWidth: 768)
                 Group {
                     if showsAddPanel {
                         DashboardPanelControlButton(glyph: .panelLeftOpen, accessibilityLabel: "Add panel", help: "Add panel", action: onAddPanel)
@@ -505,11 +541,12 @@ private struct BotConversationPane: View {
                 }
                 .padding(.bottom, DashboardComposer.verticalPadding)
             }
-            .frame(maxWidth: 768 + (showsClosePanel || showsAddPanel ? 2 * (DashboardPanelControlButton.size + 8) : 0))
         }
-        .padding(.horizontal, showsClosePanel || showsAddPanel ? 6 : 24)
-        .padding(.bottom, 16)
-        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { bottomStackHeight = $0 }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, usesCompactSpacing ? 12 : 32)
+        .padding(.top, 8)
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { bottomStackHeight = max(0, $0) }
+        .padding(.bottom, ConversationBottomOverlayLayout.bottomOffset)
     }
 
     private var draftBinding: Binding<String> {
@@ -645,7 +682,7 @@ private struct BotMessageRow: View {
                 }
                 if !entry.text.isEmpty {
                     if entry.isUser {
-                        ConversationUserBubble(content: entry.text) { EmptyView() }
+                        ConversationUserBubble(content: entry.text.trimmingCharacters(in: .whitespacesAndNewlines)) { EmptyView() }
                     } else {
                         ConversationResponse(content: entry.text, isStreaming: false, showsCopyButton: false)
                             .padding(.horizontal, 4)
@@ -700,9 +737,8 @@ private struct BotMessageRow: View {
                 .buttonStyle(DashboardIconButtonStyle())
             }
         }
-        .opacity(hovering ? 1 : 0)
-        .allowsHitTesting(hovering)
-        .accessibilityHidden(!hovering)
+        // Nearly invisible rather than hidden, so VoiceOver and the keyboard still reach them.
+        .opacity(hovering ? 1 : 0.001)
         .onChange(of: hovering) { _, isHovering in if !isHovering { copied = false } }
     }
 }
@@ -839,7 +875,7 @@ private struct BotModelStatusBanner: View {
     }
 }
 
-private struct BotDismissibleError: View {
+struct BotDismissibleError: View {
     let text: String
     let onDismiss: () -> Void
 

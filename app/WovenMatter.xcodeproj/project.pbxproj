@@ -167,11 +167,24 @@
 		E28499E4C2D5B48EEE8DC498 /* ApplicationModel+Bots.swift in Sources */ = {isa = PBXBuildFile; fileRef = 969567647C35836A4EB30551 /* ApplicationModel+Bots.swift */; };
 		BEDC6AB2114D9EEA07B99418 /* BackendBotsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A603D65A1C1E75AAB8AF89D /* BackendBotsService.swift */; };
 		E88A8C82622D17428EA4D912 /* BotsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A01C0BFDB37FC20485E98D8 /* BotsModel.swift */; };
+		3697736CB63899E6B1B3A7BD /* BotConversationController.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3383A8CF03C94A295F8BFAB /* BotConversationController.swift */; };
 		443D5D95EA55098A1F2F5F5C /* PiBotRuntimeSupervisor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F8D1F1FEDB47370162C9C14 /* PiBotRuntimeSupervisor.swift */; };
 		E71AABCCC66026E6318FBD29 /* SettingsMCPAccessSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74C188D9E69C4993381D98D1 /* SettingsMCPAccessSection.swift */; };
 		9751CD46C4F44301F5724297 /* SettingsBotsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FCFD40BE16F23BEF01EC54C /* SettingsBotsView.swift */; };
 		07CA66F71A1C7A036C6CF8F4 /* DashboardBotsSidebarSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE4243B3E426F7661EAE7064 /* DashboardBotsSidebarSection.swift */; };
 		1292F0F1EA444D9BD6ED6194 /* BotConversationSurface.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3CC5476EE428BA0767248F7E /* BotConversationSurface.swift */; };
+		7964BA5A54A3495C39752CCD /* SettingsBotsTeams.swift in Sources */ = {isa = PBXBuildFile; fileRef = BAF2826C97FFAAECD582B73B /* SettingsBotsTeams.swift */; };
+		EECF0E4CD0968832CC8E7783 /* SettingsBotsSearch.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE4D2803DAEF648CA73B43E6 /* SettingsBotsSearch.swift */; };
+		35B1475C056707F79975973B /* SettingsBotsProfiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = 869B55034D9B3A3BC666E2CF /* SettingsBotsProfiles.swift */; };
+		46FB165530D7766320A17B03 /* SettingsBotsProfileEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C269991D9359E701DBA9771 /* SettingsBotsProfileEditor.swift */; };
+		5FB89AE898F7387B7B2D9B4E /* SettingsBotsOnboarding.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4DC465D8AC2E96D243D7F086 /* SettingsBotsOnboarding.swift */; };
+		CF52BA09822D8FB507452311 /* SettingsBotsMemory.swift in Sources */ = {isa = PBXBuildFile; fileRef = D27853FF3941D9112587F886 /* SettingsBotsMemory.swift */; };
+		998D360774CD9F930D776EA0 /* SettingsBotsLogin.swift in Sources */ = {isa = PBXBuildFile; fileRef = 233A3665C12013C4841C0698 /* SettingsBotsLogin.swift */; };
+		56A5E2C23E8F5863793E7EAF /* SettingsBotsGitHub.swift in Sources */ = {isa = PBXBuildFile; fileRef = 31B2AEB7E12A1863606CFA32 /* SettingsBotsGitHub.swift */; };
+		AFB18EF1F269753D99192159 /* SettingsBotsControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8116307205B5EFD0A6FCD384 /* SettingsBotsControls.swift */; };
+		BBAEE128DF4A5814F6260333 /* SettingsBotsConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A49B9E9DAE84D88057C5986 /* SettingsBotsConfig.swift */; };
+		045C4DFD9A0B84775D00DB22 /* SettingsBotsAccounts.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3F2A38215478BB33794EA32 /* SettingsBotsAccounts.swift */; };
+		FB70CF6F2A2BF4CB4D441CB0 /* SettingsBotsSections.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81538C0EF326DF67979E2ACE /* SettingsBotsSections.swift */; };
 		FBC100000000000000000001 /* SettingsBackgroundServerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBC100000000000000000002 /* SettingsBackgroundServerView.swift */; };
 		FBC100000000000000000003 /* ApplicationModel+RuntimeInspection.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBC100000000000000000004 /* ApplicationModel+RuntimeInspection.swift */; };
 		FBC100000000000000000005 /* RuntimeInspectionInventoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBC100000000000000000006 /* RuntimeInspectionInventoryView.swift */; };
@@ -336,11 +349,24 @@
 		969567647C35836A4EB30551 /* ApplicationModel+Bots.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+Bots.swift"; sourceTree = "<group>"; };
 		7A603D65A1C1E75AAB8AF89D /* BackendBotsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendBotsService.swift"; sourceTree = "<group>"; };
 		4A01C0BFDB37FC20485E98D8 /* BotsModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BotsModel.swift"; sourceTree = "<group>"; };
+		F3383A8CF03C94A295F8BFAB /* BotConversationController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BotConversationController.swift"; sourceTree = "<group>"; };
 		3F8D1F1FEDB47370162C9C14 /* PiBotRuntimeSupervisor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PiBotRuntimeSupervisor.swift"; sourceTree = "<group>"; };
 		74C188D9E69C4993381D98D1 /* SettingsMCPAccessSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsMCPAccessSection.swift"; sourceTree = "<group>"; };
 		3FCFD40BE16F23BEF01EC54C /* SettingsBotsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsBotsView.swift"; sourceTree = "<group>"; };
 		DE4243B3E426F7661EAE7064 /* DashboardBotsSidebarSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DashboardBotsSidebarSection.swift"; sourceTree = "<group>"; };
 		3CC5476EE428BA0767248F7E /* BotConversationSurface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BotConversationSurface.swift"; sourceTree = "<group>"; };
+		BAF2826C97FFAAECD582B73B /* SettingsBotsTeams.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsBotsTeams.swift"; sourceTree = "<group>"; };
+		EE4D2803DAEF648CA73B43E6 /* SettingsBotsSearch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsBotsSearch.swift"; sourceTree = "<group>"; };
+		869B55034D9B3A3BC666E2CF /* SettingsBotsProfiles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsBotsProfiles.swift"; sourceTree = "<group>"; };
+		0C269991D9359E701DBA9771 /* SettingsBotsProfileEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsBotsProfileEditor.swift"; sourceTree = "<group>"; };
+		4DC465D8AC2E96D243D7F086 /* SettingsBotsOnboarding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsBotsOnboarding.swift"; sourceTree = "<group>"; };
+		D27853FF3941D9112587F886 /* SettingsBotsMemory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsBotsMemory.swift"; sourceTree = "<group>"; };
+		233A3665C12013C4841C0698 /* SettingsBotsLogin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsBotsLogin.swift"; sourceTree = "<group>"; };
+		31B2AEB7E12A1863606CFA32 /* SettingsBotsGitHub.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsBotsGitHub.swift"; sourceTree = "<group>"; };
+		8116307205B5EFD0A6FCD384 /* SettingsBotsControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsBotsControls.swift"; sourceTree = "<group>"; };
+		2A49B9E9DAE84D88057C5986 /* SettingsBotsConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsBotsConfig.swift"; sourceTree = "<group>"; };
+		A3F2A38215478BB33794EA32 /* SettingsBotsAccounts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsBotsAccounts.swift"; sourceTree = "<group>"; };
+		81538C0EF326DF67979E2ACE /* SettingsBotsSections.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsBotsSections.swift"; sourceTree = "<group>"; };
 		FBC100000000000000000002 /* SettingsBackgroundServerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Views/SettingsBackgroundServerView.swift"; sourceTree = SOURCE_ROOT; };
 		FBC100000000000000000004 /* ApplicationModel+RuntimeInspection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Models/ApplicationModel+RuntimeInspection.swift"; sourceTree = SOURCE_ROOT; };
 		FBC100000000000000000006 /* RuntimeInspectionInventoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Views/RuntimeInspectionInventoryView.swift"; sourceTree = SOURCE_ROOT; };
@@ -443,6 +469,7 @@
 				969567647C35836A4EB30551 /* ApplicationModel+Bots.swift */,
 				7A603D65A1C1E75AAB8AF89D /* BackendBotsService.swift */,
 				4A01C0BFDB37FC20485E98D8 /* BotsModel.swift */,
+				F3383A8CF03C94A295F8BFAB /* BotConversationController.swift */,
 				3F8D1F1FEDB47370162C9C14 /* PiBotRuntimeSupervisor.swift */,
 				D84D7A0E10812D5E772A19B5 /* BackendToolsService.swift */,
 				F178B05B2AE0D773B0C59957 /* BackendOpenCodeService.swift */,
@@ -531,6 +558,18 @@
 				3FCFD40BE16F23BEF01EC54C /* SettingsBotsView.swift */,
 				DE4243B3E426F7661EAE7064 /* DashboardBotsSidebarSection.swift */,
 				3CC5476EE428BA0767248F7E /* BotConversationSurface.swift */,
+				BAF2826C97FFAAECD582B73B /* SettingsBotsTeams.swift */,
+				EE4D2803DAEF648CA73B43E6 /* SettingsBotsSearch.swift */,
+				869B55034D9B3A3BC666E2CF /* SettingsBotsProfiles.swift */,
+				0C269991D9359E701DBA9771 /* SettingsBotsProfileEditor.swift */,
+				4DC465D8AC2E96D243D7F086 /* SettingsBotsOnboarding.swift */,
+				D27853FF3941D9112587F886 /* SettingsBotsMemory.swift */,
+				233A3665C12013C4841C0698 /* SettingsBotsLogin.swift */,
+				31B2AEB7E12A1863606CFA32 /* SettingsBotsGitHub.swift */,
+				8116307205B5EFD0A6FCD384 /* SettingsBotsControls.swift */,
+				2A49B9E9DAE84D88057C5986 /* SettingsBotsConfig.swift */,
+				A3F2A38215478BB33794EA32 /* SettingsBotsAccounts.swift */,
+				81538C0EF326DF67979E2ACE /* SettingsBotsSections.swift */,
 				5E7A00000000000000000004 /* SettingsGeneralView.swift */,
 				FBC100000000000000000002 /* SettingsBackgroundServerView.swift */,
 				FBC100000000000000000006 /* RuntimeInspectionInventoryView.swift */,
@@ -720,10 +759,23 @@
 				9751CD46C4F44301F5724297 /* SettingsBotsView.swift in Sources */,
 				07CA66F71A1C7A036C6CF8F4 /* DashboardBotsSidebarSection.swift in Sources */,
 				1292F0F1EA444D9BD6ED6194 /* BotConversationSurface.swift in Sources */,
+				7964BA5A54A3495C39752CCD /* SettingsBotsTeams.swift in Sources */,
+				EECF0E4CD0968832CC8E7783 /* SettingsBotsSearch.swift in Sources */,
+				35B1475C056707F79975973B /* SettingsBotsProfiles.swift in Sources */,
+				46FB165530D7766320A17B03 /* SettingsBotsProfileEditor.swift in Sources */,
+				5FB89AE898F7387B7B2D9B4E /* SettingsBotsOnboarding.swift in Sources */,
+				CF52BA09822D8FB507452311 /* SettingsBotsMemory.swift in Sources */,
+				998D360774CD9F930D776EA0 /* SettingsBotsLogin.swift in Sources */,
+				56A5E2C23E8F5863793E7EAF /* SettingsBotsGitHub.swift in Sources */,
+				AFB18EF1F269753D99192159 /* SettingsBotsControls.swift in Sources */,
+				BBAEE128DF4A5814F6260333 /* SettingsBotsConfig.swift in Sources */,
+				045C4DFD9A0B84775D00DB22 /* SettingsBotsAccounts.swift in Sources */,
+				FB70CF6F2A2BF4CB4D441CB0 /* SettingsBotsSections.swift in Sources */,
 				DE6A299C4400AB55B5D0CE55 /* BackendMCPService.swift in Sources */,
 				E28499E4C2D5B48EEE8DC498 /* ApplicationModel+Bots.swift in Sources */,
 				BEDC6AB2114D9EEA07B99418 /* BackendBotsService.swift in Sources */,
 				E88A8C82622D17428EA4D912 /* BotsModel.swift in Sources */,
+				3697736CB63899E6B1B3A7BD /* BotConversationController.swift in Sources */,
 				443D5D95EA55098A1F2F5F5C /* PiBotRuntimeSupervisor.swift in Sources */,
 				2D11BF999DCFCAD843281985 /* ApplicationModel+MCPAccess.swift in Sources */,
 				CD6C65D104529DB4126B59E2 /* NoteToolEdits.swift in Sources */,

@@ -173,7 +173,7 @@ class HostTests(unittest.TestCase):
             'protocol':1, 'lockSha256':hashlib.sha256(lock.encode()).hexdigest()}),
             'package.json':'{"private":true}', 'pnpm-lock.yaml':lock,
             'pnpm-workspace.yaml':'packages: []', 'packages/server/dist/cli.js':'fixture',
-            'apps/web/dist/index.html':'fixture', 'packages/server/dist/config.js':CONFIG_MODULE})
+            'packages/server/dist/config.js':CONFIG_MODULE})
 
     def run_host(self, command, *args, success=True, input=None, **env):
         result = subprocess.run(['bash', str(ROOT/'scripts/pi-bot-host.sh'), command,
@@ -210,7 +210,7 @@ class HostTests(unittest.TestCase):
         for directory in ('data', 'node', 'releases', 'pnpm-store'):
             self.assertEqual((self.root/directory).stat().st_mode & 0o777, 0o700)
         self.assertEqual((self.root/'config.toml').stat().st_mode & 0o777, 0o600)
-        self.assertIn(json.dumps(str(self.root/'current/apps/web/dist')), (self.root/'config.toml').read_text())
+        self.assertNotIn('web_dir', (self.root/'config.toml').read_text())
         self.assertTrue((self.root/'tooling/node_modules/.bin/pnpm').exists())
         self.assertEqual(self.run_host('start')['supervisor'], 'caller')
         self.assertEqual(self.run_host('stop')['supervisor'], 'caller')
@@ -620,7 +620,6 @@ case "$*" in "list --all --quiet") printf '%b' {others!r} ;; esac
         self.assertEqual(self.run_host('inspect')['managed']['root'], str(self.root))
         fields = dict(line.split(' = ', 1) for line in (self.root/'config.toml').read_text().splitlines() if ' = ' in line)
         self.assertEqual(json.loads(fields['data_dir']), str(self.root/'data'))
-        self.assertEqual(json.loads(fields['web_dir']), str(self.root/'current/apps/web/dist'))
 
     def test_argument_validation_and_reserved_port(self):
         for args in (('--wat',), ('--port', '4317'), ('--port', 'abc'), ('--service',),
