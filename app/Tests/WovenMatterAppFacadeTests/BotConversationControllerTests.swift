@@ -347,10 +347,15 @@ struct BotConversationControllerTests {
 
     @Test func eventsThatOvertakeTheOpenAreKept() async throws {
         let server = try await ScriptedPiBot()
-        openMain(server, entries: [entry(1, "user", "hi")])
+        server.on("conversation.open") { _ in
+            Thread.sleep(forTimeInterval: 0.2)
+            return ["subscriptionId": 9, "botId": "a", "conversationId": 5, "mainConversationId": 5,
+                    "entries": [entry(1, "user", "hi")], "running": false]
+        }
         let bots = try await connected(server)
         let controller = bots.conversation(botID: "a", conversationID: nil)
         controller.attach()
+        try await eventually("open sent") { !server.requests("conversation.open").isEmpty }
         // Delivered while the open is still unanswered on this actor.
         controller.receive(conversationID: 5, .entry(PiBotDisplayEntry(id: 2, conversationId: 5, role: "assistant", text: "fast")))
         controller.receive(conversationID: 6, .entry(PiBotDisplayEntry(id: 3, conversationId: 6, role: "assistant", text: "elsewhere")))
