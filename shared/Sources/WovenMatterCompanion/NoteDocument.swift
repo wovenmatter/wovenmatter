@@ -15,6 +15,10 @@ public struct NoteDocument: Codable, Equatable, Sendable {
   public var boardPurpose: String?
   /// Collaboration metadata keyed by stable card (block) ID.
   public var boardItems: [String: BoardItem]?
+  /// The nesting of a Page's blocks. `nil` is a Board from before Pages flowed.
+  public var pageNodes: [String: PageNode]?
+  /// Saved inputs and app state of an Artifact, keyed by `app:` or `form:` names.
+  public var artifactState: [String: ArtifactStateEntry]?
 
   public init(
     version: Int = currentVersion,
@@ -26,7 +30,9 @@ public struct NoteDocument: Codable, Equatable, Sendable {
     canvasConnections: [CanvasConnection]? = nil,
     databaseLink: DatabaseArtifactLink? = nil,
     boardPurpose: String? = nil,
-    boardItems: [String: BoardItem]? = nil
+    boardItems: [String: BoardItem]? = nil,
+    pageNodes: [String: PageNode]? = nil,
+    artifactState: [String: ArtifactStateEntry]? = nil
   ) {
     self.version = version
     self.kind = kind
@@ -44,10 +50,13 @@ public struct NoteDocument: Codable, Equatable, Sendable {
     self.databaseLink = databaseLink
     self.boardPurpose = boardPurpose
     self.boardItems = boardItems
+    self.pageNodes = pageNodes
+    self.artifactState = artifactState
   }
 
   private enum CodingKeys: String, CodingKey {
     case version, kind, blocks, html, databaseLink, canvas, canvasSections, canvasConnections, boardPurpose, boardItems
+    case pageNodes, artifactState
   }
 
   public init(from decoder: any Decoder) throws {
@@ -73,6 +82,8 @@ public struct NoteDocument: Codable, Equatable, Sendable {
     )
     boardPurpose = try values.decodeIfPresent(String.self, forKey: .boardPurpose)
     boardItems = try values.decodeIfPresent([String: BoardItem].self, forKey: .boardItems)
+    pageNodes = try values.decodeIfPresent([String: PageNode].self, forKey: .pageNodes)
+    artifactState = try values.decodeIfPresent([String: ArtifactStateEntry].self, forKey: .artifactState)
   }
 
   public static func decode(_ content: String) -> NoteDocument {
@@ -110,7 +121,9 @@ public struct NoteDocument: Codable, Equatable, Sendable {
       canvasConnections: canvasConnections,
       databaseLink: databaseLink,
       boardPurpose: boardPurpose,
-      boardItems: boardItems
+      boardItems: boardItems,
+      pageNodes: pageNodes,
+      artifactState: artifactState
     )
   }
 

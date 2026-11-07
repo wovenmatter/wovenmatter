@@ -29,7 +29,7 @@ run_static_checks() {
   scripts/test-app-termination.sh
   scripts/test-conversation-layout.sh
   python3 scripts/test-support/test_executor_deployment.py
-  node --test scripts/test-support/native-mcp.test.mjs scripts/test-support/live-streaming-smoke.test.mjs
+  node --test scripts/test-support/native-mcp.test.mjs scripts/test-support/live-streaming-smoke.test.mjs scripts/test-support/artifact-state.test.mjs
   scripts/test-remote-workspace.sh
   scripts/test-remote-host.sh
   PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-support/test_remote_image.py

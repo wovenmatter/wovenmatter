@@ -435,7 +435,7 @@ final class WorkspaceAgentToolsModel {
                     allWorkspace: command.options["all-workspace"] != nil))
             case .notes:
                 if command.isDatabaseCommand { result = try await sessionHandler(callerID, command, request) }
-                else if command.isBoardCommand { result = try await boards(command, request: request, callerID: callerID) }
+                else if command.isPageCommand { result = try await pages(command, request: request, callerID: callerID) }
                 else { result = try await notes(command, request: request, callerID: callerID) }
             case .sessions:
                 if command.action == "list" || command.action == "status" {
@@ -556,10 +556,14 @@ final class WorkspaceAgentToolsModel {
         }
         if let error = error as? NoteEditError {
             switch error {
-            case .blockNotFound, .tableNotFound: return "not_found"
-            case .boardItemConflict: return "revision_conflict"
+            case .blockNotFound, .tableNotFound, .pageTargetMissing: return "not_found"
+            case .boardItemConflict, .pageSubtreeConflict: return "revision_conflict"
             default: return "invalid_request"
             }
+        }
+        if let error = error as? ArtifactStateError {
+            if case .conflict = error { return "revision_conflict" }
+            return "invalid_request"
         }
         if error is NoteDocumentSafetyError || error is RemoteNoteEditError { return "invalid_request" }
         if error is CancellationError { return "cancelled" }
@@ -604,7 +608,7 @@ final class WorkspaceAgentToolsModel {
                 after: Int64(command.integer("after", default: 0, range: 0...Int.max)),
                 limit: command.integer("limit", default: 100, range: 1...200)))
         case "create":
-            guard let kind = NoteArtifactKind(rawValue: command.options["kind"] ?? "note"), kind != .canvas else { throw WorkspaceToolError.invalid("Choose note, spreadsheet or html. Use woven_boards_create for a Board.") }
+            guard let kind = NoteArtifactKind(rawValue: command.options["kind"] ?? "note"), kind != .canvas else { throw WorkspaceToolError.invalid("Choose note, spreadsheet or html. Use woven_pages_create for a Page.") }
             let id = try await database.createNote(folderID: command.options["folder"], title: command.required("title"), kind: kind, callerConversationID: callerID, requestID: request.requestID)
             return .init(result: .object(["id": .string(id)]))
         case "versions", "version":
@@ -616,6 +620,31 @@ final class WorkspaceAgentToolsModel {
             return try noteMutationAcknowledgement(await noteRestoreHandler(callerID,
                 command.required("note-id", allowPositional: true), command.required("version"),
                 command.required("revision"), request.requestID))
+        case "artifact-state":
+            let response = try await noteHandler(callerID, .init(command: .read, noteID: command.required("note-id")), request.requestID)
+            guard let document = response.document, document.kind == .html else {
+                throw ArtifactStateError.notArtifact
+            }
+            return .init(result: .object(["id": .string(response.noteID),
+                "revision": response.revision.map(GatewayJSONValue.string) ?? .null,
+                "state": try WovenMCPCatalog.json(document.artifactStateSnapshot)]))
+        case "artifact-state-edit":
+            let edit = try NoteToolEdits.request(command)
+            do {
+                let response = try await noteHandler(callerID, edit, request.requestID)
+                var object = try noteMutationAcknowledgement(response).result?.objectValue ?? [:]
+                // A replay carries only its acknowledgement, never another copy of the state.
+                if let document = response.document { object["state"] = try WovenMCPCatalog.json(document.artifactStateSnapshot) }
+                return .init(success: response.success, result: .object(object), error: response.error,
+                    code: response.success ? nil : "mutation_failed")
+            } catch ArtifactStateError.conflict(let key, let current) {
+                // The failed transaction changed nothing, so this is current state to act on.
+                var object: [String: GatewayJSONValue] = ["id": .string(edit.noteID), "key": .string(key),
+                    "currentVersion": .number(Double(current?.version ?? 0))]
+                if let value = current?.value { object["currentValue"] = value }
+                let message = ArtifactStateError.conflict(key: key, current: current).localizedDescription
+                return .init(success: false, result: .object(object), error: message, code: "revision_conflict")
+            }
         default:
             let edit = try NoteToolEdits.request(command)
             let response = try await noteHandler(callerID, edit, request.requestID)
@@ -628,62 +657,64 @@ final class WorkspaceAgentToolsModel {
         }
     }
 
-    private func boards(_ command: WovenMatterToolCommand, request: WovenMatterToolRequest, callerID: String) async throws -> WovenMatterToolResponse {
+    private func pages(_ command: WovenMatterToolCommand, request: WovenMatterToolRequest, callerID: String) async throws -> WovenMatterToolResponse {
         switch command.action {
-        case "board-list":
-            return .init(result: try await database.listAgentBoards(callerID: callerID, search: command.options["search"], folderID: command.options["folder"],
+        case "page-list":
+            return .init(result: try await database.listAgentPages(callerID: callerID, search: command.options["search"], folderID: command.options["folder"],
                 after: Int64(try command.integer("after", default: Int.max, range: 0...Int.max)),
                 limit: try command.integer("limit", default: 50, range: 1...200)))
-        case "board-create":
+        case "page-create":
             let purpose = command.options["purpose"] ?? ""
             try NoteToolEdits.requirePurpose(purpose)
-            let content = try NoteDocument(kind: .canvas, boardPurpose: purpose.isEmpty ? nil : purpose).encoded()
+            let content = try NoteDocument(kind: .canvas, boardPurpose: purpose.isEmpty ? nil : purpose, pageNodes: [:]).encoded()
             let id = try await database.createNote(folderID: command.options["folder"], title: command.required("title"), content: content, kind: .canvas,
                 callerConversationID: callerID, requestID: request.requestID)
-            return .init(result: .object(["id": .string(id), "kind": .string("board")]))
-        case "board-read":
+            return .init(result: .object(["id": .string(id), "kind": .string("page")]))
+        case "page-read":
             let filter = try BoardReadFilter(command: command)
-            let (document, response) = try await readBoard(command.required("note-id"), callerID: callerID, requestID: request.requestID)
+            let (document, response) = try await readPage(command.required("note-id"), callerID: callerID, requestID: request.requestID)
             let assets = try await database.boardAssetSummaries(callerID: callerID, ids: document.boardAssetIDs(filter: filter))
-            return .init(result: try document.boardReadValue(id: response.noteID, title: response.title ?? "",
+            return .init(result: try document.pageReadValue(id: response.noteID, title: response.title ?? "",
                 revision: response.revision ?? "", filter: filter, assets: assets))
         default:
-            let edit = try NoteToolEdits.boardRequest(command, requestID: request.requestID)
-            let itemID = command.action == "board-add-item" ? request.requestID : command.options["id"]
+            let edit = try NoteToolEdits.pageRequest(command, requestID: request.requestID)
+            let componentID = command.action == "page-add-component" ? request.requestID : command.options["id"]
             do {
                 let response = try await noteHandler(callerID, edit, request.requestID)
-                return try await boardAcknowledgement(response, itemID: itemID, callerID: callerID)
+                return try await pageAcknowledgement(response, componentID: componentID, callerID: callerID)
             } catch NoteEditError.boardItemConflict(let id, _) {
-                return await boardConflict(boardID: edit.noteID, itemID: id, callerID: callerID, requestID: request.requestID)
+                return await pageConflict(pageID: edit.noteID, componentID: id, callerID: callerID, requestID: request.requestID)
+            } catch NoteEditError.pageSubtreeConflict(let id, _) {
+                return await pageConflict(pageID: edit.noteID, componentID: id, callerID: callerID, requestID: request.requestID)
             } catch WorkspaceNoteMutationError.revisionConflict {
-                return await boardConflict(boardID: edit.noteID, itemID: nil, callerID: callerID, requestID: request.requestID)
+                return await pageConflict(pageID: edit.noteID, componentID: nil, callerID: callerID, requestID: request.requestID)
             } catch RemoteNoteEditError.operationNotAllowed, NoteEditError.artifactKindMismatch {
-                throw WorkspaceToolError.invalid("This asset is not a Board. Use the woven_notes tools.")
+                throw WorkspaceToolError.invalid("This asset is not a Page. Use the woven_notes tools.")
             }
         }
     }
 
-    private func readBoard(_ id: String, callerID: String, requestID: String) async throws -> (NoteDocument, NoteEditingResponse) {
+    private func readPage(_ id: String, callerID: String, requestID: String) async throws -> (NoteDocument, NoteEditingResponse) {
         let response = try await noteHandler(callerID, .init(command: .read, noteID: id), requestID)
         guard let document = response.document, document.kind == .canvas else {
-            throw WorkspaceToolError.invalid("This asset is not a Board. Use woven_notes_read.")
+            throw WorkspaceToolError.invalid("This asset is not a Page. Use woven_notes_read.")
         }
         return (document, response)
     }
 
     /// A replay acknowledges the original revision; it never returns old contents.
-    private func boardAcknowledgement(_ response: NoteEditingResponse, itemID: String?, callerID: String) async throws -> WovenMatterToolResponse {
+    private func pageAcknowledgement(_ response: NoteEditingResponse, componentID: String?, callerID: String) async throws -> WovenMatterToolResponse {
         var object: [String: GatewayJSONValue] = [
-            "boardID": .string(response.noteID),
+            "pageID": .string(response.noteID),
             "revision": response.revision.map(GatewayJSONValue.string) ?? .null,
             "replayed": .bool(response.replayed == true),
         ]
         if let title = response.title { object["title"] = .string(title) }
-        if let itemID { object["itemID"] = .string(itemID) }
-        if let itemID, let document = response.document, document.blocks.contains(where: { $0.id == itemID }) {
-            let assets = try await database.boardAssetSummaries(callerID: callerID, ids: document.canvas?[itemID]?.assetID.map { [$0] } ?? [])
-            object["itemRevision"] = .string(document.boardItemRevision(for: itemID))
-            object["item"] = try document.boardCardValue(id: itemID, assets: assets)
+        if let componentID { object["componentID"] = .string(componentID) }
+        if let componentID, let document = response.document, document.blocks.contains(where: { $0.id == componentID }) {
+            let assets = try await database.boardAssetSummaries(callerID: callerID, ids: document.canvas?[componentID]?.assetID.map { [$0] } ?? [])
+            object["componentRevision"] = .string(document.boardItemRevision(for: componentID))
+            object["component"] = try document.pageComponentValue(id: componentID, assets: assets)
         }
         return .init(success: response.success, result: .object(object), error: response.error,
             code: response.success ? nil : "mutation_failed")
@@ -691,25 +722,28 @@ final class WorkspaceAgentToolsModel {
 
     /// The failed transaction changed nothing, so this reports current state an
     /// agent can use directly. It says the same in text for clients that drop structure.
-    private func boardConflict(boardID: String, itemID: String?, callerID: String, requestID: String) async -> WovenMatterToolResponse {
-        var object: [String: GatewayJSONValue] = ["boardID": .string(boardID)]
-        var message = itemID.map { "Board item \($0) changed since it was read." } ?? "The Board changed since it was read."
-        if let (document, response) = try? await readBoard(boardID, callerID: callerID, requestID: requestID) {
+    private func pageConflict(pageID: String, componentID: String?, callerID: String, requestID: String) async -> WovenMatterToolResponse {
+        var object: [String: GatewayJSONValue] = ["pageID": .string(pageID)]
+        var message = componentID.map { "Page component \($0) changed since it was read." } ?? "The Page changed since it was read."
+        if let (stored, response) = try? await readPage(pageID, callerID: callerID, requestID: requestID) {
+            // Reads project an unmigrated Page, so tokens here match what the write compared.
+            let document = stored.materializedPage()
             let revision = response.revision ?? ""
             object["currentRevision"] = .string(revision)
             message += " Current document revision: \(revision)."
-            if let itemID {
-                object["itemID"] = .string(itemID)
-                if document.blocks.contains(where: { $0.id == itemID }) {
-                    let current = document.boardItemRevision(for: itemID)
-                    let ids = document.canvas?[itemID]?.assetID.map { [$0] } ?? []
+            if let componentID {
+                object["componentID"] = .string(componentID)
+                if document.blocks.contains(where: { $0.id == componentID }) {
+                    let current = document.boardItemRevision(for: componentID)
+                    let ids = document.canvas?[componentID]?.assetID.map { [$0] } ?? []
                     let assets = (try? await database.boardAssetSummaries(callerID: callerID, ids: ids)) ?? [:]
-                    object["currentItemRevision"] = .string(current)
-                    object["item"] = try? document.boardCardValue(id: itemID, assets: assets)
-                    message += " Current item revision: \(current)."
+                    object["currentComponentRevision"] = .string(current)
+                    object["currentSubtreeRevision"] = .string(document.pageSubtreeRevision(for: componentID))
+                    object["component"] = try? document.pageComponentValue(id: componentID, assets: assets)
+                    message += " Current component revision: \(current)."
                 } else {
-                    object["itemRemoved"] = .bool(true)
-                    message += " The item no longer exists."
+                    object["componentRemoved"] = .bool(true)
+                    message += " The component no longer exists."
                 }
             }
         }

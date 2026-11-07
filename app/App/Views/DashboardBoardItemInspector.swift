@@ -22,13 +22,15 @@ struct DashboardBoardItemInspector: View {
     var onOpenSession: ((String) -> Void)?
     @State private var sending = false
     @State private var sendResult: String?
-    private var item: BoardItem { document.boardItems?[itemID] ?? BoardItem() }
+    private var item: BoardItem { document.materializedPage().boardItems?[itemID] ?? BoardItem() }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Toggle("Task", isOn: Binding(get: { item.task != nil }, set: { enabled in
-                update { $0.task = enabled ? BoardTask() : nil }
-            }))
+            if document.materializedPage().pageNodes?[itemID]?.isSection != true {
+                Toggle("Task", isOn: Binding(get: { item.task != nil }, set: { enabled in
+                    update { $0.task = enabled ? BoardTask() : nil }
+                }))
+            }
             if let task = item.task {
                 Picker("State", selection: Binding(get: { item.task?.status ?? .todo }, set: { status in
                     update { $0.task?.status = status }
@@ -148,7 +150,7 @@ struct DashboardBoardItemInspector: View {
         return formatter.date(from: value) ?? ISO8601DateFormatter().date(from: value)
     }
     private func update(_ change: (inout BoardItem) -> Void) {
-        commitBoard(document: $document, state: $viewState) { value in
+        commitPage(document: $document, state: $viewState) { value in
             guard value.blocks.contains(where: { $0.id == itemID }) else { return }
             var item = value.boardItems?[itemID] ?? BoardItem()
             change(&item)

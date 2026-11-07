@@ -77,11 +77,12 @@ struct NotePane: View {
           Text("Artifact · read only").font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
           if document.databaseLink != nil {
             LinkedArtifactPreview(model: model, note: note, tableID: nil, html: document.html)
-          } else { SafeHTMLPreview(html: document.html) }
+          } else { SafeHTMLPreview(html: document.html, state: document.artifactStateSnapshot) }
         } else {
+          let document = document.kind == .canvas ? document.materializedPage() : document
           ScrollView {
             LazyVStack(alignment: .leading, spacing: 12) {
-              if document.kind != .note { Text(document.kind == .canvas ? "Board · read only · edit on your Mac" : "Sheet · read only").font(.caption).foregroundStyle(DashboardPalette.mutedForeground) }
+              if document.kind != .note { Text(document.kind == .canvas ? "Page · read only · edit on your Mac" : "Sheet · read only").font(.caption).foregroundStyle(DashboardPalette.mutedForeground) }
               else if !editable { Text("Read only · unsupported attributes preserved").font(.caption).foregroundStyle(DashboardPalette.mutedForeground) }
               if document.kind == .canvas, let purpose = document.boardPurpose, !purpose.isEmpty {
                 Text(purpose).font(.callout).textSelection(.enabled)
@@ -90,6 +91,7 @@ struct NotePane: View {
                 LinkedArtifactPreview(model: model, note: note, tableID: nil, html: nil)
               }
               ForEach(document.blocks, id: \.id) { block in
+                Group {
                 if document.kind == .canvas, let item = document.boardItems?[block.id] {
                   MobileBoardItemSummary(item: item)
                 }
@@ -126,7 +128,8 @@ struct NotePane: View {
                   } else { NativeTablePreview(table: table) }
                 }
                 }
-                if document.kind == .canvas { Divider() }
+                }
+                .padding(.leading, document.kind == .canvas ? CGFloat(document.pageDepth(for: block.id)) * 16 : 0)
               }
               if editable {
                 Button { change { try RichDocumentEditing.appendingParagraph(to: content) } } label: { Label("Add paragraph", glyph: .plus).font(.caption).foregroundStyle(DashboardPalette.mutedForeground) }.frame(minHeight: 44).padding(.top, 12)
@@ -333,6 +336,7 @@ struct SafeHTMLPreview: UIViewRepresentable {
   @Environment(\.colorScheme) private var colorScheme
   let html: String
   var linkedDataJSON: String? = nil
+  var state: ArtifactStateSnapshot = .empty
   func makeCoordinator() -> Coordinator { Coordinator() }
   func makeUIView(context: Context) -> WKWebView {
     let configuration = WKWebViewConfiguration()
@@ -347,7 +351,7 @@ struct SafeHTMLPreview: UIViewRepresentable {
     // keep their exact HTML and are not reloaded when the theme changes.
     let emptyDark = html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && colorScheme == .dark
     let body = emptyDark ? String(format: "<style>body{background:#%06X}</style>", DashboardColors.darkWorkspace) : html
-    let rendered = MobileArtifactPreview.renderedHTML(html: body, linkedDataJSON: linkedDataJSON)
+    let rendered = MobileArtifactPreview.renderedHTML(html: body, linkedDataJSON: linkedDataJSON, state: state)
     guard context.coordinator.loaded != rendered else { return }
     context.coordinator.loaded = rendered
     view.loadHTMLString(rendered, baseURL: nil)
@@ -379,7 +383,8 @@ private struct LinkedArtifactPreview: View {
         else { Button("Refresh") { Task { await load() } }.font(.caption).disabled(!model.online) }
       }.padding(.horizontal, html == nil ? 0 : 20)
       if let error { Text(error).font(.caption).foregroundStyle(DashboardPalette.mutedForeground).padding(.horizontal, html == nil ? 0 : 20) }
-      if let html { SafeHTMLPreview(html: html, linkedDataJSON: data?.json) }
+      if let html { SafeHTMLPreview(html: html, linkedDataJSON: data?.json,
+          state: NoteDocument.decode(note.content).artifactStateSnapshot) }
       else if let data {
         ScrollView(.horizontal) {
           LazyVStack(alignment: .leading, spacing: 0) {

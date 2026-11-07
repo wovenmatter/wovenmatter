@@ -200,48 +200,171 @@ struct DashboardSpreadsheetEditor: View {
 
 struct DashboardHTMLArtifactView: NSViewRepresentable {
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.isEnabled) private var isEnabled
     let html: String
     let linkedDataJSON: String?
+    var persistentState: [String: ArtifactStateEntry] = [:]
+    var readState: (() -> [String: ArtifactStateEntry])?
+    var saveState: ((ArtifactStateEdit, Task<ArtifactStateWriteResult, any Error>?) -> Task<ArtifactStateWriteResult, any Error>)?
+    var onSaveError: ((String?) -> Void)?
+    var retrySignal = 0
 
-    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
 
     func makeNSView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
+        configuration.userContentController.add(context.coordinator, name: "wovenArtifactState")
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
+        context.coordinator.webView = webView
         return webView
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
         let coordinator = context.coordinator
+        coordinator.parent = self
         let emptyAppearance = html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? colorScheme : nil
-        guard coordinator.html != html || coordinator.linkedDataJSON != linkedDataJSON
-            || coordinator.emptyAppearance != emptyAppearance else { return }
-        coordinator.emptyAppearance = emptyAppearance
-        coordinator.html = html
-        coordinator.linkedDataJSON = linkedDataJSON
-        let rendered = DashboardHTMLArtifactDocument.render(html: html, linkedDataJSON: linkedDataJSON, emptyAppearance: emptyAppearance)
-        guard context.coordinator.renderedHTML != rendered else { return }
-        context.coordinator.renderedHTML = rendered
-        webView.loadHTMLString(rendered, baseURL: nil)
+        let editable = isEnabled && saveState != nil
+        if coordinator.html != html || coordinator.emptyAppearance != emptyAppearance || coordinator.editable != editable {
+            coordinator.html = html
+            coordinator.emptyAppearance = emptyAppearance
+            coordinator.editable = editable
+            coordinator.token = UUID().uuidString
+            coordinator.latestWrites.removeAll()
+            coordinator.saveErrors.removeAll()
+            coordinator.lastState = DashboardArtifactStateSnapshot(persistentState)
+            coordinator.linkedDataJSON = linkedDataJSON
+            let config = Coordinator.Configuration(token: coordinator.token, state: coordinator.lastState!, editable: editable)
+            let json = (try? String(decoding: JSONEncoder().encode(config), as: UTF8.self)) ?? "{}"
+            let rendered = DashboardHTMLArtifactDocument.render(html: html, linkedDataJSON: linkedDataJSON,
+                emptyAppearance: emptyAppearance, artifactConfigurationJSON: json)
+            webView.loadHTMLString(rendered, baseURL: nil)
+        } else {
+            coordinator.pushLatestState()
+        }
+        if coordinator.retrySignal != retrySignal {
+            coordinator.retrySignal = retrySignal
+            Task { _ = try? await webView.callAsyncJavaScript("await window.__wovenArtifactRetry?.()", arguments: [:], in: nil, contentWorld: .page) }
+        }
     }
 
-    final class Coordinator: NSObject, WKNavigationDelegate {
+    static func dismantleNSView(_ webView: WKWebView, coordinator: Coordinator) {
+        webView.configuration.userContentController.removeScriptMessageHandler(forName: "wovenArtifactState")
+        webView.navigationDelegate = nil
+        coordinator.webView = nil
+    }
+
+    @MainActor final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
+        struct Configuration: Encodable {
+            let token: String
+            let state: DashboardArtifactStateSnapshot
+            let editable: Bool
+        }
+        var parent: DashboardHTMLArtifactView
+        weak var webView: WKWebView?
         var html: String?
         var linkedDataJSON: String?
-        var renderedHTML: String?
+        var lastState: DashboardArtifactStateSnapshot?
         var emptyAppearance: ColorScheme?
+        var editable = false
+        var token = ""
+        var retrySignal = 0
+        var latestWrites: [String: (id: String, write: Task<ArtifactStateWriteResult, any Error>)] = [:]
+        var saveErrors: [String: String] = [:]
+        init(parent: DashboardHTMLArtifactView) { self.parent = parent }
 
-        func webView(
-            _ webView: WKWebView,
-            decidePolicyFor navigationAction: WKNavigationAction
-        ) async -> WKNavigationActionPolicy {
-            guard navigationAction.navigationType == .other,
-                  navigationAction.request.url?.scheme == "about" else {
-                return .cancel
+        func updateSaveError(_ message: String?, key: String, generation: String) {
+            guard generation == token else { return }
+            saveErrors[key] = message
+            parent.onSaveError?(saveErrors.sorted { $0.key < $1.key }.first?.value)
+        }
+
+        func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+            guard message.name == "wovenArtifactState", message.frameInfo.isMainFrame,
+                  message.webView === webView, editable, let save = parent.saveState,
+                  let body = message.body as? [String: Any], body["token"] as? String == token,
+                  let requestID = body["requestID"] as? String, !requestID.isEmpty, requestID.utf8.count <= 64 else { return }
+            let request: DashboardArtifactStateMessage
+            do { request = try DashboardArtifactStateMessage.decode(body, token: token) }
+            catch {
+                let key = (body["edit"] as? [String: Any])?["key"] as? String ?? "invalid-request"
+                updateSaveError(ArtifactInputError.invalidMessage.localizedDescription, key: key, generation: token)
+                let activeToken = token
+                Task { await reply(token: activeToken, requestID: requestID, state: currentSnapshot,
+                    error: ArtifactInputError.invalidMessage.localizedDescription) }
+                return
             }
+            let previous: Task<ArtifactStateWriteResult, any Error>?
+            if let priorID = request.previousRequestID {
+                guard let prior = latestWrites[request.edit.key], prior.id == priorID else {
+                    updateSaveError(ArtifactInputError.invalidMessage.localizedDescription, key: request.edit.key, generation: request.token)
+                    Task { await reply(token: request.token, requestID: request.requestID, state: currentSnapshot,
+                        error: ArtifactInputError.invalidMessage.localizedDescription) }
+                    return
+                }
+                previous = prior.write
+            } else { previous = nil }
+            // Admission is synchronous, so closing this view cannot detach a
+            // write from the application's existing shutdown flush barrier.
+            let write = save(request.edit, previous)
+            latestWrites[request.edit.key] = (request.requestID, write)
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                do {
+                    let result = try await write.value
+                    self.updateSaveError(nil, key: request.edit.key, generation: request.token)
+                    await self.reply(token: request.token, requestID: request.requestID, state: result.snapshot, error: nil)
+                } catch {
+                    self.updateSaveError(error.localizedDescription, key: request.edit.key, generation: request.token)
+                    await self.reply(token: request.token, requestID: request.requestID, state: (error as? ArtifactInputFailure)?.snapshot ?? self.currentSnapshot,
+                                     error: error.localizedDescription)
+                }
+            }
+        }
+
+        private var currentSnapshot: ArtifactStateSnapshot {
+            let state = parent.readState?() ?? parent.persistentState
+            return .init(values: state.compactMapValues(\.value), versions: state.mapValues(\.version))
+        }
+
+        private func reply(token requestToken: String, requestID: String, state: ArtifactStateSnapshot, error: String?) async {
+            guard requestToken == token, let webView else { return }
+            let snapshot = DashboardArtifactStateSnapshot(state)
+            let payload: GatewayJSONValue = .object([
+                "state": (try? JSONDecoder().decode(GatewayJSONValue.self, from: Data(snapshot.json.utf8))) ?? .object([:]),
+                "error": error.map(GatewayJSONValue.string) ?? .null
+            ])
+            guard let data = try? JSONEncoder().encode(payload) else { return }
+            _ = try? await webView.callAsyncJavaScript(
+                "window.__wovenArtifactStateReply?.(token, requestID, JSON.parse(payload))",
+                arguments: ["token": token, "requestID": requestID, "payload": String(decoding: data, as: UTF8.self)],
+                in: nil, contentWorld: .page)
+        }
+
+        func pushLatestState(force: Bool = false) {
+            let snapshot = DashboardArtifactStateSnapshot(parent.persistentState)
+            // Deliver the initial data event once after the authored document
+            // loads. Later saved-input echoes must not redraw its interface.
+            let dataChanged = force || parent.linkedDataJSON != linkedDataJSON
+            guard force || snapshot != lastState || dataChanged else { return }
+            lastState = snapshot
+            linkedDataJSON = parent.linkedDataJSON
+            guard let webView else { return }
+            let token = token, data = parent.linkedDataJSON ?? "null", state = snapshot.json
+            Task {
+                _ = try? await webView.callAsyncJavaScript(
+                    "window.__wovenArtifactUpdate?.(token, JSON.parse(state), dataChanged ? JSON.parse(data) : null, dataChanged)",
+                    arguments: ["token": token, "state": state, "data": data, "dataChanged": dataChanged], in: nil, contentWorld: .page)
+            }
+        }
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { pushLatestState(force: true) }
+
+        func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
+            guard navigationAction.navigationType == .other,
+                  navigationAction.request.url?.scheme == "about" else { return .cancel }
             return .allow
         }
     }

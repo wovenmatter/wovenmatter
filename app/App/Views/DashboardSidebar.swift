@@ -1486,7 +1486,7 @@ struct DashboardNewNoteDrawer: View {
                     icon: .panelTop,
                     kind: .html
                 )
-                artifactButton("Board", detail: "Coordinate tasks, context, and shared work", icon: .panelsTopLeft, kind: .canvas)
+                artifactButton("Page", detail: "A fluid document for your work with agents", icon: .fileText, kind: .canvas)
             }
             .padding(20)
         }
@@ -2270,9 +2270,9 @@ final class DashboardListPresentationCache: @unchecked Sendable {
                 return "Sheet · \(table.rows.count) rows × \(table.columns.count) columns"
             }.first ?? "Sheet"
         case .html:
-            "Interactive page"
+            document.databaseLink == nil ? "Interactive Artifact" : "Live Artifact"
         case .canvas:
-            "Board · \(document.blocks.count) cards"
+            "Page · \(document.materializedPage().blocks.count) components"
         }
         let presentation = DashboardNoteRowPresentation(
             note: note,

@@ -23,8 +23,8 @@ extension WorkspaceDatabaseConnection {
     }
   }
 
-  public func listAgentBoards(callerID: String, search: String? = nil, folderID: String? = nil,
-                              after: Int64 = Int64.max, limit: Int = 50) throws -> GatewayJSONValue {
+  public func listAgentPages(callerID: String, search: String? = nil, folderID: String? = nil,
+                             after: Int64 = Int64.max, limit: Int = 50) throws -> GatewayJSONValue {
     try withLock {
       try requireToolUnlocked(.notes, sessionID: callerID)
       guard after >= 0, (1...200).contains(limit) else { throw WorkspaceToolError.invalid("Invalid pagination.") }
@@ -32,7 +32,7 @@ extension WorkspaceDatabaseConnection {
       var sql = """
         SELECT rowid AS sequence,id,title,folder_id AS folderID,json_extract(content,'$.boardPurpose') AS purpose,
           CAST(COALESCE((SELECT revision FROM companion_versions WHERE kind='note' AND resource_id=notes.id),1) AS TEXT) AS revision,
-          json_array_length(content,'$.blocks') AS cards,
+          json_array_length(content,'$.blocks') AS components,
           (SELECT count(*) FROM json_each(content,'$.boardItems') WHERE json_extract(value,'$.task.status') IN ('todo','doing','blocked')) AS openTasks,
           (SELECT count(*) FROM json_each(content,'$.boardItems') WHERE json_extract(value,'$.review')='needed') AS needsReview,
           updated_at AS updatedAt
@@ -49,7 +49,7 @@ extension WorkspaceDatabaseConnection {
     }
   }
 
-  /// Resolves linked originals for a Board read. An ID with no row is simply absent.
+  /// Resolves linked originals for a Page read. An ID with no row is simply absent.
   public func boardAssetSummaries(callerID: String, ids: [String]) throws -> [String: BoardAssetSummary] {
     guard !ids.isEmpty else { return [:] }
     return try withLock {
@@ -123,9 +123,9 @@ extension WorkspaceDatabase {
     try await read { try $0.listAgentNotes(callerID: callerID, search: search, folderID: folderID, after: after, limit: limit, newestFirst: newestFirst) }
   }
 
-  public func listAgentBoards(callerID: String, search: String? = nil, folderID: String? = nil,
-                              after: Int64 = Int64.max, limit: Int = 50) async throws -> GatewayJSONValue {
-    try await read { try $0.listAgentBoards(callerID: callerID, search: search, folderID: folderID, after: after, limit: limit) }
+  public func listAgentPages(callerID: String, search: String? = nil, folderID: String? = nil,
+                             after: Int64 = Int64.max, limit: Int = 50) async throws -> GatewayJSONValue {
+    try await read { try $0.listAgentPages(callerID: callerID, search: search, folderID: folderID, after: after, limit: limit) }
   }
 
   public func boardAssetSummaries(callerID: String, ids: [String]) async throws -> [String: BoardAssetSummary] {

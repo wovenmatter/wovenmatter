@@ -128,10 +128,10 @@ extension CompanionModel {
       if command.isMutation, command.group == .notes {
         let snapshot = await store.snapshot()
         let noteID = command.options["note-id"] ?? command.positional.first
-        let editsLocalBoard = noteID.flatMap { snapshot.notes[$0] }
+        let editsLocalPage = noteID.flatMap { snapshot.notes[$0] }
           .map { NoteDocument.decode($0.content).kind == .canvas } ?? false
-        if command.isBoardCommand || editsLocalBoard {
-          throw WorkspaceToolError.invalid("Board writes use the paired Mac. Retry with target central. This device has not changed the Board.")
+        if command.isPageCommand || editsLocalPage {
+          throw WorkspaceToolError.invalid("Page writes use the paired Mac. Retry with target central. This device has not changed the Page.")
         }
       }
       if command.isMutation, command.group?.isAutomation != true {

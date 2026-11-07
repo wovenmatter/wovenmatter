@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 
 public enum BoardItemRole: String, Codable, CaseIterable, Sendable { case content, instructions }
@@ -156,11 +155,7 @@ public extension NoteDocument {
   /// update. Returns an empty string for a card that does not exist.
   func boardItemRevision(for id: String) -> String {
     guard let block = blocks.first(where: { $0.id == id }) else { return "" }
-    let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-    let placement = canvasPlacement(for: id)
-    guard let bytes = try? encoder.encode(BoardItemFingerprint(block: block.normalized, title: placement.title,
-      assetID: placement.assetID, item: boardItems?[id])) else { return "" }
-    return SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined().prefix(32).description
+    return pageRevision(of: block)
   }
 
   /// Stamps cards whose content or metadata differ from `old`, restores provenance
@@ -263,9 +258,9 @@ public extension NoteDocument {
       boardItems?[id] = item
     case .removeItem:
       let id = try requireBoardItem(edit, revisionRequired: true)
+      try requirePageRemovable(id)
       blocks.removeAll { $0.id == id }
-      canvas?.removeValue(forKey: id); boardItems?.removeValue(forKey: id)
-      canvasConnections?.removeAll { $0.from == id || $0.to == id }
+      prunePageMetadata([id])
     case .linkSession:
       let id = try requireBoardItem(edit, revisionRequired: false)
       guard let sessionID = edit.sessionID, !sessionID.isEmpty, sessionID.utf8.count <= 1024 else { throw NoteDocumentSafetyError.unsupportedFormat }
@@ -300,7 +295,7 @@ public extension NoteDocument {
     return id
   }
 
-  private func applyBoardPatch(_ patch: BoardItemPatch?, to item: inout BoardItem) throws {
+  internal func applyBoardPatch(_ patch: BoardItemPatch?, to item: inout BoardItem) throws {
     guard let patch else { return }
     if let role = patch.role { item.role = role }
     let changesTask = patch.status != nil || patch.assignee != nil || patch.outcome != nil
@@ -331,11 +326,13 @@ public extension NoteDocument {
   }
 }
 
-private struct BoardItemFingerprint: Encodable {
+/// `isSection` is omitted unless true, so tokens of every other block stay stable.
+struct BoardItemFingerprint: Encodable {
   let block: NoteBlock
   let title: String?
   let assetID: String?
   let item: BoardItem?
+  let isSection: Bool?
 }
 
 private struct BoardItemContent: Equatable {

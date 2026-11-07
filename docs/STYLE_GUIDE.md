@@ -191,7 +191,7 @@ when an intentional design change is accepted.
   24-point bottom gutter outside the scrolling text, without stacking additional
   editor or footer padding beneath the note. Align the count button's right
   edge with the header controls using the same 12-point side inset.
-- **Assets:** use Notes, Sheets, Artifacts, and Boards in user-facing creation and
+- **Assets:** use Notes, Sheets, Artifacts, and Pages in user-facing creation and
   discovery. Label the creation picker **New Asset** and the Library's general
   saved-output collection **Saved Assets**. Artifacts are interactive HTML
   artifacts built on live data; data connections are optional. The Assets sidebar
@@ -199,23 +199,22 @@ when an intentional design change is accepted.
   Describe an Artifact connected to live data as a **Live Artifact**. Keep
   **Artifact** as the single creation option; Live is a description of the data
   connection, not another asset type. These experiences run inside Woven.
-- **Boards:** keep purpose, task completion and attention above the surface.
-  Task details include state, assignment, outcome, review, instructions and linked
-  chats; assignment is a label and never starts execution. Use the existing
-  workspace and theme-whisper surfaces with quiet
-  card borders. Let the board fill the editor below its title without outer
-  content gutters or a separate footer. While a Board is open, remove the desktop
-  shell’s sidebar gaps and outer insets too, so the board reaches adjacent panes
-  and the window bottom. Put compact Add card, Arrange, and zoom
-  controls in the title row immediately before history and database actions; card
-  headers own dragging and an accessible actions menu for movement, size, and
-  removal. Boards use a virtual pan/zoom viewport, quiet dots, colored sections,
-  and labeled connections; selection controls stay in the title row. References
-  preview the original asset and expand into its normal tab. Preserve chat beside the board
-  and use the existing note title, history, and save/conflict controls.
-  Mark reference cards as Original. Open database-linked assets in their normal
-  editor for live data. Keep the sharing/conflict limit discoverable in the
-  purpose bar; do not call sync-based collaboration live multiplayer editing.
+- **Pages:** make the flowing document the primary experience. Reuse the native
+  Notes editor for contiguous text, lists, formatting, tables, and task paragraphs.
+  Use one outer scroll surface; text grows to fit rather than becoming a scroll
+  box per component. Keep editable paragraph positions before, between, and after
+  sections and original assets. Nest sections with quiet indentation and disclosure
+  controls. Nested Pages open the original Page; do not recursively mount editors.
+  Keep component actions compact, and show task/review/session details on demand.
+  Completing a task updates its saved state. Assignment is descriptive and starts
+  no execution. Agent dispatch uses the existing chat admission and permissions.
+  Mark embeds **Original**. Notes, Sheets and Artifacts edit the same library asset
+  wherever it is embedded. Use the original editor and database-link refresh path.
+  Artifact form inputs and custom state persist on that original, with a visible
+  save error and explicit retry after a conflict. Data refresh must not reload the
+  interface or erase input being entered. Preserve normal asset title, version
+  history, and draft recovery controls. Keep the existing sync limitations clear;
+  this is not distributed live editing.
 - **Conversation progress:** use the shared elapsed work header and static semantic
   icons with meaningful live text. Do not show busy spinners in tool-call rows,
   work-group headers, reasoning indicators, or tool-detail loading. Thinking and

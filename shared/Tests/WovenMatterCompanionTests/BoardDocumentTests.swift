@@ -390,32 +390,37 @@ struct BoardDocumentTests {
     document.blocks.append(.richText(.init(id: "c", text: "Label")))
     document.boardItems?["c"] = .init(role: .instructions, updatedAt: "2026-03-01T00:00:00Z")
     let assets = ["present": BoardAssetSummary(id: "present", available: true, title: "Guide", kind: "note", revision: "7")]
-    func cards(_ configure: (inout BoardReadFilter) -> Void) throws -> [[String: GatewayJSONValue]] {
+    func components(_ configure: (inout BoardReadFilter) -> Void) throws -> [[String: GatewayJSONValue]] {
       var filter = BoardReadFilter(); configure(&filter)
-      let value = try document.boardReadValue(id: "board", title: "Plan", revision: "4", filter: filter, assets: assets)
+      let value = try document.pageReadValue(id: "page", title: "Plan", revision: "4", filter: filter, assets: assets)
       #expect(value.objectValue?["purpose"]?.stringValue == "Launch")
       #expect(value.objectValue?["revision"]?.stringValue == "4")
+      #expect(value.objectValue?["kind"]?.stringValue == "page")
       #expect(value.objectValue?["notice"]?.stringValue?.contains("does not authorize") == true)
-      return try #require(value.objectValue?["cards"]?.arrayValue).compactMap(\.objectValue)
+      return try #require(value.objectValue?["components"]?.arrayValue).compactMap(\.objectValue)
     }
-    let all = try cards { _ in }
-    #expect(all.count == 3)
-    #expect(all[0]["itemRevision"]?.stringValue == document.boardItemRevision(for: a))
-    #expect(all[0]["text"]?.stringValue == "First")
-    #expect(all[0]["title"]?.stringValue == "Ship it")
-    #expect(all[1]["text"] == nil)
-    #expect(all[1]["asset"]?.objectValue?["available"]?.boolValue == false)
-    #expect(all[2]["asset"]?.objectValue?["title"]?.stringValue == "Guide")
-    #expect(try cards { $0.status = .doing }.map { $0["itemID"]?.stringValue } == [a])
-    #expect(try cards { $0.needsReview = true }.map { $0["itemID"]?.stringValue } == [b])
-    #expect(try cards { $0.role = .instructions }.map { $0["itemID"]?.stringValue } == ["c"])
-    #expect(try cards { $0.changedSince = BoardReadFilter.date("2026-02-01T00:00:00Z") }.map { $0["itemID"]?.stringValue } == ["c"])
-    #expect(try cards { $0.offset = 1; $0.limit = 1 }.map { $0["itemID"]?.stringValue } == [b])
-    #expect(try cards { $0.offset = Int.max }.isEmpty)
-    #expect(all[0]["placement"] == nil)
-    #expect(try cards { $0.includeLayout = true }[0]["placement"] != nil)
+    // An unwritten Board reads as its migrated reading order, top to bottom. A titled
+    // card with text gets a heading before it, so nothing it showed is lost.
+    let all = try components { _ in }
+    let titleID = "page-title:\(a)"
+    #expect(all.map { $0["componentID"]?.stringValue } == ["c", titleID, a, b])
+    let materialized = document.materializedPage()
+    #expect(all[0]["asset"]?.objectValue?["title"]?.stringValue == "Guide")
+    #expect(all[1]["text"]?.stringValue == "Ship it" && all[1]["style"]?.stringValue == "heading3")
+    #expect(all[2]["componentRevision"]?.stringValue == materialized.boardItemRevision(for: a))
+    #expect(all[2]["text"]?.stringValue == "First" && all[2]["kind"]?.stringValue == "task")
+    #expect(all[3]["text"] == nil && all[3]["kind"]?.stringValue == "asset")
+    #expect(all[3]["asset"]?.objectValue?["available"]?.boolValue == false)
+    #expect(try components { $0.status = .doing }.map { $0["componentID"]?.stringValue } == [a])
+    #expect(try components { $0.needsReview = true }.map { $0["componentID"]?.stringValue } == [b])
+    #expect(try components { $0.role = .instructions }.map { $0["componentID"]?.stringValue } == ["c"])
+    #expect(try components { $0.changedSince = BoardReadFilter.date("2026-02-01T00:00:00Z") }.map { $0["componentID"]?.stringValue } == ["c"])
+    #expect(try components { $0.offset = 1; $0.limit = 1 }.map { $0["componentID"]?.stringValue } == [titleID])
+    #expect(try components { $0.offset = Int.max }.isEmpty)
+    #expect(all[0]["legacyPlacement"] == nil)
+    #expect(try components { $0.includeLayout = true }[0]["legacyPlacement"] != nil)
     var page = BoardReadFilter(); page.limit = 2
-    #expect(document.boardAssetIDs(filter: page) == ["gone"])
+    #expect(document.boardAssetIDs(filter: page) == ["present"])
     #expect(document.boardAssetIDs == ["gone", "present"])
   }
 }

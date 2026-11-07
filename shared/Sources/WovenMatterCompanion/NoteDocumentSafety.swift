@@ -53,6 +53,8 @@ extension NoteDocument {
       }
     }
     try validateCanvasStructure()
+    try validatePageStructure()
+    try validateArtifactState()
     var totalCells = 0
     var ids = Set<String>()
     for block in blocks {

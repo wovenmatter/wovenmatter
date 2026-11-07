@@ -108,6 +108,7 @@ public enum MobileToolSupport {
     case WorkspaceToolError.revisionRequired: code = "revision_required"
     case WorkspaceToolError.revisionConflict: code = "revision_conflict"
     case WorkspaceToolError.accessRequired: code = "access_required"
+    case ArtifactStateError.conflict: code = "revision_conflict"
     default: code = "invalid_request"
     }
     return .init(success: false, error: error.localizedDescription, code: code, requestID: requestID)

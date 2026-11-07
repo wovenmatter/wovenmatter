@@ -654,9 +654,16 @@ extension WorkspaceDatabaseConnection {
           "SELECT title,content FROM note_asset_versions WHERE id=? AND note_id=?",
           values: [versionID, noteID])
         guard let row = rows.first?.objectValue, let title = row["title"]?.stringValue,
-          let content = row["content"]?.stringValue
+          var content = row["content"]?.stringValue
         else {
           throw WorkspaceDatabaseError.open("This version is no longer retained")
+        }
+        // Restoring an Artifact's code must not rewind what users have entered since,
+        // or versions of saved inputs would run backwards under another open view.
+        if let restored = try? NoteDocument.editableDocument(from: content), restored.kind == .html,
+           let live = try? NoteDocument.editableDocument(from: current.content), live.kind == .html,
+           restored.artifactState != live.artifactState {
+          content = try restored.replacingArtifactState(with: live.artifactState).encoded()
         }
         try checkpointNoteUnlocked(id: noteID, source: "before-restore", force: true)
         let update = try prepareUnlocked(

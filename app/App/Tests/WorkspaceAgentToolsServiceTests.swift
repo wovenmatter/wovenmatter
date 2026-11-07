@@ -228,26 +228,22 @@ extension WorkspaceAgentToolsServiceTests {
         #expect(saved.document?.plainText.contains("Agent idea") == true)
         #expect(saved.document?.plainText.contains("Comparison") == true)
         #expect(saved.document?.canvas?[card.id] == placement)
+        // A generic insert migrated it without moving anything or losing its layout record.
+        #expect(saved.document?.pageNodes != nil)
         // Exercise the actual command parser, permissions, service and transactional store.
         let asset = try await database.createNote(folderID: nil, title: "Independent artifact", kind: .html,
             callerConversationID: caller, requestID: UUID().uuidString)
-        let section = CanvasSection(title: "Options", x: -400, y: -300)
-        var referencePlacement = CanvasCardPlacement(x: -360, y: -240, width: 500, height: 400)
-        referencePlacement.sectionID = section.id
-        // The linked card and its section arrive through the Board tools; provenance is the caller's.
-        let sectionEdit = String(decoding: try JSONEncoder().encode([CanvasEdit(action: .section, section: section)]), as: UTF8.self)
-        let grouped = await model.handle(.init(arguments: ["boards", "edit-layout", "--note-id", note, "--revision", try #require(saved.revision), "--json", sectionEdit]), callerID: caller)
+        let sectionID = UUID().uuidString.lowercased()
+        let grouped = await model.handle(.init(arguments: ["pages", "add-component", "--note-id", note, "--kind", "section", "--title", "Options"], requestID: sectionID), callerID: caller)
         #expect(grouped.success)
-        let placementJSON = String(decoding: try JSONEncoder().encode(referencePlacement), as: UTF8.self)
+        #expect(grouped.result?.objectValue?["component"]?.objectValue?["kind"]?.stringValue == "section")
         let referenceID = UUID().uuidString.lowercased()
-        let added = await model.handle(.init(arguments: ["boards", "add-item", "--note-id", note, "--asset-id", asset, "--title", "Artifact", "--json", placementJSON], requestID: referenceID), callerID: caller)
+        let added = await model.handle(.init(arguments: ["pages", "add-component", "--note-id", note, "--parent-id", sectionID, "--asset-id", asset, "--title", "Artifact"], requestID: referenceID), callerID: caller)
         #expect(added.success)
-        #expect(added.result?.objectValue?["itemID"]?.stringValue == referenceID)
-        let revisionAfterAdd = try #require(try await database.readNoteForEditing(id: note).revision)
-        let connection = CanvasConnection(from: card.id, to: referenceID, label: "supports")
-        let edits: [CanvasEdit] = [.init(action: .connect, connection: connection), .init(action: .arrange, ids: [card.id, referenceID], layout: "row")]
-        let json = String(decoding: try JSONEncoder().encode(edits), as: UTF8.self)
-        let arguments = ["boards", "edit-layout", "--note-id", note, "--revision", revisionAfterAdd, "--json", json]
+        #expect(added.result?.objectValue?["componentID"]?.stringValue == referenceID)
+        #expect(added.result?.objectValue?["component"]?.objectValue?["parentID"]?.stringValue == sectionID)
+        let tableRevision = try #require(try await database.readNoteForEditing(id: note).document?.boardItemRevision(for: table.id))
+        let arguments = ["pages", "move-component", "--note-id", note, "--id", table.id, "--parent-id", sectionID, "--component-revision", tableRevision]
         let requestID = UUID().uuidString
         let batch = await model.handle(.init(arguments: arguments, requestID: requestID), callerID: caller)
         #expect(batch.success)
@@ -255,33 +251,35 @@ extension WorkspaceAgentToolsServiceTests {
         #expect(replay.success)
         #expect(replay.result?.objectValue?["replayed"]?.boolValue == true)
         let arranged = try await database.readNoteForEditing(id: note)
-        #expect(arranged.document?.canvasConnections == [connection])
+        #expect(arranged.document?.pageParentID(for: table.id) == sectionID)
+        #expect(arranged.document?.boardItemRevision(for: table.id) == tableRevision)
         #expect(arranged.document?.canvas?[referenceID]?.assetID == asset)
-        #expect(arranged.document?.canvas?[referenceID]?.sectionID == section.id)
-        #expect(arranged.document?.blocks.count == 4)
-        let staleLayout = await model.handle(.init(arguments: arguments, requestID: UUID().uuidString), callerID: caller)
-        #expect(!staleLayout.success)
-        #expect(staleLayout.code == "revision_conflict")
-        #expect(staleLayout.result?.objectValue?["currentRevision"]?.stringValue == arranged.revision)
-        let invalidJSON = String(decoding: try JSONEncoder().encode([CanvasEdit(action: .disconnect, id: "missing")]), as: UTF8.self)
-        let rejected = await model.handle(.init(arguments: ["boards", "edit-layout", "--note-id", note, "--revision", try #require(arranged.revision), "--json", invalidJSON]), callerID: caller)
-        #expect(!rejected.success)
-        let cardEdit = String(decoding: try JSONEncoder().encode([CanvasEdit(action: .remove, id: referenceID)]), as: UTF8.self)
-        let noCards = await model.handle(.init(arguments: ["boards", "edit-layout", "--note-id", note, "--revision", try #require(arranged.revision), "--json", cardEdit]), callerID: caller)
-        #expect(!noCards.success)
+        #expect(arranged.document?.blocks.count == 5)
+        // Spatial layout is not a public tool any more.
+        let layout = await model.handle(.init(arguments: ["pages", "edit-layout", "--note-id", note, "--revision", try #require(arranged.revision), "--json", "[]"]), callerID: caller)
+        #expect(!layout.success)
+        #expect(layout.code == "invalid_request")
+        // A non-empty section needs a choice, and a stale subtree cannot be removed.
+        let sectionRevision = try #require(arranged.document?.boardItemRevision(for: sectionID))
+        let undecided = await model.handle(.init(arguments: ["pages", "remove-component", "--note-id", note, "--id", sectionID, "--component-revision", sectionRevision]), callerID: caller)
+        #expect(!undecided.success)
+        #expect(undecided.code == "invalid_request")
+        let staleSubtree = await model.handle(.init(arguments: ["pages", "remove-component", "--note-id", note, "--id", sectionID, "--removal", "removeSubtree", "--subtree-revision", "stale"]), callerID: caller)
+        #expect(!staleSubtree.success)
+        #expect(staleSubtree.code == "revision_conflict")
+        #expect(staleSubtree.result?.objectValue?["currentSubtreeRevision"]?.stringValue == arranged.document?.pageSubtreeRevision(for: sectionID))
         #expect(try await database.readNoteForEditing(id: note).document == arranged.document)
         let referenceRevision = try #require(arranged.document?.boardItemRevision(for: referenceID))
-        let removed = await model.handle(.init(arguments: ["boards", "remove-item", "--note-id", note, "--id", referenceID, "--item-revision", referenceRevision]), callerID: caller)
+        let removed = await model.handle(.init(arguments: ["pages", "remove-component", "--note-id", note, "--id", referenceID, "--component-revision", referenceRevision]), callerID: caller)
         #expect(removed.success)
         #expect(try await database.readNoteForEditing(id: asset).success)
-        #expect(try await database.readNoteForEditing(id: note).document?.canvasConnections?.isEmpty == true)
         try await database.setSessionTools(.init(enabled: [.history]), sessionID: caller)
         let denied = await model.handle(.init(arguments: arguments), callerID: caller)
         #expect(!denied.success)
 
     }
 
-    private func boardFixture(_ root: URL) async throws -> (WorkspaceDatabase, WorkspaceAgentToolsModel, String, String) {
+    private func pageFixture(_ root: URL) async throws -> (WorkspaceDatabase, WorkspaceAgentToolsModel, String, String) {
         let database = try await WorkspaceDatabase(url: root.appending(path: "workspace.sqlite"))
         let first = try await database.createFixtureLocalACPSession(runtimeKind: .codex, title: "First worker", ownerDeviceID: UUID())
         let second = try await database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Second worker", ownerDeviceID: UUID())
@@ -298,131 +296,133 @@ extension WorkspaceAgentToolsServiceTests {
         return (database, model, first, second)
     }
 
-    @Test func agentsCoordinateOnOneBoardWithoutOverwritingEachOther() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: "boards-" + UUID().uuidString)
+    @Test func agentsCoordinateOnOnePageWithoutOverwritingEachOther() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "pages-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let (database, model, first, second) = try await boardFixture(root)
+        let (database, model, first, second) = try await pageFixture(root)
         defer { model.stop() }
 
         let createID = UUID().uuidString
-        let createArguments = ["boards", "create", "--title", "Launch", "--purpose", "Ship the release"]
+        let createArguments = ["pages", "create", "--title", "Launch", "--purpose", "Ship the release"]
         let created = await model.handle(.init(arguments: createArguments, requestID: createID), callerID: first)
         #expect(created.success)
-        let board = try #require(created.result?.objectValue?["id"]?.stringValue)
-        #expect(await model.handle(.init(arguments: createArguments, requestID: createID), callerID: first).result?.objectValue?["id"]?.stringValue == board)
-        let mismatched = await model.handle(.init(arguments: ["boards", "create", "--title", "Other"], requestID: createID), callerID: first)
+        #expect(created.result?.objectValue?["kind"]?.stringValue == "page")
+        let page = try #require(created.result?.objectValue?["id"]?.stringValue)
+        #expect(await model.handle(.init(arguments: createArguments, requestID: createID), callerID: first).result?.objectValue?["id"]?.stringValue == page)
+        let mismatched = await model.handle(.init(arguments: ["pages", "create", "--title", "Other"], requestID: createID), callerID: first)
         #expect(!mismatched.success)
 
-        // Adding needs no revision, and a retry cannot duplicate the card.
+        // Adding needs no revision, and a retry cannot duplicate the component.
         let addID = UUID().uuidString.lowercased()
-        let addArguments = ["boards", "add-item", "--note-id", board, "--title", "Write notes", "--text", "Draft them", "--status", "todo"]
+        let addArguments = ["pages", "add-component", "--note-id", page, "--text", "Draft them", "--status", "todo"]
         let added = await model.handle(.init(arguments: addArguments, requestID: addID), callerID: first)
         #expect(added.success)
-        #expect(added.result?.objectValue?["itemID"]?.stringValue == addID)
+        #expect(added.result?.objectValue?["componentID"]?.stringValue == addID)
         let replayed = await model.handle(.init(arguments: addArguments, requestID: addID), callerID: first)
         #expect(replayed.result?.objectValue?["replayed"]?.boolValue == true)
-        #expect(replayed.result?.objectValue?["itemID"]?.stringValue == addID)
-        let reused = await model.handle(.init(arguments: ["boards", "add-item", "--note-id", board, "--text", "Different"], requestID: addID), callerID: first)
+        #expect(replayed.result?.objectValue?["componentID"]?.stringValue == addID)
+        let reused = await model.handle(.init(arguments: ["pages", "add-component", "--note-id", page, "--text", "Different"], requestID: addID), callerID: first)
         #expect(!reused.success)
         let otherID = UUID().uuidString.lowercased()
-        #expect(await model.handle(.init(arguments: ["boards", "add-item", "--note-id", board, "--text", "Other work"], requestID: otherID), callerID: second).success)
-        #expect(try await database.readNoteForEditing(id: board).document?.blocks.count == 2)
+        #expect(await model.handle(.init(arguments: ["pages", "add-component", "--note-id", page, "--text", "Other work"], requestID: otherID), callerID: second).success)
+        #expect(try await database.readNoteForEditing(id: page).document?.blocks.count == 2)
 
-        // Both read, then both write. Different cards do not conflict.
-        let snapshot = try #require(try await database.readNoteForEditing(id: board).document)
+        // Both read, then both write. Different components do not conflict.
+        let snapshot = try #require(try await database.readNoteForEditing(id: page).document)
         let revision = snapshot.boardItemRevision(for: addID), otherRevision = snapshot.boardItemRevision(for: otherID)
-        let claim = await model.handle(.init(arguments: ["boards", "update-item", "--note-id", board, "--id", addID, "--item-revision", revision, "--status", "doing", "--assignee", "First", "--last-change", "Claimed"]), callerID: first)
+        let claim = await model.handle(.init(arguments: ["pages", "update-component", "--note-id", page, "--id", addID, "--component-revision", revision, "--status", "doing", "--assignee", "First", "--last-change", "Claimed"]), callerID: first)
         #expect(claim.success)
-        #expect(claim.result?.objectValue?["itemRevision"]?.stringValue != revision)
-        let independent = await model.handle(.init(arguments: ["boards", "update-item", "--note-id", board, "--id", otherID, "--item-revision", otherRevision, "--review", "needed"]), callerID: second)
+        #expect(claim.result?.objectValue?["componentRevision"]?.stringValue != revision)
+        let independent = await model.handle(.init(arguments: ["pages", "update-component", "--note-id", page, "--id", otherID, "--component-revision", otherRevision, "--review", "needed"]), callerID: second)
         #expect(independent.success)
 
-        // The same card conflicts, changes nothing, and reports what is current.
-        let before = try await database.readNoteForEditing(id: board)
-        let stale = await model.handle(.init(arguments: ["boards", "update-item", "--note-id", board, "--id", addID, "--item-revision", revision, "--assignee", "Second"]), callerID: second)
+        // The same component conflicts, changes nothing, and reports what is current.
+        let before = try await database.readNoteForEditing(id: page)
+        let stale = await model.handle(.init(arguments: ["pages", "update-component", "--note-id", page, "--id", addID, "--component-revision", revision, "--assignee", "Second"]), callerID: second)
         #expect(!stale.success)
         #expect(stale.code == "revision_conflict")
         let current = try #require(before.document?.boardItemRevision(for: addID))
-        #expect(stale.result?.objectValue?["currentItemRevision"]?.stringValue == current)
-        #expect(stale.result?.objectValue?["item"]?.objectValue?["task"]?.objectValue?["assignee"]?.stringValue == "First")
+        #expect(stale.result?.objectValue?["currentComponentRevision"]?.stringValue == current)
+        #expect(stale.result?.objectValue?["component"]?.objectValue?["task"]?.objectValue?["assignee"]?.stringValue == "First")
         #expect(stale.error?.contains(current) == true)
-        #expect(try await database.readNoteForEditing(id: board).revision == before.revision)
+        #expect(try await database.readNoteForEditing(id: page).revision == before.revision)
 
-        // Attribution is the caller the host authorized, and only touched cards change.
-        let saved = try #require(try await database.readNoteForEditing(id: board).document)
+        // Attribution is the caller the host authorized, and only touched components change.
+        let saved = try #require(try await database.readNoteForEditing(id: page).document)
         #expect(saved.boardItems?[addID]?.createdBy?.sessionID == first)
         #expect(saved.boardItems?[addID]?.updatedBy?.kind == .session)
         #expect(saved.boardItems?[addID]?.updatedBy?.sessionID == first)
         #expect(saved.boardItems?[addID]?.updatedBy?.label == "First worker")
         #expect(saved.boardItems?[otherID]?.updatedBy?.sessionID == second)
         #expect(saved.boardItems?[addID]?.task == BoardTask(status: .doing, assignee: "First"))
-        #expect(saved.canvas?[addID]?.title == "Write notes")
 
         // Filtered discovery and reads.
-        let listed = await model.handle(.init(arguments: ["boards", "list", "--search", "Launch"]), callerID: second)
+        let listed = await model.handle(.init(arguments: ["pages", "list", "--search", "Launch"]), callerID: second)
         let row = try #require(listed.result?.objectValue?["rows"]?.arrayValue?.first?.objectValue)
-        #expect(row["id"]?.stringValue == board && row["purpose"]?.stringValue == "Ship the release")
-        #expect(row["openTasks"]?.intValue == 1 && row["needsReview"]?.intValue == 1 && row["cards"]?.intValue == 2)
+        #expect(row["id"]?.stringValue == page && row["purpose"]?.stringValue == "Ship the release")
+        #expect(row["openTasks"]?.intValue == 1 && row["needsReview"]?.intValue == 1 && row["components"]?.intValue == 2)
         let plainNote = try await database.createNote(folderID: nil, title: "Launch notes", callerConversationID: first, requestID: UUID().uuidString)
-        #expect(await model.handle(.init(arguments: ["boards", "list", "--search", "Launch"]), callerID: second).result?.objectValue?["rows"]?.arrayValue?.count == 1)
-        let needs = await model.handle(.init(arguments: ["boards", "read", "--note-id", board, "--needs-review"]), callerID: second)
-        #expect(needs.result?.objectValue?["cards"]?.arrayValue?.compactMap { $0.objectValue?["itemID"]?.stringValue } == [otherID])
-        #expect(needs.result?.objectValue?["kind"]?.stringValue == "board")
+        #expect(await model.handle(.init(arguments: ["pages", "list", "--search", "Launch"]), callerID: second).result?.objectValue?["rows"]?.arrayValue?.count == 1)
+        let needs = await model.handle(.init(arguments: ["pages", "read", "--note-id", page, "--needs-review"]), callerID: second)
+        #expect(needs.result?.objectValue?["components"]?.arrayValue?.compactMap { $0.objectValue?["componentID"]?.stringValue } == [otherID])
+        #expect(needs.result?.objectValue?["kind"]?.stringValue == "page")
         #expect(needs.result?.objectValue?["notice"]?.stringValue != nil)
-        #expect(await !model.handle(.init(arguments: ["boards", "read", "--note-id", plainNote]), callerID: second).success)
+        #expect(await !model.handle(.init(arguments: ["pages", "read", "--note-id", plainNote]), callerID: second).success)
 
         // The document revision guards the title and purpose, with current data on conflict.
-        let staleTitle = await model.handle(.init(arguments: ["boards", "update", "--note-id", board, "--revision", "1", "--purpose", "Stale"]), callerID: first)
+        let staleTitle = await model.handle(.init(arguments: ["pages", "update", "--note-id", page, "--revision", "1", "--purpose", "Stale"]), callerID: first)
         #expect(staleTitle.code == "revision_conflict")
         #expect(staleTitle.result?.objectValue?["currentRevision"]?.stringValue == before.revision)
-        let updated = await model.handle(.init(arguments: ["boards", "update", "--note-id", board, "--revision", try #require(before.revision), "--title", "Launch v2", "--purpose", "Ship it"]), callerID: first)
+        let updated = await model.handle(.init(arguments: ["pages", "update", "--note-id", page, "--revision", try #require(before.revision), "--title", "Launch v2", "--purpose", "Ship it"]), callerID: first)
         #expect(updated.success)
-        let renamed = try await database.readNoteForEditing(id: board)
+        let renamed = try await database.readNoteForEditing(id: page)
         #expect(renamed.title == "Launch v2" && renamed.document?.boardPurpose == "Ship it")
         #expect(renamed.document?.boardItemRevision(for: addID) == saved.boardItemRevision(for: addID))
 
         // A session link is repeatable and stays separate from the task.
         let session = second
         for _ in 0..<2 {
-            #expect(await model.handle(.init(arguments: ["boards", "link-session", "--note-id", board, "--id", addID, "--session", session]), callerID: first).success)
+            #expect(await model.handle(.init(arguments: ["pages", "link-session", "--note-id", page, "--id", addID, "--session", session]), callerID: first).success)
         }
-        let linked = try #require(try await database.readNoteForEditing(id: board).document?.boardItems?[addID])
+        let linked = try #require(try await database.readNoteForEditing(id: page).document?.boardItems?[addID])
         #expect(linked.sessions == [session] && linked.task?.status == .doing)
-        #expect(await !model.handle(.init(arguments: ["boards", "link-session", "--note-id", board, "--id", addID, "--session", "not-a-uuid"]), callerID: first).success)
+        #expect(await !model.handle(.init(arguments: ["pages", "link-session", "--note-id", page, "--id", addID, "--session", "not-a-uuid"]), callerID: first).success)
+        for _ in 0..<2 {
+            #expect(await model.handle(.init(arguments: ["pages", "unlink-session", "--note-id", page, "--id", addID, "--session", session]), callerID: first).success)
+        }
+        #expect(try await database.readNoteForEditing(id: page).document?.boardItems?[addID]?.sessions == [])
 
         // Outside callers and the user's app are attributed by the host, too.
         try await database.updateExternalMCP(enabled: true)
         try await database.updateExternalMCP(group: .notes, groupEnabled: true)
         let outsideID = UUID().uuidString.lowercased()
-        #expect(await model.handle(.init(arguments: ["boards", "add-item", "--note-id", board, "--text", "From outside"], requestID: outsideID), callerID: WovenMCPCaller.outside).success)
-        let outsideItem = try await database.readNoteForEditing(id: board).document?.boardItems?[outsideID]
+        #expect(await model.handle(.init(arguments: ["pages", "add-component", "--note-id", page, "--text", "From outside"], requestID: outsideID), callerID: WovenMCPCaller.outside).success)
+        let outsideItem = try await database.readNoteForEditing(id: page).document?.boardItems?[outsideID]
         #expect(outsideItem?.createdBy == BoardActor(kind: .outside))
-        let userEdit = try await database.applyNoteEdits(.init(command: .apply, noteID: board, operations: [.board(.init(action: .addItem, id: "from-user", patch: .init(text: "Mine")))]))
+        let userEdit = try await database.applyNoteEdits(.init(command: .apply, noteID: page, operations: [.page(.init(action: .add, id: "from-user", patch: .init(text: "Mine")))]))
         #expect(userEdit.document?.boardItems?["from-user"]?.createdBy == BoardActor(kind: .user))
 
-        // Turning Notes off removes every Board tool, including replays.
+        // Turning Notes off removes every Page tool, including replays.
         try await database.setSessionTools(.init(enabled: [.history]), sessionID: second)
-        let denied = await model.handle(.init(arguments: ["boards", "read", "--note-id", board]), callerID: second)
+        let denied = await model.handle(.init(arguments: ["pages", "read", "--note-id", page]), callerID: second)
         #expect(!denied.success)
         #expect(denied.code == "tool_disabled")
         let deniedWrite = await model.handle(.init(arguments: addArguments, requestID: addID), callerID: second)
         #expect(!deniedWrite.success)
     }
 
-    @Test func boardToolsRefuseOtherAssetsAndStayReplayable() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: "boards-kind-" + UUID().uuidString)
+    @Test func pageToolsRefuseOtherAssetsAndStayReplayable() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "pages-kind-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let (database, model, caller, _) = try await boardFixture(root)
+        let (database, model, caller, _) = try await pageFixture(root)
         defer { model.stop() }
         let note = try await database.createNote(folderID: nil, title: "Ordinary", callerConversationID: caller, requestID: UUID().uuidString)
         let revision = try #require(try await database.readNoteForEditing(id: note).revision)
-        let empty = "[]"
-        for arguments in [["boards", "update", "--note-id", note, "--revision", revision, "--title", "Renamed"],
-                          ["boards", "update", "--note-id", note, "--revision", revision, "--purpose", "Nope"],
-                          ["boards", "edit-layout", "--note-id", note, "--revision", revision, "--json", empty],
-                          ["boards", "add-item", "--note-id", note, "--text", "Nope"]] {
+        for arguments in [["pages", "update", "--note-id", note, "--revision", revision, "--title", "Renamed"],
+                          ["pages", "update", "--note-id", note, "--revision", revision, "--purpose", "Nope"],
+                          ["pages", "add-component", "--note-id", note, "--text", "Nope"]] {
             let response = await model.handle(.init(arguments: arguments), callerID: caller)
             #expect(!response.success, "\(arguments)")
             #expect(response.code == "invalid_request", "\(arguments)")
@@ -430,114 +430,153 @@ extension WorkspaceAgentToolsServiceTests {
         let unchanged = try await database.readNoteForEditing(id: note)
         #expect(unchanged.title == "Ordinary" && unchanged.revision == revision)
 
-        // A title-only update replays after success, even once the Board is gone.
-        let created = await model.handle(.init(arguments: ["boards", "create", "--title", "Plan"]), callerID: caller)
-        let board = try #require(created.result?.objectValue?["id"]?.stringValue)
-        let boardRevision = try #require(try await database.readNoteForEditing(id: board).revision)
-        let arguments = ["boards", "update", "--note-id", board, "--revision", boardRevision, "--title", "Plan v2"]
+        // A title-only update replays after success, even once the Page is gone.
+        let created = await model.handle(.init(arguments: ["pages", "create", "--title", "Plan"]), callerID: caller)
+        let page = try #require(created.result?.objectValue?["id"]?.stringValue)
+        let pageRevision = try #require(try await database.readNoteForEditing(id: page).revision)
+        let arguments = ["pages", "update", "--note-id", page, "--revision", pageRevision, "--title", "Plan v2"]
         let requestID = UUID().uuidString
         #expect(await model.handle(.init(arguments: arguments, requestID: requestID), callerID: caller).success)
-        #expect(try await database.readNoteForEditing(id: board).title == "Plan v2")
-        try await database.mutateNote(id: board, mutation: .moveToTrash, expectedRevision: database.noteActionRevision(id: board))
+        #expect(try await database.readNoteForEditing(id: page).title == "Plan v2")
+        try await database.mutateNote(id: page, mutation: .moveToTrash, expectedRevision: database.noteActionRevision(id: page))
         let replay = await model.handle(.init(arguments: arguments, requestID: requestID), callerID: caller)
         #expect(replay.success)
         #expect(replay.result?.objectValue?["replayed"]?.boolValue == true)
-        let mismatch = await model.handle(.init(arguments: ["boards", "update", "--note-id", board, "--revision", boardRevision, "--title", "Other"], requestID: requestID), callerID: caller)
+        let mismatch = await model.handle(.init(arguments: ["pages", "update", "--note-id", page, "--revision", pageRevision, "--title", "Other"], requestID: requestID), callerID: caller)
         #expect(!mismatch.success)
     }
 
-    @Test func removedItemsConflictActionablyAndRepeatedLinksKeepRevisions() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: "boards-removed-" + UUID().uuidString)
+    @Test func removedComponentsConflictActionablyAndRepeatedLinksKeepRevisions() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "pages-removed-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let (database, model, first, second) = try await boardFixture(root)
+        let (database, model, first, second) = try await pageFixture(root)
         defer { model.stop() }
-        let created = await model.handle(.init(arguments: ["boards", "create", "--title", "Plan"]), callerID: first)
-        let board = try #require(created.result?.objectValue?["id"]?.stringValue)
+        let created = await model.handle(.init(arguments: ["pages", "create", "--title", "Plan"]), callerID: first)
+        let page = try #require(created.result?.objectValue?["id"]?.stringValue)
         let itemID = UUID().uuidString.lowercased()
-        #expect(await model.handle(.init(arguments: ["boards", "add-item", "--note-id", board, "--text", "Task", "--status", "todo"], requestID: itemID), callerID: first).success)
-        let held = try #require(try await database.readNoteForEditing(id: board).document?.boardItemRevision(for: itemID))
+        #expect(await model.handle(.init(arguments: ["pages", "add-component", "--note-id", page, "--text", "Task", "--status", "todo"], requestID: itemID), callerID: first).success)
+        let held = try #require(try await database.readNoteForEditing(id: page).document?.boardItemRevision(for: itemID))
 
         // Linking twice changes the document once, and never strands another writer's revision.
-        #expect(await model.handle(.init(arguments: ["boards", "link-session", "--note-id", board, "--id", itemID, "--session", second]), callerID: first).success)
-        let linked = try await database.readNoteForEditing(id: board)
-        let again = await model.handle(.init(arguments: ["boards", "link-session", "--note-id", board, "--id", itemID, "--session", second]), callerID: first)
+        #expect(await model.handle(.init(arguments: ["pages", "link-session", "--note-id", page, "--id", itemID, "--session", second]), callerID: first).success)
+        let linked = try await database.readNoteForEditing(id: page)
+        let again = await model.handle(.init(arguments: ["pages", "link-session", "--note-id", page, "--id", itemID, "--session", second]), callerID: first)
         #expect(again.success)
         #expect(again.result?.objectValue?["revision"]?.stringValue == linked.revision)
-        #expect(try await database.readNoteForEditing(id: board).revision == linked.revision)
+        #expect(try await database.readNoteForEditing(id: page).revision == linked.revision)
 
         let current = try #require(linked.document?.boardItemRevision(for: itemID))
         #expect(current != held)
-        #expect(await model.handle(.init(arguments: ["boards", "remove-item", "--note-id", board, "--id", itemID, "--item-revision", current]), callerID: first).success)
-        let removed = try await database.readNoteForEditing(id: board)
-        for arguments in [["boards", "update-item", "--note-id", board, "--id", itemID, "--item-revision", current, "--status", "done"],
-                          ["boards", "remove-item", "--note-id", board, "--id", itemID, "--item-revision", current]] {
+        #expect(await model.handle(.init(arguments: ["pages", "remove-component", "--note-id", page, "--id", itemID, "--component-revision", current]), callerID: first).success)
+        let removed = try await database.readNoteForEditing(id: page)
+        for arguments in [["pages", "update-component", "--note-id", page, "--id", itemID, "--component-revision", current, "--status", "done"],
+                          ["pages", "remove-component", "--note-id", page, "--id", itemID, "--component-revision", current]] {
             let stale = await model.handle(.init(arguments: arguments), callerID: second)
             #expect(!stale.success)
             #expect(stale.code == "revision_conflict")
-            #expect(stale.result?.objectValue?["itemRemoved"]?.boolValue == true)
-            #expect(stale.result?.objectValue?["itemID"]?.stringValue == itemID)
+            #expect(stale.result?.objectValue?["componentRemoved"]?.boolValue == true)
+            #expect(stale.result?.objectValue?["componentID"]?.stringValue == itemID)
             #expect(stale.result?.objectValue?["currentRevision"]?.stringValue == removed.revision)
             #expect(stale.error?.contains("no longer exists") == true)
         }
-        // Without a held revision an unknown card is simply not found.
-        let unknown = await model.handle(.init(arguments: ["boards", "link-session", "--note-id", board, "--id", itemID, "--session", second]), callerID: first)
+        // Without a held revision an unknown component is simply not found.
+        let unknown = await model.handle(.init(arguments: ["pages", "link-session", "--note-id", page, "--id", itemID, "--session", second]), callerID: first)
         #expect(unknown.code == "not_found")
     }
 
-    @Test func boardLinksPreserveOriginalsAndReportMissingOnes() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: "boards-assets-" + UUID().uuidString)
+    @Test func pageLinksPreserveOriginalsAndReportMissingOnes() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "pages-assets-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let (database, model, caller, _) = try await boardFixture(root)
+        let (database, model, caller, _) = try await pageFixture(root)
         defer { model.stop() }
-        let created = await model.handle(.init(arguments: ["boards", "create", "--title", "Refs"]), callerID: caller)
-        let board = try #require(created.result?.objectValue?["id"]?.stringValue)
+        let created = await model.handle(.init(arguments: ["pages", "create", "--title", "Refs"]), callerID: caller)
+        let page = try #require(created.result?.objectValue?["id"]?.stringValue)
         let asset = try await database.createNote(folderID: nil, title: "Original", kind: .html, callerConversationID: caller, requestID: UUID().uuidString)
 
-        let missing = await model.handle(.init(arguments: ["boards", "add-item", "--note-id", board, "--asset-id", UUID().uuidString.lowercased()]), callerID: caller)
+        let missing = await model.handle(.init(arguments: ["pages", "add-component", "--note-id", page, "--asset-id", UUID().uuidString.lowercased()]), callerID: caller)
         #expect(!missing.success)
         #expect(missing.code == "not_found")
-        let selfLink = await model.handle(.init(arguments: ["boards", "add-item", "--note-id", board, "--asset-id", board]), callerID: caller)
+        let selfLink = await model.handle(.init(arguments: ["pages", "add-component", "--note-id", page, "--asset-id", page]), callerID: caller)
         #expect(!selfLink.success)
-        let copied = await model.handle(.init(arguments: ["boards", "add-item", "--note-id", board, "--asset-id", asset, "--text", "Copy"]), callerID: caller)
+        let copied = await model.handle(.init(arguments: ["pages", "add-component", "--note-id", page, "--asset-id", asset, "--text", "Copy"]), callerID: caller)
         #expect(!copied.success)
-        let nested = await model.handle(.init(arguments: ["boards", "add-item", "--note-id", board, "--json", #"{"x":0,"y":0,"width":360,"height":300,"assetID":"\#(asset)"}"#]), callerID: caller)
-        #expect(!nested.success)
-        #expect(nested.code == "invalid_request")
-        #expect(try await database.readNoteForEditing(id: board).document?.blocks.isEmpty == true)
+        #expect(copied.code == "invalid_request")
+        #expect(try await database.readNoteForEditing(id: page).document?.blocks.isEmpty == true)
 
         let itemID = UUID().uuidString.lowercased()
-        let linked = await model.handle(.init(arguments: ["boards", "add-item", "--note-id", board, "--asset-id", asset, "--title", "Spec", "--role", "instructions"], requestID: itemID), callerID: caller)
+        let linked = await model.handle(.init(arguments: ["pages", "add-component", "--note-id", page, "--asset-id", asset, "--title", "Spec", "--role", "instructions"], requestID: itemID), callerID: caller)
         #expect(linked.success)
-        #expect(linked.result?.objectValue?["item"]?.objectValue?["asset"]?.objectValue?["title"]?.stringValue == "Original")
-        #expect(linked.result?.objectValue?["item"]?.objectValue?["asset"]?.objectValue?["kind"]?.stringValue == "html")
+        #expect(linked.result?.objectValue?["component"]?.objectValue?["asset"]?.objectValue?["title"]?.stringValue == "Original")
+        #expect(linked.result?.objectValue?["component"]?.objectValue?["asset"]?.objectValue?["kind"]?.stringValue == "html")
 
-        // A layout batch and a task update keep the original; deleting it keeps the link.
-        let document = try #require(try await database.readNoteForEditing(id: board).document)
-        let moved = String(decoding: try JSONEncoder().encode([CanvasEdit(action: .place, id: itemID, placement: .init(x: 4_000, y: 4_000))]), as: UTF8.self)
-        let revision = try #require(try await database.readNoteForEditing(id: board).revision)
-        #expect(await model.handle(.init(arguments: ["boards", "edit-layout", "--note-id", board, "--revision", revision, "--json", moved]), callerID: caller).success)
-        let afterMove = try #require(try await database.readNoteForEditing(id: board).document)
+        // A move and a task update keep the original; deleting it keeps the link.
+        let document = try #require(try await database.readNoteForEditing(id: page).document)
+        let sectionID = UUID().uuidString.lowercased()
+        #expect(await model.handle(.init(arguments: ["pages", "add-component", "--note-id", page, "--kind", "section", "--title", "Sources"], requestID: sectionID), callerID: caller).success)
+        #expect(await model.handle(.init(arguments: ["pages", "move-component", "--note-id", page, "--id", itemID, "--parent-id", sectionID]), callerID: caller).success)
+        let afterMove = try #require(try await database.readNoteForEditing(id: page).document)
         #expect(afterMove.canvas?[itemID]?.assetID == asset)
         #expect(afterMove.canvas?[itemID]?.title == "Spec")
+        #expect(afterMove.pageParentID(for: itemID) == sectionID)
         #expect(afterMove.boardItems?[itemID] == document.boardItems?[itemID])
         #expect(afterMove.boardItemRevision(for: itemID) == document.boardItemRevision(for: itemID))
 
         try await database.mutateNote(id: asset, mutation: .moveToTrash, expectedRevision: database.noteActionRevision(id: asset))
-        let read = await model.handle(.init(arguments: ["boards", "read", "--note-id", board]), callerID: caller)
-        let card = try #require(read.result?.objectValue?["cards"]?.arrayValue?.first?.objectValue)
-        #expect(card["assetID"]?.stringValue == asset)
-        #expect(card["asset"]?.objectValue?["available"]?.boolValue == false)
-        let task = await model.handle(.init(arguments: ["boards", "update-item", "--note-id", board, "--id", itemID, "--item-revision", afterMove.boardItemRevision(for: itemID), "--status", "todo"]), callerID: caller)
+        let read = await model.handle(.init(arguments: ["pages", "read", "--note-id", page]), callerID: caller)
+        let component = try #require(read.result?.objectValue?["components"]?.arrayValue?.last?.objectValue)
+        #expect(component["assetID"]?.stringValue == asset)
+        #expect(component["asset"]?.objectValue?["available"]?.boolValue == false)
+        let task = await model.handle(.init(arguments: ["pages", "update-component", "--note-id", page, "--id", itemID, "--component-revision", afterMove.boardItemRevision(for: itemID), "--status", "todo"]), callerID: caller)
         #expect(task.success)
-        #expect(try await database.readNoteForEditing(id: board).document?.canvas?[itemID]?.assetID == asset)
+        #expect(try await database.readNoteForEditing(id: page).document?.canvas?[itemID]?.assetID == asset)
 
-        // The retained link stays, but a new card cannot reuse its missing original.
-        let reused = await model.handle(.init(arguments: ["boards", "add-item", "--note-id", board, "--asset-id", asset]), callerID: caller)
+        // The retained link stays, but a new component cannot reuse its missing original.
+        let reused = await model.handle(.init(arguments: ["pages", "add-component", "--note-id", page, "--asset-id", asset]), callerID: caller)
         #expect(!reused.success)
         #expect(reused.code == "not_found")
-        #expect(try await database.readNoteForEditing(id: board).document?.blocks.count == 1)
+        #expect(try await database.readNoteForEditing(id: page).document?.blocks.count == 2)
+    }
+
+    @Test func artifactStateToolsWriteOnlyStateAndReportConflicts() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "artifact-state-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (database, model, caller, _) = try await pageFixture(root)
+        defer { model.stop() }
+        let artifact = try await database.createNote(folderID: nil, title: "Form", kind: .html, callerConversationID: caller, requestID: UUID().uuidString)
+        let start = try await database.readNoteForEditing(id: artifact)
+        let setHTML = await model.handle(.init(arguments: ["notes", "set-html", "--note-id", artifact, "--html", "<input id=\"name\">", "--revision", try #require(start.revision)]), callerID: caller)
+        #expect(setHTML.success)
+        let edits = #"[{"action":"set","key":"app:plan","value":{"step":2,"ratio":0.5,"none":null}}]"#
+        let saved = await model.handle(.init(arguments: ["notes", "artifact-state-edit", "--note-id", artifact, "--json", edits], requestID: UUID().uuidString), callerID: caller)
+        #expect(saved.success)
+        #expect(saved.result?.objectValue?["state"]?.objectValue?["versions"]?.objectValue?["app:plan"]?.intValue == 1)
+
+        let read = await model.handle(.init(arguments: ["notes", "artifact-state", "--note-id", artifact]), callerID: caller)
+        let value = try #require(read.result?.objectValue?["state"]?.objectValue?["values"]?.objectValue?["app:plan"]?.objectValue)
+        #expect(value["step"] == .number(2) && value["ratio"] == .number(0.5) && value["none"] == .null)
+
+        // A stale write reports what is current and changes nothing, including the revision.
+        let before = try await database.readNoteForEditing(id: artifact)
+        let stale = #"[{"action":"set","key":"app:plan","value":"newer"}]"#
+        let conflict = await model.handle(.init(arguments: ["notes", "artifact-state-edit", "--note-id", artifact, "--json", stale], requestID: UUID().uuidString), callerID: caller)
+        #expect(!conflict.success)
+        #expect(conflict.code == "revision_conflict")
+        #expect(conflict.result?.objectValue?["currentVersion"]?.intValue == 1)
+        #expect(conflict.result?.objectValue?["currentValue"]?.objectValue?["step"] == .number(2))
+        let after = try await database.readNoteForEditing(id: artifact)
+        #expect(after.revision == before.revision)
+        #expect(after.document?.html == "<input id=\"name\">")
+
+        // Not an artifact, not this tool. Off with Notes, like every other note tool.
+        let note = try await database.createNote(folderID: nil, title: "Plain", callerConversationID: caller, requestID: UUID().uuidString)
+        let wrong = await model.handle(.init(arguments: ["notes", "artifact-state-edit", "--note-id", note, "--json", edits], requestID: UUID().uuidString), callerID: caller)
+        #expect(!wrong.success && wrong.code == "invalid_request")
+        try await database.setSessionTools(.init(enabled: [.history]), sessionID: caller)
+        let denied = await model.handle(.init(arguments: ["notes", "artifact-state", "--note-id", artifact]), callerID: caller)
+        #expect(!denied.success && denied.code == "tool_disabled")
     }
 
 

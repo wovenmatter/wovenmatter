@@ -102,8 +102,9 @@ public extension NoteDocument {
       canvas?[id] = updated
     case .remove:
       guard let id = edit.id, blocks.contains(where: { $0.id == id }) else { throw NoteDocumentSafetyError.unsupportedFormat }
-      blocks.removeAll { $0.id == id }; canvas?.removeValue(forKey: id); boardItems?.removeValue(forKey: id)
-      canvasConnections?.removeAll { $0.from == id || $0.to == id }
+      try requirePageRemovable(id)
+      blocks.removeAll { $0.id == id }
+      prunePageMetadata([id])
     case .section:
       guard let section = edit.section, section.isValid else { throw NoteDocumentSafetyError.unsupportedFormat }
       if canvasSections == nil { canvasSections = [] }

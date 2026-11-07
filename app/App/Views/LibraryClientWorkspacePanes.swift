@@ -305,7 +305,7 @@ struct LibraryClientNotePane: View {
         ContentUnavailableView("Not downloaded", systemImage: "arrow.down.circle", description: Text("Reconnect to the central database to download this note."))
       } else if !cache.isEditable(noteID: note.id, source: source.content) {
         Text("This document uses a newer format. Update Woven Matter to edit it.").padding()
-      } else if hasLinkedData {
+      } else if hasLinkedData, document.wrappedValue.kind != .canvas {
         linkedPreview
       } else {
         switch document.wrappedValue.kind {
@@ -316,14 +316,13 @@ struct LibraryClientNotePane: View {
           }.buttonStyle(DashboardQuietButtonStyle()).padding(.horizontal, 22)
           DashboardNoteEditor(document: document, controller: editor).padding(.horizontal, 22)
         case .spreadsheet: DashboardSpreadsheetEditor(document: document)
-        case .canvas:
-          ContentUnavailableView("Open this Board from Assets", systemImage: "rectangle.3.group",
-            description: Text("Use the workspace Board editor for tasks, references, and layout."))
+        case .canvas: LibraryClientPagePreview(model: model, note: source, document: document.wrappedValue)
         case .html:
           VSplitView {
             TextEditor(text: Binding(get: { document.wrappedValue.html }, set: { var value = document.wrappedValue; value.html = $0; document.wrappedValue = value }))
               .font(.system(size: 12, design: .monospaced)).frame(minHeight: 150)
-            DashboardHTMLArtifactView(html: document.wrappedValue.html, linkedDataJSON: nil).frame(minHeight: 150)
+            DashboardHTMLArtifactView(html: document.wrappedValue.html, linkedDataJSON: nil,
+              persistentState: document.wrappedValue.artifactState ?? [:]).frame(minHeight: 150)
           }.padding(.horizontal, 22)
         }
       }
@@ -340,6 +339,8 @@ private struct LibraryClientLinkedPreview: View {
   let note: CompanionNote
   let tableID: String?
   let html: String?
+  /// Inside a Page's scrolling document, which needs a bounded table to give it a height.
+  var embedded = false
   @State private var data: CompanionLinkedData?
   @State private var error: String?
   @State private var loading = false
@@ -354,16 +355,19 @@ private struct LibraryClientLinkedPreview: View {
         else { Button("Refresh") { Task { await load() } }.disabled(!model.online) }
       }
       if let error { Text(error).font(.caption).foregroundStyle(DashboardPalette.mutedForeground) }
-      if let html { DashboardHTMLArtifactView(html: html, linkedDataJSON: data?.json).frame(minHeight: 250) }
-      else if let data {
+      if let html {
+        DashboardHTMLArtifactView(html: html, linkedDataJSON: data?.json,
+          persistentState: NoteDocument.decode(note.content).artifactState ?? [:]).frame(minHeight: 250)
+      } else if let data {
         ScrollView([.horizontal, .vertical]) {
           LazyVStack(alignment: .leading, spacing: 0) {
             row(data.columns, header: true)
             ForEach(Array(data.rows.enumerated()), id: \.offset) { _, cells in row(cells, header: false) }
           }
-        }.accessibilityLabel("Live linked table, read only")
+        }.frame(minHeight: embedded ? 180 : nil, maxHeight: embedded ? 420 : nil)
+          .accessibilityLabel("Live linked table, read only")
       }
-    }.padding(22).task(id: requestKey) { await load() }
+    }.padding(embedded ? 8 : 22).task(id: requestKey) { await load() }
   }
   private func row(_ cells: [String], header: Bool) -> some View {
     HStack(spacing: 0) {
@@ -377,13 +381,227 @@ private struct LibraryClientLinkedPreview: View {
   }
   private func load() async {
     let key = requestKey
-    data = nil; error = nil; loading = true
+    // The result replaces the old data in one step, so a refresh reaches an Artifact
+    // as one data change rather than as null followed by the new rows.
+    error = nil; loading = true
     defer { if requestKey == key { loading = false } }
-    guard model.online else { error = "Connect to your central database to preview this linked data."; return }
+    guard model.online else { data = nil; error = "Connect to your central database to preview this linked data."; return }
     do {
       let result = try await model.linkedData(note: note, tableID: tableID)
       guard !Task.isCancelled, requestKey == key else { return }
       data = result
-    } catch is CancellationError {} catch { if requestKey == key { self.error = error.localizedDescription } }
+    } catch is CancellationError {} catch {
+      if requestKey == key { data = nil; self.error = error.localizedDescription }
+    }
+  }
+}
+
+/// A client reads a Page here and changes it on the library host, whose component
+/// revisions protect concurrent work. Nothing in this view can write to the document.
+private struct LibraryClientPagePreview: View {
+  @Bindable var model: CentralLibraryClientModel
+  let note: CompanionNote
+  let document: NoteDocument
+  var body: some View {
+    let page = document.materializedPage()
+    let blocks = Dictionary(page.blocks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+    ScrollView {
+      VStack(alignment: .leading, spacing: 4) {
+        Text("Page · read only").font(.caption).foregroundStyle(DashboardPalette.mutedForeground).padding(.leading, 24)
+        if let purpose = page.boardPurpose, !purpose.isEmpty {
+          Text(purpose).font(.system(size: 14)).foregroundStyle(DashboardPalette.mutedForeground)
+            .textSelection(.enabled).padding(.leading, 24).padding(.bottom, 10)
+        }
+        ForEach(page.pageSegments) { segment in
+          segmentView(segment, page: page, blocks: blocks).padding(.leading, CGFloat(segment.depth) * 20)
+        }
+        if page.blocks.isEmpty {
+          Text("This Page has no content yet.").foregroundStyle(DashboardPalette.mutedForeground).padding(.leading, 24)
+        }
+        let connections = page.pageLegacyConnections
+        if !connections.isEmpty {
+          DisclosureGroup("Retained connections") {
+            ForEach(connections) { connection in
+              Text(verbatim: "\(connection.fromText.prefix(60)) → \(connection.toText.prefix(60))"
+                + (connection.label.isEmpty ? "" : ": \(connection.label)"))
+                .font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground).textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+          }.padding(.top, 20).padding(.leading, 24)
+        }
+      }.padding(.horizontal, 24).padding(.top, 8).padding(.bottom, 60)
+    }.scrollIndicators(.never)
+  }
+  @ViewBuilder private func segmentView(_ segment: PageSegment, page: NoteDocument, blocks: [String: NoteBlock]) -> some View {
+    switch segment {
+    case let .flow(_, _, _, _, ids):
+      ForEach(LibraryClientPagePiece.pieces(of: ids, page: page, blocks: blocks)) { piece in
+        switch piece {
+        case .text(let flow, _): LibraryClientPageText(document: flow)
+        case .linkedTable(let id): LibraryClientLinkedPreview(model: model, note: note, tableID: id, html: nil, embedded: true)
+        case .details(let item, _): LibraryClientPageDetails(item: item, showsPlainStatus: false).padding(.leading, 24).padding(.bottom, 6)
+        }
+      }
+    case let .section(id, _, _):
+      VStack(alignment: .leading, spacing: 4) {
+        let title = blocks[id]?.plainText ?? ""
+        Text(title.isEmpty ? "Untitled section" : title).font(.system(size: 19, weight: .semibold))
+          .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+          .accessibilityAddTraits(.isHeader)
+        if let item = page.boardItems?[id], item.hasPreviewDetails {
+          LibraryClientPageDetails(item: item, showsPlainStatus: false)
+        }
+      }.padding(.leading, 24).padding(.top, 14).padding(.bottom, 3)
+    case let .asset(id, assetID, _, _):
+      LibraryClientPageOriginal(model: model, assetID: assetID, label: page.canvas?[id]?.title, item: page.boardItems?[id])
+        .padding(.vertical, 6)
+    }
+  }
+}
+
+/// One flow splits where the native editor cannot show something by itself: a linked
+/// table is evaluated by the library host, and task details have no inspector here.
+private enum LibraryClientPagePiece: Identifiable {
+  case text(NoteDocument, firstBlockID: String)
+  case linkedTable(String)
+  case details(BoardItem, blockID: String)
+
+  var id: String {
+    switch self {
+    case .text(_, let id): "text:" + id
+    case .linkedTable(let id): "table:" + id
+    case .details(_, let id): "details:" + id
+    }
+  }
+
+  static func pieces(of ids: [String], page: NoteDocument, blocks: [String: NoteBlock]) -> [Self] {
+    var pieces: [Self] = []
+    var run: [String] = []
+    func flush() {
+      guard let first = run.first else { return }
+      pieces.append(.text(flowDocument(run, page: page), firstBlockID: first))
+      run = []
+    }
+    for id in ids {
+      if case .table(let table)? = blocks[id], table.databaseLink != nil || page.databaseLink != nil {
+        flush()
+        pieces.append(.linkedTable(id))
+      } else { run.append(id) }
+      if let item = page.boardItems?[id], item.hasPreviewDetails {
+        flush()
+        pieces.append(.details(item, blockID: id))
+      }
+    }
+    flush()
+    return pieces
+  }
+
+  /// The same projection the Page editor gives the Notes renderer, so text and task
+  /// checkboxes look the same on both. It is only displayed, never saved.
+  private static func flowDocument(_ ids: [String], page: NoteDocument) -> NoteDocument {
+    var flow = page.pageFlowDocument(blockIDs: ids)
+    flow.kind = .canvas
+    let shown = Set(ids)
+    let items = (page.boardItems ?? [:]).filter { shown.contains($0.key) }.mapValues { source in
+      var item = source
+      item.createdBy = nil; item.createdAt = nil; item.updatedBy = nil; item.updatedAt = nil
+      return item
+    }.filter { $0.value != BoardItem() }
+    flow.boardItems = items.isEmpty ? nil : items
+    return flow
+  }
+}
+
+private struct LibraryClientPageText: View {
+  let document: NoteDocument
+  @State private var controller = DashboardNoteEditorController()
+  var body: some View {
+    DashboardNoteEditor(document: .constant(document), controller: controller, sizesToContent: true)
+      .frame(minHeight: 40).disabled(true).accessibilityLabel("Page text, read only")
+  }
+}
+
+private extension BoardItem {
+  /// A checkbox already shows to do and done, so only other states need words.
+  var hasPreviewDetails: Bool {
+    if review == .needed || role == .instructions || lastChange?.isEmpty == false { return true }
+    guard let task else { return false }
+    return ![.todo, .done].contains(task.status) || !task.assignee.isEmpty || !task.outcome.isEmpty
+  }
+}
+
+private struct LibraryClientPageDetails: View {
+  let item: BoardItem
+  /// An original has no checkbox, so it also names to do and done.
+  let showsPlainStatus: Bool
+  private var statusLabel: String? {
+    switch item.task?.status {
+    case .todo: showsPlainStatus ? "To do" : nil
+    case .done: showsPlainStatus ? "Done" : nil
+    case .doing: "In progress"
+    case .blocked: "Blocked"
+    case .canceled: "Canceled"
+    case nil: nil
+    }
+  }
+  var body: some View {
+    VStack(alignment: .leading, spacing: 4) {
+      HStack(spacing: 10) {
+        if let statusLabel { Text(statusLabel) }
+        if let assignee = item.task?.assignee, !assignee.isEmpty { Text(assignee) }
+        if item.role == .instructions { Label("Reference instructions", systemImage: "book.closed") }
+        if item.review == .needed { Label("Needs review", systemImage: "tray") }
+      }.foregroundStyle(DashboardPalette.mutedForeground)
+      if let outcome = item.task?.outcome, !outcome.isEmpty { Text(outcome).textSelection(.enabled) }
+      if let change = item.lastChange, !change.isEmpty {
+        Text(change).foregroundStyle(DashboardPalette.mutedForeground).textSelection(.enabled)
+      }
+    }.font(.system(size: 12)).frame(maxWidth: .infinity, alignment: .leading)
+  }
+}
+
+/// A reference by stable ID. Opening uses the normal note tab, whose pane chooses
+/// between the synchronized local record and the client preview of linked data.
+private struct LibraryClientPageOriginal: View {
+  @Environment(\.workspaceApplicationModel) private var appModel
+  @Bindable var model: CentralLibraryClientModel
+  let assetID: String
+  let label: String?
+  let item: BoardItem?
+  private var clientNote: CompanionNote? {
+    model.state.deletedNotes.contains(assetID) ? nil : model.state.notes[assetID]
+  }
+  private var localNote: WorkspaceNoteRecord? { appModel?.workspaceOverview?.notes.first { $0.id == assetID } }
+  private var canOpen: Bool {
+    guard appModel != nil else { return false }
+    return localNote != nil || clientNote.map(DevelopmentLibraryProjection.usesCentralPreview) == true
+  }
+  private var title: String {
+    [clientNote?.title, localNote?.title, label].compactMap { $0 }.first { !$0.isEmpty } ?? "Original asset"
+  }
+  private var kindName: String? {
+    if let clientNote, let kind = clientNote.kind { return kind.displayName }
+    return (localNote?.content ?? clientNote?.content).map { NoteDocument.decode($0).kind.displayName }
+  }
+  var body: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      HStack(spacing: 8) {
+        Text(title).font(.system(size: 13, weight: .medium)).lineLimit(1)
+        Label("Original", systemImage: "link").font(.system(size: 10)).foregroundStyle(DashboardPalette.mutedForeground)
+        if let kindName { Text(kindName).font(.system(size: 10)).foregroundStyle(DashboardPalette.mutedForeground) }
+        Spacer()
+        Button { appModel?.workspaceAssets.openNote(assetID) } label: { Image(systemName: "arrow.up.right.square") }
+          .buttonStyle(DashboardIconButtonStyle()).help("Open original")
+          .accessibilityLabel("Open original asset").disabled(!canOpen)
+      }
+      if !canOpen {
+        Text(clientNote == nil ? "The original asset is unavailable. Its reference is retained."
+          : "The original has not synchronized to this Mac yet. Its reference is retained.")
+          .font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground)
+      }
+      if let item, item.task != nil || item.hasPreviewDetails { LibraryClientPageDetails(item: item, showsPlainStatus: true) }
+    }
+    .padding(12)
+    .background(DashboardPalette.muted.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
   }
 }

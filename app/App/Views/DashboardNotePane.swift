@@ -11,8 +11,11 @@ struct DashboardNotePane: View {
     let onOpenNote: (String) -> Void
     var onCanvasContext: ((CanvasViewportContext) -> Void)?
     var onOpenSession: ((String) -> Void)?
+    var embedded = false
+    var onEditorFocus: ((DashboardNoteEditorController) -> Void)?
     @FocusState private var titleFocused: Bool
     @State private var editorController = DashboardNoteEditorController()
+    @State private var activePageEditor: DashboardNoteEditorController?
     @State private var dictationEditor = DictationEditor()
     @State private var documentCache = DashboardNoteDocumentCache()
     @State private var canvasViewState = DashboardCanvasViewState()
@@ -93,6 +96,7 @@ struct DashboardNotePane: View {
     var body: some View {
         let currentDocument = self.currentDocument
         VStack(spacing: 0) {
+            if !embedded {
             HStack(spacing: 8) {
                 TextField(
                     currentDocument.kind == .note
@@ -126,20 +130,26 @@ struct DashboardNotePane: View {
                     .help("Redo (⇧⌘Z)").accessibilityLabel("Redo")
                 }
                 if currentDocument.kind == .canvas && documentIsEditable {
-                    DashboardCanvasControls(document: document, viewState: $canvasViewState,
-                        assets: canvasAssets,
-                        canOpenAssets: true, compact: paneWidth < 640, onCreateAsset: { kind, title, html in
-                            guard let id = await model.createNote(folderID: note.folderID, kind: kind),
-                                  let asset = model.workspaceOverview?.notes.first(where: { $0.id == id }) else { return nil }
-                            var value = NoteDocument.decode(asset.content)
-                            if let html { value.html = html }
-                            model.updateNoteDraft(note: asset, title: title, content: try? value.encoded())
-                            return id
-                        }, conversations: model.workspaceOverview?.conversations ?? [],
-                        onSendItem: { itemID, conversationID in
-                            try await model.sendBoardItem(boardID: note.id, itemID: itemID, to: conversationID)
-                        }, onOpenSession: onOpenSession)
-                        .disabled(model.noteEditingSuspended)
+                    Button {
+                        if activePageEditor?.canUndo == true { activePageEditor?.undo() }
+                        else { var value = document.wrappedValue; canvasViewState.undo(&value); document.wrappedValue = value }
+                    } label: { Image(systemName: "arrow.uturn.backward").frame(width: 32, height: 32) }
+                    .buttonStyle(DashboardIconButtonStyle())
+                    .disabled(activePageEditor?.canUndo != true && canvasViewState.undoStack.isEmpty)
+                    .accessibilityLabel("Undo")
+                    Button {
+                        if activePageEditor?.canRedo == true { activePageEditor?.redo() }
+                        else { var value = document.wrappedValue; canvasViewState.redo(&value); document.wrappedValue = value }
+                    } label: { Image(systemName: "arrow.uturn.forward").frame(width: 32, height: 32) }
+                    .buttonStyle(DashboardIconButtonStyle())
+                    .disabled(activePageEditor?.canRedo != true && canvasViewState.redoStack.isEmpty)
+                    .accessibilityLabel("Redo")
+                    Button { showsFormatting.toggle() } label: { Image(systemName: "textformat").frame(width: 32, height: 32) }
+                        .buttonStyle(DashboardIconButtonStyle()).help("Format text")
+                        .disabled(activePageEditor == nil || titleFocused)
+                    if let dictation = activePageEditor?.boundDictationEditor {
+                        DictationMicrophone(editor: dictation, usesNoteToolbarStyle: true)
+                    }
                 }
                 Button { showsVersionHistory = true } label: {
                     Image(systemName: "clock.arrow.circlepath").font(.system(size: 14)).frame(width: 32, height: 32)
@@ -179,22 +189,12 @@ struct DashboardNotePane: View {
             .padding(.horizontal, 12)
             .frame(height: 56)
 
-            if currentDocument.kind == .canvas && documentIsEditable {
-                DashboardBoardPurposeBar(purpose: Binding(get: { document.wrappedValue.boardPurpose ?? "" }, set: { purpose in
-                    commitBoard(document: document, state: $canvasViewState) { $0.boardPurpose = purpose.isEmpty ? nil : purpose }
-                }), taskCount: currentDocument.boardItems?.values.filter { $0.task != nil }.count ?? 0,
-                completedCount: currentDocument.boardItems?.values.filter { $0.task?.status == .done }.count ?? 0,
-                needsReviewCount: currentDocument.boardItems?.values.filter { $0.review == .needed }.count ?? 0,
-                onAddTask: { addBoardTask(document: document, state: $canvasViewState) }, onReview: {
-                    canvasViewState.navigatorFilter = .review
-                    canvasViewState.showsNavigator = true
-                }).disabled(model.noteEditingSuspended)
             }
 
-            if showsFormatting && currentDocument.kind == .note && documentIsEditable {
-                DashboardNoteFormattingBar(controller: editorController)
-                    .padding(.horizontal, 32)
-                    .padding(.vertical, 6)
+            if showsFormatting && (currentDocument.kind == .note || currentDocument.kind == .canvas) && documentIsEditable {
+                DashboardNoteFormattingBar(controller: currentDocument.kind == .canvas ? (activePageEditor ?? editorController) : editorController)
+                    .disabled(currentDocument.kind == .canvas && (activePageEditor == nil || titleFocused))
+                    .padding(.horizontal, 32).padding(.vertical, 6)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 
@@ -217,25 +217,24 @@ struct DashboardNotePane: View {
                         switch currentDocument.kind {
                         case .note:
                             DashboardNoteEditor(document: document, controller: editorController,
-                                dictationEditor: dictationEditor, dictationIdentity: note.id)
+                                dictationEditor: dictationEditor, dictationIdentity: note.id,
+                                sizesToContent: embedded, onFocus: onEditorFocus)
                                 .accessibilityLabel("Note body")
                         case .canvas:
-                            DashboardCanvasEditor(document: document,
-                                assets: canvasAssets,
-                                onOpenAsset: onOpenNote, onEditAsset: { id, value in
-                                    guard let asset = model.workspaceOverview?.notes.first(where: { $0.id == id }),
-                                          (try? value.validateEditableShape()) != nil,
-                                          let content = try? value.encoded() else { return }
-                                    model.updateNoteDraft(note: asset, content: content)
-                                }, viewState: $canvasViewState, onContext: onCanvasContext)
+                            DashboardPageEditor(model: model, document: document, viewState: $canvasViewState,
+                                noteID: note.id, folderID: note.folderID, onOpenAsset: onOpenNote,
+                                onOpenSession: onOpenSession, onFocus: { activePageEditor = $0 }, onSectionFocus: { activePageEditor = nil })
                         case .spreadsheet:
                             DashboardSpreadsheetEditor(document: document)
                                 .accessibilityLabel("Sheet")
                         case .html:
-                            DashboardHTMLArtifactView(
-                                html: currentDocument.html,
-                                linkedDataJSON: linkedDataJSON
-                            )
+                            DashboardPersistentArtifactView(document: document, linkedDataJSON: linkedDataJSON,
+                                savedState: (try? NoteDocument.editableDocument(from: note.content))?.artifactState ?? [:],
+                                currentState: {
+                                    guard let asset = model.workspaceOverview?.notes.first(where: { $0.id == note.id }) else { return [:] }
+                                    return (try? NoteDocument.editableDocument(from: asset.content))?.artifactState ?? [:]
+                                },
+                                saveState: { model.enqueueArtifactInput(noteID: note.id, edit: $0, after: $1) })
                             .accessibilityLabel("Artifact")
                         }
                     }
@@ -262,6 +261,16 @@ struct DashboardNotePane: View {
                     .foregroundStyle(DashboardPalette.warning)
                 }
 
+                if let notice = draft.reconciliationNotice {
+                    HStack(alignment: .top, spacing: 8) {
+                        Text(notice)
+                        Spacer(minLength: 4)
+                        Button("Dismiss") { model.dismissNoteReconciliationNotice(noteID: note.id) }
+                            .buttonStyle(.plain).underline()
+                    }
+                    .font(.system(size: 12)).foregroundStyle(DashboardPalette.warning)
+                    .padding(.horizontal, currentDocument.kind == .canvas ? 24 : 0)
+                }
                 switch draft.saveState {
                 case .failed(let message):
                     HStack(spacing: 6) {
@@ -290,10 +299,10 @@ struct DashboardNotePane: View {
                 alignment: .leading
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-            .padding(.horizontal, currentDocument.kind == .canvas ? 0 : 32)
+            .padding(.horizontal, embedded || currentDocument.kind == .canvas ? 0 : 32)
             .padding(.bottom, currentDocument.kind == .canvas || currentDocument.kind == .note ? 0 : 24)
 
-            if currentDocument.kind == .note {
+            if !embedded && (currentDocument.kind == .note || currentDocument.kind == .canvas) {
                 let statistics = DashboardNoteTextStatistics(document: currentDocument)
                 Button { showsCharacterCount.toggle() } label: {
                     Text(showsCharacterCount
@@ -328,6 +337,12 @@ struct DashboardNotePane: View {
             }
         }
         .onChange(of: note) { _, updated in model.prepareNoteDraft(updated) }
+        .onChange(of: draft.conflictComponentRemaps) { _, remaps in
+            if let id = activePageEditor?.selectedBlockID, let copyID = remaps[id] {
+                canvasViewState.selected = [copyID]
+                canvasViewState.revealCardID = copyID
+            }
+        }
         .onChange(of: model.databasesSnapshot) { _, _ in
             guard hasDatabaseLinks else { return }
             Task { await refreshLinkedData() }

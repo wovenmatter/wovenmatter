@@ -59,6 +59,27 @@ struct PairedLibraryTests {
     #expect(try await a.database.companionWorkspaceID() != b.database.companionWorkspaceID())
   }
 
+  @Test func nestedPagesAndArtifactInputStateUseTheExistingPairedLibraryPath() async throws {
+    let a = try await Mac(), b = try await Mac(); defer { a.remove(); b.remove() }
+    let artifact = try await a.database.createNote(folderID: nil, title: "Planner",
+      content: NoteDocument(kind: .html, html: "<input id='title'>").encoded(), kind: .html)
+    _ = try await a.database.applyArtifactStateEdit(noteID: artifact,
+      edit: .init(action: .set, key: "form:text:title:0", value: .string("Trip plan")))
+    let page = NoteDocument(kind: .canvas, blocks: [.richText(.init(id: "section", text: "Work")), .richText(.init(id: "embed", text: ""))],
+      canvas: ["embed": .init(x: 0, y: 0, assetID: artifact)],
+      pageNodes: ["section": .init(isSection: true), "embed": .init(parentID: "section")])
+    let id = try await a.database.createNote(folderID: nil, title: "Page", content: page.encoded(), kind: .canvas)
+    try await a.send(to: b); try await b.send(to: a)
+    let received = try #require(try await b.database.readNoteForEditing(id: id).document)
+    #expect(received.pageParentID(for: "embed") == "section")
+    #expect(received.canvas?["embed"]?.assetID == artifact)
+    #expect(try await b.database.artifactStateSnapshot(noteID: artifact).values["form:text:title:0"] == .string("Trip plan"))
+    _ = try await b.database.applyArtifactStateEdit(noteID: artifact,
+      edit: .init(action: .set, key: "form:text:title:0", value: .string("Revised trip"), expectedVersion: 1))
+    try await b.send(to: a)
+    #expect(try await a.database.artifactStateSnapshot(noteID: artifact).values["form:text:title:0"] == .string("Revised trip"))
+  }
+
   @Test func boardsSyncOriginalReferencesAndPreserveConcurrentWholeDocumentEdits() async throws {
     let a = try await Mac(), b = try await Mac(); defer { a.remove(); b.remove() }
     let asset = try await a.database.createNote(folderID: nil, title: "Shared reference",

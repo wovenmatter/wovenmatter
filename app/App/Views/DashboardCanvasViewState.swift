@@ -29,29 +29,36 @@ struct DashboardCanvasViewState {
         origin.y += viewport.height / 2 / zoom - viewport.height / 2 / next
         zoom = next
     }
-    mutating func observe(_ old: NoteDocument, _ new: NoteDocument) {
+    @discardableResult mutating func observe(_ old: NoteDocument, _ new: NoteDocument) -> Bool {
         selected.formIntersection(Set(new.blocks.map(\.id)))
-        if pendingLocalDocument == new {
+        if pendingLocalDocument.map({ sameContent($0, new) }) == true || sameContent(old, new) {
             pendingLocalDocument = nil
             lastKnownDocument = new
-            return
+            return false
         }
         // Incoming work is a history boundary. Undo must never restore an old
         // whole-document snapshot over another participant's changes.
         undoStack.removeAll(); redoStack.removeAll()
         pendingLocalDocument = nil
         lastKnownDocument = new
+        return true
     }
-    mutating func recordLocalChange(from old: NoteDocument, to new: NoteDocument) {
+    mutating func recordLocalChange(from old: NoteDocument, to new: NoteDocument, undoable: Bool = true) {
         // The binding saves a normalized document. Track that exact shape so
         // merging adjacent text runs is never mistaken for incoming work.
         let before = old.normalized(), after = new.normalized()
-        guard before != after else { return }
-        if let lastKnownDocument, lastKnownDocument != before {
+        guard !sameContent(before, after) else { return }
+        if let lastKnownDocument, !sameContent(lastKnownDocument, before) {
             undoStack.removeAll(); redoStack.removeAll()
         }
-        undoStack.append(before)
-        if undoStack.count > 30 { undoStack.removeFirst() }
+        if undoable {
+            undoStack.append(before)
+            if undoStack.count > 30 { undoStack.removeFirst() }
+        } else {
+            // Native text has its own shared Page undo manager. A later whole-
+            // document component undo must not erase edits in another text flow.
+            undoStack.removeAll()
+        }
         redoStack.removeAll()
         pendingLocalDocument = after; lastKnownDocument = after
     }
@@ -68,13 +75,27 @@ struct DashboardCanvasViewState {
         pendingLocalDocument = restored; lastKnownDocument = restored; document = restored
     }
     private mutating func historyMatches(_ document: NoteDocument) -> Bool {
-        guard lastKnownDocument == nil || lastKnownDocument == document.normalized() else {
+        guard lastKnownDocument.map({ sameContent($0, document) }) ?? true else {
             undoStack.removeAll(); redoStack.removeAll(); pendingLocalDocument = nil
             lastKnownDocument = document
-            error = "The Board changed. Local undo history has been cleared to preserve incoming work."
+            error = "The Page changed. Local undo history has been cleared to preserve incoming work."
             return false
         }
         return true
+    }
+    private func sameContent(_ lhs: NoteDocument, _ rhs: NoteDocument) -> Bool {
+        func content(_ source: NoteDocument) -> NoteDocument {
+            var value = source.normalized()
+            var items: [String: BoardItem] = [:]
+            for (id, original) in value.boardItems ?? [:] {
+                var item = original
+                item.createdBy = nil; item.createdAt = nil; item.updatedBy = nil; item.updatedAt = nil
+                if item != BoardItem() { items[id] = item }
+            }
+            value.boardItems = items.isEmpty ? nil : items
+            return value
+        }
+        return content(lhs) == content(rhs)
     }
     private mutating func restored(_ snapshot: NoteDocument, from current: NoteDocument) -> NoteDocument? {
         do {

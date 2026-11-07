@@ -33,7 +33,7 @@ public enum NoteArtifactKind: String, Codable, CaseIterable, Sendable {
     case .note: "Note"
     case .spreadsheet: "Sheet"
     case .html: "Artifact"
-    case .canvas: "Board"
+    case .canvas: "Page"
     }
   }
 }

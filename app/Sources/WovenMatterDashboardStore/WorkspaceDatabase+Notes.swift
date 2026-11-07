@@ -388,7 +388,9 @@ extension WorkspaceDatabaseConnection {
     content: String,
     updatedAt: Date = Date(),
     expectedRevision: String? = nil,
-    operationID: String? = nil
+    operationID: String? = nil,
+    baseContent: String? = nil,
+    baseTitle: String? = nil
   ) throws -> Bool {
     try transaction {
       if let operationID, let receipt = try companionDraftReceiptUnlocked(operationID: operationID) {
@@ -405,32 +407,134 @@ extension WorkspaceDatabaseConnection {
           title: title, content: content, revision: note.revision)
         return true
       }
-      guard let expectedRevision, expectedRevision == note.revision else {
-        throw WorkspaceNoteMutationError.revisionConflict
+      let resolved = try resolveNoteDraftUnlocked(note: note, title: title, content: content,
+        expectedRevision: expectedRevision, baseContent: baseContent, baseTitle: baseTitle)
+      // A stale draft can resolve to exactly what is stored. Nothing moves, so no
+      // other writer's revision goes stale because of it.
+      if resolved.title == note.title, resolved.content == note.content {
+        try saveCompanionDraftReceiptUnlocked(operationID: operationID, id: id,
+          title: title, content: content, revision: note.revision)
+        return true
       }
       // Decoding must preserve every supported field; persist the editor's raw
       // bytes so a title-only change can retain an unsupported future document.
-      if content != note.content {
+      if resolved.content != note.content {
         _ = try NoteDocument.editableDocument(from: note.content)
-        let candidate = try NoteDocument.editableDocument(from: content)
-        // Every participant must still be able to change a Board. A larger
-        // existing Board can shrink, but it cannot grow further out of reach.
-        if candidate.kind == .canvas, content.utf8.count > NoteDocument.maximumBoardBytes,
-           content.utf8.count > note.content.utf8.count {
+        let candidate = try NoteDocument.editableDocument(from: resolved.content)
+        // Every participant must still be able to change a Page. A larger
+        // existing Page can shrink, but it cannot grow further out of reach.
+        if candidate.kind == .canvas, resolved.content.utf8.count > NoteDocument.maximumBoardBytes,
+           resolved.content.utf8.count > note.content.utf8.count {
           throw NoteDocumentSafetyError.tooLarge
         }
       }
       try checkpointNoteUnlocked(id: id, source: "editor", force: false)
       try toolsExecuteUnlocked(
         "UPDATE notes SET title = ?, content = ?, snippet = ?, updated_at = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
-        [title, content, Self.noteSnippet(content), try nextNoteUpdatedAtUnlocked(id: id, now: updatedAt), id, operatorID]
+        [resolved.title, resolved.content, Self.noteSnippet(resolved.content), try nextNoteUpdatedAtUnlocked(id: id, now: updatedAt), id, operatorID]
       )
       guard changedRowCountUnlocked == 1 else { throw WorkspaceNoteMutationError.noteNotFound }
       try checkpointNoteUnlocked(id: id, source: "editor", force: false)
       let revision = try noteForEditingUnlocked(id: id, operatorID: operatorID).revision
+      // The receipt identifies what was submitted, so a retry of a merged draft replays it.
       try saveCompanionDraftReceiptUnlocked(operationID: operationID, id: id,
         title: title, content: content, revision: revision)
       return true
+    }
+  }
+
+  /// What a draft should store, given the row as it is now. Pages and Artifacts have a
+  /// finer unit than the document revision, so another writer's change to a different
+  /// component or to saved state need not fail this save. Anything that cannot combine
+  /// without losing someone's writing throws `revisionConflict`, so draft recovery keeps it.
+  private func resolveNoteDraftUnlocked(
+    note: (title: String, content: String, revision: String), title: String, content: String,
+    expectedRevision: String?, baseContent: String?, baseTitle: String?
+  ) throws -> (title: String, content: String) {
+    let isCurrent = expectedRevision == note.revision && expectedRevision != nil
+    guard let current = try? NoteDocument.editableDocument(from: note.content),
+          let draft = try? NoteDocument.editableDocument(from: content),
+          current.kind == draft.kind, current.kind == .canvas || current.kind == .html else {
+      guard isCurrent else { throw WorkspaceNoteMutationError.revisionConflict }
+      return (title, content)
+    }
+    // A chained autosave names the latest revision while its text derives from an earlier
+    // draft. If an earlier save was merged, that text lacks the other writer's change.
+    let derivesFromCurrent = isCurrent && (baseContent == nil || baseContent == note.content)
+    let base = baseContent.flatMap { try? NoteDocument.editableDocument(from: $0) }
+    let resolvedTitle: String
+    if derivesFromCurrent || title == note.title { resolvedTitle = title }
+    else if title == baseTitle { resolvedTitle = note.title }
+    else if note.title == baseTitle, baseTitle != nil { resolvedTitle = title }
+    else { throw WorkspaceNoteMutationError.revisionConflict }
+
+    if current.kind == .html {
+      let code = { (document: NoteDocument) in document.replacingArtifactState(with: nil).normalized() }
+      let stateBase: [String: ArtifactStateEntry]?
+      let chosen: NoteDocument
+      if derivesFromCurrent {
+        stateBase = current.artifactState; chosen = draft
+      } else if code(draft) == code(current) {
+        stateBase = base?.artifactState ?? current.artifactState; chosen = current
+      } else if let base, base.kind == .html {
+        stateBase = base.artifactState
+        if code(base) == code(current) { chosen = draft }      // Only state moved underneath this draft.
+        else if code(draft) == code(base) { chosen = current } // Only the title changed here.
+        else { throw WorkspaceNoteMutationError.revisionConflict }
+      } else {
+        throw WorkspaceNoteMutationError.revisionConflict
+      }
+      let state: [String: ArtifactStateEntry]?
+      do {
+        state = try NoteDocument.mergeArtifactState(base: stateBase, draft: draft.artifactState, current: current.artifactState, at: Self.timestamp(Date()))
+      } catch ArtifactStateError.conflict { throw WorkspaceNoteMutationError.revisionConflict }
+      // Raw bytes stay when the draft is already right.
+      if code(chosen) == code(draft), state == draft.artifactState { return (resolvedTitle, content) }
+      return (resolvedTitle, try chosen.replacingArtifactState(with: state).encoded())
+    }
+
+    if derivesFromCurrent { return (resolvedTitle, content) }
+    guard let base, base.kind == .canvas else { throw WorkspaceNoteMutationError.revisionConflict }
+    guard var merged = try? NoteDocument.mergePage(base: base, local: draft, remote: current).document else {
+      throw WorkspaceNoteMutationError.revisionConflict
+    }
+    merged.stampBoardChanges(from: current.materializedPage(), actor: BoardActor(kind: .user), at: Self.timestamp(Date()))
+    return (resolvedTitle, try merged.encoded())
+  }
+
+  /// Saves one key of an Artifact's state for the user's own app. It takes no document
+  /// revision and no document: only `artifactState` changes, on the latest row, so code
+  /// read from a stale view can never be written back. Nothing is written for a no-op.
+  public func applyArtifactStateEdit(noteID: String, edit: ArtifactStateEdit) throws -> ArtifactStateWriteResult {
+    try transaction {
+      let operatorID = try localMutationOperatorIDUnlocked()
+      let note = try noteForEditingUnlocked(id: noteID, operatorID: operatorID)
+      var document = try NoteDocument.editableDocument(from: note.content)
+      guard try document.applyArtifactStateEdits([edit], at: Self.timestamp(Date())) else {
+        return ArtifactStateWriteResult(noteID: noteID, key: edit.key, version: document.artifactState?[edit.key]?.version ?? 0,
+          changed: false, revision: note.revision, snapshot: document.artifactStateSnapshot)
+      }
+      let content = try document.encoded()
+      guard content.utf8.count <= CompanionProtocol.maximumNoteBytes else { throw ArtifactStateError.stateTooLarge }
+      // Saved inputs change often. Coalesce their history so they cannot crowd out real versions.
+      try checkpointNoteUnlocked(id: noteID, source: "artifact-state", force: false)
+      try toolsExecuteUnlocked(
+        "UPDATE notes SET content = ?, updated_at = ? WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
+        [content, try nextNoteUpdatedAtUnlocked(id: noteID), noteID, operatorID])
+      guard changedRowCountUnlocked == 1 else { throw WorkspaceNoteMutationError.noteNotFound }
+      try checkpointNoteUnlocked(id: noteID, source: "artifact-state", force: false)
+      return ArtifactStateWriteResult(noteID: noteID, key: edit.key, version: document.artifactState?[edit.key]?.version ?? 0,
+        changed: true, revision: try noteForEditingUnlocked(id: noteID, operatorID: operatorID).revision,
+        snapshot: document.artifactStateSnapshot)
+    }
+  }
+
+  public func artifactStateSnapshot(noteID: String) throws -> ArtifactStateSnapshot {
+    try withLock {
+      let note = try noteForEditingUnlocked(id: noteID, operatorID: try localMutationOperatorIDUnlocked())
+      let document = try NoteDocument.editableDocument(from: note.content)
+      guard document.kind == .html else { throw ArtifactStateError.notArtifact }
+      return document.artifactStateSnapshot
     }
   }
 
@@ -479,13 +583,13 @@ extension WorkspaceDatabaseConnection {
 
   /// A newly linked original must exist now. A link that already existed is kept
   /// even if its original is gone, and reads report it as unavailable.
-  private func requireNewBoardAssetsUnlocked(old: NoteDocument, new: NoteDocument, boardID: String, operatorID: String) throws {
-    // Compare per card: a new card must not inherit another card's retained missing link.
+  private func requireNewPageAssetsUnlocked(old: NoteDocument, new: NoteDocument, pageID: String, operatorID: String) throws {
+    // Compare per component: a new one must not inherit another's retained missing link.
     let added = Set((new.canvas ?? [:]).compactMap { id, placement -> String? in
       placement.assetID == old.canvas?[id]?.assetID ? nil : placement.assetID
     })
     guard !added.isEmpty else { return }
-    guard !added.contains(boardID) else { throw WorkspaceToolError.invalid("A Board cannot link to itself.") }
+    guard !added.contains(pageID) else { throw WorkspaceToolError.invalid("A Page cannot link to itself.") }
     let ids = String(decoding: try JSONEncoder().encode(added.sorted()), as: UTF8.self)
     let found = Set(try historyRowsUnlocked(
       "SELECT id FROM notes WHERE user_id=? AND deleted_at IS NULL AND id IN (SELECT value FROM json_each(?))",
@@ -512,12 +616,16 @@ extension WorkspaceDatabaseConnection {
     }
     let currentDocument = try NoteDocument.editableDocument(from: note.content)
     try RemoteNoteEditEnvelope.validate(operations: request.operations, applyingTo: currentDocument)
-    // Task updates are frequent and small. Coalesce their retained versions so a
-    // busy Board keeps a usable span of history and does not crowd out other notes.
+    // Task updates and saved inputs are frequent and small. Coalesce their retained versions
+    // so a busy Page keeps a usable span of history and does not crowd out other notes.
     let forceCheckpoint = !request.operations.allSatisfy {
-      if case .board(let edit) = $0 { edit.action != .setPurpose } else { false }
+      switch $0 {
+      case .board(let edit): edit.action != .setPurpose
+      case .page(let edit): edit.action != .setPurpose && edit.action != .remove
+      case .artifactState: true
+      default: false
+      }
     }
-    try checkpointNoteUnlocked(id: request.noteID, source: "before-agent-edit", force: forceCheckpoint)
     var document = currentDocument
     if document.kind == .html,
        request.operations.contains(where: {
@@ -526,13 +634,20 @@ extension WorkspaceDatabaseConnection {
       throw NoteEditError.artifactKindMismatch
     }
     let updatedTitle = try document.apply(request.operations) ?? note.title
-    // Repeating an idempotent Board edit must not make other writers' revisions stale.
-    if document.kind == .canvas, updatedTitle == note.title, document == currentDocument.normalized() {
+    // Repeating an idempotent edit must not make other writers' revisions stale, and a
+    // first read-only pass over an older Board must not migrate it.
+    let unchanged = updatedTitle == note.title && (document == currentDocument.normalized()
+      || (document.kind == .canvas && document == currentDocument.materializedPage().normalized()))
+    if (document.kind == .canvas || document.kind == .html), unchanged {
       return NoteEditingResponse(success: true, noteID: request.noteID, title: note.title, revision: note.revision, document: document)
     }
+    try checkpointNoteUnlocked(id: request.noteID, source: "before-agent-edit", force: forceCheckpoint)
     if document.kind == .canvas {
-      try requireNewBoardAssetsUnlocked(old: currentDocument, new: document, boardID: request.noteID, operatorID: operatorID)
-      document.stampBoardChanges(from: currentDocument, actor: actor, at: Self.timestamp(Date()))
+      // A first write migrates an older Board. Compare it to its own migrated form, so the
+      // migration itself is attributed to nobody and only this edit is stamped.
+      let old = document.pageNodes == nil ? currentDocument : currentDocument.materializedPage()
+      try requireNewPageAssetsUnlocked(old: old, new: document, pageID: request.noteID, operatorID: operatorID)
+      document.stampBoardChanges(from: old, actor: actor, at: Self.timestamp(Date()))
     }
     let content = try document.encoded()
     if document.kind == .canvas, content.utf8.count > NoteDocument.maximumBoardBytes {
@@ -679,9 +794,18 @@ extension WorkspaceDatabase {
     title: String,
     content: String,
     updatedAt: Date = Date(),
-    expectedRevision: String? = nil, operationID: String? = nil
+    expectedRevision: String? = nil, operationID: String? = nil,
+    baseContent: String? = nil, baseTitle: String? = nil
   ) async throws -> Bool {
-    try await write { try $0.persistNoteDraft(id: id, title: title, content: content, updatedAt: updatedAt, expectedRevision: expectedRevision, operationID: operationID) }
+    try await write { try $0.persistNoteDraft(id: id, title: title, content: content, updatedAt: updatedAt, expectedRevision: expectedRevision, operationID: operationID, baseContent: baseContent, baseTitle: baseTitle) }
+  }
+
+  public func applyArtifactStateEdit(noteID: String, edit: ArtifactStateEdit) async throws -> ArtifactStateWriteResult {
+    try await write { try $0.applyArtifactStateEdit(noteID: noteID, edit: edit) }
+  }
+
+  public func artifactStateSnapshot(noteID: String) async throws -> ArtifactStateSnapshot {
+    try await read { try $0.artifactStateSnapshot(noteID: noteID) }
   }
 
   public func readNoteForEditing(id: String, callerConversationID: String? = nil) async throws -> NoteEditingResponse {

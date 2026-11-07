@@ -20,6 +20,7 @@ case "${1:-changed}" in
 esac
 
 scripts/scan-public-tree.sh
+node --test scripts/test-support/artifact-state.test.mjs
 while IFS= read -r -d '' file; do
   [ ! -f "$file" ] || bash -n "$file"
 done < <(git ls-files -z -- '*.sh')
