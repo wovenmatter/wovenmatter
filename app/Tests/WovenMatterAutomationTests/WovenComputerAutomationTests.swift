@@ -89,7 +89,9 @@ struct WovenComputerAutomationTests {
     for line in sys.stdin:
         m=json.loads(line)
         if 'id' not in m: continue
-        if m['method']=='initialize': result={'protocolVersion':'2025-03-26','capabilities':{},'serverInfo':{'name':'fixture','version':'1'}}
+        if m['method']=='initialize':
+            assert m['params']['protocolVersion']=='2025-06-18'
+            result={'protocolVersion':'2025-06-18','capabilities':{},'serverInfo':{'name':'fixture','version':'1'}}
         else:
             name=m['params']['name']
             if name=='hang': time.sleep(30)
@@ -118,6 +120,37 @@ struct WovenComputerAutomationTests {
     await #expect(throws: (any Error).self) { try await runtime.call("crash", arguments: [:], callerID: "one", admit: {}) }
     let recovered = try await runtime.call("list_apps", arguments: [:], callerID: "one", admit: {})
     #expect(recovered.objectValue?["structuredContent"]?.objectValue?["pid"] != replacement.objectValue?["structuredContent"]?.objectValue?["pid"])
+  }
+
+  @MainActor @Test(.timeLimit(.minutes(1))) func unsupportedMcpNegotiationNeverDispatchesDesktopTools() async throws {
+    for version in ["2025-03-26", "future-version", ""] {
+      let directory = FileManager.default.temporaryDirectory.appending(path: "woven-cua-negotiation-" + UUID().uuidString)
+      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+      defer { try? FileManager.default.removeItem(at: directory) }
+      let script = directory.appending(path: "driver")
+      try #"""
+      #!/usr/bin/python3
+      import json,pathlib,socket,sys
+      root=pathlib.Path(__file__).parent
+      if sys.argv[1]=='serve':
+          sock=socket.socket(socket.AF_UNIX);sock.bind(sys.argv[sys.argv.index('--socket')+1]);sock.listen()
+          sys.stdin.buffer.read();sys.exit(0)
+      for line in sys.stdin:
+          m=json.loads(line)
+          with (root/'calls').open('a') as log: log.write(m['method']+'\n')
+          if 'id' not in m: continue
+          result={'protocolVersion':(root/'version').read_text()} if m['method']=='initialize' else {'content':[]}
+          print(json.dumps({'jsonrpc':'2.0','id':m['id'],'result':result}),flush=True)
+      """#.write(to: script, atomically: true, encoding: .utf8)
+      try version.write(to: directory.appending(path: "version"), atomically: true, encoding: .utf8)
+      try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+      let runtime = WovenCuaRuntime(executable: script, bundleID: "wovenmatter.fixture")
+      defer { runtime.stop() }
+      await #expect(throws: WorkspaceToolError.invalid("Cua Driver selected an unsupported MCP protocol.")) {
+        try await runtime.call("list_apps", arguments: [:], callerID: "one", admit: {})
+      }
+      #expect(try String(contentsOf: directory.appending(path: "calls"), encoding: .utf8) == "initialize\n")
+    }
   }
 
   @Test func computerUseRemainsOffForNewSettingsAndChats() {
