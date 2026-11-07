@@ -64,11 +64,20 @@ struct PiBotRelayTests {
         return collected
     }
 
-    private static func wait(_ relay: PiBotRelay) async throws -> PiBotRelay.Hello {
-        for _ in 0..<200 {
-            if let hello = relay.hello { return hello }
-            #expect(relay.isRunning)
-            try await Task.sleep(for: .milliseconds(50))
+    /// A free port can be taken before the relay listens on it, on a busy machine or by another
+    /// test process. The relay then stops, as the supervisor expects, so try another port.
+    private static func started(
+        _ make: (Int) throws -> PiBotRelay
+    ) async throws -> (relay: PiBotRelay, port: Int, hello: PiBotRelay.Hello) {
+        for _ in 0..<5 {
+            let port = try #require(PiBotLoopback.freePort())
+            let relay = try make(port)
+            try relay.start()
+            for _ in 0..<200 where relay.isRunning {
+                if let hello = relay.hello { return (relay, port, hello) }
+                try await Task.sleep(for: .milliseconds(50))
+            }
+            relay.stop()
         }
         throw PiBotHostError.command("no hello")
     }
@@ -80,15 +89,15 @@ struct PiBotRelayTests {
         defer { try? FileManager.default.removeItem(at: home) }
         let piBot = try await Server { Data("pi-bot:".utf8) + $0 }
         let mcp = try await Server { Data("mcp:".utf8) + $0 }
-        let localPort = try #require(PiBotLoopback.freePort())
-        let forward = PiBotTunnel.Forward(localPort: localPort, remotePort: piBot.port, mcpLocalPort: mcp.port)
-        let command = "PATH=\(URL(fileURLWithPath: Self.node!).deletingLastPathComponent().path):$PATH HOME=\(RemoteWorkspaceExecTarget.quote(home.path)) "
-            + PiBotTunnel.remoteCommand(instance: "fixture", relaySource: try Self.relaySource, forward: forward)
-        let relay = PiBotRelay(executable: URL(fileURLWithPath: shell), arguments: ["-c", command], errorLog: nil,
-                               localPort: localPort, reverseTargetPort: mcp.port)
-        try relay.start()
+        let source = try Self.relaySource
+        let (relay, localPort, hello) = try await Self.started { localPort in
+            let forward = PiBotTunnel.Forward(localPort: localPort, remotePort: piBot.port, mcpLocalPort: mcp.port)
+            let command = "PATH=\(URL(fileURLWithPath: Self.node!).deletingLastPathComponent().path):$PATH HOME=\(RemoteWorkspaceExecTarget.quote(home.path)) "
+                + PiBotTunnel.remoteCommand(instance: "fixture", relaySource: source, forward: forward)
+            return PiBotRelay(executable: URL(fileURLWithPath: shell), arguments: ["-c", command], errorLog: nil,
+                              localPort: localPort, reverseTargetPort: mcp.port)
+        }
         defer { relay.stop() }
-        let hello = try await Self.wait(relay)
         let reverse = try #require(hello.reversePort)
         // The Mac's client reaches Pi Bot on the device.
         let toPiBot = try await Self.roundTrip(port: localPort, send: Data("hello".utf8), expecting: 12)
@@ -101,13 +110,13 @@ struct PiBotRelayTests {
     @Test(.enabled(if: node != nil))
     func manyStreamsAndALargeTransferStaySeparateAndIntact() async throws {
         let piBot = try await Server { $0 }
-        let localPort = try #require(PiBotLoopback.freePort())
-        let relay = PiBotRelay(executable: URL(fileURLWithPath: Self.node!),
-            arguments: ["--input-type=module", "-e", try Self.relaySource, "--", String(piBot.port), "none"],
-            errorLog: nil, localPort: localPort, reverseTargetPort: nil)
-        try relay.start()
+        let source = try Self.relaySource
+        let (relay, localPort, _) = try await Self.started { localPort in
+            PiBotRelay(executable: URL(fileURLWithPath: Self.node!),
+                arguments: ["--input-type=module", "-e", source, "--", String(piBot.port), "none"],
+                errorLog: nil, localPort: localPort, reverseTargetPort: nil)
+        }
         defer { relay.stop() }
-        _ = try await Self.wait(relay)
         try await withThrowingTaskGroup(of: Void.self) { group in
             for index in 0..<12 {
                 group.addTask {
