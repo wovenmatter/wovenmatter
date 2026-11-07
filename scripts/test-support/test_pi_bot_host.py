@@ -9,6 +9,7 @@ import socket
 import subprocess
 import tarfile
 import tempfile
+import threading
 import time
 import unittest
 
@@ -536,6 +537,20 @@ case "$*" in "list --all --quiet") printf '%b' {others!r} ;; esac
         (lock/'pid').write_text('2147483647')
         self.install(extra=self.container_args(), **self.mac())
         self.assertFalse(lock.exists())
+
+    def test_an_install_waiting_on_the_lock_survives_the_runtime_being_retired(self):
+        self.mac_archive()
+        lock = self.shared_runtime/'.lock'
+        lock.mkdir(parents=True)
+        (lock/'pid').write_text(str(os.getpid()))
+        retire = threading.Timer(1.5, lambda: shutil.rmtree(self.shared_runtime))
+        retire.start()
+        try:
+            self.install(extra=self.container_args(), **self.mac())
+        finally:
+            retire.join()
+        self.assertTrue((self.shared_runtime/'container/1.6.1/bin/container').exists())
+        self.assertTrue(self.registration().exists())
 
     def test_an_installed_runtime_is_never_stopped(self):
         self.mac_archive()

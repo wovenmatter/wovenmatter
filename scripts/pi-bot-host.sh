@@ -140,9 +140,10 @@ runtime_lock_held=no; runtime_registered_now=no
 # Recording a use and retiring the runtime can't interleave across installations.
 lock_runtime() {
   local attempt owner
-  mkdir -p "$shared_runtime"
-  chmod 700 "$shared_runtime"
   for ((attempt=0; attempt<1200; attempt++)); do
+    # Each time: the installation holding the lock can retire this whole directory.
+    mkdir -p "$shared_runtime"
+    chmod 700 "$shared_runtime" 2>/dev/null || true
     if mkdir "$shared_runtime/.lock" 2>/dev/null; then
       printf '%s\n' "$$" > "$shared_runtime/.lock/pid"
       runtime_lock_held=yes
