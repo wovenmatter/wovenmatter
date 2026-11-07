@@ -29,6 +29,14 @@ struct BotOnboardingView: View {
             guard bots.isConnected, bots.onboarding?.signedIn == true else { return }
             await state.load { catalog = try await $0.modelCatalog() }
         }
+        // The server doesn't announce sign-ins, and another client can finish this first.
+        .task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(5))
+                guard !Task.isCancelled else { return }
+                await bots.refreshOnboarding()
+            }
+        }
     }
 
     private var onboardingContent: some View {

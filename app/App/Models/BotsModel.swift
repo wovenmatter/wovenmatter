@@ -205,6 +205,7 @@ final class BotsModel {
             guard client === self.client else { return }
             bots = latest
             hasLoadedBots = true
+            await refreshOnboarding()
             groups = latestGroups
             loadError = nil
             let present = Set(latest.map(\.id))

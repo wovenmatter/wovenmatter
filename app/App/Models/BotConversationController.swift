@@ -32,6 +32,8 @@ final class BotConversationController {
     /// Events can overtake the answer to `conversation.open`, which also names the conversation.
     @ObservationIgnored private var isOpening = false
     @ObservationIgnored private var duringOpen: [(conversationID: Int, event: PiBotStreamEvent)] = []
+    @ObservationIgnored private var lastRequest: Task<Void, Never>?
+    private var isSubscribed = false
 
     init(bots: BotsModel, key: BotConversationKey) {
         self.bots = bots
@@ -42,7 +44,7 @@ final class BotConversationController {
     var isThread: Bool { viewedID != nil && mainID != nil && viewedID != mainID }
     /// Ready to take a message: connected, loaded, and showing the conversation asked for.
     var isReady: Bool {
-        guard bots?.isConnected == true, !loading, let viewedID else { return false }
+        guard bots?.isConnected == true, !loading, isSubscribed, let viewedID else { return false }
         return key.conversationID.map { $0 == viewedID } ?? (viewedID == mainID)
     }
 
@@ -67,6 +69,8 @@ final class BotConversationController {
         openGeneration += 1
         isOpening = false
         duringOpen = []
+        isSubscribed = false
+        lastRequest = nil
         subscriptionID = nil
         openedOn = nil
         loading = true
@@ -80,9 +84,21 @@ final class BotConversationController {
         openGeneration += 1
         isOpening = false
         duringOpen = []
+        isSubscribed = false
+        lastRequest = nil
         viewers = 0
         subscriptionID = nil
         openedOn = nil
+    }
+
+    /// Opens and closes run one at a time: the server keeps one subscription per conversation
+    /// on a socket, so one overtaking another could leave none.
+    private func enqueue(_ work: @escaping @MainActor () async -> Void) {
+        let previous = lastRequest
+        lastRequest = Task { @MainActor in
+            await previous?.value
+            await work()
+        }
     }
 
     private func open() {
@@ -91,13 +107,14 @@ final class BotConversationController {
         let generation = openGeneration
         isOpening = true
         duringOpen = []
+        isSubscribed = false
         loading = true
         error = nil
         let key = key
-        Task { [weak self] in
+        enqueue { [weak self] in
+            guard let self, generation == openGeneration else { return }
             do {
                 let snapshot = try await client.openConversation(botID: key.botID, conversationID: key.conversationID)
-                guard let self else { return }
                 guard generation == openGeneration else {
                     // Superseded while it was on the way: don't leave its subscription behind.
                     try? await client.closeConversation(botID: key.botID, conversationID: snapshot.conversationId, subscriptionID: snapshot.subscriptionId)
@@ -105,23 +122,34 @@ final class BotConversationController {
                 }
                 subscriptionID = snapshot.subscriptionId
                 openedOn = client
+                isSubscribed = true
                 origin = snapshot.threadOrigin
                 viewedID = snapshot.conversationId
                 mainID = snapshot.mainConversationId
                 let streamed = duringOpen.filter { $0.conversationID == snapshot.conversationId }.map(\.event)
                 isOpening = false
                 duringOpen = []
-                state = PiBotConversationState.opened(from: state, snapshot: snapshot, events: streamed)
+                state = PiBotConversationState.opened(snapshot: snapshot, events: streamed)
                 loading = false
                 for event in streamed { reportSideEffects(of: event) }
                 await bots?.loadThreads(botID: key.botID)
             } catch {
-                guard let self, generation == openGeneration else { return }
+                guard generation == openGeneration else { return }
                 isOpening = false
                 duringOpen = []
                 self.error = error.localizedDescription
                 loading = false
+                retryOpen(after: generation)
             }
+        }
+    }
+
+    /// The composer stays off without a subscription, so a failed open keeps trying.
+    private func retryOpen(after generation: Int) {
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(3))
+            guard let self, generation == openGeneration, isAttached else { return }
+            open()
         }
     }
 
@@ -129,12 +157,13 @@ final class BotConversationController {
         openGeneration += 1
         isOpening = false
         duringOpen = []
+        isSubscribed = false
         guard let client = openedOn, let viewedID else { return }
         let subscription = subscriptionID
         subscriptionID = nil
         openedOn = nil
         let botID = key.botID
-        Task { try? await client.closeConversation(botID: botID, conversationID: viewedID, subscriptionID: subscription) }
+        enqueue { try? await client.closeConversation(botID: botID, conversationID: viewedID, subscriptionID: subscription) }
     }
 
     func receive(conversationID: Int, _ event: PiBotStreamEvent) {

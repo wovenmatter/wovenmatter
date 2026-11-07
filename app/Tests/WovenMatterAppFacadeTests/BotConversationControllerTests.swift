@@ -77,6 +77,8 @@ private final class ScriptedPiBot: @unchecked Sendable {
         for connection in lock.withLock({ connections }) { write(connection, body) }
     }
 
+    var allRequests: [[String: Any]] { lock.withLock { received } }
+
     func requests(_ type: String) -> [[String: Any]] {
         lock.withLock { received.filter { $0["type"] as? String == type } }
     }
@@ -237,12 +239,34 @@ struct BotConversationControllerTests {
 
     @Test func leavingBeforeTheOpenAnswersStillClosesIt() async throws {
         let server = try await ScriptedPiBot()
-        openMain(server)
+        server.on("conversation.open") { _ in
+            Thread.sleep(forTimeInterval: 0.2)
+            return ["subscriptionId": 9, "botId": "a", "conversationId": 5, "mainConversationId": 5, "entries": [], "running": false]
+        }
         let bots = try await connected(server)
         let controller = bots.conversation(botID: "a", conversationID: nil)
         controller.attach()
+        try await eventually("open sent") { !server.requests("conversation.open").isEmpty }
         controller.detach()
         try await eventually("close") { !server.requests("conversation.close").isEmpty }
+        #expect(server.requests("conversation.close").first?["subscriptionId"] as? Int == 9)
+    }
+
+    @Test func aSupersededOpenIsClosedBeforeTheNextOneGoesOut() async throws {
+        let server = try await ScriptedPiBot()
+        server.on("conversation.open") { _ in
+            Thread.sleep(forTimeInterval: 0.2)
+            return ["subscriptionId": 9, "botId": "a", "conversationId": 5, "mainConversationId": 5, "entries": [], "running": false]
+        }
+        let bots = try await connected(server)
+        let controller = bots.conversation(botID: "a", conversationID: nil)
+        controller.attach()
+        try await eventually("first open") { server.requests("conversation.open").count == 1 }
+        controller.detach()
+        controller.attach()
+        try await eventually("ready") { controller.isReady }
+        let order = server.allRequests.compactMap { $0["type"] as? String }.filter { $0.hasPrefix("conversation.") }
+        #expect(order == ["conversation.open", "conversation.close", "conversation.open"])
     }
 
     @Test func aReconnectReopensAndKeepsWhatWasOnScreen() async throws {
@@ -278,6 +302,32 @@ struct BotConversationControllerTests {
         try await eventually("reopen") { controller.state.entries.count == 2 }
         #expect(!controller.state.running)
         #expect(controller.state.streaming == nil)
+    }
+
+    @Test func aFailedOpenLeavesTheComposerOffAndRetries() async throws {
+        let server = try await ScriptedPiBot()
+        server.on("conversation.open") { _ in throw Rejected() }
+        let bots = try await connected(server)
+        let controller = bots.conversation(botID: "a", conversationID: nil)
+        controller.attach()
+        try await eventually("error") { controller.error == "The server refused it." }
+        #expect(!controller.isReady)
+        openMain(server)
+        try await eventually("retry") { controller.isReady }
+    }
+
+    @Test func opensAndClosesRunInOrder() async throws {
+        let server = try await ScriptedPiBot()
+        openMain(server)
+        let bots = try await connected(server)
+        let controller = bots.conversation(botID: "a", conversationID: nil)
+        controller.attach()
+        controller.detach()
+        controller.attach()
+        try await eventually("ready") { controller.isReady }
+        // The first open never went out, so the only subscription is the one on screen.
+        #expect(server.requests("conversation.open").count == 1)
+        #expect(server.requests("conversation.close").isEmpty)
     }
 
     @Test func eventsThatOvertakeTheOpenAreKept() async throws {

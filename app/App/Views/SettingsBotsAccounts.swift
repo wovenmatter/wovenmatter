@@ -82,13 +82,14 @@ struct BotSettingsAccountsList: View {
                 login?.progress.apply(.error("Connection lost. Start sign-in again."))
             }
         }
-        .onDisappear { if let login { state.bots.stopObservingLogin(login.id) } }
+        // A sign-in nobody can see any more shouldn't keep running on the server.
+        .onDisappear { abandonLogin() }
     }
 
     private func refresh(_ client: PiBotClient) async throws {
         accounts = try await client.accounts().accounts
         // The last sign-in going away, or the first arriving, changes what a bot's panel shows.
-        await state.bots.refreshOnboarding()
+        await state.bots.refreshOnboarding(onError: { state.error = $0 })
         await onChanged()
     }
 
@@ -114,7 +115,7 @@ struct BotSettingsAccountsList: View {
         Task {
             await state.run { client in
                 let id = try await client.startLogin(accountID: account.id, method: method)
-                close()
+                abandonLogin()
                 login = BotSettingsLogin(id: id, account: account, method: method)
                 state.bots.observeLogin(id) { event in
                     guard login?.id == id else { return }
@@ -139,6 +140,14 @@ struct BotSettingsAccountsList: View {
         guard let id = login?.id else { return }
         close()
         Task { await state.run { try await $0.cancelLogin(loginID: id) } }
+    }
+
+    private func abandonLogin() {
+        guard let login else { return }
+        let running = login.progress.status == .running
+        close()
+        guard running, let client = state.bots.connectedClient else { return }
+        Task { try? await client.cancelLogin(loginID: login.id) }
     }
 }
 

@@ -70,29 +70,29 @@ struct PiBotConversationStateTests {
         #expect(state.streaming == "live")
     }
 
-    @Test func openingStartsFromTheSnapshotNotFromBefore() {
-        var previous = PiBotConversationState()
-        previous.running = true
-        previous.streaming = "stale"
-        previous.entries = (1...3).map { entry($0) }
-        previous.pending = [.init(id: 1, text: "recorded"), .init(id: 2, text: "still waiting")]
+    @Test func eventsAfterASnapshotContinueIt() {
         let snapshot = PiBotConversationSnapshot(botId: "b", conversationId: 1, mainConversationId: 1,
-            entries: [entry(3), entry(4, role: "user", text: "recorded"), entry(5)], running: false)
-        let next = PiBotConversationState.opened(from: previous, snapshot: snapshot)
-        #expect(next.entries.map(\.id) == [3, 4, 5])
-        #expect(!next.running)
-        #expect(next.streaming == nil)
-        #expect(next.pending.map(\.text) == ["still waiting"])
+            entries: [entry(1)], running: true, streaming: "Hel")
+        let streaming = PiBotConversationState.opened(snapshot: snapshot, events: [.delta("lo")])
+        #expect(streaming.streaming == "Hello")
+        #expect(streaming.running)
+
+        let finished = PiBotConversationState.opened(snapshot: snapshot, events: [
+            .delta("lo"), .entry(entry(2, text: "Hello")), .run(started: false),
+        ])
+        #expect(finished.entries.map(\.id) == [1, 2])
+        #expect(finished.streaming == nil)
+        #expect(!finished.running)
     }
 
-    @Test func eventsDuringAnOpenWinOverItsSnapshot() {
+    @Test func openingKeepsNothingFromBefore() {
         let snapshot = PiBotConversationSnapshot(botId: "b", conversationId: 1, mainConversationId: 1,
-            entries: [entry(1)], running: false, streaming: "old")
-        let next = PiBotConversationState.opened(from: PiBotConversationState(), snapshot: snapshot,
-            events: [.run(started: true), .assistantStart("new"), .entry(entry(2, role: "user"))])
-        #expect(next.running)
-        #expect(next.streaming == "new")
-        #expect(next.entries.map(\.id) == [1, 2])
+            entries: [entry(3)], running: false)
+        let next = PiBotConversationState.opened(snapshot: snapshot)
+        #expect(next.entries.map(\.id) == [3])
+        #expect(!next.running)
+        #expect(next.streaming == nil)
+        #expect(next.pending.isEmpty)
     }
 
     @Test func snapshotsDecodeFromTheWire() throws {

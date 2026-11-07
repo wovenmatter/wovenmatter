@@ -8,6 +8,7 @@ struct BotSettingsBots: View {
     @State private var deleted: [PiBotDeletedBot]?
     @State private var restoring: String?
     @State private var purging: String?
+    @State private var refreshes = 0
 
     var body: some View {
         Group {
@@ -24,11 +25,16 @@ struct BotSettingsBots: View {
     }
 
     private func refresh(_ client: PiBotClient) async throws {
+        refreshes += 1
+        let current = refreshes
         async let active = client.bots()
         async let listed = client.profiles()
         async let removed = client.deletedBots()
         let result = try await (active, listed, removed)
+        // An older read that finishes late must not undo a newer change.
+        guard current == refreshes else { return }
         live = result.0; profiles = result.1.profiles; deleted = result.2
+        await state.bots.refreshOnboarding(onError: { state.error = $0 })
     }
 
     private func act(_ work: @escaping @MainActor (PiBotClient) async throws -> Void) {

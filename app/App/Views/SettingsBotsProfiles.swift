@@ -8,6 +8,7 @@ struct BotSettingsProfiles: View {
     @State private var catalog: PiBotModelCatalog?
     @State private var editing: String?
     @State private var titleDraft: PiBotRoles?
+    @State private var refreshes = 0
 
     var body: some View {
         Group {
@@ -24,12 +25,16 @@ struct BotSettingsProfiles: View {
     }
 
     private func refresh(_ client: PiBotClient) async throws {
+        refreshes += 1
+        let current = refreshes
         async let listed = client.profiles()
         async let active = client.bots()
         async let models = client.modelCatalog()
         let result = try await (listed, active, models)
+        // An older read that finishes late must not undo a newer save.
+        guard current == refreshes else { return }
         profiles = result.0.profiles; live = result.1; catalog = result.2
-        await state.bots.refreshOnboarding()
+        await state.bots.refreshOnboarding(onError: { state.error = $0 })
     }
 
     private func profilesCard(_ profiles: [PiBotProfile], providers: [PiBotProviderModels]) -> some View {
