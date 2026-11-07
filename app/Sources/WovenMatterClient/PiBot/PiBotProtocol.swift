@@ -129,6 +129,23 @@ public struct PiBotConversationState: Equatable, Sendable {
         running = snapshot.running || running
         streaming = streaming ?? snapshot.streaming
     }
+
+    /// The state after an open: the snapshot and what streamed during the open, and nothing else
+    /// from before it, because a run may have ended and the history window moved meanwhile.
+    /// Messages still waiting stay pending until history shows they were recorded.
+    public static func opened(from previous: PiBotConversationState, snapshot: PiBotConversationSnapshot,
+                              events: [PiBotStreamEvent] = []) -> PiBotConversationState {
+        var next = PiBotConversationState()
+        events.forEach { next.apply($0) }
+        next.apply(snapshot: snapshot)
+        let known = Set(previous.entries.map(\.id))
+        var waiting = previous.pending
+        for entry in next.entries where entry.isUser && !known.contains(entry.id) {
+            if let index = waiting.firstIndex(where: { $0.text == entry.text }) { waiting.remove(at: index) }
+        }
+        next.pending = waiting
+        return next
+    }
 }
 
 // MARK: - Accounts and sign-in

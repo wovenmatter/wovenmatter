@@ -87,6 +87,8 @@ struct BotSettingsAccountsList: View {
 
     private func refresh(_ client: PiBotClient) async throws {
         accounts = try await client.accounts().accounts
+        // The last sign-in going away, or the first arriving, changes what a bot's panel shows.
+        await state.bots.refreshOnboarding()
         await onChanged()
     }
 

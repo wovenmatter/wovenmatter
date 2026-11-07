@@ -262,6 +262,37 @@ struct BotConversationControllerTests {
         #expect(controller.state.entries.map(\.id) == [1, 2])
     }
 
+    @Test func aRunThatEndedWhileAwayDoesNotLookRunning() async throws {
+        let server = try await ScriptedPiBot()
+        openMain(server, entries: [entry(1, "user", "hi")], running: true)
+        let bots = try await connected(server)
+        let controller = bots.conversation(botID: "a", conversationID: nil)
+        controller.attach()
+        try await eventually("ready") { controller.isReady }
+        server.push(["type": "event", "botId": "a", "conversationId": 5, "event": ["kind": "assistant_start", "text": "partial"]])
+        try await eventually("stream") { controller.state.streaming == "partial" }
+        controller.detach()
+        openMain(server, entries: [entry(1, "user", "hi"), entry(2, "assistant", "done")], running: false)
+
+        controller.attach()
+        try await eventually("reopen") { controller.state.entries.count == 2 }
+        #expect(!controller.state.running)
+        #expect(controller.state.streaming == nil)
+    }
+
+    @Test func eventsThatOvertakeTheOpenAreKept() async throws {
+        let server = try await ScriptedPiBot()
+        openMain(server, entries: [entry(1, "user", "hi")])
+        let bots = try await connected(server)
+        let controller = bots.conversation(botID: "a", conversationID: nil)
+        controller.attach()
+        // Delivered while the open is still unanswered on this actor.
+        controller.receive(conversationID: 5, .entry(PiBotDisplayEntry(id: 2, conversationId: 5, role: "assistant", text: "fast")))
+        controller.receive(conversationID: 6, .entry(PiBotDisplayEntry(id: 3, conversationId: 6, role: "assistant", text: "elsewhere")))
+        try await eventually("ready") { controller.isReady }
+        #expect(controller.state.entries.map(\.id) == [1, 2])
+    }
+
     @Test func aThreadShowsOnlyItsOwnEntriesAndItsOrigin() async throws {
         let server = try await ScriptedPiBot()
         server.on("conversation.open") { _ in

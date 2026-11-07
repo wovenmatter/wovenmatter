@@ -29,6 +29,7 @@ struct BotSettingsProfiles: View {
         async let models = client.modelCatalog()
         let result = try await (listed, active, models)
         profiles = result.0.profiles; live = result.1; catalog = result.2
+        await state.bots.refreshOnboarding()
     }
 
     private func profilesCard(_ profiles: [PiBotProfile], providers: [PiBotProviderModels]) -> some View {

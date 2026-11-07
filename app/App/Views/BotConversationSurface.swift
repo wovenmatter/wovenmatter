@@ -66,6 +66,8 @@ struct BotConversationSurface: View {
             }
         }
         .simultaneousGesture(TapGesture().onEnded { onActivate() })
+        // A sign-in made in Settings, or by another client, ends first-run setup here.
+        .task(id: target.botID) { await bots.refreshOnboarding() }
     }
 
     private var unavailable: some View {
@@ -665,8 +667,10 @@ private struct BotMessageRow: View {
     let canStartThread: Bool
     let onStartThread: () -> Void
     let onOpenThread: (Int) -> Void
+    private enum Action: Hashable { case copy, startThread }
     @State private var hovering = false
     @State private var copied = false
+    @FocusState private var focusedAction: Action?
 
     var body: some View {
         HStack(spacing: 0) {
@@ -720,6 +724,7 @@ private struct BotMessageRow: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(DashboardIconButtonStyle())
+            .focused($focusedAction, equals: .copy)
             .help("Copy message")
             .accessibilityLabel(copied ? "Message copied" : "Copy message")
             if canStartThread {
@@ -733,10 +738,11 @@ private struct BotMessageRow: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(DashboardIconButtonStyle())
+                .focused($focusedAction, equals: .startThread)
             }
         }
         // Nearly invisible rather than hidden, so VoiceOver and the keyboard still reach them.
-        .opacity(hovering ? 1 : 0.001)
+        .opacity(hovering || focusedAction != nil ? 1 : 0.001)
         .onChange(of: hovering) { _, isHovering in if !isHovering { copied = false } }
     }
 }
@@ -780,7 +786,6 @@ private struct BotThreadOrigin: View {
             if entry.isUser {
                 Text(entry.text)
                     .font(.system(size: 13))
-                    .lineLimit(8)
                     .textSelection(.enabled)
             } else {
                 Text(botName).font(.system(size: 12, weight: .medium))

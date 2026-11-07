@@ -178,8 +178,8 @@ final class BotsModel {
         case .memoryChanged(let botID):
             memoryObservers.values.forEach { $0(botID) }
         case .conversation(let botID, let conversationID, let event):
-            for controller in conversations.values where controller.key.botID == botID && controller.viewedID == conversationID {
-                controller.receive(event)
+            for controller in conversations.values where controller.key.botID == botID {
+                controller.receive(conversationID: conversationID, event)
             }
         case .login(let loginID, let event):
             if let observer = loginObservers[loginID] { observer(event) }

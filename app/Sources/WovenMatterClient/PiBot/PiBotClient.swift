@@ -73,7 +73,8 @@ public actor PiBotClient {
         let current = generation
         update(.connecting)
         let socket = session.webSocketTask(with: socketURL)
-        socket.maximumMessageSize = 16 * 1024 * 1024
+        // A conversation snapshot carries up to 200 entries of any length.
+        socket.maximumMessageSize = 256 * 1024 * 1024
         task = socket
         socket.resume()
         Task { await self.receive(socket, generation: current) }
@@ -168,7 +169,17 @@ public actor PiBotClient {
         }
     }
 
-    private func call(_ type: String, _ fields: [String: GatewayJSONValue] = [:], timeout: Duration = .seconds(30)) async throws -> GatewayJSONValue {
+    /// Pi Bot's client's deadlines: these wait on a bot's container, or on a running reply.
+    static func timeout(for type: String) -> Duration {
+        switch type {
+        case "bots.restore", "bots.purge", "bots.delete", "conversation.abort": .seconds(600)
+        case "woven.connect": .seconds(60)
+        default: .seconds(30)
+        }
+    }
+
+    private func call(_ type: String, _ fields: [String: GatewayJSONValue] = [:]) async throws -> GatewayJSONValue {
+        let timeout = Self.timeout(for: type)
         guard let socket = task, state == .open else { throw RemoteError(message: "Pi Bot is not connected.") }
         let id = nextID
         nextID += 1
@@ -268,7 +279,7 @@ public actor PiBotClient {
     }
     /// Stops the running reply and drops queued follow-ups; resolves once the conversation is idle.
     public func abort(botID: String, conversationID: Int) async throws {
-        _ = try await call("conversation.abort", ["botId": .string(botID), "conversationId": .number(Double(conversationID))], timeout: .seconds(120))
+        _ = try await call("conversation.abort", ["botId": .string(botID), "conversationId": .number(Double(conversationID))])
     }
     public func forkThread(botID: String, conversationID: Int, entryID: Int) async throws -> PiBotThread {
         try decode(try await call("thread.fork", [
@@ -333,9 +344,8 @@ public actor PiBotClient {
         let result = try decode(try await call("bots.restore", ["botId": .string(id)]), as: RestoredResult.self)
         return result.restored ? result.bot : nil
     }
-    /// Removing a bot's container and workspace can take a while.
     public func purgeBot(id: String) async throws -> PiBotPurgeResult {
-        try decode(try await call("bots.purge", ["botId": .string(id)], timeout: .seconds(180)))
+        try decode(try await call("bots.purge", ["botId": .string(id)]))
     }
 
     // MARK: Memory

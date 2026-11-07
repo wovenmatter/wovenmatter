@@ -29,6 +29,9 @@ final class BotConversationController {
     @ObservationIgnored private var openedOn: PiBotClient?
     @ObservationIgnored private var nextPendingID = 0
     @ObservationIgnored private var openGeneration = 0
+    /// Events can overtake the answer to `conversation.open`, which also names the conversation.
+    @ObservationIgnored private var isOpening = false
+    @ObservationIgnored private var duringOpen: [(conversationID: Int, event: PiBotStreamEvent)] = []
 
     init(bots: BotsModel, key: BotConversationKey) {
         self.bots = bots
@@ -62,6 +65,8 @@ final class BotConversationController {
 
     func connectionLost() {
         openGeneration += 1
+        isOpening = false
+        duringOpen = []
         subscriptionID = nil
         openedOn = nil
         loading = true
@@ -73,6 +78,8 @@ final class BotConversationController {
     /// The device changed: nothing here applies any more.
     func forget() {
         openGeneration += 1
+        isOpening = false
+        duringOpen = []
         viewers = 0
         subscriptionID = nil
         openedOn = nil
@@ -82,6 +89,8 @@ final class BotConversationController {
         guard let client = bots?.connectedClient else { return }
         openGeneration += 1
         let generation = openGeneration
+        isOpening = true
+        duringOpen = []
         loading = true
         error = nil
         let key = key
@@ -99,11 +108,17 @@ final class BotConversationController {
                 origin = snapshot.threadOrigin
                 viewedID = snapshot.conversationId
                 mainID = snapshot.mainConversationId
-                state.apply(snapshot: snapshot)
+                let streamed = duringOpen.filter { $0.conversationID == snapshot.conversationId }.map(\.event)
+                isOpening = false
+                duringOpen = []
+                state = PiBotConversationState.opened(from: state, snapshot: snapshot, events: streamed)
                 loading = false
+                for event in streamed { reportSideEffects(of: event) }
                 await bots?.loadThreads(botID: key.botID)
             } catch {
                 guard let self, generation == openGeneration else { return }
+                isOpening = false
+                duringOpen = []
                 self.error = error.localizedDescription
                 loading = false
             }
@@ -112,6 +127,8 @@ final class BotConversationController {
 
     private func close() {
         openGeneration += 1
+        isOpening = false
+        duringOpen = []
         guard let client = openedOn, let viewedID else { return }
         let subscription = subscriptionID
         subscriptionID = nil
@@ -120,9 +137,17 @@ final class BotConversationController {
         Task { try? await client.closeConversation(botID: botID, conversationID: viewedID, subscriptionID: subscription) }
     }
 
-    func receive(_ event: PiBotStreamEvent) {
+    func receive(conversationID: Int, _ event: PiBotStreamEvent) {
+        if isOpening {
+            duringOpen.append((conversationID, event))
+        } else if conversationID == viewedID, isAttached {
+            state.apply(event)
+            reportSideEffects(of: event)
+        }
+    }
+
+    private func reportSideEffects(of event: PiBotStreamEvent) {
         if case .error(let message) = event { error = message }
-        state.apply(event)
         if case .run(started: false) = event {
             // Thread titles may have been generated meanwhile.
             let botID = key.botID
