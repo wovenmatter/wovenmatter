@@ -318,7 +318,6 @@ public struct PiBotRuntimeSnapshot: Codable, Equatable, Sendable {
         self.bundleAvailable = bundleAvailable; self.woven = woven; self.lingeringDisabled = lingeringDisabled; self.busy = busy
     }
 
-    /// Pi Bot's client can run inside this app only from this capability on.
     /// Old enough servers lack the protocol Woven's bot UI runs on.
     public var isCompatible: Bool { health?.supports("groups") == true && health?.supports("message.context") == true }
 

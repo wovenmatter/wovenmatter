@@ -57,9 +57,12 @@ when an intentional design change is accepted.
 - **Bots:** the Bots section sits above New chat in the navigation rail, using the
   rail's own disclosure headings and rows. A bot's row shows only its name and opens
   its main channel; a chevron reveals its threads, pinned first and then newest
-  created. Thread dropdowns start closed. Chat, threads, and Pi Bot's settings sections
-  are Pi Bot's own UI in a web view; do not add native copies. Settings → Bots keeps
-  device choice and Woven MCP access native and drills down into Pi Bot's sections.
+  created. Thread dropdowns start closed. Everything about bots is native and uses the
+  components regular chats and Settings use: the shared transcript text, user bubble and
+  composer, and Settings cards. Never embed Pi Bot's web client. A thread sits beside
+  its bot's main channel at 760 points and wider. Message actions appear on hover.
+  Settings → Bots holds device choice and Woven MCP access and drills down into one
+  page per Pi Bot settings section.
 - **Harness setup:** use compact rows grouped on the theme-whisper surface for
   both harness installation and Pi Durable setup, with the same typography,
   padding, inset dividers, and quiet actions. Keep provider setup limited to

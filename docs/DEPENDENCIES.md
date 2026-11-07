@@ -56,8 +56,8 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   floor; locked installs and the container smoke test validate CLI compatibility.
   Unused bundled Yarn is removed from the workspace image.
 - **Pi Bot** is source-only inside `pi-bot-bundle.tar.gz`. Its exact repository
-  commit is a core-function selection: the native supervisor and embedded client
-  must consume the reviewed protocol and matching server/web/lockfile together.
+  commit is a core-function selection: the native supervisor and bot UI must consume
+  the reviewed protocol with its matching server and lockfile together.
   The exact pnpm selection must understand that workspace lockfile consistently
   on the build host and target; its npm lock retains registry integrity. Pi Bot's
   own exact package declarations remain that repository's policy. Dependencies

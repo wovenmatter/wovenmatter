@@ -1,21 +1,22 @@
 # Pi Bot integration
 
 Pi Bot ([`wovenmatter/pi-bot`](https://github.com/wovenmatter/pi-bot)) stays its own
-repository and owns the bots: server, storage, sign-ins, profiles, chat UI and thread
-behavior. Woven Matter consumes a recorded revision of it as a dependency and owns the
-native sidebar, the side-area tabs, device selection, process lifecycle and Woven MCP
-authorization.
+repository and owns the bots: server, storage, sign-ins, profiles and their rules. Woven
+Matter consumes a recorded revision of its server as a dependency and draws everything
+itself in SwiftUI: the sidebar, chat and threads, the side-area tabs, Settings, device
+selection, process lifecycle and Woven MCP authorization. Pi Bot's web client stays that
+repository's standalone UI and isn't part of the bundle.
 
-Provider sign-ins, keys and bot data never pass through Woven Matter. Nothing here
-changes a standalone Pi Bot deployment, which keeps working without this app.
+Provider keys and sign-in codes go from Woven's Settings straight to the Pi Bot server over
+its WebSocket and are never stored or logged by Woven Matter. Bot data stays with the server.
+Nothing here changes a standalone Pi Bot deployment, which keeps working without this app.
 
 ## Decisions
 
 | Question | Decision | Why |
 | --- | --- | --- |
 | Dependency form | `pi-bot/selection.json` records a repository and full commit SHA. No submodule, no `main` resolution at build time. | The commit hash pins the whole tree. Pi Bot has no npm release and changes daily. Submodules complicate this repository's worktrees and CI. |
-| Chat, threads, settings UI | Embed Pi Bot's React client in a `WKWebView` | Trey asked for its UI and keeps iterating on it; a SwiftUI copy would drift. |
-| Sidebar, side area | Native | They must behave as the rest of Woven Matter does. |
+| Chat, threads, settings UI | Native SwiftUI over Pi Bot's WebSocket protocol, with Pi Bot's behavior and wording | Trey asked for the app's own design language. A web view would look and behave like a guest. The protocol is what stays in step with Pi Bot. |
 | Sidebar groups | Stored by the Pi Bot server, separate from teams | Groups belong with the bots and appear on every client. Teams carry authority and messaging rules; groups are only placement. |
 | Device choice | One Pi Bot server on one device, chosen in Settings → Bots | A deployment hosts many bots. Changing devices connects to that device's own bots; it does not move data. |
 | Local process owner | The Woven background server | Closing the window must not stop bots. |
@@ -60,7 +61,7 @@ in Pi Bot's `packages/server/docker`. On a Mac, Docker Desktop and Apple's
 [`container`](https://github.com/apple/container) were measured with that image on a Mac mini
 (12 cores, 32 GB, macOS 27.2). Memory is the physical footprint of the runtime and its VMs.
 
-| | Docker Desktop 29.9 | Apple `container` 1.6 |
+| | Docker Desktop 29.9 | Apple `container` 1.6 (now pinned at 1.7.1) |
 | --- | --- | --- |
 | Started, no containers | 3.8 GB | 22 MB |
 | After building the image, no containers | 6.9 GB, until it quits | 22 MB, once the builder is removed |
@@ -145,7 +146,8 @@ per-OS, per-CPU and per-libc executables.
 `pnpm package:woven --out <file>` lives in Pi Bot and writes a deterministic gzip tar with
 `manifest.json` (`commit`, `version`, `protocol`, `lockSha256`), root `package.json`,
 `pnpm-workspace.yaml`, `pnpm-lock.yaml`, `LICENSE`, `packages/server/{package.json,dist,docker}`,
-`apps/web/{package.json,dist}`. It must not advance `.preview-build-number`.
+and `apps/web/package.json`, which the frozen workspace lockfile needs. It builds only the server, so
+it holds no web client and doesn't advance `.preview-build-number`.
 
 ## Host script
 
@@ -186,11 +188,11 @@ starts the service, and restores the previous `current` on failure. It returns
 
 ## Protocol additions
 
-Every addition is capability-gated. The embedded client needs `host.embed`, so Woven Matter
+Every addition is capability-gated. Woven's bot UI needs `groups` and `message.context`, so it
 asks the user to update an older attached instance rather than show a broken page.
 
 `hello` and `GET /health` gain `protocol: 1`, `installationId` (a UUID stored once in the
-database) and `capabilities`: `host.embed`, `groups`, `woven.mcp`, `message.context`.
+database) and `capabilities`: `groups`, `woven.mcp`, `message.context`.
 
 Sidebar groups:
 
@@ -227,33 +229,26 @@ channel, with an optional `deliveryId`. Pi Bot remembers it, so a retry after a 
 acknowledgement cannot submit the same work twice. Delivery is at-least-once: a crash between
 submitting and recording acceptance repeats a notification rather than losing it.
 
-## Host bridge
+## Native client
 
-Woven loads `<base>/?host=woven&theme=<green|cognac|dark>` plus the normal hash route. In that
-mode the client renders no sidebar, sidebar toggle or brand, and its settings render one section
-with no tab row, because Woven provides that navigation. The standalone client is unchanged.
+`PiBotClient` holds one WebSocket per deployment and carries every request and push. The rest of the
+app reads it through `BotsModel`. Wire shapes are in `PiBotProtocol.swift` and decode only what is
+shown, so Pi Bot can add fields freely. A failed decode of a field Woven needs is a bug here.
 
-Native to web, on `window.wovenPiBotHost`:
+Each open conversation is a `BotConversationController`, shared by every panel showing it. It follows
+Pi Bot's client:
 
-```
-setTheme(theme)        navigate(hashRoute, token)        setContext(string | null)        focusComposer()
-setHeaderInsets(left, right)
-```
+- `conversation.open` returns a snapshot and starts the stream. The last viewer sends
+  `conversation.close`, and an open that is answered after everyone left closes itself.
+- A dropped socket reopens on the next `hello`. What's on screen stays, and the snapshot merges in by
+  entry id, so a reply that finished while disconnected appears.
+- Sent messages show as pending until their entry arrives. A message the server refuses goes back in
+  the composer, with its attachments.
+- Attachments are text files, sent as message text, because that is all Pi Bot accepts today. Drafts
+  stay in memory by bot and conversation.
 
-Web to native, through `window.webkit.messageHandlers.wovenBots.postMessage`, each with `v: 1`:
-
-```
-{ kind: "ready", protocol, installationId }
-{ kind: "route", hash, navigation, botId?, conversationId?, threadView?, settings?, section? }
-{ kind: "connection", state }
-{ kind: "openExternal", url }
-```
-
-`navigation` echoes the latest `navigate` token. A report carrying an older token describes a
-route from before the host's newest selection, so the host ignores it.
-
-Native code validates the main frame and origin on every message. The bridge exposes no RPC,
-files or credentials. Drafts survive bot switches, keyed by bot and conversation.
+Copying Pi Bot's behavior is deliberate, and so is drawing it Woven's way. When Pi Bot's client gains a
+behavior or a setting, it needs the same change here.
 
 ## Bot MCP principal
 
@@ -299,18 +294,24 @@ var botSettings: WorkspaceExternalMCPSettings
   created first, matching Pi Bot's `sortThreads`.
 - **Selection:** a chat panel holds either a conversation or a `DashboardBotTarget`. Bots stay on
   `destination == .workspace`, so the side-area tabs, splitter, focus mode and compact layout all
-  apply unchanged. Pi Bot's own Main and thread split lives inside its web view.
-- **Links:** http(s) links from a bot open in a side-area browser tab.
-- **Settings:** a **Bots** row follows Agents. It holds device choice and lifecycle, Woven MCP
-  access, and drill-downs into Pi Bot's own settings sections.
+  apply unchanged.
+- **Conversation:** `BotConversationSurface` uses the shared transcript text, user bubble and composer,
+  including dictation. At 760 points and wider, a thread can sit beside the main channel, with a
+  draggable divider. First-run sign-in and model choice appear in the panel until they're done.
+- **Links:** links in a bot's reply open in a side-area browser tab. Sign-in pages open in the default
+  browser, which has the user's accounts.
+- **Context:** what's open in the side area goes with each message from the primary panel as
+  `message.context`, at most 4000 characters: browser URLs and note references, no page content.
+- **Settings:** a **Bots** row follows Agents. It holds device choice and lifecycle and Woven MCP
+  access, then one page each for Accounts, Profiles, Bots and teams, Search, GitHub, Config and Build.
 
 ## Known limits
 
-- Provider sign-ins are the user's to perform, in Pi Bot's own settings.
+- Provider sign-ins are the user's to perform, in Settings → Bots → Accounts.
 - Without a container runtime, bots have messaging, web and Woven MCP tools, and do coding work
   by launching Woven sessions. That means Linux without Docker, and Intel Macs or Macs before
   macOS 26 without Docker.
 - Apple's `container` has no restart policy, so a bot's background job ends if its server restarts
   or the Mac does. Docker's containers come back on their own.
-- Woven dictation is not bridged into the embedded composer.
+- Attachments are text and code files only, because Pi Bot takes them as message text.
 - iPhone and iPad do not show bots.
