@@ -217,16 +217,29 @@ private struct BotSettingsBotName: View {
                 Button("Save") { save() }.disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 Button("Cancel") { self.draft = nil }
             }
+            .task {
+                // The field has to be in the window before it can take focus.
+                await Task.yield()
+                focused = true
+            }
         } else {
             VStack(alignment: .leading, spacing: 3) {
                 HStack {
                     Text(bot.name).font(.system(size: 13, weight: .medium))
                     SettingsPill(bot.role, tone: .neutral)
                 }
-                if let note { SettingsNote(note) }
-                if !bot.isAdmin {
-                    Button("Rename") { draft = bot.name; focused = true }
-                        .accessibilityLabel("Rename \(bot.name)")
+                HStack(spacing: 5) {
+                    if let note {
+                        Text(note).font(.system(size: 12.5)).foregroundStyle(DashboardPalette.mutedForeground)
+                        if !bot.isAdmin { Text("·").foregroundStyle(DashboardPalette.mutedForeground) }
+                    }
+                    if !bot.isAdmin {
+                        Button("Rename") { draft = bot.name }
+                            .buttonStyle(.plain)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(DashboardPalette.mutedForeground)
+                            .accessibilityLabel("Rename \(bot.name)")
+                    }
                 }
             }
         }

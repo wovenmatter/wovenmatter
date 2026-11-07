@@ -125,7 +125,12 @@ private struct BotSettingsFactForm: View {
             if let onCancel { Button("Cancel", action: onCancel) }
         }
         .disabled(saving)
-        .onAppear { focused = onCancel != nil }
+        .task {
+            // The field has to be in the window before it can take focus.
+            guard onCancel != nil else { return }
+            await Task.yield()
+            focused = true
+        }
     }
 
     private func save() {

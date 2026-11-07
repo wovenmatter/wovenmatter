@@ -32,8 +32,9 @@ struct BotSettingsGitHub: View {
                 Text(key.comment ?? key.type).font(.system(size: 13, weight: .medium))
                 Text(key.fingerprint).font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(DashboardPalette.mutedForeground).textSelection(.enabled)
+                // No accessibility label here: on selectable text it recurses until SwiftUI crashes.
                 Text(key.publicKey).font(.system(size: 12, design: .monospaced))
-                    .textSelection(.enabled).accessibilityLabel("Public key")
+                    .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 ViewThatFits(in: .horizontal) {
                     HStack { keyActions(key) }
@@ -68,7 +69,7 @@ struct BotSettingsGitHub: View {
 
     @ViewBuilder private func keyActions(_ key: PiBotSshKey) -> some View {
         BotSettingsCopy(title: "Copy public key", text: key.publicKey)
-        BotSettingsLink(title: "Add key on GitHub ↗", url: "https://github.com/settings/ssh/new", onOpenLink: onOpenLink)
+        BotSettingsLink(title: "Add key on GitHub", url: "https://github.com/settings/ssh/new", onOpenLink: onOpenLink)
         Button {
             state.confirm("Remove the stored SSH key?", action: "Remove key") {
                 Task { await state.run { client in try await client.removeSSHKey(); try await refresh(client) } }

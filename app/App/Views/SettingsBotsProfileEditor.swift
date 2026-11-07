@@ -17,11 +17,11 @@ struct BotSettingsProfileEditor: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            SettingsField("Name") { TextField("e.g. Coding", text: $draft.name).dashboardInput() }
+            SettingsField("Name") { TextField("e.g. Coding", text: $draft.name).dashboardInput().accessibilityLabel("Name") }
             if profile == nil {
                 SettingsField("Id") {
                     SettingsNote("Lowercase letters, digits, - and _. Can't be changed.")
-                    TextField("e.g. coding", text: $draft.id).dashboardInput()
+                    TextField("e.g. coding", text: $draft.id).dashboardInput().accessibilityLabel("Id")
                 }
             }
             BotSettingsEditorSection(title: "Main model", summary: draft.main.isEmpty ? "Not set" : draft.main, open: true) {
@@ -47,6 +47,7 @@ struct BotSettingsProfileEditor: View {
             }
         }
         .disabled(saving)
+        .accessibilityElement(children: .contain)
         .accessibilityLabel(profile.map { "Edit \($0.name)" } ?? "New profile")
     }
 
