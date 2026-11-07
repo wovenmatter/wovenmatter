@@ -1,10 +1,10 @@
 {
-  "version": "0.38.0",
-  "tag": "cua-driver-rs-v0.38.0",
-  "sourceRevision": "85e2b1318bd77ccf3cfa88ccdf875a4bb7eaed19",
-  "url": "https://github.com/trycua/cua/releases/download/cua-driver-rs-v0.38.0/cua-driver-rs-0.38.0-darwin-universal-binary.tar.gz",
-  "archiveSHA256": "2bb8dc4a7e69185ffd04c4a9c0eab590bd2c54b72c2c1be13ab675be4f487732",
-  "archiveBytes": 53208248,
-  "binarySHA256": "92067848d0eeb9de76929fbd06a137af801b0ff6caedbb3109bd7a6cc84a1f9f",
+  "version": "0.40.6",
+  "tag": "cua-driver-rs-v0.40.6",
+  "sourceRevision": "6d840c54da418192fc2f4fd61b7140893da24a2d",
+  "url": "https://github.com/trycua/cua/releases/download/cua-driver-rs-v0.40.6/cua-driver-rs-0.40.6-darwin-universal-binary.tar.gz",
+  "archiveSHA256": "257c40e5eba0da2348f30469a6dd0a0a1222ae5d2bca52c10e5d494f81b1abfa",
+  "archiveBytes": 53941420,
+  "binarySHA256": "83d763a87ec43692ff0771b220ecc015ec86ae3a56a59ef4887831bf0ffe44d4",
   "teamIdentifier": "YCK386LBJ7"
 }

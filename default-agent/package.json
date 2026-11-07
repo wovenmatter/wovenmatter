@@ -34,9 +34,9 @@
       "openai": ">=7.53.0",
       "@anthropic-ai/sdk": ">=1.6.0",
       "@google/genai": ">=3.0.0",
-      "@aws-sdk/client-bedrock-runtime": ">=3.1163.0",
+      "@aws-sdk/client-bedrock-runtime": ">=3.1164.0",
       "@smithy/node-http-handler": ">=4.14.2",
-      "@aws-sdk/token-providers": ">=3.1163.0"
+      "@aws-sdk/token-providers": ">=3.1164.0"
     },
     "@earendil-works/chord": {
       "ws": "$ws"
