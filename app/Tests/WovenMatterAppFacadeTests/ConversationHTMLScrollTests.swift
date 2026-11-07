@@ -33,9 +33,13 @@ struct ConversationHTMLScrollTests {
         let target = try #require(scroll.hitTest(point))
         let before = scroll.contentView.bounds.origin.y
         target.scrollWheel(with: event)
-        try await Task.sleep(for: .milliseconds(100))
         #expect(scroll.wheelEvents > 0, "WebKit swallowed the conversation's wheel event")
-        #expect(scroll.contentView.bounds.origin.y > before, "Wheeling over the embedded visual reply did not move the transcript")
+        // AppKit forwards the event while the Mac is locked but doesn't move the scroll view.
+        let session = CGSessionCopyCurrentDictionary() as? [String: Any]
+        if session?["CGSSessionScreenIsLocked"] as? Bool != true {
+            _ = try await pollUntil(attempts: 300, interval: .milliseconds(10)) { scroll.contentView.bounds.origin.y > before }
+            #expect(scroll.contentView.bounds.origin.y > before, "Wheeling over the embedded visual reply did not move the transcript")
+        }
 
         // Chart zoom/pan modifiers and horizontal wheel gestures stay with
         // WebKit instead of being stolen by the transcript bridge.

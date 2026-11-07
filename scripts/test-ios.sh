@@ -6,6 +6,21 @@ case "$mode" in
   *) printf '%s\n' 'usage: scripts/test-ios.sh [--package|--simulator|--ui|--all-devices]' >&2; exit 64 ;;
 esac
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# xcodebuild launches the test host suspended and resumes it through Xcode's
+# DTServiceHub. A beta left selected after its release can lose that connection,
+# stopping the host in dyld until XCTest reports a hung runner. Prefer the installed
+# release over a beta it supersedes; an explicit DEVELOPER_DIR always wins.
+release_xcode="${WOVENMATTER_IOS_RELEASE_XCODE:-/Applications/Xcode.app/Contents/Developer}"
+if [[ -z "${DEVELOPER_DIR:-}" && -d "$release_xcode" ]]; then
+  xcode_field() { plutil -extract "$2" raw -o - "$1/../version.plist" 2>/dev/null || true; }
+  selected_xcode="$(xcode-select -p 2>/dev/null || true)"
+  selected_train="$(xcode_field "$selected_xcode" CFBundleVersion)"
+  release_train="$(xcode_field "$release_xcode" CFBundleVersion)"
+  if [[ "$(xcode_field "$selected_xcode" ProductBuildVersion)" == *[a-z] && "${selected_train%%.*}" -lt "${release_train%%.*}" ]]; then
+    printf 'Using %s; the selected beta at %s is superseded. Set DEVELOPER_DIR to override.\n' "$release_xcode" "$selected_xcode"
+    export DEVELOPER_DIR="$release_xcode"
+  fi
+fi
 if [[ "$mode" == "--all-devices" ]]; then
   "$root/scripts/test-ios.sh" --ui
   WOVENMATTER_IOS_SIMULATOR_DESTINATION="" \

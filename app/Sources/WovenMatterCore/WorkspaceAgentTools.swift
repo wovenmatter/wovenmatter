@@ -6,10 +6,25 @@ public enum WorkspaceCalendarAccess: String, CaseIterable, Codable, Sendable {
   public var title: String { self == .full ? "Full access" : "Read only" }
 }
 
-/// An app-wide caller supplied only by the host's private Tailnet transport.
+/// App-wide identities supplied by authenticated host transports.
 /// This is an identity for policy and receipts, never a conversation.
 public enum WovenMCPCaller {
   public static let outside = "woven:tailnet"
+
+  public static func bot(installationID: String, botID: String) -> String {
+    "woven:bot:" + installationID.lowercased() + ":" + botID.lowercased()
+  }
+
+  public static func parseBot(_ caller: String) -> (installationID: String, botID: String)? {
+    let parts = caller.split(separator: ":", omittingEmptySubsequences: false)
+    guard parts.count == 4, parts[0] == "woven", parts[1] == "bot",
+          let installation = UUID(uuidString: String(parts[2])), let bot = UUID(uuidString: String(parts[3])) else { return nil }
+    return (installation.uuidString.lowercased(), bot.uuidString.lowercased())
+  }
+
+  public static func isAppWide(_ caller: String) -> Bool {
+    caller == outside || parseBot(caller) != nil
+  }
 }
 
 public struct WorkspaceExternalMCPSettings: Codable, Equatable, Sendable {
@@ -24,6 +39,7 @@ public struct WorkspaceExternalMCPSettings: Codable, Equatable, Sendable {
 }
 
 public struct WorkspaceToolSettings: Codable, Equatable, Sendable {
+  public var botMCP: WorkspaceExternalMCPSettings = .init(isEnabled: true)
   public var externalMCP: WorkspaceExternalMCPSettings?
   public var enabledByDefault: Set<WorkspaceToolGroup>
   public var calendarAccess: WorkspaceCalendarAccess
@@ -41,6 +57,23 @@ public struct WorkspaceToolSettings: Codable, Equatable, Sendable {
     self.maximumRunningSessions = maximumRunningSessions
   }
 
+  private enum CodingKeys: String, CodingKey {
+    case botMCP, externalMCP, enabledByDefault, calendarAccess, maximumManagedSessions
+    case executorSetup, executor, maximumRunningSessions
+  }
+
+  public init(from decoder: any Decoder) throws {
+    let values = try decoder.container(keyedBy: CodingKeys.self)
+    botMCP = try values.decodeIfPresent(WorkspaceExternalMCPSettings.self, forKey: .botMCP) ?? .init(isEnabled: true)
+    externalMCP = try values.decodeIfPresent(WorkspaceExternalMCPSettings.self, forKey: .externalMCP)
+    enabledByDefault = try values.decode(Set<WorkspaceToolGroup>.self, forKey: .enabledByDefault)
+    calendarAccess = try values.decode(WorkspaceCalendarAccess.self, forKey: .calendarAccess)
+    maximumManagedSessions = try values.decode(Int.self, forKey: .maximumManagedSessions)
+    maximumRunningSessions = try values.decode(Int.self, forKey: .maximumRunningSessions)
+    executorSetup = try values.decodeIfPresent(ExecutorSetupState.self, forKey: .executorSetup)
+    executor = try values.decodeIfPresent(ExecutorConfiguration.self, forKey: .executor)
+  }
+
   public func applyingChanges(from base: Self, to edited: Self) -> Self {
     var result = self
     result.enabledByDefault.formUnion(edited.enabledByDefault.subtracting(base.enabledByDefault))
@@ -54,6 +87,7 @@ public struct WorkspaceToolSettings: Codable, Equatable, Sendable {
       selection.subtract(old.defaultProfiles.subtracting(change.defaultProfiles))
       result.executor?.defaultProfiles = selection.intersection(Set(current.apps.map(\.id)))
     }
+    if base.botMCP != edited.botMCP { result.botMCP = edited.botMCP }
     if base.externalMCP != edited.externalMCP { result.externalMCP = edited.externalMCP }
     // Setup, inventory and connection identity belong to the manager.
     return result
@@ -106,6 +140,7 @@ public struct WorkspaceSessionTools: Codable, Equatable, Sendable {
 public struct WorkspaceSessionCreationConfiguration: Codable, Equatable, Sendable {
   public var runtimeKind: AgentRuntimeKind
   public var workspaceID: UUID?
+  public var pairedAgentID: UUID?
   public var folderID: String?
   public var title: String
   public var model: String?
@@ -118,9 +153,10 @@ public struct WorkspaceSessionCreationConfiguration: Codable, Equatable, Sendabl
   public var nativeWorkspaceID: String?
   public var tools: WorkspaceSessionTools
 
-  public init(runtimeKind: AgentRuntimeKind, workspaceID: UUID? = nil, folderID: String? = nil,
+  public init(runtimeKind: AgentRuntimeKind, workspaceID: UUID? = nil, pairedAgentID: UUID? = nil, folderID: String? = nil,
               title: String, model: String? = nil, thinking: String? = nil, permission: String? = nil,
               usesProductPermissionDefault: Bool? = nil, selectionWorkspace: String? = nil, nativeWorkingDirectory: String? = nil, nativeWorkspaceID: String? = nil, tools: WorkspaceSessionTools = .init()) {
+    self.pairedAgentID = pairedAgentID
     self.runtimeKind = runtimeKind; self.workspaceID = workspaceID; self.folderID = folderID
     self.title = title; self.model = model; self.thinking = thinking
     self.permission = permission; self.usesProductPermissionDefault = usesProductPermissionDefault

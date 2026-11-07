@@ -3,7 +3,7 @@ import SQLite3
 import Testing
 import WorkspaceFixtures
 import WovenMatterCore
-import WovenMatterDashboardStore
+@testable import WovenMatterDashboardStore
 @testable import WovenMatterAppFacade
 
 @MainActor @Suite(.serialized)
@@ -161,9 +161,9 @@ struct WovenMCPHostTests {
         #expect(names.contains("woven_timers_list") && !names.contains("woven_notes_list"))
         let goal = try #require(tools.first { $0.objectValue?["name"] == .string("woven_goals_get") })
         #expect(goal.objectValue?["inputSchema"]?.objectValue?["required"]?.arrayValue?.contains(.string("sessionID")) == true)
-        let targetless = try #require(await fixture.host.handle(mcpHostRequest(token: nil, name: "woven_goals_get"), allowOutside: true))
+        let targetless = try #require(await fixture.host.handle(try mcpHostRequest(token: nil, name: "woven_goals_get"), allowOutside: true))
         #expect(try JSONDecoder().decode(GatewayJSONValue.self, from: targetless.body).objectValue?["error"] != nil)
-        let targeted = try #require(await fixture.host.handle(mcpHostRequest(token: nil, name: "woven_goals_get", arguments: ["sessionID": .string(fixture.caller)]), allowOutside: true))
+        let targeted = try #require(await fixture.host.handle(try mcpHostRequest(token: nil, name: "woven_goals_get", arguments: ["sessionID": .string(fixture.caller)]), allowOutside: true))
         #expect(try JSONDecoder().decode(GatewayJSONValue.self, from: targeted.body).objectValue?["result"]?.objectValue?["isError"] == .bool(false))
         #expect(fixture.calls.callers == [WovenMCPCaller.outside])
         #expect(fixture.calls.requests.first?.targetSessionID == fixture.caller)
@@ -208,7 +208,7 @@ struct WovenMCPHostTests {
         let denied = try await fixture.call(connection, name: "woven_notes_list")
         #expect(denied.objectValue?["error"] != nil)
         fixture.host.revokeSession(fixture.caller)
-        #expect(try await fixture.host.handle(mcpHostRequest(token: connection.bearerToken, name: "woven_notes_list")) == nil)
+        #expect(try await fixture.host.handle(try mcpHostRequest(token: connection.bearerToken, name: "woven_notes_list")) == nil)
         let saved = try String(contentsOf: fixture.directory.appending(path: "mcp-access.json"), encoding: .utf8)
         #expect(!saved.contains(connection.bearerToken))
     }
@@ -295,9 +295,260 @@ private struct MCPHostFixture {
     }
 }
 
-private func mcpHostRequest(token: String?, name: String, arguments: [String: GatewayJSONValue] = [:]) throws -> CompanionHTTPRequest {
+private func mcpHostRequest(token: String?, name: String, arguments: [String: GatewayJSONValue] = [:], headers: [String: String] = [:]) throws -> CompanionHTTPRequest {
     let message: GatewayJSONValue = .object(["jsonrpc": .string("2.0"), "id": .string(UUID().uuidString),
         "method": .string("tools/call"), "params": .object(["name": .string(name), "arguments": .object(arguments)])])
-    return .init(method: "POST", target: "/mcp", headers: token.map { ["authorization": "Bearer " + $0] } ?? [:],
+    var headers = headers
+    if let token { headers["authorization"] = "Bearer " + token }
+    return .init(method: "POST", target: "/mcp", headers: headers,
                  body: try JSONEncoder().encode(message))
+}
+
+
+extension WovenMCPHostTests {
+    @Test func botIdentityAndOldSettingsDecodeWithoutAConversation() throws {
+        let installation = UUID().uuidString, botID = UUID().uuidString
+        let caller = WovenMCPCaller.bot(installationID: installation, botID: botID)
+        #expect(WovenMCPCaller.parseBot(caller)?.installationID == installation.lowercased())
+        #expect(WovenMCPCaller.parseBot(caller)?.botID == botID.lowercased())
+        #expect(WovenMCPCaller.isAppWide(caller) && WovenMCPCaller.isAppWide(WovenMCPCaller.outside))
+        #expect(!WovenMCPCaller.isAppWide("woven:bot:forged:identity"))
+        var old = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(WorkspaceToolSettings())) as? [String: Any])
+        old.removeValue(forKey: "botMCP")
+        let decoded = try JSONDecoder().decode(WorkspaceToolSettings.self, from: JSONSerialization.data(withJSONObject: old))
+        #expect(decoded.botMCP.isEnabled)
+        #expect(!decoded.botMCP.groups.contains(.computer) && !decoded.botMCP.groups.contains(.executor))
+    }
+
+    @Test func botGrantRequiresValidIdentityRotatesAndPersistsOnlyDigest() async throws {
+        let fixture = try await MCPHostFixture(); defer { fixture.remove() }
+        let installation = UUID().uuidString, botID = UUID().uuidString
+        let grant = try await fixture.host.issueBotGrant(installationID: installation)
+        #expect(URL(string: grant.endpointURL)?.host == "127.0.0.1")
+        let saved = try String(contentsOf: fixture.directory.appending(path: "mcp-access.json"), encoding: .utf8)
+        let hasPlaintext = saved.contains(grant.bearerToken)
+        #expect(!hasPlaintext)
+        for identity in [nil, "forged", "", "woven:tailnet"] as [String?] {
+            let request = try mcpHostRequest(token: grant.bearerToken, name: "woven_notes_list", headers: identity.map { ["x-woven-bot-id": $0] } ?? [:])
+            #expect(await fixture.host.handle(request)?.status == 401)
+        }
+        let headers = ["x-woven-bot-id": botID, "x-woven-bot-name": "Research%20Bot%0A"]
+        let request = try mcpHostRequest(token: grant.bearerToken, name: "woven_notes_list", headers: headers)
+        #expect(await fixture.host.handle(request)?.status == 200)
+        let caller = WovenMCPCaller.bot(installationID: installation, botID: botID)
+        #expect(fixture.calls.callers == [caller])
+        let delivery = try await fixture.database.reserveToolDelivery(sourceID: caller, targetID: fixture.caller, text: "Hello", requestID: UUID().uuidString)
+        #expect(delivery.sourceTitle == "Research Bot" && delivery.sourceHarness == "Research Bot")
+        #expect(try await fixture.database.workspaceOverview().conversations.count == 1)
+        let rotated = try await fixture.host.issueBotGrant(installationID: installation)
+        #expect(await fixture.host.handle(request, allowOutside: true) == nil)
+        #expect(await fixture.host.handle(try mcpHostRequest(token: "wrong", name: "woven_notes_list", headers: headers), allowOutside: true) == nil)
+        #expect(await fixture.host.handle(try mcpHostRequest(token: rotated.bearerToken, name: "woven_notes_list", headers: headers))?.status == 200)
+        fixture.host.revokeBotGrants(installationID: installation)
+        #expect(await fixture.host.handle(try mcpHostRequest(token: rotated.bearerToken, name: "woven_notes_list", headers: headers)) == nil)
+        // Reloading cannot restore a revoked grant.
+        let reopened = try WovenMCPHost(database: fixture.database) { _, _ in .init(success: true) }
+        defer { reopened.stop() }
+        #expect(await reopened.handle(try mcpHostRequest(token: rotated.bearerToken, name: "woven_notes_list", headers: headers)) == nil)
+    }
+
+    @Test func botNamesAreBoundedAndInstallationHeadersOnlyAttribute() async throws {
+        let fixture = try await MCPHostFixture(); defer { fixture.remove() }
+        let installation = UUID().uuidString, botID = UUID().uuidString
+        let grant = try await fixture.host.issueBotGrant(installationID: installation)
+        let name = String(repeating: "A", count: 500) + "%0A%00"
+        let headers = ["x-woven-bot-id": botID, "x-woven-bot-name": name]
+        _ = await fixture.host.handle(try mcpHostRequest(token: grant.bearerToken, name: "woven_notes_list", headers: headers))
+        let caller = WovenMCPCaller.bot(installationID: installation, botID: botID)
+        let delivery = try await fixture.database.reserveToolDelivery(sourceID: caller, targetID: fixture.caller, text: "Attribution", requestID: UUID().uuidString)
+        #expect(delivery.sourceTitle.count == 128 && !delivery.sourceTitle.contains("\n"))
+        let otherID = UUID().uuidString
+        _ = await fixture.host.handle(try mcpHostRequest(token: grant.bearerToken, name: "woven_notes_list", headers: ["x-woven-bot-id": otherID, "x-woven-bot-name": "%invalid"]))
+        #expect(fixture.calls.callers.last == WovenMCPCaller.bot(installationID: installation, botID: otherID))
+        fixture.host.stop()
+        let restored = try WovenMCPHost(database: fixture.database) { _, identity in
+            .init(result: .string(identity))
+        }
+        defer { restored.stop() }
+        #expect(await restored.handle(try mcpHostRequest(token: grant.bearerToken, name: "woven_notes_list", headers: headers))?.status == 200)
+    }
+
+    @Test(arguments: [false, true]) func botPolicyIsIndependentOfOutsideExposure(outside: Bool) async throws {
+        let fixture = try await MCPHostFixture(); defer { fixture.remove() }
+        let installation = UUID().uuidString, botID = UUID().uuidString
+        let grant = try await fixture.host.issueBotGrant(installationID: installation)
+        var settings = try await fixture.database.toolSettings()
+        settings.externalMCP = .init(isEnabled: outside)
+        try await fixture.database.saveToolSettings(settings)
+        let headers = ["x-woven-bot-id": botID]
+        let request = try mcpHostRequest(token: grant.bearerToken, name: "woven_notes_list", headers: headers)
+        #expect(await fixture.host.handle(request, allowOutside: outside)?.status == 200)
+        settings.botMCP.groups.remove(.notes)
+        try await fixture.database.saveToolSettings(settings)
+        let disabledGroup = try #require(await fixture.host.handle(request, allowOutside: outside))
+        #expect(try JSONDecoder().decode(GatewayJSONValue.self, from: disabledGroup.body).objectValue?["error"] != nil)
+        settings.botMCP.isEnabled = false
+        try await fixture.database.saveToolSettings(settings)
+        let disabled = try #require(await fixture.host.handle(request, allowOutside: outside))
+        #expect(try JSONDecoder().decode(GatewayJSONValue.self, from: disabled.body).objectValue?["error"] != nil)
+        #expect(fixture.calls.callers.count == 1)
+        _ = await fixture.host.handle(try mcpHostRequest(token: nil, name: "woven_notes_list", headers: headers), allowOutside: outside)
+        #expect(fixture.calls.callers.allSatisfy { WovenMCPCaller.parseBot($0) != nil } == !outside)
+        #expect(fixture.calls.callers.last == (outside ? WovenMCPCaller.outside : WovenMCPCaller.bot(installationID: installation, botID: botID)))
+    }
+
+    @Test func botToolsUseExplicitSessionTargets() async throws {
+        let fixture = try await MCPHostFixture(); defer { fixture.remove() }
+        let installation = UUID().uuidString, botID = UUID().uuidString
+        _ = try await fixture.host.issueBotGrant(installationID: installation)
+        let caller = WovenMCPCaller.bot(installationID: installation, botID: botID)
+        try await fixture.database.registerBotCaller(caller, displayName: "Targeting bot")
+        let service = try await WorkspaceAgentToolsModel(database: fixture.database,
+            sessionHandler: { _, _, _ in throw CancellationError() }, noteHandler: { _, _, _ in throw CancellationError() },
+            noteRestoreHandler: { _, _, _, _, _ in throw CancellationError() }, usageHandler: { _ in throw CancellationError() }, onMutation: {})
+        defer { service.stop() }
+        let context = await service.handle(.init(arguments: ["context"]), callerID: caller)
+        #expect(context.success && context.result == .null)
+        var goalRequest = WovenMatterToolRequest(arguments: ["goals", "get"])
+        goalRequest.targetSessionID = fixture.caller
+        let goal = await service.handle(goalRequest, callerID: caller)
+        #expect(goal.success)
+        let targetless = await service.handle(.init(arguments: ["goals", "get"]), callerID: caller)
+        #expect(!targetless.success)
+        let timer = WorkspaceSessionTimer(sessionID: fixture.caller, instruction: "Follow up", nextFireAt: Date().addingTimeInterval(60))
+        _ = try await fixture.database.saveSessionTimer(timer, callerID: caller, requestID: UUID().uuidString)
+        #expect(try await rows(fixture.database.querySessionTimers(callerID: caller, sessionID: fixture.caller)).count == 1)
+        let run = try await fixture.database.beginLocalACPRun(conversationID: fixture.caller, input: .init(text: "Render"))
+        let json = #"{"action":"render","html":"<p>From a bot</p>","title":"Bot page","height":160}"#
+        var renderRequest = WovenMatterToolRequest(arguments: ["html", "call", "--json", json])
+        renderRequest.targetSessionID = fixture.caller
+        let render = await service.handle(renderRequest, callerID: caller)
+        #expect(render.success, "\(render.error ?? "")")
+        let history = try await fixture.database.conversationHistoryPage(id: fixture.caller, limit: 20, compactActivities: true)
+        #expect(history.activities.contains { $0.runID == run.runID && $0.activity.htmlRender?.title == "Bot page" })
+    }
+
+    /// Relationships synchronize between paired Macs and bot grants do not. A Mac that does
+    /// not host this bot must neither clear its coordination nor consume its events.
+    @Test func aBotHostedByAnotherMacKeepsItsCoordinationHere() async throws {
+        let fixture = try await MCPHostFixture(); defer { fixture.remove() }
+        let installation = UUID().uuidString.lowercased()
+        _ = try await fixture.host.issueBotGrant(installationID: installation)
+        let caller = WovenMCPCaller.bot(installationID: installation, botID: UUID().uuidString)
+        try await fixture.database.registerBotCaller(caller, displayName: "Elsewhere")
+        _ = try await fixture.database.requestCoordinationAccess(sourceID: caller, targetID: fixture.caller,
+            purpose: "Coordinate", requestID: UUID().uuidString)
+        try await fixture.database.write { connection in
+            try connection.toolsExecuteUnlocked("DELETE FROM workspace_mcp_bot_installations WHERE installation_id=?", [installation])
+        }
+        #expect(try await fixture.database.collectCoordinationTurnNotifications().isEmpty)
+        #expect(try await fixture.database.sessionRelationship(fixture.caller).coordinatorID == caller)
+        #expect(try await fixture.database.recordCoordinationNeedsInput(sessionID: fixture.caller,
+            requestID: "elsewhere-input", requiresUserApproval: true) == nil)
+        #expect(try await fixture.database.sessionRelationship(fixture.caller).coordinatorID == caller)
+
+        // A relationship that arrives through paired sync names a caller this Mac never saw.
+        let foreign = WovenMCPCaller.bot(installationID: UUID().uuidString, botID: UUID().uuidString)
+        let violations = try await fixture.database.write { connection -> Int in
+            try connection.toolsExecuteUnlocked("UPDATE workspace_session_relationships SET coordinator_id=? WHERE session_id=?", [foreign, fixture.caller])
+            return try connection.historyRowsUnlocked("PRAGMA foreign_key_check(workspace_session_relationships)", values: []).count
+        }
+        #expect(violations == 0)
+        #expect(try await fixture.database.collectCoordinationTurnNotifications().isEmpty)
+        #expect(try await fixture.database.sessionRelationship(fixture.caller).coordinatorID == foreign)
+        try await fixture.database.write { connection in
+            try connection.toolsExecuteUnlocked("UPDATE workspace_session_relationships SET coordinator_id=? WHERE session_id=?", [caller, fixture.caller])
+        }
+
+        // A local revocation still retires it.
+        _ = try await fixture.host.issueBotGrant(installationID: installation)
+        try await fixture.database.setBotInstallation(installation, active: false)
+        #expect(try await fixture.database.collectCoordinationTurnNotifications().isEmpty)
+        #expect(try await fixture.database.sessionRelationship(fixture.caller).coordinatorID == nil)
+    }
+
+    /// A bot first seen through paired sync can later be attached here. Disconnecting must then
+    /// clear what it coordinates, and reattaching must not bring that access back.
+    @Test func aSyncedBotThatAttachesHereIsClearedByItsRevocation() async throws {
+        let fixture = try await MCPHostFixture(); defer { fixture.remove() }
+        let installation = UUID().uuidString.lowercased()
+        let caller = WovenMCPCaller.bot(installationID: installation, botID: UUID().uuidString)
+        let other = UUID().uuidString.lowercased()
+        _ = try await fixture.host.issueBotGrant(installationID: other)
+        let setup = WovenMCPCaller.bot(installationID: other, botID: UUID().uuidString)
+        try await fixture.database.registerBotCaller(setup, displayName: "Setup")
+        _ = try await fixture.database.requestCoordinationAccess(sourceID: setup, targetID: fixture.caller,
+            purpose: "Fixture", requestID: UUID().uuidString)
+        try await fixture.database.write { connection in
+            // The synced row names a caller this Mac has never registered.
+            try connection.toolsExecuteUnlocked("UPDATE workspace_session_relationships SET coordinator_id=? WHERE session_id=?", [caller, fixture.caller])
+        }
+        #expect(try await fixture.database.sessionRelationship(fixture.caller).coordinatorID == caller)
+
+        _ = try await fixture.host.issueBotGrant(installationID: installation)
+        try await fixture.database.registerBotCaller(caller, displayName: "Attached")
+        #expect(try await fixture.database.sessionRelationship(fixture.caller).coordinatorID == caller)
+
+        try await fixture.database.setBotInstallation(installation, active: false)
+        #expect(try await fixture.database.sessionRelationship(fixture.caller).coordinatorID == nil)
+
+        _ = try await fixture.host.issueBotGrant(installationID: installation)
+        try await fixture.database.registerBotCaller(caller, displayName: "Attached")
+        #expect(try await fixture.database.sessionRelationship(fixture.caller).coordinatorID == nil)
+    }
+
+    @Test func botNotificationsRetryWithoutReobservingOrDuplicatingAcceptedEvents() async throws {
+        let fixture = try await MCPHostFixture(); defer { fixture.remove() }
+        let installation = UUID().uuidString, botID = UUID().uuidString
+        _ = try await fixture.host.issueBotGrant(installationID: installation)
+        let caller = WovenMCPCaller.bot(installationID: installation, botID: botID)
+        try await fixture.database.registerBotCaller(caller, displayName: "Coordinator")
+        let assignment = try await fixture.database.requestCoordinationAccess(sourceID: caller, targetID: fixture.caller,
+            purpose: "Coordinate", requestID: UUID().uuidString)
+        #expect(assignment.state == "accepted" && assignment.notifications)
+        try await fixture.database.setCoordinationNotifications(sourceID: caller, targetID: fixture.caller, enabled: true)
+        #expect(try await fixture.database.collectCoordinationTurnNotifications().isEmpty)
+        #expect(try await fixture.database.sessionRelationship(fixture.caller).coordinatorID == caller)
+        let delivery = try #require(try await fixture.database.recordCoordinationNeedsInput(sessionID: fixture.caller,
+            requestID: "fixture-input", requiresUserApproval: true))
+        #expect(delivery.text.contains(fixture.caller) && delivery.text.contains("MCP caller") && delivery.text.contains("blocked"))
+        #expect(try await fixture.database.recordCoordinationNeedsInput(sessionID: fixture.caller, requestID: "fixture-input", requiresUserApproval: true) == nil)
+        await #expect(throws: (any Error).self) { _ = try await fixture.host.deliverBotNotification(delivery) }
+        #expect(try await fixture.database.toolDelivery(id: delivery.id)?.status == "queued")
+        // Expire the scheduler backoff without waiting in wall-clock time.
+        try await fixture.database.write { try $0.toolsExecuteUnlocked("UPDATE workspace_session_deliveries SET retry_after=0 WHERE id=?", [delivery.id]) }
+        var attempts = 0
+        var accepted = Set<String>()
+        fixture.host.botNotificationSink = { event in
+            attempts += 1
+            accepted.insert(event.id)
+            if attempts == 1 { throw CancellationError() } // Lost acknowledgement after receiver acceptance.
+        }
+        await #expect(throws: CancellationError.self) { _ = try await fixture.host.deliverBotNotification(delivery) }
+        try await fixture.database.write { try $0.toolsExecuteUnlocked("UPDATE workspace_session_deliveries SET retry_after=0 WHERE id=?", [delivery.id]) }
+        fixture.host.stop()
+        let restored = try WovenMCPHost(database: fixture.database) { _, _ in .init(success: true) }
+        restored.botNotificationSink = fixture.host.botNotificationSink
+        defer { restored.stop() }
+        #expect(try await restored.deliverBotNotification(delivery))
+        #expect(try await restored.deliverBotNotification(delivery))
+        #expect(attempts == 2 && accepted.count == 1)
+        #expect(try await fixture.database.toolDelivery(id: delivery.id)?.status == "accepted")
+        let run = try await fixture.database.beginLocalACPRun(conversationID: fixture.caller, input: .init(text: "Fail in fixture"))
+        try await fixture.database.completeLocalACPRun(runID: run.runID, error: "Fixture failure")
+        let failures = try await fixture.database.collectCoordinationTurnNotifications()
+        #expect(failures.count == 1 && failures.first?.text.contains("failed") == true)
+        let creationID = UUID().uuidString.lowercased()
+        _ = try await fixture.database.reserveToolSessionCreation(sourceID: caller, requestID: creationID,
+            arguments: ["sessions", "create"], purpose: "Pending creation", managed: true)
+        fixture.host.revokeBotGrants(installationID: installation)
+        _ = try await fixture.database.collectCoordinationTurnNotifications()
+        // Wait for the serialized revocation through the host API.
+        _ = try await fixture.host.deliverBotNotification(delivery)
+        #expect(try await fixture.database.sessionRelationship(fixture.caller).coordinatorID == nil)
+        let creation = try await fixture.database.read { connection in
+            try connection.historyRowsUnlocked("SELECT status FROM workspace_session_creations WHERE id=?", values: [creationID]).first
+        }
+        #expect(creation?.objectValue?["status"] == .string("failed"))
+    }
 }

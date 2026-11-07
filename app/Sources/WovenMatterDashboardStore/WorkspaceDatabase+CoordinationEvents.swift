@@ -52,10 +52,10 @@ extension WorkspaceDatabaseConnection {
         let replied = replies.contains { $0.objectValue?["status"]?.stringValue == "accepted" }
         let detail: String
         if status == "completed" {
-          detail = "done."
+          detail = "completed; done."
         } else {
           let error = row["error"]?.stringValue.map { " " + String(WorkspaceHistoryPrivacy.redactingToolEndpoints($0).prefix(2_000)) } ?? ""
-          detail = "\(status == "failed" ? "error" : "idle (cancelled)").\(error)"
+          detail = "\(status == "failed" ? "failed (error)" : "idle (cancelled)").\(error)"
         }
         if let delivery = try recordCoordinationObservationUnlocked(sessionID: session, eventID: "run:" + id,
             detail: detail + " Run: " + id + ".", suppress: notificationOnly || replied) {
@@ -107,6 +107,9 @@ extension WorkspaceDatabaseConnection {
     let relationship = try relationshipUnlocked(sessionID)
     guard let target = relationship.coordinatorID,
           let epoch = try historyRowsUnlocked("SELECT coordination_epoch FROM workspace_session_relationships WHERE session_id=?", values: [sessionID]).first?.objectValue?["coordination_epoch"]?.stringValue else { return nil }
+    // Another Mac hosts this bot and observes the same synchronized runs for it.
+    if let bot = WovenMCPCaller.parseBot(target),
+       try historyRowsUnlocked("SELECT 1 FROM workspace_mcp_bot_installations WHERE installation_id=? AND active=1", values: [bot.installationID]).isEmpty { return nil }
     guard try historyRowsUnlocked("SELECT 1 FROM workspace_coordination_observations WHERE epoch=? AND event_key=?", values: [epoch, eventID]).isEmpty else { return nil }
     try toolsExecuteUnlocked("INSERT INTO workspace_coordination_observations(epoch,event_key) VALUES(?,?)", [epoch, eventID])
     guard !suppress, relationship.notificationsEnabled,
@@ -120,11 +123,14 @@ extension WorkspaceDatabaseConnection {
 
   /// Snapshot tombstones can outlive a coordination relationship. Retire only
   /// those invalid assignments; a missing session must not stop the scheduler.
+  /// Relationships synchronize between paired Macs but bot grants do not, so a bot
+  /// counts as gone only when this instance holds and revoked its installation.
   private func retireUnavailableCoordinationUnlocked(sessionID: String? = nil) throws {
     let predicate = """
       coordinator_id IS NOT NULL AND (? IS NULL OR session_id=?) AND (
         NOT EXISTS (SELECT 1 FROM dashboard_conversations c WHERE c.id=workspace_session_relationships.session_id AND c.deleted_at IS NULL)
-        OR (coordinator_id != 'woven:tailnet' AND NOT EXISTS (SELECT 1 FROM dashboard_conversations c WHERE c.id=workspace_session_relationships.coordinator_id AND c.deleted_at IS NULL)))
+        OR (coordinator_id != 'woven:tailnet' AND coordinator_id NOT LIKE 'woven:bot:%' AND NOT EXISTS (SELECT 1 FROM dashboard_conversations c WHERE c.id=workspace_session_relationships.coordinator_id AND c.deleted_at IS NULL))
+        OR (coordinator_id LIKE 'woven:bot:%' AND EXISTS (SELECT 1 FROM workspace_mcp_callers b JOIN workspace_mcp_bot_installations i ON i.installation_id=b.installation_id AND i.active=0 WHERE b.id=workspace_session_relationships.coordinator_id)))
       """
     try toolsExecuteUnlocked("DELETE FROM workspace_session_grants WHERE kind='approved' AND target_id IN (SELECT session_id FROM workspace_session_relationships WHERE " + predicate + ")", [sessionID, sessionID])
     try toolsExecuteUnlocked("UPDATE workspace_session_relationships SET coordinator_id=NULL,coordination_epoch=NULL,coordination_since=NULL WHERE " + predicate, [sessionID, sessionID])

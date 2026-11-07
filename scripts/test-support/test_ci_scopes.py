@@ -23,6 +23,10 @@ for path in ['remote/src/server.mjs', 'remote/Dockerfile', 'remote/Executor.Dock
              'remote/entrypoint.sh', 'remote/security/build-backports.py',
              'remote/npm-runtime/package-lock.json', 'remote/executor-runtime/package-lock.json']:
     assert active(path) == {'service', 'scripts'}, (path, active(path))
+assert active('app/WovenMatter.xcodeproj/project.pbxproj') == {'scripts'}
+assert active('pi-bot/selection.json') == {'scripts'}
+assert active('pi-bot/tooling/package-lock.json') == {'scripts'}
+assert active('default-agent/.node-version') == {'agent', 'service', 'pi', 'scripts'}
 assert active('.dockerignore') == {'service'}
 assert active('app/Updater/sparkle-version.json') == {'scripts'}
 assert active('scripts/test-support/test_ios_runner.py') == {'scripts'}

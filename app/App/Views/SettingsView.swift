@@ -40,6 +40,8 @@ private enum SettingsSection: Equatable {
     case remoteWorkspaces
     case usage
     case dictation
+    case bots
+    case botsSection(PiBotSettingsSection)
 }
 
 struct SettingsView: View {
@@ -142,6 +144,21 @@ struct SettingsView: View {
                     reservesRailControlSpace: reservesRailControlSpace,
                     onBack: { section = .landing }
                 )
+            case .bots:
+                SettingsBotsView(
+                    model: model,
+                    reservesRailControlSpace: reservesRailControlSpace,
+                    onBack: { section = .landing },
+                    onOpenSection: { section = .botsSection($0) }
+                )
+            case .botsSection(let botSection):
+                SettingsBotsSectionPage(
+                    bots: model.bots,
+                    section: botSection,
+                    reservesRailControlSpace: reservesRailControlSpace,
+                    onBack: { section = .bots },
+                    onOpenLink: { NSWorkspace.shared.open($0) }
+                )
             }
         }
         .foregroundStyle(DashboardPalette.foreground)
@@ -151,7 +168,8 @@ struct SettingsView: View {
         .task {
             model.refreshLocalACPRuntimesNow()
         }
-        .onAppear { openPendingDefaultAgentSettings(); openPendingConnections() }
+        .onAppear { openPendingDefaultAgentSettings(); openPendingConnections(); openPendingBotsSettings() }
+        .onChange(of: model.pendingBotsSettings) { _, _ in openPendingBotsSettings() }
         .onChange(of: model.pendingConnectionsScope) { _, _ in openPendingConnections() }
         .onReceive(NotificationCenter.default.publisher(for: .init("wovenmatter.open-connections"))) { event in
             section = .connections(event.object as? String ?? "global")
@@ -164,6 +182,11 @@ struct SettingsView: View {
         guard let scope = model.pendingDefaultAgentSettingsScope else { return }
         section = .defaultAgent(scope, .agents)
         model.pendingDefaultAgentSettingsScope = nil
+    }
+    private func openPendingBotsSettings() {
+        guard model.pendingBotsSettings else { return }
+        section = .bots
+        model.pendingBotsSettings = false
     }
     private func openPendingConnections() {
         guard let scope = model.pendingConnectionsScope else { return }
@@ -187,6 +210,12 @@ struct SettingsView: View {
                     detail: "Accounts, installation, and chat settings.",
                     icon: { DashboardLucideIcon(glyph: .bot, size: 15) },
                     action: { section = .agents }
+                )
+                SettingsDestinationRow(
+                    title: "Bots",
+                    detail: "Where your bots run, their accounts, models, and settings.",
+                    icon: { DashboardLucideIcon(glyph: .sparkles, size: 15) },
+                    action: { section = .bots }
                 )
                 SettingsDestinationRow(
                     title: "Dictation",

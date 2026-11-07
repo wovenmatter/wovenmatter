@@ -236,6 +236,9 @@ final class ApplicationModel {
     private(set) var noteMutationError: String?
     var agentTools: WorkspaceAgentToolsModel?
     let workspaceAssets: WorkspaceAssetSession
+    let bots = BotsModel()
+    var pendingBotsSettings = false
+    var piBotSupervisor: PiBotRuntimeSupervisor?
     @ObservationIgnored var clientExecutionDirectory: URL?
     @ObservationIgnored var automationHost: WovenAutomationHost?
     var activeSessionLimitPresented = false
@@ -578,6 +581,7 @@ final class ApplicationModel {
         await openCode.restore()
         await refreshWorkspace()
         state = .ready
+        startBotsClient()
         startAgentToolRuntime()
         startDashboardStoreIfReady()
         refreshLocalACPRuntimesNow()
@@ -631,6 +635,7 @@ final class ApplicationModel {
         agentTools?.automationDidDisable = { [weak self] caller in await self?.cancelAutomation(callerID: caller) }
         try await recoverExecutorSetup()
         configureSessionToolSelectionAdapter()
+        configureBotsRuntime()
     }
 
     private func start() async {
@@ -715,6 +720,7 @@ final class ApplicationModel {
             await recoverPendingRemoteNoteEdits(store: dashboardStore)
             await refreshWorkspace()
             state = .ready
+            startBotsClient()
             startAgentToolRuntime()
             startDashboardStoreIfReady()
             await companionHost.startForCentralDatabase()
@@ -2963,7 +2969,8 @@ final class ApplicationModel {
         return .localACPRuntimeUnavailable
     }
 
-    func createPairedMacSession(agentID: UUID, conversationID: UUID, folderID: String?) async throws -> String {
+    func createPairedMacSession(agentID: UUID, conversationID: UUID, folderID: String?,
+                                beforeDispatch: @escaping @MainActor () async throws -> Void = {}) async throws -> String {
         if isBackendFrontend {
             let result = try await sendBackendCommand(.createPeerSession(agentID: agentID, conversationID: conversationID, folderID: folderID))
             guard let id = result.conversationID else { throw ApplicationModelError.dashboardStoreUnavailable }
@@ -2976,7 +2983,7 @@ final class ApplicationModel {
         }
         let client = try centralExecutionClient()
         _ = try await client.createSession(workspace: workspace, runtimeKind: agent.runtimeKind,
-            conversationID: conversationID.uuidString.lowercased(), folderID: folderID)
+            conversationID: conversationID.uuidString.lowercased(), folderID: folderID, beforeDispatch: beforeDispatch)
         try await database.installPairedConversationPlaceholder(id: conversationID.uuidString.lowercased(), agentID: agentID,
             workspace: workspace, runtimeKind: agent.runtimeKind.rawValue)
         await refreshWorkspace()
@@ -3478,6 +3485,7 @@ final class ApplicationModel {
 
     func shutdownLocalACPSessions() {
         guard localSessionShutdownTask == nil else { return }
+        piBotSupervisor?.terminateImmediately()
         automationHost?.stop(); automationHost = nil
         executorRuntime.setupTask?.cancel()
         for session in Set(executorRuntime.sessions.values) { executorRuntime.cancel(session) }
@@ -3512,6 +3520,7 @@ final class ApplicationModel {
     func finishBackendShutdown() async {
         startupTask?.cancel()
         await startupTask?.value
+        await piBotSupervisor?.shutdown()
         shutdownLocalACPSessions()
         await localSessionShutdownTask?.value
         backendRPCServer?.stop()
@@ -4550,6 +4559,7 @@ extension ApplicationModel {
             await usage.refreshBackendSnapshot()
             try Task.checkCancellation()
             state = .ready
+            startBotsClient()
             backendClientTask?.cancel()
             backendConversationClientTask?.cancel()
             // The journal supports independent bounded waiters. Transcript
@@ -4590,6 +4600,7 @@ extension ApplicationModel {
                         try await self.refreshBackendApplicationState()
                     }
                     if change.requiresReload || change.scopes.contains(.databases) { try await self.refreshBackendDatabasesState() }
+                    if change.requiresReload || change.scopes.contains(.bots) { await self.bots.refreshRuntime() }
                     if change.requiresReload || change.scopes.contains(.remoteWorkspaces) { try await self.refreshBackendRemoteState() }
                     if change.requiresReload || change.scopes.contains(.openCode) { try await self.refreshBackendOpenCodeState() }
                     if change.requiresReload || change.scopes.contains(.settings) {

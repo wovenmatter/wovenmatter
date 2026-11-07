@@ -23,6 +23,8 @@ for every package update. Three separate mechanisms do that:
 | --- | --- | --- |
 | `package.json` minimum-only ranges (`>=version`) | Declaration. The floor is the current tested release; there is no upper cap on stable releases. | Maintenance PRs raise floors, including majors |
 | `default-agent/package-lock.json`, `ios/EmbeddedRuntime/package-lock.json` | Exact tested snapshot with integrity hashes, installed with `npm ci` | The same PRs |
+| `pi-bot/selection.json` | Exact Pi Bot repository commit, protocol, pnpm, the shared Node archive checksums, and Apple's `container` package | `scripts/update-pi-bot.sh` in a maintenance PR; update Node records together |
+| `pi-bot/tooling/package-lock.json` | Integrity-locked pnpm executable and platform packages, installed with private Node and `npm ci` | Regenerate with npm when refreshing the pnpm selection |
 | `app/Package.resolved` | Shared SwiftPM/Xcode graph: Sparkle and any transitive packages | Native package-manager tooling during maintenance |
 | `default-agent/.node-version` and the Node checksums in `scripts/prepare-default-agent.sh` and `LocalACPManagedRuntime.swift` | One current stable Node release and its official archive SHA-256 values | Maintenance PR, all copies together |
 | `remote/host/runtime-versions.json` | The same Node release's Linux archive SHA-256 values and the lockfile's Playwright version | The same maintenance PR; host bundle tests reject drift |
@@ -53,6 +55,34 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   Node's bundled npm may lag. Dependency maintenance reviews that Dockerfile
   floor; locked installs and the container smoke test validate CLI compatibility.
   Unused bundled Yarn is removed from the workspace image.
+- **Pi Bot** is source-only inside `pi-bot-bundle.tar.gz`. Its exact repository
+  commit is a core-function selection: the native supervisor and bot UI must consume
+  the reviewed protocol with its matching server and lockfile together.
+  The exact pnpm selection must understand that workspace lockfile consistently
+  on the build host and target; its npm lock retains registry integrity. Pi Bot's
+  own exact package declarations remain that repository's policy. Dependencies
+  install on each target, since native SDK executables vary by OS, CPU and libc.
+  The Node selection and checksums match Built-in and remote-host records; official
+  Linux archives require glibc, and musl is refused.
+  Run `scripts/update-pi-bot.sh` to record the current Pi Bot `origin/main` using
+  this checkout's configured GitHub SSH identity. Review its packaging/protocol
+  changes before accepting the commit. When pnpm changes, update `selection.json`
+  and `pi-bot/tooling/package.json`, then run
+  `npm install --package-lock-only --ignore-scripts --no-audit --no-fund --prefix pi-bot/tooling`.
+  Refresh all Node records and checksums together when Node changes.
+  Apple's `container` is recorded by version and the SHA-256 of its signed package. It reaches
+  a Mac only when bots are installed there and it has none of its own, and the installer also
+  checks Apple's signature. Refresh both fields from `gh release view -R apple/container`.
+  `scripts/prepare-pi-bot.sh OUTPUT` fetches only the recorded SHA over HTTPS,
+  installs the frozen graph in temporary storage, and runs Pi Bot's
+  `package:woven`. Debug source overrides fingerprint tracked and nonignored
+  source content; Release refuses overrides. Never resolve `main` during builds.
+  Validate with `scripts/test-pi-bot-host.sh`, portable PR CI, and a temporary-root
+  install/health/stop smoke using `--no-service`. The fixtures cover both service
+  managers and rollback without providers. A local smoke proves only its host's
+  runtime; fixtures do not establish actual Linux/systemd, launchd session,
+  provider-authentication, or signed-app/notarization acceptance. Run requested
+  platform validation separately before claiming those boundaries.
 - **Remote workspace tools** rebuild curl/libcurl 8.23.0 from authenticated
   Debian unstable source against the stable runtime ABI. This replaces the
   older stable and stable-backports builds, including the newly disclosed

@@ -24,7 +24,8 @@ def scopes(paths):
         embedded=infrastructure or changed(r'^(ios/EmbeddedRuntime/|'
                                           r'ios/Sources/EmbeddedExecution/Resources/|'
                                           r'scripts/build-ios-embedded-runtime\.mjs$)'),
-        scripts=infrastructure or changed(r'^(scripts/|remote/|app/Updater/|'
+        scripts=infrastructure or changed(r'^(pi-bot/|default-agent/\.node-version$|scripts/|remote/|app/Updater/|'
+                                         r'app/WovenMatter\.xcodeproj/project\.pbxproj$|'
                                          r'\.github/workflows/|\.github/release-refresh\.json$)'),
     )
 

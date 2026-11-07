@@ -1,5 +1,18 @@
 # Third-party notices
 
+## Pi Bot
+
+Woven Matter delivers the source-built [Pi Bot](https://github.com/wovenmatter/pi-bot)
+revision recorded in `pi-bot/selection.json`, under the MIT License in that repository.
+Its npm dependencies install on the device that runs it, under their own licenses.
+
+## Apple container
+
+On Macs without it, Woven Matter installs Apple's signed
+[`container`](https://github.com/apple/container) package at the version recorded in
+`pi-bot/selection.json`, in a per-user folder, when bots are set up on that Mac. It is
+unmodified and remains under the Apache License 2.0 in that repository.
+
 ## Executor
 
 Woven Matter integrates [Executor](https://executor.sh), created by Rhys Sullivan,

@@ -52,8 +52,17 @@ when an intentional design change is accepted.
 - **Settings navigation:** group Pi Durable, Codex, Claude Code, Grok Build, and
   OpenCode under **Settings → Agents**. Harness pages return to Agents unless
   opened from a workspace's settings. Spell **OpenCode** as one word throughout
-  the app. Order the main Settings page as General, Agents, Dictation, Local
+  the app. Order the main Settings page as General, Agents, Bots, Dictation, Local
   Workspace, Remote Workspaces, Apple Devices, Background Server, then Usage.
+- **Bots:** the Bots section sits above New chat in the navigation rail, using the
+  rail's own disclosure headings and rows. A bot's row shows only its name and opens
+  its main channel; a chevron reveals its threads, pinned first and then newest
+  created. Thread dropdowns start closed. Everything about bots is native and uses the
+  components regular chats and Settings use: the shared transcript text, user bubble and
+  composer, and Settings cards. Never embed Pi Bot's web client. A thread sits beside
+  its bot's main channel at 760 points and wider. Message actions appear on hover.
+  Settings → Bots holds device choice and Woven MCP access and drills down into one
+  page per Pi Bot settings section.
 - **Harness setup:** use compact rows grouped on the theme-whisper surface for
   both harness installation and Pi Durable setup, with the same typography,
   padding, inset dividers, and quiet actions. Keep provider setup limited to

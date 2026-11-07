@@ -7,14 +7,29 @@ import WovenMatterDashboardStore
 
 enum WovenMCPAccessAction: Codable, Sendable {
     case status
+    case setBotsEnabled(Bool)
+    case setBotsGroup(WorkspaceToolGroup, enabled: Bool)
     case setEnabled(Bool)
     case setGroup(WorkspaceToolGroup, enabled: Bool)
 }
 
 struct WovenMCPAccessSnapshot: Codable, Sendable {
     var endpointURL: String
+    var botSettings: WorkspaceExternalMCPSettings
     var settings: WorkspaceExternalMCPSettings
     var exposureError: String?
+}
+
+struct WovenBotMCPGrant: Sendable {
+    let endpointURL: String
+    let bearerToken: String
+}
+
+struct WovenBotNotification: Sendable {
+    let id: String
+    let installationID: String
+    let botID: String
+    let text: String
 }
 
 /// Native bearers identify conversation callers. The optional private Tailnet
@@ -30,7 +45,12 @@ final class WovenMCPHost {
     private struct SavedAccess: Codable {
         var port: UInt16
         var httpsPort: Int?
+        var botGrants: [String: String]?
     }
+    private var botGrants: [String: String] = [:]
+    private var revocationTask: Task<Void, any Error>?
+    private var botDispatches: [UUID: (installationID: String, fence: AgentDispatchFence)] = [:]
+    var botNotificationSink: (@MainActor (WovenBotNotification) async throws -> Void)?
     private let exposure: CompanionTailscaleServe
     private var outsideEndpoint: String?
     private var exposureError: String?
@@ -55,6 +75,7 @@ final class WovenMCPHost {
         if FileManager.default.fileExists(atPath: accessFile.path) {
             let saved = try JSONDecoder().decode(SavedAccess.self, from: Data(contentsOf: accessFile))
             preferredPort = saved.port; preferredHTTPSPort = saved.httpsPort
+            botGrants = saved.botGrants ?? [:]
         }
     }
 
@@ -115,16 +136,86 @@ final class WovenMCPHost {
         return .init(endpointURL: endpoint, bearerToken: connection.bearerToken, captureID: captureID, sessionID: sessionID)
     }
 
+    func issueBotGrant(installationID: String) async throws -> WovenBotMCPGrant {
+        guard let uuid = UUID(uuidString: installationID) else { throw WorkspaceToolError.invalid("Invalid bot installation UUID.") }
+        let installation = uuid.uuidString.lowercased()
+        try await revocationTask?.value
+        let endpoint = try await start()
+        let token = try Self.randomToken()
+        botGrants[installation] = Self.hash(token)
+        do {
+            try save()
+            try await database.setBotInstallation(installation, active: true)
+        } catch { botGrants.removeValue(forKey: installation); throw error }
+        return .init(endpointURL: endpoint, bearerToken: token)
+    }
+
+    func trackBotDispatch(callerID: String, fence: AgentDispatchFence) throws -> UUID? {
+        guard let bot = WovenMCPCaller.parseBot(callerID) else { return nil }
+        guard botGrants[bot.installationID] != nil else {
+            throw WorkspaceToolError.invalid("This bot installation grant was revoked.")
+        }
+        let id = UUID()
+        botDispatches[id] = (bot.installationID, fence)
+        return id
+    }
+
+    func finishBotDispatch(_ id: UUID?) {
+        if let id { botDispatches.removeValue(forKey: id) }
+    }
+
+    func revokeBotGrants(installationID: String) {
+        guard let uuid = UUID(uuidString: installationID) else { return }
+        let installation = uuid.uuidString.lowercased()
+        botGrants.removeValue(forKey: installation)
+        for (id, dispatch) in botDispatches where dispatch.installationID == installation {
+            dispatch.fence.cancel()
+            botDispatches.removeValue(forKey: id)
+        }
+        let previous = revocationTask
+        let database = database
+        let saveError: (any Error)?
+        do { try save(); saveError = nil } catch { saveError = error }
+        revocationTask = Task {
+            _ = try? await previous?.value
+            try await database.setBotInstallation(installation, active: false)
+            if let saveError { throw saveError }
+        }
+    }
+
+    func deliverBotNotification(_ delivery: WorkspaceSessionDelivery) async throws -> Bool {
+        guard [.notification, .message].contains(delivery.kind), let bot = WovenMCPCaller.parseBot(delivery.targetID) else { return false }
+        try await revocationTask?.value
+        guard let claimed = try await database.claimToolDelivery(id: delivery.id) else { return true }
+        do {
+            try await database.validateClaimedToolDelivery(id: claimed.id)
+            guard botGrants[bot.installationID] != nil, let botNotificationSink else {
+                throw WorkspaceToolError.invalid("The bot runtime is unavailable.")
+            }
+            // The stable delivery ID is the receiver's idempotency key, including
+            // an acknowledgement lost after the receiver durably accepted it.
+            try await botNotificationSink(.init(id: claimed.id, installationID: bot.installationID, botID: bot.botID, text: claimed.text))
+            try await database.setToolDeliveryStatus(id: claimed.id, status: "accepted")
+        } catch {
+            try await database.failToolDeliveryAttempt(id: claimed.id)
+            throw error
+        }
+        return true
+    }
+
     func access(_ action: WovenMCPAccessAction) async throws -> WovenMCPAccessSnapshot {
+        try await revocationTask?.value
         let localEndpoint = try await start()
         switch action {
         case .status: break
+        case .setBotsEnabled(let enabled): try await database.updateBotMCP(enabled: enabled)
+        case let .setBotsGroup(group, enabled): try await database.updateBotMCP(group: group, groupEnabled: enabled)
         case .setEnabled(let enabled): try await database.updateExternalMCP(enabled: enabled)
         case let .setGroup(group, enabled): try await database.updateExternalMCP(group: group, groupEnabled: enabled)
         }
         let outside = try await database.toolSettings().externalMCP ?? .init()
         await refreshExposure()
-        return .init(endpointURL: outsideEndpoint ?? localEndpoint, settings: outside, exposureError: exposureError)
+        return .init(endpointURL: outsideEndpoint ?? localEndpoint, botSettings: try await database.toolSettings().botMCP, settings: outside, exposureError: exposureError)
     }
 
     private func startExposureMonitor() {
@@ -176,11 +267,20 @@ final class WovenMCPHost {
         let path = URLComponents(string: "http://localhost" + request.target)?.path
         guard path == "/mcp" || path == "/wovenmatter/mcp" else { return nil }
         let credential: Credential?
+        var botAuthorization: (installation: String, hash: String)?
         let callerID: String
         if let token = request.bearer {
-            guard var native = credentials[Self.hash(token)], Date().timeIntervalSince(native.lastAliveAt) <= 24 * 60 * 60 else { return nil }
-            native.lastAliveAt = Date(); credentials[native.tokenHash] = native
-            credential = native; callerID = native.sessionID
+            let digest = Self.hash(token)
+            if let installation = botGrants.first(where: { $0.value == digest })?.key {
+                guard let raw = request.headers["x-woven-bot-id"], let bot = UUID(uuidString: raw) else { return Self.unauthorizedResponse() }
+                callerID = WovenMCPCaller.bot(installationID: installation, botID: bot.uuidString)
+                credential = nil
+                botAuthorization = (installation, digest)
+            } else {
+                guard var native = credentials[digest], Date().timeIntervalSince(native.lastAliveAt) <= 24 * 60 * 60 else { return nil }
+                native.lastAliveAt = Date(); credentials[native.tokenHash] = native
+                credential = native; callerID = native.sessionID
+            }
         } else {
             guard allowOutside else { return nil }
             guard (try? await database.toolSettings().externalMCP?.isEnabled) == true else {
@@ -210,10 +310,16 @@ final class WovenMCPHost {
             rpcID = message.objectValue?["id"] ?? .null
             decodedMessage = true
             let authorizedCredential = credential
+            let authorizedBot = botAuthorization
+            if let authorizedBot {
+                try await revocationTask?.value
+                guard botGrants[authorizedBot.installation] == authorizedBot.hash else { return Self.unauthorizedResponse() }
+                try await database.registerBotCaller(callerID, displayName: Self.botName(request.headers["x-woven-bot-name"]))
+            }
             if credential != nil { try await database.requireMCPCaller(callerID) }
             let current = try await database.sessionTools(callerID)
             let discovering = message.objectValue?["method"] == .string("tools/list")
-            let outside = callerID == WovenMCPCaller.outside
+            let outside = WovenMCPCaller.isAppWide(callerID)
             let allowed = Set(WovenMCPCatalog.tools.filter { tool in
                 guard let group = tool.group else { return false }
                 if outside { return current.enabled.contains(group) }
@@ -226,13 +332,8 @@ final class WovenMCPHost {
             let result = await WovenMCPServer.handle(message, contextID: contextID, allowedTools: allowed, outsideCaller: outside) { [weak self] call in
                 guard let self else { return .init(success: false, error: "Woven MCP stopped.", code: "unavailable", requestID: call.requestID) }
                 if let authorizedCredential { return await self.authorizedPerform(call, credential: authorizedCredential) }
-                // Recheck settings after suspension and before service dispatch.
-                do {
-                    let command = try WovenMatterToolCommand(call.arguments)
-                    let group = command.group ?? .notes
-                    try await self.database.requireTool(group, sessionID: WovenMCPCaller.outside)
-                    return await self.perform(call, WovenMCPCaller.outside)
-                } catch { return .init(success: false, error: error.localizedDescription, code: "tool_disabled", requestID: call.requestID) }
+                return await self.authorizedAppWidePerform(call, callerID: callerID,
+                    installation: authorizedBot?.installation, tokenHash: authorizedBot?.hash)
             }
             guard let result else { return .init(status: 202, body: Data()) }
             return try .json(result)
@@ -240,6 +341,21 @@ final class WovenMCPHost {
             return (try? .json(WovenMCPServer.error(id: rpcID, code: decodedMessage ? -32602 : -32700, message: error.localizedDescription)))
                 ?? .error("invalid_request", "The MCP request could not be decoded.", status: 400)
         }
+    }
+
+    private func authorizedAppWidePerform(_ call: WovenMatterToolRequest, callerID: String,
+                                           installation: String?, tokenHash: String?) async -> WovenMatterToolResponse {
+        do {
+            if let installation, botGrants[installation] != tokenHash {
+                return .init(success: false, error: "This bot grant was revoked.", code: "unauthorized", requestID: call.requestID)
+            }
+            let command = try WovenMatterToolCommand(call.arguments)
+            try await database.requireTool(command.group ?? .notes, sessionID: callerID)
+            if let installation, botGrants[installation] != tokenHash {
+                return .init(success: false, error: "This bot grant was revoked.", code: "unauthorized", requestID: call.requestID)
+            }
+            return await perform(call, callerID)
+        } catch { return .init(success: false, error: error.localizedDescription, code: "tool_disabled", requestID: call.requestID) }
     }
 
     private func authorizedPerform(_ call: WovenMatterToolRequest, credential: Credential) async -> WovenMatterToolResponse {
@@ -255,6 +371,8 @@ final class WovenMCPHost {
     }
 
     func stop() {
+        for dispatch in botDispatches.values { dispatch.fence.cancel() }
+        botDispatches.removeAll()
         generation = UUID(); startTask?.cancel(); startTask = nil
         server?.stop(); server = nil; endpointURL = nil
         exposureTask?.cancel(); exposureTask = nil; exposure.stop(); outsideEndpoint = nil; port = nil
@@ -262,19 +380,30 @@ final class WovenMCPHost {
     }
 
     private func issue(sessionID: String, endpoint: String) throws -> WovenMCPConnection {
-        var bytes = [UInt8](repeating: 0, count: 32)
-        guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else {
-            throw WorkspaceToolError.invalid("Woven could not create an MCP credential.")
-        }
-        let token = Data(bytes).base64EncodedString().replacingOccurrences(of: "+", with: "-")
-            .replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
+        let token = try Self.randomToken()
         let hash = Self.hash(token)
         credentials[hash] = .init(sessionID: sessionID, tokenHash: hash, lastAliveAt: Date())
         return .init(endpointURL: endpoint, bearerToken: token)
     }
 
+    private static func randomToken() throws -> String {
+        var bytes = [UInt8](repeating: 0, count: 32)
+        guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else {
+            throw WorkspaceToolError.invalid("Woven could not create an MCP credential.")
+        }
+        return Data(bytes).base64EncodedString().replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
+    }
+
+    private static func botName(_ encoded: String?) -> String {
+        let decoded = encoded.flatMap { String(decoding: $0.utf8.prefix(4_096), as: UTF8.self).removingPercentEncoding } ?? "Bot"
+        let scalars = decoded.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) && !(0x202A...0x202E).contains($0.value) && !(0x2066...0x2069).contains($0.value) }
+        let name = String(String.UnicodeScalarView(scalars.prefix(128))).trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? "Bot" : name
+    }
+
     private func save() throws {
-        let saved = SavedAccess(port: preferredPort, httpsPort: preferredHTTPSPort)
+        let saved = SavedAccess(port: preferredPort, httpsPort: preferredHTTPSPort, botGrants: botGrants)
         try JSONEncoder().encode(saved).write(to: accessFile, options: [.atomic])
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: accessFile.path)
     }

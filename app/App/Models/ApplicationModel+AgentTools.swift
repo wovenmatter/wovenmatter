@@ -13,8 +13,8 @@ struct WorkspaceToolCallerSource {
         id = conversation.id; localRuntimeKind = conversation.localRuntimeKind
         remoteWorkspaceID = conversation.remoteWorkspaceID; folderID = conversation.folderID
     }
-    init() {
-        id = WovenMCPCaller.outside; localRuntimeKind = .pi; remoteWorkspaceID = nil; folderID = nil
+    init(callerID: String = WovenMCPCaller.outside) {
+        id = callerID; localRuntimeKind = .defaultAgent; remoteWorkspaceID = nil; folderID = nil
     }
 }
 
@@ -198,7 +198,7 @@ extension ApplicationModel {
     }
 
     func toolCallerSource(_ callerID: String) async throws -> WorkspaceToolCallerSource {
-        if callerID == WovenMCPCaller.outside { return .init() }
+        if WovenMCPCaller.isAppWide(callerID) { return .init(callerID: callerID) }
         return try await .init(toolConversation(callerID))
     }
 
@@ -260,7 +260,13 @@ extension ApplicationModel {
                         "workspaceName": .string(workspace.name), "ready": .bool(remoteWorkspaces.isHarnessReady(harness.id, in: workspace))])
                 }
             }
-            let rows = local + remote
+            let destinations = try await database.pairedAgentWorkspaces()
+            let paired: [GatewayJSONValue] = try await database.dashboardAgents().sorted { $0.id.uuidString < $1.id.uuidString }.compactMap { agent in
+                guard let workspace = destinations[agent.id], workspace.kind == .mac else { return nil }
+                return .object(["harness": .string(agent.runtimeKind.rawValue), "workspace": .string(workspace.id),
+                    "workspaceName": .string(workspace.name), "ready": .bool(workspace.retainedHistory != true && agent.runtimeStatus == .ready)])
+            }
+            let rows = local + remote + paired
             let offset = try command.integer("offset", default: 0, range: 0...(Int.max - 1))
             let limit = try command.integer("limit", default: 100, range: 1...200)
             let page = Array(rows.dropFirst(offset).prefix(limit))
@@ -300,6 +306,9 @@ extension ApplicationModel {
             }
             let dispatchFence = self.beginAgentDispatch(conversationID: id)
             defer { self.finishAgentDispatch(conversationID: id, fence: dispatchFence) }
+            guard let agentTools = self.agentTools else { throw ApplicationModelError.dashboardStoreUnavailable }
+            let botDispatch = try agentTools.trackBotDispatch(callerID: source.id, fence: dispatchFence)
+            defer { agentTools.finishBotDispatch(botDispatch) }
             // Completed delivery receipts must replay before admission: unrelated
             // running sessions cannot turn a successful creation into at_capacity.
             if reservation.objectValue?["status"]?.stringValue == "ready",
@@ -308,7 +317,6 @@ extension ApplicationModel {
                     requestID: request.requestID, kind: .created, purpose: purpose)
                 return try await self.dispatchToolDelivery(delivery, dispatchFence: dispatchFence)
             }
-            guard let agentTools = self.agentTools else { throw ApplicationModelError.dashboardStoreUnavailable }
             let admission = self.toolSessionAdmission.begin(id, running: self.runningToolSessionIDs,
                 limit: agentTools.settings.maximumRunningSessions)
             if admission == .atCapacity {
@@ -334,7 +342,7 @@ extension ApplicationModel {
                     let alreadyConfigured = reservation.objectValue?["configuration_applied"]?.intValue == 1
                     try self.captureToolSessionSelections(id: id, configuration: configuration, alreadyConfigured: alreadyConfigured)
                     let remoteTarget: RemoteHarnessChatTarget?
-                    if let workspaceID = configuration.workspaceID {
+                    if configuration.pairedAgentID == nil, let workspaceID = configuration.workspaceID {
                         guard let workspace = self.remoteWorkspaces.configuration(id: workspaceID),
                               let harness = self.remoteWorkspaces.harnesses[workspaceID]?.first(where: { $0.id == runtime }),
                               self.remoteWorkspaces.isHarnessReady(runtime, in: workspace) else {
@@ -346,7 +354,14 @@ extension ApplicationModel {
                         try dispatchFence.check()
                         let directory = configuration.nativeWorkingDirectory.map { URL(fileURLWithPath: $0) }
                         let created: String?
-                        if let remoteTarget {
+                        if let agentID = configuration.pairedAgentID {
+                            try await store.database.requireTool(.sessions, sessionID: source.id)
+                            created = try await self.createPairedMacSession(agentID: agentID, conversationID: uuid, folderID: configuration.folderID,
+                                beforeDispatch: {
+                                    try await store.database.requireTool(.sessions, sessionID: source.id)
+                                    try dispatchFence.check()
+                                })
+                        } else if let remoteTarget {
                             created = await self.createRemoteACPSession(target: remoteTarget, requestedConversationID: uuid,
                                 nativeWorkingDirectory: directory, initialTitle: configuration.title, nativeWorkspaceID: configuration.nativeWorkspaceID, folderID: configuration.folderID)
                         } else {
@@ -357,7 +372,10 @@ extension ApplicationModel {
                     }
                     let target = try await self.toolConversation(id)
                     try dispatchFence.check()
-                    guard target.localRuntimeKind == runtime, target.remoteWorkspaceID == configuration.workspaceID else {
+                    let matches: Bool
+                    if let paired = configuration.pairedAgentID { matches = target.agentID == paired.uuidString.lowercased() }
+                    else { matches = target.localRuntimeKind == runtime && target.remoteWorkspaceID == configuration.workspaceID }
+                    guard matches else {
                         throw WorkspaceToolError.invalid("The saved session does not match this creation request's destination.")
                     }
                     try await store.database.requireTool(.sessions, sessionID: source.id)
@@ -368,6 +386,19 @@ extension ApplicationModel {
                     try dispatchFence.check()
                     if !alreadyConfigured {
                         try dispatchFence.check()
+                        if configuration.pairedAgentID != nil {
+                            let client = try self.centralExecutionClient()
+                            let authorize: @MainActor () async throws -> Void = {
+                                try await store.database.requireTool(.sessions, sessionID: source.id)
+                                try dispatchFence.check()
+                            }
+                            _ = try await client.perform(conversationID: id,
+                                action: .conversation(id: id, action: "rename", title: configuration.title, folderID: nil), beforeDispatch: authorize)
+                            if configuration.model != nil || configuration.thinking != nil {
+                                _ = try await client.perform(conversationID: id,
+                                    action: .configureSession(id: id, model: configuration.model, thinking: configuration.thinking, permission: nil), beforeDispatch: authorize)
+                            }
+                        }
                         try await store.database.markToolSessionCreationConfigured(requestID: request.requestID, sourceID: source.id)
                     }
                     try dispatchFence.check()
@@ -402,18 +433,33 @@ extension ApplicationModel {
         if let raw = command.options["harness"], AgentRuntimeKind(rawValue: raw) == nil {
             throw WorkspaceToolError.invalid("Unknown harness.")
         }
-        guard let runtime = command.options["harness"].flatMap(AgentRuntimeKind.init(rawValue:)) ?? source.localRuntimeKind ?? (source.id == WovenMCPCaller.outside ? .pi : nil) else {
+        guard let runtime = command.options["harness"].flatMap(AgentRuntimeKind.init(rawValue:)) ?? source.localRuntimeKind ?? (WovenMCPCaller.isAppWide(source.id) ? .defaultAgent : nil) else {
             throw WorkspaceToolError.invalid("Choose a configured harness.")
         }
         guard AgentRuntimeKind.allCases.contains(runtime) else { throw WorkspaceToolError.invalid("This harness has been retired.") }
         let workspace = command.options["workspace"] ?? source.remoteWorkspaceID?.uuidString.lowercased() ?? "local"
+        guard let store = dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
+        let pairedWorkspaces = try await store.database.pairedAgentWorkspaces()
+        let pairedAgents = try await store.database.dashboardAgents().sorted { $0.id.uuidString < $1.id.uuidString }
+        if let agent = pairedAgents.first(where: { agent in
+            pairedWorkspaces[agent.id].map { $0.id == workspace && $0.kind == .mac && $0.retainedHistory != true } == true && agent.runtimeKind == runtime
+        }), let destination = pairedWorkspaces[agent.id] {
+            guard command.options["directory"] == nil else {
+                throw WorkspaceToolError.invalid("Paired Macs use their owner's working directory. Choose a folder on that Mac instead.")
+            }
+            let folder = command.options["folder"].flatMap { ["all", "ungrouped"].contains($0) ? nil : $0 }
+            let settings = try await store.database.toolSettings()
+            return .init(runtimeKind: runtime, pairedAgentID: agent.id, folderID: folder,
+                title: title, model: command.options["model"], thinking: command.options["thinking"],
+                usesProductPermissionDefault: true, selectionWorkspace: destination.id,
+                tools: .init(enabled: settings.enabledByDefault, executorProfiles: settings.executor?.defaultProfiles ?? []))
+        }
         let workspaceID: UUID?
         if workspace == "local" { workspaceID = source.remoteWorkspaceID }
         else {
             guard let id = UUID(uuidString: workspace) else { throw WorkspaceToolError.invalid("The destination workspace is unavailable.") }
             workspaceID = id
         }
-        guard let store = dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
         let federatedSource = try await store.database.companionExecutionOwner(conversationID: source.id) != nil
         if federatedSource, command.options["workspace"] == nil || command.options["harness"] == nil {
             throw WorkspaceToolError.invalid("Choose an explicit --workspace and --harness when creating a central session from another device.")
@@ -447,10 +493,17 @@ extension ApplicationModel {
                               admissionDecision: WorkspaceSessionAdmission.Decision? = nil,
                               dispatchFence suppliedFence: AgentDispatchFence? = nil) async throws -> WovenMatterToolResponse {
         guard let database = dashboardStore?.database else { throw CancellationError() }
+        if WovenMCPCaller.parseBot(delivery.targetID) != nil {
+            guard let agentTools else { throw ApplicationModelError.dashboardStoreUnavailable }
+            _ = try await agentTools.deliverBotNotification(delivery)
+            return try await toolDeliveryResponse(database.toolDelivery(id: delivery.id) ?? delivery)
+        }
         // Claiming and loading the target are part of preparation. Stop owns
         // the same fence across these waits and any earlier reserved creation.
         let dispatchFence = suppliedFence ?? beginAgentDispatch(conversationID: delivery.targetID)
         defer { if suppliedFence == nil { finishAgentDispatch(conversationID: delivery.targetID, fence: dispatchFence) } }
+        let botDispatch = try agentTools?.trackBotDispatch(callerID: delivery.sourceID, fence: dispatchFence)
+        defer { agentTools?.finishBotDispatch(botDispatch) }
         guard let claimed = try await database.claimToolDelivery(id: delivery.id) else {
             return try await toolDeliveryResponse(database.toolDelivery(id: delivery.id) ?? delivery)
         }

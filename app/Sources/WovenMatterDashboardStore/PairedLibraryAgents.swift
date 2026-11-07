@@ -39,6 +39,7 @@ extension WorkspaceDatabase {
         defer { sqlite3_finalize(query) }
         try connection.bind(id, at: 1, to: query); try connection.bind(workspace.id, at: 2, to: query)
         try connection.bind(JSONEncoder().encode(value), at: 3, to: query); try connection.stepDone(query)
+        try connection.adoptReservedSessionOriginUnlocked(id)
         try connection.executeUnlocked("UPDATE paired_library_clock SET applying=0")
       }
     }

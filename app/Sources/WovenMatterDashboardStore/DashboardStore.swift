@@ -291,7 +291,7 @@ public actor DashboardStore {
     // cooperative executor, and only the staging URL crosses backend IPC.
     do {
       try await WorkspaceExportFileIO.perform {
-        try data.write(to: stagedURL, options: [.atomic, .completeFileProtection])
+        try data.write(to: stagedURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: stagedURL.path)
       }
     } catch {

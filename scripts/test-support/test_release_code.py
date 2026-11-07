@@ -1,4 +1,5 @@
 """Offline checks that signing preflight discovers every native package."""
+import gzip
 import importlib.util
 import os
 from pathlib import Path
@@ -47,6 +48,10 @@ else:
         native.parent.mkdir(parents=True)
         native.write_bytes(bytes.fromhex('cffaedfe') + b'fixture')
         (bundle / 'plain-text').write_text('Not executable code')
+        pi_bot = bundle / 'Contents/Resources/pi-bot'
+        pi_bot.mkdir(parents=True)
+        # Compressed source bundles stay opaque to Mach-O signing enumeration.
+        (pi_bot / 'pi-bot-bundle.tar.gz').write_bytes(gzip.compress(bytes.fromhex('cffaedfe') + b'fixture'))
         (bundle / 'alias').symlink_to(native)
         module.validate(bundle)
         for name, message in (('unsigned', 'missing Developer ID'), ('no-timestamp', 'missing secure timestamp'),
