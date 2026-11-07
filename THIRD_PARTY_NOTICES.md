@@ -59,7 +59,7 @@ Bundled dependencies retain their own upstream licenses and notices.
 
 ## Lucide
 
-The dashboard icon assets are derived from `lucide-static` 1.69.0.
+The dashboard icon assets are derived from `lucide-static` 1.70.0.
 Published tarball integrity and per-asset hashes are recorded in
 `docs/assets/lucide-provenance.json`.
 
@@ -308,7 +308,7 @@ POSSIBILITY OF SUCH DAMAGE.
 
 ## Remote workspace tools
 
-The remote workspace image builds unmodified OpenSSH Portable 10.6p1 client
+The remote workspace image builds unmodified OpenSSH Portable 10.6p2 client
 sources from [OpenSSH](https://www.openssh.org/portable.html). It retains the
 upstream `LICENCE` at `/usr/local/share/licenses/openssh/LICENCE` in the image;
 that file contains the component copyright, permission, and disclaimer notices.
