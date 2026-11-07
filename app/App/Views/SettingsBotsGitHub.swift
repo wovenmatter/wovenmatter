@@ -47,7 +47,7 @@ struct BotSettingsGitHub: View {
             }
             if pasting {
                 BotSettingsTextEditor(text: $privateKey, label: "Private key",
-                    placeholder: "-----BEGIN OPENSSH PRIVATE KEY-----", height: 150, monospaced: true)
+                    placeholder: "Paste an OpenSSH private key", height: 150, monospaced: true)
                     .autocorrectionDisabled().privacySensitive()
                 HStack {
                     Button("Save private key") {
