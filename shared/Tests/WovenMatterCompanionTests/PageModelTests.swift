@@ -32,6 +32,18 @@ struct PageModelTests {
     #expect(next.document.blocks.first { $0.id == "a" }?.plainText == "Theirs")
     #expect(next.document.blocks.first { $0.id == copy }?.plainText == "Mine, continued")
     #expect(next.document.boardItems?[copy]?.review == .needed)
+    var current = next.document
+    var previous = continued
+    for value in ["Third save", "Fourth save", "Fifth save"] {
+      let local = page([text("a", value)])
+      let merged = try NoteDocument.mergePage(base: previous, local: local, remote: current)
+      #expect(merged.conflictCopyIDs.isEmpty)
+      #expect(merged.document.blocks.count == 2)
+      #expect(merged.document.blocks.first { $0.id == copy }?.plainText == value)
+      #expect(NoteDocument.pageConflictComponentRemaps(submitted: local, stored: merged.document)["a"] == copy)
+      previous = local
+      current = merged.document
+    }
   }
 
   // MARK: Materialization

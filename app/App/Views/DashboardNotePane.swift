@@ -328,6 +328,7 @@ struct DashboardNotePane: View {
         .disabled(model.noteActionIDs.contains(note.id))
         .background(theme.palette.workspace)
         .disabled(model.noteEditingSuspended)
+        .allowsHitTesting(!model.noteEditingSuspended)
         .sheet(isPresented: $showsVersionHistory) { WorkspaceNoteRecovery(model: model, noteID: note.id) }
         .onAppear {
             model.prepareNoteDraft(note)

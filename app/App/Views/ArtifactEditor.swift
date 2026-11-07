@@ -226,7 +226,10 @@ struct DashboardHTMLArtifactView: NSViewRepresentable {
         let coordinator = context.coordinator
         coordinator.parent = self
         let emptyAppearance = html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? colorScheme : nil
-        let editable = isEnabled && saveState != nil
+        // A transient lifecycle pause must not reload the document: accepted
+        // input and its retry state still belong to this WebView generation.
+        // The model closes write admission while editing is suspended.
+        let editable = saveState != nil
         if coordinator.html != html || coordinator.emptyAppearance != emptyAppearance || coordinator.editable != editable {
             coordinator.html = html
             coordinator.emptyAppearance = emptyAppearance

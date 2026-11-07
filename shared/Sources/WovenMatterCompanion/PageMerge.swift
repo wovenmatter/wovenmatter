@@ -34,11 +34,30 @@ public extension NoteDocument {
     let previous = PageMerger.Snapshot(submitted.materializedPage())
     let current = PageMerger.Snapshot(stored.materializedPage())
     var result: [String: String] = [:]
+    var used = Set<String>()
     for block in previous.document.blocks where !previous.isSection(block.id) {
       guard let content = previous.content(block.id), current.has(block.id),
             current.content(block.id) != content else { continue }
       let copyID = "conflict-" + PageMerger.hash(block.id, content)
-      if current.has(copyID), !previous.has(copyID) { result[block.id] = copyID }
+      if current.has(copyID), !previous.has(copyID), used.insert(copyID).inserted {
+        result[block.id] = copyID
+      } else {
+        // A prior chained save can have edited the copy without renaming it.
+        // Recognize that exact retained content, never arbitrary matching text.
+        let candidates = current.document.blocks.filter { candidate in
+          guard candidate.id.hasPrefix("conflict-"), !previous.has(candidate.id), !used.contains(candidate.id),
+                let retained = current.content(candidate.id),
+                retained.block == PageMerger.copyBlock(content.block, id: candidate.id),
+                retained.title == content.title, retained.assetID == content.assetID,
+                retained.task == content.task, retained.role == content.role,
+                retained.sessions == content.sessions else { return false }
+          return true
+        }
+        if candidates.count == 1, let candidate = candidates.first {
+          result[block.id] = candidate.id
+          used.insert(candidate.id)
+        }
+      }
     }
     return result
   }
