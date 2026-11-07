@@ -105,7 +105,7 @@ final class BotConversationController {
         guard let client = bots?.connectedClient else { return }
         openGeneration += 1
         let generation = openGeneration
-        isOpening = true
+        isOpening = false
         duringOpen = []
         isSubscribed = false
         loading = true
@@ -113,6 +113,9 @@ final class BotConversationController {
         let key = key
         enqueue { [weak self] in
             guard let self, generation == openGeneration else { return }
+            // Only now: until the previous close is done, its subscription can still send events.
+            isOpening = true
+            duringOpen = []
             do {
                 let snapshot = try await client.openConversation(botID: key.botID, conversationID: key.conversationID)
                 guard generation == openGeneration else {
@@ -132,7 +135,7 @@ final class BotConversationController {
                 state = PiBotConversationState.opened(snapshot: snapshot, events: streamed)
                 loading = false
                 for event in streamed { reportSideEffects(of: event) }
-                await bots?.loadThreads(botID: key.botID)
+                Task { [weak bots] in await bots?.loadThreads(botID: key.botID) }
             } catch {
                 guard generation == openGeneration else { return }
                 isOpening = false

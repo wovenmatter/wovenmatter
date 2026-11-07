@@ -25,6 +25,7 @@ final class BotsModel {
     @ObservationIgnored private var eventTask: Task<Void, Never>?
     @ObservationIgnored private var loadedThreads = Set<String>()
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
+    @ObservationIgnored private var reloads = 0
     @ObservationIgnored private var conversations: [BotConversationKey: BotConversationController] = [:]
     @ObservationIgnored private var loginObservers: [String: (PiBotLoginEvent) -> Void] = [:]
     @ObservationIgnored private var loginBacklog = PiBotLoginBacklog()
@@ -199,21 +200,24 @@ final class BotsModel {
 
     func reload() async {
         guard let client else { return }
+        reloads += 1
+        let current = reloads
         do {
             let latest = try await client.bots()
             let latestGroups = capabilities.contains("groups") ? try await client.groups() : []
-            guard client === self.client else { return }
+            // A reload that finishes late must not undo a newer one.
+            guard client === self.client, current == reloads else { return }
             bots = latest
             hasLoadedBots = true
-            await refreshOnboarding()
             groups = latestGroups
             loadError = nil
             let present = Set(latest.map(\.id))
             threadsByBot = threadsByBot.filter { present.contains($0.key) }
             loadedThreads.formIntersection(present)
+            await refreshOnboarding()
             for botID in loadedThreads { await loadThreads(botID: botID) }
         } catch {
-            guard client === self.client else { return }
+            guard client === self.client, current == reloads else { return }
             loadError = error.localizedDescription
         }
     }

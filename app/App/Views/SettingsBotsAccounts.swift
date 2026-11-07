@@ -51,6 +51,7 @@ struct BotSettingsAccountsList: View {
     var onChanged: () async -> Void = {}
     @State private var accounts: [PiBotAccount]?
     @State private var login: BotSettingsLogin?
+    @State private var visible = true
 
     var body: some View {
         if intro { SettingsNote("Keys are write-only: only their last four characters are ever shown.") }
@@ -82,8 +83,12 @@ struct BotSettingsAccountsList: View {
                 login?.progress.apply(.error("Connection lost. Start sign-in again."))
             }
         }
+        .onAppear { visible = true }
         // A sign-in nobody can see any more shouldn't keep running on the server.
-        .onDisappear { abandonLogin() }
+        .onDisappear {
+            visible = false
+            abandonLogin()
+        }
     }
 
     private func refresh(_ client: PiBotClient) async throws {
@@ -115,6 +120,10 @@ struct BotSettingsAccountsList: View {
         Task {
             await state.run { client in
                 let id = try await client.startLogin(accountID: account.id, method: method)
+                guard visible else {
+                    try? await client.cancelLogin(loginID: id)
+                    return
+                }
                 abandonLogin()
                 login = BotSettingsLogin(id: id, account: account, method: method)
                 state.bots.observeLogin(id) { event in

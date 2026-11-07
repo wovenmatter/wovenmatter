@@ -126,7 +126,9 @@ struct BotSettingsProfiles: View {
                     Button("Save") {
                         Task {
                             await state.run { client in
-                                self.catalog?.roles = try await client.setRoles(roles)
+                                let saved = try await client.setRoles(roles)
+                                refreshes += 1 // Older reads still hold the previous roles.
+                                self.catalog?.roles = saved
                                 titleDraft = nil; state.configSaved()
                             }
                         }

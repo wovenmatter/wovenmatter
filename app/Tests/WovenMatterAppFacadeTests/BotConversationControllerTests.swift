@@ -316,6 +316,21 @@ struct BotConversationControllerTests {
         try await eventually("retry") { controller.isReady }
     }
 
+    @Test func theOldSubscriptionsEventsDontJoinAReopen() async throws {
+        let server = try await ScriptedPiBot()
+        openMain(server, running: true)
+        let bots = try await connected(server)
+        let controller = bots.conversation(botID: "a", conversationID: nil)
+        controller.attach()
+        try await eventually("ready") { controller.isReady }
+        controller.detach()
+        controller.attach()
+        // Still ahead of the queued close and open: it belongs to the old subscription.
+        controller.receive(conversationID: 5, .delta("old"))
+        try await eventually("reopen") { controller.isReady }
+        #expect(controller.state.streaming == nil)
+    }
+
     @Test func opensAndClosesRunInOrder() async throws {
         let server = try await ScriptedPiBot()
         openMain(server)
