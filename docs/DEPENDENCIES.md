@@ -81,7 +81,7 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   repository (tested minimum 2.103.3), with the published keyring SHA-256 checked
   before trusting it. Debian's older CLI retains CVE-2026-48501. Maintenance
   reviews both the floor and signing-key record against upstream.
-  OpenSSH clients are built from the current 10.6p1 source in a separate image
+  OpenSSH clients are built from the current 10.6p2 source in a separate image
   stage: the Dockerfile records the exact release/SHA-256 and verifies its
   detached signature against the upstream release-key fingerprint. This
   security exception replaces Debian's client, which retains CVE-2026-60002
@@ -107,7 +107,7 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   The workspace image retains the same reviewed current HTTP dispatcher across
   Mac and Linux tooling, with tuple-header redirect credential stripping covered
   by provider-free fixtures. It applies the independently locked security selection
-  in `remote/npm-runtime` (tested undici 8.12.4, ip-address 10.7.6 and minimatch 11.0.4), addressing CVE-2026-111997,
+  in `remote/npm-runtime` (tested undici 8.12.4, ip-address 10.7.6 and minimatch 11.0.5), addressing CVE-2026-111997,
   GHSA-xjj6-f33q-929c and the
   related denial-of-service advisories. npm ignores overrides for its bundled
   dependencies, so this replacement is explicit in the image definition.
@@ -120,13 +120,20 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   The Executor image consumes the same npm runtime lock, plus
   `remote/executor-runtime/package-lock.json` for sharp 0.35.5 and its native
   libvips packages. This exact overlay is required because the newest supported
-  Executor V2 package embeds affected sharp 0.35.4. The image verifies the
+  Executor V2 package embeds affected sharp 0.35.4. Since beta.37 the npm
+  package is a launcher that downloads its separately checksummed native archive.
+  Mac installation materializes that archive in a private candidate generation
+  before retiring the active runtime, verifies its executable version, and retains
+  the archive digest with provenance. It never uses or prunes the user's shared
+  launcher cache. The Linux image materializes the same selected archive during
+  construction, then repairs its `native/runtime/node_modules` tree and starts
+  the prepared native executable directly. The image verifies the
   replacement loads, then runs the unchanged provider-free V2 behavior suite.
   Executor also selects only the ncurses, acl, and util-linux source repairs it
   needs; do not install the workspace browser-library repairs into that smaller
   image without a runtime dependency.
   npm also vendors minimatch 10.2.5, affected by GHSA-g3hv-75wg-m249. The
-  same graph replaces minimatch with 11.0.4 and its locked dependency closure.
+  same graph replaces minimatch with 11.0.5 and its locked dependency closure.
   Mac, native Linux and both container paths copy and verify every graph module,
   including scoped dependencies; npm's actual install/ci behavior and bounded
   glob-pattern fixtures validate this major migration. Keep this replacement
@@ -156,10 +163,13 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   and notices. Builds never run an upstream installer or update the runtime.
   Maintenance checks Cua's non-nightly release channel, including new majors and
   0.x minors, and refreshes every record and notice together. Upstream currently
-  marks even its numbered driver releases as GitHub prereleases; 0.38.0 is the
-  numbered published driver selection, rather than a nightly build.
+  marks even its numbered driver releases as GitHub prereleases to keep the
+  monorepo Latest pointer separate. Its release notes identify plain SemVer
+  driver releases as stable; the current selection is 0.40.6.
   The driver is spawned directly by the signed GUI, without a Node SDK or
-  additional native libraries. Provider-free tests cover the MCP contract,
+  additional native libraries. Woven negotiates MCP 2025-06-18 and refuses an
+  unsupported initialize response before dispatching desktop tools.
+  Provider-free tests cover the MCP contract,
   authorization, lifecycle, cancellation, and packaging integrity. The opt-in
   `scripts/test-cua-desktop.sh` verifies actual input and capture through Woven MCP
   against a disposable native fixture, including background focus preservation.
@@ -185,20 +195,29 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   peer validation. Real local WebSocket streaming/cancellation fixtures and the
   Chord/Durable suites validate this selection; review it on each Chord refresh.
   Pi AI 1.5.0 also pins older provider clients. Consumer-scoped minimum-only
-  overrides select the tested OpenAI 7.51.0, Anthropic 1.5.0, Google GenAI 2.32.0,
-  Bedrock Runtime 3.1162.0 and Smithy Node HTTP handler 4.14.2 releases without
+  overrides select the tested OpenAI 7.53.0, Anthropic 1.6.0, Google GenAI 3.0.0,
+  Bedrock Runtime and token providers 3.1164.0, and Smithy Node HTTP handler
+  4.14.2 releases without
   changing vendor manifests. Keeping these clients current is required for
   provider API and transport compatibility, including Anthropic's 2026-10-21
   Messages API. Maintenance reviews each upstream requirement and removes an
   override when Pi itself selects an equal or newer client. The committed lock
   records the effective graph; Settings SDK generations retain these overrides.
+  The token-provider floor also applies below the SSO credential provider, whose
+  current upstream package still pins the previous patch.
   Provider-free loopback fixtures exercise Pi's actual SDK clients, request
   serialization, streaming text/tools, usage and cancellation. They do not
   establish authenticated provider acceptance. The iOS bundle excludes these
   network clients; its generated provenance still follows the shared lock.
+  GenAI 3 requires Node 22 or newer and defaults the Gemini Developer API to
+  `v1`. The recorded Node 26 satisfies that requirement. Pi supplies each model's
+  complete versioned base URL with an explicit empty SDK API version, preserving
+  existing `v1beta` models and custom endpoints even when the new
+  `GOOGLE_GENAI_API_VERSION` environment variable is set. Loopback fixtures cover
+  exact versioned paths, streaming tools/usage, and cancellation with GenAI 3.
   Pi Coding Agent 1.5.0 now selects minimatch 11.0.3, which includes the
   GHSA-g3hv-75wg-m249 repair. The consumer-scoped floor advances to the current
-  `>=11.0.4` patch without changing the named matching API. Provider-free
+  `>=11.0.5` patch without changing the named matching API. Provider-free
   model-scope matching and bounded adversarial-pattern fixtures validate this
   selection; review the override on every refresh and remove it when Pi itself
   selects the current tested release.
@@ -241,12 +260,12 @@ an older configured channel. OpenCode and Executor retain the documented v2 API 
 maintenance must review a newer stable API major and implement its migration.
 
 `harnesses/catalog.json` records tested connector and engine minimums separately:
-Codex ACP 2.5.0 with Codex 0.166.0, and Claude ACP 0.100.0 with Claude SDK 0.3.318
-(native Claude Code 2.1.318). The standalone Codex and Claude sign-in CLIs use their
+Codex ACP 2.5.0 with Codex 0.167.0, and Claude ACP 0.101.0 with Claude SDK 0.3.319
+(native Claude Code 2.1.319). The standalone Codex and Claude sign-in CLIs use their
 official current stable release channels. Codex ACP's `^0.165.0` engine range
 otherwise keeps its chat engine behind; its ACP TypeScript SDK also retains 2.1
-through a restrictive range. Claude ACP 0.100.0 pins SDK 0.3.316; the consumer-scoped override raises
-its engine to 0.3.318 without changing the connector. Transcript-write loss
+through a restrictive range. Claude ACP 0.101.0 pins SDK 0.3.318; the consumer-scoped
+override selects 0.3.319 independently so engine-only updates remain eligible. Transcript-write loss
 invalidates the native resume marker and refuses tool dispatch/continuation commits;
 config-only write loss leaves a valid response intact. Provider-free persistence
 fixtures verify canonical replay after recovery. The connector selects protocol SDK
