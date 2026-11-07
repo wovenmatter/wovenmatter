@@ -107,10 +107,13 @@ final class WovenCuaRuntime {
         let client = try WovenCuaMCPProcess(executable: executable,
             arguments: ["mcp", "--embedded", "--socket", socket.path], environment: environment(root))
         clients[callerID] = client
-        _ = try await client.call(method: "initialize", params: .object([
-            "protocolVersion": .string("2025-03-26"), "capabilities": .object([:]),
+        let initialized = try await client.call(method: "initialize", params: .object([
+            "protocolVersion": .string("2025-06-18"), "capabilities": .object([:]),
             "clientInfo": .object(["name": .string("woven"), "version": .string("1")])
         ]))
+        guard initialized.objectValue?["protocolVersion"]?.stringValue == "2025-06-18" else {
+            throw WorkspaceToolError.invalid("Cua Driver selected an unsupported MCP protocol.")
+        }
         try client.notify(method: "notifications/initialized", params: .object([:]))
         return client
     }

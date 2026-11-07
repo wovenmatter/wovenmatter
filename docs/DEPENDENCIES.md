@@ -163,10 +163,13 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   and notices. Builds never run an upstream installer or update the runtime.
   Maintenance checks Cua's non-nightly release channel, including new majors and
   0.x minors, and refreshes every record and notice together. Upstream currently
-  marks even its numbered driver releases as GitHub prereleases; 0.38.0 is the
-  numbered published driver selection, rather than a nightly build.
+  marks even its numbered driver releases as GitHub prereleases to keep the
+  monorepo Latest pointer separate. Its release notes identify plain SemVer
+  driver releases as stable; the current selection is 0.40.6.
   The driver is spawned directly by the signed GUI, without a Node SDK or
-  additional native libraries. Provider-free tests cover the MCP contract,
+  additional native libraries. Woven negotiates MCP 2025-06-18 and refuses an
+  unsupported initialize response before dispatching desktop tools.
+  Provider-free tests cover the MCP contract,
   authorization, lifecycle, cancellation, and packaging integrity. The opt-in
   `scripts/test-cua-desktop.sh` verifies actual input and capture through Woven MCP
   against a disposable native fixture, including background focus preservation.
@@ -193,7 +196,7 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   Chord/Durable suites validate this selection; review it on each Chord refresh.
   Pi AI 1.5.0 also pins older provider clients. Consumer-scoped minimum-only
   overrides select the tested OpenAI 7.53.0, Anthropic 1.6.0, Google GenAI 3.0.0,
-  Bedrock Runtime and token providers 3.1163.0, and Smithy Node HTTP handler
+  Bedrock Runtime and token providers 3.1164.0, and Smithy Node HTTP handler
   4.14.2 releases without
   changing vendor manifests. Keeping these clients current is required for
   provider API and transport compatibility, including Anthropic's 2026-10-21
