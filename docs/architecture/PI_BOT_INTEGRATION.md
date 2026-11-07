@@ -79,6 +79,25 @@ shared VM holds 4 to 9 GB whether or not a bot is working, which a 16 GB Mac can
 they have touched until they stop, so Pi Bot starts them on first use and stops them when idle;
 see Pi Bot's `docs/environments.md`. Docker stays the choice on Linux, where it needs no VM.
 
+### On a 16 GB Mac
+
+With no 16 GB Mac to test on, another process held 16 GiB of incompressible memory on that Mini, so
+macOS had what a 16 GB Mac would have. Each bot's VM was limited to 4 GB, the default for 16 GB, and
+ran an npm install, a TypeScript compile, a 2.5 GiB allocation and Chromium at the same time.
+
+| | Three bots | Five bots |
+| --- | --- | --- |
+| Time for all of them | 15 s | 16 s |
+| Peak memory for bots and runtime | 11.3 GB | 17.2 GB |
+| Memory pressure | One warning at the start, then normal | Normal |
+
+The five-bot peak came partly after the held memory was released, so three busy bots at once is the
+tested load, not five. Once idle, the three bots' memory fell to 127 MB, and the next tool call took
+1.3 seconds including the VM's start. On this Mac the app, its background server, Pi Bot's server and
+Apple's helpers held about 520 MB together, with no bot working.
+
+### Installing it
+
 Woven Matter installs Apple's signed package with no administrator, after checking its SHA-256 and
 that Apple signed it. It doesn't touch an installed `container`, which is used as it is. Otherwise
 the copy goes in `~/Library/Application Support/Woven Matter Pi Bot/runtime`, outside any one
