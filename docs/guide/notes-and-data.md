@@ -45,6 +45,10 @@ calculators, and visuals; a data connection is optional. Each asset is saved in
 WovenMatter's SQLite database. You can take and organize notes without connecting
 an agent.
 
+An Artifact connected to live data is a **Live Artifact**. It runs inside Woven
+and refreshes through its data links. Choose **Artifact** to create one; Live is
+a description of its data connection, not a separate option in the picker.
+
 Keep up to four assets open in the shared tab strip. Tabs stay open when you
 switch conversations. Closing a note tab keeps the saved note; hiding the asset
 pane keeps its tabs. Open tabs are not restored after quitting the app.

@@ -61,6 +61,10 @@ are interactive HTML artifacts built on live data: visuals, calculators,
 interactive explanations, dashboards, and small tools authored with inline
 CSS/JavaScript. Data connections are optional; linked query results arrive as
 `window.wovenMatterData` and refresh through the existing database-link workflow.
+A data-connected Artifact can be described as a **Live Artifact**, such as a
+dashboard that reflects changing records. **Artifact** remains the single
+creation option; Live describes its connection to data. The experience runs
+inside Woven and does not require publication as a website.
 Artifacts preserve the existing isolated renderer: no network, blocked navigation,
 nonpersistent web storage, and no script bridge that can edit app data.
 JavaScript's transient state is not Board data and is not synchronized.

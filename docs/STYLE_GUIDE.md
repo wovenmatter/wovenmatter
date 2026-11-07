@@ -196,6 +196,9 @@ when an intentional design change is accepted.
   saved-output collection **Saved Assets**. Artifacts are interactive HTML
   artifacts built on live data; data connections are optional. The Assets sidebar
   filters these types. Preserve the existing HTML sandbox.
+  Describe an Artifact connected to live data as a **Live Artifact**. Keep
+  **Artifact** as the single creation option; Live is a description of the data
+  connection, not another asset type. These experiences run inside Woven.
 - **Boards:** keep purpose, task completion and attention above the surface.
   Task details include state, assignment, outcome, review, instructions and linked
   chats; assignment is a label and never starts execution. Use the existing
