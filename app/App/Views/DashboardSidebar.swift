@@ -1466,7 +1466,7 @@ struct DashboardNewNoteDrawer: View {
 
     var body: some View {
         DashboardDrawerChrome(onClose: onClose) {
-            Text("New asset")
+            Text("New Asset")
                 .font(.system(size: 18, weight: .semibold))
         } content: {
             VStack(alignment: .leading, spacing: 10) {
@@ -1481,8 +1481,8 @@ struct DashboardNewNoteDrawer: View {
                     kind: .spreadsheet
                 )
                 artifactButton(
-                    "Page",
-                    detail: "Interactive content, dashboards, and visuals",
+                    "Artifact",
+                    detail: "Interactive HTML artifacts built on live data",
                     icon: .panelTop,
                     kind: .html
                 )

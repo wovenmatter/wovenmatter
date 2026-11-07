@@ -13,7 +13,7 @@ enum CompanionFederationAPI {
         && (workspace.executionDeviceID == nil || workspace.executionDeviceID == device.id)
     }
     func rejectedRelay() -> CompanionHTTPResponse {
-      .error("wrong_owner", "This client may publish only its own on-device history and saved artifacts.", status: 403)
+      .error("wrong_owner", "This client may publish only its own on-device history and saved assets.", status: 403)
     }
     if request.method == "GET" {
       switch path {

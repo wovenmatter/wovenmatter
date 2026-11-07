@@ -191,9 +191,11 @@ when an intentional design change is accepted.
   24-point bottom gutter outside the scrolling text, without stacking additional
   editor or footer padding beneath the note. Align the count button's right
   edge with the header controls using the same 12-point side inset.
-- **Assets:** use Notes, Sheets, Pages, and Boards in user-facing creation and
-  discovery. The Assets sidebar filters these types. Pages include interactive
-  authored content, not only static visuals; preserve their existing sandbox.
+- **Assets:** use Notes, Sheets, Artifacts, and Boards in user-facing creation and
+  discovery. Label the creation picker **New Asset** and the Library's general
+  saved-output collection **Saved Assets**. Artifacts are interactive HTML
+  artifacts built on live data; data connections are optional. The Assets sidebar
+  filters these types. Preserve the existing HTML sandbox.
 - **Boards:** keep purpose, task completion and attention above the surface.
   Task details include state, assignment, outcome, review, instructions and linked
   chats; assignment is a label and never starts execution. Use the existing

@@ -40,7 +40,7 @@ enum CompanionWorkspacePublisherAPI {
       let value = try JSONDecoder().decode(CompanionArtifactCommit.self, from: request.body)
       guard try await database.companionArtifactTransfer(id: value.id)?.manifest.workspaceID == principal.workspaceID else { return .error("wrong_owner", "This artifact belongs to another workspace.", status: 403) }
       return try .json(try await database.commitCompanionArtifact(value, deviceID: principal.executionDeviceID))
-    default: return .error("not_found", "This publisher can submit workspace history and saved artifacts only.", status: 404)
+    default: return .error("not_found", "This publisher can submit workspace history and saved assets only.", status: 404)
     }
   }
 }

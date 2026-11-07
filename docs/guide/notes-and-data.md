@@ -39,9 +39,11 @@ period. Original workspace files are not deleted or edited by the Library.
 
 ## Work beside a note
 
-The **New Note** picker offers **Note**, **Spreadsheet**, and **HTML**. Each is
-saved in WovenMatter's SQLite database. You can take and organize notes without
-connecting an agent.
+The **New Asset** picker offers **Note**, **Sheet**, **Artifact**, and **Board**.
+Artifacts are interactive HTML artifacts built on live data, including dashboards,
+calculators, and visuals; a data connection is optional. Each asset is saved in
+WovenMatter's SQLite database. You can take and organize notes without connecting
+an agent.
 
 Keep up to four assets open in the shared tab strip. Tabs stay open when you
 switch conversations. Closing a note tab keeps the saved note; hiding the asset

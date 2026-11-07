@@ -32,7 +32,7 @@ public enum NoteArtifactKind: String, Codable, CaseIterable, Sendable {
     switch self {
     case .note: "Note"
     case .spreadsheet: "Sheet"
-    case .html: "Page"
+    case .html: "Artifact"
     case .canvas: "Board"
     }
   }

@@ -106,7 +106,7 @@ The composer has a Tools menu with independent groups:
 
 | Group | MCP tools and contract |
 | --- | --- |
-| Notes and managed data | `woven_notes_*`, `woven_boards_*`, `woven_databases_*`: discover, read, create and edit Notes, Sheets, Pages, Boards and workspace-owned SQLite datasets; retained asset versions |
+| Notes and managed data | `woven_notes_*`, `woven_boards_*`, `woven_databases_*`: discover, read, create and edit Notes, Sheets, Artifacts, Boards and workspace-owned SQLite datasets; retained asset versions |
 | Conversation history | `woven_history_*`: search and selectively read conversations and full observed traces |
 | Session management | `woven_sessions_*`: discover metadata, create sessions, send messages and manage coordination |
 | Goals | `woven_goals_*`: inspect and maintain the calling conversation's explicitly requested objective |
@@ -353,7 +353,7 @@ history remains readable without reintroducing its execution integration. Exclud
 coverage for older data; never invent unobserved historical frames.
 
 Use the existing workspace database with transactional migrations and bounded
-reads. Note versions cover Notes, Sheets, Pages and Boards, with before/after agent
+reads. Note versions cover Notes, Sheets, Artifacts and Boards, with before/after agent
 edits, coalesced editor checkpoints, conflict-safe restore and count/byte budgets.
 Do not version externally linked data files. Reference retention remains separate
 from event journal retention and should be described honestly.

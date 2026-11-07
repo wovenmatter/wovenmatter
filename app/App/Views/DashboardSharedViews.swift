@@ -214,7 +214,7 @@ struct DashboardNewArtifactButton: View {
                 DashboardLucideIcon(glyph: .fileText, size: 13)
                     .foregroundStyle(DashboardPalette.foreground)
                     .frame(width: 15, height: 15)
-                Text("New asset")
+                Text("New Asset")
                     .lineLimit(1)
                 Spacer()
             }
@@ -230,7 +230,7 @@ struct DashboardNewArtifactButton: View {
         }
         .buttonStyle(DashboardRailButtonStyle())
         .dashboardScrollAwareHover($hovered, token: hoverID)
-        .accessibilityLabel("Create note or artifact")
+        .accessibilityLabel("Create asset")
     }
 }
 

@@ -74,7 +74,7 @@ struct NotePane: View {
         if model.online { Button("Download document") { Task { await model.openNote(note.id) } }.buttonStyle(DashboardPrimaryButtonStyle()).padding() }
       } else if let document {
         if document.kind == .html {
-          Text("Page · read only").font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+          Text("Artifact · read only").font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
           if document.databaseLink != nil {
             LinkedArtifactPreview(model: model, note: note, tableID: nil, html: document.html)
           } else { SafeHTMLPreview(html: document.html) }

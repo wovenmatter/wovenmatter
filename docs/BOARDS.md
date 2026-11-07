@@ -1,9 +1,9 @@
 # Boards
 
 Boards are durable project spaces for tasks, reference material, recommendations,
-and work shared by a person and their agents. Create one from **New asset → Board**,
+and work shared by a person and their agents. Create one from **New Asset → Board**,
 give it a title and purpose, and open it alongside a chat. The sidebar's **Assets**
-filter finds Boards independently of Notes, Sheets, and Pages. Multiple Boards
+filter finds Boards independently of Notes, Sheets, and Artifacts. Multiple Boards
 can belong to the same folder or serve different projects.
 
 ## Working in a Board
@@ -38,7 +38,7 @@ local history so undo cannot silently replace another participant’s work.
 Restored changes are attributed to the user. Referenced assets retain their own
 editing/history controls.
 
-## Original assets and interactive Pages
+## Original assets and interactive Artifacts
 
 An **Original** badge means a card references an independent library asset by
 stable ID. Inline Note and Sheet edits update that original, including its other
@@ -52,19 +52,21 @@ New assets and bounded image imports can still be added directly to a Board.
 References cover the note-family library assets; arbitrary workspace files are
 not copied into a Board or made cross-device merely by mentioning a path.
 
-The user-facing family is **Notes, Sheets, Pages, Boards**. The saved format keeps
+The user-facing family is **Notes, Sheets, Artifacts, Boards**. The saved format keeps
 `note`, `spreadsheet`, `html`, and `canvas` and the existing placement keys, so
 existing development documents retain their content without a migration.
 
-“Sheets” is compact and matches the existing native tabular editor. “Pages”
-covers authored HTML with inline CSS/JavaScript: visuals, calculators,
-interactive explanations, dashboards, and small tools. “Visuals” would imply a
-narrower category; “Apps” would suggest network and persistent application
-capabilities the artifact renderer does not provide. Pages preserve the existing
-isolated renderer: no network, blocked navigation, nonpersistent web storage,
-and no script bridge that can edit app data. JavaScript's transient state is not
-Board data and is not synchronized. Chat visual replies remain a separate
-existing feature with their own rendering policy.
+“Sheets” is compact and matches the existing native tabular editor. “Artifacts”
+are interactive HTML artifacts built on live data: visuals, calculators,
+interactive explanations, dashboards, and small tools authored with inline
+CSS/JavaScript. Data connections are optional; linked query results arrive as
+`window.wovenMatterData` and refresh through the existing database-link workflow.
+Artifacts preserve the existing isolated renderer: no network, blocked navigation,
+nonpersistent web storage, and no script bridge that can edit app data.
+JavaScript's transient state is not Board data and is not synchronized.
+The Library calls general saved outputs **Saved Assets**, reserving **Artifacts**
+for this HTML asset type. Chat visual replies remain a separate existing feature
+with their own rendering policy.
 
 ## Woven MCP
 

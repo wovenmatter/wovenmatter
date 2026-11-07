@@ -11,8 +11,8 @@ enum DashboardHTMLArtifactDocument {
         let body = html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? """
               <main class="woven-empty">
-                <h2>Page</h2>
-                <p>Ask your agent to build an interactive page, dashboard, or visual here.</p>
+                <h2>Artifact</h2>
+                <p>Ask your agent to build an interactive HTML artifact with live data, such as a dashboard, calculator, or visual.</p>
               </main>
               """
             : html

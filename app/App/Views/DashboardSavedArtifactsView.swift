@@ -21,7 +21,7 @@ struct DashboardSavedArtifactsView: View {
     var body: some View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 14) {
-                DashboardSearchField(text: $search, prompt: "Search saved artifacts")
+                DashboardSearchField(text: $search, prompt: "Search saved assets")
                 HStack {
                     Menu {
                         Button("All workspaces") { workspaceID = nil }
@@ -33,7 +33,7 @@ struct DashboardSavedArtifactsView: View {
                             .font(.system(size: 12, weight: .medium))
                     }.menuStyle(.borderlessButton).fixedSize().accessibilityLabel("Workspaces")
                     Spacer()
-                    Text("\(filtered.count) \(filtered.count == 1 ? "artifact" : "artifacts")")
+                    Text("\(filtered.count) \(filtered.count == 1 ? "asset" : "assets")")
                         .font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground)
                     if !search.isEmpty || workspaceID != nil {
                         Button("Clear filters") { search = ""; workspaceID = nil }
@@ -53,10 +53,10 @@ struct DashboardSavedArtifactsView: View {
             } else if filtered.isEmpty {
                 DashboardConversationEmptyState(
                     icon: .libraryBigControl,
-                    title: model.items.isEmpty ? "No saved artifacts yet" : "No matching artifacts",
+                    title: model.items.isEmpty ? "No saved assets yet" : "No matching assets",
                     detail: model.items.isEmpty
                         ? "Outputs saved from your devices and workspaces will appear here."
-                        : "Adjust your workspace filter or search to find an artifact."
+                        : "Adjust your workspace filter or search to find an asset."
                 ).frame(maxHeight: .infinity)
             } else {
                 ScrollView {
@@ -116,7 +116,7 @@ private struct SavedArtifactRow: View {
     }
     private var actions: some View {
         HStack(spacing: 8) {
-            if busy { ProgressView().controlSize(.small).accessibilityLabel("Preparing saved artifact") }
+            if busy { ProgressView().controlSize(.small).accessibilityLabel("Preparing saved asset") }
             Button("Open") { Task { if let openPreview { await model.open(item, onOpenFile: openPreview) } } }
                 .buttonStyle(DashboardQuietButtonStyle()).disabled(busy)
             Button("Share") {

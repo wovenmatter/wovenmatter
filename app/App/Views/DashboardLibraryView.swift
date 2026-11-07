@@ -38,7 +38,7 @@ struct DashboardLibrarySurface: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            if collection == "Saved Artifacts" {
+            if collection == "Saved Assets" {
                 DashboardSavedArtifactsView(model: library.savedArtifacts)
             } else {
                 if let error = library.error ?? library.loadError {
@@ -113,7 +113,7 @@ struct DashboardLibrarySurface: View {
                     .menuStyle(.borderlessButton).fixedSize()
                 }
             }
-            DashboardSegmentedSelector(options: ["Messages", "Saved Artifacts"], selection: $collection) { $0 }
+            DashboardSegmentedSelector(options: ["Messages", "Saved Assets"], selection: $collection) { $0 }
                 .frame(maxWidth: 320)
             if collection == "Messages" {
                 DashboardSearchField(text: $selection.search, prompt: "Search Library")

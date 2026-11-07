@@ -236,7 +236,7 @@ struct DashboardNotePane: View {
                                 html: currentDocument.html,
                                 linkedDataJSON: linkedDataJSON
                             )
-                            .accessibilityLabel("Page")
+                            .accessibilityLabel("Artifact")
                         }
                     }
                 }

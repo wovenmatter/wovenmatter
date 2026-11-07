@@ -54,7 +54,7 @@ public actor SavedArtifactLibraryService {
   private func current(id: String, revision: Int64) async throws -> CompanionArtifactManifest {
     guard let manifest = try await database.companionSavedArtifacts().first(where: { $0.id == id }),
       !manifest.deleted, manifest.revision == revision else {
-      throw WorkspaceToolError.invalid("This saved artifact changed or was removed. Refresh the Library and try again.")
+      throw WorkspaceToolError.invalid("This saved asset changed or was removed. Refresh the Library and try again.")
     }
     return manifest
   }
@@ -75,7 +75,7 @@ public actor SavedArtifactLibraryService {
     }
     let temporary = folder.appending(path: ".\(UUID().uuidString).partial")
     guard FileManager.default.createFile(atPath: temporary.path, contents: nil, attributes: [.posixPermissions: 0o600]) else {
-      throw WorkspaceToolError.invalid("The saved artifact opening copy could not be created.")
+      throw WorkspaceToolError.invalid("The saved asset opening copy could not be created.")
     }
     defer { try? FileManager.default.removeItem(at: temporary) }
     let file = try FileHandle(forWritingTo: temporary)
@@ -93,7 +93,7 @@ public actor SavedArtifactLibraryService {
       offset += Int64(chunk.data.count)
     }
     guard offset == manifest.byteCount, hash.finalize().hexString == manifest.sha256 else {
-      throw WorkspaceToolError.invalid("This saved artifact failed its integrity check. Its opening copy was discarded.")
+      throw WorkspaceToolError.invalid("This saved asset failed its integrity check. Its opening copy was discarded.")
     }
     try Task.checkCancellation()
     guard try await current(id: id, revision: revision) == manifest else { throw WorkspaceDatabaseError.corruptRow }
