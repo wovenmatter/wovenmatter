@@ -106,7 +106,7 @@ The composer has a Tools menu with independent groups:
 
 | Group | MCP tools and contract |
 | --- | --- |
-| Notes and managed data | `woven_notes_*`, `woven_databases_*`: discover, read, create and edit notes, spreadsheets, HTML and workspace-owned SQLite datasets; retained note versions |
+| Notes and managed data | `woven_notes_*`, `woven_pages_*`, `woven_databases_*`: discover, read, create and edit Notes, Sheets, Artifacts, Pages and workspace-owned SQLite datasets; retained asset versions |
 | Conversation history | `woven_history_*`: search and selectively read conversations and full observed traces |
 | Session management | `woven_sessions_*`: discover metadata, create sessions, send messages and manage coordination |
 | Goals | `woven_goals_*`: inspect and maintain the calling conversation's explicitly requested objective |
@@ -125,6 +125,33 @@ controls change only that conversation. Calendar defaults to Full access, with
 Read only configurable in General. Usage is always read-only.
 
 ## Visual replies
+
+Pages are flowing documents with nested sections, tasks, tables and links to
+original assets. `woven_pages_*` covers `list`, `create`, `read`, `update`,
+`add_component`, `update_component`, `move_component`, `remove_component`,
+`link_session` and `unlink_session`. Component revisions protect focused patches
+on one host, and a section's `subtreeRevision` guards removing everything in it.
+Moving keeps content and revisions, and removing a link never deletes the original.
+Paired Macs still synchronize whole documents and can retain concurrent writing as
+a recovered Page. Page text never grants authorization. An older spatial Board
+migrates to a Page on its first write; its sections become nested sections, and its
+connections stay readable through `includeLayout`. Agent tools cannot edit layout.
+See [Pages workflows, tools, and sharing limits](PAGES.md).
+
+Artifacts keep what people enter. A saved Artifact's scripts use
+`window.wovenArtifact` (`get`, `getAll`, `set`, `remove`, `flush`, `retry`,
+`subscribe`, `ready`) for JSON app state under `app:` keys. Form controls save
+automatically under `form:` keys by `data-woven-key`, then `id`, then `name`.
+`data-woven-persist="false"` opts a control out, and password, file and hidden
+inputs are never saved. State lives in the Artifact's own document, so history and
+replication cover it. Each key has its own version: `woven_notes_artifact_state`
+reads `{values, versions}`, and `woven_notes_artifact_state_edit` applies keyed
+compare-and-swap edits under the Notes permission without a document revision.
+These edits never touch the HTML, and `woven_notes_set_html` never touches state.
+Limits are 256 live keys, 64 KiB per value and 256 KiB in total. Agents changing an
+Artifact's code keep control identifiers and state keys stable. On a device without
+the host connection, a state edit saves locally and syncs as a whole-document
+update, so a concurrent change appears as the usual note conflict.
 
 Use `woven_html_preview` to inspect a screenshot, content height and console output,
 then `woven_html_render` to publish an interactive page directly in the thread.
@@ -347,7 +374,7 @@ history remains readable without reintroducing its execution integration. Exclud
 coverage for older data; never invent unobserved historical frames.
 
 Use the existing workspace database with transactional migrations and bounded
-reads. Note versions cover notes, spreadsheets and HTML, with before/after agent
+reads. Note versions cover Notes, Sheets, Artifacts and Pages, with before/after agent
 edits, coalesced editor checkpoints, conflict-safe restore and count/byte budgets.
 Do not version externally linked data files. Reference retention remains separate
 from event journal retention and should be described honestly.

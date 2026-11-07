@@ -6,6 +6,83 @@ import Testing
 struct WovenMCPTests {
   private let requestID = "11111111-1111-4111-8111-111111111111"
 
+  @Test func pageToolsShareTheNotesGroupAndMapToItsCommands() throws {
+    let expected = ["list", "create", "read", "update", "add_component", "update_component", "move_component", "remove_component", "link_session", "unlink_session"].map { "woven_pages_" + $0 }
+    let tools = WovenMCPCatalog.tools.filter { $0.name.hasPrefix("woven_pages_") }
+    #expect(Set(tools.map(\.name)) == Set(expected))
+    #expect(tools.allSatisfy { $0.group == .notes })
+    #expect(Set(tools.filter { !$0.isMutation }.map(\.name)) == ["woven_pages_list", "woven_pages_read"])
+    #expect(!WovenMCPCatalog.tools.contains { $0.name.hasPrefix("woven_boards_") || $0.name == "woven_notes_canvas" })
+    #expect(throws: WorkspaceToolError.self) { try WovenMatterToolCommand(["boards", "list"]) }
+    #expect(throws: WorkspaceToolError.self) { try WovenMatterToolCommand(["pages", "edit-layout", "--note-id", "p", "--json", "[]"]) }
+    #expect(throws: WorkspaceToolError.self) { try WovenMatterToolCommand(["notes", "canvas", "--note-id", "n", "--json", "[]"]) }
+    #expect(throws: WorkspaceToolError.self) { try WovenMCPCatalog.request(name: "woven_notes_create", arguments: .object(["title": .string("B"), "kind": .string("canvas")])) }
+
+    let request = try WovenMCPCatalog.request(name: "woven_pages_update_component", arguments: .object([
+      "pageID": .string("p"), "componentID": .string("c"), "componentRevision": .string("r"), "status": .string("done"),
+      "outcome": .string(""), "clearReview": .bool(true), "requestID": .string(requestID)]))
+    let command = try WovenMatterToolCommand(request.arguments)
+    #expect(command.group == .notes && command.action == "page-update-component" && command.isPageCommand && command.isMutation)
+    #expect(command.options["note-id"] == "p" && command.options["id"] == "c" && command.options["component-revision"] == "r")
+    #expect(command.options["outcome"] == "" && command.options["clear-review"] == "true")
+    #expect(request.requestID == requestID)
+    for action in ["list", "read"] {
+      let read = try WovenMatterToolCommand(["pages", action] + (action == "read" ? ["--note-id", "p"] : []))
+      #expect(read.group == .notes && !read.isMutation)
+    }
+    let moved = try WovenMatterToolCommand(WovenMCPCatalog.request(name: "woven_pages_move_component", arguments: .object([
+      "pageID": .string("p"), "componentID": .string("c"), "parentID": .string("s"), "afterID": .string("a"), "atStart": .bool(false)])).arguments)
+    #expect(moved.options["parent-id"] == "s" && moved.options["after-id"] == "a" && moved.options["at-start"] == nil)
+    let removed = try WovenMatterToolCommand(WovenMCPCatalog.request(name: "woven_pages_remove_component", arguments: .object([
+      "pageID": .string("p"), "componentID": .string("c"), "subtreeRevision": .string("r"), "removal": .string("removeSubtree")])).arguments)
+    #expect(removed.options["subtree-revision"] == "r" && removed.options["removal"] == "removeSubtree")
+    let block = try WovenMCPCatalog.request(name: "woven_pages_add_component", arguments: .object([
+      "pageID": .string("p"), "kind": .string("section"), "block": .object(["type": .string("richText")])]))
+    #expect(try WovenMatterToolCommand(block.arguments).options["json"]?.contains("richText") == true)
+  }
+
+  @Test func pageToolsAcceptNoProvenanceAndRequireTheirRevisions() throws {
+    let base: [String: GatewayJSONValue] = ["pageID": .string("p"), "componentID": .string("c"), "componentRevision": .string("r")]
+    for forged in ["updatedBy", "createdBy", "actor", "updatedAt", "createdAt", "caller", "conversationID"] {
+      #expect(throws: WorkspaceToolError.self) {
+        try WovenMCPCatalog.request(name: "woven_pages_update_component", arguments: .object(base.merging([forged: .string("forged")]) { $1 }))
+      }
+      #expect(throws: WorkspaceToolError.self) {
+        try WovenMCPCatalog.request(name: "woven_pages_add_component", arguments: .object(["pageID": .string("p"), forged: .string("forged")]))
+      }
+    }
+    #expect(throws: WorkspaceToolError.self) { try WovenMCPCatalog.request(name: "woven_pages_update_component", arguments: .object(["pageID": .string("p"), "componentID": .string("c"), "status": .string("done")])) }
+    #expect(throws: WorkspaceToolError.self) { try WovenMCPCatalog.request(name: "woven_pages_update", arguments: .object(["pageID": .string("p"), "title": .string("T")])) }
+    #expect(throws: WorkspaceToolError.self) { try WovenMCPCatalog.request(name: "woven_pages_update_component", arguments: .object(base.merging(["status": .string("started")]) { $1 })) }
+    #expect(throws: WorkspaceToolError.self) { try WovenMCPCatalog.request(name: "woven_pages_remove_component", arguments: .object(["pageID": .string("p"), "componentID": .string("c"), "removal": .string("everything")])) }
+  }
+
+  @Test func artifactStateToolsStayInNotesAndCarryNoDocument() throws {
+    let read = try #require(WovenMCPCatalog.tools.first { $0.name == "woven_notes_artifact_state" })
+    let write = try #require(WovenMCPCatalog.tools.first { $0.name == "woven_notes_artifact_state_edit" })
+    #expect(read.group == .notes && !read.isMutation)
+    #expect(write.group == .notes && write.isMutation)
+    let request = try WovenMCPCatalog.request(name: "woven_notes_artifact_state_edit", arguments: .object([
+      "noteID": .string("n"), "edits": .array([.object(["action": .string("set"), "key": .string("app:x"), "value": .null, "expectedVersion": .number(2)])])]))
+    let command = try WovenMatterToolCommand(request.arguments)
+    #expect(command.isMutation)
+    let edits = try JSONDecoder().decode([ArtifactStateEdit].self, from: Data(command.required("json").utf8))
+    #expect(edits == [ArtifactStateEdit(action: .set, key: "app:x", value: .null, expectedVersion: 2)])
+    #expect(throws: WorkspaceToolError.self) {
+      try WovenMCPCatalog.request(name: "woven_notes_artifact_state_edit", arguments: .object(["noteID": .string("n"), "edits": .array([]), "html": .string("<p>")]))
+    }
+    #expect(!(try WovenMatterToolCommand(["notes", "artifact-state", "--note-id", "n"])).isMutation)
+    #expect(RemoteNoteEditEnvelope.requiresRevision([.artifactState([ArtifactStateEdit(action: .remove, key: "app:x")])]) == false)
+  }
+
+  /// Linux reads this file directly. A stale copy would silently hide tools there.
+  @Test func bundledLinuxCatalogMatchesTheCanonicalCatalog() throws {
+    let file = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+      .deletingLastPathComponent().appending(path: "remote/src/woven-mcp-tools.json")
+    let bundled = try JSONDecoder().decode([WovenMCPToolDefinition].self, from: Data(contentsOf: file))
+    #expect(bundled == WovenMCPCatalog.tools)
+  }
+
   @Test func computerAndBrowserUseNamesAndCuaTargetsAreCanonical() throws {
     let names = Set(WovenMCPCatalog.tools.map(\.name))
     #expect(names.contains("woven_browser_use") && names.contains("woven_browser_use_cancel"))

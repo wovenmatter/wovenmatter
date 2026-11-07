@@ -57,7 +57,7 @@ its normal write-flush and active-work checks, and withdraws its temporary conne
 Background Server settings inspect, stop, and restart this instance's server; no
 development login job is installed.
 
-The local database synchronizes notes, folders, calendar, saved artifacts, and
+The local database synchronizes notes, folders, calendar, saved assets, and
 conversation history bidirectionally with the production library through the
 library API. The client runs its own branch's agents and tools. Production is
 the shared-data authority, not the client's execution owner. Offline edits remain

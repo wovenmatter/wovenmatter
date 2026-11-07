@@ -180,11 +180,16 @@ public struct RemoteNoteEditEnvelope: Codable, Equatable, Sendable {
   public static func requiresRevision(_ operations: [NoteEditOperation]) -> Bool {
     operations.contains { operation in
       switch operation {
+      // Item edits carry their own item revision; only the purpose is Board-wide.
+      case .board(let edit): edit.action == .setPurpose
+      case .page(let edit): edit.action == .setPurpose
+      // A state write is a keyed compare-and-swap on the latest document.
+      case .artifactState: false
       case .appendText, .insertText, .createTable: false
       case .addTableRow(_, let after), .addTableColumn(_, let after): after != nil
       case .setTitle, .replaceBlock, .deleteBlock, .setParagraphStyle, .setTableCell,
            .removeTableRow, .removeTableColumn, .setHTML, .setArtifactDatabaseLink,
-           .setTableDatabaseLink: true
+           .setTableDatabaseLink, .canvas: true
       }
     }
   }
@@ -222,6 +227,15 @@ public struct RemoteNoteEditEnvelope: Codable, Equatable, Sendable {
         throw RemoteNoteEditError.operationTooLarge
       }
       switch operation {
+      case .canvas, .board:
+        guard noteKind == .canvas else { throw RemoteNoteEditError.operationNotAllowed }
+      case .page(let edit):
+        guard noteKind == .canvas else { throw RemoteNoteEditError.operationNotAllowed }
+        if let block = edit.block { try Self.validate(block) }
+      case .artifactState(let edits):
+        guard noteKind == .html, !edits.isEmpty, edits.count <= Self.maximumOperationCount else {
+          throw RemoteNoteEditError.operationNotAllowed
+        }
       case .setTitle(let title):
         guard noteKind != .html, title.utf8.count <= 1_024 else {
           throw RemoteNoteEditError.operationNotAllowed
@@ -269,28 +283,32 @@ public struct RemoteNoteEditEnvelope: Codable, Equatable, Sendable {
       case .setTableDatabaseLink(_, let link):
         try Self.validate(link)
       case .replaceBlock(_, let block):
-        // Validate the raw block before apply/normalization can allocate a large
-        // rectangle or a later operation indexes a malformed cell array.
-        switch block {
-        case .richText(let text):
-          guard text.runs.count <= 4_096 else { throw RemoteNoteEditError.operationTooLarge }
-          try Self.validate(text.runs)
-        case .table(let table):
-          let (cells, overflow) = table.rows.count.multipliedReportingOverflow(by: table.columns.count)
-          guard (1...Self.maximumTableRows).contains(table.rows.count),
-                (1...Self.maximumTableColumns).contains(table.columns.count),
-                !overflow, cells <= Self.maximumTableCells,
-                table.rows.allSatisfy({ $0.cells.count == table.columns.count &&
-                  $0.cells.allSatisfy({ $0.runs.count <= 4_096 }) }) else {
-            throw RemoteNoteEditError.operationNotAllowed
-          }
-          try Self.validate(table.databaseLink)
-          for row in table.rows {
-            for cell in row.cells { try Self.validate(cell.runs) }
-          }
-        }
+        try Self.validate(block)
       case .deleteBlock, .setParagraphStyle:
         break
+      }
+    }
+  }
+
+  /// Validate a raw block before apply/normalization can allocate a large
+  /// rectangle or a later operation indexes a malformed cell array.
+  private static func validate(_ block: NoteBlock) throws {
+    switch block {
+    case .richText(let text):
+      guard text.runs.count <= 4_096 else { throw RemoteNoteEditError.operationTooLarge }
+      try Self.validate(text.runs)
+    case .table(let table):
+      let (cells, overflow) = table.rows.count.multipliedReportingOverflow(by: table.columns.count)
+      guard (1...Self.maximumTableRows).contains(table.rows.count),
+            (1...Self.maximumTableColumns).contains(table.columns.count),
+            !overflow, cells <= Self.maximumTableCells,
+            table.rows.allSatisfy({ $0.cells.count == table.columns.count &&
+              $0.cells.allSatisfy({ $0.runs.count <= 4_096 }) }) else {
+        throw RemoteNoteEditError.operationNotAllowed
+      }
+      try Self.validate(table.databaseLink)
+      for row in table.rows {
+        for cell in row.cells { try Self.validate(cell.runs) }
       }
     }
   }
@@ -385,6 +403,10 @@ public struct NoteEditingResponse: Codable, Equatable, Sendable {
 }
 
 public enum NoteEditOperation: Codable, Equatable, Sendable {
+  case canvas(CanvasEdit)
+  case board(BoardEdit)
+  case page(PageEdit)
+  case artifactState([ArtifactStateEdit])
   case setTitle(String)
   case appendText(String, NoteParagraphStyle)
   case insertText(afterBlockID: String?, text: String, style: NoteParagraphStyle)
@@ -404,11 +426,11 @@ public enum NoteEditOperation: Codable, Equatable, Sendable {
   private enum CodingKeys: String, CodingKey {
     case type, title, text, style, afterBlockID, id, block, blockID
     case rows, columns, headerRow, tableID, row, column, runs, after
-    case html, databaseLink
+    case html, databaseLink, edit, edits
   }
 
   private enum Kind: String, Codable {
-    case setTitle, appendText, insertText, replaceBlock, deleteBlock
+    case canvas, board, page, artifactState, setTitle, appendText, insertText, replaceBlock, deleteBlock
     case setParagraphStyle, createTable, setTableCell
     case addTableRow, removeTableRow, addTableColumn, removeTableColumn
     case setHTML, setArtifactDatabaseLink, setTableDatabaseLink
@@ -417,6 +439,14 @@ public enum NoteEditOperation: Codable, Equatable, Sendable {
   public init(from decoder: any Decoder) throws {
     let values = try decoder.container(keyedBy: CodingKeys.self)
     switch try values.decode(Kind.self, forKey: .type) {
+    case .canvas:
+      self = .canvas(try values.decode(CanvasEdit.self, forKey: .edit))
+    case .board:
+      self = .board(try values.decode(BoardEdit.self, forKey: .edit))
+    case .page:
+      self = .page(try values.decode(PageEdit.self, forKey: .edit))
+    case .artifactState:
+      self = .artifactState(try values.decode([ArtifactStateEdit].self, forKey: .edits))
     case .setTitle:
       self = .setTitle(try values.decode(String.self, forKey: .title))
     case .appendText:
@@ -493,6 +523,18 @@ public enum NoteEditOperation: Codable, Equatable, Sendable {
   public func encode(to encoder: any Encoder) throws {
     var values = encoder.container(keyedBy: CodingKeys.self)
     switch self {
+    case .canvas(let edit):
+      try values.encode(Kind.canvas, forKey: .type)
+      try values.encode(edit, forKey: .edit)
+    case .board(let edit):
+      try values.encode(Kind.board, forKey: .type)
+      try values.encode(edit, forKey: .edit)
+    case .page(let edit):
+      try values.encode(Kind.page, forKey: .type)
+      try values.encode(edit, forKey: .edit)
+    case .artifactState(let edits):
+      try values.encode(Kind.artifactState, forKey: .type)
+      try values.encode(edits, forKey: .edits)
     case .setTitle(let title):
       try values.encode(Kind.setTitle, forKey: .type)
       try values.encode(title, forKey: .title)
@@ -572,24 +614,38 @@ public extension NoteDocument {
     var title: String?
     for operation in operations {
       switch operation {
+      case .canvas(let edit):
+        try applyCanvasEdit(edit)
+      case .board(let edit):
+        try applyBoardEdit(edit)
+      case .page(let edit):
+        try applyPageEdit(edit)
+      case .artifactState(let edits):
+        // The host applying this op stamps the time. An edit cannot carry its own.
+        try applyArtifactStateEdits(edits, at: ISO8601DateFormatter().string(from: Date()))
       case .setTitle(let value):
         guard value.utf8.count <= 4096 else { throw NoteDocumentSafetyError.tooLarge }
         title = value
       case .appendText(let text, let style):
+        self = materializedPage()
         blocks.append(.richText(NoteRichTextBlock(style: style, text: text)))
       case .insertText(let afterBlockID, let text, let style):
-        let block = NoteBlock.richText(NoteRichTextBlock(style: style, text: text))
-        blocks.insert(block, at: insertionIndex(after: afterBlockID))
+        self = materializedPage()
+        insertPageAware(.richText(NoteRichTextBlock(style: style, text: text)), after: afterBlockID)
       case .replaceBlock(let id, let block):
         guard let index = blocks.firstIndex(where: { $0.id == id }) else {
           throw NoteEditError.blockNotFound(id)
         }
+        // A Board card's ID is what placements, links, tasks and agents refer to.
+        guard kind != .canvas || block.id == id else { throw NoteEditError.boardCardIDChanged(id) }
         blocks[index] = block
       case .deleteBlock(let id):
         guard let index = blocks.firstIndex(where: { $0.id == id }) else {
           throw NoteEditError.blockNotFound(id)
         }
+        try requirePageRemovable(id)
         blocks.remove(at: index)
+        prunePageMetadata([id])
       case .setParagraphStyle(let blockID, let style):
         guard let index = blocks.firstIndex(where: { $0.id == blockID }),
               case .richText(var block) = blocks[index] else {
@@ -601,10 +657,8 @@ public extension NoteDocument {
       case .createTable(let afterBlockID, let rows, let columns, let headerRow):
         guard (1...1000).contains(rows), (1...128).contains(columns),
               rows <= 50_000 / columns else { throw NoteDocumentSafetyError.unsupportedFormat }
-        blocks.insert(
-          .table(NoteTableBlock(rows: rows, columns: columns, headerRow: headerRow)),
-          at: insertionIndex(after: afterBlockID)
-        )
+        self = materializedPage()
+        insertPageAware(.table(NoteTableBlock(rows: rows, columns: columns, headerRow: headerRow)), after: afterBlockID)
       case .setTableCell(let tableID, let row, let column, let runs):
         try mutateTable(id: tableID) { table in
           guard table.rows.indices.contains(row), table.columns.indices.contains(column) else {
@@ -661,13 +715,6 @@ public extension NoteDocument {
     return title
   }
 
-  private func insertionIndex(after blockID: String?) -> Int {
-    guard let blockID, let index = blocks.firstIndex(where: { $0.id == blockID }) else {
-      return blocks.endIndex
-    }
-    return index + 1
-  }
-
   private mutating func mutateTable(
     id: String,
     _ mutation: (inout NoteTableBlock) throws -> Void
@@ -686,9 +733,37 @@ public enum NoteEditError: Error, Equatable, LocalizedError {
   case tableNotFound(String)
   case tableCoordinateOutOfRange
   case artifactKindMismatch
+  case boardItemConflict(id: String, currentRevision: String)
+  case boardItemExists(String)
+  case boardLinkedAssetText(String)
+  case boardItemNotText(String)
+  case boardSessionLimit(String)
+  case boardConflictingPatch(String)
+  case boardCardIDChanged(String)
+  case pageTargetMissing(String)
+  case pageMoveIntoOwnSubtree(String)
+  case pageDepthExceeded(String)
+  case pageSectionNotEmpty(String)
+  case pagePositionInvalid(String)
+  case pageSubtreeConflict(id: String, currentRevision: String)
 
   public var errorDescription: String? {
     switch self {
+    case .pageTargetMissing(let id): "Page section \(id) does not exist. Read the Page and choose a current section."
+    case .pageMoveIntoOwnSubtree(let id): "Page section \(id) cannot move inside itself."
+    case .pageDepthExceeded(let id): "Component \(id) would nest more than \(NoteDocument.maximumPageDepth) sections deep."
+    case .pageSectionNotEmpty(let id): "Page section \(id) still has contents. Use woven_pages_remove_component and choose promoteChildren, or removeSubtree with its subtreeRevision."
+    case .pagePositionInvalid(let id): "\(id) is not a valid place here. An afterID must be a direct child of the chosen parent."
+    case .pageSubtreeConflict(let id, _): "Page section \(id) or its contents changed since they were read. Read them again before removing them."
+    case .boardItemConflict(let id, let current):
+      current.isEmpty ? "Page component \(id) was removed since it was read."
+        : "Page component \(id) changed since it was read. Read it again and apply your intended change to the current item."
+    case .boardItemExists(let id): "A Page component already exists with ID \(id)."
+    case .boardLinkedAssetText(let id): "Page component \(id) shows a linked original. Edit the original asset, not the component."
+    case .boardItemNotText(let id): "Page component \(id) is a table. Use the table tools to change it."
+    case .boardSessionLimit(let id): "Page component \(id) already links \(BoardItem.maximumSessions) sessions."
+    case .boardConflictingPatch(let message): message
+    case .boardCardIDChanged(let id): "A Page component keeps its ID. Replace the content of \(id) without changing its ID."
     case .blockNotFound(let id): "Note block not found: \(id)"
     case .tableNotFound(let id): "Note table not found: \(id)"
     case .tableCoordinateOutOfRange: "The table row or column is out of range."

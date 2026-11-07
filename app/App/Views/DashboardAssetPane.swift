@@ -12,6 +12,7 @@ struct DashboardAssetPane: View {
     let newlyCreatedNoteID: String?
     let onNewNoteFocusHandled: (String) -> Void
     let onBack: () -> Void
+    var onOpenSession: ((String) -> Void)?
     @Environment(\.dashboardTheme) private var theme
 
     private var notes: [WorkspaceNoteRecord] { model.workspaceOverview?.notes ?? [] }
@@ -78,7 +79,10 @@ struct DashboardAssetPane: View {
                         DashboardNotePane(
                             model: model, note: note,
                             focusesTitleOnAppear: note.id == newlyCreatedNoteID,
-                            onInitialFocusHandled: { onNewNoteFocusHandled(note.id) }
+                            onInitialFocusHandled: { onNewNoteFocusHandled(note.id) },
+                            onOpenNote: { assets.openNote($0) },
+                            onCanvasContext: { assets.canvasContexts[note.id] = $0 },
+                            onOpenSession: onOpenSession
                         ).id(id)
                     } else {
                         ContentUnavailableView("Asset unavailable", systemImage: "doc")

@@ -20,6 +20,9 @@ case "${1:-changed}" in
 esac
 
 scripts/scan-public-tree.sh
+if grep -Eq '^(shared/Sources/WovenMatterCompanion/ArtifactState|scripts/test-support/artifact-state.test.mjs|app/App/Views/(ArtifactEditor|DashboardArtifactState|DashboardPersistentArtifactView))' "$changed"; then
+  node --test scripts/test-support/artifact-state.test.mjs
+fi
 while IFS= read -r -d '' file; do
   [ ! -f "$file" ] || bash -n "$file"
 done < <(git ls-files -z -- '*.sh')

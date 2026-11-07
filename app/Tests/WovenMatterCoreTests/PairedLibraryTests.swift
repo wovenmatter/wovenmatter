@@ -59,6 +59,79 @@ struct PairedLibraryTests {
     #expect(try await a.database.companionWorkspaceID() != b.database.companionWorkspaceID())
   }
 
+  @Test func nestedPagesAndArtifactInputStateUseTheExistingPairedLibraryPath() async throws {
+    let a = try await Mac(), b = try await Mac(); defer { a.remove(); b.remove() }
+    let artifact = try await a.database.createNote(folderID: nil, title: "Planner",
+      content: NoteDocument(kind: .html, html: "<input id='title'>").encoded(), kind: .html)
+    _ = try await a.database.applyArtifactStateEdit(noteID: artifact,
+      edit: .init(action: .set, key: "form:text:title:0", value: .string("Trip plan")))
+    let page = NoteDocument(kind: .canvas, blocks: [.richText(.init(id: "section", text: "Work")), .richText(.init(id: "embed", text: ""))],
+      canvas: ["embed": .init(x: 0, y: 0, assetID: artifact)],
+      pageNodes: ["section": .init(isSection: true), "embed": .init(parentID: "section")])
+    let id = try await a.database.createNote(folderID: nil, title: "Page", content: page.encoded(), kind: .canvas)
+    try await a.send(to: b); try await b.send(to: a)
+    let received = try #require(try await b.database.readNoteForEditing(id: id).document)
+    #expect(received.pageParentID(for: "embed") == "section")
+    #expect(received.canvas?["embed"]?.assetID == artifact)
+    #expect(try await b.database.artifactStateSnapshot(noteID: artifact).values["form:text:title:0"] == .string("Trip plan"))
+    _ = try await b.database.applyArtifactStateEdit(noteID: artifact,
+      edit: .init(action: .set, key: "form:text:title:0", value: .string("Revised trip"), expectedVersion: 1))
+    try await b.send(to: a)
+    #expect(try await a.database.artifactStateSnapshot(noteID: artifact).values["form:text:title:0"] == .string("Revised trip"))
+  }
+
+  @Test func boardsSyncOriginalReferencesAndPreserveConcurrentWholeDocumentEdits() async throws {
+    let a = try await Mac(), b = try await Mac(); defer { a.remove(); b.remove() }
+    let asset = try await a.database.createNote(folderID: nil, title: "Shared reference",
+      content: NoteDocument(blocks: [.richText(.init(text: "One original"))]).encoded())
+    let task = NoteRichTextBlock(id: "task", text: "Investigate"), reference = NoteRichTextBlock(id: "reference", text: "Reference")
+    let source = NoteDocument(kind: .canvas, blocks: [.richText(task), .richText(reference)],
+      canvas: [reference.id: .init(x: 400, y: 0, assetID: asset)],
+      boardPurpose: "Coordinate the project", boardItems: [task.id: BoardItem(task: .init())])
+    let board = try await a.database.createNote(folderID: nil, title: "Project board", content: source.encoded(), kind: .canvas)
+    try await a.send(to: b); try await b.send(to: a)
+    let onB = try #require(try await b.database.readNoteForEditing(id: board).document)
+    #expect(onB.boardPurpose == source.boardPurpose)
+    #expect(onB.canvas?[reference.id]?.assetID == asset)
+    #expect(try await b.database.companionNote(id: asset)?.content == a.database.companionNote(id: asset)?.content)
+    _ = try await b.database.applyNoteEdits(.init(command: .apply, noteID: board, operations: [
+      .board(.init(action: .updateItem, id: task.id, expectedRevision: onB.boardItemRevision(for: task.id),
+        patch: .init(status: .done, outcome: "Verified on the second Mac", review: .needed)))
+    ]))
+    try await b.send(to: a); try await a.send(to: b)
+    let synchronized = try #require(try await a.database.readNoteForEditing(id: board).document)
+    #expect(synchronized.boardItems?[task.id]?.task?.status == .done)
+    #expect(synchronized.boardItems?[task.id]?.review == .needed)
+    // Paired Macs replicate complete documents. Concurrent writing is retained,
+    // rather than being described as a distributed per-item claim or merge.
+    for (mac, outcome) in [(a, "Air offline outcome"), (b, "Mini offline outcome")] {
+      let current = try #require(try await mac.database.readNoteForEditing(id: board).document)
+      _ = try await mac.database.applyNoteEdits(.init(command: .apply, noteID: board, operations: [
+        .board(.init(action: .updateItem, id: task.id, expectedRevision: current.boardItemRevision(for: task.id),
+          patch: .init(outcome: outcome)))
+      ]))
+    }
+    try await a.send(to: b); try await b.send(to: a); try await a.send(to: b)
+    let aNotes = try await a.database.companionSnapshot().notes.filter { $0.kind == .canvas }
+    let bNotes = try await b.database.companionSnapshot().notes.filter { $0.kind == .canvas }
+    #expect(Set(aNotes.map(\.id)) == Set(bNotes.map(\.id)))
+    #expect(aNotes.count == 2)
+    let outcomes = try aNotes.map { try NoteDocument.editableDocument(from: $0.content).boardItems?[task.id]?.task?.outcome }
+    #expect(Set(outcomes.compactMap { $0 }) == ["Air offline outcome", "Mini offline outcome"])
+    #expect(aNotes.contains { $0.title.contains("Recovered edit") })
+    for note in aNotes {
+      let document = try NoteDocument.editableDocument(from: note.content)
+      #expect(document.canvas?[reference.id]?.assetID == asset)
+    }
+    let current = try #require(try await a.database.readNoteForEditing(id: board).document)
+    _ = try await a.database.applyNoteEdits(.init(command: .apply, noteID: board, operations: [
+      .board(.init(action: .removeItem, id: reference.id, expectedRevision: current.boardItemRevision(for: reference.id)))
+    ]))
+    try await a.send(to: b)
+    #expect(try await a.database.companionNote(id: asset) != nil)
+    #expect(try await b.database.companionNote(id: asset) != nil)
+  }
+
   @Test func concurrentWritingRetainsBothVersionsAndDeletionDoesNotResurrect() async throws {
     let a = try await Mac(), b = try await Mac(); defer { a.remove(); b.remove() }
     let id = UUID().uuidString.lowercased()

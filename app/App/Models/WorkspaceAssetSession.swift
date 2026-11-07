@@ -16,6 +16,7 @@ final class WorkspaceAssetSession: NSObject, @preconcurrency WMBrowserPageDelega
     private(set) var pageRevision = 0
     private(set) var browserPresentationRevision = 0
     var notice: String?
+    var canvasContexts: [String: CanvasViewportContext] = [:]
     var automationTabs: [GatewayJSONValue] {
         tabs.browserIDs.compactMap { id in
             pages[id].map { .object(["tabId": .string(id.uuidString.lowercased()), "url": .string($0.url),
@@ -95,7 +96,7 @@ final class WorkspaceAssetSession: NSObject, @preconcurrency WMBrowserPageDelega
         let openNotes = tabs.noteIDs.compactMap { id -> WorkspaceVisibleContext.Note? in
             guard let note = notes.first(where: { $0.id == id }) else { return nil }
             return .init(id: id, title: title(note), revision: note.updatedAt ?? note.createdAt ?? "",
-                         active: tabs.selected == .note(id))
+                         active: tabs.selected == .note(id), kind: NoteDocument.decode(note.content).kind, canvasViewport: tabs.selected == .note(id) ? canvasContexts[id] : nil)
         }
         let openPages = tabs.browserIDs.compactMap { id -> WorkspaceVisibleContext.Page? in
             guard let page = pages[id] else { return nil }

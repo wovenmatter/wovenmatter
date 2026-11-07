@@ -91,7 +91,7 @@ extension WorkspaceDatabaseConnection {
     guard let workspace = try federationWorkspaceUnlocked(id), !workspace.deleted,
           workspace.kind == .linux ? workspace.executionDeviceID == deviceID
             : workspace.ownerDeviceID == deviceID && (workspace.executionDeviceID == nil || workspace.executionDeviceID == deviceID) else {
-      throw federationError("wrong_owner", "This device is not authorized to publish this workspace's history or saved artifacts.")
+      throw federationError("wrong_owner", "This device is not authorized to publish this workspace's history or saved assets.")
     }
     return workspace
   }

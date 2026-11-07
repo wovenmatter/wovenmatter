@@ -336,7 +336,7 @@ struct WorkspaceView: View {
             }
         }
         .sheet(item: $noteToRename) { note in
-            DashboardRenameSheet(heading: "Rename note", placeholder: "Note name", initialTitle: model.noteDraft(for: note).title) { title in
+            DashboardRenameSheet(heading: "Rename asset", placeholder: "Asset name", initialTitle: model.noteDraft(for: note).title) { title in
                 try await model.mutateNote(id: note.id, mutation: .rename(title))
             }
         }
@@ -399,6 +399,12 @@ struct WorkspaceView: View {
         }
     }
 
+    private var presentsCanvas: Bool {
+        guard destination == .workspace, assets.tabs.isPresented,
+              let note = selectedNote else { return false }
+        return NoteDocument.decode(model.noteDraft(for: note).content).kind == .canvas
+    }
+
     private func desktopShell(layout: DashboardLayoutState) -> some View {
         let showLeftRailButton = sidebarStyle != .split
             ? !layout.showsLeftRail && singleSidebarSide == .left
@@ -407,7 +413,7 @@ struct WorkspaceView: View {
             ? !layout.showsRightRail && singleSidebarSide == .right
             : !layout.showsRightRail
 
-        return HStack(spacing: DashboardMetrics.shellGap) {
+        return HStack(spacing: presentsCanvas ? 0 : DashboardMetrics.shellGap) {
             if layout.showsLeftRail {
                 railGroup(side: .left)
             }
@@ -424,8 +430,17 @@ struct WorkspaceView: View {
                 railGroup(side: .right)
             }
         }
-        .padding(.horizontal, DashboardMetrics.shellInset)
-        .padding(.bottom, DashboardMetrics.shellInset)
+        // Only fill the tiny cutouts beneath rounded sidebar bottoms. Keep the
+        // shell and title-bar backgrounds unchanged everywhere else.
+        .background(alignment: .bottom) {
+            if presentsCanvas {
+                theme.palette.themeWhisper
+                    .frame(height: DashboardMetrics.windowAlignedSurfaceMinimumRadius)
+                    .allowsHitTesting(false)
+            }
+        }
+        .padding(.horizontal, presentsCanvas ? 0 : DashboardMetrics.shellInset)
+        .padding(.bottom, presentsCanvas ? 0 : DashboardMetrics.shellInset)
         .animation(reduceMotion ? nil : .snappy(duration: 0.3), value: layout)
     }
 
@@ -688,6 +703,7 @@ struct WorkspaceView: View {
                         onAddPanel: addPanel,
                         onClosePanel: closePanel,
                         onNavigatePanel: navigatePanel,
+                        onOpenBoardSession: selectConversation,
                         onSend: send,
                         onAttachmentAction: handleAttachmentAction,
                         onRemoveAttachment: removeAttachment,
@@ -1448,6 +1464,7 @@ struct DashboardWorkspaceSurface: View {
     let onAddPanel: (DashboardChatPanelID) -> Void
     let onClosePanel: (DashboardChatPanelID) -> Void
     let onNavigatePanel: (DashboardChatPanelDirection) -> Bool
+    let onOpenBoardSession: (String) -> Void
     let onSend: (DashboardChatPanelID) -> Void
     let onAttachmentAction: (DashboardChatPanelID, DashboardComposerAttachmentAction) -> Void
     let onRemoveAttachment: (String, DashboardChatPanelID) -> Void
@@ -1517,7 +1534,7 @@ struct DashboardWorkspaceSurface: View {
             reservesLeadingRailControlSpace: reservesLeadingRailControlSpace,
             reservesTrailingRailControlSpace: reservesTrailingRailControlSpace,
             newlyCreatedNoteID: newlyCreatedNoteID, onNewNoteFocusHandled: onNewNoteFocusHandled,
-            onBack: { compactPane = .chat }
+            onBack: { compactPane = .chat }, onOpenSession: onOpenBoardSession
         )
     }
 

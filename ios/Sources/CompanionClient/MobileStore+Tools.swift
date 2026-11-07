@@ -60,6 +60,7 @@ extension MobileStore {
   }
 
   private static func notesTool(_ command: WovenMatterToolCommand, requestID: String, context: MobileToolContext, state: inout MobileStoreState) throws -> GatewayJSONValue {
+    if command.isPageCommand { return try pageTool(command, state: state) }
     let query = command.options["search"] ?? ""
     if command.action == "folders" { return try MobileToolSupport.page(state.folders.values.sorted { $0.id < $1.id }.map(MobileToolSupport.value), command: command) }
     if command.action == "list" {
@@ -78,7 +79,7 @@ extension MobileStore {
     }
     let id = command.action == "create" ? requestID : try command.required("note-id", allowPositional: true)
     if command.action == "create" {
-      guard state.notes[id] == nil, !state.deletedNotes.contains(id), let kind = NoteArtifactKind(rawValue: command.options["kind"] ?? "note") else { throw WorkspaceToolError.invalid("Choose a new note, spreadsheet, or HTML artifact.") }
+      guard state.notes[id] == nil, !state.deletedNotes.contains(id), let kind = NoteArtifactKind(rawValue: command.options["kind"] ?? "note"), kind != .canvas else { throw WorkspaceToolError.invalid("Choose a new note, spreadsheet or HTML artifact. Pages are created with woven_pages_create and target central.") }
       let folder = command.options["folder"] ?? context.folderID
       if let folder, state.folders[folder] == nil { throw WorkspaceToolError.notFound("This folder is not available on this device.") }
       let content = try NoteDocument(kind: kind).encoded()
@@ -90,10 +91,17 @@ extension MobileStore {
     }
     guard var note = state.notes[id], !state.deletedNotes.contains(id), !state.uncachedNoteIDs.contains(id) else { throw WorkspaceToolError.notFound("This note is not saved on this device. Download it from the central library first.") }
     if command.action == "read" { return try noteRead(note, command: command) }
+    if command.action == "artifact-state" {
+      guard let document = try? NoteDocument.editableDocument(from: note.content), document.kind == .html else { throw ArtifactStateError.notArtifact }
+      return .object(["id": .string(id), "revision": .string(try MobileToolSupport.fingerprint(note)), "state": try MobileToolSupport.value(document.artifactStateSnapshot)])
+    }
     if command.action == "versions" { return try MobileToolSupport.page((state.toolNoteVersions ?? []).filter { $0.note.id == id }.reversed().map { .object(["id": .string($0.id), "noteID": .string(id), "title": .string($0.note.title), "createdAt": .string($0.savedAt)]) }, command: command) }
+    if (note.kind ?? NoteDocument.decode(note.content).kind) == .canvas { throw pageWriteRequiresCentral }
     guard state.conflicts[id] == nil else { throw WorkspaceToolError.revisionConflict("Resolve this note's sync conflict before editing.") }
     let revision = try MobileToolSupport.fingerprint(note)
-    let appendOnly = command.action == "append" || (command.action == "table" && ["add-row", "add-column"].contains(command.subaction ?? "") && command.options["after"] == nil)
+    // A state edit carries a compare-and-swap for each key instead of a document revision.
+    let appendOnly = command.action == "append" || command.action == "artifact-state-edit"
+      || (command.action == "table" && ["add-row", "add-column"].contains(command.subaction ?? "") && command.options["after"] == nil)
     if let expected = command.options["revision"] {
       guard expected == revision else { throw WorkspaceToolError.revisionConflict("The note changed. Read it again before editing.") }
     } else if !appendOnly { throw WorkspaceToolError.revisionRequired("Read the note and supply its current --revision before changing existing content.") }
@@ -122,6 +130,53 @@ extension MobileStore {
     }
     return .object(["id": .string(id), "title": .string(note.title), "revision": .string(try MobileToolSupport.fingerprint(note)), "replayed": .bool(false)])
   }
+  private static var pageWriteRequiresCentral: WorkspaceToolError {
+    .invalid("Page writes use the paired Mac so concurrent agents share one atomic path. Retry with target central when connected; this device has not changed the Page.")
+  }
+
+  /// Reads work from the downloaded replica, including nesting. Agent writes are refused
+  /// rather than queued as whole-document updates, which could not honor component
+  /// revisions offline. A person's own edits on this device use the note editing route.
+  private static func pageTool(_ command: WovenMatterToolCommand, state: MobileStoreState) throws -> GatewayJSONValue {
+    func document(_ note: CompanionNote) -> NoteDocument? {
+      guard !state.uncachedNoteIDs.contains(note.id), let value = try? NoteDocument.editableDocument(from: note.content), value.kind == .canvas else { return nil }
+      return value
+    }
+    switch command.action {
+    case "page-list":
+      let query = command.options["search"] ?? ""
+      let rows = state.notes.values.filter { note in
+        !state.deletedNotes.contains(note.id) && (note.kind ?? NoteDocument.decode(note.content).kind) == .canvas && (command.options["folder"] == nil || command.options["folder"] == note.folderID)
+          && (query.isEmpty || note.title.localizedCaseInsensitiveContains(query) || note.content.localizedCaseInsensitiveContains(query))
+      }.sorted { $0.updatedAt == $1.updatedAt ? $0.id < $1.id : $0.updatedAt > $1.updatedAt }
+      return try MobileToolSupport.page(rows.map { note in
+        let items = document(note)?.boardItems?.values
+        var value: [String: GatewayJSONValue] = ["id": .string(note.id), "title": .string(note.title), "revision": .string(try MobileToolSupport.fingerprint(note)), "cached": .bool(!state.uncachedNoteIDs.contains(note.id)), "updatedAt": .string(note.updatedAt)]
+        if let current = document(note) {
+          value["purpose"] = current.boardPurpose.map(GatewayJSONValue.string) ?? .null
+          value["components"] = .number(Double(current.materializedPage().blocks.count))
+          value["openTasks"] = .number(Double(items?.filter { [.todo, .doing, .blocked].contains($0.task?.status) }.count ?? 0))
+          value["needsReview"] = .number(Double(items?.filter { $0.review == .needed }.count ?? 0))
+        }
+        return .object(value)
+      }, command: command)
+    case "page-read":
+      let id = try command.required("note-id")
+      guard let note = state.notes[id], !state.deletedNotes.contains(id) else { throw WorkspaceToolError.notFound("This Page is not available on this device.") }
+      guard !state.uncachedNoteIDs.contains(id) else { throw WorkspaceToolError.notFound("This Page is not saved on this device. Download it from the central library first.") }
+      guard let current = document(note) else { throw WorkspaceToolError.invalid("This asset is not a Page. Use woven_notes_read.") }
+      let filter = try BoardReadFilter(command: command)
+      var assets: [String: BoardAssetSummary] = [:]
+      for assetID in current.boardAssetIDs(filter: filter) {
+        guard let asset = state.notes[assetID], !state.deletedNotes.contains(assetID) else { continue }
+        assets[assetID] = BoardAssetSummary(id: assetID, available: !state.uncachedNoteIDs.contains(assetID), title: asset.title, kind: asset.kind?.rawValue, revision: try MobileToolSupport.fingerprint(asset))
+      }
+      return try current.pageReadValue(id: id, title: note.title, revision: try MobileToolSupport.fingerprint(note), filter: filter, assets: assets)
+    default:
+      throw pageWriteRequiresCentral
+    }
+  }
+
   private static func noteRead(_ note: CompanionNote, command: WovenMatterToolCommand) throws -> GatewayJSONValue {
     var value = try MobileToolSupport.chunk(note.content, command: command)
     value["id"] = .string(note.id); value["title"] = .string(note.title); value["revision"] = .string(try MobileToolSupport.fingerprint(note)); value["kind"] = .string(note.kind?.rawValue ?? NoteDocument.decode(note.content).kind.rawValue)
@@ -141,6 +196,10 @@ extension MobileStore {
     case "format": return [.setParagraphStyle(blockID: try c.required("block-id"), style: try style())]
     case "set-title": return [.setTitle(try c.required("title"))]
     case "set-html": return [.setHTML(try c.required("html"))]
+    case "artifact-state-edit":
+      let edits = try JSONDecoder().decode([ArtifactStateEdit].self, from: Data(c.required("json").utf8))
+      guard !edits.isEmpty else { throw WorkspaceToolError.invalid("Supply at least one state edit.") }
+      return [.artifactState(edits)]
     case "apply": return try JSONDecoder().decode([NoteEditOperation].self, from: Data(c.required("json").utf8))
     case "link", "unlink":
       let link: DatabaseArtifactLink? = c.action == "unlink" ? nil : .init(sourceID: try c.required("source-id"), databaseID: try c.required("database-id"), relativePath: try c.required("path"), sqliteQuery: c.options["query"])

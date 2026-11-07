@@ -1466,7 +1466,7 @@ struct DashboardNewNoteDrawer: View {
 
     var body: some View {
         DashboardDrawerChrome(onClose: onClose) {
-            Text("New Note")
+            Text("New Asset")
                 .font(.system(size: 18, weight: .semibold))
         } content: {
             VStack(alignment: .leading, spacing: 10) {
@@ -1476,16 +1476,17 @@ struct DashboardNewNoteDrawer: View {
                     kind: .note
                 )
                 artifactButton(
-                    "Spreadsheet",
+                    "Sheet",
                     icon: .panelsTopLeft,
                     kind: .spreadsheet
                 )
                 artifactButton(
-                    "HTML",
-                    detail: "View HTML",
+                    "Artifact",
+                    detail: "Interactive HTML artifacts built on live data",
                     icon: .panelTop,
                     kind: .html
                 )
+                artifactButton("Page", detail: "A fluid document for your work with agents", icon: .fileText, kind: .canvas)
             }
             .padding(20)
         }
@@ -1659,6 +1660,7 @@ struct DashboardSidebarWorkspacePage: View {
     @State private var recentsOpen = true
     @State private var scrollHoverCoordinator = DashboardScrollHoverCoordinator()
     @State private var content = DashboardRightRailContent.empty
+    @State private var assetKind: NoteArtifactKind?
     @State private var conversationDetailCardState = DashboardConversationDetailCardState()
 
     private var mode: WorkspaceListMode {
@@ -1683,6 +1685,20 @@ struct DashboardSidebarWorkspacePage: View {
                 modePicker
                 HStack(spacing: 8) {
                     searchField
+                    if mode == .notes {
+                        Menu {
+                            Button("All assets") { assetKind = nil }
+                            ForEach(NoteArtifactKind.allCases, id: \.self) { kind in
+                                Button(kind.displayName + "s") { assetKind = kind }
+                            }
+                        } label: {
+                            Image(systemName: assetKind == nil ? "line.3.horizontal.decrease" : "line.3.horizontal.decrease.circle.fill")
+                                .frame(width: 28, height: 28)
+                        }
+                        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                        .accessibilityLabel("Asset type: \(assetKind.map { $0.displayName + "s" } ?? "All assets")")
+                        .help("Filter notes, sheets, pages, and boards")
+                    }
                     if onBack != nil {
                         filterMenu(inSearchRow: true)
                     }
@@ -1719,27 +1735,27 @@ struct DashboardSidebarWorkspacePage: View {
                             }
                         }
                     } else {
-                        DashboardListSectionHeader(title: "Pinned notes", expanded: pinnedOpen) {
+                        DashboardListSectionHeader(title: "Pinned assets", expanded: pinnedOpen) {
                             pinnedOpen.toggle()
                         }
                         if pinnedOpen {
-                            if content.pinnedNotes.isEmpty {
-                                DashboardEmptyListRow(text: "No pinned notes.")
+                            if content.pinnedNotes.filter({ assetKind == nil || $0.kind == assetKind }).isEmpty {
+                                DashboardEmptyListRow(text: "No pinned assets.")
                             } else {
-                                ForEach(content.pinnedNotes) { presentation in
+                                ForEach(content.pinnedNotes.filter { assetKind == nil || $0.kind == assetKind }) { presentation in
                                     noteRow(presentation)
                                 }
                             }
                         }
 
-                        DashboardListSectionHeader(title: "Notes", expanded: recentsOpen) {
+                        DashboardListSectionHeader(title: "Assets", expanded: recentsOpen) {
                             recentsOpen.toggle()
                         }
                         if recentsOpen {
-                            if content.notes.isEmpty {
-                                DashboardEmptyListRow(text: "No notes.")
+                            if content.notes.filter({ assetKind == nil || $0.kind == assetKind }).isEmpty {
+                                DashboardEmptyListRow(text: "No assets.")
                             } else {
-                                ForEach(content.notes) { presentation in
+                                ForEach(content.notes.filter { assetKind == nil || $0.kind == assetKind }) { presentation in
                                     noteRow(presentation)
                                 }
                             }
@@ -1816,7 +1832,7 @@ struct DashboardSidebarWorkspacePage: View {
                 Text(selectedFolderName ?? "All Workspaces")
                     .font(.system(size: 13, weight: .semibold))
                     .lineLimit(1)
-                Text("\(conversations.count) chats · \(notes.count) notes")
+                Text("\(conversations.count) chats · \(notes.count) assets")
                     .font(.system(size: 11))
                     .foregroundStyle(DashboardPalette.foreground)
             }
@@ -1954,14 +1970,14 @@ struct DashboardSidebarWorkspacePage: View {
             options: WorkspaceListMode.allCases,
             selection: modeBinding
         ) { value in
-            value == .chats ? "Chats" : "Notes"
+            value == .chats ? "Chats" : "Assets"
         }
     }
 
     private var searchField: some View {
         DashboardSearchField(
             text: $query,
-            prompt: mode == .chats ? "Search chats" : "Search notes"
+            prompt: mode == .chats ? "Search chats" : "Search assets"
         )
     }
 
@@ -2251,10 +2267,12 @@ final class DashboardListPresentationCache: @unchecked Sendable {
         case .spreadsheet:
             document.blocks.compactMap { block -> String? in
                 guard case .table(let table) = block else { return nil }
-                return "Spreadsheet · \(table.rows.count) rows × \(table.columns.count) columns"
-            }.first ?? "Spreadsheet"
+                return "Sheet · \(table.rows.count) rows × \(table.columns.count) columns"
+            }.first ?? "Sheet"
         case .html:
-            "Agent-rendered HTML artifact"
+            document.databaseLink == nil ? "Interactive Artifact" : "Live Artifact"
+        case .canvas:
+            "Page · \(document.materializedPage().blocks.count) components"
         }
         let presentation = DashboardNoteRowPresentation(
             note: note,

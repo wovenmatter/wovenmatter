@@ -3,7 +3,8 @@ import SwiftUI
 
 /// Theme only the app-owned empty state, never authored HTML or linked data.
 enum DashboardHTMLArtifactDocument {
-    static func render(html: String, linkedDataJSON: String?, emptyAppearance: ColorScheme? = nil) -> String {
+    static func render(html: String, linkedDataJSON: String?, emptyAppearance: ColorScheme? = nil,
+                       artifactConfigurationJSON: String? = nil) -> String {
         let emptyStyle = html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && emptyAppearance == .dark
             ? String(format: "body { background: #%06X; } .woven-empty { color: #%06X; } .woven-empty h2 { color: #%06X; }",
                      DashboardColors.darkWorkspace, DashboardColors.darkMutedForeground, DashboardColors.darkForeground)
@@ -11,17 +12,15 @@ enum DashboardHTMLArtifactDocument {
         let body = html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? """
               <main class="woven-empty">
-                <h2>HTML artifact</h2>
-                <p>Ask your agent to build a visualization here.</p>
+                <h2>Artifact</h2>
+                <p>Ask your agent to build an interactive HTML artifact with live data, such as a dashboard, calculator, or visual.</p>
               </main>
               """
             : html
-        let data = (linkedDataJSON ?? "null")
-            .replacingOccurrences(of: "&", with: "\\u0026")
-            .replacingOccurrences(of: "<", with: "\\u003c")
-            .replacingOccurrences(of: ">", with: "\\u003e")
-            .replacingOccurrences(of: "\u{2028}", with: "\\u2028")
-            .replacingOccurrences(of: "\u{2029}", with: "\\u2029")
+        let data = scriptJSON(linkedDataJSON ?? "null")
+        let stateScript = artifactConfigurationJSON.map {
+            "<script>window.__wovenArtifactConfiguration = \(scriptJSON($0));\n\(DashboardArtifactStateScript.bootstrap)</script>"
+        } ?? ""
         return """
         <!doctype html>
         <html>
@@ -39,9 +38,19 @@ enum DashboardHTMLArtifactDocument {
             \(emptyStyle)
           </style>
           <script>window.wovenMatterData = \(data);</script>
+          \(stateScript)
         </head>
         <body>\(body)</body>
         </html>
         """
+    }
+
+    private static func scriptJSON(_ json: String) -> String {
+        json
+            .replacingOccurrences(of: "&", with: "\\u0026")
+            .replacingOccurrences(of: "<", with: "\\u003c")
+            .replacingOccurrences(of: ">", with: "\\u003e")
+            .replacingOccurrences(of: "\u{2028}", with: "\\u2028")
+            .replacingOccurrences(of: "\u{2029}", with: "\\u2029")
     }
 }

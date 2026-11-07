@@ -26,16 +26,16 @@ extension WorkspaceDatabaseConnection {
       guard federationID(manifest.id), manifest.byteCount >= 0, manifest.byteCount <= 512 * 1_024 * 1_024,
             manifest.title.utf8.count <= 4_096, !manifest.title.isEmpty, manifest.mediaType.utf8.count <= 256,
             manifest.sha256.count == 64, manifest.sha256.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else {
-        throw federationError("invalid_artifact", "Saved artifacts need a stable identity, SHA-256 digest, and size no larger than 512 MiB.")
+        throw federationError("invalid_artifact", "Saved assets need a stable identity, SHA-256 digest, and size no larger than 512 MiB.")
       }
       let existing = try committedArtifactUnlocked(manifest.id)
       if let existing {
-        guard existing.workspaceID == manifest.workspaceID else { throw federationError("wrong_owner", "This saved artifact belongs to another workspace.") }
+        guard existing.workspaceID == manifest.workspaceID else { throw federationError("wrong_owner", "This saved asset belongs to another workspace.") }
         manifest.revision = existing.revision
         if manifest == existing { return CompanionArtifactTransfer(manifest: existing, nextOffset: existing.byteCount, complete: true) }
         guard !existing.deleted, request.expectedRevision == existing.revision else { throw federationError("revision_conflict", "This artifact changed or was deleted. Keep your local copy and refresh its revision.") }
       } else if request.expectedRevision != nil || manifest.deleted {
-        throw federationError("revision_conflict", "The saved artifact does not exist.")
+        throw federationError("revision_conflict", "The saved asset does not exist.")
       }
       if let pending = try artifactTransferUnlocked(id: manifest.id), !pending.complete {
         manifest.revision = pending.manifest.revision
@@ -75,7 +75,7 @@ extension WorkspaceDatabaseConnection {
       try bind(chunk.id, at: 1, to: lookup); sqlite3_bind_int64(lookup, 2, chunk.revision); sqlite3_bind_int64(lookup, 3, chunk.offset)
       let code = sqlite3_step(lookup)
       if code == SQLITE_ROW {
-        guard try blob(lookup, column: 0) == chunk.data else { throw federationError("chunk_conflict", "A saved artifact chunk cannot be replaced with different bytes.") }
+        guard try blob(lookup, column: 0) == chunk.data else { throw federationError("chunk_conflict", "A saved asset chunk cannot be replaced with different bytes.") }
         return transfer
       }
       guard code == SQLITE_DONE else { throw stepError() }
@@ -98,7 +98,7 @@ extension WorkspaceDatabaseConnection {
       }
       _ = try federationAuthorizedWorkspaceUnlocked(transfer.manifest.workspaceID, deviceID: deviceID)
       if transfer.complete { return transfer.manifest }
-      guard transfer.nextOffset == transfer.manifest.byteCount else { throw federationError("incomplete_artifact", "The saved artifact has not finished uploading.") }
+      guard transfer.nextOffset == transfer.manifest.byteCount else { throw federationError("incomplete_artifact", "The saved asset has not finished uploading.") }
       var hash = SHA256(); var offset: Int64 = 0
       let statement = try prepareUnlocked("SELECT offset,bytes FROM companion_artifact_chunks WHERE artifact_id=? AND revision=? ORDER BY offset")
       defer { sqlite3_finalize(statement) }
@@ -131,7 +131,7 @@ extension WorkspaceDatabaseConnection {
     try withLock {
       guard let manifest = try committedArtifactUnlocked(id), !manifest.deleted,
             revision == nil || revision == manifest.revision, offset >= 0, offset < manifest.byteCount else {
-        throw federationError("not_found", "This saved artifact revision or offset is unavailable.")
+        throw federationError("not_found", "This saved asset revision or offset is unavailable.")
       }
       let statement = try prepareUnlocked("SELECT offset,bytes FROM companion_artifact_chunks WHERE artifact_id=? AND revision=? AND offset<=? ORDER BY offset DESC LIMIT 1")
       defer { sqlite3_finalize(statement) }

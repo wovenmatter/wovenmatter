@@ -253,7 +253,7 @@ final class CentralLibraryClientModel {
         let local: URL
         if let cached = await store?.artifacts.localURL(id: artifact.id) { local = cached }
         else if let engine { local = try await engine.ensureArtifactCached(artifact.id) }
-        else { throw CompanionAPIError(code: "not_downloaded", message: "Reconnect to download this saved artifact.") }
+        else { throw CompanionAPIError(code: "not_downloaded", message: "Reconnect to download this saved asset.") }
         let directory = FileManager.default.temporaryDirectory.appending(path: "WovenMatterClientPreview/" + UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         let title = URL(fileURLWithPath: artifact.title).lastPathComponent

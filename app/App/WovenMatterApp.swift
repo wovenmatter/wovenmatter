@@ -452,7 +452,7 @@ struct WorkspaceMenuCommands: Commands {
             Button("New Chat") { actions?.newChat() }
                 .keyboardShortcut("n", modifiers: .command)
                 .disabled(actions == nil)
-            Button("New Note") { actions?.newNote() }
+            Button("New Asset") { actions?.newNote() }
                 .keyboardShortcut("n", modifiers: [.command, .shift])
                 .disabled(actions == nil)
             Button("New Browser Tab") { actions?.newBrowserTab() }

@@ -433,7 +433,10 @@ final class WorkspaceAgentToolsModel {
             case .history:
                 result = .init(result: try await database.queryAgentHistory(historyQuery(command), callerID: callerID,
                     allWorkspace: command.options["all-workspace"] != nil))
-            case .notes: result = try await command.isDatabaseCommand ? sessionHandler(callerID, command, request) : notes(command, request: request, callerID: callerID)
+            case .notes:
+                if command.isDatabaseCommand { result = try await sessionHandler(callerID, command, request) }
+                else if command.isPageCommand { result = try await pages(command, request: request, callerID: callerID) }
+                else { result = try await notes(command, request: request, callerID: callerID) }
             case .sessions:
                 if command.action == "list" || command.action == "status" {
                     var query = try historyQuery(command)
@@ -551,6 +554,18 @@ final class WorkspaceAgentToolsModel {
             case .revisionConflict: return "revision_conflict"
             }
         }
+        if let error = error as? NoteEditError {
+            switch error {
+            case .blockNotFound, .tableNotFound, .pageTargetMissing: return "not_found"
+            case .boardItemConflict, .pageSubtreeConflict: return "revision_conflict"
+            default: return "invalid_request"
+            }
+        }
+        if let error = error as? ArtifactStateError {
+            if case .conflict = error { return "revision_conflict" }
+            return "invalid_request"
+        }
+        if error is NoteDocumentSafetyError || error is RemoteNoteEditError { return "invalid_request" }
         if error is CancellationError { return "cancelled" }
         return "operation_failed"
     }
@@ -593,7 +608,7 @@ final class WorkspaceAgentToolsModel {
                 after: Int64(command.integer("after", default: 0, range: 0...Int.max)),
                 limit: command.integer("limit", default: 100, range: 1...200)))
         case "create":
-            guard let kind = NoteArtifactKind(rawValue: command.options["kind"] ?? "note") else { throw WorkspaceToolError.invalid("Choose note, spreadsheet or html.") }
+            guard let kind = NoteArtifactKind(rawValue: command.options["kind"] ?? "note"), kind != .canvas else { throw WorkspaceToolError.invalid("Choose note, spreadsheet or html. Use woven_pages_create for a Page.") }
             let id = try await database.createNote(folderID: command.options["folder"], title: command.required("title"), kind: kind, callerConversationID: callerID, requestID: request.requestID)
             return .init(result: .object(["id": .string(id)]))
         case "versions", "version":
@@ -605,6 +620,31 @@ final class WorkspaceAgentToolsModel {
             return try noteMutationAcknowledgement(await noteRestoreHandler(callerID,
                 command.required("note-id", allowPositional: true), command.required("version"),
                 command.required("revision"), request.requestID))
+        case "artifact-state":
+            let response = try await noteHandler(callerID, .init(command: .read, noteID: command.required("note-id")), request.requestID)
+            guard let document = response.document, document.kind == .html else {
+                throw ArtifactStateError.notArtifact
+            }
+            return .init(result: .object(["id": .string(response.noteID),
+                "revision": response.revision.map(GatewayJSONValue.string) ?? .null,
+                "state": try WovenMCPCatalog.json(document.artifactStateSnapshot)]))
+        case "artifact-state-edit":
+            let edit = try NoteToolEdits.request(command)
+            do {
+                let response = try await noteHandler(callerID, edit, request.requestID)
+                var object = try noteMutationAcknowledgement(response).result?.objectValue ?? [:]
+                // A replay carries only its acknowledgement, never another copy of the state.
+                if let document = response.document { object["state"] = try WovenMCPCatalog.json(document.artifactStateSnapshot) }
+                return .init(success: response.success, result: .object(object), error: response.error,
+                    code: response.success ? nil : "mutation_failed")
+            } catch ArtifactStateError.conflict(let key, let current) {
+                // The failed transaction changed nothing, so this is current state to act on.
+                var object: [String: GatewayJSONValue] = ["id": .string(edit.noteID), "key": .string(key),
+                    "currentVersion": .number(Double(current?.version ?? 0))]
+                if let value = current?.value { object["currentValue"] = value }
+                let message = ArtifactStateError.conflict(key: key, current: current).localizedDescription
+                return .init(success: false, result: .object(object), error: message, code: "revision_conflict")
+            }
         default:
             let edit = try NoteToolEdits.request(command)
             let response = try await noteHandler(callerID, edit, request.requestID)
@@ -615,6 +655,100 @@ final class WorkspaceAgentToolsModel {
             }
             return try noteMutationAcknowledgement(response)
         }
+    }
+
+    private func pages(_ command: WovenMatterToolCommand, request: WovenMatterToolRequest, callerID: String) async throws -> WovenMatterToolResponse {
+        switch command.action {
+        case "page-list":
+            return .init(result: try await database.listAgentPages(callerID: callerID, search: command.options["search"], folderID: command.options["folder"],
+                after: Int64(try command.integer("after", default: Int.max, range: 0...Int.max)),
+                limit: try command.integer("limit", default: 50, range: 1...200)))
+        case "page-create":
+            let purpose = command.options["purpose"] ?? ""
+            try NoteToolEdits.requirePurpose(purpose)
+            let content = try NoteDocument(kind: .canvas, boardPurpose: purpose.isEmpty ? nil : purpose, pageNodes: [:]).encoded()
+            let id = try await database.createNote(folderID: command.options["folder"], title: command.required("title"), content: content, kind: .canvas,
+                callerConversationID: callerID, requestID: request.requestID)
+            return .init(result: .object(["id": .string(id), "kind": .string("page")]))
+        case "page-read":
+            let filter = try BoardReadFilter(command: command)
+            let (document, response) = try await readPage(command.required("note-id"), callerID: callerID, requestID: request.requestID)
+            let assets = try await database.boardAssetSummaries(callerID: callerID, ids: document.boardAssetIDs(filter: filter))
+            return .init(result: try document.pageReadValue(id: response.noteID, title: response.title ?? "",
+                revision: response.revision ?? "", filter: filter, assets: assets))
+        default:
+            let edit = try NoteToolEdits.pageRequest(command, requestID: request.requestID)
+            let componentID = command.action == "page-add-component" ? request.requestID : command.options["id"]
+            do {
+                let response = try await noteHandler(callerID, edit, request.requestID)
+                return try await pageAcknowledgement(response, componentID: componentID, callerID: callerID)
+            } catch NoteEditError.boardItemConflict(let id, _) {
+                return await pageConflict(pageID: edit.noteID, componentID: id, callerID: callerID, requestID: request.requestID)
+            } catch NoteEditError.pageSubtreeConflict(let id, _) {
+                return await pageConflict(pageID: edit.noteID, componentID: id, callerID: callerID, requestID: request.requestID)
+            } catch WorkspaceNoteMutationError.revisionConflict {
+                return await pageConflict(pageID: edit.noteID, componentID: nil, callerID: callerID, requestID: request.requestID)
+            } catch RemoteNoteEditError.operationNotAllowed, NoteEditError.artifactKindMismatch {
+                throw WorkspaceToolError.invalid("This asset is not a Page. Use the woven_notes tools.")
+            }
+        }
+    }
+
+    private func readPage(_ id: String, callerID: String, requestID: String) async throws -> (NoteDocument, NoteEditingResponse) {
+        let response = try await noteHandler(callerID, .init(command: .read, noteID: id), requestID)
+        guard let document = response.document, document.kind == .canvas else {
+            throw WorkspaceToolError.invalid("This asset is not a Page. Use woven_notes_read.")
+        }
+        return (document, response)
+    }
+
+    /// A replay acknowledges the original revision; it never returns old contents.
+    private func pageAcknowledgement(_ response: NoteEditingResponse, componentID: String?, callerID: String) async throws -> WovenMatterToolResponse {
+        var object: [String: GatewayJSONValue] = [
+            "pageID": .string(response.noteID),
+            "revision": response.revision.map(GatewayJSONValue.string) ?? .null,
+            "replayed": .bool(response.replayed == true),
+        ]
+        if let title = response.title { object["title"] = .string(title) }
+        if let componentID { object["componentID"] = .string(componentID) }
+        if let componentID, let document = response.document, document.blocks.contains(where: { $0.id == componentID }) {
+            let assets = try await database.boardAssetSummaries(callerID: callerID, ids: document.canvas?[componentID]?.assetID.map { [$0] } ?? [])
+            object["componentRevision"] = .string(document.boardItemRevision(for: componentID))
+            object["component"] = try document.pageComponentValue(id: componentID, assets: assets)
+        }
+        return .init(success: response.success, result: .object(object), error: response.error,
+            code: response.success ? nil : "mutation_failed")
+    }
+
+    /// The failed transaction changed nothing, so this reports current state an
+    /// agent can use directly. It says the same in text for clients that drop structure.
+    private func pageConflict(pageID: String, componentID: String?, callerID: String, requestID: String) async -> WovenMatterToolResponse {
+        var object: [String: GatewayJSONValue] = ["pageID": .string(pageID)]
+        var message = componentID.map { "Page component \($0) changed since it was read." } ?? "The Page changed since it was read."
+        if let (stored, response) = try? await readPage(pageID, callerID: callerID, requestID: requestID) {
+            // Reads project an unmigrated Page, so tokens here match what the write compared.
+            let document = stored.materializedPage()
+            let revision = response.revision ?? ""
+            object["currentRevision"] = .string(revision)
+            message += " Current document revision: \(revision)."
+            if let componentID {
+                object["componentID"] = .string(componentID)
+                if document.blocks.contains(where: { $0.id == componentID }) {
+                    let current = document.boardItemRevision(for: componentID)
+                    let ids = document.canvas?[componentID]?.assetID.map { [$0] } ?? []
+                    let assets = (try? await database.boardAssetSummaries(callerID: callerID, ids: ids)) ?? [:]
+                    object["currentComponentRevision"] = .string(current)
+                    object["currentSubtreeRevision"] = .string(document.pageSubtreeRevision(for: componentID))
+                    object["component"] = try? document.pageComponentValue(id: componentID, assets: assets)
+                    message += " Current component revision: \(current)."
+                } else {
+                    object["componentRemoved"] = .bool(true)
+                    message += " The component no longer exists."
+                }
+            }
+        }
+        message += " Apply your intended change to the current data and retry with a new requestID."
+        return .init(success: false, result: .object(object), error: message, code: "revision_conflict")
     }
 
     private func noteMutationAcknowledgement(_ response: NoteEditingResponse) throws -> WovenMatterToolResponse {

@@ -28,6 +28,11 @@ extension NoteDocument {
       fileExtension = "json"
     } else {
       switch kind {
+      case .canvas:
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        data = try encoder.encode(self)
+        fileExtension = "json"
       case .html:
         data = Data(html.utf8)
         fileExtension = "html"
@@ -88,6 +93,14 @@ extension NoteDocument {
     var budget = WorkspaceExportBudget()
     try budget.consume(title)
     try budget.consume(html)
+    if let canvas {
+      try budget.consume(items: canvas.count)
+      for (id, placement) in canvas {
+        try budget.consume(id)
+        try budget.consume(placement.assetID)
+        try budget.consume(bytes: 128)
+      }
+    }
     func link(_ link: DatabaseArtifactLink?, budget: inout WorkspaceExportBudget) throws {
       guard let link else { return }
       try budget.consume(link.sourceID); try budget.consume(link.databaseID)

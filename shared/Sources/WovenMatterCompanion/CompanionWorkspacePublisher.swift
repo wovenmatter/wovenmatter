@@ -1,7 +1,7 @@
 import Foundation
 
 /// A service publisher can submit only its own execution journal and explicitly
-/// saved artifacts, and resolve exact retained-run associations for that workspace.
+/// saved assets, and resolve exact retained-run associations for that workspace.
 /// It is not a paired-device, command, inference, or general library read grant.
 public struct CompanionWorkspacePublisherGrant: Codable, Equatable, Sendable {
   public var grantID: String

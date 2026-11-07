@@ -6,31 +6,57 @@ public struct NoteDocument: Codable, Equatable, Sendable {
   public var version: Int
   public var kind: NoteArtifactKind
   public var blocks: [NoteBlock]
+  public var canvas: [String: CanvasCardPlacement]?
+  public var canvasSections: [CanvasSection]?
+  public var canvasConnections: [CanvasConnection]?
   public var html: String
   public var databaseLink: DatabaseArtifactLink?
+  /// What a Board is for. Project text read as data, never as authorization.
+  public var boardPurpose: String?
+  /// Collaboration metadata keyed by stable card (block) ID.
+  public var boardItems: [String: BoardItem]?
+  /// The nesting of a Page's blocks. `nil` is a Board from before Pages flowed.
+  public var pageNodes: [String: PageNode]?
+  /// Saved inputs and app state of an Artifact, keyed by `app:` or `form:` names.
+  public var artifactState: [String: ArtifactStateEntry]?
 
   public init(
     version: Int = currentVersion,
     kind: NoteArtifactKind = .note,
     blocks: [NoteBlock] = [],
     html: String = "",
-    databaseLink: DatabaseArtifactLink? = nil
+    canvas: [String: CanvasCardPlacement]? = nil,
+    canvasSections: [CanvasSection]? = nil,
+    canvasConnections: [CanvasConnection]? = nil,
+    databaseLink: DatabaseArtifactLink? = nil,
+    boardPurpose: String? = nil,
+    boardItems: [String: BoardItem]? = nil,
+    pageNodes: [String: PageNode]? = nil,
+    artifactState: [String: ArtifactStateEntry]? = nil
   ) {
     self.version = version
     self.kind = kind
-    self.blocks = if blocks.isEmpty {
+    self.blocks = if blocks.isEmpty && kind != .canvas {
       kind == .spreadsheet
         ? [.table(NoteTableBlock(rows: 20, columns: 8, headerRow: true))]
         : [.richText(NoteRichTextBlock())]
     } else {
       blocks
     }
+    self.canvas = canvas
+    self.canvasSections = canvasSections
+    self.canvasConnections = canvasConnections
     self.html = html
     self.databaseLink = databaseLink
+    self.boardPurpose = boardPurpose
+    self.boardItems = boardItems
+    self.pageNodes = pageNodes
+    self.artifactState = artifactState
   }
 
   private enum CodingKeys: String, CodingKey {
-    case version, kind, blocks, html, databaseLink
+    case version, kind, blocks, html, databaseLink, canvas, canvasSections, canvasConnections, boardPurpose, boardItems
+    case pageNodes, artifactState
   }
 
   public init(from decoder: any Decoder) throws {
@@ -46,11 +72,18 @@ public struct NoteDocument: Codable, Equatable, Sendable {
     version = Self.currentVersion
     kind = try values.decodeIfPresent(NoteArtifactKind.self, forKey: .kind) ?? .note
     blocks = try values.decodeIfPresent([NoteBlock].self, forKey: .blocks) ?? []
+    canvasSections = try values.decodeIfPresent([CanvasSection].self, forKey: .canvasSections)
+    canvasConnections = try values.decodeIfPresent([CanvasConnection].self, forKey: .canvasConnections)
+    canvas = try values.decodeIfPresent([String: CanvasCardPlacement].self, forKey: .canvas)
     html = try values.decodeIfPresent(String.self, forKey: .html) ?? ""
     databaseLink = try values.decodeIfPresent(
       DatabaseArtifactLink.self,
       forKey: .databaseLink
     )
+    boardPurpose = try values.decodeIfPresent(String.self, forKey: .boardPurpose)
+    boardItems = try values.decodeIfPresent([String: BoardItem].self, forKey: .boardItems)
+    pageNodes = try values.decodeIfPresent([String: PageNode].self, forKey: .pageNodes)
+    artifactState = try values.decodeIfPresent([String: ArtifactStateEntry].self, forKey: .artifactState)
   }
 
   public static func decode(_ content: String) -> NoteDocument {
@@ -83,7 +116,14 @@ public struct NoteDocument: Codable, Equatable, Sendable {
       kind: kind,
       blocks: blocks.map(\.normalized),
       html: html,
-      databaseLink: databaseLink
+      canvas: canvas,
+      canvasSections: canvasSections,
+      canvasConnections: canvasConnections,
+      databaseLink: databaseLink,
+      boardPurpose: boardPurpose,
+      boardItems: boardItems,
+      pageNodes: pageNodes,
+      artifactState: artifactState
     )
   }
 

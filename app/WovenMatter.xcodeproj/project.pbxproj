@@ -7,6 +7,18 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		283736DA094FD83AE984C8D9 /* DashboardPageImageImport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 211AA157217C28EC5ADF4CD3 /* DashboardPageImageImport.swift */; };
+		B10A285D13BC530C6796AE09 /* ApplicationModel+ArtifactInputs.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD9E7289D06829ADA99BDB30 /* ApplicationModel+ArtifactInputs.swift */; };
+		3916B578BCC0F3BA0615B21A /* DashboardPageAssetEmbed.swift in Sources */ = {isa = PBXBuildFile; fileRef = 515656236774C19232018A70 /* DashboardPageAssetEmbed.swift */; };
+		F5858FAB18E67146ADA585EA /* DashboardPageComponentMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12AC5ECE47E299F5063607C4 /* DashboardPageComponentMenu.swift */; };
+		5CC920A3B60E5B8249C7CA74 /* DashboardPageTextFlow.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA75185448532DBDE3FB2D8F /* DashboardPageTextFlow.swift */; };
+		8160B2404AAD828F1DCD8795 /* DashboardPageEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 419B3B76D5F81D1B02AD9059 /* DashboardPageEditor.swift */; };
+		962548B00F72E479686D0315 /* DashboardPersistentArtifactView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 057F73B2AAF3A87BE19921D5 /* DashboardPersistentArtifactView.swift */; };
+		B17579AC9B2D8EA6CEBEE078 /* DashboardArtifactStateSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAEA22D7DA825A413BA5615E /* DashboardArtifactStateSnapshot.swift */; };
+		A926FFE23C14F8E1F831EEA8 /* DashboardArtifactStateScript.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEB177F7569AE5E4A5D3E71F /* DashboardArtifactStateScript.swift */; };
+		B1F674635460DD7CD908D3BE /* ApplicationModel+Boards.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58AF79E0D198DB9D0CD834B4 /* ApplicationModel+Boards.swift */; };
+		4E22CDDAA6EDB5EF58AD7284 /* DashboardBoardItemInspector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 365A001AABC65B97F0703FEF /* DashboardBoardItemInspector.swift */; };
+		CA4A50000000000000000011 /* DashboardCanvasViewState.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA4A50000000000000000012 /* DashboardCanvasViewState.swift */; };
 		D20900000000000000000003 /* LegacyMacLibraryUpgrade.swift in Sources */ = {isa = PBXBuildFile; fileRef = D20900000000000000000004 /* LegacyMacLibraryUpgrade.swift */; };
 		D20900000000000000000001 /* PairedMacSyncController.swift in Sources */ = {isa = PBXBuildFile; fileRef = D20900000000000000000002 /* PairedMacSyncController.swift */; };
 		58D2DD715AC36ACD6DF22BB2 /* LUCIDE_LICENSE.txt in Resources */ = {isa = PBXBuildFile; fileRef = 0AAFD6EAB1F3FB697B1A2D05 /* LUCIDE_LICENSE.txt */; };
@@ -171,6 +183,18 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		211AA157217C28EC5ADF4CD3 /* DashboardPageImageImport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DashboardPageImageImport.swift"; sourceTree = "<group>"; };
+		BD9E7289D06829ADA99BDB30 /* ApplicationModel+ArtifactInputs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+ArtifactInputs.swift"; sourceTree = "<group>"; };
+		515656236774C19232018A70 /* DashboardPageAssetEmbed.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DashboardPageAssetEmbed.swift"; sourceTree = "<group>"; };
+		12AC5ECE47E299F5063607C4 /* DashboardPageComponentMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DashboardPageComponentMenu.swift"; sourceTree = "<group>"; };
+		DA75185448532DBDE3FB2D8F /* DashboardPageTextFlow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DashboardPageTextFlow.swift"; sourceTree = "<group>"; };
+		419B3B76D5F81D1B02AD9059 /* DashboardPageEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DashboardPageEditor.swift"; sourceTree = "<group>"; };
+		057F73B2AAF3A87BE19921D5 /* DashboardPersistentArtifactView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DashboardPersistentArtifactView.swift"; sourceTree = "<group>"; };
+		CAEA22D7DA825A413BA5615E /* DashboardArtifactStateSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DashboardArtifactStateSnapshot.swift"; sourceTree = "<group>"; };
+		EEB177F7569AE5E4A5D3E71F /* DashboardArtifactStateScript.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DashboardArtifactStateScript.swift"; sourceTree = "<group>"; };
+		58AF79E0D198DB9D0CD834B4 /* ApplicationModel+Boards.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+Boards.swift"; sourceTree = "<group>"; };
+		365A001AABC65B97F0703FEF /* DashboardBoardItemInspector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DashboardBoardItemInspector.swift"; sourceTree = "<group>"; };
+		CA4A50000000000000000012 /* DashboardCanvasViewState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardCanvasViewState.swift; sourceTree = "<group>"; };
 		D20900000000000000000004 /* LegacyMacLibraryUpgrade.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LegacyMacLibraryUpgrade.swift; sourceTree = "<group>"; };
 		D20900000000000000000002 /* PairedMacSyncController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairedMacSyncController.swift; sourceTree = "<group>"; };
 		0AAFD6EAB1F3FB697B1A2D05 /* LUCIDE_LICENSE.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = ../docs/assets/LUCIDE_LICENSE.txt; sourceTree = SOURCE_ROOT; };
@@ -435,6 +459,8 @@
 				753DF034EE6D727B6091929D /* BackendLibraryService.swift */,
 				C131C0A00000000000000001 /* ApplicationModel+ConversationActions.swift */,
 				C131C0B00000000000000001 /* ApplicationModel+NoteActions.swift */,
+				58AF79E0D198DB9D0CD834B4 /* ApplicationModel+Boards.swift */,
+				BD9E7289D06829ADA99BDB30 /* ApplicationModel+ArtifactInputs.swift */,
 				B88F25850147F01B163EDF7E /* ApplicationModel+Calendar.swift */,
 				20E807F893654CD4A1F24D40 /* WorkspaceAgentToolsModel.swift */,
 				7C678F616FB535F772A00598 /* WorkspaceAgentToolsModel+Calendar.swift */,
@@ -474,6 +500,8 @@
 				40D1B5DEF1B0023CB8C52B6D /* DashboardSharedViews.swift */,
 				C04200000000000000000002 /* DashboardConversationPopover.swift */,
 				52C822631EDF91C6FE39C754 /* DashboardNotePane.swift */,
+				365A001AABC65B97F0703FEF /* DashboardBoardItemInspector.swift */,
+				CA4A50000000000000000012 /* DashboardCanvasViewState.swift */,
 				45C178F10C928BB5DF700830 /* DashboardComposer.swift */,
 				B5CEADA1DA4AFBF4EFFC2CDC /* DashboardConversation.swift */,
 				988F5895CCE74B6E9C970200 /* ConversationGoalControls.swift */,
@@ -498,6 +526,14 @@
 				D45100000000000000000002 /* DashboardDesign.swift */,
 				D57100000000000000000002 /* DashboardStyle.swift */,
 				DA4C00000000000000000004 /* DashboardHTMLArtifactDocument.swift */,
+				211AA157217C28EC5ADF4CD3 /* DashboardPageImageImport.swift */,
+				515656236774C19232018A70 /* DashboardPageAssetEmbed.swift */,
+				12AC5ECE47E299F5063607C4 /* DashboardPageComponentMenu.swift */,
+				DA75185448532DBDE3FB2D8F /* DashboardPageTextFlow.swift */,
+				419B3B76D5F81D1B02AD9059 /* DashboardPageEditor.swift */,
+				057F73B2AAF3A87BE19921D5 /* DashboardPersistentArtifactView.swift */,
+				CAEA22D7DA825A413BA5615E /* DashboardArtifactStateSnapshot.swift */,
+				EEB177F7569AE5E4A5D3E71F /* DashboardArtifactStateScript.swift */,
 				DA4C00000000000000000002 /* DashboardColors.swift */,
 				A11C00000000000000000004 /* WorkspaceView.swift */,
 				489A29D04369BF898400D045 /* RootView.swift */,
@@ -754,6 +790,8 @@
 				923D138C1F54FC887AA90493 /* DashboardSharedViews.swift in Sources */,
 				C04200000000000000000001 /* DashboardConversationPopover.swift in Sources */,
 				2350EC32F0F50FD3DB4069F3 /* DashboardNotePane.swift in Sources */,
+				4E22CDDAA6EDB5EF58AD7284 /* DashboardBoardItemInspector.swift in Sources */,
+				CA4A50000000000000000011 /* DashboardCanvasViewState.swift in Sources */,
 				FE8DA980F8CFABCB8AAB3893 /* DashboardComposer.swift in Sources */,
 				E8E4FA74C6587F81C8999942 /* DashboardConversation.swift in Sources */,
 				A9682778D5284ABE8DF0D342 /* ConversationGoalControls.swift in Sources */,
@@ -788,6 +826,8 @@
 				281F6DF22C3AE19CCE3FC99D /* BackendLibraryService.swift in Sources */,
 				C131C0A00000000000000002 /* ApplicationModel+ConversationActions.swift in Sources */,
 				C131C0B00000000000000002 /* ApplicationModel+NoteActions.swift in Sources */,
+				B1F674635460DD7CD908D3BE /* ApplicationModel+Boards.swift in Sources */,
+				B10A285D13BC530C6796AE09 /* ApplicationModel+ArtifactInputs.swift in Sources */,
 				A13EC094A3DEA4F302868640 /* ApplicationModel+Calendar.swift in Sources */,
 				5C84BF439B9047118002DD70 /* WorkspaceAgentToolsModel.swift in Sources */,
 				E9A58E7B05C5C2726FA4EE82 /* WorkspaceAgentToolsModel+Calendar.swift in Sources */,
@@ -818,6 +858,14 @@
 				D45100000000000000000001 /* DashboardDesign.swift in Sources */,
 				D57100000000000000000001 /* DashboardStyle.swift in Sources */,
 				DA4C00000000000000000003 /* DashboardHTMLArtifactDocument.swift in Sources */,
+				283736DA094FD83AE984C8D9 /* DashboardPageImageImport.swift in Sources */,
+				3916B578BCC0F3BA0615B21A /* DashboardPageAssetEmbed.swift in Sources */,
+				F5858FAB18E67146ADA585EA /* DashboardPageComponentMenu.swift in Sources */,
+				5CC920A3B60E5B8249C7CA74 /* DashboardPageTextFlow.swift in Sources */,
+				8160B2404AAD828F1DCD8795 /* DashboardPageEditor.swift in Sources */,
+				962548B00F72E479686D0315 /* DashboardPersistentArtifactView.swift in Sources */,
+				B17579AC9B2D8EA6CEBEE078 /* DashboardArtifactStateSnapshot.swift in Sources */,
+				A926FFE23C14F8E1F831EEA8 /* DashboardArtifactStateScript.swift in Sources */,
 				DA4C00000000000000000001 /* DashboardColors.swift in Sources */,
 				A11C00000000000000000003 /* WorkspaceView.swift in Sources */,
 				5E64711B441F5A188A2862AC /* RootView.swift in Sources */,
