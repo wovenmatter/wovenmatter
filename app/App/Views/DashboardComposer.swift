@@ -60,6 +60,10 @@ struct DashboardComposer: View {
     var folderWorkspaceID: String? = nil
     var folderSelectionDisabled = true
     var onSelectFolder: ((String?) -> Void)? = nil
+    /// When set, the add button goes straight to the upload action under this label.
+    var directAttachmentLabel: String? = nil
+    /// Offered Escape first, after slash commands. Returns whether it handled the key.
+    var onEscapeKey: (() -> Bool)? = nil
     @Environment(\.dashboardTheme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.conversationTaskProgress) private var taskProgress
@@ -273,7 +277,7 @@ struct DashboardComposer: View {
             onTab: applySelectedSlashCommandIfNeeded,
             onCommandNavigation: onCommandNavigation,
             onMoveSelection: moveSlashSelection,
-            onEscape: dismissSlashCommands,
+            onEscape: { dismissSlashCommands() || onEscapeKey?() == true },
             completionRequest: $completionRequest,
             onCaretAtEndChange: { caretAtEnd = $0 },
             onAttachFiles: onDropFiles,
@@ -573,7 +577,27 @@ struct DashboardComposer: View {
         .help(isCollapsed ? "Expand composer" : "Collapse composer")
     }
 
-    private var attachmentControl: some View {
+    @ViewBuilder private var attachmentControl: some View {
+        if let directAttachmentLabel {
+            Button {
+                onActivate()
+                focused = false
+                openMenu = nil
+                onAttachmentAction(.upload)
+            } label: {
+                DashboardLucideIcon(glyph: .plus, size: 16)
+                    .frame(width: 36, height: 36)
+                    .contentShape(Circle())
+            }
+            .buttonStyle(DashboardComposerControlButtonStyle())
+            .accessibilityLabel(directAttachmentLabel)
+            .help(directAttachmentLabel)
+        } else {
+            attachmentMenuControl
+        }
+    }
+
+    private var attachmentMenuControl: some View {
         composerIconButton(
             icon: .plus,
             accessibilityLabel: "Add files or photos",

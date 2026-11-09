@@ -48,6 +48,7 @@ struct SettingsCompanionView: View {
             SettingsDeviceWorkspaceInventory(workspaces: host.executionWorkspaces)
             if !DevelopmentLaunch.isClient {
                 DevicePairingDiscoveryCard(pairing: client.devicePairing, host: host, canPairWithCentral: true)
+                BotsDiscoverDevicesCard(bots: model.bots)
                 DevicePairingCodeCard(host: host)
                 SettingsCard(title: "Use a pairing link", detail: "Copy a pairing link from the other Mac’s Apple Devices settings.") {
                     HStack {
