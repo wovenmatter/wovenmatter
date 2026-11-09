@@ -1,3 +1,4 @@
+#if os(macOS)
 import WorkspaceFixtures
 import Foundation
 import Testing
@@ -318,3 +319,4 @@ final class ConfigurationTestProcessLease: LocalACPProcessLeasing, @unchecked Se
     lock.withLock { holdCount = max(0, holdCount - 1) }
   }
 }
+#endif

@@ -127,8 +127,10 @@ struct LibraryHostTests {
   @Test func optionsRequireAnExplicitDataRoot() throws {
     #expect(throws: LibraryHostError.self) { try LibraryHostOptions.parse([]) }
     #expect(try LibraryHostOptions.parse(["--version"]) == nil)
-    let options = try #require(try LibraryHostOptions.parse(["--data-root", "/srv/woven", "--port", "4100", "--socket", "/run/x.sock", "--migrate-only"]))
+    let options = try #require(try LibraryHostOptions.parse(["--data-root", "/srv/woven", "--port", "4100", "--socket", "/run/x.sock",
+                                                             "--harness-catalog", "/opt/release/harnesses/catalog.json", "--migrate-only"]))
     #expect(options.dataRoot.path == "/srv/woven" && options.port == 4100 && options.socket?.path == "/run/x.sock" && options.migrateOnly)
+    #expect(options.harnessCatalog?.path == "/opt/release/harnesses/catalog.json")
     #expect(throws: LibraryHostError.self) { try LibraryHostOptions.parse(["--data-root", "/a", "--port", "70000"]) }
     #expect(throws: LibraryHostError.self) { try LibraryHostOptions.parse(["--data-root", "/a", "--bogus"]) }
   }

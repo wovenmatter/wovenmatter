@@ -15,21 +15,24 @@ public struct LibraryHostOptions: Equatable, Sendable {
   public var port: UInt16 = 0
   public var socket: URL?
   public var tokenFile: URL?
+  public var harnessCatalog: URL?
   public var migrateOnly = false
 
   public static let usage = """
-    usage: wovenmatter-library --data-root DIR [--port N] [--socket PATH] [--token-file PATH] [--migrate-only]
+    usage: wovenmatter-library --data-root DIR [--port N] [--socket PATH] [--token-file PATH]
+                               [--harness-catalog PATH] [--migrate-only]
            wovenmatter-library --version
 
       --data-root DIR    Library host data root (created 0700). Holds library/, secrets/ and run/.
       --port N           Loopback TCP port for /v1/health and mounted peer/mobile routes (default 0: any free port).
       --socket PATH      Unix socket for the local API (default DIR/run/library.sock).
       --token-file PATH  Local API bearer token, 0600 (default DIR/run/library-api.token; created if missing).
+      --harness-catalog PATH  harnesses/catalog.json (default: the host release's copy beside this binary).
       --migrate-only     Open and migrate the library database, then exit.
     """
 
   public static func parse(_ arguments: [String]) throws -> LibraryHostOptions? {
-    var root: URL?, port: UInt16 = 0, socket: URL?, token: URL?, migrate = false
+    var root: URL?, port: UInt16 = 0, socket: URL?, token: URL?, catalog: URL?, migrate = false
     var index = arguments.startIndex
     func value(_ flag: String) throws -> String {
       index += 1
@@ -48,6 +51,7 @@ public struct LibraryHostOptions: Equatable, Sendable {
         port = parsed
       case "--socket": socket = path(try value("--socket"))
       case "--token-file": token = path(try value("--token-file"))
+      case "--harness-catalog": catalog = path(try value("--harness-catalog"))
       case "--migrate-only": migrate = true
       case "--help", "-h": throw LibraryHostError.usage(usage)
       default: throw LibraryHostError.usage("Unknown argument \(arguments[index]).\n\n\(usage)")
@@ -55,7 +59,7 @@ public struct LibraryHostOptions: Equatable, Sendable {
       index += 1
     }
     guard let root else { throw LibraryHostError.usage("--data-root is required.\n\n\(usage)") }
-    return .init(dataRoot: root, port: port, socket: socket, tokenFile: token, migrateOnly: migrate)
+    return .init(dataRoot: root, port: port, socket: socket, tokenFile: token, harnessCatalog: catalog, migrateOnly: migrate)
   }
 }
 
@@ -74,6 +78,10 @@ public enum LibraryHostCommand {
       FileHandle.standardError.write(Data((error.localizedDescription + "\n").utf8)); return 64
     }
     let layout = LibraryHostLayout(root: options.dataRoot)
+    // Sessions are created against the shared harness catalog. A host bundle
+    // ships it at <release>/harnesses; this binary is <release>/host/library/<platform>/.
+    HarnessCatalog.hostCatalogURL = options.harnessCatalog ?? Bundle.main.executableURL?.resolvingSymlinksInPath()
+      .deletingLastPathComponent().appending(path: "../../../harnesses/catalog.json").standardizedFileURL
     do {
       let host = try await LibraryHost(layout: layout, tokenFile: options.tokenFile)
       if options.migrateOnly {

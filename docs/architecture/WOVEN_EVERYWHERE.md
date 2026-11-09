@@ -99,7 +99,8 @@ the statically linked build described under "Linux build".
 is no default production location.
 
 ```
-wovenmatter-library --data-root DIR [--port N] [--socket PATH] [--token-file PATH] [--migrate-only]
+wovenmatter-library --data-root DIR [--port N] [--socket PATH] [--token-file PATH]
+                    [--harness-catalog PATH] [--migrate-only]
 wovenmatter-library --version
 ```
 
@@ -107,6 +108,8 @@ wovenmatter-library --version
   free port.
 - `--socket PATH`: the local API's Unix socket, default `DIR/run/library.sock`.
 - `--token-file PATH`: the local API bearer, default `DIR/run/library-api.token`.
+- `--harness-catalog PATH`: the shared `harnesses/catalog.json`; by default the
+  copy a host release ships three directories above the binary.
 - `--migrate-only`: open and migrate the database, print
   `{"event":"migrated"}` and exit. Use it to verify an install or update.
 - When both listeners are ready it prints one line to stdout and writes the

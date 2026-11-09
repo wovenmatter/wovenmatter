@@ -76,6 +76,15 @@ public enum HarnessCatalog {
     return document
   }
 
+  private static let hostCatalogLock = NSLock()
+  nonisolated(unsafe) private static var configuredHostCatalog: URL?
+  /// A host without an app bundle (`wovenmatter-library`) names the catalog
+  /// its release ships. Set it before the first catalog read.
+  public static var hostCatalogURL: URL? {
+    get { hostCatalogLock.withLock { configuredHostCatalog } }
+    set { hostCatalogLock.withLock { configuredHostCatalog = newValue } }
+  }
+
   public static func loadBundled() throws -> HarnessCatalogDocument {
     let fileManager = FileManager.default
     let currentDirectory = URL(
@@ -83,6 +92,7 @@ public enum HarnessCatalog {
       isDirectory: true
     )
     let candidates = [
+      hostCatalogURL,
       Bundle.main.resourceURL?.appending(path: "harnesses/catalog.json"),
       currentDirectory.appending(path: "harnesses/catalog.json"),
       currentDirectory.appending(path: "../harnesses/catalog.json"),

@@ -7,7 +7,9 @@ import Musl
 #endif
 import Dispatch
 import Foundation
-import WovenMatterCore
+#if !canImport(Darwin)
+import WovenMatterCore // Darwin-qualified calls; tests also compile this file on its own on macOS.
+#endif
 
 /// Headless helper mode of the app. The parent's heartbeat pipe is deliberately
 /// not inherited by Tailscale. EOF or helper termination reaps only our Serve child.
