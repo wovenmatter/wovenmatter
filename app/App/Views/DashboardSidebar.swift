@@ -121,6 +121,8 @@ struct DashboardSidebarRail: View {
     let remoteWorkspaces: RemoteWorkspacesModel
     let localWorkspaceReady: Bool
     let localExecutionWorkspaceID: String?
+    let executionWorkspaces: [CompanionExecutionWorkspace]
+    let conversationOwners: [String: String]
     let folders: [WorkspaceFolderRecord]
     let conversations: [WorkspaceConversationRecord]
     let notes: [WorkspaceNoteRecord]
@@ -160,6 +162,8 @@ struct DashboardSidebarRail: View {
             remoteWorkspaces: remoteWorkspaces,
             localWorkspaceReady: localWorkspaceReady,
             localExecutionWorkspaceID: localExecutionWorkspaceID,
+            executionWorkspaces: executionWorkspaces,
+            conversationOwners: conversationOwners,
             folders: folders,
             conversations: conversations,
             notes: notes,
@@ -221,6 +225,8 @@ struct DashboardSidebarNavigationPage: View {
     let remoteWorkspaces: RemoteWorkspacesModel
     let localWorkspaceReady: Bool
     let localExecutionWorkspaceID: String?
+    let executionWorkspaces: [CompanionExecutionWorkspace]
+    let conversationOwners: [String: String]
     let folders: [WorkspaceFolderRecord]
     let conversations: [WorkspaceConversationRecord]
     let notes: [WorkspaceNoteRecord]
@@ -259,6 +265,10 @@ struct DashboardSidebarNavigationPage: View {
 
     private var pinnedAgentIDs: Set<UUID> {
         Set(pinnedAgentOrder)
+    }
+
+    private var pairedWorkspaceLinks: [CompanionExecutionWorkspace] {
+        DashboardPairedWorkspaceSidebarModel.workspaces(executionWorkspaces)
     }
 
     private var remoteWorkspaceLinks: [DashboardRemoteWorkspaceSidebarLink] {
@@ -315,7 +325,8 @@ struct DashboardSidebarNavigationPage: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text("Workspaces")
                     .font(.system(size: 13, weight: .semibold))
-                Text("\(remoteWorkspaceLinks.count + 1) \(remoteWorkspaceLinks.isEmpty ? "workspace" : "workspaces")")
+                let workspaceCount = remoteWorkspaceLinks.count + pairedWorkspaceLinks.count + 1
+                Text("\(workspaceCount) \(workspaceCount == 1 ? "workspace" : "workspaces")")
                 .font(.system(size: 11))
                 .foregroundStyle(DashboardPalette.foreground)
             }
@@ -438,11 +449,14 @@ struct DashboardSidebarNavigationPage: View {
                 let key = DashboardAgentDisclosureKey.remoteWorkspaces
                 agentDisclosureHeading(title: "Remote workspaces", key: key)
                 if agentSectionExpanded(key) {
-                    if remoteWorkspaceLinks.isEmpty {
+                    if remoteWorkspaceLinks.isEmpty && pairedWorkspaceLinks.isEmpty {
                         agentEmptyLabel("No remote workspaces yet")
                     }
                     ForEach(remoteWorkspaceLinks) { workspace in
                         remoteWorkspaceSection(workspace)
+                    }
+                    ForEach(pairedWorkspaceLinks) { workspace in
+                        pairedWorkspaceSection(workspace)
                     }
                 }
             }
@@ -466,7 +480,59 @@ struct DashboardSidebarNavigationPage: View {
     private var unavailableFolderOwnerIDs: [String] {
         let known = Set(remoteWorkspaceLinks.map { ApplicationModel.remoteDatabaseSourceID($0.id) }
             + [localExecutionWorkspaceID].compactMap { $0 })
-        return Set(folders.compactMap { $0.executionWorkspaceID }.filter { !$0.isEmpty }).subtracting(known).sorted()
+        // iPhone and iPad folders are listed under their own workspace.
+        let paired = Set(pairedWorkspaceLinks.map { DashboardPairedWorkspaceSidebarModel.canonicalID($0.id) })
+        return Set(folders.compactMap { $0.executionWorkspaceID }.filter {
+            !$0.isEmpty && !paired.contains(DashboardPairedWorkspaceSidebarModel.canonicalID($0))
+        }).subtracting(known).sorted()
+    }
+
+    /// A paired iPhone or iPad: its Quick Chat history (read-only here) and the
+    /// folders bound to it. Folders are created on the device itself.
+    @ViewBuilder
+    private func pairedWorkspaceSection(_ workspace: CompanionExecutionWorkspace) -> some View {
+        let key = "paired-workspace:" + DashboardPairedWorkspaceSidebarModel.canonicalID(workspace.id)
+        let history = DashboardPairedWorkspaceSidebarModel.history(
+            for: workspace, conversations: conversations, owners: conversationOwners)
+        let sections = DashboardFolderSections(
+            folders: DashboardPairedWorkspaceSidebarModel.folders(for: workspace, in: folders))
+        let counts = folderContentCounts
+        agentDisclosureHeading(title: workspace.name, key: key)
+        if agentSectionExpanded(key) {
+            VStack(alignment: .leading, spacing: 0) {
+                agentDisclosureHeading(title: "Quick Chat", key: key + ":history")
+                if agentSectionExpanded(key + ":history") {
+                    if history.isEmpty { agentEmptyLabel("No synced chats yet") }
+                    ForEach(history) { conversation in
+                        DashboardRailRow(
+                            icon: .messageSquare,
+                            title: conversation.title,
+                            hoverID: "paired-conversation:\(conversation.id)",
+                            selected: selectedConversationID == conversation.id,
+                            conversationID: conversation.id
+                        ) {
+                            actions.onSelectConversation(conversation.id)
+                        }
+                        .help("Quick Chat history. Continue on \(workspace.name).")
+                    }
+                }
+                agentDisclosureHeading(title: "Folders", key: key + ":folders")
+                if agentSectionExpanded(key + ":folders") {
+                    if sections.pinned.isEmpty && sections.unpinned.isEmpty {
+                        agentEmptyLabel("No folders yet. Create folders on \(workspace.name).")
+                    }
+                    ForEach(sections.pinned) { folder in
+                        folderRow(folder, sectionFolders: sections.pinned,
+                                  counts: counts[folder.id, default: .init()], workspaceTitle: workspace.name)
+                    }
+                    ForEach(sections.unpinned) { folder in
+                        folderRow(folder, sectionFolders: sections.unpinned,
+                                  counts: counts[folder.id, default: .init()], workspaceTitle: workspace.name)
+                    }
+                }
+            }
+            .padding(.leading, 8)
+        }
     }
 
     @ViewBuilder

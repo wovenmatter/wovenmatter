@@ -354,6 +354,8 @@ final class ApplicationModel {
     var federatedExecutionSnapshots: [String: FederatedExecutionSnapshot] = [:]
     private(set) var peerAgentWorkspaces: [UUID: CompanionExecutionWorkspace] = [:]
     var federatedExecutionOwners: [String: String] = [:]
+    /// The synced execution workspace registry, including iPhone and iPad Quick Chat workspaces.
+    var executionWorkspaceRegistry: [CompanionExecutionWorkspace] = []
     @ObservationIgnored
     lazy var companionCommands = CompanionCommandService(model: self)
     @ObservationIgnored
@@ -1205,6 +1207,9 @@ final class ApplicationModel {
             }
             guard self.dashboardStore === dashboardStore, generation == workspaceRefreshGeneration, !Task.isCancelled else { return }
             federatedExecutionOwners = try await dashboardStore.database.companionExecutionOwners()
+            var registry = try await dashboardStore.database.companionExecutionWorkspaces()
+            for workspace in liveLibraryClient?.executionWorkspaces ?? [] where !registry.contains(where: { $0.id == workspace.id }) { registry.append(workspace) }
+            if executionWorkspaceRegistry != registry { executionWorkspaceRegistry = registry }
             for (id, owner) in backendReplica.owners { federatedExecutionOwners[id] = owner }
             if let client = liveLibraryClient {
                 for conversation in client.conversations where client.isForeignConversation(conversation.id) {

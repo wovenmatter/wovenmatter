@@ -570,6 +570,8 @@ struct WorkspaceView: View {
             remoteWorkspaces: model.remoteWorkspaces,
             localWorkspaceReady: model.localACPWorkspaceAvailability.isReady,
             localExecutionWorkspaceID: localExecutionWorkspaceID,
+            executionWorkspaces: model.executionWorkspaceRegistry,
+            conversationOwners: model.federatedExecutionOwners,
             folders: model.workspaceOverview?.folders ?? [],
             conversations: model.workspaceOverview?.conversations ?? [],
             notes: model.workspaceOverview?.notes ?? [],
