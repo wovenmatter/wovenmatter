@@ -1,3 +1,4 @@
+#if canImport(Security)
 import Foundation
 import Security
 import Testing
@@ -114,3 +115,4 @@ private final class BrowserKeychainFixture: @unchecked Sendable {
     )))
   }
 }
+#endif

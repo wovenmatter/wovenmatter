@@ -89,6 +89,100 @@ same commit.
   needs updating and offers "Update everything". There is no compatibility
   layer.
 
+### Library host (`wovenmatter-library`)
+
+The `wovenmatter-library` executable (`app/Sources/WovenMatterLibraryDaemon`,
+logic in `WovenMatterLibraryHost`) builds for Linux and macOS. Linux hosts run
+the statically linked build described under "Linux build".
+
+**Command line.** Every path is explicit or derived from `--data-root`; there
+is no default production location.
+
+```
+wovenmatter-library --data-root DIR [--port N] [--socket PATH] [--token-file PATH]
+                    [--harness-catalog PATH] [--migrate-only]
+wovenmatter-library --version
+```
+
+- `--port N`: loopback TCP port (127.0.0.1 only). `0`, the default, picks a
+  free port.
+- `--socket PATH`: the local API's Unix socket, default `DIR/run/library.sock`.
+- `--token-file PATH`: the local API bearer, default `DIR/run/library-api.token`.
+- `--harness-catalog PATH`: the shared `harnesses/catalog.json`; by default the
+  copy a host release ships three directories above the binary.
+- `--migrate-only`: open and migrate the database, print
+  `{"event":"migrated"}` and exit. Use it to verify an install or update.
+- When both listeners are ready it prints one line to stdout and writes the
+  same object to `DIR/run/library.json` (0600):
+  `{"event":"ready","pid":N,"port":N,"socket":"…","version":"1"}`. SIGTERM or
+  SIGINT stops it cleanly and removes that file. Exit codes: 0 clean, 1
+  startup failure, 64 usage.
+
+**Data layout.** The root and every directory it creates are 0700 and must be
+owned by the running user.
+
+| Path | Contents |
+| --- | --- |
+| `DIR/library/` | The `DashboardStore` support directory: `workspace.sqlite` (+ WAL), `dashboard-device-id` (this machine's device ID), library and attachment files |
+| `DIR/secrets/` | 0600 files that replace Keychain items (`LinuxSecretStore`), one per generic-password item |
+| `DIR/run/library.sock` | Local API socket, 0600; peers must also be this user (checked with `SO_PEERCRED`) |
+| `DIR/run/library-api.token` | Local API bearer, 0600, 43–256 base64url characters. The Node server may create it before starting the host; otherwise the host creates it |
+| `DIR/run/library.json` | Ready record (above) |
+
+**Loopback routes** (published with Tailscale Serve under `/wovenmatter`,
+which the host strips):
+
+- `GET /v1/health` → `{"status":"ok","service":"wovenmatter-library","version":"1","deviceID":"…","uptimeSeconds":N}`,
+  or 503 when the database is unavailable. Unauthenticated; it reveals only
+  the device ID.
+- Peer sync and mobile library routes are mounted with
+  `LibraryHost.mount(prefix:_:)`, for example `/v1/peers/` and
+  `/v1/federation/`. Nothing is mounted yet: the member authentication those
+  routes need belongs to the membership workstream, and unmounted paths return
+  404. The handlers already in the package (`PairedLibraryStore` replication,
+  `CompanionWorkspaceAPI`) are the ones to mount.
+
+**Local API** (Unix socket, for this machine's Node server). Every request
+carries `Authorization: Bearer <token file contents>`. Requests are HTTP/1.1,
+one per connection, with `Host`; POST bodies are `application/json`.
+
+- `GET /v1/health`: as above.
+- `POST /v1/callers` registers a conversation as a local session so tool
+  effects (notes, receipts, versions, mutation history) are attributed to it:
+  `{"conversationID":"<uuid>","title":"…","runtimeKind":"default_agent","workingDirectory":"/home/…","enabledGroups":["notes","calendar"]}`
+  (only `conversationID` is required) →
+  `{"conversationID":"<uuid>","enabledGroups":"calendar,notes"}`.
+- `POST /v1/mcp`: stateless MCP JSON-RPC (`initialize`, `ping`, `tools/list`,
+  `tools/call`), the same messages the Node server sends a Mac's
+  `/mcp/workspace` today. Headers: `X-Woven-Conversation-ID` (the caller, a
+  UUID; registered on first use), `X-Woven-Enabled-Groups` (comma-separated,
+  the caller's current selection; the Node server is the authority for its own
+  sessions' tool policy), optional `X-Woven-Context-ID` and
+  `MCP-Protocol-Version`. Served groups: `notes` (including spreadsheet and
+  HTML note artifacts), `history`, `calendar` and `library`, plus
+  `woven_context`. Other tools are not listed and are refused; `woven_html_render`
+  needs the caller's active run and stays in the Node server until Linux
+  session history is written into this library. A `tools/call` result's
+  `structuredContent` is the `WovenMatterToolResponse`
+  (`{success,result,error,code,requestID}`); errors use the usual codes
+  (`tool_disabled`, `revision_required`, `revision_conflict`, `not_found`, …).
+
+Tool execution is `WorkspaceToolExecutor` in `WovenMatterDashboardStore`, the
+same code the Mac app's `WorkspaceAgentToolsModel` now delegates to. Note edits
+go to `WorkspaceDatabase.readNoteForEditing` / `applyNoteEdits`, so a Linux
+edit stores the same `NoteDocument` bytes a Mac stores for the same edit.
+
+**Linux build.** `scripts/build-linux-library.sh` builds
+`remote/host/library/linux-{x86_64,aarch64}/wovenmatter-library` (static musl,
+any distribution) in the pinned Swift image with the pinned Static Linux SDK
+and SQLite amalgamation (`remote/library/build-version.json`). Anything under
+`remote/host/` is a host bundle input, so a Mac app built with those binaries
+present ships them to every host install and update at
+`<release>/host/library/linux-<arch>/wovenmatter-library`. Starting and
+supervising it is the Node server's job. `scripts/test-linux-library.sh` builds
+and tests the portable targets on Linux; the manual validation workflow
+(`linux` scope) runs both and keeps the binaries as an artifact.
+
 ## Sessions across devices
 
 - Every Mac's agents can create and manage sessions on every Mac and Linux

@@ -1,5 +1,9 @@
 import Foundation
+#if canImport(SQLite3)
 import SQLite3
+#else
+import CSQLite
+#endif
 
 extension WorkspaceDatabaseConnection {
   /// A control lookup must not materialize transcript bodies or attachment payloads.

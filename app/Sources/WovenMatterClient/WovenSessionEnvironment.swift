@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(SystemConfiguration)
 import SystemConfiguration
+#endif
 
 /// Sessions are often started from another device while nobody is at this Mac.
 /// Every process Woven launches for a session therefore gets an environment in
@@ -79,8 +81,13 @@ public enum WovenSessionEnvironment {
 
     /// The device name the helpers use in their messages, e.g. "Mac Mini".
     public static let deviceName: String = {
+        #if canImport(SystemConfiguration)
         let name = SCDynamicStoreCopyComputerName(nil, nil) as String?
         return name?.isEmpty == false ? name! : "this Mac"
+        #else
+        let name = ProcessInfo.processInfo.hostName
+        return name.isEmpty ? "this machine" : name
+        #endif
     }()
 
     /// Applies the no-prompt overlay to a session process environment.

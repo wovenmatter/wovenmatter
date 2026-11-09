@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(CryptoKit)
 import CryptoKit
+#endif
 
 /// A cache is a display projection, never the durable source of tool output.
 /// Keep identities, order, status, and file metadata while fetching full details

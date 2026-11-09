@@ -1,4 +1,11 @@
+#if os(macOS)
+#if canImport(Darwin)
 import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 import Foundation
 import Testing
 import WovenMatterCore
@@ -365,3 +372,4 @@ private struct PermissionFixture {
         return "'" + String(decoding: data, as: UTF8.self).replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 }
+#endif

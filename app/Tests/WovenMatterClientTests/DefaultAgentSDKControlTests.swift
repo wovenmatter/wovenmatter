@@ -1,4 +1,11 @@
+#if os(macOS)
+#if canImport(Darwin)
 import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 import Foundation
 import Testing
 
@@ -107,3 +114,4 @@ extension DefaultAgentSDKControlTests {
         #expect(kill(child, 0) == 0)
     }
 }
+#endif

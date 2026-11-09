@@ -1,3 +1,4 @@
+#if canImport(Security)
 import Foundation
 import LocalAuthentication
 import Security
@@ -126,3 +127,4 @@ private final class PolicyFixture: @unchecked Sendable {
     }
   }
 }
+#endif

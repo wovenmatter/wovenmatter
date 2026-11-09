@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 import Testing
 import WovenMatterCore
@@ -56,3 +57,4 @@ struct LocalACPFormTests {
         }
     }
 }
+#endif

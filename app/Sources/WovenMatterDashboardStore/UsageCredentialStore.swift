@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(Security)
 import Security
+#endif
 import WovenMatterClient
 
 protocol UsageCredentialStoring: Sendable {

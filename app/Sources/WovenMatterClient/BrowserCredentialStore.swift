@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(Security)
 import Security
+#endif
 
 /// Browser-only credentials. Values never enter workspace snapshots, agent IPC,
 /// diagnostics, defaults, or plaintext files. Dev and production have distinct vaults.

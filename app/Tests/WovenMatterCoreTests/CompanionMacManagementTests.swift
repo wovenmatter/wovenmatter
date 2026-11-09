@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 import Testing
 import WovenMatterCore
@@ -151,3 +152,4 @@ private actor MacManagementCalls {
     var items: [String] = []
     func append(_ value: String) { items.append(value) }
 }
+#endif

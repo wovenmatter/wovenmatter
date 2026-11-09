@@ -185,9 +185,10 @@ case "$mode" in
   --companion) run_companion --simulator; exit ;;
   --companion-desktop) run_companion --desktop-only; exit ;;
   --remote) run_remote; exit ;;
+  --linux) WOVENMATTER_TEST_CACHE_DIR="$cache_root" scripts/test-linux-library.sh; exit ;;
   changed) ;;
   *)
-    printf '%s\n' 'usage: scripts/test-changes.sh [--ci|--native|--all|--desktop|--macos|--companion|--companion-desktop|--remote]' >&2
+    printf '%s\n' 'usage: scripts/test-changes.sh [--ci|--native|--all|--desktop|--macos|--companion|--companion-desktop|--remote|--linux]' >&2
     exit 64
     ;;
 esac

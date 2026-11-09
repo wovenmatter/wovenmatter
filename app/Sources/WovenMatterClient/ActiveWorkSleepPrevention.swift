@@ -11,6 +11,7 @@ public struct IdleSleepProtectionSnapshot: Codable, Equatable, Sendable {
     }
 }
 
+#if os(macOS)
 /// Dispatch leases cover preparation and transport awaits; session state covers
 /// providers that acknowledge a send before the run finishes. The selected power
 /// policies control idle sleep independently of the lifetime of the work itself.
@@ -154,3 +155,4 @@ public final class ActiveWorkSleepPrevention {
     // Foundation also ends the activity if its token is deallocated, so releasing
     // this owner cannot leak an assertion even without an explicit stop().
 }
+#endif

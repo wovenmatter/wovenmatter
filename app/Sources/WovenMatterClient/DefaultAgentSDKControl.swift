@@ -1,5 +1,11 @@
 import Foundation
+#if canImport(Darwin)
 import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 import WovenMatterCore
 
 public struct DefaultAgentSDKStatus: Codable, Equatable, Sendable {
@@ -74,6 +80,9 @@ public enum DefaultAgentSDKControl {
 
     private static func execute(_ request: DefaultAgentSDKRequest, executable: URL,
                                 arguments: [String], timeout: TimeInterval, cancellation: CancellationFlag) throws -> Data {
+        #if !os(macOS)
+        throw DefaultAgentError.message("The Pi Durable maintenance helper runs only in the Mac app.")
+        #else
         guard !cancellation.isCancelled else { throw CancellationError() }
         let input = Pipe(), output = Pipe()
         let inputRead = input.fileHandleForReading, inputWrite = input.fileHandleForWriting
@@ -159,5 +168,6 @@ public enum DefaultAgentSDKControl {
             var event = pollfd(fd: reachedEOF ? -1 : descriptor, events: Int16(POLLIN | POLLHUP), revents: 0)
             _ = poll(&event, 1, 25)
         }
+        #endif
     }
 }

@@ -1,5 +1,9 @@
 import Foundation
+#if canImport(CryptoKit)
 import CryptoKit
+#else
+import Crypto
+#endif
 
 public enum LibraryItemKind: String, Codable, CaseIterable, Sendable {
   case file, link, photo
@@ -188,9 +192,12 @@ public enum LibraryLinkDiscovery {
       guard results.count < maximumItemsPerMessage,
         let regex = try? NSRegularExpression(pattern: pattern)
       else { return }
-      regex.enumerateMatches(in: text, range: full) { match, _, stop in
-        if let match { visit(match) }
-        if results.count == maximumItemsPerMessage { stop.pointee = true }
+      // Linux Foundation declares this enumeration callback as escaping.
+      withoutActuallyEscaping(visit) { visit in
+        regex.enumerateMatches(in: text, range: full) { match, _, stop in
+          if let match { visit(match) }
+          if results.count == maximumItemsPerMessage { stop.pointee = true }
+        }
       }
     }
     matches(#"!?\[([^\[\]\n]*)\]\((<[^>\n]+>|(?:[^\s()]|\([^()]*\))+)(?:\s+\"[^\"]*\")?\)"#) { match in

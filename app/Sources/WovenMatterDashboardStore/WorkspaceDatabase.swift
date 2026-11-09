@@ -1,5 +1,9 @@
 import Foundation
+#if canImport(SQLite3)
 import SQLite3
+#else
+import CSQLite
+#endif
 
 /// The app's internal database. No SQLite handle or synchronous operation escapes
 /// this facade. Each write is one worker job; reads use two query-only connections.
