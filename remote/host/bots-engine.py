@@ -546,7 +546,8 @@ class Engine:
             if current is not None and disk is not None and disk>=(self.image_size() or 0):
                 self.grow(disk)
             else:
-                if active: self.systemctl('stop',layout.service,layout.containerd)
+                # containerd keeps its root on the data mount even without dockerd.
+                self.systemctl('stop',layout.service,layout.containerd,check=False)
                 if current is None and disk is not None: disk=self.to_image(disk)
                 elif current is not None and disk is None: self.to_directory()
                 elif disk is not None: disk=self.shrink(disk)
