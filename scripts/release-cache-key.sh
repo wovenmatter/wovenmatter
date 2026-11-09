@@ -24,7 +24,8 @@ sdk="$(xcrun --sdk macosx --show-sdk-path)"
 cmake="$(command -v cmake)"
 browser="$(SDKROOT="$sdk" MACOSX_DEPLOYMENT_TARGET=26.0 python3 scripts/browser-build-cache.py key "$(uname -m)" "$cmake")"
 swiftpm="$(files app/Package.resolved | digest)"
-npm="$(files default-agent/package-lock.json | digest)"
+# Both bundled npm graphs restore from one npm cache; each is checked by its lockfile.
+npm="$(files default-agent/package-lock.json bots/package-lock.json | digest)"
 # Exact toolchain always; the native graph selects the closest entry. Xcode keys
 # each compilation by its full inputs, so a fallback can only skip identical work.
 native="$(files app/Package.resolved app/Package.swift shared/Package.swift \

@@ -31,8 +31,13 @@ if lipo -archs "$main_executable" | grep -qw arm64; then
   test -x "$vm_helper"
   codesign --verify --strict "$vm_helper"
   codesign -d --entitlements :- "$vm_helper" 2>/dev/null | grep -q com.apple.security.virtualization
-  for file in guest-version.json agent.py provision.sh egress.sh disk-cap.sh docker-archive-keyring.asc; do
-    test -f "${app}/Contents/Resources/WovenVM/$file"
+  # Signed with the hardened runtime by build-vm-helper.sh, like every shipped executable.
+  codesign -dvv "$vm_helper" 2>&1 | grep -Eq 'flags=0x[0-9a-f]*\(.*runtime'
+  # The guest files are sealed resources: exactly the committed copies, one pin for the guest.
+  cmp "$repo_root/app/VMHelper/guest-version.json" "${app}/Contents/Resources/WovenVM/guest-version.json"
+  for file in agent.py provision.sh egress.sh disk-cap.sh docker-archive-keyring.asc \
+      woven-agent.service woven-provision.service woven-update.service woven-egress.service; do
+    cmp "$repo_root/app/VMHelper/Guest/$file" "${app}/Contents/Resources/WovenVM/$file"
   done
 fi
 
@@ -96,6 +101,19 @@ if [ "$claude_arch" = x86_64 ]; then claude_arch=x64; fi
 claude_binary="${resources}/default-agent/node_modules/@anthropic-ai/claude-agent-sdk-darwin-$claude_arch/claude"
 test -x "$claude_binary"
 codesign --verify --strict "$claude_binary"
+# The bots runtime (Resources/bots): its sources, production dependencies only, and
+# Anthropic's signed Claude runtime, unmodified (prepare-bots.sh).
+bots="${resources}/bots"
+for file in package.json package-lock.json src/cli.ts helper/supervisor.mjs helper/agent.mjs image/Dockerfile; do
+  test -f "$bots/$file"
+done
+test ! -e "$bots/test"
+test ! -e "$bots/node_modules/vitest"
+test ! -e "$bots/node_modules/typescript"
+bots_claude="$bots/node_modules/@anthropic-ai/claude-agent-sdk-darwin-$claude_arch/claude"
+test -x "$bots_claude"
+codesign --verify --strict "$bots_claude"
+test "$("${resources}/default-agent/bin/node" "$bots/src/cli.ts" --version)" = "$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["version"])' "$bots/package.json")"
 test -f "${resources}/harnesses/catalog.json"
 for integration in adapter.mjs hook.mjs binding.mjs proxy.mjs instructions.mjs opencode.mjs install.mjs; do
   test -f "${resources}/harnesses/mcp/$integration"
