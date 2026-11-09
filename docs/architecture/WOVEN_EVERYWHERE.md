@@ -193,8 +193,8 @@ same commit.
 - **iPhone sync set.** Full copies of notes, Quick Chats with their
   transcripts, calendar, and timers and reminders. The list of every session
   on every device, with title and status. Transcripts for very recent
-  sessions, plus any session the user opens. Large files are fetched when
-  opened.
+  sessions (updated in the last 3 days, or running), plus any session the
+  user opens or keeps offline. Large files are fetched when opened.
 - **Versions.** Sync requires matching schemas (`PairedLibraryStore` already
   rejects a mismatch). When peers disagree, every device shows which part
   needs updating and offers "Update everything". There is no compatibility
@@ -266,7 +266,7 @@ which the host strips):
   `/v1/hello`, `/v1/snapshot`, `/v1/changes`, `/v1/mutations`, `/v1/commands`,
   `/v1/federation/…`, `/v1/calendar…`, `/v1/dictations`, `/v1/notes/…`,
   `/v1/assets/…`, `/v1/sessions/…`, `/v1/devices`, `/v1/providers`,
-  `/v1/pending`, `/v1/workspace-read`, `/mcp`; signed by an `ios` or `mac`
+  `/v1/pending`, `/v1/workspace-read`, `/v1/sync/status`, `/v1/members`, `/mcp`; signed by an `ios` or `mac`
   member only, no bearer) are mounted with `LibraryHost.mount(prefix:_:)`.
   Sessions are not started through it (`unsupported`). Other paths return 404.
   Sync starts once both listeners are ready.
@@ -394,6 +394,58 @@ and tests the portable targets on Linux; the manual validation workflow
   accepted as a destination.
 - The iPhone connects directly to every Mac and Linux workspace with its own
   member key. It has no home Mac.
+
+### iPhone reach
+
+- **Identity.** On first pairing the phone creates a Curve25519 signing key
+  in its Keychain (`MobileMemberKeyVault`, service
+  `com.wovenmatter.companion.member`, this device only), bound to its library
+  device ID, and sends it as `CompanionPairRequest.memberPublicKey`. A re-pair
+  presents the same key (a Mac refuses a known device with a new key).
+- **Signed requests.** `HTTPSCompanionTransport(host:identity:)` and
+  `HTTPSExecutionWorkspaceTransport(workspace:identity:)` sign every request
+  (`MobileRequestSigning`: the target is the percent-encoded path and query as
+  sent, `/wovenmatter` included) and send no bearer. A signed 401 means "this
+  host does not know this phone yet" (`memberUnknown`, skipped like an offline
+  host); a host that answers that it does not accept member requests
+  (`memberUnsupported`) keeps the phone on its bearer grant and shows "Update
+  everything"; 409 `update_required` becomes `updateRequired`.
+- **Members.** The mobile API serves `GET /v1/members` (the resolved member
+  list, as on the library socket) on every Mac and Linux host. The phone
+  learns it from whichever host it syncs with, when the host changes and at
+  most every five minutes, with `GET /v1/sync/status` alongside. It is kept in
+  `membership.json` beside the phone's library (`MobileMembershipState`).
+  Endpoints are used only when they are HTTPS on the paired endpoint's
+  tailnet (`<tailnet>.ts.net`), normalized to `/wovenmatter`; a Mac without a
+  member endpoint is reached at its registered `.mac` execution workspace
+  address (the same server).
+- **Host choice and failover.** Each synchronization tries hosts in order (the
+  last one that worked, the paired Mac, other Macs, then Linux hosts) with one
+  short signed `GET /v1/hello` each, and syncs every lane with the first that
+  answers. There is no extra timer: the existing foreground, change-driven
+  cadence is unchanged.
+- **Moving to another host.** Each host has its own library ID, revisions and
+  change cursors, but the same records under the same IDs. When the chosen
+  host's library ID differs from the replica's, the phone rebinds without
+  re-uploading: the host's snapshot replaces revision baselines; a pending note
+  edit is acknowledged (already there), resent (the host has its base), kept
+  as a conflict with both versions (the host has another version) or created
+  there (the host never got it); calendar edits are rebased on the next
+  snapshot the same way; the journal keeps all history, resets its cursor and
+  offers this phone's own records again (the host keeps those it has);
+  dictation and artifact cursors restart. The phone's device workspace is
+  re-registered in the new host's library at that host's revision.
+- **Sessions.** "Central" means the library host the phone is syncing with;
+  its own sessions use the mobile API, and every other workspace with an
+  endpoint (each Mac's own and each Linux workspace) gets a signed direct
+  client, with no execution grant. A workspace too old for signatures keeps
+  its bearer grant. Inference adapters on a Mac still use their bearer grant
+  (the Mac's inference host does not accept signatures yet).
+- **Migration.** Existing phone data stays. A phone paired before members
+  shows "Pair again once with any Mac"; pairing with a Mac of the same
+  library set (its registry holds the phone's previous library) keeps the
+  replica and rebinds on the next sync instead of the destructive library
+  change.
 
 ## iPhone Quick Chat
 
