@@ -1,0 +1,36 @@
+const fail = (statusCode, message) => Object.assign(new Error(message), { statusCode })
+
+// The Woven MCP groups this machine's library host serves (docs: "Library
+// host", local API). Spreadsheet and HTML note artifacts are part of notes.
+export const libraryServedGroups = Object.freeze(new Set(['notes', 'history', 'calendar', 'library']))
+
+/**
+ * The one adapter between Woven MCP and the local library socket: it registers
+ * a session as a library caller once, then sends stateless JSON-RPC to
+ * `POST /v1/mcp` with the caller's current tool selection. `callerInfo(id)`
+ * supplies the session's title, harness and working directory.
+ */
+export function createLocalLibraryTools({ client, available, callerInfo = () => ({}), maximumReplyBytes = 4 * 1024 * 1024 }) {
+  const registered = new Set()
+  async function register(conversationID, groups) {
+    if (registered.has(conversationID)) return
+    let info = {}
+    try { info = callerInfo(conversationID) ?? {} } catch {}
+    // Registration names the session; `/v1/mcp` also registers on first use,
+    // so a failure here is not fatal.
+    try { await client.registerCaller({ conversationID, ...info, enabledGroups: groups }); registered.add(conversationID) } catch {}
+  }
+  async function call({ conversationID, groups, message, signal }) {
+    if (!available()) throw fail(503, 'This machine’s library is not running yet. Notes, calendar and history tools return when it restarts; inspect prior effects before retrying a change.')
+    const served = [...groups].filter(group => libraryServedGroups.has(group)).sort()
+    await register(conversationID, served)
+    const reply = await client.mcp(message, { 'x-woven-conversation-id': conversationID, 'x-woven-enabled-groups': served.join(','), 'mcp-protocol-version': '2025-06-18' }, { signal })
+    if (reply.status === 202) return null
+    if (reply.status !== 200 || !reply.body || typeof reply.body !== 'object' || Buffer.isBuffer(reply.body)) {
+      throw fail(reply.status === 413 ? 413 : 502, typeof reply.body?.message === 'string' ? reply.body.message.slice(0, 512) : 'The local library refused this Woven MCP request.')
+    }
+    if (Buffer.byteLength(JSON.stringify(reply.body)) > maximumReplyBytes) throw fail(413, 'The library MCP response is too large. Request a smaller page.')
+    return reply.body
+  }
+  return { call, available, forget: conversationID => registered.delete(conversationID) }
+}

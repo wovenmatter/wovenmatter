@@ -1,4 +1,4 @@
-import { appendFile, mkdir } from 'node:fs/promises'
+import { appendFile, mkdir, readdir, readFile, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 const fail = (statusCode, message) => Object.assign(new Error(message), { statusCode })
@@ -65,6 +65,68 @@ export function createJournalBotLibraryAdapter(directory) {
       })
       queues.set(botID, run.catch(() => {}))
       return run
+    },
+  }
+}
+
+/**
+ * The production adapter: batches go to the local library host's
+ * `POST /v1/bots/{botID}/entries`. While the host is down (or refuses a
+ * batch), they are kept in the journal outbox above and accepted; `drain()`
+ * replays the outbox in order once the host is ready and removes each file.
+ * Per-bot order holds because writes and drains share one queue.
+ */
+export function createLocalLibraryBotAdapter({ client, available, directory, log = () => {} }) {
+  const journal = createJournalBotLibraryAdapter(directory)
+  const queues = new Map()
+  const serialized = (botID, operation) => {
+    const run = (queues.get(botID) ?? Promise.resolve()).then(operation)
+    queues.set(botID, run.catch(() => {}))
+    return run
+  }
+  async function drainBot(botID) {
+    const path = join(directory, botID + '.jsonl')
+    let lines
+    try { lines = (await readFile(path, 'utf8')).split('\n').filter(Boolean) } catch (error) { if (error.code === 'ENOENT') return 0; throw error }
+    let sent = 0
+    for (const line of lines) {
+      let value
+      try { value = JSON.parse(line) } catch { log('Skipping an unreadable bot outbox line for ' + botID); sent++; continue }
+      const { receivedAt, ...batch } = value
+      try { await client.botEntries(botID, batch) } catch (error) {
+        // Keep what is left, in order; upserts make the sent part harmless to resend.
+        if (sent) await writeFile(path, lines.slice(sent).join('\n') + '\n', { mode: 0o600 })
+        throw error
+      }
+      sent++
+    }
+    await unlink(path).catch(error => { if (error.code !== 'ENOENT') throw error })
+    return sent
+  }
+  async function pendingBots() {
+    try { return (await readdir(directory)).filter(name => /^[0-9a-f-]{36}\.jsonl$/.test(name)).map(name => name.slice(0, -6)) } catch { return [] }
+  }
+  return {
+    directory,
+    writeBotEntries(botID, batch) {
+      return serialized(botID, async () => {
+        if (available()) {
+          try {
+            await drainBot(botID)
+            await client.botEntries(botID, batch)
+            return { conversations: batch.conversations.length, entries: batch.entries.length }
+          } catch (error) { log('Bot entries for ' + botID + ' were kept in the outbox: ' + error.message) }
+        }
+        return journal.writeBotEntries(botID, batch)
+      })
+    },
+    async drain() {
+      if (!available()) return 0
+      let total = 0
+      for (const botID of await pendingBots()) {
+        total += await serialized(botID, () => drainBot(botID)).catch(error => { log('Bot outbox for ' + botID + ' is still pending: ' + error.message); return 0 })
+      }
+      return total
     },
   }
 }
