@@ -1,0 +1,12 @@
+[Unit]
+Description=Woven VM guest agent
+After=local-fs.target
+DefaultDependencies=no
+
+[Service]
+ExecStart=/usr/bin/python3 -I /usr/local/lib/woven/agent.py
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target

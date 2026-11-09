@@ -31,6 +31,7 @@ for every package update. Three separate mechanisms do that:
 | `harnesses/npm-version.json` | Current private Mac npm archive and registry integrity, with the existing locked `remote/npm-runtime` vendor repairs | Maintenance PR; managed CLI and bundled SDK updater verification |
 | `app/Automation/cua-version.json` | Exact Cua Driver archive/executable digests, source and signing identity | Maintenance PR with desktop acceptance |
 | `app/Browser/cef-version.json` | Exact CEF build and archive SHA-1 values per architecture | Maintenance PR |
+| `app/VMHelper/guest-version.json` and `app/VMHelper/Guest/docker-archive-keyring.asc` | Woven Mac VM guest: Ubuntu cloud image serial, URL, size and SHA-256; Docker apt repository, signing-key fingerprint and file SHA-256, exact `docker-ce` and `containerd.io` versions | Maintenance PR, record and key together |
 | `app/Updater/sparkle-version.json` and the Xcode Sparkle revision | Release, exact commit, and tools archive SHA-256 for the updater | Maintenance PR, both together |
 | Generated iOS bundles and `provenance.json` | Output of the locked packages, verified by `--check` in CI | Regenerated from the updated lockfiles during maintenance |
 
@@ -152,6 +153,23 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   actual registry installs, lockfiles, SDK updates and patched runtime APIs.
 - **CEF** is compiled and signed into the app. The newest stable build is
   always proposed: Chromium ships security fixes only on its current major.
+- **Woven Mac VM guest** (bots engine on a Mac, see
+  [Woven everywhere](architecture/WOVEN_EVERYWHERE.md#mac-vm)) is an exact
+  selection for security and core function: a VM that changed itself broke
+  earlier tests (the guest auto-upgraded its kernel), and Woven must be able
+  to snapshot, update and roll back as one step. The official Ubuntu 26.04 LTS
+  arm64 cloud image is pinned by serial directory and SHA-256 rather than
+  built locally, so it stays Canonical's signed, reproducibly published
+  artifact; the helper verifies size and digest before converting it.
+  `docker-ce`, `docker-ce-cli` and `containerd.io` are pinned to exact
+  versions from Docker's apt repository, verified with the bundled signing key
+  whose fingerprint and digest are recorded (the helper refuses a key that
+  does not match). Maintenance proposes the newest image serial and Docker
+  Engine release together; validation boots a fresh VM and runs the Mac VM
+  checks (engine socket, egress, exec half-close, previews). Installed VMs
+  move to new Docker pins and current Ubuntu security updates only through
+  Woven's Update action, which snapshots first and rolls back on failure; a
+  new image serial affects only new installs.
 - **Sparkle** delivers every later fix, so the Xcode project requires the exact
   release commit, and its signing tools come from the same release record.
   Major lines are proposed with the other majors and need careful review.

@@ -1,0 +1,9 @@
+[Unit]
+Description=Woven VM guest update
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/woven/provision.sh upgrade
+TimeoutStartSec=3600

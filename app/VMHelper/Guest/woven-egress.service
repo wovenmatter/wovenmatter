@@ -1,0 +1,13 @@
+[Unit]
+Description=Woven VM container egress rules
+After=network-online.target
+Wants=network-online.target
+Before=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/lib/woven/egress.sh apply
+
+[Install]
+WantedBy=multi-user.target

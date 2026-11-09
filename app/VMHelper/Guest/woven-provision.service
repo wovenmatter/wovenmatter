@@ -1,0 +1,13 @@
+[Unit]
+Description=Woven VM first-boot provisioning
+After=network-online.target woven-agent.service
+Wants=network-online.target
+ConditionPathExists=!/var/lib/woven/provisioned
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/woven/provision.sh first-boot
+TimeoutStartSec=3600
+
+[Install]
+WantedBy=multi-user.target
