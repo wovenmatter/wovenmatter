@@ -34,17 +34,36 @@ class HostFixtures(unittest.TestCase):
             mock.patch.object(self.m.os,'getuid',return_value=self.actual_uid),mock.patch.object(self.m,'inventory',return_value=[])]
         for patcher in self.patchers: patcher.start()
         self.m.owned_directory=lambda p: Path(p).mkdir(mode=0o700,parents=True,exist_ok=True)
+        # Never read a real engine on the machine running these tests.
+        self.m.BOTS_ETC=self.home/'etc/wovenmatter-bots'; self.m.BOTS_VAR=self.home/'var/lib/wovenmatter-bots'
+        self.m.BOTS_HELPER=self.home/'usr/local/lib/wovenmatter-bots/bots-engine'
+        self.engine_calls=[]
     def tearDown(self):
         for patcher in reversed(self.patchers): patcher.stop()
         self.temp.cleanup()
     def command(self,args,**kwargs):
         args=[str(a) for a in args]; self.calls.append(args); output=b''; code=0
-        if args[0]=='sudo':
+        if args[0]=='sudo' and len(args)>5 and args[3]=='-I':
+            # The root engine helper: record it and act as its installed state.
+            self.engine_calls.append(args[4:])
+            command=args[7]
+            if command=='install':
+                self.m.BOTS_ETC.mkdir(parents=True,exist_ok=True)
+                self.m.BOTS_ETC.joinpath('instance.json').write_text(json.dumps({'user':self.m.pwd.getpwuid(self.actual_uid).pw_name,'socket':str(self.home/'missing.sock'),
+                    'poolBytes':int(args[args.index('--pool')+1]),'diskBytes':int(args[args.index('--disk')+1])}))
+            elif command=='uninstall': self.m.BOTS_ETC.joinpath('instance.json').unlink()
+            output=b'{"ok":true}\n'
+        elif args[0]=='curl':
+            Path(args[args.index('--output')+1]).write_bytes(b'docker-fixture')
+        elif args[0]=='sudo':
             if args[2:4]==['tailscale','set']:
                 self.tail_operator=args[4].removeprefix('--operator=')
             else: output=b'0\n'
         elif args[0]=='loginctl': output=b'yes\n'
         elif args[0]=='dpkg-query': output=b'installed'
+        elif args[0]=='systemctl' and args[1]!='--user':
+            # System units belong to the bot engine fixture.
+            output=b'active\n' if args[1]=='is-active' else b''
         elif args[0]=='systemctl':
             action=args[2]
             if action=='is-active': output=b'active\n' if self.active else b'inactive\n'; code=0 if self.active else 3
@@ -93,7 +112,7 @@ class HostFixtures(unittest.TestCase):
             self.assertEqual(result['kind'],'host'); self.assertEqual(result['id'],'fixture')
             if result['running']: self.assertEqual(result['state'],'running')
         self.assertNotIn(TOKEN,json.dumps(self.m.main(['logs','fixture','10'])))
-        self.m.privileged_actions=lambda d:[]; self.m.os_release=lambda:{'ID':'debian','VERSION_ID':'13'}
+        self.m.privileged_actions=lambda d,roles=None:[]; self.m.os_release=lambda:{'ID':'debian','VERSION_ID':'13'}
         # inspect() checks binary discovery after prepare. The fixture's fake
         # command runner does not imply these programs exist on the test host.
         required={'tailscale','script','setpriv','curl'}
@@ -217,16 +236,18 @@ class HostFixtures(unittest.TestCase):
         content=b'tampered'; manifest['files']['src/server.mjs']['sha256']=hashlib.sha256(content).hexdigest()
         path=self.archive([('src/server.mjs',content,tarfile.REGTYPE,''),('manifest.json',json.dumps(manifest).encode(),tarfile.REGTYPE,'')])
         with self.assertRaises(self.m.Failure): self.m.safe_extract(path,self.home/'tampered',fp)
-    def install_bundle(self):
-        versions={'nodeVersion':'26.12.1','playwrightVersion':'1.64.1','nodeSHA256':{'linux-x64':'a'*64}}
+    def install_bundle(self,bots=False):
+        versions={'nodeVersion':'26.12.1','playwrightVersion':'1.64.1','nodeSHA256':{'linux-x64':'a'*64},
+            'dockerVersion':'29.9.3','dockerSHA256':{'linux-x64':hashlib.sha256(b'docker-fixture').hexdigest(),'linux-arm64':'b'*64}}
         files={'host/runtime-versions.json':json.dumps(versions).encode(),
             'default-agent/package-lock.json':json.dumps({'packages':{'node_modules/playwright-core':{'version':'1.64.1'}}}).encode(),
             'src/server.mjs':b'fixture',
             'npm-runtime/package.json':(ROOT/'remote/npm-runtime/package.json').read_bytes(),
             'npm-runtime/package-lock.json':(ROOT/'remote/npm-runtime/package-lock.json').read_bytes()}
+        if bots: files.update({'bots/package.json':b'{"version":"0.1.0"}','bots/package-lock.json':b'{}','bots/src/cli.ts':b'fixture','host/bots-engine.py':b'# fixture helper\n'})
         digest=hashlib.sha256(); records={}
-        for name,data in sorted(files.items()):
-            source=name if name.startswith('default-agent/') else 'remote/'+name
+        for name,data in sorted(files.items(),key=lambda item:item[0] if item[0].startswith(('default-agent/','bots/')) else 'remote/'+item[0]):
+            source=name if name.startswith(('default-agent/','bots/')) else 'remote/'+name
             digest.update((source+'\0false\0'+'0\0').encode()); digest.update(hashlib.sha256(data).digest())
             records[name]={'sourcePath':source,'sourceMode':0,'mode':0o600,'sha256':hashlib.sha256(data).hexdigest()}
         fp=digest.hexdigest(); manifest={'fingerprint':fp,'nodeVersion':'26.12.1','playwrightVersion':'1.64.1','files':records}
@@ -405,5 +426,82 @@ class HostFixtures(unittest.TestCase):
         (self.m.ROOT/'releases').mkdir(); self.m.ROOT.chmod(0o700)
         with mock.patch.object(self.m.os,'getuid',return_value=self.m.ROOT.stat().st_uid): result=self.m.uninstall('fixture',True)
         self.assertTrue(result['persistentDataRemoved']); self.assertFalse(self.m.ROOT.exists())
+
+    def feed(self,stream):
+        source=open(stream,'rb'); saved=None
+        try: saved=os.dup(3)
+        except OSError: pass
+        os.dup2(source.fileno(),3)
+        def restore():
+            if saved is not None: os.dup2(saved,3); os.close(saved)
+            source.close()
+        self.addCleanup(restore)
+        return source
+    def test_bots_only_install_then_adding_the_workspace_reuses_the_server(self):
+        self.m.ROOT.mkdir(parents=True)
+        fp,stream=self.install_bundle(bots=True); self.m.TOKEN=''
+        self.m.health=lambda *a:{'serviceFingerprint':fp,'runtimeKind':'host'}
+        source=self.feed(stream)
+        result=self.m.main(['install','fixture','7337','fullRoot',fp,'bots'])
+        self.assertEqual(result['roles'],{'workspace':False,'bots':True})
+        settings=self.m.parse_env()
+        self.assertEqual(settings['WOVENMATTER_WORKSPACE_ENABLED'],'0'); self.assertEqual(settings['WOVENMATTER_BOTS_ENABLED'],'1')
+        self.assertEqual(settings['WOVENMATTER_BOTS_DATA'],str(self.m.ROOT/'bots'))
+        self.assertFalse(any('playwright-core/cli.js' in ' '.join(call) for call in self.calls),'a bots-only server installs no host browser')
+        self.assertFalse((self.m.ROOT/'browsers/current').exists())
+        self.assertTrue(any(call[-1].endswith('--no-fund') and str(self.m.ROOT/'releases') in ' '.join(call) and '/bots' in call[call.index('--prefix')+1] for call in self.calls if 'ci' in call))
+        [engine]=self.engine_calls
+        self.assertEqual(engine[:4],[str(self.m.ROOT/'releases'/fp/'host/bots-engine.py'),'--instance','wovenmatter','install'])
+        self.assertEqual(engine[engine.index('--docker-version')+1],'29.9.3')
+        self.assertEqual(int(engine[engine.index('--pool')+1]),min(8*1024**3,self.m.memory_total() or 8*1024**3))
+        # Adding the workspace is an update of the same server: same data root, no second engine install.
+        stream.write_bytes(b'\n'+self.home.joinpath('bundle.tar').read_bytes()); source.seek(0); self.m.TOKEN=''
+        self.m.BOTS_HELPER.parent.mkdir(parents=True); self.m.BOTS_HELPER.write_bytes(b'# fixture helper\n')
+        updated=self.m.main(['update','fixture','7337','fullRoot',fp,'workspace'])
+        self.assertEqual(updated['roles'],{'workspace':True,'bots':True},'roles only grow on update')
+        self.assertEqual(len(self.engine_calls),1)
+        self.assertEqual(self.m.parse_env()['WOVENMATTER_WORKSPACE_ENABLED'],'1')
+        self.assertTrue(any('playwright-core/cli.js' in ' '.join(call) for call in self.calls))
+        self.assertEqual(self.m.parse_env()['WOVENMATTER_API_TOKEN'],TOKEN)
+    def test_workspace_install_without_roles_is_unchanged_and_old_records_read_as_workspace(self):
+        self.save_install()
+        self.assertEqual(self.m.record()['roles'],{'workspace':True,'bots':False})
+        self.assertEqual(self.m.status('fixture')['botsState'],'server_without_bots')
+        missing=lambda args,**kwargs: subprocess.CompletedProcess(args,1 if args[0]=='pacman' else 0,b'yes\n' if args[0]=='loginctl' else b'',b'')
+        with mock.patch.object(self.m,'run',side_effect=missing), mock.patch.object(self.m.shutil,'which',return_value=None):
+            packages=self.m.privileged_actions({'ID':'arch'},{'workspace':False,'bots':True})
+        self.assertEqual(packages[-1][:3],['pacman','-S','--needed'])
+        flat=' '.join(' '.join(action) for action in packages)
+        self.assertIn('nftables',flat); self.assertNotIn('nss',flat.split())
+        with self.assertRaises(self.m.Failure): self.m.valid_roles('workspace,unknown')
+    def test_discovery_reports_no_server_server_without_bots_and_bots_ready(self):
+        self.m.os_release=lambda:{'ID':'debian','VERSION_ID':'13'}
+        self.assertEqual(self.m.inspect('user')['bots']['state'],'no_server')
+        found=self.m.inspect('user','bots')['bots']
+        self.assertGreater(found['memoryTotalBytes'] or 1,0); self.assertGreater(found['diskTotalBytes'],0); self.assertIn('diskFreeBytes',found)
+        self.save_install()
+        self.assertEqual(self.m.inspect('user')['bots']['state'],'server_without_bots')
+        record=json.loads(self.m.RECORD.read_text()); record['roles']={'workspace':True,'bots':True}; self.m.RECORD.write_text(json.dumps(record))
+        self.m.BOTS_ETC.mkdir(parents=True); socket_path=self.home/'docker.sock'
+        import socket as sockets
+        listener=sockets.socket(sockets.AF_UNIX); listener.bind(str(socket_path)); self.addCleanup(listener.close)
+        self.m.BOTS_ETC.joinpath('instance.json').write_text(json.dumps({'user':self.m.pwd.getpwuid(self.actual_uid).pw_name,'socket':str(socket_path),'poolBytes':None,'diskBytes':None}))
+        self.assertEqual(self.m.inspect('user')['bots']['state'],'bots_ready')
+        self.m.BOTS_ETC.joinpath('instance.json').write_text(json.dumps({'user':'someone-else','socket':str(socket_path)}))
+        other=self.m.inspect('user')['bots']
+        self.assertEqual(other['state'],'server_without_bots'); self.assertTrue(other['blockingIssues'])
+    def test_bots_configure_writes_a_request_and_uninstall_removes_the_engine_first(self):
+        self.save_install(); record=json.loads(self.m.RECORD.read_text()); record['roles']={'workspace':True,'bots':True}; self.m.RECORD.write_text(json.dumps(record))
+        self.m.BOTS_ETC.mkdir(parents=True); (self.m.BOTS_VAR/'requests').mkdir(parents=True); (self.m.BOTS_VAR/'state').mkdir(parents=True)
+        self.m.BOTS_ETC.joinpath('instance.json').write_text(json.dumps({'user':self.m.pwd.getpwuid(self.actual_uid).pw_name,'socket':'/missing'}))
+        result=self.m.main(['bots-configure','fixture','4294967296','none','1'])
+        request=json.loads((self.m.BOTS_VAR/'requests/settings.json').read_text())
+        self.assertEqual(request,{'revision':result['revision'],'poolBytes':4294967296,'diskBytes':None})
+        self.assertTrue(result['pending'])
+        with self.assertRaises(self.m.Failure): self.m.main(['bots-configure','fixture','-1','none'])
+        self.m.BOTS_HELPER.parent.mkdir(parents=True); self.m.BOTS_HELPER.write_text('# installed helper'); (self.m.ROOT/'releases').mkdir()
+        removed=self.m.uninstall('fixture')
+        self.assertTrue(removed['botsEngineRemoved'])
+        self.assertEqual(self.engine_calls[0][:4],[str(self.m.BOTS_HELPER),'--instance','wovenmatter','uninstall'])
 
 if __name__=='__main__': unittest.main()
