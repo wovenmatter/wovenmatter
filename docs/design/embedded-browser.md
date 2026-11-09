@@ -3,7 +3,7 @@
 For controls, tab limits, persistence, and sharing behavior, see
 [Notes and data](../guide/notes-and-data.md#browse-beside-your-work). Credential
 consent, recovery, and Dev signing are documented in
-[Credential access](../KEYCHAIN_ACCESS.md).
+[Credential access](../MAC_ACCESS.md#keychain-access-and-prompt-policy).
 
 ## Ownership and lifecycle
 

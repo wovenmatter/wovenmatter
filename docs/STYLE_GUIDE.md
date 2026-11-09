@@ -72,10 +72,15 @@ when an intentional design change is accepted.
   on limits-account switches or credentials.
 - **Tool defaults:** settings say Woven MCP and show effective defaults,
   rather than an off-looking inheritance switch. Composer controls retain Tools.
-- **Keychain:** General uses Keychain access, Enable/Restore Keychain access,
-  Access ready, and Access needs attention. Keep one storage sentence, a status
-  pill, and an action; show the Always Allow hint only when access is not ready.
-  Consent is not verification.
+- **Mac access:** General has one Mac access card that sets up everything a
+  session may need once: Keychain access, then Full Disk Access, Accessibility,
+  Screen Recording, Automation and Microphone. Each row has its name, one purpose
+  sentence, a status pill (Ready, Needs attention, Not set up) and, until ready,
+  one quiet action. Keychain keeps Enable/Restore Keychain access, Access ready,
+  and Access needs attention, with one storage sentence; show the Always Allow
+  hint only when access is not ready. Consent is not verification. A session on a
+  Mac missing a permission it needs shows a full-width quiet notice above its
+  composer, like the composer setup notices.
 - **Harness lists:** local and remote workspaces use compact expandable harness
   rows. Keep versions and labeled maintenance controls inside the expanded row,
   rather than a horizontal strip of actions. Remote workspaces have no global
