@@ -1,0 +1,47 @@
+{
+  "name": "wovenmatter-bots",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Woven Matter bots runtime: many bots in one Node process on Pi Durable, tools in per-bot containers",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=26"
+  },
+  "bin": {
+    "wovenmatter-bots": "./src/cli.ts"
+  },
+  "scripts": {
+    "start": "node src/cli.ts serve",
+    "test": "tsc -p tsconfig.json && vitest run",
+    "test:engine": "WOVEN_BOTS_ENGINE_TEST=1 vitest run test/engine-integration.test.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": ">=0.3.319",
+    "@earendil-works/chord": ">=1.5.0",
+    "@earendil-works/pi-ai": ">=1.5.0",
+    "@earendil-works/pi-durable": ">=1.5.0",
+    "typebox": ">=1.4.6",
+    "ws": ">=8.22.2",
+    "zod": ">=4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": ">=26.6.6",
+    "@types/ws": ">=8.18.2",
+    "typescript": ">=7.0.2",
+    "vitest": ">=5.1.0"
+  },
+  "overrides": {
+    "@earendil-works/pi-ai": {
+      "openai": ">=7.53.0",
+      "@anthropic-ai/sdk": ">=1.6.0",
+      "@google/genai": ">=3.0.0",
+      "@aws-sdk/client-bedrock-runtime": ">=3.1164.0",
+      "@smithy/node-http-handler": ">=4.14.2",
+      "@aws-sdk/token-providers": ">=3.1164.0"
+    },
+    "@earendil-works/chord": {
+      "ws": "$ws"
+    }
+  }
+}
