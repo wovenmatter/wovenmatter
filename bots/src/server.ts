@@ -741,7 +741,7 @@ class Server {
 export async function startServer(
   options: BotServerOptions & {
     readonly previews?: {
-      list(botId: string): { botId: string; containerPort: number; url: string }[];
+      list(botId?: string): { botId: string; containerPort: number; url: string }[];
       unshare(botId: string, port: number): Promise<boolean>;
     };
   },
@@ -760,11 +760,8 @@ export async function startServer(
   );
   const previews = options.previews;
   if (previews) {
-    state.previewList = (botId) => {
-      const list = (id: string) =>
-        previews.list(id).map((p) => ({ botId: p.botId, port: p.containerPort, url: p.url }));
-      return botId ? list(botId) : [];
-    };
+    state.previewList = (botId) =>
+      previews.list(botId).map((p) => ({ botId: p.botId, port: p.containerPort, url: p.url }));
     state.stopPreviewHandler = (botId, port) => previews.unshare(botId, port);
   }
   const log = options.log ?? (() => {});

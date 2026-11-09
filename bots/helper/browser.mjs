@@ -21,6 +21,8 @@ const pages = new Map(); // id → page
 let nextId = 1;
 let active;
 let saveTimer;
+// Once shutdown begins the tab list is final: closing pages must not overwrite it.
+let closing = false;
 
 function idOf(page) {
   let id = ids.get(page);
@@ -41,6 +43,7 @@ function idOf(page) {
 }
 
 function scheduleSave() {
+  if (closing) return;
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => void saveTabs(), 500);
 }
@@ -135,8 +138,10 @@ const methods = {
     return { closed: true, tabs: await methods.tabs() };
   },
   async shutdown() {
+    if (closing) return { saved: true };
     clearTimeout(saveTimer);
     await saveTabs().catch(() => {});
+    closing = true;
     await context?.close().catch(() => {});
     context = undefined;
     return { saved: true };

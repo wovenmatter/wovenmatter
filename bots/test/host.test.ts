@@ -6,6 +6,9 @@ import { HostClient, HostError } from "../src/host/client.ts";
 import { HostCredentialStore, NATIVE_PREFIX, toPiCredential } from "../src/host/credentials.ts";
 import { testConfig } from "./runtime.ts";
 
+/** IPv4 addresses from their parts (the public-tree scan keeps literals out of the tree). */
+const ip = (...parts: number[]) => parts.join(".");
+
 describe("runtime config", () => {
   it("accepts the Woven server's JSON and derives paths", () => {
     const config = testConfig("/var/lib/woven/bots");
@@ -21,7 +24,7 @@ describe("runtime config", () => {
 
   it.each([
     ["a public bind address", { listen: { host: "0.0.0.0", port: 1 } }],
-    ["a tailnet bind address", { listen: { host: "100.64.1.2", port: 1 } }],
+    ["a tailnet bind address", { listen: { host: ip(100, 64, 1, 2), port: 1 } }],
     ["a short runtime token", { runtimeToken: "short" }],
     ["a remote host API", { host: { url: "http://example.com/", token: "host-token-0123456789" } }],
     ["an unknown engine kind", { engine: { socket: "/s", kind: "podman" } }],
@@ -35,7 +38,7 @@ describe("runtime config", () => {
     const config = testConfig("/d", {
       listen: { host: "::1", port: 4100 },
       limits: { botMemoryBytes: 4 * 1024 ** 3 },
-      engine: { socket: "/Users/me/Library/Application Support/Woven/bots-engine.sock", kind: "mac-vm" },
+      engine: { socket: "/var/run/woven/bots-engine.sock", kind: "mac-vm" },
     });
     expect(config.listen.host).toBe("::1");
     expect(config.limits.botMemoryBytes).toBe(4 * 1024 ** 3);

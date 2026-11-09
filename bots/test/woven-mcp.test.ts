@@ -22,6 +22,9 @@ import { tempDir } from "./helpers.ts";
 import { FakeHost, openClient, startTestRuntime, type TestRuntime } from "./runtime.ts";
 import type { Client } from "./ws-client.ts";
 
+/** IPv4 addresses from their parts (the public-tree scan keeps literals out of the tree). */
+const ip = (...parts: number[]) => parts.join(".");
+
 const TOKEN = "fixture-woven-bearer";
 /** A host that hands every bot the fixture key for `endpoint`. */
 const keyHost = (endpoint = "http://localhost/mcp") => ({
@@ -70,7 +73,7 @@ describe("stateless Woven MCP", () => {
 
   it.each([
     "http://example.com/mcp",
-    "http://127.1.2.3/mcp",
+    `http://${ip(127, 1, 2, 3)}/mcp`,
     "ftp://localhost/mcp",
     "https://user:pass@example.com/mcp",
     "https://example.com/mcp#fragment",

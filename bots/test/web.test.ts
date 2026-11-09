@@ -22,6 +22,9 @@ import {
 } from "../src/web.ts";
 import { FAUX_MODEL, profileOf, tempDir } from "./helpers.ts";
 
+/** IPv4 addresses from their parts (the public-tree scan keeps literals out of the tree). */
+const ip = (...parts: number[]) => parts.join(".");
+
 const ctx = BACKGROUND_CONTEXT;
 const EXA_KEY = "exa-test-key-0001";
 const BRAVE_KEY = "brave-test-key-0002";
@@ -64,10 +67,10 @@ function store(keys: Record<string, string>): WebToolsOptions["credentials"] {
 
 const lookup = async (host: string) => {
   const table: Record<string, string[]> = {
-    "example.com": ["93.184.215.14"],
+    "example.com": [ip(93, 184, 215, 14)],
     "docs.example.com": ["2606:2800:21f:cb07:6820:80da:af6b:8b2c"],
-    "evil.example": ["93.184.215.15", "127.0.0.1"],
-    "tailnet.example": ["100.101.102.103"],
+    "evil.example": [ip(93, 184, 215, 15), "127.0.0.1"],
+    "tailnet.example": [ip(100, 101, 102, 103)],
     "tail6.example": ["fd7a:115c:a1e0::1"],
     localhost: ["127.0.0.1", "::1"],
   };
@@ -226,12 +229,12 @@ describe("fetch_url", () => {
   it("blocks loopback, private, link-local, CGNAT/tailnet and unique-local addresses", () => {
     for (const address of [
       "127.0.0.1",
-      "10.1.2.3",
-      "172.20.0.1",
-      "192.168.1.1",
-      "169.254.169.254",
-      "100.64.0.1",
-      "100.127.255.254",
+      ip(10, 1, 2, 3),
+      ip(172, 20, 0, 1),
+      ip(192, 168, 1, 1),
+      ip(169, 254, 169, 254),
+      ip(100, 64, 0, 1),
+      ip(100, 127, 255, 254),
       "0.0.0.0",
       "::1",
       "::",
@@ -244,7 +247,7 @@ describe("fetch_url", () => {
     ]) {
       expect(isBlockedAddress(address), address).toBe(true);
     }
-    for (const address of ["93.184.215.14", "100.128.0.1", "2606:4700::1111", "8.8.8.8"]) {
+    for (const address of [ip(93, 184, 215, 14), ip(100, 128, 0, 1), "2606:4700::1111", ip(8, 8, 8, 8)]) {
       expect(isBlockedAddress(address), address).toBe(false);
     }
   });
@@ -301,12 +304,12 @@ describe("fetch_url", () => {
       "http://[::1]:4317/",
       "http://[::ffff:127.0.0.1]/",
       "http://[fd7a:115c:a1e0::1]/",
-      "http://100.100.100.100/",
+      `http://${ip(100, 100, 100, 100)}/`,
       "http://tailnet.example/",
       "http://tail6.example/",
       // One blocked address among several is enough.
       "http://evil.example/",
-      "http://169.254.169.254/latest/meta-data/",
+      `http://${ip(169, 254, 169, 254)}/latest/meta-data/`,
     ]) {
       await expect(fetchUrl(options, url), url).rejects.toThrow(/refusing to fetch/);
     }

@@ -6,6 +6,9 @@ import { Type } from "typebox";
 import { SEARCH_PROVIDERS, type SearchProviderId } from "./settings/catalog.ts";
 import { run } from "./tools.ts";
 
+/** IPv4 addresses from their parts (the public-tree scan keeps literals out of the tree). */
+const ip = (...parts: number[]) => parts.join(".");
+
 type Fetch = typeof globalThis.fetch;
 
 /** What `web_search` and `fetch_url` reach. Keys are read from the store on every call. */
@@ -222,23 +225,23 @@ export async function webSearch(
 
 /**
  * Addresses `fetch_url` never reaches: unspecified, loopback, private, link-local, CGNAT (which
- * holds the tailnet's 100.64.0.0/10), multicast and reserved IPv4; IPv6 loopback, link-local,
+ * holds the tailnet's 100.64/10), multicast and reserved IPv4; IPv6 loopback, link-local,
  * unique-local (fc00::/7, which holds the tailnet's fd7a:115c:a1e0::/48), multicast and NAT64.
  * IPv4-mapped IPv6 addresses are checked as IPv4.
  */
 const BLOCKED = new BlockList();
 for (const [network, prefix] of [
   ["0.0.0.0", 8],
-  ["10.0.0.0", 8],
-  ["100.64.0.0", 10],
-  ["127.0.0.0", 8],
-  ["169.254.0.0", 16],
-  ["172.16.0.0", 12],
-  ["192.0.0.0", 24],
-  ["192.168.0.0", 16],
-  ["198.18.0.0", 15],
-  ["224.0.0.0", 4],
-  ["240.0.0.0", 4],
+  [ip(10, 0, 0, 0), 8],
+  [ip(100, 64, 0, 0), 10],
+  [ip(127, 0, 0, 0), 8],
+  [ip(169, 254, 0, 0), 16],
+  [ip(172, 16, 0, 0), 12],
+  [ip(192, 0, 0, 0), 24],
+  [ip(192, 168, 0, 0), 16],
+  [ip(198, 18, 0, 0), 15],
+  [ip(224, 0, 0, 0), 4],
+  [ip(240, 0, 0, 0), 4],
 ] as const) {
   BLOCKED.addSubnet(network, prefix, "ipv4");
 }

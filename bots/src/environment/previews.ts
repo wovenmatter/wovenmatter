@@ -59,8 +59,10 @@ export class PreviewManager {
     return this.#lastTraffic.get(botId);
   }
 
-  list(botId: string): Preview[] {
-    return [...this.#live.values()].map((live) => live.preview).filter((preview) => preview.botId === botId);
+  list(botId?: string): Preview[] {
+    return [...this.#live.values()]
+      .map((live) => live.preview)
+      .filter((preview) => botId === undefined || preview.botId === botId);
   }
 
   #touch(botId: string): void {
