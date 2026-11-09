@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import Observation
 import Security
+import WovenMatterClient
 import WovenMatterCore
 import WovenMatterDashboardStore
 
@@ -464,6 +465,8 @@ final class CompanionHostController {
         var revoke: @MainActor (_ workspaceID: String, _ deviceID: String) async throws -> Void
     }
     @ObservationIgnored var remoteExecutionRequests: RemoteExecutionRequests?
+    /// Test seam: carries signed requests to Linux hosts in process.
+    @ObservationIgnored var remoteHostSend: MemberSignedHTTPClient.Send?
 
     private func localExecutionWorkspaceID(libraryID: String) -> String {
         let key = "companion.execution.local-id." + libraryID
@@ -594,7 +597,11 @@ final class CompanionHostController {
         defer { provisioningWorkspaceIDs.remove(id) }
         let identity = try await database.companionLibraryIdentity()
         if let workspace = try await database.companionExecutionWorkspaces().first(where: { $0.id == id && !$0.deleted }), workspace.libraryID != identity.libraryID {
-            let credential = try await peerSync.provision(workspace: workspace, deviceID: deviceID)
+            // A Linux host issues its own grants to any Mac member; only a
+            // paired Mac's own workspace is asked through that Mac.
+            let credential = workspace.kind == .linux && workspace.endpoint != nil
+                ? try await provisionAtLinuxHost(workspace, deviceID: deviceID, name: name)
+                : try await peerSync.provision(workspace: workspace, deviceID: deviceID)
             try await commit()
             return credential
         }
@@ -629,8 +636,10 @@ final class CompanionHostController {
                 libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID, deviceID: deviceID, deviceName: name)
         } else if let registered, registered.kind == .mac {
             credential = try await managedExecutionRequest(workspace: registered, deviceID: deviceID, revoke: false)
+        } else if let registered, registered.kind == .linux, registered.endpoint != nil {
+            credential = try await provisionAtLinuxHost(registered, deviceID: deviceID, name: name)
         } else {
-            throw CompanionAPIError(code: "unknown_workspace", message: "Enable client access on this workspace's managing device first.")
+            throw CompanionAPIError(code: "unknown_workspace", message: "This workspace's address has not reached this Mac yet. Retry after the devices synchronize.")
         }
         do {
             guard credential.deviceID == deviceID, credential.workspace.id == id,

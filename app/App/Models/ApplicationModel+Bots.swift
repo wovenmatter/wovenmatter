@@ -104,7 +104,7 @@ extension ApplicationModel {
                 }
                 self.remoteWorkspaces.updateContainer(configuration)
             },
-            syncErrors: { [weak self] in self.map { Array($0.companionHost.peerSync.errors.values) } ?? [] })
+            syncErrors: { [weak self] in self.map { Array($0.companionHost.peerSync.errors.values) + Self.libraryUpdateNotices($0.companionHost.peerSync.syncStatus) } ?? [] })
     }
 
     // MARK: Other machines

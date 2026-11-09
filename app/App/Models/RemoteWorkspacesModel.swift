@@ -42,6 +42,12 @@ final class RemoteWorkspacesModel {
         }
     }
 
+    /// Linux hosts this Mac administers by signed request (any host in the
+    /// synced registry, whichever Mac added it), keyed by workspace ID.
+    var sharedHosts: [String: SharedHostState] = [:]
+    /// Builds the signed administration client for a registered Linux host.
+    @ObservationIgnored var sharedHostAdministration: (@MainActor (String) async throws -> RemoteHostAdministrationClient)?
+
     private(set) var workspaces: [RemoteWorkspaceConfiguration] = []
     private(set) var taskGatewayStatuses: [UUID: RemoteTaskGatewayStatus] = [:]
     private(set) var taskGatewayErrors: [UUID: String] = [:]
@@ -1280,11 +1286,18 @@ final class RemoteWorkspacesModel {
         try requireCurrent(identity)
         return value
     }
-    func adoptMembers(configuration: RemoteWorkspaceConfiguration, adoption: Data) async throws {
+    /// The installer bearer adopts a fresh host; once the host knows a Mac it
+    /// needs a signed `mac` member, so a refusal is retried signed.
+    func adoptMembers(configuration: RemoteWorkspaceConfiguration, adoption: Data, signer: MemberRequestSigner? = nil) async throws {
         let identity = try requestIdentity(configuration)
         let client = try await serviceClient(for: configuration)
         try requireCurrent(identity)
-        _ = try await client.adoptMembers(adoption)
+        do { _ = try await client.adoptMembers(adoption) }
+        catch {
+            guard let signer else { throw error }
+            try requireCurrent(identity)
+            _ = try await client.adoptMembers(adoption, signer: signer)
+        }
         try requireCurrent(identity)
     }
 
@@ -1611,6 +1624,7 @@ final class RemoteWorkspacesModel {
         let errorMessage: String?
         let checkedPreflight: RemoteWorkspacePreflight?
         let checkedHostKey: String?
+        var sharedHosts: [String: SharedHostState]? = nil
     }
 
     func backendSnapshot() -> BackendSnapshot {
@@ -1650,7 +1664,8 @@ final class RemoteWorkspacesModel {
             progress: progress,
             errorMessage: errorMessage,
             checkedPreflight: checkedPreflight,
-            checkedHostKey: checkedHostKey)
+            checkedHostKey: checkedHostKey,
+            sharedHosts: sharedHosts)
     }
 
     func applyBackendSnapshot(_ snapshot: BackendSnapshot) {
@@ -1691,6 +1706,11 @@ final class RemoteWorkspacesModel {
         errorMessage = snapshot.errorMessage
         checkedPreflight = snapshot.checkedPreflight
         checkedHostKey = snapshot.checkedHostKey
+        sharedHosts = snapshot.sharedHosts ?? [:]
+    }
+
+    func requestSharedHostBackend(_ command: BackendRemoteWorkspaceCommand) async throws -> BackendRemoteWorkspaceResponse {
+        try await requestBackend(command)
     }
 
     private func forwardToBackend(_ command: BackendRemoteWorkspaceCommand) -> Bool {

@@ -104,21 +104,64 @@ private extension CompanionWorkspaceAPI {
         }
     }
 
-    func handleWorkspaceMCP(_ request: CompanionHTTPRequest) async throws -> CompanionHTTPResponse {
-        guard request.headers["x-woven-protocol"] == String(CompanionProtocol.version), let bearer = request.bearer else {
-            return .error("unauthorized", "A library MCP grant is required.", status: 401)
+    /// The caller of `/mcp/workspace`: a library MCP grant, or a signed request
+    /// from the Linux member that executes the workspace named by
+    /// `X-Woven-Workspace-ID` (so a Linux host needs no grant from any one Mac).
+    /// `current` re-checks it during and after a long call.
+    struct WorkspaceMCPCaller: Sendable {
+        let principal: CompanionWorkspaceMCPPrincipal
+        let current: @Sendable () async throws -> CompanionWorkspaceMCPPrincipal
+    }
+    func authenticateWorkspaceMCP(_ request: CompanionHTTPRequest) async throws -> Result<WorkspaceMCPCaller, CompanionAPIError> {
+        if MemberRequestVerifier.isSigned(request.headers) {
+            guard let members else { return .failure(.init(code: "unauthorized", message: "This Mac does not accept member requests yet.")) }
+            let key: MemberKey
+            do {
+                key = try await members.verifier.verify(method: request.method, target: request.target, headers: request.headers,
+                                                        body: request.body, allowing: [.linux])
+            } catch let error as MemberRequestError { return .failure(.init(code: error.code, message: error.message)) }
+            guard let workspaceID = request.headers["x-woven-workspace-id"]?.lowercased() else {
+                return .failure(.init(code: "invalid_request", message: "Name the Linux workspace in X-Woven-Workspace-ID."))
+            }
+            let database = database
+            let current: @Sendable () async throws -> CompanionWorkspaceMCPPrincipal = {
+                guard await members.member(key.deviceID) != nil else { throw CompanionAPIError(code: "unauthorized", message: MemberRequestError.unknown.message) }
+                return try await database.companionWorkspaceMCPMember(workspaceID: workspaceID, deviceID: key.deviceID)
+            }
+            return .success(.init(principal: try await current(), current: current))
         }
+        guard let bearer = request.bearer else { return .failure(.init(code: "unauthorized", message: "A library MCP grant is required.")) }
         let principal = try await database.authenticateCompanionWorkspaceMCP(bearer: bearer)
         guard request.headers["x-woven-workspace"] == principal.libraryID else {
-            return .error("library_mismatch", "This MCP grant belongs to another library.", status: 409)
+            return .failure(.init(code: "library_mismatch", message: "This MCP grant belongs to another library."))
         }
+        let database = database
+        return .success(.init(principal: principal, current: {
+            let current = try await database.authenticateCompanionWorkspaceMCP(bearer: bearer)
+            guard current.grantID == principal.grantID else {
+                throw CompanionAPIError(code: "unauthorized", message: "The workspace's library MCP grant changed.")
+            }
+            return current
+        }))
+    }
+
+    func handleWorkspaceMCP(_ request: CompanionHTTPRequest) async throws -> CompanionHTTPResponse {
+        guard request.headers["x-woven-protocol"] == String(CompanionProtocol.version) else {
+            return .error("unauthorized", "A library MCP grant is required.", status: 401)
+        }
+        let caller: WorkspaceMCPCaller
+        switch try await authenticateWorkspaceMCP(request) {
+        case .success(let value): caller = value
+        case .failure(let error): return .error(error.code, error.message, status: error.code == "library_mismatch" ? 409 : 401)
+        }
+        let principal = caller.principal
         let (message, conversationID, groups, captureID) = try mcpInput(request)
         try await database.authorizeCompanionWorkspaceMCPCaller(conversationID: conversationID, principal: principal)
         let result = await WovenMCPServer.handle(message, contextID: captureID, allowedTools: mcpTools(groups: groups)) { call in
-            await self.performWorkspaceMCP(call, conversationID: conversationID, groups: groups, bearer: bearer, principal: principal)
+            await self.performWorkspaceMCP(call, conversationID: conversationID, groups: groups, caller: caller)
         }
         guard isActive() else { return .error("unavailable", "The library MCP host stopped.", status: 503) }
-        _ = try await database.authenticateCompanionWorkspaceMCP(bearer: bearer)
+        _ = try await caller.current()
         guard let result else { return .init(status: 202, body: Data()) }
         return try .json(result)
     }
@@ -127,11 +170,12 @@ private extension CompanionWorkspaceAPI {
         guard request.method == "POST" else { return .error("method_not_allowed", "Scheduled caller registration uses POST.", status: 405) }
         guard request.headers["x-woven-protocol"] == String(CompanionProtocol.version) else { return .error("version_mismatch", "Update the execution workspace to a compatible version.", status: 426) }
         guard request.body.count <= 1_048_576 else { return .error("too_large", "The scheduled caller registration exceeds 1 MiB.", status: 413) }
-        guard let bearer = request.bearer else { return .error("unauthorized", "A library MCP grant is required.", status: 401) }
-        let principal = try await database.authenticateCompanionWorkspaceMCP(bearer: bearer)
-        guard request.headers["x-woven-workspace"] == principal.libraryID else {
-            return .error("library_mismatch", "This MCP grant belongs to another library.", status: 409)
+        let caller: WorkspaceMCPCaller
+        switch try await authenticateWorkspaceMCP(request) {
+        case .success(let value): caller = value
+        case .failure(let error): return .error(error.code, error.message, status: error.code == "library_mismatch" ? 409 : 401)
         }
+        let principal = caller.principal
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .custom { decoder in
             let value = try decoder.singleValueContainer().decode(String.self)
@@ -143,19 +187,16 @@ private extension CompanionWorkspaceAPI {
         let preparation = try decoder.decode(CompanionScheduledMCPPreparation.self, from: request.body)
         let enabled = try await database.prepareCompanionScheduledMCP(preparation, principal: principal)
         guard isActive() else { return .error("unavailable", "The library MCP host stopped.", status: 503) }
-        _ = try await database.authenticateCompanionWorkspaceMCP(bearer: bearer)
+        _ = try await caller.current()
         onMutation()
         return try .json(["enabledGroups": enabled.map(\.rawValue)])
     }
 
     func performWorkspaceMCP(_ call: WovenMatterToolRequest, conversationID: String, groups: [WorkspaceToolGroup],
-                             bearer: String, principal: CompanionWorkspaceMCPPrincipal) async -> WovenMatterToolResponse {
+                             caller: WorkspaceMCPCaller) async -> WovenMatterToolResponse {
         do {
             guard isActive() else { throw CompanionAPIError(code: "unavailable", message: "The library MCP host stopped.") }
-            let current = try await database.authenticateCompanionWorkspaceMCP(bearer: bearer)
-            guard current.grantID == principal.grantID else {
-                throw CompanionAPIError(code: "unauthorized", message: "The workspace's library MCP grant changed.")
-            }
+            let current = try await caller.current()
             try await database.authorizeCompanionWorkspaceMCPCaller(conversationID: conversationID, principal: current)
             let request = CompanionToolRequest(conversationID: conversationID, request: call, enabledGroups: groups)
             try await database.authorizeCompanionTool(request, deviceID: current.executionDeviceID)

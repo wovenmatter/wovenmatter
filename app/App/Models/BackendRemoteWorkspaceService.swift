@@ -26,6 +26,7 @@ enum BackendRemoteWorkspaceCommand: Codable {
     case browserTabs(UUID, profile: String? = nil), browserFrame(UUID, tabID: String, previousFrameID: String? = nil, profile: String? = nil), browserAction(UUID, RemoteBrowserAction, profile: String? = nil)
 
     case browserActions(UUID, [RemoteBrowserAction], profile: String? = nil)
+    case sharedHost(String, SharedHostAction)
 
     var isBrowserOperation: Bool {
         switch self {
@@ -103,6 +104,9 @@ struct BackendRemoteWorkspaceService {
         case .browserAction(let id, let action, let profile): actionResult = try await model.browserAction(action, for: workspace(id), profile: profile)
         case .browserFrame(let id, let tabID, let previous, let profile): frame = try await model.browserFrame(tabID: tabID, previousFrameID: previous, for: workspace(id), profile: profile)
         case .browserActions(let id, let actions, let profile): actionResults = try await model.browserActions(actions, for: workspace(id), profile: profile)
+        case .sharedHost(let id, let action):
+            // Updates run for minutes; a later snapshot reports their result.
+            if action == .update { model.manageSharedHost(id, action) } else { await model.performSharedHost(id, action) }
         }
         return .init(snapshot: command.isBrowserOperation ? nil : model.backendSnapshot(), databases: databases, database: database, hostDirectories: directories, browserTabs: tabs, browserFrame: frame, browserAction: actionResult, browserActions: actionResults)
     }

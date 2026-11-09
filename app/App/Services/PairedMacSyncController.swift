@@ -442,10 +442,10 @@ final class PairedMacSyncController {
             }
             if path == "/v1/peers/credential", request.method == "POST", request.body.count <= 4096 {
                 let enrollment = try JSONDecoder().decode(PairedWorkspaceEnrollment.self, from: request.body)
-                let own = try await host.peerRoute()
-                guard let workspace = try await database.companionExecutionWorkspaces().first(where: { $0.id == enrollment.workspaceID && !$0.deleted }),
-                      workspace.ownerDeviceID == own.deviceID else {
-                    return .error("unauthorized", "Request this workspace's grant from the Mac that manages it.", status: 403)
+                // Any Mac enrolls a device for any workspace it knows: Linux hosts
+                // issue grants to every Mac member, and a Mac issues its own.
+                guard try await database.companionExecutionWorkspaces().contains(where: { $0.id == enrollment.workspaceID && !$0.deleted && $0.kind != .ios }) else {
+                    return .error("unknown_workspace", "This Mac does not know that workspace yet.", status: 404)
                 }
                 // A Mac enrolls itself directly. It may also enroll one of its own
                 // mobile devices; that grant records the Mac as its provenance.

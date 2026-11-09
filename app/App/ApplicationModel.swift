@@ -678,6 +678,13 @@ final class ApplicationModel {
                 guard let self else { throw ApplicationModelError.dashboardStoreUnavailable }
                 return try await self.changeRemoteCalendarGateway(configuration, enabled: enabled)
             }
+            remoteWorkspaces.sharedHostAdministration = { [weak self] id in
+                guard let self, let database = self.dashboardStore?.database,
+                      let workspace = try await database.companionExecutionWorkspaces().first(where: { $0.id == id && !$0.deleted }) else {
+                    throw RemoteWorkspaceClientError.invalidResponse("This host is no longer in the workspace registry.")
+                }
+                return try await self.companionHost.hostAdministration(for: workspace)
+            }
             remoteWorkspaces.onRuntimeMaintenanceChanged = { [weak self] in
                 await self?.synchronizeRemoteAgentCatalog()
                 await self?.synchronizeRemoteOpenCodeInstances()

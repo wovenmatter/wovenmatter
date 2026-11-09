@@ -251,16 +251,7 @@ extension ApplicationModel {
                 "nextCursor": receipts.last.map { .string($0.id) } ?? .null
             ]))
         case "harnesses":
-            let local: [GatewayJSONValue] = LocalACPRuntimeCatalog.definitions.map {
-                .object(["harness": .string($0.runtimeKind.rawValue), "workspace": .string("local"), "ready": .bool(isLocalACPAgentReady($0.runtimeKind))])
-            }
-            let remote: [GatewayJSONValue] = remoteWorkspaces.workspaces.flatMap { workspace in
-                (remoteWorkspaces.harnesses[workspace.id] ?? []).map { harness in
-                    .object(["harness": .string(harness.id.rawValue), "workspace": .string(workspace.id.uuidString.lowercased()),
-                        "workspaceName": .string(workspace.name), "ready": .bool(remoteWorkspaces.isHarnessReady(harness.id, in: workspace))])
-                }
-            }
-            let rows = local + remote
+            let rows = try await agentToolHarnessRows()
             let offset = try command.integer("offset", default: 0, range: 0...(Int.max - 1))
             let limit = try command.integer("limit", default: 100, range: 1...200)
             let page = Array(rows.dropFirst(offset).prefix(limit))
@@ -292,6 +283,12 @@ extension ApplicationModel {
             guard !purpose.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                   purpose.utf8.count <= 65_536 else {
                 throw WorkspaceToolError.invalid("A session purpose must be at most 64 KiB.")
+            }
+            if case .member(let workspace) = try await self.resolveAgentToolDestination(command.options["workspace"], callerWorkspace: source.remoteWorkspaceID) {
+                if let raw = command.options["harness"], AgentRuntimeKind(rawValue: raw) == nil { throw WorkspaceToolError.invalid("Unknown harness.") }
+                let runtime = command.options["harness"].flatMap(AgentRuntimeKind.init(rawValue:)) ?? source.localRuntimeKind ?? .defaultAgent
+                return try await self.createMemberToolSession(sourceID: source.id, requestID: request.requestID, workspace: workspace,
+                    runtime: runtime, title: title, text: text)
             }
             let reservation = try await store.database.reserveToolSessionCreation(sourceID: source.id, requestID: request.requestID,
                 arguments: request.operationArguments, purpose: purpose, managed: source.id != WovenMCPCaller.outside && command.options["independent"] == nil)
@@ -408,13 +405,12 @@ extension ApplicationModel {
             throw WorkspaceToolError.invalid("Choose a configured harness.")
         }
         guard AgentRuntimeKind.allCases.contains(runtime) else { throw WorkspaceToolError.invalid("This harness has been retired.") }
-        let workspace = command.options["workspace"] ?? source.remoteWorkspaceID?.uuidString.lowercased() ?? "local"
         guard let store = dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
         let workspaceID: UUID?
-        if workspace == "local" { workspaceID = source.remoteWorkspaceID }
-        else {
-            guard let id = UUID(uuidString: workspace) else { throw WorkspaceToolError.invalid("The destination workspace is unavailable.") }
-            workspaceID = id
+        switch try await resolveAgentToolDestination(command.options["workspace"], callerWorkspace: source.remoteWorkspaceID) {
+        case .thisMac: workspaceID = nil
+        case .configured(let id): workspaceID = id
+        case .member: throw WorkspaceToolError.invalid("Sessions on other devices are created on that device.")
         }
         let federatedSource = try await store.database.companionExecutionOwner(conversationID: source.id) != nil
         if federatedSource, command.options["workspace"] == nil || command.options["harness"] == nil {

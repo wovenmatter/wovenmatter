@@ -97,6 +97,8 @@
 		E678564F286E71B5FA588A5A /* CompanionCommandService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF3D48D1E7B9587A3DF2F895 /* CompanionCommandService.swift */; };
 		B7937C7349692E25EE127696 /* CompanionHostController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0083907CDB98FA31255BD2C1 /* CompanionHostController.swift */; };
 		301E0D2FD0D0674DA6DF406A /* CompanionHostController+Publishing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0643377195E7D10D99BB22ED /* CompanionHostController+Publishing.swift */; };
+		891F58B6ECD392232CDF9C9C /* SignedExecutionWorkspaceTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = F693CF31F7FF68A69F6E42C2 /* SignedExecutionWorkspaceTransport.swift */; };
+		F79287905382CBAD684D5E65 /* CompanionHostController+Members.swift in Sources */ = {isa = PBXBuildFile; fileRef = 946CA17242C4F2F626658DA0 /* CompanionHostController+Members.swift */; };
 		88FA3C83BF80A7BC5B0AAD17 /* CompanionMacPairingController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92D5260CF0515975E64CFF87 /* CompanionMacPairingController.swift */; };
 		A22000000000000000000002 /* MacDeviceSetupModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A22000000000000000000001 /* MacDeviceSetupModel.swift */; };
 		A22000000000000000000004 /* RemoteDeviceSetup.swift in Sources */ = {isa = PBXBuildFile; fileRef = A22000000000000000000003 /* RemoteDeviceSetup.swift */; };
@@ -164,6 +166,8 @@
 		2D11BF999DCFCAD843281985 /* ApplicationModel+MCPAccess.swift in Sources */ = {isa = PBXBuildFile; fileRef = 392AA3B531FF25C552C29E12 /* ApplicationModel+MCPAccess.swift */; };
 		DE6A299C4400AB55B5D0CE55 /* BackendMCPService.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC1EEBCD8EBF7AD5965C8DF8 /* BackendMCPService.swift */; };
 		895A902611CD21FC10814499 /* ApplicationModel+Bots.swift in Sources */ = {isa = PBXBuildFile; fileRef = C29A70F944FF97D2DD457E7C /* ApplicationModel+Bots.swift */; };
+		2A9DD382F8055BA4D1817FEB /* RemoteWorkspacesModel+SharedHosts.swift in Sources */ = {isa = PBXBuildFile; fileRef = C675F53C9F1FED2C8ED7B721 /* RemoteWorkspacesModel+SharedHosts.swift */; };
+		CA2FBC8830FD2860BE268EA5 /* ApplicationModel+MemberSessions.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE5A3B5C1BAA5CF305BDFD9C /* ApplicationModel+MemberSessions.swift */; };
 		0E7D7AE0817B9BEF633E5B27 /* BackendBotsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A43821D6EA11448362738D3A /* BackendBotsService.swift */; };
 		250B7901DFC1AAF2F91F87C8 /* BotsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5878323C60BE97DFD9BAFC2 /* BotsModel.swift */; };
 		BA32B256A31201F0C7A60050 /* BotConversationController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1EDC53FEFEB9F50425DA9E5B /* BotConversationController.swift */; };
@@ -280,6 +284,8 @@
 		FF3D48D1E7B9587A3DF2F895 /* CompanionCommandService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionCommandService.swift; sourceTree = "<group>"; };
 		0083907CDB98FA31255BD2C1 /* CompanionHostController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionHostController.swift; sourceTree = "<group>"; };
 		0643377195E7D10D99BB22ED /* CompanionHostController+Publishing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CompanionHostController+Publishing.swift"; sourceTree = "<group>"; };
+		F693CF31F7FF68A69F6E42C2 /* SignedExecutionWorkspaceTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignedExecutionWorkspaceTransport.swift; sourceTree = "<group>"; };
+		946CA17242C4F2F626658DA0 /* CompanionHostController+Members.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CompanionHostController+Members.swift"; sourceTree = "<group>"; };
 		92D5260CF0515975E64CFF87 /* CompanionMacPairingController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionMacPairingController.swift; sourceTree = "<group>"; };
 		A22000000000000000000001 /* MacDeviceSetupModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacDeviceSetupModel.swift; sourceTree = "<group>"; };
 		A22000000000000000000003 /* RemoteDeviceSetup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteDeviceSetup.swift; sourceTree = "<group>"; };
@@ -346,6 +352,8 @@
 		392AA3B531FF25C552C29E12 /* ApplicationModel+MCPAccess.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+MCPAccess.swift"; sourceTree = "<group>"; };
 		DC1EEBCD8EBF7AD5965C8DF8 /* BackendMCPService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendMCPService.swift"; sourceTree = "<group>"; };
 		C29A70F944FF97D2DD457E7C /* ApplicationModel+Bots.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+Bots.swift"; sourceTree = "<group>"; };
+		C675F53C9F1FED2C8ED7B721 /* RemoteWorkspacesModel+SharedHosts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "RemoteWorkspacesModel+SharedHosts.swift"; sourceTree = "<group>"; };
+		EE5A3B5C1BAA5CF305BDFD9C /* ApplicationModel+MemberSessions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+MemberSessions.swift"; sourceTree = "<group>"; };
 		A43821D6EA11448362738D3A /* BackendBotsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendBotsService.swift"; sourceTree = "<group>"; };
 		C5878323C60BE97DFD9BAFC2 /* BotsModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BotsModel.swift"; sourceTree = "<group>"; };
 		1EDC53FEFEB9F50425DA9E5B /* BotConversationController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BotConversationController.swift"; sourceTree = "<group>"; };
@@ -468,6 +476,8 @@
 				392AA3B531FF25C552C29E12 /* ApplicationModel+MCPAccess.swift */,
 				DC1EEBCD8EBF7AD5965C8DF8 /* BackendMCPService.swift */,
 				C29A70F944FF97D2DD457E7C /* ApplicationModel+Bots.swift */,
+				C675F53C9F1FED2C8ED7B721 /* RemoteWorkspacesModel+SharedHosts.swift */,
+				EE5A3B5C1BAA5CF305BDFD9C /* ApplicationModel+MemberSessions.swift */,
 				A43821D6EA11448362738D3A /* BackendBotsService.swift */,
 				C5878323C60BE97DFD9BAFC2 /* BotsModel.swift */,
 				1EDC53FEFEB9F50425DA9E5B /* BotConversationController.swift */,
@@ -607,6 +617,8 @@
 				D20900000000000000000002 /* PairedMacSyncController.swift */,
 				D20900000000000000000004 /* LegacyMacLibraryUpgrade.swift */,
 				0643377195E7D10D99BB22ED /* CompanionHostController+Publishing.swift */,
+				F693CF31F7FF68A69F6E42C2 /* SignedExecutionWorkspaceTransport.swift */,
+				946CA17242C4F2F626658DA0 /* CompanionHostController+Members.swift */,
 				92D5260CF0515975E64CFF87 /* CompanionMacPairingController.swift */,
 				A22000000000000000000001 /* MacDeviceSetupModel.swift */,
 				A22000000000000000000003 /* RemoteDeviceSetup.swift */,
@@ -758,6 +770,8 @@
 				E71AABCCC66026E6318FBD29 /* SettingsMCPAccessSection.swift in Sources */,
 				DE6A299C4400AB55B5D0CE55 /* BackendMCPService.swift in Sources */,
 				895A902611CD21FC10814499 /* ApplicationModel+Bots.swift in Sources */,
+				2A9DD382F8055BA4D1817FEB /* RemoteWorkspacesModel+SharedHosts.swift in Sources */,
+				CA2FBC8830FD2860BE268EA5 /* ApplicationModel+MemberSessions.swift in Sources */,
 				0E7D7AE0817B9BEF633E5B27 /* BackendBotsService.swift in Sources */,
 				250B7901DFC1AAF2F91F87C8 /* BotsModel.swift in Sources */,
 				BA32B256A31201F0C7A60050 /* BotConversationController.swift in Sources */,
@@ -822,6 +836,8 @@
 				D20900000000000000000001 /* PairedMacSyncController.swift in Sources */,
 				D20900000000000000000003 /* LegacyMacLibraryUpgrade.swift in Sources */,
 				301E0D2FD0D0674DA6DF406A /* CompanionHostController+Publishing.swift in Sources */,
+				891F58B6ECD392232CDF9C9C /* SignedExecutionWorkspaceTransport.swift in Sources */,
+				F79287905382CBAD684D5E65 /* CompanionHostController+Members.swift in Sources */,
 				88FA3C83BF80A7BC5B0AAD17 /* CompanionMacPairingController.swift in Sources */,
 				A22000000000000000000002 /* MacDeviceSetupModel.swift in Sources */,
 				A22000000000000000000004 /* RemoteDeviceSetup.swift in Sources */,
