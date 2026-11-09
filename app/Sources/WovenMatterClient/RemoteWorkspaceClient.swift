@@ -28,14 +28,17 @@ public struct RemoteMachineCandidate: Codable, Equatable, Identifiable, Sendable
     public let online: Bool
     /// Keep the Tailnet short name and the DNS name required for private HTTPS.
     public let dnsName: String?
+    /// `linux` or `macOS`, from tailscaled. Discovery for workspaces lists only Linux.
+    public var system: String? = nil
 
     public var id: String { hostName }
 
-    public init(hostName: String, displayName: String, online: Bool, dnsName: String? = nil) {
+    public init(hostName: String, displayName: String, online: Bool, dnsName: String? = nil, system: String? = nil) {
         self.hostName = hostName
         self.displayName = displayName
         self.online = online
         self.dnsName = dnsName
+        self.system = system
     }
 }
 
@@ -436,7 +439,8 @@ public enum RemoteWorkspaceLifecycleAction: String, Sendable {
 }
 
 public enum RemoteMachineDiscovery {
-    public static func tailnetMachines() throws -> [RemoteMachineCandidate] {
+    /// Online Linux peers; with `includeMacs`, online macOS peers too (Discover devices for bots).
+    public static func tailnetMachines(includeMacs: Bool = false) throws -> [RemoteMachineCandidate] {
         let executable = try RemoteWorkspaceTailnet.executable()
         let result = try RemoteWorkspaceProcess.run(
             executable: executable,
@@ -445,18 +449,20 @@ public enum RemoteMachineDiscovery {
         guard result.status == 0 else {
             throw RemoteWorkspaceClientError.commandFailed(result.output)
         }
-        return try decodeTailnetMachines(from: result.data)
+        return try decodeTailnetMachines(from: result.data, includeMacs: includeMacs)
     }
 
-    static func decodeTailnetMachines(from data: Data) throws -> [RemoteMachineCandidate] {
+    public static func decodeTailnetMachines(from data: Data, includeMacs: Bool = false) throws -> [RemoteMachineCandidate] {
         let document = try JSONSerialization.jsonObject(with: data)
         guard let root = document as? [String: Any], root["BackendState"] as? String == "Running",
               let peers = root["Peer"] as? [String: Any]
         else { throw RemoteWorkspaceClientError.commandFailed("Connect Tailscale before using remote workspaces.") }
         return peers.values.compactMap { value in
             guard let peer = value as? [String: Any], peer["Online"] as? Bool == true,
-                  peer["Expired"] as? Bool != true,
-                  RemoteWorkspaceTailnet.isLinuxPeer(peer) else { return nil }
+                  peer["Expired"] as? Bool != true else { return nil }
+            let isLinux = RemoteWorkspaceTailnet.isLinuxPeer(peer)
+            let isMac = (peer["OS"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "macos"
+            guard isLinux || (includeMacs && isMac) else { return nil }
             let dnsName = (peer["DNSName"] as? String)?
                 .trimmingCharacters(in: CharacterSet(charactersIn: "."))
             let shortName = (peer["HostName"] as? String)?
@@ -470,7 +476,8 @@ public enum RemoteMachineDiscovery {
                 hostName: hostName,
                 displayName: preferredName ?? hostName,
                 online: peer["Online"] as? Bool ?? false,
-                dnsName: dnsName
+                dnsName: dnsName,
+                system: isLinux ? "linux" : "macOS"
             )
         }.sorted {
             $0.displayName.localizedCaseInsensitiveCompare($1.displayName)
@@ -1364,6 +1371,20 @@ public struct RemoteWorkspaceServiceClient: Sendable {
     public func defaultAgentSDKs(_ command: DefaultAgentSDKRequest) async throws -> DefaultAgentSDKStatus {
         try await request(path: "v1/default-agent/sdks", method: command.action == .status ? "GET" : "POST",
                           body: command.action == .status ? nil : JSONEncoder().encode(command))
+    }
+    /// The host's bots, if its server runs them (docs/architecture/WOVEN_EVERYWHERE.md).
+    public func botsStatus() async throws -> BotsRemoteStatus {
+        try await request(path: "v1/bots/status", method: "GET", body: nil)
+    }
+    public func setBotsResources(_ resources: BotResourceSettings) async throws -> BotsRemoteStatus {
+        struct Body: Encodable { let resources: BotResourceSettings }
+        return try await request(path: "v1/bots/resources", method: "POST", body: JSONEncoder().encode(Body(resources: resources)))
+    }
+    /// The WebSocket this host's server proxies to its bots runtime, over the SSH tunnel.
+    public var botsSocket: BotSocketEndpoint {
+        var components = URLComponents(url: baseURL.appending(path: "v1/bots/ws"), resolvingAgainstBaseURL: false)!
+        components.scheme = "ws"
+        return BotSocketEndpoint(url: components.url!, bearer: token)
     }
     public func signInStatuses() async throws -> [AgentSignInStatus] {
         struct Response: Decodable { let statuses: [AgentSignInStatus] }

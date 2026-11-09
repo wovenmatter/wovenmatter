@@ -1,12 +1,16 @@
 import Foundation
 
+/// What `remote-host.sh` installs: a full workspace host, or the Woven server with
+/// only bots (its `install-bots` subcommand), which a workspace can be added to later.
+public enum RemoteHostInstallMode: String, Sendable { case workspace, botsOnly }
+
 extension RemoteWorkspaceSSHClient {
     /// Ships source and its locked dependency graph from this Mac. npm installs
     /// on the destination so native optional dependencies match Linux/CPU ABI.
     /// The API token is the first stdin line, never an argument or progress text.
     @discardableResult
     public func deployHost(configuration: RemoteWorkspaceConfiguration, token: String? = nil,
-                           update: Bool = false,
+                           update: Bool = false, mode: RemoteHostInstallMode = .workspace,
                            progress: @escaping @Sendable (String) -> Void = { _ in }) throws -> RemoteWorkspaceStatus {
         guard configuration.kind == .host else {
             throw RemoteWorkspaceClientError.invalidResponse("Select a Linux host workspace for native deployment.")
@@ -22,7 +26,8 @@ extension RemoteWorkspaceSSHClient {
         progress("Preparing the host service bundle…")
         let bundle = try RemoteHostBundle.archive(root: root, deployment: deployment)
         let script = try String(data: hostScriptLoader(), encoding: .utf8).unwrapHostScript()
-        let arguments = [update ? "update" : "install", configuration.workspaceID,
+        let subcommand = update ? "update" : mode == .botsOnly ? "install-bots" : "install"
+        let arguments = [subcommand, configuration.workspaceID,
                          String(configuration.remotePort), configuration.accessMode.rawValue, deployment.fingerprint]
         let command = "exec bash -c " + RemoteWorkspaceExecTarget.quote(script) + " -- "
             + arguments.map(RemoteWorkspaceExecTarget.quote).joined(separator: " ")

@@ -74,6 +74,8 @@ final class CompanionHostController {
     private var authentication: CompanionAuthentication?
     private var executionAPI: CompanionMacExecutionAPI?
     private var inferenceHost: CompanionInferenceHost?
+    /// Who may use this Mac's bots from another device (`/v1/bots/*`).
+    private var authorizeBots: (@MainActor (CompanionHTTPRequest) async throws -> Void)?
     private var executionAuthentication: CompanionExecutionAuthentication?
     private var provisioningWorkspaceIDs: Set<String> = []
     private var revokingDeviceIDs: Set<String> = []
@@ -165,7 +167,10 @@ final class CompanionHostController {
                     do { return try await model.linkedData(for: link) }
                     catch { throw CompanionAPIError(code: "linked_data_unavailable", message: error.localizedDescription) }
                 })
-            let listener = CompanionHTTPServer { [weak self] request in
+            let listener = CompanionHTTPServer(upgradeHandler: { [weak self] request in
+                guard let self else { return .reject(.error("unavailable", "This sharing session has stopped.", status: 503)) }
+                return await self.upgrade(request, generation: expectedGeneration)
+            }) { [weak self] request in
                 guard let self else { return .error("unavailable", "This sharing session has stopped.", status: 503) }
                 return await self.handle(request, generation: expectedGeneration, libraryAPI: api)
             }
@@ -214,6 +219,13 @@ final class CompanionHostController {
                         throw CompanionAPIError(code: "unauthorized", message: "This device is no longer paired.")
                     }
                 }, authorizeGrant: authorizeGrant)
+            // Member auth replaces this one check: today any current execution grant
+            // (a paired Mac, or a device this Mac paired) may use this Mac's bots.
+            authorizeBots = { request in
+                guard let bearer = request.bearer else { throw CompanionAPIError(code: "unauthorized", message: "A device credential is required.") }
+                let grant = try await executionAuth.authenticateGrant(bearer: bearer)
+                try await authorizeGrant(grant.scope.deviceID, grant.provisionedBy)
+            }
             inferenceHost = CompanionInferenceHost(authentication: executionAuth, descriptor: local,
                 directory: try supportDirectory ?? ApplicationModel.dashboardSupportDirectory(),
                 isActive: { [weak self] in self?.generation == expectedGeneration && self?.endpoint != nil }, authorize: authorizeGrant)
@@ -271,7 +283,27 @@ final class CompanionHostController {
             guard let inferenceHost else { return .error("unavailable", "This inference host is starting.", status: 503) }
             return await inferenceHost.handle(request)
         }
+        let botsPath = path.hasPrefix("/wovenmatter/") ? String(path.dropFirst("/wovenmatter".count)) : path
+        if botsPath.hasPrefix("/v1/bots/") {
+            guard let authorizeBots, let host = model?.botsHost else { return .error("unavailable", "Bots on this Mac are starting.", status: 503) }
+            do { try await authorizeBots(request) }
+            catch { return .error("unauthorized", error.localizedDescription, status: 401) }
+            return await host.remoteRequest(request, path: botsPath)
+        }
         return await libraryAPI.handle(request)
+    }
+
+    /// Only `/v1/bots/ws` upgrades: a member's WebSocket to this Mac's bots runtime.
+    private func upgrade(_ request: CompanionHTTPRequest, generation expected: UUID) async -> CompanionUpgradeDecision {
+        guard generation == expected else { return .reject(.error("unavailable", "This sharing session has stopped.", status: 503)) }
+        let path = request.target.split(separator: "?", maxSplits: 1).first.map(String.init) ?? request.target
+        guard path == "/v1/bots/ws" || path == "/wovenmatter/v1/bots/ws" else {
+            return .reject(.error("not_found", "Unknown upgrade route.", status: 404))
+        }
+        guard let authorizeBots, let host = model?.botsHost else { return .reject(.error("unavailable", "Bots on this Mac are starting.", status: 503)) }
+        do { try await authorizeBots(request) }
+        catch { return .reject(.error("unauthorized", error.localizedDescription, status: 401)) }
+        return host.remoteUpgrade(request)
     }
 
     /// Quit and role changes cancel recovery as well as the owned listener.
@@ -284,7 +316,7 @@ final class CompanionHostController {
 
     private func stopService() {
         generation = UUID(); healthTask?.cancel(); healthTask = nil
-        server?.stop(); server = nil; executionAPI = nil; inferenceHost = nil
+        server?.stop(); server = nil; executionAPI = nil; inferenceHost = nil; authorizeBots = nil
         if let serve {
             serve.stop()
             if !stoppingExposures.contains(where: { $0 === serve }) { stoppingExposures.append(serve) }

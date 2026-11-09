@@ -120,6 +120,18 @@ final class CentralExecutionClient {
         }
     }
 
+    /// This Mac's execution grant for another member's workspace, provisioned as a
+    /// command would be. Bots on that machine use it until member auth replaces it.
+    func directCredential(for workspace: CompanionExecutionWorkspace) async throws -> DirectWorkspaceCredential {
+        _ = try await transport(for: workspace)
+        let identity = try await database.companionLibraryIdentity()
+        let account = CentralExecutionCredentialVault.account(libraryID: workspace.libraryID, workspaceID: workspace.id, deviceID: identity.hostDeviceID)
+        guard let saved = try loadCredential(account), saved.endpoint == workspace.endpoint else {
+            throw CompanionAPIError(code: "unauthorized", message: "This Mac has no access to \(workspace.name) yet.")
+        }
+        return saved
+    }
+
     private func transport(for workspace: CompanionExecutionWorkspace) async throws -> any ExecutionWorkspaceTransport {
         if let transport = transports[workspace.id], transportEndpoints[workspace.id] == workspace.endpoint { return transport }
         transports.removeValue(forKey: workspace.id)

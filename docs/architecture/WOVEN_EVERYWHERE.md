@@ -224,6 +224,95 @@ same commit.
 - The native SwiftUI bot UI and settings come from PR #226, adapted to this
   runtime and to Woven's provider connections.
 
+### Interfaces between the runtime, the Woven servers and the apps
+
+These are what the Mac side implements and calls. The runtime and Linux workstreams
+build to the same shapes.
+
+**Runtime config.** The supervising server writes it with mode 0600 and starts
+`node bots/src/cli.ts serve --config <file>` with the Node the app already ships.
+On a Mac the file is `<support>/Bots/runtime.json` and `dataDir` is
+`<support>/Bots/data`.
+
+```json
+{ "dataDir": "…", "listen": { "host": "127.0.0.1", "port": 47311 }, "runtimeToken": "…",
+  "engine": { "socket": "…/docker.sock", "kind": "mac-vm" }, "image": { "tag": "wovenmatter/bots:<version>" },
+  "limits": { "botMemoryBytes": 4294967296 }, "host": { "url": "http://127.0.0.1:<port>", "token": "…" },
+  "machine": { "deviceID": "<woven device id>", "name": "…" } }
+```
+
+`limits.botMemoryBytes` is `null` for no cap. `image.tag` is `wovenmatter.image` from
+`bots/package.json`, or `wovenmatter/bots:<package version>`. The server restarts the
+runtime with backoff when it exits and considers it running once `GET /health`
+answers 200 on the listen port.
+
+**Runtime host API.** Loopback HTTP on the supervising server, bearer `host.token`.
+Errors are `{ "code", "message" }` with a 4xx status.
+
+| Route | Body | Reply |
+| --- | --- | --- |
+| `POST /v1/bots-host/mcp-keys` | `{ botID, botName }` | `{ endpoint, token }`; 403 `revoked` when the user revoked that bot |
+| `DELETE /v1/bots-host/mcp-keys/{botID}` | | `{ ok }` — the bot was deleted |
+| `POST /v1/bots-host/previews` | `{ botID, port }` | `{ url }`, the tailnet HTTPS URL |
+| `GET /v1/bots-host/previews` | | `{ previews: [{ botID, port, url, lastActivityAt }] }`, for the idle check |
+| `DELETE /v1/bots-host/previews/{botID}/{port}` | | `{ ok }` |
+| `POST /v1/bots-host/inference-credentials` | `{ provider }` | `{ provider, credential: { type, key?, access?, expires?, accountId? } }`; 404 when not connected |
+| `POST /v1/bots-host/conversations/{botID}/entries` | `{ botName, conversationId, mainConversationId?, title?, entries: [{ id, conversationId?, role, text, error?, createdAt? }] }` | `{ recorded }` |
+| `DELETE /v1/bots-host/conversations/{botID}` | | `{ ok }` — marks the bot's conversations deleted |
+
+Provider IDs are Woven's `ProviderConnectionID`s (`openai`, `openai-codex`,
+`anthropic`, `openrouter`, `xai`, `xai-api`, …). Credentials are the borrowed,
+access-only snapshot the machine's own Pi Durable receives; refresh tokens never
+leave the machine. Bot IDs and device IDs are identifier tokens
+(`[A-Za-z0-9._-]{1,128}`; UUIDs today). Entry IDs are unique per bot, and reporting an
+entry again updates it in place, so the runtime may report a reply partially and again
+when it ends. `role` is `user`, `assistant`, `system` or `tool`.
+
+**Bot conversations in the library** are two paired-library tables, not chats:
+`bot_conversations(id = "<machine>:<bot>:<conversationId>", machine_id, bot_id, bot_name,
+conversation_id, main_conversation_id, title, created_at, updated_at, deleted_at)` and
+`bot_conversation_entries(id = "<machine>:<bot>:<entryId>", conversation, entry_id, role,
+text, error, created_at)`. Regular chat lists never show them.
+
+**Protocol additions** the apps use, beyond Pi Bot protocol 1:
+
+- `hello` carries `machineId`.
+- `runtime.status` → `{ version, protocol, image, state, error? }`, `state` being
+  `ready`, `updating`, `rebuilding` or `failed`.
+- `runtime.update` → the same status when done. It stops running work, snapshots
+  each bot, updates it, health-checks it and rolls back on failure; it is a no-op for
+  bots already on the current image. Pushes `runtime.progress`
+  `{ botId?, phase, message? }` (`stopping`, `snapshot`, `updating`, `checking`,
+  `restarting`, `rolledBack`, `done`, `failed`).
+- `bots.rebuild { botId }` recreates one bot from a clean image, keeping its storage.
+- `onboarding.status.signedIn` means the runtime can use at least one Woven provider
+  connection. There is no sign-in, account, search, GitHub or config protocol.
+- Woven notifications are `message.send` to the main channel with `deliveryId`.
+
+**Woven server routes for bots.** Every Woven server that hosts bots answers these,
+under `/wovenmatter` when reached through Tailscale Serve:
+
+| Route | Reply |
+| --- | --- |
+| `GET /v1/bots/status` | `{ machine: { deviceID, name, kind }, enabled, state, message?, versions: { app, runtime, protocol }, resources, capacity: { memoryBytes, diskTotalBytes, diskFreeBytes, diskUsedByBotsBytes? }, paused }` |
+| `POST /v1/bots/resources` `{ resources: { poolBytes, perBotBytes, diskBytes } }` | the status after applying; `null` is no cap |
+| `GET /v1/bots/ws` (WebSocket upgrade) | proxied to the runtime's `/ws` with the runtime's own bearer |
+
+Until member auth lands, a Mac's server accepts any current execution grant
+(`CompanionExecutionAuthentication`) for these routes, and a Linux server accepts its
+workspace API token through the SSH tunnel. On the Mac, `ApplicationModel.botsAccess`
+is the one function member auth replaces.
+
+**Linux bots-only install.** `remote-host.sh install-bots <workspace-id> <port>
+<access-mode> <fingerprint>` takes the same stdin (token line, then bundle) as
+`install` and installs the Woven server with bots and its engine, asking for sudo once.
+
+**Mac engine.** The bots host codes against `BotEngineHost`
+(`app/App/Services/BotEngineHost.swift`): `ensureRunning(resources:)` returns the
+Docker socket once the VM answers, `apply(resources:)`, `diskUsedByBots()`,
+`forwardPort(botID:containerPort:)` to a loopback port, `removeForward`, `status()` and
+`stop()`. `BotEngineHostFactory.make` returns the implementation.
+
 ## Out of scope
 
 - TestFlight preparation (its own PR).
