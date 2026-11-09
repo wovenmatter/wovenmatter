@@ -258,7 +258,8 @@ final class BotsHostController {
     }
 
     /// Updates the VM in the background: it can take many minutes, longer than any command
-    /// round trip. Containers and the runtime survive it; the runtime reconnects to the socket.
+    /// round trip. The guest reboots, so running containers stop; volumes and images stay,
+    /// and the runtime starts a bot's container again on its next tool call.
     private func startEngineUpdate() throws {
         guard persisted.enabled else { throw BotsError.unavailable("Bots are off on this Mac.") }
         guard engineUpdateTask == nil else { return }
@@ -266,7 +267,9 @@ final class BotsHostController {
         engineUpdateTask = Task { [weak self] in
             guard let self else { return }
             do { try await engine.update() }
+            catch is CancellationError { return }
             catch { engineUpdateFailure = error.localizedDescription }
+            guard !Task.isCancelled else { return }
             engineStatus = await engine.status()
             engineUpdateTask = nil
             changed()
@@ -300,7 +303,8 @@ final class BotsHostController {
 
     private func bringDown() async {
         bringUpTask?.cancel(); bringUpTask = nil
-        await engineUpdateTask?.value
+        // Stop following a VM update; turning bots off stops the VM itself below.
+        engineUpdateTask?.cancel(); engineUpdateTask = nil
         await previews.removeAll()
         if let notifier { await notifier.invalidate() }
         notifier = nil
