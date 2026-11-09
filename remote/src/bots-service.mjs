@@ -119,9 +119,34 @@ export function createBotsService({ configuration, mcp, defaultAgent, serverPort
     json(response, 404, { error: 'not_found' }); return true
   }
 
+  const runtimeVersion = packageRoot ? readJSONFile(join(packageRoot, 'package.json'), {}).then(value => typeof value.version === 'string' ? value.version : null) : Promise.resolve(null)
+  const size = value => Number.isSafeInteger(value) && value >= 0 ? value : null
+
+  // The shape every Woven server that hosts bots answers (docs/architecture/
+  // WOVEN_EVERYWHERE.md, "Woven server routes for bots"), plus this server's
+  // own engine, runtime and settings detail.
   async function status() {
-    return { enabled: configuration.botsEnabled, workspaceEnabled: configuration.workspaceEnabled, runtimeAvailable: !!runtime,
-      engine: await engine.status(), runtime: runtime?.status() ?? null, machine: await machineInfo(), settings: await settings() }
+    const [engineStatus, saved, identity] = await Promise.all([engine.status(), settings(), machineInfo()])
+    const report = engineStatus.installed ? await engine.resources({ botMemoryBytes: saved.botMemoryBytes ?? null }).catch(() => null) : null
+    const running = runtime?.status() ?? null
+    let state = 'off', message
+    if (!configuration.botsEnabled) state = 'off'
+    else if (!runtime) { state = 'failed'; message = 'This release does not include the bots runtime. Update this host.' }
+    else if (!engineStatus.installed) { state = 'starting'; message = 'Waiting for the bot engine.' }
+    else if (running?.running && engineStatus.ready) state = 'ready'
+    else { state = 'starting'; if (!engineStatus.ready) message = 'Waiting for the bot engine to answer.' }
+    const memoryBytes = size(report?.memory?.totalBytes), diskTotalBytes = size(report?.disk?.totalBytes), diskFreeBytes = size(report?.disk?.freeBytes)
+    return {
+      machine: { ...identity, kind: 'linux' }, enabled: !!configuration.botsEnabled, state, ...(message ? { message } : {}),
+      // A Linux server has no app version; the runtime version names its bots package.
+      versions: { app: null, runtime: await runtimeVersion, protocol: 1 },
+      resources: engineStatus.installed ? { poolBytes: engineStatus.poolBytes ?? null, perBotBytes: saved.botMemoryBytes ?? null, diskBytes: engineStatus.diskBytes ?? null } : null,
+      capacity: memoryBytes !== null && diskTotalBytes !== null && diskFreeBytes !== null
+        ? { memoryBytes, diskTotalBytes, diskFreeBytes, diskUsedByBotsBytes: size(report.disk.usedBytes) } : null,
+      // Pause-all is the bots' Woven MCP switch on this server.
+      paused: mcp ? mcp.settings().botMCP?.isEnabled === false : false,
+      workspaceEnabled: configuration.workspaceEnabled, runtimeAvailable: !!runtime,
+      engine: engineStatus, runtime: running, settings: saved }
   }
 
   // App-facing routes. Reads accept device grants; changes need administration.
@@ -133,7 +158,12 @@ export function createBotsService({ configuration, mcp, defaultAgent, serverPort
     if (path === '/v1/bots/resources' && method === 'GET') { json(response, 200, await engine.resources(await settings())); return true }
     if (!administrator) { json(response, 403, { error: 'administrator_required' }); return true }
     if (path === '/v1/bots/resources' && method === 'POST') {
-      const body = await readJSON(request, 4096), current = await engine.status(), saved = await settings()
+      // `{resources: {poolBytes, perBotBytes, diskBytes}}`: null is no cap; a
+      // missing field stays as it is.
+      const requested = (await readJSON(request, 4096))?.resources
+      if (!requested || typeof requested !== 'object' || Array.isArray(requested)) throw fail(400, 'Send {resources: {poolBytes, perBotBytes, diskBytes}}.')
+      const body = { poolBytes: requested.poolBytes, diskBytes: requested.diskBytes, botMemoryBytes: requested.perBotBytes }
+      const current = await engine.status(), saved = await settings()
       const pool = body.poolBytes === undefined ? current.poolBytes ?? null : body.poolBytes
       const disk = body.diskBytes === undefined ? current.diskBytes ?? null : body.diskBytes
       // Lowering the pool below the per-bot limit lowers that limit with it.
@@ -141,13 +171,13 @@ export function createBotsService({ configuration, mcp, defaultAgent, serverPort
         : pool !== null && (saved.botMemoryBytes === null || saved.botMemoryBytes > pool) ? pool : saved.botMemoryBytes
       if (pool !== null && (!Number.isSafeInteger(pool) || pool < GB)) throw fail(400, 'The RAM pool must be at least 1 GB, or null for no cap.')
       if (botMemoryBytes !== null && (!Number.isSafeInteger(botMemoryBytes) || botMemoryBytes < 256 * 1024 ** 2 || (pool !== null && botMemoryBytes > pool))) throw fail(400, 'Per-bot RAM must fit in the pool, or be null for no cap.')
-      const result = (pool !== current.poolBytes || disk !== current.diskBytes) ? await engine.configure({ poolBytes: pool, diskBytes: disk }) : await engine.resources({ botMemoryBytes })
+      if (pool !== current.poolBytes || disk !== current.diskBytes) await engine.configure({ poolBytes: pool, diskBytes: disk })
       if (botMemoryBytes !== saved.botMemoryBytes) {
         await writePrivateJSON(settingsPath, { ...saved, botMemoryBytes })
         // The runtime reads limits from its config at start; bots keep running.
         if (runtime && configuration.botsEnabled) await runtime.restart()
       }
-      json(response, 200, { ...result, memory: { ...result.memory, botBytes: botMemoryBytes } }); return true
+      json(response, 200, await status()); return true
     }
     if (path === '/v1/bots/mcp' && method === 'GET') { json(response, 200, { settings: mcp.settings().botMCP, keys: mcp.botKeys() }); return true }
     if (path === '/v1/bots/mcp' && method === 'POST') {

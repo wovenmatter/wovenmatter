@@ -290,12 +290,20 @@ test('client routes read with device grants, change only as administrator, and r
   assert.equal((await f.call('/v1/bots/status', { token: 'nobody' })).status, 401)
   const status = await f.call('/v1/bots/status', { token: 'device' })
   assert.equal(status.body.enabled, true); assert.equal(status.body.workspaceEnabled, false); assert.equal(status.body.engine.installed, true)
+  // The shape every Woven server that hosts bots answers, as the apps decode it.
+  assert.deepEqual(status.body.machine, { ...f.machine, kind: 'linux' })
+  assert.equal(status.body.state, 'starting'); assert.equal(status.body.paused, false)
+  assert.deepEqual(status.body.versions, { app: null, runtime: null, protocol: 1 })
+  assert.deepEqual(status.body.resources, { poolBytes: 8 * 1024 ** 3, perBotBytes: 4 * 1024 ** 3, diskBytes: null })
+  assert.ok(status.body.capacity === null || Number.isSafeInteger(status.body.capacity.memoryBytes))
   const resources = await f.call('/v1/bots/resources', { token: 'device' })
   assert.equal(resources.body.memory.botBytes, 4 * 1024 ** 3)
-  assert.equal((await f.call('/v1/bots/resources', { token: 'device', method: 'POST', body: { botMemoryBytes: 1024 ** 3 } })).status, 403)
-  assert.equal((await f.call('/v1/bots/resources', { token: 'admin', method: 'POST', body: { botMemoryBytes: 64 * 1024 ** 3 } })).status, 400, 'per-bot RAM must fit the pool')
-  const changed = await f.call('/v1/bots/resources', { token: 'admin', method: 'POST', body: { botMemoryBytes: 2 * 1024 ** 3 } })
-  assert.equal(changed.body.memory.botBytes, 2 * 1024 ** 3)
+  assert.equal((await f.call('/v1/bots/resources', { token: 'device', method: 'POST', body: { resources: { perBotBytes: 1024 ** 3 } } })).status, 403)
+  assert.equal((await f.call('/v1/bots/resources', { token: 'admin', method: 'POST', body: { resources: { perBotBytes: 64 * 1024 ** 3 } } })).status, 400, 'per-bot RAM must fit the pool')
+  assert.equal((await f.call('/v1/bots/resources', { token: 'admin', method: 'POST', body: { botMemoryBytes: 2 * 1024 ** 3 } })).status, 400, 'the body is {resources}')
+  const changed = await f.call('/v1/bots/resources', { token: 'admin', method: 'POST', body: { resources: { poolBytes: 8 * 1024 ** 3, perBotBytes: 2 * 1024 ** 3, diskBytes: null } } })
+  assert.equal(changed.status, 200)
+  assert.deepEqual(changed.body.resources, { poolBytes: 8 * 1024 ** 3, perBotBytes: 2 * 1024 ** 3, diskBytes: null })
   assert.equal((await f.call('/v1/bots/status', { token: 'device' })).body.settings.botMemoryBytes, 2 * 1024 ** 3)
 })
 
@@ -316,9 +324,9 @@ test('the runtime starts once the engine finishes installing, and lowering the p
   assert.equal(starts, 1)
   const json = (response, status, value) => { response.statusCode = status; response.value = value }
   const response = {}
-  await service.handleClient({ method: 'POST', headers: {} }, response, new URL('http://x/v1/bots/resources'), { readJSON: async () => ({ poolBytes: 2 * 1024 ** 3 }), json, administrator: true, device: null })
+  await service.handleClient({ method: 'POST', headers: {} }, response, new URL('http://x/v1/bots/resources'), { readJSON: async () => ({ resources: { poolBytes: 2 * 1024 ** 3 } }), json, administrator: true, device: null })
   assert.equal(response.statusCode, 200)
-  assert.equal(response.value.memory.botBytes, 2 * 1024 ** 3)
+  assert.equal(response.value.resources.perBotBytes, 2 * 1024 ** 3)
 })
 
 test('the bots socket requires client authorization and reaches the runtime with the runtime token only', async t => {

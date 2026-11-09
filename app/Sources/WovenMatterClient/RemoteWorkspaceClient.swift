@@ -649,18 +649,20 @@ public actor RemoteWorkspaceSSHClient {
         return result.endpoint
     }
 
+    /// `roles` (host only) is `remote-host.sh prepare`'s roles argument, such as `bots`.
     public func prepareHost(
         hostName: String,
         userName: String?,
         kind: RemoteWorkspaceKind = .container,
-        accessMode: RemoteWorkspaceAccessMode = .user
+        accessMode: RemoteWorkspaceAccessMode = .user,
+        roles: String? = nil
     ) throws -> RemoteWorkspacePreflight {
         try decode(
             RemoteWorkspacePreflight.self,
             from: runScript(
                 hostName: hostName,
                 userName: userName,
-                arguments: ["prepare", "AUTHORIZED"] + (kind == .host ? [accessMode.rawValue] : []),
+                arguments: ["prepare", "AUTHORIZED"] + (kind == .host ? [accessMode.rawValue] + (roles.map { [$0] } ?? []) : []),
                 kind: kind
             )
         )

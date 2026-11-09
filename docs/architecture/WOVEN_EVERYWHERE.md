@@ -515,9 +515,14 @@ Pi Bot's Admin Bot config tools (`read_config`, `update_config`,
   poolBytes, botBytes, usedBytes}`, `disk {path, totalBytes, freeBytes,
   capBytes, imageBytes, usedBytes}`, `warnings`), and `GET /v1/bots/ws`
   (WebSocket, proxied to the runtime's `/ws` with the runtime token).
-  Administrator only: `POST /v1/bots/resources {poolBytes?, diskBytes?,
-  botMemoryBytes?}` (a pool below per-bot RAM lowers it), `GET|POST
-  /v1/bots/mcp {isEnabled?, groups?}` and `DELETE /v1/bots/mcp/keys/{botID}`.
+  Administrator only: `POST /v1/bots/resources {resources: {poolBytes?,
+  perBotBytes?, diskBytes?}}` (a missing field stays; a pool below per-bot
+  RAM lowers it), `GET|POST /v1/bots/mcp {isEnabled?, groups?}` and
+  `DELETE /v1/bots/mcp/keys/{botID}`. `GET /v1/bots/status` and the
+  resources reply use the shape in "Woven server routes for bots" below,
+  plus `workspaceEnabled`, `runtimeAvailable`, `engine`, `runtime` and
+  `settings`. On Linux `versions.app` is `null`, `versions.runtime` is the
+  bots package version and `paused` is `botMCP.isEnabled == false`.
   `/v1/execution/mcp-settings` also carries `botMCP {isEnabled, groups}`.
 
 ### Resources
@@ -650,7 +655,7 @@ under `/wovenmatter` when reached through Tailscale Serve:
 | Route | Reply |
 | --- | --- |
 | `GET /v1/bots/status` | `{ machine: { deviceID, name, kind }, enabled, state, message?, versions: { app, runtime, protocol }, resources, capacity: { memoryBytes, diskTotalBytes, diskFreeBytes, diskUsedByBotsBytes? }, paused }` |
-| `POST /v1/bots/resources` `{ resources: { poolBytes, perBotBytes, diskBytes } }` | the status after applying; `null` is no cap |
+| `POST /v1/bots/resources` `{ resources: { poolBytes, perBotBytes, diskBytes } }` | the status after applying; `null` is no cap (Linux also leaves a missing field as it is) |
 | `GET /v1/bots/ws` (WebSocket upgrade) | proxied to the runtime's `/ws` with the runtime's own bearer |
 
 Until member auth lands, a Mac's server accepts any current execution grant
@@ -658,9 +663,11 @@ Until member auth lands, a Mac's server accepts any current execution grant
 workspace API token through the SSH tunnel. On the Mac, `ApplicationModel.botsAccess`
 is the one function member auth replaces.
 
-**Linux bots-only install.** `remote-host.sh install-bots <workspace-id> <port>
-<access-mode> <fingerprint>` takes the same stdin (token line, then bundle) as
-`install` and installs the Woven server with bots and its engine, asking for sudo once.
+**Linux bots-only install.** The Mac runs `remote-host.sh prepare AUTHORIZED
+<access-mode> bots`, then `remote-host.sh install <workspace-id> <port> <access-mode>
+<fingerprint> bots` with the same stdin as any install (token line, then bundle); see
+"One server, roles". Both use the SSH account's existing noninteractive sudo. The
+Mac records a bots-only host with workspace id `bots`.
 
 **Mac engine.** The bots host codes against `BotEngineHost`
 (`app/App/Services/BotEngineHost.swift`): `ensureRunning(resources:)` returns the

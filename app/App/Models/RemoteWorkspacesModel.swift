@@ -1453,8 +1453,10 @@ final class RemoteWorkspacesModel {
         try await serviceClient(for: configuration)
     }
 
-    /// Installs the Woven server with only bots on a Linux peer (`remote-host.sh install-bots`,
-    /// which asks for sudo once there). Adding a workspace later reuses the same server.
+    /// Installs the Woven server with only bots on a Linux peer: `remote-host.sh prepare`
+    /// then `install` with the `bots` role, which use that account's existing noninteractive
+    /// sudo there. The user confirmed this in Settings → Bots. Adding a workspace later
+    /// reuses the same server.
     @discardableResult
     func installBotsHost(hostName: String, userName: String?, deploy: BotsHostDeploy? = nil) async throws -> RemoteWorkspaceConfiguration {
         guard !isBackendProjection else { throw BackendRPCError.remote("Remote connections are owned by the background service.") }
@@ -1471,6 +1473,12 @@ final class RemoteWorkspacesModel {
             let status: RemoteWorkspaceStatus
             if let deploy { status = try await deploy(configuration, token) }
             else {
+                progress = "Preparing \(host)…"
+                let prepared = try await sshClient.prepareHost(hostName: host, userName: user, kind: .host,
+                    accessMode: configuration.accessMode, roles: RemoteHostInstallMode.botsOnly.roles)
+                if let issues = prepared.blockingIssues, !issues.isEmpty {
+                    throw RemoteWorkspaceClientError.commandFailed(issues.joined(separator: " "))
+                }
                 status = try await sshClient.deployHost(configuration: configuration, token: token, mode: .botsOnly) { [weak self] message in
                     Task { @MainActor [weak self] in self?.progress = message }
                 }

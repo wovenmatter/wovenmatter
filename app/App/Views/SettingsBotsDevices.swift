@@ -33,7 +33,7 @@ struct BotsDiscoverDevicesCard: View {
             Button("Install") { install(device) }
             Button("Cancel", role: .cancel) { confirming = nil }
         } message: { _ in
-            Text("This installs the Woven server with bots over Tailscale SSH. It asks for that machine's administrator password once, there, to set up its own container engine. You can add a workspace to it later.")
+            Text("This installs the Woven server with bots over Tailscale SSH. It uses the SSH account's passwordless sudo to prepare the machine and set up its own container engine. You can add a workspace to it later.")
         }
     }
 

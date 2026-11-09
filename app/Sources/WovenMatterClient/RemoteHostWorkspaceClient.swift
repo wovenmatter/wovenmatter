@@ -1,8 +1,13 @@
 import Foundation
 
-/// What `remote-host.sh` installs: a full workspace host, or the Woven server with
-/// only bots (its `install-bots` subcommand), which a workspace can be added to later.
-public enum RemoteHostInstallMode: String, Sendable { case workspace, botsOnly }
+/// What `remote-host.sh install` sets up: a full workspace host, or the Woven server
+/// with only its `bots` role, which a workspace can be added to later.
+public enum RemoteHostInstallMode: String, Sendable {
+    case workspace, botsOnly
+    /// The roles argument of `remote-host.sh prepare|install|update`. nil keeps the
+    /// host's recorded roles (or `workspace` on a new host); roles only grow there.
+    public var roles: String? { self == .botsOnly ? "bots" : nil }
+}
 
 extension RemoteWorkspaceSSHClient {
     /// Ships source and its locked dependency graph from this Mac. npm installs
@@ -26,9 +31,9 @@ extension RemoteWorkspaceSSHClient {
         progress("Preparing the host service bundle…")
         let bundle = try RemoteHostBundle.archive(root: root, deployment: deployment)
         let script = try String(data: hostScriptLoader(), encoding: .utf8).unwrapHostScript()
-        let subcommand = update ? "update" : mode == .botsOnly ? "install-bots" : "install"
-        let arguments = [subcommand, configuration.workspaceID,
+        let arguments = [update ? "update" : "install", configuration.workspaceID,
                          String(configuration.remotePort), configuration.accessMode.rawValue, deployment.fingerprint]
+            + (mode.roles.map { [$0] } ?? [])
         let command = "exec bash -c " + RemoteWorkspaceExecTarget.quote(script) + " -- "
             + arguments.map(RemoteWorkspaceExecTarget.quote).joined(separator: " ")
         var input = Data((secret + "\n").utf8)

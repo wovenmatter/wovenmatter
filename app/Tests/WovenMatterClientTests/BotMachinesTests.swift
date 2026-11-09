@@ -118,6 +118,22 @@ struct BotMachinesTests {
         #expect(off.machine(kind: .linux, socket: socket, thisMacVersion: "1.3.0").socket == nil)
     }
 
+    /// What remote/src/bots-service.mjs answers: the shared fields plus its own engine detail.
+    @Test func linuxServerStatusDecodes() throws {
+        let body = """
+        {"machine":{"deviceID":"0b6f8c2e-6a51-4f7e-9d8a-2f9f6c1d3e4a","name":"box","kind":"linux"},"enabled":true,
+         "state":"starting","message":"Waiting for the bot engine.","versions":{"app":null,"runtime":"0.1.0","protocol":1},
+         "resources":{"poolBytes":8589934592,"perBotBytes":4294967296,"diskBytes":null},
+         "capacity":{"memoryBytes":34359738368,"diskTotalBytes":1000000000000,"diskFreeBytes":500000000000,"diskUsedByBotsBytes":null},
+         "paused":false,"workspaceEnabled":false,"runtimeAvailable":true,"engine":{"installed":false},"runtime":null,"settings":{}}
+        """
+        let status = try JSONDecoder().decode(BotsRemoteStatus.self, from: Data(body.utf8))
+        #expect(status.resources == .init(poolBytes: 8 * gib, perBotBytes: 4 * gib, diskBytes: nil))
+        #expect(status.capacity?.memoryBytes == 32 * gib && status.paused == false)
+        // No app version on Linux, so it never reads as a mismatch.
+        #expect(status.machine(kind: .linux, socket: nil, thisMacVersion: "1.4.0").state == .starting)
+    }
+
     @Test func socketDescriptionNeverPrintsTheBearer() {
         let socket = BotSocketEndpoint(url: URL(string: "wss://mac.tail.ts.net/wovenmatter/v1/bots/ws")!, bearer: "secret-token")
         #expect(!String(describing: socket).contains("secret-token"))
