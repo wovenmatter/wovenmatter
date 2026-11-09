@@ -499,13 +499,15 @@ test('host health reports native paths and source inventory without exposing its
   const service = await startService({ workspace, home, catalog: catalogPath, token, environmentOverrides: {
     WOVENMATTER_RUNTIME_KIND: 'host', WOVENMATTER_ACCESS_MODE: 'fullRoot',
     WOVENMATTER_DATA_DIRECTORY: databases, WOVENMATTER_STATE_DIRECTORY: resolve(home, 'data/run'),
-    WOVENMATTER_SERVICE_FINGERPRINT: 'a'.repeat(64), WOVENMATTER_LIBRARY: '0',
+    WOVENMATTER_SERVICE_FINGERPRINT: 'a'.repeat(64), WOVENMATTER_RELEASE_VERSION: '1.4.0', WOVENMATTER_LIBRARY: '0',
   } })
   context.after(() => stopService(service.child))
   const headers = { Authorization: 'Bearer ' + token }
   const health = await (await fetch(service.url + '/v1/health', { headers })).json()
   assert.deepEqual(health, { status: 'ready', version: '0.1.0', workspaceRoot: workspace, harnessCount: 4,
     runtimeKind: 'host', serviceFingerprint: 'a'.repeat(64), databasesDirectory: databases,
+    // What apps compare to tell an out-of-date host (no library host here, so no schema).
+    release: { version: '1.4.0', fingerprint: 'a'.repeat(64), librarySchema: null },
     attachmentsDirectory: resolve(workspace, '.wovenmatter/attachments'), dataRoot: resolve(home, 'data'), accessMode: 'fullRoot',
     workspaceEnabled: true, botsEnabled: false, library: null, memberIdentity: null })
   const body = await (await fetch(service.url + '/v1/harnesses', { headers })).json()
