@@ -253,7 +253,9 @@ defaults, in that order. The source chat's selections do not become defaults for
 the new chat. General Agent tools settings supply the native tool fallback.
 
 Permissions and tools come from user controls and cannot be overridden by agent
-tool calls. A user-saved empty Tools default disables every tool group for new chats
+tool calls. They are the destination's own saved defaults (Full access unless the
+user chose otherwise), never capped to or inherited from the calling session's
+permission or tools, on Mac and Linux alike. A user-saved empty Tools default disables every tool group for new chats
 in that scope. Creation binds the working location before resolving defaults and
 freezes every choice with the request, so retries survive changed defaults.
 Native settings must be accepted before the initial instruction is sent. Provider
