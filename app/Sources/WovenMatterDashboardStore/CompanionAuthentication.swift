@@ -1,7 +1,21 @@
+#if canImport(CryptoKit)
 import CryptoKit
+#else
+import Crypto
+#endif
+#if canImport(Darwin)
 import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 import Foundation
+#if canImport(Security)
 import Security
+#else
+import WovenMatterClient // File-backed Security shims
+#endif
 import WovenMatterCore
 
 public struct CompanionPairedDevice: Codable, Equatable, Sendable, Identifiable {

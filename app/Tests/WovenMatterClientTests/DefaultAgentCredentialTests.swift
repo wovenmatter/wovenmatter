@@ -1,3 +1,4 @@
+#if canImport(Security)
 import Foundation
 import Security
 import Testing
@@ -306,3 +307,4 @@ extension DefaultAgentCredentialTests {
         #expect(reverted.config.models == independent.config.models)
     }
 }
+#endif

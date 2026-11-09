@@ -1,5 +1,8 @@
 import WorkspaceFixtures
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 import Testing
 import WovenMatterClient
 import WovenMatterCore
@@ -147,6 +150,19 @@ private final class ApprovalURLProtocol: URLProtocol, @unchecked Sendable {
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
         let fixture = Self.fixture!
+        #if canImport(FoundationNetworking)
+        // Linux URLProtocol members are not Sendable; this fixture owns them.
+        nonisolated(unsafe) let client = client, request = request, loader = self
+        operation = Task {
+            do {
+                let (status, payload) = try await fixture.response(request)
+                try Task.checkCancellation()
+                client?.urlProtocol(loader, didReceive: HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!, cacheStoragePolicy: .notAllowed)
+                if status != 204 { client?.urlProtocol(loader, didLoad: try JSONEncoder().encode(payload)) }
+                client?.urlProtocolDidFinishLoading(loader)
+            } catch { client?.urlProtocol(loader, didFailWithError: error) }
+        }
+        #else
         operation = Task {
             do {
                 let (status, payload) = try await fixture.response(request)
@@ -156,6 +172,7 @@ private final class ApprovalURLProtocol: URLProtocol, @unchecked Sendable {
                 client?.urlProtocolDidFinishLoading(self)
             } catch { client?.urlProtocol(self, didFailWithError: error) }
         }
+        #endif
     }
     override func stopLoading() { operation?.cancel() }
 }

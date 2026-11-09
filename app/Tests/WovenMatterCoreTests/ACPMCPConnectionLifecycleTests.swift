@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 import Testing
 import WorkspaceFixtures
@@ -124,3 +125,4 @@ private actor MCPRetirementFixture {
   func waitForRelease() async { for await _ in releaseEntered.stream { break } }
   func finishRelease() { releaseWaiter?.resume(); releaseWaiter = nil }
 }
+#endif

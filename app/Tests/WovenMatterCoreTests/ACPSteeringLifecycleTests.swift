@@ -1,3 +1,4 @@
+#if os(macOS)
 import WorkspaceFixtures
 import Foundation
 import Testing
@@ -87,3 +88,4 @@ private actor SteeringDriver {
     func waitForPrompt() async { for await _ in ready.stream { break } }
     func finishInitial() { initial.continuation.yield(()) }
 }
+#endif

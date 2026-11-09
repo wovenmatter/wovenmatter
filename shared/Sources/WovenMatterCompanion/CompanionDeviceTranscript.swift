@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(CryptoKit)
 import CryptoKit
+#endif
 
 /// Rebuilds display history from the native SDK snapshot, including conversations
 /// saved before structured rendering existed. Tool results are never chat messages.

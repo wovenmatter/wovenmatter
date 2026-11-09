@@ -1,3 +1,4 @@
+#if os(macOS)
 import WorkspaceFixtures
 import Foundation
 import Testing
@@ -425,3 +426,4 @@ private actor PermissionLifecycleGate {
     for waiter in waiters { waiter.resume() }
   }
 }
+#endif

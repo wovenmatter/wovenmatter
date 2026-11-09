@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 
 /// Used only by the privileged helper, on its serial queue. Tests supply an
@@ -97,3 +98,4 @@ final class ClosedLidLeaseController {
         }
     }
 }
+#endif

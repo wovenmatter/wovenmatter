@@ -1,6 +1,17 @@
+#if canImport(CryptoKit)
 import CryptoKit
+#else
+import Crypto
+#endif
+#if canImport(Darwin)
 import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 import Foundation
+import WovenMatterCore
 
 public struct BackendRPCRequest: Codable, Sendable {
     public let id: String
@@ -166,7 +177,7 @@ public final class BackendRPCServer: @unchecked Sendable {
     public func stop() {
         lock.lock(); defer { lock.unlock() }
         guard descriptor >= 0 else { return }
-        shutdown(descriptor, SHUT_RDWR); Darwin.close(descriptor); descriptor = -1
+        shutdown(descriptor, PortablePOSIX.shutdownBoth); Darwin.close(descriptor); descriptor = -1
         unlink(socketURL.path)
     }
 }
@@ -186,27 +197,20 @@ private enum BackendSocket {
               info.st_uid == getuid(), info.st_mode & 0o077 == 0 else { throw BackendRPCError.unauthorized }
     }
     static func address(_ url: URL) throws -> sockaddr_un {
-        var address = sockaddr_un()
-        let bytes = Array(url.path.utf8) + [0]
-        guard bytes.count <= MemoryLayout.size(ofValue: address.sun_path) else { throw BackendRPCError.invalidEndpoint }
-        address.sun_family = sa_family_t(AF_UNIX)
-        address.sun_len = UInt8(MemoryLayout<sockaddr_un>.size)
-        withUnsafeMutableBytes(of: &address.sun_path) { target in target.copyBytes(from: bytes) }
+        guard let address = PortablePOSIX.unixAddress(path: url.path) else { throw BackendRPCError.invalidEndpoint }
         return address
     }
     static func make() throws -> Int32 {
-        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        let fd = socket(AF_UNIX, PortablePOSIX.streamSocket, 0)
         guard fd >= 0 else { throw BackendRPCError.unavailable }
         do { try configure(fd); return fd } catch { Darwin.close(fd); throw error }
     }
     static func configure(_ fd: Int32) throws {
-        var one: Int32 = 1
         guard fcntl(fd, F_SETFL, O_NONBLOCK) == 0, fcntl(fd, F_SETFD, FD_CLOEXEC) == 0,
-              setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout<Int32>.size)) == 0 else { throw BackendRPCError.unavailable }
+              PortablePOSIX.disableBrokenPipeSignal(fd) else { throw BackendRPCError.unavailable }
     }
     static func authenticate(_ fd: Int32) throws {
-        var uid: uid_t = 0; var gid: gid_t = 0
-        guard getpeereid(fd, &uid, &gid) == 0, uid == getuid() else { throw BackendRPCError.unauthorized }
+        guard PortablePOSIX.peerUser(fd) == getuid() else { throw BackendRPCError.unauthorized }
     }
     static func ready(_ fd: Int32, events: Int16, deadline: Date) throws {
         while true {

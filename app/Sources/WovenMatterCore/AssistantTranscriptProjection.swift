@@ -1,5 +1,9 @@
 import Foundation
+#if canImport(CryptoKit)
 import CryptoKit
+#else
+import Crypto
+#endif
 
 /// Keeps frozen commentary in the work timeline while leaving the final (or live)
 /// reply outside it. Canonical replacement text wins over a damaged live prefix.

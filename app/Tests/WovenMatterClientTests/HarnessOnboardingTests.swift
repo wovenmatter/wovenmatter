@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 import Testing
 @testable import WovenMatterClient
@@ -48,3 +49,4 @@ struct HarnessOnboardingTests {
         #expect(denied.accounts?.isEmpty == true)
     }
 }
+#endif

@@ -1,5 +1,9 @@
 import Foundation
+#if canImport(SQLite3)
 import SQLite3
+#else
+import CSQLite
+#endif
 
 // Schema creation, compatibility columns and revision triggers.
 extension WorkspaceDatabaseConnection {

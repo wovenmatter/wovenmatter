@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(Network)
 import Network
+#endif
 import WovenMatterCore
 
 public struct CompanionHTTPRequest: Sendable {
@@ -94,6 +96,7 @@ public struct CompanionHTTPParser: Sendable {
   private var malformed: CompanionAPIError { CompanionAPIError(code: "invalid_request", message: "Invalid companion request.") }
 }
 
+#if canImport(Network)
 /// Each connection has its own bounded reader. Ordinary request tasks do not own
 /// Mac runs, so disconnecting never cancels an accepted execution command. An
 /// inference-only streaming response does own its producer and cancels it on close.
@@ -305,3 +308,4 @@ private final class CompanionHTTPConnection: @unchecked Sendable {
     }
   }
 }
+#endif

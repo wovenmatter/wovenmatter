@@ -1,6 +1,10 @@
 import Foundation
+#if canImport(LocalAuthentication)
 import LocalAuthentication
+#endif
+#if canImport(Security)
 import Security
+#endif
 
 /// System operations are injectable so tests never need the user's Keychain.
 public struct KeychainOperations: Sendable {
@@ -11,6 +15,7 @@ public struct KeychainOperations: Sendable {
   public let add: @Sendable ([String: Any]) -> OSStatus
   public let delete: @Sendable ([String: Any]) -> OSStatus
 
+#if canImport(Security)
   public init(
     copyMatching: @escaping @Sendable ([String: Any]) -> (OSStatus, CFTypeRef?) = { query in
       var result: CFTypeRef?
@@ -42,6 +47,23 @@ public struct KeychainOperations: Sendable {
     self.add = add
     self.delete = delete
   }
+#else
+  public init(
+    copyMatching: @escaping @Sendable ([String: Any]) -> (OSStatus, CFTypeRef?) = { LinuxSecretStore.copyMatching($0) },
+    getInteractionAllowed: @escaping @Sendable () -> (OSStatus, Bool) = { (errSecSuccess, false) },
+    setInteractionAllowed: @escaping @Sendable (Bool) -> OSStatus = { _ in errSecSuccess },
+    update: @escaping @Sendable ([String: Any], [String: Any]) -> OSStatus = { LinuxSecretStore.update($0, $1) },
+    add: @escaping @Sendable ([String: Any]) -> OSStatus = { LinuxSecretStore.add($0) },
+    delete: @escaping @Sendable ([String: Any]) -> OSStatus = { LinuxSecretStore.delete($0) }
+  ) {
+    self.copyMatching = copyMatching
+    self.getInteractionAllowed = getInteractionAllowed
+    self.setInteractionAllowed = setInteractionAllowed
+    self.update = update
+    self.add = add
+    self.delete = delete
+  }
+#endif
 }
 
 /// Noninteractive by default, including the legacy macOS login Keychain.
@@ -163,11 +185,15 @@ public struct KeychainAccess: Sendable {
     allowInteraction: Bool
   ) -> [String: Any] {
     guard !policy.allowsInteraction(allowInteraction) else { return query }
+    #if canImport(LocalAuthentication)
     let context = LAContext()
     context.interactionNotAllowed = true
     var query = query
     query[kSecUseAuthenticationContext as String] = context
     return query
+    #else
+    return query // File-backed secrets never prompt.
+    #endif
   }
 }
 

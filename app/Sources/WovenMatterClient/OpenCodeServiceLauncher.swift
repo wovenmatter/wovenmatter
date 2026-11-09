@@ -1,5 +1,11 @@
 import Foundation
+#if canImport(Darwin)
 import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 
 public enum OpenCodeServiceLauncher {
     /// Reuse the standard service. Only a missing or dead process permits a

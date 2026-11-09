@@ -1,4 +1,9 @@
+#if os(macOS)
+#if canImport(CryptoKit)
 import CryptoKit
+#else
+import Crypto
+#endif
 import Foundation
 import Testing
 import WovenMatterCore
@@ -87,3 +92,4 @@ struct CompanionMacInstallerTests {
         #expect(FileManager.default.fileExists(atPath: lock.path) == (scenario == "busy-lock"))
     }
 }
+#endif
