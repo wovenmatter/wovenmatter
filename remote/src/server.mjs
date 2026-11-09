@@ -17,6 +17,7 @@ import { createWorkspaceBrowser, streamBrowserFrames } from './workspace-browser
 import { browserSelfTest } from './browser-selftest.mjs'
 import { loadWorkspaceMCPCatalog, validateInput, maximumMCPRequestBytes } from './workspace-mcp.mjs'
 import { runtimeConfiguration as configuration, runtimeHarnessEnvironment, shellQuote } from './config.mjs'
+import { createBotsService } from './bots-service.mjs'
 import { createServer } from 'node:http'
 import { timingSafeEqual, randomUUID, createHash } from 'node:crypto'
 import { readFile, writeFile, mkdir, realpath } from 'node:fs/promises'
@@ -101,6 +102,18 @@ const retainedExecution = runningAsService ? createRetainedExecutionCapture({
   resolveAssociation:request=>clientExecution.resolveRetainedAssociation(request),
 }) : null
 
+// Bots run only on native Linux hosts. The service exists whenever bots may be
+// enabled, so its routes answer clearly while the engine is being installed.
+const bots = runningAsService && configuration.runtimeKind === 'host' && process.platform === 'linux' ? createBotsService({
+  configuration, mcp: clientExecution.mcp, defaultAgent, serverPort: () => server.address()?.port ?? listenPort,
+  authorizeClient: request => authorized(request) || !!clientExecution.principal(request.headers.authorization, 'execution'),
+}) : null
+// A bots-only machine keeps its server, data root and connections but runs no
+// workspace agents, schedules or projects until the workspace is added.
+const workspaceRoutes = ['/v1/execution/commands', '/v1/task-gateway', '/v1/durable-acp/', '/v1/default-agent/rpc', '/v1/default-agent/runs/',
+  '/v1/projects', '/v1/scratch', '/v1/directories', '/v1/databases', '/v1/browser/', '/v1/harnesses/', '/v1/runtime-maintenance', '/v1/workspace-instances']
+const workspaceRoute = pathname => workspaceRoutes.some(prefix => pathname === prefix || pathname.startsWith(prefix.endsWith('/') ? prefix : prefix + '/'))
+
 const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
   requestTimeout: 30_000, connectionsCheckingInterval: 1_000 }, async (request, response) => {
   try {
@@ -126,6 +139,7 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
         return json(response,200,result)
       } finally {response.removeListener('close',disconnected)}
     }
+    if (bots && await bots.handleHost(request, response, url, { readJSON, json })) return
     const scope = url.pathname.startsWith('/v1/inference/') ? 'inference' : 'execution'
     const device = clientExecution?.principal(request.headers.authorization, scope)
     if (!administrator && !device) return json(response, 401, { error: 'unauthorized' })
@@ -133,6 +147,8 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
       const material = clientExecution.unlockMaterial(request.headers.authorization)
       if (material) await defaultAgent.unlockForClient(material)
     }
+    if (bots && await bots.handleClient(request, response, url, { readJSON, json, administrator, device })) return
+    if (!configuration.workspaceEnabled && workspaceRoute(url.pathname)) return json(response, 409, { error: 'workspace_disabled' })
     if (url.pathname === '/v1/runtime/inspection' && request.method === 'GET') {
       if (!administrator) return json(response,403,{error:'administrator_required'})
       return json(response,200,{ownerID:'remote',observedAt:Date.now()/1000-978307200,items:await inspectProcesses([
@@ -378,6 +394,8 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
         dataRoot: configuration.dataRoot,
         accessMode: configuration.accessMode,
         harnessCount: catalog.size,
+        workspaceEnabled: configuration.workspaceEnabled,
+        botsEnabled: configuration.botsEnabled,
       })
     }
 
@@ -464,9 +482,13 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
 
 server.maxConnections = 256
 server.maxRequestsPerSocket = 1_000
+server.on('upgrade', (request, socket, head) => {
+  socket.on('error', () => {})
+  if (!bots?.upgrade(request, socket, head)) socket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n')
+})
 
 if (runningAsService) {
-  taskGateway.start()
+  if (configuration.workspaceEnabled) taskGateway.start()
   retainedExecution.start()
   setInterval(() => {
     for (const [id, lease] of foregroundDefaultRuns) {
@@ -479,10 +501,11 @@ if (runningAsService) {
   }, 5000).unref()
   server.listen(listenPort, listenHost, () => {
     process.stdout.write(`Woven Matter remote service listening on ${listenHost}:${listenPort}\n`)
+    bots?.start().catch(error => process.stderr.write('Bots could not start: ' + error.message + '\n'))
   })
   process.once('SIGTERM', async () => {
     server.close()
-    try { await workspaceBrowser.close(); await taskGateway.close(); await retainedExecution.close(); await clientExecution.close(); await durableACP.stopAll(); await defaultAgent.close(); releaseTaskOwner?.(); process.exit(0) }
+    try { await bots?.close(); await workspaceBrowser.close(); await taskGateway.close(); await retainedExecution.close(); await clientExecution.close(); await durableACP.stopAll(); await defaultAgent.close(); releaseTaskOwner?.(); process.exit(0) }
     catch { process.exit(1) }
   })
 }

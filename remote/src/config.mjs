@@ -37,6 +37,11 @@ export function loadRuntimeConfiguration(environment = process.env) {
     legacyBrowserProfile: resolve(home, '.local/share/wovenmatter/browser'),
     harnessPath: environment.WOVENMATTER_HARNESS_PATH ?? '',
     serviceFingerprint: environment.WOVENMATTER_SERVICE_FINGERPRINT ?? null,
+    // One server per machine: a Linux host may run bots with the workspace off.
+    workspaceEnabled: environment.WOVENMATTER_WORKSPACE_ENABLED !== '0',
+    botsEnabled: environment.WOVENMATTER_BOTS_ENABLED === '1',
+    botsInstance: environment.WOVENMATTER_BOTS_INSTANCE ?? 'wovenmatter',
+    botsData: environment.WOVENMATTER_BOTS_DATA ?? null,
   })
 }
 
