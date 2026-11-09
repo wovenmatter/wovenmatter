@@ -37,15 +37,35 @@ same commit.
   endpoints, the adding device and its signature. Any Mac member may add a
   device, because adding needs the UI. Removal is a signed revocation that
   every device applies as soon as it syncs.
-- **Authentication between members.** A device proves its key with the
-  existing challenge/handshake pattern (`v1/peers/challenge`,
-  `v1/peers/handshake`, `v1/peers/proof`), generalized to any member kind. The
-  verifier accepts any key on the current member list. The resulting bearer is
-  cached by the caller and stays valid until revocation. Nothing is issued only
-  by a "managing" Mac, and nothing expires on a timer.
-- The Linux Node server verifies member signatures itself; Ed25519 in Node is
-  compatible with CryptoKit Curve25519 signing keys. It reads the member list
-  from its local library copy.
+- **Authentication between members: signed requests.** Every request from
+  one member to another is signed with the caller's device key. Nothing is
+  issued, cached or renewed, and nothing expires on a timer. Revoking a member
+  takes effect as soon as the revocation syncs.
+  - Headers:
+    - `X-Woven-Member-Device`: the caller's device ID.
+    - `X-Woven-Member-Time`: Unix time in milliseconds.
+    - `X-Woven-Member-Nonce`: 16 random bytes, base64url without padding.
+    - `X-Woven-Member-Signature`: an Ed25519 signature, base64url without
+      padding.
+  - The signed message is the UTF-8 string
+    `woven-member-v1\n<METHOD>\n<path with query>\n<time>\n<nonce>\n<hex SHA-256 of body>`.
+    An empty body hashes the empty string. A WebSocket upgrade signs its
+    `GET` request.
+  - The verifier accepts a request when:
+    - the device is on the current member list and not revoked;
+    - the time is within 300 seconds of its own clock;
+    - it has not seen the nonce in that window;
+    - the signature verifies with the member's raw 32-byte Ed25519 public key.
+      That key is CryptoKit `Curve25519.Signing` compatible, and Node verifies
+      it with `crypto.verify(null, …)`.
+  - The shared test vectors in `shared/Tests/.../MemberSignatureVectors.json`
+    are checked by Swift and by Node.
+- Pairing a new device still uses the existing pairing link and confirmation
+  UI on a Mac. Its result is a signed member entry instead of a bearer grant.
+- The Linux Node server verifies member signatures itself. It reads the member
+  list from its local library host (`GET /v1/members` on the library socket),
+  which returns each member's `deviceID`, `kind`, `name`, `publicKey`
+  (base64), `endpoints` and `revoked`, plus a `revision`.
 - Remote host administration (status, logs, restart, update) is available to
   every Mac member. First install still runs over Tailscale SSH from the Mac
   that adds the machine.
