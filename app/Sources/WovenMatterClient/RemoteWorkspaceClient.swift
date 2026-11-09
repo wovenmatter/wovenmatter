@@ -1096,8 +1096,10 @@ public struct RemoteWorkspaceServiceClient: Sendable {
     }
     /// Hands the Linux host the signed member records (a `LibraryMemberAdoption`);
     /// the server forwards them to its library socket's `POST /v1/members/adopt`.
-    public func adoptMembers(_ adoption: Data) async throws -> GatewayJSONValue {
-        try await request(path: "v1/host/members/adopt", method: "POST", body: adoption)
+    /// The server accepts the installer bearer only for the first adoption;
+    /// after that it needs a signed `mac` member, so `signer` signs the request.
+    public func adoptMembers(_ adoption: Data, signer: MemberRequestSigner? = nil) async throws -> GatewayJSONValue {
+        try await request(path: "v1/host/members/adopt", method: "POST", body: adoption, signer: signer)
     }
 
     public func executionPublisherStatus() async throws -> CompanionWorkspacePublisherStatus {
@@ -1421,7 +1423,8 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         path: String,
         method: String,
         body: Data?,
-        queryItems: [URLQueryItem]? = nil
+        queryItems: [URLQueryItem]? = nil,
+        signer: MemberRequestSigner? = nil
     ) async throws -> Value {
         try validateOrigin()
         let endpoint = baseURL.appending(path: path)
@@ -1446,6 +1449,12 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         if body != nil {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
+        if let signer {
+            let target = components.percentEncodedPath + (components.percentEncodedQuery.map { "?" + $0 } ?? "")
+            for (key, value) in try signer.headers(method: method, target: target, body: body ?? Data()) {
+                request.setValue(value, forHTTPHeaderField: key)
+            }
         }
         let (data, response) = try await session.data(for: request, delegate: RemoteWorkspaceRedirectPolicy.shared)
         guard let http = response as? HTTPURLResponse,

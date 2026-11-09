@@ -2,7 +2,7 @@
 // ready line and local API shapes (docs: "Library host"), with an in-memory
 // notes store. FAKE_LIBRARY_MEMBERS names a JSON file served as /v1/members;
 // FAKE_LIBRARY_LOG appends one JSON line per local API request.
-import { randomUUID } from 'node:crypto'
+import { createHash, createPrivateKey, createPublicKey, randomBytes, randomUUID, sign } from 'node:crypto'
 import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { join } from 'node:path'
@@ -18,7 +18,13 @@ const token = readFileSync(tokenFile, 'utf8').trim()
 const deviceFile = join(dataRoot, 'library/dashboard-device-id')
 if (!existsSync(deviceFile)) writeFileSync(deviceFile, randomUUID() + '\n', { mode: 0o600 })
 const deviceID = readFileSync(deviceFile, 'utf8').trim()
-const notes = new Map(), callers = new Map(), journal = [], botEntries = []
+// A real member key, as `secrets/member-signing.key` (raw 32-byte seed, base64).
+const keyFile = join(dataRoot, 'secrets/member-signing.key')
+if (!existsSync(keyFile)) writeFileSync(keyFile, randomBytes(32).toString('base64') + '\n', { mode: 0o600 })
+const memberKey = createPrivateKey({ key: Buffer.concat([Buffer.from('302e020100300506032b657004220420', 'hex'), Buffer.from(readFileSync(keyFile, 'utf8').trim(), 'base64')]), format: 'der', type: 'pkcs8' })
+const memberPublicKey = Buffer.from(createPublicKey(memberKey).export({ format: 'jwk' }).x, 'base64url').toString('base64')
+const notes = new Map(), callers = new Map(), journal = [], botEntries = [], adoptions = [], selfUpdates = [], signatures = []
+const readJSONFile = (name, fallback) => process.env[name] ? JSON.parse(readFileSync(process.env[name], 'utf8')) : fallback
 const log = value => { if (process.env.FAKE_LIBRARY_LOG) appendFileSync(process.env.FAKE_LIBRARY_LOG, JSON.stringify(value) + '\n') }
 
 const reply = (response, status, value) => { const body = JSON.stringify(value); response.writeHead(status, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) }); response.end(body) }
@@ -44,14 +50,34 @@ const local = createServer(async (request, response) => {
   log({ method: request.method, path, headers: Object.fromEntries(Object.entries(request.headers).filter(([key]) => key.startsWith('x-woven-'))), body })
   if (request.headers.authorization !== 'Bearer ' + token) return reply(response, 401, { code: 'unauthorized', message: 'A valid library API token is required.' })
   if (path === '/v1/health') return reply(response, 200, { status: 'ok', service: 'wovenmatter-library', version: '1', deviceID, uptimeSeconds: 1 })
-  if (path === '/v1/identity' && process.env.FAKE_LIBRARY_IDENTITY !== '0') return reply(response, 200, { deviceID, kind: 'linux', name: 'Fake Linux', publicKey: Buffer.alloc(32, 7).toString('base64'), endpoints: [] })
+  if (path === '/v1/identity' && process.env.FAKE_LIBRARY_IDENTITY !== '0') return reply(response, 200, { deviceID, kind: 'linux', name: 'Fake Linux', publicKey: memberPublicKey, endpoints: [] })
   if (path === '/v1/members') {
     if (!process.env.FAKE_LIBRARY_MEMBERS) return reply(response, 404, { code: 'not_found', message: 'Unknown library API route.' })
     return reply(response, 200, JSON.parse(readFileSync(process.env.FAKE_LIBRARY_MEMBERS, 'utf8')))
   }
+  // Signing for the Node server: the exact message of member-auth.mjs.
+  if (path === '/v1/members/sign') {
+    if (!/^[0-9a-f]{64}$/.test(body?.bodySHA256 ?? '') || !String(body?.target).startsWith('/')) return reply(response, 400, { code: 'invalid_request', message: 'Invalid signature request.' })
+    const time = String(Date.now()), nonce = randomBytes(16).toString('base64url'), method = String(body.method).toUpperCase()
+    const target = body.target === '/wovenmatter' ? '/' : body.target.startsWith('/wovenmatter/') || body.target.startsWith('/wovenmatter?') ? (body.target.slice('/wovenmatter'.length).replace(/^\?/, '/?')) : body.target
+    const message = `woven-member-v1\n${method}\n${target}\n${time}\n${nonce}\n${body.bodySHA256}`
+    signatures.push({ method, target: body.target })
+    return reply(response, 200, { headers: { 'X-Woven-Member-Device': deviceID, 'X-Woven-Member-Time': time, 'X-Woven-Member-Nonce': nonce,
+      'X-Woven-Member-Signature': sign(null, Buffer.from(message), memberKey).toString('base64url') } })
+  }
+  if (path === '/v1/workspaces') return reply(response, 200, { workspaces: readJSONFile('FAKE_LIBRARY_WORKSPACES', []) })
+  if (path === '/v1/sync/status') return reply(response, 200, readJSONFile('FAKE_LIBRARY_SYNC', { deviceID, peers: [] }))
+  if (path === '/v1/members/self') { selfUpdates.push(body); return reply(response, 200, readJSONFile('FAKE_LIBRARY_MEMBERS', { revision: '0', members: [] })) }
+  if (path === '/v1/members/adopt') {
+    adoptions.push(createHash('sha256').update(raw).digest('hex'))
+    if (!body?.anchor) return reply(response, 400, { code: 'invalid_member', message: 'An adoption needs an anchor.' })
+    return reply(response, 200, readJSONFile('FAKE_LIBRARY_MEMBERS', { revision: '1', members: [] }))
+  }
   if (path === '/v1/callers') { callers.set(body.conversationID, body); return reply(response, 200, { conversationID: body.conversationID, enabledGroups: (body.enabledGroups ?? []).sort().join(',') }) }
   if (path === '/v1/mcp') {
-    const caller = request.headers['x-woven-conversation-id'], groups = (request.headers['x-woven-enabled-groups'] ?? '').split(',').filter(Boolean)
+    const bot = request.headers['x-woven-caller'], groups = (request.headers['x-woven-enabled-groups'] ?? '').split(',').filter(Boolean)
+    if (bot && (request.headers['x-woven-conversation-id'] || !bot.endsWith(':' + request.headers['x-woven-bot-id']))) return reply(response, 400, { code: 'invalid_request', message: 'Invalid bot caller.' })
+    const caller = bot ?? request.headers['x-woven-conversation-id']
     if (!caller) return reply(response, 400, { code: 'invalid_request', message: 'MCP requires a conversation binding and its current tool selection.' })
     return reply(response, 200, mcp(body, caller, groups))
   }
@@ -62,7 +88,7 @@ const local = createServer(async (request, response) => {
   if (path === '/v1/publisher/retained/settle') return reply(response, 200, { libraryID: body.libraryID, acceptedEventIDs: body.entries.map(entry => entry.eventID) })
   const bots = path.match(/^\/v1\/bots\/([0-9a-f-]{36})\/entries$/)
   if (bots && process.env.FAKE_LIBRARY_BOTS !== '0') { botEntries.push(body); return reply(response, 200, { conversations: body.conversations.length, entries: body.entries.length }) }
-  if (path === '/v1/debug/state') return reply(response, 200, { notes: [...notes.values()], callers: Object.fromEntries(callers), journal, botEntries })
+  if (path === '/v1/debug/state') return reply(response, 200, { notes: [...notes.values()], callers: Object.fromEntries(callers), journal, botEntries, adoptions, selfUpdates, signatures })
   reply(response, 404, { code: 'not_found', message: 'Unknown library API route.' })
 })
 const network = createServer((request, response) => {

@@ -23,7 +23,14 @@ public enum MemberRequestSignature {
   /// `woven-member-v1\n<METHOD>\n<path with query>\n<time>\n<nonce>\n<hex SHA-256 of body>`.
   /// The path is `canonicalTarget(target)`.
   public static func message(method: String, target: String, time: Int64, nonce: String, body: Data) -> Data {
-    Data([domain, method.uppercased(), canonicalTarget(target), String(time), nonce, bodyHash(body)].joined(separator: "\n").utf8)
+    message(method: method, target: target, time: time, nonce: nonce, bodySHA256: bodyHash(body))
+  }
+
+  /// The same message from the body's lowercase hex SHA-256, for a caller that
+  /// hashes a large or streamed body itself (a Linux library host signing for
+  /// its Node server).
+  public static func message(method: String, target: String, time: Int64, nonce: String, bodySHA256: String) -> Data {
+    Data([domain, method.uppercased(), canonicalTarget(target), String(time), nonce, bodySHA256].joined(separator: "\n").utf8)
   }
 
   /// The signed path omits a leading `/wovenmatter` mount prefix, because
@@ -77,7 +84,14 @@ public struct MemberRequestSigner: Sendable {
   public func headers(method: String, target: String, body: Data = Data(),
                       time: Int64 = MemberRequestSignature.now(),
                       nonce: String = MemberRequestSignature.randomNonce()) throws -> [String: String] {
-    let message = MemberRequestSignature.message(method: method, target: target, time: time, nonce: nonce, body: body)
+    try headers(method: method, target: target, bodySHA256: MemberRequestSignature.bodyHash(body), time: time, nonce: nonce)
+  }
+
+  /// `bodySHA256` is the lowercase hex SHA-256 of the exact body bytes.
+  public func headers(method: String, target: String, bodySHA256: String,
+                      time: Int64 = MemberRequestSignature.now(),
+                      nonce: String = MemberRequestSignature.randomNonce()) throws -> [String: String] {
+    let message = MemberRequestSignature.message(method: method, target: target, time: time, nonce: nonce, bodySHA256: bodySHA256)
     return [MemberRequestSignature.deviceHeader: deviceID, MemberRequestSignature.timeHeader: String(time),
             MemberRequestSignature.nonceHeader: nonce,
             MemberRequestSignature.signatureHeader: MemberRequestSignature.base64URL(try sign(message))]

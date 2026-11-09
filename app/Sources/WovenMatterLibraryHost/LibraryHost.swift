@@ -20,6 +20,17 @@ public final class LibraryHost: @unchecked Sendable {
   /// HTML reply needs the caller's active run, which the Node server owns until
   /// Linux session history is written into this library, so it stays there.
   public static let servedGroups: Set<WorkspaceToolGroup> = [.notes, .history, .calendar, .library]
+  /// Single library-backed tools of groups this host does not otherwise serve:
+  /// session folders are library rows, so a Linux session lists them without
+  /// any Mac. The rest of `sessions` stays in the Node server.
+  public static let servedTools: [WorkspaceToolGroup: Set<String>] = [.sessions: ["woven_sessions_folders"]]
+  static func allowedTools(_ groups: Set<WorkspaceToolGroup>, context: Bool) -> Set<String> {
+    let served = groups.intersection(servedGroups)
+    return Set(WovenMCPCatalog.tools.filter { tool in
+      (context && tool.name == "woven_context") || tool.group.map(served.contains) == true
+        || tool.group.map { groups.contains($0) && servedTools[$0]?.contains(tool.name) == true } == true
+    }.map(\.name))
+  }
   public static let maximumRequestBytes = WovenMatterToolRequest.maximumHTMLRequestBytes
   /// Mobile library routes (today's `CompanionWorkspaceAPI`), mounted under
   /// these prefixes so a phone can synchronize with this machine.
@@ -165,6 +176,12 @@ public final class LibraryHost: @unchecked Sendable {
         return try .json(try await members.list())
       case "/v1/sync/status":
         return try .json(await sync.status())
+      case "/v1/members/sign":
+        return try signForServer(request)
+      case "/v1/workspaces":
+        guard request.method == "GET" else { return .error("method_not_allowed", "Use GET.", status: 405) }
+        struct Workspaces: Encodable { let workspaces: [CompanionExecutionWorkspace] }
+        return try .json(Workspaces(workspaces: try await database.companionExecutionWorkspaces().filter { !$0.deleted }))
       default:
         if path.hasPrefix("/v1/publisher/") {
           return try await CompanionWorkspacePublisherAPI.handleLocal(request, path: path, database: database)
@@ -189,6 +206,27 @@ public final class LibraryHost: @unchecked Sendable {
     } catch {
       return .error("invalid_request", error.localizedDescription, status: 400)
     }
+  }
+
+  /// `POST /v1/members/sign {method, target, bodySHA256}` → `{headers}`: the
+  /// Node server's requests to other members are signed with this machine's
+  /// member key, which never leaves this process. `target` is the path with
+  /// query exactly as the Node server sends it.
+  public struct SignatureRequest: Codable, Sendable {
+    public var method: String
+    public var target: String
+    public var bodySHA256: String
+  }
+  private func signForServer(_ request: CompanionHTTPRequest) throws -> CompanionHTTPResponse {
+    guard request.method == "POST", request.body.count <= 16_384 else { return .error("invalid_request", "POST at most 16 KiB.", status: 400) }
+    let value = try JSONDecoder().decode(SignatureRequest.self, from: request.body)
+    let methods: Set<String> = ["GET", "POST", "PUT", "PATCH", "DELETE"]
+    guard methods.contains(value.method.uppercased()), value.target.hasPrefix("/"), !value.target.hasPrefix("//"), value.target.utf8.count <= 8_192,
+          value.target.unicodeScalars.allSatisfy({ $0.value > 0x20 && $0.value < 0x7f }),
+          value.bodySHA256.utf8.count == 64, value.bodySHA256.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else {
+      return .error("invalid_request", "Sign a method, an absolute request target and a lowercase hex SHA-256.", status: 400)
+    }
+    return try .json(["headers": try identity.signer.headers(method: value.method.uppercased(), target: value.target, bodySHA256: value.bodySHA256)])
   }
 
   public struct Identity: Codable, Sendable, Equatable {
@@ -267,7 +305,7 @@ public final class LibraryHost: @unchecked Sendable {
         executionRoot: .init(folderID: nil, location: location, defaultPath: directory))
     }
     let current = try await database.sessionTools(id)
-    let selected = groups.intersection(Self.servedGroups)
+    let selected = groups.intersection(Self.servedGroups.union(Self.servedTools.keys))
     if current.enabled != selected {
       try await database.setSessionTools(.init(enabled: selected, executorProfiles: current.executorProfiles),
         sessionID: id, confirmedPausingTimers: true)
@@ -307,8 +345,7 @@ public final class LibraryHost: @unchecked Sendable {
       let callerID = WovenMCPCaller.bot(machineID: bot.machineID, botID: bot.botID)
       let name = request.headers["x-woven-bot-name"].flatMap { $0.removingPercentEncoding } ?? "Bot"
       try await database.registerBotCaller(callerID, displayName: String(name.prefix(128)))
-      let served = groups.intersection(Self.servedGroups)
-      let allowed = Set(WovenMCPCatalog.tools.filter { $0.group.map(served.contains) == true }.map(\.name))
+      let allowed = Self.allowedTools(groups, context: false)
       let executor = executor
       let result = await WovenMCPServer.handle(message, contextID: nil, allowedTools: allowed, outsideCaller: true) { call in
         await executor.execute(call, callerID: callerID, handlers: WorkspaceToolHandlers()).bounded()
@@ -317,10 +354,7 @@ public final class LibraryHost: @unchecked Sendable {
       return try .json(result)
     }
     let callerID = try await ensureCaller(request.headers["x-woven-conversation-id"] ?? "", groups: groups)
-    let served = groups.intersection(Self.servedGroups)
-    let allowed = Set(WovenMCPCatalog.tools.filter { tool in
-      tool.name == "woven_context" || tool.group.map(served.contains) == true
-    }.map(\.name))
+    let allowed = Self.allowedTools(groups, context: true)
     let contextID = request.headers["x-woven-context-id"]
       ?? message.objectValue?["params"]?.objectValue?["_meta"]?.objectValue?["wovenContextID"]?.stringValue
     let executor = executor

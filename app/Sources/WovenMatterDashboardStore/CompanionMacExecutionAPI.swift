@@ -54,7 +54,7 @@ public final class CompanionMacExecutionAPI {
         let member: MemberKey
         do {
           member = try await members.verifier.verify(method: request.method, target: request.target, headers: request.headers,
-                                                     body: request.body, allowing: [.mac, .ios])
+                                                     body: request.body, allowing: [.mac, .ios, .linux])
         } catch let error as MemberRequestError { return .error(error.code, error.message, status: error.code == "wrong_device" ? 403 : 401) }
         guard request.headers["x-woven-workspace"].map({ $0 == descriptor.id }) ?? true else {
           return .error("wrong_workspace", "This request names another workspace.", status: 403)

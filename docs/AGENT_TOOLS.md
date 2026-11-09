@@ -39,11 +39,14 @@ uses the existing authenticated Tailscale HTTPS routes.
 
 Other Macs retain their own execution identity and use their paired-library
 adapters. Linux execution workspaces serve MCP themselves. They handle local
-execution and managed data locally and use a separately provisioned, revocable
-workspace grant for central-library tools. A publisher credential is not a tool
-grant. An unavailable library returns an explicit unavailable result; the
-workspace never adopts another device's execution or turns its replica into a
-replacement library.
+execution and managed data locally, run notes, history, calendar, library and
+session folders against their own library copy, and send the tools only a Mac
+serves (timers, usage, HTML preview) to any reachable Mac member with a signed
+request. No single Mac's grant is needed; one saved from an earlier version is
+only a fallback. A publisher credential is not a tool grant. An unavailable
+library or Mac returns an explicit unavailable result; the workspace never
+adopts another device's execution or turns its replica into a replacement
+library.
 
 Ordinary Linux-owned sessions retain local goals and session coordination.
 Independent scheduled runs keep their scheduler as execution owner and expose
@@ -290,6 +293,18 @@ unanswered approvals. Creating and managing a new session needs no extra grant.
 Revocation blocks future reads; it cannot erase content already retrieved.
 
 ## Sessions and coordination
+
+`woven_sessions_create` and `woven_sessions_harnesses` reach every Mac and Linux
+workspace, from a Mac or a Linux host. Name the destination with `workspace`: a
+workspace ID from `woven_sessions_harnesses` (or an unambiguous workspace name).
+`local` is not a destination, an iPhone never is, and omitting `workspace`
+means the caller's own workspace. The harness list shows the caller's workspace
+first, with its real ID and name, then paired Macs and Linux workspaces; a
+workspace that does not answer is listed with `online: false`. A session on
+another workspace is created there directly with a signed request, so it works
+with every other Mac offline. It uses that workspace's saved defaults and comes
+back as `independent: true`: the caller does not coordinate it, and reads its
+progress from synchronized history.
 
 New sessions inherit the source harness, working location, and folder unless
 explicitly overridden. Model and thinking accept

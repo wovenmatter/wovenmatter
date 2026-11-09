@@ -79,6 +79,13 @@ export function createLibraryClient({ socket, token, timeoutMilliseconds = 120_0
     health: () => json('GET', '/v1/health', { timeout: 5000 }),
     identity: () => json('GET', '/v1/identity', { timeout: 5000 }),
     members: () => json('GET', '/v1/members', { timeout: 10_000 }),
+    // The adding Mac's signed records, forwarded byte for byte.
+    adoptMembers: body => json('POST', '/v1/members/adopt', { body: Buffer.from(body), timeout: 30_000 }),
+    updateSelf: body => json('POST', '/v1/members/self', { body, timeout: 10_000 }),
+    // Signs one outgoing request with this machine's member key, which stays in the host.
+    sign: ({ method, target, bodySHA256 }) => json('POST', '/v1/members/sign', { body: { method, target, bodySHA256 }, timeout: 5000 }),
+    workspaces: () => json('GET', '/v1/workspaces', { timeout: 10_000 }),
+    syncStatus: () => json('GET', '/v1/sync/status', { timeout: 10_000 }),
     registerCaller: body => json('POST', '/v1/callers', { body, timeout: 30_000 }),
     mcp: (message, headers, options = {}) => request('POST', '/v1/mcp', { body: message, headers, ...options }),
     publisher: (path, body, headers = {}, options = {}) => json('POST', '/v1/publisher/' + path, { body, headers, timeout: 30_000, ...options }),

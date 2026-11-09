@@ -50,12 +50,15 @@ Outside MCP exposure is a per-Mac setting: shared tool choices synchronize, but
 enabling exposure on one Mac never enables it on another.
 
 A workspace descriptor keeps its stable ID, execution owner and credential
-namespace when another Mac receives it. Direct credentials are issued separately
-for the requesting device. A device already enrolled with a Linux workspace can
-connect directly when its managing Mac is offline. First enrollment needs that
-Mac's management capability; this is execution ownership, not library authority.
-Remote workspace definitions appear in the shared inventory; administrator and
-SSH credentials do not become shared configuration.
+namespace when another Mac receives it. There is no managing Mac: every Mac
+reaches every other Mac's and Linux host's execution API, and administers
+every Linux host, with requests signed by its own member key (see
+[Woven everywhere](architecture/WOVEN_EVERYWHERE.md)). Nothing is enrolled for
+a Mac. A phone that still uses a bearer gets its grant for a Linux workspace
+from that host, requested by any Mac; for another Mac's own workspace, from
+that Mac. Remote workspace definitions appear in the shared inventory; SSH
+credentials stay on the Mac that installed the host and do not become shared
+configuration.
 
 ## Change exchange and conflicts
 
@@ -174,9 +177,10 @@ revocation is recorded as applied only after this Mac's own access is revoked.
 
 Mobile devices keep their offline replica and approved Mac connection, and their
 bearer works only at that Mac. Other paired Macs list them for display. When a
-Mac enrolls one of its phones in a workspace another Mac manages, it asks that
-Mac directly, and the managing Mac records the requesting Mac as that issued
-grant's provenance. A replacement request is staged: earlier provenance is
+Mac enrolls one of its bearer phones in another Mac's workspace, it asks that
+Mac directly, and that Mac records the requesting Mac as that issued grant's
+provenance; for a Linux workspace the host issues the grant to any Mac's
+signed request. A replacement request is staged: earlier provenance is
 retired only once the replacement is actually issued (which replaces the earlier
 token), so a failed or offline replacement never hides a grant from cleanup. A
 direct grant the managing Mac issues to a device it paired itself likewise

@@ -114,7 +114,7 @@ extension ApplicationModel {
                 let _: BotsRemoteStatus = try await BotsRemoteHTTP.request(access.endpoint, path: "v1/bots/engine/update",
                                                                           bearer: access.token, body: Data("{}".utf8))
             },
-            syncErrors: { [weak self] in self.map { Array($0.companionHost.peerSync.errors.values) } ?? [] })
+            syncErrors: { [weak self] in self.map { Array($0.companionHost.peerSync.errors.values) + Self.libraryUpdateNotices($0.companionHost.peerSync.syncStatus) } ?? [] })
     }
 
     // MARK: Other machines

@@ -49,6 +49,11 @@ extension ApplicationModel {
                 guard let self else { throw CancellationError() }
                 return try await self.companionHost.provisionCentralExecutionWorkspace(id: id)
             }, loadCredential: storage.loadExecutionCredential, saveCredential: storage.saveExecutionCredential,
+            makeSignedTransport: { [weak self] workspace in
+                // The iPhone is never an execution destination for signed calls.
+                guard let self, workspace.kind != .ios, let directory = try? await self.companionHost.peerSync.members() else { return nil }
+                return try SignedExecutionWorkspaceTransport(workspace: workspace, signer: directory.identity.signer)
+            },
             onChange: { [weak self] in await self?.refreshWorkspace() })
         federatedExecutionClient = client
         return client

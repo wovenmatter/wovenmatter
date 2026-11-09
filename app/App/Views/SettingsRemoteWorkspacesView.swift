@@ -20,11 +20,45 @@ struct SettingsRemoteWorkspacesView: View {
     @State private var pendingDeletion: RemoteWorkspaceConfiguration?
     @State private var browserWorkspace: RemoteWorkspaceConfiguration?
     @State private var logsWorkspace: RemoteWorkspaceConfiguration?
+    @State private var sharedLogsWorkspace: CompanionExecutionWorkspace?
 
+    /// Every Linux host in the synced registry that this Mac has no SSH setup
+    /// for; it manages them by signed request.
     private var sharedWorkspaces: [CompanionExecutionWorkspace] {
-        application.companionHost.executionWorkspaces.filter {
-            $0.kind == .linux && !$0.deleted && $0.ownerDeviceID != application.companionHost.peerIdentity?.deviceID
+        let configured = Set(model.workspaces.map { $0.id.uuidString.lowercased() })
+        return application.companionHost.executionWorkspaces.filter {
+            $0.kind == .linux && !$0.deleted && !configured.contains($0.id)
         }.sorted { $0.name < $1.name }
+    }
+
+    /// A host this Mac did not add: managed by signed requests, without SSH.
+    @ViewBuilder
+    private func sharedHostRow(_ workspace: CompanionExecutionWorkspace) -> some View {
+        let state = model.sharedHosts[workspace.id]
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Text(workspace.name).font(.system(size: 13, weight: .medium))
+                if let service = state?.serviceState {
+                    SettingsPill(service == "running" || service == "ready" ? "Ready" : service.capitalized,
+                                 tone: service == "running" || service == "ready" ? .neutral : .warning)
+                } else if state?.error != nil {
+                    SettingsPill("Needs attention", tone: .warning)
+                }
+                Spacer()
+                if state?.busy == true { ProgressView().controlSize(.small) }
+                Menu {
+                    Button("Refresh status") { model.manageSharedHost(workspace.id, .refresh) }
+                    Button("Show logs") { model.manageSharedHost(workspace.id, .logs); sharedLogsWorkspace = workspace }
+                    Button("Restart") { model.manageSharedHost(workspace.id, .restart) }
+                    Button("Update") { model.manageSharedHost(workspace.id, .update) }
+                } label: { Image(systemName: "ellipsis") }
+                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                .disabled(state?.busy == true)
+            }
+            if let progress = state?.progress { SettingsNote(progress) }
+            if let error = state?.error { SettingsError(error) }
+        }
+        .task(id: workspace.id) { if state == nil { model.manageSharedHost(workspace.id, .refresh) } }
     }
 
     private func deploymentProgress(_ message: String) -> some View {
@@ -62,14 +96,9 @@ struct SettingsRemoteWorkspacesView: View {
                 } else {
                     workspacesCard
                     if !sharedWorkspaces.isEmpty {
-                        SettingsCard(title: "Shared workspaces", detail: "Workspaces added on your paired Macs are available here after synchronization. Agents keep running on their own workspace.") {
+                        SettingsCard(title: "More Linux hosts", detail: "Every Mac manages every host and starts sessions there. Agents keep running on their own host.") {
                             ForEach(sharedWorkspaces) { workspace in
-                                HStack {
-                                    Text(workspace.name).font(.system(size: 13, weight: .medium))
-                                    Spacer()
-                                    Text("Added on " + (application.companionHost.connectedPeerRoutes.first(where: { $0.deviceID == workspace.ownerDeviceID })?.name ?? "a paired Mac"))
-                                        .font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
-                                }
+                                sharedHostRow(workspace)
                             }
                         }
                     }
@@ -110,6 +139,25 @@ struct SettingsRemoteWorkspacesView: View {
                 if let error = model.errorMessage { SettingsError(error) }
                 ScrollView {
                     Text(model.workspaceLogs[workspace.id] ?? "Loading logs…")
+                        .font(.system(size: 11, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }.scrollIndicators(.never)
+            }
+            .padding(24).frame(width: 760, height: 520)
+            .foregroundStyle(DashboardPalette.foreground).background(DashboardPalette.background)
+        }
+        .sheet(item: $sharedLogsWorkspace) { workspace in
+            VStack(alignment: .leading, spacing: 16) {
+                HStack {
+                    Text("\(workspace.name) logs").font(.headline)
+                    Spacer()
+                    Button("Refresh") { model.manageSharedHost(workspace.id, .logs) }
+                    Button("Done") { sharedLogsWorkspace = nil }
+                }.buttonStyle(SettingsQuietButtonStyle())
+                if let error = model.sharedHosts[workspace.id]?.error { SettingsError(error) }
+                ScrollView {
+                    Text(model.sharedHosts[workspace.id]?.logs ?? "Loading logs…")
                         .font(.system(size: 11, design: .monospaced))
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)

@@ -10,7 +10,7 @@ const sameArtifact = (a,b) => ['id','workspaceID','title','mediaType','byteCount
 // With a local library host (`localLibrary`), history goes into this
 // machine's own library copy through its socket's `/v1/publisher/*` routes
 // (the same bodies as a Mac's `/v1/federation/publisher/*`) and reaches other
-// devices by peer sync; the single-Mac grant is only the fallback. Each target
+// devices by peer sync; the single-Mac grant is used only without a library host. Each target
 // keeps its own cursor and receipts, so switching never skips history.
 export function createClientExecutionPublisher({ db, identity, secret, events, flush = () => {}, fetchImpl = globalThis.fetch, intervalMilliseconds = 5000, localLibrary = null }) {
   db.exec(`CREATE TABLE IF NOT EXISTS central_publication (id INTEGER PRIMARY KEY CHECK(id=1), envelope TEXT NOT NULL, acknowledged INTEGER NOT NULL DEFAULT 0);
@@ -64,10 +64,12 @@ export function createClientExecutionPublisher({ db, identity, secret, events, f
         :db.prepare('SELECT count(*) AS count FROM saved_execution_artifacts WHERE uploaded=0').get().count,
       journal:lane('journal'),artifacts:lane('artifacts')}
   }
-  // The active publication target: this machine's library when its host is
-  // running, otherwise a Mac's publisher grant, otherwise nothing.
+  // The active publication target: this machine's library whenever it has a
+  // library host (history waits while the host restarts, and never goes to a
+  // single Mac meanwhile); a Mac's publisher grant only on hosts without one.
   function target() {
-    if (localLibrary?.available()) {
+    if (localLibrary) {
+      if (!localLibrary.available()) return null
       let own
       try { own = identity() } catch { return null }
       const headers = {'x-woven-workspace':own.libraryID,'x-woven-workspace-id':own.id,'x-woven-execution-device-id':own.executionDeviceID}

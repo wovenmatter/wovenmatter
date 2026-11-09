@@ -36,7 +36,8 @@ export function runHostScript(script, args, { environment = process.env, timeout
  * user unit, because they stop this server. Only first install needs SSH.
  */
 export function createHostAdministration({ serviceRoot, dataRoot, stateDirectory, script = process.env.WOVENMATTER_HOST_SCRIPT || join(serviceRoot, 'host/remote-host.sh'),
-  run = runHostScript, detach = detachedUnit, extractScript = extractBundleScript, extra = async () => ({}) }) {
+  run = runHostScript, detach = detachedUnit, extractScript = extractBundleScript, extra = async () => ({}),
+  adoptMembers = null, hasMacMember = async () => true }) {
   const updates = join(stateDirectory, 'host-update')
   async function installation() {
     try {
@@ -78,10 +79,21 @@ export function createHostAdministration({ serviceRoot, dataRoot, stateDirectory
     return { started: true, fingerprint }
   }
 
-  async function handle(request, response, url, { json, readJSON, administrator, bodyFile }) {
+  async function handle(request, response, url, { json, readJSON, readBody, administrator, bodyFile, member = null, installer = false }) {
     if (!url.pathname.startsWith('/v1/host/')) return false
-    if (!administrator) { json(response, 403, { error: 'administrator_required' }); return true }
     const path = url.pathname, method = request.method
+    // Adopting members: the installer's bearer only while no Mac is a member
+    // yet (the first adoption, when this host cannot verify any Mac); a signed
+    // Mac member after that. The body reaches the library host unchanged.
+    if (path === '/v1/host/members/adopt') {
+      if (method !== 'POST') { json(response, 405, { error: 'method_not_allowed' }); return true }
+      if (!adoptMembers) { json(response, 503, { error: 'library_unavailable' }); return true }
+      if (member?.kind !== 'mac' && !(installer && !await hasMacMember())) { json(response, 403, { error: 'mac_member_required' }); return true }
+      const body = request.wovenBody ?? await readBody(request, 1_048_576)
+      if (body.length > 1_048_576) throw fail(413, 'request_too_large')
+      json(response, 200, await adoptMembers(body)); return true
+    }
+    if (!administrator) { json(response, 403, { error: 'administrator_required' }); return true }
     if (path === '/v1/host/status' && method === 'GET') {
       const current = await installation()
       json(response, 200, { ...await run(script, ['status', current.id]), ...await extra() }); return true
