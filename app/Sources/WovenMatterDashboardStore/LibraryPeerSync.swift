@@ -247,6 +247,12 @@ public actor LibraryPeerSync {
     }
   }
 
+  /// Catches up with every peer once, for example after membership changed.
+  public func scheduleAll() async {
+    guard started, let peers = try? await peers() else { return }
+    for member in peers { known.insert(member.deviceID); scheduleSync(member.deviceID, reason: "members") }
+  }
+
   /// Coalesces: a sync already running for this peer runs once more after.
   public func scheduleSync(_ deviceID: String, reason: String = "request") {
     guard started else { return }

@@ -57,6 +57,7 @@ final class WorkspaceDatabaseConnection {
       try createNativeRunArchive()
       try createConversationActivityIndex()
       try migrateLibraryMembers()
+      try migrateBotConversations()
       try migratePairedLibrary()
     } catch {
       sqlite3_close(database)

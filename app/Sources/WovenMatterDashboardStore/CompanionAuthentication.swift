@@ -43,6 +43,17 @@ public struct CompanionPairedDevice: Codable, Equatable, Sendable, Identifiable 
   fileprivate var origin: String? = nil
 }
 
+extension CompanionPairedDevice {
+  /// A principal authenticated by a signed member request rather than a
+  /// bearer. It never matches a stored grant; callers re-check membership.
+  public static func member(_ member: LibraryMember) -> Self {
+    let kind: CompanionDeviceKind = member.kind == .mac ? .mac : member.kind == .ios ? .iPhone : .unknown
+    return .init(id: member.deviceID, name: member.name, pairedAt: Date(timeIntervalSince1970: 0), revokedAt: nil,
+                 metadata: .init(kind: kind), lastSeenAt: Date(), credentialHash: Data(), origin: "member")
+  }
+  public var isMember: Bool { origin == "member" }
+}
+
 /// A grant's role is fixed when this Mac issues it.
 public enum CompanionGrantRole: String, Codable, Sendable {
   /// A phone, tablet or other library client of this Mac only.

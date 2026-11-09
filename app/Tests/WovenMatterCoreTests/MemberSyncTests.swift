@@ -16,13 +16,16 @@ private actor Network {
   var offline: Set<String> = []
   func register(_ host: String, _ sync: LibraryPeerSync) { handlers[host] = sync }
   func setOffline(_ hosts: Set<String>) { offline = hosts }
-  func route(_ endpoint: URL, _ request: CompanionHTTPRequest) async throws -> CompanionHTTPResponse {
-    guard let host = endpoint.host, !offline.contains(host), let handler = handlers[host] else { throw URLError(.cannotConnectToHost) }
+  /// An offline device neither answers nor sends.
+  func route(from caller: String, _ endpoint: URL, _ request: CompanionHTTPRequest) async throws -> CompanionHTTPResponse {
+    guard !offline.contains(caller), let host = endpoint.host, !offline.contains(host), let handler = handlers[host] else { throw URLError(.cannotConnectToHost) }
     var target = request.target
     if endpoint.path.hasPrefix("/wovenmatter") { target = String(target.dropFirst("/wovenmatter".count)) }
     let lowered = Dictionary(uniqueKeysWithValues: request.headers.map { ($0.key.lowercased(), $0.value) })
-    return await handler.handle(.init(method: request.method, target: target, headers: lowered, body: request.body))
-      ?? .error("not_found", "Unrouted", status: 404)
+    let response = await handler.handle(.init(method: request.method, target: target, headers: lowered, body: request.body))
+    // A device that went offline mid-request never receives the reply.
+    guard !offline.contains(caller), !offline.contains(host) else { throw URLError(.networkConnectionLost) }
+    return response ?? .error("not_found", "Unrouted", status: 404)
   }
 }
 
@@ -45,7 +48,7 @@ private struct Member {
     var configuration = LibraryPeerSync.Configuration(version: "test")
     configuration.presenceInterval = presence; configuration.announceDelay = 0.05
     let network = network
-    sync = LibraryPeerSync(directory: directory, transport: .init { try await network.route($0, $1) }, configuration: configuration)
+    sync = LibraryPeerSync(directory: directory, transport: .init { try await network.route(from: host, $0, $1) }, configuration: configuration)
     self.host = host
     endpoint = URL(string: kind == .linux ? "https://\(host)/wovenmatter/" : "https://\(host)/")!
     try await directory.ensureSelf(name: host, endpoints: [endpoint])
@@ -92,6 +95,25 @@ struct MemberSyncTests {
     try await pollUntil(attempts: 300, interval: .milliseconds(50)) {
       for member in members where !(await condition(member)) { return false }
       return true
+    }
+  }
+
+  /// The vectors the Node server also checks, verified with this
+  /// platform's Ed25519 (swift-crypto on Linux, CryptoKit on Apple).
+  @Test func sharedVectorsVerifyWithThisPlatformsEd25519() async throws {
+    let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+      .appending(path: "../../../shared/Tests/WovenMatterCompanionTests/MemberSignatureVectors.json").standardizedFileURL
+    let vectors = try #require(try JSONDecoder().decode(GatewayJSONValue.self, from: Data(contentsOf: url)).objectValue)
+    let key = try #require(vectors["publicKeyBase64"]?.stringValue.flatMap { Data(base64Encoded: $0) })
+    let device = try #require(vectors["deviceID"]?.stringValue)
+    for vector in try #require(vectors["cases"]?.arrayValue).compactMap(\.objectValue) {
+      let time = Int64(try #require(vectors["windowMilliseconds"] != nil ? vector["time"]?.doubleValue : nil))
+      let headers = try #require(vector["headers"]?.objectValue).reduce(into: [String: String]()) { $0[$1.key.lowercased()] = $1.value.stringValue }
+      let verifier = MemberRequestVerifier(lookup: { $0 == device ? MemberKey(deviceID: device, kind: .linux, name: "Vector", publicKey: key) : nil },
+        verify: { MemberIdentity.verify(publicKey: $0, signature: $1, message: $2) }, clock: { time })
+      let member = try await verifier.verify(method: try #require(vector["method"]?.stringValue), target: try #require(vector["target"]?.stringValue),
+                                             headers: headers, body: Data(try #require(vector["body"]?.stringValue).utf8))
+      #expect(member.deviceID == device)
     }
   }
 
