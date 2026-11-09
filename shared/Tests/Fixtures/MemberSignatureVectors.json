@@ -1,0 +1,121 @@
+{
+  "description": "Signed member request vectors (docs/architecture/WOVEN_EVERYWHERE.md, \"Membership and device keys\"). Generated with a deterministic test key; Swift and Node both verify them. Ed25519 signing is deterministic in Node; CryptoKit signatures are randomized, so Swift checks that it verifies these signatures and that its own signatures verify, not byte equality.",
+  "algorithm": "woven-member-v1",
+  "windowMilliseconds": 300000,
+  "verifyAt": "1798761600000",
+  "member": {
+    "deviceID": "6f1c2a5e-8b3d-4c7a-9e21-0d4b5c6a7f80",
+    "kind": "mac",
+    "name": "Vector Mac",
+    "publicKey": "FcjTkjz8DN0RYScE/kWqgsa7w7ns8c2d0RfOoCRv1n0=",
+    "privateKeySeed": "c/J6O/QZdG3lAOvi0f5slAkZFtNc69D7sbIq9gzzWdM=",
+    "revoked": false
+  },
+  "otherKey": {
+    "publicKey": "yM0bdk3RdJGPLZeQmOHIO4bDiHUA5h12AbRAcDNs85g=",
+    "privateKeySeed": "N1HzmVpC0QjBnipv5Jk3mO6I+r6GDzq1tSqPUCCCBJU="
+  },
+  "accepted": [
+    {
+      "name": "websocket-upgrade",
+      "method": "GET",
+      "target": "/v1/bots/ws",
+      "body": "",
+      "time": "1798761600000",
+      "nonce": "AAECAwQFBgcICQoLDA0ODw",
+      "bodySHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "message": "woven-member-v1\nGET\n/v1/bots/ws\n1798761600000\nAAECAwQFBgcICQoLDA0ODw\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "signature": "bt4SdEpfCtqcshn9kaASVqWtTNfyx2uiBUuvZYUZS-oc-Y4MLvK2JiWaVWgWNj0PGHKiM86h24_-r-0JTPRlDA"
+    },
+    {
+      "name": "json-body-with-query",
+      "method": "POST",
+      "target": "/v1/execution/commands?after=12&x=a%20b",
+      "body": "{\"commandID\":\"4c1f4b0e-5a65-4d3f-a7c2-0d7f9a3b2e11\",\"text\":\"hello\"}",
+      "time": "1798761301000",
+      "nonce": "EBESExQVFhcYGRobHB0eHw",
+      "bodySHA256": "cd9e3162c64167ded75384945c648f21e8b23a6ee5b74ecf8597e7efe5b6b5a1",
+      "message": "woven-member-v1\nPOST\n/v1/execution/commands?after=12&x=a%20b\n1798761301000\nEBESExQVFhcYGRobHB0eHw\ncd9e3162c64167ded75384945c648f21e8b23a6ee5b74ecf8597e7efe5b6b5a1",
+      "signature": "6NLF7p8Jj-ER79OoqdET3kvJQgeUxq2tjSpBmyKxKS4BaYyDbM_yGYKeZg01nkuNUxLuA86_DcEHELRu881xCQ"
+    },
+    {
+      "name": "utf8-body",
+      "method": "POST",
+      "target": "/v1/bots/resources",
+      "body": "{\"name\":\"Zoë — café ✓\"}",
+      "time": "1798761720000",
+      "nonce": "ICEiIyQlJicoKSorLC0uLw",
+      "bodySHA256": "6d8e902d9ba07f196009b6dd60ba3aee5c97c7e715efb491609dd274857565d7",
+      "message": "woven-member-v1\nPOST\n/v1/bots/resources\n1798761720000\nICEiIyQlJicoKSorLC0uLw\n6d8e902d9ba07f196009b6dd60ba3aee5c97c7e715efb491609dd274857565d7",
+      "signature": "QDik5EMGwKg6pp_-VKYlqvJ3HoX1zyYhIITRG-xoQ-SW93pWwYHPdfEEHrC6enoFwN9YJnFu0QzLJI13S8jvDQ"
+    }
+  ],
+  "rejected": [
+    {
+      "name": "wrong-key",
+      "reason": "member_signature_mismatch",
+      "method": "POST",
+      "target": "/v1/execution/commands?after=12&x=a%20b",
+      "body": "{\"commandID\":\"4c1f4b0e-5a65-4d3f-a7c2-0d7f9a3b2e11\",\"text\":\"hello\"}",
+      "time": "1798761301000",
+      "nonce": "MDEyMzQ1Njc4OTo7PD0-Pw",
+      "signature": "WpUySVZD-Xk25JB7IuYaHnSfLSFlriQ4aGKc1q-Bpwtzc0nNE_utAY2VTW9qODuobeDm_LXplRaOoBrtVoN_CA"
+    },
+    {
+      "name": "tampered-body",
+      "reason": "member_signature_mismatch",
+      "method": "POST",
+      "target": "/v1/execution/commands?after=12&x=a%20b",
+      "body": "{\"commandID\":\"4c1f4b0e-5a65-4d3f-a7c2-0d7f9a3b2e11\",\"text\":\"hellO\"}",
+      "time": "1798761301000",
+      "nonce": "EBESExQVFhcYGRobHB0eHw",
+      "signature": "6NLF7p8Jj-ER79OoqdET3kvJQgeUxq2tjSpBmyKxKS4BaYyDbM_yGYKeZg01nkuNUxLuA86_DcEHELRu881xCQ"
+    },
+    {
+      "name": "tampered-target",
+      "reason": "member_signature_mismatch",
+      "method": "POST",
+      "target": "/v1/execution/commands?after=13&x=a%20b",
+      "body": "{\"commandID\":\"4c1f4b0e-5a65-4d3f-a7c2-0d7f9a3b2e11\",\"text\":\"hello\"}",
+      "time": "1798761301000",
+      "nonce": "EBESExQVFhcYGRobHB0eHw",
+      "signature": "6NLF7p8Jj-ER79OoqdET3kvJQgeUxq2tjSpBmyKxKS4BaYyDbM_yGYKeZg01nkuNUxLuA86_DcEHELRu881xCQ"
+    },
+    {
+      "name": "tampered-method",
+      "reason": "member_signature_mismatch",
+      "method": "PUT",
+      "target": "/v1/execution/commands?after=12&x=a%20b",
+      "body": "{\"commandID\":\"4c1f4b0e-5a65-4d3f-a7c2-0d7f9a3b2e11\",\"text\":\"hello\"}",
+      "time": "1798761301000",
+      "nonce": "EBESExQVFhcYGRobHB0eHw",
+      "signature": "6NLF7p8Jj-ER79OoqdET3kvJQgeUxq2tjSpBmyKxKS4BaYyDbM_yGYKeZg01nkuNUxLuA86_DcEHELRu881xCQ"
+    },
+    {
+      "name": "stale-time",
+      "reason": "member_time_stale",
+      "method": "POST",
+      "target": "/v1/execution/commands?after=12&x=a%20b",
+      "body": "{\"commandID\":\"4c1f4b0e-5a65-4d3f-a7c2-0d7f9a3b2e11\",\"text\":\"hello\"}",
+      "time": "1798761299999",
+      "nonce": "QEFCQ0RFRkdISUpLTE1OTw",
+      "signature": "gi8xqR-uy54k6mNETyYVnPLLkuwIM8TjDSCVqYR_2wgWA-agumFiggFfIL7PqOabBUMJq4ZT-LZNQqidsFlaDg"
+    },
+    {
+      "name": "future-time",
+      "reason": "member_time_stale",
+      "method": "POST",
+      "target": "/v1/execution/commands?after=12&x=a%20b",
+      "body": "{\"commandID\":\"4c1f4b0e-5a65-4d3f-a7c2-0d7f9a3b2e11\",\"text\":\"hello\"}",
+      "time": "1798761900001",
+      "nonce": "UFFSU1RVVldYWVpbXF1eXw",
+      "signature": "t6keEToxI0DWAOV0Oqk4pXihRX_tEn85c2R4fCyEcAw0n9zFbGyBB4KUVC5WTpw1Dcz5hlNUSfrmmfdRmJFgDA"
+    }
+  ],
+  "replay": {
+    "name": "replayed-nonce",
+    "reason": "member_nonce_replayed",
+    "of": "json-body-with-query",
+    "description": "Verifying the same accepted request a second time within the window is rejected."
+  }
+}
