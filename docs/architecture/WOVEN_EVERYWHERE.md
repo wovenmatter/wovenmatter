@@ -293,8 +293,115 @@ Pi Bot's Admin Bot config tools (`read_config`, `update_config`,
 - **Mac:** a Woven-managed Linux VM (Virtualization framework) runs Docker
   Engine. Its socket is forwarded over vsock to a Unix socket under the app's
   support directory. The VM stays running so a wake only starts a container,
-  and it returns unused memory to the Mac through the balloon and free page
-  reporting.
+  and it returns unused memory to the Mac through the balloon (see Mac VM:
+  Virtualization offers no free page reporting, so the balloon follows the
+  guest's demand instead).
+
+#### Mac VM
+
+The VM belongs to `WovenMatterVMHelper`, a per-user launch agent bundled at
+`Contents/Helpers/WovenMatterVMHelper` (Apple silicon only; signed with
+`com.apple.security.virtualization`, built by `scripts/build-vm-helper.sh`).
+Its job is `~/Library/LaunchAgents/<bundle id>.vm.plist`, label
+`<bundle id>.vm`, with `KeepAlive: {SuccessfulExit: false}`: a crash or kill
+restarts it, a clean stop leaves it stopped. Killing the helper reboots the
+guest, like a power cut: containers, images and volumes survive, containers
+with a restart policy come back, and writes not yet synced in the last few
+seconds may be lost (the guest writes back dirty data within about 2 s and
+commits the data disk's journal every 2 s; fsync'd data is durable). The helper is started on demand by the app; it then also starts at
+login until `stop()`.
+
+- **Files.** Everything lives in `<support directory>/WovenVM`, where the
+  support directory is the app's workspace folder (`Woven Matter`, or the
+  Dev instance's folder): `disk.img` (16 GB sparse root), `data.img` (sparse
+  data disk as large as the volume, holding `/var/lib/docker` and
+  `/var/lib/containerd`), `efi-vars.fd`, `seed.iso`, `config.json`,
+  `state.json`, `console.log`, `helper.log` and `snapshot/`. Sockets are
+  `docker.sock` and `control.sock` in the same folder (0600, folder 0700),
+  or in `/private/tmp/wovenmatter-vm-<uid>-<digest>/` when that path would
+  exceed `sun_path`. Always read the socket path from the API, never build it.
+- **Guest.** The pinned Ubuntu 26.04 LTS arm64 cloud image
+  (`app/VMHelper/guest-version.json`), converted from QCOW2 to a raw disk on
+  first run, EFI boot, cloud-init NoCloud seed. First boot purges
+  unattended-upgrades, snapd and SSH, masks the apt timers, formats the data
+  disk and installs the pinned Docker Engine from Docker's signed apt
+  repository (packages held). The guest changes only through Woven's update.
+  It has no user, password or SSH key; the Mac reaches it over vsock only,
+  and the guest agent accepts only the host CID.
+- **Engine socket.** `docker.sock` carries the Docker Engine API to the
+  guest's dockerd (vsock 2375). It is byte-transparent: HTTP upgrade and
+  hijack (attach, exec) work, and each direction ends independently, so an
+  exec whose stdin closed still returns all its output. Before the VM is
+  ready it answers `503 {"message": ...}`.
+- **Egress.** Inside the guest, `WOVEN-EGRESS` (from `DOCKER-USER`, all
+  Docker bridges) rejects container traffic to 100.64/10,
+  fd7a:115c:a1e0::/48, RFC 1918, link-local, ULA, loopback, multicast and
+  every address of the Mac (pushed by the helper), and `WOVEN-INPUT` rejects
+  container traffic to the guest itself. DNS to the NAT gateway is the one
+  exception. Containers have no `CAP_NET_ADMIN` in the guest namespace and
+  cannot open vsock sockets. The bots runtime must never create
+  privileged or host-network containers, or mount the socket.
+- **Resources.** The VM boots with the RAM pool (no cap: all RAM), which is
+  the hard limit. A change applies fully at the next VM restart, which the
+  helper performs by itself when no container runs; until then a lower pool
+  is applied through the balloon, which the guest may deflate under memory
+  pressure (Virtualization's balloon offers deflate-on-OOM). Unused guest
+  memory returns to the Mac through the balloon. Virtualization offers no
+  free page reporting, and it frees ballooned pages on the Mac only while
+  they stay in the balloon (deflating re-commits them), so the balloon
+  follows demand: every second the helper reads guest memory and sets the
+  target to what the guest uses (page cache counts as free) plus headroom
+  (the larger of 1 GiB and a quarter of the pool). It grows back at once
+  when the guest needs more, opens fully when guest available memory falls
+  below half the headroom or the guest agent does not answer within a
+  second, and shrinks only after demand stayed lower for 30 seconds. An
+  allocation faster than the headroom can stall for about a second until the
+  balloon opens; it is not killed. Ballooned pages become clean at once and
+  leave the VM process within about 20 seconds; `vmMemoryFootprintBytes` is
+  the process's `phys_footprint` (what Activity Monitor shows) and can lag.
+  Per-container memory limits (`Memory`, `MemorySwap`) are enforced by the
+  guest kernel (cgroup v2). The disk cap is enforced inside the guest by a
+  reserve file of unwritten extents on the data disk, so raising and lowering both apply at
+  once while running; lowering stops at what is used. Freed blocks are
+  trimmed back to the Mac every ten minutes.
+- **Time.** The helper sets the guest clock on wake
+  (`NSWorkspace.didWakeNotification`) and every minute.
+- **Updates.** `update()` shuts the guest down, saves APFS clones of the
+  disks to `snapshot/` (one kept), boots, upgrades guest packages and the
+  pinned Docker Engine (also delivering the bundle's current guest files),
+  reboots and health-checks Docker. On failure it restores the clones and
+  reports `updateFailure`. A new image pin affects new installs only.
+
+**Swift API** (`WovenMatterClient`, `WovenVMController`):
+
+| Call | Meaning |
+| --- | --- |
+| `WovenVMController.forApp(supportDirectory:)` | Nil on Intel or without the helper |
+| `ensureRunning()` | Install/refresh the launch agent, start the helper, return status |
+| `status()`, `waitUntilReady(timeout:progress:)` | `WovenVMStatus`: `phase` (`stopped`, `downloading`, `preparing`, `booting`, `provisioning`, `ready`, `updating`, `failed`), `detail`, `failure`, `progress`, `engineSocket`, `resources`, `guest`, `forwards`, `updateFailure`, `snapshotAvailable` |
+| `engineSocket` | Docker Engine API Unix socket for the bots runtime |
+| `applyResources(WovenVMResources(memoryBytes:diskBytes:))` | `nil` means no cap |
+| `forwardPreview(WovenVMForwardRequest(container:port:hostPort:))` | Optional; the runtime carries previews over Engine API exec streams and does not use it. Returns `WovenVMForward` with the `127.0.0.1` `hostPort`; idempotent; resolved by container name at connect time; survives restarts |
+| `unforwardPreview(id:)`, `forwards()` | |
+| `update()`, `restart()` | |
+| `stop()` | Shut down, stop the helper, remove the launch agent |
+| `uninstall()` | `stop()`, then delete every VM file |
+
+`resources` (`WovenVMResourceReport`) gives the Mac's total RAM, disk total
+and free, the VM's boot memory, physical footprint, guest memory in use,
+balloon target, the effective disk cap, the disk images' real allocation,
+guest disk use, and `restartPending`.
+
+**Control API** for other processes: HTTP/1.1, JSON,
+one request per connection on `control.sock` (e.g.
+`curl --unix-socket <control.sock> http://vm/v1/status`):
+`GET /v1/status`; `PUT /v1/resources`; (optional forwards) `GET /v1/forwards`;
+`POST /v1/forwards` with `{"container": "<name or id>", "port": 3000}` (or
+`"address"` instead of `"container"`, optional `"hostPort"`) returning
+`{"id", "hostPort", ...}` with 201; `DELETE /v1/forwards/<id>`;
+`POST /v1/update`, `/v1/restart`, `/v1/stop` (202). Errors are
+`{"error": "..."}`.
+
 - **Image:** Ubuntu 26.04 LTS with Chromium and Playwright, git, Node, Python,
   build tools and tini. A bot runs as a user with passwordless sudo, which
   gives it full root inside its container.
