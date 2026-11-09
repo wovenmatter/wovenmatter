@@ -202,8 +202,9 @@ same commit.
   message, version, schema}`; `LibrarySyncStatus` (`{deviceID, version,
   schema, peers: [{deviceID, name, kind, state: online|offline|updateRequired|failing,
   version, lastSynchronized, lastContact, error}], conflicts, quarantined}`,
-  `updateRequired`) is on the Mac's `CompanionHostSnapshot.librarySync` and the
-  library socket's `GET /v1/sync/status`.
+  `updateRequired`) is on the Mac's `CompanionHostSnapshot.librarySync`, the
+  library socket's `GET /v1/sync/status` and, for phones, the mobile API's
+  signed `GET /v1/sync/status` on every Mac and Linux host.
 
 ### Library host (`wovenmatter-library`)
 
