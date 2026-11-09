@@ -33,6 +33,18 @@ private actor DisabledPairingWorkspace: ExecutionWorkspaceTransport {
   func transcript(_ id: String) async throws -> CompanionTranscript { throw MobileConnectionError.revoked }
 }
 
+/// Records pairing requests in place of central, so pairing tests never resolve or contact a host.
+private actor PairingRequestLog {
+  var requests: [(transport: ObjectIdentifier, name: String)] = []
+  func record(_ transport: ObjectIdentifier, _ name: String) { requests.append((transport, name)) }
+}
+private struct RecordedPairingRequests: MobilePairingRequests {
+  let transport: ObjectIdentifier
+  let log: PairingRequestLog
+  func confirmPairing() async throws { await log.record(transport, "confirm") }
+  func unpair() async throws { await log.record(transport, "unpair") }
+}
+
 final class PairingSettingsTests: XCTestCase {
   @MainActor func testUnpairPreservesWritingAndDetachesBindingWhileClearingDirectWorkspaceAccess() async throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -96,6 +108,8 @@ final class PairingSettingsTests: XCTestCase {
     defer { try? FileManager.default.removeItem(at: directory) }
     let store = try MobileStore(file: directory.appendingPathComponent("library.json"))
     let model = CompanionModel(store: store, transport: PairingSettingsMac())
+    let log = PairingRequestLog()
+    model.pairingRequests = { RecordedPairingRequests(transport: ObjectIdentifier($0), log: log) }
     await model.reload()
     let paired = MobileCredential(endpoint: URL(string: "https://central.example.ts.net/wovenmatter")!,
       workspaceID: "library-a", deviceID: model.state.deviceID, token: "synthetic-test-token")
@@ -104,7 +118,13 @@ final class PairingSettingsTests: XCTestCase {
     XCTAssertEqual(saved, paired)
     XCTAssertEqual(model.state.workspaceID, "library-a")
     XCTAssertFalse(model.online)
+    let pairedTransport = ObjectIdentifier(try XCTUnwrap(model.transport))
+    var requests = await log.requests
+    XCTAssertTrue(requests.isEmpty, "An already confirmed credential is not confirmed again")
     await model.disconnectMac(clearCredential: {}, clearWorkspaceCredential: { _ in })
+    requests = await log.requests
+    XCTAssertEqual(requests.map(\.name), ["unpair"], "Unpairing asks central to forget this device once")
+    XCTAssertEqual(requests.first?.transport, pairedTransport, "Unpair uses the paired connection")
     let reopened = try MobileStore(file: directory.appendingPathComponent("library.json"))
     let persisted = await reopened.snapshot()
     XCTAssertNil(persisted.workspaceID); XCTAssertEqual(persisted.detachedWorkspaceID, "library-a")
