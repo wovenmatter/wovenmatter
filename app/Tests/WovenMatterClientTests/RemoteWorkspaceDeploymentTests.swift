@@ -79,11 +79,31 @@ struct RemoteWorkspaceDeploymentTests {
             roles: RemoteHostInstallMode.botsOnly.roles)
         _ = try await client.deployHost(configuration: configuration, token: "fixture-secret", mode: .botsOnly)
         _ = try await client.deployHost(configuration: configuration, token: "fixture-secret")
+        // Adding the workspace later: the real id, on the same server, with the workspace role.
+        var studio = configuration; studio.workspaceID = "studio"
+        _ = try await client.deployHost(configuration: studio, token: "fixture-secret", mode: .addWorkspace)
         let sent = commands.values
-        #expect(sent.count == 3)
+        #expect(sent.count == 4)
         #expect(sent[0].contains("'prepare' 'AUTHORIZED' 'user' 'bots'"))
         #expect(sent[1].contains("'install' 'bots' '") && sent[1].hasSuffix(" 'bots'"))
         #expect(!sent[2].hasSuffix(" 'bots'"), "a workspace install keeps the host's recorded roles")
+        #expect(sent[3].contains("'install' 'studio' '") && sent[3].hasSuffix(" 'workspace'"))
+        #expect(RemoteHostInstallMode.botsOnlyWorkspaceID == configuration.workspaceID)
+    }
+
+    @Test func hostBundlesRecordTheReleaseVersionOutsideTheFingerprint() throws {
+        let root = try hostFixture(); defer { try? FileManager.default.removeItem(at: root) }
+        let deployment = try RemoteWorkspaceDeployment(root: root, kind: .host)
+        func manifest(_ version: String?) throws -> [String: Any] {
+            let archive = try RemoteHostBundle.archive(root: root, deployment: deployment, releaseVersion: version)
+            let extracted = try RemoteWorkspaceProcess.run(executable: "/usr/bin/tar", arguments: ["-xzOf", "-", "manifest.json"], input: archive)
+            return try #require(JSONSerialization.jsonObject(with: extracted.data) as? [String: Any])
+        }
+        #expect(try manifest("1.4.0")["releaseVersion"] as? String == "1.4.0")
+        #expect(try manifest("1.4.0")["fingerprint"] as? String == deployment.fingerprint)
+        // Free text never reaches the host's environment.
+        #expect(try manifest("1.4\nX=1")["releaseVersion"] == nil)
+        #expect(try manifest(nil)["releaseVersion"] == nil)
     }
 
     @Test func nativeHostArchiveIsDeterministicAndRejectsSourceDrift() throws {

@@ -9,7 +9,7 @@ command -v python3 >/dev/null 2>&1 || {
 }
 exec 3<&0
 exec python3 - "$@" <<'PY'
-import contextlib, fcntl, glob, hashlib, io, json, os, platform, pwd, re, shutil, socket, stat, subprocess, sys, tarfile, tempfile, time, urllib.request
+import contextlib, fcntl, glob, gzip, hashlib, io, json, os, platform, pwd, re, shutil, socket, stat, subprocess, sys, tarfile, tempfile, time, urllib.request
 from pathlib import Path, PurePosixPath
 
 HOME=Path.home()
@@ -56,6 +56,7 @@ def run(args,*,check=False,timeout=30,env=None,input=None):
     return p
 
 def text(result): return result.stdout.decode('utf8','replace').strip()
+BOTS_ONLY_ID='bots'
 def valid_id(value):
     if not re.fullmatch('[a-z0-9][a-z0-9-]{0,47}',value): fail('invalid_workspace_id','Use a 1-48 character lowercase workspace identifier.',64)
 def valid_port(value):
@@ -207,10 +208,40 @@ def inventory(paths):
         result.append({'id':identity,'cli':components[0],'adapter':components[1],'status':status})
     return result
 
+LIBRARY_MAX_BYTES=1024**3
 def library_binary(release):
     arch={'x86_64':'x86_64','aarch64':'aarch64','arm64':'aarch64'}.get(platform.machine())
-    path=Path(release)/'host/library'/('linux-'+str(arch))/'wovenmatter-library'
-    return path if arch and path.is_file() else None
+    if not arch: return None
+    directory=Path(release)/'host/library'/('linux-'+arch)
+    path=directory/'wovenmatter-library'; packed=directory/'wovenmatter-library.gz'; record=directory/'wovenmatter-library.sha256'
+    if not packed.is_file():
+        return path if path.is_file() and not path.is_symlink() else None
+    # Releases ship the binary gzip-compressed (the manifest verified the .gz); the
+    # uncompressed binary must match the SHA-256 recorded beside it before it runs.
+    try: expected=record.read_text().split()[0]
+    except (OSError,IndexError): fail('library_verification_failed','The library host binary has no recorded checksum.',78)
+    if not re.fullmatch('[a-f0-9]{64}',expected): fail('library_verification_failed','The library host binary checksum is invalid.',78)
+    def digest(file):
+        value=hashlib.sha256()
+        with open(file,'rb') as source:
+            for chunk in iter(lambda: source.read(1024*1024),b''): value.update(chunk)
+        return value.hexdigest()
+    if path.is_file() and not path.is_symlink() and digest(path)==expected: return path
+    temporary=directory/('.wovenmatter-library.'+str(os.getpid()))
+    try:
+        total=0
+        with gzip.open(packed,'rb') as source, open(temporary,'xb') as output:
+            for chunk in iter(lambda: source.read(1024*1024),b''):
+                total+=len(chunk)
+                if total>LIBRARY_MAX_BYTES: fail('library_verification_failed','The library host binary exceeds its size limit.',78)
+                output.write(chunk)
+        os.chmod(temporary,0o700)
+        if digest(temporary)!=expected: fail('library_verification_failed','The library host binary did not match its recorded checksum.',78)
+        os.replace(temporary,path)
+    except (OSError,EOFError,gzip.BadGzipFile): fail('library_verification_failed','The library host binary could not be unpacked.',78)
+    finally:
+        with contextlib.suppress(FileNotFoundError): temporary.unlink()
+    return path
 
 def member_identity():
     # The library host's identity, which a Mac uses to create this machine's member entry.
@@ -423,8 +454,14 @@ def status(workspace_id):
         'storageWarning':None,'legacyStorage':False,'kind':'host','linger':linger(),'fingerprint':installed['fingerprint'],
         'dataRoot':str(ROOT),'workspaceRoot':str(ROOT/'workspace'),'databasesDirectory':str(ROOT/'databases'),
         'attachmentsDirectory':str(ROOT/'workspace/.wovenmatter/attachments'),'accessMode':installed['accessMode'],'browserSelfTest':browser,
-        'roles':installed['roles'],'botsState':bots_discovery(installed,False)['state'],'memberIdentity':member_identity()}
+        'roles':installed['roles'],'botsState':bots_discovery(installed,False)['state'],'memberIdentity':member_identity(),
+        'releaseVersion':installed.get('releaseVersion')}
 
+def release_version(manifest):
+    # The app version that shipped this release, which the server reports so apps can
+    # tell an out-of-date host. Not part of the fingerprint; anything odd is dropped.
+    value=(manifest or {}).get('releaseVersion')
+    return value if isinstance(value,str) and re.fullmatch('[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}',value) else ''
 def safe_extract(archive_path,target,expected=None):
     # Validate the entire archive BEFORE creating any extracted paths. All links
     # and special files are rejected, including duplicate directory entries.
@@ -651,7 +688,13 @@ def install(workspace_id,requested_port,mode,fingerprint,updating=False,roles=No
     if mode=='fullRoot' and not unrestricted_root(): fail('root_access_unavailable','Full root requires existing unrestricted passwordless sudo.',77)
     if not linger(): fail('host_preparation_required','Enable the user service at boot with the reviewed preparation step first.',78)
     old=record()
-    if old and old['id']!=workspace_id: fail('host_workspace_conflict','A different native workspace already belongs to this host account.',73)
+    requested_roles=valid_roles(roles) if roles else None
+    # A bots-only server is recorded as `bots` until a workspace is added. Its first
+    # workspace install takes over that record once: same server, port, token and data
+    # root, bots kept running. Any other id change is still a conflict.
+    converting=bool(old and old['id']==BOTS_ONLY_ID and workspace_id!=BOTS_ONLY_ID and not updating
+        and old['roles']=={'workspace':False,'bots':True} and (requested_roles or {}).get('workspace'))
+    if old and old['id']!=workspace_id and not converting: fail('host_workspace_conflict','A different native workspace already belongs to this host account.',73)
     if old and old['accessMode']!=mode: fail('access_mode_change_requires_reinstall','The access level is fixed for this installation. Remove its data explicitly before creating a workspace with another level.',78)
     if updating and not old: fail('workspace_not_found','Install this native workspace before updating it.',66)
     # Roles only grow here: adding the workspace or bots reuses this server and
@@ -757,7 +800,7 @@ def install(workspace_id,requested_port,mode,fingerprint,updating=False,roles=No
             'WOVENMATTER_DATA_DIRECTORY':str(ROOT/'databases'),'WOVENMATTER_STATE_DIRECTORY':str(ROOT/'run'),
             'WOVENMATTER_BROWSER_PROFILES':str(ROOT/'browser-profiles'),'PLAYWRIGHT_BROWSERS_PATH':str(ROOT/'browsers/current'),
             'WOVENMATTER_LISTEN_HOST':'127.0.0.1','WOVENMATTER_LISTEN_PORT':str(port),'WOVENMATTER_API_TOKEN':TOKEN,
-            'WOVENMATTER_SERVICE_FINGERPRINT':fingerprint,'WOVENMATTER_HARNESS_PATH':':'.join([str(ROOT/'current/tooling/bin'),str(ROOT/'node/current/bin'),*harness_path()]),
+            'WOVENMATTER_SERVICE_FINGERPRINT':fingerprint,'WOVENMATTER_RELEASE_VERSION':release_version(manifest),'WOVENMATTER_HARNESS_PATH':':'.join([str(ROOT/'current/tooling/bin'),str(ROOT/'node/current/bin'),*harness_path()]),
             'WOVEN_DEFAULT_AGENT_DIRECTORY':str(ROOT/'workspace/.wovenmatter/default-agent'),
             'WOVENMATTER_DATA_ROOT':str(ROOT),'WOVENMATTER_WORKSPACE_ENABLED':'1' if roles['workspace'] else '0',
             'WOVENMATTER_BOTS_ENABLED':'1' if roles['bots'] else '0','WOVENMATTER_BOTS_INSTANCE':BOTS_INSTANCE,'WOVENMATTER_BOTS_DATA':str(ROOT/'bots'),
@@ -802,7 +845,11 @@ def install(workspace_id,requested_port,mode,fingerprint,updating=False,roles=No
             if checked.returncode or browser.get('ok') is not True:
                 reason=browser.get('reason','sandbox_blocked')
                 fail('browser_selftest_failed',str(reason)+': '+str(browser.get('hint','The sandbox could not be verified.')),70)
-        installed={'id':workspace_id,'port':port,'accessMode':mode,'fingerprint':fingerprint,'nodeVersion':node_version,'playwrightVersion':playwright_version,'roles':roles}
+        installed={'id':workspace_id,'port':port,'accessMode':mode,'fingerprint':fingerprint,'releaseVersion':release_version(manifest) or None,'nodeVersion':node_version,'playwrightVersion':playwright_version,'roles':roles}
+        # Private routes published under an earlier id are still this server's; uninstall
+        # removes them too.
+        previous=sorted(set((old or {}).get('previousIDs',[]))|({old['id']} if converting else set()))
+        if previous: installed['previousIDs']=previous
         private_file(RECORD,json.dumps(installed,sort_keys=True).encode()+b'\n')
         if library:
             # The server records the library host's identity once it is ready.
@@ -1046,6 +1093,8 @@ def uninstall(workspace_id,remove_data=False):
     # Remove the engine first: it needs sudo, and a refusal leaves everything intact.
     engine_removed=remove_engine()
     removed_routes=cleanup_private_routes(workspace_id,installed['port'])+remove_library_route()
+    for previous in installed.get('previousIDs',[]):
+        valid_id(previous); removed_routes+=cleanup_private_routes(previous,installed['port'])
     run(['systemctl','--user','disable','--now',UNIT_NAME],check=True)
     with contextlib.suppress(FileNotFoundError): UNIT.unlink()
     with contextlib.suppress(FileNotFoundError): ENV_FILE.unlink()

@@ -18,13 +18,17 @@ enum RemoteHostBundle {
     }
     private struct Manifest: Encodable {
         let fingerprint: String
+        /// The Woven Matter version shipping this release; the host reports it as
+        /// `versions.app`. Not part of the fingerprint, which covers the files only.
+        let releaseVersion: String?
         let nodeVersion: String
         let playwrightVersion: String
         let dependencyInstallation = "target-npm-ci"
         let files: [String: Record]
     }
 
-    static func archive(root: URL, deployment: RemoteWorkspaceDeployment) throws -> Data {
+    static func archive(root: URL, deployment: RemoteWorkspaceDeployment,
+                        releaseVersion: String? = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) throws -> Data {
         let versions = try JSONDecoder().decode(Versions.self,
             from: Data(contentsOf: root.appending(path: "remote/host/runtime-versions.json")))
         let recordedNode = try String(contentsOf: root.appending(path: "default-agent/.node-version"), encoding: .utf8)
@@ -61,7 +65,7 @@ enum RemoteHostBundle {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         var manifest = try encoder.encode(Manifest(fingerprint: deployment.fingerprint,
-            nodeVersion: versions.nodeVersion, playwrightVersion: versions.playwrightVersion, files: records))
+            releaseVersion: releaseVersion.flatMap(validReleaseVersion), nodeVersion: versions.nodeVersion, playwrightVersion: versions.playwrightVersion, files: records))
         manifest.append(10)
         files["manifest.json"] = (manifest, 0o600)
         var tar = Data()
@@ -73,6 +77,11 @@ enum RemoteHostBundle {
         let result = try RemoteWorkspaceProcess.run(executable: "/usr/bin/gzip", arguments: ["-n", "-c"], input: tar)
         guard result.status == 0 else { throw RemoteWorkspaceClientError.commandFailed(result.output) }
         return result.data
+    }
+
+    /// What `remote-host.sh` accepts: a short version name, never free text.
+    static func validReleaseVersion(_ value: String) -> String? {
+        value.range(of: #"^[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}$"#, options: .regularExpression) == nil ? nil : value
     }
 
     private static func digest(_ data: Data) -> String {

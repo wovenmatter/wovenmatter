@@ -1,9 +1,11 @@
 import { type ChildProcess, spawn } from "node:child_process";
+import { rmSync } from "node:fs";
 import { mkdir, rm } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { Socket } from "node:net";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { socketDirectory } from "./helpers.ts";
 
 const HELPER = fileURLToPath(new URL("../helper/", import.meta.url));
 
@@ -26,6 +28,10 @@ type Container = {
 export class FakeEngine {
   readonly socketPath: string;
   readonly root: string;
+  /** Holds the engine and supervisor sockets; see `socketDirectory`. */
+  readonly socketDir: string;
+  /** stderr of every helper process, for diagnosing a failed test. */
+  readonly helperLog: string[] = [];
   readonly images = new Set<string>();
   readonly volumes = new Map<string, Record<string, string>>();
   readonly containers = new Map<string, Container>();
@@ -41,7 +47,8 @@ export class FakeEngine {
 
   constructor(root: string) {
     this.root = root;
-    this.socketPath = join(root, "engine.sock");
+    this.socketDir = socketDirectory(root);
+    this.socketPath = join(this.socketDir, "engine.sock");
   }
 
   volumeDir(name: string): string {
@@ -49,18 +56,36 @@ export class FakeEngine {
   }
 
   controlSocket(name: string): string {
-    return join(this.root, `${(this.containers.get(name)?.id ?? name).slice(0, 8)}.sock`);
+    return join(this.socketDir, `${(this.containers.get(name)?.id ?? name).slice(0, 8)}.sock`);
   }
 
   async start(): Promise<void> {
     this.#server = createServer((request, response) => void this.#handle(request, response));
     this.#server.on("upgrade", (request: IncomingMessage, socket: Socket, head: Buffer) => this.#upgrade(request, socket, head));
-    await new Promise<void>((resolve) => this.#server?.listen(this.socketPath, resolve));
+    // A listen error (a path over sun_path, EADDRINUSE) must fail the test, not hang it.
+    await new Promise<void>((resolve, reject) => {
+      this.#server?.once("error", reject);
+      this.#server?.listen(this.socketPath, () => {
+        this.#server?.off("error", reject);
+        resolve();
+      });
+    });
   }
 
   async close(): Promise<void> {
     for (const container of this.containers.values()) container.supervisor?.kill("SIGKILL");
     await new Promise<void>((resolve) => (this.#server ? this.#server.close(() => resolve()) : resolve()));
+    if (this.socketDir !== this.root) rmSync(this.socketDir, { recursive: true, force: true });
+  }
+
+  #capture(child: ChildProcess, label: string): ChildProcess {
+    child.stderr?.on("data", (chunk: Buffer) => {
+      if (this.helperLog.length < 200) this.helperLog.push(`${label}: ${chunk.toString("utf8").trimEnd()}`);
+    });
+    child.on("exit", (code, signal) => {
+      if (code !== 0 && signal === null) this.helperLog.push(`${label} exited ${code}`);
+    });
+    return child;
   }
 
   #json(response: ServerResponse, status: number, value?: unknown): void {
@@ -93,8 +118,9 @@ export class FakeEngine {
         WOVEN_CONTROL_SOCKET: this.controlSocket(container.name),
       },
       cwd: state,
-      stdio: "ignore",
+      stdio: ["ignore", "ignore", "pipe"],
     });
+    this.#capture(container.supervisor, `supervisor ${container.name}`);
   }
 
   async #stopContainer(container: Container): Promise<void> {
@@ -265,7 +291,7 @@ export class FakeEngine {
       ...(cwd ? { WOVEN_WORKSPACE_ROOT: cwd } : {}),
     };
     const helper = (file: string, args: string[] = []) =>
-      spawn(process.execPath, [join(HELPER, file), ...args], { env, cwd, stdio: ["pipe", "pipe", "pipe"] });
+      this.#capture(spawn(process.execPath, [join(HELPER, file), ...args], { env, cwd, stdio: ["pipe", "pipe", "pipe"] }), file);
     const [first, second] = cmd;
     if (first === "node" && second === "/opt/woven-bot/agent.mjs") return helper("agent.mjs");
     if (first === "node" && second === "/opt/woven-bot/forward.mjs") return helper("forward.mjs", cmd.slice(2));

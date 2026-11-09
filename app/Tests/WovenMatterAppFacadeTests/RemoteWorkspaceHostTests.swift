@@ -101,6 +101,38 @@ private final class HostInspectionFixture: @unchecked Sendable {
         #expect(fixture.calls.first?.contains("'fullRoot'") == true)
     }
 
+    @Test func aWorkspaceAddedToABotsOnlyHostReusesItsServerRecord() async throws {
+        let placeholder = RemoteWorkspaceConfiguration(name: "box", workspaceID: RemoteHostInstallMode.botsOnlyWorkspaceID,
+            hostName: "native.invalid", userName: "trey", remotePort: 7400, kind: .host, accessMode: .user)
+        let converted = try RemoteWorkspacesModel.addingWorkspace(to: placeholder, name: "Studio", workspaceID: "studio", accessMode: .user)
+        // Same record (id, so the same Keychain token), host, port and access level; the real name and id.
+        #expect(converted.id == placeholder.id && converted.remotePort == 7400 && converted.accessMode == .user)
+        #expect(converted.name == "Studio" && converted.workspaceID == "studio")
+        #expect(throws: (any Error).self) {
+            try RemoteWorkspacesModel.addingWorkspace(to: placeholder, name: "Studio", workspaceID: "studio", accessMode: .fullRoot)
+        }
+        #expect(throws: (any Error).self) {
+            try RemoteWorkspacesModel.addingWorkspace(to: placeholder, name: "Studio", workspaceID: "bots", accessMode: .user)
+        }
+        #expect(throws: (any Error).self) {
+            try RemoteWorkspacesModel.addingWorkspace(to: converted, name: "Other", workspaceID: "other", accessMode: .user)
+        }
+
+        // Through the create flow: the placeholder is found instead of refusing a second host workspace.
+        let fixture = HostInspectionFixture(); fixture.setReady(true)
+        let suite = "native-host-bots-placeholder-" + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(try JSONEncoder().encode([placeholder]), forKey: "wovenmatter.remote-workspaces.v1")
+        let model = RemoteWorkspacesModel(defaults: defaults, backendProjection: false, sshClient: fixture.client)
+        model.checkHost(hostName: placeholder.hostName, userName: "trey", kind: .host, accessMode: .fullRoot)
+        try await settled(model)
+        model.create(name: "Studio", workspaceID: "studio", hostName: placeholder.hostName, userName: "trey",
+            port: 7448, kind: .host, accessMode: .fullRoot)
+        #expect(model.errorMessage?.contains("same access level") == true)
+        #expect(!model.isCreating && model.workspaces == [placeholder])
+    }
+
     @Test func nativeWorkspaceCannotBeConfiguredTwiceForTheSameHostAndUser() async throws {
         let fixture = HostInspectionFixture(); fixture.setReady(true)
         let suite = "native-host-duplicate-" + UUID().uuidString

@@ -54,3 +54,25 @@ rsync -a --delete --exclude=/node_modules --exclude=/test --exclude=.DS_Store --
 mkdir -p "$output/node_modules"
 rsync -a --delete "$dependency_root/node_modules/" "$output/node_modules/"
 find "$output/node_modules" -type f -name '*.map' -delete
+
+# As for the default agent: Anthropic's signed Claude runtime ships unmodified and is
+# never re-signed. It must be the only native code here, because nothing else under
+# Resources/bots is signed by the build; a new native dependency has to be removed or
+# signed explicitly before it can ship (validate-release-code.py checks every image).
+claude_binary="$output/node_modules/@anthropic-ai/claude-agent-sdk-darwin-$node_arch/claude"
+test -x "$claude_binary"
+codesign --verify --strict "$claude_binary"
+unexpected="$(python3 - "$output/node_modules" "$claude_binary" <<'PY'
+import pathlib, sys
+magic = {bytes.fromhex(v) for v in ("feedface", "cefaedfe", "feedfacf", "cffaedfe", "cafebabe", "bebafeca", "cafebabf", "bfbafeca")}
+allowed = pathlib.Path(sys.argv[2]).resolve()
+for path in sorted(pathlib.Path(sys.argv[1]).rglob("*")):
+    if path.is_file() and not path.is_symlink() and path.resolve() != allowed:
+        with path.open("rb") as source:
+            if source.read(4) in magic: print(path)
+PY
+)"
+if [ -n "$unexpected" ]; then
+  printf 'Unsigned native code in the bots runtime dependencies:\n%s\n' "$unexpected" >&2
+  exit 1
+fi

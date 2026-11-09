@@ -30,7 +30,7 @@ async function writePrivateJSON(path, value) {
  * reports resources, and proxies /v1/bots/ws for Woven apps.
  */
 export function createBotsService({ configuration, mcp, defaultAgent, serverPort, library, libraryHost, engine, runtime, previews,
-  authorizeClient, machine, memberIdentity, engineWatchMilliseconds = 5000, log = message => process.stderr.write(message + '\n') }) {
+  authorizeClient, machine, memberIdentity, release, engineWatchMilliseconds = 5000, log = message => process.stderr.write(message + '\n') }) {
   const stateDirectory = join(configuration.stateDirectory, 'bots')
   const settingsPath = join(stateDirectory, 'settings.json')
   const dataDirectory = configuration.botsData ?? join(configuration.dataRoot, 'bots')
@@ -128,6 +128,10 @@ export function createBotsService({ configuration, mcp, defaultAgent, serverPort
     json(response, 404, { error: 'not_found' }); return true
   }
 
+  function releaseVersions() {
+    const value = release?.() ?? { version: configuration.releaseVersion ?? null, fingerprint: configuration.serviceFingerprint ?? null, librarySchema: null }
+    return { app: value.version ?? null, fingerprint: value.fingerprint ?? null, librarySchema: value.librarySchema ?? null }
+  }
   const runtimeVersion = packageRoot ? readJSONFile(join(packageRoot, 'package.json'), {}).then(value => typeof value.version === 'string' ? value.version : null) : Promise.resolve(null)
   const size = value => Number.isSafeInteger(value) && value >= 0 ? value : null
 
@@ -147,8 +151,9 @@ export function createBotsService({ configuration, mcp, defaultAgent, serverPort
     const memoryBytes = size(report?.memory?.totalBytes), diskTotalBytes = size(report?.disk?.totalBytes), diskFreeBytes = size(report?.disk?.freeBytes)
     return {
       machine: { ...identity, kind: 'linux' }, enabled: !!configuration.botsEnabled, state, ...(message ? { message } : {}),
-      // A Linux server has no app version; the runtime version names its bots package.
-      versions: { app: null, runtime: await runtimeVersion, protocol: 1 },
+      // `app` is the Woven Matter version that shipped this host release; apps compare the
+      // fingerprint (exact) and the library schema to tell an out-of-date host.
+      versions: { ...releaseVersions(), runtime: await runtimeVersion, protocol: 1 },
       resources: engineStatus.installed ? { poolBytes: engineStatus.poolBytes ?? null, perBotBytes: saved.botMemoryBytes ?? null, diskBytes: engineStatus.diskBytes ?? null } : null,
       capacity: memoryBytes !== null && diskTotalBytes !== null && diskFreeBytes !== null
         ? { memoryBytes, diskTotalBytes, diskFreeBytes, diskUsedByBotsBytes: size(report.disk.usedBytes) } : null,

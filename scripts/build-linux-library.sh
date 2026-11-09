@@ -2,8 +2,11 @@
 # Builds the statically linked wovenmatter-library for Linux hosts (amd64 and
 # arm64; any distribution) with the pinned Swift toolchain image and Static
 # Linux SDK (musl). Inputs are verified against remote/library/build-version.json.
-# Output: remote/host/library/linux-<arch>/wovenmatter-library, which the host
-# bundle ships to installs and updates. See docs/DEPENDENCIES.md.
+# Output: remote/host/library/linux-<arch>/wovenmatter-library.gz and the
+# uncompressed binary's wovenmatter-library.sha256, which the host bundle ships
+# to installs and updates; remote-host.sh unpacks and verifies the binary there.
+# Compressed, they keep the app small. --uncompressed also leaves the binary for
+# local runs. See docs/DEPENDENCIES.md.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
@@ -12,8 +15,9 @@ arches=(x86_64 aarch64)
 output="$root/remote/host/library"
 cache="${WOVENMATTER_LIBRARY_BUILD_CACHE:-${TMPDIR:-/tmp}/wovenmatter-library-build}"
 mode=auto
+keep=0
 
-usage() { echo 'usage: scripts/build-linux-library.sh [--arch x86_64|aarch64] [--output DIR] [--cache DIR] [--docker|--native]' >&2; exit 64; }
+usage() { echo 'usage: scripts/build-linux-library.sh [--arch x86_64|aarch64] [--output DIR] [--cache DIR] [--docker|--native] [--uncompressed]' >&2; exit 64; }
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --arch) [ "$#" -ge 2 ] || usage; case "$2" in x86_64|aarch64) arches=("$2") ;; *) usage ;; esac; shift 2 ;;
@@ -21,6 +25,7 @@ while [ "$#" -gt 0 ]; do
     --cache) [ "$#" -ge 2 ] || usage; cache="$2"; shift 2 ;;
     --docker) mode=docker; shift ;;
     --native) mode=native; shift ;;
+    --uncompressed) keep=1; shift ;;
     *) usage ;;
   esac
 done
@@ -59,6 +64,7 @@ if [ "$mode" = docker ]; then
   command -v docker >/dev/null || { echo 'Docker or the pinned Swift toolchain is required.' >&2; exit 1; }
   selection=()
   [ "${#arches[@]}" -ne 1 ] || selection=(--arch "${arches[0]}")
+  [ "$keep" = 0 ] || selection+=(--uncompressed)
   exec docker run --rm -e WOVENMATTER_LIBRARY_BUILD_INPUTS=verified \
     -v "$root:/src:ro" -v "$cache:/cache" -v "$output:/out" "$image" \
     /src/scripts/build-linux-library.sh --native --cache /cache --output /out ${selection[@]+"${selection[@]}"}
@@ -99,5 +105,9 @@ for arch in "${arches[@]}"; do
   mkdir -p "$output/linux-$arch"
   install -m 0755 "$binary" "$output/linux-$arch/wovenmatter-library"
   (cd "$output/linux-$arch" && sha256sum wovenmatter-library > wovenmatter-library.sha256)
-  echo "Built $output/linux-$arch/wovenmatter-library ($(wc -c < "$binary") bytes)"
+  # -n: no name or time in the header, so the same binary always packs the same bytes
+  # (the host release fingerprint covers the .gz).
+  gzip -9 -n -c "$output/linux-$arch/wovenmatter-library" > "$output/linux-$arch/wovenmatter-library.gz"
+  [ "$keep" = 1 ] || rm -f "$output/linux-$arch/wovenmatter-library"
+  echo "Built $output/linux-$arch/wovenmatter-library.gz ($(wc -c < "$output/linux-$arch/wovenmatter-library.gz") bytes from $(wc -c < "$binary"))"
 done

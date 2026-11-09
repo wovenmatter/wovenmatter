@@ -157,6 +157,9 @@ final class BotsUpdateCoordinator {
             case let .mac(_, name):
                 current = "Updating Woven Matter on \(name)…"
                 if let failure = await updateMac(named: name) { failures.append("\(name): \(failure)") }
+            case let .engine(machineID, name):
+                current = "Updating the bots VM on \(name)…"
+                if let failure = await updateEngine(machineID: machineID, bots: bots) { failures.append("Bots VM on \(name): \(failure)") }
             case let .bots(machineID, name):
                 current = "Updating bots on \(name)…"
                 if let session = bots.session(for: machineID) {
@@ -170,6 +173,20 @@ final class BotsUpdateCoordinator {
             }
         }
         await bots.refresh()
+    }
+
+    /// Starts a Mac's VM update and follows that machine until it finishes; nil on success.
+    private func updateEngine(machineID: String, bots: BotsModel, timeout: Duration = .seconds(3_600)) async -> String? {
+        do { try await bots.send(.updateEngine(machineID: machineID)) }
+        catch { return error.localizedDescription }
+        let deadline = ContinuousClock.now + timeout
+        while ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .seconds(2))
+            await bots.refresh()
+            guard let machine = bots.machines.first(where: { $0.id == machineID }) else { return "It stopped answering." }
+            if !machine.updating { return machine.engineUpdateFailure }
+        }
+        return "It did not finish in time."
     }
 
     /// Other Macs update over the same Tailscale SSH path as Mac connections.

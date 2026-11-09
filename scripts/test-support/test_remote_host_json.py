@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Provider-free lifecycle fixtures, archive attacks and rollback verification."""
+import gzip
 import hashlib
 import io
 import json
@@ -241,7 +242,7 @@ class HostFixtures(unittest.TestCase):
         content=b'tampered'; manifest['files']['src/server.mjs']['sha256']=hashlib.sha256(content).hexdigest()
         path=self.archive([('src/server.mjs',content,tarfile.REGTYPE,''),('manifest.json',json.dumps(manifest).encode(),tarfile.REGTYPE,'')])
         with self.assertRaises(self.m.Failure): self.m.safe_extract(path,self.home/'tampered',fp)
-    def install_bundle(self,bots=False,library=False):
+    def install_bundle(self,bots=False,library=False,release_version=None,packed_library=None):
         versions={'nodeVersion':'26.12.1','playwrightVersion':'1.64.1','nodeSHA256':{'linux-x64':'a'*64},
             'dockerVersion':'29.9.3','dockerSHA256':{'linux-x64':hashlib.sha256(b'docker-fixture').hexdigest(),'linux-arm64':'b'*64}}
         files={'host/runtime-versions.json':json.dumps(versions).encode(),
@@ -251,12 +252,18 @@ class HostFixtures(unittest.TestCase):
             'npm-runtime/package-lock.json':(ROOT/'remote/npm-runtime/package-lock.json').read_bytes()}
         if bots: files.update({'bots/package.json':b'{"version":"0.1.0"}','bots/package-lock.json':b'{}','bots/src/cli.ts':b'fixture','host/bots-engine.py':b'# fixture helper\n'})
         if library: files['host/library/linux-x86_64/wovenmatter-library']=b'fixture library host'
+        if packed_library is not None:
+            # As build-linux-library.sh ships it: the gzip and the uncompressed binary's SHA-256.
+            binary,recorded=packed_library
+            files['host/library/linux-x86_64/wovenmatter-library.gz']=gzip.compress(binary,mtime=0)
+            files['host/library/linux-x86_64/wovenmatter-library.sha256']=(recorded+'  wovenmatter-library\n').encode()
         digest=hashlib.sha256(); records={}
         for name,data in sorted(files.items(),key=lambda item:item[0] if item[0].startswith(('default-agent/','bots/')) else 'remote/'+item[0]):
             source=name if name.startswith(('default-agent/','bots/')) else 'remote/'+name
             digest.update((source+'\0false\0'+'0\0').encode()); digest.update(hashlib.sha256(data).digest())
             records[name]={'sourcePath':source,'sourceMode':0,'mode':0o600,'sha256':hashlib.sha256(data).hexdigest()}
         fp=digest.hexdigest(); manifest={'fingerprint':fp,'nodeVersion':'26.12.1','playwrightVersion':'1.64.1','files':records}
+        if release_version is not None: manifest['releaseVersion']=release_version
         path=self.archive([(name,data,tarfile.REGTYPE,'') for name,data in files.items()]+[('manifest.json',json.dumps(manifest).encode(),tarfile.REGTYPE,'')])
         data=path.read_bytes(); stream=self.home/'stream'; stream.write_bytes((TOKEN+'\n').encode()+data)
         node=self.m.ROOT/'node/26.12.1/bin/node'; node.parent.mkdir(parents=True,exist_ok=True); node.write_bytes(b'fixture')
@@ -469,6 +476,44 @@ class HostFixtures(unittest.TestCase):
         self.assertEqual(self.m.parse_env()['WOVENMATTER_WORKSPACE_ENABLED'],'1')
         self.assertTrue(any('playwright-core/cli.js' in ' '.join(call) for call in self.calls))
         self.assertEqual(self.m.parse_env()['WOVENMATTER_API_TOKEN'],TOKEN)
+    def test_a_bots_only_placeholder_becomes_the_real_workspace_once(self):
+        # The Mac records a bots-only host as `bots`; adding the workspace later installs
+        # with the real id and must reuse that server, port, token and data root.
+        self.m.ROOT.mkdir(parents=True)
+        fp,stream=self.install_bundle(bots=True,release_version='1.4.0'); self.m.TOKEN=''
+        self.m.health=lambda *a:{'serviceFingerprint':fp,'runtimeKind':'host'}
+        source=self.feed(stream)
+        first=self.m.main(['install','bots','7337','fullRoot',fp,'bots'])
+        self.assertEqual(first['roles'],{'workspace':False,'bots':True})
+        self.assertEqual(self.m.parse_env()['WOVENMATTER_RELEASE_VERSION'],'1.4.0')
+        self.assertEqual(first['releaseVersion'],'1.4.0')
+        port=self.m.record()['port']
+        def again():
+            stream.write_bytes(b'\n'+self.home.joinpath('bundle.tar').read_bytes()); source.seek(0); self.m.TOKEN=''
+        # Only a workspace install may take over the placeholder, never an update or another bots install.
+        again()
+        with self.assertRaises(self.m.Failure) as conflict: self.m.main(['update','studio','7337','fullRoot',fp,'workspace'])
+        self.assertEqual(conflict.exception.code,'host_workspace_conflict')
+        again()
+        with self.assertRaises(self.m.Failure) as conflict: self.m.main(['install','studio','7337','fullRoot',fp,'bots'])
+        self.assertEqual(conflict.exception.code,'host_workspace_conflict')
+        self.m.BOTS_HELPER.parent.mkdir(parents=True); self.m.BOTS_HELPER.write_bytes(b'# fixture helper\n')
+        again()
+        converted=self.m.main(['install','studio','7337','fullRoot',fp,'workspace'])
+        self.assertEqual(converted['id'],'studio')
+        self.assertEqual(converted['roles'],{'workspace':True,'bots':True})
+        record=self.m.record()
+        self.assertEqual((record['id'],record['port'],record['previousIDs']),('studio',port,['bots']))
+        settings=self.m.parse_env()
+        self.assertEqual(settings['WOVENMATTER_API_TOKEN'],TOKEN)
+        self.assertEqual((settings['WOVENMATTER_DATA_ROOT'],settings['WOVENMATTER_BOTS_DATA']),(str(self.m.ROOT),str(self.m.ROOT/'bots')))
+        self.assertEqual((settings['WOVENMATTER_WORKSPACE_ENABLED'],settings['WOVENMATTER_BOTS_ENABLED']),('1','1'))
+        self.assertEqual(len(self.engine_calls),1,'the running engine is kept, not installed again')
+        # Once: the placeholder is gone, so a second workspace id is a conflict again.
+        again()
+        with self.assertRaises(self.m.Failure) as conflict: self.m.main(['install','other','7337','fullRoot',fp,'workspace'])
+        self.assertEqual(conflict.exception.code,'host_workspace_conflict')
+        self.assertEqual(self.m.status('studio')['roles'],{'workspace':True,'bots':True})
     def test_workspace_install_without_roles_is_unchanged_and_old_records_read_as_workspace(self):
         self.save_install()
         self.assertEqual(self.m.record()['roles'],{'workspace':True,'bots':False})
@@ -540,6 +585,30 @@ class HostFixtures(unittest.TestCase):
         finally:
             if saved_fd is not None: os.dup2(saved_fd,3); os.close(saved_fd)
             source.close()
+    def test_a_compressed_library_binary_is_unpacked_and_verified_before_it_runs(self):
+        binary=b'\x7fELF fixture library host '*4096
+        self.m.ROOT.mkdir(parents=True)
+        fp,stream=self.install_bundle(packed_library=(binary,hashlib.sha256(binary).hexdigest())); self.m.TOKEN=''
+        self.m.health=lambda *a:{'serviceFingerprint':fp,'runtimeKind':'host'}
+        # The installer waits for the library host's identity; this one is already known.
+        self.m.LIBRARY_STATE.mkdir(parents=True); (self.m.LIBRARY_STATE/'identity.json').write_text(json.dumps({'deviceID':'6f1c2a5e-8b3d-4c7a-9e21-0d4b5c6a7f80'}))
+        source=self.feed(stream)
+        self.m.install('fixture','7337','fullRoot',fp)
+        unpacked=self.m.ROOT/'releases'/fp/'host/library/linux-x86_64/wovenmatter-library'
+        self.assertEqual(self.migrations[-1][0],str(unpacked))
+        self.assertEqual(unpacked.read_bytes(),binary)
+        self.assertEqual(unpacked.stat().st_mode&0o777,0o700)
+        # A tampered unpacked copy is replaced from the verified archive on the next use.
+        unpacked.write_bytes(b'tampered')
+        self.assertEqual(self.m.library_binary(self.m.ROOT/'releases'/fp),unpacked)
+        self.assertEqual(unpacked.read_bytes(),binary)
+        # A checksum that does not match the archive never runs.
+        directory=self.m.ROOT/'releases'/fp/'host/library/linux-x86_64'
+        unpacked.unlink(); (directory/'wovenmatter-library.sha256').write_text('0'*64+'  wovenmatter-library\n')
+        with self.assertRaises(self.m.Failure) as error: self.m.library_binary(self.m.ROOT/'releases'/fp)
+        self.assertEqual(error.exception.code,'library_verification_failed')
+        self.assertFalse(unpacked.exists())
+        self.assertEqual([path.name for path in directory.iterdir() if path.name.startswith('.')],[])
     def test_uninstall_removes_only_the_recorded_library_route(self):
         self.save_install(); (self.m.ROOT/'releases').mkdir(); self.m.UNIT.parent.mkdir(parents=True); self.m.UNIT.write_text('fixture')
         endpoint='fixture.test.ts.net:10000'

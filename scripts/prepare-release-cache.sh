@@ -17,7 +17,9 @@ export DERIVED_FILE_DIR="$temporary/derived"
 export BUILT_PRODUCTS_DIR="$temporary/products"
 # Use every pinned archive so the download store retains exactly the current set.
 WOVENMATTER_CEF_CACHE_DIR="$temporary/cef" scripts/prepare-browser.sh
-CODE_SIGNING_ALLOWED=NO scripts/prepare-default-agent.sh "$temporary/agent"
+CODE_SIGNING_ALLOWED=NO scripts/prepare-default-agent.sh "$temporary/resources/default-agent"
+# The bots runtime installs with the default agent's bundled Node and npm beside it.
+CODE_SIGNING_ALLOWED=NO scripts/prepare-bots.sh "$temporary/resources/bots"
 WOVENMATTER_SPARKLE_TOOLS_DIR="$temporary/sparkle" scripts/prepare-sparkle-tools.sh >/dev/null
 scripts/prepare-cua.sh "$temporary/cua"
 xcodebuild -quiet -resolvePackageDependencies -onlyUsePackageVersionsFromResolvedFile \

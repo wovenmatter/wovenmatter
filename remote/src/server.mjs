@@ -134,8 +134,15 @@ const retainedExecution = runningAsService ? createRetainedExecutionCapture({
 
 // Bots run only on native Linux hosts. The service exists whenever bots may be
 // enabled, so its routes answer clearly while the engine is being installed.
+// What apps compare to tell an out-of-date host: the release, its fingerprint and the
+// library's paired-library schema hash (reported once the library host announces one).
+function hostRelease() {
+  const ready = library?.status() ?? null
+  return { version: configuration.releaseVersion, fingerprint: configuration.serviceFingerprint, librarySchema: ready?.schema ?? null }
+}
+
 const bots = runningAsService && configuration.runtimeKind === 'host' && process.platform === 'linux' ? createBotsService({
-  configuration, mcp: clientExecution.mcp, defaultAgent, serverPort: () => server.address()?.port ?? listenPort,
+  configuration, mcp: clientExecution.mcp, release: hostRelease, defaultAgent, serverPort: () => server.address()?.port ?? listenPort,
   libraryHost: library, memberIdentity,
   // Any member may open the bots socket; the bearers remain for the transition.
   authorizeClient: async request => authorized(request) || !!clientExecution.principal(request.headers.authorization, 'execution')
@@ -441,6 +448,7 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
         workspaceRoot,
         runtimeKind: configuration.runtimeKind,
         serviceFingerprint: configuration.serviceFingerprint,
+        release: hostRelease(),
         databasesDirectory: managedDataRoot,
         attachmentsDirectory: resolve(workspaceRoot, '.wovenmatter/attachments'),
         dataRoot: configuration.dataRoot,

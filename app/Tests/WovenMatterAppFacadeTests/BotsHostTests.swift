@@ -11,8 +11,16 @@ private final class FakeEngine: BotEngineHost {
     var applied: [BotResourceSettings] = []
     var forwards: [String] = []
     var stopped = 0
+    var updates = 0
+    var updateError: String?
+    var onStatusChange: (@MainActor (BotEngineStatus) -> Void)?
     let socket: String
     init(socket: String) { self.socket = socket }
+    func update() async throws {
+        updates += 1
+        onStatusChange?(.init(state: .updating, socketPath: socket, message: "Updating the bots VM…"))
+        if let updateError { throw BotsError.unavailable(updateError) }
+    }
     func ensureRunning(resources: BotResourceSettings) async throws -> BotEngineStatus {
         ensured.append(resources)
         return .init(state: .running, socketPath: socket)
@@ -222,6 +230,31 @@ struct BotsHostTests {
         let status = await fixture.host.remoteRequest(try hostRequest("GET", "/v1/bots/status", token: "ignored"), path: "/v1/bots/status")
         let decoded = try JSONDecoder().decode(BotsRemoteStatus.self, from: status.body)
         #expect(decoded.machine.kind == "mac" && decoded.enabled && decoded.state == "ready")
+    }
+
+    @Test func theEnginesProgressAndItsUpdateShowOnThisMac() async throws {
+        let fixture = try HostFixture(); defer { fixture.remove() }
+        _ = try await fixture.host.perform(.setEnabled(true))
+        try await waitFor("runtime") { fixture.supervisor.phase == .running }
+        // A note from a running engine reaches the machine row.
+        fixture.engine.onStatusChange?(.init(state: .running, socketPath: fixture.engine.socket, message: "The new RAM pool applies later."))
+        #expect(await fixture.host.snapshot().machines.first?.message == "The new RAM pool applies later.")
+
+        _ = try await fixture.host.perform(.updateEngine(machineID: "D3VICE-0001"))
+        try await waitFor("engine update") { fixture.host.engineUpdateTask == nil }
+        #expect(fixture.engine.updates == 1)
+        #expect(await fixture.host.snapshot().machines.first?.engineUpdateFailure == nil)
+
+        fixture.engine.updateError = "The bots VM update failed and was rolled back: Docker did not start."
+        let remote = await fixture.host.remoteRequest(try hostRequest("POST", "/v1/bots/engine/update", token: "ignored"), path: "/v1/bots/engine/update")
+        #expect(remote.status == 200)
+        try await waitFor("engine update") { fixture.host.engineUpdateTask == nil }
+        let status = await fixture.host.remoteRequest(try hostRequest("GET", "/v1/bots/status", token: "ignored"), path: "/v1/bots/status")
+        let decoded = try JSONDecoder().decode(BotsRemoteStatus.self, from: status.body)
+        #expect(decoded.updating == false && decoded.engineUpdateFailure?.contains("rolled back") == true)
+
+        _ = try await fixture.host.perform(.setEnabled(false))
+        await #expect(throws: (any Error).self) { _ = try await fixture.host.perform(.updateEngine(machineID: "d3vice-0001")) }
     }
 
     @Test func theCompanionParserAcceptsAWebSocketUpgradeOnlyWhenAsked() throws {

@@ -811,6 +811,22 @@ final class RemoteWorkspacesModel {
         )
         do {
             try RemoteWorkspaceSSHClient.validateConfiguration(configuration)
+            // A bots-only server on this host: the workspace joins it instead of a second install.
+            if kind == .host, let placeholder = workspaces.first(where: {
+                $0.kind == .host && $0.workspaceID == RemoteHostInstallMode.botsOnlyWorkspaceID
+                    && Self.hostKey(hostName: $0.hostName, userName: $0.userName ?? "")
+                    == Self.hostKey(hostName: configuration.hostName, userName: configuration.userName ?? "")
+            }) {
+                let converted = try Self.addingWorkspace(to: placeholder, name: cleanName, workspaceID: cleanID, accessMode: accessMode)
+                isCreating = true
+                errorMessage = nil
+                Task {
+                    defer { isCreating = false; progress = nil }
+                    do { try await addWorkspace(converted) }
+                    catch { errorMessage = error.localizedDescription }
+                }
+                return
+            }
             if kind == .host, workspaces.contains(where: {
                 $0.kind == .host && Self.hostKey(hostName: $0.hostName, userName: $0.userName ?? "")
                     == Self.hostKey(hostName: configuration.hostName, userName: configuration.userName ?? "")
@@ -1387,6 +1403,46 @@ final class RemoteWorkspacesModel {
         }
     }
 
+    /// The bots-only host's record with the workspace's name and id. It keeps its id,
+    /// token, port and access level: remote-host.sh converts the server in place.
+    static func addingWorkspace(to placeholder: RemoteWorkspaceConfiguration, name: String, workspaceID: String,
+                                accessMode: RemoteWorkspaceAccessMode) throws -> RemoteWorkspaceConfiguration {
+        guard placeholder.kind == .host, placeholder.workspaceID == RemoteHostInstallMode.botsOnlyWorkspaceID else {
+            throw RemoteWorkspaceClientError.invalidResourceLimit("A native host workspace is already configured for this host and user.")
+        }
+        guard workspaceID != RemoteHostInstallMode.botsOnlyWorkspaceID else {
+            throw RemoteWorkspaceClientError.invalidResourceLimit("Choose another workspace ID; “bots” names this host's bots-only server.")
+        }
+        guard accessMode == placeholder.accessMode else {
+            throw RemoteWorkspaceClientError.invalidResourceLimit(
+                "This host already runs bots with \(placeholder.accessMode.rawValue) access, which is fixed for its server. Add the workspace with the same access level.")
+        }
+        var converted = placeholder
+        converted.name = name
+        converted.workspaceID = workspaceID
+        try RemoteWorkspaceSSHClient.validateConfiguration(converted)
+        return converted
+    }
+
+    /// Adds the workspace role to this host's bots-only server: same server and data root,
+    /// with the token it already has; bots keep their engine and containers.
+    private func addWorkspace(_ configuration: RemoteWorkspaceConfiguration) async throws {
+        guard let token = try await credentials.token(for: configuration.id) else {
+            throw RemoteWorkspaceClientError.invalidResponse("The bots host's API token is missing from Keychain.")
+        }
+        progress = "Adding the workspace to \(configuration.hostName)…"
+        let status = try await sshClient.deployHost(configuration: configuration, token: token, mode: .addWorkspace) { [weak self] message in
+            Task { @MainActor [weak self] in self?.progress = message }
+        }
+        guard let index = workspaces.firstIndex(where: { $0.id == configuration.id }) else { return }
+        workspaces[index] = configuration
+        let resolved = recordStatus(status, for: configuration)
+        save()
+        requestHarnessSetup(configuration.id)
+        await onRuntimeMaintenanceChanged?()
+        await refreshService(resolved)
+    }
+
     private func provision(
         _ configuration: RemoteWorkspaceConfiguration
     ) async throws {
@@ -1481,7 +1537,8 @@ final class RemoteWorkspacesModel {
         if let existing = workspaces.first(where: { $0.kind == .host && Self.hostKey(hostName: $0.hostName, userName: $0.userName ?? "") == Self.hostKey(hostName: host, userName: user ?? "") }) {
             return existing
         }
-        let configuration = RemoteWorkspaceConfiguration(name: host, workspaceID: "bots", hostName: host, userName: user, kind: .host, accessMode: .user)
+        let configuration = RemoteWorkspaceConfiguration(name: host, workspaceID: RemoteHostInstallMode.botsOnlyWorkspaceID, hostName: host,
+                                                         userName: user, kind: .host, accessMode: .user)
         try RemoteWorkspaceSSHClient.validateConfiguration(configuration)
         let token = try Self.generateToken()
         try await credentials.save(token: token, for: configuration.id)

@@ -11,12 +11,21 @@ public struct BotSocketEndpoint: Codable, Equatable, Sendable, CustomStringConve
 }
 
 public struct BotMachineVersions: Codable, Equatable, Sendable {
-    /// The Woven Matter app on a Mac, or the Woven host server on Linux.
+    /// The Woven Matter app on a Mac. On Linux, the Woven Matter version whose app shipped
+    /// the host release (nil for a release that predates recording it).
     public var app: String?
     public var runtime: String?
     public var `protocol`: Int?
-    public init(app: String? = nil, runtime: String? = nil, protocol: Int? = nil) {
+    /// A Linux host's release fingerprint: the SHA-256 `remote-host.sh install` verified.
+    /// It changes with any host source, the library binaries included.
+    public var fingerprint: String?
+    /// The library host's paired-library schema hash, when its library reports one. Sync
+    /// between two devices needs equal schemas.
+    public var librarySchema: String?
+    public init(app: String? = nil, runtime: String? = nil, protocol: Int? = nil,
+                fingerprint: String? = nil, librarySchema: String? = nil) {
         self.app = app; self.runtime = runtime; self.protocol = `protocol`
+        self.fingerprint = fingerprint; self.librarySchema = librarySchema
     }
 }
 
@@ -47,8 +56,10 @@ public struct BotMachine: Codable, Equatable, Identifiable, Sendable {
     public var capacity: BotMachineCapacity?
     /// Every bot here is paused from Woven MCP.
     public var paused: Bool
-    /// A bots update or rebuild is running.
+    /// A bots update or rebuild is running, or the machine's bots engine is updating.
     public var updating: Bool
+    /// Why the machine's last bots engine update (the Mac VM) failed and was rolled back.
+    public var engineUpdateFailure: String?
 
     public init(id: String, name: String, kind: Kind, state: State, message: String? = nil, socket: BotSocketEndpoint? = nil,
                 versions: BotMachineVersions = .init(), resources: BotResourceSettings? = nil, capacity: BotMachineCapacity? = nil,
@@ -79,6 +90,9 @@ public struct BotsRemoteStatus: Codable, Equatable, Sendable {
     public var resources: BotResourceSettings?
     public var capacity: BotMachineCapacity?
     public var paused: Bool?
+    /// The machine's bots engine is updating (Macs; absent from older servers).
+    public var updating: Bool?
+    public var engineUpdateFailure: String?
 
     public init(machine: Machine, enabled: Bool, state: String, message: String? = nil, versions: BotMachineVersions,
                 resources: BotResourceSettings? = nil, capacity: BotMachineCapacity? = nil, paused: Bool? = nil) {
@@ -86,13 +100,36 @@ public struct BotsRemoteStatus: Codable, Equatable, Sendable {
         self.resources = resources; self.capacity = capacity; self.paused = paused
     }
 
-    /// The machine as the Bots UI lists it, reached through `socket`.
-    public func machine(kind: BotMachine.Kind, socket: BotSocketEndpoint?, thisMacVersion: String?) -> BotMachine {
+    /// The machine as the Bots UI lists it, reached through `socket`. `expectedHostFingerprint`
+    /// is the host release this Mac would install (its bundled host sources): a Linux host on
+    /// any other release is out of date, whatever version it names.
+    public func machine(kind: BotMachine.Kind, socket: BotSocketEndpoint?, thisMacVersion: String?,
+                        expectedHostFingerprint: String? = nil) -> BotMachine {
         let base: BotMachine.State = switch state { case "ready": .ready; case "starting": .starting; case "failed": .failed; default: .off }
-        let mismatched = kind != .thisMac && thisMacVersion != nil && versions.app != nil && versions.app != thisMacVersion
-        return BotMachine(id: machine.deviceID, name: machine.name, kind: kind, state: mismatched ? .needsUpdate : base,
-                          message: mismatched ? "Runs Woven Matter \(versions.app ?? "") and this Mac runs \(thisMacVersion ?? ""). Update everything to use its bots." : message,
-                          socket: enabled ? socket : nil, versions: versions, resources: resources, capacity: capacity, paused: paused ?? false)
+        let mismatch = Self.mismatch(kind: kind, versions: versions, thisMacVersion: thisMacVersion,
+                                     expectedHostFingerprint: expectedHostFingerprint)
+        var result = BotMachine(id: machine.deviceID, name: machine.name, kind: kind, state: mismatch == nil ? base : .needsUpdate,
+                                message: mismatch ?? message,
+                                socket: enabled ? socket : nil, versions: versions, resources: resources, capacity: capacity,
+                                paused: paused ?? false, updating: updating ?? false)
+        result.engineUpdateFailure = engineUpdateFailure
+        return result
+    }
+
+    /// Why a machine cannot be used until it is updated, or nil when it matches this Mac.
+    static func mismatch(kind: BotMachine.Kind, versions: BotMachineVersions, thisMacVersion: String?,
+                         expectedHostFingerprint: String?) -> String? {
+        guard kind != .thisMac else { return nil }
+        if kind == .linux, let expected = expectedHostFingerprint, versions.fingerprint != expected {
+            if let app = versions.app, let ours = thisMacVersion, app != ours {
+                return "Runs Woven Matter \(app) and this Mac runs \(ours). Update everything to use its bots."
+            }
+            return "Runs a different Woven host release than this Mac's. Update everything to use its bots."
+        }
+        if let app = versions.app, let ours = thisMacVersion, app != ours, versions.fingerprint == nil || expectedHostFingerprint == nil {
+            return "Runs Woven Matter \(app) and this Mac runs \(ours). Update everything to use its bots."
+        }
+        return nil
     }
 }
 
@@ -271,6 +308,11 @@ public struct BotVersionReport: Equatable, Sendable {
             if let app = machine.versions.app, let thisMacVersion, app != thisMacVersion {
                 parts.append(.init(id: machine.id, kind: machine.kind == .mac ? .mac : .linux, name: machine.name,
                                    current: app, expected: thisMacVersion))
+            } else if machine.kind == .linux, machine.state == .needsUpdate {
+                // Same version name, different release (or one too old to say): name the releases.
+                parts.append(.init(id: machine.id, kind: .linux, name: machine.name,
+                                   current: machine.versions.fingerprint.map { "release " + $0.prefix(8) } ?? machine.versions.app ?? "an older release",
+                                   expected: thisMacVersion ?? "this Mac's release"))
             }
         }
         let runtimes = Set(machines.compactMap(\.versions.runtime))
@@ -302,13 +344,16 @@ public struct BotVersionReport: Equatable, Sendable {
     }
 }
 
-/// "Update everything": other machines first, then bots, then this Mac's app, which restarts.
-/// A machine already on this Mac's version is skipped; `runtime.update` is a no-op for bots
-/// already on their runtime's current image.
+/// "Update everything": other machines first, then each Mac's bots engine (the VM) and then
+/// its bots, then this Mac's app, which restarts. A machine already on this Mac's release is
+/// skipped; `runtime.update` is a no-op for bots already on their runtime's current image.
 public enum BotUpdatePlan {
     public enum Step: Equatable, Sendable {
         case linuxHost(id: String, name: String)
         case mac(id: String, name: String)
+        /// A Mac's Woven VM, before its bots: `runtime.update` then runs on the updated engine.
+        /// A Linux host's engine updates with the host itself.
+        case engine(machineID: String, name: String)
         case bots(machineID: String, name: String)
         case thisMacApp
     }
@@ -317,11 +362,20 @@ public enum BotUpdatePlan {
         let others = machines.filter { $0.kind != .thisMac && $0.state != .unreachable }
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         var steps: [Step] = others.compactMap { machine in
+            if machine.kind == .linux {
+                // The fingerprint is exact: a host on this Mac's release has nothing to update.
+                let current = machine.versions.fingerprint != nil ? machine.state != .needsUpdate
+                    : machine.versions.app != nil && machine.versions.app == thisMacVersion
+                return current ? nil : .linuxHost(id: machine.id, name: machine.name)
+            }
             guard machine.versions.app == nil || machine.versions.app != thisMacVersion else { return nil }
-            if machine.kind == .mac, let theirs = machine.versions.app, let ours = thisMacVersion, isNewer(theirs, than: ours) { return nil }
-            return machine.kind == .linux ? .linuxHost(id: machine.id, name: machine.name) : .mac(id: machine.id, name: machine.name)
+            if let theirs = machine.versions.app, let ours = thisMacVersion, isNewer(theirs, than: ours) { return nil }
+            return .mac(id: machine.id, name: machine.name)
         }
-        steps += machines.filter { $0.state == .ready || $0.state == .needsUpdate }.map { .bots(machineID: $0.id, name: $0.displayName) }
+        for machine in machines where machine.state == .ready || machine.state == .needsUpdate {
+            if machine.kind != .linux { steps.append(.engine(machineID: machine.id, name: machine.displayName)) }
+            steps.append(.bots(machineID: machine.id, name: machine.displayName))
+        }
         if thisMacNeedsUpdate(machines: machines, thisMacVersion: thisMacVersion) { steps.append(.thisMacApp) }
         return steps
     }

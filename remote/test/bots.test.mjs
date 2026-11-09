@@ -293,7 +293,8 @@ test('client routes read with device grants, change only as administrator, and r
   // The shape every Woven server that hosts bots answers, as the apps decode it.
   assert.deepEqual(status.body.machine, { ...f.machine, kind: 'linux' })
   assert.equal(status.body.state, 'starting'); assert.equal(status.body.paused, false)
-  assert.deepEqual(status.body.versions, { app: null, runtime: null, protocol: 1 })
+  // A release that recorded nothing reports nulls; apps then treat it as out of date.
+  assert.deepEqual(status.body.versions, { app: null, fingerprint: null, librarySchema: null, runtime: null, protocol: 1 })
   assert.deepEqual(status.body.resources, { poolBytes: 8 * 1024 ** 3, perBotBytes: 4 * 1024 ** 3, diskBytes: null })
   assert.ok(status.body.capacity === null || Number.isSafeInteger(status.body.capacity.memoryBytes))
   const resources = await f.call('/v1/bots/resources', { token: 'device' })
@@ -305,6 +306,23 @@ test('client routes read with device grants, change only as administrator, and r
   assert.equal(changed.status, 200)
   assert.deepEqual(changed.body.resources, { poolBytes: 8 * 1024 ** 3, perBotBytes: 2 * 1024 ** 3, diskBytes: null })
   assert.equal((await f.call('/v1/bots/status', { token: 'device' })).body.settings.botMemoryBytes, 2 * 1024 ** 3)
+})
+
+test('the bots status names the host release, its fingerprint and the library schema', async t => {
+  const fingerprint = 'f'.repeat(64)
+  const service = createBotsService({ configuration: { stateDirectory: temporary(t), dataRoot: temporary(t), serviceRoot: temporary(t), botsEnabled: false, workspaceEnabled: true,
+    botsInstance: 'wmtest', releaseVersion: '1.4.0', serviceFingerprint: fingerprint },
+    engine: { status: async () => ({ installed: false }) }, runtime: null, previews: { recover: async () => {}, close: async () => {} },
+    library: createBotConversationLibrary(createMemoryBotLibraryAdapter()), machine: { deviceID: randomUUID(), name: 'box' },
+    serverPort: () => 1, authorizeClient: () => false, log: () => {} })
+  assert.deepEqual((await service.status()).versions, { app: '1.4.0', fingerprint, librarySchema: null, runtime: null, protocol: 1 })
+  // The server passes its library host's schema through once it reports one.
+  const withLibrary = createBotsService({ configuration: { stateDirectory: temporary(t), dataRoot: temporary(t), serviceRoot: temporary(t), botsEnabled: false, workspaceEnabled: true, botsInstance: 'wmtest' },
+    release: () => ({ version: '1.4.0', fingerprint, librarySchema: 'a'.repeat(64) }),
+    engine: { status: async () => ({ installed: false }) }, runtime: null, previews: { recover: async () => {}, close: async () => {} },
+    library: createBotConversationLibrary(createMemoryBotLibraryAdapter()), machine: { deviceID: randomUUID(), name: 'box' },
+    serverPort: () => 1, authorizeClient: () => false, log: () => {} })
+  assert.equal((await withLibrary.status()).versions.librarySchema, 'a'.repeat(64))
 })
 
 test('the runtime starts once the engine finishes installing, and lowering the pool lowers per-bot RAM', async t => {
@@ -336,6 +354,8 @@ test('the bots socket requires client authorization and reaches the runtime with
     seen.push({ url: request.url, authorization: request.headers.authorization, cookie: request.headers.cookie })
     socket.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n')
     socket.on('data', data => socket.write(data))
+    // The test client resets each connection once it has its echo.
+    socket.on('error', () => {})
   })
   const runtimePort = await listen(runtimeServer); t.after(() => runtimeServer.close())
   const runtime = { start() {}, stop: async () => {}, restart: async () => {}, status: () => ({ running: true }), endpoint: () => ({ host: '127.0.0.1', port: runtimePort, token: 'runtime-token' }) }
@@ -349,5 +369,11 @@ test('the bots socket requires client authorization and reaches the runtime with
   assert.match(await handshake('Bearer nobody'), /401/)
   assert.match(await handshake('Bearer device', 'Origin: https://evil.example\r\n'), /403/)
   assert.match(await handshake('Bearer device'), /101[\s\S]*echo/)
-  assert.deepEqual(seen, [{ url: '/ws?client=mac', authorization: 'Bearer runtime-token', cookie: undefined }])
+  // Exactly what the Mac's URLSessionWebSocketTask sends besides the fields above (captured
+  // from CFNetwork; PiBotHandshakeTests checks the Mac side): no Origin, so it is accepted.
+  const cfNetwork = 'Accept-Encoding: gzip, deflate\r\nUser-Agent: Woven Matter CFNetwork/3896.200.61 Darwin/27.2.0\r\n'
+    + 'Sec-WebSocket-Extensions: permessage-deflate\r\nAccept: */*\r\nAccept-Language: en-US,en;q=0.9\r\n'
+  assert.match(await handshake('Bearer device', cfNetwork), /101[\s\S]*echo/)
+  assert.deepEqual(seen, [{ url: '/ws?client=mac', authorization: 'Bearer runtime-token', cookie: undefined },
+    { url: '/ws?client=mac', authorization: 'Bearer runtime-token', cookie: undefined }])
 })

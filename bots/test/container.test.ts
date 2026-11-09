@@ -40,9 +40,14 @@ describe("bot containers on the Engine API", () => {
       probe: async () => (busy ? { busy } : {}),
       ...options,
     });
-  beforeEach(async () => {
+  beforeEach(async (context) => {
     dir = await tempDir();
     engine = new FakeEngine(dir.path);
+    const current = engine;
+    // Helpers run as child processes; their stderr is the only trace of why one failed.
+    context.onTestFailed(() => {
+      if (current.helperLog.length) console.error(`helper output:\n${current.helperLog.join("\n")}`);
+    });
     await engine.start();
     busy = undefined;
     env = make();

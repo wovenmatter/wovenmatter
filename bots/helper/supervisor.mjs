@@ -306,7 +306,15 @@ async function main() {
     });
     socket.on("error", () => {});
   });
-  await new Promise((resolve) => server.listen(SOCKET, resolve));
+  // A socket that cannot be bound must end the supervisor with a reason, never leave it
+  // running without one (ctl and the agent would wait for it until they time out).
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(SOCKET, () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
   await reconcile().catch((error) => log(`restart list: ${error.message}`));
   void restoreBrowser();
   const shutdown = async () => {
