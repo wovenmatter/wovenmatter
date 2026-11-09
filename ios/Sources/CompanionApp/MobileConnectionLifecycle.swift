@@ -22,10 +22,10 @@ extension CompanionModel {
       appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String)
   }
 
-  func acceptPairing(_ paired: MobileCredential, allowingLibraryChange: Bool = false,
+  func acceptPairing(_ paired: MobileCredential, allowingLibraryChange: Bool = false, keepLibrary: Bool = false,
                      saveCredential: (MobileCredential) throws -> Void) async throws {
     guard let store else { throw MobileConnectionError.invalidResponse }
-    let connection = try HTTPSCompanionTransport(credential: paired, metadata: deviceMetadata)
+    let connection = try HTTPSCompanionTransport(credential: paired, metadata: deviceMetadata, performer: httpPerformer)
     connectionGeneration = UUID()
     connectionRefreshTask?.cancel(); connectionRefreshTask = nil
     for task in workspacePollTasks.values { task.cancel() }
@@ -34,7 +34,7 @@ extension CompanionModel {
     credential = nil; transport = nil; engine = nil; online = false
     await previousEngine?.cancelSynchronization()
     let committed = try await MobilePairingCommit.complete(paired, store: store,
-      allowingLibraryChange: allowingLibraryChange, saveCredential: saveCredential,
+      allowingLibraryChange: allowingLibraryChange, keepLibrary: keepLibrary, saveCredential: saveCredential,
       confirm: { try await pairingRequests(connection).confirmPairing() })
     credential = committed; transport = connection
     engine = MobileSyncEngine(store: store, transport: connection)
@@ -66,6 +66,7 @@ extension CompanionModel {
       // Best effort while reachable; local unpairing also works offline.
       if let previousTransport { try? await pairingRequests(previousTransport).unpair() }
       try clearCredential()
+      clearMembership()
       try await store?.recoverPairingTransition()
       try await store?.detachWorkspace()
       let journalIDs = await store?.journal.snapshot().workspaces.keys.map { $0 } ?? []

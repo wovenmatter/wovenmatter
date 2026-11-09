@@ -3,12 +3,22 @@ import WovenMatterCompanion
 
 public actor MobileSyncEngine {
   public let store: MobileStore
-  private let transport: any CompanionTransport
+  private var transport: any CompanionTransport
+  /// Member mode: the phone syncs with any online Mac or Linux library host,
+  /// failing over automatically. Nil for a bearer-era pairing with one Mac.
+  public nonisolated let hosts: MobileLibraryHosts?
+  private var learnedAt: Date?
   private var syncTask: Task<Void, Error>?
   private var analyticsTask: Task<Void, Never>?
   private var syncGeneration: UInt64 = 0
   var launchTasks: [String: Task<MobileLaunchRecord, Error>] = [:]
-  public init(store: MobileStore, transport: any CompanionTransport) { self.store = store; self.transport = transport }
+  public init(store: MobileStore, transport: any CompanionTransport) { self.store = store; self.transport = transport; hosts = nil }
+  /// `initial` serves calls made before the first synchronization chooses a host.
+  public init(store: MobileStore, hosts: MobileLibraryHosts, initial: any CompanionTransport) {
+    self.store = store; self.hosts = hosts; transport = initial
+  }
+  /// The connection the last synchronization chose.
+  public func currentTransport() -> any CompanionTransport { transport }
   /// Only one flush owns the outbox at a time. Acknowledgements and newer edits
   /// meet inside the store actor, so editing while a request is in flight is safe.
   public func synchronize() async throws {
@@ -136,11 +146,34 @@ public actor MobileSyncEngine {
     try await store.restoreExecutionProjection()
     let identity: String
     do {
-      identity = try await transport.workspaceIdentity()
-      status.centralReachable = true; status.lastContactAt = Date()
-      try await store.bindWorkspace(identity)
+      if let hosts {
+        let registry = Array(await store.journal.snapshot().workspaces.values)
+        let (connection, hello, host) = try await hosts.connect(registry: registry)
+        let changed = status.libraryHost?.endpoint != host.endpoint
+        transport = connection
+        status.centralReachable = true; status.lastContactAt = Date(); status.libraryHost = host
+        let local = await store.snapshot()
+        if let bound = local.workspaceID ?? local.detachedWorkspaceID, bound != hello.workspaceID, local.pairingTransitionWorkspaceID == nil {
+          try await rebindLibraryHost(using: connection, libraryID: hello.workspaceID)
+        }
+        identity = hello.workspaceID
+        try await store.bindWorkspace(identity)
+        // Members and peer status are learned when the host changes and at
+        // most every five minutes, never on each change-driven pass.
+        if changed || learnedAt.map({ Date().timeIntervalSince($0) > 300 }) ?? true {
+          learnedAt = Date()
+          await hosts.learn(from: connection, host: host)
+          status.libraryHost = await hosts.snapshot().currentHost ?? host
+          status.updateRequired = await Self.updateMessage(hosts.snapshot().syncStatus)
+        }
+      } else {
+        identity = try await transport.workspaceIdentity()
+        status.centralReachable = true; status.lastContactAt = Date()
+        try await store.bindWorkspace(identity)
+      }
       verifiedThisPass = true
     } catch {
+      if case MobileConnectionError.updateRequired(let message) = error { status.updateRequired = message }
       await store.analytics.disconnect()
       if case MobileConnectionError.http = error { status.centralReachable = true; status.lastContactAt = Date() }
       else if !(error is MobileStore.Failure) { status.centralReachable = false }
@@ -173,6 +206,29 @@ public actor MobileSyncEngine {
     if let error = await synchronizeLane(.offlineCache, { try await self.synchronizeOfflineCache() }) { errors.append(error) }
     try Task.checkCancellation()
     if let error = errors.first { throw error }
+  }
+  /// Moves every lane to another host of the same library set. The main
+  /// store commits last, so an interrupted move simply runs again.
+  private func rebindLibraryHost(using connection: HTTPSCompanionTransport, libraryID: String) async throws {
+    let deviceID = await store.snapshot().deviceID
+    let snapshot = try await connection.snapshot()
+    guard snapshot.workspaceID == libraryID else { throw MobileStore.Failure.wrongWorkspace }
+    var bodies: [String: CompanionNote] = [:]
+    for id in await store.notesNeedingBodies(for: snapshot) {
+      try Task.checkCancellation()
+      if let note = try? await connection.note(id) { bodies[id] = note }
+    }
+    try await store.journal.rebindLibrary(to: libraryID, deviceID: deviceID)
+    try await store.calendar.rebindLibrary(to: libraryID)
+    try await store.dictations.rebindLibrary(to: libraryID)
+    try await store.artifacts.rebindLibrary(to: libraryID)
+    try await store.rebindLibrary(to: snapshot, bodies: bodies)
+  }
+  static func updateMessage(_ status: MobileLibrarySyncStatus?) -> String? {
+    guard let status else { return nil }
+    let names = status.peers.filter { $0.state == "updateRequired" }.map(\.name)
+    guard !names.isEmpty else { return nil }
+    return "Update everything: " + names.sorted().joined(separator: ", ") + (names.count == 1 ? " runs" : " run") + " a different version of Woven Matter."
   }
   private func synchronizeLibrary() async throws {
     var errors: [any Error] = []
@@ -253,7 +309,9 @@ public actor MobileSyncEngine {
     if let error = errors.first { throw error }
   }
   private static func automaticTranscriptIDs(_ current: MobileStoreState) -> Set<String> {
-    let cutoff = Date().addingTimeInterval(-14 * 86_400)
+    // The iPhone sync set: transcripts of very recent sessions (and any the
+    // user opened or pinned); older ones load when opened.
+    let cutoff = Date().addingTimeInterval(-3 * 86_400)
     let formatter = ISO8601DateFormatter(); formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
     let fallback = ISO8601DateFormatter()
     return Set(current.conversations.values.compactMap { conversation in

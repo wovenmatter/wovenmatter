@@ -76,8 +76,11 @@ extension MobileSyncEngine {
         continue
       }
       var registration = workspace
-      registration.revision = local.centralWorkspaceRevisions[id] ?? 0
-      let canonical = try await transport.registerWorkspace(.init(workspace: registration, expectedRevision: local.centralWorkspaceRevisions[id]))
+      // After moving to another host of the library, that host may already
+      // hold this registration (synced from a peer) at its own revision.
+      let expected = local.centralWorkspaceRevisions[id] ?? registered.first(where: { $0.id == id })?.revision
+      registration.revision = expected ?? 0
+      let canonical = try await transport.registerWorkspace(.init(workspace: registration, expectedRevision: expected))
       try await store.journal.upsertWorkspace(canonical, pending: false)
     }
     try await store.journal.mergeRegistry(registered)

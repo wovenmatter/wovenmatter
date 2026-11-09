@@ -262,7 +262,7 @@ extension CompanionModel {
   var selectedMacAccessNotice: String? {
     let id = selectedExecutionWorkspaceID
     let workspace = id == "central"
-      ? executionWorkspaces.first(where: { $0.kind == .mac && $0.capabilities.contains("history.central.v1") && $0.isVisibleInConnections })
+      ? centralExecutionWorkspace.flatMap { $0.isVisibleInConnections ? $0 : nil }
       : executionWorkspaces.first(where: { $0.id == id })
     guard selectedConversationID != nil, let workspace, workspace.kind == .mac else { return nil }
     return workspace.macAccess?.sessionNotice(deviceName: workspace.name, isThisDevice: false)
@@ -270,7 +270,7 @@ extension CompanionModel {
   var executionName: String {
     switch selectedExecutionWorkspaceID {
     case "local": "Quick Chat"
-    case "central": "Central Mac"
+    case "central": libraryHostName ?? "Central Mac"
     default: executionWorkspaces.first { $0.id == selectedExecutionWorkspaceID }?.name ?? "Workspace"
     }
   }

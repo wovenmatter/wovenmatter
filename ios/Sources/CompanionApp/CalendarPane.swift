@@ -158,7 +158,7 @@ struct CalendarEventSheet: View {
         Text("No folder").tag("")
         ForEach(model.folders.filter { folder in
           guard let owner = folder.execution?.workspaceID else { return true }
-          let selected = draft.task?.workspaceID ?? model.folderWorkspaces.first(where: { $0.capabilities.contains("history.central.v1") })?.id
+          let selected = draft.task?.workspaceID ?? (model.centralExecutionWorkspace ?? model.folderWorkspaces.first(where: { $0.capabilities.contains("history.central.v1") }))?.id
           return owner == selected
         }) { Text($0.name).tag($0.id) }
       }

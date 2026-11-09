@@ -34,6 +34,9 @@ public actor MobileCalendarStore {
     var through: [String: Date] = [:]
     var dirtyRuns: Set<String>?
     var preparedDrafts: [String: PreparedDraft]?
+    /// Bases from the library host the phone synced with before it moved to
+    /// another member host; the next snapshot rebases pending edits on them.
+    var rebaseFrom: [String: CompanionCalendarRecord]?
   }
   public nonisolated let deviceID: String
   private let file: URL
@@ -272,6 +275,18 @@ public actor MobileCalendarStore {
     }
   }
 
+  /// Moves to another host of the same library set (any Mac or Linux member).
+  /// Nothing is re-uploaded: revisions are per host, so pending edits are
+  /// rebased on the new host's first snapshot by comparing content.
+  public func rebindLibrary(to workspaceID: String) throws {
+    guard state.workspaceID != workspaceID else { return }
+    try update { next in
+      if next.workspaceID != nil, next.rebaseFrom == nil { next.rebaseFrom = next.bases }
+      next.bases = [:]; next.workspaceID = workspaceID
+      for index in next.outbox.indices { next.outbox[index].submitted = false }
+    }
+  }
+
   public func verifyWorkspace(_ id: String) throws {
     guard state.workspaceID == nil || state.workspaceID == id else { throw CompanionCalendarError.wrongWorkspace }
   }
@@ -279,6 +294,27 @@ public actor MobileCalendarStore {
     try verifyWorkspace(snapshot.workspaceID)
     try update { next in
       next.workspaceID = snapshot.workspaceID
+      if let previous = next.rebaseFrom {
+        func sameContent(_ lhs: CompanionCalendarRecord?, _ rhs: CompanionCalendarRecord?) -> Bool {
+          var left = lhs, right = rhs; left?.event.revision = 0; right?.event.revision = 0
+          return left == right
+        }
+        let remote = Dictionary(snapshot.records.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        for index in next.outbox.indices {
+          let pending = next.outbox[index].mutation
+          if let current = remote[pending.record.id] {
+            if sameContent(current, previous[pending.record.id]) || sameContent(current, pending.record) {
+              next.outbox[index].mutation.expectedRevision = current.event.revision
+            } else if next.conflicts[pending.record.id] == nil {
+              next.conflicts[pending.record.id] = .init(local: next.records[pending.record.id] ?? pending.record, remote: current)
+            }
+          } else {
+            // Not on this host yet: it becomes a creation there.
+            next.outbox[index].mutation.expectedRevision = nil
+          }
+        }
+        next.rebaseFrom = nil
+      }
       for run in snapshot.runs ?? [] where run.ownerDeviceID != deviceID || next.runs[run.id] == nil {
         next.runs[run.id] = run
         if run.ownerDeviceID == deviceID { next.through[run.eventID] = max(next.through[run.eventID] ?? .distantPast, run.scheduledAt) }

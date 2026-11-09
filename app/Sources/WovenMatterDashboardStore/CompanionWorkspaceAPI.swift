@@ -432,6 +432,11 @@ public final class CompanionWorkspaceAPI {
                     }
                     return try .json(page)
                 case "/v1/providers": return try .json(commands.providers())
+                case "/v1/members":
+                    // A phone learns every Mac and Linux member (with endpoints)
+                    // from whichever one it syncs with, so it has no home Mac.
+                    guard let members else { return .error("unavailable", "This device does not serve members yet.", status: 503) }
+                    return try .json(try await members.list())
                 case "/v1/sync/status":
                     guard let status = await syncStatus() else { return .error("unavailable", "Synchronization has not started.", status: 503) }
                     return try .json(status)

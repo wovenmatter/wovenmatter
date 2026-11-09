@@ -177,6 +177,15 @@ extension CompanionModel {
       for workspace in executionWorkspaces {
         guard workspace.endpoint != nil else { continue }
         if !force, let after = workspaceRefreshAfter[workspace.id], after > Date() { continue }
+        // Member mode: signed requests straight to the workspace's own
+        // endpoint, whichever Macs are offline. No grant is issued or stored.
+        if let memberIdentity, memberMode, let endpoint = workspace.endpoint, !memberUnsupportedWorkspaceIDs.contains(workspace.id),
+           workspaceClients[workspace.id] == nil || memberClientEndpoints[workspace.id] != endpoint {
+          workspacePollTasks.removeValue(forKey: workspace.id)?.cancel()
+          workspaceClients[workspace.id] = WorkspaceClient(store: store, workspaceID: workspace.id,
+            transport: try HTTPSExecutionWorkspaceTransport(workspace: workspace, identity: memberIdentity, performer: httpPerformer))
+          memberClientEndpoints[workspace.id] = endpoint
+        }
         if workspaceClients[workspace.id] == nil {
           var saved = try workspaceCredentials.load(workspace.id)
           if let candidate = saved, !(await acceptsWorkspaceCredential(candidate)) { saved = nil }
@@ -254,6 +263,11 @@ extension CompanionModel {
         workspaceClients.removeValue(forKey: workspaceID)
         do { try (clearCredential ?? workspaceCredentials.clear)(workspaceID) }
         catch { workspaceProblems[workspaceID] = error.localizedDescription }
+      }
+      if case MobileConnectionError.memberUnsupported = error {
+        // An older workspace: use its bearer grant until it is updated.
+        workspaceClients.removeValue(forKey: workspaceID); memberClientEndpoints.removeValue(forKey: workspaceID)
+        memberUnsupportedWorkspaceIDs.insert(workspaceID)
       }
       let failures = (workspaceRetryCount[workspaceID] ?? 0) + 1
       workspaceRetryCount[workspaceID] = failures

@@ -152,6 +152,24 @@ public actor WorkspaceJournal {
     }
   }
 
+  /// Another host of the same library set. Unlike `moveDeviceWorkspace`, every
+  /// cached record is kept: the history is the same, only the host's journal
+  /// cursor and registration revisions are its own. This device's own records
+  /// are offered again; the host keeps those it already has (idempotent by
+  /// event identity), so history the previous host never forwarded is not lost.
+  public func rebindLibrary(to libraryID: String, deviceID: String) throws {
+    guard state.libraryID != libraryID else { return }
+    try transaction { next in
+      let owned = Set(next.workspaces.values.filter { Self.isLocalExecutionOwner($0, deviceID: deviceID) }.map(\.id))
+      for id in owned { next.workspaces[id]?.libraryID = libraryID }
+      next.pendingRegistrations.formUnion(owned)
+      next.centralWorkspaceRevisions = [:]
+      next.pendingEventIDs.formUnion(next.entries.values.filter { owned.contains($0.workspaceID) }.map(\.eventID))
+      next.centralCursor = 0
+      next.libraryID = libraryID
+    }
+  }
+
   public func bind(libraryID: String) throws {
     try transaction { next in
       guard next.libraryID == nil || next.libraryID == libraryID else { throw Failure.wrongLibrary }
