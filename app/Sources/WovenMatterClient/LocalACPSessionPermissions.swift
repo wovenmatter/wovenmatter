@@ -27,7 +27,7 @@ enum LocalACPSessionPermissions {
         return runtimeKind == .grokBuild ? explicitGrokPermission(in: arguments) : nil
     }
 
-    static let grokOptions = ["default", "acceptEdits", "auto", "dontAsk", "bypassPermissions"]
+    static let grokOptions = AgentRuntimeKind.grokBuild.orderedPermissionOptions(["default", "auto", "acceptEdits", "dontAsk", "bypassPermissions"])
 
     static let grokMetadata: [String: SessionOptionMetadata] = [
         "default": .init(name: "Ask for approval", description: "Grok asks for approval beyond its built-in read-only and preapproved actions."),

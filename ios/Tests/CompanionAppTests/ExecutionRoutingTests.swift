@@ -16,7 +16,12 @@ private actor ExecutionTestWorkspace: ExecutionWorkspaceTransport {
   var dropCreateAcknowledgement = false
   func dropNextCreateAcknowledgement() { dropCreateAcknowledgement = true }
   init(_ workspace: CompanionExecutionWorkspace) { self.workspace = workspace }
-  func identity() async throws -> CompanionExecutionWorkspace { workspace }
+  var identityOffline = false
+  func setIdentityOffline(_ offline: Bool) { identityOffline = offline }
+  func identity() async throws -> CompanionExecutionWorkspace {
+    if identityOffline { throw MobileConnectionError.offline }
+    return workspace
+  }
   func providers() async throws -> [CompanionProvider] { [.init(id: "pi", runtimeKind: "pi", displayName: "Pi Durable", available: true)] }
   func pending() async throws -> [CompanionPendingInteraction] { [] }
   func capabilities(_ id: String) async throws -> CompanionProvider { .init(id: "pi", runtimeKind: "pi", displayName: "Pi Durable", available: true) }
@@ -27,6 +32,16 @@ private actor ExecutionTestWorkspace: ExecutionWorkspaceTransport {
     if command.kind == .createSession && dropCreateAcknowledgement { dropCreateAcknowledgement = false; throw MobileConnectionError.offline }
     if command.kind == .send && dropSendAcknowledgement { dropSendAcknowledgement = false; throw MobileConnectionError.offline }
     return receipt
+  }
+  var savedFolders: [CompanionFolder] = []
+  var dropFolderReply = true
+  func folders() async throws -> [CompanionFolder] { savedFolders }
+  func createFolder(_ request: CompanionMutation) async throws -> CompanionFolder {
+    if let folder = savedFolders.first(where: { $0.id == request.resourceID }) { return folder }
+    let folder = CompanionFolder(id: request.resourceID, name: request.title ?? "", execution: .init(workspaceID: workspace.id, rootPath: "/home/worker/" + request.resourceID))
+    savedFolders.append(folder)
+    if dropFolderReply { dropFolderReply = false; throw MobileConnectionError.offline }
+    return folder
   }
   func receipt(_ id: String) async throws -> CompanionCommandReceipt? { receipts[id] }
   func events(after: Int64) async throws -> CompanionJournalPage { .init(libraryID: workspace.libraryID, cursor: after) }
@@ -39,66 +54,80 @@ private actor ExecutionTestWorkspace: ExecutionWorkspaceTransport {
 }
 
 final class ExecutionRoutingTests: XCTestCase {
-  @MainActor func testHTMLImagesResolveVirtualWorkspacePathsWithoutEscapingTheConversation() throws {
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-    defer { try? FileManager.default.removeItem(at: root) }
-    let model = CompanionModel(store: try MobileStore(file: root.appendingPathComponent("library.json")), transport: ExecutionTestLibrary())
-    model.executionDirectory = root.appendingPathComponent("execution")
-    let id = UUID().uuidString.lowercased()
-    let image = try model.deviceWorkspaceURL(conversationID: id, path: "image.png")
-    try Data([137,80,78,71,13,10,26,10]).write(to: image)
-    let prepared = try ConversationHTMLResources.prepare("<img src='/workspace/image.png'>") {
-      try model.deviceHTMLImageURL(conversationID: id, path: $0)
+
+  @MainActor func testOfflineOwnersCannotCreateChatsAndDoNotQueueRequests() async throws {
+    for kind in [CompanionExecutionWorkspace.Kind.mac, .linux] {
+      let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+      defer { try? FileManager.default.removeItem(at: root) }
+      let store = try MobileStore(file: root.appendingPathComponent("library.json"))
+      let model = CompanionModel(store: store, transport: ExecutionTestLibrary())
+      let workspace = CompanionExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: "library", ownerDeviceID: "host", kind: kind, name: "Offline owner")
+      let endpoint = ExecutionTestWorkspace(workspace)
+      model.executionWorkspaces = [workspace]
+      model.workspaceProviders[workspace.id] = try await endpoint.providers()
+      model.workspaceClients[workspace.id] = WorkspaceClient(store: store, workspaceID: workspace.id, transport: endpoint)
+      model.workspaceReachable[workspace.id] = false
+      model.newChat()
+      let agent = try XCTUnwrap(model.launcherAgents.first { $0.workspaceID == workspace.id })
+      await model.startNewChat(with: agent)
+      XCTAssertEqual(model.chatSetupProblem, CompanionModel.deviceConnectionMessage)
+      XCTAssertNil(model.selectedConversationID)
+      // A stale online indicator must also pass a fresh owner check before saving intent.
+      model.workspaceReachable[workspace.id] = true
+      await endpoint.setIdentityOffline(true)
+      let staleAgent = try XCTUnwrap(model.launcherAgents.first { $0.workspaceID == workspace.id })
+      await model.startNewChat(with: staleAgent)
+      XCTAssertEqual(model.chatSetupProblem, CompanionModel.deviceConnectionMessage)
+      let state = await store.snapshot(), journal = await store.journal.snapshot()
+      XCTAssertTrue(state.commands.isEmpty); XCTAssertTrue(state.launches.isEmpty)
+      XCTAssertTrue(journal.commands.isEmpty)
+      let commands = await endpoint.commands, folders = await endpoint.savedFolders
+      XCTAssertTrue(commands.isEmpty); XCTAssertTrue(folders.isEmpty)
     }
-    XCTAssertTrue(prepared.html.contains("data:image/png;base64,"))
-    XCTAssertThrowsError(try model.deviceHTMLImageURL(conversationID: id, path: "/private/app-data.png"))
-    XCTAssertThrowsError(try model.deviceHTMLImageURL(conversationID: id, path: "/workspace/../other/image.png"))
-    // Use a readable target: Foundation leaves dangling symlinks unresolved.
-    let privateImage = root.appendingPathComponent("private.png")
-    try Data([137,80,78,71,13,10,26,10]).write(to: privateImage)
-    try FileManager.default.createSymbolicLink(at: image.deletingLastPathComponent().appendingPathComponent("outside.png"), withDestinationURL: privateImage)
-    XCTAssertThrowsError(try model.deviceHTMLImageURL(conversationID: id, path: "/workspace/outside.png"))
-    XCTAssertThrowsError(try ConversationHTMLResources.prepare("<img src='/workspace/outside.png'>") {
-      try model.deviceHTMLImageURL(conversationID: id, path: $0)
-    })
   }
 
-  @MainActor func testDeviceGoalsPersistAndRouteWithoutStartingInference() async throws {
+  @MainActor func testOfflineCentralMacCannotCreateChat() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
     let store = try MobileStore(file: root.appendingPathComponent("library.json"))
     let model = CompanionModel(store: store, transport: ExecutionTestLibrary())
+    model.providers = [.init(id: "local:pi", runtimeKind: "pi", displayName: "Pi Durable", available: true)]
+    model.online = false
+    model.newChat()
+    await model.startNewChat(with: try XCTUnwrap(model.launcherAgents.first { $0.workspaceID == "central" }))
+    XCTAssertEqual(model.chatSetupProblem, CompanionModel.deviceConnectionMessage)
+    let saved = await store.snapshot()
+    XCTAssertTrue(saved.commands.isEmpty); XCTAssertTrue(saved.launches.isEmpty)
+  }
+
+  @MainActor func testEarlierPhoneAgentsAreRetainedWithoutStartingTheirSavedTools() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let model = CompanionModel(store: try MobileStore(file: root.appendingPathComponent("library.json")), transport: ExecutionTestLibrary())
     model.executionDirectory = root.appendingPathComponent("execution")
-    let id = UUID().uuidString.lowercased()
-    let descriptor = InferenceModel(id: "gpt-test", name: "Test model", provider: "openai", api: "openai-responses", baseUrl: "https://api.openai.com/v1", reasoning: true)
-    model.executionRecords[id] = DeviceConversationRecord(id: id, title: "Goal chat", connectionID: "fixture", modelJSON: try descriptor.descriptorJSON(), status: "ready", updatedAt: "")
-    let set = await model.perform(.goal(id: id, mutation: .set(objective: "Verify device work", tokenBudget: nil, turnBudget: 2)))
-    XCTAssertTrue(set)
-    guard case .session(let settings) = try await model.workspace(.session(id: id)) else { XCTFail("Missing owner status"); return }
-    let goal = try XCTUnwrap(settings.goal)
-    XCTAssertEqual(goal.sessionID, id)
+    var record = DeviceConversationRecord(id: UUID().uuidString.lowercased(), title: "Earlier agent", enabledTools: ["execute_command", "woven_executor"], connectionID: "old", modelJSON: "{}", runID: "old-run", status: "running", updatedAt: "")
+    record.quickChatVersion = nil
+    model.executionRecords[record.id] = record
+    try model.persistExecutionConfiguration()
+    try await model.loadExecutionConfiguration()
+    model.selectedConversationID = record.id
+    XCTAssertEqual(model.executionRecords[record.id]?.quickChatVersion, 0)
+    XCTAssertEqual(model.executionRecords[record.id]?.status, "retained")
+    XCTAssertFalse(model.canResumeLocalRun)
     XCTAssertTrue(model.localRuntimes.isEmpty)
-    let requestID = UUID().uuidString
-    let arguments: [String: GatewayJSONValue] = ["id": .string(goal.id), "evidence": .string("Verified a change"), "requestID": .string(requestID)]
-    let first = try await model.performDeviceMCP(name: "woven_goals_checkpoint", arguments: arguments, conversationID: id, requestID: requestID)
-    let retry = try await model.performDeviceMCP(name: "woven_goals_checkpoint", arguments: arguments, conversationID: id, requestID: requestID)
-    XCTAssertEqual(first, retry)
-    XCTAssertEqual(model.executionRecords[id]?.goalLedger?.goal?.progressRevision, 1)
-    XCTAssertTrue(model.localPending.isEmpty, "Goal evidence does not require approval for an external effect")
-    let pause = await model.perform(.goal(id: id, mutation: .pause(id: goal.id)))
-    XCTAssertTrue(pause)
-    let resume = await model.perform(.goal(id: id, mutation: .resume(id: goal.id)))
-    XCTAssertTrue(resume)
-    try await model.configureDeviceChat(tools: [], conversationID: id)
-    XCTAssertEqual(model.executionRecords[id]?.goalLedger?.goal?.status, .active)
-    let reopened = CompanionModel(store: store, transport: ExecutionTestLibrary())
-    reopened.executionDirectory = model.executionDirectory
-    try await reopened.loadExecutionConfiguration()
-    XCTAssertEqual(reopened.executionRecords[id]?.goalLedger?.goal?.status, .paused)
-    XCTAssertTrue(reopened.localRuntimes.isEmpty)
-    let clear = await reopened.perform(.goal(id: id, mutation: .clear(id: goal.id)))
-    XCTAssertTrue(clear)
-    XCTAssertNil(reopened.executionRecords[id]?.goalLedger?.goal)
+  }
+
+  @MainActor func testQuickChatRejectsAutonomousToolsEvenWhenSavedGrantsEnabledThem() async throws {
+    for name in ["execute_command", "write_file", "read_file", "woven_goals_set", "woven_sessions_create", "woven_executor_execute", "woven_browser_use", "woven_computer_use"] {
+      XCTAssertFalse(CompanionModel.deviceToolEnabled(name, selection: nil))
+      XCTAssertFalse(CompanionModel.deviceToolEnabled(name, selection: [name, "wovenmatter_goals", "wovenmatter_executor", "wovenmatter_sessions"]))
+    }
+    XCTAssertTrue(CompanionModel.deviceToolEnabled("woven_notes_create", selection: nil))
+    XCTAssertTrue(CompanionModel.deviceToolEnabled("web_search", selection: nil))
+    XCTAssertTrue(CompanionModel.deviceToolEnabled("woven_timers_create", selection: nil), "Timers and reminders stay with Quick Chat")
+    let tools = (try JSONSerialization.jsonObject(with: Data(CompanionModel.deviceToolsJSON.utf8)) as? [[String: Any]] ?? []).compactMap { $0["name"] as? String }
+    XCTAssertTrue(tools.contains("clock")); XCTAssertTrue(tools.contains("woven_calendar_create"))
+    XCTAssertFalse(tools.contains("execute_command")); XCTAssertFalse(tools.contains("fetch_url"))
   }
 
 
@@ -205,6 +234,40 @@ final class ExecutionRoutingTests: XCTestCase {
     XCTAssertEqual(model.launcherAgents.filter { $0.workspaceID == connected.id }.count, 1)
   }
 
+  @MainActor func testNewChatWithCurrentAgentDoesNotInheritUnrelatedBrowsedFolder() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = try MobileStore(file: root.appendingPathComponent("library.json"))
+    let workspace = CompanionExecutionWorkspace(id: "direct", libraryID: "library", ownerDeviceID: "owner", kind: .linux, name: "Linux")
+    let endpoint = ExecutionTestWorkspace(workspace)
+    let model = CompanionModel(store: store, transport: ExecutionTestLibrary())
+    model.executionDirectory = root.appendingPathComponent("execution")
+    model.executionWorkspaces = [workspace]; model.workspaceReachable[workspace.id] = true
+    model.workspaceProviders[workspace.id] = try await endpoint.providers()
+    model.workspaceClients[workspace.id] = WorkspaceClient(store: store, workspaceID: workspace.id, transport: endpoint)
+    model.state.conversations["current"] = .init(id: "current", title: "Current", providerID: "pi", workspaceID: workspace.id)
+    model.selectedConversationID = "current"
+    model.selectedFolderID = "unrelated"
+    model.state.folders["unrelated"] = .init(id: "unrelated", name: "Other device", execution: .init(workspaceID: "foreign", rootPath: "/foreign"))
+    model.newChatNoteID = "stale-reference"
+    await model.newChatWithCurrentAgent()
+    let commands = await endpoint.commands
+    XCTAssertEqual(commands.filter { $0.kind == .createSession }.count, 1)
+    XCTAssertNil(commands.first?.folderID)
+    XCTAssertNil(model.newChatNoteID)
+  }
+
+  @MainActor func testQuickChatCannotMoveIntoAnotherDevicesFolder() async throws {
+    let model = CompanionModel()
+    let id = UUID().uuidString.lowercased()
+    model.executionRecords[id] = .init(id: id, title: "Quick Chat", connectionID: "fixture", modelJSON: "{}", status: "ready", updatedAt: "")
+    model.state.folders["foreign"] = .init(id: "foreign", name: "Other phone", execution: .init(workspaceID: "device:" + UUID().uuidString.lowercased(), rootPath: "/other"))
+    let moved = await model.performDeviceAction(.conversation(id: id, action: "move", title: nil, folderID: "foreign"))
+    XCTAssertFalse(moved)
+    XCTAssertNil(model.executionRecords[id]?.folderID)
+    XCTAssertEqual(model.errorMessage, "Choose a folder on this device for Quick Chat.")
+  }
+
   @MainActor func testNewChatChooserPreservesCurrentConversationUntilAgentSelection() throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
@@ -267,6 +330,7 @@ final class ExecutionRoutingTests: XCTestCase {
     let created = try XCTUnwrap(model.selectedConversationID)
     XCTAssertEqual(model.executionRecords[created]?.status, "ready")
     XCTAssertEqual(model.executionRecords[created]?.thinkingLevel, "medium", "New chats use the middle supported non-Off level")
+    XCTAssertEqual(model.executionRecords[created]?.permissionMode, .ask, "A new chat saves the mode it starts with, so a later default cannot change it")
     XCTAssertTrue(model.localRuntimes.isEmpty, "Choosing an agent must not start inference")
     XCTAssertEqual(model.state.transcripts[created]?.messages, [])
     let record = DeviceConversationRecord(id: "first", title: "First", connectionID: connection.id, connection: connection, modelJSON: try descriptor.descriptorJSON(), status: "ready", updatedAt: "")
@@ -348,12 +412,12 @@ final class ExecutionRoutingTests: XCTestCase {
     model.executionRecords[record.id] = record
     let tools = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(model.toolsJSON(for: record).utf8)) as? [[String: Any]])
     let names = Set(tools.compactMap { $0["name"] as? String })
-    XCTAssertTrue(names.isSuperset(of: ["list_files", "read_file", "write_file", "read_image", "read_document", "fetch_url", "ask_user", "execute_command", "woven_goals_get"]))
+    XCTAssertEqual(names, ["ask_user"])
     XCTAssertFalse(names.contains { $0.hasPrefix("wovenmatter_") })
     XCTAssertFalse(names.contains("read_note"))
     XCTAssertFalse(names.contains("woven_notes_read"))
     let context = try model.deviceToolContext(conversationID: record.id)
-    XCTAssertEqual(context.enabled, [.goals, .html])
+    XCTAssertEqual(context.enabled, [.html])
     for name in ["woven_calendar_list", "woven_notes_read"] {
       do {
         _ = try await model.performDeviceTool(CompanionModel.toolJSON(["name": name, "conversationID": record.id, "arguments": [:]]))
@@ -361,13 +425,13 @@ final class ExecutionRoutingTests: XCTestCase {
       } catch { XCTAssertTrue(error.localizedDescription.contains("disabled")) }
     }
     XCTAssertTrue(CompanionModel.deviceToolEnabled("woven_notes_read", selection: ["wovenmatter_notes"]))
-    XCTAssertTrue(CompanionModel.deviceToolEnabled("woven_browser_use", selection: nil))
+    XCTAssertFalse(CompanionModel.deviceToolEnabled("woven_browser_use", selection: nil))
     XCTAssertFalse(CompanionModel.deviceToolEnabled("woven_computer_use", selection: nil))
-    XCTAssertTrue(CompanionModel.deviceToolEnabled("woven_computer_use", selection: ["wovenmatter_computer"]))
+    XCTAssertFalse(CompanionModel.deviceToolEnabled("woven_computer_use", selection: ["wovenmatter_computer"]))
     XCTAssertTrue(CompanionModel.deviceToolEnabled("woven_notes_read", selection: ["read_note"]))
     XCTAssertFalse(CompanionModel.deviceToolEnabled("woven_notes_create", selection: ["read_note"]))
-    XCTAssertEqual(Set(CompanionModel.deviceToolAccessOptions.map(\.id)), Set(WorkspaceToolGroup.configurableCases.map { "woven_" + $0.rawValue }))
-    XCTAssertTrue(CompanionModel.deviceMCPTools.contains { $0["name"] as? String == "woven_goals_get" })
+    XCTAssertEqual(Set(CompanionModel.deviceToolAccessOptions.map(\.id)), ["woven_notes", "quick_chat_web"])
+    XCTAssertFalse(CompanionModel.deviceMCPTools.contains { $0["name"] as? String == "woven_goals_get" })
     for tool in CompanionModel.deviceMCPTools {
       let schema = try XCTUnwrap(tool["parameters"] as? [String: Any])
       let properties = try XCTUnwrap(schema["properties"] as? [String: Any])
@@ -441,33 +505,153 @@ final class ExecutionRoutingTests: XCTestCase {
     XCTAssertNotEqual(try MobileToolSupport.fingerprint(original), try MobileToolSupport.fingerprint(edited))
   }
 
+  private struct UnansweredWait: Error { var label: String }
+  /// Runs work that may wait for an approval or question, with a real deadline.
+  /// If nothing answers in time, the test fails, the operation and pending
+  /// prompts are cancelled, and this throws without awaiting the operation again.
+  @MainActor private func bounded<T: Sendable>(_ model: CompanionModel, _ label: String, seconds: Double = 10,
+                                               _ operation: @escaping @MainActor () async throws -> T) async throws -> T {
+    let finished = XCTestExpectation(description: label)
+    var outcome: Result<T, any Error>?
+    let task = Task { @MainActor in
+      do { outcome = .success(try await operation()) } catch { outcome = .failure(error) }
+      finished.fulfill()
+    }
+    guard await XCTWaiter().fulfillment(of: [finished], timeout: seconds) == .completed, let outcome else {
+      task.cancel()
+      for id in Array(model.localApprovals.keys) { model.cancelDeviceApproval(id) }
+      XCTFail(label + " did not finish: an approval or question was left unanswered")
+      throw UnansweredWait(label: label)
+    }
+    return try outcome.get()
+  }
+
   @MainActor func testFullAccessRunsToolsWithoutPromptsAndAskModeStillRequiresApproval() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
     let model = CompanionModel(store: try MobileStore(file: root.appendingPathComponent("library.json")), transport: ExecutionTestLibrary())
     model.executionDirectory = root.appendingPathComponent("execution")
-    let full = DeviceConversationRecord(id: "full", title: "Full", connectionID: "fixture", modelJSON: "{}", status: "ready", updatedAt: "")
+    defer { for id in Array(model.localApprovals.keys) { model.cancelDeviceApproval(id) } }
+    var full = DeviceConversationRecord(id: "full", title: "Full", connectionID: "fixture", modelJSON: "{}", status: "ready", updatedAt: "")
+    full.permissionMode = .full
     var ask = full; ask.id = "ask"; ask.permissionMode = .ask
     model.executionRecords = [full.id: full, ask.id: ask]
     model.selectedConversationID = ask.id
-    let request = try CompanionModel.toolJSON(["name": "write_file", "conversationID": full.id, "arguments": ["path": "result.txt", "content": "Saved"]])
-    _ = try await model.performDeviceTool(request)
-    XCTAssertEqual(try String(contentsOf: model.deviceWorkspaceURL(conversationID: full.id, path: "result.txt"), encoding: .utf8), "Saved")
+    let request = try CompanionModel.toolJSON(["name": "woven_notes_create", "conversationID": full.id, "arguments": ["title": "Saved", "kind": "note"]])
+    // Note tools report failures as MCP results rather than throwing.
+    func toolResult(_ json: String) throws -> (isError: Bool, text: String) {
+      let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+      return (object["isError"] as? Bool ?? true, ((object["content"] as? [[String: Any]])?.first?["text"] as? String) ?? "")
+    }
+    let written = try toolResult(try await bounded(model, "A Full Access note write") { try await model.performDeviceTool(request) })
+    XCTAssertFalse(written.isError, written.text)
+    XCTAssertEqual(model.notes.first?.title, "Saved")
     XCTAssertTrue(model.localPending.isEmpty, "Permission belongs to the tool's owner, not the selected chat")
     model.selectedConversationID = full.id
-    XCTAssertEqual(model.deviceChatPermission, .full, "Chats saved before the selector existed default to full access")
+    XCTAssertEqual(model.deviceChatPermission, .full, "An explicit Allow choice is honored")
     guard case .session(let settings) = try await model.readDeviceWorkspace(.session(id: full.id)) else { return XCTFail("Missing settings") }
     XCTAssertEqual(settings.permission, "full")
+
+    // The same write in an Ask chat waits for the user; declining saves nothing.
+    let askRequest = try CompanionModel.toolJSON(["name": "woven_notes_create", "conversationID": ask.id, "arguments": ["title": "Declined", "kind": "note"]])
+    let declined = Task { @MainActor in try await model.performDeviceTool(askRequest) }
+    for _ in 0..<500 where model.localPending.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+    let prompt = try XCTUnwrap(model.localPending.first, "An Ask chat prompts before a note write")
+    XCTAssertEqual(prompt.conversationID, ask.id)
+    await model.respond(prompt, response: .init(optionID: "deny"))
+    let refused = try toolResult(try await bounded(model, "A declined note write") { try await declined.value })
+    XCTAssertTrue(refused.isError, "A declined write is reported to the agent as a failed tool call")
+    XCTAssertEqual(refused.text, "The user declined this tool action.", "Declining is reported as the user's answer, not as cancellation")
+    XCTAssertFalse(model.notes.contains { $0.title == "Declined" }, "Nothing is saved after declining")
+
     let waiting = Task { try await model.requireDeviceApproval(id: "ask-write", conversationID: ask.id, title: "Write", detail: "File") }
     for _ in 0..<100 where model.localApprovals["ask-write"] == nil { await Task.yield() }
-    XCTAssertEqual(model.localPending.map(\.id), ["ask-write"], "An explicit Ask for Approval choice keeps prompting")
+    XCTAssertEqual(model.localPending.map(\.id), ["ask-write"], "An explicit Ask choice keeps prompting")
     waiting.cancel()
-    do { try await waiting.value; XCTFail("Cancelled approval must not continue") } catch is CancellationError { }
+    do { try await bounded(model, "A cancelled approval") { try await waiting.value }; XCTFail("Cancelled approval must not continue") } catch is CancellationError { }
     let question = Task { try await model.askDeviceQuestion(id: "question", conversationID: full.id, question: "Which file?") }
     for _ in 0..<100 where model.localApprovals["question"] == nil { await Task.yield() }
     XCTAssertEqual(model.localPending.map(\.id), ["question"], "Full access must still surface questions")
     question.cancel()
-    do { _ = try await question.value; XCTFail("Cancelled question must not continue") } catch is CancellationError { }
+    do { _ = try await bounded(model, "A cancelled question") { try await question.value }; XCTFail("Cancelled question must not continue") } catch is CancellationError { }
+  }
+
+  /// Timers fire once on the phone; recurring agent work is offered on a Mac or Linux workspace.
+  @MainActor func testQuickChatTimersAreOneTimeAndClockReportsTheDeviceTime() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let model = CompanionModel(store: try MobileStore(file: root.appendingPathComponent("library.json")), transport: ExecutionTestLibrary())
+    model.executionDirectory = root.appendingPathComponent("execution")
+    let chat = DeviceConversationRecord(id: UUID().uuidString.lowercased(), title: "Timers", connectionID: "fixture", modelJSON: "{}", status: "ready", updatedAt: "")
+    model.executionRecords = [chat.id: chat]
+    func result(_ json: String) throws -> (isError: Bool, text: String) {
+      let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+      return (object["isError"] as? Bool ?? false, ((object["content"] as? [[String: Any]])?.first?["text"] as? String) ?? "")
+    }
+    let recurring = try result(await model.performDeviceTool(try CompanionModel.toolJSON(["name": "woven_timers_create", "conversationID": chat.id,
+      "arguments": ["text": "Summarize my notes", "at": "2030-01-01T09:00:00Z", "every": 86_400]])))
+    XCTAssertTrue(recurring.isError)
+    XCTAssertTrue(recurring.text.contains("Mac or Linux"), recurring.text)
+    let once = try result(await model.performDeviceTool(try CompanionModel.toolJSON(["name": "woven_timers_create", "conversationID": chat.id,
+      "arguments": ["text": "Tell the user their tea is ready", "at": "2030-01-01T09:00:00Z"]])))
+    XCTAssertFalse(once.isError, once.text)
+    let snapshot = await model.store?.snapshot()
+    let timers = try XCTUnwrap(snapshot?.toolTimers)
+    XCTAssertEqual(timers.values.filter { !$0.removed }.map(\.sessionID), [chat.id])
+    XCTAssertEqual(model.quickChatSessionIDs, [chat.id])
+    XCTAssertTrue(CompanionModel.timerDeliveryPrompt("Tea").contains("Tea"))
+    let clock = try result(await model.performDeviceTool(try CompanionModel.toolJSON(["name": "clock", "conversationID": chat.id, "arguments": [:]])))
+    XCTAssertTrue(clock.text.hasPrefix("Now: "), clock.text)
+    XCTAssertEqual(CompanionModel.clockDescription(Date(timeIntervalSince1970: 0), timeZone: TimeZone(identifier: "UTC")!).prefix(25), "Now: 1970-01-01T00:00:00Z")
+  }
+
+  /// Full Access is the default, and saved choices never flip on reopen: an explicit
+  /// mode keeps its value, a current chat without one uses Full Access, and a chat from
+  /// an earlier on-device agent (no Quick Chat version) stays retained history whatever its mode.
+  @MainActor func testPermissionModesSurviveReopenAndEarlierChatsStayRetained() async throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = try MobileStore(file: root.appendingPathComponent("library.json"))
+    let model = CompanionModel(store: store, transport: ExecutionTestLibrary())
+    model.executionDirectory = root.appendingPathComponent("execution")
+    // A complete saved connection, so reopening reaches the retained-history guard
+    // itself rather than failing earlier for a missing account. No request is made.
+    let connection = InferenceConnection(id: "fixture", name: "Saved", provider: "openai", route: .direct, modelID: "test")
+    func record(_ id: String, _ mode: DevicePermissionMode?) -> DeviceConversationRecord {
+      var value = DeviceConversationRecord(id: id, title: id, connectionID: connection.id, connection: connection, modelJSON: "{}", status: "ready", updatedAt: "")
+      value.permissionMode = mode; return value
+    }
+    model.executionRecords = ["full": record("full", .full), "ask": record("ask", .ask), "unset": record("unset", nil), "legacy": record("legacy", .full)]
+    try model.persistExecutionConfiguration()
+    // An earlier build wrote no Quick Chat version.
+    let file = try XCTUnwrap(model.executionDirectory).appendingPathComponent("preferences.json")
+    var saved = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+    var conversations = try XCTUnwrap(saved["conversations"] as? [String: Any])
+    var legacy = try XCTUnwrap(conversations["legacy"] as? [String: Any]); legacy.removeValue(forKey: "quickChatVersion")
+    conversations["legacy"] = legacy; saved["conversations"] = conversations
+    try JSONSerialization.data(withJSONObject: saved).write(to: file)
+
+    let reopened = CompanionModel(store: store, transport: ExecutionTestLibrary())
+    reopened.executionDirectory = model.executionDirectory
+    try await reopened.loadExecutionConfiguration()
+    XCTAssertEqual(reopened.executionRecords["full"]?.permissionMode, .full)
+    XCTAssertEqual(reopened.executionRecords["ask"]?.permissionMode, .ask)
+    XCTAssertNil(reopened.executionRecords["unset"]?.permissionMode, "Nothing is migrated to an explicit mode")
+    for (id, expected) in [("full", DevicePermissionMode.full), ("ask", .ask), ("unset", .full)] {
+      reopened.selectedConversationID = id
+      XCTAssertEqual(reopened.deviceChatPermission, expected, id)
+      guard case .session(let settings) = try await reopened.readDeviceWorkspace(.session(id: id)) else { return XCTFail("Missing settings") }
+      XCTAssertEqual(settings.permission, expected.rawValue, id)
+    }
+    let retained = try XCTUnwrap(reopened.executionRecords["legacy"])
+    XCTAssertEqual(retained.quickChatVersion, 0)
+    XCTAssertEqual(retained.status, "retained")
+    XCTAssertEqual(retained.permissionMode, .full, "The earlier chat's saved mode is kept as it was")
+    reopened.selectedConversationID = "legacy"
+    XCTAssertFalse(reopened.canResumeLocalRun, "Earlier chats are history and never run tools")
+    do { _ = try await reopened.deviceRuntime("legacy"); XCTFail("An earlier chat reopened its runtime") }
+    catch { XCTAssertTrue(error.localizedDescription.contains("saved as history"), "Refused as retained history, not for another reason: \(error.localizedDescription)") }
+    XCTAssertTrue(reopened.localRuntimes.isEmpty)
   }
 
   @MainActor func testDraftPermissionPersistsAndInvalidRemoteModeIsRejected() async throws {
@@ -476,12 +660,17 @@ final class ExecutionRoutingTests: XCTestCase {
     let store = try MobileStore(file: root.appendingPathComponent("library.json"))
     let model = CompanionModel(store: store, transport: ExecutionTestLibrary())
     model.executionDirectory = root.appendingPathComponent("execution")
-    XCTAssertEqual(model.deviceChatPermission, .full)
+    XCTAssertEqual(model.deviceChatPermission, .full, "A new Quick Chat starts with Full Access")
     try await model.configureDeviceChat(permission: .ask)
+    let reopenedAsk = CompanionModel(store: store, transport: ExecutionTestLibrary())
+    reopenedAsk.executionDirectory = model.executionDirectory
+    try await reopenedAsk.loadExecutionConfiguration()
+    XCTAssertEqual(reopenedAsk.deviceChatPermission, .ask, "An explicit draft choice survives reopening")
+    try await model.configureDeviceChat(permission: .full)
     let reopened = CompanionModel(store: store, transport: ExecutionTestLibrary())
     reopened.executionDirectory = model.executionDirectory
     try await reopened.loadExecutionConfiguration()
-    XCTAssertEqual(reopened.deviceChatPermission, .ask)
+    XCTAssertEqual(reopened.deviceChatPermission, .full)
     model.executionRecords["chat"] = .init(id: "chat", title: "Chat", connectionID: "fixture", modelJSON: "{}", status: "ready", updatedAt: "")
     let changed = await model.performDeviceAction(.configureSession(id: "chat", model: nil, thinking: nil, permission: "unknown"))
     XCTAssertFalse(changed)
@@ -504,7 +693,7 @@ final class ExecutionRoutingTests: XCTestCase {
     XCTAssertNotNil(model.localApprovals["approval"])
     XCTAssertEqual(model.localPending.map(\.id), ["approval"])
     waiting.cancel()
-    let cancelled = await waiting.value
+    let cancelled = try await bounded(model, "A cancelled approval") { await waiting.value }
     XCTAssertTrue(cancelled)
     XCTAssertNil(model.localApprovals["approval"])
     XCTAssertTrue(model.localPending.isEmpty)
@@ -528,7 +717,7 @@ final class ExecutionRoutingTests: XCTestCase {
     for _ in 0..<100 where model.localApprovals["question"] == nil { await Task.yield() }
     let firstToken = try XCTUnwrap(model.localApprovals["question"]?.token)
     first.cancel()
-    let firstCancelled = await first.value
+    let firstCancelled = try await bounded(model, "A cancelled question") { await first.value }
     XCTAssertTrue(firstCancelled)
     let second = questionTask()
     for _ in 0..<100 where model.localApprovals["question"] == nil { await Task.yield() }
@@ -538,7 +727,7 @@ final class ExecutionRoutingTests: XCTestCase {
     XCTAssertEqual(model.localApprovals["question"]?.token, secondToken)
     XCTAssertEqual(model.localPending.map(\.id), ["question"])
     second.cancel()
-    let secondCancelled = await second.value
+    let secondCancelled = try await bounded(model, "A replacement question") { await second.value }
     XCTAssertTrue(secondCancelled)
     XCTAssertTrue(model.localPending.isEmpty)
     XCTAssertTrue(model.localQuestionAnswers.isEmpty)
@@ -556,6 +745,43 @@ final class ExecutionRoutingTests: XCTestCase {
     XCTAssertThrowsError(try model.deviceWorkspaceURL(conversationID: id, path: "/etc/passwd"))
     try FileManager.default.createSymbolicLink(at: workspace.appendingPathComponent("outside"), withDestinationURL: root)
     XCTAssertThrowsError(try model.deviceWorkspaceURL(conversationID: id, path: "outside/library.json"))
+  }
+
+  /// Retained chats from earlier on-device agents keep read-only export of their
+  /// saved files, including nested ones, without reopening a runtime.
+  @MainActor func testRetainedChatFilesListNestedFilesAndStayInsideTheirFolder() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let model = CompanionModel(store: try MobileStore(file: root.appendingPathComponent("library.json")), transport: ExecutionTestLibrary())
+    let execution = root.appendingPathComponent("execution"); model.executionDirectory = execution
+    let id = UUID().uuidString.lowercased()
+    let folder = execution.appendingPathComponent("files/" + id, isDirectory: true)
+
+    XCTAssertEqual(model.retainedDeviceFiles(conversationID: id), [])
+    XCTAssertFalse(FileManager.default.fileExists(atPath: folder.path), "Listing a chat without files creates nothing")
+
+    let manager = FileManager.default
+    try manager.createDirectory(at: folder.appendingPathComponent("reports/2026"), withIntermediateDirectories: true)
+    try Data("summary".utf8).write(to: folder.appendingPathComponent("reports/2026/summary.md"))
+    try Data("notes".utf8).write(to: folder.appendingPathComponent("notes.txt"))
+    try Data("hidden".utf8).write(to: folder.appendingPathComponent(".hidden"))
+    try Data("secret".utf8).write(to: root.appendingPathComponent("outside.txt"))
+    try manager.createSymbolicLink(at: folder.appendingPathComponent("escape.txt"), withDestinationURL: root.appendingPathComponent("outside.txt"))
+    try manager.createSymbolicLink(at: folder.appendingPathComponent("escape-folder"), withDestinationURL: root)
+    try manager.createSymbolicLink(at: folder.appendingPathComponent("alias.txt"), withDestinationURL: folder.appendingPathComponent("notes.txt"))
+
+    let files = model.retainedDeviceFiles(conversationID: id)
+    XCTAssertEqual(files.map(\.path), ["alias.txt", "notes.txt", "reports/2026/summary.md"])
+    XCTAssertEqual(try Data(contentsOf: try XCTUnwrap(files.last).url), Data("summary".utf8))
+    XCTAssertTrue(files.allSatisfy { $0.url.resolvingSymlinksInPath().path.hasPrefix(folder.resolvingSymlinksInPath().path + "/") })
+
+    // A chat folder that is itself a link elsewhere lists nothing.
+    let linked = UUID().uuidString.lowercased()
+    try manager.createSymbolicLink(at: execution.appendingPathComponent("files/" + linked), withDestinationURL: root)
+    XCTAssertEqual(model.retainedDeviceFiles(conversationID: linked), [])
+    XCTAssertEqual(model.retainedDeviceFiles(conversationID: ".."), [])
+    XCTAssertEqual(model.retainedDeviceFiles(conversationID: id + "/../" + linked), [])
+    XCTAssertTrue(model.localRuntimes.isEmpty)
   }
 }
 

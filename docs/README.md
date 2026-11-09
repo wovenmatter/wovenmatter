@@ -28,7 +28,7 @@ in your installed version.
 ## Technical references
 
 - [Agent tools, access, and retries](AGENT_TOOLS.md)
-- [Credential access](KEYCHAIN_ACCESS.md)
+- [Mac access and credentials](MAC_ACCESS.md)
 - [Remote workspace internals](reference/REMOTE_WORKSPACES.md)
 - [Remote database limits](reference/REMOTE_DATABASES.md)
 - [Runtime installation and updates](RUNTIME_MAINTENANCE.md)

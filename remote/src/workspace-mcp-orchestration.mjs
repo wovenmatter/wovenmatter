@@ -1,20 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { ordered } from './durable-json.mjs'
+import { fullAccessPermissions } from './config.mjs'
 
 const fail=(statusCode,message)=>Object.assign(new Error(message),{statusCode})
 const stamp=()=>new Date().toISOString()
 const uuid=value=>typeof value==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
 const stableID=value=>{const h=createHash('sha256').update('woven-mcp-orchestration-v1\0'+value).digest('hex');return `${h.slice(0,8)}-${h.slice(8,12)}-5${h.slice(13,16)}-a${h.slice(17,20)}-${h.slice(20,32)}`}
-const permissionRank=value=> {
-  if(value==null)return undefined
-  const key=String(value).replaceAll(/[-_\s]/g,'').toLowerCase()
-  if(['deny','dontask','readonly','readOnly','plan'].includes(key))return 0
-  if(['ask','default','approvalrequired','onrequest','untrusted','askforapproval','supervised','workspacewrite'].includes(key))return 1
-  if(['acceptedits','autoacceptedits','autoedit','auto','autoreview','smartapprovals','smartreview','agent'].includes(key))return 2
-  if(['allow','full','fullaccess','bypasspermissions','never','agentfullaccess'].includes(key))return 3
-  return undefined
-}
-
 // These operations use the workspace's existing accepted-command engine. The
 // MCP credential selects the source, and no model argument can change it.
 export function createWorkspaceMCPOrchestration({db,identity,getRecord,command,runtime,settings,runningSessions=()=>0,policy,notifyApproval}) {
@@ -63,20 +54,14 @@ export function createWorkspaceMCPOrchestration({db,identity,getRecord,command,r
     db.prepare('INSERT INTO mcp_session_coordination VALUES(?,?,?,?,?,?)').run(target,caller,purpose,randomUUID(),notify?1:0,stamp())
     return relationship(target)
   }
-  async function narrowPermissions(source,child,intent) {
+  // Agent-created sessions use the destination's saved defaults, exactly as a
+  // user-created session would. The caller's own permission and tools never cap them.
+  async function applyDestinationSelections(child,intent) {
     if(!runtime.settings||!runtime.configure)return
-    const parent=await runtime.settings({native:source.native,runtimeKind:source.conversation.runtimeKind})
     const target=await runtime.settings({native:child.native,runtimeKind:child.conversation.runtimeKind})
-    const ceiling=intent.permissionCeiling??permissionRank(parent.permission)??1,actual=permissionRank(target.permission)
     const options={...(intent.model?{model:intent.model}:{}),...(intent.thinking?{thinking:intent.thinking}:{})}
-    const wanted=intent.permission??target.permission,wantedRank=permissionRank(wanted)
-    if(wantedRank!==undefined&&wantedRank<=ceiling) {
-      if(wanted!==target.permission)options.permission=wanted
-    } else if(actual===undefined||actual>ceiling||wantedRank!==undefined&&wantedRank>ceiling) {
-      const choices=(target.permissions??[]).filter(item=>{const rank=permissionRank(item.id);return rank!==undefined&&rank<=ceiling}).sort((a,b)=>permissionRank(b.id)-permissionRank(a.id))
-      if(!choices.length)throw fail(409,'The destination cannot enforce the caller’s permission ceiling. Configure a narrower destination mode in Woven before dispatching work.')
-      options.permission=choices[0].id
-    }
+    const offered=(target.permissions??[]).some(item=>item.id===intent.permission)
+    if(intent.permission&&intent.permission!==target.permission&&offered)options.permission=intent.permission
     if(Object.keys(options).length)await runtime.configure({native:child.native,runtimeKind:child.conversation.runtimeKind,options})
   }
   async function deliver(caller,target,text,requestID,suffix='send') {
@@ -108,14 +93,11 @@ export function createWorkspaceMCPOrchestration({db,identity,getRecord,command,r
       let intent=previous?.intent?JSON.parse(previous.intent):null
       if(!intent) {
         const kind=input.harness??source.conversation.runtimeKind,defaults=settings().harnessDefaults?.[kind]??{}
-        const parentSettings=runtime.settings?await runtime.settings({native:source.native,runtimeKind:source.conversation.runtimeKind}):{}
-        const permissionCeiling=permissionRank(parentSettings.permission)??1
-        let permission=defaults.permission
-        if(kind==='grok_build'){permission??='default';if((permissionRank(permission)??Infinity)>permissionCeiling)permission=permissionCeiling===0?'dontAsk':'default'}
-        const enabled=[...new Set([...(defaults.tools??settings().enabledByDefault),'goals'])].filter(group=>!scope.enabledGroups||scope.enabledGroups.includes(group)||group==='goals')
+        const permission=defaults.permission??fullAccessPermissions[kind]
+        const enabled=[...new Set([...(defaults.tools??settings().enabledByDefault),'goals'])]
         intent={id:stableID([scope.conversationID,requestID,'child'].join(':')),runtimeKind:kind,title:input.title,text:input.text,purpose:input.purpose,
           ...(input.folder==='all'?{}:input.folder||source.conversation.folderID?{folderID:input.folder??source.conversation.folderID}:{}),
-          nativeWorkingDirectory:input.directory??source.native.nativeWorkingDirectory,model:input.model??defaults.model,thinking:input.thinking??defaults.thinking,permission,permissionCeiling,enabledTools:enabled,independent:input.independent===true}
+          nativeWorkingDirectory:input.directory??source.native.nativeWorkingDirectory,model:input.model??defaults.model,thinking:input.thinking??defaults.thinking,permission,enabledTools:enabled,independent:input.independent===true}
         db.prepare('UPDATE mcp_orchestration_receipts SET intent=? WHERE caller=? AND request_id=?').run(JSON.stringify(intent),scope.conversationID,requestID)
       }
       if(!intent.independent) {
@@ -127,7 +109,7 @@ export function createWorkspaceMCPOrchestration({db,identity,getRecord,command,r
       const created=await baseCommand('createSession',scope.conversationID,requestID,'create',{conversationID:intent.id,providerID:intent.runtimeKind,runtimeKind:intent.runtimeKind,folderID:intent.folderID,initialConfiguration:intent})
       if(created.status!=='completed')throw fail(409,created.message??'The destination session could not be created.')
       const child=getRecord(intent.id)
-      if(!child.conversation.activeRunID&&!db.prepare('SELECT id FROM commands WHERE id=?').get(stableID([scope.conversationID,requestID,'initial-send'].join(':'))))await narrowPermissions(source,child,intent)
+      if(!child.conversation.activeRunID&&!db.prepare('SELECT id FROM commands WHERE id=?').get(stableID([scope.conversationID,requestID,'initial-send'].join(':'))))await applyDestinationSelections(child,intent)
       db.prepare('INSERT OR IGNORE INTO mcp_session_provenance VALUES(?,?,?,?)').run(intent.id,scope.conversationID,intent.purpose,stamp())
       if(!intent.independent)coordinate(scope.conversationID,intent.id,intent.purpose)
       signal?.throwIfAborted()

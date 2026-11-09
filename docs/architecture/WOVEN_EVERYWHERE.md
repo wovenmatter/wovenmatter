@@ -125,8 +125,13 @@ same commit.
   through that machine's Woven server at `/v1/bots/ws`, authenticated as a
   member, which then proxies to the loopback socket.
 - Each bot's agent loop runs in the runtime on the host, and its tools run
-  inside its container through the in-container helper (Pi Bot's
-  `docker/agent.mjs`, mounted read-only from the host). Provider keys and
+  inside its container through the in-container helper (`bots/helper/`: Pi
+  Bot's env agent plus a supervisor, browser and preview forwarder). The
+  helper is mounted read-only at `/opt/woven-bot` from a content-versioned
+  volume (`woven-bots-helper-<hash>`) that the runtime fills from its own
+  install through the Engine API, so a Mac VM needs no file sharing and
+  runtime updates need no image change. A bot picks up a new helper on
+  Update or Rebuild. Provider keys and
   sign-ins never enter a container. The runtime gets provider credentials the
   same way the machine's default agent does
   (`docs/architecture/DEFAULT_AGENT_CREDENTIALS.md`), and bots use the
@@ -140,6 +145,142 @@ same commit.
   are Woven MCP timers delivered back to the bot.
 - Bot conversations are written into the machine's library copy as
   conversations, so they sync everywhere.
+
+#### Runtime config
+
+`node bots/src/cli.ts serve --config <file>` reads one JSON file that the
+Woven server writes (mode 0600). Unknown keys are refused.
+
+```json
+{
+  "dataDir": "/abs/path",
+  "listen": { "host": "127.0.0.1", "port": 4317 },
+  "runtimeToken": "≥32 random characters",
+  "engine": { "socket": "/run/wovenmatter/docker.sock", "kind": "linux-dockerd" },
+  "image": { "tag": "wovenmatter-bots" },
+  "limits": { "botMemoryBytes": 4294967296 },
+  "host": { "url": "http://127.0.0.1:<port>/", "token": "bearer for the host API" },
+  "machine": { "deviceID": "<member device id>", "name": "Studio" }
+}
+```
+
+- `listen.host` must be loopback (`127.0.0.1`, `::1`, `localhost`). Every HTTP
+  request and WebSocket upgrade needs `Authorization: Bearer <runtimeToken>`;
+  `Host` and `Origin`, when present, must be loopback.
+- `engine.kind` is `linux-dockerd` or `mac-vm`. `image.tag` without a tag
+  (`wovenmatter-bots`) gets the content hash of `bots/image` as its tag and is
+  built through the Engine API when missing; a tagged name is used as is.
+- `limits.botMemoryBytes` is each container's memory limit (`Memory` and
+  `MemorySwap`); `null` means no cap.
+- `host.url` must be loopback `http`. The runtime keeps its own state under
+  `dataDir`: `bots.sqlite` (bots, threads, Pi Durable tables, memory, limits,
+  cached Woven tool lists, previews), `settings.json` (model profiles, title
+  model, memory extraction, compaction, bot-to-bot limits; no secrets) and
+  `claude-agent/` (the Claude Agent SDK's private scratch directory).
+- Exit on SIGTERM/SIGINT is graceful. Containers keep running across a runtime
+  restart and are picked up by the next start.
+
+#### Runtime host API
+
+Served by the machine's Woven server at `host.url`, `Authorization: Bearer
+<host.token>`, JSON bodies. Non-2xx means failure; the runtime never shows the
+reply body. Replies are at most 1 MiB.
+
+| Request | Body | Reply |
+| --- | --- | --- |
+| `POST /v1/bots-host/mcp-keys` | `{botID, botName}` | `{endpoint, token}`: the bot's Woven MCP key, principal `woven:bot:<machine.deviceID>:<botID>`. The same bot may ask again (after a restart, or a 401 from MCP); the host returns its current key or rotates it. |
+| `DELETE /v1/bots-host/mcp-keys/{botID}` | none | 2xx. Sent when the user purges a bot. |
+| `POST /v1/bots-host/previews` | `{botID, port, containerPort}` | `{url}`. `port` is the runtime's loopback activity proxy; the host publishes `http://127.0.0.1:<port>` with Tailscale Serve (its own HTTPS port, inbound only, never Funnel). Idempotent for the same `(botID, port)`; sent again after a runtime restart. |
+| `DELETE /v1/bots-host/previews/{botID}/{port}` | none | 2xx. |
+| `POST /v1/bots-host/inference-credentials` | `{provider}` | `{credential}`, where `credential` is `null` (not connected), `{type: "api_key", key}`, `{type: "oauth", access, expires, accountId?}` (access only; `expires` epoch ms; the host renews, the runtime asks again a minute before expiry), or `{type: "native", configDir, secureStorageDir?}` (Claude subscription: the machine's native Claude runtime directories, which the default agent uses, passed to the Claude Agent SDK as `CLAUDE_CONFIG_DIR` and `CLAUDE_SECURESTORAGE_CONFIG_DIR`; no token material). `provider` is a Woven connection id: `openai-codex`, `openai`, `openrouter`, `opencode-go`, `xai`, `xai-api`, `claude-subscription`, `anthropic`, `exa`, `brave`, `firecrawl`, or `web-search`, which also returns `searchProvider` (`exa`, `brave` or `firecrawl`, the selected web search provider) with that provider's key. |
+| `POST /v1/bots-host/conversations/{botID}/entries` | `{bot: {id, name}, conversations: [{conversationId, kind: "main"\|"thread", parentConversationId?, forkedAt?, title?, pinned?, createdAt?}], entries: [{id, conversationId, role: "user"\|"assistant", text, error?, stopped?, createdAt}]}` | 2xx. The host writes them into its library copy, upserting entries by `(botID, id)` and conversations by `(botID, conversationId)`. Entry ids are unique per bot and never reused. `conversations` always lists the bot's main channel and every thread; a batch may have no entries when only metadata (a title, a pin, a rename) changed. Batches hold at most 200 entries, in id order; the runtime resends after a failure. |
+
+The runtime caches credentials in memory only (keys 60 s, "not connected"
+15 s) and never stores them. A credential change in Woven settings takes
+effect within that window.
+
+#### Runtime protocol
+
+Pi Bot protocol 1 over WebSocket at `/ws`: JSON text frames, each request
+`{id, type, …}` answered by `{type: "result", id, data}` or `{type: "error",
+id?, message}`. `hello` carries `version`, `protocol: 1`, `installationId`,
+`capabilities` and `environment` (`none`, `linux-dockerd` or `mac-vm`).
+Capabilities: `groups`, `woven.mcp`, `message.context`, plus the additions
+`bots.environment`, `runtime.update` and `previews`. `GET /health` returns the
+same identity with `ok: true`.
+
+Kept from Pi Bot, with their wire shapes: `bots.list`, `bots.create`,
+`bots.delete`, `bots.listDeleted`, `bots.restore`, `bots.purge`,
+`bots.rename`, `bots.setManager`, `bots.setTeam`, `bots.replaceManager`,
+`bots.setOrchestrator`, `bots.setGroup`, `bots.setProfile`, `groups.list`,
+`groups.create`, `groups.rename`, `groups.delete`, `groups.reorder`,
+`onboarding.status`, `onboarding.setMainModel`, `profiles.list`,
+`profiles.save`, `profiles.delete`, `profiles.setDefault`, `memory.list`,
+`memory.add`, `memory.update`, `memory.delete`, `account.notes`,
+`account.setNotes`, `conversation.open`, `conversation.close`,
+`conversation.abort`, `message.send` (with `context` and `deliveryId`),
+`thread.fork`, `thread.setPinned`, `threads.list`, `models.catalog`,
+`models.setRoles` (now live: `restartRequired` is always `false`).
+
+Changed:
+
+- `woven.status` → `{state, toolCount, error?, bots: {<botId>: {state,
+  toolCount}}}`, aggregated over the bots' own keys. `woven.connect` and
+  `woven.disconnect` are gone: keys come from the host API.
+- `settings.accounts` is read-only: `{accounts: [{id, label, group, method,
+  configured}], search: {provider, providers: [...]}}`, with Woven connection
+  ids.
+
+Dropped: `credentials.set`, `credentials.remove`, `login.start`,
+`login.respond`, `login.cancel`, `config.get`, `config.validate`,
+`config.save`, `config.update`, `github.get`, `github.setSshKey`,
+`github.generateSshKey`, `github.removeSshKey`, `github.setIdentity`,
+`server.restart`, and the `login` push. Sign-ins and keys are Woven
+connections; bots set up their own git and SSH inside their containers.
+
+Added requests:
+
+| Request | Reply |
+| --- | --- |
+| `bots.environment {botId}` | `{environment: {botId, state: "missing"\|"running"\|"stopped"\|"unavailable", busy?, lastActivity?, services?, previews: [{port, url}]}}`. `busy` says why a running bot is not idle now; `services` is the restart list with each service's state. |
+| `bots.stop {botId}` | `{stopped: true}`. The next tool call starts the container again. |
+| `bots.rebuild {botId}` | `{rebuilt: true}`. A clean container from the current image and helper; storage, restart list and browser profile stay. |
+| `previews.list {botId?}` | `{previews: [{botId, port, url}]}` for one bot or all (`port` is the container port). |
+| `previews.stop {botId, port}` | `{stopped: boolean}`. |
+| `runtime.update {botIds?}` | `{started: true}` at once; the update runs for all bots (or the listed ones), one at a time. |
+| `runtime.status` | `{version, environment, bots}`. |
+
+Added pushes:
+
+- `{type: "runtime.update", botId?, phase, error?}` with `phase` `stopping`,
+  `updating`, then `updated`, `rolledBack` or `skipped` per bot, and one final
+  `done` (with `error` if the run itself failed).
+- `{type: "bots.environment.changed", botId, state}` after stop, rebuild and
+  update.
+
+Bot tools added by the runtime: `keep_running {name, command, cwd?}`,
+`keep_running_list`, `keep_running_remove {name}`, `keep_running_logs {name,
+lines?}`, `browser {action: navigate|read|screenshot|click|type|tabs|new_tab|
+close_tab, url?, tab?, selector?, text?, label?, value?, submit?, fullPage?,
+maxChars?}`, `share_preview {port}`, `stop_preview {port}`, `list_previews`.
+Pi Bot's Admin Bot config tools (`read_config`, `update_config`,
+`restart_server`) are gone; `settings_status` reports connections and models.
+
+#### Container layout
+
+- Container `woven-bot-<botId>`, storage volume `woven-bot-<botId>-workspace`
+  at `/workspace`, snapshot `woven-bot-<botId>-snapshot` (volume) and
+  `woven-bot-snapshot:<botId>` (image). Labels `woven.bot=<botId>`,
+  `woven.bots.machine=<deviceID>` and `woven.bots.helper=<helper volume>`; the
+  runtime only ever touches containers with its own machine label.
+- User `bot` (passwordless sudo), `tini` as PID 1, the supervisor as its
+  child, restart policy `no` (the runtime decides when bots run), 512 MiB
+  `/dev/shm` for Chromium, no published ports, no host mounts, no Docker
+  socket.
+- Bot state the runtime owns lives in the storage volume under
+  `/workspace/.woven/`: `services.json` (restart list), `logs/<name>.log`,
+  `browser/profile/` (Chromium profile) and `browser/tabs.json` (open tabs,
+  saved on every change and on stop).
 
 ### Engine
 
@@ -158,10 +299,11 @@ same commit.
   build tools and tini. A bot runs as a user with passwordless sudo, which
   gives it full root inside its container.
 - **Network:** the container has internet access. Outbound traffic to the
-  tailnet (Tailscale's 100.64/10 CGNAT range and fd7a:115c:a1e0::/48), private and link-local ranges
+  tailnet (CGNAT 100.64/10, fd7a:115c:a1e0::/48), private and link-local ranges
   and the host is blocked by the engine host: iptables on the Woven bridge on
-  Linux, and inside the guest on a Mac. No container port is published except
-  through previews. The Docker socket is never mounted into a bot.
+  Linux, and inside the guest on a Mac. No container port is published, not
+  even for previews (see Previews). The Docker socket is never mounted into a
+  bot.
 
 ### Resources
 
@@ -183,6 +325,19 @@ same commit.
 - A bot stops fully after 15 minutes idle. The period is fixed.
 - A bot is idle when it has no turn running, no command running, no timer due
   soon, no one viewing its chat, and no preview traffic during the period.
+  - "No command running": no tool call in flight and no process in the
+    container besides PID 1, the supervisor and everything under it (the
+    restart list and the browser, which come back on wake), env agents and
+    preview forwarders. Children of an env agent and orphaned background jobs
+    count. A process check that fails counts as busy.
+  - "No timer due soon": none of the bot's Woven timers (`woven_timers_list`
+    through its own MCP key) fires within 5 minutes. When that can't be told
+    (no timer tool, Woven unreachable) it doesn't block the stop: a due timer
+    reaches the bot as `message.send`, which wakes it anyway.
+  - Activity that restarts the period: a tool call, `conversation.open`,
+    `message.send`, and each preview connection or byte.
+  - Stopping sends SIGTERM with 20 seconds' grace: the supervisor saves open
+    tabs, closes the browser profile and stops the restart list.
 - On wake, the agent loop is already running in the runtime, so it can reply
   immediately. The container starts on the first tool call. After that, the
   restart list and the browser come back in the background.
@@ -195,10 +350,21 @@ same commit.
 
 ### Previews
 
-- The bot asks to share a container port. Woven publishes it to a loopback
-  port on the host, runs a small activity-counting proxy in front of it, and
-  publishes that proxy with Tailscale Serve on the host's tailnet name using
-  its own HTTPS port. The bot gets back the URL to give the user.
+- The bot asks to share a container port (`share_preview`). The runtime runs
+  a small activity-counting TCP proxy on a loopback port of the engine's host
+  machine and asks the host API to publish that proxy with Tailscale Serve on
+  the host's tailnet name using its own HTTPS port. The bot gets back the URL
+  to give the user. HTTP and WebSockets pass through unchanged.
+- The proxy reaches the container port over the Engine API: each connection
+  is a Docker exec of the helper's forwarder (`/opt/woven-bot/forward.mjs
+  <port>`) with the bytes on its hijacked stdio. Docker cannot add a port
+  binding to an existing container without recreating it, and this works
+  the same through a Mac VM's forwarded socket, so no container port is ever
+  published and the Mac VM needs no port forwarding. A preview connection
+  starts a stopped container. The transport is a replaceable hook
+  (`PreviewTransport` in `bots/src/environment/previews.ts`, passed as
+  `previewTransport` to `startRuntime`) should a host integration want a
+  direct path.
 - Previews are inbound only and never use Funnel.
 
 ### Updates
@@ -212,6 +378,18 @@ same commit.
   last update is kept. Afterwards it restarts from the restart list and tells
   the bot that its last turn was interrupted.
 - **Rebuild** recreates a bot from a clean image while keeping its storage.
+- In the runtime (`runtime.update`): running turns are aborted first, then for
+  each bot, one at a time: stop the container, commit it to
+  `woven-bot-snapshot:<botId>` and copy its storage volume into
+  `woven-bot-<botId>-snapshot` (replacing the previous snapshot), recreate the
+  container from that commit with the current helper and limits, start it,
+  run `apt-get update && apt-get -y upgrade` as root, and health-check it
+  (`node --version`, `sudo -n true`, writable `/workspace`, the supervisor
+  answering). On any failure the container is recreated from the snapshot
+  with its previous helper and the storage copied back. The supervisor starts
+  the restart list and the browser on every start. Each conversation whose
+  turn was aborted then gets a message saying the environment was updated and
+  the last turn stopped part-way, so the bot can continue.
 
 ### Discovery and UI
 

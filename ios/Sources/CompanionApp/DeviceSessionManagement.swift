@@ -50,7 +50,13 @@ extension CompanionModel {
         case "rename":
           guard let title, !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw DeviceExecutionError.unavailable("Enter a conversation title.") }
           record.title = title
-        case "move": record.folderID = folderID
+        case "move":
+          if let folderID {
+            guard let folder = state.folders[folderID], folderOwner(folder) == canonicalWorkspaceID(deviceWorkspaceID) else {
+              throw DeviceExecutionError.unavailable("Choose a folder on this device for Quick Chat.")
+            }
+          }
+          record.folderID = folderID
         case "pin": record.isPinned = true
         case "unpin": record.isPinned = false
         case "trash":
@@ -66,8 +72,8 @@ extension CompanionModel {
         }
         record.updatedAt = Self.executionTimestamp(); executionRecords[id] = record
         try persistExecutionConfiguration(); try await adoptDeviceConversation(record, transcript: nil); await reload()
-      case .goal(let id, let mutation):
-        _ = try await mutateDeviceGoal(id, mutation: mutation)
+      case .goal:
+        throw DeviceExecutionError.unavailable("Goals run on Mac or Linux workspace agents. Quick Chat has no autonomous goals.")
       case .configureSession(let id, let connectionID, let thinking, let permission):
         guard let record = executionRecords[id] else { throw InferenceError.invalidConfiguration }
         let connection: InferenceConnection?

@@ -24,7 +24,7 @@ async function fixture(t,{kind='opencode',sourcePermission='ask',destinationPerm
   return {directory,service,source,scope,command,call,created,runs,selections}
 }
 
-test('Linux MCP creates source-owned children once, applies destination defaults within the permission ceiling, and enforces fanout',async t=>{
+test('Linux MCP creates source-owned children once, applies destination defaults without capping them to the caller, and enforces fanout',async t=>{
   const f=await fixture(t)
   f.service.mcp.configureSettings({enabledByDefault:['notes','history','sessions'],maximumManagedSessions:1,maximumRunningSessions:3,
     harnessDefaults:{opencode:{model:'destination-model',thinking:'high',permission:'allow',tools:[]}}})
@@ -35,7 +35,9 @@ test('Linux MCP creates source-owned children once, applies destination defaults
   assert.equal(child.workspaceID,f.service.descriptor().id);assert.equal(child.runtimeKind,'opencode')
   assert.equal(f.created.length,2);assert.equal(f.created[1].nativeWorkingDirectory,f.directory)
   assert.equal(f.runs.length,1);assert.equal(f.runs[0].command.conversationID,child.id)
-  assert.equal(f.selections.get(f.runs[0].native.sessionID).permission,'ask')
+  // The caller runs with Ask; the destination still receives its saved Full access default.
+  assert.equal(f.selections.get(f.runs[0].native.sessionID).permission,'allow')
+  assert.equal(f.created[1].permission,'allow')
   assert.equal(f.selections.get(f.runs[0].native.sessionID).model,'destination-model')
   const childSettings=(await f.service.readWorkspace({session:{id:child.id}})).session._0
   assert.deepEqual(childSettings.enabledTools,['goals'])
@@ -63,6 +65,18 @@ test('queued cross-session messages wait for idle, management epochs fence stale
   assert.equal(stale.result.isError,true)
   const released=await f.call('woven_sessions_release',{id:child,epoch:value.relationship.coordinationEpoch})
   assert.equal(released.result.isError,false);assert.equal(released.result.structuredContent.result.coordinatorID,undefined)
+})
+
+test('destination without saved defaults starts with Full access and the default tools, even from a restricted caller',async t=>{
+  const f=await fixture(t,{sourcePermission:'deny',destinationPermission:'ask',permissionOptions:['allow','ask','deny']})
+  f.service.mcp.configureSettings({enabledByDefault:['notes','sessions'],maximumManagedSessions:4,maximumRunningSessions:8,harnessDefaults:{}})
+  const reply=await f.call('woven_sessions_create',{title:'Worker',text:'Controlled fixture',purpose:'Verify destination defaults'})
+  assert.equal(reply.result.isError,false)
+  await turn();assert.equal(f.runs.length,1)
+  assert.equal(f.created[1].permission,'allow')
+  assert.equal(f.selections.get(f.runs[0].native.sessionID).permission,'allow')
+  const child=reply.result.structuredContent.result.session.id
+  assert.deepEqual((await f.service.readWorkspace({session:{id:child}})).session._0.enabledTools.toSorted(),['goals','notes','sessions'])
 })
 
 test('Pi Durable full permission is recognized for source-owned delegation',async t=>{

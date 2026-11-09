@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import { supportsOpenCodeVersion } from './opencode-compatibility.mjs'
+import { presentPermissionChoices } from './config.mjs'
 
 const fail = text => Object.assign(new Error(text), {statusCode:409})
 const selection = (id, label = id) => ({id,label})
@@ -66,7 +67,7 @@ export function createNativeClientSessions({workspaceRoot,instances,
     return {...emptyTools,model:key,thinking:current?.variant??(variants.length?'default':null),
       permission:last?.action==='*'&&last.resource==='*'&&['ask','allow','deny'].includes(last.effect)?last.effect:null,models:models.map(item=>selection(modelKey(item),item.name??item.id)),
       thinkingLevels:variants.length?[selection('default'),...variants.map(item=>selection(item.id,item.name??item.id))]:[],
-      permissions:[selection('ask','Ask for approval'),selection('allow','Full access'),selection('deny','Deny')]}
+      permissions:presentPermissionChoices('opencode',[selection('ask','Ask for approval'),selection('allow','Full access'),selection('deny','Deny')])}
   }
   return {async perform(runtimeKind,native,operation,options) {
     if(runtimeKind==='opencode')return openCode(native,operation,options)

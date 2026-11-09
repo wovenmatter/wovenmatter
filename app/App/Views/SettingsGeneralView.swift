@@ -14,6 +14,7 @@ struct SettingsGeneralView: View {
     @AppStorage(DashboardSidebarStyle.storageKey) private var storedSidebarStyle = DashboardSidebarStyle.defaultStyle.rawValue
     @State private var showsCredentialDisclosure = false
     @State private var closedLidHelperSetup: ClosedLidHelperSetup = .unavailable
+    @State private var macAccess = MacAccessSetupModel.shared
 
     private var sidebarStyleBinding: Binding<DashboardSidebarStyle> {
         Binding(
@@ -32,7 +33,7 @@ struct SettingsGeneralView: View {
             onBack: onBack
         ) {
             releaseUpdateCard
-            credentialAccessCard
+            macAccessCard
             harnessSetupCard
             appearanceCard
             sidebarLayoutCard
@@ -169,19 +170,26 @@ struct SettingsGeneralView: View {
         }
     }
 
-    private var credentialAccessCard: some View {
+    /// One card that sets up everything a session on this Mac may need, once,
+    /// so sessions started from another device never wait on a prompt here.
+    private var macAccessCard: some View {
         SettingsCard(
-            title: "Keychain access",
-            detail: "Credentials are stored in Apple Keychain."
+            title: "Mac access",
+            detail: "Set up once so sessions started from any device never wait on a prompt at this Mac."
         ) {
             HStack(alignment: .center, spacing: 16) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Keychain access").font(.system(size: 13, weight: .medium))
+                    Text("Credentials are stored in Apple Keychain.")
+                        .font(.system(size: 11.5)).foregroundStyle(DashboardPalette.mutedForeground)
+                }
+                Spacer(minLength: 12)
                 SettingsPill(model.isReconnectingSavedCredentials ? "Checking…"
                     : model.keychainAccessReady == true ? "Access ready"
                     : model.keychainAccessReady == false ? "Access needs attention"
                     : model.hasAcknowledgedCredentialAccessDisclosure ? "Checking…" : "Not enabled",
                     tone: model.keychainAccessReady == false ? .warning : .neutral)
                     .help(model.credentialAccessStatus ?? "Enable access to use saved credentials.")
-                Spacer(minLength: 12)
                 Button(model.isReconnectingSavedCredentials ? "Checking…"
                        : model.keychainAccessReady == true ? "Check access"
                        : model.hasAcknowledgedCredentialAccessDisclosure || model.keychainAccessReady == false
@@ -200,8 +208,59 @@ struct SettingsGeneralView: View {
             if model.keychainAccessReady != true {
                 SettingsNote("Choose Always Allow when macOS asks to avoid repeated prompts.")
             }
+            ForEach(Self.macAccessItems, id: \.item) { row in
+                Divider()
+                macAccessRow(row)
+            }
+            if macAccess.states[.screenRecording] == .needsAttention || macAccess.states[.accessibility] == .needsAttention {
+                SettingsNote("After allowing Screen Recording or Accessibility in System Settings, quit and reopen Woven Matter if this still says Needs attention.")
+            }
+        }
+        .task {
+            while !Task.isCancelled {
+                macAccess.refresh(keychainReady: model.keychainAccessReady)
+                do { try await Task.sleep(for: .seconds(2)) } catch { return }
+            }
+        }
+        .onChange(of: model.keychainAccessReady) { _, ready in macAccess.recordKeychain(ready: ready) }
+    }
+
+    private struct MacAccessRow {
+        let item: CompanionMacAccessStatus.Item
+        let detail: String
+        let action: String
+    }
+
+    private static let macAccessItems: [MacAccessRow] = [
+        .init(item: .fullDiskAccess, detail: "Lets sessions use files in protected folders without a macOS prompt.", action: "Open System Settings"),
+        .init(item: .accessibility, detail: "Lets Computer Use control apps on this Mac.", action: "Allow Accessibility"),
+        .init(item: .screenRecording, detail: "Lets Computer Use see windows and the screen.", action: "Allow Screen Recording"),
+        .init(item: .automation, detail: "Lets agents control System Events and Finder. Other apps ask the first time an agent uses them.", action: "Allow Automation"),
+        .init(item: .microphone, detail: "Used by Dictation.", action: "Allow Microphone"),
+    ]
+
+    private func macAccessRow(_ row: MacAccessRow) -> some View {
+        let state = macAccess.states[row.item] ?? .unknown
+        return HStack(alignment: .center, spacing: 16) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(row.item.displayName).font(.system(size: 13, weight: .medium))
+                Text(row.detail)
+                    .font(.system(size: 11.5)).foregroundStyle(DashboardPalette.mutedForeground)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 12)
+            SettingsPill(state == .ready ? "Ready" : state == .needsAttention ? "Needs attention" : "Not set up",
+                         tone: state == .needsAttention ? .warning : .neutral)
+            if state != .ready {
+                Button(macAccess.settingUp == row.item ? "Opening\u{2026}" : row.action) {
+                    Task { await macAccess.setUp(row.item) }
+                }
+                .buttonStyle(SettingsQuietButtonStyle())
+                .disabled(macAccess.settingUp != nil)
+            }
         }
     }
+
     private var dictationCard: some View {
         @Bindable var dictation = DictationModel.shared
         return SettingsCard(title: "Dictation", detail: "Dictate into conversations and notes with Apple on-device speech.") {

@@ -97,11 +97,11 @@ struct CalendarEventSheet: View {
   @Environment(\.dismiss) private var dismiss
   init(model: CompanionModel, event: CompanionCalendarEvent?, newTask: Bool = false) {
     self.model = model; self.event = event
-    _draft = State(initialValue: event?.draft ?? .init(startsAt: Date().addingTimeInterval(3_600), task: newTask ? .init(runtime: "default_agent", workspaceID: model.deviceWorkspaceID) : nil, showsOnCalendar: newTask ? false : true))
+    _draft = State(initialValue: event?.draft ?? .init(startsAt: Date().addingTimeInterval(3_600), task: newTask ? Self.defaultTask(model) : nil, showsOnCalendar: newTask ? false : true))
     _eventID = State(initialValue: event?.id ?? UUID().uuidString.lowercased())
   }
   private var recurrence: Binding<String> { Binding(get: { draft.recurrenceUnit ?? "" }, set: { draft.recurrenceUnit = $0.isEmpty ? nil : $0 }) }
-  private var scheduled: Binding<Bool> { Binding(get: { draft.task != nil }, set: { draft.task = $0 ? .init(runtime: "default_agent", workspaceID: model.deviceWorkspaceID) : nil }) }
+  private var scheduled: Binding<Bool> { Binding(get: { draft.task != nil }, set: { draft.task = $0 ? Self.defaultTask(model) : nil }) }
   var body: some View {
       Form {
         if let error = model.errorMessage { Text(error).foregroundStyle(DashboardPalette.danger).accessibilityIdentifier("workspace-action-error") }
@@ -156,36 +156,46 @@ struct CalendarEventSheet: View {
       TextField("Prompt", text: Binding(get: { draft.task?.prompt ?? "" }, set: { draft.task?.prompt = $0 }), axis: .vertical).lineLimit(4...12)
       Picker("Session folder", selection: Binding(get: { draft.task?.folderID ?? "" }, set: { draft.task?.folderID = $0.isEmpty ? nil : $0 })) {
         Text("No folder").tag("")
-        ForEach(model.folders) { Text($0.name).tag($0.id) }
+        ForEach(model.folders.filter { folder in
+          guard let owner = folder.execution?.workspaceID else { return true }
+          let selected = draft.task?.workspaceID ?? model.folderWorkspaces.first(where: { $0.capabilities.contains("history.central.v1") })?.id
+          return owner == selected
+        }) { Text($0.name).tag($0.id) }
       }
       if draft.recurrenceUnit != nil { Toggle("New session each time", isOn: Binding(get: { draft.task?.newSessionEachTime ?? false }, set: { draft.task?.newSessionEachTime = $0 })) }
     }
   }
   private var selectedRoute: String {
-    guard let task = draft.task else { return "local:default_agent" }
+    guard let task = draft.task, !task.runtime.isEmpty else { return "" }
     if task.workspaceID == model.deviceWorkspaceID { return "device" }
     return task.workspaceID.map { "remote:\($0):\(task.runtime)" } ?? "local:\(task.runtime)"
   }
+  private static func defaultTask(_ model: CompanionModel) -> CompanionScheduledTask {
+    let agent = model.launcherAgents.first { $0.workspaceID != "local" && $0.isAvailable }
+    return .init(runtime: agent?.runtimeKind ?? "", workspaceID: agent.flatMap { $0.workspaceID == "central" ? nil : $0.workspaceID })
+  }
   private var routeChoices: [CompanionSelection] {
-    var values = [CompanionSelection(id: "device", label: "Pi Durable · " + model.deviceWorkspaceName)] + model.providers.filter { $0.id.hasPrefix("local:") || $0.id.hasPrefix("remote:") }
-      .map { CompanionSelection(id: $0.id, label: "\($0.displayName) · \($0.routeName)") }
-    if !values.contains(where: { $0.id == selectedRoute }) {
-      values.append(.init(id: selectedRoute, label: "Saved agent and workspace"))
+    var values = [CompanionSelection(id: "", label: "Choose a Mac or Linux agent")]
+    for agent in model.launcherAgents where agent.workspaceID != "local" {
+      let owner = agent.workspaceID == "central" ? "local:" + agent.runtimeKind : "remote:" + agent.workspaceID + ":" + agent.runtimeKind
+      if !values.contains(where: { $0.id == owner }) { values.append(.init(id: owner, label: agent.name + " · " + agent.workspaceName)) }
     }
+    if selectedRoute == "device" { values.append(.init(id: "device", label: "Previously assigned to this phone · choose a workspace")) }
+    else if !values.contains(where: { $0.id == selectedRoute }) { values.append(.init(id: selectedRoute, label: "Saved agent and workspace")) }
     return values
   }
   private func selectRoute(_ id: String) {
-    if id == "device" {
-      draft.task?.runtime = "default_agent"; draft.task?.workspaceID = model.deviceWorkspaceID
-      draft.task?.model = nil; draft.task?.thinking = nil; draft.task?.permission = nil
-      return
-    }
-    guard let provider = model.providers.first(where: { $0.id == id }) else { return }
-    draft.task?.runtime = provider.runtimeKind
-    draft.task?.workspaceID = id.hasPrefix("remote:") ? String(id.split(separator: ":")[1]) : nil
+    let parts = id.split(separator: ":").map(String.init)
+    guard parts.count >= 2, id != "device" else { return }
+    draft.task?.runtime = parts.last ?? ""
+    draft.task?.workspaceID = parts[0] == "remote" ? parts[1] : nil
     draft.task?.model = nil; draft.task?.thinking = nil; draft.task?.permission = nil
+    draft.task?.folderID = nil
   }
   private func save() async {
+    if let task = draft.task, task.runtime.isEmpty || task.workspaceID == model.deviceWorkspaceID {
+      model.errorMessage = "Choose a Mac or Linux agent to run this task."; return
+    }
     busy = true; defer { busy = false }
     if await model.perform(.saveCalendar(id: eventID, revision: event?.revision, draft: draft)) { dismiss() }
   }
