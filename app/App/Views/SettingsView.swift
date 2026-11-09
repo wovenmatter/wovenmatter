@@ -167,7 +167,7 @@ struct SettingsView: View {
     }
     private func openPendingConnections() {
         guard let scope = model.pendingConnectionsScope else { return }
-        section = scope == "usage" ? .usage : .connections(scope); model.pendingConnectionsScope = nil
+        section = scope == "usage" ? .usage : scope == "general" ? .general : .connections(scope); model.pendingConnectionsScope = nil
     }
 
     private var landing: some View {

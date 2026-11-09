@@ -19,8 +19,16 @@ creation captures them are used. Later default edits apply only to later chats.
 | Grok Build | Local or remote creation in `ApplicationModel` | Read current native metadata |
 | OpenCode | `OpenCodeModel.create`, before returning its saved chat | Read catalog/snapshot and watch updates |
 
+New chats start with each harness's Full access mode (Codex agent-full-access,
+Claude Code and Grok Build bypassPermissions, OpenCode allow, Pi Durable full)
+on every workspace unless the user saved a different default; Ask stays
+available but is never the default.
+
 The new-chat chooser, sidebar creation actions, companion requests, and
-agent-created chats use these same creation methods. Scheduled new sessions pass
+agent-created chats use these same creation methods. Agent-created chats use the
+destination workspace's saved defaults, including permission and tools, without
+capping them to the calling chat (Linux applies them in
+`remote/src/workspace-mcp-orchestration.mjs`). Scheduled new sessions pass
 their explicitly captured task settings through creation as well. Imported
 transcripts retain their native settings and do not inherit new-chat defaults.
 

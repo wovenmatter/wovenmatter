@@ -671,6 +671,11 @@ public actor LocalACPClient {
                 && !removedPrefixes.contains(where: upperKey.hasPrefix)
         }
         environment["WOVENMATTER_LOCAL_ACP"] = "1"
+        // Harness tools run on this Mac with nobody necessarily at its screen.
+        // Remote launches get the Linux host's equivalent from wm-exec.
+        if launch.wrappedCommand == nil, launch.executableURL.path != "/usr/bin/ssh" {
+            WovenSessionEnvironment.apply(to: &environment)
+        }
         process.environment = environment
 
         let stdin = Pipe()
@@ -1866,7 +1871,7 @@ public actor LocalACPClient {
                 modelOptionMetadata: configuration.modelOptionMetadata,
                 thinkingOptionMetadata: configuration.thinkingOptionMetadata,
                 permission: modes["currentModeId"]?.stringValue,
-                permissionOptions: available.compactMap { $0["id"]?.stringValue },
+                permissionOptions: runtimeKind.orderedPermissionOptions(available.compactMap { $0["id"]?.stringValue }),
                 permissionOptionMetadata: LocalACPSessionPermissions.nativeMetadata(runtimeKind: runtimeKind, options: available, idKeys: ["id"])
             )
         }
@@ -2037,7 +2042,7 @@ public actor LocalACPClient {
                         || (id == "mode" && (runtimeKind == .codex || runtimeKind == .claudeCode)) {
                 permission = ParsedConfigurationOption(
                     id: parsed.id, currentValue: parsed.currentValue,
-                    options: parsed.options,
+                    options: runtimeKind.orderedPermissionOptions(parsed.options),
                     metadata: LocalACPSessionPermissions.nativeMetadata(runtimeKind: runtimeKind,
                         options: option["options"]?.arrayValue ?? [], idKeys: ["value"])
                 )

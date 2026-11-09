@@ -1,6 +1,91 @@
-# Keychain access and prompt policy
+# Mac access
 
-**Settings → General → Keychain access** is the single deliberate recovery entry.
+Sessions are often started from another device while nobody is at the Mac
+that runs them. Nothing a session does may wait on a dialog, Keychain prompt or
+password there. **Settings → General → Mac access** sets everything up once:
+
+| Item | Why sessions need it | How it is granted | Detection |
+| --- | --- | --- | --- |
+| Keychain access | Saved provider, workspace and browser credentials | Enable/Restore Keychain access (below) | The existing owner-process checks |
+| Full Disk Access | Files in protected folders (Desktop, Documents, Downloads, other apps' data) without a per-folder prompt | Opens Privacy & Security → Full Disk Access; macOS has no request API | Reads a file only Full Disk Access unlocks (`~/Library/Application Support/com.apple.TCC/TCC.db`, Safari bookmarks); a missing file is inconclusive |
+| Accessibility | Computer Use input | `AXIsProcessTrustedWithOptions` prompt, then the pane | `AXIsProcessTrusted` |
+| Screen Recording | Computer Use snapshots | `CGRequestScreenCaptureAccess`, then the pane | `CGPreflightScreenCaptureAccess` |
+| Automation | Agents scripting System Events and Finder (`osascript`) | Launches System Events hidden and asks with `AEDeterminePermissionToAutomateTarget`; the pane if denied | The same call without asking; a target that is not running is inconclusive |
+| Microphone | Dictation (attended) | `AVCaptureDevice.requestAccess` | `AVCaptureDevice.authorizationStatus` |
+
+Rows show Ready, Needs attention or Not set up and refresh every two seconds while
+General is open, so a grant made in System Settings is detected without a button.
+Screen Recording and Accessibility can need a relaunch before the running app
+sees them; the card says so. Automation for other apps still asks the first time
+an agent controls them, and that macOS dialog needs a person at the Mac; it is a
+known remaining prompt, so grant frequently scripted apps ahead of time. The app declares `NSAppleEventsUsageDescription` and the hardened
+runtime `com.apple.security.automation.apple-events` entitlement for these requests.
+
+## Which process macOS attributes permissions to
+
+TCC grants belong to the *responsible* process's code identity, not to an
+executable path. Woven Matter's background server is the same signed app binary
+(`Contents/MacOS/WovenMatter --backend`) started by its LaunchAgent, so it has
+the app's bundle identifier and designated requirement; the frontend, the server
+and every harness, shell and tool process they spawn with `Process`/`posix_spawn`
+are attributed to Woven Matter. One grant therefore covers the processes that
+run sessions, and checks made in either process agree. The bundled Cua driver is
+spawned by the signed GUI for the same reason. Exceptions:
+
+- Processes started over SSH, by Terminal or by another app are attributed to
+  that app, not Woven Matter. Linux workspaces have no TCC.
+- The closed-lid helper is a separate launchd daemon and needs no privacy access.
+- Production and each Dev profile have different bundle identifiers and need
+  their own grants. Ad-hoc signed Dev builds lose grants when rebuilt; use a
+  stable signing identity (below).
+- An OpenCode service that was started outside Woven Matter keeps its starter's
+  attribution and environment.
+
+## Status on every device
+
+Each Mac publishes its status as `CompanionMacAccessStatus` inside its
+`CompanionExecutionWorkspace` record (`macAccess`): a map from item to
+`ready`/`needsAttention`/`unknown` plus the app name, with no credentials, paths
+or timestamps, so only a real change bumps the record. The central Mac includes
+it in its five-second registry refresh; a secondary Mac republishes on change
+during its library refresh. The fields are transport-agnostic Codable values;
+unknown items and states from newer Macs decode as unknown, and older Macs that
+never checked report nothing. The background server combines prompt-free probes
+with the last Keychain and Automation results saved by Settings
+(`wovenmatter.mac-access.v1` in the app's defaults).
+
+A session on a Mac missing Full Disk Access or Keychain access — or Accessibility
+and Screen Recording when Computer Use is enabled for it — shows a quiet notice
+above its composer, for example "Mac Mini is missing Full Disk Access for Woven
+Matter. Open Settings → General on that Mac." `CompanionMacAccessStatus.sessionNotice`
+produces the text for any client, so every device shows the same message.
+
+## Password prompts fail fast
+
+Sessions launched by Woven get an environment in which credential prompts fail
+at once with a message instead of hanging a PTY:
+
+- `sudo` resolves to a Woven `session-tools/sudo` first on `PATH`. It runs the
+  real `/usr/bin/sudo -n`, so passwordless rules (Linux Full root) work unchanged
+  and anything needing a password fails immediately with "This command needs
+  <device>'s password…". Under Linux Normal user (`NoNewPrivileges`) it explains
+  that sudo is unavailable.
+- `GIT_ASKPASS`, `SSH_ASKPASS` (with `SSH_ASKPASS_REQUIRE=force`) and
+  `SUDO_ASKPASS` point to a helper that refuses with a message;
+  `GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=never`, `DEBIAN_FRONTEND=noninteractive`.
+
+The scripts live in `remote/host/session-tools` and ship in the Linux host
+bundle; the Mac writes byte-identical copies (a test enforces this) to
+`~/Library/Application Support/Woven Matter/Session Tools`. Mac native harnesses,
+Pi Durable and the OpenCode service Woven starts receive the overlay from
+`WovenSessionEnvironment`; Linux sessions receive it from `wm-exec` and
+`nonInteractiveSessionEnvironment` in `remote/src/config.mjs` (harnesses, Pi
+Durable's worker and scheduled tasks). Macs have no Full root mode; their
+sessions keep normal-user behavior.
+
+## Keychain access and prompt policy
+
+**Settings → General → Mac access → Keychain access** is the single deliberate recovery entry.
 Use **Enable Keychain access** initially or **Restore Keychain access** after a failure.
 When macOS asks, **Always Allow** remembers access to that item; it is not a blanket
 authorization for future credentials. Background checks stay noninteractive.
@@ -82,6 +167,12 @@ Apple references: [Code signing requirements](https://developer.apple.com/docume
 [Mac Keychain implementations](https://developer.apple.com/documentation/technotes/tn3137-on-mac-keychains).
 
 ## Validation
+
+Mac access tests cover the status record's wire format and notice text
+(`CompanionMacAccessTests`), the session-tools scripts with a fake sudo on both
+platforms (`WovenSessionEnvironmentTests`, `remote/test/session-tools.test.mjs`)
+and the environment overlays. Real TCC prompts and System Settings grants need a
+person at the Mac and are verified manually.
 
 Provider-free regression suites cover read/write suppression and policy
 restoration, denied/missing credentials, concurrent operations, last-good usage

@@ -45,9 +45,9 @@ final class AgentLauncherTests: XCTestCase {
     XCTAssertEqual(agents.map(\.providerID), ["pi-durable-device", "local:pi", "gateway:eddie"])
     XCTAssertTrue(agents.dropFirst().allSatisfy { $0.workspaceName == mac.name })
     let groups = CompanionAgentGroup.list(agents: agents, workspaces: [mac, empty])
-    XCTAssertEqual(groups.map(\.name), ["This iPhone", "James’s MacBook Air", "Test"])
-    XCTAssertEqual(groups.last?.agents, [])
-    XCTAssertEqual(groups.last?.workspace?.kind, .linux)
+    XCTAssertEqual(groups.map(\.name), ["James’s MacBook Air", "Test", "This iPhone"])
+    XCTAssertEqual(groups.first(where: { $0.name == "Test" })?.agents, [])
+    XCTAssertEqual(groups.first(where: { $0.name == "Test" })?.workspace?.kind, .linux)
   }
 
 }

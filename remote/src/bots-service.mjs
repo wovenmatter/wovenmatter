@@ -185,5 +185,5 @@ export function createBotsService({ configuration, mcp, defaultAgent, serverPort
     return true
   }
 
-  return { start, close, status, handleHost, handleClient, upgrade, hostToken: () => hostToken }
+  return { start, close, status, handleHost, handleClient, upgrade, runtimeConfiguration, hostToken: () => hostToken }
 }

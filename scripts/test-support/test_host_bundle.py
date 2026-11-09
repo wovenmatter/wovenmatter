@@ -115,6 +115,14 @@ class ExecTests(unittest.TestCase):
         self.assertNotIn(self.settings['WOVENMATTER_API_TOKEN'],' '.join(value['argv']))
         self.assertEqual(value['input'],'protocol\n'); self.assertEqual(value['cwd'],str(self.root/'workspace'))
         self.assertEqual(value['env']['WOVEN_DEFAULT_AGENT_DIRECTORY'],str(self.root/'workspace/.wovenmatter/default-agent'))
+    def test_sessions_get_noninteractive_credential_prompts(self):
+        code='import os,json; print(json.dumps({k:os.environ.get(k) for k in ("PATH","GIT_TERMINAL_PROMPT","SSH_ASKPASS","SSH_ASKPASS_REQUIRE","SUDO_ASKPASS")}))'
+        result=self.execute('exec',sys.executable,'-c',code)
+        self.assertEqual(result.returncode,0,result.stderr.decode()); value=json.loads(result.stdout)
+        tools=str(self.root/'current/host/session-tools')
+        self.assertEqual(value['PATH'].split(':')[0],tools)
+        self.assertEqual(value['GIT_TERMINAL_PROMPT'],'0'); self.assertEqual(value['SSH_ASKPASS_REQUIRE'],'force')
+        self.assertEqual(value['SSH_ASKPASS'],tools+'/askpass'); self.assertEqual(value['SUDO_ASKPASS'],tools+'/askpass')
     def test_literal_environment_and_no_shell_rc_execution(self):
         marker=self.home/'rc-was-executed'; (self.home/'.bashrc').write_text('touch '+str(marker)+'\n')
         literal='$(touch '+str(marker)+') # value with spaces'

@@ -305,18 +305,7 @@ public final class SessionSelectionPreferences {
   /// The app's starting policy for new conversations, below explicit user
   /// defaults. Never written as an override or applied to imported sessions.
   public static func productDefaults(harness: String) -> SessionSelections {
-    let permission: String?
-    switch AgentRuntimeKind(rawValue: harness) {
-    case .codex: permission = "agent-full-access"
-    case .claudeCode, .grokBuild: permission = "bypassPermissions"
-    case .openclaw, .hermes: permission = "full"
-    case .opencode: permission = "allow"
-    // Cursor Full Access uses its documented native --force process flag.
-    case .cursor: permission = "force"
-    case .defaultAgent: permission = "full"
-    case .pi, nil: permission = nil
-    }
-    return SessionSelections(permission: permission)
+    SessionSelections(permission: AgentRuntimeKind(rawValue: harness)?.fullAccessPermission)
   }
 
   private func setDefaults(

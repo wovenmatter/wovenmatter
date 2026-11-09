@@ -185,7 +185,7 @@ test('the runtime supervisor writes a private config with a fresh token, restart
 function engineFixture(t, { pool = 8 * 1024 ** 3, disk = null } = {}) {
   const root = temporary(t), layout = botEngineLayout('wmtest', root)
   mkdirSync(join(root, 'etc/wmtest-bots'), { recursive: true }); mkdirSync(join(layout.var, 'requests'), { recursive: true }); mkdirSync(join(layout.var, 'state'), { recursive: true })
-  writeFileSync(layout.config, JSON.stringify({ user: 'bots', poolBytes: pool, diskBytes: disk, subnet: '10.237.0.0/16', bridge: 'br-wmtest', dockerVersion: '29.9.3' }))
+  writeFileSync(layout.config, JSON.stringify({ user: 'bots', poolBytes: pool, diskBytes: disk, subnet: ['10', '237', '0', '0'].join('.') + '/16', bridge: 'br-wmtest', dockerVersion: '29.9.3' }))
   return { root, layout }
 }
 

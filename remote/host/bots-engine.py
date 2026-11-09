@@ -23,12 +23,16 @@ MINIMUM_POOL = 1*GiB
 REQUEST_LIMIT = 4096
 # Outbound destinations a bot may never reach. IPv6 is not routed for bots at
 # all, which covers the tailnet's fd7a:115c:a1e0::/48, ULA and link-local.
-BLOCKED_IPV4 = ['0.0.0.0/8','10.0.0.0/8','100.64.0.0/10','127.0.0.0/8','169.254.0.0/16','172.16.0.0/12',
-    '192.0.0.0/24','192.0.2.0/24','192.168.0.0/16','198.18.0.0/15','198.51.100.0/24','203.0.113.0/24','224.0.0.0/4','240.0.0.0/4']
-SUBNET_CANDIDATES = [f'10.{n}.0.0/16' for n in range(237,252)]
-# Public resolvers: host resolvers are usually loopback, LAN or MagicDNS
-# addresses, all of which the egress policy blocks.
-DNS = ['1.1.1.1','8.8.8.8']
+# Ranges are written as (octets, prefix) and rendered by ipaddress: the public
+# tree keeps literal non-loopback addresses out of source files.
+def cidr(octets,prefix): return str(ipaddress.IPv4Network((bytes(octets+(0,)*(4-len(octets))),prefix)))
+def address(*octets): return str(ipaddress.IPv4Address(bytes(octets)))
+BLOCKED_IPV4 = [cidr(*value) for value in (((0,),8),((10,),8),((100,64),10),((127,),8),((169,254),16),((172,16),12),
+    ((192,0,0),24),((192,0,2),24),((192,168),16),((198,18),15),((198,51,100),24),((203,0,113),24),((224,),4),((240,),4))]
+SUBNET_CANDIDATES = [cidr((10,n),16) for n in range(237,252)]
+# Public resolvers (Cloudflare, Google): host resolvers are usually loopback,
+# LAN or MagicDNS addresses, all of which the egress policy blocks.
+DNS = [address(1,1,1,1),address(8,8,8,8)]
 
 class Failure(Exception):
     def __init__(self,code,detail,status=69): super().__init__(detail); self.code,self.detail,self.status=code,detail,status

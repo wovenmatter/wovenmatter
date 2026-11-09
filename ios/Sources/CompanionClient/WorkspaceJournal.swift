@@ -488,6 +488,8 @@ public actor WorkspaceClient {
   public init(store: MobileStore, workspaceID: String, transport: any ExecutionWorkspaceTransport) {
     self.store = store; self.workspaceID = workspaceID; self.transport = transport
   }
+  /// Confirms this host still answers for the registered workspace before a new remote creation.
+  public func checkConnection() async throws { try await verify() }
   public func providers() async throws -> [CompanionProvider] { try await transport.providers() }
   public func pending() async throws -> [CompanionPendingInteraction] { try await transport.pending() }
   public func capabilities(_ id: String) async throws -> CompanionProvider { try await verify(); return try await transport.capabilities(id) }

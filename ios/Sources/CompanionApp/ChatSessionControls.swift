@@ -5,13 +5,26 @@ import WovenMatterCompanion
 
 extension CompanionModel {
   func startNewChat(with agent: CompanionAgentLauncher) async {
-    guard launcherAgents.contains(where: { $0.id == agent.id && $0.isAvailable }) else { return }
+    guard let current = launcherAgents.first(where: { $0.id == agent.id }) else { return }
+    guard current.isAvailable else {
+      chatSetupProblem = workspaceIsConnected(current.workspaceID) ? "This agent is currently unavailable." : Self.deviceConnectionMessage
+      if !chatChooserPresented { errorMessage = chatSetupProblem }
+      return
+    }
     await startNewChat(workspaceID: agent.workspaceID, agentID: agent.providerID)
   }
 
   func newChatWithCurrentAgent() async {
+    guard !isViewingRemoteQuickChat else { return }
+    guard workspaceIsConnected(selectedExecutionWorkspaceID) else { errorMessage = Self.deviceConnectionMessage; return }
     guard let agent = activeProvider else { newChat(); return }
-    await startNewChat(workspaceID: selectedExecutionWorkspaceID, agentID: agent.id)
+    let workspaceID = selectedExecutionWorkspaceID
+    // The toolbar belongs to the displayed conversation, not the folder most
+    // recently browsed in another tab.
+    selectedFolderID = selectedConversation?.folderID
+    selectedFolderWorkspaceID = canonicalWorkspaceID(workspaceID)
+    newChatNoteID = nil
+    await startNewChat(workspaceID: workspaceID, agentID: agent.id)
   }
 
   private func startNewChat(workspaceID: String, agentID: String) async {
@@ -19,6 +32,11 @@ extension CompanionModel {
     startingChat = true; chatSetupProblem = nil
     defer { startingChat = false }
     let folder = selectedFolderID, reference = newChatNoteID
+    guard routeOwnsFolder(workspaceID: workspaceID, folderID: folder) else {
+      chatSetupProblem = "Choose an agent in this folder’s owning workspace."
+      if !chatChooserPresented { errorMessage = chatSetupProblem }
+      return
+    }
     do {
       var conversationID: String?
       if workspaceID == "local", let connection = inferenceConnections.first(where: { $0.id == inferenceConnectionID }) {
@@ -33,20 +51,21 @@ extension CompanionModel {
         try await adoptDeviceConversation(record, transcript: .init(conversationID: id))
         await reload(); conversationID = id
       } else if workspaceID != "local" {
+        try await requireWorkspaceConnection(workspaceID)
         let agents = workspaceID == "central" ? providers : workspaceProviders[workspaceID] ?? []
         guard (workspaceID == "central" ? online : workspaceReachable[workspaceID] == true),
               agents.contains(where: { $0.id == agentID && $0.available && $0.canStart }) else {
           throw DeviceExecutionError.unavailable("This agent is currently unavailable.")
         }
+        try await prepareExecutionFolder(folder, workspaceID: workspaceID)
         let records = workspaceID == "central" ? await store.snapshot().commands : await store.journal.commandRecords(workspaceID: workspaceID)
-        let pending = records.first { $0.command.commandID == pendingChatCreation?.commandID && ($0.command.workspaceID ?? "central") == workspaceID }
-          ?? records.first { $0.command.kind == .createSession && $0.receipt?.status != .completed && $0.receipt?.status != .rejected }
-        if let pending {
-          let launches = await store.snapshot().launches
-          guard pending.command.providerID == agentID, pending.command.folderID == folder,
-                !launches.contains(where: { $0.create.commandID == pending.id }) else {
-            throw DeviceExecutionError.unavailable("A previous chat is awaiting acknowledgement. Resolve it in Settings → Pair to Mac → Pending changes.")
-          }
+        let launchCommands = Set(await store.snapshot().launches.map { $0.create.commandID })
+        let pending = records.first {
+          $0.command.commandID == pendingChatCreation?.commandID && $0.command.providerID == agentID &&
+            $0.command.folderID == folder && !launchCommands.contains($0.id) && $0.receipt?.status != .rejected
+        } ?? records.first {
+          $0.command.kind == .createSession && $0.command.providerID == agentID && $0.command.folderID == folder &&
+            !launchCommands.contains($0.id) && $0.receipt?.status != .completed && $0.receipt?.status != .rejected
         }
         var command = pending?.command ?? CompanionCommand(deviceID: state.deviceID, kind: .createSession,
           conversationID: UUID().uuidString.lowercased(), providerID: agentID, folderID: folder)
@@ -76,8 +95,8 @@ extension CompanionModel {
       try persistExecutionConfiguration()
       if workspaceID != "local" { await refreshConversation() }
     } catch {
-      chatSetupProblem = error.localizedDescription
-      if !chatChooserPresented { errorMessage = error.localizedDescription }
+      chatSetupProblem = workspaceActionMessage(error)
+      if !chatChooserPresented { errorMessage = chatSetupProblem }
     }
   }
 
@@ -104,7 +123,7 @@ extension CompanionModel {
   private func canConfigureDeviceChat(_ id: String?) -> Bool {
     guard !sending, !startingChat, !fixture else { return false }
     guard let id else { return true }
-    guard let record = executionRecords[id] else { return false }
+    guard let record = executionRecords[id], record.quickChatVersion == 1 else { return false }
     return !configuringDeviceSessions.contains(id) && localRunTokens[id] == nil && !["running", "stopping", "interrupted"].contains(record.status)
   }
 
@@ -156,10 +175,14 @@ struct NewChatChooser: View {
   var body: some View {
     VStack(spacing: 0) {
       header
+      if let problem = model.chatSetupProblem {
+        Text(problem).font(.caption).foregroundStyle(DashboardPalette.danger)
+          .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 20).padding(.vertical, 12)
+          .accessibilityIdentifier("chat-setup-problem")
+      }
       ScrollView {
         VStack(alignment: .leading, spacing: 8) {
-          ForEach(model.launcherGroups) { workspace in workspaceSection(workspace) }
-          if let problem = model.chatSetupProblem { Text(problem).font(.caption).foregroundStyle(DashboardPalette.danger).padding(.vertical, 12) }
+          ForEach(model.chatLauncherGroups) { workspace in workspaceSection(workspace) }
         }.padding(.horizontal, 20).padding(.bottom, 24)
       }.scrollIndicators(.never)
     }.background(theme.palette.workspace).foregroundStyle(DashboardPalette.foreground)
@@ -190,7 +213,7 @@ struct NewChatChooser: View {
         DashboardLucideIcon(glyph: .arrowRight, size: 16)
       }.frame(minHeight: 44).padding(12)
         .background(theme.palette.themeWhisper, in: RoundedRectangle(cornerRadius: DashboardMetrics.cardRadius))
-    }.buttonStyle(.plain).disabled(!agent.isAvailable || model.startingChat)
+    }.buttonStyle(.plain).disabled(model.startingChat)
       .opacity(agent.isAvailable ? 1 : 0.45).accessibilityIdentifier("choose-chat-agent-" + agent.id)
   }
 }

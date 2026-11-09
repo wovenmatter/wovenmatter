@@ -78,6 +78,7 @@ struct DashboardCloudConversation: View {
     @State private var librarySourceMessageID: String?
     @State private var attachmentOpenError: String?
     @State private var executionWorkspaceID: String?
+    @State private var macAccessNotice: MacAccessSessionNotice?
     @State private var canChooseFolder = false
     @State private var choosingFolder = false
     @State private var folderSelectionError: String?
@@ -438,6 +439,10 @@ struct DashboardCloudConversation: View {
                     }
                     .padding(.bottom, DashboardComposer.verticalPadding)
                     VStack(spacing: 8) {
+                        if let macAccessNotice {
+                            DashboardMacAccessNotice(message: macAccessNotice.message,
+                                openSettings: macAccessNotice.isThisMac ? { model.pendingConnectionsScope = "general" } : nil)
+                        }
                         if let conversation, !conversation.isArchived, conversation.localRuntimeKind == .defaultAgent,
                            model.localACPSessionMetadata[conversation.id]?.selectableModels.isEmpty == true {
                             Button {
@@ -599,6 +604,17 @@ struct DashboardCloudConversation: View {
                             }
                         )
                         .disabled(conversation?.isArchived == true)
+                        .task(id: conversation?.id) {
+                            // Cheap, prompt-free checks; a grant made elsewhere clears the notice.
+                            macAccessNotice = nil
+                            guard let conversation else { return }
+                            while !Task.isCancelled {
+                                let notice = await model.macAccessNotice(for: conversation)
+                                guard !Task.isCancelled else { return }
+                                if notice != macAccessNotice { macAccessNotice = notice }
+                                do { try await Task.sleep(for: .seconds(10)) } catch { return }
+                            }
+                        }
                         .task(id: "\(conversation?.id ?? ""):\(conversation?.folderID ?? ""):\(conversation?.isArchived == true):\(messages.contains(where: { $0.role == "user" })):\(sendInProgress)") {
                             canChooseFolder = false
                             executionWorkspaceID = nil
@@ -1378,5 +1394,48 @@ struct DashboardLocalFormCard: View {
             }
         }
         return request.accepts(result) ? result : nil
+    }
+}
+
+/// A session on a Mac that is missing a permission it needs. Full-width quiet
+/// notice above the composer, matching the composer setup notices.
+private struct DashboardMacAccessNotice: View {
+    @Environment(\.dashboardTheme) private var theme
+    let message: String
+    let openSettings: (() -> Void)?
+
+    var body: some View {
+        if let openSettings {
+            Button(action: openSettings) { label(showsArrow: true) }
+                .buttonStyle(SettingsQuietButtonStyle(horizontalPadding: 12, minimumHeight: 32))
+                .background(theme.palette.themeWhisper,
+                    in: RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
+                .help("Open Settings → General")
+        } else {
+            label(showsArrow: false)
+                .padding(.horizontal, 12)
+                .frame(minHeight: 32)
+                .background(theme.palette.themeWhisper,
+                    in: RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
+        }
+    }
+
+    private func label(showsArrow: Bool) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(message)
+                .font(.system(size: 12.5, weight: .regular))
+                .foregroundStyle(DashboardPalette.mutedForeground)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+            if showsArrow {
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 11, weight: .regular))
+                    .foregroundStyle(DashboardPalette.mutedForeground)
+                    .accessibilityHidden(true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 6)
     }
 }

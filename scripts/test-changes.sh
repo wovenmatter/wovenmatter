@@ -92,6 +92,12 @@ run_remote_tests() {
   npm test --prefix remote
 }
 
+run_bots_tests() {
+  npm ci --prefix bots --ignore-scripts --no-audit --no-fund
+  npm test --prefix bots
+  bots_tested=1
+}
+
 run_app_build() {
   xcodebuild -quiet -onlyUsePackageVersionsFromResolvedFile \
     -project app/WovenMatter.xcodeproj \
@@ -131,6 +137,7 @@ run_all() {
   run_static_checks
   run_default_agent_tests
   run_remote_tests
+  run_bots_tests
   run_package_tests
   run_app_build
   run_companion --all-devices
@@ -165,6 +172,7 @@ run_remote() {
   run_static_checks
   run_default_agent_tests
   run_remote_tests
+  run_bots_tests
 }
 
 mode="${1:-changed}"
@@ -201,7 +209,13 @@ elif printf '%s\n' "$changed" | grep -Eq '^app/App/' \
   run_macos
 elif printf '%s\n' "$changed" | grep -Eq '^app/(Sources|Tests)/'; then
   run_package_tests
+elif printf '%s\n' "$changed" | grep -Eq '^bots/' \
+  && ! printf '%s\n' "$changed" | grep -Eqv '^(bots/|docs/)'; then
+  run_bots_tests
 else
   run_static_checks
   run_app_build
+fi
+if [ -z "${bots_tested:-}" ] && printf '%s\n' "$changed" | grep -Eq '^bots/'; then
+  run_bots_tests
 fi

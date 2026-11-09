@@ -22,11 +22,12 @@ for every package update. Three separate mechanisms do that:
 | Record | Kind | Updated by |
 | --- | --- | --- |
 | `package.json` minimum-only ranges (`>=version`) | Declaration. The floor is the current tested release; there is no upper cap on stable releases. | Maintenance PRs raise floors, including majors |
-| `default-agent/package-lock.json`, `ios/EmbeddedRuntime/package-lock.json` | Exact tested snapshot with integrity hashes, installed with `npm ci` | The same PRs |
+| `default-agent/package-lock.json`, `ios/EmbeddedRuntime/package-lock.json`, `bots/package-lock.json` | Exact tested snapshot with integrity hashes, installed with `npm ci` | The same PRs |
 | `app/Package.resolved` | Shared SwiftPM/Xcode graph: Sparkle and any transitive packages | Native package-manager tooling during maintenance |
 | `default-agent/.node-version` and the Node checksums in `scripts/prepare-default-agent.sh` and `LocalACPManagedRuntime.swift` | One current stable Node release and its official archive SHA-256 values | Maintenance PR, all copies together |
 | `remote/host/runtime-versions.json` | The same Node release's Linux archive SHA-256 values and the lockfile's Playwright version | The same maintenance PR; host bundle tests reject drift |
 | `dockerVersion` and `dockerSHA256` in `remote/host/runtime-versions.json` | The Docker Engine static release (`download.docker.com/linux/static/stable`) that Linux bot engines install, with its x86_64 and aarch64 archive SHA-256 values | Maintenance PR; both checksums together |
+| `bots/image/Dockerfile` (`NODE_VERSION` with its two Linux SHA-256 values, `PLAYWRIGHT_VERSION`) | The bot image's copy of the same Node and Playwright selections; Ubuntu 26.04 packages float and are upgraded at build and by the bots Update | The same maintenance PR, kept equal to `remote/host/runtime-versions.json` |
 | `remote/npm-runtime/package-lock.json` | Locked security replacements for npm's vendored dependencies, shared by image builds and each native host release's private npm | Dependency maintenance; runtime API and installer tests validate both uses |
 | `harnesses/npm-version.json` | Current private Mac npm archive and registry integrity, with the existing locked `remote/npm-runtime` vendor repairs | Maintenance PR; managed CLI and bundled SDK updater verification |
 | `app/Automation/cua-version.json` | Exact Cua Driver archive/executable digests, source and signing identity | Maintenance PR with desktop acceptance |
@@ -237,6 +238,17 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   recover transcript window gaps, and derive progress receipts only from new
   committed entries. Archive/subagent observers use `observeCommits`; SQLite
   migration verifies each batched commit receipt before activation.
+- **Bots runtime** (`bots/`) consumes the same Pi family, Chord, Claude Agent
+  SDK, typebox and ws selections as `default-agent`, with the same
+  consumer-scoped pi-ai provider and Chord `ws` overrides, and minimum-only
+  ranges. Its in-container helper ships the runtime's own locked Pi Durable,
+  Chord and Pi telemetry packages (copied from `bots/node_modules` into the
+  helper volume), so they never drift from the runtime. The bot image builds
+  through the Engine API from `bots/image` under a content-hash tag, so a
+  changed recipe gives a new image; existing bots move to it with Rebuild.
+  `npm test --prefix bots` (type check plus faux-provider suites) validates
+  it; `npm run test:engine --prefix bots` with `WOVEN_BOTS_ENGINE_SOCKET` set
+  exercises a real engine on request.
 - **Pyodide and esbuild** produce the offline iOS resources and their
   provenance. They refresh together with the generated files.
 

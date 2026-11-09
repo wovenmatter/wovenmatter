@@ -166,7 +166,7 @@ struct SettingsAgentDefaultsSection: View {
         // Known defaults can be named before discovery. The native catalog
         // still controls selectable options and takes precedence once loaded.
         return value == SessionSelectionPreferences.productDefaults(harness: runtime.rawValue).permission
-            ? "Full Access" : value
+            ? "Full access" : value
     }
 
     @MainActor private func loadDefaults() async {

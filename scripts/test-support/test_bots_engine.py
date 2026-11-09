@@ -10,6 +10,7 @@ import unittest
 from unittest import mock
 
 ROOT=Path(__file__).resolve().parents[2]
+cidr=lambda *octets,prefix: str(__import__('ipaddress').IPv4Network((bytes(octets+(0,)*(4-len(octets))),prefix)))
 spec=importlib.util.spec_from_file_location('bots_engine',ROOT/'remote/host/bots-engine.py')
 engine=importlib.util.module_from_spec(spec); spec.loader.exec_module(engine)
 
@@ -23,7 +24,7 @@ class RecordingHost:
 class Rendering(unittest.TestCase):
     def setUp(self):
         self.layout=engine.Layout('wovenmatter')
-        self.config={'user':'trey','group':'trey','subnet':'10.237.0.0/16','poolBytes':8*1024**3,'diskBytes':50*1024**3}
+        self.config={'user':'trey','group':'trey','subnet':cidr(10,237,prefix=16),'poolBytes':8*1024**3,'diskBytes':50*1024**3}
     def test_production_names_match_the_contract(self):
         layout=self.layout
         self.assertEqual(layout.service,'wovenmatter-docker.service'); self.assertEqual(layout.slice,'wovenmatter-bots.slice')
@@ -57,7 +58,7 @@ class Rendering(unittest.TestCase):
         self.assertIn('Slice=wovenmatter-bots.slice',units[self.layout.containerd])
     def test_egress_ruleset_blocks_tailnet_private_host_and_ipv6(self):
         rules=engine.render_ruleset(self.layout,self.config)
-        for network in ('100.64.0.0/10','10.0.0.0/8','172.16.0.0/12','192.168.0.0/16','169.254.0.0/16','127.0.0.0/8'):
+        for network in (cidr(100,64,prefix=10),cidr(10,prefix=8),cidr(172,16,prefix=12),cidr(192,168,prefix=16),cidr(169,254,prefix=16),cidr(127,prefix=8)):
             self.assertIn(network,rules)
         bridge=self.layout.bridge
         self.assertIn(f'iifname "{bridge}" meta nfproto ipv6 drop',rules)
@@ -84,8 +85,9 @@ class Rendering(unittest.TestCase):
         self.assertEqual(engine.normalize_disk(5*1024**3+1,100*1024**3)%(4*1024**2),0)
         with self.assertRaises(engine.Failure): engine.normalize_disk(1024**3,100*1024**3)
         with self.assertRaises(engine.Failure): engine.size_or_none(True,'x')
-        self.assertEqual(engine.choose_subnet(['10.237.5.0/24','172.17.0.0/16','100.83.1.2/32']),'10.238.0.0/16')
-        self.assertEqual(engine.bridge_address('10.240.0.0/16'),'10.240.0.1/24')
+        self.assertEqual(engine.choose_subnet([cidr(10,237,5,prefix=24),cidr(172,17,prefix=16),cidr(100,83,1,2,prefix=32)]),cidr(10,238,prefix=16))
+        self.assertEqual(engine.bridge_address(cidr(10,240,prefix=16)),engine.address(10,240,0,1)+'/24')
+        self.assertIn(cidr(100,64,prefix=10),engine.BLOCKED_IPV4); self.assertEqual(engine.DNS,[engine.address(1,1,1,1),engine.address(8,8,8,8)])
 
 class Requests(unittest.TestCase):
     def setUp(self):
@@ -93,7 +95,7 @@ class Requests(unittest.TestCase):
         self.layout=engine.Layout('wmtest',root); self.host=RecordingHost()
         self.engine=engine.Engine(self.layout,self.host,'/usr/bin/python3')
         self.layout.etc.mkdir(parents=True); self.layout.requests.mkdir(parents=True); self.layout.state_dir.mkdir(parents=True)
-        self.engine.save_config({'user':'bots','uid':os.getuid(),'gid':os.getgid(),'group':'bots','subnet':'10.237.0.0/16','poolBytes':None,'diskBytes':None})
+        self.engine.save_config({'user':'bots','uid':os.getuid(),'gid':os.getgid(),'group':'bots','subnet':cidr(10,237,prefix=16),'poolBytes':None,'diskBytes':None})
         self.applied=[]
         # Host facts come from /proc and /sys on Linux; fix them for any test host.
         for name,value in (('total_memory',lambda:16*1024**3),):
