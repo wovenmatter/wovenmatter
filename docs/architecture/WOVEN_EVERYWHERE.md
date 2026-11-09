@@ -50,9 +50,11 @@ same commit.
   - The signed message is the UTF-8 string
     `woven-member-v1\n<METHOD>\n<path with query>\n<time>\n<nonce>\n<hex SHA-256 of body>`.
     An empty body hashes the empty string. A WebSocket upgrade signs its
-    `GET` request. The path is the request target the receiving server sees:
-    relative to the member endpoint it was sent to, so a Tailscale Serve
-    prefix (`/wovenmatter`, `/wovenmatter-execution/<id>`) is not part of it.
+    `GET` request. The path is the request target as sent, without a leading
+    `/wovenmatter` mount (Tailscale Serve strips it before a Linux host sees
+    the request; a Mac receives it intact). The Linux Node server, which Serve
+    reaches through `/wovenmatter-execution/<id>`, accepts a signature over
+    the path with or without that prefix.
   - The verifier accepts a request when:
     - the device is on the current member list and not revoked;
     - the time is within 300 seconds of its own clock;
@@ -60,11 +62,9 @@ same commit.
     - the signature verifies with the member's raw 32-byte Ed25519 public key.
       That key is CryptoKit `Curve25519.Signing` compatible, and Node verifies
       it with `crypto.verify(null, …)`.
-  - The shared test vectors in `shared/Tests/Fixtures/MemberSignatureVectors.json`
-    are checked by Swift and by Node (`remote/test/member-auth.test.mjs`).
-    They use a deterministic test key whose seed is in the file; CryptoKit
-    signatures are randomized, so Swift verifies them rather than reproducing
-    them.
+  - The shared test vectors in
+    `shared/Tests/WovenMatterCompanionTests/MemberSignatureVectors.json` are
+    checked by Swift and by Node (`remote/test/member-auth.test.mjs`).
 - Pairing a new device still uses the existing pairing link and confirmation
   UI on a Mac. Its result is a signed member entry instead of a bearer grant.
 - The Linux Node server verifies member signatures itself. It reads the member

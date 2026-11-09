@@ -139,7 +139,7 @@ const bots = runningAsService && configuration.runtimeKind === 'host' && process
   libraryHost: library, memberIdentity,
   // Any member may open the bots socket; the bearers remain for the transition.
   authorizeClient: async request => authorized(request) || !!clientExecution.principal(request.headers.authorization, 'execution')
-    || !!(members && hasMemberSignature(request.headers) && await members.verify({ method: request.method, target: request.url, headers: request.headers, body: Buffer.alloc(0) }).catch(() => null)),
+    || !!(members && hasMemberSignature(request.headers) && await members.verify({ method: request.method, target: request.url, alternateTargets: await servedTargets(request.url), headers: request.headers, body: Buffer.alloc(0) }).catch(() => null)),
 }) : null
 // A bots-only machine keeps its server, data root and connections but runs no
 // workspace agents, schedules or projects until the workspace is added.
@@ -161,7 +161,7 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
       if (!members) return json(response, 401, { error: 'member_auth_unavailable' })
       const upload = url.pathname === '/v1/host/update' && request.method === 'POST' && hostAdmin
       try {
-        member = await members.verify({ method: request.method, target: request.url, headers: request.headers,
+        member = await members.verify({ method: request.method, target: request.url, alternateTargets: await servedTargets(request.url), headers: request.headers,
           body: async () => upload ? (bodyFile = await hostAdmin.receive(request)) : (request.wovenBody = await readBody(request, maximumSignedBodyBytes)) })
       } catch (error) {
         if (bodyFile) await rm(bodyFile.path, { force: true }).catch(() => {})
@@ -594,6 +594,20 @@ async function refreshMemberIdentity(endpoint) {
   await writeFile(temporary, JSON.stringify(memberIdentityRecord) + '\n', { mode: 0o600 })
   await rename(temporary, resolve(libraryState, 'identity.json'))
   return memberIdentityRecord
+}
+
+// Members sign the path they send. Tailscale Serve reaches this server through
+// `/wovenmatter-execution/<id>` and strips that prefix, so a request may also
+// verify with it put back.
+let executionRoutePrefix = null
+async function servedTargets(target) {
+  if (!executionRoutePrefix) {
+    try {
+      const { id } = JSON.parse(await readFile(resolve(configuration.dataRoot, 'installation.json'), 'utf8'))
+      if (/^[a-z0-9][a-z0-9-]{0,47}$/.test(id)) executionRoutePrefix = '/wovenmatter-execution/' + id
+    } catch {}
+  }
+  return executionRoutePrefix ? [executionRoutePrefix + target] : []
 }
 
 async function memberIdentity() {

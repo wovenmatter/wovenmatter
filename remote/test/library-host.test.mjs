@@ -249,6 +249,7 @@ test('the server accepts signed member requests and rejects wrong keys, replays,
     { deviceID: mac.deviceID, kind: 'mac', name: 'Studio Mac', publicKey: rawPublicKeyFor(mac.key).toString('base64'), endpoints: [], revoked: false },
     { deviceID: phone.deviceID, kind: 'ios', name: 'Phone', publicKey: rawPublicKeyFor(phone.key).toString('base64'), endpoints: [], revoked: false }, ...extra] }))
   writeMembers(1)
+  mkdirSync(join(directory, 'data'), { mode: 0o700 }); writeFileSync(join(directory, 'data/installation.json'), JSON.stringify({ id: 'studio', port: 7337 }))
   const token = 'member-fixture-' + 'a'.repeat(40), port = await freePort()
   // The host lock uses flock(1), which macOS lacks; the service tests use the same shim.
   const tools = join(directory, 'bin'); mkdirSync(tools)
@@ -297,6 +298,9 @@ test('the server accepts signed member requests and rejects wrong keys, replays,
   // A body that differs from the signed one is refused.
   const headers = signMemberRequest({ deviceID: mac.deviceID, privateKey: mac.key, method: 'POST', target: '/v1/execution/devices', body: Buffer.from(provision) })
   await refused(await fetch(base + '/v1/execution/devices', { method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: provision.replace('execution', 'inference') }), 'member_signature_mismatch')
+  // A Mac signs the execution endpoint's full path, which Serve strips.
+  assert.equal((await signed(phone, 'GET', '/v1/execution', null, { target: '/wovenmatter-execution/studio/v1/execution' })).status, 200)
+  await refused(await signed(phone, 'GET', '/v1/execution', null, { target: '/wovenmatter-execution/other/v1/execution' }), 'member_signature_mismatch')
   // (Revocation is applied on the next member list refresh; member-auth.test.mjs covers it.)
   // The installer's bearer still works during the transition.
   assert.equal((await fetch(base + '/v1/health', { headers: { authorization: 'Bearer ' + token } })).status, 200)

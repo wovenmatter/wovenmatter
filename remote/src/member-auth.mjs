@@ -11,13 +11,26 @@ export const memberHeaders = Object.freeze({
 export const memberSignatureWindowMilliseconds = 300_000
 const fail = (statusCode, message, code) => Object.assign(new Error(message), { statusCode, code })
 const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
-const base64url = value => typeof value === 'string' && /^[A-Za-z0-9_-]+$/.test(value)
+// Strict unpadded base64url: only the canonical encoding of its bytes.
+const base64url = value => typeof value === 'string' && /^[A-Za-z0-9_-]+$/.test(value) && Buffer.from(value, 'base64url').toString('base64url') === value
 
 export const bodyDigest = body => createHash('sha256').update(body ?? Buffer.alloc(0)).digest('hex')
 
+/**
+ * The signed path omits a leading `/wovenmatter` mount, which Tailscale Serve
+ * strips before a Linux host sees the request while a Mac receives it intact
+ * (Swift `MemberRequestSignature.canonicalTarget`).
+ */
+export function canonicalTarget(target) {
+  if (target === '/wovenmatter') return '/'
+  if (target.startsWith('/wovenmatter/')) return target.slice('/wovenmatter'.length)
+  if (target.startsWith('/wovenmatter?')) return '/' + target.slice('/wovenmatter'.length)
+  return target
+}
+
 /** The exact UTF-8 string both sides sign. `target` is the path with query. */
 export function memberSigningMessage({ method, target, time, nonce, bodySHA256 }) {
-  return `woven-member-v1\n${String(method).toUpperCase()}\n${target}\n${time}\n${nonce}\n${bodySHA256}`
+  return `woven-member-v1\n${String(method).toUpperCase()}\n${canonicalTarget(target)}\n${time}\n${nonce}\n${bodySHA256}`
 }
 
 /** Accepts standard or URL-safe base64, padded or not; returns the raw 32-byte key. */
@@ -109,14 +122,17 @@ export function createMemberVerifier({ loadMembers, now = Date.now, windowMillis
 
   /**
    * Verifies one request. `target` is the request target as this server
-   * received it (path and query); `body` is the raw body bytes. Returns the
-   * member, or throws a 401 whose `code` names the reason.
+   * received it (path and query); `alternateTargets` are the same request as
+   * the caller may have sent it before a Serve prefix was stripped. `body` is
+   * the raw body bytes or a reader. Returns the member, or throws a 401 whose
+   * `code` names the reason.
    */
-  async function verify({ method, target, headers, body }) {
+  async function verify({ method, target, alternateTargets = [], headers, body }) {
     const device = headers[memberHeaders.device], time = headers[memberHeaders.time]
     const nonce = headers[memberHeaders.nonce], signature = headers[memberHeaders.signature]
     if (![device, time, nonce, signature].every(value => typeof value === 'string')) throw fail(401, 'Every member signature header is required.', 'member_headers_missing')
-    if (!uuid(device)) throw fail(401, 'The member device ID is invalid.', 'member_device_invalid')
+    // Device IDs are lowercase on the wire, as the Swift signer sends them.
+    if (!uuid(device) || device !== device.toLowerCase()) throw fail(401, 'The member device ID is invalid.', 'member_device_invalid')
     if (!/^\d{1,16}$/.test(time)) throw fail(401, 'The member request time is invalid.', 'member_time_invalid')
     if (!base64url(nonce) || Buffer.from(nonce, 'base64url').length !== 16 || nonce.length !== 22) throw fail(401, 'The member nonce must be 16 bytes of unpadded base64url.', 'member_nonce_invalid')
     if (!base64url(signature) || Buffer.from(signature, 'base64url').length !== 64) throw fail(401, 'The member signature is invalid.', 'member_signature_invalid')
@@ -128,8 +144,10 @@ export function createMemberVerifier({ loadMembers, now = Date.now, windowMillis
     // A body reader runs only after the cheap checks, so strangers cannot make
     // this server buffer large uploads; it may return `{sha256}` for a file.
     const bytes = typeof body === 'function' ? await body() : body
-    const message = memberSigningMessage({ method, target, time, nonce, bodySHA256: typeof bytes?.sha256 === 'string' ? bytes.sha256 : bodyDigest(bytes) })
-    if (!verifySignature(null, Buffer.from(message, 'utf8'), found.key, Buffer.from(signature, 'base64url'))) throw fail(401, 'The member signature does not verify.', 'member_signature_mismatch')
+    const bodySHA256 = typeof bytes?.sha256 === 'string' ? bytes.sha256 : bodyDigest(bytes), raw = Buffer.from(signature, 'base64url')
+    const verified = [target, ...alternateTargets].some(candidate =>
+      verifySignature(null, Buffer.from(memberSigningMessage({ method, target: candidate, time, nonce, bodySHA256 }), 'utf8'), found.key, raw))
+    if (!verified) throw fail(401, 'The member signature does not verify.', 'member_signature_mismatch')
     // Only a verified request consumes its nonce, so a forged copy cannot block it.
     const key = found.deviceID + ':' + nonce
     const seen = nonces.get(key)

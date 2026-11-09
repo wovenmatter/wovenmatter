@@ -1,0 +1,114 @@
+{
+  "description": "Signed member request vectors (docs/architecture/WOVEN_EVERYWHERE.md, \"Membership and device keys\"). Signatures are deterministic RFC 8032 Ed25519 over the UTF-8 message; Node regenerates them byte for byte. CryptoKit signatures are randomized, so Swift checks the message bytes and verification. Each reject reuses the named case's signature with one field changed and must be refused.",
+  "privateKeySeedHex": "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60",
+  "publicKeyBase64": "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=",
+  "publicKeyHex": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+  "deviceID": "6f1c2b3a-4d5e-4f60-8a7b-9c0d1e2f3a4b",
+  "windowMilliseconds": 300000,
+  "cases": [
+    {
+      "name": "post-with-body",
+      "method": "POST",
+      "target": "/v1/peers/sync",
+      "time": 1762646400000,
+      "nonce": "AAECAwQFBgcICQoLDA0ODw",
+      "body": "{\"deviceID\":\"6f1c2b3a-4d5e-4f60-8a7b-9c0d1e2f3a4b\",\"after\":0}",
+      "bodyBase64": "eyJkZXZpY2VJRCI6IjZmMWMyYjNhLTRkNWUtNGY2MC04YTdiLTljMGQxZTJmM2E0YiIsImFmdGVyIjowfQ==",
+      "bodySHA256": "6992f2d1dc03f3aaa3785f93b725c5c16642813cd50cd5f4d15d4a7d009c4c5f",
+      "message": "woven-member-v1\nPOST\n/v1/peers/sync\n1762646400000\nAAECAwQFBgcICQoLDA0ODw\n6992f2d1dc03f3aaa3785f93b725c5c16642813cd50cd5f4d15d4a7d009c4c5f",
+      "signature": "VSkyA2LiRgyczr7KinCj66Z_M5Nc-YEVkEhfpiFT9lEWBZXMtFwCgVnMs68yYzZVHW9gSJNKh-PTA8p7iRDFAA",
+      "headers": {
+        "X-Woven-Member-Device": "6f1c2b3a-4d5e-4f60-8a7b-9c0d1e2f3a4b",
+        "X-Woven-Member-Time": "1762646400000",
+        "X-Woven-Member-Nonce": "AAECAwQFBgcICQoLDA0ODw",
+        "X-Woven-Member-Signature": "VSkyA2LiRgyczr7KinCj66Z_M5Nc-YEVkEhfpiFT9lEWBZXMtFwCgVnMs68yYzZVHW9gSJNKh-PTA8p7iRDFAA"
+      }
+    },
+    {
+      "name": "get-empty-body-with-query",
+      "method": "GET",
+      "target": "/v1/changes?after=12&limit=200",
+      "time": 1762646400123,
+      "nonce": "EBESExQVFhcYGRobHB0eHw",
+      "body": "",
+      "bodyBase64": "",
+      "bodySHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "message": "woven-member-v1\nGET\n/v1/changes?after=12&limit=200\n1762646400123\nEBESExQVFhcYGRobHB0eHw\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "signature": "L59IHJvPECGMI8zRPgTpIeLATjopIhwfxNw6ue3DQBxvvsrWF-UjznpwYaQOyDvROgbRGwsxF8jKFZixvNAeAQ",
+      "headers": {
+        "X-Woven-Member-Device": "6f1c2b3a-4d5e-4f60-8a7b-9c0d1e2f3a4b",
+        "X-Woven-Member-Time": "1762646400123",
+        "X-Woven-Member-Nonce": "EBESExQVFhcYGRobHB0eHw",
+        "X-Woven-Member-Signature": "L59IHJvPECGMI8zRPgTpIeLATjopIhwfxNw6ue3DQBxvvsrWF-UjznpwYaQOyDvROgbRGwsxF8jKFZixvNAeAQ"
+      }
+    },
+    {
+      "name": "websocket-upgrade",
+      "method": "GET",
+      "target": "/v1/bots/ws",
+      "time": 1762646401000,
+      "nonce": "ICEiIyQlJicoKSorLC0uLw",
+      "body": "",
+      "bodyBase64": "",
+      "bodySHA256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "message": "woven-member-v1\nGET\n/v1/bots/ws\n1762646401000\nICEiIyQlJicoKSorLC0uLw\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "signature": "-u1J2wQQf7dN1qsOTd8q6wx7bD3vW3JZ2qYkMwNFLfumd2Qt6tPgevGqa377pdI5qQrXFx2r25LKCP5FHgwGAQ",
+      "headers": {
+        "X-Woven-Member-Device": "6f1c2b3a-4d5e-4f60-8a7b-9c0d1e2f3a4b",
+        "X-Woven-Member-Time": "1762646401000",
+        "X-Woven-Member-Nonce": "ICEiIyQlJicoKSorLC0uLw",
+        "X-Woven-Member-Signature": "-u1J2wQQf7dN1qsOTd8q6wx7bD3vW3JZ2qYkMwNFLfumd2Qt6tPgevGqa377pdI5qQrXFx2r25LKCP5FHgwGAQ"
+      }
+    },
+    {
+      "name": "unicode-body",
+      "method": "POST",
+      "target": "/v1/mutations",
+      "time": 1762646402000,
+      "nonce": "MDEyMzQ1Njc4OTo7PD0-Pw",
+      "body": "{\"title\":\"Café — notes 📝\"}",
+      "bodyBase64": "eyJ0aXRsZSI6IkNhZsOpIOKAlCBub3RlcyDwn5OdIn0=",
+      "bodySHA256": "701135f4863ccfad9175f20b54cbae0cf4fdef0b30cba4d8f70e11a32cefc9f0",
+      "message": "woven-member-v1\nPOST\n/v1/mutations\n1762646402000\nMDEyMzQ1Njc4OTo7PD0-Pw\n701135f4863ccfad9175f20b54cbae0cf4fdef0b30cba4d8f70e11a32cefc9f0",
+      "signature": "ZnSCoWztxVEG5X0fvTO3nmBqFSvKxksQhqdvvStZSVxyDxx7ijG0s2NqFv1mo4gJ_6sJPxDsjK6Kmh41EGExBw",
+      "headers": {
+        "X-Woven-Member-Device": "6f1c2b3a-4d5e-4f60-8a7b-9c0d1e2f3a4b",
+        "X-Woven-Member-Time": "1762646402000",
+        "X-Woven-Member-Nonce": "MDEyMzQ1Njc4OTo7PD0-Pw",
+        "X-Woven-Member-Signature": "ZnSCoWztxVEG5X0fvTO3nmBqFSvKxksQhqdvvStZSVxyDxx7ijG0s2NqFv1mo4gJ_6sJPxDsjK6Kmh41EGExBw"
+      }
+    }
+  ],
+  "rejects": [
+    {
+      "name": "method-changed",
+      "case": "post-with-body",
+      "method": "PUT"
+    },
+    {
+      "name": "target-changed",
+      "case": "post-with-body",
+      "target": "/v1/peers/files"
+    },
+    {
+      "name": "query-changed",
+      "case": "get-empty-body-with-query",
+      "target": "/v1/changes?after=13&limit=200"
+    },
+    {
+      "name": "time-changed",
+      "case": "post-with-body",
+      "time": 1762646400001
+    },
+    {
+      "name": "nonce-changed",
+      "case": "post-with-body",
+      "nonce": "AAECAwQFBgcICQoLDA0OEA"
+    },
+    {
+      "name": "body-changed",
+      "case": "post-with-body",
+      "body": "{\"deviceID\":\"6f1c2b3a-4d5e-4f60-8a7b-9c0d1e2f3a4b\",\"after\":1}"
+    }
+  ]
+}
