@@ -27,6 +27,8 @@ fi
 work="$cache/src"
 rm -rf "$work"; mkdir -p "$work"
 cp -R "$root/app" "$root/shared" "$root/ios" "$root/harnesses" "$work/"
+# Client tests compare the Mac session helpers with the Linux host's copies.
+mkdir -p "$work/remote/host" && cp -R "$root/remote/host/session-tools" "$work/remote/host/"
 rm -rf "$work/app/.build" "$work/shared/.build" "$work/ios/.build"
 
 # Darwin pipes never raise SIGPIPE; Linux hosts ignore it process-wide
