@@ -849,7 +849,7 @@ import CompanionInference
         workspaceProviders[workspace.id] = [.init(id: "pi", runtimeKind: "pi", displayName: "Pi Durable", available: true)]
         workspaceReachable[workspace.id] = false
       }
-      if scenario == "workspace-organization" {
+      if scenario == "workspace-organization" || scenario == "remote-folders-empty" {
         let mac = "aaaaaaaa-1111-4111-8111-111111111111", linux = "bbbbbbbb-2222-4222-8222-222222222222", ipad = "cccccccc-3333-4333-8333-333333333333"
         executionWorkspaces = [
           .init(id: mac, libraryID: "fixture", ownerDeviceID: mac, kind: .mac, name: "Studio Mac", capabilities: ["history.central.v1"]),

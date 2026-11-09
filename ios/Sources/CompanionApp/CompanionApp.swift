@@ -365,6 +365,10 @@ struct FoldersPane: View {
     .onAppear {
       guard !initializedSections else { return }
       collapsedSections.formUnion(groups.filter { !$0.isLocal }.map(\.id))
+      // UI fixture: open the Linux workspace, whose folder list is empty, without scrolling.
+      if CompanionModel.uiScenario == "remote-folders-empty" {
+        collapsedSections = Set(["local"] + groups.filter { !$0.isLocal && $0.kind != .linux }.map(\.id))
+      }
       initializedSections = true
     }
     .navigationDestination(isPresented: $recentDetailsPresented) {
@@ -419,7 +423,15 @@ struct FoldersPane: View {
             newFolderWorkspace = workspace; folderName = ""
           }.accessibilityIdentifier("action-new-folder-" + workspace.id)
         }
-        ForEach(model.folders.filter { model.folderOwner($0) == workspace.id }) { folder in
+        let folders = model.folders.filter { model.folderOwner($0) == workspace.id }
+        // Remote workspaces create folders where their files live, so explain the empty list.
+        if folders.isEmpty && !workspace.canCreateFolder {
+          Text("No folders yet. Create folders on " + workspace.name + ".").font(.caption)
+            .foregroundStyle(DashboardPalette.mutedForeground)
+            .frame(maxWidth: .infinity, alignment: .leading).padding(14)
+            .accessibilityIdentifier("workspace-folders-empty-" + workspace.id)
+        }
+        ForEach(folders) { folder in
           WorkspaceRow(icon: .folder, title: folder.name,
             detail: String(model.notes.filter { $0.folderID == folder.id }.count + model.conversations.filter { $0.folderID == folder.id }.count)) { model.openFolder(folder.id) }
             .accessibilityIdentifier("folder-" + folder.id)

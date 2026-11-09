@@ -108,6 +108,15 @@ final class CompanionUITests: XCTestCase {
     XCTAssertTrue(app.buttons["folder-workspace-cccccccc-3333-4333-8333-333333333333"].exists)
   }
 
+  @MainActor func testRemoteWorkspaceWithoutFoldersExplainsWhereToCreateThem() {
+    let app = launch(scenario: "remote-folders-empty")
+    let linux = "bbbbbbbb-2222-4222-8222-222222222222"
+    let caption = app.staticTexts["workspace-folders-empty-" + linux]
+    XCTAssertTrue(caption.waitForExistence(timeout: 5))
+    XCTAssertEqual(caption.label, "No folders yet. Create folders on Linux workspace.")
+    XCTAssertFalse(app.buttons["action-new-folder-" + linux].exists, "Remote folders are created on their own machine")
+  }
+
   @MainActor func testWorkspaceOrganizationAndForeignQuickChatHistory() {
     let app = launch(scenario: "workspace-organization")
     XCTAssertTrue(app.buttons["folders-local"].exists)
