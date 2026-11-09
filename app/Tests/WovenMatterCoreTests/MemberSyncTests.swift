@@ -117,6 +117,18 @@ struct MemberSyncTests {
     }
   }
 
+  /// Upgrade proof on a copy of a real library (never a production path):
+  /// opening runs every migration; the caller compares tables before and after.
+  @Test(.enabled(if: ProcessInfo.processInfo.environment["WOVENMATTER_MIGRATION_PROOF_DB"] != nil))
+  func migratesACopiedLibraryInPlace() async throws {
+    let url = URL(fileURLWithPath: try #require(ProcessInfo.processInfo.environment["WOVENMATTER_MIGRATION_PROOF_DB"]))
+    #expect(!url.path.contains("/Library/Application Support/Woven Matter"))
+    let database = try await WorkspaceDatabase(url: url)
+    let identity = MemberIdentity(deviceID: try await database.companionLibraryIdentity().hostDeviceID, kind: .mac, key: .init())
+    try await MemberDirectory(database: database, identity: identity).ensureSelf(name: "Proof", endpoints: [])
+    #expect(try await database.libraryMembers().members.map(\.deviceID) == [identity.deviceID])
+  }
+
   @Test func memberResolutionFollowsSignaturesAnchorsAndRemovals() throws {
     let mac = MemberIdentity(deviceID: UUID().uuidString.lowercased(), kind: .mac, key: .init())
     let other = MemberIdentity(deviceID: UUID().uuidString.lowercased(), kind: .mac, key: .init())
