@@ -1276,7 +1276,7 @@ final class RemoteWorkspacesModel {
         let identity = try requestIdentity(configuration)
         let client = try await serviceClient(for: configuration)
         try requireCurrent(identity)
-        let value = try await client.memberIdentity()
+        let value = try await client.hostStatus().objectValue?["memberIdentity"] ?? .null
         try requireCurrent(identity)
         return value
     }

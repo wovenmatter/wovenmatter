@@ -124,7 +124,7 @@ public final class LibraryHost: @unchecked Sendable {
     }
     if path.hasPrefix("/wovenmatter/") { path = String(path.dropFirst("/wovenmatter".count)) }
     if path == "/v1/health" { return await health(request) }
-    if path == "/v1/identity" { return identityResponse(request) }
+    if path == "/v1/identity" { return await identityResponse(request) }
     let handler = lock.withLock { mounts.first { path.hasPrefix($0.prefix) }?.handler }
     guard let handler else { return .error("not_found", "This library route is not served here.", status: 404) }
     return await handler(request)
@@ -143,7 +143,7 @@ public final class LibraryHost: @unchecked Sendable {
     do {
       switch path {
       case "/v1/health": return await health(request)
-      case "/v1/identity": return identityResponse(request)
+      case "/v1/identity": return await identityResponse(request)
       case "/v1/callers": return try await registerCaller(request)
       case "/v1/mcp": return try await mcp(request)
       case "/v1/members":
@@ -197,14 +197,18 @@ public final class LibraryHost: @unchecked Sendable {
     public let name: String
     /// Raw 32-byte Ed25519 public key, base64.
     public let publicKey: Data
+    /// This machine's own advertised base URLs (its self entry).
+    public var endpoints: [URL] = []
   }
-  public func identityValue() -> Identity {
-    .init(deviceID: identity.deviceID, kind: identity.kind, name: ProcessInfo.processInfo.hostName, publicKey: identity.publicKey)
+  public func identityValue() async -> Identity {
+    let own = await members.member(identity.deviceID)
+    return .init(deviceID: identity.deviceID, kind: identity.kind, name: own?.name ?? ProcessInfo.processInfo.hostName,
+                 publicKey: identity.publicKey, endpoints: own?.endpoints ?? [])
   }
   /// Public by design: the adding Mac reads it to sign this machine's entry.
-  private func identityResponse(_ request: CompanionHTTPRequest) -> CompanionHTTPResponse {
+  private func identityResponse(_ request: CompanionHTTPRequest) async -> CompanionHTTPResponse {
     guard request.method == "GET" else { return .error("method_not_allowed", "Use GET.", status: 405) }
-    return (try? .json(identityValue())) ?? .error("unavailable", "Identity unavailable.", status: 503)
+    return (try? .json(await identityValue())) ?? .error("unavailable", "Identity unavailable.", status: 503)
   }
 
   private func health(_ request: CompanionHTTPRequest) async -> CompanionHTTPResponse {

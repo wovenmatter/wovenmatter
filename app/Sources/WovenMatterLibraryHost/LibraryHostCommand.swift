@@ -117,7 +117,7 @@ public enum LibraryHostCommand {
       }
       let output = JSONEncoder(); output.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
       if options.printIdentity {
-        FileHandle.standardOutput.write(try output.encode(host.identityValue()) + Data([10])); return 0
+        FileHandle.standardOutput.write(try output.encode(await host.identityValue()) + Data([10])); return 0
       }
       if let source = options.adoptMembers {
         let data = source == "-" ? FileHandle.standardInput.readDataToEndOfFile() : try Data(contentsOf: URL(fileURLWithPath: source))
