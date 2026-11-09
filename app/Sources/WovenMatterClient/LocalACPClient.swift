@@ -1866,7 +1866,7 @@ public actor LocalACPClient {
                 modelOptionMetadata: configuration.modelOptionMetadata,
                 thinkingOptionMetadata: configuration.thinkingOptionMetadata,
                 permission: modes["currentModeId"]?.stringValue,
-                permissionOptions: available.compactMap { $0["id"]?.stringValue },
+                permissionOptions: runtimeKind.orderedPermissionOptions(available.compactMap { $0["id"]?.stringValue }),
                 permissionOptionMetadata: LocalACPSessionPermissions.nativeMetadata(runtimeKind: runtimeKind, options: available, idKeys: ["id"])
             )
         }
@@ -2037,7 +2037,7 @@ public actor LocalACPClient {
                         || (id == "mode" && (runtimeKind == .codex || runtimeKind == .claudeCode)) {
                 permission = ParsedConfigurationOption(
                     id: parsed.id, currentValue: parsed.currentValue,
-                    options: parsed.options,
+                    options: runtimeKind.orderedPermissionOptions(parsed.options),
                     metadata: LocalACPSessionPermissions.nativeMetadata(runtimeKind: runtimeKind,
                         options: option["options"]?.arrayValue ?? [], idKeys: ["value"])
                 )

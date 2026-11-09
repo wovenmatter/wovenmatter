@@ -37,7 +37,8 @@ struct ACPSessionPermissionTests {
             #expect(initialized.configuration.permission == "default")
             let restored = try await client.setSessionPermission(saved)
             #expect(restored.permission == saved)
-            #expect(restored.permissionOptions == ["default", "auto", "acceptEdits", "bypassPermissions", "plan", "dontAsk"])
+            // Full access first, auto-approve modes next, Ask for approval last.
+            #expect(restored.permissionOptions == ["bypassPermissions", "auto", "acceptEdits", "plan", "dontAsk", "default"])
             #expect(try await client.setSessionPermission(saved).permission == saved)
             #expect(try fixture.requests(method: modern ? "session/set_config_option" : "session/set_mode").count == 1)
         }
@@ -143,7 +144,7 @@ struct ACPSessionPermissionTests {
         try await withClient(state: state) { _, fixture, initialized async throws in
             let value = initialized.configuration
             #expect(value.permission == "agent")
-            #expect(value.permissionOptions == ["read-only", "agent", "agent-full-access", "future-policy"])
+            #expect(value.permissionOptions == ["agent-full-access", "agent", "read-only", "future-policy"])
             #expect(value.permissionOptionMetadata["read-only"]?.name == "Read only")
             #expect(value.permissionOptionMetadata["agent"]?.name == "Approve for me")
             #expect(value.permissionOptionMetadata["agent-full-access"]?.name == "Full access")

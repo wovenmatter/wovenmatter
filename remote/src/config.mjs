@@ -55,9 +55,28 @@ export function runtimeNPMCommand(configuration = runtimeConfiguration, nodeExec
   return [nodeExecutable, resolve(configuration.serviceRoot, 'tooling/lib/node_modules/npm/bin/npm-cli.js')].map(shellQuote).join(' ')
 }
 
+// Each harness's native Full access mode. New sessions start here unless the
+// user saved a different default; Full root workspaces always use it.
+export const fullAccessPermissions = Object.freeze({ codex: 'agent-full-access', claude_code: 'bypassPermissions', grok_build: 'bypassPermissions', default_agent: 'full', opencode: 'allow' })
+
+const autoApprovePermissions = Object.freeze({ codex: ['agent'], claude_code: ['auto', 'acceptEdits'], grok_build: ['auto', 'acceptEdits'] })
+const askPermissions = Object.freeze({ codex: ['workspace-write'], claude_code: ['default'], grok_build: ['default'], opencode: ['ask'], default_agent: ['ask'] })
+
+// Present native permission modes as Full access first, then the harness's
+// auto-approve modes, then its other modes, with ask-for-approval last. Every
+// Full access mode is labeled "Full access"; the others keep native names.
+export function presentPermissionChoices(runtimeKind, choices) {
+  const rank = id => id === fullAccessPermissions[runtimeKind] ? 0
+    : autoApprovePermissions[runtimeKind]?.includes(id) ? 1
+    : askPermissions[runtimeKind]?.includes(id) ? 3 : 2
+  return choices.map((item, index) => ({ item, index }))
+    .sort((a, b) => rank(a.item.id) - rank(b.item.id) || a.index - b.index)
+    .map(({ item }) => item.id === fullAccessPermissions[runtimeKind] ? { ...item, label: 'Full access' } : item)
+}
+
 export function workspacePermission(runtimeKind, requested, configuration = runtimeConfiguration) {
   if (configuration.runtimeKind !== 'host' || configuration.accessMode !== 'fullRoot') return requested
-  return { codex: 'agent-full-access', claude_code: 'bypassPermissions', grok_build: 'bypassPermissions', default_agent: 'full', opencode: 'allow' }[runtimeKind] ?? requested
+  return fullAccessPermissions[runtimeKind] ?? requested
 }
 
 export function workspaceExecutionConfiguration(value, configuration = runtimeConfiguration) {

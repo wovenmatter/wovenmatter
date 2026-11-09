@@ -29,6 +29,10 @@ when an intentional design change is accepted.
   without all-caps styling or expanded letter spacing. Keep saved-default actions
   out of the conversation selector popouts. Composer model buttons show only the
   model name and version; connection attribution belongs in the model popout.
+  Permission menus use each harness's own mode names, except that every
+  harness's full mode is shown as Full access. List Full access first (the
+  default everywhere), then the harness's auto-approve modes, then its other
+  modes, with ask-for-approval last.
   Permission buttons use the fullest label that fits, then explicit shorter
   labels, then an icon. Never ellipsize these labels or collapse distinct modes
   such as Auto and Auto Accept into the same text. Popouts retain full labels

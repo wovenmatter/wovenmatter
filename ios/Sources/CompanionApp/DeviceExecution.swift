@@ -6,7 +6,8 @@ import CompanionInference
 import PiDurableRuntime
 
 enum DevicePermissionMode: String, Codable, CaseIterable {
-  case ask, full
+  // Full access is the default and listed first; Ask stays available, listed last.
+  case full, ask
   static let defaultMode: Self = .full
   var label: String { self == .full ? "Full Access" : "Ask for Approval" }
   var detail: String {
