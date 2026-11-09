@@ -35,8 +35,10 @@ assert active('ios/Sources/CompanionInference/PiSDKVersion.swift') == {'pi'}
 assert active('scripts/test-support/native-mcp.test.mjs') == {'agent', 'scripts'}
 assert active('README.md', 'remote/src/server.mjs', 'app/App/Views/SettingsGeneralView.swift') == {'service', 'scripts'}
 assert module.scopes(iter(['remote/src/server.mjs'])) == module.scopes(['remote/src/server.mjs'])
+for path in ['bots/src/app.ts', 'bots/package-lock.json', 'bots/helper/agent.mjs', 'bots/image/Dockerfile']:
+    assert active(path) == {'bots'}, (path, active(path))
 
-portable = {'agent', 'service', 'pi', 'embedded', 'scripts'}
+portable = {'agent', 'service', 'pi', 'embedded', 'scripts', 'bots'}
 assert set(module.scopes([])) == portable
 for path in ['.github/workflows/ci.yml', '.github/workflows/validation.yml',
              'scripts/test-changes.sh', 'scripts/test-ci.sh', 'scripts/ci-scopes.py',
