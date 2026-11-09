@@ -165,7 +165,7 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   0.x minors, and refreshes every record and notice together. Upstream currently
   marks even its numbered driver releases as GitHub prereleases to keep the
   monorepo Latest pointer separate. Its release notes identify plain SemVer
-  driver releases as stable; the current selection is 0.41.2.
+  driver releases as stable; the current selection is 0.45.4.
   The driver is spawned directly by the signed GUI, without a Node SDK or
   additional native libraries. Woven negotiates MCP 2025-06-18 and refuses an
   unsupported initialize response before dispatching desktop tools.
@@ -190,13 +190,13 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   releases. Provider-free HTTP security fixtures and the coding-agent suites
   validate the overridden Node dependency; it is not part of the mobile bundle.
   Chord 1.5.0 declares an optional exact ws 8.21.0 peer, which conflicts with
-  the app's current ws 8.22.1 transport. A scoped `$ws` override shares the
+  the app's current ws 8.22.2 transport. A scoped `$ws` override shares the
   app's tested current transport without editing vendor manifests or ignoring
   peer validation. Real local WebSocket streaming/cancellation fixtures and the
   Chord/Durable suites validate this selection; review it on each Chord refresh.
   Pi AI 1.5.0 also pins older provider clients. Consumer-scoped minimum-only
-  overrides select the tested OpenAI 7.53.0, Anthropic 1.6.0, Google GenAI 3.0.0,
-  Bedrock Runtime and token providers 3.1164.0, and Smithy Node HTTP handler
+  overrides select the tested OpenAI 7.54.0, Anthropic 1.7.0, Google GenAI 3.0.0,
+  Bedrock Runtime and token providers 3.1165.0, and Smithy Node HTTP handler
   4.14.2 releases without
   changing vendor manifests. Keeping these clients current is required for
   provider API and transport compatibility, including Anthropic's 2026-10-21
@@ -260,21 +260,22 @@ an older configured channel. OpenCode and Executor retain the documented v2 API 
 maintenance must review a newer stable API major and implement its migration.
 
 `harnesses/catalog.json` records tested connector and engine minimums separately:
-Codex ACP 2.5.0 with Codex 0.167.0, and Claude ACP 0.101.0 with Claude SDK 0.3.319
-(native Claude Code 2.1.319). The standalone Codex and Claude sign-in CLIs use their
-official current stable release channels. Codex ACP's `^0.165.0` engine range
-otherwise keeps its chat engine behind; its ACP TypeScript SDK also retains 2.1
-through a restrictive range. Claude ACP 0.101.0 pins SDK 0.3.318; the consumer-scoped
-override selects 0.3.319 independently so engine-only updates remain eligible. Transcript-write loss
+Codex ACP 2.6.0 with Codex 0.167.0, and Claude ACP 0.102.0 with Claude SDK 0.3.321
+(native Claude Code 2.1.321). The standalone Codex and Claude sign-in CLIs use their
+official current stable release channels. Codex ACP's `^0.166.0` engine range
+otherwise keeps its chat engine behind; its `~2.4.0` ACP TypeScript SDK range
+also excludes the current 2.5.0. Claude ACP 0.102.0 pins the current SDK 0.3.321;
+the consumer-scoped override still selects it independently so engine-only updates
+remain eligible when the connector's pin lags. Transcript-write loss
 invalidates the native resume marker and refuses tool dispatch/continuation commits;
 config-only write loss leaves a valid response intact. Provider-free persistence
-fixtures verify canonical replay after recovery. The connector selects protocol SDK
-2.4.0 directly. The catalog's independent ACP SDK floor is 2.4.0. Mac and native
+fixtures verify canonical replay after recovery. Claude's connector selects protocol SDK
+2.5.0 directly. The catalog's independent ACP SDK floor is 2.5.0. Mac and native
 Linux/container explicit updates resolve its newest nondeprecated stable
 publication independently, retain the vendor manifests, and verify the exact
 consumer graph and ACP v1 handshake before activation. SDK-only updates appear
 in inventory even when connector and engine are current. Failed candidates
-leave the active generation intact. The 2.4 SDK retains stable v1;
+leave the active generation intact. The 2.5 SDK retains stable v1;
 its v2 changes remain experimental and do not change Woven Matter's wire API.
 The consumer graph created by `harnesses/install-adapter.mjs` therefore declares
 the independently selected engine and scopes an npm override to that connector.
