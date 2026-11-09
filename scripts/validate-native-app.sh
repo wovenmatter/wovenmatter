@@ -25,6 +25,17 @@ test "$(/usr/libexec/PlistBuddy -c 'Print :BundleProgram' "$power_daemon")" = Co
 test "$(/usr/libexec/PlistBuddy -c 'Print :UserName' "$power_daemon")" = root
 test "$(/usr/libexec/PlistBuddy -c 'Print :KeepAlive' "$power_daemon")" = true
 
+# The Woven VM helper exists on Apple silicon builds only (the guest is arm64).
+vm_helper="${app}/Contents/Helpers/WovenMatterVMHelper"
+if lipo -archs "$main_executable" | grep -qw arm64; then
+  test -x "$vm_helper"
+  codesign --verify --strict "$vm_helper"
+  codesign -d --entitlements :- "$vm_helper" 2>/dev/null | grep -q com.apple.security.virtualization
+  for file in guest-version.json agent.py provision.sh egress.sh disk-cap.sh docker-archive-keyring.asc; do
+    test -f "${app}/Contents/Resources/WovenVM/$file"
+  done
+fi
+
 frameworks="$app/Contents/Frameworks"
 cef="$frameworks/Chromium Embedded Framework.framework"
 test -f "$cef/Resources/Info.plist"
