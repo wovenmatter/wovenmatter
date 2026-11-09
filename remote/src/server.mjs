@@ -558,10 +558,15 @@ if (runningAsService) {
     process.stdout.write(`Woven Matter remote service listening on ${listenHost}:${listenPort}\n`)
     bots?.start().catch(error => process.stderr.write('Bots could not start: ' + error.message + '\n'))
   })
+  // Any exit, including a crash, also stops the library host it supervises.
+  process.once('exit', () => library?.terminate())
   process.once('SIGTERM', async () => {
     server.close()
-    try { await bots?.close(); await workspaceBrowser.close(); await taskGateway.close(); await retainedExecution.close(); await clientExecution.close(); await library?.stop(); members?.close(); await durableACP.stopAll(); await defaultAgent.close(); releaseTaskOwner?.(); process.exit(0) }
-    catch { process.exit(1) }
+    let code = 0
+    try { await bots?.close(); await workspaceBrowser.close(); await taskGateway.close(); await retainedExecution.close(); await clientExecution.close(); await durableACP.stopAll(); await defaultAgent.close(); releaseTaskOwner?.() }
+    catch { code = 1 }
+    await library?.stop().catch(() => {}); members?.close()
+    process.exit(code)
   })
 }
 

@@ -259,7 +259,8 @@ test('the server accepts signed member requests and rejects wrong keys, replays,
     WOVENMATTER_WORKSPACE: join(home, 'workspace'), WOVENMATTER_HARNESS_CATALOG: resolve(repositoryRoot, 'harnesses/catalog.json'),
     WOVENMATTER_STATE_DIRECTORY: join(home, 'state'), WOVENMATTER_DATA_ROOT: join(directory, 'data'), WOVENMATTER_DATA_DIRECTORY: join(directory, 'data/databases'),
     WOVENMATTER_LIBRARY_BINARY: fakeBinary(directory), WOVENMATTER_LIBRARY_SERVE: '0', FAKE_LIBRARY_MEMBERS: membersPath } })
-  t.after(() => child.kill('SIGTERM'))
+  const exited = new Promise(resolve => child.once('exit', resolve))
+  t.after(async () => { child.kill('SIGTERM'); await exited })
   let output = ''
   child.stdout.on('data', data => { output += data }); child.stderr.on('data', data => { output += data })
   const base = 'http://127.0.0.1:' + port
@@ -305,6 +306,12 @@ test('the server accepts signed member requests and rejects wrong keys, replays,
   // The installer's bearer still works during the transition.
   assert.equal((await fetch(base + '/v1/health', { headers: { authorization: 'Bearer ' + token } })).status, 200)
   assert.equal(memberHeaders.signature, 'x-woven-member-signature')
+  // Stopping the server stops the library host it supervises.
+  const libraryPid = identity.library.pid
+  child.kill('SIGTERM'); await exited
+  let alive = true
+  for (let i = 0; i < 50 && alive; i++) { try { process.kill(libraryPid, 0); await new Promise(r => setTimeout(r, 50)) } catch { alive = false } }
+  assert.equal(alive, false, 'the library host exited with the server')
 })
 
 function freePort() {

@@ -208,8 +208,11 @@ export function createLibraryHostSupervisor({ binary, dataRoot, harnessCatalog, 
     })
   }
 
+  // Synchronous last resort for process exit: the host never outlives this server.
+  function terminate() { stopping = true; generation++; clearTimeout(timer); child?.kill('SIGTERM') }
+
   return {
-    layout, client, start, stop, whenReady,
+    layout, client, start, stop, terminate, whenReady,
     available: () => !!ready,
     endpoint: () => ready ? { port: ready.port, socket: ready.socket, pid: ready.pid } : null,
     status: () => ({ running: !!child, ready: !!ready, pid: child?.pid ?? null, port: ready?.port ?? null, version: ready?.version ?? null,
