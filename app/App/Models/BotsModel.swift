@@ -51,6 +51,19 @@ final class BotsModel {
         do { try await send(command) } catch { notice = error.localizedDescription }
     }
 
+    @ObservationIgnored private var refreshLoop: Task<Void, Never>?
+
+    /// Other machines come and go without telling this one, so look again now and then.
+    func startRefreshing() {
+        refreshLoop?.cancel()
+        refreshLoop = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.refresh()
+                try? await Task.sleep(for: .seconds(60))
+            }
+        }
+    }
+
     func refresh() async {
         do { try await send(.status); loadError = nil }
         catch { loadError = error.localizedDescription }

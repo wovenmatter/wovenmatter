@@ -25,13 +25,14 @@ extension ApplicationModel {
             guard let self else { throw CancellationError() }
             return try await self.controlBots(command)
         }
-        Task { await bots.refresh() }
+        bots.startRefreshing()
     }
 
     /// Called once agent tools exist, since bot keys and deliveries live there.
     func configureBotsRuntime() {
-        guard LocalExecutionRole.current.ownsExecution, botsHost == nil,
-              let support = try? Self.dashboardSupportDirectory() else { return }
+        guard LocalExecutionRole.current.ownsExecution else { return }
+        if let botsHost { attachBotDeliveries(botsHost); return }
+        guard let support = try? Self.dashboardSupportDirectory() else { return }
         let directory = support.appending(path: "Bots")
         let host = BotsHostController(directory: directory, engine: BotEngineHostFactory.make(directory),
                                       dependencies: makeBotsHostDependencies())
@@ -43,11 +44,16 @@ extension ApplicationModel {
                 await self.backendApplicationService?.invalidations.publish(scopes: [.bots])
             }
         }
+        attachBotDeliveries(host)
+        host.start()
+    }
+
+    /// Agent tools can be rebuilt; each new instance delivers to the same host.
+    private func attachBotDeliveries(_ host: BotsHostController) {
         agentTools?.botNotificationSink = { [weak host] notification in
             guard let host else { throw CancellationError() }
             try await host.deliver(notification)
         }
-        host.start()
     }
 
     private func makeBotsHostDependencies() -> BotsHostDependencies {
@@ -72,6 +78,7 @@ extension ApplicationModel {
                 try await tools.setBotsPaused(machineID: machineID, paused: paused)
             },
             callers: { [weak self] in try await self?.agentTools?.botCallers() ?? [] },
+            isPaused: { [weak self] machineID in (try? await self?.dashboardStore?.database.isBotMachinePaused(machineID)) ?? false },
             botMCP: { [weak self] in try? await self?.agentTools?.database.toolSettings().botMCP },
             recordConversation: { [weak self] machineID, botID, report in
                 guard let database = self?.dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }

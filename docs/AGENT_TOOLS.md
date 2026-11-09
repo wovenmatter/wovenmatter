@@ -106,7 +106,7 @@ key here:
   undelivered messages. The bot stays revoked, and its runtime cannot get a new key,
   until the user reinstates it. A bot its runtime deletes loses its key the same way
   but is not marked revoked.
-- **Pause all bots on this Mac** stops every bot of this machine from calling and
+- **Pause Woven MCP for every bot on this Mac** stops every bot of this machine from calling and
   retires the same state; resuming keeps their keys.
 
 `WorkspaceToolSettings.botMCP` is independent of **Expose Woven MCP** and starts on,

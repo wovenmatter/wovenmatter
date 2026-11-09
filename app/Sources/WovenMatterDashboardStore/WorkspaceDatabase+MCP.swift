@@ -164,6 +164,15 @@ extension WorkspaceDatabase {
     }
   }
 
+  public func isBotMachinePaused(_ machineID: String) async throws -> Bool {
+    try await read { connection in
+      try connection.withLock {
+        try connection.historyRowsUnlocked("SELECT active FROM workspace_mcp_bot_machines WHERE machine_id=?", values: [machineID.lowercased()])
+          .first?.objectValue?["active"]?.intValue == 0
+      }
+    }
+  }
+
   /// The bots that hold or held a key here, for Settings: attribution and revoke.
   public func botCallers() async throws -> [WovenBotCaller] {
     try await read { connection in

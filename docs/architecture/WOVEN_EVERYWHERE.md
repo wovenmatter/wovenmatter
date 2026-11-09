@@ -158,7 +158,7 @@ same commit.
   build tools and tini. A bot runs as a user with passwordless sudo, which
   gives it full root inside its container.
 - **Network:** the container has internet access. Outbound traffic to the
-  tailnet (100.64.0.0/10, fd7a:115c:a1e0::/48), private and link-local ranges
+  tailnet (Tailscale's 100.64/10 CGNAT range and fd7a:115c:a1e0::/48), private and link-local ranges
   and the host is blocked by the engine host: iptables on the Woven bridge on
   Linux, and inside the guest on a Mac. No container port is published except
   through previews. The Docker socket is never mounted into a bot.

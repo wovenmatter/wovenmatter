@@ -192,7 +192,7 @@ struct SettingsBotsView: View {
                     }
                     .padding(.leading, 38)
                 }
-                Toggle("Pause all bots on this Mac", isOn: Binding(
+                Toggle("Pause Woven MCP for every bot on this Mac", isOn: Binding(
                     get: { bots.thisMachine?.paused ?? false },
                     set: { paused in Task { await bots.attempt(.setPaused(paused)) } }))
                     .disabled(bots.busy || bots.thisMachine == nil)

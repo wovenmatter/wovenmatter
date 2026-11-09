@@ -43,6 +43,7 @@ struct BotsHostDependencies {
     var reinstate: @MainActor (_ callerID: String) async throws -> Void
     var setPaused: @MainActor (_ machineID: String, _ paused: Bool) async throws -> Void
     var callers: @MainActor () async throws -> [WovenBotCaller]
+    var isPaused: @MainActor (_ machineID: String) async -> Bool = { _ in false }
     var botMCP: @MainActor () async -> WorkspaceExternalMCPSettings?
     var recordConversation: @MainActor (_ machineID: String, _ botID: String, _ report: BotConversationReport) async throws -> Int
     var deleteConversations: @MainActor (_ machineID: String, _ botID: String) async throws -> Void
@@ -89,6 +90,9 @@ final class BotsHostController {
     @ObservationIgnored private var notifier: PiBotClient?
     @ObservationIgnored private var bringUpTask: Task<Void, Never>?
     @ObservationIgnored private var lastDevices: [BotDiscoveredDevice]?
+    /// Other machines answer slowly; a status refresh reuses a recent probe.
+    @ObservationIgnored private var remoteCache: (at: Date, machines: [BotMachine])?
+    static let remoteCacheLifetime: TimeInterval = 20
 
     init(directory: URL, engine: any BotEngineHost, bundle: BotsRuntimeBundle? = BotsRuntimeBundle.locate(),
          dependencies: BotsHostDependencies, supervisor: BotsRuntimeSupervisor? = nil) {
@@ -135,6 +139,7 @@ final class BotsHostController {
 
     func perform(_ command: BotsCommand) async throws -> BotsCommandResult {
         var devices: [BotDiscoveredDevice]?
+        if case .status = command {} else { remoteCache = nil }
         switch command {
         case .status: break
         case .setEnabled(let enabled):
@@ -179,10 +184,17 @@ final class BotsHostController {
         let identity = try? await resolveIdentity()
         var machines: [BotMachine] = []
         if let identity { machines.append(await thisMachine(identity)) }
-        machines += await dependencies.remoteMachines(dependencies.appVersion).filter { $0.id != identity?.deviceID }
+        machines += await remoteMachines().filter { $0.id != identity?.deviceID }
         return BotsCommandResult(machines: machines, thisMachineID: identity?.deviceID, thisMacVersion: dependencies.appVersion,
                                  callers: (try? await dependencies.callers()) ?? [], devices: devices,
                                  syncErrors: dependencies.syncErrors(), botMCP: await dependencies.botMCP())
+    }
+
+    private func remoteMachines() async -> [BotMachine] {
+        if let remoteCache, Date().timeIntervalSince(remoteCache.at) < Self.remoteCacheLifetime { return remoteCache.machines }
+        let machines = await dependencies.remoteMachines(dependencies.appVersion)
+        remoteCache = (Date(), machines)
+        return machines
     }
 
     /// This Mac as other members and the window see it.
@@ -197,7 +209,7 @@ final class BotsHostController {
 
     private func thisMachine(_ identity: (deviceID: String, name: String)) async -> BotMachine {
         let capacity = await dependencies.capacity(directory).with(used: await engine.diskUsedByBots())
-        let paused = ((try? await dependencies.callers()) ?? []).contains { $0.machineID == identity.deviceID && $0.paused }
+        let paused = await dependencies.isPaused(identity.deviceID)
         let state: BotMachine.State
         var message: String? = lastError
         if !persisted.enabled { state = .off; message = nil }
