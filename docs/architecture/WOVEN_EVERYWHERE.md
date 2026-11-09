@@ -50,7 +50,9 @@ same commit.
   - The signed message is the UTF-8 string
     `woven-member-v1\n<METHOD>\n<path with query>\n<time>\n<nonce>\n<hex SHA-256 of body>`.
     An empty body hashes the empty string. A WebSocket upgrade signs its
-    `GET` request.
+    `GET` request. The path is the request target the receiving server sees:
+    relative to the member endpoint it was sent to, so a Tailscale Serve
+    prefix (`/wovenmatter`, `/wovenmatter-execution/<id>`) is not part of it.
   - The verifier accepts a request when:
     - the device is on the current member list and not revoked;
     - the time is within 300 seconds of its own clock;
@@ -58,17 +60,37 @@ same commit.
     - the signature verifies with the member's raw 32-byte Ed25519 public key.
       That key is CryptoKit `Curve25519.Signing` compatible, and Node verifies
       it with `crypto.verify(null, …)`.
-  - The shared test vectors in `shared/Tests/.../MemberSignatureVectors.json`
-    are checked by Swift and by Node.
+  - The shared test vectors in `shared/Tests/Fixtures/MemberSignatureVectors.json`
+    are checked by Swift and by Node (`remote/test/member-auth.test.mjs`).
+    They use a deterministic test key whose seed is in the file; CryptoKit
+    signatures are randomized, so Swift verifies them rather than reproducing
+    them.
 - Pairing a new device still uses the existing pairing link and confirmation
   UI on a Mac. Its result is a signed member entry instead of a bearer grant.
 - The Linux Node server verifies member signatures itself. It reads the member
   list from its local library host (`GET /v1/members` on the library socket),
   which returns each member's `deviceID`, `kind`, `name`, `publicKey`
   (base64), `endpoints` and `revoked`, plus a `revision`.
+  The list is cached by `revision`, reloaded every 15 seconds and, at most
+  every 2 seconds, when an unknown device signs.
+- On the Linux server (`remote/src/server.mjs`, `member-auth.mjs`), a signed
+  request from any member gets what a device grant had: execution and
+  inference routes, `GET /v1/bots/status|resources` and `GET /v1/bots/ws`. A
+  `mac` member is also an administrator, like the installing Mac's bearer:
+  every administrator route, the bots changes and `/v1/host/*`. During the
+  transition the installer's API bearer and existing device grants keep
+  working beside signatures; the runtime host API (`/v1/bots-host/*`) and
+  session MCP (`/mcp`) keep their own bearers.
 - Remote host administration (status, logs, restart, update) is available to
-  every Mac member. First install still runs over Tailscale SSH from the Mac
-  that adds the machine.
+  every Mac member, as signed requests to the Linux server:
+  `GET /v1/host/status` (remote-host.sh `status` plus `library` and
+  `memberIdentity`), `GET /v1/host/logs?lines=N`, `POST /v1/host/restart`
+  (202), `POST /v1/host/bots-configure {poolBytes, diskBytes}` (bytes or
+  `null`), and `POST /v1/host/update?fingerprint=<sha256>[&roles=…]` whose body
+  is the host bundle (202; `GET /v1/host/update` reports `running`,
+  `succeeded` with the status, or `failed` with the error). Restart and update
+  run in a transient systemd user unit, because they stop the server. First
+  install still runs over Tailscale SSH from the Mac that adds the machine.
 - Bots are not members. Each bot has its own Woven MCP key (see Bots).
 
 ## Library on every surface
@@ -186,6 +208,56 @@ one per connection, with `Host`; POST bodies are `application/json`.
   `structuredContent` is the `WovenMatterToolResponse`
   (`{success,result,error,code,requestID}`); errors use the usual codes
   (`tool_disabled`, `revision_required`, `revision_conflict`, `not_found`, …).
+
+Routes the membership workstream adds to the local API, which the Node server
+already calls (`remote/src/library-host.mjs`):
+
+- `GET /v1/identity` → `{deviceID, kind: "linux", name, publicKey, endpoints}`,
+  this machine's member identity. Until it exists the server uses the health
+  `deviceID` with no key.
+- `GET /v1/members` → `{revision, members: [...]}` (see "Membership").
+- `POST /v1/publisher/{journal,retained/settle,association,artifacts/register,artifacts/chunk,artifacts/commit}`:
+  the bodies and replies of a Mac's `/v1/federation/publisher/*`. The caller is
+  named by headers instead of a publisher bearer: `X-Woven-Workspace` (library
+  ID), `X-Woven-Workspace-ID` and `X-Woven-Execution-Device-ID`.
+- `POST /v1/bots/{botID}/entries`: a runtime conversation batch (`{bot,
+  conversations, entries}`, see "Runtime host API"), upserted as described there.
+
+**Node server supervision** (`remote/src/library-host.mjs`, wired in
+`server.mjs`). On native Linux hosts the server starts
+`<release>/host/library/linux-<arch>/wovenmatter-library --data-root <Woven data
+root> --port P --socket <root>/run/library.sock --token-file
+<root>/run/library-api.token --harness-catalog <release>/harnesses/catalog.json`,
+so the library lives at `<data root>/library/workspace.sqlite`. It creates the
+token first, keeps the loopback port in `<state>/library/host.json` so the
+Serve route stays valid, waits for the ready line (or `library.json`),
+restarts a crash with backoff up to 30 s and stops it on SIGTERM. After each
+start it publishes the loopback port with `tailscale serve --bg --https=<port>
+--set-path=/wovenmatter` (the first of 8443, 10000, 8444, 8445 with no TCP
+route, as a Mac chooses; the recorded route is updated in place, never
+Funnel; recorded in `<state>/library/serve.json`, removed by uninstall), and
+writes `<state>/library/identity.json` (`{deviceID, kind, name, publicKey,
+endpoints, libraryEndpoint, updatedAt}`, 0600), which `remote-host.sh inspect`
+and `status` return as `memberIdentity` for the Mac that creates this
+machine's member entry; `/v1/health` reports it too. `remote-host.sh
+install|update` runs `--migrate-only` after stopping the old service and
+before switching releases; a failed migration, or any later failure, restores
+the database files and the previous release. Isolated tests use
+`WOVENMATTER_LIBRARY_BINARY`, `WOVENMATTER_LIBRARY_DATA_ROOT`,
+`WOVENMATTER_LIBRARY_SERVE=0` or `WOVENMATTER_LIBRARY_HTTPS_PORT`;
+`WOVENMATTER_LIBRARY=0` turns it off.
+
+The server sends a session's notes, history, calendar and library tools to
+`POST /v1/mcp` (registering it with `POST /v1/callers` first), so they work
+with every Mac offline and no single-Mac library grant. History the caller may
+read only through its managed sessions, and all history while the library host
+is down, comes from the Node journal. Databases, `woven_context` and
+`woven_html_render` stay in Node; timers, usage, `woven_sessions_folders`,
+sessions on other workspaces and bot callers still use the Mac grant until
+their own workstreams move them. Session history is published to the local
+publisher routes (the Mac grant is only a fallback without a library host),
+and bot conversation batches go to `/v1/bots/{botID}/entries`, waiting in the
+outbox while the host is down.
 
 Tool execution is `WorkspaceToolExecutor` in `WovenMatterDashboardStore`, the
 same code the Mac app's `WorkspaceAgentToolsModel` now delegates to. Note edits
@@ -492,9 +564,10 @@ Pi Bot's Admin Bot config tools (`read_config`, `update_config`,
   <state>/bots/runtime.json` (0600), regenerating `runtimeToken`, the
   loopback port and the host bearer on every start, and restarting a crash
   with backoff up to 30 s. It starts the runtime once the engine is
-  installed. `image.tag` is `wovenmatter-bots`; `machine.deviceID` comes from
+  installed. `image.tag` is `wovenmatter-bots`; `machine.deviceID` is the
+  library host's member identity, or, without a library host,
   `WOVENMATTER_DEVICE_ID` or `<data root>/identity/device-id` (0600, created
-  once), which the membership identity replaces.
+  once).
 - It implements the runtime host API under `/v1/bots-host/` with that bearer.
   Previews publish `http://127.0.0.1:<port>` (the runtime's proxy) with
   `tailscale serve --bg --https=<17000–17999>`, never Funnel, verify the
@@ -505,12 +578,14 @@ Pi Bot's Admin Bot config tools (`read_config`, `update_config`,
   Pause-all is `botMCP.isEnabled = false`.
 - Conversation batches go through `library.writeBotEntries(botID, {bot,
   conversations, entries})` (`remote/src/bots-library.mjs`). Adapters upsert
-  by entry and conversation id. Until the server supervises
-  `wovenmatter-library`, the adapter appends each batch as one JSON line to
-  `<data root>/bots/library-outbox/<botID>.jsonl` (0600); the library adapter
-  replaces it and imports that outbox.
-- App-facing routes, authenticated as administrator or device grant (member
-  auth replaces `authorizeClient` in `remote/src/bots-service.mjs`):
+  by entry and conversation id. The library adapter posts each batch to the
+  library host's `POST /v1/bots/{botID}/entries`; while the host is down or
+  refuses, it appends the batch as one JSON line to
+  `<data root>/bots/library-outbox/<botID>.jsonl` (0600) and replays that
+  outbox, in order, when the host is ready again.
+- App-facing routes, authenticated as a member (or, during the transition,
+  administrator bearer or device grant; `authorizeClient` in
+  `remote/src/bots-service.mjs`):
   `GET /v1/bots/status`, `GET /v1/bots/resources` (`memory {totalBytes,
   poolBytes, botBytes, usedBytes}`, `disk {path, totalBytes, freeBytes,
   capBytes, imageBytes, usedBytes}`, `warnings`), and `GET /v1/bots/ws`

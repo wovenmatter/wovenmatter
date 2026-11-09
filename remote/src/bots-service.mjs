@@ -4,7 +4,7 @@ import { connect } from 'node:net'
 import { hostname } from 'node:os'
 import { dirname, join } from 'node:path'
 import { createBotEngine, machineIdentity } from './bots-engine.mjs'
-import { createBotConversationLibrary, createJournalBotLibraryAdapter } from './bots-library.mjs'
+import { createBotConversationLibrary, createJournalBotLibraryAdapter, createLocalLibraryBotAdapter } from './bots-library.mjs'
 import { createBotPreviews } from './bots-previews.mjs'
 import { botsPackageRoot, createBotsRuntime } from './bots-runtime.mjs'
 
@@ -29,21 +29,30 @@ async function writePrivateJSON(path, value) {
  * runtime, serves the runtime host API on /v1/bots-host/* with its own bearer,
  * reports resources, and proxies /v1/bots/ws for Woven apps.
  */
-export function createBotsService({ configuration, mcp, defaultAgent, serverPort, library, engine, runtime, previews,
-  authorizeClient, machine, engineWatchMilliseconds = 5000, log = message => process.stderr.write(message + '\n') }) {
+export function createBotsService({ configuration, mcp, defaultAgent, serverPort, library, libraryHost, engine, runtime, previews,
+  authorizeClient, machine, memberIdentity, engineWatchMilliseconds = 5000, log = message => process.stderr.write(message + '\n') }) {
   const stateDirectory = join(configuration.stateDirectory, 'bots')
   const settingsPath = join(stateDirectory, 'settings.json')
   const dataDirectory = configuration.botsData ?? join(configuration.dataRoot, 'bots')
   const hostToken = randomBytes(32).toString('base64url'), hostDigest = digest(hostToken)
   const packageRoot = botsPackageRoot(configuration.serviceRoot)
   engine ??= createBotEngine({ instance: configuration.botsInstance })
-  library ??= createBotConversationLibrary(createJournalBotLibraryAdapter(join(dataDirectory, 'library-outbox')))
+  // With this machine's library host, batches go into its library copy; the
+  // outbox keeps them while it is down and is drained when it is ready.
+  const outbox = join(dataDirectory, 'library-outbox')
+  const libraryAdapter = libraryHost ? createLocalLibraryBotAdapter({ client: libraryHost.client, available: libraryHost.available, directory: outbox, log }) : createJournalBotLibraryAdapter(outbox)
+  library ??= createBotConversationLibrary(libraryAdapter)
   previews ??= createBotPreviews({ statePath: join(stateDirectory, 'previews.json') })
   let identity = machine ?? null, started = false, engineWatch = null
   const settings = () => readJSONFile(settingsPath, { botMemoryBytes: 4 * GB })
 
+  // The machine's member identity (the library host's) names its bots; the
+  // saved device-id file is the fallback while there is no library host.
   async function machineInfo() {
-    identity ??= await machineIdentity({ dataRoot: configuration.dataRoot, hostname: hostname() })
+    if (!identity) {
+      const member = await Promise.resolve().then(() => memberIdentity?.()).catch(() => null)
+      identity = member?.deviceID ? { deviceID: member.deviceID, name: member.name || hostname() } : await machineIdentity({ dataRoot: configuration.dataRoot, hostname: hostname() })
+    }
     return identity
   }
   async function runtimeConfiguration() {
@@ -159,14 +168,20 @@ export function createBotsService({ configuration, mcp, defaultAgent, serverPort
     json(response, 404, { error: 'not_found' }); return true
   }
 
-  // Woven apps reach this machine's bots here. `authorizeClient` is the single
-  // place member authentication will replace the device grant check.
+  // Woven apps reach this machine's bots here. `authorizeClient` (possibly
+  // async) accepts a signed member request or, during transition, a bearer.
   function upgrade(request, socket, head) {
     const url = new URL(request.url, 'http://localhost')
     if (url.pathname !== '/v1/bots/ws') return false
     const refuse = (status, text) => { socket.end(`HTTP/1.1 ${status} ${text}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`) }
     if (request.headers.origin) { refuse(403, 'Forbidden'); return true }
-    if (!authorizeClient(request)) { refuse(401, 'Unauthorized'); return true }
+    socket.pause()
+    Promise.resolve().then(() => authorizeClient(request)).catch(() => false).then(allowed => {
+      if (!allowed) refuse(401, 'Unauthorized'); else proxySocket(request, socket, head, url, refuse)
+    })
+    return true
+  }
+  function proxySocket(request, socket, head, url, refuse) {
     const target = configuration.botsEnabled ? runtime?.endpoint() : null
     if (!target) { refuse(503, 'Service Unavailable'); return true }
     if ((request.headers.upgrade ?? '').toLowerCase() !== 'websocket') { refuse(400, 'Bad Request'); return true }
@@ -175,15 +190,15 @@ export function createBotsService({ configuration, mcp, defaultAgent, serverPort
       for (const name of forwardedSocketHeaders) if (typeof request.headers[name] === 'string') lines.push(`${name}: ${request.headers[name].replace(/[\r\n]/g, '')}`)
       upstream.write(lines.join('\r\n') + '\r\n\r\n')
       if (head?.length) upstream.write(head)
-      upstream.pipe(socket); socket.pipe(upstream)
+      upstream.pipe(socket); socket.pipe(upstream); socket.resume()
     })
     const close = () => { upstream.destroy(); socket.destroy() }
     upstream.on('error', () => { if (!socket.writableEnded && upstream.bytesRead === 0) refuse(502, 'Bad Gateway'); close() })
     // HTTP server sockets allow half-open connections; end either side fully.
     for (const event of ['error', 'end', 'close']) socket.on(event, close)
     upstream.on('end', close); upstream.on('close', close)
-    return true
   }
 
-  return { start, close, status, handleHost, handleClient, upgrade, runtimeConfiguration, hostToken: () => hostToken }
+  return { start, close, status, handleHost, handleClient, upgrade, runtimeConfiguration, hostToken: () => hostToken,
+    drainLibrary: () => libraryAdapter.drain?.() ?? Promise.resolve(0) }
 }

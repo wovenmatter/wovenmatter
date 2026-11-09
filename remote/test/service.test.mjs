@@ -507,7 +507,7 @@ test('host health reports native paths and source inventory without exposing its
   assert.deepEqual(health, { status: 'ready', version: '0.1.0', workspaceRoot: workspace, harnessCount: 4,
     runtimeKind: 'host', serviceFingerprint: 'a'.repeat(64), databasesDirectory: databases,
     attachmentsDirectory: resolve(workspace, '.wovenmatter/attachments'), dataRoot: resolve(home, 'data'), accessMode: 'fullRoot',
-    workspaceEnabled: true, botsEnabled: false })
+    workspaceEnabled: true, botsEnabled: false, library: null, memberIdentity: null })
   const body = await (await fetch(service.url + '/v1/harnesses', { headers })).json()
   assert.ok(body.harnesses.every(row => ['system', 'managed', 'missing'].includes(row.source)))
   assert.equal(body.harnesses.find(row => row.id === 'default_agent').source, 'managed')

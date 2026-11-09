@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomUUID, createCipheriv, createDecipheriv } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { sha256 as hash } from './durable-json.mjs'
+import { libraryServedGroups } from './library-tools.mjs'
 
 const fail = (statusCode, message) => Object.assign(new Error(message), {statusCode})
 const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
@@ -12,6 +13,8 @@ const groupFor = name => name === 'woven_context' || name.startsWith('woven_data
 const defaultBotGroups = ['notes','history','sessions','goals','timers','usage','calendar','library','browser','html']
 export const botPrincipal = (deviceID, botID) => `woven:bot:${String(deviceID).toLowerCase()}:${String(botID).toLowerCase()}`
 const isBot = scope => scope?.kind === 'bot'
+// The Node server keeps its managed databases and context lookups itself.
+const nodeOwned = name => name === 'woven_context' || name.startsWith('woven_databases_')
 const errorReply = (id, code, message) => ({jsonrpc:'2.0',id:id??null,error:{code,message}})
 const result = value => value.result?.content ? {content:value.result.content,structuredContent:{success:value.success,requestID:value.requestID},isError:value.success===false}
   : {content:[{type:'text',text:JSON.stringify(value.result ?? null)}],structuredContent:value,isError:value.success===false}
@@ -22,7 +25,7 @@ export function loadWorkspaceMCPCatalog() {
 
 // The public endpoint never accepts a conversation id as caller authority. A
 // session connection or separately created outside-client credential owns it.
-export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localTools,localCall,fetchImpl=globalThis.fetch,catalog=loadWorkspaceMCPCatalog(),beforeLibraryCall=async()=>{},shouldDelegate=()=>false,scopedHistoryAccess=()=>false}) {
+export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localTools,localCall,fetchImpl=globalThis.fetch,catalog=loadWorkspaceMCPCatalog(),beforeLibraryCall=async()=>{},shouldDelegate=()=>false,scopedHistoryAccess=()=>false,localLibrary=null}) {
   db.exec(`CREATE TABLE IF NOT EXISTS mcp_external_clients (id TEXT PRIMARY KEY, digest TEXT NOT NULL UNIQUE, body TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS mcp_library_connection (id INTEGER PRIMARY KEY CHECK(id=1), envelope TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS mcp_preferences (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL);
@@ -142,6 +145,20 @@ export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localT
     const current=new Set([...(taskPolicies.get(scope.conversationID)??policy(scope.conversationID)),'html'])
     return scope.enabledGroups?new Set(scope.enabledGroups.filter(group=>current.has(group))):current
   }
+  // Library-backed groups run against this machine's own library copy, so they
+  // work with every Mac offline. History the caller may read only through its
+  // managed sessions stays on the Node journal, which scopes it, as does all
+  // history while the library host is down.
+  function servedLocally(scope,name) {
+    if(!localLibrary||isBot(scope)||nodeOwned(name)||!libraryServedGroups.has(groupFor(name)))return false
+    return groupFor(name)!=='history'||activeGroups(scope).has('history')&&(localLibrary.available()||!local.has(name))
+  }
+  async function localLibraryCall(scope,message,signal) {
+    // History published since the last batch should be searchable at once;
+    // publication trouble never blocks notes or calendar.
+    if(groupFor(message.params?.name??'')==='history')await Promise.resolve().then(beforeLibraryCall).catch(()=>{})
+    return localLibrary.call({conversationID:scope.conversationID,groups:activeGroups(scope),message,signal})
+  }
   function inventory(scope) {
     if(isBot(scope)) {
       // Conversation-bound local tools have no meaning for a bot; library
@@ -164,7 +181,7 @@ export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localT
       const cleanup=['woven_browser_use_cancel','woven_computer_use_cancel','woven_html_cancel'].includes(tool.name)
       const scopedHistory=!scope.taskProof&&group==='history'&&scopedHistoryAccess(scope)
       const localTask=tool.name.startsWith('woven_databases_')||tool.name==='woven_context'||group==='browser'&&local.has(tool.name)
-      const transport=scope.taskProof?(localTask||hasLibrary):(local.has(tool.name)||hasLibrary)
+      const transport=servedLocally(scope,tool.name)||(scope.taskProof?(localTask||hasLibrary):(local.has(tool.name)||hasLibrary))
       return (current.has(group)||cleanup||scopedHistory)&&transport
     })
   }
@@ -222,7 +239,7 @@ export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localT
     }
     if(message.params!==undefined&&(!message.params||typeof message.params!=='object'||Array.isArray(message.params)))return errorReply(id,-32602,'Parameters must be an object.')
     if(message.method==='initialize'&&(!message.params?.protocolVersion||!message.params?.capabilities||!message.params?.clientInfo))return errorReply(id,-32602,'Initialization requires protocolVersion, capabilities and clientInfo.')
-    if(message.method==='initialize')return {jsonrpc:'2.0',id,result:{protocolVersion:['2025-11-25','2025-06-18','2025-03-26'].includes(message.params?.protocolVersion)?message.params.protocolVersion:'2025-11-25',capabilities:{tools:{listChanged:false}},serverInfo:{name:'Woven MCP',version:'1.0.0'},instructions:'Use named Woven tools within this credential’s conversation and current permissions. Library operations require the central library; local execution tools remain available while it is offline. Never replay an uncertain external effect.'}}
+    if(message.method==='initialize')return {jsonrpc:'2.0',id,result:{protocolVersion:['2025-11-25','2025-06-18','2025-03-26'].includes(message.params?.protocolVersion)?message.params.protocolVersion:'2025-11-25',capabilities:{tools:{listChanged:false}},serverInfo:{name:'Woven MCP',version:'1.0.0'},instructions:'Use named Woven tools within this credential’s conversation and current permissions. Notes, calendar, history and library tools use this machine’s library copy; other delegated tools need a connected Mac, and local execution tools remain available while it is offline. Never replay an uncertain external effect.'}}
     if(message.method==='ping')return {jsonrpc:'2.0',id,result:{}}
     let requestKey,requestController,operationRequestID
     try {
@@ -245,6 +262,7 @@ export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localT
       if(inFlight.has(requestKey))return errorReply(id,-32600,'This JSON-RPC request ID is already active for this caller.')
       requestController=new AbortController();inFlight.set(requestKey,requestController)
       const invocationSignal=signal?AbortSignal.any([signal,requestController.signal]):requestController.signal
+      if(servedLocally(scope,name))return await localLibraryCall(scope,{...message,params:{...message.params,arguments:{...input,requestID:operationRequestID}}},invocationSignal)
       if(isBot(scope)||!local.has(name)||shouldDelegate(scope,name,input)||scope.taskProof&&!name.startsWith('woven_databases_')&&name!=='woven_context'&&groupFor(name)!=='browser')return await libraryCall(scope,{...message,params:{...message.params,arguments:{...input,requestID:operationRequestID}}},invocationSignal)
       const value=await localCall(scope,name,{...input,requestID:operationRequestID},{signal:invocationSignal})
       const reply=result(value)

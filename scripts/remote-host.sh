@@ -30,6 +30,11 @@ BOTS_HELPER=Path('/usr/local/lib')/(BOTS_INSTANCE+'-bots')/'bots-engine'
 ROLES=('workspace','bots')
 DEFAULT_POOL=8*1024**3
 DEFAULT_DISK=50*1024**3
+# The server supervises the release's wovenmatter-library with ROOT as its data
+# root (ROOT/library holds workspace.sqlite) and records this machine's member
+# identity and its /wovenmatter Serve route under ROOT/run/library.
+LIBRARY_STATE=ROOT/'run/library'
+LIBRARY_DATABASE=('workspace.sqlite','workspace.sqlite-wal','workspace.sqlite-shm')
 
 class Failure(Exception):
     def __init__(self,code,detail,status=69): self.code,self.detail,self.status=code,detail,status
@@ -202,6 +207,36 @@ def inventory(paths):
         result.append({'id':identity,'cli':components[0],'adapter':components[1],'status':status})
     return result
 
+def library_binary(release):
+    arch={'x86_64':'x86_64','aarch64':'aarch64','arm64':'aarch64'}.get(platform.machine())
+    path=Path(release)/'host/library'/('linux-'+str(arch))/'wovenmatter-library'
+    return path if arch and path.is_file() else None
+
+def member_identity():
+    # The library host's identity, which a Mac uses to create this machine's member entry.
+    try:
+        value=json.loads((LIBRARY_STATE/'identity.json').read_text())
+        if isinstance(value,dict) and isinstance(value.get('deviceID'),str): return value
+    except (OSError,ValueError): pass
+    return None
+
+def remove_library_route():
+    try: saved=json.loads((LIBRARY_STATE/'serve.json').read_text())
+    except (OSError,ValueError): return 0
+    if not isinstance(saved,dict) or not str(saved.get('httpsPort','')).isdigit(): return 0
+    response=run(['tailscale','serve','status','--json'])
+    try: config=json.loads(response.stdout) or {}
+    except ValueError: config={}
+    endpoint=str(saved.get('dns',''))+':'+str(saved['httpsPort'])
+    handlers=config.get('Web',{}).get(endpoint,{}).get('Handlers',{})
+    handler=handlers.get('/wovenmatter') or handlers.get('/wovenmatter/')
+    # Only the route this server recorded, still pointing where it left it.
+    if response.returncode or not handler or handler.get('Proxy')!=saved.get('target') or config.get('AllowFunnel',{}).get(endpoint): return 0
+    if run(['tailscale','serve','--https='+str(saved['httpsPort']),'--set-path=/wovenmatter','off']).returncode:
+        fail('tailscale_route_cleanup_failed','The library private route could not be removed. Restore this account’s Tailscale operator access and retry uninstall; the workspace was preserved.',69)
+    with contextlib.suppress(FileNotFoundError): (LIBRARY_STATE/'serve.json').unlink()
+    return 1
+
 def tailscale_operator_ready():
     # Serve status is readable even when the account cannot change Serve. Query
     # only the existing operator preference; never return raw preferences or
@@ -342,7 +377,7 @@ def inspect(mode='user',roles=None):
         'blockingIssues':blockers,'blockers':blockers,'canPrepare':elevated,'preparationRequired':bool(actions),
         'hostStorageCapacityBytes':disk.total,'hostStorageAvailableBytes':disk.free,'hostStorageLow':disk.free<10*1024**3,
         'storageWarning':'Less than 10 GiB of free host storage remains.' if disk.free<10*1024**3 else None,
-        'requestedRoles':roles,'bots':bots_discovery(installed,elevated)}
+        'requestedRoles':roles,'bots':bots_discovery(installed,elevated),'memberIdentity':member_identity()}
 
 def shell_quote(value):
     import shlex
@@ -388,7 +423,7 @@ def status(workspace_id):
         'storageWarning':None,'legacyStorage':False,'kind':'host','linger':linger(),'fingerprint':installed['fingerprint'],
         'dataRoot':str(ROOT),'workspaceRoot':str(ROOT/'workspace'),'databasesDirectory':str(ROOT/'databases'),
         'attachmentsDirectory':str(ROOT/'workspace/.wovenmatter/attachments'),'accessMode':installed['accessMode'],'browserSelfTest':browser,
-        'roles':installed['roles'],'botsState':bots_discovery(installed,False)['state']}
+        'roles':installed['roles'],'botsState':bots_discovery(installed,False)['state'],'memberIdentity':member_identity()}
 
 def safe_extract(archive_path,target,expected=None):
     # Validate the entire archive BEFORE creating any extracted paths. All links
@@ -642,7 +677,7 @@ def install(workspace_id,requested_port,mode,fingerprint,updating=False,roles=No
     saved_links={p:os.readlink(p) if p.is_symlink() else None for p in links}
     old_active=run(['systemctl','--user','is-active','--quiet',UNIT_NAME]).returncode==0
     old_enabled=run(['systemctl','--user','is-enabled','--quiet',UNIT_NAME]).returncode==0
-    activated=False
+    activated=False; library_backup=None
     try:
         archive=stage/'bundle.tar.gz'
         with archive.open('wb') as output:
@@ -732,6 +767,18 @@ def install(workspace_id,requested_port,mode,fingerprint,updating=False,roles=No
         progress('activating')
         run(['systemctl','--user','stop',UNIT_NAME])
         activated=True
+        library=library_binary(destination)
+        if library:
+            # Migrate with the old server stopped and before switching releases.
+            # A failure, or any later one, restores the database and the old release.
+            progress('library')
+            owned_directory(ROOT/'library')
+            library_backup=stage/'library-backup'; library_backup.mkdir(mode=0o700)
+            for name in LIBRARY_DATABASE:
+                if (ROOT/'library'/name).is_file(): shutil.copy2(ROOT/'library'/name,library_backup/name)
+            migrated=run([library,'--data-root',ROOT,'--migrate-only','--harness-catalog',destination/'harnesses/catalog.json'],timeout=900)
+            if migrated.returncode or b'"event":"migrated"' not in migrated.stdout:
+                fail('library_migration_failed','The library database could not be migrated; the previous version was restored.',70)
         atomic_link(ROOT/'current',destination)
         atomic_link(ROOT/'node/current',node_root)
         if roles['workspace']: atomic_link(ROOT/'browsers/current',browser_root)
@@ -757,6 +804,10 @@ def install(workspace_id,requested_port,mode,fingerprint,updating=False,roles=No
                 fail('browser_selftest_failed',str(reason)+': '+str(browser.get('hint','The sandbox could not be verified.')),70)
         installed={'id':workspace_id,'port':port,'accessMode':mode,'fingerprint':fingerprint,'nodeVersion':node_version,'playwrightVersion':playwright_version,'roles':roles}
         private_file(RECORD,json.dumps(installed,sort_keys=True).encode()+b'\n')
+        if library:
+            # The server records the library host's identity once it is ready.
+            deadline=time.monotonic()+30
+            while member_identity() is None and time.monotonic()<deadline: time.sleep(.5)
         verify_user_files(snapshot)
         activated=False
         if roles['bots']:
@@ -770,6 +821,11 @@ def install(workspace_id,requested_port,mode,fingerprint,updating=False,roles=No
     except BaseException:
         if activated:
             run(['systemctl','--user','stop',UNIT_NAME])
+            if library_backup is not None:
+                for name in LIBRARY_DATABASE:
+                    if (library_backup/name).is_file(): shutil.copy2(library_backup/name,ROOT/'library'/name)
+                    else:
+                        with contextlib.suppress(FileNotFoundError): (ROOT/'library'/name).unlink()
             for path,target in saved_links.items():
                 if target is not None: atomic_link(path,target)
                 elif path.is_symlink(): path.unlink()
@@ -989,7 +1045,7 @@ def uninstall(workspace_id,remove_data=False):
     installed=require_owner(workspace_id)
     # Remove the engine first: it needs sudo, and a refusal leaves everything intact.
     engine_removed=remove_engine()
-    removed_routes=cleanup_private_routes(workspace_id,installed['port'])
+    removed_routes=cleanup_private_routes(workspace_id,installed['port'])+remove_library_route()
     run(['systemctl','--user','disable','--now',UNIT_NAME],check=True)
     with contextlib.suppress(FileNotFoundError): UNIT.unlink()
     with contextlib.suppress(FileNotFoundError): ENV_FILE.unlink()

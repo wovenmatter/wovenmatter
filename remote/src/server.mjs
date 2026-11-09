@@ -18,9 +18,14 @@ import { browserSelfTest } from './browser-selftest.mjs'
 import { loadWorkspaceMCPCatalog, validateInput, maximumMCPRequestBytes } from './workspace-mcp.mjs'
 import { runtimeConfiguration as configuration, runtimeHarnessEnvironment, nonInteractiveSessionEnvironment, shellQuote } from './config.mjs'
 import { createBotsService } from './bots-service.mjs'
+import { createLibraryHostSupervisor, libraryBinaryPath } from './library-host.mjs'
+import { createLibraryServe } from './library-serve.mjs'
+import { createMemberVerifier, hasMemberSignature } from './member-auth.mjs'
+import { createHostAdministration } from './host-admin.mjs'
 import { createServer } from 'node:http'
 import { timingSafeEqual, randomUUID, createHash } from 'node:crypto'
-import { readFile, writeFile, mkdir, realpath } from 'node:fs/promises'
+import { readFile, writeFile, mkdir, realpath, rename, rm } from 'node:fs/promises'
+import { hostname } from 'node:os'
 import { spawn } from 'node:child_process'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -87,12 +92,36 @@ const workspaceBrowser = createWorkspaceBrowser({ profile: configuration.legacyB
 let browserSelfTestPending
 const browserMCPSchemas = new Map(loadWorkspaceMCPCatalog().filter(tool => ['woven_browser_use', 'woven_browser_use_cancel'].includes(tool.name)).map(tool => [tool.name, tool.inputSchema]))
 
+// This machine's own library copy (docs/architecture/WOVEN_EVERYWHERE.md,
+// "Library host"): native Linux hosts supervise `wovenmatter-library`, publish
+// its peer and mobile routes at /wovenmatter with Tailscale Serve, serve the
+// library-backed Woven MCP tools from it, write session history into it, and
+// verify signed member requests against its member list.
+// WOVENMATTER_LIBRARY=0 turns it off; WOVENMATTER_LIBRARY_BINARY,
+// _DATA_ROOT, _SERVE=0 and _HTTPS_PORT let isolated tests run side by side.
+const nativeLinuxHost = runningAsService && configuration.runtimeKind === 'host' && process.platform === 'linux'
+const libraryState = resolve(configuration.stateDirectory, 'library')
+let memberIdentityRecord = null
+const library = runningAsService && (nativeLinuxHost || process.env.WOVENMATTER_LIBRARY_BINARY) && process.env.WOVENMATTER_LIBRARY !== '0' ? createLibraryHostSupervisor({
+  binary: process.env.WOVENMATTER_LIBRARY_BINARY || libraryBinaryPath(configuration.serviceRoot),
+  dataRoot: process.env.WOVENMATTER_LIBRARY_DATA_ROOT || configuration.dataRoot,
+  harnessCatalog: catalogPath, statePath: resolve(libraryState, 'host.json'),
+  log: message => process.stderr.write(message + '\n'), onReady: ready => libraryReady(ready),
+}) : null
+const libraryServe = library && process.env.WOVENMATTER_LIBRARY_SERVE !== '0' ? createLibraryServe({ statePath: resolve(libraryState, 'serve.json'),
+  ...(/^\d{1,5}$/.test(process.env.WOVENMATTER_LIBRARY_HTTPS_PORT ?? '') ? { candidates: [Number(process.env.WOVENMATTER_LIBRARY_HTTPS_PORT)] } : {}) }) : null
+const members = library ? createMemberVerifier({ loadMembers: () => library.client.members() }) : null
+const hostAdmin = nativeLinuxHost ? createHostAdministration({ serviceRoot: configuration.serviceRoot, dataRoot: configuration.dataRoot, stateDirectory: configuration.stateDirectory,
+  extra: async () => ({ library: library?.status() ?? null, memberIdentity: memberIdentityRecord }) }) : null
+const maximumSignedBodyBytes = 50 * 1024 * 1024
+
 const clientExecution = runningAsService ? createClientExecution({
   directory: resolve(workspaceRoot, '.wovenmatter/client-execution'),
   publisherKey: apiToken,
   mcpEndpointURL: () => `http://127.0.0.1:${server.address()?.port ?? listenPort}/mcp`, managedDataRoot,externalRunningSessions:()=>taskGateway.status().activeRuns,
   kind: process.platform === 'darwin' ? 'mac' : 'linux',
   workspaceBrowser,
+  library: library ? { client: library.client, available: library.available } : null,
   runtime: createClientExecutionRuntime({defaultAgent,durableACP,catalog,workspaceRoot,harnessStatus,
     environment:harnessEnvironment,instances,isExecutionEnabled:()=>taskGateway.enabled()}),
 }) : null
@@ -107,7 +136,10 @@ const retainedExecution = runningAsService ? createRetainedExecutionCapture({
 // enabled, so its routes answer clearly while the engine is being installed.
 const bots = runningAsService && configuration.runtimeKind === 'host' && process.platform === 'linux' ? createBotsService({
   configuration, mcp: clientExecution.mcp, defaultAgent, serverPort: () => server.address()?.port ?? listenPort,
-  authorizeClient: request => authorized(request) || !!clientExecution.principal(request.headers.authorization, 'execution'),
+  libraryHost: library, memberIdentity,
+  // Any member may open the bots socket; the bearers remain for the transition.
+  authorizeClient: async request => authorized(request) || !!clientExecution.principal(request.headers.authorization, 'execution')
+    || !!(members && hasMemberSignature(request.headers) && await members.verify({ method: request.method, target: request.url, headers: request.headers, body: Buffer.alloc(0) }).catch(() => null)),
 }) : null
 // A bots-only machine keeps its server, data root and connections but runs no
 // workspace agents, schedules or projects until the workspace is added.
@@ -121,8 +153,24 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
     // This control service is called by native clients, never browser pages.
     if (request.headers.origin) return json(response, 403, { error: 'browser_origin_forbidden' })
     if (!request.url?.startsWith('/') || request.url.startsWith('//')) return json(response, 400, { error: 'invalid_request_target' })
-    const administrator = authorized(request)
     const url = new URL(request.url, 'http://localhost')
+    // A signed member request: the body is read (or, for a host update,
+    // streamed to a file) only after the device, time and nonce checks pass.
+    let member = null, bodyFile = null
+    if (hasMemberSignature(request.headers)) {
+      if (!members) return json(response, 401, { error: 'member_auth_unavailable' })
+      const upload = url.pathname === '/v1/host/update' && request.method === 'POST' && hostAdmin
+      try {
+        member = await members.verify({ method: request.method, target: request.url, headers: request.headers,
+          body: async () => upload ? (bodyFile = await hostAdmin.receive(request)) : (request.wovenBody = await readBody(request, maximumSignedBodyBytes)) })
+      } catch (error) {
+        if (bodyFile) await rm(bodyFile.path, { force: true }).catch(() => {})
+        if (error.statusCode === 413) return json(response, 413, { error: 'request_too_large' })
+        return json(response, error.statusCode === 503 ? 503 : 401, { error: error.code ?? 'unauthorized' })
+      }
+    }
+    // Mac members administer this host, as the installing Mac's bearer does.
+    const administrator = authorized(request) || member?.kind === 'mac'
     if (url.pathname === '/mcp') {
       const principal=clientExecution?.mcp.resolvePrincipal(request.headers.authorization)
       if(!principal){response.writeHead(401,{'content-type':'application/json','cache-control':'no-store','www-authenticate':'Bearer'});response.end(JSON.stringify({error:'invalid_mcp_credential'}));return}
@@ -142,13 +190,16 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
     }
     if (bots && await bots.handleHost(request, response, url, { readJSON, json })) return
     const scope = url.pathname.startsWith('/v1/inference/') ? 'inference' : 'execution'
-    const device = clientExecution?.principal(request.headers.authorization, scope)
+    // Every member gets the execution and inference scopes a device grant had.
+    const device = member ? { id: member.deviceID, name: member.name, scopes: ['execution', 'inference'], memberKind: member.kind }
+      : clientExecution?.principal(request.headers.authorization, scope)
     if (!administrator && !device) return json(response, 401, { error: 'unauthorized' })
-    if (device) {
+    if (device && !member) {
       const material = clientExecution.unlockMaterial(request.headers.authorization)
       if (material) await defaultAgent.unlockForClient(material)
     }
     if (bots && await bots.handleClient(request, response, url, { readJSON, json, administrator, device })) return
+    if (hostAdmin && await hostAdmin.handle(request, response, url, { readJSON, json, administrator, bodyFile })) return
     if (!configuration.workspaceEnabled && workspaceRoute(url.pathname)) return json(response, 409, { error: 'workspace_disabled' })
     if (url.pathname === '/v1/runtime/inspection' && request.method === 'GET') {
       if (!administrator) return json(response,403,{error:'administrator_required'})
@@ -397,6 +448,8 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
         harnessCount: catalog.size,
         workspaceEnabled: configuration.workspaceEnabled,
         botsEnabled: configuration.botsEnabled,
+        library: library?.status() ?? null,
+        memberIdentity: memberIdentityRecord,
       })
     }
 
@@ -500,15 +553,52 @@ if (runningAsService) {
       }
     }
   }, 5000).unref()
+  library?.start()
   server.listen(listenPort, listenHost, () => {
     process.stdout.write(`Woven Matter remote service listening on ${listenHost}:${listenPort}\n`)
     bots?.start().catch(error => process.stderr.write('Bots could not start: ' + error.message + '\n'))
   })
   process.once('SIGTERM', async () => {
     server.close()
-    try { await bots?.close(); await workspaceBrowser.close(); await taskGateway.close(); await retainedExecution.close(); await clientExecution.close(); await durableACP.stopAll(); await defaultAgent.close(); releaseTaskOwner?.(); process.exit(0) }
+    try { await bots?.close(); await workspaceBrowser.close(); await taskGateway.close(); await retainedExecution.close(); await clientExecution.close(); await library?.stop(); members?.close(); await durableACP.stopAll(); await defaultAgent.close(); releaseTaskOwner?.(); process.exit(0) }
     catch { process.exit(1) }
   })
+}
+
+// After each library host start: publish its routes, record this machine's
+// member identity (remote-host.sh inspect/status read it), refresh members,
+// and flush history and bot conversations that waited for it.
+async function libraryReady(ready) {
+  let endpoint = null
+  if (libraryServe) {
+    try { endpoint = (await libraryServe.publish(ready.port)).endpoint }
+    catch (error) { process.stderr.write('The library route could not be published: ' + error.message + '\n') }
+  }
+  await refreshMemberIdentity(endpoint).catch(error => process.stderr.write('The member identity could not be read: ' + error.message + '\n'))
+  await members?.refresh().catch(() => {})
+  clientExecution?.kickPublisher()
+  await bots?.drainLibrary().catch(() => {})
+}
+
+// The machine's member identity is the library host's (`GET /v1/identity`);
+// until that route exists, its device ID comes from `/v1/health`.
+async function refreshMemberIdentity(endpoint) {
+  let value = await library.client.identity().catch(() => null)
+  if (!value?.deviceID) value = { deviceID: (await library.client.health()).deviceID }
+  if (typeof value.deviceID !== 'string') return null
+  const libraryEndpoint = endpoint ?? (await libraryServe?.recorded().catch(() => null))?.endpoint ?? memberIdentityRecord?.libraryEndpoint ?? null
+  memberIdentityRecord = { deviceID: value.deviceID.toLowerCase(), kind: value.kind ?? 'linux', name: value.name ?? hostname(), publicKey: value.publicKey ?? null,
+    endpoints: Array.isArray(value.endpoints) ? value.endpoints : [], libraryEndpoint, updatedAt: new Date().toISOString() }
+  await mkdir(libraryState, { recursive: true, mode: 0o700 })
+  const temporary = resolve(libraryState, '.identity.' + randomUUID())
+  await writeFile(temporary, JSON.stringify(memberIdentityRecord) + '\n', { mode: 0o600 })
+  await rename(temporary, resolve(libraryState, 'identity.json'))
+  return memberIdentityRecord
+}
+
+async function memberIdentity() {
+  if (!library || !await library.whenReady(15_000)) return null
+  return memberIdentityRecord ?? await refreshMemberIdentity(null).catch(() => null)
 }
 
 function authorized(request) {
@@ -1129,7 +1219,7 @@ function harnessEnvironment() {
   return runtimeHarnessEnvironment(process.env, configuration)
 }
 
-async function readJSON(request, maximumBytes = 1_048_576) {
+async function readBody(request, maximumBytes) {
   const chunks = []
   let bytes = 0
   for await (const chunk of request) {
@@ -1137,8 +1227,15 @@ async function readJSON(request, maximumBytes = 1_048_576) {
     if (bytes > maximumBytes) throw httpError(413, 'request_too_large')
     chunks.push(chunk)
   }
-  if (chunks.length === 0) return {}
-  try { return JSON.parse(Buffer.concat(chunks).toString('utf8')) }
+  return Buffer.concat(chunks, bytes)
+}
+
+// A signed request's body was already read to check its signature.
+async function readJSON(request, maximumBytes = 1_048_576) {
+  const body = request.wovenBody ?? await readBody(request, maximumBytes)
+  if (body.length > maximumBytes) throw httpError(413, 'request_too_large')
+  if (body.length === 0) return {}
+  try { return JSON.parse(body.toString('utf8')) }
   catch { throw httpError(400, 'invalid_json') }
 }
 
