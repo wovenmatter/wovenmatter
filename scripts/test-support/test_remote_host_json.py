@@ -241,7 +241,7 @@ class HostFixtures(unittest.TestCase):
         content=b'tampered'; manifest['files']['src/server.mjs']['sha256']=hashlib.sha256(content).hexdigest()
         path=self.archive([('src/server.mjs',content,tarfile.REGTYPE,''),('manifest.json',json.dumps(manifest).encode(),tarfile.REGTYPE,'')])
         with self.assertRaises(self.m.Failure): self.m.safe_extract(path,self.home/'tampered',fp)
-    def install_bundle(self,bots=False,library=False):
+    def install_bundle(self,bots=False,library=False,release_version=None):
         versions={'nodeVersion':'26.12.1','playwrightVersion':'1.64.1','nodeSHA256':{'linux-x64':'a'*64},
             'dockerVersion':'29.9.3','dockerSHA256':{'linux-x64':hashlib.sha256(b'docker-fixture').hexdigest(),'linux-arm64':'b'*64}}
         files={'host/runtime-versions.json':json.dumps(versions).encode(),
@@ -257,6 +257,7 @@ class HostFixtures(unittest.TestCase):
             digest.update((source+'\0false\0'+'0\0').encode()); digest.update(hashlib.sha256(data).digest())
             records[name]={'sourcePath':source,'sourceMode':0,'mode':0o600,'sha256':hashlib.sha256(data).hexdigest()}
         fp=digest.hexdigest(); manifest={'fingerprint':fp,'nodeVersion':'26.12.1','playwrightVersion':'1.64.1','files':records}
+        if release_version is not None: manifest['releaseVersion']=release_version
         path=self.archive([(name,data,tarfile.REGTYPE,'') for name,data in files.items()]+[('manifest.json',json.dumps(manifest).encode(),tarfile.REGTYPE,'')])
         data=path.read_bytes(); stream=self.home/'stream'; stream.write_bytes((TOKEN+'\n').encode()+data)
         node=self.m.ROOT/'node/26.12.1/bin/node'; node.parent.mkdir(parents=True,exist_ok=True); node.write_bytes(b'fixture')
@@ -469,6 +470,44 @@ class HostFixtures(unittest.TestCase):
         self.assertEqual(self.m.parse_env()['WOVENMATTER_WORKSPACE_ENABLED'],'1')
         self.assertTrue(any('playwright-core/cli.js' in ' '.join(call) for call in self.calls))
         self.assertEqual(self.m.parse_env()['WOVENMATTER_API_TOKEN'],TOKEN)
+    def test_a_bots_only_placeholder_becomes_the_real_workspace_once(self):
+        # The Mac records a bots-only host as `bots`; adding the workspace later installs
+        # with the real id and must reuse that server, port, token and data root.
+        self.m.ROOT.mkdir(parents=True)
+        fp,stream=self.install_bundle(bots=True,release_version='1.4.0'); self.m.TOKEN=''
+        self.m.health=lambda *a:{'serviceFingerprint':fp,'runtimeKind':'host'}
+        source=self.feed(stream)
+        first=self.m.main(['install','bots','7337','fullRoot',fp,'bots'])
+        self.assertEqual(first['roles'],{'workspace':False,'bots':True})
+        self.assertEqual(self.m.parse_env()['WOVENMATTER_RELEASE_VERSION'],'1.4.0')
+        self.assertEqual(first['releaseVersion'],'1.4.0')
+        port=self.m.record()['port']
+        def again():
+            stream.write_bytes(b'\n'+self.home.joinpath('bundle.tar').read_bytes()); source.seek(0); self.m.TOKEN=''
+        # Only a workspace install may take over the placeholder, never an update or another bots install.
+        again()
+        with self.assertRaises(self.m.Failure) as conflict: self.m.main(['update','studio','7337','fullRoot',fp,'workspace'])
+        self.assertEqual(conflict.exception.code,'host_workspace_conflict')
+        again()
+        with self.assertRaises(self.m.Failure) as conflict: self.m.main(['install','studio','7337','fullRoot',fp,'bots'])
+        self.assertEqual(conflict.exception.code,'host_workspace_conflict')
+        self.m.BOTS_HELPER.parent.mkdir(parents=True); self.m.BOTS_HELPER.write_bytes(b'# fixture helper\n')
+        again()
+        converted=self.m.main(['install','studio','7337','fullRoot',fp,'workspace'])
+        self.assertEqual(converted['id'],'studio')
+        self.assertEqual(converted['roles'],{'workspace':True,'bots':True})
+        record=self.m.record()
+        self.assertEqual((record['id'],record['port'],record['previousIDs']),('studio',port,['bots']))
+        settings=self.m.parse_env()
+        self.assertEqual(settings['WOVENMATTER_API_TOKEN'],TOKEN)
+        self.assertEqual((settings['WOVENMATTER_DATA_ROOT'],settings['WOVENMATTER_BOTS_DATA']),(str(self.m.ROOT),str(self.m.ROOT/'bots')))
+        self.assertEqual((settings['WOVENMATTER_WORKSPACE_ENABLED'],settings['WOVENMATTER_BOTS_ENABLED']),('1','1'))
+        self.assertEqual(len(self.engine_calls),1,'the running engine is kept, not installed again')
+        # Once: the placeholder is gone, so a second workspace id is a conflict again.
+        again()
+        with self.assertRaises(self.m.Failure) as conflict: self.m.main(['install','other','7337','fullRoot',fp,'workspace'])
+        self.assertEqual(conflict.exception.code,'host_workspace_conflict')
+        self.assertEqual(self.m.status('studio')['roles'],{'workspace':True,'bots':True})
     def test_workspace_install_without_roles_is_unchanged_and_old_records_read_as_workspace(self):
         self.save_install()
         self.assertEqual(self.m.record()['roles'],{'workspace':True,'bots':False})
