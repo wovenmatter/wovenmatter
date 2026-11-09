@@ -6,7 +6,8 @@ import CompanionInference
 import PiDurableRuntime
 
 enum DevicePermissionMode: String, Codable, CaseIterable {
-  case ask, full
+  // Full access is the default and listed first; Ask stays available, listed last.
+  case full, ask
   static let defaultMode: Self = .full
   var label: String { self == .full ? "Full Access" : "Ask for Approval" }
   var detail: String {
@@ -256,6 +257,15 @@ extension CompanionModel {
     case "central": return online
     default: return workspaceReachable[executionRoute(for: conversationID)] == true
     }
+  }
+  /// A session on a Mac that is missing a permission it needs (see docs/MAC_ACCESS.md).
+  var selectedMacAccessNotice: String? {
+    let id = selectedExecutionWorkspaceID
+    let workspace = id == "central"
+      ? executionWorkspaces.first(where: { $0.kind == .mac && $0.capabilities.contains("history.central.v1") && $0.isVisibleInConnections })
+      : executionWorkspaces.first(where: { $0.id == id })
+    guard selectedConversationID != nil, let workspace, workspace.kind == .mac else { return nil }
+    return workspace.macAccess?.sessionNotice(deviceName: workspace.name, isThisDevice: false)
   }
   var executionName: String {
     switch selectedExecutionWorkspaceID {

@@ -38,16 +38,19 @@ public struct CompanionExecutionWorkspace: Codable, Equatable, Identifiable, Sen
   public var developmentInstance: String?
   /// Copied snapshot owners retain history, not a live connection.
   public var retainedHistory: Bool?
+  /// A Mac's one-time access setup status (Keychain and macOS privacy permissions).
+  public var macAccess: CompanionMacAccessStatus?
   public var isVisibleInConnections: Bool {
     !deleted && retainedHistory != true && (developmentInstance == nil || endpoint != nil)
   }
   public init(id: String, libraryID: String, ownerDeviceID: String, kind: Kind, name: String,
-              endpoint: URL? = nil, capabilities: [String] = [], executionDeviceID: String? = nil, journalDeviceIDs: [String] = [], revision: Int64 = 0, deleted: Bool = false, developmentInstance: String? = nil, retainedHistory: Bool? = nil) {
+              endpoint: URL? = nil, capabilities: [String] = [], executionDeviceID: String? = nil, journalDeviceIDs: [String] = [], revision: Int64 = 0, deleted: Bool = false, developmentInstance: String? = nil, retainedHistory: Bool? = nil, macAccess: CompanionMacAccessStatus? = nil) {
     self.id = id; self.libraryID = libraryID; self.ownerDeviceID = ownerDeviceID; self.kind = kind; self.name = name
     self.executionDeviceID = executionDeviceID
     self.endpoint = endpoint; self.capabilities = capabilities; self.journalDeviceIDs = journalDeviceIDs
     self.revision = revision; self.deleted = deleted
     self.developmentInstance = developmentInstance; self.retainedHistory = retainedHistory
+    self.macAccess = macAccess
   }
 }
 public struct CompanionWorkspaceRegistration: Codable, Equatable, Sendable {

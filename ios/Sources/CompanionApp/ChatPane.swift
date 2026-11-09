@@ -65,6 +65,9 @@ struct ChatPane: View {
               Text("Workspace connection interrupted · execution stays there")
                 .font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
             }
+            if let notice = model.selectedMacAccessNotice {
+              Text(notice).font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+            }
             Color.clear.frame(height: 1).id("latest")
           }.padding(20)
         }.scrollDismissesKeyboard(.interactively)

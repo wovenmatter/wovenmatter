@@ -16,7 +16,7 @@ import { createWorkspaceInstances } from './workspace-instances.mjs'
 import { createWorkspaceBrowser, streamBrowserFrames } from './workspace-browser.mjs'
 import { browserSelfTest } from './browser-selftest.mjs'
 import { loadWorkspaceMCPCatalog, validateInput, maximumMCPRequestBytes } from './workspace-mcp.mjs'
-import { runtimeConfiguration as configuration, runtimeHarnessEnvironment, shellQuote } from './config.mjs'
+import { runtimeConfiguration as configuration, runtimeHarnessEnvironment, nonInteractiveSessionEnvironment, shellQuote } from './config.mjs'
 import { createServer } from 'node:http'
 import { timingSafeEqual, randomUUID, createHash } from 'node:crypto'
 import { readFile, writeFile, mkdir, realpath } from 'node:fs/promises'
@@ -41,7 +41,8 @@ if (catalogDocument.schemaVersion !== 4 || !Array.isArray(catalogDocument.harnes
   throw new Error('Unsupported harness catalog')
 }
 const catalog = new Map(catalogDocument.harnesses.map((entry) => [entry.id, entry]))
-const defaultAgent = createManagedDefaultAgentService({ cwd: workspaceRoot, directory: resolve(workspaceRoot, '.wovenmatter/default-agent') })
+// Pi Durable's tools run in this worker, so it gets the same no-prompt session environment.
+const defaultAgent = createManagedDefaultAgentService({ cwd: workspaceRoot, directory: resolve(workspaceRoot, '.wovenmatter/default-agent'), environment: nonInteractiveSessionEnvironment(process.env, configuration) })
 const authenticationSessions = new Map()
 const foregroundDefaultRuns = new Map()
 const maximumRetainedTerminalRecords = 64

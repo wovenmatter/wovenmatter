@@ -464,6 +464,11 @@ final class CentralLibraryClientModel {
             await startLocalSharing()
         }
         refreshing = true; defer { refreshing = false }
+        if sharingLocalExecution, let localExecution, let store, (try? await localExecution.refreshMacAccess()) == true {
+            var descriptor = localExecution.descriptor
+            descriptor.revision = journal.workspaces[descriptor.id]?.revision ?? 0
+            try? await store.journal.upsertWorkspace(descriptor)
+        }
         async let directRefresh: Void = refreshAllExecutionWorkspaces(background: background)
         guard let engine, !background || nextCentralRefresh <= Date() else { await directRefresh; return }
         let expectedConnection = connectionGeneration

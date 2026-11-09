@@ -50,10 +50,17 @@ if not args: fail('A host execution subcommand is required.')
 if not cwd.startswith('/') or '\0' in cwd: fail('The remote working directory must be an absolute path.')
 root=Path(settings['WOVENMATTER_STATE_DIRECTORY']).parent
 node=str(root/'node/current/bin/node')
-paths=[str(home/'.local/bin'),str(home/'.npm-global/bin'),str(root/'current/tooling/bin'),str(root/'node/current/bin')]
+# Sessions often start from another device with nobody here: credential prompts
+# fail at once instead of hanging. The session-tools sudo runs sudo -n, so
+# passwordless Full root still works. Keep in sync with remote/src/config.mjs.
+tools=str(root/'current/host/session-tools')
+paths=[tools,str(home/'.local/bin'),str(home/'.npm-global/bin'),str(root/'current/tooling/bin'),str(root/'node/current/bin')]
 paths.extend(settings.get('WOVENMATTER_HARNESS_PATH','').split(':'))
 paths.extend(os.environ.get('PATH','/usr/local/bin:/usr/bin:/bin').split(':'))
 env['PATH']=':'.join(dict.fromkeys(p for p in paths if p))
+askpass=tools+'/askpass'
+env.update({'GIT_TERMINAL_PROMPT':'0','GCM_INTERACTIVE':'never','GIT_ASKPASS':askpass,'SSH_ASKPASS':askpass,
+    'SSH_ASKPASS_REQUIRE':'force','SUDO_ASKPASS':askpass,'DEBIAN_FRONTEND':'noninteractive'})
 env['WOVEN_DEFAULT_AGENT_DIRECTORY']=str(Path(settings['WOVENMATTER_WORKSPACE'])/'.wovenmatter/default-agent')
 resource.setrlimit(resource.RLIMIT_CORE,(0,0))
 os.umask(0o077)

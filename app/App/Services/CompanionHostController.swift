@@ -458,7 +458,9 @@ final class CompanionHostController {
         var desired: [CompanionExecutionWorkspace] = [
             .init(id: localID, libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID,
                   kind: .mac, name: DevelopmentLaunch.deviceName(), endpoint: endpoint,
-                  capabilities: ["execution.v1", "history.central.v1", "inference.v1"], executionDeviceID: identity.hostDeviceID, developmentInstance: DevelopmentLaunch.instance)
+                  capabilities: ["execution.v1", "history.central.v1", "inference.v1"], executionDeviceID: identity.hostDeviceID, developmentInstance: DevelopmentLaunch.instance,
+                  // Paired devices show sessions here a clear message when a permission is missing.
+                  macAccess: MacAccessSetupModel.current(keychainReady: model.keychainAccessReady))
         ]
         desired += model.remoteWorkspaces.workspaces.map { configuration in
             let id = configuration.id.uuidString.lowercased()
