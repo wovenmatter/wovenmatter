@@ -34,6 +34,7 @@ let package = Package(
       linkerSettings: [
         .linkedFramework("Security"),
         .linkedFramework("LocalAuthentication"),
+        .linkedFramework("SystemConfiguration"),
         .linkedLibrary("sqlite3")
       ]
     ),

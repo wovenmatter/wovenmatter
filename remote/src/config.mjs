@@ -40,11 +40,30 @@ export function loadRuntimeConfiguration(environment = process.env) {
   })
 }
 
+// Sessions often start from another device with nobody at this one, so a
+// credential prompt must fail at once instead of hanging the session. The
+// session-tools sudo runs the real sudo with -n (passwordless Full root still
+// works); askpass refuses git/ssh prompts with a message. Keep this overlay in
+// sync with remote/host/bin/wm-exec and the Mac's WovenSessionEnvironment.
+export function sessionToolsDirectory(configuration = runtimeConfiguration) {
+  return resolve(configuration.serviceRoot, 'host/session-tools')
+}
+
+export function nonInteractiveSessionEnvironment(environment = process.env, configuration = runtimeConfiguration) {
+  const tools = sessionToolsDirectory(configuration)
+  const askpass = resolve(tools, 'askpass')
+  const paths = (environment.PATH ?? '').split(':').filter(path => path && path !== tools)
+  return { ...environment, PATH: [tools, ...paths].join(':'),
+    GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never', GIT_ASKPASS: askpass,
+    SSH_ASKPASS: askpass, SSH_ASKPASS_REQUIRE: 'force', SUDO_ASKPASS: askpass,
+    DEBIAN_FRONTEND: 'noninteractive' }
+}
+
 export function runtimeHarnessEnvironment(environment = process.env, configuration = loadRuntimeConfiguration(environment)) {
   const paths = [resolve(configuration.home, '.local/bin'), resolve(configuration.home, '.npm-global/bin')]
   if (configuration.harnessPath) paths.push(configuration.harnessPath)
   paths.push(environment.PATH ?? '')
-  return { ...environment, HOME: configuration.home, PATH: paths.join(':'), WOVENMATTER_WORKSPACE: configuration.workspaceRoot }
+  return nonInteractiveSessionEnvironment({ ...environment, HOME: configuration.home, PATH: paths.join(':'), WOVENMATTER_WORKSPACE: configuration.workspaceRoot }, configuration)
 }
 
 export function runtimeNPMCommand(configuration = runtimeConfiguration, nodeExecutable = process.execPath) {

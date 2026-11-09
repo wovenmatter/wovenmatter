@@ -671,6 +671,11 @@ public actor LocalACPClient {
                 && !removedPrefixes.contains(where: upperKey.hasPrefix)
         }
         environment["WOVENMATTER_LOCAL_ACP"] = "1"
+        // Harness tools run on this Mac with nobody necessarily at its screen.
+        // Remote launches get the Linux host's equivalent from wm-exec.
+        if launch.wrappedCommand == nil, launch.executableURL.path != "/usr/bin/ssh" {
+            WovenSessionEnvironment.apply(to: &environment)
+        }
         process.environment = environment
 
         let stdin = Pipe()
