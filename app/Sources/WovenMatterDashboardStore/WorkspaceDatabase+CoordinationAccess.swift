@@ -24,7 +24,7 @@ extension WorkspaceDatabaseConnection {
       try validateCoordinationUnlocked(sourceID: sourceID, targetID: targetID)
       let pending: Bool
       do {
-        if sourceID != WovenMCPCaller.outside { try requireTranscriptAccessUnlocked(sourceID: sourceID, targetID: targetID) }
+        if !WovenMCPCaller.isAppWide(sourceID) { try requireTranscriptAccessUnlocked(sourceID: sourceID, targetID: targetID) }
         pending = false
       } catch WorkspaceToolError.accessRequired { pending = true }
       if pending {
@@ -89,9 +89,9 @@ extension WorkspaceDatabaseConnection {
 
   private var coordinationAccessSelect: String {
     """
-      SELECT r.*,coalesce(s.title,'Outside agent') AS source_title,t.title AS target_title
+      SELECT r.*,coalesce(s.title,b.display_name,'Outside agent') AS source_title,t.title AS target_title
       FROM workspace_coordination_access_requests r
-      LEFT JOIN dashboard_conversations s ON s.id=r.source_id JOIN dashboard_conversations t ON t.id=r.target_id AND (s.id IS NOT NULL OR r.source_id='woven:tailnet')
+      LEFT JOIN dashboard_conversations s ON s.id=r.source_id LEFT JOIN workspace_mcp_callers b ON b.id=r.source_id JOIN dashboard_conversations t ON t.id=r.target_id AND (s.id IS NOT NULL OR b.id IS NOT NULL)
       """
   }
 

@@ -127,7 +127,7 @@ extension ApplicationModel {
     }
 
     func executorPolicy(_ session: String) async throws -> ExecutorApprovalPolicy {
-        if session == WovenMCPCaller.outside {
+        if WovenMCPCaller.isAppWide(session) {
             guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
             try await database.requireTool(.executor, sessionID: session)
             return .full
