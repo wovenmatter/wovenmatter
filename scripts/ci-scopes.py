@@ -26,6 +26,7 @@ def scopes(paths):
                                           r'scripts/build-ios-embedded-runtime\.mjs$)'),
         scripts=infrastructure or changed(r'^(scripts/|remote/|app/Updater/|'
                                          r'\.github/workflows/|\.github/release-refresh\.json$)'),
+        bots=infrastructure or changed(r'^bots/'),
     )
 
 
