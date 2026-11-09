@@ -67,6 +67,10 @@ public struct CompanionPairRequest: Codable, Equatable, Sendable {
   /// Explicit pairing purpose. Only `CompanionPairingPurpose.peerMac` can
   /// become a paired-Mac grant; device metadata never selects that role.
   public let purpose: String?
+  /// The device's raw 32-byte Ed25519 member key. When present, the Mac
+  /// that accepts the pairing signs a member entry for it, so the device
+  /// then signs its requests to every Mac and Linux member.
+  public var memberPublicKey: Data? = nil
   public init(token: String, deviceID: String, deviceName: String, protocolVersion: Int = CompanionProtocol.version,
               metadata: CompanionDeviceMetadata? = nil, expectedWorkspaceID: String? = nil, requiresConfirmation: Bool? = nil,
               purpose: String? = nil) {

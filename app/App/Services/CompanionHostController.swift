@@ -167,7 +167,11 @@ final class CompanionHostController {
                     guard let model else { throw CompanionAPIError(code: "unavailable", message: "The Mac workspace is closed.") }
                     do { return try await model.linkedData(for: link) }
                     catch { throw CompanionAPIError(code: "linked_data_unavailable", message: error.localizedDescription) }
-                }, members: try? await peerSync.members())
+                }, members: try? await peerSync.members(),
+                onMemberPaired: { [weak self] deviceID, name, key in
+                    do { try await self?.peerSync.members().add(deviceID: deviceID, kind: .ios, name: name, publicKey: key, endpoints: []) }
+                    catch { self?.errorMessage = error.localizedDescription }
+                })
             let listener = CompanionHTTPServer(upgradeHandler: { [weak self] request in
                 guard let self else { return .reject(.error("unavailable", "This sharing session has stopped.", status: 503)) }
                 return await self.upgrade(request, generation: expectedGeneration)

@@ -207,6 +207,8 @@ public final class CompanionWorkspaceAPI {
     /// Signed member requests (any Mac or Linux library host). A phone or Mac
     /// member is authenticated by its signature; no grant is issued.
     private let members: MemberDirectory?
+    /// A phone paired with its member key: the host signs its member entry.
+    private let onMemberPaired: @MainActor @Sendable (_ deviceID: String, _ name: String, _ publicKey: Data) async -> Void
     public init(database: WorkspaceDatabase, authentication: CompanionAuthentication,
                 commands: any CompanionCommandServing,
                 isActive: @escaping @MainActor @Sendable () -> Bool,
@@ -219,8 +221,9 @@ public final class CompanionWorkspaceAPI {
                 onRequest: @escaping @MainActor @Sendable () -> Void = {},
                 linkedData: @escaping @MainActor @Sendable (DatabaseArtifactLink) async throws -> DatabaseTabularData = { _ in
                     throw CompanionAPIError(code: "linked_data_unavailable", message: "This database is unavailable on the Mac.")
-                }, members: MemberDirectory? = nil) {
-        self.members = members
+                }, members: MemberDirectory? = nil,
+                onMemberPaired: @escaping @MainActor @Sendable (String, String, Data) async -> Void = { _, _, _ in }) {
+        self.members = members; self.onMemberPaired = onMemberPaired
         self.database = database; self.authentication = authentication; self.commands = commands
         self.isActive = isActive; self.onPair = onPair; self.onMutation = onMutation; self.onRequest = onRequest
         self.linkedData = linkedData; self.discovery = discovery; self.onCancelPairing = onCancelPairing
@@ -305,6 +308,10 @@ public final class CompanionWorkspaceAPI {
                 guard request.body.count <= 8_192 else { return .error("too_large", "The pairing request is too large.", status: 413) }
                 let command = try JSONDecoder().decode(CompanionPairRequest.self, from: request.body)
                 let result = try await authentication.pair(command, workspaceID: workspaceID)
+                if let key = command.memberPublicKey, key.count == 32, command.purpose != CompanionPairingPurpose.peerMac,
+                   [.iPhone, .iPad].contains(command.metadata?.kind ?? .unknown) {
+                    await onMemberPaired(command.deviceID.lowercased(), command.deviceName, key)
+                }
                 await onPair()
                 return try .json(result)
             }
