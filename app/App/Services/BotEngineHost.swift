@@ -14,10 +14,8 @@ protocol BotEngineHost: AnyObject {
     /// lowering it stops at what is already used.
     func apply(resources: BotResourceSettings) async throws
     /// What bots already store, for the disk cap's lower bound. nil when unknown.
+    /// Previews need nothing here: the runtime carries them over Engine API exec streams.
     func diskUsedByBots() async -> Int64?
-    /// Forwards a container port inside the VM to a loopback port on this Mac.
-    func forwardPort(botID: String, containerPort: Int) async throws -> UInt16
-    func removeForward(botID: String, containerPort: Int) async
     /// Stops containers and the VM, for quit or when bots are turned off here.
     func stop() async
 }
@@ -41,8 +39,6 @@ final class UnavailableBotEngineHost: BotEngineHost {
     func status() async -> BotEngineStatus { .init(state: .unavailable, message: reason) }
     func apply(resources: BotResourceSettings) async throws {}
     func diskUsedByBots() async -> Int64? { nil }
-    func forwardPort(botID: String, containerPort: Int) async throws -> UInt16 { throw BotsError.unavailable(reason) }
-    func removeForward(botID: String, containerPort: Int) async {}
     func stop() async {}
 }
 

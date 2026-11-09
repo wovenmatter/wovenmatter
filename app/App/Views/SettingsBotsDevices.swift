@@ -159,7 +159,11 @@ final class BotsUpdateCoordinator {
                 if let failure = await updateMac(named: name) { failures.append("\(name): \(failure)") }
             case let .bots(machineID, name):
                 current = "Updating bots on \(name)…"
-                await bots.session(for: machineID)?.updateBots()
+                if let session = bots.session(for: machineID) {
+                    await session.updateBots()
+                    await session.waitForUpdate()
+                    if let error = session.progress?.error { failures.append("Bots on \(name): \(error)") }
+                }
             case .thisMacApp:
                 current = "Checking for an update to this Mac…"
                 DesktopUpdater.shared.checkForUpdates()

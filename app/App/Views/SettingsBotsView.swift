@@ -92,7 +92,7 @@ struct SettingsBotsView: View {
                                 Text(summary(machine)).font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
                             }
                             Spacer(minLength: 8)
-                            if machine.state == .starting || machine.updating { ProgressView().controlSize(.small) }
+                            if machine.state == .starting || bots.session(for: machine.id)?.updating == true { ProgressView().controlSize(.small) }
                             SettingsPill(stateLabel(machine), tone: [.ready, .off].contains(machine.state) ? .neutral : .warning)
                         }
                         if let message = machine.message, machine.kind != .thisMac { SettingsNote(message) }
@@ -115,11 +115,10 @@ struct SettingsBotsView: View {
                 ForEach(PiBotSettingsSection.allCases) { section in
                     Button(section.title) { onOpenSection(machine.id, section) }
                 }
-                Button(session.progress != nil ? "Updating bots…" : "Update bots") {
-                    confirmation = nil
+                Button(session.updating ? "Updating bots…" : "Update bots") {
                     Task { await session.updateBots() }
                 }
-                .disabled(session.progress != nil)
+                .disabled(session.updating)
                 .help("Stops running work, snapshots each bot, updates it and rolls back on failure.")
             }
             if machine.kind == .linux, machine.state != .unreachable {
@@ -131,7 +130,8 @@ struct SettingsBotsView: View {
             }
         }
         if let progress = session?.progress {
-            SettingsNote([progress.phase.capitalized, progress.message].compactMap { $0 }.joined(separator: ": "))
+            let bot = progress.botId.flatMap { id in session?.bots.first { $0.id == id }?.name }
+            SettingsNote([bot, progress.text].compactMap { $0 }.joined(separator: ": "))
         }
     }
 

@@ -45,9 +45,9 @@ struct BotsHostDependencies {
     var callers: @MainActor () async throws -> [WovenBotCaller]
     var isPaused: @MainActor (_ machineID: String) async -> Bool = { _ in false }
     var botMCP: @MainActor () async -> WorkspaceExternalMCPSettings?
-    var recordConversation: @MainActor (_ machineID: String, _ botID: String, _ report: BotConversationReport) async throws -> Int
+    var recordConversation: @MainActor (_ machineID: String, _ batch: BotConversationMirror) async throws -> Void
     var deleteConversations: @MainActor (_ machineID: String, _ botID: String) async throws -> Void
-    var inferenceCredential: @MainActor (_ provider: String) async throws -> BotsHostAPI.Credential?
+    var inferenceCredential: @MainActor (_ provider: String) async throws -> BotsHostAPI.CredentialReply
     var remoteMachines: @MainActor (_ thisMacVersion: String?) async -> [BotMachine] = { _ in [] }
     var setRemoteResources: @MainActor (_ machineID: String, _ resources: BotResourceSettings) async throws -> Void = { _, _ in
         throw BotsError.unavailable("That machine is unavailable.")
@@ -100,7 +100,7 @@ final class BotsHostController {
         self.engine = engine
         self.bundle = bundle
         self.dependencies = dependencies
-        previews = BotPreviewPublisher(engine: engine)
+        previews = BotPreviewPublisher()
         if let data = try? Data(contentsOf: directory.appending(path: "host.json")),
            let saved = try? JSONDecoder().decode(Persisted.self, from: data) {
             persisted = saved
@@ -276,7 +276,7 @@ final class BotsHostController {
             listen: .init(port: port), runtimeToken: persisted.runtimeToken,
             engine: .init(socket: socket), image: .init(tag: bundle.imageTag),
             limits: .init(botMemoryBytes: resources.perBotBytes),
-            host: .init(url: "http://127.0.0.1:\(hostPort)", token: persisted.hostToken),
+            host: .init(url: "http://127.0.0.1:\(hostPort)/", token: persisted.hostToken),
             machine: .init(deviceID: identity.deviceID, name: identity.name))
         try supervisor.run(config)
     }
@@ -297,13 +297,15 @@ final class BotsHostController {
         return BotsHostAPI(
             token: persisted.hostToken,
             issueKey: { botID, name in try await dependencies.issueKey(machineID, botID, name) },
-            revokeKey: { botID in try dependencies.revokeKey(WovenMCPCaller.bot(machineID: machineID, botID: botID), false) },
-            publishPreview: { botID, port in try await previews.publish(botID: botID, port: port) },
+            // Sent when the user purges a bot: its key and its library conversations go.
+            revokeKey: { botID in
+                try dependencies.revokeKey(WovenMCPCaller.bot(machineID: machineID, botID: botID), false)
+                try await dependencies.deleteConversations(machineID, botID)
+            },
+            publishPreview: { botID, port, containerPort in try await previews.publish(botID: botID, port: port, containerPort: containerPort) },
             removePreview: { botID, port in await previews.remove(botID: botID, port: port) },
-            previews: { previews.previews },
             inferenceCredential: { provider in try await dependencies.inferenceCredential(provider) },
-            recordConversation: { botID, report in try await dependencies.recordConversation(machineID, botID, report) },
-            deleteConversations: { botID in try await dependencies.deleteConversations(machineID, botID) })
+            recordConversation: { _, batch in try await dependencies.recordConversation(machineID, batch) })
     }
 
     // MARK: Delivery to bots

@@ -582,27 +582,80 @@ public struct PiBotAttachmentDraft: Equatable, Identifiable, Sendable {
 
 // MARK: - Runtime (Woven additions to protocol 1)
 
-/// `runtime.status`: what this runtime runs and whether an update is in progress.
+/// `runtime.status`.
 public struct PiBotRuntimeStatus: Codable, Equatable, Sendable {
     public let version: String
-    public let `protocol`: Int?
-    public let image: String?
-    /// `ready`, `updating`, `rebuilding` or `failed`.
-    public let state: String?
-    public let error: String?
-    public init(version: String, protocol: Int? = nil, image: String? = nil, state: String? = nil, error: String? = nil) {
-        self.version = version; self.protocol = `protocol`; self.image = image; self.state = state; self.error = error
+    /// `none`, `linux-dockerd` or `mac-vm`.
+    public let environment: String?
+    /// How many bots this runtime has.
+    public let bots: Int?
+    public init(version: String, environment: String? = nil, bots: Int? = nil) {
+        self.version = version; self.environment = environment; self.bots = bots
     }
-    public var isBusy: Bool { state == "updating" || state == "rebuilding" }
 }
 
-/// `runtime.progress` push during an update or rebuild.
+/// The `runtime.update` push: per bot `stopping`, `updating`, then `updated`, `rolledBack`
+/// or `skipped`, and one final `done` (with `error` if the run itself failed).
 public struct PiBotRuntimeProgress: Codable, Equatable, Sendable {
     public let botId: String?
-    /// `stopping`, `snapshot`, `updating`, `checking`, `restarting`, `rolledBack`, `done` or `failed`.
     public let phase: String
-    public let message: String?
-    public init(botId: String? = nil, phase: String, message: String? = nil) {
-        self.botId = botId; self.phase = phase; self.message = message
+    public let error: String?
+    public init(botId: String? = nil, phase: String, error: String? = nil) {
+        self.botId = botId; self.phase = phase; self.error = error
     }
+    public var isFinished: Bool { phase == "done" }
+    public var text: String {
+        let what: String = switch phase {
+        case "stopping": "Stopping running work"
+        case "updating": "Updating"
+        case "updated": "Updated"
+        case "rolledBack": "Rolled back to the previous version"
+        case "skipped": "Already up to date"
+        case "done": error == nil ? "Update finished" : "Update failed"
+        default: phase
+        }
+        return [what, error].compactMap { $0 }.joined(separator: ": ")
+    }
+}
+
+/// `bots.environment`: a bot's container.
+public struct PiBotEnvironment: Codable, Equatable, Sendable {
+    public struct Preview: Codable, Equatable, Sendable { public let port: Int; public let url: String }
+    public let botId: String
+    /// `missing`, `running`, `stopped` or `unavailable`.
+    public let state: String
+    /// Why a running bot is not idle now.
+    public let busy: String?
+    /// Epoch milliseconds.
+    public let lastActivity: Double?
+    public let previews: [Preview]
+    public init(botId: String, state: String, busy: String? = nil, lastActivity: Double? = nil, previews: [Preview] = []) {
+        self.botId = botId; self.state = state; self.busy = busy; self.lastActivity = lastActivity; self.previews = previews
+    }
+    public var stateText: String {
+        switch state {
+        case "running": busy.map { "Running · \($0)" } ?? "Running"
+        case "stopped": "Stopped · starts on its next tool call"
+        case "missing": "Not created yet"
+        default: "Unavailable"
+        }
+    }
+}
+
+/// `previews.list`: `port` is the container port.
+public struct PiBotPreview: Codable, Equatable, Sendable, Identifiable {
+    public let botId: String
+    public let port: Int
+    public let url: String
+    public var id: String { botId + ":" + String(port) }
+    public init(botId: String, port: Int, url: String) { self.botId = botId; self.port = port; self.url = url }
+}
+
+/// `woven.status`, aggregated over the bots' own keys.
+public struct PiBotWovenStatus: Codable, Equatable, Sendable {
+    public struct Bot: Codable, Equatable, Sendable { public let state: String; public let toolCount: Int? }
+    public let state: String
+    public let toolCount: Int?
+    public let error: String?
+    public let bots: [String: Bot]?
 }

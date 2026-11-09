@@ -37,7 +37,7 @@ private final class ScriptedPiBot: @unchecked Sendable {
     private func accept(_ connection: NWConnection) {
         lock.withLock { connections.append(connection) }
         connection.start(queue: .global())
-        write(connection, ["type": "hello", "version": "0.1.0", "protocol": 1, "machineId": "fixture",
+        write(connection, ["type": "hello", "version": "0.1.0", "protocol": 1, "installationId": "fixture", "environment": "mac-vm",
                            "capabilities": ["groups", "woven.mcp", "message.context"]])
         receive(connection)
     }
@@ -423,17 +423,22 @@ struct BotConversationControllerTests {
     @Test func theSocketCarriesTheMachinesBearer() async throws {
         let server = try await ScriptedPiBot()
         let bots = try await connected(server)
-        #expect(bots.isConnected && bots.health?.machineId == "fixture")
+        #expect(bots.isConnected && bots.health?.environment == "mac-vm")
     }
 
     @Test func updateProgressReachesTheSession() async throws {
         let server = try await ScriptedPiBot()
         let bots = try await connected(server)
-        server.on("runtime.status") { _ in ["version": "0.2.0", "protocol": 1, "state": "ready"] }
-        server.push(["type": "runtime.progress", "botId": "a", "phase": "snapshot", "message": "Saving a"])
-        try await eventually("progress") { bots.progress?.phase == "snapshot" }
-        server.push(["type": "runtime.progress", "phase": "done"])
-        try await eventually("status") { bots.runtimeStatus?.version == "0.2.0" }
+        server.on("runtime.status") { _ in ["version": "0.2.0", "environment": "mac-vm", "bots": 1] }
+        server.on("runtime.update") { _ in ["started": true] }
+        await bots.updateBots()
+        #expect(bots.updating && server.requests("runtime.update").count == 1)
+        server.push(["type": "runtime.update", "botId": "a", "phase": "updating"])
+        try await eventually("progress") { bots.progress?.phase == "updating" }
+        server.push(["type": "bots.environment.changed", "botId": "a", "state": "running"])
+        try await eventually("environment") { bots.environmentStates["a"] == "running" }
+        server.push(["type": "runtime.update", "phase": "done"])
+        try await eventually("status") { !bots.updating && bots.runtimeStatus?.version == "0.2.0" }
     }
 
     @Test func memoryChangesReachObserversUntilTheyStop() async throws {

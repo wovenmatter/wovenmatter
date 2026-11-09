@@ -55,13 +55,9 @@ struct BotsRuntimeBundle: Equatable, Sendable {
         return object["version"] as? String
     }
 
-    /// `package.json` may record `wovenmatter.image`; otherwise the tag follows the package version.
-    var imageTag: String {
-        if let data = try? Data(contentsOf: root.appending(path: "package.json")),
-           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let woven = object["wovenmatter"] as? [String: Any], let image = woven["image"] as? String, !image.isEmpty { return image }
-        return "wovenmatter/bots:" + (version ?? "latest")
-    }
+    /// An untagged name: the runtime tags it with the content hash of `bots/image` and
+    /// builds it through the Engine API when missing.
+    var imageTag: String { "wovenmatter-bots" }
 }
 
 @MainActor

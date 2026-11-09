@@ -20,8 +20,6 @@ private final class FakeEngine: BotEngineHost {
     func status() async -> BotEngineStatus { .init(state: stopped > 0 ? .stopped : .running, socketPath: socket) }
     func apply(resources: BotResourceSettings) async throws { applied.append(resources) }
     func diskUsedByBots() async -> Int64? { 2 * BotResourceSettings.gib }
-    func forwardPort(botID: String, containerPort: Int) async throws -> UInt16 { forwards.append(botID + ":\(containerPort)"); return 1 }
-    func removeForward(botID: String, containerPort: Int) async {}
     func stop() async { stopped += 1 }
 }
 
@@ -40,7 +38,8 @@ private final class HostFixture {
     var launches: [[String]] = []
     var issued: [(String, String, String)] = []
     var revoked: [(String, Bool)] = []
-    var recorded: [(String, String, BotConversationReport)] = []
+    var recorded: [(String, BotConversationMirror)] = []
+    var deleted: [String] = []
     let host: BotsHostController
     let supervisor: BotsRuntimeSupervisor
 
@@ -60,21 +59,31 @@ private final class HostFixture {
         }, probe: { _, _ in true })
         var issued: [(String, String, String)] = []
         var revoked: [(String, Bool)] = []
-        var recorded: [(String, String, BotConversationReport)] = []
+        var recorded: [(String, BotConversationMirror)] = []
+        var deleted: [String] = []
         let gib = BotResourceSettings.gib
         let dependencies = BotsHostDependencies(
             identity: { ("D3VICE-0001", "Fixture Mac") }, appVersion: "1.4.0",
             issueKey: { machine, bot, name in issued.append((machine, bot, name)); return .init(endpointURL: "http://127.0.0.1:1/mcp", bearerToken: "bot-key") },
             revokeKey: { caller, sticky in revoked.append((caller, sticky)) },
             reinstate: { _ in }, setPaused: { _, _ in }, callers: { [] }, botMCP: { nil },
-            recordConversation: { machine, bot, report in recorded.append((machine, bot, report)); return report.entries.count },
-            deleteConversations: { _, _ in },
-            inferenceCredential: { provider in provider == "openai" ? .init(type: "api_key", key: "fixture-key") : nil },
+            recordConversation: { machine, batch in recorded.append((machine, batch)) },
+            deleteConversations: { _, bot in deleted.append(bot) },
+            inferenceCredential: { provider in
+                switch provider {
+                case "openai": .init(credential: .apiKey("fixture-key"))
+                case "web-search": .init(credential: .apiKey("search-key"), searchProvider: "brave")
+                case "openai-codex": .init(credential: .oauth(access: "access", expires: 1_900_000_000_000, accountId: nil))
+                default: .init()
+                }
+            },
             capacity: { _ in BotMachineCapacity(memoryBytes: 16 * gib, diskTotalBytes: 500 * gib, diskFreeBytes: 200 * gib) })
         host = BotsHostController(directory: state, engine: engine, bundle: bundle, dependencies: dependencies, supervisor: supervisor)
         // Closures above write through these boxes; mirror them after each step.
         self.launches = launches; self.issued = issued; self.revoked = revoked; self.recorded = recorded
-        sync = { [unowned self] in self.launches = launches; self.issued = issued; self.revoked = revoked; self.recorded = recorded }
+        sync = { [unowned self] in
+            self.launches = launches; self.issued = issued; self.revoked = revoked; self.recorded = recorded; self.deleted = deleted
+        }
     }
     var sync: () -> Void = {}
 
@@ -119,7 +128,7 @@ struct BotsHostTests {
         #expect(listen["host"] as? String == "127.0.0.1")
         #expect((config["engine"] as? [String: Any])?["socket"] as? String == fixture.engine.socket)
         #expect((config["engine"] as? [String: Any])?["kind"] as? String == "mac-vm")
-        #expect((config["image"] as? [String: Any])?["tag"] as? String == "wovenmatter/bots:0.3.1")
+        #expect((config["image"] as? [String: Any])?["tag"] as? String == "wovenmatter-bots")
         #expect((config["limits"] as? [String: Any])?["botMemoryBytes"] as? Int64 == 4 * BotResourceSettings.gib)
         #expect((config["machine"] as? [String: Any])?["deviceID"] as? String == "d3vice-0001")
         let hostURL = (config["host"] as? [String: Any])?["url"] as? String
@@ -164,20 +173,34 @@ struct BotsHostTests {
         #expect(keyBody == ["endpoint": "http://127.0.0.1:1/mcp", "token": "bot-key"])
         #expect(await api.handle(try hostRequest("POST", "/v1/bots-host/mcp-keys", token: token, body: ["botID": "not valid"])).status == 400)
         #expect(await api.handle(try hostRequest("DELETE", "/v1/bots-host/mcp-keys/b1", token: token)).status == 200)
-        let credential = await api.handle(try hostRequest("POST", "/v1/bots-host/inference-credentials", token: token, body: ["provider": "openai"]))
-        #expect(credential.status == 200)
-        #expect(String(decoding: credential.body, as: UTF8.self).contains("fixture-key"))
-        #expect(await api.handle(try hostRequest("POST", "/v1/bots-host/inference-credentials", token: token, body: ["provider": "xai"])).status == 404)
-        let entries = await api.handle(try hostRequest("POST", "/v1/bots-host/conversations/b1/entries", token: token, body: [
-            "botName": "Builder", "conversationId": 7, "entries": [["id": 1, "role": "user", "text": "hi"], ["id": 2, "role": "assistant", "text": "hello"]],
-        ]))
-        #expect(entries.status == 200)
-        #expect(await api.handle(try hostRequest("GET", "/v1/bots-host/previews", token: token)).status == 200)
+        func credential(_ provider: String) async throws -> [String: Any] {
+            let reply = await api.handle(try hostRequest("POST", "/v1/bots-host/inference-credentials", token: token, body: ["provider": provider]))
+            #expect(reply.status == 200)
+            return try #require(try JSONSerialization.jsonObject(with: reply.body) as? [String: Any])
+        }
+        #expect(try await credential("openai")["credential"] as? [String: String] == ["type": "api_key", "key": "fixture-key"])
+        let search = try await credential("web-search")
+        #expect(search["searchProvider"] as? String == "brave")
+        let oauth = try #require(try await credential("openai-codex")["credential"] as? [String: Any])
+        #expect(oauth["type"] as? String == "oauth" && oauth["refresh"] == nil && oauth["expires"] as? Double == 1_900_000_000_000)
+        // Not connected is a reply, not an error.
+        let missing = try await credential("xai")
+        #expect(missing.keys.contains("credential") && missing["credential"] is NSNull)
+        #expect(await api.handle(try hostRequest("POST", "/v1/bots-host/inference-credentials", token: token, body: ["provider": "unknown"])).status == 400)
+        let batch: [String: Any] = [
+            "bot": ["id": "b1", "name": "Builder"],
+            "conversations": [["conversationId": 7, "kind": "main"]],
+            "entries": [["id": 1, "conversationId": 7, "role": "user", "text": "hi", "createdAt": "2026-11-09T00:00:00Z"]],
+        ]
+        #expect(await api.handle(try hostRequest("POST", "/v1/bots-host/conversations/b1/entries", token: token, body: batch)).status == 200)
+        #expect(await api.handle(try hostRequest("POST", "/v1/bots-host/conversations/other/entries", token: token, body: batch)).status == 400)
+        #expect(await api.handle(try hostRequest("POST", "/v1/bots-host/previews", token: token, body: ["botID": "b1", "port": 80, "containerPort": 3000])).status == 400)
         #expect(await api.handle(try hostRequest("GET", "/v1/bots-host/unknown", token: token)).status == 404)
         fixture.sync()
         #expect(fixture.issued.map(\.0) == ["d3vice-0001"] && fixture.issued.map(\.2) == ["Builder"])
         #expect(fixture.revoked.map(\.0) == ["woven:bot:d3vice-0001:b1"] && fixture.revoked.map(\.1) == [false])
-        #expect(fixture.recorded.first?.2.entries.count == 2)
+        #expect(fixture.deleted == ["b1"])
+        #expect(fixture.recorded.first?.0 == "d3vice-0001" && fixture.recorded.first?.1.entries.count == 1)
     }
 
     @Test func otherMembersReachTheRuntimeOnlyThroughItsOwnBearer() async throws {
@@ -218,26 +241,35 @@ struct BotsHostTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let database = try await WorkspaceDatabase(url: directory.appending(path: "workspace.sqlite"))
-        let report = BotConversationReport(botName: "Builder", conversationId: 5, mainConversationId: 5, title: "Main", entries: [
-            .init(id: 1, role: "user", text: "hi"), .init(id: 2, role: "assistant", text: "hel"),
+        let stamp = "2026-11-09T00:00:00Z"
+        let main = BotConversationMirror.Conversation(conversationId: 5, kind: "main", title: "Main")
+        var batch = BotConversationMirror(bot: .init(id: "B1", name: "Builder"), conversations: [main], entries: [
+            .init(id: 1, conversationId: 5, role: "user", text: "hi", createdAt: stamp),
+            .init(id: 2, conversationId: 5, role: "assistant", text: "hel", createdAt: stamp),
         ])
-        #expect(try await database.recordBotConversation(machineID: "M1", botID: "B1", report) == 2)
-        var finished = report; finished.entries = [.init(id: 2, role: "assistant", text: "hello")]
-        #expect(try await database.recordBotConversation(machineID: "M1", botID: "B1", finished) == 0)
-        let thread = BotConversationReport(botName: "Builder", conversationId: 9, mainConversationId: 5, title: "Side", entries: [
-            .init(id: 3, role: "user", text: "thread"),
-        ])
-        #expect(try await database.recordBotConversation(machineID: "M1", botID: "B1", thread) == 1)
+        #expect(try await database.recordBotConversation(machineID: "M1", batch) == 2)
+        batch.entries = [.init(id: 2, conversationId: 5, role: "assistant", text: "hello", stopped: true, createdAt: stamp)]
+        #expect(try await database.recordBotConversation(machineID: "M1", batch) == 0)
+        let thread = BotConversationMirror.Conversation(conversationId: 9, kind: "thread", parentConversationId: 5, forkedAt: 2, title: "Side", pinned: true)
+        // A metadata-only batch: a new thread and a renamed main channel.
+        var renamed = main; renamed.title = "Renamed"
+        #expect(try await database.recordBotConversation(machineID: "M1", .init(bot: .init(id: "B1", name: "Builder"), conversations: [renamed, thread], entries: [])) == 0)
         let conversations = try await database.botConversations()
         #expect(conversations.map(\.conversationID) == [5, 9])
-        #expect(conversations.first?.machineID == "m1" && conversations.first?.botName == "Builder")
+        #expect(conversations.first?.machineID == "m1" && conversations.first?.title == "Renamed")
+        #expect(conversations.last?.kind == "thread" && conversations.last?.parentConversationID == 5 && conversations.last?.pinned == true)
         let entries = try await database.botConversationEntries(id: try #require(conversations.first?.id))
-        #expect(entries.map(\.text) == ["hi", "hello"])
+        #expect(entries.map(\.text) == ["hi", "hello"] && entries.last?.stopped == true)
         // Regular chats never see bot conversations.
         #expect(try await database.workspaceOverview().conversations.isEmpty)
         #expect(PairedLibraryTables.names.contains("bot_conversations") && PairedLibraryTables.names.contains("bot_conversation_entries"))
         await #expect(throws: (any Error).self) {
-            _ = try await database.recordBotConversation(machineID: "M1", botID: "B1", .init(botName: "x", conversationId: 1, entries: [.init(id: 1, role: "root", text: "x")]))
+            _ = try await database.recordBotConversation(machineID: "M1", .init(bot: .init(id: "B1", name: "x"), conversations: [main],
+                entries: [.init(id: 3, conversationId: 5, role: "system", text: "x", createdAt: stamp)]))
+        }
+        await #expect(throws: (any Error).self) {
+            _ = try await database.recordBotConversation(machineID: "M1", .init(bot: .init(id: "B1", name: "x"), conversations: [main],
+                entries: [.init(id: 3, conversationId: 77, role: "user", text: "x", createdAt: stamp)]))
         }
         try await database.deleteBotConversations(machineID: "M1", botID: "B1")
         #expect(try await database.botConversations().isEmpty)

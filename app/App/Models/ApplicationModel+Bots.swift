@@ -80,9 +80,9 @@ extension ApplicationModel {
             callers: { [weak self] in try await self?.agentTools?.botCallers() ?? [] },
             isPaused: { [weak self] machineID in (try? await self?.dashboardStore?.database.isBotMachinePaused(machineID)) ?? false },
             botMCP: { [weak self] in try? await self?.agentTools?.database.toolSettings().botMCP },
-            recordConversation: { [weak self] machineID, botID, report in
+            recordConversation: { [weak self] machineID, batch in
                 guard let database = self?.dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
-                return try await database.recordBotConversation(machineID: machineID, botID: botID, report)
+                try await database.recordBotConversation(machineID: machineID, batch)
             },
             deleteConversations: { [weak self] machineID, botID in
                 try await self?.dashboardStore?.database.deleteBotConversations(machineID: machineID, botID: botID)

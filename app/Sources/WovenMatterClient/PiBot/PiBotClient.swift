@@ -12,8 +12,10 @@ public actor PiBotClient {
         case threadsChanged(botID: String)
         case memoryChanged(botID: String)
         case conversation(botID: String, conversationID: Int, PiBotStreamEvent)
-        /// A bots update or rebuild reported progress (`runtime.progress`).
+        /// A `runtime.update` run reported progress.
         case runtimeProgress(PiBotRuntimeProgress)
+        /// A bot's container changed state (`bots.environment.changed`).
+        case environmentChanged(botID: String, state: String)
     }
 
     public struct RemoteError: LocalizedError, Sendable {
@@ -148,7 +150,7 @@ public actor PiBotClient {
             if let data = try? JSONEncoder().encode(value),
                let hello = try? JSONDecoder().decode(PiBotHello.self, from: data) {
                 onEvent(.hello(PiBotHealth(ok: true, version: hello.version, protocol: hello.protocol,
-                    machineId: hello.machineId, capabilities: hello.capabilities)))
+                    installationId: hello.installationId, capabilities: hello.capabilities, environment: hello.environment)))
             }
         case "result":
             guard let id = object["id"]?.intValue, let continuation = pending.removeValue(forKey: id) else { return }
@@ -167,8 +169,12 @@ public actor PiBotClient {
                let event = object["event"].flatMap(PiBotStreamEvent.init(json:)) {
                 onEvent(.conversation(botID: botID, conversationID: conversationID, event))
             }
-        case "runtime.progress":
+        case "runtime.update":
             if let progress = try? decode(value, as: PiBotRuntimeProgress.self) { onEvent(.runtimeProgress(progress)) }
+        case "bots.environment.changed":
+            if let botID = object["botId"]?.stringValue, let state = object["state"]?.stringValue {
+                onEvent(.environmentChanged(botID: botID, state: state))
+            }
         default: break
         }
     }
@@ -177,8 +183,7 @@ public actor PiBotClient {
     static func timeout(for type: String) -> Duration {
         switch type {
         case "bots.restore", "bots.purge", "bots.delete", "conversation.abort": .seconds(600)
-        // Each bot is snapshotted, updated and health-checked; progress arrives meanwhile.
-        case "runtime.update", "bots.rebuild": .seconds(3_600)
+        case "bots.rebuild", "bots.stop": .seconds(600)
         default: .seconds(30)
         }
     }
@@ -345,17 +350,40 @@ public actor PiBotClient {
 
     // MARK: Runtime (Woven additions)
 
+    private struct EnvironmentResult: Decodable { let environment: PiBotEnvironment }
+    private struct PreviewsResult: Decodable { let previews: [PiBotPreview] }
+    private struct StoppedResult: Decodable { let stopped: Bool }
+
     public func runtimeStatus() async throws -> PiBotRuntimeStatus { try decode(try await call("runtime.status")) }
-    /// Stops running work, snapshots each bot, updates it in place, health-checks it and
-    /// rolls back on failure. Progress arrives as `runtime.progress`.
-    public func updateBots() async throws -> PiBotRuntimeStatus { try decode(try await call("runtime.update")) }
+    /// Starts at once and returns: it stops running work, snapshots each bot, updates it,
+    /// health-checks it and rolls back on failure. Progress arrives as `runtime.update` pushes.
+    public func updateBots(botIDs: [String]? = nil) async throws {
+        var fields: [String: GatewayJSONValue] = [:]
+        if let botIDs { fields["botIds"] = .array(botIDs.map(GatewayJSONValue.string)) }
+        _ = try await call("runtime.update", fields)
+    }
     /// Recreates one bot from a clean image, keeping its storage.
     public func rebuildBot(id: String) async throws { _ = try await call("bots.rebuild", ["botId": .string(id)]) }
+    /// Stops a bot's container now; its next tool call starts it again.
+    public func stopBot(id: String) async throws { _ = try await call("bots.stop", ["botId": .string(id)]) }
+    public func environment(botID: String) async throws -> PiBotEnvironment {
+        try decode(try await call("bots.environment", ["botId": .string(botID)]), as: EnvironmentResult.self).environment
+    }
+    public func previews(botID: String? = nil) async throws -> [PiBotPreview] {
+        var fields: [String: GatewayJSONValue] = [:]
+        if let botID { fields["botId"] = .string(botID) }
+        return try decode(try await call("previews.list", fields), as: PreviewsResult.self).previews
+    }
+    @discardableResult public func stopPreview(botID: String, port: Int) async throws -> Bool {
+        try decode(try await call("previews.stop", ["botId": .string(botID), "port": .number(Double(port))]), as: StoppedResult.self).stopped
+    }
+    public func wovenStatus() async throws -> PiBotWovenStatus { try decode(try await call("woven.status")) }
 }
 
 private struct PiBotHello: Decodable {
     let version: String
     let `protocol`: Int?
-    let machineId: String?
+    let installationId: String?
     let capabilities: [String]?
+    let environment: String?
 }

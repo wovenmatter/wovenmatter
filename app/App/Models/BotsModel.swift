@@ -109,6 +109,11 @@ final class BotMachineSession: Identifiable {
     private(set) var onboarding: PiBotOnboardingStatus?
     private(set) var runtimeStatus: PiBotRuntimeStatus?
     private(set) var progress: PiBotRuntimeProgress?
+    /// A `runtime.update` run is in progress.
+    private(set) var updating = false
+    /// The last container state each bot's runtime announced.
+    private(set) var environmentStates: [String: String] = [:]
+    private(set) var environmentRevision = 0
     /// The bot list has arrived from this machine at least once.
     private(set) var hasLoadedBots = false
     private(set) var loadError: String?
@@ -242,8 +247,12 @@ final class BotMachineSession: Identifiable {
                 controller.receive(conversationID: conversationID, event)
             }
         case .runtimeProgress(let progress):
+            // The run's last word stays on screen; a later run replaces it.
             self.progress = progress
-            if progress.phase == "done" || progress.phase == "failed" { Task { await refreshRuntimeStatus() } }
+            if progress.isFinished { updating = false; Task { await refreshRuntimeStatus(); await reload() } }
+        case .environmentChanged(let botID, let state):
+            environmentRevision += 1
+            environmentStates[botID] = state
         }
     }
 
@@ -344,14 +353,22 @@ final class BotMachineSession: Identifiable {
         await loadThreads(botID: botID)
     }
 
-    /// Snapshots, updates and health-checks every bot here, rolling back on failure.
+    /// Starts updating every bot here: each is snapshotted, updated and health-checked,
+    /// and rolled back on failure. Progress arrives as `runtime.update` pushes.
     func updateBots() async {
-        await attempt { client in
-            progress = .init(phase: "stopping", message: "Stopping running work…")
-            runtimeStatus = try await client.updateBots()
-            progress = nil
+        guard !updating else { return }
+        updating = true
+        progress = .init(phase: "stopping")
+        await attempt { try await $0.updateBots() }
+        if connectedClient == nil { updating = false }
+    }
+
+    /// Waits for a running update to finish, for "Update everything".
+    func waitForUpdate(timeout: Duration = .seconds(3_600)) async {
+        let deadline = ContinuousClock.now + timeout
+        while updating, ContinuousClock.now < deadline, connection == .open || connection == .connecting {
+            try? await Task.sleep(for: .milliseconds(250))
         }
-        progress = nil
     }
 
     func rebuild(botID: String) async {

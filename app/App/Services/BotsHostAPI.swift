@@ -11,34 +11,61 @@ enum BotsHostAPIError: LocalizedError {
 
 /// The Runtime host API: what this Mac's bots runtime asks of the Woven server that
 /// supervises it. Loopback only, behind its own bearer, which only the runtime holds.
-/// Routes and shapes are in docs/architecture/WOVEN_EVERYWHERE.md ("Runtime host API").
+/// Routes and shapes are docs/architecture/WOVEN_EVERYWHERE.md, Bots → Runtime host API.
 struct BotsHostAPI: Sendable {
-    struct Credential: Codable, Equatable, Sendable {
-        var type: String
-        var key: String?
-        var access: String?
-        var expires: Double?
-        var accountId: String?
+    /// `null` when not connected; otherwise exactly one of the contract's shapes.
+    enum Credential: Equatable, Sendable, Encodable {
+        case apiKey(String)
+        /// Access only; `expires` is epoch milliseconds. Renewal stays with this Mac.
+        case oauth(access: String, expires: Double, accountId: String?)
+        /// The Claude subscription: the native runtime's directories, no token material.
+        case native(configDir: String, secureStorageDir: String?)
+
+        private enum Keys: String, CodingKey { case type, key, access, expires, accountId, configDir, secureStorageDir }
+        func encode(to encoder: any Encoder) throws {
+            var container = encoder.container(keyedBy: Keys.self)
+            switch self {
+            case .apiKey(let key):
+                try container.encode("api_key", forKey: .type); try container.encode(key, forKey: .key)
+            case let .oauth(access, expires, accountId):
+                try container.encode("oauth", forKey: .type); try container.encode(access, forKey: .access)
+                try container.encode(expires, forKey: .expires); try container.encodeIfPresent(accountId, forKey: .accountId)
+            case let .native(configDir, secureStorageDir):
+                try container.encode("native", forKey: .type); try container.encode(configDir, forKey: .configDir)
+                try container.encodeIfPresent(secureStorageDir, forKey: .secureStorageDir)
+            }
+        }
     }
+
+    struct CredentialReply: Encodable, Equatable, Sendable {
+        var credential: Credential?
+        /// Only for `web-search`: the search provider selected in Woven settings.
+        var searchProvider: String?
+        private enum Keys: String, CodingKey { case credential, searchProvider }
+        func encode(to encoder: any Encoder) throws {
+            var container = encoder.container(keyedBy: Keys.self)
+            try container.encode(credential, forKey: .credential)
+            try container.encodeIfPresent(searchProvider, forKey: .searchProvider)
+        }
+    }
+
+    /// Woven connection ids the runtime may ask for, plus `web-search`.
+    static let providers: Set<String> = Set(ProviderConnectionID.allCases.map(\.rawValue)).union(["web-search"])
+    static let maximumMirrorEntries = 200
 
     var token: String
     var issueKey: @MainActor @Sendable (_ botID: String, _ botName: String) async throws -> WovenBotMCPGrant
     var revokeKey: @MainActor @Sendable (_ botID: String) async throws -> Void
-    var publishPreview: @MainActor @Sendable (_ botID: String, _ port: Int) async throws -> URL
+    var publishPreview: @MainActor @Sendable (_ botID: String, _ port: Int, _ containerPort: Int) async throws -> URL
     var removePreview: @MainActor @Sendable (_ botID: String, _ port: Int) async -> Void
-    var previews: @MainActor @Sendable () async -> [BotPreview]
-    var inferenceCredential: @MainActor @Sendable (_ provider: String) async throws -> Credential?
-    var recordConversation: @MainActor @Sendable (_ botID: String, _ report: BotConversationReport) async throws -> Int
-    var deleteConversations: @MainActor @Sendable (_ botID: String) async throws -> Void
+    var inferenceCredential: @MainActor @Sendable (_ provider: String) async throws -> CredentialReply
+    var recordConversation: @MainActor @Sendable (_ botID: String, _ batch: BotConversationMirror) async throws -> Void
 
     private struct KeyRequest: Decodable { let botID: String; let botName: String? }
     private struct KeyResponse: Encodable { let endpoint: String; let token: String }
-    private struct PreviewRequest: Decodable { let botID: String; let port: Int }
+    private struct PreviewRequest: Decodable { let botID: String; let port: Int; let containerPort: Int }
     private struct PreviewResponse: Encodable { let url: String }
-    private struct PreviewList: Encodable { let previews: [BotPreview] }
     private struct CredentialRequest: Decodable { let provider: String }
-    private struct CredentialResponse: Encodable { let provider: String; let credential: Credential }
-    private struct Recorded: Encodable { let recorded: Int }
     private struct Done: Encodable { var ok = true }
 
     func handle(_ request: CompanionHTTPRequest) async -> CompanionHTTPResponse {
@@ -64,10 +91,11 @@ struct BotsHostAPI: Sendable {
             case ("POST", ["previews"]):
                 let body = try decode(PreviewRequest.self, request)
                 try Self.requireIdentifier(body.botID)
-                let url = try await publishPreview(body.botID, body.port)
+                guard (1024...65535).contains(body.port), (1...65535).contains(body.containerPort) else {
+                    throw BotsHostAPIError.invalid("Invalid preview port.")
+                }
+                let url = try await publishPreview(body.botID, body.port, body.containerPort)
                 return try .json(PreviewResponse(url: url.absoluteString))
-            case ("GET", ["previews"]):
-                return try .json(PreviewList(previews: await previews()))
             case let ("DELETE", route) where route.count == 3 && route[0] == "previews":
                 try Self.requireIdentifier(route[1])
                 guard let port = Int(route[2]), (1...65535).contains(port) else { throw BotsHostAPIError.invalid("Invalid preview port.") }
@@ -75,26 +103,22 @@ struct BotsHostAPI: Sendable {
                 return try .json(Done())
             case ("POST", ["inference-credentials"]):
                 let body = try decode(CredentialRequest.self, request)
-                guard WovenMCPCaller.isIdentifier(body.provider) else { throw BotsHostAPIError.invalid("Invalid provider.") }
-                guard let credential = try await inferenceCredential(body.provider) else {
-                    return .error("not_connected", "Connect \(body.provider) in Settings → Connections first.", status: 404)
-                }
-                return try .json(CredentialResponse(provider: body.provider, credential: credential))
+                guard Self.providers.contains(body.provider) else { throw BotsHostAPIError.invalid("Unknown provider.") }
+                return try .json(try await inferenceCredential(body.provider))
             case let ("POST", route) where route.count == 3 && route[0] == "conversations" && route[2] == "entries":
                 try Self.requireIdentifier(route[1])
-                let report = try decode(BotConversationReport.self, request)
-                return try .json(Recorded(recorded: try await recordConversation(route[1], report)))
-            case let ("DELETE", route) where route.count == 2 && route[0] == "conversations":
-                try Self.requireIdentifier(route[1])
-                try await deleteConversations(route[1])
+                let batch = try decode(BotConversationMirror.self, request)
+                guard batch.bot.id == route[1] else { throw BotsHostAPIError.invalid("The batch names another bot.") }
+                guard batch.entries.count <= Self.maximumMirrorEntries else { throw BotsHostAPIError.invalid("Send at most 200 entries at a time.") }
+                try await recordConversation(route[1], batch)
                 return try .json(Done())
             default:
                 return .error("not_found", "Unknown bots host route.", status: 404)
             }
         } catch let error as WovenBotKeyError {
             return .error("revoked", error.localizedDescription, status: 403)
-        } catch let error as DecodingError {
-            return .error("invalid_request", "Invalid request body: \(Self.describe(error))", status: 400)
+        } catch is DecodingError {
+            return .error("invalid_request", "Invalid request body.", status: 400)
         } catch {
             return .error("failed", error.localizedDescription, status: 400)
         }
@@ -113,22 +137,34 @@ struct BotsHostAPI: Sendable {
         return zip(a, b).reduce(UInt8(0)) { $0 | ($1.0 ^ $1.1) } == 0 && !expected.isEmpty
     }
 
-    private static func describe(_ error: DecodingError) -> String {
-        switch error {
-        case .keyNotFound(let key, _): "missing \(key.stringValue)"
-        case .typeMismatch(_, let context), .valueNotFound(_, let context), .dataCorrupted(let context):
-            context.codingPath.map(\.stringValue).joined(separator: ".")
-        @unknown default: "malformed"
+    /// The same credentials this Mac's own Pi Durable receives: a borrowed, access-only
+    /// snapshot from the coordinator that owns renewal. Refresh tokens never leave the Mac.
+    @MainActor static func storedCredential(provider: String) async throws -> CredentialReply {
+        if provider == ProviderConnectionID.claudeSubscription.rawValue { return .init(credential: nativeClaude()) }
+        let payload = try await ProviderAccountCoordinator.shared.prepare("global")
+        if provider == "web-search" {
+            let selected = payload.config.searchProvider
+            guard ProviderConnectionID.searchProviders.map(\.rawValue).contains(selected) else { return .init() }
+            return .init(credential: credential(payload.credentials[selected]), searchProvider: selected)
         }
+        return .init(credential: credential(payload.credentials[provider]))
     }
 
-    /// Borrowed, access-only credentials, the same snapshot the Mac's own Pi Durable receives.
-    /// Refresh tokens never leave this Mac.
-    @MainActor static func storedCredential(provider: String) async throws -> Credential? {
-        let payload = try await ProviderAccountCoordinator.shared.prepare("global")
-        guard let value = payload.credentials[provider] else { return nil }
-        let borrowed = value.borrowing()
-        return Credential(type: borrowed.type, key: borrowed.key, access: borrowed.access,
-                          expires: borrowed.expires, accountId: borrowed.accountId)
+    static func credential(_ value: DefaultAgentCredential?) -> Credential? {
+        guard let value else { return nil }
+        if let key = value.key, !key.isEmpty, value.access == nil { return .apiKey(key) }
+        if let access = value.access, !access.isEmpty { return .oauth(access: access, expires: value.expires ?? 0, accountId: value.accountId) }
+        return nil
+    }
+
+    /// Where the bundled default agent keeps the native Claude runtime's state
+    /// (default-agent/src/claude-runtime.mjs). Absent until the user signs in there.
+    static func nativeClaude(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> Credential? {
+        let root = home.appending(path: ".wovenmatter/default-agent")
+        let config = root.appending(path: "claude-runtime"), storage = root.appending(path: "claude-keychain")
+        var directory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: config.path, isDirectory: &directory), directory.boolValue else { return nil }
+        let hasStorage = FileManager.default.fileExists(atPath: storage.path, isDirectory: &directory) && directory.boolValue
+        return .native(configDir: config.path, secureStorageDir: hasStorage ? storage.path : nil)
     }
 }

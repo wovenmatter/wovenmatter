@@ -9,6 +9,7 @@ struct BotSettingsBots: View {
     @State private var restoring: String?
     @State private var purging: String?
     @State private var refreshes = 0
+    @State private var environments: [String: PiBotEnvironment] = [:]
 
     var body: some View {
         Group {
@@ -143,18 +144,42 @@ struct BotSettingsBots: View {
         } else { work() }
     }
 
-    /// Rebuild recreates a bot from a clean image and keeps its storage.
+    /// Each bot's container: its state and previews, Stop, and Rebuild, which recreates it
+    /// from a clean image and keeps its storage.
     private func rebuildCard(_ live: [PiBotSummary]) -> some View {
-        SettingsCard(title: "Rebuild", detail: "Recreate a bot's container from a clean image. Its files, memory and conversations stay; anything installed outside its storage goes.") {
+        SettingsCard(title: "Containers", detail: "A stopped bot starts again on its next tool call. Rebuild recreates a bot's container from a clean image; its files, restart list, browser profile, memory and conversations stay.") {
             ForEach(live.filter { !$0.isAdmin }) { bot in
                 SettingsInset {
-                    HStack {
-                        Text(bot.name).font(.system(size: 13, weight: .medium))
-                        Spacer()
-                        Button { rebuild(bot) } label: { BotSettingsActionLabel(title: "Rebuild", glyph: .rotate) }
-                            .accessibilityLabel("Rebuild \(bot.name)")
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(bot.name).font(.system(size: 13, weight: .medium))
+                                if let environment = environments[bot.id] { SettingsNote(environment.stateText) }
+                            }
+                            Spacer()
+                            if environments[bot.id]?.state == "running" {
+                                Button { act { try await $0.stopBot(id: bot.id) } } label: { BotSettingsActionLabel(title: "Stop", glyph: .close) }
+                                    .accessibilityLabel("Stop \(bot.name)")
+                            }
+                            Button { rebuild(bot) } label: { BotSettingsActionLabel(title: "Rebuild", glyph: .rotate) }
+                                .accessibilityLabel("Rebuild \(bot.name)")
+                        }
+                        ForEach(environments[bot.id]?.previews ?? [], id: \.port) { preview in
+                            HStack(spacing: 8) {
+                                Text("Port \(preview.port)").font(.system(size: 12))
+                                Text(preview.url).font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground).textSelection(.enabled)
+                                Spacer()
+                                Button("Stop sharing") { act { try await $0.stopPreview(botID: bot.id, port: preview.port) } }
+                            }
+                        }
                     }
                 }
+            }
+        }
+        .task(id: "\(state.bots.connection.rawValue):\(state.bots.environmentRevision):\(refreshes)") {
+            guard state.bots.isConnected else { return }
+            for bot in live where !bot.isAdmin {
+                await state.load { environments[bot.id] = try await $0.environment(botID: bot.id) }
             }
         }
     }
