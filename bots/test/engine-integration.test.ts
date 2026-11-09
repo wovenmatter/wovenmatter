@@ -173,6 +173,10 @@ describe.skipIf(!SOCKET)("bots on a real Docker Engine", () => {
     expect(opened).toContain("http://127.0.0.1:8000/");
     const page = await ask(bot, tool("browser", { action: "read" }));
     expect(page).toContain("cookie:woven=1");
+    const shot = await ask(bot, tool("browser", { action: "screenshot" }));
+    expect(shot).toMatch(/^RESULT Tab 1: .*127\.0\.0\.1:8000/);
+    const context = JSON.stringify(await (await bot.main()).context(ctx));
+    expect(context).toContain('"mimeType":"image/png"');
     // Nothing runs now but the supervisor's own processes: the bot goes idle and stops.
     expect(await env.runningWork(bot.id)).toEqual([]);
     await expect.poll(() => env.state(bot.id), { timeout: 120_000, interval: 1_000 }).toBe("stopped");

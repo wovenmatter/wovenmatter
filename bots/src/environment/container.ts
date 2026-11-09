@@ -425,7 +425,9 @@ export class BotEnvironment implements BotEnvironmentAdapter {
   async reconcile(activeBotIds: readonly string[], deletedBotIds: readonly string[] = []): Promise<void> {
     await this.#engine.ping();
     // Ready before the first tool call needs it, which then waits only for a container start.
-    void this.helper().catch((error: unknown) => this.#log(`bot image: ${(error as Error).message}`));
+    void this.helper()
+      .then(() => this.pruneHelpers())
+      .catch((error: unknown) => this.#log(`bot image: ${(error as Error).message}`));
     const active = new Set(activeBotIds);
     const deleted = new Set(deletedBotIds);
     for (const container of await this.#engine.listContainers(BOT_LABEL)) {
@@ -436,6 +438,17 @@ export class BotEnvironment implements BotEnvironmentAdapter {
       // Left running by the last runtime: its idle clock starts now.
       else if (active.has(botId)) this.touch(botId);
     }
+  }
+
+  /** Remove this machine's older helper volumes that no container uses any more. */
+  async pruneHelpers(): Promise<string[]> {
+    const current = await this.helper();
+    const removed: string[] = [];
+    for (const volume of await this.#engine.listVolumes(HELPER_LABEL)) {
+      if (volume.Name === current || volume.Labels?.[MACHINE_LABEL] !== this.#options.machineId) continue;
+      if (await this.#engine.removeVolume(volume.Name).catch(() => false)) removed.push(volume.Name);
+    }
+    return removed;
   }
 
   // --- updates ---------------------------------------------------------------------------------
@@ -521,6 +534,7 @@ export class BotEnvironment implements BotEnvironmentAdapter {
         await this.#healthCheck(botId);
         this.touch(botId);
         this.#log(`bot ${botId}: updated`);
+        void this.pruneHelpers().catch(() => {});
         return { botId, ok: true };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);

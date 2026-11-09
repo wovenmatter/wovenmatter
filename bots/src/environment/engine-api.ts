@@ -336,8 +336,23 @@ export class DockerEngineAPI {
     await this.json("POST", "/volumes/create", { body: { Name: name, Labels: labels } });
   }
 
-  async removeVolume(name: string): Promise<void> {
-    await this.json("DELETE", `/volumes/${encodeURIComponent(name)}`, { allow: [404] });
+  /** Remove a volume; one still used by a container is left (409) and reported as false. */
+  async removeVolume(name: string): Promise<boolean> {
+    const response = await this.request("DELETE", `/volumes/${encodeURIComponent(name)}`);
+    if (response.status === 409) return false;
+    if (response.status !== 204 && response.status !== 200 && response.status !== 404) {
+      throw new EngineError(`Docker Engine DELETE /volumes/${name}: ${engineMessage(response)}`, response.status);
+    }
+    return true;
+  }
+
+  async listVolumes(label: string): Promise<{ Name: string; Labels: Record<string, string> | null }[]> {
+    const result = await this.json<{ Volumes: { Name: string; Labels: Record<string, string> | null }[] | null }>(
+      "GET",
+      "/volumes",
+      { query: { filters: JSON.stringify({ label: [label] }) } },
+    );
+    return result?.Volumes ?? [];
   }
 
   /** Extract a tar archive into `path` of a (created or running) container. */

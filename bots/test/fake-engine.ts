@@ -131,6 +131,14 @@ export class FakeEngine {
       for (const tag of url.searchParams.getAll("t")) this.images.add(tag);
       return void response.end(`${JSON.stringify({ stream: "Successfully built\n" })}\n`);
     }
+    if (path === "/volumes" && method === "GET") {
+      const label = JSON.parse(url.searchParams.get("filters") ?? "{}").label?.[0];
+      return this.#json(response, 200, {
+        Volumes: [...this.volumes]
+          .filter(([, labels]) => !label || label in labels)
+          .map(([Name, Labels]) => ({ Name, Labels })),
+      });
+    }
     if (path === "/volumes/create") {
       const spec = json();
       this.volumes.set(spec.Name, spec.Labels ?? {});
@@ -140,6 +148,10 @@ export class FakeEngine {
     if ((match = /^\/volumes\/(.+)$/.exec(path))) {
       const name = decodeURIComponent(match[1] ?? "");
       if (method === "DELETE") {
+        const used = [...this.containers.values()].some((c) =>
+          ((c.spec.HostConfig as { Mounts?: { Source: string }[] })?.Mounts ?? []).some((m) => m.Source === name),
+        );
+        if (used) return this.#json(response, 409, { message: "volume is in use" });
         this.volumes.delete(name);
         await rm(this.volumeDir(name), { recursive: true, force: true });
         return this.#json(response, 204);

@@ -182,6 +182,15 @@ describe("bot containers on the Engine API", () => {
     expect(engine.images.has(snapshotImage(BOT))).toBe(false);
   });
 
+  it("prunes this machine's unused helper volumes and keeps the current one", async () => {
+    must(await shell().writeFile("x", "1", ctx));
+    engine.volumes.set("woven-bots-helper-old", { "woven.bots.helper": "x", "woven.bots.machine": "machine-1" });
+    engine.volumes.set("woven-bots-helper-other", { "woven.bots.helper": "x", "woven.bots.machine": "elsewhere" });
+    expect(await env.pruneHelpers()).toEqual(["woven-bots-helper-old"]);
+    expect(engine.volumes.has("woven-bots-helper-other")).toBe(true);
+    expect(engine.volumes.has(await env.helper())).toBe(true);
+  });
+
   it("leaves other machines' containers alone and stops deleted bots' at startup", async () => {
     must(await shell().writeFile("x", "1", ctx));
     env.close();
