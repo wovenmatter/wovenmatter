@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Provider-free lifecycle fixtures, archive attacks and rollback verification."""
+import gzip
 import hashlib
 import io
 import json
@@ -241,7 +242,7 @@ class HostFixtures(unittest.TestCase):
         content=b'tampered'; manifest['files']['src/server.mjs']['sha256']=hashlib.sha256(content).hexdigest()
         path=self.archive([('src/server.mjs',content,tarfile.REGTYPE,''),('manifest.json',json.dumps(manifest).encode(),tarfile.REGTYPE,'')])
         with self.assertRaises(self.m.Failure): self.m.safe_extract(path,self.home/'tampered',fp)
-    def install_bundle(self,bots=False,library=False,release_version=None):
+    def install_bundle(self,bots=False,library=False,release_version=None,packed_library=None):
         versions={'nodeVersion':'26.12.1','playwrightVersion':'1.64.1','nodeSHA256':{'linux-x64':'a'*64},
             'dockerVersion':'29.9.3','dockerSHA256':{'linux-x64':hashlib.sha256(b'docker-fixture').hexdigest(),'linux-arm64':'b'*64}}
         files={'host/runtime-versions.json':json.dumps(versions).encode(),
@@ -251,6 +252,11 @@ class HostFixtures(unittest.TestCase):
             'npm-runtime/package-lock.json':(ROOT/'remote/npm-runtime/package-lock.json').read_bytes()}
         if bots: files.update({'bots/package.json':b'{"version":"0.1.0"}','bots/package-lock.json':b'{}','bots/src/cli.ts':b'fixture','host/bots-engine.py':b'# fixture helper\n'})
         if library: files['host/library/linux-x86_64/wovenmatter-library']=b'fixture library host'
+        if packed_library is not None:
+            # As build-linux-library.sh ships it: the gzip and the uncompressed binary's SHA-256.
+            binary,recorded=packed_library
+            files['host/library/linux-x86_64/wovenmatter-library.gz']=gzip.compress(binary,mtime=0)
+            files['host/library/linux-x86_64/wovenmatter-library.sha256']=(recorded+'  wovenmatter-library\n').encode()
         digest=hashlib.sha256(); records={}
         for name,data in sorted(files.items(),key=lambda item:item[0] if item[0].startswith(('default-agent/','bots/')) else 'remote/'+item[0]):
             source=name if name.startswith(('default-agent/','bots/')) else 'remote/'+name
@@ -579,6 +585,30 @@ class HostFixtures(unittest.TestCase):
         finally:
             if saved_fd is not None: os.dup2(saved_fd,3); os.close(saved_fd)
             source.close()
+    def test_a_compressed_library_binary_is_unpacked_and_verified_before_it_runs(self):
+        binary=b'\x7fELF fixture library host '*4096
+        self.m.ROOT.mkdir(parents=True)
+        fp,stream=self.install_bundle(packed_library=(binary,hashlib.sha256(binary).hexdigest())); self.m.TOKEN=''
+        self.m.health=lambda *a:{'serviceFingerprint':fp,'runtimeKind':'host'}
+        # The installer waits for the library host's identity; this one is already known.
+        self.m.LIBRARY_STATE.mkdir(parents=True); (self.m.LIBRARY_STATE/'identity.json').write_text(json.dumps({'deviceID':'6f1c2a5e-8b3d-4c7a-9e21-0d4b5c6a7f80'}))
+        source=self.feed(stream)
+        self.m.install('fixture','7337','fullRoot',fp)
+        unpacked=self.m.ROOT/'releases'/fp/'host/library/linux-x86_64/wovenmatter-library'
+        self.assertEqual(self.migrations[-1][0],str(unpacked))
+        self.assertEqual(unpacked.read_bytes(),binary)
+        self.assertEqual(unpacked.stat().st_mode&0o777,0o700)
+        # A tampered unpacked copy is replaced from the verified archive on the next use.
+        unpacked.write_bytes(b'tampered')
+        self.assertEqual(self.m.library_binary(self.m.ROOT/'releases'/fp),unpacked)
+        self.assertEqual(unpacked.read_bytes(),binary)
+        # A checksum that does not match the archive never runs.
+        directory=self.m.ROOT/'releases'/fp/'host/library/linux-x86_64'
+        unpacked.unlink(); (directory/'wovenmatter-library.sha256').write_text('0'*64+'  wovenmatter-library\n')
+        with self.assertRaises(self.m.Failure) as error: self.m.library_binary(self.m.ROOT/'releases'/fp)
+        self.assertEqual(error.exception.code,'library_verification_failed')
+        self.assertFalse(unpacked.exists())
+        self.assertEqual([path.name for path in directory.iterdir() if path.name.startswith('.')],[])
     def test_uninstall_removes_only_the_recorded_library_route(self):
         self.save_install(); (self.m.ROOT/'releases').mkdir(); self.m.UNIT.parent.mkdir(parents=True); self.m.UNIT.write_text('fixture')
         endpoint='fixture.test.ts.net:10000'

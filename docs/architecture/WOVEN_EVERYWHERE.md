@@ -267,13 +267,21 @@ edit stores the same `NoteDocument` bytes a Mac stores for the same edit.
 **Linux build.** `scripts/build-linux-library.sh` builds
 `remote/host/library/linux-{x86_64,aarch64}/wovenmatter-library` (static musl,
 any distribution) in the pinned Swift image with the pinned Static Linux SDK
-and SQLite amalgamation (`remote/library/build-version.json`). Anything under
-`remote/host/` is a host bundle input, so a Mac app built with those binaries
-present ships them to every host install and update at
-`<release>/host/library/linux-<arch>/wovenmatter-library`. Starting and
+and SQLite amalgamation (`remote/library/build-version.json`) and packs it as
+`wovenmatter-library.gz` (`gzip -9 -n`) beside `wovenmatter-library.sha256`, the
+uncompressed binary's SHA-256 (`--uncompressed` also keeps the binary for local
+runs). Anything under `remote/host/` is a host bundle input, so a Mac app built
+with those files present ships them to every host install and update; the bundle
+manifest verifies the `.gz`, and `remote-host.sh` unpacks it to
+`<release>/host/library/linux-<arch>/wovenmatter-library` (0700) and checks the
+recorded SHA-256 before the migration runs (`library_verification_failed`
+otherwise; a release with a plain binary is used as is). Starting and
 supervising it is the Node server's job. `scripts/test-linux-library.sh` builds
 and tests the portable targets on Linux; the manual validation workflow
-(`linux` scope) runs both and keeps the binaries as an artifact.
+(`linux` scope) runs both and keeps the binaries as an artifact. The release
+workflow's `linux-library` job (ubuntu, Docker) builds both architectures and
+hands them to the macOS job, which checks them with
+`scripts/verify-linux-library.sh` before `xcodebuild`.
 
 ## Sessions across devices
 

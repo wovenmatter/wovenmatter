@@ -9,7 +9,7 @@ command -v python3 >/dev/null 2>&1 || {
 }
 exec 3<&0
 exec python3 - "$@" <<'PY'
-import contextlib, fcntl, glob, hashlib, io, json, os, platform, pwd, re, shutil, socket, stat, subprocess, sys, tarfile, tempfile, time, urllib.request
+import contextlib, fcntl, glob, gzip, hashlib, io, json, os, platform, pwd, re, shutil, socket, stat, subprocess, sys, tarfile, tempfile, time, urllib.request
 from pathlib import Path, PurePosixPath
 
 HOME=Path.home()
@@ -208,10 +208,40 @@ def inventory(paths):
         result.append({'id':identity,'cli':components[0],'adapter':components[1],'status':status})
     return result
 
+LIBRARY_MAX_BYTES=1024**3
 def library_binary(release):
     arch={'x86_64':'x86_64','aarch64':'aarch64','arm64':'aarch64'}.get(platform.machine())
-    path=Path(release)/'host/library'/('linux-'+str(arch))/'wovenmatter-library'
-    return path if arch and path.is_file() else None
+    if not arch: return None
+    directory=Path(release)/'host/library'/('linux-'+arch)
+    path=directory/'wovenmatter-library'; packed=directory/'wovenmatter-library.gz'; record=directory/'wovenmatter-library.sha256'
+    if not packed.is_file():
+        return path if path.is_file() and not path.is_symlink() else None
+    # Releases ship the binary gzip-compressed (the manifest verified the .gz); the
+    # uncompressed binary must match the SHA-256 recorded beside it before it runs.
+    try: expected=record.read_text().split()[0]
+    except (OSError,IndexError): fail('library_verification_failed','The library host binary has no recorded checksum.',78)
+    if not re.fullmatch('[a-f0-9]{64}',expected): fail('library_verification_failed','The library host binary checksum is invalid.',78)
+    def digest(file):
+        value=hashlib.sha256()
+        with open(file,'rb') as source:
+            for chunk in iter(lambda: source.read(1024*1024),b''): value.update(chunk)
+        return value.hexdigest()
+    if path.is_file() and not path.is_symlink() and digest(path)==expected: return path
+    temporary=directory/('.wovenmatter-library.'+str(os.getpid()))
+    try:
+        total=0
+        with gzip.open(packed,'rb') as source, open(temporary,'xb') as output:
+            for chunk in iter(lambda: source.read(1024*1024),b''):
+                total+=len(chunk)
+                if total>LIBRARY_MAX_BYTES: fail('library_verification_failed','The library host binary exceeds its size limit.',78)
+                output.write(chunk)
+        os.chmod(temporary,0o700)
+        if digest(temporary)!=expected: fail('library_verification_failed','The library host binary did not match its recorded checksum.',78)
+        os.replace(temporary,path)
+    except (OSError,EOFError,gzip.BadGzipFile): fail('library_verification_failed','The library host binary could not be unpacked.',78)
+    finally:
+        with contextlib.suppress(FileNotFoundError): temporary.unlink()
+    return path
 
 def member_identity():
     # The library host's identity, which a Mac uses to create this machine's member entry.
