@@ -216,6 +216,8 @@ export function createLibraryHostSupervisor({ binary, dataRoot, harnessCatalog, 
     available: () => !!ready,
     endpoint: () => ready ? { port: ready.port, socket: ready.socket, pid: ready.pid } : null,
     status: () => ({ running: !!child, ready: !!ready, pid: child?.pid ?? null, port: ready?.port ?? null, version: ready?.version ?? null,
+      // The paired-library schema hash, once the library host includes it in its ready line.
+      schema: typeof ready?.schema === 'string' ? ready.schema : null,
       restarts, lastExit, lastError, startedAt: ready?.startedAt ?? null, binary }),
   }
 }

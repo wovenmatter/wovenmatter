@@ -696,15 +696,26 @@ one request per connection on `control.sock` (e.g.
   `GET /v1/bots/status`, `GET /v1/bots/resources` (`memory {totalBytes,
   poolBytes, botBytes, usedBytes}`, `disk {path, totalBytes, freeBytes,
   capBytes, imageBytes, usedBytes}`, `warnings`), and `GET /v1/bots/ws`
-  (WebSocket, proxied to the runtime's `/ws` with the runtime token).
+  (WebSocket, proxied to the runtime's `/ws` with the runtime token; any
+  `Origin` header is refused, since only native apps connect: the Mac's
+  `URLSessionWebSocketTask` sends none, which `PiBotHandshakeTests` checks).
   Administrator only: `POST /v1/bots/resources {resources: {poolBytes?,
   perBotBytes?, diskBytes?}}` (a missing field stays; a pool below per-bot
   RAM lowers it), `GET|POST /v1/bots/mcp {isEnabled?, groups?}` and
   `DELETE /v1/bots/mcp/keys/{botID}`. `GET /v1/bots/status` and the
   resources reply use the shape in "Woven server routes for bots" below,
   plus `workspaceEnabled`, `runtimeAvailable`, `engine`, `runtime` and
-  `settings`. On Linux `versions.app` is `null`, `versions.runtime` is the
-  bots package version and `paused` is `botMCP.isEnabled == false`.
+  `settings`. On Linux `versions.app` is the Woven Matter version that shipped
+  the host release (the bundle manifest's `releaseVersion`, which
+  `remote-host.sh` passes as `WOVENMATTER_RELEASE_VERSION`; `null` for older
+  releases), `versions.fingerprint` is the release fingerprint,
+  `versions.librarySchema` is the library host's paired-library schema hash
+  once its ready line carries `schema` (`null` until then), `versions.runtime`
+  is the bots package version and `paused` is `botMCP.isEnabled == false`.
+  `GET /v1/health` carries the same as `release {version, fingerprint,
+  librarySchema}`. A Mac treats a Linux host whose fingerprint differs from the
+  host release it would install (`RemoteWorkspaceSSHClient.bundledHostFingerprint()`)
+  as `needsUpdate`, whatever version it names.
   `/v1/execution/mcp-settings` also carries `botMCP {isEnabled, groups}`.
 
 ### Resources
@@ -836,7 +847,8 @@ under `/wovenmatter` when reached through Tailscale Serve:
 
 | Route | Reply |
 | --- | --- |
-| `GET /v1/bots/status` | `{ machine: { deviceID, name, kind }, enabled, state, message?, versions: { app, runtime, protocol }, resources, capacity: { memoryBytes, diskTotalBytes, diskFreeBytes, diskUsedByBotsBytes? }, paused }` |
+| `GET /v1/bots/status` | `{ machine: { deviceID, name, kind }, enabled, state, message?, versions: { app, runtime, protocol, fingerprint?, librarySchema? }, resources, capacity: { memoryBytes, diskTotalBytes, diskFreeBytes, diskUsedByBotsBytes? }, paused, updating?, engineUpdateFailure? }` (`updating` and `engineUpdateFailure`: a Mac's VM update) |
+| `POST /v1/bots/engine/update` (Macs) | starts the Mac's VM update and returns the status at once; follow `updating`, then `engineUpdateFailure` |
 | `POST /v1/bots/resources` `{ resources: { poolBytes, perBotBytes, diskBytes } }` | the status after applying; `null` is no cap (Linux also leaves a missing field as it is) |
 | `GET /v1/bots/ws` (WebSocket upgrade) | proxied to the runtime's `/ws` with the runtime's own bearer |
 
@@ -849,13 +861,26 @@ is the one function member auth replaces.
 <access-mode> bots`, then `remote-host.sh install <workspace-id> <port> <access-mode>
 <fingerprint> bots` with the same stdin as any install (token line, then bundle); see
 "One server, roles". Both use the SSH account's existing noninteractive sudo. The
-Mac records a bots-only host with workspace id `bots`.
+Mac records a bots-only host with workspace id `bots`. Adding the workspace later
+keeps that record (its id, token, port and access level) and runs `remote-host.sh
+install <real-id> … workspace` (`RemoteHostInstallMode.addWorkspace`): the script lets
+the first workspace install take over a bots-only `bots` record once, on the same
+server and data root with bots kept, and records `previousIDs: ["bots"]` so uninstall
+also removes routes published under the old id. Any other id change is still
+`host_workspace_conflict`.
 
 **Mac engine.** The bots host codes against `BotEngineHost`
 (`app/App/Services/BotEngineHost.swift`): `ensureRunning(resources:)` returns the
-Docker socket once the VM answers, `apply(resources:)`, `diskUsedByBots()`, `status()` and
-`stop()`. Previews need no VM port forward: the runtime carries them over Engine API exec
-streams. `BotEngineHostFactory.make` returns the implementation.
+Docker socket once the VM answers, `apply(resources:)`, `diskUsedByBots()`, `status()`,
+`update()` (the VM's update; returns when it is ready again, throws if it was rolled
+back), `stop()` and `onStatusChange` (download, first-boot and update progress, and
+failures with their reason). Previews need no VM port forward: the runtime carries them
+over Engine API exec streams. `BotEngineHostFactory.make(<support directory>)` returns
+`WovenVMBotEngineHost` over `WovenVMController.forApp(supportDirectory:)`: the RAM pool
+is the VM's memory and the disk cap its disk cap (at least 1 GB and 10 GB; no cap stays no
+cap), and per-bot RAM stays in the runtime config. Where the VM cannot run (Intel, or no
+helper) it returns an engine that says why. "Update everything" updates each Mac's VM
+before its bots (`BotUpdatePlan.Step.engine`, `BotsCommand.updateEngine`).
 
 ## Out of scope
 

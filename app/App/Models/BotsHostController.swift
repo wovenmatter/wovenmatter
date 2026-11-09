@@ -19,6 +19,9 @@ enum BotsCommand: Codable, Sendable {
     case discoverDevices
     case installBots(hostName: String, userName: String?)
     case updateLinuxHost(machineID: String)
+    /// Starts updating a Mac's bots engine (the Woven VM). Progress and the outcome show on
+    /// that machine: `updating`, then `engineUpdateFailure` if it was rolled back.
+    case updateEngine(machineID: String)
     case restartRuntime
 }
 
@@ -57,6 +60,10 @@ struct BotsHostDependencies {
         throw BotsError.unavailable("Installing bots on Linux is unavailable.")
     }
     var updateLinuxHost: @MainActor (_ machineID: String) async throws -> Void = { _ in }
+    /// Another Mac's `POST /v1/bots/engine/update`.
+    var updateRemoteEngine: @MainActor (_ machineID: String) async throws -> Void = { _ in
+        throw BotsError.unavailable("That machine is unavailable.")
+    }
     var syncErrors: @MainActor () -> [String] = { [] }
     var capacity: @MainActor (_ directory: URL) async -> BotMachineCapacity = BotsHostController.localCapacity
 }
@@ -76,6 +83,8 @@ final class BotsHostController {
     private(set) var persisted: Persisted
     private(set) var engineStatus = BotEngineStatus(state: .stopped)
     private(set) var lastError: String?
+    /// Why the last engine update was rolled back; cleared when the next one starts.
+    private(set) var engineUpdateFailure: String?
     var onChange: (@MainActor () -> Void)?
 
     @ObservationIgnored private let directory: URL
@@ -89,6 +98,7 @@ final class BotsHostController {
     @ObservationIgnored private var identity: (deviceID: String, name: String)?
     @ObservationIgnored private var notifier: PiBotClient?
     @ObservationIgnored private var bringUpTask: Task<Void, Never>?
+    @ObservationIgnored private(set) var engineUpdateTask: Task<Void, Never>?
     @ObservationIgnored private var lastDevices: [BotDiscoveredDevice]?
     /// Other machines answer slowly; a status refresh reuses a recent probe.
     @ObservationIgnored private var remoteCache: (at: Date, machines: [BotMachine])?
@@ -109,6 +119,11 @@ final class BotsHostController {
         }
         self.supervisor = supervisor ?? bundle.map { BotsRuntimeSupervisor(directory: directory, bundle: $0) }
         self.supervisor?.onChange = { [weak self] in self?.changed() }
+        engine.onStatusChange = { [weak self] status in
+            guard let self, self.persisted.enabled || status.state == .stopped else { return }
+            self.engineStatus = status
+            self.changed()
+        }
     }
 
     var isEnabled: Bool { persisted.enabled }
@@ -174,6 +189,9 @@ final class BotsHostController {
             lastDevices = devices
         case .updateLinuxHost(let machineID):
             try await dependencies.updateLinuxHost(machineID)
+        case .updateEngine(let machineID):
+            if try await isThisMac(machineID) { try startEngineUpdate() }
+            else { try await dependencies.updateRemoteEngine(machineID) }
         case .restartRuntime:
             if persisted.enabled { await supervisor?.stop(); bringUp() }
         }
@@ -202,9 +220,12 @@ final class BotsHostController {
         let identity = try await resolveIdentity()
         let machine = await thisMachine(identity)
         let state: String = switch machine.state { case .ready: "ready"; case .starting: "starting"; case .failed: "failed"; default: "off" }
-        return BotsRemoteStatus(machine: .init(deviceID: identity.deviceID, name: identity.name, kind: "mac"), enabled: persisted.enabled,
-                                state: state, message: machine.message, versions: machine.versions, resources: machine.resources,
-                                capacity: machine.capacity, paused: machine.paused)
+        var status = BotsRemoteStatus(machine: .init(deviceID: identity.deviceID, name: identity.name, kind: "mac"), enabled: persisted.enabled,
+                                      state: state, message: machine.message, versions: machine.versions, resources: machine.resources,
+                                      capacity: machine.capacity, paused: machine.paused)
+        status.updating = machine.updating
+        status.engineUpdateFailure = machine.engineUpdateFailure
+        return status
     }
 
     private func thisMachine(_ identity: (deviceID: String, name: String)) async -> BotMachine {
@@ -216,19 +237,41 @@ final class BotsHostController {
         else if bundle == nil { state = .failed; message = "This build doesn't include the bots runtime. Rebuild Woven Matter with its bots resources." }
         else {
             switch supervisor?.phase ?? .stopped {
-            case .running: state = .ready; message = nil
+            // A running engine can still have something to say: a pending restart, a rolled-back update.
+            case .running: state = .ready; message = engineStatus.message
             case .starting, .stopped: state = engineStatus.state == .failed || engineStatus.state == .unavailable ? .failed : .starting
-                if state == .failed { message = engineStatus.message ?? message }
+                // While starting, the engine's progress (download, first boot) is the message.
+                message = state == .failed ? engineStatus.message ?? message : lastError ?? engineStatus.message
             case .failed(let reason): state = .failed; message = reason
             }
         }
         let socket: BotSocketEndpoint? = persisted.runtimePort.flatMap { port in
             URL(string: "ws://127.0.0.1:\(port)/ws").map { BotSocketEndpoint(url: $0, bearer: persisted.runtimeToken) }
         }
-        return BotMachine(id: identity.deviceID, name: identity.name, kind: .thisMac, state: state, message: message,
-                          socket: persisted.enabled ? socket : nil,
-                          versions: .init(app: dependencies.appVersion, runtime: bundle?.version, protocol: 1),
-                          resources: resources, capacity: capacity, paused: paused)
+        var machine = BotMachine(id: identity.deviceID, name: identity.name, kind: .thisMac, state: state, message: message,
+                                 socket: persisted.enabled ? socket : nil,
+                                 versions: .init(app: dependencies.appVersion, runtime: bundle?.version, protocol: 1),
+                                 resources: resources, capacity: capacity, paused: paused,
+                                 updating: engineUpdateTask != nil || engineStatus.state == .updating)
+        machine.engineUpdateFailure = engineUpdateFailure
+        return machine
+    }
+
+    /// Updates the VM in the background: it can take many minutes, longer than any command
+    /// round trip. Containers and the runtime survive it; the runtime reconnects to the socket.
+    private func startEngineUpdate() throws {
+        guard persisted.enabled else { throw BotsError.unavailable("Bots are off on this Mac.") }
+        guard engineUpdateTask == nil else { return }
+        engineUpdateFailure = nil
+        engineUpdateTask = Task { [weak self] in
+            guard let self else { return }
+            do { try await engine.update() }
+            catch { engineUpdateFailure = error.localizedDescription }
+            engineStatus = await engine.status()
+            engineUpdateTask = nil
+            changed()
+        }
+        changed()
     }
 
     // MARK: Bring up and down
@@ -257,6 +300,7 @@ final class BotsHostController {
 
     private func bringDown() async {
         bringUpTask?.cancel(); bringUpTask = nil
+        await engineUpdateTask?.value
         await previews.removeAll()
         if let notifier { await notifier.invalidate() }
         notifier = nil
@@ -349,6 +393,10 @@ final class BotsHostController {
         do {
             switch (request.method, path) {
             case ("GET", "/v1/bots/status"):
+                return try .json(try await remoteStatus())
+            case ("POST", "/v1/bots/engine/update"):
+                let identity = try await resolveIdentity()
+                _ = try await perform(.updateEngine(machineID: identity.deviceID))
                 return try .json(try await remoteStatus())
             case ("POST", "/v1/bots/resources"):
                 struct Body: Decodable { let resources: BotResourceSettings }

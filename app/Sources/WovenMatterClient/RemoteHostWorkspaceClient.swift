@@ -3,13 +3,46 @@ import Foundation
 /// What `remote-host.sh install` sets up: a full workspace host, or the Woven server
 /// with only its `bots` role, which a workspace can be added to later.
 public enum RemoteHostInstallMode: String, Sendable {
-    case workspace, botsOnly
+    /// `addWorkspace` adds the workspace role to a bots-only server: roles only grow, so
+    /// the host keeps bots and becomes `workspace,bots` on the same server and data root.
+    case workspace, botsOnly, addWorkspace
+    /// The workspace id the Mac records for a bots-only host until a workspace is added.
+    /// remote-host.sh lets the first workspace install take over this placeholder once.
+    public static let botsOnlyWorkspaceID = "bots"
     /// The roles argument of `remote-host.sh prepare|install|update`. nil keeps the
     /// host's recorded roles (or `workspace` on a new host); roles only grow there.
-    public var roles: String? { self == .botsOnly ? "bots" : nil }
+    public var roles: String? {
+        switch self {
+        case .workspace: nil
+        case .botsOnly: "bots"
+        case .addWorkspace: "workspace"
+        }
+    }
+}
+
+/// The host release fingerprint of this app's bundled host sources, hashed once per process
+/// (the sources include the Linux library binaries, so it is not free).
+private actor BundledHostFingerprint {
+    static let shared = BundledHostFingerprint()
+    private var task: Task<String?, Never>?
+    func value() async -> String? {
+        if let task { return await task.value }
+        let task = Task.detached(priority: .utility) { () -> String? in
+            guard let root = try? RemoteWorkspaceSSHClient.loadDeploymentRoot() else { return nil }
+            return try? RemoteWorkspaceDeployment(root: root, kind: .host).fingerprint
+        }
+        self.task = task
+        return await task.value
+    }
 }
 
 extension RemoteWorkspaceSSHClient {
+    /// The fingerprint `deployHost` installs from this app: a Linux host reporting any other
+    /// release in `GET /v1/bots/status` is out of date. nil without bundled host sources.
+    public static func bundledHostFingerprint() async -> String? {
+        await BundledHostFingerprint.shared.value()
+    }
+
     /// Ships source and its locked dependency graph from this Mac. npm installs
     /// on the destination so native optional dependencies match Linux/CPU ABI.
     /// The API token is the first stdin line, never an argument or progress text.

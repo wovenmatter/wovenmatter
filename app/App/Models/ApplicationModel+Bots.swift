@@ -34,7 +34,8 @@ extension ApplicationModel {
         if let botsHost { attachBotDeliveries(botsHost); return }
         guard let support = try? Self.dashboardSupportDirectory() else { return }
         let directory = support.appending(path: "Bots")
-        let host = BotsHostController(directory: directory, engine: BotEngineHostFactory.make(directory),
+        // The VM lives beside Bots in the support directory (`<support>/WovenVM`).
+        let host = BotsHostController(directory: directory, engine: BotEngineHostFactory.make(support),
                                       dependencies: makeBotsHostDependencies())
         botsHost = host
         host.onChange = { [weak self] in
@@ -104,6 +105,15 @@ extension ApplicationModel {
                 }
                 self.remoteWorkspaces.updateContainer(configuration)
             },
+            updateRemoteEngine: { [weak self] machineID in
+                guard let self, let workspaceID = directory.macs[machineID.lowercased()],
+                      let workspace = await self.otherMacWorkspaces().first(where: { $0.id == workspaceID }) else {
+                    throw BotsError.unavailable("That Mac is unavailable.")
+                }
+                let access = try await self.botsAccess(for: workspace)
+                let _: BotsRemoteStatus = try await BotsRemoteHTTP.request(access.endpoint, path: "v1/bots/engine/update",
+                                                                          bearer: access.token, body: Data("{}".utf8))
+            },
             syncErrors: { [weak self] in self.map { Array($0.companionHost.peerSync.errors.values) } ?? [] })
     }
 
@@ -129,7 +139,8 @@ extension ApplicationModel {
             let client = try await remoteWorkspaces.botsService(for: configuration)
             let status = try await botsTimeout { try await client.botsStatus() }
             directory.linux[status.machine.deviceID.lowercased()] = configuration.id
-            return status.machine(kind: .linux, socket: client.botsSocket, thisMacVersion: thisMacVersion)
+            return status.machine(kind: .linux, socket: client.botsSocket, thisMacVersion: thisMacVersion,
+                                  expectedHostFingerprint: await RemoteWorkspaceSSHClient.bundledHostFingerprint())
         } catch {
             return BotMachine(id: "linux:" + configuration.id.uuidString.lowercased(), name: configuration.name, kind: .linux,
                               state: .unreachable, message: Self.botsUnavailableText(error))

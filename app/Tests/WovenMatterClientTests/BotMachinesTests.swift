@@ -166,6 +166,56 @@ struct BotMachinesTests {
         #expect(!BotUpdatePlan.steps(machines: [machine("this", kind: .thisMac)], thisMacVersion: "1.4.0").contains(.thisMacApp))
     }
 
+    @Test func aLinuxHostIsJudgedByItsReleaseFingerprint() {
+        let ours = String(repeating: "a", count: 64), theirs = String(repeating: "b", count: 64)
+        func status(app: String?, fingerprint: String?) -> BotsRemoteStatus {
+            BotsRemoteStatus(machine: .init(deviceID: "D1", name: "box", kind: "linux"), enabled: true, state: "ready",
+                             versions: .init(app: app, runtime: "0.2.0", protocol: 1, fingerprint: fingerprint, librarySchema: "s1"))
+        }
+        // Same version name, different release (a development build): still out of date.
+        let other = status(app: "1.4.0", fingerprint: theirs).machine(kind: .linux, socket: nil, thisMacVersion: "1.4.0", expectedHostFingerprint: ours)
+        #expect(other.state == .needsUpdate)
+        #expect(other.message?.contains("different Woven host release") == true)
+        // The exact release this Mac installs is current, whatever version it names.
+        #expect(status(app: "1.3.9", fingerprint: ours).machine(kind: .linux, socket: nil, thisMacVersion: "1.4.0",
+                                                                  expectedHostFingerprint: ours).state == .ready)
+        // A host too old to report its release is out of date.
+        #expect(status(app: nil, fingerprint: nil).machine(kind: .linux, socket: nil, thisMacVersion: "1.4.0",
+                                                             expectedHostFingerprint: ours).state == .needsUpdate)
+        // Without bundled host sources this Mac can only compare version names.
+        #expect(status(app: "1.4.0", fingerprint: theirs).machine(kind: .linux, socket: nil, thisMacVersion: "1.4.0").state == .ready)
+
+        var stale = machine("box", kind: .linux, app: "1.4.0", state: .needsUpdate); stale.versions.fingerprint = theirs
+        var current = machine("same", kind: .linux, app: "1.3.0"); current.versions.fingerprint = ours
+        let steps = BotUpdatePlan.steps(machines: [machine("this", kind: .thisMac), stale, current], thisMacVersion: "1.4.0")
+        #expect(steps.contains(.linuxHost(id: "box", name: "box")))
+        #expect(!steps.contains(.linuxHost(id: "same", name: "same")))
+        #expect(BotVersionReport(thisMacVersion: "1.4.0", machines: [stale]).outdated.map(\.current) == ["release bbbbbbbb"])
+    }
+
+    @Test func updateEverythingUpdatesAMacsVMBeforeItsBots() {
+        let steps = BotUpdatePlan.steps(machines: [machine("this", kind: .thisMac), machine("mini", kind: .mac), machine("box", kind: .linux)],
+                                        thisMacVersion: "1.4.0")
+        let engine = steps.firstIndex(of: .engine(machineID: "this", name: "This Mac"))
+        let bots = steps.firstIndex(of: .bots(machineID: "this", name: "This Mac"))
+        #expect(engine != nil && bots != nil && engine! < bots!)
+        #expect(steps.contains(.engine(machineID: "mini", name: "mini")))
+        // A Linux host's engine updates with the host.
+        #expect(!steps.contains(.engine(machineID: "box", name: "box")))
+    }
+
+    @Test func linuxStatusWithReleaseAndEngineUpdateFieldsDecodes() throws {
+        let body = """
+        {"machine":{"deviceID":"D1","name":"box","kind":"linux"},"enabled":true,"state":"ready",
+         "versions":{"app":"1.4.0","runtime":"0.1.0","protocol":1,"fingerprint":"\(String(repeating: "c", count: 64))","librarySchema":null},
+         "paused":false,"updating":true,"engineUpdateFailure":"rolled back"}
+        """
+        let status = try JSONDecoder().decode(BotsRemoteStatus.self, from: Data(body.utf8))
+        #expect(status.versions.fingerprint?.count == 64 && status.versions.librarySchema == nil)
+        let machine = status.machine(kind: .mac, socket: nil, thisMacVersion: "1.4.0")
+        #expect(machine.updating && machine.engineUpdateFailure == "rolled back")
+    }
+
     @Test func discoveryIncludesMacsOnlyWhenAsked() throws {
         let status = Data(#"""
         {"BackendState":"Running","Self":{"DNSName":"me.tail.ts.net."},"Peer":{
