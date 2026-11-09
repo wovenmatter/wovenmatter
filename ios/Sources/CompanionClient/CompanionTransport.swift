@@ -44,6 +44,12 @@ public extension CompanionTransport {
 
 public enum MobileConnectionError: Error, LocalizedError {
   case http(Int, String), revoked, versionMismatch, invalidResponse, responseTooLarge, insecureEndpoint, offline
+  /// Signed: this host does not list this phone as a member (yet, or any more).
+  case memberUnknown
+  /// Signed: this host is too old to accept member requests.
+  case memberUnsupported
+  /// Devices disagree on versions; every device shows "Update everything".
+  case updateRequired(String)
   public var errorDescription: String? {
     switch self {
     case .http(_, let message): message
@@ -53,6 +59,9 @@ public enum MobileConnectionError: Error, LocalizedError {
     case .responseTooLarge: "This response exceeds the client download limit."
     case .insecureEndpoint: "Pair using the Tailscale HTTPS address shown by Woven Matter on your Mac."
     case .offline: "This workspace is unavailable. Locally saved work remains available."
+    case .memberUnknown: "This device doesn’t recognize your iPhone yet. It learns about it after it syncs with a Mac you paired with."
+    case .memberUnsupported: "Update everything: this device needs a newer Woven Matter before your iPhone can connect directly."
+    case .updateRequired(let message): "Update everything. " + message
     }
   }
 }
@@ -86,27 +95,30 @@ public protocol MobilePairingRequests: Sendable {
 
 public final class HTTPSCompanionTransport: CompanionTransport, MobilePairingRequests, @unchecked Sendable {
   let credential: MobileCredential
-  private let session: URLSession
-  private let mcpSession: URLSession
+  /// Signed member requests (no bearer). Nil for bearer-era pairing.
+  let signer: MemberRequestSigner?
+  private let performer: any MobileHTTPPerforming
   private let mcpConnections = CompanionMCPConnections()
   private let deviceMetadata: CompanionDeviceMetadata?
-  public init(credential: MobileCredential, metadata: CompanionDeviceMetadata? = nil) throws {
+  public var endpoint: URL { credential.endpoint }
+  public var isSigned: Bool { signer != nil }
+  public init(credential: MobileCredential, metadata: CompanionDeviceMetadata? = nil, signer: MemberRequestSigner? = nil,
+              performer: (any MobileHTTPPerforming)? = nil) throws {
     guard CompanionPairingPayload.isValidEndpoint(credential.endpoint) else { throw MobileConnectionError.insecureEndpoint }
-    self.credential = credential; self.deviceMetadata = metadata
-    let configuration = URLSessionConfiguration.ephemeral
-    configuration.httpCookieStorage = nil; configuration.urlCache = nil
-    configuration.timeoutIntervalForRequest = 30; configuration.timeoutIntervalForResource = 45
-    session = URLSession(configuration: configuration, delegate: NoRedirects(), delegateQueue: nil)
-    let mcpConfiguration = URLSessionConfiguration.ephemeral
-    mcpConfiguration.httpCookieStorage = nil; mcpConfiguration.urlCache = nil
-    mcpConfiguration.timeoutIntervalForRequest = 24 * 60 * 60
-    mcpConfiguration.timeoutIntervalForResource = 24 * 60 * 60
-    mcpSession = URLSession(configuration: mcpConfiguration, delegate: NoRedirects(), delegateQueue: nil)
+    self.credential = credential; self.deviceMetadata = metadata; self.signer = signer
+    self.performer = performer ?? URLSessionMobileHTTP()
+  }
+  /// A signed connection to any Mac or Linux library host. Its library ID is
+  /// whatever the host reports; the store decides whether to rebind.
+  public convenience init(host endpoint: URL, identity: MobileMemberIdentity, metadata: CompanionDeviceMetadata? = nil,
+                          performer: (any MobileHTTPPerforming)? = nil) throws {
+    try self.init(credential: .init(endpoint: endpoint, workspaceID: "", deviceID: identity.deviceID, token: ""),
+                  metadata: metadata, signer: identity.signer, performer: performer)
   }
   public static func previewPairing(_ payload: CompanionPairingPayload, deviceID: String, deviceName: String,
-                                    metadata: CompanionDeviceMetadata? = nil) async throws -> String {
+                                    metadata: CompanionDeviceMetadata? = nil, performer: (any MobileHTTPPerforming)? = nil) async throws -> String {
     let provisional = MobileCredential(endpoint: payload.endpoint, workspaceID: "", deviceID: deviceID, token: "")
-    let transport = try HTTPSCompanionTransport(credential: provisional)
+    let transport = try HTTPSCompanionTransport(credential: provisional, performer: performer)
     let request = CompanionPairRequest(token: payload.token, deviceID: deviceID, deviceName: deviceName,
       metadata: metadata, requiresConfirmation: true)
     let preview: CompanionPairingPreview = try await transport.request("v1/pair/preview", method: "POST", body: JSONEncoder().encode(request))
@@ -120,10 +132,14 @@ public final class HTTPSCompanionTransport: CompanionTransport, MobilePairingReq
   }
   public static func pair(_ payload: CompanionPairingPayload, deviceID: String, deviceName: String,
                           metadata: CompanionDeviceMetadata? = nil, expectedWorkspaceID: String? = nil,
-                          requiresConfirmation: Bool = false) async throws -> MobileCredential {
+                          requiresConfirmation: Bool = false, memberPublicKey: Data? = nil,
+                          performer: (any MobileHTTPPerforming)? = nil) async throws -> MobileCredential {
     let provisional = MobileCredential(endpoint: payload.endpoint, workspaceID: "", deviceID: deviceID, token: "")
-    let transport = try HTTPSCompanionTransport(credential: provisional, metadata: metadata)
-    let request = CompanionPairRequest(token: payload.token, deviceID: deviceID, deviceName: deviceName, protocolVersion: payload.protocolVersion, metadata: metadata, expectedWorkspaceID: expectedWorkspaceID, requiresConfirmation: requiresConfirmation ? true : nil)
+    let transport = try HTTPSCompanionTransport(credential: provisional, metadata: metadata, performer: performer)
+    var request = CompanionPairRequest(token: payload.token, deviceID: deviceID, deviceName: deviceName, protocolVersion: payload.protocolVersion, metadata: metadata, expectedWorkspaceID: expectedWorkspaceID, requiresConfirmation: requiresConfirmation ? true : nil)
+    // The Mac signs an `ios` member entry for this key; the phone then signs
+    // its requests to every Mac and Linux member, whichever is online.
+    request.memberPublicKey = memberPublicKey
     let result: CompanionPairResponse = try await transport.request("v1/pair", method: "POST", body: JSONEncoder().encode(request))
     guard result.protocolVersion == CompanionProtocol.version, result.deviceID == deviceID else { throw MobileConnectionError.versionMismatch }
     guard expectedWorkspaceID == nil || result.workspaceID == expectedWorkspaceID,
@@ -167,8 +183,19 @@ public final class HTTPSCompanionTransport: CompanionTransport, MobilePairingReq
   public func workspaceIdentity() async throws -> String {
     let hello: CompanionHello = try await request("v1/hello")
     guard hello.protocolVersion == CompanionProtocol.version else { throw MobileConnectionError.versionMismatch }
-    guard hello.workspaceID == credential.workspaceID else { throw MobileStore.Failure.wrongWorkspace }
+    // A signed host connection reports its own library ID; the store binds or rebinds.
+    guard (signer != nil && credential.workspaceID.isEmpty) || hello.workspaceID == credential.workspaceID else { throw MobileStore.Failure.wrongWorkspace }
     return hello.workspaceID
+  }
+  /// Members with endpoints, as this host resolves them.
+  public func members() async throws -> MobileLibraryMemberList { try await request("v1/members", timeout: 15) }
+  /// Every peer's synchronization state on this host, for "Update everything".
+  public func syncStatus() async throws -> MobileLibrarySyncStatus { try await request("v1/sync/status", timeout: 15) }
+  /// A short reachability and identity probe used when choosing a library host.
+  public func probe(timeout: TimeInterval = 8) async throws -> CompanionHello {
+    let hello: CompanionHello = try await request("v1/hello", timeout: timeout)
+    guard hello.protocolVersion == CompanionProtocol.version else { throw MobileConnectionError.versionMismatch }
+    return hello
   }
   public func snapshot() async throws -> CompanionSnapshot { try await request("v1/snapshot") }
   public func changes(after: Int64) async throws -> CompanionChangePage { try await request("v1/changes", query: [.init(name: "after", value: String(after)), .init(name: "limit", value: "200")]) }
@@ -211,32 +238,19 @@ public final class HTTPSCompanionTransport: CompanionTransport, MobilePairingReq
     }
     if body != nil { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
     for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
-    if !credential.token.isEmpty {
+    if let signer {
+      if !credential.workspaceID.isEmpty { request.setValue(credential.workspaceID, forHTTPHeaderField: "X-Woven-Workspace") }
+      try MobileRequestSigning.sign(&request, with: signer)
+    } else if !credential.token.isEmpty {
       request.setValue("Bearer " + credential.token, forHTTPHeaderField: "Authorization")
       request.setValue(credential.workspaceID, forHTTPHeaderField: "X-Woven-Workspace")
     }
-    #if !os(Linux)
-    let (bytes, response) = try await (headers["MCP-Protocol-Version"] == nil ? session : mcpSession).bytes(for: request)
-    guard let response = response as? HTTPURLResponse else { throw MobileConnectionError.invalidResponse }
-    guard response.expectedContentLength <= maximumBytes else { throw MobileConnectionError.responseTooLarge }
-    var data = Data(); data.reserveCapacity(min(maximumBytes, max(0, Int(response.expectedContentLength))))
-    for try await byte in bytes {
-      guard data.count < maximumBytes else { throw MobileConnectionError.responseTooLarge }
-      data.append(byte)
+    let (data, response) = try await performer.perform(request, maximumBytes: maximumBytes, longLived: headers["MCP-Protocol-Version"] != nil)
+    guard (200..<300).contains(response.statusCode) else {
+      throw MobileRequestSigning.failure(status: response.statusCode, data: data, signed: signer != nil,
+                                         fallback: "Mac connection failed (\(response.statusCode)).")
     }
-    #else
-    let (data, rawResponse) = try await (headers["MCP-Protocol-Version"] == nil ? session : mcpSession).data(for: request)
-    guard let response = rawResponse as? HTTPURLResponse else { throw MobileConnectionError.invalidResponse }
-    guard data.count <= maximumBytes else { throw MobileConnectionError.responseTooLarge }
-    #endif
-    switch response.statusCode {
-    case 200..<300: return (data, response)
-    case 401, 403: throw MobileConnectionError.revoked
-    case 426: throw MobileConnectionError.versionMismatch
-    default:
-      let error = try? JSONDecoder().decode(CompanionAPIError.self, from: data)
-      throw MobileConnectionError.http(response.statusCode, error?.message ?? "Mac connection failed (\(response.statusCode)).")
-    }
+    return (data, response)
   }
   private static func safeID(_ id: String) throws -> String {
     guard !id.isEmpty, id.unicodeScalars.allSatisfy({ CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_")).contains($0) }) else { throw MobileConnectionError.invalidResponse }

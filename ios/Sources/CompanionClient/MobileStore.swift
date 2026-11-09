@@ -599,7 +599,7 @@ public actor MobileStore {
       (state.workspaceID ?? state.detachedWorkspaceID) == nil || (state.workspaceID ?? state.detachedWorkspaceID) == id else { throw Failure.wrongWorkspace }
     state.workspaceID = id; state.detachedWorkspaceID = nil
   }
-  private static func remoteNote(_ note: CompanionNote, state: inout MobileStoreState) {
+  static func remoteNote(_ note: CompanionNote, state: inout MobileStoreState) {
     if state.deletedNotes.contains(note.id), state.bases[note.id]?.revision ?? 0 >= note.revision { return }
     if state.isDirty(note.id) {
       if var conflict = state.conflicts[note.id] {

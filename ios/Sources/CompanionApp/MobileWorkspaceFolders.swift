@@ -8,7 +8,7 @@ extension CompanionModel {
   /// is display grouping only and never decides execution ownership.
   func canonicalWorkspaceID(_ id: String) -> String {
     if id == "local" || id == "device" { return Self.displayWorkspaceID(deviceWorkspaceID) }
-    if id == "central", let central = executionWorkspaces.first(where: { $0.capabilities.contains("history.central.v1") }) { return Self.displayWorkspaceID(central.id) }
+    if id == "central", let central = centralExecutionWorkspace { return Self.displayWorkspaceID(central.id) }
     return Self.displayWorkspaceID(id)
   }
   static func displayWorkspaceID(_ value: String) -> String {
@@ -30,7 +30,7 @@ extension CompanionModel {
       let parts = provider.split(separator: ":")
       if parts.count == 3, parts[0] == "remote", UUID(uuidString: String(parts[1])) != nil { return canonicalWorkspaceID(String(parts[1])) }
       if providers.contains(where: { $0.id == provider }) {
-        return executionWorkspaces.first(where: { $0.capabilities.contains("history.central.v1") }).map { canonicalWorkspaceID($0.id) }
+        return centralExecutionWorkspace.map { canonicalWorkspaceID($0.id) }
       }
     }
     return nil

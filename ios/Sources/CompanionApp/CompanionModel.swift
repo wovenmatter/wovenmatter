@@ -81,6 +81,19 @@ import CompanionInference
   var store: MobileStore?
   var engine: MobileSyncEngine?
   var transport: HTTPSCompanionTransport?
+  /// This phone's member identity and the Mac and Linux hosts it can sync
+  /// with. Nil until the phone pairs with its member key (or for an older Mac).
+  var memberIdentity: MobileMemberIdentity?
+  var libraryHosts: MobileLibraryHosts?
+  var membership: MobileMembershipState?
+  var membershipFile: URL?
+  @ObservationIgnored var memberKeyStorage: MobileMemberKeyStorage = .keychain
+  /// Test routing for in-process hosts; production uses URLSession.
+  @ObservationIgnored var httpPerformer: (any MobileHTTPPerforming)?
+  /// The endpoint each signed workspace client was made for.
+  var memberClientEndpoints: [String: URL] = [:]
+  /// Workspaces too old for member requests keep their bearer grant.
+  var memberUnsupportedWorkspaceIDs: Set<String> = []
   /// Pairing confirmation and unpairing for a paired transport. Tests record
   /// these requests instead of contacting central.
   @ObservationIgnored var pairingRequests: (HTTPSCompanionTransport) -> any MobilePairingRequests = { $0 }
@@ -200,7 +213,11 @@ import CompanionInference
       let filename = fixture ? "fixture-library-\(safeNamespace).json" : "mobile-library.json"
       let libraryRoot = root.appendingPathComponent("WovenMatterCompanion")
       store = try MobileStore(file: libraryRoot.appendingPathComponent(filename))
+      membershipFile = libraryRoot.appendingPathComponent(fixture ? "fixture-membership-\(safeNamespace).json" : "membership.json")
       executionDirectory = libraryRoot.appendingPathComponent(fixture ? "fixture-execution-\(safeNamespace)" : "execution", isDirectory: true)
+      #if DEBUG
+      httpPerformer = DevelopmentTailnet(ProcessInfo.processInfo.environment["WOVENMATTER_DEV_TAILNET"])
+      #endif
     } catch { errorMessage = "The local library could not open: " + error.localizedDescription }
   }
   init(store: MobileStore, transport: any CompanionTransport) {
@@ -243,10 +260,16 @@ import CompanionInference
           if let pending = credential, pending.confirmationPending == true {
             credential = nil
             try await acceptPairing(pending, allowingLibraryChange: true) { try MobileCredentialVault.save($0) }
+            if let identity = try? loadMemberIdentity() {
+              await finishMemberPairing(endpoint: pending.endpoint, accepted: await probeMemberPairing(endpoint: pending.endpoint, identity: identity))
+            }
           } else { try configureTransport() }
         } catch { pairingError = error.localizedDescription; credential = nil }
         do { try await store?.interruptExecutorJobs(); try await loadExecutionConfiguration() }
         catch { errorMessage = error.localizedDescription }
+        #if DEBUG
+        await DevelopmentTailnet.applyLaunchOptions(to: self)
+        #endif
       }
     }
     if let store { await analytics.configure(store.analytics, transport: transport) }
@@ -264,10 +287,11 @@ import CompanionInference
     calendarRevision &+= 1
     await refreshSynchronizationStatus()
   }
-  private func configureTransport() throws {
+  func configureTransport() throws {
     guard let credential, let store else { connectionLabel = "Saved on this device"; return }
     guard credential.deviceID == state.deviceID else { throw CompanionAPIError(code: "device_identity_changed", message: "Pair this local library with your Mac again. The saved credential belongs to a previous app installation; your local notes are safe.") }
-    let client = try HTTPSCompanionTransport(credential: credential, metadata: deviceMetadata)
+    if try configureMemberTransport() { return }
+    let client = try HTTPSCompanionTransport(credential: credential, metadata: deviceMetadata, performer: httpPerformer)
     transport = client; engine = MobileSyncEngine(store: store, transport: client)
   }
   func pair(url: URL) async {
@@ -290,6 +314,9 @@ import CompanionInference
         defer { if connectionForeground { startDeviceScheduler() } }
         do {
           try await acceptPairing(pending, allowingLibraryChange: true) { try MobileCredentialVault.save($0) }
+          if let identity = try? loadMemberIdentity() {
+            await finishMemberPairing(endpoint: payload.endpoint, accepted: await probeMemberPairing(endpoint: payload.endpoint, identity: identity))
+          }
           pairingText = ""
           await refresh(); await refreshExecutionWorkspaces(force: true)
           return
@@ -299,7 +326,7 @@ import CompanionInference
         }
       }
       let target = try await HTTPSCompanionTransport.previewPairing(payload, deviceID: current.deviceID,
-        deviceName: UIDevice.current.name, metadata: deviceMetadata)
+        deviceName: UIDevice.current.name, metadata: deviceMetadata, performer: httpPerformer)
       if (current.workspaceID ?? current.detachedWorkspaceID) != target,
         !localRunTasks.isEmpty || processingDeviceSchedule {
         throw DeviceExecutionError.unavailable("Finish the running device agents before changing the central database.")
@@ -307,9 +334,20 @@ import CompanionInference
       await flushLocalWrites()
       stopDeviceScheduler()
       defer { if connectionForeground { startDeviceScheduler() } }
+      // The member key: the Mac adds this phone as a member, and every later
+      // request to any Mac or Linux member is signed with it.
+      let identity = try loadMemberIdentity()
       let paired = try await HTTPSCompanionTransport.pair(payload, deviceID: current.deviceID,
-        deviceName: UIDevice.current.name, metadata: deviceMetadata, expectedWorkspaceID: target, requiresConfirmation: true)
-      try await acceptPairing(paired, allowingLibraryChange: true) { try MobileCredentialVault.save($0) }
+        deviceName: UIDevice.current.name, metadata: deviceMetadata, expectedWorkspaceID: target, requiresConfirmation: true,
+        memberPublicKey: identity.publicKey, performer: httpPerformer)
+      let accepted = await probeMemberPairing(endpoint: payload.endpoint, identity: identity)
+      // Pairing again with another Mac of the same library moves nothing:
+      // the next sync rebinds to it like to any other member host.
+      let previous = current.workspaceID ?? current.detachedWorkspaceID
+      let keepLibrary = accepted == true && previous != nil && previous != target
+        ? await joinsSameLibrarySet(endpoint: payload.endpoint, identity: identity, previousLibraryID: previous) : false
+      try await acceptPairing(paired, allowingLibraryChange: true, keepLibrary: keepLibrary) { try MobileCredentialVault.save($0) }
+      await finishMemberPairing(endpoint: payload.endpoint, accepted: accepted)
       pairingText = ""
       await refresh()
       await refreshExecutionWorkspaces(force: true)
@@ -319,18 +357,19 @@ import CompanionInference
     guard let engine, !refreshInProgress else { return }
     refreshInProgress = true; connecting = true
     let generation = connectionGeneration
-    let activeTransport = transport
     defer { refreshInProgress = false; connecting = false }
     let targetConversationID = selectedExecutionWorkspaceID == "central" ? selectedConversationID : nil
     do {
       try await engine.synchronize()
       guard generation == connectionGeneration, !Task.isCancelled else { return }
+      await adoptCurrentLibraryHost(engine)
       let refreshedProviders = frame % 5 == 0 || providers.isEmpty ? try await engine.providers() : providers
       let refreshedPending = try await engine.pending()
       var capability: CompanionProvider?
       if let targetConversationID {
         try await engine.refreshTranscriptIfNeeded(targetConversationID)
-        if let activeTransport { capability = try await activeTransport.capabilities(targetConversationID) }
+        // The host this synchronization chose (member mode can fail over).
+        if let activeTransport = transport { capability = try? await activeTransport.capabilities(targetConversationID) }
       }
       if frame % 5 == 0 { try await engine.recoverCommandReceipts() }
       let status = await engine.synchronizationStatus()
@@ -349,6 +388,7 @@ import CompanionInference
       let status = await engine.synchronizationStatus()
       guard generation == connectionGeneration else { return }
       synchronizationStatus = status
+      await adoptCurrentLibraryHost(engine)
       online = status.centralReachable == true
       connectionLabel = online ? "Connected" : "Disconnected"
       centralRetryCount += 1

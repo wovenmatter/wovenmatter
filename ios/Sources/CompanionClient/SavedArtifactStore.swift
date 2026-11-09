@@ -69,6 +69,16 @@ public actor SavedArtifactStore {
     try commit(next)
   }
 
+  /// Another host of the same library set: keep every record and download, and
+  /// let that host's manifests (its own revisions) replace the cached ones.
+  public func rebindLibrary(to libraryID: String) throws {
+    guard state.libraryID != libraryID else { return }
+    var next = state
+    for id in next.records.keys { next.records[id]?.manifest.revision = 0 }
+    next.libraryID = libraryID
+    try commit(next)
+  }
+
   public func manifests() -> [CompanionArtifactManifest] { state.records.values.map(\.manifest) }
   public func pendingUploadCount() -> Int { state.records.values.filter(\.upload).count }
   public func pendingDownloadCount() -> Int { state.records.values.filter { !$0.complete && ($0.pinned == true || $0.requestedDownload == true) }.count }

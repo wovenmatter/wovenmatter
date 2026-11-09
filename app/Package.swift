@@ -79,7 +79,9 @@ let package = Package(
     ),
     .testTarget(
       name: "WovenMatterLibraryHostTests",
-      dependencies: ["WovenMatterLibraryHost", "WovenMatterDashboardStore", "WovenMatterCore", linuxSQLite]
+      dependencies: ["WovenMatterLibraryHost", "WovenMatterDashboardStore", "WovenMatterCore", linuxSQLite,
+                     // The phone client, for the in-process Mac + Linux + phone reach test.
+                     .product(name: "CompanionClient", package: "ios", condition: .when(platforms: [.macOS]))]
     ),
     .target(name: "WorkspaceFixtures", dependencies: ["WovenMatterCore", "WovenMatterClient", "WovenMatterDashboardStore", linuxCrypto, linuxSQLite], path: "TestsSupport/WorkspaceFixtures"),
     .testTarget(

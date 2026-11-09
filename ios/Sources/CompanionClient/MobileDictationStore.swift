@@ -55,6 +55,15 @@ public actor MobileDictationStore {
       try Self.execute(db, "UPDATE sync SET workspace=?, cursor=0 WHERE singleton=1", [workspaceID])
     }
   }
+  /// Another host of the same library set: its change cursor starts over and
+  /// unsent dictations stay pending; nothing already sent is re-uploaded.
+  public func rebindLibrary(to workspaceID: String) throws {
+    try Self.access(file) { db in
+      let existing = try Self.rows(db, "SELECT COALESCE(workspace, '') FROM sync")[0][0]
+      guard existing != workspaceID else { return }
+      try Self.execute(db, "UPDATE sync SET workspace=?, cursor=0 WHERE singleton=1", [workspaceID])
+    }
+  }
   public func cursor() throws -> Int64 {
     try Self.access(file) { db in Int64(try Self.rows(db, "SELECT cursor FROM sync")[0][0]) ?? 0 }
   }
