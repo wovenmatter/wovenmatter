@@ -391,8 +391,12 @@ extension WovenMCPHostTests {
         #expect(try JSONDecoder().decode(GatewayJSONValue.self, from: paused.body).objectValue?["error"] != nil)
         #expect(try await fixture.database.sessionRelationship(fixture.caller).coordinatorID == nil)
         #expect(try await fixture.database.botCallers().allSatisfy(\.paused))
+        #expect(try await fixture.database.isBotMachinePaused(Self.machine))
+        // A bot created while paused still gets a key, which works on resume.
+        let later = try await fixture.host.issueBotKey(machineID: Self.machine, botID: UUID().uuidString, botName: "Later")
         try await fixture.host.setBotsPaused(machineID: Self.machine, paused: false)
         #expect(await fixture.host.handle(try mcpHostRequest(token: grant.bearerToken, name: "woven_notes_list"))?.status == 200)
+        #expect(await fixture.host.handle(try mcpHostRequest(token: later.bearerToken, name: "woven_notes_list"))?.status == 200)
     }
 
     @Test func botNamesAreBounded() async throws {

@@ -45,6 +45,7 @@ struct SettingsCompanionView: View {
                 if host.pairedDevices.contains(where: { $0.id != host.peerIdentity?.deviceID }) { pairedDevices }
                 if !host.pendingDeviceRevocations.isEmpty { pendingRevocations }
             }
+            BotsVersionNotice(bots: model.bots)
             SettingsDeviceWorkspaceInventory(workspaces: host.executionWorkspaces)
             if !DevelopmentLaunch.isClient {
                 DevicePairingDiscoveryCard(pairing: client.devicePairing, host: host, canPairWithCentral: true)

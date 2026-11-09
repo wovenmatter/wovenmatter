@@ -124,7 +124,8 @@ extension WorkspaceDatabase {
     }
   }
 
-  /// Registers or renames a bot's caller. A new key for a revoked bot reinstates it.
+  /// Registers or renames a bot's caller. A paused machine's bots may still get keys,
+  /// which work once it resumes; a revoked bot may not unless `reinstate` is set.
   public func registerBotCaller(_ callerID: String, displayName: String, reinstate: Bool = false) async throws {
     try await write { connection in
       try connection.transaction {
@@ -132,7 +133,9 @@ extension WorkspaceDatabase {
         if reinstate { try connection.toolsExecuteUnlocked("UPDATE workspace_mcp_callers SET revoked=0 WHERE id=?", [callerID]) }
         // The first key for a machine enables it; a paused machine stays paused.
         try connection.toolsExecuteUnlocked("INSERT OR IGNORE INTO workspace_mcp_bot_machines VALUES(?,1)", [bot.machineID])
-        try connection.requireActiveBotUnlocked(callerID)
+        guard (try connection.historyRowsUnlocked("SELECT 1 FROM workspace_mcp_callers WHERE id=? AND revoked=1", values: [callerID])).isEmpty else {
+          throw WorkspaceToolError.invalid("This bot's Woven MCP key was revoked.")
+        }
         try connection.toolsExecuteUnlocked("INSERT INTO workspace_mcp_callers(id,display_name,machine_id) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET display_name=excluded.display_name,machine_id=excluded.machine_id", [callerID, displayName, bot.machineID])
       }
     }
