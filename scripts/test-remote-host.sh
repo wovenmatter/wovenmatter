@@ -7,6 +7,7 @@ if [ "${1:-}" != --installed ]; then
   repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
   PYTHONDONTWRITEBYTECODE=1 python3 "$repo_root/scripts/test-support/test_remote_host_json.py"
   PYTHONDONTWRITEBYTECODE=1 python3 "$repo_root/scripts/test-support/test_host_bundle.py"
+  PYTHONDONTWRITEBYTECODE=1 python3 "$repo_root/scripts/test-support/test_bots_engine.py"
   exit
 fi
 workspace_id="${2:-}"

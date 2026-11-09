@@ -305,6 +305,107 @@ Pi Bot's Admin Bot config tools (`read_config`, `update_config`,
   even for previews (see Previews). The Docker socket is never mounted into a
   bot.
 
+#### Linux engine and host wiring
+
+- **Install.** `scripts/remote-host.sh` runs `remote/host/bots-engine.py` with
+  the account's existing `sudo -n` once (`install` with the `bots` role, or
+  `bots-enable`). It copies itself to `/usr/local/lib/wovenmatter-bots/bots-engine`
+  (root-owned) and installs Docker's official static binaries, pinned with
+  SHA-256 in `remote/host/runtime-versions.json`. No distribution package and
+  no sudoers rule is added. Everything is named from one instance
+  (`wovenmatter`; isolated tests set `WOVENMATTER_BOTS_INSTANCE`).
+- **Units.** `wovenmatter-docker.service` (`dockerd --config-file
+  /etc/wovenmatter-bots/daemon.json`, socket `/run/wovenmatter/docker.sock`,
+  root `0660`, group = the account's primary group, which must have no other
+  members), `wovenmatter-containerd.service` (its own containerd at
+  `/run/wovenmatter/containerd/containerd.sock`; dockerd would otherwise join
+  a system containerd and share the user's Docker `moby` namespace),
+  `wovenmatter-bots-firewall.service`, `wovenmatter-bots-apply.path`/`.service`,
+  and `wovenmatter-bots.slice` (`MemoryMax` = RAM pool, `infinity` for no cap).
+  The engine and every container (`cgroup-parent`) run in the slice. Data root
+  `/var/lib/wovenmatter-bots/docker`: a sparse ext4 image (`disk.img`) mounted
+  by `var-lib-wovenmatter\x2dbots-docker.mount` when there is a disk cap, a
+  plain directory when there is none.
+- **Network.** Bridge `br-wovenbots` on a free private /16 (first of
+  `10.237–251.0.0/16`). dockerd runs with `iptables`/`ip6tables`/`ip-forward`
+  off and never touches the user's chains. The Woven nftables table `inet
+  wovenmatter_bots`, replaced atomically on every engine start and after
+  `nftables.service` reloads, drops all IPv6, all traffic from the bridge to
+  the host itself, new connections into the bridge, and forwarded traffic to
+  0/8, 10/8, 100.64/10 (tailnet and MagicDNS), 127/8, 169.254/16, 172.16/12,
+  192.168/16 and the other special-use ranges; it masquerades the rest. A
+  Woven iptables chain (`WOVENMATTER-BOTS`, jumped first from `FORWARD`) only
+  accepts what that table allowed, for hosts whose `FORWARD` policy is DROP.
+  Containers use Cloudflare's and Google's public resolvers. Bots use only the
+  default bridge: the runtime creates no networks, and the engine sets no
+  `default-address-pools` (with them, dockerd deletes the host's `docker0` on
+  every restart).
+- **Settings.** The server, which has no sudo, writes
+  `{revision, poolBytes, diskBytes}` (bytes or `null` for no cap) to
+  `/var/lib/wovenmatter-bots/requests/settings.json`; the path unit applies it
+  as root and records `appliedRevision` in `/var/lib/wovenmatter-bots/state/state.json`.
+  Pool changes and disk growth are immediate; shrinking stops the engine and
+  stops at the space in use; switching between a cap and no cap migrates the
+  data. `remote-host.sh bots-configure ID POOL DISK` uses the same request.
+- **Uninstall.** `bots-disable` (workspace kept) or `uninstall` removes the
+  units, slice, mount, image, data, bridge, nftables table and iptables chain,
+  and restores `ip_forward` if Woven turned it on.
+
+#### One server, roles
+
+- `remote-host.sh install|update ID PORT MODE FINGERPRINT [ROLES]` takes
+  `workspace`, `bots` or `workspace,bots` (default: the recorded roles, or
+  `workspace`). Roles only grow on update; a bots-only server skips the host
+  Chromium. The installation record gains `roles`; the service environment
+  gains `WOVENMATTER_WORKSPACE_ENABLED`, `WOVENMATTER_BOTS_ENABLED`,
+  `WOVENMATTER_BOTS_INSTANCE`, `WOVENMATTER_BOTS_DATA` (`<data root>/bots`)
+  and `WOVENMATTER_DATA_ROOT`. With the workspace off the server answers
+  workspace routes (execution commands, schedules, projects, harnesses,
+  browser, databases) with `409 workspace_disabled` and starts no scheduler.
+- `remote-host.sh inspect [MODE] [ROLES]` adds `bots`: `state` (`no_server`,
+  `server_without_bots`, `bots_ready`), `engine`, `memoryTotalBytes`,
+  `diskTotalBytes`, `diskFreeBytes` (the filesystem holding
+  `/var/lib/wovenmatter-bots`), `defaultPoolBytes`, `defaultDiskBytes` and
+  `blockingIssues`. `status` adds `roles` and `botsState`.
+- Host releases ship `bots/package.json`, `bots/package-lock.json`,
+  `bots/src/**`, `bots/helper/**` and `bots/image/**` when the checkout or app
+  has them, and run `npm ci --omit=dev --ignore-scripts` in `bots/` on the
+  host. Nothing else under `bots/` ships.
+
+#### Server side
+
+- The server supervises `node bots/src/cli.ts serve --config
+  <state>/bots/runtime.json` (0600), regenerating `runtimeToken`, the
+  loopback port and the host bearer on every start, and restarting a crash
+  with backoff up to 30 s. It starts the runtime once the engine is
+  installed. `image.tag` is `wovenmatter-bots`; `machine.deviceID` comes from
+  `WOVENMATTER_DEVICE_ID` or `<data root>/identity/device-id` (0600, created
+  once), which the membership identity replaces.
+- It implements the runtime host API under `/v1/bots-host/` with that bearer.
+  Previews publish `http://127.0.0.1:<port>` (the runtime's proxy) with
+  `tailscale serve --bg --https=<17000–17999>`, never Funnel, verify the
+  route, and remove only routes they recorded (`<state>/bots/previews.json`).
+  Credentials come from the default agent's store, access-only. Bot MCP keys
+  are stored as digests; bot callers get only library-delegated tools, with
+  `x-woven-caller`, `x-woven-bot-id` and `x-woven-bot-name` attribution.
+  Pause-all is `botMCP.isEnabled = false`.
+- Conversation batches go through `library.writeBotEntries(botID, {bot,
+  conversations, entries})` (`remote/src/bots-library.mjs`). Adapters upsert
+  by entry and conversation id. Until the server supervises
+  `wovenmatter-library`, the adapter appends each batch as one JSON line to
+  `<data root>/bots/library-outbox/<botID>.jsonl` (0600); the library adapter
+  replaces it and imports that outbox.
+- App-facing routes, authenticated as administrator or device grant (member
+  auth replaces `authorizeClient` in `remote/src/bots-service.mjs`):
+  `GET /v1/bots/status`, `GET /v1/bots/resources` (`memory {totalBytes,
+  poolBytes, botBytes, usedBytes}`, `disk {path, totalBytes, freeBytes,
+  capBytes, imageBytes, usedBytes}`, `warnings`), and `GET /v1/bots/ws`
+  (WebSocket, proxied to the runtime's `/ws` with the runtime token).
+  Administrator only: `POST /v1/bots/resources {poolBytes?, diskBytes?,
+  botMemoryBytes?}` (a pool below per-bot RAM lowers it), `GET|POST
+  /v1/bots/mcp {isEnabled?, groups?}` and `DELETE /v1/bots/mcp/keys/{botID}`.
+  `/v1/execution/mcp-settings` also carries `botMCP {isEnabled, groups}`.
+
 ### Resources
 
 - **RAM pool:** default 8 GB per machine. It may be set anywhere from 1 GB to

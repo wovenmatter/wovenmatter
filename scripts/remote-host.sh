@@ -22,6 +22,14 @@ TOKEN=os.environ.pop('WOVENMATTER_API_TOKEN','')
 UNIT_NAME='wovenmatter.service'
 RC_FILES=['.bashrc','.bash_profile','.bash_login','.profile','.zshrc','.zprofile','.zshenv','.config/fish/config.fish']
 HARNESS_CONFIGS=['.codex','.claude','.claude.json','.config/opencode','.grok']
+# The bot engine instance. Only isolated tests choose another name.
+BOTS_INSTANCE=os.environ.get('WOVENMATTER_BOTS_INSTANCE','wovenmatter')
+BOTS_ETC=Path('/etc')/(BOTS_INSTANCE+'-bots')
+BOTS_VAR=Path('/var/lib')/(BOTS_INSTANCE+'-bots')
+BOTS_HELPER=Path('/usr/local/lib')/(BOTS_INSTANCE+'-bots')/'bots-engine'
+ROLES=('workspace','bots')
+DEFAULT_POOL=8*1024**3
+DEFAULT_DISK=50*1024**3
 
 class Failure(Exception):
     def __init__(self,code,detail,status=69): self.code,self.detail,self.status=code,detail,status
@@ -51,6 +59,15 @@ def valid_port(value):
 def valid_mode(value):
     if value not in ('fullRoot','user'): fail('invalid_access_mode','Choose Full root or Normal user permissions.',64)
     return value
+def valid_roles(value):
+    roles=[r for r in str(value).split(',') if r]
+    if not roles or any(r not in ROLES for r in roles) or len(set(roles))!=len(roles): fail('invalid_roles','Choose the workspace, bots, or both.',64)
+    return {'workspace':'workspace' in roles,'bots':'bots' in roles}
+def role_text(roles): return ','.join(r for r in ROLES if roles.get(r))
+def valid_size(value,label):
+    if value in ('none','null',None): return None
+    if not str(value).isdigit() or int(value)<=0: fail('invalid_size','Choose a positive '+label+' in bytes, or none.',64)
+    return int(value)
 
 def owned_directory(path):
     path=Path(path)
@@ -101,6 +118,9 @@ def record(required=False):
         result=json.loads(RECORD.read_text())
         valid_id(result['id']); valid_port(result['port']); valid_mode(result['accessMode'])
         if not re.fullmatch('[a-f0-9]{64}',result['fingerprint']): raise ValueError()
+        # Records written before bots existed describe a workspace-only server.
+        roles=result.setdefault('roles',{'workspace':True,'bots':False})
+        if set(roles)!=set(ROLES) or not all(isinstance(v,bool) for v in roles.values()) or not any(roles.values()): raise ValueError()
         return result
     except FileNotFoundError:
         if required: fail('workspace_not_found','No native workspace is installed for this account.',66)
@@ -193,6 +213,60 @@ def tailscale_operator_ready():
         return preferences.get('OperatorUser','')==pwd.getpwuid(os.getuid()).pw_name
     except (ValueError,AttributeError): return None
 
+def bot_packages(distro):
+    # The engine needs nftables, ext4 tools and iproute2; Docker itself ships
+    # as checksummed static binaries, never as a distribution package.
+    identity=distro.get('ID','')
+    if identity in ('ubuntu','debian'): return ['nftables','e2fsprogs','iproute2','util-linux']
+    if identity in ('arch','omarchy') or 'arch' in distro.get('ID_LIKE','').split(): return ['nftables','e2fsprogs','iproute2','util-linux']
+    return []
+
+def memory_total():
+    try:
+        for line in Path('/proc/meminfo').read_text().splitlines():
+            if line.startswith('MemTotal:'): return int(line.split()[1])*1024
+    except (OSError,ValueError,IndexError): pass
+    return None
+
+def bot_storage():
+    path=BOTS_VAR
+    while not path.exists(): path=path.parent
+    return shutil.disk_usage(path)
+
+def bots_engine():
+    # Read-only and self-contained: discovery never runs installed code.
+    try:
+        config=json.loads((BOTS_ETC/'instance.json').read_text())
+        if not isinstance(config,dict): raise ValueError()
+    except (OSError,ValueError): config=None
+    me=pwd.getpwuid(os.getuid()).pw_name
+    if not config: return {'installed':False,'instance':BOTS_INSTANCE}
+    active=text(run(['systemctl','is-active',BOTS_INSTANCE+'-docker.service'])) or 'inactive'
+    socket_path=Path(str(config.get('socket','')))
+    try: socket_ready=stat.S_ISSOCK(socket_path.stat().st_mode)
+    except OSError: socket_ready=False
+    try: state=json.loads((BOTS_VAR/'state/state.json').read_text())
+    except (OSError,ValueError): state={}
+    return {'installed':True,'instance':BOTS_INSTANCE,'owner':config.get('user'),'ownedByThisAccount':config.get('user')==me,
+        'state':active,'running':active=='active' and socket_ready,'socket':str(socket_path),'dockerVersion':config.get('dockerVersion'),
+        'poolBytes':config.get('poolBytes'),'diskBytes':config.get('diskBytes'),'appliedRevision':state.get('appliedRevision'),
+        'requestError':state.get('requestError'),'notes':state.get('notes') or []}
+
+def bots_discovery(installed,elevated):
+    engine=bots_engine(); storage=bot_storage()
+    roles=installed['roles'] if installed else None
+    if not installed: state='no_server'
+    elif roles['bots'] and engine['installed'] and engine.get('ownedByThisAccount') and engine['running']: state='bots_ready'
+    else: state='server_without_bots'
+    blockers=[]
+    if platform.system()!='Linux': blockers.append('Bots require Linux.')
+    if not Path('/sys/fs/cgroup/cgroup.controllers').exists(): blockers.append('Bots require the unified cgroup hierarchy (cgroup v2).')
+    if engine['installed'] and not engine.get('ownedByThisAccount'): blockers.append('This machine’s bot engine belongs to another account.')
+    if not engine['installed'] and not elevated: blockers.append('Installing bots requires existing noninteractive administrative access once.')
+    return {'state':state,'engine':engine,'blockingIssues':blockers,'roles':roles,
+        'memoryTotalBytes':memory_total(),'diskTotalBytes':storage.total,'diskFreeBytes':storage.free,'dataPath':str(BOTS_VAR),
+        'defaultPoolBytes':min(DEFAULT_POOL,memory_total() or DEFAULT_POOL),'defaultDiskBytes':min(DEFAULT_DISK,storage.total)}
+
 def dependency_packages(distro):
     # Bootstrap inspect/prepare are self-contained and cannot trust an installed release.
     common='libasound2 libatk-bridge2.0-0 libatk1.0-0 libatspi2.0-0 libcairo2 libcups2 libdbus-1-3 libdrm2 libgbm1 libglib2.0-0 libnspr4 libnss3 libpango-1.0-0 libwayland-client0 libx11-6 libxcb1 libxcomposite1 libxdamage1 libxext6 libxfixes3 libxkbcommon0 libxrandr2 libfontconfig1 libfreetype6 fonts-liberation fonts-noto-color-emoji util-linux python3 ca-certificates curl'.split()
@@ -209,10 +283,14 @@ def dependency_packages(distro):
         return 'alsa-lib at-spi2-core cairo cups libcups dbus libdrm mesa glib2 nspr nss pango wayland libx11 libxcb libxcomposite libxdamage libxext libxfixes libxkbcommon libxrandr fontconfig freetype2 ttf-liberation noto-fonts-emoji util-linux python ca-certificates curl'.split()
     return []
 
-def privileged_actions(distro):
+def privileged_actions(distro,roles=None):
+    roles=roles or {'workspace':True,'bots':False}
     actions=[]
     if not linger(): actions.append(['loginctl','enable-linger',pwd.getpwuid(os.getuid()).pw_name])
+    # A bots-only server has no host browser, so it needs no Chromium libraries.
     packages=dependency_packages(distro)
+    if packages and not roles['workspace']: packages=['python3' if distro.get('ID') in ('ubuntu','debian') else 'python','ca-certificates','curl','util-linux']
+    if packages and roles['bots']: packages=list(dict.fromkeys(packages+bot_packages(distro)))
     if packages:
         if distro.get('ID') in ('ubuntu','debian'):
             missing=[p for p in packages if run(['dpkg-query','-W','-f=${db:Status-Status}',p]).stdout!=b'installed']
@@ -220,7 +298,7 @@ def privileged_actions(distro):
         else:
             missing=[p for p in packages if run(['pacman','-Q',p]).returncode]
             if missing: actions.append(['pacman','-S','--needed','--noconfirm',*missing])
-    if distro.get('ID')=='ubuntu' and apparmor_restriction()==1:
+    if roles['workspace'] and distro.get('ID')=='ubuntu' and apparmor_restriction()==1:
         target='/etc/apparmor.d/wovenmatter-chromium-'+str(os.getuid())
         # Fixed profile content below; a stable version glob avoids sudo on updates.
         if not Path(target).exists():
@@ -229,8 +307,9 @@ def privileged_actions(distro):
         actions.append(['tailscale','set','--operator='+pwd.getpwuid(os.getuid()).pw_name])
     return actions
 
-def inspect(mode='user'):
+def inspect(mode='user',roles=None):
     valid_mode(mode); distro=os_release(); paths=harness_path(); installed=record(); manager=user_manager(); elevated=unrestricted_root()
+    roles=valid_roles(roles) if roles else (installed['roles'] if installed else {'workspace':True,'bots':False})
     architecture={'x86_64':'amd64','aarch64':'arm64','arm64':'arm64'}.get(platform.machine(),platform.machine())
     blockers=[]
     if platform.system()!='Linux': blockers.append('Native workspaces require Linux.')
@@ -240,7 +319,7 @@ def inspect(mode='user'):
     if mode=='fullRoot' and not elevated: blockers.append('Full root requires existing unrestricted passwordless sudo for this SSH account.')
     for binary,label in [('tailscale','Tailscale'),('script','util-linux script'),('setpriv','util-linux setpriv'),('curl','curl')]:
         if not shutil.which(binary) and (binary=='tailscale' or not dependency_packages(distro) or not elevated): blockers.append(label+' is missing.')
-    actions=privileged_actions(distro)
+    actions=privileged_actions(distro,roles)
     if actions and not elevated: blockers.append('Host preparation requires an account with existing noninteractive administrative access.')
     disk=shutil.disk_usage(HOME)
     containers=[]
@@ -262,16 +341,17 @@ def inspect(mode='user'):
         'preparationActions':['sudo -n '+' '.join(shell_quote(a) for a in action) for action in actions],
         'blockingIssues':blockers,'blockers':blockers,'canPrepare':elevated,'preparationRequired':bool(actions),
         'hostStorageCapacityBytes':disk.total,'hostStorageAvailableBytes':disk.free,'hostStorageLow':disk.free<10*1024**3,
-        'storageWarning':'Less than 10 GiB of free host storage remains.' if disk.free<10*1024**3 else None}
+        'storageWarning':'Less than 10 GiB of free host storage remains.' if disk.free<10*1024**3 else None,
+        'requestedRoles':roles,'bots':bots_discovery(installed,elevated)}
 
 def shell_quote(value):
     import shlex
     return shlex.quote(str(value))
 
-def prepare(authorization,mode='user'):
+def prepare(authorization,mode='user',roles=None):
     if authorization!='AUTHORIZED': fail('confirmation_required','Review and authorize the listed privileged commands first.',77)
-    valid_mode(mode)
-    distro=os_release(); actions=privileged_actions(distro)
+    valid_mode(mode); parsed=valid_roles(roles) if roles else None
+    distro=os_release(); actions=privileged_actions(distro,parsed or (record() or {}).get('roles'))
     if actions and not unrestricted_root(): fail('sudo_unavailable','Preparation requires existing unrestricted noninteractive sudo.',77)
     progress('preparing')
     for action in actions:
@@ -283,7 +363,7 @@ def prepare(authorization,mode='user'):
                 tmp.write(profile); tmp.flush()
                 run(['sudo','-n','install','-m','0644',tmp.name,action[-1]],check=True,timeout=60)
         else: run(['sudo','-n',*action],check=True,timeout=600)
-    result=inspect(mode); result['prepared']=not result['preparationRequired'] and not result['blockingIssues']
+    result=inspect(mode,roles); result['prepared']=not result['preparationRequired'] and not result['blockingIssues']
     return result
 
 def health(port,token):
@@ -307,7 +387,8 @@ def status(workspace_id):
         'hostStorageCapacityBytes':disk.total,'hostStorageAvailableBytes':disk.free,'hostStorageLow':disk.free<10*1024**3,
         'storageWarning':None,'legacyStorage':False,'kind':'host','linger':linger(),'fingerprint':installed['fingerprint'],
         'dataRoot':str(ROOT),'workspaceRoot':str(ROOT/'workspace'),'databasesDirectory':str(ROOT/'databases'),
-        'attachmentsDirectory':str(ROOT/'workspace/.wovenmatter/attachments'),'accessMode':installed['accessMode'],'browserSelfTest':browser}
+        'attachmentsDirectory':str(ROOT/'workspace/.wovenmatter/attachments'),'accessMode':installed['accessMode'],'browserSelfTest':browser,
+        'roles':installed['roles'],'botsState':bots_discovery(installed,False)['state']}
 
 def safe_extract(archive_path,target,expected=None):
     # Validate the entire archive BEFORE creating any extracted paths. All links
@@ -351,6 +432,7 @@ def safe_extract(archive_path,target,expected=None):
                     elif source=='scripts/remote-host.sh': canonical='host/remote-host.sh'
                     elif source.startswith('harnesses/'): canonical=source
                     elif source in ('default-agent/package.json','default-agent/package-lock.json','default-agent/.node-version') or source.startswith('default-agent/src/'): canonical=source
+                    elif source in ('bots/package.json','bots/package-lock.json') or source.startswith(('bots/src/','bots/helper/','bots/image/')): canonical=source
                     else: raise ValueError()
                     expected_mode=0o700 if source_mode else 0o600
                     if canonical!=name or entry.get('mode')!=expected_mode or archive.getmember(name).mode&0o7777!=expected_mode: raise ValueError()
@@ -525,7 +607,7 @@ def prepare_npm_tooling(node_root,release,environment):
     private_file(tooling/'security.json',json.dumps(installed,sort_keys=True).encode()+b'\n')
     return npm_cli
 
-def install(workspace_id,requested_port,mode,fingerprint,updating=False):
+def install(workspace_id,requested_port,mode,fingerprint,updating=False,roles=None):
     global TOKEN
     valid_id(workspace_id); requested_port=valid_port(requested_port); valid_mode(mode)
     if not re.fullmatch('[a-f0-9]{64}',fingerprint): fail('invalid_fingerprint','A SHA-256 deployment fingerprint is required.',64)
@@ -537,6 +619,14 @@ def install(workspace_id,requested_port,mode,fingerprint,updating=False):
     if old and old['id']!=workspace_id: fail('host_workspace_conflict','A different native workspace already belongs to this host account.',73)
     if old and old['accessMode']!=mode: fail('access_mode_change_requires_reinstall','The access level is fixed for this installation. Remove its data explicitly before creating a workspace with another level.',78)
     if updating and not old: fail('workspace_not_found','Install this native workspace before updating it.',66)
+    # Roles only grow here: adding the workspace or bots reuses this server and
+    # data root. Removing bots is the explicit bots-disable command.
+    roles=valid_roles(roles) if roles else (old['roles'] if old else {'workspace':True,'bots':False})
+    if old: roles={key:roles[key] or old['roles'][key] for key in ROLES}
+    engine=bots_engine()
+    if engine['installed'] and not engine.get('ownedByThisAccount'): fail('bots_engine_conflict','This machine’s bot engine belongs to another account.',73)
+    install_engine=roles['bots'] and not engine['installed']
+    if install_engine and not unrestricted_root(): fail('sudo_unavailable','Installing bots requires existing unrestricted noninteractive sudo once.',77)
     stream=os.fdopen(os.dup(3),'rb',buffering=0)
     if not TOKEN:
         credential=stream.readline(258)
@@ -593,13 +683,21 @@ def install(workspace_id,requested_port,mode,fingerprint,updating=False):
         npm_cli=prepare_npm_tooling(node_root,release,environment)
         environment['PATH']=str(release/'tooling/bin')+':'+environment['PATH']
         run([node_root/'bin/node',npm_cli,'ci','--prefix',release/'default-agent','--omit=dev','--ignore-scripts','--no-audit','--no-fund'],check=True,timeout=600,env=environment)
+        # The bots runtime ships in every release that contains it, so adding
+        # bots later needs no new install; a bots role requires it.
+        if (release/'bots/package-lock.json').is_file():
+            run([node_root/'bin/node',npm_cli,'ci','--prefix',release/'bots','--omit=dev','--ignore-scripts','--no-audit','--no-fund'],check=True,timeout=600,env=environment)
+        elif roles['bots']: fail('bots_runtime_missing','This release does not include the bots runtime.',78)
         playwright_version=versions['playwrightVersion']
         if not re.fullmatch(r'\d+\.\d+\.\d+',playwright_version): fail('invalid_runtime_record','Invalid pinned Playwright version.',78)
         browser_root=ROOT/'browsers'/('playwright-'+playwright_version)
-        owned_directory(browser_root)
-        progress('browser')
-        environment['PLAYWRIGHT_BROWSERS_PATH']=str(browser_root)
-        run([node_root/'bin/node',release/'default-agent/node_modules/playwright-core/cli.js','install','chromium'],check=True,timeout=600,env=environment)
+        if roles['workspace']:
+            # Bots run their own browser in their containers; only a workspace
+            # needs the host Chromium.
+            owned_directory(browser_root)
+            progress('browser')
+            environment['PLAYWRIGHT_BROWSERS_PATH']=str(browser_root)
+            run([node_root/'bin/node',release/'default-agent/node_modules/playwright-core/cli.js','install','chromium'],check=True,timeout=600,env=environment)
         verify_user_files(snapshot)
         destination=ROOT/'releases'/fingerprint
         if destination.exists() or destination.is_symlink():
@@ -626,6 +724,8 @@ def install(workspace_id,requested_port,mode,fingerprint,updating=False):
             'WOVENMATTER_LISTEN_HOST':'127.0.0.1','WOVENMATTER_LISTEN_PORT':str(port),'WOVENMATTER_API_TOKEN':TOKEN,
             'WOVENMATTER_SERVICE_FINGERPRINT':fingerprint,'WOVENMATTER_HARNESS_PATH':':'.join([str(ROOT/'current/tooling/bin'),str(ROOT/'node/current/bin'),*harness_path()]),
             'WOVEN_DEFAULT_AGENT_DIRECTORY':str(ROOT/'workspace/.wovenmatter/default-agent'),
+            'WOVENMATTER_DATA_ROOT':str(ROOT),'WOVENMATTER_WORKSPACE_ENABLED':'1' if roles['workspace'] else '0',
+            'WOVENMATTER_BOTS_ENABLED':'1' if roles['bots'] else '0','WOVENMATTER_BOTS_INSTANCE':BOTS_INSTANCE,'WOVENMATTER_BOTS_DATA':str(ROOT/'bots'),
             'PATH':':'.join([str(HOME/'.local/bin'),str(HOME/'.npm-global/bin'),str(ROOT/'current/tooling/bin'),str(ROOT/'node/current/bin'),*harness_path()])}
         if any(any(c in value for c in ('\0','\n','\r')) for value in settings.values()): fail('unsupported_home_path','Host configuration contains an unsupported path.',78)
         unit='[Unit]\nDescription=Woven Matter native workspace\nAfter=network-online.target\n\n[Service]\nEnvironmentFile=%h/.config/wovenmatter/service.env\nWorkingDirectory=%h/.local/share/wovenmatter/workspace\nExecStart=%h/.local/share/wovenmatter/node/current/bin/node %h/.local/share/wovenmatter/current/src/server.mjs\nRestart=always\nRestartSec=3\nUMask=0077\nNoNewPrivileges='+('no' if mode=='fullRoot' else 'yes')+'\nLimitCORE=0\n\n[Install]\nWantedBy=default.target\n'
@@ -634,7 +734,7 @@ def install(workspace_id,requested_port,mode,fingerprint,updating=False):
         activated=True
         atomic_link(ROOT/'current',destination)
         atomic_link(ROOT/'node/current',node_root)
-        atomic_link(ROOT/'browsers/current',browser_root)
+        if roles['workspace']: atomic_link(ROOT/'browsers/current',browser_root)
         private_file(ENV_FILE,(''.join(key+'='+json.dumps(value,ensure_ascii=False)+'\n' for key,value in settings.items())).encode())
         private_file(UNIT,unit.encode())
         run(['systemctl','--user','daemon-reload'],check=True)
@@ -645,18 +745,26 @@ def install(workspace_id,requested_port,mode,fingerprint,updating=False):
             if response and response.get('serviceFingerprint')==fingerprint and response.get('runtimeKind')=='host': break
             time.sleep(.3)
         else: fail('host_health_failed','The new native service did not become healthy; the previous version was restored.',70)
-        progress('selftest')
-        environment.update(settings)
-        checked=run([node_root/'bin/node',destination/'src/browser-selftest.mjs','--json'],timeout=90,env=environment)
-        try: browser=json.loads(text(checked))
-        except ValueError: browser={'ok':False,'reason':'sandbox_blocked','missingLibraries':[],'hint':'The browser sandbox could not be verified.'}
-        private_file(ROOT/'run/browser-selftest.json',json.dumps(browser).encode()+b'\n')
-        if checked.returncode or browser.get('ok') is not True:
-            reason=browser.get('reason','sandbox_blocked')
-            fail('browser_selftest_failed',str(reason)+': '+str(browser.get('hint','The sandbox could not be verified.')),70)
-        installed={'id':workspace_id,'port':port,'accessMode':mode,'fingerprint':fingerprint,'nodeVersion':node_version,'playwrightVersion':playwright_version}
+        if roles['workspace']:
+            progress('selftest')
+            environment.update(settings)
+            checked=run([node_root/'bin/node',destination/'src/browser-selftest.mjs','--json'],timeout=90,env=environment)
+            try: browser=json.loads(text(checked))
+            except ValueError: browser={'ok':False,'reason':'sandbox_blocked','missingLibraries':[],'hint':'The browser sandbox could not be verified.'}
+            private_file(ROOT/'run/browser-selftest.json',json.dumps(browser).encode()+b'\n')
+            if checked.returncode or browser.get('ok') is not True:
+                reason=browser.get('reason','sandbox_blocked')
+                fail('browser_selftest_failed',str(reason)+': '+str(browser.get('hint','The sandbox could not be verified.')),70)
+        installed={'id':workspace_id,'port':port,'accessMode':mode,'fingerprint':fingerprint,'nodeVersion':node_version,'playwrightVersion':playwright_version,'roles':roles}
         private_file(RECORD,json.dumps(installed,sort_keys=True).encode()+b'\n')
         verify_user_files(snapshot)
+        activated=False
+        if roles['bots']:
+            # After activation: the server stays installed if the engine step
+            # fails, and bots-enable retries it without a second install.
+            progress('bots')
+            engine_install(destination,None if not install_engine else min(DEFAULT_POOL,memory_total() or DEFAULT_POOL),
+                None if not install_engine else min(DEFAULT_DISK,bot_storage().total),refresh_only=not install_engine)
         progress('ready')
         return status(workspace_id)
     except BaseException:
@@ -677,6 +785,114 @@ def install(workspace_id,requested_port,mode,fingerprint,updating=False):
         raise
     finally:
         stream.close(); shutil.rmtree(stage,ignore_errors=True)
+
+def system_python():
+    # Root runs only a root-owned interpreter, never a user shim earlier in PATH.
+    for candidate in ('/usr/bin/python3','/usr/local/bin/python3','/bin/python3'):
+        try: info=Path(candidate).resolve().stat()
+        except OSError: continue
+        if info.st_uid==0 and not info.st_mode&0o022: return candidate
+    fail('python_missing','A root-owned system Python 3 is required for the bot engine.',69)
+
+def engine_command(helper,*args,timeout=1800):
+    result=run(['sudo','-n',system_python(),'-I',helper,'--instance',BOTS_INSTANCE,*args],timeout=timeout)
+    if result.returncode:
+        try: error=json.loads(result.stderr.decode('utf8','replace').strip().splitlines()[-1])
+        except (ValueError,IndexError): error={}
+        if isinstance(error,dict) and re.fullmatch('[a-z_]{1,64}',str(error.get('error',''))):
+            fail(error['error'],str(error.get('detail','The bot engine operation failed.'))[:512],70)
+        fail('bots_engine_failed','The bot engine operation failed.',70)
+    return json.loads(text(result).splitlines()[-1])
+
+def engine_install(release,pool,disk,refresh_only=False):
+    helper=release/'host/bots-engine.py'
+    if refresh_only:
+        # Updates replace the root-owned helper only when it changed.
+        with contextlib.suppress(OSError):
+            if BOTS_HELPER.read_bytes()==helper.read_bytes(): return bots_engine()
+        if not unrestricted_root(): return {**bots_engine(),'updateRequired':True}
+        current=bots_engine(); pool,disk=current.get('poolBytes'),current.get('diskBytes')
+    if not unrestricted_root(): fail('sudo_unavailable','Installing bots requires existing unrestricted noninteractive sudo once.',77)
+    versions=json.loads((release/'host/runtime-versions.json').read_text())
+    machine={'x86_64':('x86_64','linux-x64'),'aarch64':('aarch64','linux-arm64'),'arm64':('aarch64','linux-arm64')}.get(platform.machine())
+    if not machine: fail('unsupported_architecture','Bots support amd64 and arm64 hosts.',78)
+    version=versions['dockerVersion']; checksum=versions['dockerSHA256'][machine[1]]
+    if not re.fullmatch(r'\d+\.\d+\.\d+',version) or not re.fullmatch('[a-f0-9]{64}',checksum): fail('invalid_runtime_record','Invalid pinned Docker Engine record.',78)
+    owned_directory(ROOT/'run')
+    with tempfile.TemporaryDirectory(prefix='.bots-engine-',dir=ROOT/'run') as temporary:
+        archive=Path(temporary)/'docker.tgz'
+        progress('bots-engine')
+        run(['curl','--proto','=https','--tlsv1.2','--fail','--silent','--show-error','--location',
+             'https://download.docker.com/linux/static/stable/'+machine[0]+'/docker-'+version+'.tgz','--output',archive],check=True,timeout=600)
+        if hashlib.sha256(archive.read_bytes()).hexdigest()!=checksum: fail('docker_checksum_mismatch','The pinned Docker Engine archive failed SHA-256 verification.',78)
+        size=lambda value:'none' if value is None else str(value)
+        engine_command(helper,'install','--user',pwd.getpwuid(os.getuid()).pw_name,'--pool',size(pool),'--disk',size(disk),
+            '--docker-archive',archive,'--docker-version',version,'--docker-sha256',checksum)
+    return bots_engine()
+
+def update_service_environment(changes):
+    settings=parse_env(); settings.update(changes)
+    private_file(ENV_FILE,(''.join(key+'='+json.dumps(value,ensure_ascii=False)+'\n' for key,value in settings.items())).encode())
+
+def save_roles(installed,roles):
+    installed={**installed,'roles':roles}
+    private_file(RECORD,json.dumps(installed,sort_keys=True).encode()+b'\n')
+    update_service_environment({'WOVENMATTER_WORKSPACE_ENABLED':'1' if roles['workspace'] else '0','WOVENMATTER_BOTS_ENABLED':'1' if roles['bots'] else '0',
+        'WOVENMATTER_BOTS_INSTANCE':BOTS_INSTANCE,'WOVENMATTER_BOTS_DATA':str(ROOT/'bots'),'WOVENMATTER_DATA_ROOT':str(ROOT)})
+    run(['systemctl','--user','restart',UNIT_NAME],check=True)
+    return installed
+
+def bots_enable(workspace_id,authorization,pool='default',disk='default'):
+    if authorization!='AUTHORIZED': fail('confirmation_required','Review and authorize installing the bot engine first.',77)
+    installed=require_owner(workspace_id); storage=bot_storage()
+    pool=min(DEFAULT_POOL,memory_total() or DEFAULT_POOL) if pool=='default' else valid_size(pool,'RAM pool')
+    disk=min(DEFAULT_DISK,storage.total) if disk=='default' else valid_size(disk,'disk cap')
+    release=(ROOT/'current').resolve()
+    if not (release/'bots/node_modules').is_dir() or not (release/'host/bots-engine.py').is_file():
+        fail('host_update_required','Update this host to a release that includes bots, then enable bots.',78)
+    engine=bots_engine()
+    if engine['installed'] and not engine.get('ownedByThisAccount'): fail('bots_engine_conflict','This machine’s bot engine belongs to another account.',73)
+    engine_install(release,pool,disk)
+    save_roles(installed,{**installed['roles'],'bots':True})
+    return {**status(workspace_id),'bots':bots_discovery(record(True),True)}
+
+def bots_configure(workspace_id,pool,disk,wait='120'):
+    installed=require_owner(workspace_id); engine=bots_engine()
+    if not installed['roles']['bots'] or not engine['installed'] or not engine.get('ownedByThisAccount'): fail('bots_not_enabled','Enable bots on this host first.',66)
+    import uuid
+    request={'revision':str(uuid.uuid4()),'poolBytes':valid_size(pool,'RAM pool'),'diskBytes':valid_size(disk,'disk cap')}
+    path=BOTS_VAR/'requests/settings.json'
+    fd,temporary=tempfile.mkstemp(prefix='.settings.',dir=path.parent)
+    try:
+        with os.fdopen(fd,'w') as stream: json.dump(request,stream)
+        os.chmod(temporary,0o640); os.replace(temporary,path)
+    finally:
+        with contextlib.suppress(FileNotFoundError): os.unlink(temporary)
+    deadline=time.monotonic()+max(1,min(int(wait) if str(wait).isdigit() else 120,3600))
+    while time.monotonic()<deadline:
+        engine=bots_engine()
+        if engine.get('appliedRevision')==request['revision']:
+            if engine.get('requestError'): fail(engine['requestError'],'The bot engine could not apply these settings.',70)
+            return {'bots':bots_discovery(record(True),False),'revision':request['revision']}
+        time.sleep(.5)
+    return {'bots':bots_discovery(record(True),False),'revision':request['revision'],'pending':True}
+
+def bots_disable(workspace_id,authorization):
+    if authorization!='AUTHORIZED': fail('confirmation_required','Review and authorize removing the bot engine first.',77)
+    installed=require_owner(workspace_id)
+    if not installed['roles']['workspace']: fail('last_role','This server hosts only bots. Uninstall the host instead.',78)
+    remove_engine()
+    save_roles(installed,{**installed['roles'],'bots':False})
+    return {**status(workspace_id),'bots':bots_discovery(record(True),unrestricted_root())}
+
+def remove_engine():
+    engine=bots_engine()
+    if not engine['installed']: return False
+    if not engine.get('ownedByThisAccount'): fail('bots_engine_conflict','This machine’s bot engine belongs to another account.',73)
+    if not unrestricted_root(): fail('sudo_unavailable','Removing the bot engine requires existing unrestricted noninteractive sudo.',77)
+    helper=BOTS_HELPER if BOTS_HELPER.is_file() else (ROOT/'current/host/bots-engine.py')
+    engine_command(helper,'uninstall','--user',pwd.getpwuid(os.getuid()).pw_name,timeout=900)
+    return True
 
 def expose(workspace_id,port,https_port='8443'):
     installed=require_owner(workspace_id); port=valid_port(port); https_port=valid_port(https_port)
@@ -771,6 +987,8 @@ def cleanup_private_routes(workspace_id,port):
 
 def uninstall(workspace_id,remove_data=False):
     installed=require_owner(workspace_id)
+    # Remove the engine first: it needs sudo, and a refusal leaves everything intact.
+    engine_removed=remove_engine()
     removed_routes=cleanup_private_routes(workspace_id,installed['port'])
     run(['systemctl','--user','disable','--now',UNIT_NAME],check=True)
     with contextlib.suppress(FileNotFoundError): UNIT.unlink()
@@ -783,16 +1001,24 @@ def uninstall(workspace_id,remove_data=False):
     if remove_data:
         if ROOT.is_symlink() or ROOT.stat().st_uid!=os.getuid(): fail('unsafe_host_path','The data root is unsafe; no data was removed.',78)
         shutil.rmtree(ROOT)
-    return {'deleted':True,'id':workspace_id,'containerExisted':False,'persistentDataRemoved':remove_data,'kind':'host','privateRoutesRemoved':removed_routes,'privateRoutesCleanupVerified':True}
+    return {'deleted':True,'id':workspace_id,'containerExisted':False,'persistentDataRemoved':remove_data,'kind':'host','privateRoutesRemoved':removed_routes,'privateRoutesCleanupVerified':True,'botsEngineRemoved':engine_removed}
 
 def main(args):
     if not args: fail('invalid_command','A host lifecycle command is required.',64)
     action,*args=args
-    if action=='inspect' and len(args)<=1: return inspect(*args)
-    if action=='prepare' and 1<=len(args)<=2:
+    if action=='inspect' and len(args)<=2: return inspect(*args)
+    if action=='prepare' and 1<=len(args)<=3:
         with lifecycle_lock(): return prepare(*args)
-    if action in ('install','update') and len(args)==4:
-        with lifecycle_lock(): return install(*args,updating=action=='update')
+    if action in ('install','update') and len(args) in (4,5):
+        with lifecycle_lock(): return install(*args[:4],updating=action=='update',roles=args[4] if len(args)==5 else None)
+    if action=='bots-enable' and 2<=len(args)<=4:
+        with lifecycle_lock(): return bots_enable(*args)
+    if action=='bots-configure' and 3<=len(args)<=4:
+        with lifecycle_lock(): return bots_configure(*args)
+    if action=='bots-disable' and len(args)==2:
+        with lifecycle_lock(): return bots_disable(*args)
+    if action=='bots-status' and len(args)==1:
+        return {'bots':bots_discovery(require_owner(args[0]),unrestricted_root())}
     if action=='status' and len(args)==1: return status(args[0])
     if action in ('start','stop','restart') and len(args)==1:
         with lifecycle_lock():

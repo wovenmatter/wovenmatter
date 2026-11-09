@@ -139,6 +139,7 @@ export function createManagedDefaultAgentService({ cwd, directory, environment =
     },
     unlockForClient: options => dispatch('unlockForClient', options),
     inferenceCatalog: options => dispatch('inferenceCatalog', options),
+    botCredentials: options => dispatch('botCredentials', options),
     async inferenceStream(request, options) {
       let response;
       await selected(value => { response = value.stream(request, options); leases++; });

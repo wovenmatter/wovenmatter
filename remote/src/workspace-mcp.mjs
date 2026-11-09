@@ -7,6 +7,11 @@ const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-
 const groups = new Set(['notes','history','sessions','goals','timers','usage','calendar','library','executor','browser','computer','html'])
 export const maximumMCPRequestBytes = message => message?.method === 'tools/call' && ['woven_html_preview','woven_html_render'].includes(message.params?.name) ? 40*1024*1024 : 4*1024*1024
 const groupFor = name => name === 'woven_context' || name.startsWith('woven_databases_') ? 'notes' : name.split('_')[1]
+// Bots are app-wide callers, never conversations: WorkspaceToolSettings.botMCP
+// on the Mac. Computer Use and Executor start off; goals and HTML stay on.
+const defaultBotGroups = ['notes','history','sessions','goals','timers','usage','calendar','library','browser','html']
+export const botPrincipal = (deviceID, botID) => `woven:bot:${String(deviceID).toLowerCase()}:${String(botID).toLowerCase()}`
+const isBot = scope => scope?.kind === 'bot'
 const errorReply = (id, code, message) => ({jsonrpc:'2.0',id:id??null,error:{code,message}})
 const result = value => value.result?.content ? {content:value.result.content,structuredContent:{success:value.success,requestID:value.requestID},isError:value.success===false}
   : {content:[{type:'text',text:JSON.stringify(value.result ?? null)}],structuredContent:value,isError:value.success===false}
@@ -20,15 +25,24 @@ export function loadWorkspaceMCPCatalog() {
 export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localTools,localCall,fetchImpl=globalThis.fetch,catalog=loadWorkspaceMCPCatalog(),beforeLibraryCall=async()=>{},shouldDelegate=()=>false,scopedHistoryAccess=()=>false}) {
   db.exec(`CREATE TABLE IF NOT EXISTS mcp_external_clients (id TEXT PRIMARY KEY, digest TEXT NOT NULL UNIQUE, body TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS mcp_library_connection (id INTEGER PRIMARY KEY CHECK(id=1), envelope TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS mcp_preferences (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL);`)
+    CREATE TABLE IF NOT EXISTS mcp_preferences (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS mcp_bot_keys (bot_id TEXT PRIMARY KEY, digest TEXT NOT NULL UNIQUE, body TEXT NOT NULL);`)
   const key = typeof secret === 'string' && secret.length >= 16 ? createHash('sha256').update('wovenmatter-workspace-mcp-library-v1\0'+secret).digest() : null
   const sessions = new Map(), controllers = new Set(), taskPolicies=new Map(),inFlight=new Map()
   let stopped = false
   const definition = new Map(catalog.map(tool=>[tool.name,tool]))
   const local = new Set(localTools)
   const own = () => identity()
-  const defaultSettings={enabledByDefault:['notes','history','sessions','goals','timers','usage','calendar','library','browser'],maximumManagedSessions:4,maximumRunningSessions:16,harnessDefaults:{}}
-  function settings(){return JSON.parse(db.prepare('SELECT body FROM mcp_preferences WHERE id=1').get()?.body??JSON.stringify(defaultSettings))}
+  const defaultSettings={enabledByDefault:['notes','history','sessions','goals','timers','usage','calendar','library','browser'],maximumManagedSessions:4,maximumRunningSessions:16,harnessDefaults:{},botMCP:{isEnabled:true,groups:defaultBotGroups}}
+  function settings(){
+    const saved=JSON.parse(db.prepare('SELECT body FROM mcp_preferences WHERE id=1').get()?.body??JSON.stringify(defaultSettings))
+    return {...saved,botMCP:saved.botMCP??defaultSettings.botMCP}
+  }
+  function normalizedBotSettings(value,current) {
+    if(value==null)return current
+    if(!value||typeof value!=='object'||Array.isArray(value)||typeof value.isEnabled!=='boolean'||!Array.isArray(value.groups)||value.groups.some(group=>!groups.has(group)))throw fail(400,'Invalid bot Woven MCP settings.')
+    return {isEnabled:value.isEnabled,groups:[...new Set(value.groups)]}
+  }
   function configureSettings(value) {
     const enabled=value?.enabledByDefault
     if(!Array.isArray(enabled)||enabled.some(group=>!groups.has(group)||group==='databases')||!Number.isSafeInteger(value.maximumManagedSessions)||value.maximumManagedSessions<1||value.maximumManagedSessions>16||!Number.isSafeInteger(value.maximumRunningSessions)||value.maximumRunningSessions<1||value.maximumRunningSessions>48)throw fail(400,'Invalid Woven MCP tool defaults or session limits.')
@@ -40,7 +54,8 @@ export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localT
       if(selection.tools!=null&&(!Array.isArray(selection.tools)||selection.tools.some(group=>!groups.has(group)||group==='databases')))throw fail(400,'Invalid saved harness tool defaults.')
       if(selection.usesProductPermissionDefault!=null&&typeof selection.usesProductPermissionDefault!=='boolean')throw fail(400,'Invalid saved harness permission default.')
     }
-    const normalized={enabledByDefault:[...new Set([...enabled,'goals'])],maximumManagedSessions:value.maximumManagedSessions,maximumRunningSessions:value.maximumRunningSessions,harnessDefaults:defaults}
+    const normalized={enabledByDefault:[...new Set([...enabled,'goals'])],maximumManagedSessions:value.maximumManagedSessions,maximumRunningSessions:value.maximumRunningSessions,harnessDefaults:defaults,
+      botMCP:normalizedBotSettings(value.botMCP,settings().botMCP)}
     db.prepare('INSERT INTO mcp_preferences VALUES(1,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body').run(JSON.stringify(normalized))
     return settings()
   }
@@ -88,8 +103,23 @@ export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localT
     if(stopped||typeof authorization!=='string'||!authorization.startsWith('Bearer '))return null
     const digest=hash(authorization.slice(7))
     for(const scope of sessions.values())if(hash(scope.bearerToken)===digest&&Date.now()-scope.lastAliveAt<=24*3600000){scope.lastAliveAt=Date.now();return scope}
-    const row=db.prepare('SELECT body FROM mcp_external_clients WHERE digest=?').get(digest)
+    const row=db.prepare('SELECT body FROM mcp_external_clients WHERE digest=?').get(digest)??db.prepare('SELECT body FROM mcp_bot_keys WHERE digest=?').get(digest)
     return row?JSON.parse(row.body):null
+  }
+  // One key per bot. Issuing again rotates it; only its digest is stored.
+  function issueBotKey({botID,botName,deviceID}) {
+    if(!uuid(botID)||!uuid(deviceID)||typeof botName!=='string'||!botName.trim()||botName.length>256)throw fail(400,'A bot UUID, name and machine identity are required.')
+    const id=botID.toLowerCase(),bearerToken=randomBytes(32).toString('base64url')
+    const scope={id:'bot:'+id,kind:'bot',botID:id,botName:botName.trim().replace(/[\u0000-\u001f\u007f]/g,' '),principal:botPrincipal(deviceID,id),createdAt:new Date(Date.now()).toISOString()}
+    db.prepare('INSERT INTO mcp_bot_keys VALUES(?,?,?) ON CONFLICT(bot_id) DO UPDATE SET digest=excluded.digest,body=excluded.body').run(id,hash(bearerToken),JSON.stringify(scope))
+    return {endpointURL:endpoint(),bearerToken,principal:scope.principal}
+  }
+  function revokeBotKey(botID){if(!uuid(botID))throw fail(400,'Invalid bot identifier.');db.prepare('DELETE FROM mcp_bot_keys WHERE bot_id=?').run(botID.toLowerCase());return {revoked:true}}
+  function botKeys(){return db.prepare('SELECT body FROM mcp_bot_keys ORDER BY bot_id').all().map(row=>JSON.parse(row.body))}
+  function configureBots(value) {
+    const current=settings(),botMCP=normalizedBotSettings({...current.botMCP,...value},current.botMCP)
+    db.prepare('INSERT INTO mcp_preferences VALUES(1,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body').run(JSON.stringify({...current,botMCP}))
+    return {settings:settings().botMCP,keys:botKeys()}
   }
   function provisionClient(body) {
     if(!uuid(body.conversationID)||typeof body.label!=='string'||!body.label.trim()||body.label.length>256)throw fail(400,'Choose an existing conversation and client label.')
@@ -104,10 +134,21 @@ export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localT
   function clients(){return db.prepare('SELECT body FROM mcp_external_clients ORDER BY id').all().map(row=>JSON.parse(row.body))}
   function revokeClient(id){db.prepare('DELETE FROM mcp_external_clients WHERE id=?').run(id);return {revoked:true}}
   function activeGroups(scope) {
+    if(isBot(scope)) {
+      // Pause-all is botMCP.isEnabled=false: every bot loses every tool at once.
+      const bot=settings().botMCP
+      return new Set(bot.isEnabled?[...bot.groups,'goals','html']:[])
+    }
     const current=new Set([...(taskPolicies.get(scope.conversationID)??policy(scope.conversationID)),'html'])
     return scope.enabledGroups?new Set(scope.enabledGroups.filter(group=>current.has(group))):current
   }
   function inventory(scope) {
+    if(isBot(scope)) {
+      // Conversation-bound local tools have no meaning for a bot; library
+      // tools reach the library with the bot's own attribution.
+      const bot=settings().botMCP
+      return catalog.filter(tool=>bot.isEnabled&&new Set([...bot.groups,'goals','html']).has(groupFor(tool.name))&&!local.has(tool.name))
+    }
     return catalog.filter(tool=>{
       const group=groupFor(tool.name)
       const granted=!scope.enabledGroups||scope.enabledGroups.includes(group)
@@ -117,6 +158,7 @@ export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localT
   }
   function available(scope) {
     const current=activeGroups(scope),hasLibrary=!!libraryGrant()
+    if(isBot(scope))return hasLibrary?inventory(scope).filter(tool=>current.has(groupFor(tool.name))):[]
     return inventory(scope).filter(tool=>{
       const group=groupFor(tool.name)
       const cleanup=['woven_browser_use_cancel','woven_computer_use_cancel','woven_html_cancel'].includes(tool.name)
@@ -155,10 +197,11 @@ export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localT
     const controller=new AbortController();controllers.add(controller)
     const timer=setTimeout(()=>controller.abort(),115000);timer.unref()
     const headers={authorization:'Bearer '+grant.bearerToken,'content-type':'application/json',accept:'application/json, text/event-stream','mcp-protocol-version':'2025-06-18',
-      'x-woven-protocol':'3','x-woven-workspace':grant.libraryID,'x-woven-conversation-id':scope.conversationID,'x-woven-enabled-groups':[...activeGroups(scope)].join(',')}
+      'x-woven-protocol':'3','x-woven-workspace':grant.libraryID,'x-woven-enabled-groups':[...activeGroups(scope)].join(','),
+      ...(isBot(scope)?{'x-woven-caller':scope.principal,'x-woven-bot-id':scope.botID,'x-woven-bot-name':encodeURIComponent(scope.botName)}:{'x-woven-conversation-id':scope.conversationID})}
     try {
       if(scope.taskProof)await prepareTaskCaller(scope,grant,signal)
-      else await beforeLibraryCall()
+      else if(!isBot(scope))await beforeLibraryCall()
       const response=await fetchImpl(grant.endpointURL,{method:'POST',headers,redirect:'error',body:JSON.stringify(message),signal:signal?AbortSignal.any([controller.signal,signal]):controller.signal})
       if(!response.ok)throw fail(response.status,'The central library did not authorize this Woven MCP request. Refresh the workspace connection before retrying.')
       const text=await response.text()
@@ -202,7 +245,7 @@ export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localT
       if(inFlight.has(requestKey))return errorReply(id,-32600,'This JSON-RPC request ID is already active for this caller.')
       requestController=new AbortController();inFlight.set(requestKey,requestController)
       const invocationSignal=signal?AbortSignal.any([signal,requestController.signal]):requestController.signal
-      if(!local.has(name)||shouldDelegate(scope,name,input)||scope.taskProof&&!name.startsWith('woven_databases_')&&name!=='woven_context'&&groupFor(name)!=='browser')return await libraryCall(scope,{...message,params:{...message.params,arguments:{...input,requestID:operationRequestID}}},invocationSignal)
+      if(isBot(scope)||!local.has(name)||shouldDelegate(scope,name,input)||scope.taskProof&&!name.startsWith('woven_databases_')&&name!=='woven_context'&&groupFor(name)!=='browser')return await libraryCall(scope,{...message,params:{...message.params,arguments:{...input,requestID:operationRequestID}}},invocationSignal)
       const value=await localCall(scope,name,{...input,requestID:operationRequestID},{signal:invocationSignal})
       const reply=result(value)
       if(Buffer.byteLength(JSON.stringify(reply))>1048576)throw fail(413,'The response exceeds 1 MiB. Request a smaller page or character window.')
@@ -212,6 +255,7 @@ export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localT
     } finally {if(requestKey&&inFlight.get(requestKey)===requestController)inFlight.delete(requestKey)}
   }
   return {settings,configureSettings,sessionConnection,prepareTask,resolvePrincipal,handle,libraryStatus,configureLibrary,clearLibrary,provisionClient,clients,revokeClient,
+    issueBotKey,revokeBotKey,botKeys,configureBots,
     revokeSession:conversationID=>sessions.delete(conversationID),close(){stopped=true;sessions.clear();taskPolicies.clear();for(const controller of inFlight.values())controller.abort();inFlight.clear();for(const controller of controllers)controller.abort();controllers.clear()}}
 }
 

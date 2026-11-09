@@ -85,6 +85,8 @@ enum RemoteHostBundle {
             return String(source.dropFirst("remote/".count))
         }
         if source.hasPrefix("default-agent/") || source.hasPrefix("harnesses/") { return source }
+        if source == "bots/package.json" || source == "bots/package-lock.json"
+            || source.hasPrefix("bots/src/") || source.hasPrefix("bots/helper/") || source.hasPrefix("bots/image/") { return source }
         throw RemoteWorkspaceClientError.deploymentBundleUnavailable
     }
 
