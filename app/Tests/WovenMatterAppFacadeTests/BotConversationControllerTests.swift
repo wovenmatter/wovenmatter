@@ -130,7 +130,8 @@ struct BotConversationControllerTests {
         }
         let bots = BotMachineSession(machineID: "fixture", drafts: BotDraftStore())
         bots.apply(machine(server))
-        try await eventually("connection") { bots.isConnected }
+        // Wait for hello as well: it reopens attached conversations, which would race the test.
+        try await eventually("connection") { bots.isConnected && bots.health != nil }
         return bots
     }
 
