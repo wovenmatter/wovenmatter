@@ -51,6 +51,14 @@ public actor MemberDirectory {
   }
   public func member(_ deviceID: String) async -> LibraryMember? { try? await list().active(deviceID) }
 
+  /// Authenticates one signed request (any route: execution, mobile, bots
+  /// WebSocket upgrade) and returns the current member that signed it.
+  public func authenticate(_ request: CompanionHTTPRequest, allowing kinds: Set<MemberKind> = Set(MemberKind.allCases)) async throws -> LibraryMember {
+    let key = try await verifier.verify(method: request.method, target: request.target, headers: request.headers, body: request.body, allowing: kinds)
+    guard let member = await member(key.deviceID) else { throw MemberRequestError.unknown }
+    return member
+  }
+
   /// Adds (or re-adds) a device. Only a Mac member signs entries, because
   /// adding needs the pairing UI.
   @discardableResult

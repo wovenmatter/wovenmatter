@@ -14,12 +14,18 @@ public final class CompanionMacExecutionAPI {
   private let authorizeDevice: @MainActor @Sendable (String) async throws -> Void
   /// Live authorization of one presented grant, by device and provenance.
   private let authorizeGrant: (@MainActor @Sendable (String, String?) async throws -> Void)?
+  /// Signed member requests: any Mac or phone member controls this Mac's
+  /// local sessions with its own signature; nothing is issued or managed.
+  private let members: MemberDirectory?
+  private struct Scope { let deviceID: String; let libraryID: String; let workspaceID: String }
   public init(database: WorkspaceDatabase, commands: any CompanionCommandServing,
               authentication: CompanionExecutionAuthentication, descriptor: CompanionExecutionWorkspace,
               isActive: @escaping @MainActor @Sendable () -> Bool,
               events: (@MainActor @Sendable (Int64) async throws -> CompanionJournalPage)? = nil,
               authorizeDevice: @escaping @MainActor @Sendable (String) async throws -> Void = { _ in },
-              authorizeGrant: (@MainActor @Sendable (String, String?) async throws -> Void)? = nil) {
+              authorizeGrant: (@MainActor @Sendable (String, String?) async throws -> Void)? = nil,
+              members: MemberDirectory? = nil) {
+    self.members = members
     self.database = database; self.commands = commands; self.authentication = authentication
     self.descriptor = descriptor; self.isActive = isActive; self.events = events; self.authorizeDevice = authorizeDevice
     self.authorizeGrant = authorizeGrant
@@ -41,13 +47,33 @@ public final class CompanionMacExecutionAPI {
       if path.hasPrefix("/wovenmatter/") { path = String(path.dropFirst("/wovenmatter".count)) }
       guard path == "/v1/execution" || path.hasPrefix("/v1/execution/") else { return .error("not_found", "Unknown execution endpoint.", status: 404) }
       guard request.headers["x-woven-protocol"] == String(CompanionProtocol.version) else { return .error("version_mismatch", "Update both clients to compatible versions.", status: 426) }
-      guard let bearer = request.bearer else { return .error("unauthorized", "Missing execution credential.", status: 401) }
-      let grant = try await authentication.authenticateGrant(bearer: bearer)
-      let scope = grant.scope
-      guard scope.libraryID == descriptor.libraryID, scope.workspaceID == descriptor.id,
-            request.headers["x-woven-library"] == scope.libraryID, request.headers["x-woven-workspace"] == scope.workspaceID,
-            request.headers["x-woven-device"] == scope.deviceID else { return .error("wrong_workspace", "This execution credential is scoped to another device or workspace.", status: 403) }
-      if let authorizeGrant { try await authorizeGrant(scope.deviceID, grant.provisionedBy) } else { try await authorizeDevice(scope.deviceID) }
+      let scope: Scope
+      let authorize: @MainActor () async throws -> Void
+      if MemberRequestVerifier.isSigned(request.headers) {
+        guard let members else { return .error("unauthorized", "This Mac does not accept member requests yet.", status: 401) }
+        let member: MemberKey
+        do {
+          member = try await members.verifier.verify(method: request.method, target: request.target, headers: request.headers,
+                                                     body: request.body, allowing: [.mac, .ios])
+        } catch let error as MemberRequestError { return .error(error.code, error.message, status: error.code == "wrong_device" ? 403 : 401) }
+        guard request.headers["x-woven-workspace"].map({ $0 == descriptor.id }) ?? true else {
+          return .error("wrong_workspace", "This request names another workspace.", status: 403)
+        }
+        scope = .init(deviceID: member.deviceID, libraryID: descriptor.libraryID, workspaceID: descriptor.id)
+        authorize = {
+          guard await members.member(member.deviceID) != nil else { throw CompanionAPIError(code: "unauthorized", message: MemberRequestError.unknown.message) }
+        }
+      } else {
+        guard let bearer = request.bearer else { return .error("unauthorized", "Missing execution credential.", status: 401) }
+        let grant = try await authentication.authenticateGrant(bearer: bearer)
+        scope = .init(deviceID: grant.scope.deviceID, libraryID: grant.scope.libraryID, workspaceID: grant.scope.workspaceID)
+        guard scope.libraryID == descriptor.libraryID, scope.workspaceID == descriptor.id,
+              request.headers["x-woven-library"] == scope.libraryID, request.headers["x-woven-workspace"] == scope.workspaceID,
+              request.headers["x-woven-device"] == scope.deviceID else { return .error("wrong_workspace", "This execution credential is scoped to another device or workspace.", status: 403) }
+        let authorizeGrant = authorizeGrant, authorizeDevice = authorizeDevice
+        authorize = { if let authorizeGrant { try await authorizeGrant(scope.deviceID, grant.provisionedBy) } else { try await authorizeDevice(scope.deviceID) } }
+      }
+      try await authorize()
       guard isActive() else { return .error("unavailable", "This Mac execution workspace stopped.", status: 503) }
       let parts = path.split(separator: "/").map(String.init)
       func query(_ key: String) -> String? { url.queryItems?.first(where: { $0.name == key })?.value }
@@ -103,7 +129,7 @@ public final class CompanionMacExecutionAPI {
             guard let id = command.conversationID else { throw notLocal }
             try await requireLocal(id)
           }
-          if let authorizeGrant { try await authorizeGrant(scope.deviceID, grant.provisionedBy) } else { try await authorizeDevice(scope.deviceID) }
+          try await authorize()
           return try .json(scoped(try await commands.execute(command, deviceID: scope.deviceID)))
         }
         if path == "/v1/execution/workspace-read" {

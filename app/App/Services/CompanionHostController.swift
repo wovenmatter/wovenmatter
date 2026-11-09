@@ -164,7 +164,7 @@ final class CompanionHostController {
                     guard let model else { throw CompanionAPIError(code: "unavailable", message: "The Mac workspace is closed.") }
                     do { return try await model.linkedData(for: link) }
                     catch { throw CompanionAPIError(code: "linked_data_unavailable", message: error.localizedDescription) }
-                })
+                }, members: try? await peerSync.members())
             let listener = CompanionHTTPServer { [weak self] request in
                 guard let self else { return .error("unavailable", "This sharing session has stopped.", status: 503) }
                 return await self.handle(request, generation: expectedGeneration, libraryAPI: api)
@@ -213,7 +213,7 @@ final class CompanionHostController {
                     guard await authentication.mayExecute(deviceID: deviceID) else {
                         throw CompanionAPIError(code: "unauthorized", message: "This device is no longer paired.")
                     }
-                }, authorizeGrant: authorizeGrant)
+                }, authorizeGrant: authorizeGrant, members: try? await peerSync.members())
             inferenceHost = CompanionInferenceHost(authentication: executionAuth, descriptor: local,
                 directory: try supportDirectory ?? ApplicationModel.dashboardSupportDirectory(),
                 isActive: { [weak self] in self?.generation == expectedGeneration && self?.endpoint != nil }, authorize: authorizeGrant)
@@ -284,6 +284,8 @@ final class CompanionHostController {
 
     private func stopService() {
         generation = UUID(); healthTask?.cancel(); healthTask = nil
+        let peerSync = peerSync
+        Task { await peerSync.stopMembers() }
         server?.stop(); server = nil; executionAPI = nil; inferenceHost = nil
         if let serve {
             serve.stop()
@@ -383,6 +385,7 @@ final class CompanionHostController {
             if let signer {
                 await authentication?.useIdentity(signer)
                 try await authentication?.revoke(deviceID: deviceID, expected: expected)
+                try await peerSync.removeMember(deviceID)
             } else {
                 try await authentication?.revokeLocally(deviceID: deviceID)
             }
@@ -823,7 +826,8 @@ final class CompanionHostController {
               errorMessage: errorMessage, pairingPayload: pairingPayload, pairingExpiresAt: pairingExpiresAt,
               pairedDevices: pairedDevices, lastSeenAt: lastSeenAt, discoveredPeers: discoveredPeers,
               pendingPairingRequests: pendingPairingRequests, isDiscovering: isDiscovering, executionWorkspaces: executionWorkspaces,
-              pendingDeviceRevocations: pendingRevocations, peerPairingStatus: peerSync.pairing.status, peerPairingError: peerSync.pairing.errorMessage, peerSyncErrors: peerSync.errors, peerRoutes: peerSync.routes, peerIdentity: discoveryIdentity)
+              pendingDeviceRevocations: pendingRevocations, peerPairingStatus: peerSync.pairing.status, peerPairingError: peerSync.pairing.errorMessage, peerSyncErrors: peerSync.errors, peerRoutes: peerSync.routes, peerIdentity: discoveryIdentity,
+              librarySync: peerSync.syncStatus)
     }
 
     func refreshStatus() async {
@@ -904,6 +908,20 @@ final class CompanionHostController {
         if model?.isBackendFrontend == true { await forward(.cancelPeerPairing); return }
         peerSync.pairing.cancelRequest()
     }
+    /// A member removal learned from a peer: withdraw this Mac's own grants
+    /// and routes for that device without minting another removal.
+    func applyMemberRemoval(_ deviceID: String) async {
+        guard deviceID != discoveryIdentity?.deviceID else { return }
+        do { try await performRevocation(deviceID, recordsUnpair: false) }
+        catch { errorMessage = error.localizedDescription }
+    }
+
+    /// Verifies a signed member request for any route this Mac serves (for
+    /// example the bots WebSocket upgrade) and returns the member.
+    func authenticateMember(_ request: CompanionHTTPRequest, allowing kinds: Set<MemberKind> = Set(MemberKind.allCases)) async throws -> LibraryMember {
+        try await peerSync.members().authenticate(request, allowing: kinds)
+    }
+
     func applyPeerRevocations() async throws {
         guard let authentication else { return }
         var processed = Set(defaults.stringArray(forKey: "companion.peers.applied-revocations") ?? [])
@@ -981,6 +999,8 @@ struct CompanionHostSnapshot: Codable, Sendable {
     var peerSyncErrors: [String: String]? = nil
     var peerRoutes: [PairedMacRoute]? = nil
     var peerIdentity: CompanionPairingDeviceIdentity? = nil
+    /// Every peer's synchronization state, including "update required".
+    var librarySync: LibrarySyncStatus? = nil
 }
 
 private struct ExecutionManagementAcknowledgement: Decodable { let revoked: Bool }

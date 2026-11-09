@@ -12,8 +12,11 @@ public struct LibraryPeerExchange: Codable, Sendable {
   public let after: Int64
   public let page: PairedLibraryPage
   public let version: String
-  public init(deviceID: String, after: Int64, page: PairedLibraryPage, version: String) {
-    self.deviceID = deviceID; self.after = after; self.page = page; self.version = version
+  /// Device-local state a host exchanges alongside rows (a Mac's bearer-era
+  /// pairing roster). Opaque here; Linux hosts send none.
+  public let attachment: Data?
+  public init(deviceID: String, after: Int64, page: PairedLibraryPage, version: String, attachment: Data? = nil) {
+    self.deviceID = deviceID; self.after = after; self.page = page; self.version = version; self.attachment = attachment
   }
 }
 
@@ -105,6 +108,16 @@ private extension URL {
 /// - Every request is a signed member request; peers must share the exact
 ///   shared-table schema, and a mismatch is reported as "update required".
 public actor LibraryPeerSync {
+  /// Optional per-exchange side channel (see `LibraryPeerExchange.attachment`).
+  /// `incoming` runs before the page is applied and may throw to refuse it.
+  public struct Attachments: Sendable {
+    public var outgoing: @Sendable (_ peer: String) async -> Data?
+    public var incoming: @Sendable (_ data: Data, _ peer: String) async throws -> Void
+    public init(outgoing: @escaping @Sendable (String) async -> Data?, incoming: @escaping @Sendable (Data, String) async throws -> Void) {
+      self.outgoing = outgoing; self.incoming = incoming
+    }
+  }
+
   public struct Configuration: Sendable {
     public var version: String
     public var presenceInterval: TimeInterval = 60
@@ -119,6 +132,7 @@ public actor LibraryPeerSync {
   private let transport: LibraryPeerTransport
   private let configuration: Configuration
   private let files: PairedLibraryFiles
+  private let attachments: Attachments?
   private var statuses: [String: LibraryPeerStatus] = [:]
   private var nextPresence: [String: Date] = [:]
   private var backoff: [String: TimeInterval] = [:]
@@ -136,7 +150,9 @@ public actor LibraryPeerSync {
   /// Counts for tests and diagnostics: how each exchange was triggered.
   public private(set) var exchanges: [String: Int] = [:]
 
-  public init(directory: MemberDirectory, transport: LibraryPeerTransport = .urlSession(), configuration: Configuration) {
+  public init(directory: MemberDirectory, transport: LibraryPeerTransport = .urlSession(), configuration: Configuration,
+              attachments: Attachments? = nil) {
+    self.attachments = attachments
     self.directory = directory; self.database = directory.database
     self.transport = transport; self.configuration = configuration
     files = PairedLibraryFiles(root: directory.database.supportDirectory)
@@ -247,6 +263,19 @@ public actor LibraryPeerSync {
     }
   }
 
+  /// Exchanges with every peer now and returns when done ("Sync now").
+  public func synchronizeAll() async {
+    guard let peers = try? await peers() else { return }
+    for member in peers {
+      known.insert(member.deviceID)
+      while running.contains(member.deviceID) { try? await Task.sleep(for: .milliseconds(10)) }
+      running.insert(member.deviceID)
+      exchanges["now", default: 0] += 1
+      await synchronize(with: member)
+      running.remove(member.deviceID)
+    }
+  }
+
   /// Catches up with every peer once, for example after membership changed.
   public func scheduleAll() async {
     guard started, let peers = try? await peers() else { return }
@@ -279,13 +308,15 @@ public actor LibraryPeerSync {
         guard await directory.member(member.deviceID) != nil else { return }
         let cursors = try await database.pairedLibraryCursors(member.deviceID)
         let page = try await database.pairedLibraryPage(after: cursors.pushed)
-        let exchange = LibraryPeerExchange(deviceID: own, after: cursors.pulled, page: page, version: configuration.version)
+        let exchange = LibraryPeerExchange(deviceID: own, after: cursors.pulled, page: page, version: configuration.version,
+                                           attachment: await attachments?.outgoing(member.deviceID))
         let response = try await send(member, path: "v1/peers/sync", body: JSONEncoder().encode(exchange))
         guard response.status == 200 else { await failed(member, response); return }
         let reply = try JSONDecoder().decode(LibraryPeerExchange.self, from: response.body)
         guard reply.deviceID == member.deviceID, reply.after == page.cursor else {
           throw CompanionAPIError(code: "wrong_peer", message: "The peer did not acknowledge this exact page.")
         }
+        if let data = reply.attachment, let attachments { try await attachments.incoming(data, member.deviceID) }
         // A removal learned meanwhile stops the exchange before its page.
         guard await directory.member(member.deviceID) != nil else { return }
         try await database.receivePairedLibrary(reply.page, from: member.deviceID)
@@ -423,13 +454,15 @@ public actor LibraryPeerSync {
             message: "Update Woven Matter on every device: this device runs \(configuration.version), \(resolved.name) runs \(exchange.version).",
             version: configuration.version, schema: schema), status: 409)
         }
+        if let data = exchange.attachment, let attachments { try await attachments.incoming(data, member.deviceID) }
         try await database.receivePairedLibrary(exchange.page, from: member.deviceID)
         // A removal learned in this page ends access before anything returns.
         await directory.invalidate()
         if !exchange.page.entries.isEmpty { await meetNewPeers() }
         guard await directory.member(member.deviceID) != nil else { return .error("unauthorized", "This device was removed.", status: 401) }
         let reply = LibraryPeerExchange(deviceID: directory.identity.deviceID, after: exchange.page.cursor,
-          page: try await database.pairedLibraryPage(after: exchange.after), version: configuration.version)
+          page: try await database.pairedLibraryPage(after: exchange.after), version: configuration.version,
+          attachment: await attachments?.outgoing(member.deviceID))
         // The reply already carries this device's changes; the caller keeps
         // exchanging until neither side has more.
         online(resolved, synchronized: true)
