@@ -1,3 +1,5 @@
+// The Woven VM is macOS only.
+#if os(macOS)
 import Compression
 import Darwin
 import Foundation
@@ -289,3 +291,4 @@ private final class FakeControlServer: @unchecked Sendable {
         unlink(path)
     }
 }
+#endif
