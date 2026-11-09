@@ -47,7 +47,7 @@ public struct CompanionAgentLauncher: Identifiable, Equatable, Sendable {
     }
     let workspaces = workspaces.filter { !$0.deleted }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     let central = workspaces.first { $0.kind == .mac && $0.capabilities.contains("history.central.v1") }
-    var result: [Self] = [.init(workspaceID: "local", workspaceName: deviceName, providerID: "pi-durable-device", name: "Pi Durable", runtimeKind: "pi")]
+    var result: [Self] = [.init(workspaceID: "local", workspaceName: deviceName, providerID: "pi-durable-device", name: "Quick Chat", runtimeKind: "pi")]
     var representedDirectAgents = Set<String>()
     for provider in providers where known(provider, workspace: "central") {
       let parts = provider.id.split(separator: ":", omittingEmptySubsequences: false)
@@ -113,9 +113,9 @@ public struct CompanionAgentGroup: Identifiable, Equatable, Sendable {
       } else { groups.append(.init(id: id, name: workspace.name, workspace: workspace, agents: [])) }
     }
     func rank(_ group: Self) -> Int {
-      if group.id == "local" { return 0 }
-      if group.id == "central" { return 1 }
-      return group.workspace?.kind == .mac ? 2 : 3
+      if group.id == "local" { return 3 }
+      if group.id == "central" { return 0 }
+      return group.workspace?.kind == .mac ? 1 : 2
     }
     return groups.sorted {
       rank($0) == rank($1) ? $0.name.localizedStandardCompare($1.name) == .orderedAscending : rank($0) < rank($1)

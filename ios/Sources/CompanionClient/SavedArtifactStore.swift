@@ -34,6 +34,28 @@ public actor SavedArtifactStore {
     self.directory = directory
     let file = directory.appendingPathComponent("index.json")
     state = FileManager.default.fileExists(atPath: file.path) ? try JSONDecoder().decode(State.self, from: Data(contentsOf: file)) : .init()
+    // A restored backup omits downloaded copies; offer them for download again.
+    for (id, record) in state.records where record.complete && !record.manifest.deleted && !record.upload
+      && !FileManager.default.fileExists(atPath: directory.appendingPathComponent(record.manifest.sha256 + ".blob").path) && record.localOrigin != true {
+      state.records[id]?.complete = false; state.records[id]?.downloadedBytes = 0
+    }
+    // Earlier builds excluded saved files; correct them on open, before any edit.
+    try? MobileStorePersistence.applyBackupIfChanged(.include, at: file)
+    for hash in Set(state.records.values.map(\.manifest.sha256)) { try? Self.includeBlobIfNeeded(hash, in: state, directory: directory) }
+  }
+  /// A blob is shared by every record with the same content. It stays in backups
+  /// while any of them exists only here: saved on this device or waiting to upload.
+  private static func backup(_ hash: String, in state: State) -> MobileBackup {
+    state.records.values.contains { $0.manifest.sha256 == hash && ($0.localOrigin == true || $0.upload) } ? .include : .exclude
+  }
+  /// Inclusion is applied before an index commits and must succeed. A blob is never
+  /// excluded again in place: the system can apply an in-place exclusion late, even to
+  /// a file later written at the same path, so bytes once needed here stay in backups.
+  /// Only a fresh download no local record needs is written excluded.
+  private static func includeBlobIfNeeded(_ hash: String, in state: State, directory: URL) throws {
+    let url = directory.appendingPathComponent(hash + ".blob")
+    guard FileManager.default.fileExists(atPath: url.path), backup(hash, in: state) == .include else { return }
+    try MobileStorePersistence.applyBackupIfChanged(.include, at: url)
   }
   public func moveDeviceArtifacts(to libraryID: String, deviceID: String) throws {
     guard state.libraryID != libraryID else { return }
@@ -44,8 +66,7 @@ public actor SavedArtifactStore {
       next.records[id]?.upload = true
     }
     next.libraryID = libraryID
-    try MobileStorePersistence.writeDurably(JSONEncoder().encode(next), at: directory.appendingPathComponent("index.json"))
-    state = next
+    try commit(next)
   }
 
   public func manifests() -> [CompanionArtifactManifest] { state.records.values.map(\.manifest) }
@@ -67,7 +88,8 @@ public actor SavedArtifactStore {
     let manifest = CompanionArtifactManifest(id: id, workspaceID: workspaceID, title: title, mediaType: mediaType,
       byteCount: Int64(data.count), sha256: Self.digest(data))
     try validate(manifest, downloading: true)
-    try MobileStorePersistence.writeDurably(data, at: blob(manifest))
+    // Files saved on this device have no other copy until uploaded.
+    try MobileStorePersistence.writeDurably(data, at: blob(manifest), backup: .include)
     try update(id, Record(manifest: manifest, upload: true, downloadedBytes: manifest.byteCount, complete: true, localOrigin: true))
     return manifest
   }
@@ -144,7 +166,7 @@ public actor SavedArtifactStore {
     let manifest = record.manifest, partial = part(record.manifest)
     if !FileManager.default.fileExists(atPath: partial.path) {
       record.downloadedBytes = 0; try update(id, record)
-      try MobileStorePersistence.writeDurably(Data(), at: partial)
+      try MobileStorePersistence.writeDurably(Data(), at: partial, backup: .exclude)
     }
     let handle = try FileHandle(forWritingTo: partial); defer { try? handle.close() }
     try handle.truncate(atOffset: UInt64(record.downloadedBytes)); try handle.seekToEnd()
@@ -164,7 +186,14 @@ public actor SavedArtifactStore {
       record.downloadedBytes = 0; try update(id, record); throw Failure.checksumMismatch
     }
     guard state.records[id]?.manifest == manifest else { throw Failure.invalidTransfer }
-    try MobileStorePersistence.writeDurably(downloaded, at: blob(manifest))
+    // Downloads are central copies and can be fetched again after a restore, unless
+    // identical bytes also belong to a file saved here. Verified identical bytes already
+    // stored are kept as they are, so a download never downgrades another record's blob.
+    var after = state; after.records[id] = record
+    let existing = blob(manifest)
+    if !(FileManager.default.fileExists(atPath: existing.path) && (try? Self.digest(Data(contentsOf: existing, options: .mappedIfSafe))) == manifest.sha256) {
+      try MobileStorePersistence.writeDurably(downloaded, at: existing, backup: Self.backup(manifest.sha256, in: after))
+    }
     record.complete = true; record.requestedDownload = false; record.pinned = state.records[id]?.pinned
     try update(id, record)
     try? FileManager.default.removeItem(at: partial)
@@ -188,6 +217,11 @@ public actor SavedArtifactStore {
   private func part(_ manifest: CompanionArtifactManifest) -> URL { directory.appendingPathComponent(Self.digest(Data((manifest.id + ":" + String(manifest.revision)).utf8)) + ".partial") }
   private func update(_ id: String, _ record: Record) throws {
     var next = state; next.records[id] = record
-    try MobileStorePersistence.writeDurably(JSONEncoder().encode(next), at: directory.appendingPathComponent("index.json")); state = next
+    try commit(next)
+  }
+  private func commit(_ next: State) throws {
+    for hash in Set(next.records.values.map(\.manifest.sha256)) { try Self.includeBlobIfNeeded(hash, in: next, directory: directory) }
+    try MobileStorePersistence.writeDurably(JSONEncoder().encode(next), at: directory.appendingPathComponent("index.json"), backup: .include)
+    state = next
   }
 }
