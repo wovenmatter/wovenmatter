@@ -26,6 +26,7 @@ for every package update. Three separate mechanisms do that:
 | `app/Package.resolved` | Shared SwiftPM/Xcode graph: Sparkle and any transitive packages | Native package-manager tooling during maintenance |
 | `default-agent/.node-version` and the Node checksums in `scripts/prepare-default-agent.sh` and `LocalACPManagedRuntime.swift` | One current stable Node release and its official archive SHA-256 values | Maintenance PR, all copies together |
 | `remote/host/runtime-versions.json` | The same Node release's Linux archive SHA-256 values and the lockfile's Playwright version | The same maintenance PR; host bundle tests reject drift |
+| `dockerVersion` and `dockerSHA256` in `remote/host/runtime-versions.json` | The Docker Engine static release (`download.docker.com/linux/static/stable`) that Linux bot engines install, with its x86_64 and aarch64 archive SHA-256 values | Maintenance PR; both checksums together |
 | `remote/npm-runtime/package-lock.json` | Locked security replacements for npm's vendored dependencies, shared by image builds and each native host release's private npm | Dependency maintenance; runtime API and installer tests validate both uses |
 | `harnesses/npm-version.json` | Current private Mac npm archive and registry integrity, with the existing locked `remote/npm-runtime` vendor repairs | Maintenance PR; managed CLI and bundled SDK updater verification |
 | `app/Automation/cua-version.json` | Exact Cua Driver archive/executable digests, source and signing identity | Maintenance PR with desktop acceptance |
@@ -39,6 +40,16 @@ Security-critical runtimes retain verified exact selections. Ordinary libraries
 use minimum-only ranges with their resolved versions recorded in lockfiles.
 Maintenance checks both for newer releases; recorded does not mean frozen.
 
+- **Docker Engine** for Linux bots is an exact static release, because the
+  bot engine runs as root with a verified, distribution-independent binary set
+  (dockerd, containerd, runc, docker-proxy, docker-init) on Ubuntu, Debian and
+  Arch alike. `remote-host.sh` downloads it once per host and the root helper
+  re-verifies the SHA-256 before installing it. Maintenance selects the newest
+  stable `docker-<version>.tgz` (no release candidates) and records both
+  architectures' checksums. Validation: `scripts/test-support/test_bots_engine.py`
+  in CI, and the bots install, egress and uninstall checks on a Linux host
+  before release. Installed hosts pick up a new selection on update; the
+  engine restarts only when its binaries or configuration changed.
 - **Node** runs the signed Built-in agent and managed adapter tools.
   Launch reuses the recorded installed runtime without a metadata lookup; a
   first installation may download its checksummed archive. Select the newest
