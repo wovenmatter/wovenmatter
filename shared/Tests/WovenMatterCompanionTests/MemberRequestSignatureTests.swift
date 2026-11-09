@@ -1,0 +1,143 @@
+#if canImport(CryptoKit)
+import CryptoKit
+#endif
+import Foundation
+import Testing
+import WovenMatterCompanion
+
+/// The vector file is shared with the Node server's tests.
+struct MemberSignatureVectors: Decodable {
+  struct Case: Decodable {
+    let name, method, target, nonce, body, bodySHA256, message, signature: String
+    let time: Int64
+    let headers: [String: String]
+  }
+  struct Reject: Decodable {
+    let name: String
+    let `case`: String
+    let method, target, nonce, body: String?
+    let time: Int64?
+  }
+  let privateKeySeedHex, publicKeyBase64, deviceID: String
+  let windowMilliseconds: Int64
+  let cases: [Case]
+  let rejects: [Reject]
+
+  static func load() throws -> Self {
+    let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appending(path: "MemberSignatureVectors.json")
+    return try JSONDecoder().decode(Self.self, from: Data(contentsOf: url))
+  }
+}
+
+@Suite("Signed member requests")
+struct MemberRequestSignatureTests {
+  @Test func messagesMatchTheSharedVectors() throws {
+    let vectors = try MemberSignatureVectors.load()
+    #expect(vectors.windowMilliseconds == MemberRequestSignature.windowMilliseconds)
+    for vector in vectors.cases {
+      let body = Data(vector.body.utf8)
+      #expect(MemberRequestSignature.bodyHash(body) == vector.bodySHA256, "\(vector.name)")
+      let message = MemberRequestSignature.message(method: vector.method, target: vector.target, time: vector.time, nonce: vector.nonce, body: body)
+      #expect(String(decoding: message, as: UTF8.self) == vector.message, "\(vector.name)")
+      #expect(vector.headers[MemberRequestSignature.deviceHeader] == vectors.deviceID)
+      #expect(vector.headers[MemberRequestSignature.signatureHeader] == vector.signature)
+      #expect(MemberRequestSignature.decodeBase64URL(vector.nonce)?.count == 16)
+      #expect(MemberRequestSignature.decodeBase64URL(vector.signature)?.count == 64)
+    }
+  }
+
+  @Test func mountPrefixIsNotSigned() {
+    #expect(MemberRequestSignature.canonicalTarget("/wovenmatter/v1/peers/sync") == "/v1/peers/sync")
+    #expect(MemberRequestSignature.canonicalTarget("/wovenmatter?x=1") == "/?x=1")
+    #expect(MemberRequestSignature.canonicalTarget("/wovenmatterx/v1") == "/wovenmatterx/v1")
+    #expect(MemberRequestSignature.message(method: "get", target: "/wovenmatter/v1/a?b=1", time: 1, nonce: "n", body: Data())
+      == MemberRequestSignature.message(method: "GET", target: "/v1/a?b=1", time: 1, nonce: "n", body: Data()))
+  }
+
+  @Test func base64URLIsStrict() {
+    #expect(MemberRequestSignature.decodeBase64URL("AAECAwQFBgcICQoLDA0ODw") == Data(0..<16))
+    #expect(MemberRequestSignature.decodeBase64URL("AAECAwQFBgcICQoLDA0ODw==") == nil)
+    #expect(MemberRequestSignature.decodeBase64URL("AAECAwQFBgcICQoLDA0OD+") == nil)
+    #expect(MemberRequestSignature.decodeBase64URL("") == nil)
+    #expect(MemberRequestSignature.base64URL(Data([0xfb, 0xff])) == "-_8")
+  }
+
+  #if canImport(CryptoKit)
+  private static func key(_ vectors: MemberSignatureVectors) throws -> Curve25519.Signing.PrivateKey {
+    let seed = stride(from: 0, to: vectors.privateKeySeedHex.count, by: 2).map {
+      let start = vectors.privateKeySeedHex.index(vectors.privateKeySeedHex.startIndex, offsetBy: $0)
+      return UInt8(vectors.privateKeySeedHex[start..<vectors.privateKeySeedHex.index(start, offsetBy: 2)], radix: 16)!
+    }
+    return try Curve25519.Signing.PrivateKey(rawRepresentation: Data(seed))
+  }
+
+  private static func verifier(_ vectors: MemberSignatureVectors, at time: Int64, revoked: Bool = false) -> MemberRequestVerifier {
+    let member = MemberKey(deviceID: vectors.deviceID, kind: .mac, name: "Vector",
+                           publicKey: Data(base64Encoded: vectors.publicKeyBase64)!)
+    return MemberRequestVerifier(lookup: { $0 == member.deviceID && !revoked ? member : nil }, clock: { time })
+  }
+
+  private static func lowercased(_ headers: [String: String]) -> [String: String] {
+    Dictionary(uniqueKeysWithValues: headers.map { ($0.key.lowercased(), $0.value) })
+  }
+
+  @Test func vectorSignaturesVerifyAndTamperingIsRefused() async throws {
+    let vectors = try MemberSignatureVectors.load()
+    #expect(try Self.key(vectors).publicKey.rawRepresentation.base64EncodedString() == vectors.publicKeyBase64)
+    for vector in vectors.cases {
+      let verifier = Self.verifier(vectors, at: vector.time + 299_000)
+      let member = try await verifier.verify(method: vector.method, target: vector.target,
+        headers: Self.lowercased(vector.headers), body: Data(vector.body.utf8))
+      #expect(member.deviceID == vectors.deviceID)
+    }
+    for reject in vectors.rejects {
+      let original = try #require(vectors.cases.first { $0.name == reject.case })
+      var headers = Self.lowercased(original.headers)
+      if let time = reject.time { headers["x-woven-member-time"] = String(time) }
+      if let nonce = reject.nonce { headers["x-woven-member-nonce"] = nonce }
+      let verifier = Self.verifier(vectors, at: original.time)
+      await #expect(throws: MemberRequestError.signature, "\(reject.name)") {
+        try await verifier.verify(method: reject.method ?? original.method, target: reject.target ?? original.target,
+          headers: headers, body: Data((reject.body ?? original.body).utf8))
+      }
+    }
+  }
+
+  @Test func windowReplayAndRevocation() async throws {
+    let vectors = try MemberSignatureVectors.load()
+    let vector = vectors.cases[0]
+    let headers = Self.lowercased(vector.headers), body = Data(vector.body.utf8)
+    for skew: Int64 in [-300_001, 300_001] {
+      await #expect(throws: MemberRequestError.clock) {
+        try await Self.verifier(vectors, at: vector.time + skew).verify(method: vector.method, target: vector.target, headers: headers, body: body)
+      }
+    }
+    let verifier = Self.verifier(vectors, at: vector.time - 300_000)
+    _ = try await verifier.verify(method: vector.method, target: vector.target, headers: headers, body: body)
+    await #expect(throws: MemberRequestError.replay) {
+      try await verifier.verify(method: vector.method, target: vector.target, headers: headers, body: body)
+    }
+    await #expect(throws: MemberRequestError.unknown) {
+      try await Self.verifier(vectors, at: vector.time, revoked: true).verify(method: vector.method, target: vector.target, headers: headers, body: body)
+    }
+    await #expect(throws: MemberRequestError.kind) {
+      try await Self.verifier(vectors, at: vector.time).verify(method: vector.method, target: vector.target, headers: headers, body: body, allowing: [.linux])
+    }
+  }
+
+  @Test func signerRoundTrips() async throws {
+    let key = Curve25519.Signing.PrivateKey()
+    let device = UUID().uuidString.lowercased()
+    let signer = MemberRequestSigner(deviceID: device, key: key)
+    let body = Data("{\"after\":3}".utf8)
+    let headers = try signer.headers(method: "POST", target: "/wovenmatter/v1/peers/sync", body: body)
+    let member = MemberKey(deviceID: device, kind: .linux, name: "Host", publicKey: key.publicKey.rawRepresentation)
+    let verifier = MemberRequestVerifier(lookup: { $0 == device ? member : nil })
+    // A Linux host behind Tailscale Serve sees the path without its prefix.
+    #expect(try await verifier.verify(method: "POST", target: "/v1/peers/sync", headers: Self.lowercased(headers), body: body) == member)
+    await #expect(throws: MemberRequestError.signature) {
+      try await MemberRequestVerifier(lookup: { _ in member }).verify(method: "POST", target: "/v1/peers/files", headers: Self.lowercased(headers), body: body)
+    }
+  }
+  #endif
+}

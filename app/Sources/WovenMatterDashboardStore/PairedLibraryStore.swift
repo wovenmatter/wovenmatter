@@ -494,6 +494,7 @@ extension WorkspaceDatabaseConnection {
     }
     try setPairedStateUnlocked("pending.after", after.isEmpty ? nil : after)
   }
+  func pairedLibrarySchemaUnlocked() throws -> String { try peerSchema() }
   func pairedLibraryQuarantineCount() throws -> Int {
     try historyRowsUnlocked("SELECT count(*) AS count FROM paired_library_quarantine", values: []).first?.objectValue?["count"]?.intValue ?? 0
   }
@@ -772,4 +773,10 @@ extension WorkspaceDatabase {
   }
   public func pairedLibraryConflicts() async throws -> [PairedLibraryConflict] { try await read { try $0.pairedLibraryConflicts() } }
   public func pairedLibraryQuarantineCount() async throws -> Int { try await read { try $0.pairedLibraryQuarantineCount() } }
+  /// The newest change-log cursor.
+  public func pairedLibraryHead() async throws -> Int64 {
+    try await read { Int64(try $0.historyRowsUnlocked("SELECT seq FROM sqlite_sequence WHERE name='paired_library_changes'", values: []).first?.objectValue?["seq"]?.doubleValue ?? 0) }
+  }
+  /// Peers synchronize only with an identical shared-table graph.
+  public func pairedLibrarySchema() async throws -> String { try await read { try $0.pairedLibrarySchemaUnlocked() } }
 }

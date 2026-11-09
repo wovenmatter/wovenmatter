@@ -15,6 +15,7 @@ public final class WorkspaceDatabase: Sendable {
   public let fileURL: URL
   public let isReadOnlyProjection: Bool
   let libraryFiles: LibraryFileStore
+  private let changes = PeerChangeObservers()
 
   public init(url: URL, readOnlyProjection: Bool = false) async throws {
     self.fileURL = url.standardizedFileURL
@@ -40,8 +41,20 @@ public final class WorkspaceDatabase: Sendable {
 
   func write<T: Sendable>(_ operation: @escaping @Sendable (WorkspaceDatabaseConnection) throws -> T) async throws -> T {
     guard let writer else { throw WorkspaceDatabaseError.readOnlyProjection }
-    return try await writer.worker.perform { _ in try writer.use(operation) }
+    let changes = changes
+    return try await writer.worker.perform { _ in
+      try writer.use { connection in
+        defer { if changes.isObserved { changes.check(connection) } }
+        return try operation(connection)
+      }
+    }
   }
+
+  /// Calls `handler` (on the writer's queue; keep it short) after any write
+  /// that appended to the peer change log, so synchronization is change-driven.
+  @discardableResult
+  public func observePeerChanges(_ handler: @escaping @Sendable (Int64) -> Void) -> UUID { changes.add(handler) }
+  public func removePeerChangeObserver(_ id: UUID) { changes.remove(id) }
 
   /// Cleanup of accepted work must survive cancellation of the task driving it.
   /// This still observes admission limits and queue deadlines.
@@ -69,4 +82,29 @@ public final class WorkspaceDatabase: Sendable {
   }
   #endif
 
+}
+
+/// Tracks the change log's high-water mark on the writer connection. One
+/// indexed read of `sqlite_sequence` per write, only while observed.
+final class PeerChangeObservers: @unchecked Sendable {
+  private let lock = NSLock()
+  private var handlers: [UUID: @Sendable (Int64) -> Void] = [:]
+  private var last: Int64?
+  var isObserved: Bool { lock.withLock { !handlers.isEmpty } }
+  func add(_ handler: @escaping @Sendable (Int64) -> Void) -> UUID {
+    let id = UUID(); lock.withLock { handlers[id] = handler }; return id
+  }
+  func remove(_ id: UUID) { lock.withLock { _ = handlers.removeValue(forKey: id) } }
+  func check(_ connection: WorkspaceDatabaseConnection) {
+    guard let value = try? connection.historyRowsUnlocked("SELECT seq FROM sqlite_sequence WHERE name='paired_library_changes'", values: [])
+      .first?.objectValue?["seq"]?.doubleValue.map({ Int64($0) }) else { return }
+    let notify: [@Sendable (Int64) -> Void] = lock.withLock {
+      defer { last = value }
+      // The first observed write may follow an unseen change; a spurious
+      // announcement is harmless, a missed one is not.
+      if let last, value <= last { return [] }
+      return Array(handlers.values)
+    }
+    for handler in notify { handler(value) }
+  }
 }

@@ -77,11 +77,11 @@ private final class HostFixture {
   let socket: String
   let token: String
 
-  init() async throws {
+  init(transport: LibraryPeerTransport = .urlSession(), endpoint: URL? = nil) async throws {
     // Short path: Unix socket paths are limited to about 100 bytes.
     directory = URL(fileURLWithPath: "/tmp").appending(path: "wml-\(UUID().uuidString.prefix(8))")
     let layout = LibraryHostLayout(root: directory)
-    host = try await LibraryHost(layout: layout)
+    host = try await LibraryHost(layout: layout, endpoints: endpoint.map { [$0] } ?? [], transport: transport)
     socket = layout.defaultSocket.path
     port = try host.listen(port: 0, socket: layout.defaultSocket)
     token = try String(contentsOf: layout.defaultTokenFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -249,5 +249,169 @@ struct LibraryHostTests {
     _ = try document.apply(operations)
     let stored = try Data(contentsOf: url.appending(path: "stored.json"))
     #expect(Data(try document.encoded().utf8) == stored)
+  }
+
+  /// A Mac reads the host's identity, signs its entry and hands it the
+  /// records over the socket; a phone that Mac added then uses the mobile
+  /// API with signed requests until a Mac removes it.
+  @Test func membersAdoptionAndSignedMobileRequests() async throws {
+    let fixture = try await HostFixture(); defer { fixture.remove() }
+    let auth = ["Authorization": "Bearer " + fixture.token]
+    let identity = try JSONDecoder().decode(LibraryHost.Identity.self, from: send("GET", "/wovenmatter/v1/identity", port: fixture.port).body)
+    #expect(identity.kind == .linux && identity.publicKey.count == 32)
+    #expect(try send("GET", "/v1/health", port: fixture.port).json?.objectValue?["deviceID"]?.stringValue == identity.deviceID)
+    #expect(try JSONDecoder().decode(LibraryHost.Identity.self, from: send("GET", "/v1/identity", unix: fixture.socket, headers: auth).body) == identity)
+
+    let macRoot = fixture.directory.appending(path: "mac")
+    try FileManager.default.createDirectory(at: macRoot, withIntermediateDirectories: true)
+    let macDatabase = try await WorkspaceDatabase(url: macRoot.appending(path: "workspace.sqlite"))
+    let mac = MemberDirectory(database: macDatabase, identity: try MemberIdentity.loadOrCreate(file: macRoot.appending(path: "mac.key"),
+      deviceID: try await macDatabase.companionLibraryIdentity().hostDeviceID, kind: .mac), cacheLifetime: 0)
+    try await mac.ensureSelf(name: "Studio Mac", endpoints: [URL(string: "https://studio.tailnet.ts.net/")!])
+    try await mac.add(deviceID: identity.deviceID, kind: .linux, name: "Box", publicKey: identity.publicKey,
+                      endpoints: [URL(string: "https://box.tailnet.ts.net/wovenmatter/")!])
+    let phone = try MemberIdentity.loadOrCreate(file: macRoot.appending(path: "phone.key"), deviceID: UUID().uuidString.lowercased(), kind: .ios)
+    try await mac.add(deviceID: phone.deviceID, kind: .ios, name: "iPhone", publicKey: phone.publicKey, endpoints: [])
+
+    func signed(_ path: String, as member: MemberIdentity = phone) throws -> HTTPReply {
+      let headers = try member.signer.headers(method: "GET", target: path).merging(["X-Woven-Protocol": String(CompanionProtocol.version)]) { a, _ in a }
+      return try send("GET", path, port: fixture.port, headers: headers)
+    }
+    // Unsigned or from a stranger: refused before adoption.
+    #expect(try signed("/wovenmatter/v1/hello").status == 401)
+    #expect(try send("GET", "/wovenmatter/v1/hello", port: fixture.port, headers: ["X-Woven-Protocol": String(CompanionProtocol.version)]).status == 401)
+    // An adoption whose anchor did not sign this host's key is refused.
+    let stranger = MemberDirectory(database: macDatabase, identity: try MemberIdentity.loadOrCreate(file: macRoot.appending(path: "other.key"),
+      deviceID: UUID().uuidString.lowercased(), kind: .mac))
+    #expect(try send("POST", "/v1/members/adopt", unix: fixture.socket, headers: auth, body: JSONEncoder().encode(await stranger.adoption())).status == 400)
+
+    let adopted = try send("POST", "/v1/members/adopt", unix: fixture.socket, headers: auth, body: JSONEncoder().encode(await mac.adoption()))
+    #expect(adopted.status == 200, "\(String(decoding: adopted.body, as: UTF8.self))")
+    let members = try JSONDecoder().decode(LibraryMemberList.self, from: send("GET", "/v1/members", unix: fixture.socket, headers: auth).body)
+    #expect(Set(members.members.map(\.deviceID)) == [identity.deviceID, mac.identity.deviceID, phone.deviceID])
+    #expect(members.members.first { $0.deviceID == identity.deviceID }?.endpoints.first?.absoluteString == "https://box.tailnet.ts.net/wovenmatter/")
+    let raw = try #require(send("GET", "/v1/members", unix: fixture.socket, headers: auth).json?.objectValue)
+    #expect(raw["revision"]?.stringValue?.isEmpty == false)
+    #expect(raw["members"]?.arrayValue?.first?.objectValue?["publicKey"]?.stringValue?.count == 44)
+
+    let hello = try signed("/wovenmatter/v1/hello")
+    #expect(hello.status == 200, "\(String(decoding: hello.body, as: UTF8.self))")
+    #expect(try signed("/v1/snapshot").status == 200)
+    // The phone can show whether some device needs an update.
+    let syncStatus = try signed("/wovenmatter/v1/sync/status")
+    #expect(syncStatus.status == 200 && syncStatus.json?.objectValue?["deviceID"]?.stringValue == identity.deviceID)
+    // A signed request cannot be replayed.
+    let headers = try phone.signer.headers(method: "GET", target: "/v1/hello").merging(["X-Woven-Protocol": String(CompanionProtocol.version)]) { a, _ in a }
+    #expect(try send("GET", "/v1/hello", port: fixture.port, headers: headers).status == 200)
+    #expect(try send("GET", "/v1/hello", port: fixture.port, headers: headers).status == 401)
+
+    try await mac.remove(phone.deviceID)
+    #expect(try send("POST", "/v1/members/adopt", unix: fixture.socket, headers: auth, body: JSONEncoder().encode(await mac.adoption())).status == 200)
+    #expect(try signed("/v1/hello").status == 401)
+    let status = try #require(send("GET", "/v1/sync/status", unix: fixture.socket, headers: auth).json?.objectValue)
+    #expect(status["peers"]?.arrayValue?.first?.objectValue?["deviceID"]?.stringValue == mac.identity.deviceID)
+  }
+
+  @Test func botEntriesAndLocalPublishingWriteThisLibrary() async throws {
+    let fixture = try await HostFixture(); defer { fixture.remove() }
+    let auth = ["Authorization": "Bearer " + fixture.token]
+    let bot = UUID().uuidString.lowercased()
+    let batch: GatewayJSONValue = .object([
+      "bot": .object(["id": .string(bot), "name": .string("Helper")]),
+      "conversations": .array([.object(["conversationId": .number(1), "kind": .string("main"), "title": .string("Main")])]),
+      "entries": .array([.object(["id": .number(1), "conversationId": .number(1), "role": .string("user"),
+                                  "text": .string("Hello"), "createdAt": .string("2026-11-09T12:00:00Z")])])
+    ])
+    for _ in 0..<2 {
+      let reply = try send("POST", "/v1/bots/\(bot)/entries", unix: fixture.socket, headers: auth, body: JSONEncoder().encode(batch))
+      #expect(reply.status == 200 && reply.json?.objectValue?["entries"] == .number(1), "\(String(decoding: reply.body, as: UTF8.self))")
+    }
+    let conversations = try await fixture.host.database.botConversations()
+    #expect(conversations.count == 1 && conversations.first?.botName == "Helper" && conversations.first?.machineID == fixture.host.identity.deviceID)
+    #expect(try await fixture.host.database.botConversationEntries(id: try #require(conversations.first?.id)).count == 1)
+    #expect(try send("POST", "/v1/bots/\(UUID().uuidString.lowercased())/entries", unix: fixture.socket, headers: auth, body: JSONEncoder().encode(batch)).status == 400)
+
+    // Session history from this machine's Node server lands in its own library.
+    let library = try await fixture.host.database.companionLibraryIdentity()
+    // On a real host this descriptor arrives with the adding Mac's records.
+    let workspace = CompanionExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: library.libraryID,
+      ownerDeviceID: library.hostDeviceID, kind: .linux, name: "Box", executionDeviceID: UUID().uuidString.lowercased())
+    let conversation = UUID().uuidString.lowercased()
+    let entry = CompanionJournalEntry(workspaceID: workspace.id, originSequence: 1, conversationID: conversation, kind: .conversation,
+      conversation: .init(id: conversation, title: "Linux session", runtimeKind: "default_agent"))
+    let journal = CompanionJournalBatch(libraryID: workspace.libraryID, entries: [entry])
+    #expect(try send("POST", "/v1/publisher/journal", unix: fixture.socket, headers: auth, body: JSONEncoder().encode(journal)).status == 403)
+    _ = try await fixture.host.database.registerCompanionExecutionWorkspace(.init(workspace: workspace), deviceID: library.hostDeviceID)
+    let published = try send("POST", "/v1/publisher/journal", unix: fixture.socket, headers: auth, body: JSONEncoder().encode(journal))
+    #expect(published.status == 200, "\(String(decoding: published.body, as: UTF8.self))")
+    #expect(try JSONDecoder().decode(CompanionJournalBatchResult.self, from: published.body).libraryID == workspace.libraryID)
+    #expect(try await fixture.host.database.companionJournal(after: 0).entries.map(\.eventID) == [entry.eventID])
+    let foreign = CompanionJournalBatch(libraryID: UUID().uuidString.lowercased(), entries: [entry])
+    #expect(try send("POST", "/v1/publisher/journal", unix: fixture.socket, headers: auth, body: JSONEncoder().encode(foreign)).status == 400)
+  }
+
+  /// Two Linux hosts that one Mac added synchronize through their mounted
+  /// peer routes (behind a Serve-style prefix strip) with no Mac online.
+  @Test func twoHostsSynchronizeThroughTheirPeerRoutes() async throws {
+    final class Routes: @unchecked Sendable { var hosts: [String: LibraryHost] = [:] }
+    let routes = Routes()
+    let transport = LibraryPeerTransport { endpoint, request in
+      guard let host = routes.hosts[endpoint.host ?? ""] else { throw URLError(.cannotConnectToHost) }
+      let headers = Dictionary(uniqueKeysWithValues: request.headers.map { ($0.key.lowercased(), $0.value) })
+      return await host.handleNetwork(.init(method: request.method, target: String(request.target.dropFirst("/wovenmatter".count)),
+                                            headers: headers, body: request.body))
+    }
+    let one = try await HostFixture(transport: transport), two = try await HostFixture(transport: transport)
+    defer { one.remove(); two.remove() }
+    routes.hosts = ["one.test": one.host, "two.test": two.host]
+    let macRoot = one.directory.appending(path: "mac")
+    try FileManager.default.createDirectory(at: macRoot, withIntermediateDirectories: true)
+    let macDatabase = try await WorkspaceDatabase(url: macRoot.appending(path: "workspace.sqlite"))
+    let mac = MemberDirectory(database: macDatabase, identity: try MemberIdentity.loadOrCreate(file: macRoot.appending(path: "mac.key"),
+      deviceID: try await macDatabase.companionLibraryIdentity().hostDeviceID, kind: .mac), cacheLifetime: 0)
+    try await mac.ensureSelf(name: "Offline Mac", endpoints: [URL(string: "https://mac.test/")!])
+    for (fixture, name) in [(one, "one"), (two, "two")] {
+      try await mac.add(deviceID: fixture.host.identity.deviceID, kind: .linux, name: name, publicKey: fixture.host.identity.publicKey,
+                        endpoints: [URL(string: "https://\(name).test/wovenmatter/")!])
+    }
+    for fixture in [one, two] {
+      #expect(try send("POST", "/v1/members/adopt", unix: fixture.socket, headers: ["Authorization": "Bearer " + fixture.token],
+                       body: JSONEncoder().encode(await mac.adoption())).status == 200)
+      await fixture.host.startSync()
+    }
+    let caller = UUID().uuidString.lowercased()
+    let created = try one.call(caller, "woven_notes_create", ["title": .string("From host one")])
+    let noteID = try #require(created.value["id"]?.stringValue, "\(created.error ?? "")")
+    var arrived = false
+    for _ in 0..<200 where !arrived {
+      arrived = (try? await two.host.database.companionNote(id: noteID)) != nil
+      if !arrived { try await Task.sleep(for: .milliseconds(50)) }
+    }
+    #expect(arrived)
+    let status = await two.host.sync.status()
+    #expect(status.peers.first { $0.deviceID == one.host.identity.deviceID }?.state == .online)
+  }
+
+  /// The Node server sends a bot's library calls as an app-wide caller.
+  @Test func botCallersUseLibraryToolsWithoutAConversation() async throws {
+    let fixture = try await HostFixture(); defer { fixture.remove() }
+    var settings = try await fixture.host.database.toolSettings()
+    settings.botMCP = .init(isEnabled: true, groups: [.notes])
+    try await fixture.host.database.saveToolSettings(settings)
+    let bot = UUID().uuidString.lowercased(), principal = "woven:bot:\(fixture.host.identity.deviceID):\(bot)"
+    func call(_ name: String, _ arguments: [String: GatewayJSONValue], groups: String = "notes", botID: String? = nil) throws -> GatewayJSONValue? {
+      let message: GatewayJSONValue = .object(["jsonrpc": .string("2.0"), "id": .number(1), "method": .string("tools/call"),
+        "params": .object(["name": .string(name), "arguments": .object(arguments)])])
+      let reply = try send("POST", "/v1/mcp", unix: fixture.socket, headers: [
+        "Authorization": "Bearer " + fixture.token, "X-Woven-Caller": principal, "X-Woven-Bot-ID": botID ?? bot,
+        "X-Woven-Bot-Name": "Helper%20Bot", "X-Woven-Enabled-Groups": groups], body: try JSONEncoder().encode(message))
+      return reply.status == 200 ? reply.json?.objectValue?["result"]?.objectValue?["structuredContent"] : nil
+    }
+    let created = try #require(try call("woven_notes_create", ["title": .string("From a bot")])?.objectValue)
+    #expect(created["success"] == .bool(true), "\(created)")
+    #expect(try call("woven_notes_create", ["title": .string("x")], botID: UUID().uuidString.lowercased()) == nil)
+    // A group the library's bot settings exclude stays off.
+    let calendar = try call("woven_calendar_list", [:], groups: "notes,calendar")
+    #expect(calendar?.objectValue?["success"] != .bool(true))
   }
 }

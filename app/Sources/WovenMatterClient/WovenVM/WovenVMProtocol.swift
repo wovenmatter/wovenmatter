@@ -1,3 +1,5 @@
+// The Woven VM is macOS only (Virtualization framework); Linux library builds skip it.
+#if os(macOS)
 import CryptoKit
 import Darwin
 import Foundation
@@ -228,3 +230,4 @@ public enum WovenVMGuestPort {
     public static let forward: UInt32 = 2001
     public static let docker: UInt32 = 2375
 }
+#endif

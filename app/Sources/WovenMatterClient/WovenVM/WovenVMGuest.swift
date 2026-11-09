@@ -1,3 +1,5 @@
+// The Woven VM is macOS only (Virtualization framework); Linux library builds skip it.
+#if os(macOS)
 import CryptoKit
 import Foundation
 
@@ -191,3 +193,4 @@ public enum WovenVMSizing {
         }
     }
 }
+#endif

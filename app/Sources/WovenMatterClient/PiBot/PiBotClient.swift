@@ -1,3 +1,5 @@
+// The native bots client is for the Mac app; Linux library builds skip it.
+#if os(macOS)
 import Foundation
 
 /// One WebSocket to one machine's bots runtime (Pi Bot protocol 1 with Woven's additions),
@@ -387,3 +389,4 @@ private struct PiBotHello: Decodable {
     let capabilities: [String]?
     let environment: String?
 }
+#endif

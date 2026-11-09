@@ -81,6 +81,7 @@ final class CompanionHostController {
     private var revokingDeviceIDs: Set<String> = []
     var mcpSettingsFingerprints: [String: String] = [:]
     private var registryRefreshInProgress = false
+    private var adoptedLinuxHosts: Set<String> = []
     private var revocationRetryInProgress = false
     private static let pendingRevocationsKey = "companion.execution.pending-revocations"
     private var server: CompanionHTTPServer?
@@ -166,7 +167,11 @@ final class CompanionHostController {
                     guard let model else { throw CompanionAPIError(code: "unavailable", message: "The Mac workspace is closed.") }
                     do { return try await model.linkedData(for: link) }
                     catch { throw CompanionAPIError(code: "linked_data_unavailable", message: error.localizedDescription) }
-                })
+                }, members: try? await peerSync.members(),
+                onMemberPaired: { [weak self] deviceID, name, key in
+                    do { try await self?.peerSync.members().add(deviceID: deviceID, kind: .ios, name: name, publicKey: key, endpoints: []) }
+                    catch { self?.errorMessage = error.localizedDescription }
+                }, syncStatus: { [weak self] in await self?.peerSync.librarySync?.status() })
             let listener = CompanionHTTPServer(upgradeHandler: { [weak self] request in
                 guard let self else { return .reject(.error("unavailable", "This sharing session has stopped.", status: 503)) }
                 return await self.upgrade(request, generation: expectedGeneration)
@@ -218,10 +223,15 @@ final class CompanionHostController {
                     guard await authentication.mayExecute(deviceID: deviceID) else {
                         throw CompanionAPIError(code: "unauthorized", message: "This device is no longer paired.")
                     }
-                }, authorizeGrant: authorizeGrant)
-            // Member auth replaces this one check: today any current execution grant
-            // (a paired Mac, or a device this Mac paired) may use this Mac's bots.
-            authorizeBots = { request in
+                }, authorizeGrant: authorizeGrant, members: try? await peerSync.members())
+            // A signed member request (any Mac or phone member), or for devices
+            // paired before members, a current execution grant.
+            authorizeBots = { [weak self] request in
+                if MemberRequestVerifier.isSigned(request.headers) {
+                    guard let self else { throw CompanionAPIError(code: "unavailable", message: "This sharing session has stopped.") }
+                    _ = try await self.authenticateMember(request, allowing: [.mac, .ios])
+                    return
+                }
                 guard let bearer = request.bearer else { throw CompanionAPIError(code: "unauthorized", message: "A device credential is required.") }
                 let grant = try await executionAuth.authenticateGrant(bearer: bearer)
                 try await authorizeGrant(grant.scope.deviceID, grant.provisionedBy)
@@ -316,6 +326,8 @@ final class CompanionHostController {
 
     private func stopService() {
         generation = UUID(); healthTask?.cancel(); healthTask = nil
+        let peerSync = peerSync
+        Task { await peerSync.stopMembers() }
         server?.stop(); server = nil; executionAPI = nil; inferenceHost = nil; authorizeBots = nil
         if let serve {
             serve.stop()
@@ -415,6 +427,7 @@ final class CompanionHostController {
             if let signer {
                 await authentication?.useIdentity(signer)
                 try await authentication?.revoke(deviceID: deviceID, expected: expected)
+                try await peerSync.removeMember(deviceID)
             } else {
                 try await authentication?.revokeLocally(deviceID: deviceID)
             }
@@ -516,6 +529,12 @@ final class CompanionHostController {
         for workspace in executionWorkspaces where workspace.kind == .linux && workspace.executionDeviceID != nil && !workspace.deleted {
             if let configuration = model.remoteWorkspaces.workspaces.first(where: { $0.id.uuidString.lowercased() == workspace.id }) {
                 try? await ensureExecutionPublisher(workspace: workspace, configuration: configuration)
+                // Once per launch: a host that does not serve members yet is retried next launch.
+                if !adoptedLinuxHosts.contains(workspace.id) {
+                    adoptedLinuxHosts.insert(workspace.id)
+                    do { try await ensureLinuxMember(configuration: configuration) }
+                    catch { NSLog("Linux member setup for %@ is pending: %@", configuration.name, error.localizedDescription) }
+                }
             }
         }
     }
@@ -855,7 +874,8 @@ final class CompanionHostController {
               errorMessage: errorMessage, pairingPayload: pairingPayload, pairingExpiresAt: pairingExpiresAt,
               pairedDevices: pairedDevices, lastSeenAt: lastSeenAt, discoveredPeers: discoveredPeers,
               pendingPairingRequests: pendingPairingRequests, isDiscovering: isDiscovering, executionWorkspaces: executionWorkspaces,
-              pendingDeviceRevocations: pendingRevocations, peerPairingStatus: peerSync.pairing.status, peerPairingError: peerSync.pairing.errorMessage, peerSyncErrors: peerSync.errors, peerRoutes: peerSync.routes, peerIdentity: discoveryIdentity)
+              pendingDeviceRevocations: pendingRevocations, peerPairingStatus: peerSync.pairing.status, peerPairingError: peerSync.pairing.errorMessage, peerSyncErrors: peerSync.errors, peerRoutes: peerSync.routes, peerIdentity: discoveryIdentity,
+              librarySync: peerSync.syncStatus)
     }
 
     func refreshStatus() async {
@@ -936,6 +956,20 @@ final class CompanionHostController {
         if model?.isBackendFrontend == true { await forward(.cancelPeerPairing); return }
         peerSync.pairing.cancelRequest()
     }
+    /// A member removal learned from a peer: withdraw this Mac's own grants
+    /// and routes for that device without minting another removal.
+    func applyMemberRemoval(_ deviceID: String) async {
+        guard deviceID != discoveryIdentity?.deviceID else { return }
+        do { try await performRevocation(deviceID, recordsUnpair: false) }
+        catch { errorMessage = error.localizedDescription }
+    }
+
+    /// Verifies a signed member request for any route this Mac serves (for
+    /// example the bots WebSocket upgrade) and returns the member.
+    func authenticateMember(_ request: CompanionHTTPRequest, allowing kinds: Set<MemberKind> = Set(MemberKind.allCases)) async throws -> LibraryMember {
+        try await peerSync.members().authenticate(request, allowing: kinds)
+    }
+
     func applyPeerRevocations() async throws {
         guard let authentication else { return }
         var processed = Set(defaults.stringArray(forKey: "companion.peers.applied-revocations") ?? [])
@@ -1013,6 +1047,8 @@ struct CompanionHostSnapshot: Codable, Sendable {
     var peerSyncErrors: [String: String]? = nil
     var peerRoutes: [PairedMacRoute]? = nil
     var peerIdentity: CompanionPairingDeviceIdentity? = nil
+    /// Every peer's synchronization state, including "update required".
+    var librarySync: LibrarySyncStatus? = nil
 }
 
 private struct ExecutionManagementAcknowledgement: Decodable { let revoked: Bool }

@@ -72,6 +72,36 @@ struct CompanionToolFacadeTests {
         #expect(try await fixture.database.companionSnapshot().notes.count == 1)
     }
 
+    /// A phone that pairs with its member key becomes a member; its signed
+    /// requests then work without the bearer, until a Mac removes it.
+    @Test func phonePairedWithAMemberKeySignsItsRequests() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        let auth = try CompanionAuthentication(fileURL: fixture.directory.appending(path: "member-devices.json"))
+        let mac = MemberDirectory(database: fixture.database, identity: try MemberIdentity.loadOrCreate(
+            file: fixture.directory.appending(path: "mac.key"), deviceID: try await fixture.database.companionLibraryIdentity().hostDeviceID, kind: .mac), cacheLifetime: 0)
+        try await mac.ensureSelf(name: "Mac", endpoints: [])
+        let phone = try MemberIdentity.loadOrCreate(file: fixture.directory.appending(path: "phone.key"), deviceID: UUID().uuidString.lowercased(), kind: .ios)
+        let api = CompanionWorkspaceAPI(database: fixture.database, authentication: auth, commands: fixture.model.companionCommands,
+            isActive: { true }, members: mac, onMemberPaired: { id, name, key in
+                _ = try? await mac.add(deviceID: id, kind: .ios, name: name, publicKey: key, endpoints: [])
+            })
+        let offer = try await auth.createOffer(endpoint: URL(string: "https://fixture.ts.net/wovenmatter")!)
+        var pair = CompanionPairRequest(token: offer.payload.token, deviceID: phone.deviceID, deviceName: "Member phone", metadata: .init(kind: .iPhone))
+        pair.memberPublicKey = phone.publicKey
+        let paired = await api.handle(.init(method: "POST", target: "/v1/pair", headers: [:], body: try JSONEncoder().encode(pair)))
+        #expect(paired.status == 200)
+        #expect(await mac.member(phone.deviceID)?.kind == .ios)
+        func hello() async throws -> Int {
+            var headers = try phone.signer.headers(method: "GET", target: "/wovenmatter/v1/hello")
+            headers["X-Woven-Protocol"] = String(CompanionProtocol.version)
+            let lowered = Dictionary(uniqueKeysWithValues: headers.map { ($0.key.lowercased(), $0.value) })
+            return await api.handle(.init(method: "GET", target: "/wovenmatter/v1/hello", headers: lowered)).status
+        }
+        #expect(try await hello() == 200)
+        try await mac.remove(phone.deviceID)
+        #expect(try await hello() == 401)
+    }
+
     @Test func httpEndpointUsesPairedIdentityAndCurrentRevocation() async throws {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
         let caller = try await importPhone(fixture)

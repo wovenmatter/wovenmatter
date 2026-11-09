@@ -1,3 +1,5 @@
+// The Woven VM is macOS only (Virtualization framework); Linux library builds skip it.
+#if os(macOS)
 import Darwin
 import Foundation
 
@@ -263,3 +265,4 @@ public struct WovenVMController: Sendable {
         return process.terminationStatus
     }
 }
+#endif

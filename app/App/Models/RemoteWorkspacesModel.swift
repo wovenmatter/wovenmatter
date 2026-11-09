@@ -1272,6 +1272,22 @@ final class RemoteWorkspacesModel {
         return credential
     }
 
+    func memberIdentity(configuration: RemoteWorkspaceConfiguration) async throws -> GatewayJSONValue {
+        let identity = try requestIdentity(configuration)
+        let client = try await serviceClient(for: configuration)
+        try requireCurrent(identity)
+        let value = try await client.hostStatus().objectValue?["memberIdentity"] ?? .null
+        try requireCurrent(identity)
+        return value
+    }
+    func adoptMembers(configuration: RemoteWorkspaceConfiguration, adoption: Data) async throws {
+        let identity = try requestIdentity(configuration)
+        let client = try await serviceClient(for: configuration)
+        try requireCurrent(identity)
+        _ = try await client.adoptMembers(adoption)
+        try requireCurrent(identity)
+    }
+
     func executionPublisherStatus(configuration: RemoteWorkspaceConfiguration) async throws -> CompanionWorkspacePublisherStatus {
         let identity = try requestIdentity(configuration)
         let client = try await serviceClient(for: configuration)

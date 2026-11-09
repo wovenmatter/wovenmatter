@@ -1,3 +1,5 @@
+// The Woven VM is macOS only (Virtualization framework); Linux library builds skip it.
+#if os(macOS)
 import Compression
 import Darwin
 import Foundation
@@ -166,3 +168,4 @@ public enum QCOW2Image {
         }
     }
 }
+#endif

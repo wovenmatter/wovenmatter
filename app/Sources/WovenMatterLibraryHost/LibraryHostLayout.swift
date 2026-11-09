@@ -26,6 +26,8 @@ public struct LibraryHostLayout: Sendable, Equatable {
   public var run: URL { root.appending(path: "run", directoryHint: .isDirectory) }
   public var defaultSocket: URL { run.appending(path: "library.sock") }
   public var defaultTokenFile: URL { run.appending(path: "library-api.token") }
+  /// This machine's member signing key (raw Ed25519 key, base64, 0600).
+  public var memberKeyFile: URL { secrets.appending(path: "member-signing.key") }
   /// Written once listeners are ready; removed on clean shutdown.
   public var endpointFile: URL { run.appending(path: "library.json") }
 

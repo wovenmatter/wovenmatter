@@ -31,12 +31,51 @@ same commit.
 
 - Every device has a long-lived Curve25519 signing identity: the Mac Keychain,
   the iPhone Keychain, and a 0600 file on Linux under the Woven data root.
-  This generalizes today's paired-Mac identity (`PairedMacIdentity.swift`).
+  This generalizes today's paired-Mac identity (`PairedMacIdentity.swift`): a
+  Mac's member key *is* its paired-Mac signing key, and a Mac's or Linux
+  host's device ID is its library replica identity
+  (`companion_library_identity.host_device_id`, the sync clock's origin). On
+  Linux the key is `<library data root>/secrets/member-signing.key` (raw
+  32-byte key, base64, created on first start).
 - The **member list** is a synced, signed record set. Each member entry names
   the device ID, kind (`mac`, `linux`, `ios`), display name, public key,
   endpoints, the adding device and its signature. Any Mac member may add a
   device, because adding needs the UI. Removal is a signed revocation that
   every device applies as soon as it syncs.
+  - Storage (`LibraryMembers.swift`, `MemberDirectory.swift`): shared rows
+    `library_members(device_id, added_by, added_at, payload)` (newest entry per
+    adder) and `library_member_revocations(event_id, device_id, payload)`, in
+    the paired sync table set; local, unsynced `library_member_anchors`. Entry
+    and revocation signatures are Ed25519 over the length-prefixed canonical
+    encoding used by `PairedMacIdentity.swift`, domains
+    `woven.member.entry.v1` (`device, kind, name, key, endpoints, added_by,
+    added_at`) and `woven.member.revocation.v1` (`event, device, revoked_by,
+    revoked_at`).
+  - Resolution (`LibraryMemberResolver`): trust starts at local anchors (this
+    device; on a Linux host also the Mac that adopted it) and flows only
+    through entries signed by trusted Macs. A device's kind comes from a Mac's
+    entry; its own self-signed entry may change only its name and endpoints.
+    Two trusted keys for one device: not trusted. A revocation counts when a
+    trusted Mac (or the device itself) signed it; removing a Mac keeps the
+    devices it added earlier but voids its entries from its removal on; a newer
+    entry from an unremoved Mac re-adds a removed device.
+  - Adding: Mac↔Mac pairing (link or nearby request, then the signed join)
+    records the other Mac on both sides. A phone that includes
+    `memberPublicKey` (raw 32 bytes) in `CompanionPairRequest` gets an `ios`
+    entry from the Mac it pairs with; phones without it keep their bearer
+    grant. A Linux host: the Mac that manages it reads `memberIdentity` from
+    `GET /v1/host/status`, signs its entry (endpoint: `libraryEndpoint`, else
+    `https://<host>/wovenmatter/`) and sends `POST /v1/host/members/adopt` with
+    a `LibraryMemberAdoption` `{anchor: {deviceID, kind: "mac", publicKey},
+    entries, revocations}` through the administrative link. The Linux server
+    accepts it with the installer's API bearer (the first time, when it cannot
+    yet verify the Mac) or a signed `mac` member request, and forwards the body
+    to its library socket's `POST /v1/members/adopt`. The library host refuses
+    an adoption whose anchor did not sign this host's current key. Later
+    member changes reach the host by peer sync.
+  - Upgrade: Macs paired before members existed (a key pinned by a signed
+    join) are converted into members on launch. Phones and Linux hosts pair
+    again. Library content is never touched.
 - **Authentication between members: signed requests.** Every request from
   one member to another is signed with the caller's device key. Nothing is
   issued, cached or renewed, and nothing expires on a timer. Revoking a member
@@ -50,11 +89,15 @@ same commit.
   - The signed message is the UTF-8 string
     `woven-member-v1\n<METHOD>\n<path with query>\n<time>\n<nonce>\n<hex SHA-256 of body>`.
     An empty body hashes the empty string. A WebSocket upgrade signs its
-    `GET` request. The path is the request target as sent, without a leading
-    `/wovenmatter` mount (Tailscale Serve strips it before a Linux host sees
-    the request; a Mac receives it intact). The Linux Node server, which Serve
-    reaches through `/wovenmatter-execution/<id>`, accepts a signature over
-    the path with or without that prefix.
+    `GET` request. The path is the request target exactly as the client
+    sends it, except that a leading `/wovenmatter` mount is dropped
+    (`MemberRequestSignature.canonicalTarget`: `/wovenmatter/v1/x?y` and
+    `/v1/x?y` sign alike, `/wovenmatter?y` signs as `/?y`), because Tailscale
+    Serve strips it before a Linux host sees the request while a Mac receives
+    it intact. Any other prefix is signed as sent: a Swift client calling the
+    Linux Node server through `/wovenmatter-execution/<id>/…` signs that full
+    path, and the Node server, which sees the path with that prefix stripped,
+    also accepts a signature over the path with it restored.
   - The verifier accepts a request when:
     - the device is on the current member list and not revoked;
     - the time is within 300 seconds of its own clock;
@@ -81,6 +124,17 @@ same commit.
   transition the installer's API bearer and existing device grants keep
   working beside signatures; the runtime host API (`/v1/bots-host/*`) and
   session MCP (`/mcp`) keep their own bearers.
+- Swift (`shared/…/MemberRequestSignature.swift`): `MemberRequestSigner`
+  (`headers(method:target:body:)`) and `MemberRequestVerifier` (nonce cache,
+  window) are portable; `MemberIdentity.signer` and `MemberDirectory.verifier`
+  bind them to a device key and the resolved list.
+  `MemberDirectory.authenticate(_:allowing:)` checks any request (the Mac's
+  bots WebSocket upgrade uses it through
+  `CompanionHostController.authenticateMember`). On a Mac, signed requests are
+  accepted on peer sync (`mac`, `linux`), the mobile API and `/mcp` (`ios`,
+  `mac`), `/v1/execution/*` (`mac`, `ios`; no execution grant needed) and
+  `/v1/bots/*` (`mac`, `ios`). Bearer grants keep working beside them until
+  every phone pairs as a member.
 - Remote host administration (status, logs, restart, update) is available to
   every Mac member, as signed requests to the Linux server:
   `GET /v1/host/status` (remote-host.sh `status` plus `library` and
@@ -119,6 +173,21 @@ same commit.
   peers once and batched; a device that comes online catches up once. There is
   no constant polling: today's 5-second loop becomes change-driven, with a
   slow presence check.
+  - `LibraryPeerSync` (store package) runs it on Macs and Linux hosts, between
+    `mac` and `linux` members only, all signed: `POST /v1/peers/sync`
+    (`LibraryPeerExchange {deviceID, after, page, version, attachment?}`: push
+    this device's page after its last pushed cursor, receive the peer's after
+    `after`; repeated until neither has more), `POST /v1/peers/notify
+    {deviceID, cursor}` (the receiver pulls when `cursor` is past what it has),
+    `POST /v1/peers/files` and `POST /v1/peers/file` (content-addressed files,
+    as before).
+  - Triggers: a write that appends to the change log
+    (`WorkspaceDatabase.observePeerChanges`) is announced, debounced 300 ms,
+    to peers that are online; starting, a newly learned member and a contact
+    from a peer each catch up once; a presence check every 60 s (doubling to
+    15 minutes for an offline peer) is the only timer.
+  - A Mac also carries its bearer-era pairing roster (`PeerMembership`) in
+    `attachment` until phones pair as members; Linux hosts send none.
 - Linux session history is written into the machine's own library copy, which
   then syncs everywhere. That replaces the per-Mac publisher outbox.
 - **iPhone sync set.** Full copies of notes, Quick Chats with their
@@ -129,7 +198,13 @@ same commit.
 - **Versions.** Sync requires matching schemas (`PairedLibraryStore` already
   rejects a mismatch). When peers disagree, every device shows which part
   needs updating and offers "Update everything". There is no compatibility
-  layer.
+  layer. A mismatched exchange answers 409 `{code: "update_required",
+  message, version, schema}`; `LibrarySyncStatus` (`{deviceID, version,
+  schema, peers: [{deviceID, name, kind, state: online|offline|updateRequired|failing,
+  version, lastSynchronized, lastContact, error}], conflicts, quarantined}`,
+  `updateRequired`) is on the Mac's `CompanionHostSnapshot.librarySync`, the
+  library socket's `GET /v1/sync/status` and, for phones, the mobile API's
+  signed `GET /v1/sync/status` on every Mac and Linux host.
 
 ### Library host (`wovenmatter-library`)
 
@@ -142,7 +217,9 @@ is no default production location.
 
 ```
 wovenmatter-library --data-root DIR [--port N] [--socket PATH] [--token-file PATH]
-                    [--harness-catalog PATH] [--migrate-only]
+                    [--harness-catalog PATH] [--name NAME] [--endpoint URL]... [--migrate-only]
+wovenmatter-library --data-root DIR --identity
+wovenmatter-library --data-root DIR --adopt-members FILE|-
 wovenmatter-library --version
 ```
 
@@ -154,6 +231,11 @@ wovenmatter-library --version
   copy a host release ships three directories above the binary.
 - `--migrate-only`: open and migrate the database, print
   `{"event":"migrated"}` and exit. Use it to verify an install or update.
+- `--name NAME`, `--endpoint URL` (repeatable): this machine's own member
+  entry (name, base URLs such as `https://host.tailnet.ts.net/wovenmatter/`).
+- `--identity`: print `{deviceID, kind, name, publicKey, endpoints}` and exit.
+- `--adopt-members FILE|-`: apply a `LibraryMemberAdoption`, print the member
+  list and exit (the same as the socket's `POST /v1/members/adopt`).
 - When both listeners are ready it prints one line to stdout and writes the
   same object to `DIR/run/library.json` (0600):
   `{"event":"ready","pid":N,"port":N,"socket":"…","version":"1"}`. SIGTERM or
@@ -166,7 +248,7 @@ owned by the running user.
 | Path | Contents |
 | --- | --- |
 | `DIR/library/` | The `DashboardStore` support directory: `workspace.sqlite` (+ WAL), `dashboard-device-id` (this machine's device ID), library and attachment files |
-| `DIR/secrets/` | 0600 files that replace Keychain items (`LinuxSecretStore`), one per generic-password item |
+| `DIR/secrets/` | 0600 files that replace Keychain items (`LinuxSecretStore`), one per generic-password item, and `member-signing.key` (this machine's member key) |
 | `DIR/run/library.sock` | Local API socket, 0600; peers must also be this user (checked with `SO_PEERCRED`) |
 | `DIR/run/library-api.token` | Local API bearer, 0600, 43–256 base64url characters. The Node server may create it before starting the host; otherwise the host creates it |
 | `DIR/run/library.json` | Ready record (above) |
@@ -176,13 +258,18 @@ which the host strips):
 
 - `GET /v1/health` → `{"status":"ok","service":"wovenmatter-library","version":"1","deviceID":"…","uptimeSeconds":N}`,
   or 503 when the database is unavailable. Unauthenticated; it reveals only
-  the device ID.
-- Peer sync and mobile library routes are mounted with
-  `LibraryHost.mount(prefix:_:)`, for example `/v1/peers/` and
-  `/v1/federation/`. Nothing is mounted yet: the member authentication those
-  routes need belongs to the membership workstream, and unmounted paths return
-  404. The handlers already in the package (`PairedLibraryStore` replication,
-  `CompanionWorkspaceAPI`) are the ones to mount.
+  the device ID, which is the member device ID.
+- `GET /v1/identity` → `{deviceID, kind: "linux", name, publicKey, endpoints}`.
+  Unauthenticated: the adding Mac signs this key.
+- Peer sync (`/v1/peers/sync`, `notify`, `files`, `file`; signed by a `mac` or
+  `linux` member) and the mobile library API (`LibraryHost.mobilePrefixes`:
+  `/v1/hello`, `/v1/snapshot`, `/v1/changes`, `/v1/mutations`, `/v1/commands`,
+  `/v1/federation/…`, `/v1/calendar…`, `/v1/dictations`, `/v1/notes/…`,
+  `/v1/assets/…`, `/v1/sessions/…`, `/v1/devices`, `/v1/providers`,
+  `/v1/pending`, `/v1/workspace-read`, `/mcp`; signed by an `ios` or `mac`
+  member only, no bearer) are mounted with `LibraryHost.mount(prefix:_:)`.
+  Sessions are not started through it (`unsupported`). Other paths return 404.
+  Sync starts once both listeners are ready.
 
 **Local API** (Unix socket, for this machine's Node server). Every request
 carries `Authorization: Bearer <token file contents>`. Requests are HTTP/1.1,
@@ -209,19 +296,41 @@ one per connection, with `Host`; POST bodies are `application/json`.
   (`{success,result,error,code,requestID}`); errors use the usual codes
   (`tool_disabled`, `revision_required`, `revision_conflict`, `not_found`, …).
 
-Routes the membership workstream adds to the local API, which the Node server
-already calls (`remote/src/library-host.mjs`):
+- Bot callers on `POST /v1/mcp`: instead of `X-Woven-Conversation-ID`, send
+  `X-Woven-Caller: woven:bot:<machine-device-id>:<bot-id>` (use this host's
+  member device ID from `/v1/identity`), `X-Woven-Bot-ID: <bot-id>` (must
+  match), `X-Woven-Bot-Name` (percent-encoded) and `X-Woven-Enabled-Groups`.
+  The bot is an app-wide caller (`WovenMCPCaller.isAppWide`), registered on
+  first use; its tools are this library's `botMCP` groups (synced Woven
+  settings) intersected with the served groups and the server's selection.
+  `woven_context` is not offered to bots.
 
-- `GET /v1/identity` → `{deviceID, kind: "linux", name, publicKey, endpoints}`,
-  this machine's member identity. Until it exists the server uses the health
-  `deviceID` with no key.
-- `GET /v1/members` → `{revision, members: [...]}` (see "Membership").
+Membership, publishing and bot routes on the local API
+(`remote/src/library-host.mjs` calls them):
+
+- `GET /v1/identity`: as on loopback.
+- `GET /v1/members` → `{revision, members: [{deviceID, kind, name, publicKey
+  (base64), endpoints, addedBy, revoked}]}` (see "Membership"). `revision` is
+  an opaque string that changes whenever the resolved list changes.
+- `POST /v1/members/adopt` (`LibraryMemberAdoption`) → the member list, or 400
+  `invalid_member`.
+- `POST /v1/members/self {name?, endpoints}` updates this machine's own
+  entry; the server sends it after publishing its Serve route so peers use
+  that address.
+- `GET /v1/sync/status` → `LibrarySyncStatus`.
 - `POST /v1/publisher/{journal,retained/settle,association,artifacts/register,artifacts/chunk,artifacts/commit}`:
-  the bodies and replies of a Mac's `/v1/federation/publisher/*`. The caller is
-  named by headers instead of a publisher bearer: `X-Woven-Workspace` (library
-  ID), `X-Woven-Workspace-ID` and `X-Woven-Execution-Device-ID`.
+  the bodies and replies of a Mac's `/v1/federation/publisher/*`, written into
+  this library copy. The workspace is the one the entries (or the artifact
+  manifest, or `association`'s body `workspaceID` / `X-Woven-Workspace-ID`)
+  name; it must be a Linux execution workspace this library knows (its
+  descriptor arrives with the adding Mac's records; until then 403
+  `wrong_owner`), and history is attributed to its execution device. A batch
+  may carry this library's ID or the workspace's (the adding Mac's) library
+  ID; the reply keeps the caller's.
 - `POST /v1/bots/{botID}/entries`: a runtime conversation batch (`{bot,
-  conversations, entries}`, see "Runtime host API"), upserted as described there.
+  conversations, entries}`, see "Runtime host API"), recorded with
+  `WorkspaceDatabase.recordBotConversation(machineID:_:)` under this host's
+  member device ID → `{conversations, entries, added}`.
 
 **Node server supervision** (`remote/src/library-host.mjs`, wired in
 `server.mjs`). On native Linux hosts the server starts
@@ -253,8 +362,9 @@ with every Mac offline and no single-Mac library grant. History the caller may
 read only through its managed sessions, and all history while the library host
 is down, comes from the Node journal. Databases, `woven_context` and
 `woven_html_render` stay in Node; timers, usage, `woven_sessions_folders`,
-sessions on other workspaces and bot callers still use the Mac grant until
-their own workstreams move them. Session history is published to the local
+sessions on other workspaces still use the Mac grant until their own
+workstreams move them; bot callers' library tools can go to `/v1/mcp` as
+app-wide callers (above). Session history is published to the local
 publisher routes (the Mac grant is only a fallback without a library host),
 and bot conversation batches go to `/v1/bots/{botID}/entries`, waiting in the
 outbox while the host is down.

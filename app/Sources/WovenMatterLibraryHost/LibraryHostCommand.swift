@@ -7,6 +7,7 @@ import Musl
 #endif
 import Foundation
 import WovenMatterCore
+import WovenMatterDashboardStore
 
 /// `wovenmatter-library` command line. Every path is explicit or derived from
 /// `--data-root`; nothing reads a default production location.
@@ -17,10 +18,19 @@ public struct LibraryHostOptions: Equatable, Sendable {
   public var tokenFile: URL?
   public var harnessCatalog: URL?
   public var migrateOnly = false
+  /// This machine's advertised name and base URLs (its own member entry).
+  public var name: String?
+  public var endpoints: [URL] = []
+  /// Print `{"deviceID","kind","name","publicKey"}` and exit.
+  public var printIdentity = false
+  /// Read a `LibraryMemberAdoption` from this file (`-` for stdin), apply it, print the member list and exit.
+  public var adoptMembers: String?
 
   public static let usage = """
     usage: wovenmatter-library --data-root DIR [--port N] [--socket PATH] [--token-file PATH]
-                               [--harness-catalog PATH] [--migrate-only]
+                               [--harness-catalog PATH] [--name NAME] [--endpoint URL]... [--migrate-only]
+           wovenmatter-library --data-root DIR --identity
+           wovenmatter-library --data-root DIR --adopt-members FILE|-
            wovenmatter-library --version
 
       --data-root DIR    Library host data root (created 0700). Holds library/, secrets/ and run/.
@@ -28,11 +38,16 @@ public struct LibraryHostOptions: Equatable, Sendable {
       --socket PATH      Unix socket for the local API (default DIR/run/library.sock).
       --token-file PATH  Local API bearer token, 0600 (default DIR/run/library-api.token; created if missing).
       --harness-catalog PATH  harnesses/catalog.json (default: the host release's copy beside this binary).
+      --name NAME        This machine's member name (default: the host name).
+      --endpoint URL     A base URL where peers reach this host, e.g. https://host.tailnet.ts.net/wovenmatter/ (repeatable).
       --migrate-only     Open and migrate the library database, then exit.
+      --identity         Print this machine's member identity (device ID and public key), then exit.
+      --adopt-members F  Apply the member records a Mac signed for this machine (JSON file, - for stdin), then exit.
     """
 
   public static func parse(_ arguments: [String]) throws -> LibraryHostOptions? {
     var root: URL?, port: UInt16 = 0, socket: URL?, token: URL?, catalog: URL?, migrate = false
+    var name: String?, endpoints: [URL] = [], identity = false, adopt: String?
     var index = arguments.startIndex
     func value(_ flag: String) throws -> String {
       index += 1
@@ -53,13 +68,26 @@ public struct LibraryHostOptions: Equatable, Sendable {
       case "--token-file": token = path(try value("--token-file"))
       case "--harness-catalog": catalog = path(try value("--harness-catalog"))
       case "--migrate-only": migrate = true
+      case "--identity": identity = true
+      case "--adopt-members":
+        index += 1
+        guard index < arguments.endIndex else { throw LibraryHostError.usage("--adopt-members requires a file or -.") }
+        adopt = arguments[index]
+      case "--name": name = try value("--name")
+      case "--endpoint":
+        guard let url = URL(string: try value("--endpoint")), CompanionPairingPayload.isValidEndpoint(url) else {
+          throw LibraryHostError.usage("--endpoint must be an HTTPS tailnet URL.")
+        }
+        endpoints.append(url)
       case "--help", "-h": throw LibraryHostError.usage(usage)
       default: throw LibraryHostError.usage("Unknown argument \(arguments[index]).\n\n\(usage)")
       }
       index += 1
     }
     guard let root else { throw LibraryHostError.usage("--data-root is required.\n\n\(usage)") }
-    return .init(dataRoot: root, port: port, socket: socket, tokenFile: token, harnessCatalog: catalog, migrateOnly: migrate)
+    var options = LibraryHostOptions(dataRoot: root, port: port, socket: socket, tokenFile: token, harnessCatalog: catalog, migrateOnly: migrate)
+    options.name = name; options.endpoints = endpoints; options.printIdentity = identity; options.adoptMembers = adopt
+    return options
   }
 }
 
@@ -83,9 +111,18 @@ public enum LibraryHostCommand {
     HarnessCatalog.hostCatalogURL = options.harnessCatalog ?? Bundle.main.executableURL?.resolvingSymlinksInPath()
       .deletingLastPathComponent().appending(path: "../../../harnesses/catalog.json").standardizedFileURL
     do {
-      let host = try await LibraryHost(layout: layout, tokenFile: options.tokenFile)
+      let host = try await LibraryHost(layout: layout, tokenFile: options.tokenFile, name: options.name, endpoints: options.endpoints)
       if options.migrateOnly {
         FileHandle.standardOutput.write(Data(#"{"event":"migrated"}"#.utf8 + [10])); return 0
+      }
+      let output = JSONEncoder(); output.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+      if options.printIdentity {
+        FileHandle.standardOutput.write(try output.encode(await host.identityValue()) + Data([10])); return 0
+      }
+      if let source = options.adoptMembers {
+        let data = source == "-" ? FileHandle.standardInput.readDataToEndOfFile() : try Data(contentsOf: URL(fileURLWithPath: source))
+        let list = try await host.members.adopt(JSONDecoder().decode(LibraryMemberAdoption.self, from: data))
+        FileHandle.standardOutput.write(try output.encode(list) + Data([10])); return 0
       }
       let socket = options.socket ?? layout.defaultSocket
       let port = try host.listen(port: options.port, socket: socket)
@@ -97,6 +134,7 @@ public enum LibraryHostCommand {
         throw LibraryHostError.unsafePath(layout.endpointFile.path)
       }
       FileHandle.standardOutput.write(ready + Data([10]))
+      await host.startSync()
       await waitForTermination()
       host.stop()
       try? FileManager.default.removeItem(at: layout.endpointFile)
