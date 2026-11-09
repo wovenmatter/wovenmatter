@@ -1089,6 +1089,16 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         return try await request(path: "v1/execution/devices", method: "POST", body: JSONEncoder().encode(payload))
     }
 
+    /// The Linux host's member identity (`{deviceID, kind, name, publicKey}`),
+    /// which the adding Mac signs into a member entry.
+    public func memberIdentity() async throws -> GatewayJSONValue {
+        try await request(path: "v1/members/identity", method: "GET", body: nil)
+    }
+    /// Hands the Linux host the signed member records (a `LibraryMemberAdoption`).
+    public func adoptMembers(_ adoption: Data) async throws -> GatewayJSONValue {
+        try await request(path: "v1/members/adopt", method: "POST", body: adoption)
+    }
+
     public func executionPublisherStatus() async throws -> CompanionWorkspacePublisherStatus {
         try await request(path: "v1/execution/publisher", method: "GET", body: nil)
     }

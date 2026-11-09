@@ -78,11 +78,15 @@ public enum CompanionWorkspacePublisherAPI {
     }
     switch path {
     case "/v1/publisher/association":
-      struct Request: Decodable { var workspaceID: String; var runID: String?; var nativeSessionID: String? }
+      // The workspace comes from the body or the `X-Woven-Workspace-ID` header.
+      struct Request: Decodable { var workspaceID: String?; var runID: String?; var nativeSessionID: String? }
       let value = try JSONDecoder().decode(Request.self, from: request.body)
-      _ = try await workspace(value.workspaceID)
+      guard let workspaceID = value.workspaceID ?? request.headers["x-woven-workspace-id"] else {
+        return .error("invalid_request", "Name the workspace in X-Woven-Workspace-ID.", status: 400)
+      }
+      _ = try await workspace(workspaceID)
       guard let runID = value.runID, (value.nativeSessionID?.utf8.count ?? 0) <= 4096,
-            let association = try await database.companionRetainedAssociation(workspaceID: value.workspaceID, runID: runID, nativeSessionID: value.nativeSessionID) else {
+            let association = try await database.companionRetainedAssociation(workspaceID: workspaceID, runID: runID, nativeSessionID: value.nativeSessionID) else {
         return .error("not_found", "No exact retained execution association exists in this workspace.", status: 404)
       }
       return try .json(association)

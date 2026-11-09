@@ -4,6 +4,29 @@ import WovenMatterClient
 import WovenMatterDashboardStore
 
 extension CompanionHostController {
+    /// Adds a Linux host this Mac manages as a member: reads its identity
+    /// through the administrative link, signs its entry (endpoint
+    /// `https://<host>/wovenmatter/`; the host may correct it with its own
+    /// entry) and hands it the complete signed record set, so the host
+    /// trusts this Mac and synchronizes with every member.
+    func ensureLinuxMember(configuration: RemoteWorkspaceConfiguration) async throws {
+        guard let model, !model.isBackendFrontend else { return }
+        let value = try await model.remoteWorkspaces.memberIdentity(configuration: configuration)
+        guard let object = value.objectValue, let deviceID = object["deviceID"]?.stringValue,
+              let key = object["publicKey"]?.stringValue.flatMap({ Data(base64Encoded: $0) }), key.count == 32,
+              object["kind"]?.stringValue == MemberKind.linux.rawValue,
+              let endpoint = URL(string: "https://" + configuration.hostName + "/wovenmatter/") else {
+            throw CompanionAPIError(code: "invalid_member", message: "The Linux host returned an invalid member identity.")
+        }
+        let directory = try await peerSync.members()
+        let current = try await directory.list().members.first { $0.deviceID == deviceID.lowercased() }
+        if current == nil || current?.revoked == true || current?.publicKey != key {
+            try await directory.add(deviceID: deviceID, kind: .linux, name: configuration.name, publicKey: key, endpoints: [endpoint])
+        }
+        try await model.remoteWorkspaces.adoptMembers(configuration: configuration, adoption: JSONEncoder().encode(directory.adoption()))
+        await peerSync.librarySync?.scheduleAll()
+    }
+
     /// Provision through the existing administrative management link. The
     /// observing client's bearer is never sent to the workspace or reused here.
     func ensureExecutionPublisher(workspace: CompanionExecutionWorkspace, configuration: RemoteWorkspaceConfiguration) async throws {

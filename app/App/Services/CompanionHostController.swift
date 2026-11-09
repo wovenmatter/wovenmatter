@@ -81,6 +81,7 @@ final class CompanionHostController {
     private var revokingDeviceIDs: Set<String> = []
     var mcpSettingsFingerprints: [String: String] = [:]
     private var registryRefreshInProgress = false
+    private var adoptedLinuxHosts: Set<String> = []
     private var revocationRetryInProgress = false
     private static let pendingRevocationsKey = "companion.execution.pending-revocations"
     private var server: CompanionHTTPServer?
@@ -524,6 +525,12 @@ final class CompanionHostController {
         for workspace in executionWorkspaces where workspace.kind == .linux && workspace.executionDeviceID != nil && !workspace.deleted {
             if let configuration = model.remoteWorkspaces.workspaces.first(where: { $0.id.uuidString.lowercased() == workspace.id }) {
                 try? await ensureExecutionPublisher(workspace: workspace, configuration: configuration)
+                // Once per launch: a host that does not serve members yet is retried next launch.
+                if !adoptedLinuxHosts.contains(workspace.id) {
+                    adoptedLinuxHosts.insert(workspace.id)
+                    do { try await ensureLinuxMember(configuration: configuration) }
+                    catch { NSLog("Linux member setup for %@ is pending: %@", configuration.name, error.localizedDescription) }
+                }
             }
         }
     }
