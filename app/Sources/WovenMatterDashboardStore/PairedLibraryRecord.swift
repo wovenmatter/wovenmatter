@@ -70,6 +70,7 @@ enum PairedLibraryTables {
     "companion_execution_conversations", "companion_execution_adoptions", "companion_message_provenance",
     "companion_execution_runs", "companion_native_history", "companion_native_history_parts",
     "companion_saved_artifacts", "companion_artifact_uploads", "companion_artifact_chunks",
-    "library_messages", "library_items", "library_locations", "paired_mac_routes", "paired_remote_workspaces"
+    "library_messages", "library_items", "library_locations", "paired_mac_routes", "paired_remote_workspaces",
+    "bot_conversations", "bot_conversation_entries"
   ]
 }

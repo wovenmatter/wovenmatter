@@ -326,8 +326,42 @@ final class WorkspaceAgentToolsModel {
             guard let self else { return .init(success: false, error: "Woven MCP stopped.", code: "unavailable") }
             return await self.handle(request, callerID: callerID)
         }
+        host.botNotificationSink = botNotificationSink
         mcpHost = host
         return host
+    }
+
+    var botNotificationSink: (@MainActor (WovenBotNotification) async throws -> Void)? {
+        didSet { mcpHost?.botNotificationSink = botNotificationSink }
+    }
+
+    func mcpEndpoint() async throws -> String { try await ensureMCPHost().start() }
+
+    func issueBotKey(machineID: String, botID: String, botName: String) async throws -> WovenBotMCPGrant {
+        try await ensureMCPHost().issueBotKey(machineID: machineID, botID: botID, botName: botName)
+    }
+
+    func revokeBotKey(callerID: String, sticky: Bool) throws {
+        try ensureMCPHost().revokeBotKey(callerID: callerID, sticky: sticky)
+    }
+
+    func reinstateBot(callerID: String) async throws { try await ensureMCPHost().reinstateBot(callerID: callerID) }
+
+    func setBotsPaused(machineID: String, paused: Bool) async throws {
+        try await ensureMCPHost().setBotsPaused(machineID: machineID, paused: paused)
+    }
+
+    func botCallers() async throws -> [WovenBotCaller] { try await database.botCallers() }
+
+    func trackBotDispatch(callerID: String, fence: AgentDispatchFence) throws -> UUID? {
+        guard WovenMCPCaller.parseBot(callerID) != nil else { return nil }
+        return try ensureMCPHost().trackBotDispatch(callerID: callerID, fence: fence)
+    }
+
+    func finishBotDispatch(_ id: UUID?) { mcpHost?.finishBotDispatch(id) }
+
+    func deliverBotNotification(_ delivery: WorkspaceSessionDelivery) async throws -> Bool {
+        try await ensureMCPHost().deliverBotNotification(delivery)
     }
 
     func mcpAccess(_ action: WovenMCPAccessAction) async throws -> WovenMCPAccessSnapshot {

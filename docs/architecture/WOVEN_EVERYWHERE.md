@@ -617,6 +617,57 @@ Pi Bot's Admin Bot config tools (`read_config`, `update_config`,
 - The native SwiftUI bot UI and settings come from PR #226, adapted to this
   runtime and to Woven's provider connections.
 
+### Woven servers and apps
+
+The runtime's config, host API and protocol are above (Runtime). These are the
+other interfaces between Woven servers and apps.
+
+**Supervision on a Mac.** The background server writes the runtime config to
+`<support>/Bots/runtime.json` with `dataDir` `<support>/Bots/data`,
+`engine.kind` `mac-vm`, `image.tag` `wovenmatter-bots` and `limits.botMemoryBytes`
+from the machine's per-bot RAM, and runs the runtime with the Node the app ships
+(`<Resources>/default-agent/bin/node <Resources>/bots/src/cli.ts`). It serves the host
+API on its own loopback port. Previews are published from the runtime's loopback
+proxy port with Tailscale Serve, path `/`, on their own HTTPS port. Inference
+credentials are the coordinator snapshot Pi Durable gets; `claude-subscription`
+returns the default agent's native directories (`~/.wovenmatter/default-agent/claude-runtime`
+and `claude-keychain`) once they exist. `DELETE /v1/bots-host/mcp-keys/{botID}` also
+marks that bot's library conversations deleted.
+
+**Bot conversations in the library** are two paired-library tables, not chats:
+`bot_conversations(id = "<machine>:<bot>:<conversationId>", machine_id, bot_id,
+bot_name, conversation_id, kind, parent_conversation_id, forked_at, title, pinned,
+created_at, updated_at, deleted_at)` and `bot_conversation_entries(id =
+"<machine>:<bot>:<entryId>", conversation, entry_id, role, text, error, stopped,
+created_at)`. A resent row that has not changed is not rewritten, so it adds no sync
+traffic. Regular chat lists never show them. The Swift entry point is
+`WorkspaceDatabase.recordBotConversation(machineID:_:)`, which a Linux library daemon
+can call with the same batch.
+
+**Woven server routes for bots.** Every Woven server that hosts bots answers these,
+under `/wovenmatter` when reached through Tailscale Serve:
+
+| Route | Reply |
+| --- | --- |
+| `GET /v1/bots/status` | `{ machine: { deviceID, name, kind }, enabled, state, message?, versions: { app, runtime, protocol }, resources, capacity: { memoryBytes, diskTotalBytes, diskFreeBytes, diskUsedByBotsBytes? }, paused }` |
+| `POST /v1/bots/resources` `{ resources: { poolBytes, perBotBytes, diskBytes } }` | the status after applying; `null` is no cap |
+| `GET /v1/bots/ws` (WebSocket upgrade) | proxied to the runtime's `/ws` with the runtime's own bearer |
+
+Until member auth lands, a Mac's server accepts any current execution grant
+(`CompanionExecutionAuthentication`) for these routes, and a Linux server accepts its
+workspace API token through the SSH tunnel. On the Mac, `ApplicationModel.botsAccess`
+is the one function member auth replaces.
+
+**Linux bots-only install.** `remote-host.sh install-bots <workspace-id> <port>
+<access-mode> <fingerprint>` takes the same stdin (token line, then bundle) as
+`install` and installs the Woven server with bots and its engine, asking for sudo once.
+
+**Mac engine.** The bots host codes against `BotEngineHost`
+(`app/App/Services/BotEngineHost.swift`): `ensureRunning(resources:)` returns the
+Docker socket once the VM answers, `apply(resources:)`, `diskUsedByBots()`, `status()` and
+`stop()`. Previews need no VM port forward: the runtime carries them over Engine API exec
+streams. `BotEngineHostFactory.make` returns the implementation.
+
 ## Out of scope
 
 - TestFlight preparation (its own PR).

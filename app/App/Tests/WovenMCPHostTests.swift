@@ -3,7 +3,7 @@ import SQLite3
 import Testing
 import WorkspaceFixtures
 import WovenMatterCore
-import WovenMatterDashboardStore
+@testable import WovenMatterDashboardStore
 @testable import WovenMatterAppFacade
 
 @MainActor @Suite(.serialized)
@@ -161,9 +161,9 @@ struct WovenMCPHostTests {
         #expect(names.contains("woven_timers_list") && !names.contains("woven_notes_list"))
         let goal = try #require(tools.first { $0.objectValue?["name"] == .string("woven_goals_get") })
         #expect(goal.objectValue?["inputSchema"]?.objectValue?["required"]?.arrayValue?.contains(.string("sessionID")) == true)
-        let targetless = try #require(await fixture.host.handle(mcpHostRequest(token: nil, name: "woven_goals_get"), allowOutside: true))
+        let targetless = try #require(await fixture.host.handle(try mcpHostRequest(token: nil, name: "woven_goals_get"), allowOutside: true))
         #expect(try JSONDecoder().decode(GatewayJSONValue.self, from: targetless.body).objectValue?["error"] != nil)
-        let targeted = try #require(await fixture.host.handle(mcpHostRequest(token: nil, name: "woven_goals_get", arguments: ["sessionID": .string(fixture.caller)]), allowOutside: true))
+        let targeted = try #require(await fixture.host.handle(try mcpHostRequest(token: nil, name: "woven_goals_get", arguments: ["sessionID": .string(fixture.caller)]), allowOutside: true))
         #expect(try JSONDecoder().decode(GatewayJSONValue.self, from: targeted.body).objectValue?["result"]?.objectValue?["isError"] == .bool(false))
         #expect(fixture.calls.callers == [WovenMCPCaller.outside])
         #expect(fixture.calls.requests.first?.targetSessionID == fixture.caller)
@@ -208,7 +208,7 @@ struct WovenMCPHostTests {
         let denied = try await fixture.call(connection, name: "woven_notes_list")
         #expect(denied.objectValue?["error"] != nil)
         fixture.host.revokeSession(fixture.caller)
-        #expect(try await fixture.host.handle(mcpHostRequest(token: connection.bearerToken, name: "woven_notes_list")) == nil)
+        #expect(try await fixture.host.handle(try mcpHostRequest(token: connection.bearerToken, name: "woven_notes_list")) == nil)
         let saved = try String(contentsOf: fixture.directory.appending(path: "mcp-access.json"), encoding: .utf8)
         #expect(!saved.contains(connection.bearerToken))
     }
@@ -295,9 +295,265 @@ private struct MCPHostFixture {
     }
 }
 
-private func mcpHostRequest(token: String?, name: String, arguments: [String: GatewayJSONValue] = [:]) throws -> CompanionHTTPRequest {
+private func mcpHostRequest(token: String?, name: String, arguments: [String: GatewayJSONValue] = [:], headers: [String: String] = [:]) throws -> CompanionHTTPRequest {
     let message: GatewayJSONValue = .object(["jsonrpc": .string("2.0"), "id": .string(UUID().uuidString),
         "method": .string("tools/call"), "params": .object(["name": .string(name), "arguments": .object(arguments)])])
-    return .init(method: "POST", target: "/mcp", headers: token.map { ["authorization": "Bearer " + $0] } ?? [:],
+    var headers = headers
+    if let token { headers["authorization"] = "Bearer " + token }
+    return .init(method: "POST", target: "/mcp", headers: headers,
                  body: try JSONEncoder().encode(message))
+}
+
+
+extension WovenMCPHostTests {
+    nonisolated private static let machine = "8f1c0f5e-6a8a-4f0e-9a51-6b7d2c1e9f00"
+
+    @Test func botIdentityAndOldSettingsDecodeWithoutAConversation() throws {
+        let botID = UUID().uuidString
+        let caller = WovenMCPCaller.bot(machineID: Self.machine.uppercased(), botID: botID)
+        #expect(caller == "woven:bot:" + Self.machine + ":" + botID.lowercased())
+        #expect(WovenMCPCaller.parseBot(caller)?.machineID == Self.machine)
+        #expect(WovenMCPCaller.parseBot(caller)?.botID == botID.lowercased())
+        #expect(WovenMCPCaller.isAppWide(caller) && WovenMCPCaller.isAppWide(WovenMCPCaller.outside))
+        for forged in ["woven:bot:only-machine", "woven:bot::bot", "woven:bot:a b:c", "woven:bot:a:b:c", "woven:tailnet:x"] {
+            #expect(!WovenMCPCaller.isAppWide(forged), "\(forged)")
+        }
+        var old = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(WorkspaceToolSettings())) as? [String: Any])
+        old.removeValue(forKey: "botMCP")
+        let decoded = try JSONDecoder().decode(WorkspaceToolSettings.self, from: JSONSerialization.data(withJSONObject: old))
+        #expect(decoded.botMCP.isEnabled)
+        #expect(!decoded.botMCP.groups.contains(.computer) && !decoded.botMCP.groups.contains(.executor))
+    }
+
+    @Test func eachBotHasItsOwnKeyThatNamesItAndPersistsOnlyAsADigest() async throws {
+        let fixture = try await MCPHostFixture(); defer { fixture.remove() }
+        let first = UUID().uuidString, second = UUID().uuidString
+        let grant = try await fixture.host.issueBotKey(machineID: Self.machine, botID: first, botName: "Research Bot\n")
+        let other = try await fixture.host.issueBotKey(machineID: Self.machine, botID: second, botName: "Other")
+        #expect(URL(string: grant.endpointURL)?.host == "127.0.0.1")
+        #expect(grant.bearerToken != other.bearerToken)
+        let saved = try String(contentsOf: fixture.directory.appending(path: "mcp-access.json"), encoding: .utf8)
+        #expect(!saved.contains(grant.bearerToken) && !saved.contains(other.bearerToken))
+        // Headers never choose the identity: the key does.
+        let forged = ["x-woven-bot-id": second, "x-woven-bot-name": "Impostor"]
+        #expect(await fixture.host.handle(try mcpHostRequest(token: grant.bearerToken, name: "woven_notes_list", headers: forged))?.status == 200)
+        let caller = WovenMCPCaller.bot(machineID: Self.machine, botID: first)
+        #expect(fixture.calls.callers == [caller])
+        let delivery = try await fixture.database.reserveToolDelivery(sourceID: caller, targetID: fixture.caller, text: "Hello", requestID: UUID().uuidString)
+        #expect(delivery.sourceTitle == "Research Bot" && delivery.sourceHarness == "Research Bot")
+        #expect(try await fixture.database.workspaceOverview().conversations.count == 1)
+        // A new key replaces the old one.
+        let rotated = try await fixture.host.issueBotKey(machineID: Self.machine, botID: first, botName: "Research Bot")
+        #expect(await fixture.host.handle(try mcpHostRequest(token: grant.bearerToken, name: "woven_notes_list"), allowOutside: true) == nil)
+        #expect(await fixture.host.handle(try mcpHostRequest(token: "wrong", name: "woven_notes_list"), allowOutside: true) == nil)
+        #expect(await fixture.host.handle(try mcpHostRequest(token: rotated.bearerToken, name: "woven_notes_list"))?.status == 200)
+        // Keys survive a restart of the server.
+        fixture.host.stop()
+        let reopened = try WovenMCPHost(database: fixture.database) { _, identity in .init(result: .string(identity)) }
+        defer { reopened.stop() }
+        #expect(await reopened.handle(try mcpHostRequest(token: rotated.bearerToken, name: "woven_notes_list"))?.status == 200)
+        #expect(await reopened.handle(try mcpHostRequest(token: other.bearerToken, name: "woven_notes_list"))?.status == 200)
+    }
+
+    @Test func revokingOneBotLeavesTheOthersAndStaysRevokedUntilReinstated() async throws {
+        let fixture = try await MCPHostFixture(); defer { fixture.remove() }
+        let first = UUID().uuidString, second = UUID().uuidString
+        let grant = try await fixture.host.issueBotKey(machineID: Self.machine, botID: first, botName: "First")
+        let other = try await fixture.host.issueBotKey(machineID: Self.machine, botID: second, botName: "Second")
+        let caller = WovenMCPCaller.bot(machineID: Self.machine, botID: first)
+        fixture.host.revokeBotKey(callerID: caller, sticky: true)
+        #expect(await fixture.host.handle(try mcpHostRequest(token: grant.bearerToken, name: "woven_notes_list")) == nil)
+        #expect(await fixture.host.handle(try mcpHostRequest(token: other.bearerToken, name: "woven_notes_list"))?.status == 200)
+        // The runtime cannot get around the user's revoke by asking again.
+        await #expect(throws: WovenBotKeyError.self) {
+            _ = try await fixture.host.issueBotKey(machineID: Self.machine, botID: first, botName: "First")
+        }
+        #expect(try await fixture.database.botCallers().first { $0.callerID == caller }?.revoked == true)
+        await #expect(throws: (any Error).self) { try await fixture.database.requireTool(.notes, sessionID: caller) }
+        try await fixture.host.reinstateBot(callerID: caller)
+        let fresh = try await fixture.host.issueBotKey(machineID: Self.machine, botID: first, botName: "First")
+        #expect(await fixture.host.handle(try mcpHostRequest(token: fresh.bearerToken, name: "woven_notes_list"))?.status == 200)
+        // A bot its runtime deleted loses its key but is not marked revoked.
+        fixture.host.revokeBotKey(callerID: WovenMCPCaller.bot(machineID: Self.machine, botID: second), sticky: false)
+        #expect(await fixture.host.handle(try mcpHostRequest(token: other.bearerToken, name: "woven_notes_list")) == nil)
+        _ = try await fixture.host.issueBotKey(machineID: Self.machine, botID: second, botName: "Second")
+    }
+
+    @Test func pauseAllStopsEveryBotOnTheMachineAndResumeKeepsTheirKeys() async throws {
+        let fixture = try await MCPHostFixture(); defer { fixture.remove() }
+        let grant = try await fixture.host.issueBotKey(machineID: Self.machine, botID: UUID().uuidString, botName: "One")
+        let caller = WovenMCPCaller.bot(machineID: Self.machine, botID: "elsewhere")
+        try await fixture.database.registerBotCaller(caller, displayName: "Coordinator")
+        _ = try await fixture.database.requestCoordinationAccess(sourceID: caller, targetID: fixture.caller,
+            purpose: "Coordinate", requestID: UUID().uuidString)
+        try await fixture.host.setBotsPaused(machineID: Self.machine, paused: true)
+        let paused = try #require(await fixture.host.handle(try mcpHostRequest(token: grant.bearerToken, name: "woven_notes_list")))
+        #expect(try JSONDecoder().decode(GatewayJSONValue.self, from: paused.body).objectValue?["error"] != nil)
+        #expect(try await fixture.database.sessionRelationship(fixture.caller).coordinatorID == nil)
+        #expect(try await fixture.database.botCallers().allSatisfy(\.paused))
+        #expect(try await fixture.database.isBotMachinePaused(Self.machine))
+        // A bot created while paused still gets a key, which works on resume.
+        let later = try await fixture.host.issueBotKey(machineID: Self.machine, botID: UUID().uuidString, botName: "Later")
+        try await fixture.host.setBotsPaused(machineID: Self.machine, paused: false)
+        #expect(await fixture.host.handle(try mcpHostRequest(token: grant.bearerToken, name: "woven_notes_list"))?.status == 200)
+        #expect(await fixture.host.handle(try mcpHostRequest(token: later.bearerToken, name: "woven_notes_list"))?.status == 200)
+    }
+
+    @Test func botNamesAreBounded() async throws {
+        let fixture = try await MCPHostFixture(); defer { fixture.remove() }
+        let botID = UUID().uuidString
+        let name = String(repeating: "A", count: 500) + "\n\u{0}\u{202E}"
+        let grant = try await fixture.host.issueBotKey(machineID: Self.machine, botID: botID, botName: name)
+        _ = await fixture.host.handle(try mcpHostRequest(token: grant.bearerToken, name: "woven_notes_list"))
+        let caller = WovenMCPCaller.bot(machineID: Self.machine, botID: botID)
+        let delivery = try await fixture.database.reserveToolDelivery(sourceID: caller, targetID: fixture.caller, text: "Attribution", requestID: UUID().uuidString)
+        #expect(delivery.sourceTitle.count == 128 && !delivery.sourceTitle.contains("\n"))
+        #expect(WovenMCPHost.botName("  ") == "Bot")
+    }
+
+    @Test(arguments: [false, true]) func botPolicyIsIndependentOfOutsideExposure(outside: Bool) async throws {
+        let fixture = try await MCPHostFixture(); defer { fixture.remove() }
+        let botID = UUID().uuidString
+        let grant = try await fixture.host.issueBotKey(machineID: Self.machine, botID: botID, botName: "Bot")
+        var settings = try await fixture.database.toolSettings()
+        settings.externalMCP = .init(isEnabled: outside)
+        try await fixture.database.saveToolSettings(settings)
+        let request = try mcpHostRequest(token: grant.bearerToken, name: "woven_notes_list")
+        #expect(await fixture.host.handle(request, allowOutside: outside)?.status == 200)
+        settings.botMCP.groups.remove(.notes)
+        try await fixture.database.saveToolSettings(settings)
+        let disabledGroup = try #require(await fixture.host.handle(request, allowOutside: outside))
+        #expect(try JSONDecoder().decode(GatewayJSONValue.self, from: disabledGroup.body).objectValue?["error"] != nil)
+        settings.botMCP.isEnabled = false
+        try await fixture.database.saveToolSettings(settings)
+        let disabled = try #require(await fixture.host.handle(request, allowOutside: outside))
+        #expect(try JSONDecoder().decode(GatewayJSONValue.self, from: disabled.body).objectValue?["error"] != nil)
+        #expect(fixture.calls.callers.count == 1)
+        _ = await fixture.host.handle(try mcpHostRequest(token: nil, name: "woven_notes_list"), allowOutside: outside)
+        #expect(fixture.calls.callers.allSatisfy { WovenMCPCaller.parseBot($0) != nil } == !outside)
+        #expect(fixture.calls.callers.last == (outside ? WovenMCPCaller.outside : WovenMCPCaller.bot(machineID: Self.machine, botID: botID)))
+    }
+
+    @Test func botToolsUseExplicitSessionTargets() async throws {
+        let fixture = try await MCPHostFixture(); defer { fixture.remove() }
+        let botID = UUID().uuidString
+        _ = try await fixture.host.issueBotKey(machineID: Self.machine, botID: botID, botName: "Targeting bot")
+        let caller = WovenMCPCaller.bot(machineID: Self.machine, botID: botID)
+        let service = try await WorkspaceAgentToolsModel(database: fixture.database,
+            sessionHandler: { _, _, _ in throw CancellationError() }, noteHandler: { _, _, _ in throw CancellationError() },
+            noteRestoreHandler: { _, _, _, _, _ in throw CancellationError() }, usageHandler: { _ in throw CancellationError() }, onMutation: {})
+        defer { service.stop() }
+        let context = await service.handle(.init(arguments: ["context"]), callerID: caller)
+        #expect(context.success && context.result == GatewayJSONValue.null)
+        var goalRequest = WovenMatterToolRequest(arguments: ["goals", "get"])
+        goalRequest.targetSessionID = fixture.caller
+        let goal = await service.handle(goalRequest, callerID: caller)
+        #expect(goal.success)
+        let targetless = await service.handle(.init(arguments: ["goals", "get"]), callerID: caller)
+        #expect(!targetless.success)
+        let timer = WorkspaceSessionTimer(sessionID: fixture.caller, instruction: "Follow up", nextFireAt: Date().addingTimeInterval(60))
+        _ = try await fixture.database.saveSessionTimer(timer, callerID: caller, requestID: UUID().uuidString)
+        #expect(try await rows(fixture.database.querySessionTimers(callerID: caller, sessionID: fixture.caller)).count == 1)
+        let run = try await fixture.database.beginLocalACPRun(conversationID: fixture.caller, input: .init(text: "Render"))
+        let json = #"{"action":"render","html":"<p>From a bot</p>","title":"Bot page","height":160}"#
+        var renderRequest = WovenMatterToolRequest(arguments: ["html", "call", "--json", json])
+        renderRequest.targetSessionID = fixture.caller
+        let render = await service.handle(renderRequest, callerID: caller)
+        #expect(render.success, "\(render.error ?? "")")
+        let history = try await fixture.database.conversationHistoryPage(id: fixture.caller, limit: 20, compactActivities: true)
+        #expect(history.activities.contains { $0.runID == run.runID && $0.activity.htmlRender?.title == "Bot page" })
+    }
+
+    /// Relationships synchronize between machines and bot keys do not. A machine that does
+    /// not host this bot must neither clear its coordination nor consume its events.
+    @Test func aBotHostedByAnotherMachineKeepsItsCoordinationHere() async throws {
+        let fixture = try await MCPHostFixture(); defer { fixture.remove() }
+        let botID = UUID().uuidString
+        _ = try await fixture.host.issueBotKey(machineID: Self.machine, botID: botID, botName: "Elsewhere")
+        let caller = WovenMCPCaller.bot(machineID: Self.machine, botID: botID)
+        _ = try await fixture.database.requestCoordinationAccess(sourceID: caller, targetID: fixture.caller,
+            purpose: "Coordinate", requestID: UUID().uuidString)
+        try await fixture.database.write { connection in
+            try connection.toolsExecuteUnlocked("DELETE FROM workspace_mcp_bot_machines WHERE machine_id=?", [Self.machine])
+        }
+        #expect(try await fixture.database.collectCoordinationTurnNotifications().isEmpty)
+        #expect(try await fixture.database.sessionRelationship(fixture.caller).coordinatorID == caller)
+        #expect(try await fixture.database.recordCoordinationNeedsInput(sessionID: fixture.caller,
+            requestID: "elsewhere-input", requiresUserApproval: true) == nil)
+        #expect(try await fixture.database.sessionRelationship(fixture.caller).coordinatorID == caller)
+
+        // A relationship that arrives through sync names a caller this machine never saw.
+        let foreign = WovenMCPCaller.bot(machineID: UUID().uuidString, botID: UUID().uuidString)
+        let violations = try await fixture.database.write { connection -> Int in
+            try connection.toolsExecuteUnlocked("UPDATE workspace_session_relationships SET coordinator_id=? WHERE session_id=?", [foreign, fixture.caller])
+            return try connection.historyRowsUnlocked("PRAGMA foreign_key_check(workspace_session_relationships)", values: []).count
+        }
+        #expect(violations == 0)
+        #expect(try await fixture.database.collectCoordinationTurnNotifications().isEmpty)
+        #expect(try await fixture.database.sessionRelationship(fixture.caller).coordinatorID == foreign)
+        try await fixture.database.write { connection in
+            try connection.toolsExecuteUnlocked("UPDATE workspace_session_relationships SET coordinator_id=? WHERE session_id=?", [caller, fixture.caller])
+        }
+
+        // A local revocation still retires it.
+        _ = try await fixture.host.issueBotKey(machineID: Self.machine, botID: botID, botName: "Elsewhere")
+        fixture.host.revokeBotKey(callerID: caller, sticky: true)
+        try await fixture.host.reinstateBot(callerID: caller)
+        #expect(try await fixture.database.collectCoordinationTurnNotifications().isEmpty)
+        #expect(try await fixture.database.sessionRelationship(fixture.caller).coordinatorID == nil)
+    }
+
+    @Test func botNotificationsRetryWithoutReobservingOrDuplicatingAcceptedEvents() async throws {
+        let fixture = try await MCPHostFixture(); defer { fixture.remove() }
+        let botID = UUID().uuidString
+        _ = try await fixture.host.issueBotKey(machineID: Self.machine, botID: botID, botName: "Coordinator")
+        let caller = WovenMCPCaller.bot(machineID: Self.machine, botID: botID)
+        let assignment = try await fixture.database.requestCoordinationAccess(sourceID: caller, targetID: fixture.caller,
+            purpose: "Coordinate", requestID: UUID().uuidString)
+        #expect(assignment.state == "accepted" && assignment.notifications)
+        try await fixture.database.setCoordinationNotifications(sourceID: caller, targetID: fixture.caller, enabled: true)
+        #expect(try await fixture.database.collectCoordinationTurnNotifications().isEmpty)
+        let delivery = try #require(try await fixture.database.recordCoordinationNeedsInput(sessionID: fixture.caller,
+            requestID: "fixture-input", requiresUserApproval: true))
+        #expect(delivery.text.contains(fixture.caller) && delivery.text.contains("MCP caller") && delivery.text.contains("blocked"))
+        #expect(try await fixture.database.recordCoordinationNeedsInput(sessionID: fixture.caller, requestID: "fixture-input", requiresUserApproval: true) == nil)
+        await #expect(throws: (any Error).self) { _ = try await fixture.host.deliverBotNotification(delivery) }
+        #expect(try await fixture.database.toolDelivery(id: delivery.id)?.status == "queued")
+        try await fixture.database.write { try $0.toolsExecuteUnlocked("UPDATE workspace_session_deliveries SET retry_after=0 WHERE id=?", [delivery.id]) }
+        var attempts = 0
+        var accepted = Set<String>()
+        var machines = Set<String>()
+        fixture.host.botNotificationSink = { event in
+            attempts += 1
+            accepted.insert(event.id)
+            machines.insert(event.machineID + ":" + event.botID)
+            if attempts == 1 { throw CancellationError() } // Lost acknowledgement after receiver acceptance.
+        }
+        await #expect(throws: CancellationError.self) { _ = try await fixture.host.deliverBotNotification(delivery) }
+        try await fixture.database.write { try $0.toolsExecuteUnlocked("UPDATE workspace_session_deliveries SET retry_after=0 WHERE id=?", [delivery.id]) }
+        fixture.host.stop()
+        let restored = try WovenMCPHost(database: fixture.database) { _, _ in .init(success: true) }
+        restored.botNotificationSink = fixture.host.botNotificationSink
+        defer { restored.stop() }
+        #expect(try await restored.deliverBotNotification(delivery))
+        #expect(try await restored.deliverBotNotification(delivery))
+        #expect(attempts == 2 && accepted.count == 1)
+        #expect(machines == [Self.machine + ":" + botID.lowercased()])
+        #expect(try await fixture.database.toolDelivery(id: delivery.id)?.status == "accepted")
+        let run = try await fixture.database.beginLocalACPRun(conversationID: fixture.caller, input: .init(text: "Fail in fixture"))
+        try await fixture.database.completeLocalACPRun(runID: run.runID, error: "Fixture failure")
+        let failures = try await fixture.database.collectCoordinationTurnNotifications()
+        #expect(failures.count == 1 && failures.first?.text.contains("failed") == true)
+        let creationID = UUID().uuidString.lowercased()
+        _ = try await fixture.database.reserveToolSessionCreation(sourceID: caller, requestID: creationID,
+            arguments: ["sessions", "create"], purpose: "Pending creation", managed: true)
+        restored.revokeBotKey(callerID: caller, sticky: true)
+        // Wait for the serialized revocation through the host API.
+        _ = try? await restored.deliverBotNotification(delivery)
+        #expect(try await fixture.database.sessionRelationship(fixture.caller).coordinatorID == nil)
+        let creation = try await fixture.database.read { connection in
+            try connection.historyRowsUnlocked("SELECT status FROM workspace_session_creations WHERE id=?", values: [creationID]).first
+        }
+        #expect(creation?.objectValue?["status"] == .string("failed"))
+    }
 }

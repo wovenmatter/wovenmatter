@@ -46,23 +46,18 @@ extension WorkspaceDatabaseConnection {
       }
       if let eventKey, let existing = try historyRowsUnlocked("SELECT id FROM workspace_session_deliveries WHERE event_key=?", values: [eventKey]).first?.objectValue?["id"]?.stringValue,
          let delivery = try deliveryUnlocked(existing) { return delivery }
-      if sourceID == WovenMCPCaller.outside {
-        try toolsExecuteUnlocked("""
-          INSERT INTO workspace_session_deliveries(id,source_id,target_id,content,status,source_agent,source_title,
-            kind,purpose,target_title,target_harness,target_model,event_key)
-          SELECT ?,?,?,?,'queued','wovenmatter','Outside agent',?,?,t.title,
-            coalesce(d.runtime_kind,t.agent_codename),d.model,?
-          FROM dashboard_conversations t LEFT JOIN desktop_local_acp_sessions d ON d.conversation_id=t.id WHERE t.id=?
-          """, [requestID, sourceID, targetID, text, kind.rawValue, purpose, eventKey, targetID])
-      } else { try toolsExecuteUnlocked("""
+      try toolsExecuteUnlocked("""
         INSERT INTO workspace_session_deliveries(id,source_id,target_id,content,status,source_agent,source_title,
           kind,purpose,target_title,target_harness,target_model,event_key)
-        SELECT ?,?,?,?,'queued',coalesce(s.runtime_kind,c.agent_codename),c.title,?,?,t.title,
-          coalesce(d.runtime_kind,t.agent_codename),d.model,?
-        FROM dashboard_conversations c JOIN dashboard_conversations t ON t.id=?
+        SELECT ?,?,?,?,'queued',coalesce(b.display_name,s.runtime_kind,c.agent_codename,'wovenmatter'),
+          coalesce(b.display_name,c.title,'Outside agent'),?,?,coalesce(bt.display_name,t.title,'Bot'),
+          coalesce(bt.display_name,d.runtime_kind,t.agent_codename),d.model,?
+        FROM workspace_mcp_callers b JOIN workspace_mcp_callers bt ON bt.id=?
+        LEFT JOIN dashboard_conversations c ON c.id=b.id
+        LEFT JOIN dashboard_conversations t ON t.id=bt.id
         LEFT JOIN desktop_local_acp_sessions s ON s.conversation_id=c.id
-        LEFT JOIN desktop_local_acp_sessions d ON d.conversation_id=t.id WHERE c.id=?
-        """, [requestID, sourceID, targetID, text, kind.rawValue, purpose, eventKey, targetID, sourceID]) }
+        LEFT JOIN desktop_local_acp_sessions d ON d.conversation_id=t.id WHERE b.id=?
+        """, [requestID, sourceID, targetID, text, kind.rawValue, purpose, eventKey, targetID, sourceID])
       guard let result = try deliveryUnlocked(requestID) else { throw WorkspaceToolError.invalid("Unable to reserve delivery.") }
       return result
   }
@@ -123,7 +118,7 @@ extension WorkspaceDatabaseConnection {
         try toolsExecuteUnlocked("UPDATE workspace_session_deliveries SET status='cancelled' WHERE id=?", [id])
         return
       }
-      let scheduled = delivery.kind == .timer || delivery.kind == .notification || delivery.kind == .calendar || delivery.kind == .goal
+      let scheduled = WovenMCPCaller.parseBot(delivery.targetID) != nil || delivery.kind == .timer || delivery.kind == .notification || delivery.kind == .calendar || delivery.kind == .goal
       let status = submitted ? "uncertain" : scheduled ? "queued" : "failed"
       try toolsExecuteUnlocked("UPDATE workspace_session_deliveries SET status=?,retry_after=? WHERE id=?",
         [status, status == "queued" ? String(now.addingTimeInterval(30).timeIntervalSince1970) : nil, id])
@@ -141,17 +136,15 @@ extension WorkspaceDatabaseConnection {
   }
 
   private func toolDeliveryAuthorizedUnlocked(_ delivery: WorkspaceSessionDelivery) throws -> Bool {
-    for id in [delivery.sourceID, delivery.targetID] where id != WovenMCPCaller.outside {
+    for id in [delivery.sourceID, delivery.targetID] where !WovenMCPCaller.isAppWide(id) {
       guard !(try historyRowsUnlocked("SELECT 1 FROM dashboard_conversations WHERE id=? AND deleted_at IS NULL", values: [id])).isEmpty else { return false }
     }
-    if delivery.sourceID == WovenMCPCaller.outside,
-       try toolSettingsUnlocked().externalMCP?.enabledGroups.contains(.sessions) != true { return false }
-    let source = try sessionToolsUnlocked(delivery.sourceID)
-    let target = try sessionToolsUnlocked(delivery.targetID)
+    guard let source = try? sessionToolsUnlocked(delivery.sourceID),
+          let target = try? sessionToolsUnlocked(delivery.targetID) else { return false }
     switch delivery.kind {
     case .goal: return try goalDeliveryAuthorizedUnlocked(sessionID: delivery.targetID, deliveryID: delivery.id)
     case .calendar: return try calendarRunAuthorizedUnlocked(delivery.id)
-    case .message, .created: return source.enabled.contains(.sessions)
+    case .message, .created: return source.enabled.contains(.sessions) && (WovenMCPCaller.parseBot(delivery.targetID) == nil || target.enabled.contains(.sessions))
     case .timer:
       guard let timerID = try historyRowsUnlocked(
         "SELECT id FROM workspace_session_timers WHERE session_id=? AND pending_delivery_id=? AND is_paused=0",
@@ -190,7 +183,7 @@ extension WorkspaceDatabaseConnection {
       try executeUnlocked("""
         UPDATE workspace_session_deliveries SET status=CASE
           WHEN transport_started=1 THEN 'uncertain'
-          WHEN kind IN ('timer','notification','calendar','goal') THEN 'queued' ELSE 'failed' END
+          WHEN kind IN ('timer','notification','calendar','goal') OR target_id IN (SELECT id FROM workspace_mcp_callers WHERE machine_id IS NOT NULL) THEN 'queued' ELSE 'failed' END
           WHERE status='sending' AND message_id IS NULL
         """)
     }

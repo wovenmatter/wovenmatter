@@ -86,6 +86,52 @@ status and receipts. Usage remains read-only; enabling Calendar grants writes
 independently of the Calendar access default for Woven chats. Goals and visual
 replies remain included with exposure, matching Woven's always-available tools.
 
+## Bot callers
+
+Each bot has its own Woven MCP key, issued by the Woven server on the machine that
+runs it (`WorkspaceAgentToolsModel.issueBotKey(machineID:botID:botName:)` on a Mac,
+reached by the bots runtime through `POST /v1/bots-host/mcp-keys`). The principal is
+`woven:bot:<machine-device-id>:<bot-id>`; the key alone names the bot, so request
+headers never choose or change the caller. Issuing a key replaces the bot's previous
+one, and Woven stores only its SHA-256 digest in `mcp-access.json`. No conversation is
+created to represent a bot.
+
+Attribution comes from the name registered with the key, bounded to 128 characters
+and stripped of control and bidirectional-override characters. Names appear on
+delivery receipts and incoming messages. Settings → Bots lists every bot that holds a
+key here:
+
+- **Revoke** removes one bot's key at once, cancels its preparation fences, and retires
+  what it started: planned creations, grants, pending access requests, coordination and
+  undelivered messages. The bot stays revoked, and its runtime cannot get a new key,
+  until the user reinstates it. A bot its runtime deletes loses its key the same way
+  but is not marked revoked.
+- **Pause Woven MCP for every bot on this Mac** stops every bot of this machine from calling and
+  retires the same state; resuming keeps their keys.
+
+`WorkspaceToolSettings.botMCP` is independent of **Expose Woven MCP** and starts on,
+with Computer Use and Executor off. Old settings acquire these defaults. The host
+exposes `setBotsEnabled` and `setBotsGroup` through its access API and returns
+`botSettings` in its snapshot. The runtime runs on the host, so bots use the loopback
+HTTP endpoint even when outside exposure is off; issuing a key creates no network route.
+
+With Session management enabled, bots manage sessions under the same app-wide
+authority as outside callers, reaching only Woven workspaces under each workspace's
+own permissions. Bots can explicitly target sessions for goals, timers and HTML.
+`woven_context` returns null. Bot-created sessions are managed by that bot unless
+`independent` is true, and notification controls remain available. Completion,
+failure and needs-input observations reserve durable deliveries whose text contains
+the session ID, title and status. `botNotificationSink` receives `WovenBotNotification`
+values (`id`, `machineID`, `botID`, `text`) and sends them to the bot's main channel as
+`message.send` with `deliveryId`. Missing or throwing sinks leave deliveries queued with
+a 30-second backoff without blocking other recipients. Successful deliveries do not
+replay, including after restart; the runtime uses `deliveryId` as its durable
+deduplication key. Bot schedules are Woven MCP timers delivered the same way.
+
+Relationships synchronize between machines and bot keys do not. A machine that does
+not serve a bot's keys keeps that bot's coordination and does not consume its events.
+Dev snapshots discard keys and bot coordination.
+
 ## Open asset context
 
 `woven_context` returns the asset ID captured when the human sent the consumed

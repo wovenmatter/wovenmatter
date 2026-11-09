@@ -10,7 +10,7 @@ extension WorkspaceDatabaseConnection {
   func publishConversationHTML(_ page: ConversationHTMLPage, callerID: String, requestID: String, targetID: String? = nil) throws -> ConversationHTMLRenderReference {
     try transaction {
       try requireToolUnlocked(.html, sessionID: callerID)
-      let target = callerID == WovenMCPCaller.outside ? targetID ?? callerID : callerID
+      let target = WovenMCPCaller.isAppWide(callerID) ? targetID ?? callerID : callerID
       try requireToolSessionUnlocked(target)
       let requestID = try canonicalToolRequestID(requestID)
       try requireAutomationNotCancelled(callerID: callerID, requestID: requestID)
