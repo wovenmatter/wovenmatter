@@ -1,3 +1,4 @@
+import { mkdtempSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -104,4 +105,15 @@ export async function openTestManager(
       await db.close();
     },
   };
+}
+
+/**
+ * Unix socket paths are limited by sun_path: 104 bytes on macOS, 108 on Linux. A long
+ * TMPDIR (a sandbox's per-session temp folder, a deep worktree) would push the sockets
+ * past it, and a listen that fails silently becomes a test timeout. Sockets stay under
+ * the test's own folder when they fit, and otherwise go to a short private /tmp folder.
+ */
+export function socketDirectory(root: string, longestName = "00000000.sock"): string {
+  if (Buffer.byteLength(join(root, longestName)) < 100) return root;
+  return mkdtempSync("/tmp/wbt-");
 }

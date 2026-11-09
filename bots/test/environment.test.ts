@@ -1,5 +1,5 @@
 import { type ChildProcess, execFile, spawn } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, connect } from "node:net";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,7 +15,7 @@ import { AgentConnection, RemoteExecutionEnv } from "../src/environment/remote.t
 import { createTar } from "../src/environment/tar.ts";
 import { openSharedDatabase } from "../src/storage/database.ts";
 import { BotRegistry } from "../src/storage/registry.ts";
-import { tempDir } from "./helpers.ts";
+import { socketDirectory, tempDir } from "./helpers.ts";
 import { FakeHost } from "./runtime.ts";
 
 const HELPER = fileURLToPath(new URL("../helper/", import.meta.url));
@@ -129,6 +129,7 @@ describe("in-container supervisor", () => {
   let dir: Awaited<ReturnType<typeof tempDir>>;
   let supervisor: ChildProcess | undefined;
   let socket: string;
+  let sockets: string;
   let state: string;
   const start = async () => {
     supervisor = spawn(process.execPath, [join(HELPER, "supervisor.mjs")], {
@@ -157,13 +158,15 @@ describe("in-container supervisor", () => {
   };
   beforeEach(async () => {
     dir = await tempDir();
-    socket = join(dir.path, "c.sock");
+    sockets = socketDirectory(dir.path);
+    socket = join(sockets, "c.sock");
     state = join(dir.path, "state");
     await start();
   });
   afterEach(async () => {
     await stop();
     await dir.cleanup();
+    if (sockets !== dir.path) await rm(sockets, { recursive: true, force: true });
   });
 
   it("keeps the restart list running, restarts on exit and on every start, and serves logs", async () => {
@@ -208,6 +211,20 @@ describe("in-container supervisor", () => {
       env: { PATH: process.env.PATH ?? "", WOVEN_CONTROL_SOCKET: socket },
     });
     expect(JSON.parse(stdout)).toMatchObject({ ok: true });
+  });
+
+  it("exits with a reason when its socket cannot be bound", async () => {
+    // Longer than sun_path on every platform.
+    const unbindable = join(dir.path, "x".repeat(120), "c.sock");
+    const child = spawn(process.execPath, [join(HELPER, "supervisor.mjs")], {
+      env: { PATH: process.env.PATH ?? "/usr/bin:/bin", WOVEN_STATE_DIR: state, WOVEN_CONTROL_SOCKET: unbindable },
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    let stderr = "";
+    child.stderr?.on("data", (chunk: Buffer) => (stderr += chunk.toString("utf8")));
+    const code = await new Promise<number | null>((resolve) => child.once("exit", resolve));
+    expect(code).toBe(1);
+    expect(stderr).toMatch(/woven supervisor:/);
   });
 });
 
