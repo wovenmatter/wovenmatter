@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(UniformTypeIdentifiers)
 import UniformTypeIdentifiers
+#endif
 
 // Pi Bot's WebSocket protocol beyond the sidebar, as `apps/web/src/protocol.ts` defines it.
 // Pi Bot owns these shapes. Decode what the native client shows and tolerate additions.
@@ -563,7 +565,13 @@ public struct PiBotAttachmentDraft: Equatable, Identifiable, Sendable {
         let size = (try url.resourceValues(forKeys: [.fileSizeKey])).fileSize ?? 0
         if size > maxFileBytes { throw Problem.tooLarge }
         let fileExtension = url.pathExtension.lowercased()
-        guard textExtensions.contains(fileExtension) || UTType(filenameExtension: fileExtension)?.conforms(to: .text) == true else {
+        #if canImport(UniformTypeIdentifiers)
+        let isText = textExtensions.contains(fileExtension) || UTType(filenameExtension: fileExtension)?.conforms(to: .text) == true
+        #else
+        // Linux library builds have no type registry; the extension list decides.
+        let isText = textExtensions.contains(fileExtension)
+        #endif
+        guard isText else {
             throw Problem.notText
         }
         let data = try Data(contentsOf: url)

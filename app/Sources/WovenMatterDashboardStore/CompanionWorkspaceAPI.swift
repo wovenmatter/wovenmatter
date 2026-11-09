@@ -209,6 +209,9 @@ public final class CompanionWorkspaceAPI {
     private let members: MemberDirectory?
     /// A phone paired with its member key: the host signs its member entry.
     private let onMemberPaired: @MainActor @Sendable (_ deviceID: String, _ name: String, _ publicKey: Data) async -> Void
+    /// `GET /v1/sync/status`: every peer's state, so a phone can show
+    /// "Update everything" when devices disagree on versions.
+    private let syncStatus: @MainActor @Sendable () async -> LibrarySyncStatus?
     public init(database: WorkspaceDatabase, authentication: CompanionAuthentication,
                 commands: any CompanionCommandServing,
                 isActive: @escaping @MainActor @Sendable () -> Bool,
@@ -222,8 +225,9 @@ public final class CompanionWorkspaceAPI {
                 linkedData: @escaping @MainActor @Sendable (DatabaseArtifactLink) async throws -> DatabaseTabularData = { _ in
                     throw CompanionAPIError(code: "linked_data_unavailable", message: "This database is unavailable on the Mac.")
                 }, members: MemberDirectory? = nil,
-                onMemberPaired: @escaping @MainActor @Sendable (String, String, Data) async -> Void = { _, _, _ in }) {
-        self.members = members; self.onMemberPaired = onMemberPaired
+                onMemberPaired: @escaping @MainActor @Sendable (String, String, Data) async -> Void = { _, _, _ in },
+                syncStatus: @escaping @MainActor @Sendable () async -> LibrarySyncStatus? = { nil }) {
+        self.members = members; self.onMemberPaired = onMemberPaired; self.syncStatus = syncStatus
         self.database = database; self.authentication = authentication; self.commands = commands
         self.isActive = isActive; self.onPair = onPair; self.onMutation = onMutation; self.onRequest = onRequest
         self.linkedData = linkedData; self.discovery = discovery; self.onCancelPairing = onCancelPairing
@@ -428,6 +432,9 @@ public final class CompanionWorkspaceAPI {
                     }
                     return try .json(page)
                 case "/v1/providers": return try .json(commands.providers())
+                case "/v1/sync/status":
+                    guard let status = await syncStatus() else { return .error("unavailable", "Synchronization has not started.", status: 503) }
+                    return try .json(status)
                 case "/v1/pending": return try .json(await commands.pendingInteractions())
                 default: break
                 }

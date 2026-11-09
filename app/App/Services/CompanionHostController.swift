@@ -171,7 +171,7 @@ final class CompanionHostController {
                 onMemberPaired: { [weak self] deviceID, name, key in
                     do { try await self?.peerSync.members().add(deviceID: deviceID, kind: .ios, name: name, publicKey: key, endpoints: []) }
                     catch { self?.errorMessage = error.localizedDescription }
-                })
+                }, syncStatus: { [weak self] in await self?.peerSync.librarySync?.status() })
             let listener = CompanionHTTPServer(upgradeHandler: { [weak self] request in
                 guard let self else { return .reject(.error("unavailable", "This sharing session has stopped.", status: 503)) }
                 return await self.upgrade(request, generation: expectedGeneration)

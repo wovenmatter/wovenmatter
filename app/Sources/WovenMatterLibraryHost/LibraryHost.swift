@@ -26,7 +26,7 @@ public final class LibraryHost: @unchecked Sendable {
   public static let mobilePrefixes = [
     "/v1/hello", "/v1/snapshot", "/v1/changes", "/v1/mutations", "/v1/commands", "/v1/command-receipts/", "/v1/federation/",
     "/v1/calendar", "/v1/dictations", "/v1/notes/", "/v1/assets/", "/v1/sessions/", "/v1/devices", "/v1/providers",
-    "/v1/pending", "/v1/workspace-read", "/mcp"
+    "/v1/pending", "/v1/workspace-read", "/v1/sync/status", "/mcp"
   ]
 
   public let layout: LibraryHostLayout
@@ -68,9 +68,9 @@ public final class LibraryHost: @unchecked Sendable {
     }
     // Bearer grants are never issued here; the store only backs the API.
     let authentication = try CompanionAuthentication(fileURL: layout.library.appending(path: "companion-devices.json"))
-    let api = await MainActor.run { [database, members, executor] in
+    let api = await MainActor.run { [database, members, executor, sync] in
       CompanionWorkspaceAPI(database: database, authentication: authentication, commands: LibraryHostCommands(executor: executor),
-                            isActive: { true }, members: members)
+                            isActive: { true }, members: members, syncStatus: { await sync.status() })
     }
     mobile = api
     for prefix in Self.mobilePrefixes {

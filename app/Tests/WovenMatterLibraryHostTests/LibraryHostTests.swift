@@ -297,6 +297,9 @@ struct LibraryHostTests {
     let hello = try signed("/wovenmatter/v1/hello")
     #expect(hello.status == 200, "\(String(decoding: hello.body, as: UTF8.self))")
     #expect(try signed("/v1/snapshot").status == 200)
+    // The phone can show whether some device needs an update.
+    let syncStatus = try signed("/wovenmatter/v1/sync/status")
+    #expect(syncStatus.status == 200 && syncStatus.json?.objectValue?["deviceID"]?.stringValue == identity.deviceID)
     // A signed request cannot be replayed.
     let headers = try phone.signer.headers(method: "GET", target: "/v1/hello").merging(["X-Woven-Protocol": String(CompanionProtocol.version)]) { a, _ in a }
     #expect(try send("GET", "/v1/hello", port: fixture.port, headers: headers).status == 200)
