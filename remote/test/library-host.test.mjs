@@ -106,9 +106,9 @@ test('a Linux session reads and edits notes in its own library with no Mac grant
   const calls = readFileSync(logPath, 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(entry => entry.path === '/v1/mcp')
   for (const call of calls) {
     assert.equal(call.headers['x-woven-conversation-id'], f.id)
-    assert.ok(call.headers['x-woven-enabled-groups'].split(',').every(group => ['notes', 'history', 'calendar', 'library'].includes(group)), call.headers['x-woven-enabled-groups'])
+    assert.ok(call.headers['x-woven-enabled-groups'].split(',').every(group => ['notes', 'history', 'calendar', 'library', 'sessions'].includes(group)), call.headers['x-woven-enabled-groups'])
   }
-  // Groups the library host does not serve still need a connected Mac.
+  // Groups the library host does not serve need a reachable Mac member.
   assert.equal((await f.call('woven_timers_list')).error.code, -32602)
   // Turning notes off for the session takes effect at once.
   await f.command('workspace', { conversationID: f.id, workspaceAction: { sessionTools: { id: f.id, enabled: ['calendar'] } } })

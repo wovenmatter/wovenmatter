@@ -21,6 +21,7 @@ import { createBotsService } from './bots-service.mjs'
 import { createLibraryHostSupervisor, libraryBinaryPath } from './library-host.mjs'
 import { createLibraryServe } from './library-serve.mjs'
 import { createMemberVerifier, hasMemberSignature } from './member-auth.mjs'
+import { createMemberTransport } from './member-client.mjs'
 import { createHostAdministration } from './host-admin.mjs'
 import { createServer } from 'node:http'
 import { timingSafeEqual, randomUUID, createHash } from 'node:crypto'
@@ -112,7 +113,20 @@ const libraryServe = library && process.env.WOVENMATTER_LIBRARY_SERVE !== '0' ? 
   ...(/^\d{1,5}$/.test(process.env.WOVENMATTER_LIBRARY_HTTPS_PORT ?? '') ? { candidates: [Number(process.env.WOVENMATTER_LIBRARY_HTTPS_PORT)] } : {}) }) : null
 const members = library ? createMemberVerifier({ loadMembers: () => library.client.members() }) : null
 const hostAdmin = nativeLinuxHost ? createHostAdministration({ serviceRoot: configuration.serviceRoot, dataRoot: configuration.dataRoot, stateDirectory: configuration.stateDirectory,
-  extra: async () => ({ library: library?.status() ?? null, memberIdentity: memberIdentityRecord }) }) : null
+  extra: async () => ({ library: library?.status() ?? null, memberIdentity: memberIdentityRecord }),
+  ...(library ? {
+    adoptMembers: async body => { const list = await library.client.adoptMembers(body); await members.refresh().catch(() => {}); return list },
+    hasMacMember: async () => ((await library.client.members()).members ?? []).some(item => item.kind === 'mac' && !item.revoked),
+  } : {}) }) : null
+// Requests this host makes to other members, signed by its library host.
+const memberTransport = library ? createMemberTransport({ library: library.client }) : null
+// Whether any Mac could serve the Mac-only tools; the cached list refreshes
+// in the background, since only signed requests otherwise refresh it.
+let memberListCheckedAt = 0
+function knownMacMember() {
+  if (Date.now() - memberListCheckedAt > 15_000) { memberListCheckedAt = Date.now(); void members.refresh().catch(() => {}) }
+  return members.members().some(item => item.kind === 'mac' && !item.revoked && item.endpoints.length > 0)
+}
 const maximumSignedBodyBytes = 50 * 1024 * 1024
 
 const clientExecution = runningAsService ? createClientExecution({
@@ -122,6 +136,8 @@ const clientExecution = runningAsService ? createClientExecution({
   kind: process.platform === 'darwin' ? 'mac' : 'linux',
   workspaceBrowser,
   library: library ? { client: library.client, available: library.available } : null,
+  members: memberTransport ? { transport: memberTransport, deviceID: () => memberIdentityRecord?.deviceID ?? null,
+    hasMac: () => library.available() && knownMacMember() } : null,
   runtime: createClientExecutionRuntime({defaultAgent,durableACP,catalog,workspaceRoot,harnessStatus,
     environment:harnessEnvironment,instances,isExecutionEnabled:()=>taskGateway.enabled()}),
 }) : null
@@ -166,7 +182,10 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
       } catch (error) {
         if (bodyFile) await rm(bodyFile.path, { force: true }).catch(() => {})
         if (error.statusCode === 413) return json(response, 413, { error: 'request_too_large' })
-        return json(response, error.statusCode === 503 ? 503 : 401, { error: error.code ?? 'unauthorized' })
+        // The installing Mac signs its first adoption before this host knows
+        // it; the installer bearer it also sends still authenticates it.
+        if (!authorized(request) || request.wovenBody === undefined && bodyFile) return json(response, error.statusCode === 503 ? 503 : 401, { error: error.code ?? 'unauthorized' })
+        member = null; bodyFile = null
       }
     }
     // Mac members administer this host, as the installing Mac's bearer does.
@@ -199,7 +218,7 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
       if (material) await defaultAgent.unlockForClient(material)
     }
     if (bots && await bots.handleClient(request, response, url, { readJSON, json, administrator, device })) return
-    if (hostAdmin && await hostAdmin.handle(request, response, url, { readJSON, json, administrator, bodyFile })) return
+    if (hostAdmin && await hostAdmin.handle(request, response, url, { readJSON, readBody, json, administrator, bodyFile, member, installer: authorized(request) })) return
     if (!configuration.workspaceEnabled && workspaceRoute(url.pathname)) return json(response, 409, { error: 'workspace_disabled' })
     if (url.pathname === '/v1/runtime/inspection' && request.method === 'GET') {
       if (!administrator) return json(response,403,{error:'administrator_required'})
@@ -579,6 +598,10 @@ async function libraryReady(ready) {
     try { endpoint = (await libraryServe.publish(ready.port)).endpoint }
     catch (error) { process.stderr.write('The library route could not be published: ' + error.message + '\n') }
   }
+  // Peers reach this library at the published route: advertise it in this
+  // machine's own member entry (the adding Mac's entry stays authoritative).
+  if (endpoint) await library.client.updateSelf({ name: hostname(), endpoints: [endpoint] })
+    .catch(error => process.stderr.write('The member entry could not be updated: ' + error.message + '\n'))
   await refreshMemberIdentity(endpoint).catch(error => process.stderr.write('The member identity could not be read: ' + error.message + '\n'))
   await members?.refresh().catch(() => {})
   clientExecution?.kickPublisher()

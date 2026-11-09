@@ -1,7 +1,7 @@
 import { createHash, randomBytes, randomUUID, createCipheriv, createDecipheriv } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { sha256 as hash } from './durable-json.mjs'
-import { libraryServedGroups } from './library-tools.mjs'
+import { libraryServedGroups, libraryServedTools } from './library-tools.mjs'
 
 const fail = (statusCode, message) => Object.assign(new Error(message), {statusCode})
 const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
@@ -25,7 +25,11 @@ export function loadWorkspaceMCPCatalog() {
 
 // The public endpoint never accepts a conversation id as caller authority. A
 // session connection or separately created outside-client credential owns it.
-export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localTools,localCall,fetchImpl=globalThis.fetch,catalog=loadWorkspaceMCPCatalog(),beforeLibraryCall=async()=>{},shouldDelegate=()=>false,scopedHistoryAccess=()=>false,localLibrary=null}) {
+// `localLibrary` is this machine's library host (library-tools.mjs);
+// `memberDelegate` reaches any Mac member with signed requests for the tools
+// the library host does not serve (member-client.mjs). The saved single-Mac
+// grant (`mcp_library_connection`) is only a fallback for hosts without either.
+export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localTools,localCall,fetchImpl=globalThis.fetch,catalog=loadWorkspaceMCPCatalog(),beforeLibraryCall=async()=>{},scopedHistoryAccess=()=>false,localLibrary=null,memberDelegate=null}) {
   db.exec(`CREATE TABLE IF NOT EXISTS mcp_external_clients (id TEXT PRIMARY KEY, digest TEXT NOT NULL UNIQUE, body TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS mcp_library_connection (id INTEGER PRIMARY KEY CHECK(id=1), envelope TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS mcp_preferences (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL);
@@ -150,15 +154,21 @@ export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localT
   // managed sessions stays on the Node journal, which scopes it, as does all
   // history while the library host is down.
   function servedLocally(scope,name) {
-    if(!localLibrary||isBot(scope)||nodeOwned(name)||!libraryServedGroups.has(groupFor(name)))return false
+    if(!localLibrary||nodeOwned(name)||!libraryServedGroups.has(groupFor(name))&&!libraryServedTools.has(name))return false
+    // A bot's library tools run as an app-wide caller of this library copy.
+    if(isBot(scope))return true
     return groupFor(name)!=='history'||activeGroups(scope).has('history')&&(localLibrary.available()||!local.has(name))
   }
   async function localLibraryCall(scope,message,signal) {
+    if(isBot(scope))return localLibrary.call({bot:{principal:scope.principal,botID:scope.botID,botName:scope.botName},groups:activeGroups(scope),message,signal})
     // History published since the last batch should be searchable at once;
     // publication trouble never blocks notes or calendar.
     if(groupFor(message.params?.name??'')==='history')await Promise.resolve().then(beforeLibraryCall).catch(()=>{})
     return localLibrary.call({conversationID:scope.conversationID,groups:activeGroups(scope),message,signal})
   }
+  // Any Mac member (signed) or the legacy grant can serve the rest; bots only
+  // through the grant, because a Mac's /mcp/workspace binds a conversation.
+  const delegated=scope=>!!libraryGrant()||!isBot(scope)&&!!memberDelegate?.available()
   function inventory(scope) {
     if(isBot(scope)) {
       // Conversation-bound local tools have no meaning for a bot; library
@@ -174,8 +184,8 @@ export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localT
     })
   }
   function available(scope) {
-    const current=activeGroups(scope),hasLibrary=!!libraryGrant()
-    if(isBot(scope))return hasLibrary?inventory(scope).filter(tool=>current.has(groupFor(tool.name))):[]
+    const current=activeGroups(scope),hasLibrary=delegated(scope)
+    if(isBot(scope))return inventory(scope).filter(tool=>current.has(groupFor(tool.name))&&(servedLocally(scope,tool.name)||hasLibrary))
     return inventory(scope).filter(tool=>{
       const group=groupFor(tool.name)
       const cleanup=['woven_browser_use_cancel','woven_computer_use_cancel','woven_html_cancel'].includes(tool.name)
@@ -190,9 +200,8 @@ export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localT
     const connection=sessionConnection(run.sessionID),scope=sessions.get(run.sessionID)
     scope.taskProof={run,eventRevision,...(nativeSessionID?{nativeSessionID}:{})}
     taskPolicies.set(run.sessionID,run.task?.configuration?.tools?.enabled??['notes'])
-    const grant=libraryGrant()
-    if(grant) {
-      try {await prepareTaskCaller(scope,grant)} catch(error) {
+    if(delegated(scope)) {
+      try {await prepareTaskCaller(scope)} catch(error) {
         // Host-local data tools retain their saved schedule permissions while
         // the library is offline; delegated operations still fail explicitly.
         if(error.statusCode&&error.statusCode<500)throw error
@@ -200,24 +209,44 @@ export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localT
     }
     return {...connection,captureID:run.id}
   }
-  async function prepareTaskCaller(scope,grant,signal) {
-    const response=await fetchImpl(grant.endpointURL+'/prepare',{method:'POST',redirect:'error',signal:signal??AbortSignal.timeout(15000),
-      headers:{authorization:'Bearer '+grant.bearerToken,'content-type':'application/json','x-woven-protocol':'3','x-woven-workspace':grant.libraryID},body:JSON.stringify(scope.taskProof)})
-    if(!response.ok)throw fail(response.status,'The saved schedule no longer authorizes this MCP caller.')
-    const value=await response.json()
-    if(!Array.isArray(value.enabledGroups)||value.enabledGroups.some(group=>!groups.has(group)))throw fail(502,'Invalid schedule tool policy.')
+  // The schedule's tool policy comes from a Mac, which holds the schedule.
+  async function prepareTaskCaller(scope,signal) {
+    const grant=libraryGrant()
+    let value
+    if(memberDelegate?.available()) {
+      try {value=await memberDelegate.prepare(scope,{signal})}
+      catch(error) {
+        // A Mac that answered decides; only unreachable Macs fall back to the grant.
+        if(error.statusCode&&error.statusCode<500)throw fail(error.statusCode,'The saved schedule no longer authorizes this MCP caller.')
+        if(!grant)throw error
+      }
+    }
+    if(value===undefined) {
+      if(!grant)throw fail(503,'No Mac is reachable to confirm this schedule’s tools.')
+      const response=await fetchImpl(grant.endpointURL+'/prepare',{method:'POST',redirect:'error',signal:signal??AbortSignal.timeout(15000),
+        headers:{authorization:'Bearer '+grant.bearerToken,'content-type':'application/json','x-woven-protocol':'3','x-woven-workspace':grant.libraryID},body:JSON.stringify(scope.taskProof)})
+      if(!response.ok)throw fail(response.status,'The saved schedule no longer authorizes this MCP caller.')
+      value=await response.json()
+    }
+    if(!Array.isArray(value?.enabledGroups)||value.enabledGroups.some(group=>!groups.has(group)))throw fail(502,'Invalid schedule tool policy.')
     taskPolicies.set(scope.conversationID,value.enabledGroups)
   }
   async function libraryCall(scope,message,signal) {
+    if(!isBot(scope)&&memberDelegate?.available()) {
+      if(scope.taskProof)await prepareTaskCaller(scope,signal)
+      else await Promise.resolve().then(beforeLibraryCall).catch(()=>{})
+      try {return await memberDelegate.call(scope,message,{groups:activeGroups(scope),signal})}
+      catch(error){if(!libraryGrant())throw error}
+    }
     const grant=libraryGrant()
-    if(!grant)throw fail(503,'The central library MCP connection has not been provisioned for this workspace.')
+    if(!grant)throw fail(503,'No Mac is reachable for this tool right now. Notes, calendar, history and this workspace’s own tools keep working.')
     const controller=new AbortController();controllers.add(controller)
     const timer=setTimeout(()=>controller.abort(),115000);timer.unref()
     const headers={authorization:'Bearer '+grant.bearerToken,'content-type':'application/json',accept:'application/json, text/event-stream','mcp-protocol-version':'2025-06-18',
       'x-woven-protocol':'3','x-woven-workspace':grant.libraryID,'x-woven-enabled-groups':[...activeGroups(scope)].join(','),
       ...(isBot(scope)?{'x-woven-caller':scope.principal,'x-woven-bot-id':scope.botID,'x-woven-bot-name':encodeURIComponent(scope.botName)}:{'x-woven-conversation-id':scope.conversationID})}
     try {
-      if(scope.taskProof)await prepareTaskCaller(scope,grant,signal)
+      if(scope.taskProof)await prepareTaskCaller(scope,signal)
       else if(!isBot(scope))await beforeLibraryCall()
       const response=await fetchImpl(grant.endpointURL,{method:'POST',headers,redirect:'error',body:JSON.stringify(message),signal:signal?AbortSignal.any([controller.signal,signal]):controller.signal})
       if(!response.ok)throw fail(response.status,'The central library did not authorize this Woven MCP request. Refresh the workspace connection before retrying.')
@@ -239,7 +268,7 @@ export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localT
     }
     if(message.params!==undefined&&(!message.params||typeof message.params!=='object'||Array.isArray(message.params)))return errorReply(id,-32602,'Parameters must be an object.')
     if(message.method==='initialize'&&(!message.params?.protocolVersion||!message.params?.capabilities||!message.params?.clientInfo))return errorReply(id,-32602,'Initialization requires protocolVersion, capabilities and clientInfo.')
-    if(message.method==='initialize')return {jsonrpc:'2.0',id,result:{protocolVersion:['2025-11-25','2025-06-18','2025-03-26'].includes(message.params?.protocolVersion)?message.params.protocolVersion:'2025-11-25',capabilities:{tools:{listChanged:false}},serverInfo:{name:'Woven MCP',version:'1.0.0'},instructions:'Use named Woven tools within this credential’s conversation and current permissions. Notes, calendar, history and library tools use this machine’s library copy; other delegated tools need a connected Mac, and local execution tools remain available while it is offline. Never replay an uncertain external effect.'}}
+    if(message.method==='initialize')return {jsonrpc:'2.0',id,result:{protocolVersion:['2025-11-25','2025-06-18','2025-03-26'].includes(message.params?.protocolVersion)?message.params.protocolVersion:'2025-11-25',capabilities:{tools:{listChanged:false}},serverInfo:{name:'Woven MCP',version:'1.0.0'},instructions:'Use named Woven tools within this credential’s conversation and current permissions. Notes, calendar, history and library tools use this machine’s library copy; timers and usage need any online Mac, and this workspace’s own tools work with every Mac offline. Never replay an uncertain external effect.'}}
     if(message.method==='ping')return {jsonrpc:'2.0',id,result:{}}
     let requestKey,requestController,operationRequestID
     try {
@@ -263,7 +292,7 @@ export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localT
       requestController=new AbortController();inFlight.set(requestKey,requestController)
       const invocationSignal=signal?AbortSignal.any([signal,requestController.signal]):requestController.signal
       if(servedLocally(scope,name))return await localLibraryCall(scope,{...message,params:{...message.params,arguments:{...input,requestID:operationRequestID}}},invocationSignal)
-      if(isBot(scope)||!local.has(name)||shouldDelegate(scope,name,input)||scope.taskProof&&!name.startsWith('woven_databases_')&&name!=='woven_context'&&groupFor(name)!=='browser')return await libraryCall(scope,{...message,params:{...message.params,arguments:{...input,requestID:operationRequestID}}},invocationSignal)
+      if(isBot(scope)||!local.has(name)||scope.taskProof&&!name.startsWith('woven_databases_')&&name!=='woven_context'&&groupFor(name)!=='browser')return await libraryCall(scope,{...message,params:{...message.params,arguments:{...input,requestID:operationRequestID}}},invocationSignal)
       const value=await localCall(scope,name,{...input,requestID:operationRequestID},{signal:invocationSignal})
       const reply=result(value)
       if(Buffer.byteLength(JSON.stringify(reply))>1048576)throw fail(413,'The response exceeds 1 MiB. Request a smaller page or character window.')

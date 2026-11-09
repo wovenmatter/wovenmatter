@@ -312,6 +312,33 @@ struct LibraryHostTests {
     #expect(status["peers"]?.arrayValue?.first?.objectValue?["deviceID"]?.stringValue == mac.identity.deviceID)
   }
 
+  /// The Node server signs its requests to other members through the socket;
+  /// the signature verifies with this host's public member key, and the
+  /// workspace registry it routes sessions with is on the socket too.
+  @Test func socketSignsForTheServerAndListsWorkspaces() async throws {
+    let fixture = try await HostFixture(); defer { fixture.remove() }
+    let auth = ["Authorization": "Bearer " + fixture.token]
+    let identity = try JSONDecoder().decode(LibraryHost.Identity.self, from: send("GET", "/v1/identity", unix: fixture.socket, headers: auth).body)
+    let body = Data("{\"kind\":\"send\"}".utf8), target = "/wovenmatter-execution/abc/v1/execution/commands"
+    let request = LibraryHost.SignatureRequest(method: "post", target: target, bodySHA256: MemberRequestSignature.bodyHash(body))
+    let reply = try send("POST", "/v1/members/sign", unix: fixture.socket, headers: auth, body: JSONEncoder().encode(request))
+    #expect(reply.status == 200, "\(String(decoding: reply.body, as: UTF8.self))")
+    let headers = try #require(reply.json?.objectValue?["headers"]?.objectValue)
+    #expect(headers[MemberRequestSignature.deviceHeader]?.stringValue == identity.deviceID)
+    let time = try #require(headers[MemberRequestSignature.timeHeader]?.stringValue.flatMap { Int64($0) })
+    let nonce = try #require(headers[MemberRequestSignature.nonceHeader]?.stringValue)
+    let signature = try #require(headers[MemberRequestSignature.signatureHeader]?.stringValue.flatMap(MemberRequestSignature.decodeBase64URL))
+    #expect(MemberIdentity.verify(publicKey: identity.publicKey, signature: signature,
+      message: MemberRequestSignature.message(method: "POST", target: target, time: time, nonce: nonce, body: body)))
+    // Not a bearer for anything else: malformed requests and other callers are refused.
+    let bad = LibraryHost.SignatureRequest(method: "TRACE", target: "relative", bodySHA256: "zz")
+    #expect(try send("POST", "/v1/members/sign", unix: fixture.socket, headers: auth, body: JSONEncoder().encode(bad)).status == 400)
+    #expect(try send("POST", "/v1/members/sign", unix: fixture.socket, body: JSONEncoder().encode(request)).status == 401)
+    #expect(try send("POST", "/v1/members/sign", port: fixture.port, body: JSONEncoder().encode(request)).status == 404)
+    let workspaces = try #require(send("GET", "/v1/workspaces", unix: fixture.socket, headers: auth).json?.objectValue?["workspaces"]?.arrayValue)
+    #expect(workspaces.allSatisfy { $0.objectValue?["deleted"]?.boolValue != true })
+  }
+
   @Test func botEntriesAndLocalPublishingWriteThisLibrary() async throws {
     let fixture = try await HostFixture(); defer { fixture.remove() }
     let auth = ["Authorization": "Bearer " + fixture.token]

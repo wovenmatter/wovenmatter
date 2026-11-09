@@ -12,6 +12,8 @@ import { queryWorkspaceMCPHistory } from './workspace-mcp-history.mjs'
 import { databaseOperation } from './database-catalog.mjs'
 import { createHash, randomBytes, randomUUID, timingSafeEqual, createCipheriv, createDecipheriv } from 'node:crypto'
 import { ordered, sha256 as digest } from './durable-json.mjs'
+import { createMemberMacDelegate } from './member-client.mjs'
+import { createMemberSessions } from './member-sessions.mjs'
 
 const fail = (statusCode, message) => Object.assign(new Error(message), { statusCode })
 const identifier = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value)
@@ -24,7 +26,7 @@ function inputMessages(command,runID) {
 
 // This store is owned by the workspace service (the existing host lock fences
 // competing owners). Neither a phone nor an SSH attachment owns these runs.
-export function createClientExecution({ directory, runtime, kind = 'linux', name = 'Workspace', publisherKey, publisherFetch, publisherIntervalMilliseconds, goalIntervalMilliseconds = 1000, mcpEndpointURL = 'http://127.0.0.1:7337/mcp', managedDataRoot = resolve(directory, '../databases'), externalRunningSessions=()=>0,workspaceBrowser, library = null }) {
+export function createClientExecution({ directory, runtime, kind = 'linux', name = 'Workspace', publisherKey, publisherFetch, publisherIntervalMilliseconds, goalIntervalMilliseconds = 1000, mcpEndpointURL = 'http://127.0.0.1:7337/mcp', managedDataRoot = resolve(directory, '../databases'), externalRunningSessions=()=>0,workspaceBrowser, library = null, members = null }) {
   mkdirSync(directory, { recursive: true, mode: 0o700 })
   const path = resolve(directory, 'execution.sqlite')
   const db = new DatabaseSync(path)
@@ -333,7 +335,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       } else if (command.workspaceAction?.conversation) {
         const action = command.workspaceAction.conversation
         if (action.id !== command.conversationID) throw fail(400,'Session identity does not match.')
-        if (action.action === 'rename' && typeof action.title === 'string' && action.title.trim()) record.conversation.title = action.title.slice(0,256)
+        if (action.action === 'rename' && typeof action.title === 'string' && action.title.trim()) { record.conversation.title = action.title.slice(0,256); record.titled = true }
         else if (action.action === 'pin') record.conversation.isPinned = true
         else if (action.action === 'unpin') record.conversation.isPinned = false
         else if (action.action === 'move') record.conversation.folderID = action.folderID ?? null
@@ -362,7 +364,8 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       if (db.prepare('SELECT id FROM runs WHERE id=?').get(runID)) throw fail(409, 'This run identifier has already been used.')
       command.runID = runID
       record.conversation.activeRunID = runID; record.transcript.activeRunID = runID
-      record.conversation.title = record.transcript.messages.length ? record.conversation.title : command.text.slice(0,100)
+      // A title set before the first message (an agent naming the session it creates) stays.
+      record.conversation.title = record.transcript.messages.length || record.titled ? record.conversation.title : command.text.slice(0,100)
       record.conversation.preview = command.text.slice(0,256); record.conversation.updatedAt = date()
       const visible=command.goalID?'Continuing toward the goal.':command.text
       record.transcript.messages.push(...inputMessages({...command,text:visible},runID))
@@ -585,17 +588,33 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
     'woven_sessions_list','woven_sessions_status','woven_sessions_harnesses','woven_history_search','woven_history_conversations','woven_history_conversation','woven_history_message','woven_history_runs','woven_history_trace','woven_history_events','woven_history_event',
     'woven_databases_list','woven_databases_create','woven_databases_query','woven_databases_execute',...(workspaceBrowser?['woven_browser_use','woven_browser_use_cancel']:[])]
   db.exec('CREATE TABLE IF NOT EXISTS mcp_tool_receipts (caller TEXT NOT NULL, request_id TEXT NOT NULL, fingerprint TEXT NOT NULL, response TEXT, PRIMARY KEY(caller,request_id))')
+  // `members` ({transport, deviceID, hasMac}) reaches other members with this
+  // host's signed requests: sessions on any workspace, and the Mac-only tools.
+  const memberDelegate=members?createMemberMacDelegate({transport:members.transport,workspaceID:()=>descriptor().id,hasMac:members.hasMac}):null
+  const memberSessions=members?createMemberSessions({transport:members.transport,identity:descriptor,deviceID:members.deviceID,
+    localProviders:async()=>(await runtime.providers()).filter(provider=>provider.available!==false)}):null
   const mcp=createWorkspaceMCP({db,identity:descriptor,secret:publisherKey,endpointURL:mcpEndpointURL,
     policy:id=>getRecord(id).enabledTools??mcp.settings().enabledByDefault,localTools:localMCPTools,localCall:performMCP,fetchImpl:publisherFetch,beforeLibraryCall:()=>publisher.syncNow(),
-    shouldDelegate:(scope,name,input)=>name==='woven_sessions_create'&&input.workspace!=null&&![identity.id,'current'].includes(input.workspace),
-    scopedHistoryAccess:scope=>orchestration.readableConversationIDs(scope.conversationID).size>0,localLibrary:libraryTools})
+    scopedHistoryAccess:scope=>orchestration.readableConversationIDs(scope.conversationID).size>0,localLibrary:libraryTools,memberDelegate})
+  // Workspaces are named by ID; `local` is not one. Without a library host
+  // this workspace can only create sessions on itself.
+  async function sessionDestination(raw) {
+    if(memberSessions)return memberSessions.destination(raw)
+    if(raw==null||String(raw).toLowerCase()===descriptor().id.toLowerCase())return null
+    if(['local','current'].includes(String(raw).toLowerCase()))throw fail(400,`"${raw}" is not a workspace name. Name the destination by ID: ${descriptor().id}.`)
+    throw fail(503,'This workspace reaches other workspaces through its library host, which is not running.')
+  }
   const orchestration=createWorkspaceMCPOrchestration({db,identity:descriptor,getRecord,command:(body,device)=>command(body,device,{internal:true}),runtime,settings:()=>mcp.settings(),runningSessions:()=>Number(db.prepare("SELECT count(*) AS count FROM conversations WHERE json_extract(body,'$.conversation.activeRunID') IS NOT NULL").get().count)+externalRunningSessions(),policy:id=>getRecord(id).enabledTools??mcp.settings().enabledByDefault,notifyApproval:setInteraction})
   async function performMCP(scope,name,input,{signal}={}) {
     const caller=name==='woven_context'||name.startsWith('woven_databases_')||name.startsWith('woven_browser_use')?null:getRecord(scope.conversationID),requestID=input.requestID
-    let value
+    let value,destination
     if(name==='woven_context')value=null // Device-originated inputs have no borrowed Mac asset capture.
     else if(name==='woven_browser_use')value=await workspaceBrowser.executeMCP(scope,input,{signal})
     else if(name==='woven_browser_use_cancel')value=await workspaceBrowser.cancelMCP(scope,input.id)
+    else if(name==='woven_sessions_harnesses'&&memberSessions)value=await memberSessions.harnesses(input)
+    else if(name==='woven_sessions_create'&&(destination=await sessionDestination(input.workspace))) {
+      value=await memberSessions.create({callerID:scope.conversationID,requestID,workspace:destination,runtimeKind:caller.conversation.runtimeKind,input,signal})
+    }
     else if(name.startsWith('woven_sessions_')&&!['woven_sessions_list','woven_sessions_status','woven_sessions_harnesses'].includes(name))return orchestration.call(scope,name,input,{signal})
     else if(name.startsWith('woven_goals_')) {
       const action=name.slice('woven_goals_'.length)
