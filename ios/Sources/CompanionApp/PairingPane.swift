@@ -29,7 +29,7 @@ struct PairingPane: View {
           }.disabled(model.pairingInProgress || model.pairingText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             .accessibilityIdentifier("pairing-connect")
         } header: { Text("Device Connections") } footer: {
-          Text("On the Mac hosting your central database, open Woven Matter → Settings → Device Connections. Scan its code or paste its link. Both devices must use the same Tailscale network.")
+          Text("On the Mac hosting your central database, open Woven Matter → Settings → Apple Devices. Scan its code or paste its link. Both devices must use the same Tailscale network.")
         }
 
       }

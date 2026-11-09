@@ -78,7 +78,13 @@ private actor CompanionMCPConnections {
   }
 }
 
-public final class HTTPSCompanionTransport: CompanionTransport, @unchecked Sendable {
+/// Requests that confirm or end this device's pairing with central.
+public protocol MobilePairingRequests: Sendable {
+  func confirmPairing() async throws
+  func unpair() async throws
+}
+
+public final class HTTPSCompanionTransport: CompanionTransport, MobilePairingRequests, @unchecked Sendable {
   let credential: MobileCredential
   private let session: URLSession
   private let mcpSession: URLSession
