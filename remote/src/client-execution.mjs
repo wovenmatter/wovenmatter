@@ -6,6 +6,7 @@ import { mkdirSync, chmodSync } from 'node:fs'
 import { mutateGoal, settleGoal, setGoalStatus, budgetReached, goalUsageUnavailable, goalPrompt, goalGuidance } from './client-goals.mjs'
 import { resolve } from 'node:path'
 import { createWorkspaceMCP } from './workspace-mcp.mjs'
+import { createLocalLibraryTools } from './library-tools.mjs'
 import { createWorkspaceMCPOrchestration } from './workspace-mcp-orchestration.mjs'
 import { queryWorkspaceMCPHistory } from './workspace-mcp-history.mjs'
 import { databaseOperation } from './database-catalog.mjs'
@@ -23,7 +24,7 @@ function inputMessages(command,runID) {
 
 // This store is owned by the workspace service (the existing host lock fences
 // competing owners). Neither a phone nor an SSH attachment owns these runs.
-export function createClientExecution({ directory, runtime, kind = 'linux', name = 'Workspace', publisherKey, publisherFetch, publisherIntervalMilliseconds, goalIntervalMilliseconds = 1000, mcpEndpointURL = 'http://127.0.0.1:7337/mcp', managedDataRoot = resolve(directory, '../databases'), externalRunningSessions=()=>0,workspaceBrowser }) {
+export function createClientExecution({ directory, runtime, kind = 'linux', name = 'Workspace', publisherKey, publisherFetch, publisherIntervalMilliseconds, goalIntervalMilliseconds = 1000, mcpEndpointURL = 'http://127.0.0.1:7337/mcp', managedDataRoot = resolve(directory, '../databases'), externalRunningSessions=()=>0,workspaceBrowser, library = null }) {
   mkdirSync(directory, { recursive: true, mode: 0o700 })
   const path = resolve(directory, 'execution.sqlite')
   const db = new DatabaseSync(path)
@@ -572,8 +573,12 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       }
     })
   }
+  // `library` is this machine's library host ({client, available}); see library-host.mjs.
   const publisher = createClientExecutionPublisher({db,identity:descriptor,secret:publisherKey,events,
-    flush:()=>{for(const id of dirty.keys())flush(id)},fetchImpl:publisherFetch,intervalMilliseconds:publisherIntervalMilliseconds})
+    flush:()=>{for(const id of dirty.keys())flush(id)},fetchImpl:publisherFetch,intervalMilliseconds:publisherIntervalMilliseconds,
+    localLibrary:library?{available:library.available,post:(path,body,headers,options)=>library.client.publisher(path,body,headers,options)}:null})
+  const libraryTools=library?createLocalLibraryTools({client:library.client,available:library.available,
+    callerInfo:id=>{const {conversation}=getRecord(id);return {...(conversation.title?{title:String(conversation.title).slice(0,512)}:{}),runtimeKind:conversation.runtimeKind}}}):null
   const allToolGroups=['notes','history','sessions','goals','timers','usage','calendar','library','browser','computer','executor','html']
   const toolLabels={notes:'Notes',history:'Conversation history',sessions:'Session management',timers:'Timers',usage:'Usage data',calendar:'Calendar',library:'Library',browser:'Browser Use',computer:'Computer Use',executor:'Executor'}
   const localMCPTools=['woven_sessions_create','woven_sessions_send','woven_sessions_manage','woven_sessions_release','woven_sessions_notifications','woven_sessions_receipts','woven_context','woven_goals_get','woven_goals_set','woven_goals_pause','woven_goals_resume','woven_goals_clear','woven_goals_complete','woven_goals_block','woven_goals_checkpoint',
@@ -583,7 +588,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
   const mcp=createWorkspaceMCP({db,identity:descriptor,secret:publisherKey,endpointURL:mcpEndpointURL,
     policy:id=>getRecord(id).enabledTools??mcp.settings().enabledByDefault,localTools:localMCPTools,localCall:performMCP,fetchImpl:publisherFetch,beforeLibraryCall:()=>publisher.syncNow(),
     shouldDelegate:(scope,name,input)=>name==='woven_sessions_create'&&input.workspace!=null&&![identity.id,'current'].includes(input.workspace),
-    scopedHistoryAccess:scope=>orchestration.readableConversationIDs(scope.conversationID).size>0})
+    scopedHistoryAccess:scope=>orchestration.readableConversationIDs(scope.conversationID).size>0,localLibrary:libraryTools})
   const orchestration=createWorkspaceMCPOrchestration({db,identity:descriptor,getRecord,command:(body,device)=>command(body,device,{internal:true}),runtime,settings:()=>mcp.settings(),runningSessions:()=>Number(db.prepare("SELECT count(*) AS count FROM conversations WHERE json_extract(body,'$.conversation.activeRunID') IS NOT NULL").get().count)+externalRunningSessions(),policy:id=>getRecord(id).enabledTools??mcp.settings().enabledByDefault,notifyApproval:setInteraction})
   async function performMCP(scope,name,input,{signal}={}) {
     const caller=name==='woven_context'||name.startsWith('woven_databases_')||name.startsWith('woven_browser_use')?null:getRecord(scope.conversationID),requestID=input.requestID
@@ -629,7 +634,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
     return {success:true,result:value,requestID}
   }
   return { runningSessionCount:()=>Number(db.prepare("SELECT count(*) AS count FROM conversations WHERE json_extract(body,'$.conversation.activeRunID') IS NOT NULL").get().count), descriptor, provision, principal, revoke, adopt, importRetainedEvents, mcp, prepareTaskMCP:mcp.prepareTask,
-    configurePublisher:publisher.configure, publisherStatus:publisher.status, synchronizePublisher:publisher.syncNow, saveArtifact:publisher.saveArtifact,
+    configurePublisher:publisher.configure, publisherStatus:publisher.status, synchronizePublisher:publisher.syncNow, kickPublisher:publisher.kick, saveArtifact:publisher.saveArtifact,
     resolveRetainedAssociation:publisher.resolveRetainedAssociation, hasRun:runID=>!!db.prepare('SELECT id FROM runs WHERE id=?').get(runID),
     hasActiveRuntime:kind => [...jobs.values()].some(job=>job.runtimeKind===kind),
     async cancelActive(){await runtime.cancelActive?.();await Promise.allSettled([...jobs.values()].map(job=>job.completion))},

@@ -355,7 +355,7 @@ private enum HostFixtureError: Error { case timeout }
         let caller = request.headers[MemberRequestSignature.deviceHeader].flatMap { deviceEndpoints[$0] }
         guard !offline.contains(endpoint.absoluteString), caller.map({ !offline.contains($0) }) ?? true,
               let fixture = hosts[endpoint.absoluteString] else { throw URLError(.notConnectedToInternet) }
-        let path = String(request.target.drop { $0 == "/" })
+        let path = String(MemberRequestSignature.canonicalTarget(request.target).drop { $0 == "/" })
         requested.append(endpoint.absoluteString + " " + path)
         let response: CompanionHTTPResponse
         if overHTTP {
@@ -790,11 +790,14 @@ extension CompanionHostLifecycleTests {
         contents.sort { $0.0 < $1.0 }
         for item in contents.prefix(800) { _ = try target.retain(item.1) }
         try await mesh.pair(mini, with: air)
-        await mini.host.peerSync.synchronize(force: true)
+        // One turn walks at most eight manifest pages; later exchanges (forced
+        // here, change-driven or presence in production) continue from the cursor.
         let database = try #require(mini.model.dashboardStore?.database)
         let peer = try await air.host.peerRoute()
-        #expect(try await database.pairedLibraryFileCursor(peer.deviceID) != "")
-        await mini.host.peerSync.synchronize(force: true)
+        for _ in 0..<4 {
+            await mini.host.peerSync.synchronize(force: true)
+            if try await database.pairedLibraryFileCursor(peer.deviceID) == "" { break }
+        }
         #expect(mini.host.peerSync.errors.isEmpty)
         #expect(try await database.pairedLibraryFileCursor(peer.deviceID) == "")
         for item in contents.suffix(10) {

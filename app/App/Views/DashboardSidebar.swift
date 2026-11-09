@@ -107,6 +107,8 @@ struct DashboardSidebarActions {
     let onConversationAction: (WorkspaceConversationRecord, DashboardConversationMenuAction) -> Void
     let onNoteAction: (WorkspaceNoteRecord, DashboardNoteMenuAction) -> Void
     let onUnavailableMutation: (String) -> Void
+    let onSelectBot: (DashboardBotTarget) -> Void
+    let onOpenBotSettings: () -> Void
 }
 
 struct DashboardSidebarRail: View {
@@ -127,6 +129,8 @@ struct DashboardSidebarRail: View {
     let selectedFolderID: String?
     let selectedConversationID: String?
     let selectedNoteID: String?
+    let bots: BotsModel
+    let selectedBotTarget: DashboardBotTarget?
     let destination: DashboardDestination
     let contentRevision: Int64
     @Binding var pinnedAgentIDsRaw: String
@@ -163,6 +167,8 @@ struct DashboardSidebarRail: View {
             selectedAgentID: selectedAgentID,
             selectedFolderID: selectedFolderID,
             selectedConversationID: selectedConversationID,
+            bots: bots,
+            selectedBotTarget: selectedBotTarget,
             destination: destination,
             pinnedAgentIDsRaw: $pinnedAgentIDsRaw,
             agentOrderRaw: $agentOrderRaw,
@@ -222,6 +228,8 @@ struct DashboardSidebarNavigationPage: View {
     let selectedAgentID: UUID?
     let selectedFolderID: String?
     let selectedConversationID: String?
+    let bots: BotsModel
+    let selectedBotTarget: DashboardBotTarget?
     let destination: DashboardDestination
     @Binding var pinnedAgentIDsRaw: String
     @Binding var agentOrderRaw: String
@@ -265,6 +273,14 @@ struct DashboardSidebarNavigationPage: View {
             railHeader
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
+                    DashboardBotsSidebar(
+                        bots: bots,
+                        selectedTarget: selectedBotTarget,
+                        isWorkspaceDestination: destination == .workspace,
+                        disclosureRaw: $agentDisclosureRaw,
+                        onSelect: actions.onSelectBot,
+                        onOpenSettings: actions.onOpenBotSettings
+                    )
                     topActions
                     allWorkspacesRow
                     workspacesSection

@@ -166,6 +166,14 @@ def disconnect_snapshot(file, *, device_id, execution_root, published_root):
         for name in ("workspace_session_deliveries", "workspace_calendar_runs"):
             if name in tables:
                 db.execute("UPDATE " + quote(name) + " SET status='cancelled' WHERE status IN ('queued','pending','sending','running','accepted')")
+        if "workspace_mcp_bot_machines" in tables:
+            db.execute("UPDATE workspace_mcp_bot_machines SET active=0")
+        if "workspace_session_relationships" in tables:
+            db.execute("UPDATE workspace_session_relationships SET coordinator_id=NULL,coordination_epoch=NULL,coordination_since=NULL WHERE coordinator_id LIKE 'woven:bot:%'")
+        if "workspace_session_grants" in tables:
+            db.execute("DELETE FROM workspace_session_grants WHERE source_id LIKE 'woven:bot:%'")
+        if "workspace_coordination_access_requests" in tables:
+            db.execute("UPDATE workspace_coordination_access_requests SET state='cancelled' WHERE source_id LIKE 'woven:bot:%' AND state='pending'")
         # Network exposure belongs to the source instance, not a new snapshot.
         # Keep tool selections, but require an explicit enable in this instance.
         if "workspace_tool_settings" in tables:
@@ -224,6 +232,7 @@ def snapshot(source, destination):
         execution_root = temporary / "ExecutionHome" / ".woven-matter"
         disconnect_snapshot(temporary / "workspace.sqlite", device_id=device_id, execution_root=execution_root,
                             published_root=destination / "ExecutionHome" / ".woven-matter")
+        (temporary / "mcp-access.json").unlink(missing_ok=True)
         (temporary / "dashboard-device-id").write_text(device_id)
         (temporary / "dashboard-device-id").chmod(0o600)
         (temporary / "development-snapshot.json").write_text(json.dumps({"version": 1, "id": str(uuid.uuid4()), "source": str(source), "createdAt": time.time()}))

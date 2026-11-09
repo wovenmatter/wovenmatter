@@ -499,7 +499,7 @@ test('host health reports native paths and source inventory without exposing its
   const service = await startService({ workspace, home, catalog: catalogPath, token, environmentOverrides: {
     WOVENMATTER_RUNTIME_KIND: 'host', WOVENMATTER_ACCESS_MODE: 'fullRoot',
     WOVENMATTER_DATA_DIRECTORY: databases, WOVENMATTER_STATE_DIRECTORY: resolve(home, 'data/run'),
-    WOVENMATTER_SERVICE_FINGERPRINT: 'a'.repeat(64),
+    WOVENMATTER_SERVICE_FINGERPRINT: 'a'.repeat(64), WOVENMATTER_LIBRARY: '0',
   } })
   context.after(() => stopService(service.child))
   const headers = { Authorization: 'Bearer ' + token }
@@ -507,7 +507,7 @@ test('host health reports native paths and source inventory without exposing its
   assert.deepEqual(health, { status: 'ready', version: '0.1.0', workspaceRoot: workspace, harnessCount: 4,
     runtimeKind: 'host', serviceFingerprint: 'a'.repeat(64), databasesDirectory: databases,
     attachmentsDirectory: resolve(workspace, '.wovenmatter/attachments'), dataRoot: resolve(home, 'data'), accessMode: 'fullRoot',
-    workspaceEnabled: true, botsEnabled: false })
+    workspaceEnabled: true, botsEnabled: false, library: null, memberIdentity: null })
   const body = await (await fetch(service.url + '/v1/harnesses', { headers })).json()
   assert.ok(body.harnesses.every(row => ['system', 'managed', 'missing'].includes(row.source)))
   assert.equal(body.harnesses.find(row => row.id === 'default_agent').source, 'managed')

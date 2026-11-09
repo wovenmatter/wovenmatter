@@ -1,6 +1,7 @@
 import CompanionClient
 import Foundation
 import WovenMatterCompanion
+import WovenMatterCore
 import WovenMatterDashboardStore
 
 /// Shared replica reads do not import foreign execution identities into the
@@ -19,14 +20,15 @@ final class SecondaryMacReplicaTools {
               [.history, .sessions, .library, .usage].contains(group), let database = model.dashboardStore?.database else { return nil }
         if group == .sessions, !["list", "status"].contains(command.action) { return nil }
         // This adapter never grants access to a remote/replica caller identity.
-        _ = try await database.localACPSession(conversationID: callerID)
+        if !WovenMCPCaller.isAppWide(callerID) { _ = try await database.localACPSession(conversationID: callerID) }
         let tools = try await database.sessionTools(callerID)
         // Native history retains its narrower own-session/attachment exceptions.
         // Browsing other devices' cached history requires the actual history tool.
         if group == .history, !tools.enabled.contains(.history) { return nil }
         try await database.requireTool(group, sessionID: callerID)
         let snapshot = try await database.companionSnapshot()
-        guard let caller = snapshot.conversations.first(where: { $0.id == callerID }) else { throw WorkspaceToolError.notFound("The native caller is no longer available.") }
+        let caller = snapshot.conversations.first(where: { $0.id == callerID })
+        guard caller != nil || WovenMCPCaller.isAppWide(callerID) else { throw WorkspaceToolError.notFound("The native caller is no longer available.") }
         let nativeIDs = Set(snapshot.conversations.map(\.id))
         let explicit = command.options["conversation"] ?? (["conversation", "status"].contains(command.action) ? command.options["id"] ?? command.positional.first : nil)
         if let explicit, nativeIDs.contains(explicit) { return nil }
@@ -34,7 +36,7 @@ final class SecondaryMacReplicaTools {
         try await refreshLocal()
         // Recheck after the refresh's actor suspensions; user selection is final.
         try await database.requireTool(group, sessionID: callerID)
-        let context = MobileToolContext(sessionID: callerID, workspaceID: workspaceID, folderID: caller.folderID, enabled: tools.enabled)
+        let context = MobileToolContext(sessionID: callerID, workspaceID: workspaceID, folderID: caller?.folderID, enabled: tools.enabled)
         if group == .library { return try await library(request, command: command, context: context) }
         if group == .usage { return try await usage(command) }
         if group == .history, ["message", "event", "trace"].contains(command.action) {

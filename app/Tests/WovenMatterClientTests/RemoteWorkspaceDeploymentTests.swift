@@ -62,6 +62,30 @@ struct RemoteWorkspaceDeploymentTests {
         #expect(status.running && status.kind == .host)
     }
 
+    /// Bots-only hosts use remote-host.sh's roles argument, not a second subcommand.
+    @Test func botsOnlyHostUsesTheBotsRole() async throws {
+        let root = try hostFixture(); defer { try? FileManager.default.removeItem(at: root) }
+        let commands = LockedCommands()
+        let status = #"{"id":"bots","name":"box","state":"running","running":true,"startedAt":"","image":"native","memoryBytes":0,"swapBytes":0,"hostPort":7337,"persistentVolume":"/home/alice/.local/share/wovenmatter","capabilities":{"memory":false,"swap":false},"storageKind":"host","hostStorageLow":false,"legacyStorage":false,"kind":"host"}"#
+        let client = RemoteWorkspaceSSHClient(runner: { _, command, _ in
+            commands.append(command)
+            return Data(#"{"ready":true,"runtime":"host","version":"","architecture":"x86_64","capabilities":{"memory":false,"swap":false},"limitations":[],"hostStorageLow":false,"blockingIssues":[]}"#.utf8)
+        }, scriptLoader: { Data("container-lifecycle".utf8) }, deploymentRoot: root,
+        streamingRunner: { _, command, _, _ in commands.append(command); return Data(status.utf8) },
+        hostScriptLoader: { Data("host-lifecycle".utf8) })
+        let configuration = RemoteWorkspaceConfiguration(name: "box", workspaceID: "bots", hostName: "host.invalid",
+            userName: "alice", kind: .host, accessMode: .user)
+        _ = try await client.prepareHost(hostName: "host.invalid", userName: "alice", kind: .host, accessMode: .user,
+            roles: RemoteHostInstallMode.botsOnly.roles)
+        _ = try await client.deployHost(configuration: configuration, token: "fixture-secret", mode: .botsOnly)
+        _ = try await client.deployHost(configuration: configuration, token: "fixture-secret")
+        let sent = commands.values
+        #expect(sent.count == 3)
+        #expect(sent[0].contains("'prepare' 'AUTHORIZED' 'user' 'bots'"))
+        #expect(sent[1].contains("'install' 'bots' '") && sent[1].hasSuffix(" 'bots'"))
+        #expect(!sent[2].hasSuffix(" 'bots'"), "a workspace install keeps the host's recorded roles")
+    }
+
     @Test func nativeHostArchiveIsDeterministicAndRejectsSourceDrift() throws {
         let root = try hostFixture(); defer { try? FileManager.default.removeItem(at: root) }
         let deployment = try RemoteWorkspaceDeployment(root: root, kind: .host)
@@ -154,4 +178,11 @@ private final class ProgressState: @unchecked Sendable {
     var pid: pid_t = 0
     var messages: [String] { lock.withLock { values } }
     func append(_ value: String) { lock.withLock { values.append(value) } }
+}
+
+private final class LockedCommands: @unchecked Sendable {
+    private let lock = NSLock()
+    private var commands: [String] = []
+    var values: [String] { lock.withLock { commands } }
+    func append(_ value: String) { lock.withLock { commands.append(value) } }
 }

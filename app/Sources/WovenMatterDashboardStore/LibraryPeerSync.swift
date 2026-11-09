@@ -271,7 +271,7 @@ public actor LibraryPeerSync {
       while running.contains(member.deviceID) { try? await Task.sleep(for: .milliseconds(10)) }
       running.insert(member.deviceID)
       exchanges["now", default: 0] += 1
-      await synchronize(with: member)
+      await synchronize(with: member, includingFiles: true)
       running.remove(member.deviceID)
     }
   }
@@ -300,7 +300,7 @@ public actor LibraryPeerSync {
   }
 
   /// One bounded catch-up with a peer. Public for tests and "Sync now".
-  public func synchronize(with member: LibraryMember) async {
+  public func synchronize(with member: LibraryMember, includingFiles forceFiles: Bool = false) async {
     var received = false
     do {
       let own = directory.identity.deviceID
@@ -326,9 +326,12 @@ public actor LibraryPeerSync {
         if !page.hasMore && !reply.page.hasMore { break }
       }
       try? await database.materializePendingPeerRecords()
-      if received || (nextFiles[member.deviceID] ?? .distantPast) <= Date() {
-        do { try await synchronizeFiles(with: member); nextFiles[member.deviceID] = Date().addingTimeInterval(configuration.fileInterval) }
-        catch { update(member) { $0.error = "Files: " + error.localizedDescription } }
+      if forceFiles || received || (nextFiles[member.deviceID] ?? .distantPast) <= Date() {
+        do {
+          // A manifest longer than one bounded turn continues on the next exchange.
+          let finished = try await synchronizeFiles(with: member)
+          nextFiles[member.deviceID] = finished ? Date().addingTimeInterval(configuration.fileInterval) : .distantPast
+        } catch { update(member) { $0.error = "Files: " + error.localizedDescription } }
       }
       online(member, synchronized: true)
     } catch {
@@ -337,15 +340,19 @@ public actor LibraryPeerSync {
     if received, let onChange { await onChange() }
   }
 
-  private func synchronizeFiles(with member: LibraryMember) async throws {
+  /// Returns true when the peer's whole manifest was walked this turn.
+  private func synchronizeFiles(with member: LibraryMember) async throws -> Bool {
     var cursor = try await database.pairedLibraryFileCursor(member.deviceID), chunks = 0
     for _ in 0..<8 {
+      // A removal made during a transfer sends no further request.
+      guard await directory.member(member.deviceID) != nil else { return true }
       let response = try await send(member, path: "v1/peers/files", body: JSONEncoder().encode(cursor))
       guard response.status == 200 else { throw CompanionAPIError(code: "peer_file", message: "The peer did not list its files.") }
       let page = try JSONDecoder().decode(PairedLibraryFilePage.self, from: response.body)
       for file in page.files {
         while let offset = try await files.nextOffset(file) {
-          guard chunks < 64, !Task.isCancelled else { return }
+          guard chunks < 64, !Task.isCancelled else { return false }
+          guard await directory.member(member.deviceID) != nil else { return true }
           let reply = try await send(member, path: "v1/peers/file", body: JSONEncoder().encode(PairedLibraryFileRequest(file: file, offset: offset)))
           guard reply.status == 200 else { throw CompanionAPIError(code: "peer_file", message: "The peer did not return a shared file.") }
           let chunk = try JSONDecoder().decode(PairedLibraryFileChunk.self, from: reply.body)
@@ -355,9 +362,10 @@ public actor LibraryPeerSync {
       }
       cursor = page.hasMore ? page.cursor : ""
       try await database.savePairedLibraryFileCursor(cursor, peer: member.deviceID)
-      if !page.hasMore { break }
+      if !page.hasMore { try await database.materializePendingPeerRecords(); return true }
     }
     try await database.materializePendingPeerRecords()
+    return false
   }
 
   private func online(_ member: LibraryMember, synchronized: Bool) {
@@ -477,7 +485,7 @@ public actor LibraryPeerSync {
         return try .json(try await files.chunk(JSONDecoder().decode(PairedLibraryFileRequest.self, from: request.body)))
       }
     } catch let error as CompanionAPIError {
-      return .error(error.code, error.message, status: 409)
+      return .error(error.code, error.message, status: error.code == "unauthorized" ? 401 : 409)
     } catch {
       return .error("peer_sync", "Synchronization paused; all local writing is retained. " + error.localizedDescription, status: 409)
     }

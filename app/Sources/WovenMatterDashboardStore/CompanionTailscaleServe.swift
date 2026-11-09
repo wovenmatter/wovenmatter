@@ -73,7 +73,12 @@ public final class CompanionTailscaleServe {
     self.launch = launch ?? { try NativeCompanionServeProcess(executable: $0, arguments: $1) }
   }
 
-  public func start(loopbackPort: UInt16, preferredHTTPSPort: Int? = nil, allowPortFallback: Bool = false) async throws -> URL {
+  /// `path` is the Serve mount: `/wovenmatter` for Woven's own routes, `/` for a bot preview.
+  public func start(loopbackPort: UInt16, preferredHTTPSPort: Int? = nil, allowPortFallback: Bool = false,
+                    path: String = "/wovenmatter") async throws -> URL {
+    guard path == "/" || (path.hasPrefix("/") && !path.hasSuffix("/") && path.utf8.allSatisfy({ (97...122).contains($0) || (48...57).contains($0) || $0 == 45 || $0 == 47 })) else {
+      throw failure("Invalid sharing path.")
+    }
     guard process == nil else { throw failure("Companion sharing is already running.") }
     generation = UUID()
     let attempt = generation
@@ -117,7 +122,7 @@ public final class CompanionTailscaleServe {
     guard let httpsPort = candidates.first(where: { (1...65535).contains($0) && !used.contains($0) }) else {
       throw failure("Another service is using this device connection address.")
     }
-    let child = try launch(executable, ["serve", "--https=\(httpsPort)", "--set-path=/wovenmatter", "http://127.0.0.1:\(loopbackPort)"])
+    let child = try launch(executable, ["serve", "--https=\(httpsPort)", "--set-path=\(path)", "http://127.0.0.1:\(loopbackPort)"])
     process = child
     do {
       for _ in 0..<40 {
@@ -126,8 +131,8 @@ public final class CompanionTailscaleServe {
         guard child.isRunning else { throw failure("Tailscale Serve could not start. Enable HTTPS certificates for this tailnet in the Tailscale admin console.") }
         let live = try await probe(executable, ["serve", "status", "--json"])
         guard generation == attempt, !Task.isCancelled else { throw CancellationError() }
-        if try Self.containsProxy(in: live, port: httpsPort, target: "http://127.0.0.1:\(loopbackPort)") {
-          guard let endpoint = URL(string: "https://\(host):\(httpsPort)/wovenmatter") else { throw failure("Invalid companion endpoint.") }
+        if try Self.containsProxy(in: live, port: httpsPort, target: "http://127.0.0.1:\(loopbackPort)", path: path) {
+          guard let endpoint = URL(string: "https://\(host):\(httpsPort)" + (path == "/" ? "/" : path)) else { throw failure("Invalid companion endpoint.") }
           return endpoint
         }
       }
@@ -181,7 +186,7 @@ public final class CompanionTailscaleServe {
     return ports
   }
 
-  private static func containsProxy(in data: Data, port: Int, target: String) throws -> Bool {
+  private static func containsProxy(in data: Data, port: Int, target: String, path: String) throws -> Bool {
     let root = try JSONSerialization.jsonObject(with: data)
     func visit(_ value: Any) -> Bool {
       guard let dictionary = value as? [String: Any] else { return false }
@@ -189,7 +194,7 @@ public final class CompanionTailscaleServe {
         for (address, configuration) in web where address.hasSuffix(":\(port)") {
           if let configuration = configuration as? [String: Any],
              let handlers = configuration["Handlers"] as? [String: Any],
-             let handler = (handlers["/wovenmatter"] ?? handlers["/wovenmatter/"]) as? [String: Any],
+             let handler = (handlers[path] ?? handlers[path == "/" ? "/" : path + "/"]) as? [String: Any],
              handler["Proxy"] as? String == target { return true }
         }
       }

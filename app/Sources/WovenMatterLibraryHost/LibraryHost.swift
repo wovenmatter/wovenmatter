@@ -173,13 +173,19 @@ public final class LibraryHost: @unchecked Sendable {
         if parts.count == 4, parts[0] == "v1", parts[1] == "bots", parts[3] == "entries" {
           guard request.method == "POST" else { return .error("method_not_allowed", "Use POST.", status: 405) }
           guard request.body.count <= 8 * 1_024 * 1_024 else { return .error("too_large", "The conversation batch is too large.", status: 413) }
-          let batch = try JSONDecoder().decode(BotEntriesBatch.self, from: request.body)
-          return try .json(try await database.writeBotEntries(machineID: identity.deviceID, botID: parts[2], batch: batch))
+          let batch = try JSONDecoder().decode(BotConversationMirror.self, from: request.body)
+          guard batch.bot.id.lowercased() == parts[2].lowercased() else {
+            return .error("invalid_request", "The batch must name the bot in its path.", status: 400)
+          }
+          let added = try await database.recordBotConversation(machineID: identity.deviceID, batch)
+          return try .json(["conversations": batch.conversations.count, "entries": batch.entries.count, "added": added])
         }
         return .error("not_found", "Unknown library API route.", status: 404)
       }
     } catch let error as CompanionAPIError {
       return .error(error.code, error.message, status: error.code == "too_large" ? 413 : error.code == "wrong_owner" ? 403 : 400)
+    } catch let error as WorkspaceToolError {
+      return .error("invalid_request", error.localizedDescription, status: 400)
     } catch {
       return .error("invalid_request", error.localizedDescription, status: 400)
     }
@@ -275,9 +281,9 @@ public final class LibraryHost: @unchecked Sendable {
     if let version = request.headers["mcp-protocol-version"], !WovenMCPServer.supportedProtocolVersions.contains(version) {
       return .error("protocol_version", "Unsupported MCP protocol version.", status: 400)
     }
-    guard let rawCaller = request.headers["x-woven-conversation-id"],
-          let rawGroups = request.headers["x-woven-enabled-groups"], rawGroups.utf8.count <= 512 else {
-      return .error("invalid_request", "MCP requires a conversation binding and its current tool selection.", status: 400)
+    guard let rawGroups = request.headers["x-woven-enabled-groups"], rawGroups.utf8.count <= 512,
+          request.headers["x-woven-conversation-id"] != nil || request.headers["x-woven-caller"] != nil else {
+      return .error("invalid_request", "MCP requires a conversation binding (or a bot caller) and its current tool selection.", status: 400)
     }
     let groups = try Self.groups(rawGroups.split(separator: ",").map(String.init))
     let message: GatewayJSONValue
@@ -286,7 +292,27 @@ public final class LibraryHost: @unchecked Sendable {
     guard request.body.count <= WovenMCPServer.maximumRequestBytes(for: message) else {
       return .error("too_large", "The MCP request exceeds its size limit.", status: 413)
     }
-    let callerID = try await ensureCaller(rawCaller, groups: groups)
+    // A bot is an app-wide caller (`woven:bot:<machine-device-id>:<bot-id>`):
+    // it has no conversation here, and this library's `botMCP` settings
+    // decide its groups, further limited by the Node server's selection.
+    if let caller = request.headers["x-woven-caller"] {
+      guard request.headers["x-woven-conversation-id"] == nil, let bot = WovenMCPCaller.parseBot(caller),
+            request.headers["x-woven-bot-id"]?.lowercased() == bot.botID else {
+        return .error("invalid_request", "A bot caller is woven:bot:<machine>:<bot> with a matching X-Woven-Bot-ID.", status: 400)
+      }
+      let callerID = WovenMCPCaller.bot(machineID: bot.machineID, botID: bot.botID)
+      let name = request.headers["x-woven-bot-name"].flatMap { $0.removingPercentEncoding } ?? "Bot"
+      try await database.registerBotCaller(callerID, displayName: String(name.prefix(128)))
+      let served = groups.intersection(Self.servedGroups)
+      let allowed = Set(WovenMCPCatalog.tools.filter { $0.group.map(served.contains) == true }.map(\.name))
+      let executor = executor
+      let result = await WovenMCPServer.handle(message, contextID: nil, allowedTools: allowed, outsideCaller: true) { call in
+        await executor.execute(call, callerID: callerID, handlers: WorkspaceToolHandlers()).bounded()
+      }
+      guard let result else { return .init(status: 202, body: Data()) }
+      return try .json(result)
+    }
+    let callerID = try await ensureCaller(request.headers["x-woven-conversation-id"] ?? "", groups: groups)
     let served = groups.intersection(Self.servedGroups)
     let allowed = Set(WovenMCPCatalog.tools.filter { tool in
       tool.name == "woven_context" || tool.group.map(served.contains) == true

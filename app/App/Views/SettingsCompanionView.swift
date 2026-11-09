@@ -45,9 +45,11 @@ struct SettingsCompanionView: View {
                 if host.pairedDevices.contains(where: { $0.id != host.peerIdentity?.deviceID }) { pairedDevices }
                 if !host.pendingDeviceRevocations.isEmpty { pendingRevocations }
             }
+            BotsVersionNotice(bots: model.bots)
             SettingsDeviceWorkspaceInventory(workspaces: host.executionWorkspaces)
             if !DevelopmentLaunch.isClient {
                 DevicePairingDiscoveryCard(pairing: client.devicePairing, host: host, canPairWithCentral: true)
+                BotsDiscoverDevicesCard(bots: model.bots)
                 DevicePairingCodeCard(host: host)
                 SettingsCard(title: "Use a pairing link", detail: "Copy a pairing link from the other Mac’s Apple Devices settings.") {
                     HStack {

@@ -55,7 +55,7 @@ extension WorkspaceDatabaseConnection {
 
   func requireTimerAccessUnlocked(sourceID: String, targetID: String) throws {
     try requireToolUnlocked(.timers, sessionID: sourceID)
-    if sourceID == WovenMCPCaller.outside {
+    if WovenMCPCaller.isAppWide(sourceID) {
       try requireToolSessionUnlocked(targetID)
       return
     }
@@ -94,7 +94,7 @@ extension WorkspaceDatabaseConnection {
             next_fire_at=excluded.next_fire_at,interval_seconds=excluded.interval_seconds,
             is_paused=excluded.is_paused,outside_mcp=excluded.outside_mcp,pending_delivery_id=NULL
           """, [saved.id, saved.sessionID, saved.instruction, String(saved.nextFireAt.timeIntervalSince1970),
-                 saved.intervalSeconds.map { String($0) }, saved.isPaused ? "1" : "0", callerID == WovenMCPCaller.outside ? "1" : "0"])
+                 saved.intervalSeconds.map { String($0) }, saved.isPaused ? "1" : "0", WovenMCPCaller.isAppWide(callerID) ? "1" : "0"])
         return saved
       }
       try requireTimerAccessUnlocked(sourceID: callerID, targetID: outcome.result.sessionID)
@@ -111,8 +111,8 @@ extension WorkspaceDatabaseConnection {
           throw WorkspaceToolError.notFound("Timer not found.")
         }
         if let callerID { try requireTimerAccessUnlocked(sourceID: callerID, targetID: timer.sessionID) }
-        if !paused, callerID != WovenMCPCaller.outside { try requireToolUnlocked(.timers, sessionID: timer.sessionID) }
-        try toolsExecuteUnlocked("UPDATE workspace_session_timers SET is_paused=?,pending_delivery_id=NULL,outside_mcp=CASE WHEN ? THEN 1 ELSE outside_mcp END WHERE id=?", [paused ? "1" : "0", callerID == WovenMCPCaller.outside && !paused ? "1" : "0", id])
+        if !paused, callerID.map(WovenMCPCaller.isAppWide) != true { try requireToolUnlocked(.timers, sessionID: timer.sessionID) }
+        try toolsExecuteUnlocked("UPDATE workspace_session_timers SET is_paused=?,pending_delivery_id=NULL,outside_mcp=CASE WHEN ? THEN 1 ELSE outside_mcp END WHERE id=?", [paused ? "1" : "0", callerID.map(WovenMCPCaller.isAppWide) == true && !paused ? "1" : "0", id])
         return timer.sessionID
       }
       if let callerID { try requireTimerAccessUnlocked(sourceID: callerID, targetID: outcome.result) }

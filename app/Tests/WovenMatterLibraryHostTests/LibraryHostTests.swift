@@ -315,9 +315,9 @@ struct LibraryHostTests {
     let bot = UUID().uuidString.lowercased()
     let batch: GatewayJSONValue = .object([
       "bot": .object(["id": .string(bot), "name": .string("Helper")]),
-      "conversations": .array([.object(["conversationId": .string("main"), "kind": .string("main"), "title": .string("Main")])]),
-      "entries": .array([.object(["id": .string("00001"), "conversationId": .string("main"), "role": .string("user"),
-                                  "text": .string("Hello"), "createdAt": .number(1_762_646_400_000)])])
+      "conversations": .array([.object(["conversationId": .number(1), "kind": .string("main"), "title": .string("Main")])]),
+      "entries": .array([.object(["id": .number(1), "conversationId": .number(1), "role": .string("user"),
+                                  "text": .string("Hello"), "createdAt": .string("2026-11-09T12:00:00Z")])])
     ])
     for _ in 0..<2 {
       let reply = try send("POST", "/v1/bots/\(bot)/entries", unix: fixture.socket, headers: auth, body: JSONEncoder().encode(batch))
@@ -325,8 +325,8 @@ struct LibraryHostTests {
     }
     let conversations = try await fixture.host.database.botConversations()
     #expect(conversations.count == 1 && conversations.first?.botName == "Helper" && conversations.first?.machineID == fixture.host.identity.deviceID)
-    #expect(try await fixture.host.database.botEntries(machineID: fixture.host.identity.deviceID, botID: bot, conversationID: "main").count == 1)
-    #expect(try send("POST", "/v1/bots/not-a-uuid/entries", unix: fixture.socket, headers: auth, body: JSONEncoder().encode(batch)).status == 400)
+    #expect(try await fixture.host.database.botConversationEntries(id: try #require(conversations.first?.id)).count == 1)
+    #expect(try send("POST", "/v1/bots/\(UUID().uuidString.lowercased())/entries", unix: fixture.socket, headers: auth, body: JSONEncoder().encode(batch)).status == 400)
 
     // Session history from this machine's Node server lands in its own library.
     let library = try await fixture.host.database.companionLibraryIdentity()
@@ -387,5 +387,28 @@ struct LibraryHostTests {
     #expect(arrived)
     let status = await two.host.sync.status()
     #expect(status.peers.first { $0.deviceID == one.host.identity.deviceID }?.state == .online)
+  }
+
+  /// The Node server sends a bot's library calls as an app-wide caller.
+  @Test func botCallersUseLibraryToolsWithoutAConversation() async throws {
+    let fixture = try await HostFixture(); defer { fixture.remove() }
+    var settings = try await fixture.host.database.toolSettings()
+    settings.botMCP = .init(isEnabled: true, groups: [.notes])
+    try await fixture.host.database.saveToolSettings(settings)
+    let bot = UUID().uuidString.lowercased(), principal = "woven:bot:\(fixture.host.identity.deviceID):\(bot)"
+    func call(_ name: String, _ arguments: [String: GatewayJSONValue], groups: String = "notes", botID: String? = nil) throws -> GatewayJSONValue? {
+      let message: GatewayJSONValue = .object(["jsonrpc": .string("2.0"), "id": .number(1), "method": .string("tools/call"),
+        "params": .object(["name": .string(name), "arguments": .object(arguments)])])
+      let reply = try send("POST", "/v1/mcp", unix: fixture.socket, headers: [
+        "Authorization": "Bearer " + fixture.token, "X-Woven-Caller": principal, "X-Woven-Bot-ID": botID ?? bot,
+        "X-Woven-Bot-Name": "Helper%20Bot", "X-Woven-Enabled-Groups": groups], body: try JSONEncoder().encode(message))
+      return reply.status == 200 ? reply.json?.objectValue?["result"]?.objectValue?["structuredContent"] : nil
+    }
+    let created = try #require(try call("woven_notes_create", ["title": .string("From a bot")])?.objectValue)
+    #expect(created["success"] == .bool(true), "\(created)")
+    #expect(try call("woven_notes_create", ["title": .string("x")], botID: UUID().uuidString.lowercased()) == nil)
+    // A group the library's bot settings exclude stays off.
+    let calendar = try call("woven_calendar_list", [:], groups: "notes,calendar")
+    #expect(calendar?.objectValue?["success"] != .bool(true))
   }
 }

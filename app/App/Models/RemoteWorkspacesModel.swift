@@ -1448,6 +1448,52 @@ final class RemoteWorkspacesModel {
         return value
     }
 
+    /// The host's Woven server through its SSH tunnel, for its bots routes.
+    func botsService(for configuration: RemoteWorkspaceConfiguration) async throws -> RemoteWorkspaceServiceClient {
+        try await serviceClient(for: configuration)
+    }
+
+    /// Installs the Woven server with only bots on a Linux peer: `remote-host.sh prepare`
+    /// then `install` with the `bots` role, which use that account's existing noninteractive
+    /// sudo there. The user confirmed this in Settings → Bots. Adding a workspace later
+    /// reuses the same server.
+    @discardableResult
+    func installBotsHost(hostName: String, userName: String?, deploy: BotsHostDeploy? = nil) async throws -> RemoteWorkspaceConfiguration {
+        guard !isBackendProjection else { throw BackendRPCError.remote("Remote connections are owned by the background service.") }
+        let host = hostName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let user = userName?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        if let existing = workspaces.first(where: { $0.kind == .host && Self.hostKey(hostName: $0.hostName, userName: $0.userName ?? "") == Self.hostKey(hostName: host, userName: user ?? "") }) {
+            return existing
+        }
+        let configuration = RemoteWorkspaceConfiguration(name: host, workspaceID: "bots", hostName: host, userName: user, kind: .host, accessMode: .user)
+        try RemoteWorkspaceSSHClient.validateConfiguration(configuration)
+        let token = try Self.generateToken()
+        try await credentials.save(token: token, for: configuration.id)
+        do {
+            let status: RemoteWorkspaceStatus
+            if let deploy { status = try await deploy(configuration, token) }
+            else {
+                progress = "Preparing \(host)…"
+                let prepared = try await sshClient.prepareHost(hostName: host, userName: user, kind: .host,
+                    accessMode: configuration.accessMode, roles: RemoteHostInstallMode.botsOnly.roles)
+                if let issues = prepared.blockingIssues, !issues.isEmpty {
+                    throw RemoteWorkspaceClientError.commandFailed(issues.joined(separator: " "))
+                }
+                status = try await sshClient.deployHost(configuration: configuration, token: token, mode: .botsOnly) { [weak self] message in
+                    Task { @MainActor [weak self] in self?.progress = message }
+                }
+            }
+            workspaces.append(configuration)
+            let resolved = recordStatus(status, for: configuration)
+            workspaces.sort { $0.createdAt < $1.createdAt }
+            save()
+            return resolved
+        } catch {
+            try? await credentials.deleteToken(for: configuration.id, allowInteraction: false)
+            throw error
+        }
+    }
+
     private func serviceClient(
         for configuration: RemoteWorkspaceConfiguration
     ) async throws -> RemoteWorkspaceServiceClient {

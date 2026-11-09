@@ -160,10 +160,14 @@ final class PairedMacSyncController {
             // exchange until phones pair as members.
             let attachments = LibraryPeerSync.Attachments(outgoing: { _ in
                 try? JSONEncoder().encode(await authentication.peerMembership())
-            }, incoming: { [weak self] data, _ in
+            }, incoming: { [weak self] data, peer in
                 let membership = try JSONDecoder().decode(PeerMembership.self, from: data)
                 guard let self else { return }
                 try await self.mergeMembership(membership)
+                // An unpair learned here ends the exchange before its page.
+                guard await authentication.isActiveMac(peer) else {
+                    throw CompanionAPIError(code: "unauthorized", message: "This Mac is no longer paired.")
+                }
             })
             let sync = LibraryPeerSync(directory: directory, transport: peerTransport, configuration: .init(version: version), attachments: attachments)
             librarySync = sync

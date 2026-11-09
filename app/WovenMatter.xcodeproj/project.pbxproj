@@ -163,6 +163,27 @@
 		F6B4787FBD7B038B70D58B68 /* WovenMCPHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA618CD1607B06D9E94B96F9 /* WovenMCPHost.swift */; };
 		2D11BF999DCFCAD843281985 /* ApplicationModel+MCPAccess.swift in Sources */ = {isa = PBXBuildFile; fileRef = 392AA3B531FF25C552C29E12 /* ApplicationModel+MCPAccess.swift */; };
 		DE6A299C4400AB55B5D0CE55 /* BackendMCPService.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC1EEBCD8EBF7AD5965C8DF8 /* BackendMCPService.swift */; };
+		895A902611CD21FC10814499 /* ApplicationModel+Bots.swift in Sources */ = {isa = PBXBuildFile; fileRef = C29A70F944FF97D2DD457E7C /* ApplicationModel+Bots.swift */; };
+		0E7D7AE0817B9BEF633E5B27 /* BackendBotsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A43821D6EA11448362738D3A /* BackendBotsService.swift */; };
+		250B7901DFC1AAF2F91F87C8 /* BotsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5878323C60BE97DFD9BAFC2 /* BotsModel.swift */; };
+		BA32B256A31201F0C7A60050 /* BotConversationController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1EDC53FEFEB9F50425DA9E5B /* BotConversationController.swift */; };
+		86CACBAFFC7E97DB84276B1B /* BotsHostController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10711E2C4D6FF52822ADD5AD /* BotsHostController.swift */; };
+		35C8B5B3ED7B16682519C3F1 /* SettingsBotsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86D0C046DD9FF43FF75D9571 /* SettingsBotsView.swift */; };
+		91FF8123A627781A3B7384B6 /* DashboardBotsSidebarSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 886C0F4C61627DD7DD5BE07B /* DashboardBotsSidebarSection.swift */; };
+		232888BC018146768F84ABE6 /* BotConversationSurface.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9C23E0D94B91147BCA51776 /* BotConversationSurface.swift */; };
+		479780441D5DFD4C83B18DB9 /* SettingsBotsTeams.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12E1B4139D26B5533AF18BA6 /* SettingsBotsTeams.swift */; };
+		63E3AC2E3964B416C868778C /* SettingsBotsProfiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3317C510D37DBDE83A29ECB /* SettingsBotsProfiles.swift */; };
+		A26173786E8E05A043C275EF /* SettingsBotsProfileEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B3E1BC3E5E5E5D5DC0744B7 /* SettingsBotsProfileEditor.swift */; };
+		718D450CF03768E9786FFF3A /* SettingsBotsOnboarding.swift in Sources */ = {isa = PBXBuildFile; fileRef = 901C811656F9BA5B0CF39EC5 /* SettingsBotsOnboarding.swift */; };
+		1BD7EC982F8A86A85EAA9F81 /* SettingsBotsMemory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FD6A40AC6FFC443F6AAB163 /* SettingsBotsMemory.swift */; };
+		D103F308B19022C857BBF538 /* SettingsBotsControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B4CDD9A106DF8DE360AF046 /* SettingsBotsControls.swift */; };
+		AA64B70FC82FA55F0937546A /* SettingsBotsSections.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7104E5C0F90784AC02787F69 /* SettingsBotsSections.swift */; };
+		0409795CE22F15373CB4D0EF /* SettingsBotsResources.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5BF1B4450520A0C60B653F1 /* SettingsBotsResources.swift */; };
+		B3D362594F68A6B7CFDEEB5B /* SettingsBotsDevices.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0408C9FF683BD8FE76AE10A1 /* SettingsBotsDevices.swift */; };
+		FDD71A30939E64001B278958 /* BotEngineHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F39CFC36A57A2E1D8179E26 /* BotEngineHost.swift */; };
+		5447DD51C3A6E37D10E2E5ED /* BotsRuntimeSupervisor.swift in Sources */ = {isa = PBXBuildFile; fileRef = A56DDE951488ED17BBEBA764 /* BotsRuntimeSupervisor.swift */; };
+		E177FF31E296CA2864C860A7 /* BotsHostAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 954103B53A868E278BF6498E /* BotsHostAPI.swift */; };
+		F0065BC4E977F9B89ABF1409 /* BotPreviewPublisher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0188043D0F3E045113140511 /* BotPreviewPublisher.swift */; };
 		E71AABCCC66026E6318FBD29 /* SettingsMCPAccessSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74C188D9E69C4993381D98D1 /* SettingsMCPAccessSection.swift */; };
 		FBC100000000000000000001 /* SettingsBackgroundServerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBC100000000000000000002 /* SettingsBackgroundServerView.swift */; };
 		FBC100000000000000000003 /* ApplicationModel+RuntimeInspection.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBC100000000000000000004 /* ApplicationModel+RuntimeInspection.swift */; };
@@ -324,6 +345,27 @@
 		AA618CD1607B06D9E94B96F9 /* WovenMCPHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WovenMCPHost.swift"; sourceTree = "<group>"; };
 		392AA3B531FF25C552C29E12 /* ApplicationModel+MCPAccess.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+MCPAccess.swift"; sourceTree = "<group>"; };
 		DC1EEBCD8EBF7AD5965C8DF8 /* BackendMCPService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendMCPService.swift"; sourceTree = "<group>"; };
+		C29A70F944FF97D2DD457E7C /* ApplicationModel+Bots.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+Bots.swift"; sourceTree = "<group>"; };
+		A43821D6EA11448362738D3A /* BackendBotsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendBotsService.swift"; sourceTree = "<group>"; };
+		C5878323C60BE97DFD9BAFC2 /* BotsModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BotsModel.swift"; sourceTree = "<group>"; };
+		1EDC53FEFEB9F50425DA9E5B /* BotConversationController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BotConversationController.swift"; sourceTree = "<group>"; };
+		10711E2C4D6FF52822ADD5AD /* BotsHostController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BotsHostController.swift"; sourceTree = "<group>"; };
+		86D0C046DD9FF43FF75D9571 /* SettingsBotsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsBotsView.swift"; sourceTree = "<group>"; };
+		886C0F4C61627DD7DD5BE07B /* DashboardBotsSidebarSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DashboardBotsSidebarSection.swift"; sourceTree = "<group>"; };
+		D9C23E0D94B91147BCA51776 /* BotConversationSurface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BotConversationSurface.swift"; sourceTree = "<group>"; };
+		12E1B4139D26B5533AF18BA6 /* SettingsBotsTeams.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsBotsTeams.swift"; sourceTree = "<group>"; };
+		D3317C510D37DBDE83A29ECB /* SettingsBotsProfiles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsBotsProfiles.swift"; sourceTree = "<group>"; };
+		4B3E1BC3E5E5E5D5DC0744B7 /* SettingsBotsProfileEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsBotsProfileEditor.swift"; sourceTree = "<group>"; };
+		901C811656F9BA5B0CF39EC5 /* SettingsBotsOnboarding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsBotsOnboarding.swift"; sourceTree = "<group>"; };
+		0FD6A40AC6FFC443F6AAB163 /* SettingsBotsMemory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsBotsMemory.swift"; sourceTree = "<group>"; };
+		9B4CDD9A106DF8DE360AF046 /* SettingsBotsControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsBotsControls.swift"; sourceTree = "<group>"; };
+		7104E5C0F90784AC02787F69 /* SettingsBotsSections.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsBotsSections.swift"; sourceTree = "<group>"; };
+		D5BF1B4450520A0C60B653F1 /* SettingsBotsResources.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsBotsResources.swift"; sourceTree = "<group>"; };
+		0408C9FF683BD8FE76AE10A1 /* SettingsBotsDevices.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsBotsDevices.swift"; sourceTree = "<group>"; };
+		0F39CFC36A57A2E1D8179E26 /* BotEngineHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BotEngineHost.swift"; sourceTree = "<group>"; };
+		A56DDE951488ED17BBEBA764 /* BotsRuntimeSupervisor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BotsRuntimeSupervisor.swift"; sourceTree = "<group>"; };
+		954103B53A868E278BF6498E /* BotsHostAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BotsHostAPI.swift"; sourceTree = "<group>"; };
+		0188043D0F3E045113140511 /* BotPreviewPublisher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BotPreviewPublisher.swift"; sourceTree = "<group>"; };
 		74C188D9E69C4993381D98D1 /* SettingsMCPAccessSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsMCPAccessSection.swift"; sourceTree = "<group>"; };
 		FBC100000000000000000002 /* SettingsBackgroundServerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Views/SettingsBackgroundServerView.swift"; sourceTree = SOURCE_ROOT; };
 		FBC100000000000000000004 /* ApplicationModel+RuntimeInspection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Models/ApplicationModel+RuntimeInspection.swift"; sourceTree = SOURCE_ROOT; };
@@ -425,6 +467,11 @@
 				E7E000000000000000000002 /* ApplicationModel+Executor.swift */,
 				392AA3B531FF25C552C29E12 /* ApplicationModel+MCPAccess.swift */,
 				DC1EEBCD8EBF7AD5965C8DF8 /* BackendMCPService.swift */,
+				C29A70F944FF97D2DD457E7C /* ApplicationModel+Bots.swift */,
+				A43821D6EA11448362738D3A /* BackendBotsService.swift */,
+				C5878323C60BE97DFD9BAFC2 /* BotsModel.swift */,
+				1EDC53FEFEB9F50425DA9E5B /* BotConversationController.swift */,
+				10711E2C4D6FF52822ADD5AD /* BotsHostController.swift */,
 				D84D7A0E10812D5E772A19B5 /* BackendToolsService.swift */,
 				F178B05B2AE0D773B0C59957 /* BackendOpenCodeService.swift */,
 				A176B05B2AE0D773B0C59957 /* BackendRuntimeService.swift */,
@@ -508,6 +555,18 @@
 				E7E000000000000000000004 /* ExecutorControls.swift */,
 				D472AB9160464F1FAB826C21 /* WorkspaceToolControls.swift */,
 				74C188D9E69C4993381D98D1 /* SettingsMCPAccessSection.swift */,
+				86D0C046DD9FF43FF75D9571 /* SettingsBotsView.swift */,
+				886C0F4C61627DD7DD5BE07B /* DashboardBotsSidebarSection.swift */,
+				D9C23E0D94B91147BCA51776 /* BotConversationSurface.swift */,
+				12E1B4139D26B5533AF18BA6 /* SettingsBotsTeams.swift */,
+				D3317C510D37DBDE83A29ECB /* SettingsBotsProfiles.swift */,
+				4B3E1BC3E5E5E5D5DC0744B7 /* SettingsBotsProfileEditor.swift */,
+				901C811656F9BA5B0CF39EC5 /* SettingsBotsOnboarding.swift */,
+				0FD6A40AC6FFC443F6AAB163 /* SettingsBotsMemory.swift */,
+				9B4CDD9A106DF8DE360AF046 /* SettingsBotsControls.swift */,
+				7104E5C0F90784AC02787F69 /* SettingsBotsSections.swift */,
+				D5BF1B4450520A0C60B653F1 /* SettingsBotsResources.swift */,
+				0408C9FF683BD8FE76AE10A1 /* SettingsBotsDevices.swift */,
 				5E7A00000000000000000004 /* SettingsGeneralView.swift */,
 				FBC100000000000000000002 /* SettingsBackgroundServerView.swift */,
 				FBC100000000000000000006 /* RuntimeInspectionInventoryView.swift */,
@@ -560,6 +619,10 @@
 				879D531AEA3583A537B8BE1B /* DashboardNoteDrafts.swift */,
 				F19000000000000000000002 /* DashboardNoteDocumentCache.swift */,
 				AA618CD1607B06D9E94B96F9 /* WovenMCPHost.swift */,
+				0F39CFC36A57A2E1D8179E26 /* BotEngineHost.swift */,
+				A56DDE951488ED17BBEBA764 /* BotsRuntimeSupervisor.swift */,
+				954103B53A868E278BF6498E /* BotsHostAPI.swift */,
+				0188043D0F3E045113140511 /* BotPreviewPublisher.swift */,
 				D8761929DCF444669E58A75E /* WovenMatterRemoteToolBridge.swift */,
 			);
 			path = Services;
@@ -671,7 +734,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -eu\n\"${SRCROOT}/../scripts/prepare-default-agent.sh\" \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/default-agent\"\n\"${SRCROOT}/../scripts/prepare-cua.sh\" \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Cua\"\n\"${SRCROOT}/../scripts/build-power-helper.sh\" \"${TARGET_BUILD_DIR}/${WRAPPER_NAME}\"\n/usr/bin/xattr -cr \"${TARGET_BUILD_DIR}/${WRAPPER_NAME}\"\n/bin/rm -rf \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/remote/test\"\n/usr/bin/find \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/remote\" -type d -name node_modules -prune -exec /bin/rm -rf {} +\n/usr/bin/find \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/remote\" -type f -name \".env*\" -delete\n/bin/rm -f \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/remote/.env.example\" \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/remote/compose.yaml\"\ntouch \"${DERIVED_FILE_DIR}/bundle-metadata-cleaned.stamp\"\n";
+			shellScript = "set -eu\n\"${SRCROOT}/../scripts/prepare-default-agent.sh\" \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/default-agent\"\n\"${SRCROOT}/../scripts/prepare-bots.sh\" \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/bots\"\n\"${SRCROOT}/../scripts/prepare-cua.sh\" \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/Cua\"\n\"${SRCROOT}/../scripts/build-power-helper.sh\" \"${TARGET_BUILD_DIR}/${WRAPPER_NAME}\"\n\"${SRCROOT}/../scripts/build-vm-helper.sh\" \"${TARGET_BUILD_DIR}/${WRAPPER_NAME}\"\n/usr/bin/xattr -cr \"${TARGET_BUILD_DIR}/${WRAPPER_NAME}\"\n/bin/rm -rf \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/remote/test\"\n/usr/bin/find \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/remote\" -type d -name node_modules -prune -exec /bin/rm -rf {} +\n/usr/bin/find \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/remote\" -type f -name \".env*\" -delete\n/bin/rm -f \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/remote/.env.example\" \"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/remote/compose.yaml\"\ntouch \"${DERIVED_FILE_DIR}/bundle-metadata-cleaned.stamp\"\n";
 		};
 		BCEF00000000000000000001 /* Prepare Chromium */ = {
 			isa = PBXShellScriptBuildPhase;
@@ -694,6 +757,27 @@
 			files = (
 				E71AABCCC66026E6318FBD29 /* SettingsMCPAccessSection.swift in Sources */,
 				DE6A299C4400AB55B5D0CE55 /* BackendMCPService.swift in Sources */,
+				895A902611CD21FC10814499 /* ApplicationModel+Bots.swift in Sources */,
+				0E7D7AE0817B9BEF633E5B27 /* BackendBotsService.swift in Sources */,
+				250B7901DFC1AAF2F91F87C8 /* BotsModel.swift in Sources */,
+				BA32B256A31201F0C7A60050 /* BotConversationController.swift in Sources */,
+				86CACBAFFC7E97DB84276B1B /* BotsHostController.swift in Sources */,
+				35C8B5B3ED7B16682519C3F1 /* SettingsBotsView.swift in Sources */,
+				91FF8123A627781A3B7384B6 /* DashboardBotsSidebarSection.swift in Sources */,
+				232888BC018146768F84ABE6 /* BotConversationSurface.swift in Sources */,
+				479780441D5DFD4C83B18DB9 /* SettingsBotsTeams.swift in Sources */,
+				63E3AC2E3964B416C868778C /* SettingsBotsProfiles.swift in Sources */,
+				A26173786E8E05A043C275EF /* SettingsBotsProfileEditor.swift in Sources */,
+				718D450CF03768E9786FFF3A /* SettingsBotsOnboarding.swift in Sources */,
+				1BD7EC982F8A86A85EAA9F81 /* SettingsBotsMemory.swift in Sources */,
+				D103F308B19022C857BBF538 /* SettingsBotsControls.swift in Sources */,
+				AA64B70FC82FA55F0937546A /* SettingsBotsSections.swift in Sources */,
+				0409795CE22F15373CB4D0EF /* SettingsBotsResources.swift in Sources */,
+				B3D362594F68A6B7CFDEEB5B /* SettingsBotsDevices.swift in Sources */,
+				FDD71A30939E64001B278958 /* BotEngineHost.swift in Sources */,
+				5447DD51C3A6E37D10E2E5ED /* BotsRuntimeSupervisor.swift in Sources */,
+				E177FF31E296CA2864C860A7 /* BotsHostAPI.swift in Sources */,
+				F0065BC4E977F9B89ABF1409 /* BotPreviewPublisher.swift in Sources */,
 				2D11BF999DCFCAD843281985 /* ApplicationModel+MCPAccess.swift in Sources */,
 				F6B4787FBD7B038B70D58B68 /* WovenMCPHost.swift in Sources */,
 				04C170D0E4FB2920E4D214EF /* FederatedConversationPane.swift in Sources */,

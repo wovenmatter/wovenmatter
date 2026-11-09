@@ -13,8 +13,8 @@ struct WorkspaceToolCallerSource {
         id = conversation.id; localRuntimeKind = conversation.localRuntimeKind
         remoteWorkspaceID = conversation.remoteWorkspaceID; folderID = conversation.folderID
     }
-    init() {
-        id = WovenMCPCaller.outside; localRuntimeKind = .pi; remoteWorkspaceID = nil; folderID = nil
+    init(callerID: String = WovenMCPCaller.outside) {
+        id = callerID; localRuntimeKind = .defaultAgent; remoteWorkspaceID = nil; folderID = nil
     }
 }
 
@@ -198,7 +198,7 @@ extension ApplicationModel {
     }
 
     func toolCallerSource(_ callerID: String) async throws -> WorkspaceToolCallerSource {
-        if callerID == WovenMCPCaller.outside { return .init() }
+        if WovenMCPCaller.isAppWide(callerID) { return .init(callerID: callerID) }
         return try await .init(toolConversation(callerID))
     }
 
@@ -300,6 +300,9 @@ extension ApplicationModel {
             }
             let dispatchFence = self.beginAgentDispatch(conversationID: id)
             defer { self.finishAgentDispatch(conversationID: id, fence: dispatchFence) }
+            guard let agentTools = self.agentTools else { throw ApplicationModelError.dashboardStoreUnavailable }
+            let botDispatch = try agentTools.trackBotDispatch(callerID: source.id, fence: dispatchFence)
+            defer { agentTools.finishBotDispatch(botDispatch) }
             // Completed delivery receipts must replay before admission: unrelated
             // running sessions cannot turn a successful creation into at_capacity.
             if reservation.objectValue?["status"]?.stringValue == "ready",
@@ -308,7 +311,6 @@ extension ApplicationModel {
                     requestID: request.requestID, kind: .created, purpose: purpose)
                 return try await self.dispatchToolDelivery(delivery, dispatchFence: dispatchFence)
             }
-            guard let agentTools = self.agentTools else { throw ApplicationModelError.dashboardStoreUnavailable }
             let admission = self.toolSessionAdmission.begin(id, running: self.runningToolSessionIDs,
                 limit: agentTools.settings.maximumRunningSessions)
             if admission == .atCapacity {
@@ -402,18 +404,18 @@ extension ApplicationModel {
         if let raw = command.options["harness"], AgentRuntimeKind(rawValue: raw) == nil {
             throw WorkspaceToolError.invalid("Unknown harness.")
         }
-        guard let runtime = command.options["harness"].flatMap(AgentRuntimeKind.init(rawValue:)) ?? source.localRuntimeKind ?? (source.id == WovenMCPCaller.outside ? .pi : nil) else {
+        guard let runtime = command.options["harness"].flatMap(AgentRuntimeKind.init(rawValue:)) ?? source.localRuntimeKind ?? (WovenMCPCaller.isAppWide(source.id) ? .defaultAgent : nil) else {
             throw WorkspaceToolError.invalid("Choose a configured harness.")
         }
         guard AgentRuntimeKind.allCases.contains(runtime) else { throw WorkspaceToolError.invalid("This harness has been retired.") }
         let workspace = command.options["workspace"] ?? source.remoteWorkspaceID?.uuidString.lowercased() ?? "local"
+        guard let store = dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
         let workspaceID: UUID?
         if workspace == "local" { workspaceID = source.remoteWorkspaceID }
         else {
             guard let id = UUID(uuidString: workspace) else { throw WorkspaceToolError.invalid("The destination workspace is unavailable.") }
             workspaceID = id
         }
-        guard let store = dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
         let federatedSource = try await store.database.companionExecutionOwner(conversationID: source.id) != nil
         if federatedSource, command.options["workspace"] == nil || command.options["harness"] == nil {
             throw WorkspaceToolError.invalid("Choose an explicit --workspace and --harness when creating a central session from another device.")
@@ -447,10 +449,17 @@ extension ApplicationModel {
                               admissionDecision: WorkspaceSessionAdmission.Decision? = nil,
                               dispatchFence suppliedFence: AgentDispatchFence? = nil) async throws -> WovenMatterToolResponse {
         guard let database = dashboardStore?.database else { throw CancellationError() }
+        if WovenMCPCaller.parseBot(delivery.targetID) != nil {
+            guard let agentTools else { throw ApplicationModelError.dashboardStoreUnavailable }
+            _ = try await agentTools.deliverBotNotification(delivery)
+            return try await toolDeliveryResponse(database.toolDelivery(id: delivery.id) ?? delivery)
+        }
         // Claiming and loading the target are part of preparation. Stop owns
         // the same fence across these waits and any earlier reserved creation.
         let dispatchFence = suppliedFence ?? beginAgentDispatch(conversationID: delivery.targetID)
         defer { if suppliedFence == nil { finishAgentDispatch(conversationID: delivery.targetID, fence: dispatchFence) } }
+        let botDispatch = try agentTools?.trackBotDispatch(callerID: delivery.sourceID, fence: dispatchFence)
+        defer { agentTools?.finishBotDispatch(botDispatch) }
         guard let claimed = try await database.claimToolDelivery(id: delivery.id) else {
             return try await toolDeliveryResponse(database.toolDelivery(id: delivery.id) ?? delivery)
         }

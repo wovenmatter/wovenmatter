@@ -73,7 +73,6 @@ enum PairedLibraryTables {
     "library_messages", "library_items", "library_locations", "paired_mac_routes", "paired_remote_workspaces",
     // Signed member entries and revocations; trust is resolved from signatures.
     "library_members", "library_member_revocations",
-    // Bot conversations written by each machine's bots runtime.
     "bot_conversations", "bot_conversation_entries"
   ]
 }
