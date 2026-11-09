@@ -106,7 +106,6 @@
 		D8ADD27CBC40434BB0183702 /* CompanionNativeInteractions.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2737F707B9A5E3A2A5A5AD8 /* CompanionNativeInteractions.swift */; };
 		77A348D5C0634041BD69B746 /* CompanionWorkspaceFeatures.swift in Sources */ = {isa = PBXBuildFile; fileRef = 853617F2A39F477E947E59DA /* CompanionWorkspaceFeatures.swift */; };
 		A13EC094A3DEA4F302868640 /* ApplicationModel+Calendar.swift in Sources */ = {isa = PBXBuildFile; fileRef = B88F25850147F01B163EDF7E /* ApplicationModel+Calendar.swift */; };
-		E9A58E7B05C5C2726FA4EE82 /* WorkspaceAgentToolsModel+Calendar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C678F616FB535F772A00598 /* WorkspaceAgentToolsModel+Calendar.swift */; };
 		F4743517D41721ACB550EE94 /* DashboardCalendarEventSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AA41DB8B4A4AF41CCC355A1 /* DashboardCalendarEventSheet.swift */; };
 		22101ADAF84DA8CEE85A4AB8 /* DashboardCalendarTaskFields.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6DCB1F7BFAF35416DF437EE /* DashboardCalendarTaskFields.swift */; };
 		C47EAA780000000000000001 /* DashboardCalendarFormControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = C47EAA780000000000000002 /* DashboardCalendarFormControls.swift */; };
@@ -161,7 +160,6 @@
 		789F195BE9DA5D9B227FB05D /* ConversationHTMLRenderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2832E2AA4732BB7B4D7018C /* ConversationHTMLRenderView.swift */; };
 		82C03DE4D2C877BB2514890A /* ConversationHTMLPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A5EE1246A71A5EB98C6053B /* ConversationHTMLPreview.swift */; };
 		F6B4787FBD7B038B70D58B68 /* WovenMCPHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA618CD1607B06D9E94B96F9 /* WovenMCPHost.swift */; };
-		CD6C65D104529DB4126B59E2 /* NoteToolEdits.swift in Sources */ = {isa = PBXBuildFile; fileRef = 798B2F37DA2436C439B4BC89 /* NoteToolEdits.swift */; };
 		2D11BF999DCFCAD843281985 /* ApplicationModel+MCPAccess.swift in Sources */ = {isa = PBXBuildFile; fileRef = 392AA3B531FF25C552C29E12 /* ApplicationModel+MCPAccess.swift */; };
 		DE6A299C4400AB55B5D0CE55 /* BackendMCPService.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC1EEBCD8EBF7AD5965C8DF8 /* BackendMCPService.swift */; };
 		E71AABCCC66026E6318FBD29 /* SettingsMCPAccessSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74C188D9E69C4993381D98D1 /* SettingsMCPAccessSection.swift */; };
@@ -269,7 +267,6 @@
 		A2737F707B9A5E3A2A5A5AD8 /* CompanionNativeInteractions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionNativeInteractions.swift; sourceTree = "<group>"; };
 		853617F2A39F477E947E59DA /* CompanionWorkspaceFeatures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanionWorkspaceFeatures.swift; sourceTree = "<group>"; };
 		B88F25850147F01B163EDF7E /* ApplicationModel+Calendar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+Calendar.swift"; sourceTree = "<group>"; };
-		7C678F616FB535F772A00598 /* WorkspaceAgentToolsModel+Calendar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WorkspaceAgentToolsModel+Calendar.swift"; sourceTree = "<group>"; };
 		8AA41DB8B4A4AF41CCC355A1 /* DashboardCalendarEventSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DashboardCalendarEventSheet.swift"; sourceTree = "<group>"; };
 		D6DCB1F7BFAF35416DF437EE /* DashboardCalendarTaskFields.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DashboardCalendarTaskFields.swift"; sourceTree = "<group>"; };
 		C47EAA780000000000000002 /* DashboardCalendarFormControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "DashboardCalendarFormControls.swift"; sourceTree = "<group>"; };
@@ -323,7 +320,6 @@
 		C2832E2AA4732BB7B4D7018C /* ConversationHTMLRenderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Views/ConversationHTMLRenderView.swift"; sourceTree = SOURCE_ROOT; };
 		1A5EE1246A71A5EB98C6053B /* ConversationHTMLPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/Services/ConversationHTMLPreview.swift"; sourceTree = SOURCE_ROOT; };
 		AA618CD1607B06D9E94B96F9 /* WovenMCPHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WovenMCPHost.swift"; sourceTree = "<group>"; };
-		798B2F37DA2436C439B4BC89 /* NoteToolEdits.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "NoteToolEdits.swift"; sourceTree = "<group>"; };
 		392AA3B531FF25C552C29E12 /* ApplicationModel+MCPAccess.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ApplicationModel+MCPAccess.swift"; sourceTree = "<group>"; };
 		DC1EEBCD8EBF7AD5965C8DF8 /* BackendMCPService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "BackendMCPService.swift"; sourceTree = "<group>"; };
 		74C188D9E69C4993381D98D1 /* SettingsMCPAccessSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SettingsMCPAccessSection.swift"; sourceTree = "<group>"; };
@@ -437,7 +433,6 @@
 				C131C0B00000000000000001 /* ApplicationModel+NoteActions.swift */,
 				B88F25850147F01B163EDF7E /* ApplicationModel+Calendar.swift */,
 				20E807F893654CD4A1F24D40 /* WorkspaceAgentToolsModel.swift */,
-				7C678F616FB535F772A00598 /* WorkspaceAgentToolsModel+Calendar.swift */,
 				26006898DCC6474CBE1A1585 /* WorkspaceAgentToolsModel+Goals.swift */,
 				A71B00000000000000000102 /* LibraryModel.swift */,
 				C06300000000000000000002 /* ApplicationUsageModel.swift */,
@@ -562,7 +557,6 @@
 				879D531AEA3583A537B8BE1B /* DashboardNoteDrafts.swift */,
 				F19000000000000000000002 /* DashboardNoteDocumentCache.swift */,
 				AA618CD1607B06D9E94B96F9 /* WovenMCPHost.swift */,
-				798B2F37DA2436C439B4BC89 /* NoteToolEdits.swift */,
 				D8761929DCF444669E58A75E /* WovenMatterRemoteToolBridge.swift */,
 			);
 			path = Services;
@@ -698,7 +692,6 @@
 				E71AABCCC66026E6318FBD29 /* SettingsMCPAccessSection.swift in Sources */,
 				DE6A299C4400AB55B5D0CE55 /* BackendMCPService.swift in Sources */,
 				2D11BF999DCFCAD843281985 /* ApplicationModel+MCPAccess.swift in Sources */,
-				CD6C65D104529DB4126B59E2 /* NoteToolEdits.swift in Sources */,
 				F6B4787FBD7B038B70D58B68 /* WovenMCPHost.swift in Sources */,
 				04C170D0E4FB2920E4D214EF /* FederatedConversationPane.swift in Sources */,
 				FA2F7EB3AD102A068C2F070C /* FederatedExecutionBridge.swift in Sources */,
@@ -790,7 +783,6 @@
 				C131C0B00000000000000002 /* ApplicationModel+NoteActions.swift in Sources */,
 				A13EC094A3DEA4F302868640 /* ApplicationModel+Calendar.swift in Sources */,
 				5C84BF439B9047118002DD70 /* WorkspaceAgentToolsModel.swift in Sources */,
-				E9A58E7B05C5C2726FA4EE82 /* WorkspaceAgentToolsModel+Calendar.swift in Sources */,
 				A9AEC3CDE2454B04B05F6AA3 /* WorkspaceAgentToolsModel+Goals.swift in Sources */,
 				A71B00000000000000000101 /* LibraryModel.swift in Sources */,
 				0D0C4EE8248E4F63A87CF7B4 /* WovenMatterRemoteToolBridge.swift in Sources */,
