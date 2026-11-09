@@ -63,7 +63,7 @@ same commit.
     records the other Mac on both sides. A phone that includes
     `memberPublicKey` (raw 32 bytes) in `CompanionPairRequest` gets an `ios`
     entry from the Mac it pairs with; phones without it keep their bearer
-    grant. A Linux host: the Mac that manages it reads `memberIdentity` from
+    grant. A Linux host: the Mac that adds it reads `memberIdentity` from
     `GET /v1/host/status`, signs its entry (endpoint: `libraryEndpoint`, else
     `https://<host>/wovenmatter/`) and sends `POST /v1/host/members/adopt` with
     a `LibraryMemberAdoption` `{anchor: {deviceID, kind: "mac", publicKey},
