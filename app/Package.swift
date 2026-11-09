@@ -15,6 +15,7 @@ let package = Package(
     .library(name: "WovenMatterClient", targets: ["WovenMatterClient"]),
     .library(name: "WovenMatterAutomation", targets: ["WovenMatterAutomation"]),
     .library(name: "WovenMatterDashboardStore", targets: ["WovenMatterDashboardStore"]),
+    .executable(name: "wovenmatter-library", targets: ["WovenMatterLibraryDaemon"]),
     .executable(name: "WovenCuaDesktopFixture", targets: ["WovenCuaDesktopFixture"])
   ],
   dependencies: [
@@ -62,6 +63,21 @@ let package = Package(
         .linkedFramework("LocalAuthentication", .when(platforms: [.macOS])),
         .linkedFramework("Security", .when(platforms: [.macOS]))
       ]
+    ),
+    // Headless library host for Linux machines (docs/architecture/WOVEN_EVERYWHERE.md).
+    .target(
+      name: "WovenMatterLibraryHost",
+      dependencies: ["WovenMatterCore", "WovenMatterClient", "WovenMatterDashboardStore", linuxCrypto, linuxSQLite],
+      swiftSettings: [.enableUpcomingFeature("ExistentialAny")]
+    ),
+    .executableTarget(
+      name: "WovenMatterLibraryDaemon",
+      dependencies: ["WovenMatterLibraryHost"],
+      swiftSettings: [.enableUpcomingFeature("ExistentialAny")]
+    ),
+    .testTarget(
+      name: "WovenMatterLibraryHostTests",
+      dependencies: ["WovenMatterLibraryHost", "WovenMatterDashboardStore", "WovenMatterCore", linuxSQLite]
     ),
     .target(name: "WorkspaceFixtures", dependencies: ["WovenMatterCore", "WovenMatterClient", "WovenMatterDashboardStore", linuxCrypto, linuxSQLite], path: "TestsSupport/WorkspaceFixtures"),
     .testTarget(
