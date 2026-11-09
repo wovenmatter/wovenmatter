@@ -152,6 +152,9 @@ import CompanionInference
   var quickChatSearchResults: [String: Set<String>] = [:]
   /// Web search requests; tests inject a fixture transport.
   @ObservationIgnored var searchTransport: any InferenceHTTPTransport = InferenceURLSessionTransport()
+  /// Timer reminder notifications; test models and UI fixtures record them in memory so
+  /// nothing asks the system for notification permission.
+  @ObservationIgnored var quickChatNotifications = QuickChatNotifications.shared
   var unconfirmedSendConversationID: String?
   var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
   var backgroundFallbackToken: UUID?
@@ -194,6 +197,7 @@ import CompanionInference
     #else
     fixture = false
     #endif
+    if isolatedTestHost || fixture { quickChatNotifications = QuickChatNotifications(center: RecordingQuickChatNotificationCenter()) }
     if isolatedTestHost {
       // App-hosted unit tests must never open the real library or Keychain.
       // Explicit injected models exercise networking against their fake transport.
@@ -222,6 +226,7 @@ import CompanionInference
   }
   init(store: MobileStore, transport: any CompanionTransport) {
     fixture = false; isolatedTestHost = false; automaticSynchronization = false; self.store = store
+    quickChatNotifications = QuickChatNotifications(center: RecordingQuickChatNotificationCenter())
     executionWorkspaceID = "central"
     engine = MobileSyncEngine(store: store, transport: transport)
     online = true

@@ -79,6 +79,10 @@ struct PairingPane: View {
   private func beginScanning() async {
     scannerError = nil
     guard DataScannerViewController.isSupported else { scannerError = "Camera scanning is unavailable on this device. Paste the pairing link instead."; return }
+    // Tests and UI fixtures never raise the camera prompt; nothing would dismiss it.
+    guard CompanionModel.systemPermissionPromptsAllowed || AVCaptureDevice.authorizationStatus(for: .video) == .authorized else {
+      scannerError = "Camera scanning is unavailable here. Paste the pairing link instead."; return
+    }
     let allowed = await AVCaptureDevice.requestAccess(for: .video)
     guard allowed, DataScannerViewController.isAvailable else { scannerError = "Enable Camera access in Settings, or paste the pairing link."; return }
     scanning = true
