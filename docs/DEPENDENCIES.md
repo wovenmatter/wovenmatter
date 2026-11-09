@@ -30,6 +30,7 @@ for every package update. Three separate mechanisms do that:
 | `harnesses/npm-version.json` | Current private Mac npm archive and registry integrity, with the existing locked `remote/npm-runtime` vendor repairs | Maintenance PR; managed CLI and bundled SDK updater verification |
 | `app/Automation/cua-version.json` | Exact Cua Driver archive/executable digests, source and signing identity | Maintenance PR with desktop acceptance |
 | `app/Browser/cef-version.json` | Exact CEF build and archive SHA-1 values per architecture | Maintenance PR |
+| `remote/library/build-version.json` | Swift toolchain image digest, Static Linux SDK archive SHA-256, and SQLite amalgamation SHA-256 for the Linux `wovenmatter-library` build | Maintenance PR, all together with `app/Package.resolved` |
 | `app/Updater/sparkle-version.json` and the Xcode Sparkle revision | Release, exact commit, and tools archive SHA-256 for the updater | Maintenance PR, both together |
 | Generated iOS bundles and `provenance.json` | Output of the locked packages, verified by `--check` in CI | Regenerated from the updated lockfiles during maintenance |
 
@@ -174,6 +175,27 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   `scripts/test-cua-desktop.sh` verifies actual input and capture through Woven MCP
   against a disposable native fixture, including background focus preservation.
   Signed-app Accessibility/Screen Recording grants are required for that check.
+- **Swift on Linux** (`wovenmatter-library` and the portable library targets).
+  `apple/swift-crypto` (floor 5.1.1, transitive `swift-asn1`) replaces CryptoKit
+  only on Linux: every use is `#if canImport(CryptoKit) … #else import Crypto`,
+  and the package product is conditioned on `.linux`, so Apple builds never
+  compile it. Its declaration is a minimum-only range (`"5.1.1"..<"1000.0.0"`)
+  and `app/Package.resolved` records the selection; generate both SwiftPM and
+  Xcode pins with tooling (`swift package resolve`, then
+  `xcodebuild -resolvePackageDependencies`). `shared/` has no Linux dependency:
+  it derives identifiers with an internal SHA-256 that its tests check
+  against published vectors and CryptoKit. On Linux, `CSQLite` links the
+  distribution's SQLite for tests (`libsqlite3-dev`, FTS5 and JSON required);
+  the shipped static binary links the SQLite amalgamation recorded in
+  `remote/library/build-version.json`, compiled with FTS5 and math functions.
+  That binary is an exact selection because it is fully static: the Swift
+  toolchain image (by digest), the Static Linux SDK (musl) archive and the
+  amalgamation are verified by SHA-256 before use, and SwiftPM verifies the SDK
+  again on install. Maintenance moves all three to the current stable
+  releases together (the SDK must match the toolchain exactly), regenerates
+  the resolved graph, and validates with `scripts/test-linux-library.sh` and
+  `scripts/build-linux-library.sh` (manual `linux` validation scope). Hosts
+  receive a new binary only in a host bundle from an updated app.
 - **MCP TypeScript SDK** uses the current v2 client and server packages. Woven MCP and
   Executor use the supported Streamable HTTP client, with the shared native MCP
   protocol core serving the same focused schemas on Mac, Linux and iOS adapters;

@@ -1,3 +1,4 @@
+#if os(macOS)
 #if canImport(Darwin)
 import Darwin
 #elseif canImport(Glibc)
@@ -370,3 +371,4 @@ private struct PermissionFixture {
         return "'" + String(decoding: data, as: UTF8.self).replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 }
+#endif

@@ -25,7 +25,8 @@ let package = Package(
   ],
   targets: [
     // Linux links the system or pinned static SQLite; Apple platforms use the SDK module.
-    .systemLibrary(name: "CSQLite", pkgConfig: "sqlite3", providers: [.apt(["libsqlite3-dev"])]),
+    // No pkg-config: its host search paths would leak glibc libraries into static musl links.
+    .systemLibrary(name: "CSQLite", providers: [.apt(["libsqlite3-dev"])]),
     .target(
       name: "WovenMatterCore",
       dependencies: [.product(name: "WovenMatterCompanion", package: "shared"), linuxCrypto],

@@ -85,6 +85,25 @@ struct RemoteWorkspaceDeploymentTests {
         #expect(throws: RemoteWorkspaceClientError.self) { try RemoteHostBundle.archive(root: root, deployment: mismatched) }
     }
 
+    /// scripts/build-linux-library.sh writes remote/host/library/linux-<arch>/;
+    /// installs and updates ship whatever binaries are present, as executables.
+    @Test func builtLinuxLibraryBinariesShipAsHostExecutables() throws {
+        let root = try hostFixture(); defer { try? FileManager.default.removeItem(at: root) }
+        let without = try RemoteWorkspaceDeployment(root: root, kind: .host)
+        #expect(!without.sourceFiles.contains { $0.hasPrefix("remote/host/library/") })
+        let binary = root.appending(path: "remote/host/library/linux-x86_64/wovenmatter-library")
+        try FileManager.default.createDirectory(at: binary.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("\u{7f}ELF fixture".utf8).write(to: binary)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: binary.path)
+        let deployment = try RemoteWorkspaceDeployment(root: root, kind: .host)
+        #expect(deployment.fingerprint != without.fingerprint)
+        let archive = try RemoteHostBundle.archive(root: root, deployment: deployment)
+        let listing = try RemoteWorkspaceProcess.run(executable: "/usr/bin/tar", arguments: ["-tvzf", "-"], input: archive)
+        let line = try #require(String(decoding: listing.data, as: UTF8.self).split(separator: "\n")
+            .first { $0.hasSuffix("host/library/linux-x86_64/wovenmatter-library") })
+        #expect(line.hasPrefix("-rwx------"))
+    }
+
     @Test func hostNpmSecurityGraphIsBundledAndBoundToTheSourceIdentity() throws {
         let root = try hostFixture(); defer { try? FileManager.default.removeItem(at: root) }
         let deployment = try RemoteWorkspaceDeployment(root: root, kind: .host)
