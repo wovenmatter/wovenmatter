@@ -25,10 +25,11 @@ public struct CompanionPairingPayload: Codable, Equatable, Sendable {
     return value.port == nil || (1...65535).contains(value.port!)
   }
 
-  /// An execution workspace's address: a Mac's `/wovenmatter`, or a Linux host's
+  /// An execution workspace's address: `/wovenmatter`, or for a Linux host also its
   /// per-workspace `/wovenmatter-execution/<id>` route. Same tailnet HTTPS rules.
   public static func isValidExecutionEndpoint(_ url: URL, linux: Bool) -> Bool {
-    guard linux else { return isValidEndpoint(url) }
+    if isValidEndpoint(url) { return true }
+    guard linux else { return false }
     guard let value = URLComponents(url: url, resolvingAgainstBaseURL: false),
           value.scheme == "https", let host = value.host?.lowercased(),
           host.hasSuffix(".ts.net"), host.count > 7,
