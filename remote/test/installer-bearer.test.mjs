@@ -109,7 +109,7 @@ test('the server refuses the installer bearer through Serve and any Mac rotates 
   const signed = (who, method, path) => fetch(base + path, { method, headers: signMemberRequest({ deviceID: who.deviceID, privateKey: who.key, audience, method, target: path, body: Buffer.alloc(0) }) })
 
   // Through Serve the bearer is refused, wherever the request goes.
-  for (const headers of [{ 'x-forwarded-for': '100.64.0.9', 'x-forwarded-host': 'host.tail.ts.net' }, { 'tailscale-user-login': 'someone@example.com' }]) {
+  for (const headers of [{ 'x-forwarded-for': 'fd7a:115c:a1e0::9', 'x-forwarded-host': 'host.tail.ts.net' }, { 'tailscale-user-login': 'someone@example.com' }]) {
     assert.equal((await bearer(token, '/v1/health', headers)).status, 401)
     assert.equal((await bearer(token, '/v1/host/installer-bearer', headers, 'POST')).status, 401)
   }
