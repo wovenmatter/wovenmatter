@@ -120,7 +120,7 @@ final class CompanionModelTests: XCTestCase {
     let folderOwner = "device:" + UUID().uuidString.lowercased()
     var mac = CompanionExecutionWorkspace(id: registryID, libraryID: "library", ownerDeviceID: hostDeviceID, kind: .mac, name: "Mac Mini",
                                           capabilities: ["history.central.v1"], executionDeviceID: hostDeviceID)
-    let folder = CompanionFolder(id: "launch", name: "Launch research", execution: .init(workspaceID: folderOwner, rootPath: "/Users/me/Launch"))
+    let folder = CompanionFolder(id: "launch", name: "Launch research", execution: .init(workspaceID: folderOwner, rootPath: "/tmp/Launch"))
     let note = CompanionNote(id: "pilot", folderID: folder.id, title: "Pilot checklist", content: "")
     model.state.folders[folder.id] = folder; model.state.notes[note.id] = note
     model.executionWorkspaces = [mac]
