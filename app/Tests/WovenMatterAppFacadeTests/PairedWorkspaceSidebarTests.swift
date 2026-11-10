@@ -1,6 +1,7 @@
 import WorkspaceFixtures
 import Foundation
 import Testing
+import WovenMatterClient
 import WovenMatterCompanion
 import WovenMatterCore
 @testable import WovenMatterAppFacade
@@ -37,6 +38,37 @@ struct PairedWorkspaceSidebarTests {
         #expect(DashboardPairedWorkspaceSidebarModel.isPhoneHistory(
             owner: local.flatMap { fixture.model.federatedExecutionOwners[$0.id] },
             registry: fixture.model.executionWorkspaceRegistry) == false)
+    }
+
+    /// New Chat offers every other Mac's and Linux workspace's agents from the
+    /// synced registry, once per workspace and harness, never an iPhone's, and
+    /// not those this Mac already offers through a Linux host it manages.
+    @Test func newChatListsEveryOtherMacAndLinuxWorkspaceButNeverThePhone() throws {
+        func agent(_ runtime: AgentRuntimeKind) -> WorkspaceAgent {
+            .init(userID: "user", codename: runtime.rawValue, displayName: runtime.displayName, iconKey: "bot",
+                  executionLocation: .remote, governingPlane: .remoteWorkspace, runtimeKind: runtime)
+        }
+        let mac = CompanionExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: "library", ownerDeviceID: "mac-b", kind: .mac, name: "Studio")
+        let linux = CompanionExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: "library", ownerDeviceID: "mac-b", kind: .linux, name: "Workstation")
+        let managed = RemoteWorkspaceConfiguration(name: "Managed", workspaceID: "managed", hostName: "managed.invalid", kind: .host,
+                                                   dataRoot: "/data", workspaceRoot: "/workspace")
+        let managedLinux = CompanionExecutionWorkspace(id: managed.id.uuidString.lowercased(), libraryID: "library", ownerDeviceID: "mac-b", kind: .linux, name: "Managed")
+        let phone = CompanionExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: "library", ownerDeviceID: "phone", kind: .ios, name: "iPhone")
+        let macCodex = agent(.codex), linuxCodex = agent(.codex), linuxAgain = agent(.codex), linuxClaude = agent(.claudeCode)
+        let managedCodex = agent(.codex), phoneAgent = agent(.defaultAgent), local = agent(.codex)
+        let peers = [macCodex.id: mac, linuxCodex.id: linux, linuxAgain.id: linux, linuxClaude.id: linux, managedCodex.id: managedLinux, phoneAgent.id: phone]
+        let harness = try JSONDecoder().decode(RemoteHarnessStatus.self, from: Data("""
+            {"id":"codex","displayName":"Codex","transport":"acp","capabilities":[],"state":"ready","authenticationStatus":"ready","setupMethods":[],"detectedProviders":[]}
+            """.utf8))
+        let agents = [linuxClaude, linuxCodex, linuxAgain, phoneAgent, managedCodex, macCodex, local]
+        let targets = DashboardNewChatPeerTarget.resolve(agents: agents, peerWorkspaces: peers,
+            configured: [.init(configuration: managed, harness: harness)], folderOwnerID: nil)
+        #expect(targets.map(\.workspace.name) == ["Studio", "Workstation", "Workstation"])
+        #expect(targets.map(\.runtimeKind) == [.codex, .claudeCode, .codex])
+        #expect(targets.map(\.agentID) == [macCodex.id, linuxClaude.id, linuxCodex.id])
+        // A folder bound to one workspace offers only that workspace's agents.
+        let scoped = DashboardNewChatPeerTarget.resolve(agents: agents, peerWorkspaces: peers, configured: [], folderOwnerID: "device:" + mac.id)
+        #expect(scoped.map(\.agentID) == [macCodex.id])
     }
 
     @Test func onlyLivePhonesAreListedOnceAndFoldersMatchTheirDeviceBinding() throws {
