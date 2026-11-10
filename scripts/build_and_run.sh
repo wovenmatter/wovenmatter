@@ -80,6 +80,10 @@ if [ "$backend_running" = true ]; then
   exit 75
 fi
 
+# Every Linux host holds a library copy, and the app's host bundle carries the
+# binary. Build any missing architecture with Docker, or stop and say how.
+python3 "$repo_root/scripts/dev-build.py" linux-library --root "$repo_root"
+
 # A stable certificate-backed identity lets macOS recognize subsequent Dev
 # builds. Linker/ad-hoc signatures change identity whenever the binary changes.
 # Keep the selected certificate pinned in this build cache; never silently

@@ -57,7 +57,7 @@ elif name == 'ps':
         env = dict(os.environ, PATH=str(binaries) + os.pathsep + os.environ['PATH'],
                    WOVENMATTER_DEV_CACHE_DIR=str(cache), DEV_SIGNING_CALLS=str(calls),
                    DEV_SIGNING_IDENTITIES=str(count), DEV_SIGNING_BUILD_FAIL='1' if fail else '0',
-                   DEV_SIGNING_BACKEND_PATH=backend,
+                   DEV_SIGNING_BACKEND_PATH=backend, WOVENMATTER_DEV_LINUX_LIBRARY='skip',
                    DEV_SIGNING_REWRITE=str(root / "scripts/build_and_run.sh") if rewrite else "")
         env.pop('WOVENMATTER_DEV_SIGNING_IDENTITY', None)
         env.pop('WOVENMATTER_DEV_VARIANT', None)

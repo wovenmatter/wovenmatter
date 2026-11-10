@@ -217,5 +217,46 @@ class DevelopmentBuildTests(unittest.TestCase):
             with self.assertRaises(ValueError): dev.snapshot(source, root / "dev")
             self.assertFalse((root / "dev").exists())
 
+    def test_missing_linux_library_hosts_are_built_with_docker_or_stop_the_build(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            def ship(arch, *names):
+                directory = root / "remote/host/library" / ("linux-" + arch); directory.mkdir(parents=True, exist_ok=True)
+                for name in names: (directory / name).write_bytes(b"fixture")
+            calls = []
+            def run(command, **kwargs):
+                calls.append([str(part) for part in command])
+                if command[-1] != "info":
+                    # The build script writes what was asked for.
+                    for arch in ([command[command.index("--arch") + 1]] if "--arch" in command else dev.LINUX_LIBRARY_ARCHITECTURES):
+                        ship(arch, "wovenmatter-library.gz", "wovenmatter-library.sha256")
+                return subprocess.CompletedProcess(command, 0)
+            docker = lambda name: "/usr/local/bin/docker"
+            # Nothing shipped: both are missing; without Docker the build stops and says how.
+            self.assertEqual(dev.missing_linux_libraries(root), ["x86_64", "aarch64"])
+            with self.assertRaises(SystemExit) as stopped:
+                dev.ensure_linux_library(root, environ={}, which=lambda name: None, run=run)
+            self.assertIn("scripts/build-linux-library.sh", str(stopped.exception.code))
+            self.assertIn("WOVENMATTER_DEV_LINUX_LIBRARY=skip", str(stopped.exception.code))
+            failing = lambda command, **kwargs: subprocess.CompletedProcess(command, 1)
+            with self.assertRaises(SystemExit): dev.ensure_linux_library(root, environ={}, which=docker, run=failing)
+            self.assertEqual(calls, [])
+            # An explicit skip builds nothing and names what is missing.
+            self.assertEqual(dev.ensure_linux_library(root, environ={"WOVENMATTER_DEV_LINUX_LIBRARY": "skip"}, which=docker, run=run), ["x86_64", "aarch64"])
+            self.assertEqual(calls, [])
+            # A plain binary kept for local runs counts, and is never rebuilt over: only the other architecture is built.
+            ship("x86_64", "wovenmatter-library")
+            self.assertEqual(dev.ensure_linux_library(root, environ={}, which=docker, run=run), [])
+            self.assertEqual(calls[-1][-3:], ["--docker", "--arch", "aarch64"])
+            self.assertTrue(calls[-1][0].endswith("scripts/build-linux-library.sh"))
+            self.assertEqual((root / "remote/host/library/linux-x86_64/wovenmatter-library").read_bytes(), b"fixture")
+            # Everything present: nothing runs.
+            calls.clear()
+            self.assertEqual(dev.ensure_linux_library(root, environ={}, which=docker, run=run), [])
+            self.assertEqual(calls, [])
+            # A packed binary needs its recorded checksum beside it.
+            (root / "remote/host/library/linux-aarch64/wovenmatter-library.sha256").unlink()
+            self.assertEqual(dev.missing_linux_libraries(root), ["aarch64"])
+
 
 if __name__ == "__main__": unittest.main()

@@ -29,6 +29,59 @@ def profile(root, instance, mode):
                 bundle=f"wovenmatter.desktop.dev.{instance}.{selected}")
 
 
+LINUX_LIBRARY_ARCHITECTURES = ("x86_64", "aarch64")
+
+
+def missing_linux_libraries(root):
+    """Architectures whose wovenmatter-library this checkout's host bundle lacks.
+
+    Every Linux host holds a library copy, so a host bundle must carry the binary for
+    the host's architecture: the packed one scripts/build-linux-library.sh writes, or a
+    plain binary kept for local runs."""
+    missing = []
+    for arch in LINUX_LIBRARY_ARCHITECTURES:
+        directory = Path(root) / "remote/host/library" / ("linux-" + arch)
+        packed = (directory / "wovenmatter-library.gz").is_file() and (directory / "wovenmatter-library.sha256").is_file()
+        if not packed and not (directory / "wovenmatter-library").is_file():
+            missing.append(arch)
+    return missing
+
+
+def ensure_linux_library(root, *, environ=None, which=shutil.which, run=subprocess.run):
+    """Builds the missing Linux library hosts with Docker (the pinned image, through
+    scripts/build-linux-library.sh), or stops with how to build them. Returns the
+    architectures that are still missing (only when skipping was asked for)."""
+    environ = os.environ if environ is None else environ
+    missing = missing_linux_libraries(root)
+    if not missing:
+        return []
+    names = " and ".join(missing)
+    if environ.get("WOVENMATTER_DEV_LINUX_LIBRARY") == "skip":
+        print(f"Building without the Linux library host for {names}: this build will refuse to install or update Linux hosts of that architecture.")
+        return missing
+    docker = which("docker")
+    try:
+        ready = bool(docker) and run([docker, "info"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        ready = False
+    if not ready:
+        raise SystemExit(
+            f"This checkout has no Linux library host for {names} (remote/host/library/), so Linux hosts this build installs "
+            "could hold no library copy and never join your devices. Start Docker and run this again to build it, or build it "
+            "with scripts/build-linux-library.sh. To build the app without it (it then refuses Linux installs), set "
+            "WOVENMATTER_DEV_LINUX_LIBRARY=skip.")
+    print(f"Building the Linux library host for {names} with Docker (scripts/build-linux-library.sh)…", flush=True)
+    command = [str(Path(root) / "scripts/build-linux-library.sh"), "--docker"]
+    # One container builds every architecture; name it only when one is missing.
+    if len(missing) == 1:
+        command += ["--arch", missing[0]]
+    run(command, check=True)
+    still = missing_linux_libraries(root)
+    if still:
+        raise SystemExit("scripts/build-linux-library.sh finished without the library host for " + " and ".join(still) + ".")
+    return []
+
+
 def backend_running(executable, commands=None):
     """Compare executable identities, including macOS /tmp -> /private/tmp aliases."""
     if commands is None:
@@ -254,11 +307,15 @@ def main():
     snap.add_argument("--destination", type=Path, required=True)
     running = sub.add_parser("backend-running")
     running.add_argument("--executable", type=Path, required=True)
+    library = sub.add_parser("linux-library")
+    library.add_argument("--root", type=Path, required=True)
     args = parser.parse_args()
     if args.command == "profile":
         print(json.dumps(profile(args.root, args.instance, args.mode)))
     elif args.command == "snapshot":
         snapshot(args.source, args.destination)
+    elif args.command == "linux-library":
+        ensure_linux_library(args.root)
     else:
         print("true" if backend_running(args.executable) else "false")
 

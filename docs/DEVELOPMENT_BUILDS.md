@@ -49,6 +49,15 @@ production app. Concurrent builds of the same profile are rejected; other
 client/snapshot profiles can build and run independently. Only one host may own
 the production library, regardless of its instance name.
 
+Every Linux host holds a library copy, so the app's host bundle must carry
+`wovenmatter-library` for each Linux architecture (`remote/host/library/`,
+gitignored). Before building, the launcher builds any missing architecture with
+Docker through `scripts/build-linux-library.sh` (the pinned image; a binary
+already there, packed or plain, is kept). Without Docker it stops and says how to
+build it. `WOVENMATTER_DEV_LINUX_LIBRARY=skip` builds the app without it; that
+build then refuses to install or update Linux hosts of a missing architecture, as
+`remote-host.sh` does on the host.
+
 ## Choosing a mode
 
 Agents understand ordinary wording: "build this as a client" means `--mode client`;
