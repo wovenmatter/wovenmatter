@@ -252,12 +252,15 @@ public actor LibraryPeerSync {
     for pointer in sequence(first: first, next: { $0.pointee.ifa_next }) {
       let entry = pointer.pointee
       guard (entry.ifa_flags & UInt32(IFF_UP)) != 0, let address = entry.ifa_addr else { continue }
+      // Container and VM bridges come and go with bots; they are not the network.
+      let name = String(cString: entry.ifa_name)
+      if ["veth", "docker", "br-", "virbr", "vmnet", "bridge"].contains(where: name.hasPrefix) { continue }
       let family = Int32(address.pointee.sa_family)
       guard family == AF_INET || family == AF_INET6 else { continue }
       var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
       let length = socklen_t(family == AF_INET ? MemoryLayout<sockaddr_in>.size : MemoryLayout<sockaddr_in6>.size)
       if getnameinfo(address, length, &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0 {
-        items.append(String(cString: entry.ifa_name) + "=" + String(cString: host))
+        items.append(name + "=" + String(cString: host))
       }
     }
     return items.sorted().joined(separator: ",")
