@@ -156,7 +156,8 @@ public actor LibraryPeerSync {
   private var backoff: [String: TimeInterval] = [:]
   private var nextFiles: [String: Date] = [:]
   private var running: Set<String> = []
-  private var again: Set<String> = []
+  /// Peers whose running sync runs once more after, with the latest reason.
+  private var again: [String: String] = [:]
   private var announcing: Task<Void, Never>?
   private var presence: Task<Void, Never>?
   private var observer: UUID?
@@ -364,9 +365,9 @@ public actor LibraryPeerSync {
       exchanges["now", default: 0] += 1
       await synchronize(with: member, includingFiles: true)
       // A notice that arrived meanwhile was queued behind this exchange.
-      if again.contains(member.deviceID) && started {
+      if let reason = again[member.deviceID], started {
         let id = member.deviceID
-        Task { [weak self] in await self?.runSync(id, reason: "notice") }
+        Task { [weak self] in await self?.runSync(id, reason: reason) }
       } else { running.remove(member.deviceID) }
     }
   }
@@ -380,17 +381,19 @@ public actor LibraryPeerSync {
   /// Coalesces: a sync already running for this peer runs once more after.
   public func scheduleSync(_ deviceID: String, reason: String = "request") {
     guard started else { return }
-    if running.contains(deviceID) { again.insert(deviceID); return }
+    if running.contains(deviceID) { again[deviceID] = reason; return }
     running.insert(deviceID)
     Task { [weak self] in await self?.runSync(deviceID, reason: reason) }
   }
 
   private func runSync(_ deviceID: String, reason: String) async {
+    var reason = reason
     repeat {
-      again.remove(deviceID)
+      again[deviceID] = nil
       exchanges[reason, default: 0] += 1
       if let member = try? await peers().first(where: { $0.deviceID == deviceID }) { await synchronize(with: member) }
-    } while again.contains(deviceID) && started
+      if let next = again[deviceID] { reason = next }
+    } while again[deviceID] != nil && started
     running.remove(deviceID)
   }
 
