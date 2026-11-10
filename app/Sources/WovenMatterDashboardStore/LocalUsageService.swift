@@ -419,7 +419,8 @@ public actor LocalUsageService {
     providers: Set<ProviderKind>,
     now: Date
   ) async -> UsageAnalyticsSnapshot {
-    let storedSamples = ((try? await store.samples(in: interval)) ?? []).filter {
+    let aliases = (try? await store.deviceAliases()) ?? [:]
+    let storedSamples = UsageSample.resolvingDeviceAliases((try? await store.samples(in: interval)) ?? [], aliases: aliases).filter {
       // Legacy account-wide API imports are not activity on this device.
       !$0.sourceID.hasPrefix("openrouter:activity:")
     }
@@ -455,8 +456,11 @@ public actor LocalUsageService {
     if request.offset > 0, let cached = deviceExportCache, cached.since == since {
       records = cached.records
     } else {
-      let relayedIDs = Set(relayed.map(\.id))
-      let stored = try await store.samples(in: DateInterval(start: since, end: max(since, now))).filter {
+      let relayedIDs = Set(relayed.map { UsageDeviceSource.storedID($0.id) })
+      let aliases = try await store.deviceAliases()
+      let stored = UsageSample.resolvingDeviceAliases(
+        try await store.samples(in: DateInterval(start: since, end: max(since, now))), aliases: aliases
+      ).filter {
         guard !$0.sourceID.hasPrefix("openrouter:activity:"), $0.sourceID != "cursor:account" else { return false }
         return $0.usageDeviceID == UsageDeviceSource.localDeviceID || relayedIDs.contains($0.usageDeviceID)
       }
@@ -485,7 +489,9 @@ public actor LocalUsageService {
 
   public func storedDeviceSummaries() async -> [(identity: UsageDeviceIdentity, syncedAt: Date)] {
     guard let store = await openUsageStore() else { return [] }
-    return (try? await store.storedDevices()) ?? []
+    // A device's earlier IDs are part of it, not devices of their own.
+    let aliases = Set(((try? await store.deviceAliases()) ?? [:]).keys)
+    return ((try? await store.storedDevices()) ?? []).filter { !aliases.contains(UsageDeviceSource.storedID($0.identity.id)) }
   }
 
   /// Reads everything a device has to report and stores it under that device.
@@ -525,6 +531,13 @@ public actor LocalUsageService {
         guard page.hasMore else { break }
         guard page.nextOffset > offset else { throw UsageDeviceCollectionError.invalidPage }
         offset = page.nextOffset
+      }
+      // A host read by its member ID was stored under its workspace ID before, here or
+      // relayed by a paired Mac. Those rows are read as this device (`resolvingAliases`).
+      if !endpoint.formerIDs.isEmpty {
+        try await store.write { connection in
+          try connection.recordDeviceAliases(endpoint.formerIDs.map { ($0, identity.id) })
+        }
       }
       let byDevice = Dictionary(grouping: records) { $0.device ?? identity.id }
       for id in Set([identity.id]).union(byDevice.keys) {
@@ -643,7 +656,7 @@ public actor LocalUsageService {
     let outcomes = importOutcomes
     do {
       let importer = UsageTranscriptImporter(homeDirectory: home, outcomes: outcomes, ownership: generation,
-        preparationWorker: importPreparationWorker)
+        preparationWorker: importPreparationWorker, libraryDatabaseURL: databaseURL)
       let complete = try await importer.run(store: store, cutoff: cutoff, enabledProviders: enabledProviders, now: now, batch: batch)
       let updatedOutcomes = await importer.importOutcomes
       guard isCurrentAnalytics(generation) else { return false }
@@ -680,7 +693,8 @@ public actor LocalUsageService {
       location: homeDirectory.appending(path: ".codex/sessions"),
       store: store,
       interval: interval,
-      detail: "Exact rollout token deltas with model and reasoning metadata; fork-copy and repeated-delta suppression is applied."
+      detail: "Exact rollout token deltas with model and reasoning metadata, including archived chats; fork-copy and repeated-delta suppression is applied.",
+      outcomeKeys: ["codex:file:", "codex:archived:"]
     )) }
     if enabledProviders.contains(.claude) { await sources.append(sourceCoverage(
       id: "claude",
@@ -715,6 +729,31 @@ public actor LocalUsageService {
       interval: interval,
       detail: "Exact step-finish usage from OpenCode SQLite, including OpenCode Go and other identifiable billing routes."
     )) }
+    if !enabledProviders.isEmpty {
+      // Pi routes to any provider, so both sources are listed whenever any provider is.
+      await sources.append(sourceCoverage(
+        id: "pi",
+        prefix: "pi:file:",
+        sourceName: "Pi",
+        provider: .unknown,
+        harness: "Pi",
+        location: homeDirectory.appending(path: ".pi/agent/sessions"),
+        store: store,
+        interval: interval,
+        detail: "Per-reply token usage from Pi CLI sessions, with each reply's provider and model."
+      ))
+      await sources.append(sourceCoverage(
+        id: "pi-durable",
+        prefix: "pi-durable:",
+        sourceName: "Pi Durable",
+        provider: .unknown,
+        harness: PiDurableUsageRecords.harness,
+        location: databaseURL,
+        store: store,
+        interval: interval,
+        detail: "Per-reply token usage from Pi Durable and bots: their SQLite stores and the default agent's earlier session files, each reply counted once."
+      ))
+    }
     if !enabledProviders.isEmpty,
        (importOutcomes["wovenmatter:index"]?.failures ?? 0) > 0 {
       sources.append(UsageSourceCoverage(
@@ -740,9 +779,11 @@ public actor LocalUsageService {
     location: URL,
     store: AsyncUsageStore,
     interval: DateInterval,
-    detail: String
+    detail: String,
+    outcomeKeys: [String]? = nil
   ) async -> UsageSourceCoverage {
-    let outcome = importOutcomes[prefix] ?? .empty
+    let outcome = UsageTranscriptImporter.Outcome(failures: (outcomeKeys ?? [prefix])
+      .reduce(0) { $0 + (importOutcomes[$1]?.failures ?? 0) })
     let stats = try? await store.statistics(sourceIDPrefix: prefix, in: interval)
     let exists = fileManager.fileExists(atPath: location.path)
     let status: UsageSourceStatus
@@ -787,14 +828,14 @@ public actor LocalUsageService {
   private func deduplicatedWithinDevice(_ samples: [UsageSample]) -> [UsageSample] {
     var seenEvents: Set<String> = []
     let uniqueEvents = samples.filter { seenEvents.insert($0.id).inserted }
-    let keyed = Dictionary(grouping: uniqueEvents.filter { $0.dedupeKey != nil }) {
-      "\($0.provider.rawValue):\($0.dedupeKey ?? "")"
+    let keyed = Dictionary(grouping: uniqueEvents.filter { Self.duplicateKey($0) != nil }) {
+      "\($0.provider.rawValue):\(Self.duplicateKey($0) ?? "")"
     }
     let winners = Set(keyed.values.compactMap { group in
       group.max { lhs, rhs in Self.dedupeRank(lhs) < Self.dedupeRank(rhs) }?.id
     })
     let exact = uniqueEvents.filter { sample in
-      sample.dedupeKey == nil || winners.contains(sample.id)
+      Self.duplicateKey(sample) == nil || winners.contains(sample.id)
     }
     return Self.suppressWovenMatterEchoes(exact)
   }
@@ -806,20 +847,29 @@ public actor LocalUsageService {
     return samples.filter { !$0.isRemoteLiveRun || !scannedHarnesses.contains($0.harness) }
   }
 
-  /// ACP prompt results make native Woven turns visible immediately.
-  /// Provider/runtime histories can later report the same settled call with
-  /// richer provenance but a different request ID. Pair exact token/model
-  /// observations one-to-one so a fast path never becomes a second total.
+  /// ACP prompt results make Woven turns visible immediately, before the harness's
+  /// own history is read. That history is the record: once it has the turn, the live
+  /// copy goes. A turn's history can carry another session ID (Codex rollouts, Pi
+  /// Durable sessions) and split the turn into several calls, so the live copy goes
+  /// when the history has the same session, or activity in the same harness during
+  /// the half hour before the turn ended, or (as before) the identical call nearby.
   static func suppressWovenMatterEchoes(_ samples: [UsageSample]) -> [UsageSample] {
-    let isImmediate: (UsageSample) -> Bool = {
-      $0.sourceID == "wovenmatter:local"
-    }
-    let echoes = samples.filter(isImmediate)
-      .sorted { $0.timestamp < $1.timestamp }
+    let isImmediate: (UsageSample) -> Bool = { $0.sourceID == "wovenmatter:local" }
+    let echoes = samples.filter(isImmediate).sorted { $0.timestamp < $1.timestamp }
+    guard !echoes.isEmpty else { return samples }
     let provenance = samples.filter { !isImmediate($0) }
+    let sessions = Set(provenance.map(\.sessionID).filter { !$0.isEmpty })
+    let activity = Dictionary(grouping: provenance, by: \.harness)
+      .mapValues { $0.map(\.timestamp).sorted() }
     var claimed: Set<String> = []
     var suppressed: Set<String> = []
     for echo in echoes {
+      if sessions.contains(echo.sessionID)
+          || activity[echo.harness].map({ Self.contains($0, from: echo.timestamp.addingTimeInterval(-30 * 60),
+                                                         to: echo.timestamp.addingTimeInterval(5 * 60)) }) == true {
+        suppressed.insert(echo.id)
+        continue
+      }
       let echoModel = echo.canonicalModel
       let match = provenance
         .filter { candidate in
@@ -829,10 +879,6 @@ public actor LocalUsageService {
                 echo.provider == .unknown || echo.provider == candidate.provider else {
             return false
           }
-          let sameSession = echo.sessionID == candidate.sessionID
-          let cursorAccountCall = echo.provider == .cursor
-            && candidate.sourceID == "cursor:account"
-          guard sameSession || cursorAccountCall else { return false }
           let candidateModel = candidate.canonicalModel
           return echoModel == "Unknown model"
             || candidateModel == "Unknown model"
@@ -848,6 +894,23 @@ public actor LocalUsageService {
       }
     }
     return samples.filter { !suppressed.contains($0.id) }
+  }
+
+  /// Whether sorted `times` holds one within `start...end`.
+  private static func contains(_ times: [Date], from start: Date, to end: Date) -> Bool {
+    var low = 0, high = times.count
+    while low < high {
+      let middle = (low + high) / 2
+      if times[middle] < start { low = middle + 1 } else { high = middle }
+    }
+    return low < times.count && times[low] <= end
+  }
+
+  /// What makes two rows the same call. A Codex rollout's events have no provider ID,
+  /// but their event ID (session, line, time) stays when Codex moves the file into
+  /// archived_sessions, while the stored row ID follows the file's path.
+  private static func duplicateKey(_ sample: UsageSample) -> String? {
+    sample.dedupeKey ?? (sample.sourceID.hasPrefix("codex:file:") ? "rollout:" + sample.sourceEventID : nil)
   }
 
   private static func dedupeRank(_ sample: UsageSample) -> Int {

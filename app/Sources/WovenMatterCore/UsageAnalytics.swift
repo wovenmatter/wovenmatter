@@ -467,6 +467,14 @@ public struct UsageAnalyticsSnapshot: Codable, Equatable, Sendable {
   }
 }
 
+extension UsageSample {
+  /// The harness's current name for rows saved under an earlier one. Pi Durable ran
+  /// as "Built-in" until October 2026.
+  public static func currentHarnessName(_ name: String) -> String {
+    name == "Built-in" ? AgentRuntimeKind.defaultAgent.displayName : name
+  }
+}
+
 extension UsageAnalyticsSnapshot {
   /// Combines model calls that the Usage page cannot tell apart, so a long range
   /// stays small enough to send to the window and fast to filter. Every field the

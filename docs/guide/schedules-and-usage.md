@@ -70,19 +70,27 @@ last edited it, including the agent for changes made through Calendar tools.
 device. It needs no account setup or provider switches. OpenCode activity includes
 all billing routes; account-wide API activity is excluded from device totals.
 
-Woven Matter keeps its own lasting record of usage, including Codex's compressed
-archives, so history stays even after a harness deletes old transcripts. The first
-full import can take a few minutes and runs in the background, newest usage first:
-the last 24 hours appear within moments, followed by 7, 30, and 90 days, then the rest.
+Each device reads every supported harness it has run, inside or outside Woven Matter:
+Codex (including archived chats and compressed archives), Claude Code, Grok Build,
+OpenCode, the Pi CLI, and Pi Durable, which also covers bots and Pi Durable's earlier
+session files. Woven Matter keeps its own lasting record, so history stays even after
+a harness deletes old transcripts. The first full import can take a few minutes and
+runs in the background, newest usage first: the last 24 hours appear within moments,
+followed by 7, 30, and 90 days, then the rest.
 
-Other Macs, remote workspaces, and iPhones and iPads appear under **Devices**. Click
-a device to show or hide its usage. Devices share only token counts, model and billing
-labels, session IDs, and folder names, never prompts, responses, or file paths. A
-remote workspace reports all usage for its account on that host, including command
-line runs outside Woven Matter. It needs a service update in **Settings** before its
-usage can appear, and a device that can't report says so rather than showing zero.
-If you added the same host separately on two Macs, it appears as two devices and counts
-twice, so hide one of them.
+Each reply counts once. A turn you run in Woven Matter appears right away and is
+replaced by the harness's own record of it once that is read. A reply found in more
+than one place, such as an archived Codex chat or a Pi Durable session and its backup
+file, keeps one record. Older rows saved under **Built-in** show as Pi Durable.
+
+Other Macs, every Linux machine in your library (workspace hosts and bots-only
+machines, whichever Mac added them), and iPhones and iPads appear under **Devices**.
+Click a device to show or hide its usage. Devices share only token counts, model and
+billing labels, session IDs, folder names, and bot names, never prompts, responses, or
+file paths. A Linux machine is one device however many Macs added it, and reports all
+usage for its account there, including command line runs outside Woven Matter. It
+needs a service update in **Settings** before its usage can appear, other Macs need
+this version, and a device that can't report says so rather than showing zero.
 
 Use the column on the left to search, choose a time range up to **All**, and narrow by
 model, harness, or reasoning level. Click a provider to show or hide it.

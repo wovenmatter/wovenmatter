@@ -56,6 +56,10 @@ final class AsyncUsageStore: Sendable {
     }
   }
 
+  func deviceAliases() async throws -> [String: String] {
+    try await read { try $0.deviceAliases() }
+  }
+
   func storedDevices() async throws -> [(identity: UsageDeviceIdentity, syncedAt: Date)] {
     try await read { try $0.storedDevices() }
   }

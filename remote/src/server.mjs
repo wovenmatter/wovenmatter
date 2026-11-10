@@ -190,7 +190,8 @@ const bots = runningAsService && configuration.runtimeKind === 'host' && process
 const workspaceRoutes = ['/v1/execution/commands', '/v1/task-gateway', '/v1/durable-acp/', '/v1/default-agent/rpc', '/v1/default-agent/runs/',
   '/v1/projects', '/v1/scratch', '/v1/directories', '/v1/databases', '/v1/browser/', '/v1/harnesses/', '/v1/runtime-maintenance', '/v1/workspace-instances']
 const workspaceRoute = pathname => workspaceRoutes.some(prefix => pathname === prefix || pathname.startsWith(prefix.endsWith('/') ? prefix : prefix + '/'))
-const usageScanner = createUsageScanner()
+// Usage on this machine: its harnesses, its Pi Durable agent and its bots.
+const usageScanner = createUsageScanner({ workspaceRoot, botsDatabase: resolve(configuration.botsData ?? resolve(configuration.dataRoot, 'bots'), 'bots.sqlite') })
 
 const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
   requestTimeout: 30_000, connectionsCheckingInterval: 1_000 }, async (request, response) => {

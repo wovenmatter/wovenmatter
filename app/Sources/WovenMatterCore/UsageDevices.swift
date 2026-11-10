@@ -82,6 +82,35 @@ public enum UsageDeviceSource {
 }
 
 public extension UsageSample {
+  /// Earlier device IDs read as the device they belong to now (a host read by its
+  /// member ID after its workspace ID). `aliases` maps a stored ID to the current ID.
+  /// An earlier copy of a session the device still reports is dropped; sessions only
+  /// the earlier copy holds stay, because the device may no longer have them.
+  static func resolvingDeviceAliases(_ samples: [UsageSample], aliases: [String: String]) -> [UsageSample] {
+    guard !aliases.isEmpty else { return samples }
+    let current = Dictionary(aliases.map { (UsageDeviceSource.storedID($0.key), UsageDeviceSource.storedID($0.value)) },
+                             uniquingKeysWith: { first, _ in first })
+    let reported = Dictionary(grouping: samples.filter { !$0.isRemoteLiveRun && Set(current.values).contains($0.usageDeviceID) },
+                              by: \.usageDeviceID).mapValues { Set($0.map(\.sessionID)) }
+    return samples.compactMap { sample in
+      guard let target = current[sample.usageDeviceID], target != sample.usageDeviceID else { return sample }
+      if !sample.isRemoteLiveRun, reported[target]?.contains(sample.sessionID) == true { return nil }
+      let old = UsageDeviceSource.sourceID(deviceID: sample.usageDeviceID)
+      return sample.moved(toSource: UsageDeviceSource.sourceID(deviceID: target) + sample.sourceID.dropFirst(old.count))
+    }
+  }
+
+  /// The same sample stored under another source.
+  func moved(toSource sourceID: String) -> UsageSample {
+    UsageSample(
+      id: id, provider: provider, timestamp: timestamp, sessionID: sessionID, accountLabel: accountLabel,
+      model: model, billingProvider: billingProvider, billingRoute: billingRoute, reasoningLevel: reasoningLevel,
+      harness: harness, application: application, agent: agent, workspace: workspace, tokens: tokens,
+      requestCount: requestCount, costUSD: costUSD, attributionConfidence: attributionConfidence,
+      granularity: granularity, sourceID: sourceID, sourceEventID: sourceEventID, dedupeKey: dedupeKey
+    )
+  }
+
   /// The device that did this work. "local" is this Mac.
   var usageDeviceID: String {
     UsageDeviceSource.deviceID(fromSourceID: sourceID) ?? UsageDeviceSource.localDeviceID
@@ -266,6 +295,8 @@ public struct UsageDeviceEndpoint: Sendable {
   public let keepsLastingHistory: Bool
   /// Devices this Mac reads directly, so a relayed copy of them is ignored.
   public let excludedRelays: Set<String>
+  /// IDs this device's usage was stored under before, which move to `identity`.
+  public let formerIDs: [String]
   public let fetch: @Sendable (UsageDeviceExportRequest) async throws -> UsageDeviceExportPage
 
   public init(
@@ -273,12 +304,14 @@ public struct UsageDeviceEndpoint: Sendable {
     alwaysFull: Bool = false,
     keepsLastingHistory: Bool = false,
     excludedRelays: Set<String> = [],
+    formerIDs: [String] = [],
     fetch: @escaping @Sendable (UsageDeviceExportRequest) async throws -> UsageDeviceExportPage
   ) {
     self.identity = identity
     self.alwaysFull = alwaysFull
     self.keepsLastingHistory = keepsLastingHistory
     self.excludedRelays = excludedRelays
+    self.formerIDs = formerIDs
     self.fetch = fetch
   }
 }

@@ -143,6 +143,124 @@ export function parseOpenCodeRow(row) {
   }, { input: count(part.tokens.input), cached: count(part.tokens.cache?.read), created: count(part.tokens.cache?.write), output: count(part.tokens.output), reasoning: count(part.tokens.reasoning), total: count(part.tokens.total) })
 }
 
+/// One Pi session line (the Pi CLI, and the default agent before Pi Durable). The
+/// identity matches the desktop's `parseHarness`.
+export function piSessionParser(harness = 'Pi') {
+  const state = { sessionID: '', model: '', provider: '', reasoningLevel: null, workspace: null }
+  return (line, number) => {
+    if (!line.includes('"usage"') && !line.includes('"model_change"') && !line.includes('"thinking_level_change"') && !line.includes('"session"')) return null
+    const root = object(line)
+    if (!root || typeof root.type !== 'string') return null
+    if (root.type === 'session') {
+      state.sessionID = text(root.id ?? root.session_id) ?? state.sessionID
+      state.workspace = lastPath(root.cwd) ?? state.workspace
+      return null
+    }
+    if (root.type === 'model_change') {
+      state.model = text(root.modelId ?? root.model_id ?? root.model) ?? state.model
+      state.provider = text(root.provider ?? root.providerId ?? root.provider_id) ?? state.provider
+      return null
+    }
+    if (root.type === 'thinking_level_change') {
+      state.reasoningLevel = text(root.thinkingLevel ?? root.thinking_level) ?? state.reasoningLevel
+      return null
+    }
+    const message = root.type === 'message' ? root.message : null
+    const usage = message?.role === 'assistant' ? message.usage : null
+    const timestamp = seconds(root.timestamp ?? message?.timestamp)
+    if (!usage || typeof usage !== 'object' || timestamp == null) return null
+    const model = text(message.model ?? message.modelId ?? message.model_id) ?? state.model
+    if (!model) return null
+    const providerID = text(message.provider ?? message.providerId ?? message.provider_id) ?? state.provider
+    const [provider, billingProvider, route] = billingRoute(providerID)
+    const sessionID = text(state.sessionID) ?? text(root.sessionId ?? root.session_id) ?? 'Unknown'
+    const responseID = text(message.responseId ?? message.response_id) ?? text(message.id ?? root.id)
+    const cost = positiveNumber(usage.cost?.total ?? (typeof usage.cost === 'object' ? null : usage.cost) ?? usage.cost_usd)
+    return event({
+      timestamp, provider, sessionID, model, billingProvider, billingRoute: route,
+      reasoningLevel: text(message.thinkingLevel ?? message.thinking_level) ?? state.reasoningLevel,
+      harness, application: harness, workspace: state.workspace, cost,
+      dedupeKey: responseID ? `${providerID}:${responseID}` : `${sessionID}:${number}:${timestamp}`,
+    }, { input: count(usage.input ?? usage.input_tokens), cached: count(usage.cacheRead ?? usage.cache_read ?? usage.cached_input_tokens),
+      created: count(usage.cacheWrite ?? usage.cache_write ?? usage.cache_creation_input_tokens), output: count(usage.output ?? usage.output_tokens),
+      reasoning: count(usage.reasoning ?? usage.reasoning_tokens), total: count(usage.totalTokens ?? usage.total_tokens) })
+  }
+}
+
+const PI_DURABLE = 'Pi Durable'
+
+/// A Pi Durable reply's identity is its session, time, model and token total, the
+/// same on the desktop, so a migrated store and its retained backup count once.
+function piDurableEvent(message, session) {
+  if (message?.role !== 'assistant' || !message.usage || typeof message.usage !== 'object') return null
+  const milliseconds = Number(message.timestamp)
+  if (!Number.isFinite(milliseconds)) return null
+  const usage = message.usage, model = text(message.model) ?? 'Unknown model'
+  const output = count(usage.output)
+  const tokens = { input: count(usage.input), cached: count(usage.cacheRead), created: count(usage.cacheWrite), output,
+    reasoning: Math.min(output, count(usage.reasoning)), total: count(usage.totalTokens) }
+  const sum = tokens.input + tokens.cached + tokens.created + tokens.output
+  const [provider, billingProvider, route] = billingRoute(message.provider ?? 'Unknown')
+  return event({
+    timestamp: milliseconds / 1_000, provider, sessionID: session.id, model, billingProvider, billingRoute: route,
+    harness: PI_DURABLE, application: 'Woven Matter', agent: session.agent ?? null,
+    dedupeKey: `pi-durable:${session.id}:${Math.trunc(milliseconds)}:${model}:${tokens.total || sum}`,
+  }, tokens)
+}
+
+/// Replies in one session's entries (`{id, conversationId, model: [...]}`).
+export function piDurableEvents(records, session) {
+  const latest = new Map()
+  for (const record of records) {
+    const entry = typeof record === 'string' ? object(record) : record
+    if (!entry || !Array.isArray(entry.model)) continue
+    entry.model.forEach((message, index) => {
+      const value = piDurableEvent(message, session)
+      if (value) latest.set(`${entry.conversationId}:${entry.id}:${index}`, value)
+    })
+  }
+  return [...latest.values()]
+}
+
+/// Entries in a pre-SQLite Pi Durable commit log (`durable/<session>/native/main.jsonl`).
+export function legacyPiDurableEntries(lineText) {
+  if (!lineText.includes('"usage"')) return []
+  const commit = object(lineText)
+  return Array.isArray(commit?.writes) ? commit.writes.filter(write => write?.type === 'entry' && write.value).map(write => write.value) : []
+}
+
+const SAFE_PREFIX = /^(wm_pi|pibot)_[0-9a-f]{32}_$/
+
+/// Pi Durable stores in one SQLite database: the default agent's (`wm_pi_runtime_stores`)
+/// and the bots runtime's (`pibot_bots`), each bot conversation its own session.
+async function readPiDurableDatabase(path) {
+  let database
+  try {
+    const { DatabaseSync } = await import('node:sqlite')
+    database = new DatabaseSync(path, { readOnly: true })
+    const has = name => !!database.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name=?`).get(name)
+    const stores = []
+    if (has('wm_pi_runtime_stores')) for (const row of database.prepare('SELECT session_id, schema_prefix FROM wm_pi_runtime_stores').all()) stores.push({ prefix: row.schema_prefix, session: { id: row.session_id }, bot: false })
+    if (has('pibot_bots')) for (const row of database.prepare('SELECT id, name, schema_prefix FROM pibot_bots').all()) stores.push({ prefix: row.schema_prefix, session: { id: `bot:${row.id}`, agent: row.name ?? null }, bot: true })
+    const events = []
+    for (const store of stores) {
+      if (!SAFE_PREFIX.test(store.prefix) || !has(store.prefix + 'entries')) continue
+      const byConversation = new Map()
+      for (const row of database.prepare(`SELECT conversation_id AS conversation, record FROM "${store.prefix}entries" WHERE instr(record, '"usage"') > 0 ORDER BY id`).iterate()) {
+        const key = String(row.conversation)
+        if (!byConversation.has(key)) byConversation.set(key, [])
+        byConversation.get(key).push(row.record)
+      }
+      for (const [conversation, records] of byConversation) {
+        const session = store.bot ? { id: `${store.session.id}:${conversation}`, agent: store.session.agent } : store.session
+        for (const value of piDurableEvents(records, session)) events.push(value)
+        await nextTurn()
+      }
+    }
+    return events
+  } catch { return [] } finally { try { database?.close() } catch {} }
+}
+
 /// Combines events in one hour that the Usage page cannot tell apart.
 export function aggregate(events) {
   const groups = new Map()
@@ -212,9 +330,17 @@ async function readOpenCode(path) {
   } catch { return [] } finally { try { database?.close() } catch {} }
 }
 
-export function createUsageScanner({ env = process.env, home = homedir(), refreshMilliseconds = 15 * 60_000, now = () => Date.now() } = {}) {
+export function createUsageScanner({ env = process.env, home = homedir(), refreshMilliseconds = 15 * 60_000, now = () => Date.now(),
+  workspaceRoot = env.WOVENMATTER_WORKSPACE || join(home, '.woven-matter'), botsDatabase = null } = {}) {
+  const agentDirectories = [...new Set([join(workspaceRoot, '.wovenmatter/default-agent'), join(home, '.wovenmatter/default-agent')])]
   const roots = {
     codex: join(env.CODEX_HOME || join(home, '.codex'), 'sessions'),
+    codexArchived: join(env.CODEX_HOME || join(home, '.codex'), 'archived_sessions'),
+    pi: join(home, '.pi/agent/sessions'),
+    // The default agent's database (WOVEN_DEFAULT_AGENT_DATABASE for this server's
+    // managed agent), its own directory's database, and the bots runtime's.
+    piDurable: [...new Set([join(workspaceRoot, '.wovenmatter/workspace.sqlite'), ...agentDirectories.map(directory => join(directory, 'workspace.sqlite')),
+      ...(botsDatabase ? [botsDatabase] : [])])],
     claude: join(env.CLAUDE_CONFIG_DIR || join(home, '.claude'), 'projects'),
     grok: join(env.GROK_HOME || join(home, '.grok'), 'sessions'),
     opencode: join(home, '.local/share/opencode/opencode.db'),
@@ -227,6 +353,19 @@ export function createUsageScanner({ env = process.env, home = homedir(), refres
     const info = await fs.stat(path).catch(() => null)
     if (!info) return []
     const stamp = `${info.mtimeMs}:${info.size}`
+    const held = cache.get(path)
+    if (held?.stamp === stamp) return held.events
+    const events = await read(path).catch(() => [])
+    cache.set(path, { stamp, events })
+    return events
+  }
+
+  // A database changes in its WAL first, so its stamp includes the WAL.
+  async function cachedDatabase(path, read) {
+    const main = await fs.stat(path).catch(() => null)
+    if (!main) return []
+    const wal = await fs.stat(path + '-wal').catch(() => null)
+    const stamp = `${main.mtimeMs}:${main.size}:${wal?.mtimeMs ?? 0}:${wal?.size ?? 0}`
     const held = cache.get(path)
     if (held?.stamp === stamp) return held.events
     const events = await read(path).catch(() => [])
@@ -250,7 +389,13 @@ export function createUsageScanner({ env = process.env, home = homedir(), refres
     const events = []
     // One source can hold more rows than a call can take as arguments.
     const add = found => { for (const value of found) events.push(value) }
-    for (const path of withoutCopies(await walk(roots.codex, isTranscript))) {
+    // An archived Codex chat moves to archived_sessions under the same file name.
+    const rollouts = new Map()
+    for (const path of withoutCopies([...await walk(roots.codex, isTranscript), ...await walk(roots.codexArchived, isTranscript)])) {
+      const name = basename(path).replace(/\.zst$/, '')
+      if (!rollouts.has(name)) rollouts.set(name, path)
+    }
+    for (const path of rollouts.values()) {
       // Codex writes an event per turn, so hold each file's hourly totals.
       add(await cached(path, async file => { const parse = codexParser(); return aggregate(await readFile(file, line => parse(line))) }))
     }
@@ -262,6 +407,20 @@ export function createUsageScanner({ env = process.env, home = homedir(), refres
       }))
     }
     add(await cached(roots.opencode, readOpenCode))
+    for (const path of await walk(roots.pi, file => file.endsWith('.jsonl'))) add(await cached(path, file => readFile(file, piSessionParser('Pi'))))
+    for (const directory of agentDirectories) {
+      for (const path of await walk(join(directory, 'sessions'), file => file.endsWith('.jsonl'))) {
+        add(await cached(path, async file => (await readFile(file, piSessionParser('Pi'))).map(value => {
+          const milliseconds = Math.round(value.timestamp * 1_000)
+          return { ...value, harness: PI_DURABLE, application: 'Woven Matter', dedupeKey: `pi-durable:${value.sessionID}:${milliseconds}:${value.model}:${value.total}` }
+        })))
+      }
+      for (const path of await walk(join(directory, 'durable'), file => basename(file) === 'main.jsonl' && basename(join(file, '..')) === 'native')) {
+        const session = { id: basename(join(path, '../..')) }
+        add(await cached(path, async file => piDurableEvents(await readFile(file, legacyPiDurableEntries), session)))
+      }
+    }
+    for (const path of roots.piDurable) add(await cachedDatabase(path, readPiDurableDatabase))
     // A resumed transcript repeats earlier messages, which must only count once.
     const seen = new Set()
     const unique = events.filter(value => {

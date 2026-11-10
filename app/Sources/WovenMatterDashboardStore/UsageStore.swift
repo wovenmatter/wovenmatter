@@ -524,7 +524,7 @@ final class UsageStore {
           billingProvider: text(statement, 5),
           billingRoute: text(statement, 6),
           reasoningLevel: optionalText(statement, 11),
-          harness: text(statement, 12),
+          harness: UsageSample.currentHarnessName(text(statement, 12)),
           application: text(statement, 13),
           agent: optionalText(statement, 14),
           workspace: optionalText(statement, 15),
@@ -565,6 +565,36 @@ final class UsageStore {
       sessions: Int(sqlite3_column_int64(statement, 0)),
       events: Int(sqlite3_column_int64(statement, 1))
     )
+  }
+
+  private static let deviceAliasPrefix = "usage.device-alias."
+
+  /// Earlier device IDs and the device each is now read as.
+  func deviceAliases() throws -> [String: String] {
+    let statement = try prepare("SELECT key, value FROM usage_metadata WHERE substr(key, 1, ?) = ?")
+    defer { sqlite3_finalize(statement) }
+    sqlite3_bind_int(statement, 1, Int32(Self.deviceAliasPrefix.utf8.count))
+    bind(Self.deviceAliasPrefix, to: 2, in: statement)
+    var result: [String: String] = [:]
+    while true {
+      let status = sqlite3_step(statement)
+      if status == SQLITE_DONE { return result }
+      guard status == SQLITE_ROW else { throw stepError() }
+      result[String(text(statement, 0).dropFirst(Self.deviceAliasPrefix.count))] = text(statement, 1)
+    }
+  }
+
+  func recordDeviceAliases(_ pairs: [(former: String, current: String)]) throws {
+    for pair in pairs where UsageDeviceSource.storedID(pair.former) != UsageDeviceSource.storedID(pair.current) {
+      let statement = try prepare("""
+        INSERT INTO usage_metadata (key, value) VALUES (?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        """)
+      defer { sqlite3_finalize(statement) }
+      bind(Self.deviceAliasPrefix + UsageDeviceSource.storedID(pair.former), to: 1, in: statement)
+      bind(pair.current, to: 2, in: statement)
+      try stepDone(statement)
+    }
   }
 
   func metadataDate(_ key: String) throws -> Date? {

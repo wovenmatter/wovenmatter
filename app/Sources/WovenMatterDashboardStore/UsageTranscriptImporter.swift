@@ -23,6 +23,9 @@ actor UsageTranscriptImporter {
   }
   private static let parserVersion = "usage-index-v4"
   let homeDirectory: URL
+  /// This Mac's library database, which also holds the default agent's Pi Durable stores.
+  /// Bots keep theirs beside it, in `Bots/data/bots.sqlite`.
+  let libraryDatabaseURL: URL?
   private static let sharedPreparationWorker = DatabaseWorker(label: "wovenmatter.usage.import", capacity: 4)
   private let ownership: UsageRefreshOwnership
   private let preparationWorker: DatabaseWorker
@@ -38,8 +41,9 @@ actor UsageTranscriptImporter {
   }
 
   init(homeDirectory: URL, outcomes: [String: Outcome], ownership: UsageRefreshOwnership,
-    preparationWorker: DatabaseWorker? = nil) {
+    preparationWorker: DatabaseWorker? = nil, libraryDatabaseURL: URL? = nil) {
     self.homeDirectory = homeDirectory
+    self.libraryDatabaseURL = libraryDatabaseURL
     self.ownership = ownership
     self.preparationWorker = preparationWorker ?? Self.sharedPreparationWorker
     importOutcomes = outcomes
@@ -72,37 +76,22 @@ actor UsageTranscriptImporter {
       .joined(separator: ",")
 
     if enabledProviders.contains(.codex) {
-      let codexRoot = homeDirectory.appending(path: ".codex/sessions", directoryHint: .isDirectory)
-      importOutcomes["codex:file:"] = try await importTranscriptFiles(
-        root: codexRoot,
-        prefix: "codex:file:",
-        sourceName: "Codex rollout",
-        provider: .codex,
-        harness: "Codex",
-        providerFilterSignature: providerFilterSignature,
-        store: store,
-        cutoff: retentionCutoff,
-        now: now
-      ) { url, check in
-        var state = CodexUsageScanState()
-        var records: [UsageSample] = []
-        let usageMarker = Data("\"token_count\"".utf8)
-        let contextMarker = Data("\"turn_context\"".utf8)
-        let metadataMarker = Data("\"session_meta\"".utf8)
-        let markers = ["\"token_count\"", "\"turn_context\"", "\"session_meta\""]
-        try Self.forEachLineData(in: url, markers: markers, check: check) { data, lineNumber in
-          guard data.range(of: usageMarker) != nil
-                  || data.range(of: contextMarker) != nil
-                  || data.range(of: metadataMarker) != nil else { return }
-          if let sample = LocalUsageTranscriptParser.parseCodex(
-            line: String(decoding: data, as: UTF8.self),
-            lineNumber: lineNumber,
-            state: &state
-          ) {
-            records.append(sample)
-          }
-        }
-        return records
+      // Codex moves a chat it archives into archived_sessions. Its replies keep their
+      // identity there, so a chat read before and after the move is one record.
+      for (folder, key, name) in [("sessions", "codex:file:", "Codex rollout"),
+                                  ("archived_sessions", "codex:archived:", "Archived Codex rollout")] {
+        importOutcomes[key] = try await importTranscriptFiles(
+          root: homeDirectory.appending(path: ".codex/" + folder, directoryHint: .isDirectory),
+          prefix: "codex:file:",
+          sourceName: name,
+          provider: .codex,
+          harness: "Codex",
+          providerFilterSignature: providerFilterSignature,
+          store: store,
+          cutoff: retentionCutoff,
+          now: now,
+          parser: Self.codexSamples
+        )
       }
     }
 
@@ -163,6 +152,162 @@ actor UsageTranscriptImporter {
           .samples(cutoff: indexedAfter, now: now, check: check)
       }
     }
+
+    try await importPiSources(
+      enabledProviders: enabledProviders,
+      providerFilterSignature: providerFilterSignature,
+      store: store,
+      cutoff: retentionCutoff,
+      now: now
+    )
+  }
+
+  /// Pi on this Mac: the Pi CLI's sessions, and Pi Durable (the default agent and bots)
+  /// in each place it has kept history. A reply found in more than one of them keeps
+  /// one identity (`PiDurableUsageRecords`), so it counts once.
+  private func importPiSources(
+    enabledProviders: Set<ProviderKind>,
+    providerFilterSignature: String,
+    store: AsyncUsageStore,
+    cutoff: Date,
+    now: Date
+  ) async throws {
+    let enabled: @Sendable (UsageSample) -> Bool = { enabledProviders.contains($0.provider) }
+    importOutcomes["pi:file:"] = try await importTranscriptFiles(
+      root: homeDirectory.appending(path: ".pi/agent/sessions", directoryHint: .isDirectory),
+      prefix: "pi:file:",
+      sourceName: "Pi session",
+      provider: .unknown,
+      harness: "Pi",
+      providerFilterSignature: providerFilterSignature,
+      store: store,
+      cutoff: cutoff,
+      now: now,
+      predicate: { $0.pathExtension == "jsonl" }
+    ) { url, check in
+      try Self.piSessionSamples(url, harness: "Pi", check: check).filter(enabled)
+    }
+
+    let agent = homeDirectory.appending(path: ".wovenmatter/default-agent", directoryHint: .isDirectory)
+    var failures = 0
+    // The default agent's sessions from before Pi Durable used Pi's session files.
+    let presessions = try await importTranscriptFiles(
+      root: agent.appending(path: "sessions", directoryHint: .isDirectory),
+      prefix: "pi-durable:file:",
+      sourceName: "Pi Durable session",
+      provider: .unknown,
+      harness: PiDurableUsageRecords.harness,
+      providerFilterSignature: providerFilterSignature,
+      store: store,
+      cutoff: cutoff,
+      now: now,
+      predicate: { $0.pathExtension == "jsonl" }
+    ) { url, check in
+      try Self.piSessionSamples(url, harness: "Pi", check: check).map(PiDurableUsageRecords.adopting).filter(enabled)
+    }
+    failures += presessions.failures
+    // Later sessions kept one commit log per session, which stays as a backup once
+    // the session moves into SQLite.
+    let commitLogs = try await importTranscriptFiles(
+      root: agent.appending(path: "durable", directoryHint: .isDirectory),
+      prefix: "pi-durable:file:",
+      sourceName: "Pi Durable session",
+      provider: .unknown,
+      harness: PiDurableUsageRecords.harness,
+      providerFilterSignature: providerFilterSignature,
+      store: store,
+      cutoff: cutoff,
+      now: now,
+      predicate: { $0.lastPathComponent == "main.jsonl" && $0.deletingLastPathComponent().lastPathComponent == "native" }
+    ) { url, check in
+      let session = url.deletingLastPathComponent().deletingLastPathComponent().lastPathComponent
+      return PiDurableUsageRecords.samples(
+        entries: try PiDurableUsageRecords.legacyEntries(in: url, check: check),
+        session: .init(id: session, sourceID: "pi-durable:file:" + url.path)
+      ).filter(enabled)
+    }
+    failures += commitLogs.failures
+    // SQLite stores: the library database (Woven's own runs), the default agent's own
+    // database, and the bots runtime's.
+    var databases = [agent.appending(path: "workspace.sqlite")]
+    if let libraryDatabaseURL {
+      databases.insert(libraryDatabaseURL, at: 0)
+      databases.append(libraryDatabaseURL.deletingLastPathComponent().appending(path: "Bots/data/bots.sqlite"))
+    }
+    for database in databases where FileManager.default.fileExists(atPath: database.path) {
+      // One source per store, so a deleted session or purged bot keeps its history here.
+      let stores: [PiDurableUsageDatabase.Store]
+      do {
+        stores = try await prepare { check in
+          try PiDurableUsageDatabase(databaseURL: database, sourceID: "").stores(check: check)
+        }
+      } catch is CancellationError { throw CancellationError() }
+      catch let error as DatabaseWorkerError { throw error }
+      catch { failures += 1; hadSourceFailures = true; continue }
+      for piStore in stores {
+        let sourceID = "pi-durable:database:" + database.path + "#" + piStore.prefix
+        let outcome = try await importDatabase(
+          databaseURL: database,
+          sourceID: sourceID,
+          sourceName: piStore.isBot ? "Bot history" : "Pi Durable history",
+          provider: .unknown,
+          harness: PiDurableUsageRecords.harness,
+          providerFilterSignature: providerFilterSignature,
+          store: store,
+          cutoff: max(batch?.modifiedAfter ?? cutoff, cutoff),
+          now: now
+        ) { indexedAfter, check in
+          try PiDurableUsageDatabase(databaseURL: database, sourceID: sourceID)
+            .samples(store: piStore, cutoff: indexedAfter, now: now, check: check).filter(enabled)
+        }
+        failures += outcome.failures
+      }
+    }
+    importOutcomes["pi-durable:"] = Outcome(failures: failures)
+  }
+
+  nonisolated private static func piSessionSamples(
+    _ url: URL, harness: String, check: @escaping @Sendable () throws -> Void
+  ) throws -> [UsageSample] {
+    var state = HarnessUsageScanState()
+    var records: [UsageSample] = []
+    let markers = ["\"usage\"", "\"model_change\"", "\"thinking_level_change\"", "\"session\""].map { Data($0.utf8) }
+    try Self.forEachLineData(in: url, check: check) { data, lineNumber in
+      guard markers.contains(where: { data.range(of: $0) != nil }) else { return }
+      if let parsed = LocalUsageTranscriptParser.parseHarness(
+        line: String(decoding: data, as: UTF8.self),
+        lineNumber: lineNumber,
+        harness: harness,
+        state: &state
+      ) {
+        records.append(parsed)
+      }
+    }
+    return records
+  }
+
+  nonisolated private static func codexSamples(
+    _ url: URL, check: @escaping @Sendable () throws -> Void
+  ) throws -> [UsageSample] {
+    var state = CodexUsageScanState()
+    var records: [UsageSample] = []
+    let usageMarker = Data("\"token_count\"".utf8)
+    let contextMarker = Data("\"turn_context\"".utf8)
+    let metadataMarker = Data("\"session_meta\"".utf8)
+    let markers = ["\"token_count\"", "\"turn_context\"", "\"session_meta\""]
+    try Self.forEachLineData(in: url, markers: markers, check: check) { data, lineNumber in
+      guard data.range(of: usageMarker) != nil
+              || data.range(of: contextMarker) != nil
+              || data.range(of: metadataMarker) != nil else { return }
+      if let sample = LocalUsageTranscriptParser.parseCodex(
+        line: String(decoding: data, as: UTF8.self),
+        lineNumber: lineNumber,
+        state: &state
+      ) {
+        records.append(sample)
+      }
+    }
+    return records
   }
 
   private struct PreparedSource: Sendable {
