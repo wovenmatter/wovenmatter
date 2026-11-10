@@ -15,11 +15,13 @@ enum AgentToolDestination: Equatable {
 }
 
 extension ApplicationModel {
-    /// Every execution workspace agents may target, this Mac's first.
+    /// Every execution workspace agents may target, this Mac's first. A copied
+    /// snapshot owner (`retainedHistory`) is history, never a destination, as
+    /// on the iPhone.
     func agentToolWorkspaces() async throws -> (own: CompanionExecutionWorkspace?, others: [CompanionExecutionWorkspace]) {
         guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
         let device = try await database.companionLibraryIdentity().hostDeviceID
-        let all = try await database.companionExecutionWorkspaces().filter { !$0.deleted && $0.kind != .ios }
+        let all = try await database.companionExecutionWorkspaces().filter { !$0.deleted && $0.kind != .ios && $0.retainedHistory != true }
         let own = all.first { $0.kind == .mac && $0.executionDeviceID == device }
         let others = all.filter { $0.id != own?.id }.sorted {
             ($0.kind == .mac ? 0 : 1, $0.name.lowercased()) < ($1.kind == .mac ? 0 : 1, $1.name.lowercased())
@@ -35,8 +37,9 @@ extension ApplicationModel {
         if let uuid = UUID(uuidString: id), remoteWorkspaces.configuration(id: uuid) != nil { return .configured(uuid) }
         if let member = others.first(where: { $0.id == id }) { return .member(member) }
         if let database = dashboardStore?.database,
-           try await database.companionExecutionWorkspaces().contains(where: { $0.id == id && $0.kind == .ios }) {
-            throw WorkspaceToolError.invalid("An iPhone or iPad runs only its own Quick Chats. Choose a Mac or Linux workspace.")
+           let named = try await database.companionExecutionWorkspaces().first(where: { $0.id == id && !$0.deleted }) {
+            if named.kind == .ios { throw WorkspaceToolError.invalid("An iPhone or iPad runs only its own Quick Chats. Choose a Mac or Linux workspace.") }
+            if named.retainedHistory == true { throw WorkspaceToolError.invalid("\(named.name) is copied history in this snapshot and runs no sessions. Choose a Mac or Linux workspace.") }
         }
         let valid = ([own].compactMap { $0 } + others).map { "\($0.id) (\($0.name))" }.joined(separator: ", ")
         throw WorkspaceToolError.invalid("Name the destination by workspace ID" + (valid.isEmpty ? "." : ": " + valid + "."))
@@ -60,7 +63,8 @@ extension ApplicationModel {
         func command(_ kind: CompanionCommand.Kind, _ suffix: String, text: String? = nil, action: CompanionWorkspaceAction? = nil) -> CompanionCommand {
             .init(commandID: Self.memberToolID(sourceID, requestID, suffix), deviceID: device, kind: kind, conversationID: conversationID,
                   providerID: kind == .createSession ? provider.id : nil, runtimeKind: kind == .createSession ? runtime.rawValue : nil,
-                  text: text, workspaceAction: action, libraryID: workspace.libraryID, workspaceID: workspace.id)
+                  text: text, workspaceAction: action, libraryID: workspace.libraryID, workspaceID: workspace.id,
+                  title: kind == .createSession ? title : nil)
         }
         _ = try await client.submit(command(.createSession, "create"), workspace: workspace)
         // Remembered so later status, send, stop and respond calls need only the ID.

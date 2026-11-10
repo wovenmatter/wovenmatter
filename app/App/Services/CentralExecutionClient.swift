@@ -66,7 +66,7 @@ final class CentralExecutionClient {
         backgroundRefreshInProgress = true
         defer { backgroundRefreshInProgress = false }
         guard let workspaces = try? await database.companionExecutionWorkspaces() else { return }
-        for workspace in workspaces where !workspace.deleted && workspace.endpoint != nil &&
+        for workspace in workspaces where !workspace.deleted && workspace.endpoint != nil && workspace.retainedHistory != true &&
             !workspace.capabilities.contains("history.central.v1") {
             guard !Task.isCancelled else { return }
             guard nextBackgroundRefresh[workspace.id].map({ $0 <= Date() }) ?? true else { continue }
@@ -130,6 +130,11 @@ final class CentralExecutionClient {
     private func transport(for workspace: CompanionExecutionWorkspace) async throws -> any ExecutionWorkspaceTransport {
         if let transport = transports[workspace.id], transportEndpoints[workspace.id] == workspace.endpoint { return transport }
         transports.removeValue(forKey: workspace.id)
+        // A copied owner (a Dev snapshot's, or a Mac unpaired from this one) is
+        // history only: it is never signed for, granted or provisioned.
+        guard workspace.retainedHistory != true else {
+            throw CompanionAPIError(code: "workspace_unavailable", message: "\(workspace.name) is retained history here. Its chats stay readable; start a new session to run work.")
+        }
         guard !workspace.deleted, workspace.kind != .ios || workspace.endpoint != nil else {
             throw CompanionAPIError(code: "workspace_unavailable", message: "Open Woven Matter on the device that owns this conversation to continue its on-device agent.")
         }

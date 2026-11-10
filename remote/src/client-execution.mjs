@@ -26,7 +26,7 @@ function inputMessages(command,runID) {
 
 // This store is owned by the workspace service (the existing host lock fences
 // competing owners). Neither a phone nor an SSH attachment owns these runs.
-export function createClientExecution({ directory, runtime, kind = 'linux', name = 'Workspace', publisherKey, publisherFetch, publisherIntervalMilliseconds, goalIntervalMilliseconds = 1000, mcpEndpointURL = 'http://127.0.0.1:7337/mcp', managedDataRoot = resolve(directory, '../databases'), externalRunningSessions=()=>0,workspaceBrowser, library = null, members = null, onTimersChanged = () => {} }) {
+export function createClientExecution({ directory, runtime, kind = 'linux', name = 'Workspace', publisherKey, publisherFetch, publisherIntervalMilliseconds, goalIntervalMilliseconds = 1000, mcpEndpointURL = 'http://127.0.0.1:7337/mcp', managedDataRoot = resolve(directory, '../databases'), externalRunningSessions=()=>0,workspaceBrowser, library = null, members = null, onTimersChanged = () => {}, workspaceRole = () => true }) {
   mkdirSync(directory, { recursive: true, mode: 0o700 })
   const path = resolve(directory, 'execution.sqlite')
   const db = new DatabaseSync(path)
@@ -282,7 +282,9 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       let native
       try {native = await runtime.create({ runtimeKind: selected, conversationID: command.conversationID, providerID: provider.id, workspaceID: identity.id, mcpConnection: mcp.sessionConnection(command.conversationID),nativeWorkingDirectory:initial.nativeWorkingDirectory,permission:initial.permission??defaults.permission })}
       catch(error){db.prepare('DELETE FROM conversations WHERE id=?').run(command.conversationID);mcp.revokeSession(command.conversationID);throw error}
-      const record = { native, pending: [], enabledTools, conversation: { id: command.conversationID, title:initial.title??'New conversation', preview: '', runtimeKind: selected,
+      // A title named at creation (a member's createSession, or the frozen intent) stays past the first message.
+      const named=[command.title,initial.title].find(value=>typeof value==='string'&&value.trim())?.trim().slice(0,256)
+      const record = { native, pending: [], enabledTools, ...(named?{titled:true}:{}), conversation: { id: command.conversationID, title:named??'New conversation', preview: '', runtimeKind: selected,
         providerID: provider.id, routeID: identity.id, workspaceID: identity.id, ...(command.folderID ? {folderID: command.folderID} : {}), updatedAt: date() },
         transcript: { conversationID: command.conversationID, messages: [], activities: [] } }
       return transaction(() => { publish(record); return receipt(command, 'completed') })
@@ -596,7 +598,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
   const memberDelegate=members?createMemberMacDelegate({transport:members.transport,workspaceID:()=>descriptor().id,hasMac:members.hasMac}):null
   // Bots have no conversation here: they reach this workspace through its own
   // execution API, as another member would (`local`).
-  const memberSessions=members?createMemberSessions({transport:members.transport,identity:descriptor,deviceID:members.deviceID,db,
+  const memberSessions=members?createMemberSessions({transport:members.transport,identity:descriptor,deviceID:members.deviceID,db,workspaceRole,
     local:{providers:()=>runtime.providers(),conversations:()=>service.conversations(),transcript:(id,before)=>service.transcript(id,before),
       interactions:()=>service.interactions(),capabilities:id=>service.capabilities(id),command:body=>command(body,{id:body.deviceID},{internal:true})},
     localProviders:async()=>(await runtime.providers()).filter(provider=>provider.available!==false)}):null

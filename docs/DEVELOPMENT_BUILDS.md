@@ -150,7 +150,10 @@ remain available to history but are retired from the active catalog; startup cre
 one local agent for each harness under the snapshot's new device identity. Existing task definitions
 remain visible but have a detached owner; create a new schedule in the snapshot
 to test execution. Active goals and session timers are paused. Old chats are history; create a new
-session to test the branch's runtime. The snapshot is its own library host with
+session to test the branch's runtime. Only the copied owners and their chats are refused:
+signed execution between members works for every workspace the snapshot knows live, such as
+another Dev Mac paired with it as a member and the Linux hosts it installs, which it adopts
+and enrolls as soon as they are added. The snapshot is its own library host with
 a fresh identity and no production connections or copied grants. Its separate
 Device Connections endpoint can be paired explicitly to test host/API changes;
 it never synchronizes back to production.

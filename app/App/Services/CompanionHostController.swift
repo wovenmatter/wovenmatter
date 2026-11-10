@@ -82,7 +82,19 @@ final class CompanionHostController {
     private var revokingDeviceIDs: Set<String> = []
     var mcpSettingsFingerprints: [String: String] = [:]
     private var registryRefreshInProgress = false
-    private var adoptedLinuxHosts: Set<String> = []
+    /// Linux hosts this Mac finished setting up this launch, and those whose
+    /// setup is retrying (`setUpLinuxHost`).
+    @ObservationIgnored private var readyLinuxHosts: Set<String> = []
+    @ObservationIgnored private var linuxHostSetups: [String: (id: UUID, task: Task<Void, Never>)] = [:]
+    /// Test seam: the first retry delay, doubled after each failure up to ten minutes.
+    @ObservationIgnored var linuxHostSetupRetry: Duration = .seconds(5)
+    /// Test seam: adoption and enrollment of a Linux host. A test process sets
+    /// up no host unless a fixture supplies these, so it never reaches SSH or Keychain.
+    struct LinuxHostSetupSteps {
+        var adopt: @MainActor (RemoteWorkspaceConfiguration) async throws -> Void
+        var enroll: @MainActor (String) async throws -> Void
+    }
+    @ObservationIgnored var linuxHostSetupSteps: LinuxHostSetupSteps?
     private var revocationRetryInProgress = false
     private static let pendingRevocationsKey = "companion.execution.pending-revocations"
     private static let pendingInstallerRotationsKey = "companion.execution.pending-installer-rotations"
@@ -332,6 +344,8 @@ final class CompanionHostController {
         let peerSync = peerSync
         Task { await peerSync.stopMembers() }
         server?.stop(); server = nil; executionAPI = nil; inferenceHost = nil; authorizeBots = nil
+        for setup in linuxHostSetups.values { setup.task.cancel() }
+        linuxHostSetups.removeAll()
         if let serve {
             serve.stop()
             if !stoppingExposures.contains(where: { $0 === serve }) { stoppingExposures.append(serve) }
@@ -567,17 +581,73 @@ final class CompanionHostController {
         }
         guard generation == expectedGeneration, !Task.isCancelled else { return }
         executionWorkspaces = try await database.companionExecutionWorkspaces()
-        for workspace in executionWorkspaces where workspace.kind == .linux && workspace.executionDeviceID != nil && !workspace.deleted {
-            if let configuration = model.remoteWorkspaces.workspaces.first(where: { $0.id.uuidString.lowercased() == workspace.id }) {
+        for configuration in model.remoteWorkspaces.workspaces {
+            // Adoption and enrollment do not wait for an earlier enrollment.
+            setUpLinuxHost(configuration)
+            if let workspace = executionWorkspaces.first(where: { $0.id == configuration.id.uuidString.lowercased() }),
+               workspace.kind == .linux, workspace.executionDeviceID != nil, !workspace.deleted {
                 try? await ensureExecutionPublisher(workspace: workspace, configuration: configuration)
-                // Once per launch: a host that does not serve members yet is retried next launch.
-                if !adoptedLinuxHosts.contains(workspace.id) {
-                    adoptedLinuxHosts.insert(workspace.id)
-                    do { try await ensureLinuxMember(configuration: configuration) }
-                    catch { NSLog("Linux member setup for %@ is pending: %@", configuration.name, error.localizedDescription) }
-                }
             }
         }
+    }
+
+    /// Sets up a Linux host this Mac manages: adopts it (this Mac becomes its
+    /// anchor and signs its member entry, `ensureLinuxMember`), then exposes and
+    /// enrolls its workspace (`provisionCentralExecutionWorkspace`, which sets
+    /// the registry row's endpoint and `executionDeviceID`). It starts as soon
+    /// as the host is installed or gains its workspace (`restart`), and on each
+    /// launch, and retries with backoff until both steps succeed. A bots-only
+    /// host is only adopted.
+    func setUpLinuxHost(_ configuration: RemoteWorkspaceConfiguration, restart: Bool = false) {
+        guard let model, !model.isBackendFrontend, linuxHostSetupSteps != nil || !PairedMacDeviceStorage.isTestProcess else { return }
+        let id = configuration.id.uuidString.lowercased()
+        if restart {
+            readyLinuxHosts.remove(id)
+            linuxHostSetups.removeValue(forKey: id)?.task.cancel()
+        }
+        guard !readyLinuxHosts.contains(id), linuxHostSetups[id] == nil else { return }
+        let token = UUID(), expectedGeneration = generation, workspaceID = configuration.id
+        let task = Task { [weak self] in
+            var delay = self?.linuxHostSetupRetry ?? .seconds(5)
+            while !Task.isCancelled,
+                  let done = await self?.attemptLinuxHostSetup(workspaceID, generation: expectedGeneration), !done {
+                try? await Task.sleep(for: delay)
+                delay = min(delay * 2, .seconds(600))
+            }
+            if self?.linuxHostSetups[id]?.id == token { self?.linuxHostSetups.removeValue(forKey: id) }
+        }
+        linuxHostSetups[id] = (token, task)
+    }
+
+    /// True once the host is set up, false to retry, nil when the host was
+    /// removed or this Mac's service restarted (which sets it up again).
+    private func attemptLinuxHostSetup(_ workspaceID: UUID, generation expected: UUID) async -> Bool? {
+        guard generation == expected, let configuration = model?.remoteWorkspaces.configuration(id: workspaceID) else { return nil }
+        do {
+            try await completeLinuxHostSetup(configuration)
+            guard generation == expected, !Task.isCancelled else { return nil }
+            readyLinuxHosts.insert(workspaceID.uuidString.lowercased())
+            return true
+        } catch {
+            NSLog("Setup of Linux host %@ is pending: %@", configuration.name, error.localizedDescription)
+            return false
+        }
+    }
+
+    /// One attempt at each step that has not succeeded; the first failure is rethrown.
+    private func completeLinuxHostSetup(_ configuration: RemoteWorkspaceConfiguration) async throws {
+        let steps = linuxHostSetupSteps ?? .init(adopt: { [weak self] in try await self?.ensureLinuxMember(configuration: $0) },
+                                                 enroll: { [weak self] in _ = try await self?.provisionCentralExecutionWorkspace(id: $0) })
+        var failure: (any Error)?
+        do { try await steps.adopt(configuration) } catch { failure = error }
+        if configuration.workspaceID != RemoteHostInstallMode.botsOnlyWorkspaceID {
+            let id = configuration.id.uuidString.lowercased()
+            let registered = try await model?.dashboardStore?.database.companionExecutionWorkspaces().first { $0.id == id && !$0.deleted }
+            if registered?.endpoint == nil || registered?.executionDeviceID == nil {
+                do { try await steps.enroll(id) } catch { failure = failure ?? error }
+            }
+        }
+        if let failure { throw failure }
     }
 
     func provisionExecutionWorkspace(id: String, device: CompanionPairedDevice) async throws -> CompanionExecutionCredential {
@@ -737,8 +807,14 @@ final class CompanionHostController {
         provisioningWorkspaceIDs.insert(id)
         defer { provisioningWorkspaceIDs.remove(id) }
         let identity = try await database.companionLibraryIdentity()
-        if let workspace = try await database.companionExecutionWorkspaces().first(where: { $0.id == id && !$0.deleted }), workspace.libraryID != identity.libraryID {
-            return try await peerSync.provision(workspace: workspace, deviceID: identity.hostDeviceID)
+        if let workspace = try await database.companionExecutionWorkspaces().first(where: { $0.id == id && !$0.deleted }) {
+            // Copied history is never enrolled, whatever grant path it names.
+            guard workspace.retainedHistory != true else {
+                throw CompanionAPIError(code: "unavailable", message: "\(workspace.name) is retained history here and runs no work.")
+            }
+            if workspace.libraryID != identity.libraryID {
+                return try await peerSync.provision(workspace: workspace, deviceID: identity.hostDeviceID)
+            }
         }
         try await completePendingRevocation(workspaceID: id, deviceID: identity.hostDeviceID)
         let registered = try await database.companionExecutionWorkspaces().first { $0.id == id && !$0.deleted }

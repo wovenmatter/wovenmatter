@@ -33,10 +33,11 @@ extension ApplicationModel {
         return try await library.fileURL(id: id)
     }
 
+    /// Signed execution between members. In a Dev snapshot it reaches only the
+    /// workspaces the snapshot itself knows live (its own, paired members',
+    /// Linux hosts it added): `CentralExecutionClient` refuses every copied
+    /// owner (`retainedHistory`), whose chats stay read-only history.
     func centralExecutionClient() throws -> CentralExecutionClient {
-        guard !DevelopmentLaunch.isSnapshot else {
-            throw WorkspaceToolError.invalid("Snapshot history is disconnected. Start a new session to test execution.")
-        }
         guard !isBackendFrontend, let dashboardStore else { throw ApplicationModelError.dashboardStoreUnavailable }
         if let federatedExecutionClient { return federatedExecutionClient }
         // The command journal lives beside the library it addresses, never in a
@@ -88,13 +89,16 @@ extension ApplicationModel {
 
     func performFederatedExecution(_ action: FederatedExecutionAction) async throws -> FederatedExecutionSnapshot {
         if let client = liveLibraryClient { return try await client.desktopExecution(action) }
-        if DevelopmentLaunch.isSnapshot { return try await savedDevelopmentExecution(action) }
         let client = try centralExecutionClient()
         let targetID: String
         switch action {
         case .refresh(let id), .earlier(let id, _): targetID = id
         case .stop(let id, _), .configure(let id, _): targetID = id
         case .respond(let interaction, _): targetID = interaction.conversationID
+        }
+        // A snapshot's copied conversation has no live owner here: read its saved history.
+        if readsCopiedHistoryOnly, try await client.workspace(conversationID: targetID).map({ $0.retainedHistory == true }) ?? true {
+            return try await savedDevelopmentExecution(action)
         }
         // Quick Chat runs only on the iPhone or iPad that owns it; other devices read its synced history.
         if try await client.workspace(conversationID: targetID)?.kind == .ios {
@@ -123,7 +127,7 @@ extension ApplicationModel {
         return snapshot
     }
 
-    /// Snapshot history has no connection or credential to its former owner.
+    /// A snapshot's copied history has no connection or credential to its former owner.
     func savedDevelopmentExecution(_ action: FederatedExecutionAction) async throws -> FederatedExecutionSnapshot {
         guard let database = dashboardStore?.database else { throw ApplicationModelError.dashboardStoreUnavailable }
         let id: String

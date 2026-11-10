@@ -65,7 +65,7 @@ async function session(f) {
 
 // Linux L and Linux M; the only Mac member is offline. M's server verifies L's
 // signature and serves its execution API, as the Node server does.
-async function hosts(t, prefix, { botsOnly = false } = {}) {
+async function hosts(t, prefix, { botsOnly = false, unenrolled = false } = {}) {
   const directory = scratch(t, prefix)
   const m = workspace(t), membersFile = join(directory, 'members.json'), workspacesFile = join(directory, 'workspaces.json')
   const lHost = await library(t, directory, { FAKE_LIBRARY_MEMBERS: membersFile, FAKE_LIBRARY_WORKSPACES: workspacesFile })
@@ -99,7 +99,7 @@ async function hosts(t, prefix, { botsOnly = false } = {}) {
   const mWorkspace = { id: m.enrollment.workspaceID, libraryID: m.enrollment.libraryID, ownerDeviceID: offlineMac.deviceID, executionDeviceID: mDeviceID, kind: 'linux', name: 'Workstation M',
     endpoint: `http://127.0.0.1:${port}/wovenmatter-execution/m/`, capabilities: [], journalDeviceIDs: [], revision: 1, deleted: false }
   writeFileSync(workspacesFile, JSON.stringify([mWorkspace]))
-  const l = workspace(t, { enrolled: !botsOnly, library: { client: lHost.client, available: lHost.available },
+  const l = workspace(t, { enrolled: !botsOnly && !unenrolled, workspaceRole: () => !botsOnly, library: { client: lHost.client, available: lHost.available },
     members: { transport: createMemberTransport({ library: lHost.client, allowEndpoint: loopback }), deviceID: () => lIdentity.deviceID, hasMac: () => false } })
   return { l, m, mWorkspace, lIdentity, seen }
 }
@@ -111,6 +111,8 @@ test('a Linux session sends to, reads, answers and stops a session it created on
   assert.equal(created.result.isError, false, JSON.stringify(created))
   const child = resultOf(created).session
   await until(() => m.service.interactions().length === 1, 'the remote turn asked its question')
+  // The destination names the session as it creates it; the first message keeps that title.
+  assert.equal(m.service.conversations().find(item => item.id === child.id).title, 'Index the logs')
 
   // Status needs only the session ID: the caller remembers where it runs.
   const status = resultOf(await caller.call('woven_sessions_status', { id: child.id }))
@@ -198,4 +200,18 @@ test('a bot on a bots-only host lists and launches harnesses on other workspaces
   const here = await call('woven_sessions_create', { title: 'Local job', text: 'Work here', purpose: 'p', requestID: randomUUID() })
   assert.equal(here.result.isError, true)
   assert.match(JSON.stringify(here), /runs only bots/)
+})
+
+test('a bot on a workspace host that is not enrolled yet is told to wait for its enrollment', async t => {
+  const { l, mWorkspace, lIdentity } = await hosts(t, 'wm-unenrolled-', { unenrolled: true })
+  const key = l.service.mcp.issueBotKey({ botID: randomUUID(), botName: 'Ops', deviceID: lIdentity.deviceID })
+  const scope = l.service.mcp.resolvePrincipal('Bearer ' + key.bearerToken)
+  const call = (name, input = {}) => l.service.mcp.handle(scope, { jsonrpc: '2.0', id: randomUUID(), method: 'tools/call', params: { name, arguments: input } })
+  const here = await call('woven_sessions_create', { title: 'Local job', text: 'Work here', purpose: 'p', requestID: randomUUID() })
+  assert.equal(here.result.isError, true)
+  assert.match(JSON.stringify(here), /not enrolled yet/)
+  assert.doesNotMatch(JSON.stringify(here), /runs only bots/)
+  // Other workspaces stay reachable meanwhile.
+  const remote = await call('woven_sessions_create', { workspace: mWorkspace.id, title: 'Remote job', text: 'Work remotely', purpose: 'p', requestID: randomUUID() })
+  assert.equal(remote.result.isError, false, JSON.stringify(remote))
 })
