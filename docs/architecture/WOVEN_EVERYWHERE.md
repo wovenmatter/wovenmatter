@@ -125,11 +125,14 @@ same commit.
     administration, inference, `/mcp/workspace`), `MemberAudience.serving`
     (shared Swift; Node `createMemberTransport().audienceFor`): the
     registry's `executionDeviceID` when that is an active member, or a Mac
-    workspace's (a Mac's execution device is its member ID); otherwise, for a
-    Linux workspace, the one active `linux` member whose advertised endpoints
-    share the workspace endpoint's `.ts.net` host, because a Linux host's Node
-    server names its own random execution device ID, not its member ID. Two
-    members claiming one host: nobody. A Mac accepts a Linux host's
+    workspace's (a Mac's execution device is its member ID). A Linux host
+    registers a new workspace with its member device ID as `executionDeviceID`
+    too (`clientExecution.provision`, given the library host's identity), so
+    the registry alone names its audience. Only for an older Linux record,
+    whose Node server named its own random execution device ID, the audience
+    falls back to the one active `linux` member whose advertised endpoints
+    share the workspace endpoint's `.ts.net` host. Two members claiming one
+    host: nobody. A Mac accepts a Linux host's
     `/mcp/workspace` call from that serving member as well as from the
     execution device. The installing Mac addresses its first adoption to the
     `memberIdentity.deviceID` it read over SSH. A phone learns the pairing

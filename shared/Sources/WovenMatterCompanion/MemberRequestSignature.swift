@@ -245,9 +245,10 @@ public enum MemberAudience {
 
   /// The workspace's execution device when that is an active Mac or Linux
   /// member, and for a Mac workspace (whose execution device is the Mac's
-  /// member ID) whenever that device was not removed. A Linux host's Node
-  /// server names its own execution device ID, which is not its member ID, so
-  /// otherwise it is the one active Linux member that advertises an endpoint
+  /// member ID) whenever that device was not removed. A Linux host registers
+  /// new workspaces with its member ID too; an older Linux record names its
+  /// Node server's own execution device ID, so otherwise it is the one active
+  /// Linux member that advertises an endpoint
   /// on the same tailnet host. Two members claiming that host: nobody.
   public static func serving(_ workspace: CompanionExecutionWorkspace, members: [Member]) -> String? {
     guard workspace.kind != .ios, !workspace.deleted else { return nil }
