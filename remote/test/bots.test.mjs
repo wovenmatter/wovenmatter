@@ -60,13 +60,12 @@ test('bot MCP keys rotate, attribute library calls to the bot, honor botMCP grou
   assert.equal((await mcp.handle(scope, { jsonrpc: '2.0', id: 'n', method: 'tools/call', params: { name: 'woven_notes_read', arguments: { noteID: randomUUID() } } })).error.code, -32602)
   const own = service.descriptor()
   mcp.configureLibrary({ grantID: randomUUID(), libraryID: own.libraryID, workspaceID: own.id, executionDeviceID: own.executionDeviceID, endpointURL: 'https://central.example.ts.net/wovenmatter/mcp/workspace', bearerToken: 't'.repeat(43) })
+  // A Mac's /mcp/workspace binds conversations, so the single-Mac grant never serves bots:
+  // their library tools come only from this host's own library copy.
+  const before = requests.length
   const called = await mcp.handle(scope, { jsonrpc: '2.0', id: 'n', method: 'tools/call', params: { name: 'woven_notes_read', arguments: { noteID: randomUUID() } } })
-  assert.ok(called.result, JSON.stringify(called))
-  const headers = requests.at(-1).options.headers
-  assert.equal(headers['x-woven-caller'], second.principal)
-  assert.equal(headers['x-woven-bot-id'], botID)
-  assert.equal(decodeURIComponent(headers['x-woven-bot-name']), 'Research bot')
-  assert.equal(headers['x-woven-conversation-id'], undefined)
+  assert.equal(called.error?.code, -32602, JSON.stringify(called))
+  assert.equal(requests.length, before, 'nothing is sent to the Mac for a bot')
 
   mcp.configureBots({ groups: ['calendar'] })
   assert.ok(!(await list()).includes('woven_notes_read'))

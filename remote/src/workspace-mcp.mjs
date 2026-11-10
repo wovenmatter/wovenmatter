@@ -182,9 +182,10 @@ export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localT
     if(groupFor(message.params?.name??'')==='history')await Promise.resolve().then(beforeLibraryCall).catch(()=>{})
     return localLibrary.call({conversationID:scope.conversationID,groups:activeGroups(scope),message,signal})
   }
-  // Any Mac member (signed) or the legacy grant can serve the rest; bots only
-  // through the grant, because a Mac's /mcp/workspace binds a conversation.
-  const delegated=scope=>!!libraryGrant()||!isBot(scope)&&!!memberDelegate?.available()
+  // Any Mac member (signed) or the legacy grant can serve the rest. Never for
+  // bots: a Mac's /mcp/workspace binds every call to a conversation, so it
+  // refuses a bot caller on either route.
+  const delegated=scope=>!isBot(scope)&&(!!libraryGrant()||!!memberDelegate?.available())
   function inventory(scope) {
     if(isBot(scope)) {
       // Conversation-bound local tools have no meaning for a bot; library
@@ -248,7 +249,8 @@ export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localT
     taskPolicies.set(scope.conversationID,value.enabledGroups)
   }
   async function libraryCall(scope,message,signal) {
-    if(!isBot(scope)&&memberDelegate?.available()) {
+    if(isBot(scope))throw fail(503,'This tool runs only on a Mac, which bots on this machine cannot reach. Notes, calendar, history, library, timers and sessions keep working.')
+    if(memberDelegate?.available()) {
       if(scope.taskProof)await prepareTaskCaller(scope,signal)
       else await Promise.resolve().then(beforeLibraryCall).catch(()=>{})
       try {return await memberDelegate.call(scope,message,{groups:activeGroups(scope),signal})}
@@ -260,10 +262,10 @@ export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localT
     const timer=setTimeout(()=>controller.abort(),115000);timer.unref()
     const headers={authorization:'Bearer '+grant.bearerToken,'content-type':'application/json',accept:'application/json, text/event-stream','mcp-protocol-version':'2025-06-18',
       'x-woven-protocol':'3','x-woven-workspace':grant.libraryID,'x-woven-enabled-groups':[...activeGroups(scope)].join(','),
-      ...(isBot(scope)?{'x-woven-caller':scope.principal,'x-woven-bot-id':scope.botID,'x-woven-bot-name':encodeURIComponent(scope.botName)}:{'x-woven-conversation-id':scope.conversationID})}
+      'x-woven-conversation-id':scope.conversationID}
     try {
       if(scope.taskProof)await prepareTaskCaller(scope,signal)
-      else if(!isBot(scope))await beforeLibraryCall()
+      else await beforeLibraryCall()
       const response=await fetchImpl(grant.endpointURL,{method:'POST',headers,redirect:'error',body:JSON.stringify(message),signal:signal?AbortSignal.any([controller.signal,signal]):controller.signal})
       if(!response.ok)throw fail(response.status,'The central library did not authorize this Woven MCP request. Refresh the workspace connection before retrying.')
       const text=await response.text()

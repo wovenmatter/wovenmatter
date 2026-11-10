@@ -177,7 +177,7 @@ test('Mac-only tools go to any reachable Mac member with a signed request', asyn
   assert.equal(calls.length, 1)
 })
 
-test('bots use this host’s library as app-wide callers and get no Mac-only tools without a grant', async t => {
+test('bots use this host’s library as app-wide callers and never get Mac-only tools', async t => {
   const directory = scratch(t, 'wm-bot-'), logPath = join(directory, 'requests.jsonl')
   const lHost = await library(t, directory, { FAKE_LIBRARY_LOG: logPath })
   const l = service(t, { library: { client: lHost.client, available: lHost.available },
@@ -194,7 +194,7 @@ test('bots use this host’s library as app-wide callers and get no Mac-only too
   assert.equal(request.headers['x-woven-bot-id'], botID)
   assert.equal(decodeURIComponent(request.headers['x-woven-bot-name']), 'Ops Bot')
   assert.equal(request.headers['x-woven-conversation-id'], undefined)
-  assert.equal((await call('woven_usage_read')).error?.code, -32602, 'a Mac’s /mcp/workspace binds conversations, so bots need the grant for it')
+  assert.equal((await call('woven_usage_read')).error?.code, -32602, 'a Mac’s /mcp/workspace binds conversations, so bots never get Mac-only tools')
   // A bot's timers are its schedule, kept and fired by this host's library.
   assert.equal((await call('woven_timers_list')).result?.isError, false)
 })

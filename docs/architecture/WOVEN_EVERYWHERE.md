@@ -633,9 +633,10 @@ synced, so another Mac refuses the task's calls until the session's own row
 reaches it. The Node delegate therefore sends a task's calls to the Mac that
 last prepared it first, and prepares any other Mac (the same idempotent
 request) before asking it, so prepare and call always land on the same Mac. Bots
-cannot use this route (it binds a conversation), so their Mac-only tools are
-unavailable unless the legacy grant exists; their timers are served and fired
-locally. The single-Mac grant
+never use this route or the legacy grant (a Mac's `/mcp/workspace` binds every
+call to a conversation), so a Linux bot has no Mac-only tools. Its notes,
+calendar, history, library and timers come from this host's library copy, and
+its session tools run on this server. The single-Mac grant
 (`/v1/execution/mcp-library`, `mcp_library_connection`) is no longer
 required for anything; it stays as a fallback when no Mac member answers and
 for hosts without a library host. Session history is published to the local
