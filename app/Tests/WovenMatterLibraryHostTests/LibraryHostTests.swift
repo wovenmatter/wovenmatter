@@ -213,6 +213,25 @@ struct LibraryHostTests {
     #expect(narrowed.objectValue?["error"] != nil)
   }
 
+  @Test func historyCursorsStayExactThroughJSON() async throws {
+    let fixture = try await HostFixture(); defer { fixture.remove() }
+    let caller = UUID().uuidString.lowercased()
+    // An empty newest-first page returns its start cursor; Int64.max came back as 9.223372036854776e+18.
+    let message: GatewayJSONValue = .object(["jsonrpc": .string("2.0"), "id": .number(1), "method": .string("tools/call"),
+      "params": .object(["name": .string("woven_history_conversations"), "arguments": .object(["search": .string("no such conversation")])])])
+    let reply = try send("POST", "/v1/mcp", unix: fixture.socket, headers: [
+      "Authorization": "Bearer " + fixture.token, "X-Woven-Conversation-ID": caller, "X-Woven-Enabled-Groups": "history",
+      "MCP-Protocol-Version": "2025-06-18"], body: try JSONEncoder().encode(message))
+    let text = String(decoding: reply.body, as: UTF8.self)
+    #expect(text.contains("\"nextCursor\":\(WorkspaceToolExecutor.maximumCursor)"), "\(text)")
+    #expect(!text.contains("e+"), "\(text)")
+    let notes = try fixture.call(caller, "woven_notes_list", ["search": .string("no such note")])
+    #expect(notes.value["nextCursor"]?.intValue == WorkspaceToolExecutor.maximumCursor)
+    // A cursor that JSON numbers cannot carry exactly is refused, not rounded.
+    let tooLarge = try fixture.call(caller, "woven_history_conversations", ["after": .number(Double(WorkspaceToolExecutor.maximumCursor) * 2)])
+    #expect(!tooLarge.success)
+  }
+
   /// Creates, reads and edits a note through the socket API and checks the
   /// stored document equals the direct NoteDocument edit, byte for byte.
   /// With WOVENMATTER_NOTE_PARITY_OUT set, the inputs and stored bytes are

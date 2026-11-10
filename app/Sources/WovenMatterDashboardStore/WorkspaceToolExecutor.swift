@@ -45,6 +45,11 @@ public struct WorkspaceToolHandlers: Sendable {
 /// this code, so notes, history, calendar, library and artifact tools behave
 /// identically on every machine.
 public struct WorkspaceToolExecutor: Sendable {
+  /// The largest `after` cursor a tool takes or returns, and the newest-first
+  /// start. Results carry numbers as Double, and JavaScript callers parse them
+  /// as one, so a larger cursor (such as Int64.max) would come back rounded,
+  /// as 9.223372036854776e+18. Row sequences never come near it.
+  public static let maximumCursor = 9_007_199_254_740_991
   public let database: WorkspaceDatabase
   public init(database: WorkspaceDatabase) { self.database = database }
 
@@ -112,7 +117,7 @@ public struct WorkspaceToolExecutor: Sendable {
           result = .init(result: page)
         } else if command.action == "folders" {
           result = .init(result: try await database.listAgentFolders(callerID: callerID,
-            after: Int64(command.integer("after", default: 0, range: 0...Int.max)),
+            after: Int64(command.integer("after", default: 0, range: 0...WorkspaceToolExecutor.maximumCursor)),
             limit: command.integer("limit", default: 100, range: 1...200)))
         } else { result = try await Self.require(handlers.session, "Session management is unavailable on this host.")(callerID, command, request) }
       case .goals: result = try await goal(command, callerID: callerID, requestID: request.requestID, targetID: request.targetSessionID)
@@ -236,8 +241,8 @@ public struct WorkspaceToolExecutor: Sendable {
     query.until = command.options["until"]
     query.sort = command.options["sort"] ?? (command.action == "conversations" ||
       (command.group == .sessions && command.action == "list") ? "newest" : "oldest")
-    let initialCursor = query.sort == "newest" ? Int.max : 0
-    query.after = Int64(try command.integer("after", default: initialCursor, range: 0...Int.max))
+    let initialCursor = query.sort == "newest" ? WorkspaceToolExecutor.maximumCursor : 0
+    query.after = Int64(try command.integer("after", default: initialCursor, range: 0...WorkspaceToolExecutor.maximumCursor))
     query.limit = try command.integer("limit", default: 50, range: 1...200)
     query.offset = try command.integer("offset", default: 0, range: 0...(Int.max - 1))
     query.characters = try command.integer("characters", default: 65_536, range: 1...65_536)
@@ -249,13 +254,13 @@ public struct WorkspaceToolExecutor: Sendable {
     switch command.action {
     case "list":
       let newest = (command.options["sort"] ?? "newest") == "newest"
-      let initialCursor = newest ? Int.max : 0
+      let initialCursor = newest ? WorkspaceToolExecutor.maximumCursor : 0
       return .init(result: try await database.listAgentNotes(callerID: callerID, search: command.options["search"], folderID: command.options["folder"],
-        after: Int64(try command.integer("after", default: initialCursor, range: 0...Int.max)),
+        after: Int64(try command.integer("after", default: initialCursor, range: 0...WorkspaceToolExecutor.maximumCursor)),
         limit: try command.integer("limit", default: 50, range: 1...200), newestFirst: newest))
     case "folders":
       return .init(result: try await database.listAgentFolders(callerID: callerID, requiredTool: .notes,
-        after: Int64(command.integer("after", default: 0, range: 0...Int.max)),
+        after: Int64(command.integer("after", default: 0, range: 0...WorkspaceToolExecutor.maximumCursor)),
         limit: command.integer("limit", default: 100, range: 1...200)))
     case "create":
       guard let kind = NoteArtifactKind(rawValue: command.options["kind"] ?? "note") else { throw WorkspaceToolError.invalid("Choose note, spreadsheet or html.") }
@@ -363,7 +368,7 @@ public struct WorkspaceToolExecutor: Sendable {
     }
     if command.action == "list" {
       return .init(result: try await database.querySessionTimers(callerID: callerID, sessionID: target,
-        after: Int64(command.integer("after", default: 0, range: 0...Int.max)),
+        after: Int64(command.integer("after", default: 0, range: 0...WorkspaceToolExecutor.maximumCursor)),
         limit: command.integer("limit", default: 100, range: 1...200)))
     }
     if command.action == "create" || command.action == "update" {
@@ -432,7 +437,7 @@ public struct WorkspaceToolExecutor: Sendable {
       }
       return .init(result: try await database.listAgentCalendar(callerID: callerID,
         since: since, until: until,
-        after: Int64(command.integer("after", default: 0, range: 0...Int.max)),
+        after: Int64(command.integer("after", default: 0, range: 0...WorkspaceToolExecutor.maximumCursor)),
         limit: command.integer("limit", default: 100, range: 1...200)))
     }
     if command.action == "read" || command.action == "occurrences" {
@@ -440,7 +445,7 @@ public struct WorkspaceToolExecutor: Sendable {
       if command.action == "read" {
         return .init(result: .object(["event": try WovenMatterToolResponse.value(event).result ?? .null,
           "runs": try await database.queryCalendarRuns(eventID: event.id,
-            after: command.integer("after", default: 0, range: 0...Int.max),
+            after: command.integer("after", default: 0, range: 0...WorkspaceToolExecutor.maximumCursor),
             limit: command.integer("limit", default: 100, range: 1...200))]))
       }
       let since = try Self.date(command.required("since")), until = try Self.date(command.required("until"))
@@ -448,7 +453,7 @@ public struct WorkspaceToolExecutor: Sendable {
         throw WorkspaceToolError.invalid("Choose an occurrence window of at most one year.")
       }
       let values = WorkspaceCalendarSchedule.occurrences(event, in: .init(start: since, end: until))
-      let offset = try command.integer("after", default: 0, range: 0...Int.max)
+      let offset = try command.integer("after", default: 0, range: 0...WorkspaceToolExecutor.maximumCursor)
       let limit = try command.integer("limit", default: 100, range: 1...200)
       let page = Array(values.dropFirst(offset).prefix(limit))
       let next = offset + page.count

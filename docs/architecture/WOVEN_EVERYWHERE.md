@@ -515,6 +515,10 @@ one per connection, with `Host`; POST bodies are `application/json`.
   `structuredContent` is the `WovenMatterToolResponse`
   (`{success,result,error,code,requestID}`); errors use the usual codes
   (`tool_disabled`, `revision_required`, `revision_conflict`, `not_found`, …).
+  Integer `after` cursors (and `nextCursor`) stay within 0…2^53−1
+  (`WorkspaceToolExecutor.maximumCursor`, also the newest-first start), since
+  tool results carry numbers as Double and JavaScript callers parse them as
+  one; a larger `after` is refused rather than rounded.
 
 - Bot callers on `POST /v1/mcp`: instead of `X-Woven-Conversation-ID`, send
   `X-Woven-Caller: woven:bot:<machine-device-id>:<bot-id>` (use this host's

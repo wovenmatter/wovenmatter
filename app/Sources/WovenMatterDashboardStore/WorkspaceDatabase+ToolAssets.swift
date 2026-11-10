@@ -9,7 +9,7 @@ import WovenMatterClient
 
 extension WorkspaceDatabaseConnection {
   public func listAgentNotes(callerID: String, search: String? = nil, folderID: String? = nil,
-                              after: Int64 = Int64.max, limit: Int = 50,
+                              after: Int64 = Int64(WorkspaceToolExecutor.maximumCursor), limit: Int = 50,
                               newestFirst: Bool = true) throws -> GatewayJSONValue {
     try withLock {
       try requireToolUnlocked(.notes, sessionID: callerID)
@@ -76,7 +76,7 @@ extension WorkspaceDatabaseConnection {
 
 extension WorkspaceDatabase {
   public func listAgentNotes(callerID: String, search: String? = nil, folderID: String? = nil,
-                              after: Int64 = Int64.max, limit: Int = 50,
+                              after: Int64 = Int64(WorkspaceToolExecutor.maximumCursor), limit: Int = 50,
                               newestFirst: Bool = true) async throws -> GatewayJSONValue {
     try await read { try $0.listAgentNotes(callerID: callerID, search: search, folderID: folderID, after: after, limit: limit, newestFirst: newestFirst) }
   }
