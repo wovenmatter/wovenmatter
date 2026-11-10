@@ -268,7 +268,13 @@ private enum BackendSocket {
         var offset = 0
         while offset < frame.count {
             try ready(fd, events: Int16(POLLOUT), deadline: deadline)
+            // Linux has no SO_NOSIGPIPE: a reply to a caller that already left must
+            // fail with EPIPE instead of killing the process with SIGPIPE.
+            #if canImport(Darwin)
             let amount = frame.withUnsafeBytes { Darwin.write(fd, $0.baseAddress!.advanced(by: offset), frame.count - offset) }
+            #else
+            let amount = frame.withUnsafeBytes { send(fd, $0.baseAddress!.advanced(by: offset), frame.count - offset, Int32(MSG_NOSIGNAL)) }
+            #endif
             if amount < 0 && (errno == EINTR || errno == EAGAIN) { continue }
             guard amount > 0 else { throw BackendRPCError.unavailable }
             offset += amount

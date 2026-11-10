@@ -634,8 +634,11 @@ final class CompanionUITests: XCTestCase {
     let app = launch(tab: "Chats", scenario: "member-macs-send")
     let composer = app.descendants(matching: .any)["chat-composer"].firstMatch
     XCTAssertTrue(composer.waitForExistence(timeout: 5))
-    composer.tap()
-    composer.typeText("What should we work on next?")
+    // Tap the editor itself: on iPad the identifier first resolves to the placeholder text.
+    let editor = composer.textViews.firstMatch.exists ? composer.textViews.firstMatch : app.textViews.firstMatch
+    XCTAssertTrue(editor.waitForExistence(timeout: 5))
+    editor.tap()
+    editor.typeText("What should we work on next?")
     app.buttons["Send message"].tap()
     let message = app.staticTexts["What should we work on next?"]
     XCTAssertTrue(message.waitForExistence(timeout: 1), "The message appears before the workspace answers")

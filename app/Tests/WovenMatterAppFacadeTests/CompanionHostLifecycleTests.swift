@@ -137,7 +137,8 @@ struct CompanionHostLifecycleTests {
     @Test func clickPairingHTTPRequiresLocalApprovalAndReturnsAccurateMetadata() async throws {
         let fixture = try await HostFixture(); defer { fixture.remove() }
         await fixture.host.startForCentralDatabase()
-        try await waitUntil { fixture.host.endpoint != nil }
+        // The address is published before the workspace API is ready; wait for both.
+        try await waitUntil { fixture.host.endpoint != nil && !fixture.host.isStarting && fixture.host.status == "Available to your paired devices" }
         let target = try #require(fixture.children.last?.target)
         let base = try #require(URL(string: target))
         func post(_ path: String, _ body: Data) async throws -> (Data, Int) {
