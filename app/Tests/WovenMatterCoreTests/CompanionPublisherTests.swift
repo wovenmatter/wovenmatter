@@ -243,6 +243,28 @@ struct CompanionPublisherTests {
     try await expectError("invalid_activity_details")
   }
 
+  /// A Linux host exposes its workspace at `/wovenmatter-execution/<id>` (remote-host.sh
+  /// expose); the registry must accept exactly that shape for Linux rows, and only for them.
+  @Test func aLinuxWorkspaceRegistersItsExecutionRouteAndAMacCannot() async throws {
+    let persistence = try PersistenceFixture(); defer { persistence.remove() }
+    let database = try await persistence.openDatabase()
+    let identity = try await database.companionLibraryIdentity()
+    let route = URL(string: "https://workstation-home-1.tail906b96.ts.net:31725/wovenmatter-execution/workstation-dev")!
+    let member = UUID().uuidString.lowercased()
+    let linux = try await database.registerCompanionExecutionWorkspace(.init(workspace: .init(id: UUID().uuidString.lowercased(), libraryID: identity.libraryID,
+      ownerDeviceID: identity.hostDeviceID, kind: .linux, name: "Workstation (Dev)", endpoint: route, executionDeviceID: member)), deviceID: identity.hostDeviceID)
+    #expect(linux.endpoint == route && linux.executionDeviceID == member)
+    await #expect(throws: (any Error).self) {
+      _ = try await database.registerCompanionExecutionWorkspace(.init(workspace: .init(id: UUID().uuidString.lowercased(), libraryID: identity.libraryID,
+        ownerDeviceID: identity.hostDeviceID, kind: .mac, name: "Mac", endpoint: route)), deviceID: identity.hostDeviceID)
+    }
+    for bad in ["https://host.ts.net/wovenmatter-execution/", "https://host.ts.net/wovenmatter-execution/a/b", "https://host.ts.net/wovenmatter-execution/..",
+                "http://host.ts.net/wovenmatter-execution/a", "https://host.example.com/wovenmatter-execution/a", "https://host.ts.net/wovenmatter-execution/a?x=1"] {
+      #expect(!CompanionPairingPayload.isValidExecutionEndpoint(URL(string: bad)!, linux: true), "\(bad)")
+    }
+    #expect(CompanionPairingPayload.isValidExecutionEndpoint(URL(string: "https://mac.tail.ts.net:8443/wovenmatter")!, linux: false))
+  }
+
   private struct Fixture {
     let persistence: PersistenceFixture, database: WorkspaceDatabase, identity: CompanionLibraryIdentity, workspace: CompanionExecutionWorkspace, grant: CompanionWorkspacePublisherGrant
     init() async throws {

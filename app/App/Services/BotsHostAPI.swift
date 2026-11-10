@@ -140,7 +140,13 @@ struct BotsHostAPI: Sendable {
     /// The same credentials this Mac's own Pi Durable receives: a borrowed, access-only
     /// snapshot from the coordinator that owns renewal. Refresh tokens never leave the Mac.
     @MainActor static func storedCredential(provider: String) async throws -> CredentialReply {
-        if provider == ProviderConnectionID.claudeSubscription.rawValue { return .init(credential: nativeClaude()) }
+        if provider == ProviderConnectionID.claudeSubscription.rawValue {
+            // The selected subscription account's profile, as the default agent uses it.
+            let id = ProviderConnectionID.claudeSubscription.rawValue
+            let selected = (try? ProviderConnectionAccounts.list(provider: id))?.first { $0.isSelected }
+            let profile = selected.flatMap { try? ProviderConnectionAccounts.nativeProfile($0.id, provider: id) }
+            return .init(credential: nativeClaude(profile: profile))
+        }
         let payload = try await ProviderAccountCoordinator.shared.prepare("global")
         if provider == "web-search" {
             let selected = payload.config.searchProvider
@@ -159,8 +165,14 @@ struct BotsHostAPI: Sendable {
 
     /// Where the bundled default agent keeps the native Claude runtime's state
     /// (default-agent/src/claude-runtime.mjs). Absent until the user signs in there.
-    static func nativeClaude(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> Credential? {
-        let root = home.appending(path: ".wovenmatter/default-agent")
+    static func nativeClaude(home: URL = FileManager.default.homeDirectoryForCurrentUser, profile: String? = nil) -> Credential? {
+        var root = home.appending(path: ".wovenmatter/default-agent")
+        // Per-account profiles live in claude-accounts/<profile> (claude-runtime.mjs
+        // profileDirectory); "legacy" and no profile use the original directories.
+        if let profile, profile != "legacy" {
+            guard (1...64).contains(profile.count), profile.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") }) else { return nil }
+            root = root.appending(path: "claude-accounts").appending(path: profile)
+        }
         let config = root.appending(path: "claude-runtime"), storage = root.appending(path: "claude-keychain")
         var directory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: config.path, isDirectory: &directory), directory.boolValue else { return nil }

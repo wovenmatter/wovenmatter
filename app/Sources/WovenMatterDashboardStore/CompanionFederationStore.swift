@@ -62,7 +62,7 @@ extension WorkspaceDatabaseConnection {
             value.macAccess.map({ access in value.kind == .mac && access.items.count <= 32
               && access.items.keys.allSatisfy { $0.utf8.count <= 64 } && access.appName.utf8.count <= 120 }) ?? true,
             value.folderOwnerID.map({ value.kind == .mac && CompanionExecutionWorkspace.isValidFolderOwnerID($0) }) ?? true,
-            value.endpoint.map({ CompanionPairingPayload.isValidEndpoint($0) }) ?? true else {
+            value.endpoint.map({ CompanionPairingPayload.isValidExecutionEndpoint($0, linux: value.kind == .linux) }) ?? true else {
         throw federationError("invalid_workspace", "Only a workspace owner can register its identity and grants with a private Tailscale endpoint.")
       }
       value.journalDeviceIDs = Array(Set(value.journalDeviceIDs)).sorted()
