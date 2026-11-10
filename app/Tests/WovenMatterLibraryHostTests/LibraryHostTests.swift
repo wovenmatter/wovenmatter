@@ -465,8 +465,13 @@ struct LibraryHostTests {
       if !arrived { try await Task.sleep(for: .milliseconds(50)) }
     }
     #expect(arrived)
-    let status = await two.host.sync.status()
-    #expect(status.peers.first { $0.deviceID == one.host.identity.deviceID }?.state == .online)
+    // An exchange that started before both hosts were adopted may still be settling.
+    var online = false
+    for _ in 0..<200 where !online {
+      online = await two.host.sync.status().peers.first { $0.deviceID == one.host.identity.deviceID }?.state == .online
+      if !online { try await Task.sleep(for: .milliseconds(50)) }
+    }
+    #expect(online)
   }
 
   /// The Node server sends a bot's library calls as an app-wide caller.
