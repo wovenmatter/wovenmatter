@@ -47,6 +47,15 @@ struct MemberReachTests {
         try await directory.add(deviceID: linux.deviceID, kind: .linux, name: "Linux", publicKey: linux.publicKey, endpoints: [])
         let fromLinux = try SignedExecutionWorkspaceTransport(workspace: descriptor, signer: linux.signer, send: send)
         #expect(try await fromLinux.providers().count == 1)
+
+        // A request addressed to another member (as one captured on its way to
+        // Mac C would be) is refused here, although its nonce is new to Mac B.
+        var elsewhere = descriptor; elsewhere.executionDeviceID = UUID().uuidString.lowercased()
+        let misaddressed = try SignedExecutionWorkspaceTransport(workspace: elsewhere, signer: macA.signer, send: send)
+        await #expect(throws: MobileConnectionError.self) { _ = try await misaddressed.providers() }
+        // Without the destination's member device ID nothing is signed at all.
+        var unknown = descriptor; unknown.executionDeviceID = nil
+        #expect(throws: MemberRequestError.audienceUnknown) { _ = try SignedExecutionWorkspaceTransport(workspace: unknown, signer: macA.signer, send: send) }
     }
 
     @Test func agentToolsCreateSessionsOnLinuxHostsByIDAndRejectLocal() async throws {
@@ -122,7 +131,8 @@ struct MemberReachTests {
 
         // A stranger's signature is refused.
         let stranger = MemberIdentity(deviceID: UUID().uuidString.lowercased(), kind: .mac, key: .init())
-        let refused = try RemoteHostAdministrationClient(endpoint: workspace.endpoint!, signer: stranger.signer, send: linux.send)
+        let refused = try RemoteHostAdministrationClient(endpoint: workspace.endpoint!, signer: stranger.signer,
+                                                         audience: workspace.executionDeviceID!, send: linux.send)
         await #expect(throws: MemberSignedHTTPError.self) { _ = try await refused.status() }
     }
 
@@ -145,7 +155,7 @@ struct MemberReachTests {
             commands: fixture.model.companionCommands, isActive: { true }, members: mac)
         let message = Data(#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#.utf8)
         func call(_ signer: MemberIdentity) async throws -> (Int, String?) {
-            var headers = try signer.signer.headers(method: "POST", target: "/wovenmatter/mcp/workspace", body: message)
+            var headers = try signer.signer.headers(method: "POST", target: "/wovenmatter/mcp/workspace", body: message, audience: device)
             headers["X-Woven-Protocol"] = String(CompanionProtocol.version)
             headers["X-Woven-Workspace-ID"] = workspace.id
             headers["X-Woven-Conversation-ID"] = UUID().uuidString.lowercased()
@@ -218,10 +228,12 @@ private final class ReachLinuxHost: @unchecked Sendable {
 
     init(prefix: String, workspaceID: String, libraryID: String, members: [String: Data]) {
         self.prefix = prefix
+        let host = UUID().uuidString.lowercased()
         descriptor = .init(id: workspaceID, libraryID: libraryID, ownerDeviceID: UUID().uuidString.lowercased(), kind: .linux, name: "Linux L",
             endpoint: URL(string: "https://linux-l.fixture.ts.net" + prefix)!, capabilities: ["execution", "historyReplay"],
-            executionDeviceID: UUID().uuidString.lowercased())
-        verifier = MemberRequestVerifier(lookup: { id in members[id].map { MemberKey(deviceID: id, kind: .mac, name: "Member", publicKey: $0) } })
+            executionDeviceID: host)
+        // Like the Node server, it accepts only requests addressed to its own member device ID.
+        verifier = MemberRequestVerifier(audience: host, lookup: { id in members[id].map { MemberKey(deviceID: id, kind: .mac, name: "Member", publicKey: $0) } })
     }
 
     var send: MemberSignedHTTPClient.Send {

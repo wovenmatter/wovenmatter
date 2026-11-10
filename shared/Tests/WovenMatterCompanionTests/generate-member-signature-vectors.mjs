@@ -9,6 +9,9 @@ const priv = crypto.createPrivateKey({
 const pub = crypto.createPublicKey(priv).export({ format: 'der', type: 'spki' }).subarray(-32);
 const b64u = (bytes) => Buffer.from(bytes).toString('base64url');
 const deviceID = '6f1c2b3a-4d5e-4f60-8a7b-9c0d1e2f3a4b';
+// The destination member: every verifier refuses a request addressed to another device.
+const audience = 'a3b4c5d6-e7f8-4a09-9b1c-2d3e4f5a6b7c';
+const otherAudience = 'c0ffee00-1234-4abc-8def-0123456789ab';
 
 const cases = [
   { name: 'post-with-body', method: 'POST', target: '/v1/peers/sync', time: 1762646400000,
@@ -22,7 +25,7 @@ const cases = [
 
 const message = (c) => {
   const bodySHA256 = crypto.createHash('sha256').update(Buffer.from(c.body, 'utf8')).digest('hex');
-  return { bodySHA256, text: ['woven-member-v1', c.method, c.target, String(c.time), c.nonce, bodySHA256].join('\n') };
+  return { bodySHA256, text: ['woven-member-v2', c.audience ?? audience, c.method, c.target, String(c.time), c.nonce, bodySHA256].join('\n') };
 };
 
 const signed = cases.map((c) => {
@@ -32,7 +35,7 @@ const signed = cases.map((c) => {
   return {
     ...c, bodyBase64: Buffer.from(c.body, 'utf8').toString('base64'), bodySHA256, message: text, signature: b64u(signature),
     headers: {
-      'X-Woven-Member-Device': deviceID, 'X-Woven-Member-Time': String(c.time),
+      'X-Woven-Member-Device': deviceID, 'X-Woven-Member-Audience': audience, 'X-Woven-Member-Time': String(c.time),
       'X-Woven-Member-Nonce': c.nonce, 'X-Woven-Member-Signature': b64u(signature),
     },
   };
@@ -46,6 +49,8 @@ const rejects = [
   { name: 'time-changed', case: 'post-with-body', time: 1762646400001 },
   { name: 'nonce-changed', case: 'post-with-body', nonce: 'AAECAwQFBgcICQoLDA0OEA' },
   { name: 'body-changed', case: 'post-with-body', body: '{"deviceID":"6f1c2b3a-4d5e-4f60-8a7b-9c0d1e2f3a4b","after":1}' },
+  // The same signature presented to another member under its own audience.
+  { name: 'audience-changed', case: 'post-with-body', audience: otherAudience },
 ];
 for (const reject of rejects) {
   const original = signed.find((c) => c.name === reject.case);
@@ -59,11 +64,14 @@ process.stdout.write(JSON.stringify({
   description: 'Signed member request vectors (docs/architecture/WOVEN_EVERYWHERE.md, "Membership and device keys"). '
     + 'Signatures are deterministic RFC 8032 Ed25519 over the UTF-8 message; Node regenerates them byte for byte. '
     + 'CryptoKit signatures are randomized, so Swift checks the message bytes and verification. '
-    + 'Each reject reuses the named case\'s signature with one field changed and must be refused.',
+    + 'Each reject reuses the named case\'s signature with one field changed and must be refused. '
+    + 'The message is woven-member-v2, audience, method, canonical target, time, nonce and body SHA-256, joined by newlines; '
+    + 'a verifier whose own device ID is not the audience refuses the request before checking the signature.',
   privateKeySeedHex: seed.toString('hex'),
   publicKeyBase64: Buffer.from(pub).toString('base64'),
   publicKeyHex: Buffer.from(pub).toString('hex'),
   deviceID,
+  audience,
   windowMilliseconds: 300000,
   cases: signed,
   rejects,

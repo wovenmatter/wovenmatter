@@ -16,8 +16,10 @@ final class SignedExecutionWorkspaceTransport: ExecutionWorkspaceTransport, @unc
     init(workspace: CompanionExecutionWorkspace, signer: MemberRequestSigner,
          send: MemberSignedHTTPClient.Send? = nil) throws {
         guard let endpoint = workspace.endpoint else { throw MobileConnectionError.insecureEndpoint }
+        // The registry's execution device is the member that serves this endpoint.
+        guard let audience = workspace.executionDeviceID else { throw MemberRequestError.audienceUnknown }
         self.workspace = workspace
-        client = try MemberSignedHTTPClient(endpoint: endpoint, signer: signer, headers: [
+        client = try MemberSignedHTTPClient(endpoint: endpoint, signer: signer, audience: audience, headers: [
             "X-Woven-Protocol": String(CompanionProtocol.version), "X-Woven-Library": workspace.libraryID,
             "X-Woven-Workspace": workspace.id, "X-Woven-Device": signer.deviceID
         ], send: send)

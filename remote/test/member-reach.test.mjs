@@ -79,7 +79,8 @@ test('a Linux host creates a session on another Linux host with every Mac offlin
   const offlineMac = { deviceID: randomUUID(), kind: 'mac', name: 'Studio Mac', publicKey: Buffer.alloc(32, 1).toString('base64'), endpoints: ['https://studio.invalid.ts.net:8443/wovenmatter'], revoked: false }
   writeFileSync(membersFile, JSON.stringify({ revision: '1', members: [{ ...lIdentity, endpoints: [], revoked: false }, offlineMac] }))
   // M's server: signed members get execution scopes; the Serve prefix is restored for the check.
-  const verifier = createMemberVerifier({ loadMembers: async () => ({ revision: '1', members: [{ ...lIdentity, revoked: false }] }) })
+  const mDeviceID = randomUUID()
+  const verifier = createMemberVerifier({ loadMembers: async () => ({ revision: '1', members: [{ ...lIdentity, revoked: false }] }), audience: mDeviceID })
   t.after(() => verifier.close())
   const seen = []
   const port = await listen(t, async (request, response) => {
@@ -91,7 +92,7 @@ test('a Linux host creates a session on another Linux host with every Mac offlin
     if (path === '/v1/execution/commands' && request.method === 'POST') return send(response, 200, await m.service.command(JSON.parse(raw), device))
     send(response, 404, { error: 'not_found' })
   })
-  const mWorkspace = { id: m.enrollment.workspaceID, libraryID: m.enrollment.libraryID, ownerDeviceID: offlineMac.deviceID, kind: 'linux', name: 'Workstation M',
+  const mWorkspace = { id: m.enrollment.workspaceID, libraryID: m.enrollment.libraryID, ownerDeviceID: offlineMac.deviceID, executionDeviceID: mDeviceID, kind: 'linux', name: 'Workstation M',
     endpoint: `http://127.0.0.1:${port}/wovenmatter-execution/m/`, capabilities: [], journalDeviceIDs: [], revision: 1, deleted: false }
   writeFileSync(workspacesFile, JSON.stringify([mWorkspace, { ...mWorkspace, id: randomUUID(), kind: 'ios', name: 'iPhone', endpoint: null }]))
   const l = service(t, { library: { client: lHost.client, available: lHost.available },
@@ -135,12 +136,14 @@ test('Mac-only tools go to any reachable Mac member with a signed request', asyn
   const membersFile = join(directory, 'members.json'), syncFile = join(directory, 'sync.json')
   const lHost = await library(t, directory, { FAKE_LIBRARY_MEMBERS: membersFile, FAKE_LIBRARY_SYNC: syncFile })
   const lIdentity = await lHost.client.identity()
-  const verifier = createMemberVerifier({ loadMembers: async () => ({ revision: '1', members: [{ ...lIdentity, revoked: false }] }) })
-  t.after(() => verifier.close())
+  // Both Macs share this test server's verifier, so it accepts either audience.
+  const verifiers = new Map()
+  const verifierFor = audience => verifiers.get(audience) ?? verifiers.set(audience, createMemberVerifier({ loadMembers: async () => ({ revision: '1', members: [{ ...lIdentity, revoked: false }] }), audience })).get(audience)
+  t.after(() => { for (const value of verifiers.values()) value.close() })
   const calls = []
   const port = await listen(t, async (request, response) => {
     const raw = await body(request)
-    const member = await verifier.verify({ method: request.method, target: request.url, headers: request.headers, body: raw })
+    const member = await verifierFor(request.headers['x-woven-member-audience']).verify({ method: request.method, target: request.url, headers: request.headers, body: raw })
     calls.push({ path: request.url, device: member.deviceID, headers: request.headers, message: JSON.parse(raw) })
     if (request.url === '/wovenmatter/mcp/workspace') {
       const message = JSON.parse(raw)

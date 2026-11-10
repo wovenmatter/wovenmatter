@@ -85,13 +85,17 @@ same commit.
   takes effect as soon as the revocation syncs.
   - Headers:
     - `X-Woven-Member-Device`: the caller's device ID.
+    - `X-Woven-Member-Audience`: the destination member's device ID. Every
+      member keeps its own nonce cache, so without it a request captured on
+      its way to one member could be replayed to another within the window.
     - `X-Woven-Member-Time`: Unix time in milliseconds.
     - `X-Woven-Member-Nonce`: 16 random bytes, base64url without padding.
     - `X-Woven-Member-Signature`: an Ed25519 signature, base64url without
       padding.
   - The signed message is the UTF-8 string
-    `woven-member-v1\n<METHOD>\n<path with query>\n<time>\n<nonce>\n<hex SHA-256 of body>`.
-    An empty body hashes the empty string. A WebSocket upgrade signs its
+    `woven-member-v2\n<audience>\n<METHOD>\n<path with query>\n<time>\n<nonce>\n<hex SHA-256 of body>`.
+    Device IDs (caller and audience) are lowercase UUIDs. An empty body
+    hashes the empty string. There is no `v1` fallback. A WebSocket upgrade signs its
     `GET` request. The path is the request target exactly as the client
     sends it, except that a leading `/wovenmatter` mount is dropped
     (`MemberRequestSignature.canonicalTarget`: `/wovenmatter/v1/x?y` and
@@ -102,15 +106,35 @@ same commit.
     path, and the Node server, which sees the path with that prefix stripped,
     also accepts a signature over the path with it restored.
   - The verifier accepts a request when:
+    - the audience is its own member device ID (checked first). A Linux
+      host's Node server and library host share the machine's ID and keep
+      separate nonce caches; their signed routes do not overlap, so a
+      request for one does nothing at the other;
     - the device is on the current member list and not revoked;
     - the time is within 300 seconds of its own clock;
     - it has not seen the nonce in that window;
     - the signature verifies with the member's raw 32-byte Ed25519 public key.
       That key is CryptoKit `Curve25519.Signing` compatible, and Node verifies
       it with `crypto.verify(null, …)`.
+  - **Where the audience comes from.** A caller takes the destination's
+    device ID only from a signed or synced record, never from what the
+    endpoint says about itself (a member that answered for another could
+    otherwise collect requests to replay there): a member list entry
+    (`deviceID` beside its `endpoints`; peer sync, Node's Mac delegate, the
+    phone's host choice) or the workspace registry's `executionDeviceID`
+    (execution, bots, host administration and inference, for Mac and Linux
+    workspaces alike). The installing Mac addresses its first adoption to the
+    `memberIdentity.deviceID` it read over SSH. A phone learns the pairing
+    Mac's ID from `CompanionPairResponse.hostDeviceID`. `GET /v1/identity`
+    is used only by the Mac that is about to sign that host's entry. A
+    workspace or host without a known device ID is not signed for
+    (`member_audience_unknown`); the caller treats it as not reachable yet.
   - The shared test vectors in
-    `shared/Tests/WovenMatterCompanionTests/MemberSignatureVectors.json` are
-    checked by Swift and by Node (`remote/test/member-auth.test.mjs`).
+    `shared/Tests/WovenMatterCompanionTests/MemberSignatureVectors.json`
+    (regenerate with `generate-member-signature-vectors.mjs` there) are
+    checked by Swift (CryptoKit, and swift-crypto through
+    `MemberSyncTests`) and by Node (`remote/test/member-auth.test.mjs`),
+    including an `audience-changed` reject.
 - Pairing a new device still uses the existing pairing link and confirmation
   UI on a Mac. Its result is a signed member entry instead of a bearer grant.
 - The Linux Node server verifies member signatures itself. It reads the member
@@ -128,9 +152,12 @@ same commit.
   working beside signatures; the runtime host API (`/v1/bots-host/*`) and
   session MCP (`/mcp`) keep their own bearers.
 - Swift (`shared/…/MemberRequestSignature.swift`): `MemberRequestSigner`
-  (`headers(method:target:body:)`) and `MemberRequestVerifier` (nonce cache,
+  (`headers(method:target:body:audience:)`, or `bodySHA256:` for a hashed
+  body) and `MemberRequestVerifier(audience:…)` (own device ID, nonce cache,
   window) are portable; `MemberIdentity.signer` and `MemberDirectory.verifier`
-  bind them to a device key and the resolved list.
+  bind them to a device key and the resolved list. Node:
+  `signMemberRequest({…, audience})` and `createMemberVerifier({loadMembers,
+  audience})`, where the server's audience is its library host's identity.
   `MemberDirectory.authenticate(_:allowing:)` checks any request (the Mac's
   bots WebSocket upgrade uses it through
   `CompanionHostController.authenticateMember`). On a Mac, signed requests are
@@ -140,7 +167,7 @@ same commit.
   of the single-Mac library grant; see "Sessions across devices") and
   `/v1/bots/*` (`mac`, `ios`). Bearer grants keep working beside them until
   every phone pairs as a member.
-- Swift clients sign with `MemberSignedHTTPClient`
+- Swift clients sign with `MemberSignedHTTPClient(endpoint:signer:audience:)`
   (`app/Sources/WovenMatterClient`): the target is the exact path sent, so a
   Mac endpoint (`https://<mac>.<tailnet>.ts.net:<port>/wovenmatter`, no
   trailing slash) signs `/wovenmatter/…` and a Linux execution endpoint
@@ -348,13 +375,17 @@ Membership, publishing and bot routes on the local API
 - `POST /v1/members/self {name?, endpoints}` updates this machine's own
   entry; the server sends it (`{name: hostname, endpoints: [<published
   library route>]}`) after each Serve publish so peers use that address.
-- `POST /v1/members/sign {method, target, bodySHA256}` → `{headers:
-  {X-Woven-Member-Device, X-Woven-Member-Time, X-Woven-Member-Nonce,
-  X-Woven-Member-Signature}}`: signs one outgoing request of the Node server
-  with this machine's member key. `target` is the path with query exactly as
-  sent (an absolute, printable ASCII target of at most 8 KiB), `bodySHA256`
-  the body's lowercase hex SHA-256; methods are GET, POST, PUT, PATCH and
-  DELETE. Only the socket serves it.
+- `POST /v1/members/sign {method, target, bodySHA256, audience}` →
+  `{headers: {X-Woven-Member-Device, X-Woven-Member-Audience,
+  X-Woven-Member-Time, X-Woven-Member-Nonce, X-Woven-Member-Signature}}`:
+  signs one outgoing request of the Node server with this machine's member
+  key. `target` is the path with query exactly as sent (an absolute,
+  printable ASCII target of at most 8 KiB), `bodySHA256` the body's lowercase
+  hex SHA-256 and `audience` the destination member's lowercase device ID
+  (not this machine's); methods are GET, POST, PUT, PATCH and DELETE. Only
+  the socket serves it: on loopback every `/v1/members/…` path is 404, and
+  mounts match whole path segments. `remote/src/member-client.mjs` requires
+  `audience` on every request (`macs()` entries and registry rows carry it).
 - `GET /v1/workspaces` → `{workspaces: [CompanionExecutionWorkspace]}`: the
   synced execution workspace registry (every Mac, Linux and iPhone
   workspace this library knows, deleted ones left out), which the server

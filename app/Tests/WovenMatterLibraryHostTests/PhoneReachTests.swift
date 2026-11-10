@@ -168,10 +168,14 @@ struct PhoneReachTests {
     let paired = try await HTTPSCompanionTransport.pair(offer.payload, deviceID: phoneID, deviceName: "iPhone",
       metadata: .init(kind: .iPhone), memberPublicKey: identity.publicKey, performer: tailnet)
     #expect(await macMembers.member(phoneID)?.kind == .ios)
+    // The pairing reply names the Mac's member device ID, which the phone's requests to it are addressed to.
+    let macDevice = try #require(paired.hostDeviceID)
+    #expect(macDevice == macMembers.identity.deviceID)
     try await store.prepareForPairing(paired.workspaceID)
     let membershipFile = root.appending(path: "phone/membership.json")
-    let hosts = try MobileLibraryHosts(state: .init(deviceID: phoneID, pairedEndpoint: macURL), identity: identity, file: membershipFile, performer: tailnet)
-    var engine = MobileSyncEngine(store: store, hosts: hosts, initial: try await hosts.transport(for: .init(deviceID: "paired", kind: "mac", name: "Studio", endpoint: macURL)))
+    let hosts = try MobileLibraryHosts(state: .init(deviceID: phoneID, pairedEndpoint: macURL, pairedHostDeviceID: macDevice), identity: identity,
+                                       file: membershipFile, performer: tailnet)
+    var engine = MobileSyncEngine(store: store, hosts: hosts, initial: try await hosts.transport(for: .init(deviceID: macDevice, kind: "mac", name: "Studio", endpoint: macURL)))
     try await engine.synchronize()
     #expect(await store.snapshot().workspaceID == paired.workspaceID)
     #expect(await hosts.snapshot().pairedHostDeviceID == macMembers.identity.deviceID)

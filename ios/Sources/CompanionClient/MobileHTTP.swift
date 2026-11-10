@@ -56,11 +56,13 @@ public enum MobileRequestSigning {
     return path
   }
 
-  /// Adds the member signature headers. A signed request never carries a bearer.
-  public static func sign(_ request: inout URLRequest, with signer: MemberRequestSigner) throws {
+  /// Adds the member signature headers, addressed to the member `audience`
+  /// (its device ID from the member list or the workspace registry). A signed
+  /// request never carries a bearer.
+  public static func sign(_ request: inout URLRequest, with signer: MemberRequestSigner, audience: String) throws {
     guard let url = request.url else { throw MobileConnectionError.invalidResponse }
     request.setValue(nil, forHTTPHeaderField: "Authorization")
-    let headers = try signer.headers(method: request.httpMethod ?? "GET", target: target(of: url), body: request.httpBody ?? Data())
+    let headers = try signer.headers(method: request.httpMethod ?? "GET", target: target(of: url), body: request.httpBody ?? Data(), audience: audience)
     for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
   }
 

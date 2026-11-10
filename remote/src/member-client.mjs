@@ -26,11 +26,20 @@ export const unreached = error => error?.code === 'member_unreachable' || error?
 export function createMemberTransport({ library, fetchImpl = globalThis.fetch, allowEndpoint = tailnetEndpoint, timeoutMilliseconds = 30_000, now = Date.now }) {
   let peers = { at: 0, states: new Map() }
 
-  async function request(url, { method = 'GET', body, headers = {}, signal, timeout = timeoutMilliseconds } = {}) {
+  /**
+   * `audience` is the destination member's device ID, taken from a signed
+   * record (the member list or the workspace registry's `executionDeviceID`),
+   * never from what the endpoint says about itself.
+   */
+  async function request(url, { method = 'GET', body, headers = {}, signal, timeout = timeoutMilliseconds, audience } = {}) {
     const target = url instanceof URL ? url : new URL(url)
     if (!allowEndpoint(target.origin + target.pathname)) throw fail(400, 'Members are reached only over tailnet HTTPS.', 'member_endpoint_invalid')
+    if (typeof audience !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(audience)) {
+      throw fail(409, 'This device has not learned that member’s identity yet. Try again once the libraries have synchronized.', 'member_audience_unknown')
+    }
     const payload = body === undefined || body === null ? null : Buffer.isBuffer(body) ? body : Buffer.from(typeof body === 'string' ? body : JSON.stringify(body))
-    const signed = (await library.sign({ method, target: target.pathname + target.search, bodySHA256: createHash('sha256').update(payload ?? Buffer.alloc(0)).digest('hex') })).headers ?? {}
+    const signed = (await library.sign({ method, target: target.pathname + target.search, audience: audience.toLowerCase(),
+      bodySHA256: createHash('sha256').update(payload ?? Buffer.alloc(0)).digest('hex') })).headers ?? {}
     const outgoing = { accept: 'application/json', ...(payload ? { 'content-type': 'application/json' } : {}), ...headers }
     for (const [name, value] of Object.entries(signed)) outgoing[name.toLowerCase()] = String(value)
     const deadline = AbortSignal.timeout(timeout), combined = signal ? AbortSignal.any([signal, deadline]) : deadline
@@ -97,7 +106,7 @@ export function createMemberMacDelegate({ transport, workspaceID, hasMac = () =>
     let last = null
     for (const mac of await transport.macs()) {
       try {
-        const reply = await transport.request(memberURL(mac.endpoint, path), { method: 'POST', body, headers, signal, timeout })
+        const reply = await transport.request(memberURL(mac.endpoint, path), { method: 'POST', body, headers, signal, timeout, audience: mac.deviceID })
         if (reply.status === 202) return null
         if (reply.status >= 200 && reply.status < 300) return reply.body
         // Only a refusal before any effect moves on to another Mac.

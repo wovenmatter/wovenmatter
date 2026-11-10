@@ -14,7 +14,7 @@ public actor MemberDirectory {
   public init(database: WorkspaceDatabase, identity: MemberIdentity, cacheLifetime: TimeInterval = 1) {
     self.database = database; self.identity = identity; self.cacheLifetime = cacheLifetime
     let box = WeakDirectory()
-    verifier = MemberRequestVerifier(lookup: { await box.directory?.activeKey($0) },
+    verifier = MemberRequestVerifier(audience: identity.deviceID, lookup: { await box.directory?.activeKey($0) },
       verify: { MemberIdentity.verify(publicKey: $0, signature: $1, message: $2) })
     box.directory = self
   }

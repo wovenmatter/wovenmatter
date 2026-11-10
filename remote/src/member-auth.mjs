@@ -5,9 +5,10 @@ import { createHash, createPrivateKey, createPublicKey, randomBytes, sign as sig
 // request is accepted when its device is a current member, its time is within
 // the window, its nonce is new, and the Ed25519 signature verifies.
 export const memberHeaders = Object.freeze({
-  device: 'x-woven-member-device', time: 'x-woven-member-time',
+  device: 'x-woven-member-device', audience: 'x-woven-member-audience', time: 'x-woven-member-time',
   nonce: 'x-woven-member-nonce', signature: 'x-woven-member-signature',
 })
+export const memberSignatureDomain = 'woven-member-v2'
 export const memberSignatureWindowMilliseconds = 300_000
 const fail = (statusCode, message, code) => Object.assign(new Error(message), { statusCode, code })
 const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
@@ -28,9 +29,13 @@ export function canonicalTarget(target) {
   return target
 }
 
-/** The exact UTF-8 string both sides sign. `target` is the path with query. */
-export function memberSigningMessage({ method, target, time, nonce, bodySHA256 }) {
-  return `woven-member-v1\n${String(method).toUpperCase()}\n${canonicalTarget(target)}\n${time}\n${nonce}\n${bodySHA256}`
+/**
+ * The exact UTF-8 string both sides sign. `target` is the path with query;
+ * `audience` is the destination member's device ID, so a request captured on
+ * the way to one member cannot be replayed to another within the window.
+ */
+export function memberSigningMessage({ audience, method, target, time, nonce, bodySHA256 }) {
+  return `${memberSignatureDomain}\n${audience}\n${String(method).toUpperCase()}\n${canonicalTarget(target)}\n${time}\n${nonce}\n${bodySHA256}`
 }
 
 /** Accepts standard or URL-safe base64, padded or not; returns the raw 32-byte key. */
@@ -55,11 +60,12 @@ export function rawPublicKeyFor(privateKey) {
   return Buffer.from(createPublicKey(privateKey).export({ format: 'jwk' }).x, 'base64url')
 }
 
-/** Headers for one signed request; used by tests and by Node callers of other members. */
-export function signMemberRequest({ deviceID, privateKey, method, target, body, time = Date.now(), nonce = randomBytes(16).toString('base64url') }) {
-  const message = memberSigningMessage({ method, target, time: String(time), nonce, bodySHA256: bodyDigest(body) })
+/** Headers for one signed request to the member `audience`; used by tests. Production Node signs through its library host. */
+export function signMemberRequest({ deviceID, privateKey, audience, method, target, body, time = Date.now(), nonce = randomBytes(16).toString('base64url') }) {
+  if (!uuid(audience) || audience !== audience.toLowerCase()) throw new TypeError('A signed member request names its destination member (lowercase device ID).')
+  const message = memberSigningMessage({ audience, method, target, time: String(time), nonce, bodySHA256: bodyDigest(body) })
   return {
-    [memberHeaders.device]: deviceID, [memberHeaders.time]: String(time), [memberHeaders.nonce]: nonce,
+    [memberHeaders.device]: deviceID, [memberHeaders.audience]: audience, [memberHeaders.time]: String(time), [memberHeaders.nonce]: nonce,
     [memberHeaders.signature]: signData(null, Buffer.from(message, 'utf8'), privateKey).toString('base64url'),
   }
 }
@@ -73,10 +79,19 @@ export const hasMemberSignature = headers => Object.values(memberHeaders).some(n
  * reloaded early (at most once per `missRefreshMilliseconds`) when an unknown
  * device signs, so a newly added member works as soon as it has synced.
  */
-export function createMemberVerifier({ loadMembers, now = Date.now, windowMilliseconds = memberSignatureWindowMilliseconds,
+export function createMemberVerifier({ loadMembers, audience, now = Date.now, windowMilliseconds = memberSignatureWindowMilliseconds,
   refreshMilliseconds = 15_000, missRefreshMilliseconds = 2_000, maximumNonces = 200_000 } = {}) {
-  let current = { revision: null, members: new Map() }, loadedAt = 0, missAt = 0, loading = null
+  let current = { revision: null, members: new Map() }, loadedAt = 0, missAt = 0, loading = null, ownDeviceID = null
   const nonces = new Map()
+  // This machine's own member device ID: a request signed for any other
+  // member is refused, whatever its signature. `audience` is the ID or a
+  // function that resolves it (the library host's identity), cached once known.
+  async function own() {
+    if (ownDeviceID) return ownDeviceID
+    const value = typeof audience === 'function' ? await audience() : audience
+    if (!uuid(value)) throw fail(503, 'This host does not know its own member identity yet.', 'members_unavailable')
+    return (ownDeviceID = value.toLowerCase())
+  }
 
   function index(value) {
     if (!value || typeof value !== 'object' || !Array.isArray(value.members)) throw fail(503, 'The member list is unavailable.', 'members_unavailable')
@@ -128,11 +143,13 @@ export function createMemberVerifier({ loadMembers, now = Date.now, windowMillis
    * `code` names the reason.
    */
   async function verify({ method, target, alternateTargets = [], headers, body }) {
-    const device = headers[memberHeaders.device], time = headers[memberHeaders.time]
+    const device = headers[memberHeaders.device], time = headers[memberHeaders.time], addressed = headers[memberHeaders.audience]
     const nonce = headers[memberHeaders.nonce], signature = headers[memberHeaders.signature]
-    if (![device, time, nonce, signature].every(value => typeof value === 'string')) throw fail(401, 'Every member signature header is required.', 'member_headers_missing')
+    if (![device, addressed, time, nonce, signature].every(value => typeof value === 'string')) throw fail(401, 'Every member signature header is required.', 'member_headers_missing')
     // Device IDs are lowercase on the wire, as the Swift signer sends them.
     if (!uuid(device) || device !== device.toLowerCase()) throw fail(401, 'The member device ID is invalid.', 'member_device_invalid')
+    if (!uuid(addressed) || addressed !== addressed.toLowerCase()) throw fail(401, 'The member audience is invalid.', 'member_audience_invalid')
+    if (addressed !== await own()) throw fail(401, 'This signed request was meant for another device.', 'member_audience_mismatch')
     if (!/^\d{1,16}$/.test(time)) throw fail(401, 'The member request time is invalid.', 'member_time_invalid')
     if (!base64url(nonce) || Buffer.from(nonce, 'base64url').length !== 16 || nonce.length !== 22) throw fail(401, 'The member nonce must be 16 bytes of unpadded base64url.', 'member_nonce_invalid')
     if (!base64url(signature) || Buffer.from(signature, 'base64url').length !== 64) throw fail(401, 'The member signature is invalid.', 'member_signature_invalid')
@@ -146,7 +163,7 @@ export function createMemberVerifier({ loadMembers, now = Date.now, windowMillis
     const bytes = typeof body === 'function' ? await body() : body
     const bodySHA256 = typeof bytes?.sha256 === 'string' ? bytes.sha256 : bodyDigest(bytes), raw = Buffer.from(signature, 'base64url')
     const verified = [target, ...alternateTargets].some(candidate =>
-      verifySignature(null, Buffer.from(memberSigningMessage({ method, target: candidate, time, nonce, bodySHA256 }), 'utf8'), found.key, raw))
+      verifySignature(null, Buffer.from(memberSigningMessage({ audience: addressed, method, target: candidate, time, nonce, bodySHA256 }), 'utf8'), found.key, raw))
     if (!verified) throw fail(401, 'The member signature does not verify.', 'member_signature_mismatch')
     // Only a verified request consumes its nonce, so a forged copy cannot block it.
     const key = found.deviceID + ':' + nonce
@@ -162,5 +179,5 @@ export function createMemberVerifier({ loadMembers, now = Date.now, windowMillis
   }, 60_000)
   periodic.unref?.()
 
-  return { verify, refresh, revision: () => current.revision, members: () => [...current.members.values()].map(({ key, ...rest }) => rest), close: () => clearInterval(periodic) }
+  return { verify, refresh, audience: own, revision: () => current.revision, members: () => [...current.members.values()].map(({ key, ...rest }) => rest), close: () => clearInterval(periodic) }
 }

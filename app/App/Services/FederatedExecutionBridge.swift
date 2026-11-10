@@ -51,7 +51,9 @@ extension ApplicationModel {
             }, loadCredential: storage.loadExecutionCredential, saveCredential: storage.saveExecutionCredential,
             makeSignedTransport: { [weak self] workspace in
                 // The iPhone is never an execution destination for signed calls.
-                guard let self, workspace.kind != .ios, let directory = try? await self.companionHost.peerSync.members() else { return nil }
+                // Without its execution device a workspace cannot be addressed; its saved grant (if any) still works.
+                guard let self, workspace.kind != .ios, workspace.executionDeviceID != nil,
+                      let directory = try? await self.companionHost.peerSync.members() else { return nil }
                 return try SignedExecutionWorkspaceTransport(workspace: workspace, signer: directory.identity.signer)
             },
             onChange: { [weak self] in await self?.refreshWorkspace() })

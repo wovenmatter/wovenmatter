@@ -352,7 +352,8 @@ public final class CompanionWorkspaceAPI {
             if request.method == "POST", path == "/v1/pair" {
                 guard request.body.count <= 8_192 else { return .error("too_large", "The pairing request is too large.", status: 413) }
                 let command = try JSONDecoder().decode(CompanionPairRequest.self, from: request.body)
-                let result = try await authentication.pair(command, workspaceID: workspaceID)
+                var result = try await authentication.pair(command, workspaceID: workspaceID)
+                result.hostDeviceID = members?.identity.deviceID
                 if let key = command.memberPublicKey, key.count == 32, command.purpose != CompanionPairingPurpose.peerMac,
                    [.iPhone, .iPad].contains(command.metadata?.kind ?? .unknown) {
                     await onMemberPaired(command.deviceID.lowercased(), command.deviceName, key)

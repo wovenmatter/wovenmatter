@@ -111,7 +111,9 @@ const library = runningAsService && (nativeLinuxHost || process.env.WOVENMATTER_
 }) : null
 const libraryServe = library && process.env.WOVENMATTER_LIBRARY_SERVE !== '0' ? createLibraryServe({ statePath: resolve(libraryState, 'serve.json'),
   ...(/^\d{1,5}$/.test(process.env.WOVENMATTER_LIBRARY_HTTPS_PORT ?? '') ? { candidates: [Number(process.env.WOVENMATTER_LIBRARY_HTTPS_PORT)] } : {}) }) : null
-const members = library ? createMemberVerifier({ loadMembers: () => library.client.members() }) : null
+// Signed requests must name this host's own member device ID as their audience.
+const members = library ? createMemberVerifier({ loadMembers: () => library.client.members(),
+  audience: async () => memberIdentityRecord?.deviceID ?? (await library.client.identity()).deviceID }) : null
 const hostAdmin = nativeLinuxHost ? createHostAdministration({ serviceRoot: configuration.serviceRoot, dataRoot: configuration.dataRoot, stateDirectory: configuration.stateDirectory,
   extra: async () => ({ library: library?.status() ?? null, memberIdentity: memberIdentityRecord }),
   ...(library ? {

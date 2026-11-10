@@ -74,7 +74,7 @@ public final class LibraryHost: @unchecked Sendable {
     configuration.presenceInterval = presenceInterval
     sync = LibraryPeerSync(directory: members, transport: transport, configuration: configuration)
     let sync = sync
-    for prefix in ["/v1/peers/sync", "/v1/peers/notify", "/v1/peers/file"] {
+    for prefix in ["/v1/peers/sync", "/v1/peers/notify", "/v1/peers/files", "/v1/peers/file"] {
       mount(prefix: prefix) { await sync.handle($0) ?? .error("unauthorized", "Peer routes need a signed member request.", status: 401) }
     }
     // Bearer grants are never issued here; the store only backs the API.
@@ -136,7 +136,13 @@ public final class LibraryHost: @unchecked Sendable {
     if path.hasPrefix("/wovenmatter/") { path = String(path.dropFirst("/wovenmatter".count)) }
     if path == "/v1/health" { return await health(request) }
     if path == "/v1/identity" { return await identityResponse(request) }
-    let handler = lock.withLock { mounts.first { path.hasPrefix($0.prefix) }?.handler }
+    // The mobile API serves only `GET /v1/members`; `/v1/members/sign`,
+    // `adopt` and `self` exist on the socket alone.
+    if path.hasPrefix("/v1/members/") { return .error("not_found", "This library route is not served here.", status: 404) }
+    // Whole path segments only, so a prefix never mounts a longer name.
+    let handler = lock.withLock { mounts.first { mount in
+      path == mount.prefix || path.hasPrefix(mount.prefix.hasSuffix("/") ? mount.prefix : mount.prefix + "/")
+    }?.handler }
     guard let handler else { return .error("not_found", "This library route is not served here.", status: 404) }
     return await handler(request)
   }
@@ -208,14 +214,19 @@ public final class LibraryHost: @unchecked Sendable {
     }
   }
 
-  /// `POST /v1/members/sign {method, target, bodySHA256}` → `{headers}`: the
-  /// Node server's requests to other members are signed with this machine's
-  /// member key, which never leaves this process. `target` is the path with
-  /// query exactly as the Node server sends it.
+  /// `POST /v1/members/sign {method, target, bodySHA256, audience}` →
+  /// `{headers}`: the Node server's requests to other members are signed with
+  /// this machine's member key, which never leaves this process. `target` is
+  /// the path with query exactly as the Node server sends it; `audience` is
+  /// the destination member's device ID.
   public struct SignatureRequest: Codable, Sendable {
     public var method: String
     public var target: String
     public var bodySHA256: String
+    public var audience: String
+    public init(method: String, target: String, bodySHA256: String, audience: String) {
+      self.method = method; self.target = target; self.bodySHA256 = bodySHA256; self.audience = audience
+    }
   }
   private func signForServer(_ request: CompanionHTTPRequest) throws -> CompanionHTTPResponse {
     guard request.method == "POST", request.body.count <= 16_384 else { return .error("invalid_request", "POST at most 16 KiB.", status: 400) }
@@ -223,10 +234,12 @@ public final class LibraryHost: @unchecked Sendable {
     let methods: Set<String> = ["GET", "POST", "PUT", "PATCH", "DELETE"]
     guard methods.contains(value.method.uppercased()), value.target.hasPrefix("/"), !value.target.hasPrefix("//"), value.target.utf8.count <= 8_192,
           value.target.unicodeScalars.allSatisfy({ $0.value > 0x20 && $0.value < 0x7f }),
-          value.bodySHA256.utf8.count == 64, value.bodySHA256.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else {
-      return .error("invalid_request", "Sign a method, an absolute request target and a lowercase hex SHA-256.", status: 400)
+          value.bodySHA256.utf8.count == 64, value.bodySHA256.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }),
+          MemberRequestSignature.isDeviceID(value.audience), value.audience != identity.deviceID else {
+      return .error("invalid_request", "Sign a method, an absolute request target, a lowercase hex SHA-256 and another member's device ID.", status: 400)
     }
-    return try .json(["headers": try identity.signer.headers(method: value.method.uppercased(), target: value.target, bodySHA256: value.bodySHA256)])
+    return try .json(["headers": try identity.signer.headers(method: value.method.uppercased(), target: value.target, bodySHA256: value.bodySHA256,
+                                                             audience: value.audience)])
   }
 
   public struct Identity: Codable, Sendable, Equatable {

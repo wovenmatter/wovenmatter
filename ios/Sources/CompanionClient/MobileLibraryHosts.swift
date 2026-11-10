@@ -133,7 +133,7 @@ public actor MobileLibraryHosts {
 
   public func snapshot() -> MobileMembershipState { state }
   public func transport(for host: MobileLibraryHost) throws -> HTTPSCompanionTransport {
-    try HTTPSCompanionTransport(host: host.endpoint, identity: identity, metadata: metadata, performer: performer)
+    try HTTPSCompanionTransport(host: host.endpoint, hostDeviceID: host.deviceID, identity: identity, metadata: metadata, performer: performer)
   }
 
   /// Chooses a reachable host, trying candidates in order and failing over
