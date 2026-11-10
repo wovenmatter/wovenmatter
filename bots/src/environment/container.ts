@@ -22,6 +22,9 @@ export const IDLE_STOP_MS = 15 * 60_000;
 const AGENT_COMMAND = ["node", `${HELPER_MOUNT}/agent.mjs`];
 const SHM_BYTES = 512 * 1024 * 1024;
 const STOP_SECONDS = 20;
+/** How long a container start waits for an engine that is coming back (a Mac VM rebooting). */
+const ENGINE_WAIT_MS = 90_000;
+const ENGINE_POLL_MS = 500;
 const DEFAULT_UPGRADE = [
   "sh",
   "-c",
@@ -68,8 +71,18 @@ export type BotEnvironmentOptions = {
   readonly upgradeCommand?: readonly string[];
   /** Extra health check after an update (tests force a failure). */
   readonly healthCheck?: (botId: string) => Promise<void>;
+  /** How long a container start waits for an unavailable engine (tests shorten it). */
+  readonly engineWaitMs?: number;
   readonly log?: (message: string) => void;
 };
+
+/**
+ * The engine is not there right now but may come back: a Mac VM answers 503 while it boots, and
+ * its socket refuses connections while the helper restarts. Other errors are real failures.
+ */
+export function engineUnavailable(error: unknown): boolean {
+  return error instanceof EngineError && (error.status === undefined || error.status === 503);
+}
 
 /**
  * Pids that count as work: anything but PID 1 (tini), the supervisor and everything under it
@@ -279,9 +292,29 @@ export class BotEnvironment implements BotEnvironmentAdapter {
     return this.#locked(botId, () => this.#ensureUnlocked(botId));
   }
 
+  /**
+   * Inspect, waiting a bounded time for an engine that is unavailable (a VM reboot or update), so
+   * a tool call made meanwhile resumes once it is back instead of failing. Nothing about the
+   * outage is remembered: a call after a longer one simply asks the engine again.
+   */
+  async #inspectWhenAvailable(name: string) {
+    const deadline = Date.now() + (this.#options.engineWaitMs ?? ENGINE_WAIT_MS);
+    for (;;) {
+      try {
+        return await this.#engine.inspectContainer(name);
+      } catch (error) {
+        if (!engineUnavailable(error) || Date.now() >= deadline || this.#closed) throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, ENGINE_POLL_MS));
+    }
+  }
+
   async #ensureUnlocked(botId: string): Promise<void> {
     const name = containerName(botId);
-    let info = await this.#engine.inspectContainer(name);
+    // A container found stopped (idle, stopped by the user, or killed with the engine's VM) is
+    // started as it is: its filesystem and storage are intact, and its supervisor brings the
+    // restart list and saved tabs back. Only a missing container is created.
+    let info = await this.#inspectWhenAvailable(name);
     if (!info) {
       const [image, helper] = [await this.image(), await this.helper()];
       if (!(await this.#engine.volumeExists(volumeName(botId)))) {
@@ -355,6 +388,12 @@ export class BotEnvironment implements BotEnvironmentAdapter {
     return this.#locked(botId, async () => {
       const state = await this.state(botId);
       if (state !== "running") {
+        // Stopped from outside (a VM reboot): drop an agent stream that may not have noticed, so
+        // the next call starts the container and a fresh agent. A call that just touched the bot
+        // may be waiting for this lock to start it; leave that one alone.
+        const touched = this.#lastUse.get(botId);
+        if (touched !== undefined && Date.now() - touched < this.idleMs) return false;
+        this.#connections.get(botId)?.close();
         this.#lastUse.delete(botId);
         return false;
       }

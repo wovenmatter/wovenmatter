@@ -5,7 +5,7 @@
 // so it survives stops, updates and rebuilds. It holds no credentials.
 import { spawn } from "node:child_process";
 import { createWriteStream } from "node:fs";
-import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, rename, rm, stat } from "node:fs/promises";
 import { createServer } from "node:net";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -28,10 +28,17 @@ function log(message) {
   process.stderr.write(`woven supervisor: ${message}\n`);
 }
 
+/** Replace `path` atomically, synced first: the container can lose power (a VM reboot) any time. */
 async function writeJSON(path, value) {
   await mkdir(dirname(path), { recursive: true });
   const temporary = `${path}.tmp`;
-  await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`);
+  const file = await open(temporary, "w");
+  try {
+    await file.writeFile(`${JSON.stringify(value, null, 2)}\n`);
+    await file.sync();
+  } finally {
+    await file.close();
+  }
   await rename(temporary, path);
 }
 

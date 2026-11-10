@@ -1,10 +1,11 @@
-import { type ChildProcess, spawn } from "node:child_process";
+import { type ChildProcess, execFile, spawn } from "node:child_process";
 import { rmSync } from "node:fs";
 import { mkdir, rm } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { Socket } from "node:net";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { socketDirectory } from "./helpers.ts";
 
 const HELPER = fileURLToPath(new URL("../helper/", import.meta.url));
@@ -17,6 +18,10 @@ type Container = {
   image: string;
   labels: Record<string, string>;
   supervisor?: ChildProcess;
+  /** Exit code after it stopped; 137 after a `crash`. */
+  exitCode?: number;
+  /** Exec streams into it, dropped by a `crash`. */
+  streams: Set<{ socket: Socket; child?: ChildProcess }>;
 };
 
 /**
@@ -42,6 +47,10 @@ export class FakeEngine {
   /** Exit code of the update's upgrade command. */
   upgradeExit = 0;
   builds = 0;
+  /** Answer every request 503, as a Mac VM's socket does while the VM boots. */
+  unavailable = false;
+  /** Extra environment for each container's supervisor (and so its browser). */
+  supervisorEnv: Record<string, string> = {};
   #server: Server | undefined;
   #next = 1;
 
@@ -116,6 +125,7 @@ export class FakeEngine {
         PATH: process.env.PATH ?? "/usr/bin:/bin",
         WOVEN_STATE_DIR: join(state, ".woven"),
         WOVEN_CONTROL_SOCKET: this.controlSocket(container.name),
+        ...this.supervisorEnv,
       },
       cwd: state,
       stdio: ["ignore", "ignore", "pipe"],
@@ -123,10 +133,49 @@ export class FakeEngine {
     this.#capture(container.supervisor, `supervisor ${container.name}`);
   }
 
+  /**
+   * A power cut (a Mac VM rebooted under its containers): every process in the container dies at
+   * once with no SIGTERM, and its exec streams drop. Nothing gets to clean up.
+   */
+  async crash(name: string): Promise<void> {
+    const container = this.containers.get(name);
+    if (!container?.running) return;
+    const roots = [container.supervisor, ...[...container.streams].map((stream) => stream.child)]
+      .map((child) => child?.pid)
+      .filter((pid): pid is number => pid !== undefined);
+    // Collect the whole tree first: once a parent dies its children are re-parented away.
+    const { stdout } = await promisify(execFile)("ps", ["-A", "-o", "pid=,ppid="]);
+    const children = new Map<number, number[]>();
+    for (const line of stdout.split("\n")) {
+      const [pid, ppid] = line.trim().split(/\s+/).map(Number);
+      if (pid && ppid !== undefined) children.set(ppid, [...(children.get(ppid) ?? []), pid]);
+    }
+    const doomed = new Set<number>();
+    const walk = (pid: number) => {
+      if (doomed.has(pid)) return;
+      doomed.add(pid);
+      for (const child of children.get(pid) ?? []) walk(child);
+    };
+    for (const pid of roots) walk(pid);
+    for (const pid of doomed) {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {
+        // Already gone.
+      }
+    }
+    for (const stream of container.streams) stream.socket.destroy();
+    container.streams.clear();
+    container.supervisor = undefined;
+    container.running = false;
+    container.exitCode = 137;
+  }
+
   async #stopContainer(container: Container): Promise<void> {
     const child = container.supervisor;
     container.supervisor = undefined;
     container.running = false;
+    container.exitCode = 0;
     if (child && child.exitCode === null) {
       await new Promise<void>((resolve) => {
         child.once("exit", () => resolve());
@@ -142,6 +191,7 @@ export class FakeEngine {
     this.requests.push(`${method} ${path}`);
     const body = await this.#body(request);
     const json = () => (body.length ? JSON.parse(body.toString("utf8")) : {});
+    if (this.unavailable) return this.#json(response, 503, { message: "the Woven VM is starting" });
     let match: RegExpExecArray | null;
     if (path === "/version") return this.#json(response, 200, { ApiVersion: "1.47" });
     if (path === "/_ping") return void response.end("OK");
@@ -189,7 +239,7 @@ export class FakeEngine {
       if (this.containers.has(name)) return this.#json(response, 409, { message: "Conflict" });
       const spec = json();
       const id = `${(this.#next++).toString(16).padStart(8, "0")}${"0".repeat(56)}`;
-      this.containers.set(name, { id, name, spec, running: false, image: spec.Image, labels: spec.Labels ?? {} });
+      this.containers.set(name, { id, name, spec, running: false, image: spec.Image, labels: spec.Labels ?? {}, streams: new Set() });
       return this.#json(response, 201, { Id: id });
     }
     if (path === "/containers/json") {
@@ -219,7 +269,11 @@ export class FakeEngine {
           Name: `/${name}`,
           Image: container.image,
           Config: { Image: container.image, Labels: container.labels },
-          State: { Running: container.running, Status: container.running ? "running" : "exited" },
+          State: {
+            Running: container.running,
+            Status: container.running ? "running" : container.exitCode === undefined ? "created" : "exited",
+            ExitCode: container.exitCode ?? 0,
+          },
           HostConfig: container.spec.HostConfig,
         });
       }
@@ -310,6 +364,10 @@ export class FakeEngine {
     const match = /\/exec\/([^/]+)\/start$/.exec(request.url ?? "");
     const exec = match ? this.execs.get(match[1] ?? "") : undefined;
     const container = exec ? this.containers.get(exec.container) : undefined;
+    if (this.unavailable) {
+      socket.end("HTTP/1.1 503 Service Unavailable\r\ncontent-length: 0\r\n\r\n");
+      return;
+    }
     if (!exec || !container?.running) {
       socket.end("HTTP/1.1 409 Conflict\r\ncontent-length: 0\r\n\r\n");
       return;
@@ -331,6 +389,9 @@ export class FakeEngine {
       return;
     }
     const child = result;
+    const stream = { socket, child };
+    container.streams.add(stream);
+    socket.on("close", () => container.streams.delete(stream));
     const input = (chunk: Buffer) => {
       if (chunk.length) child.stdin?.write(chunk);
     };
