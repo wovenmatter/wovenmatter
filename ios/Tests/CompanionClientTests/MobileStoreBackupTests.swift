@@ -179,6 +179,12 @@ final class MobileStoreBackupTests: XCTestCase {
     XCTAssertTrue(try excluded(file)); XCTAssertTrue(try excluded(note))
     MobileStorePersistence.forgetAppliedBackups()
     _ = try MobileStore(file: file)
+    // The in-process exclude → include on the body settles asynchronously (see the
+    // deadline test above): wait a bounded time for both to read as included.
+    let deadline = ContinuousClock.now + .seconds(3)
+    while ContinuousClock.now < deadline, try excluded(file) || excluded(note) {
+      try await Task.sleep(for: .milliseconds(10))
+    }
     XCTAssertFalse(try excluded(file))
     XCTAssertFalse(try excluded(note))
     XCTAssertFalse(try foundationExcluded(file)); XCTAssertFalse(try foundationExcluded(note))
