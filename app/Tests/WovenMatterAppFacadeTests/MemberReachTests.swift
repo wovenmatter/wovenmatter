@@ -355,6 +355,15 @@ struct MemberReachTests {
         #expect(status.machine.deviceID == machineID && client.audience == machineID)
         #expect(linux.hostRequests.isEmpty && linux.botsRequests == ["GET /v1/bots/status"])
 
+        // A host whose library schema differs from this Mac's cannot sync: it needs Update everything.
+        linux.librarySchema = "another-schema"
+        let stale = await macB.model.remoteBotMachines(thisMacVersion: nil, directory: BotsRemoteDirectory())
+        #expect(stale.first { $0.id == machineID }?.state == .needsUpdate)
+        #expect(stale.first { $0.id == machineID }?.message?.contains("library format") == true)
+        linux.librarySchema = try await macB.database.pairedLibrarySchema()
+        let current = await macB.model.remoteBotMachines(thisMacVersion: nil, directory: BotsRemoteDirectory())
+        #expect(current.first { $0.id == machineID }?.message?.contains("library format") != true)
+
         // The socket upgrade is signed for that machine only, and only for a member's bots socket.
         let socket = try #require(workspace.endpoint).appending(path: "v1/bots/ws")
         var wss = try #require(URLComponents(url: socket, resolvingAgainstBaseURL: false)); wss.scheme = "wss"
@@ -522,7 +531,7 @@ private final class ReachLinuxHost: @unchecked Sendable {
             case ("GET", "/v1/host/update"): return try reply(200, ["state": "succeeded", "result": ["state": "running"]])
             case ("GET", "/v1/bots/status"):
                 let status = BotsRemoteStatus(machine: .init(deviceID: memberID, name: "Linux L", kind: "linux"),
-                                              enabled: true, state: "ready", versions: .init(runtime: "0.1.0", protocol: 1))
+                                              enabled: true, state: "ready", versions: .init(runtime: "0.1.0", protocol: 1, librarySchema: librarySchema))
                 return (try JSONEncoder().encode(status), HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
             case ("POST", "/v1/host/bots-configure"):
                 lock.withLock { _botsBody = try? JSONSerialization.jsonObject(with: body) as? NSDictionary }
