@@ -118,21 +118,46 @@ export function createMemberTransport({ library, fetchImpl = globalThis.fetch, a
  * usage, scheduled-task policy) go to any Mac member, signed with this host's
  * member key instead of one Mac's grant. The Mac accepts the Linux member for
  * conversations of the workspace it executes (`X-Woven-Workspace-ID`).
+ *
+ * A scheduled task's caller record (`/mcp/workspace/prepare`) stays on the Mac
+ * that prepared it: it is not synced, and another Mac refuses the task's calls
+ * until the session's own row has synchronized there. So a task's calls go to
+ * the Mac that last prepared it first, and any other Mac is prepared (the same
+ * idempotent request) before it is asked, whichever Mac answers.
  */
 export function createMemberMacDelegate({ transport, workspaceID, hasMac = () => true, log = () => {} }) {
-  async function post(path, scope, body, { groups = [], signal, timeout = 115_000 } = {}) {
+  const preparedOn = new Map()
+  const remember = (conversationID, deviceID) => {
+    preparedOn.delete(conversationID); preparedOn.set(conversationID, deviceID)
+    if (preparedOn.size > 1000) preparedOn.delete(preparedOn.keys().next().value)
+  }
+  async function once(mac, path, scope, body, { groups = [], signal, timeout }) {
     const headers = { accept: 'application/json, text/event-stream', 'mcp-protocol-version': '2025-06-18', 'x-woven-protocol': '3',
       'x-woven-workspace-id': workspaceID(), 'x-woven-enabled-groups': [...groups].join(','), 'x-woven-conversation-id': scope.conversationID }
-    let last = null
-    for (const mac of await transport.macs()) {
+    const reply = await transport.request(memberURL(mac.endpoint, path), { method: 'POST', body, headers, signal, timeout, audience: mac.deviceID })
+    if (reply.status === 202) return { value: null }
+    if (reply.status >= 200 && reply.status < 300) return { value: reply.body }
+    // Only a refusal before any effect moves on to another Mac.
+    const before = [401, 403, 404, 426, 503].includes(reply.status)
+    const error = fail(reply.status, typeof reply.body?.message === 'string' ? reply.body.message.slice(0, 512) : 'The Mac refused this Woven MCP request.', before ? 'member_refused' : undefined)
+    if (!before) throw error
+    return { refused: error }
+  }
+  async function post(path, scope, body, { task = false, timeout = 115_000, ...options } = {}) {
+    let last = null, macs = await transport.macs()
+    const pinned = task ? preparedOn.get(scope.conversationID) : null
+    if (pinned) macs = [...macs.filter(mac => mac.deviceID === pinned), ...macs.filter(mac => mac.deviceID !== pinned)]
+    for (const mac of macs) {
       try {
-        const reply = await transport.request(memberURL(mac.endpoint, path), { method: 'POST', body, headers, signal, timeout, audience: mac.deviceID })
-        if (reply.status === 202) return null
-        if (reply.status >= 200 && reply.status < 300) return reply.body
-        // Only a refusal before any effect moves on to another Mac.
-        const before = [401, 403, 404, 426, 503].includes(reply.status)
-        last = fail(reply.status, typeof reply.body?.message === 'string' ? reply.body.message.slice(0, 512) : 'The Mac refused this Woven MCP request.', before ? 'member_refused' : undefined)
-        if (!before) throw last
+        if (task && preparedOn.get(scope.conversationID) !== mac.deviceID) {
+          const ready = await once(mac, 'mcp/workspace/prepare', scope, scope.taskProof, { signal: options.signal, timeout: 15_000 })
+          if (ready.refused) { last = ready.refused; continue }
+          remember(scope.conversationID, mac.deviceID)
+        }
+        const result = await once(mac, path, scope, body, { ...options, timeout })
+        if (result.refused) { last = result.refused; continue }
+        if (path === 'mcp/workspace/prepare') remember(scope.conversationID, mac.deviceID)
+        return result.value
       } catch (error) {
         if (!unreached(error)) throw error
         last = error; log(`Mac ${mac.name || mac.deviceID} is unreachable for Woven MCP: ${error.message}`)
@@ -143,7 +168,7 @@ export function createMemberMacDelegate({ transport, workspaceID, hasMac = () =>
   }
   return {
     available: () => !!hasMac(),
-    call: (scope, message, options) => post('mcp/workspace', scope, message, options),
+    call: (scope, message, options) => post('mcp/workspace', scope, message, { ...options, task: !!scope.taskProof }),
     prepare: (scope, options) => post('mcp/workspace/prepare', scope, scope.taskProof, { ...options, timeout: 15_000 }),
   }
 }

@@ -497,7 +497,12 @@ tried in sync-status order, online first; another Mac is tried only when the
 request never reached one or was refused before any effect (401, 403, 404,
 426, 503). The Mac accepts the call when the signer serves that non-deleted
 Linux workspace (its execution device, or the member `MemberAudience.serving`
-names) and the conversation belongs to it. Bots
+names) and the conversation belongs to it. A scheduled task's caller record
+(`companion_scheduled_mcp_callers`, written by `/mcp/workspace/prepare`) is not
+synced, so another Mac refuses the task's calls until the session's own row
+reaches it. The Node delegate therefore sends a task's calls to the Mac that
+last prepared it first, and prepares any other Mac (the same idempotent
+request) before asking it, so prepare and call always land on the same Mac. Bots
 cannot use this route (it binds a conversation), so their Mac-only tools are
 unavailable unless the legacy grant exists; their timers are served and fired
 locally. The single-Mac grant
