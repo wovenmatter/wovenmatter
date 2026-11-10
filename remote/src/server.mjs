@@ -633,12 +633,14 @@ async function refreshMemberIdentity(endpoint) {
   if (!value?.deviceID) value = { deviceID: (await library.client.health()).deviceID }
   if (typeof value.deviceID !== 'string') return null
   const libraryEndpoint = endpoint ?? (await libraryServe?.recorded().catch(() => null))?.endpoint ?? memberIdentityRecord?.libraryEndpoint ?? null
-  memberIdentityRecord = { deviceID: value.deviceID.toLowerCase(), kind: value.kind ?? 'linux', name: value.name ?? hostname(), publicKey: value.publicKey ?? null,
+  const record = { deviceID: value.deviceID.toLowerCase(), kind: value.kind ?? 'linux', name: value.name ?? hostname(), publicKey: value.publicKey ?? null,
     endpoints: Array.isArray(value.endpoints) ? value.endpoints : [], libraryEndpoint, updatedAt: new Date().toISOString() }
   await mkdir(libraryState, { recursive: true, mode: 0o700 })
   const temporary = resolve(libraryState, '.identity.' + randomUUID())
-  await writeFile(temporary, JSON.stringify(memberIdentityRecord) + '\n', { mode: 0o600 })
+  await writeFile(temporary, JSON.stringify(record) + '\n', { mode: 0o600 })
   await rename(temporary, resolve(libraryState, 'identity.json'))
+  // Reported only once identity.json (which remote-host.sh reads) is in place.
+  memberIdentityRecord = record
   return memberIdentityRecord
 }
 
