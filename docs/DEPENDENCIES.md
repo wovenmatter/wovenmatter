@@ -22,14 +22,18 @@ for every package update. Three separate mechanisms do that:
 | Record | Kind | Updated by |
 | --- | --- | --- |
 | `package.json` minimum-only ranges (`>=version`) | Declaration. The floor is the current tested release; there is no upper cap on stable releases. | Maintenance PRs raise floors, including majors |
-| `default-agent/package-lock.json`, `ios/EmbeddedRuntime/package-lock.json` | Exact tested snapshot with integrity hashes, installed with `npm ci` | The same PRs |
+| `default-agent/package-lock.json`, `ios/EmbeddedRuntime/package-lock.json`, `bots/package-lock.json` | Exact tested snapshot with integrity hashes, installed with `npm ci` | The same PRs |
 | `app/Package.resolved` | Shared SwiftPM/Xcode graph: Sparkle and any transitive packages | Native package-manager tooling during maintenance |
 | `default-agent/.node-version` and the Node checksums in `scripts/prepare-default-agent.sh` and `LocalACPManagedRuntime.swift` | One current stable Node release and its official archive SHA-256 values | Maintenance PR, all copies together |
 | `remote/host/runtime-versions.json` | The same Node release's Linux archive SHA-256 values and the lockfile's Playwright version | The same maintenance PR; host bundle tests reject drift |
+| `dockerVersion` and `dockerSHA256` in `remote/host/runtime-versions.json` | The Docker Engine static release (`download.docker.com/linux/static/stable`) that Linux bot engines install, with its x86_64 and aarch64 archive SHA-256 values | Maintenance PR; both checksums together |
+| `bots/image/Dockerfile` (`NODE_VERSION` with its two Linux SHA-256 values, `PLAYWRIGHT_VERSION`) | The bot image's copy of the same Node and Playwright selections; Ubuntu 26.04 packages float and are upgraded at build and by the bots Update | The same maintenance PR, kept equal to `remote/host/runtime-versions.json` |
 | `remote/npm-runtime/package-lock.json` | Locked security replacements for npm's vendored dependencies, shared by image builds and each native host release's private npm | Dependency maintenance; runtime API and installer tests validate both uses |
 | `harnesses/npm-version.json` | Current private Mac npm archive and registry integrity, with the existing locked `remote/npm-runtime` vendor repairs | Maintenance PR; managed CLI and bundled SDK updater verification |
 | `app/Automation/cua-version.json` | Exact Cua Driver archive/executable digests, source and signing identity | Maintenance PR with desktop acceptance |
 | `app/Browser/cef-version.json` | Exact CEF build and archive SHA-1 values per architecture | Maintenance PR |
+| `remote/library/build-version.json` | Swift toolchain image digest, Static Linux SDK archive SHA-256, and SQLite amalgamation SHA-256 for the Linux `wovenmatter-library` build | Maintenance PR, all together with `app/Package.resolved` |
+| `app/VMHelper/guest-version.json` and `app/VMHelper/Guest/docker-archive-keyring.asc` | Woven Mac VM guest: Ubuntu cloud image serial, URL, size and SHA-256; Docker apt repository, signing-key fingerprint and file SHA-256, exact `docker-ce` and `containerd.io` versions | Maintenance PR, record and key together |
 | `app/Updater/sparkle-version.json` and the Xcode Sparkle revision | Release, exact commit, and tools archive SHA-256 for the updater | Maintenance PR, both together |
 | Generated iOS bundles and `provenance.json` | Output of the locked packages, verified by `--check` in CI | Regenerated from the updated lockfiles during maintenance |
 
@@ -39,12 +43,24 @@ Security-critical runtimes retain verified exact selections. Ordinary libraries
 use minimum-only ranges with their resolved versions recorded in lockfiles.
 Maintenance checks both for newer releases; recorded does not mean frozen.
 
+- **Docker Engine** for Linux bots is an exact static release, because the
+  bot engine runs as root with a verified, distribution-independent binary set
+  (dockerd, containerd, runc, docker-proxy, docker-init) on Ubuntu, Debian and
+  Arch alike. `remote-host.sh` downloads it once per host and the root helper
+  re-verifies the SHA-256 before installing it. Maintenance selects the newest
+  stable `docker-<version>.tgz` (no release candidates) and records both
+  architectures' checksums. Validation: `scripts/test-support/test_bots_engine.py`
+  in CI, and the bots install, egress and uninstall checks on a Linux host
+  before release. Installed hosts pick up a new selection on update; the
+  engine restarts only when its binaries or configuration changed.
 - **Node** runs the signed Built-in agent and managed adapter tools.
   Launch reuses the recorded installed runtime without a metadata lookup; a
   first installation may download its checksummed archive. Select the newest
   stable release, including Current; do not restrict selection to LTS. Exclude
   nightlies and prereleases. CI and release builds use the same release
-  (`node-version-file: default-agent/.node-version`). Linux images follow the
+  (`node-version-file: default-agent/.node-version`); local test scripts run the
+  bots suite through `scripts/with-pinned-node.sh`, which on a Mac with another
+  default Node uses the checksummed copy `prepare-default-agent.sh` caches. Linux images follow the
   same stable major (`node:<major>-trixie-slim`); `--pull --no-cache` picks up its
   newest patch and Debian security updates on every image build. Workspace
   creation may reuse matching local contents for less than 24 hours; an explicit
@@ -151,6 +167,23 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   actual registry installs, lockfiles, SDK updates and patched runtime APIs.
 - **CEF** is compiled and signed into the app. The newest stable build is
   always proposed: Chromium ships security fixes only on its current major.
+- **Woven Mac VM guest** (bots engine on a Mac, see
+  [Woven everywhere](architecture/WOVEN_EVERYWHERE.md#mac-vm)) is an exact
+  selection for security and core function: a VM that changed itself broke
+  earlier tests (the guest auto-upgraded its kernel), and Woven must be able
+  to snapshot, update and roll back as one step. The official Ubuntu 26.04 LTS
+  arm64 cloud image is pinned by serial directory and SHA-256 rather than
+  built locally, so it stays Canonical's signed, reproducibly published
+  artifact; the helper verifies size and digest before converting it.
+  `docker-ce`, `docker-ce-cli` and `containerd.io` are pinned to exact
+  versions from Docker's apt repository, verified with the bundled signing key
+  whose fingerprint and digest are recorded (the helper refuses a key that
+  does not match). Maintenance proposes the newest image serial and Docker
+  Engine release together; validation boots a fresh VM and runs the Mac VM
+  checks (engine socket, egress, exec half-close, previews). Installed VMs
+  move to new Docker pins and current Ubuntu security updates only through
+  Woven's Update action, which snapshots first and rolls back on failure; a
+  new image serial affects only new installs.
 - **Sparkle** delivers every later fix, so the Xcode project requires the exact
   release commit, and its signing tools come from the same release record.
   Major lines are proposed with the other majors and need careful review.
@@ -174,6 +207,27 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   `scripts/test-cua-desktop.sh` verifies actual input and capture through Woven MCP
   against a disposable native fixture, including background focus preservation.
   Signed-app Accessibility/Screen Recording grants are required for that check.
+- **Swift on Linux** (`wovenmatter-library` and the portable library targets).
+  `apple/swift-crypto` (floor 5.1.1, transitive `swift-asn1`) replaces CryptoKit
+  only on Linux: every use is `#if canImport(CryptoKit) … #else import Crypto`,
+  and the package product is conditioned on `.linux`, so Apple builds never
+  compile it. Its declaration is a minimum-only range (`"5.1.1"..<"1000.0.0"`)
+  and `app/Package.resolved` records the selection; generate both SwiftPM and
+  Xcode pins with tooling (`swift package resolve`, then
+  `xcodebuild -resolvePackageDependencies`). `shared/` has no Linux dependency:
+  it derives identifiers with an internal SHA-256 that its tests check
+  against published vectors and CryptoKit. On Linux, `CSQLite` links the
+  distribution's SQLite for tests (`libsqlite3-dev`, FTS5 and JSON required);
+  the shipped static binary links the SQLite amalgamation recorded in
+  `remote/library/build-version.json`, compiled with FTS5 and math functions.
+  That binary is an exact selection because it is fully static: the Swift
+  toolchain image (by digest), the Static Linux SDK (musl) archive and the
+  amalgamation are verified by SHA-256 before use, and SwiftPM verifies the SDK
+  again on install. Maintenance moves all three to the current stable
+  releases together (the SDK must match the toolchain exactly), regenerates
+  the resolved graph, and validates with `scripts/test-linux-library.sh` and
+  `scripts/build-linux-library.sh` (manual `linux` validation scope). Hosts
+  receive a new binary only in a host bundle from an updated app.
 - **MCP TypeScript SDK** uses the current v2 client and server packages. Woven MCP and
   Executor use the supported Streamable HTTP client, with the shared native MCP
   protocol core serving the same focused schemas on Mac, Linux and iOS adapters;
@@ -231,6 +285,17 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   recover transcript window gaps, and derive progress receipts only from new
   committed entries. Archive/subagent observers use `observeCommits`; SQLite
   migration verifies each batched commit receipt before activation.
+- **Bots runtime** (`bots/`) consumes the same Pi family, Chord, Claude Agent
+  SDK, typebox and ws selections as `default-agent`, with the same
+  consumer-scoped pi-ai provider and Chord `ws` overrides, and minimum-only
+  ranges. Its in-container helper ships the runtime's own locked Pi Durable,
+  Chord and Pi telemetry packages (copied from `bots/node_modules` into the
+  helper volume), so they never drift from the runtime. The bot image builds
+  through the Engine API from `bots/image` under a content-hash tag, so a
+  changed recipe gives a new image; existing bots move to it with Rebuild.
+  `npm test --prefix bots` (type check plus faux-provider suites) validates
+  it; `npm run test:engine --prefix bots` with `WOVEN_BOTS_ENGINE_SOCKET` set
+  exercises a real engine on request.
 - **Pyodide and esbuild** produce the offline iOS resources and their
   provenance. They refresh together with the generated files.
 

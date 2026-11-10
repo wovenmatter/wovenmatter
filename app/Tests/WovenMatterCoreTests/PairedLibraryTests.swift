@@ -1,6 +1,14 @@
 import Foundation
+#if canImport(CryptoKit)
 import CryptoKit
+#else
+import Crypto
+#endif
+#if canImport(SQLite3)
 import SQLite3
+#else
+import CSQLite
+#endif
 import WovenMatterClient
 import WorkspaceFixtures
 import Testing
@@ -1036,5 +1044,129 @@ extension PairedLibraryTests {
       #expect(names.contains("Third Mac edit") || names.contains("Third Mac edit (Recovered edit)"))
       #expect(names.contains("Large Air edit") || names.contains("Large Air edit (Recovered edit)"))
     }
+  }
+}
+
+/// The shared schema is what every peer must agree on before rows move. It is
+/// derived from column names and declared types, never physical order, so a
+/// library migrated over many releases and a freshly created one (a Linux
+/// host's) agree.
+extension PairedLibraryTests {
+  private func exchange(from sender: WorkspaceDatabase, _ senderID: String, to receiver: WorkspaceDatabase) async throws {
+    var cursor = try await receiver.pairedLibraryCursors(senderID).pulled
+    for _ in 0..<1000 {
+      let page = try await sender.pairedLibraryPage(after: cursor)
+      try await receiver.receivePairedLibrary(page, from: senderID)
+      cursor = page.cursor
+      if !page.hasMore { return }
+    }
+    Issue.record("Peer replay did not finish")
+  }
+
+  @Test func aMigratedLibraryAndAFreshOneShareOneSchemaAndExchangeRowsByName() async throws {
+    let legacy = try await Mac(), fresh = try await Mac(); defer { legacy.remove(); fresh.remove() }
+    let session = try await legacy.database.createFixtureLocalACPSession(runtimeKind: .codex, title: "Written before the upgrade", ownerDeviceID: UUID())
+    // Older releases added projection_applied with ALTER TABLE, so it sits last.
+    try await legacy.database.write { connection in
+      let sql = try #require(try connection.historyRowsUnlocked("SELECT sql FROM sqlite_master WHERE name='dashboard_run_trace_events'", values: [])
+        .first?.objectValue?["sql"]?.stringValue)
+      #expect(sql.contains("projection_applied INTEGER NOT NULL DEFAULT 0,"))
+      try connection.executeUnlocked("DROP TABLE dashboard_run_trace_events")
+      try connection.executeUnlocked(sql.replacingOccurrences(of: "projection_applied INTEGER NOT NULL DEFAULT 0,", with: ""))
+      try connection.executeUnlocked("ALTER TABLE dashboard_run_trace_events ADD COLUMN projection_applied INTEGER NOT NULL DEFAULT 0")
+    }
+    #expect(try await legacy.database.pairedLibrarySchema() == fresh.database.pairedLibrarySchema())
+    // Libraries from before September 2026 also keep the unused is_main, and
+    // their recorded versions of each chat carry it.
+    try await legacy.database.write { connection in
+      try connection.executeUnlocked("ALTER TABLE dashboard_conversations ADD COLUMN is_main INTEGER NOT NULL DEFAULT 0")
+      let value = #"json('{"type":"integer","value":"0"}')"#
+      try connection.executeUnlocked("""
+        UPDATE paired_library_changes SET payload=json_set(payload,'$.row.is_main',\(value)) WHERE json_extract(payload,'$.table')='dashboard_conversations';
+        UPDATE paired_library_rows SET payload=json_set(payload,'$.row.is_main',\(value)) WHERE table_name='dashboard_conversations';
+        """)
+    }
+    #expect(try await legacy.database.pairedLibrarySchema() != fresh.database.pairedLibrarySchema())
+
+    // Opening the library with this version drops the column and its traces.
+    let upgraded = try await WorkspaceDatabase(url: legacy.database.fileURL)
+    #expect(try await upgraded.read { try $0.historyRowsUnlocked("SELECT name FROM pragma_table_info('dashboard_conversations') WHERE name='is_main'", values: []) }.isEmpty)
+    #expect(try await upgraded.read { try $0.historyRowsUnlocked("SELECT 1 AS present FROM paired_library_changes WHERE json_type(payload,'$.row.is_main') IS NOT NULL", values: []) }.isEmpty)
+    #expect(try await upgraded.pairedLibrarySchema() == fresh.database.pairedLibrarySchema())
+
+    let event = UUID().uuidString.lowercased()
+    try await upgraded.write { try $0.toolsExecuteUnlocked("INSERT INTO dashboard_run_trace_events(id,conversation_id,content,projection_applied) VALUES(?,?,'step',1)", [event, session]) }
+    try await exchange(from: upgraded, legacy.id, to: fresh.database)
+    #expect(try await fresh.database.read { try $0.historyRowsUnlocked("SELECT title FROM dashboard_conversations WHERE id=?", values: [session]).first?.objectValue?["title"]?.stringValue } == "Written before the upgrade")
+    #expect(try await fresh.database.read { try $0.historyRowsUnlocked("SELECT projection_applied FROM dashboard_run_trace_events WHERE id=?", values: [event]).first?.objectValue?["projection_applied"]?.intValue } == 1)
+    #expect(try await fresh.database.pairedLibraryQuarantineCount() == 0)
+
+    let note = UUID().uuidString.lowercased()
+    try await fresh.note(note, title: "Written on the fresh library")
+    try await exchange(from: fresh.database, fresh.id, to: upgraded)
+    try await exchange(from: upgraded, legacy.id, to: fresh.database)
+    #expect(try await upgraded.companionNote(id: note)?.title == "Written on the fresh library")
+    #expect(try await upgraded.pairedLibraryQuarantineCount() == 0)
+    #expect(try await fresh.database.pairedLibraryQuarantineCount() == 0)
+  }
+
+  @Test func aTrulyDifferentSchemaStillMismatches() async throws {
+    let a = try await Mac(), extra = try await Mac(), retyped = try await Mac()
+    defer { a.remove(); extra.remove(); retyped.remove() }
+    try await a.note(UUID().uuidString.lowercased(), title: "Shared")
+    try await extra.database.write { try $0.executeUnlocked("ALTER TABLE notes ADD COLUMN shade TEXT") }
+    try await retyped.database.write { connection in
+      try connection.executeUnlocked("""
+        DROP TABLE paired_mac_routes;
+        CREATE TABLE paired_mac_routes(device_id TEXT PRIMARY KEY,library_id TEXT NOT NULL,endpoint TEXT NOT NULL,name BLOB NOT NULL);
+        """)
+    }
+    let schema = try await a.database.pairedLibrarySchema()
+    #expect(try await extra.database.pairedLibrarySchema() != schema)
+    #expect(try await retyped.database.pairedLibrarySchema() != schema)
+    let page = try await a.database.pairedLibraryPage(after: 0)
+    await #expect(throws: CompanionAPIError.self) { try await extra.database.receivePairedLibrary(page, from: a.id) }
+    await #expect(throws: CompanionAPIError.self) { try await retyped.database.receivePairedLibrary(page, from: a.id) }
+  }
+
+  /// The registry refresh saves remote workspace configurations every few
+  /// seconds. An unchanged one is not rewritten, whatever key order an
+  /// earlier build stored it in, so it never becomes a new shared change.
+  @Test func anUnchangedRemoteWorkspaceConfigurationIsNotRewritten() async throws {
+    let a = try await Mac(), b = try await Mac(); defer { a.remove(); b.remove() }
+    let remote = RemoteWorkspaceConfiguration(name: "Linux host", workspaceID: "fixture", hostName: "linux.example.ts.net", dataRoot: "/srv/woven")
+    let id = remote.id.uuidString.lowercased()
+    func stored(_ database: WorkspaceDatabase) async throws -> String? {
+      try await database.read { try $0.historyRowsUnlocked("SELECT configuration FROM paired_remote_workspaces WHERE id=?", values: [id]).first?.objectValue?["configuration"]?.stringValue }
+    }
+    try await a.database.savePairedRemoteWorkspaces([remote])
+    let saved = try await lastChange(a.database)
+    for _ in 0..<3 { try await a.database.savePairedRemoteWorkspaces([remote]) }
+    #expect(try await lastChange(a.database) == saved)
+
+    let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+    let sorted = String(decoding: try encoder.encode(remote), as: UTF8.self)
+    #expect(try await stored(a.database) == sorted)
+    // The same value in another key order, as an earlier build wrote it.
+    let object = try #require(try JSONSerialization.jsonObject(with: Data(sorted.utf8)) as? [String: Any])
+    let reversed = "{" + (try object.keys.sorted(by: >).map { key in
+      "\"\(key)\":" + String(decoding: try JSONSerialization.data(withJSONObject: object[key]!, options: [.fragmentsAllowed]), as: UTF8.self)
+    }).joined(separator: ",") + "}"
+    #expect(reversed != sorted)
+    #expect(try JSONDecoder().decode(RemoteWorkspaceConfiguration.self, from: Data(reversed.utf8)) == remote)
+    try await a.database.write { try $0.toolsExecuteUnlocked("UPDATE paired_remote_workspaces SET configuration=? WHERE id=?", [reversed, id]) }
+    let reordered = try await lastChange(a.database)
+    try await a.database.savePairedRemoteWorkspaces([remote])
+    #expect(try await lastChange(a.database) == reordered)
+    #expect(try await stored(a.database) == reversed)
+
+    // A real change is written once, in sorted form, and reaches peers.
+    var renamed = remote; renamed.name = "Renamed host"
+    try await a.database.savePairedRemoteWorkspaces([renamed])
+    #expect(try await lastChange(a.database) > reordered)
+    #expect(try await stored(a.database) == String(decoding: try encoder.encode(renamed), as: UTF8.self))
+    try await a.send(to: b)
+    let received = try #require(try await stored(b.database))
+    #expect(try JSONDecoder().decode(RemoteWorkspaceConfiguration.self, from: Data(received.utf8)) == renamed)
   }
 }

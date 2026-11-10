@@ -22,10 +22,10 @@ extension CompanionModel {
       appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String)
   }
 
-  func acceptPairing(_ paired: MobileCredential, allowingLibraryChange: Bool = false,
+  func acceptPairing(_ paired: MobileCredential, allowingLibraryChange: Bool = false, keepLibrary: Bool = false,
                      saveCredential: (MobileCredential) throws -> Void) async throws {
     guard let store else { throw MobileConnectionError.invalidResponse }
-    let connection = try HTTPSCompanionTransport(credential: paired, metadata: deviceMetadata)
+    let connection = try HTTPSCompanionTransport(credential: paired, metadata: deviceMetadata, performer: httpPerformer)
     connectionGeneration = UUID()
     connectionRefreshTask?.cancel(); connectionRefreshTask = nil
     for task in workspacePollTasks.values { task.cancel() }
@@ -34,12 +34,12 @@ extension CompanionModel {
     credential = nil; transport = nil; engine = nil; online = false
     await previousEngine?.cancelSynchronization()
     let committed = try await MobilePairingCommit.complete(paired, store: store,
-      allowingLibraryChange: allowingLibraryChange, saveCredential: saveCredential,
-      confirm: { try await connection.confirmPairing() })
+      allowingLibraryChange: allowingLibraryChange, keepLibrary: keepLibrary, saveCredential: saveCredential,
+      confirm: { try await pairingRequests(connection).confirmPairing() })
     credential = committed; transport = connection
     engine = MobileSyncEngine(store: store, transport: connection)
     synchronizationStatus = .init(); online = false; connectionLabel = "Connecting"
-    centralRetryCount = 0; centralRefreshAfter = .distantPast
+    centralRetryCount = 0; centralRefreshAfter = .distantPast; centralProvidersRefreshDue = true
     pairingError = nil
     await reload()
     try await ensureDeviceWorkspace()
@@ -64,8 +64,9 @@ extension CompanionModel {
     await previousEngine?.cancelSynchronization()
     do {
       // Best effort while reachable; local unpairing also works offline.
-      try? await previousTransport?.unpair()
+      if let previousTransport { try? await pairingRequests(previousTransport).unpair() }
       try clearCredential()
+      clearMembership()
       try await store?.recoverPairingTransition()
       try await store?.detachWorkspace()
       let journalIDs = await store?.journal.snapshot().workspaces.keys.map { $0 } ?? []
@@ -84,7 +85,7 @@ extension CompanionModel {
   func connectionDidBecomeActive() {
     connectionForeground = true
     guard automaticSynchronization, !fixture, !isolatedTestHost else { return }
-    centralRefreshAfter = .distantPast; workspaceRefreshAfter = [:]
+    centralRefreshAfter = .distantPast; workspaceRefreshAfter = [:]; centralProvidersRefreshDue = true
     requestSynchronization(immediately: true)
   }
 
@@ -116,14 +117,14 @@ extension CompanionModel {
       }
       // A viewed running chat receives live activity. Idle workspaces and failed
       // connections each have their own longer deadline before any network work.
-      let interval: Duration = tab == .chat && activeRunID != nil ? .seconds(2) : .seconds(15)
+      let interval: Duration = tab == .chat && (activeRunID != nil || awaitingRemoteTurn) ? .seconds(2) : .seconds(15)
       do { try await Task.sleep(for: interval) } catch { return }
     }
   }
 
   private func connectionDidBecomeReachable() {
     guard connectionForeground else { return }
-    centralRefreshAfter = .distantPast; workspaceRefreshAfter = [:]
+    centralRefreshAfter = .distantPast; workspaceRefreshAfter = [:]; centralProvidersRefreshDue = true
     requestSynchronization(immediately: true)
   }
 

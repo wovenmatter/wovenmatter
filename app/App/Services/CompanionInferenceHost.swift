@@ -5,6 +5,8 @@ import WovenMatterCore
 import WovenMatterDashboardStore
 
 /// Hosts model inference for authorized mobile clients. Pi's agent and all tools stay on the requesting device.
+/// A phone or Mac member signs its requests (docs/architecture/WOVEN_EVERYWHERE.md,
+/// "Membership and device keys"); a device paired before members presents its grant.
 @MainActor
 final class CompanionInferenceHost {
     typealias Prepare = @MainActor @Sendable () async throws -> Data
@@ -21,12 +23,50 @@ final class CompanionInferenceHost {
     /// rather than when its grant is eventually deleted.
     typealias Authorize = @MainActor @Sendable (String, String?) async throws -> Void
     private let authorize: Authorize
+    /// Signed member requests (`ios` and `mac`). Nil until this Mac has a member directory.
+    private let members: MemberDirectory?
     init(authentication: CompanionExecutionAuthentication, descriptor: CompanionExecutionWorkspace, directory: URL,
-         isActive: @escaping @MainActor @Sendable () -> Bool, authorize: @escaping Authorize,
+         isActive: @escaping @MainActor @Sendable () -> Bool, authorize: @escaping Authorize, members: MemberDirectory? = nil,
          preparePayload: @escaping Prepare = { try await ProviderAccountCoordinator.shared.prepare("local").data() },
          run: Run? = nil) {
         self.authentication = authentication; self.descriptor = descriptor; self.directory = directory; self.isActive = isActive
-        self.authorize = authorize; self.preparePayload = preparePayload; self.injectedRun = run
+        self.authorize = authorize; self.members = members; self.preparePayload = preparePayload; self.injectedRun = run
+    }
+
+    /// Who is asking and how to re-check them before credentials are prepared
+    /// and again before a model stream starts.
+    private struct Principal: Sendable {
+        let deviceID: String
+        let recheck: @Sendable () async throws -> Void
+    }
+    private func principal(_ request: CompanionHTTPRequest) async throws -> Principal? {
+        guard request.headers["x-woven-protocol"] == String(CompanionProtocol.version) else { return nil }
+        if MemberRequestVerifier.isSigned(request.headers) {
+            guard let members else { throw CompanionAPIError(code: "unauthorized", message: "This Mac does not accept member requests yet.") }
+            let member: LibraryMember
+            do { member = try await members.authenticate(request, allowing: [.ios, .mac]) }
+            catch let error as MemberRequestError {
+                throw CompanionAPIError(code: error.code == "wrong_device" ? "wrong_workspace" : "unauthorized", message: error.message)
+            }
+            // A signed caller may name this workspace, never another.
+            guard request.headers["x-woven-workspace"].map({ $0 == descriptor.id }) ?? true,
+                  request.headers["x-woven-library"].map({ $0 == descriptor.libraryID }) ?? true,
+                  request.headers["x-woven-device"].map({ $0.lowercased() == member.deviceID }) ?? true else { return nil }
+            let deviceID = member.deviceID
+            return Principal(deviceID: deviceID, recheck: {
+                // Revocation takes effect as soon as it syncs.
+                guard await members.member(deviceID) != nil else { throw CompanionAPIError(code: "unauthorized", message: "This device was removed.") }
+            })
+        }
+        guard let bearer = request.bearer else { throw CompanionAPIError(code: "unauthorized", message: "An authorized inference-host connection is required.") }
+        let grant = try await authentication.authenticateGrant(bearer: bearer)
+        let scope = grant.scope
+        guard scope.libraryID == descriptor.libraryID, scope.workspaceID == descriptor.id,
+              request.headers["x-woven-library"] == scope.libraryID,
+              request.headers["x-woven-workspace"] == scope.workspaceID,
+              request.headers["x-woven-device"] == scope.deviceID else { return nil }
+        let authorize = authorize, provisionedBy = grant.provisionedBy
+        return Principal(deviceID: scope.deviceID, recheck: { try await authorize(scope.deviceID, provisionedBy) })
     }
     func handle(_ request: CompanionHTTPRequest) async -> CompanionHTTPResponse {
         guard isActive() else { return .error("unavailable", "This inference host is stopped.", status: 503) }
@@ -35,14 +75,7 @@ final class CompanionInferenceHost {
             let catalog = request.method == "GET" && ["/v1/inference/catalog", "/wovenmatter/v1/inference/catalog"].contains(path)
             let stream = request.method == "POST" && ["/v1/inference/stream", "/wovenmatter/v1/inference/stream"].contains(path)
             guard catalog || stream else { return .error("not_found", "Unknown inference endpoint.", status: 404) }
-            guard let bearer = request.bearer else { return .error("unauthorized", "An authorized inference-host connection is required.", status: 401) }
-            let grant = try await authentication.authenticateGrant(bearer: bearer)
-            let scope = grant.scope
-            guard scope.libraryID == descriptor.libraryID, scope.workspaceID == descriptor.id,
-                  request.headers["x-woven-protocol"] == String(CompanionProtocol.version),
-                  request.headers["x-woven-library"] == scope.libraryID,
-                  request.headers["x-woven-workspace"] == scope.workspaceID,
-                  request.headers["x-woven-device"] == scope.deviceID else {
+            guard let principal = try await principal(request) else {
                 return .error("wrong_workspace", "This inference credential is scoped to another device or workspace.", status: 403)
             }
             guard request.body.count <= 8 * 1024 * 1024 else { return .error("too_large", "Inference input exceeds the request limit.", status: 413) }
@@ -56,13 +89,13 @@ final class CompanionInferenceHost {
                 }
                 object = value
             }
-            try await authorize(scope.deviceID, grant.provisionedBy)
+            try await principal.recheck()
             // This is the existing credential owner and refresh coordinator. Credentials cross only private stdin.
             let payload = try await preparePayload()
             guard isActive() else { return .error("unavailable", "This inference host stopped.", status: 503) }
             let configured = try JSONSerialization.jsonObject(with: payload)
             let body = try JSONSerialization.data(withJSONObject: ["action": catalog ? "catalog" : "stream",
-                "payload": configured, "request": object, "principalID": scope.deviceID])
+                "payload": configured, "request": object, "principalID": principal.deviceID])
             let run: Run
             if let injectedRun { run = injectedRun }
             else {
@@ -72,7 +105,7 @@ final class CompanionInferenceHost {
                 let helper = CompanionInferenceProcess(executable: launch.executableURL, arguments: launch.arguments, directory: directory)
                 run = { body, emit in try await helper.run(body: body, emit: emit) }
             }
-            try await authorize(scope.deviceID, grant.provisionedBy)
+            try await principal.recheck()
             if catalog {
                 let collected = CompanionInferenceBytes()
                 try await run(body) { data in try collected.append(data) }
@@ -80,10 +113,10 @@ final class CompanionInferenceHost {
             }
             let model = object["model"] as? [String: Any] ?? [:]
             let provider = model["provider"] as? String ?? "", modelID = model["id"] as? String ?? ""
-            let authorize = self.authorize, deviceID = scope.deviceID, provisionedBy = grant.provisionedBy
+            let recheck = principal.recheck
             return CompanionHTTPResponse(contentType: "application/x-ndjson", stream: { emit in
                 do {
-                    try await authorize(deviceID, provisionedBy)
+                    try await recheck()
                     try await run(body, emit)
                 }
                 catch {
@@ -98,7 +131,7 @@ final class CompanionInferenceHost {
                 }
             })
         } catch let error as CompanionAPIError {
-            return .error(error.code, error.message, status: error.code == "unauthorized" ? 401 : 503)
+            return .error(error.code, error.message, status: error.code == "unauthorized" ? 401 : error.code == "wrong_workspace" ? 403 : 503)
         } catch {
             return .error("inference_unavailable", "The Mac inference connection is unavailable. Check its connection in Settings.", status: 503)
         }

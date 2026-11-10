@@ -53,6 +53,10 @@ fi
 if enabled embedded; then
   node scripts/build-ios-embedded-runtime.mjs --check
 fi
+if enabled bots; then
+  scripts/with-pinned-node.sh npm ci --prefix bots --ignore-scripts --no-audit --no-fund
+  scripts/with-pinned-node.sh npm test --prefix bots
+fi
 if enabled scripts; then
   # These fixtures stub external tools; native fixtures run in manual validation.
   scripts/test-release.sh --portable

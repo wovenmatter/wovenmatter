@@ -8,6 +8,8 @@ import WovenMatterClient
 @Suite("OSC 7501 program status")
 struct ProgramStatusTests {
 
+  // Local harness sessions run only in the Mac app; Linux hosts run harnesses in Node.
+  #if os(macOS)
   @Test(arguments: [AgentRuntimeKind.defaultAgent, .codex, .claudeCode, .grokBuild])
   func coordinatorBindsReportsAndDecisionLifetimes(kind: AgentRuntimeKind) async throws {
     let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
@@ -48,6 +50,7 @@ struct ProgramStatusTests {
     #expect(final?.status?.state == .done && final?.records.contains { $0.id == "foreign" } == false)
     await coordinator.shutdown()
   }
+  #endif
 
 
   @Test(arguments: ["limited", "self", "history", "attachment", "managed"])

@@ -60,6 +60,42 @@ public enum AgentRuntimeKind: String, Codable, CaseIterable, Hashable, Sendable 
     case .opencode: "OpenCode"
     }
   }
+
+  /// The harness's native Full access mode: the product default for every new
+  /// chat on every workspace unless the user saved a different default.
+  public var fullAccessPermission: String? {
+    switch self {
+    case .codex: "agent-full-access"
+    case .claudeCode, .grokBuild: "bypassPermissions"
+    case .defaultAgent, .openclaw, .hermes: "full"
+    case .opencode: "allow"
+    // Cursor Full Access uses its documented native --force process flag.
+    case .cursor: "force"
+    case .pi: nil
+    }
+  }
+
+  /// Presentation order for native permission modes: Full access first, then
+  /// the harness's auto-approve modes, then its other modes. The ask-for-approval
+  /// mode stays available but is listed last. Unknown modes keep native order.
+  public func orderedPermissionOptions(_ options: [String]) -> [String] {
+    func rank(_ id: String) -> Int {
+      if id == fullAccessPermission { return 0 }
+      switch (self, id) {
+      case (.codex, "agent"), (.claudeCode, "auto"), (.claudeCode, "acceptEdits"),
+           (.grokBuild, "auto"), (.grokBuild, "acceptEdits"):
+        return 1
+      case (.codex, "workspace-write"), (.claudeCode, "default"), (.grokBuild, "default"),
+           (.opencode, "ask"), (.defaultAgent, "ask"):
+        return 3
+      default:
+        return 2
+      }
+    }
+    return options.enumerated()
+      .sorted { (rank($0.element), $0.offset) < (rank($1.element), $1.offset) }
+      .map(\.element)
+  }
 }
 
 public enum AgentRuntimeStatus: String, Codable, Sendable {

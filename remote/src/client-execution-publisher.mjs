@@ -7,12 +7,21 @@ const sameArtifact = (a,b) => ['id','workspaceID','title','mediaType','byteCount
 
 // This is an origin outbox, not a client relay. Its only source is the service's
 // own SQLite journal. Publication failures never control agent execution.
-export function createClientExecutionPublisher({ db, identity, secret, events, flush = () => {}, fetchImpl = globalThis.fetch, intervalMilliseconds = 5000 }) {
+// With a local library host (`localLibrary`), history goes into this
+// machine's own library copy through its socket's `/v1/publisher/*` routes
+// (the same bodies as a Mac's `/v1/federation/publisher/*`) and reaches other
+// devices by peer sync; the single-Mac grant is used only without a library host. Each target
+// keeps its own cursor and receipts, so switching never skips history.
+export function createClientExecutionPublisher({ db, identity, secret, events, flush = () => {}, fetchImpl = globalThis.fetch, intervalMilliseconds = 5000, localLibrary = null }) {
   db.exec(`CREATE TABLE IF NOT EXISTS central_publication (id INTEGER PRIMARY KEY CHECK(id=1), envelope TEXT NOT NULL, acknowledged INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE IF NOT EXISTS retained_publication_receipts (event_id TEXT PRIMARY KEY);
     CREATE TABLE IF NOT EXISTS central_publication_lanes (name TEXT PRIMARY KEY, failures INTEGER NOT NULL DEFAULT 0, next_attempt INTEGER NOT NULL DEFAULT 0, last_success TEXT, last_error_code TEXT);
     INSERT OR IGNORE INTO central_publication_lanes(name) VALUES ('journal'),('artifacts');
-    CREATE TABLE IF NOT EXISTS saved_execution_artifacts (id TEXT PRIMARY KEY, manifest TEXT NOT NULL, bytes BLOB NOT NULL, uploaded INTEGER NOT NULL DEFAULT 0);`)
+    CREATE TABLE IF NOT EXISTS saved_execution_artifacts (id TEXT PRIMARY KEY, manifest TEXT NOT NULL, bytes BLOB NOT NULL, uploaded INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE IF NOT EXISTS local_library_publication (id INTEGER PRIMARY KEY CHECK(id=1), acknowledged INTEGER NOT NULL DEFAULT 0);
+    INSERT OR IGNORE INTO local_library_publication(id) VALUES (1);
+    CREATE TABLE IF NOT EXISTS local_retained_publication_receipts (event_id TEXT PRIMARY KEY);
+    CREATE TABLE IF NOT EXISTS local_artifact_uploads (id TEXT PRIMARY KEY, manifest TEXT NOT NULL);`)
   const key = typeof secret === 'string' && secret.length >= 16 ? createHash('sha256').update('wovenmatter-workspace-publisher-v1\0'+secret).digest() : null
   let inFlight, stopped = false, timer
   const controllers = new Set()
@@ -47,12 +56,45 @@ export function createClientExecutionPublisher({ db, identity, secret, events, f
     return status()
   }
   function status() {
-    const value = grant(), row = db.prepare('SELECT acknowledged FROM central_publication WHERE id=1').get()
+    const value = target()
     const lane = name => { const item=laneRow(name);return {failureCount:item.failures,nextAttemptAt:item.next_attempt,
       ...(item.last_success?{lastSuccessAt:item.last_success}:{}),...(item.last_error_code?{lastErrorCode:item.last_error_code}:{})} }
-    return {configured:!!value,...(value?{grantID:value.grantID}:{}),acknowledgedOriginSequence:row?.acknowledged??0,
-      pendingArtifacts:db.prepare('SELECT count(*) AS count FROM saved_execution_artifacts WHERE uploaded=0').get().count,
+    return {configured:!!value,target:value?.kind??null,...(value?.grantID?{grantID:value.grantID}:{}),acknowledgedOriginSequence:value?value.cursor():0,
+      pendingArtifacts:value?.kind==='local'?db.prepare('SELECT count(*) AS count FROM saved_execution_artifacts WHERE id NOT IN (SELECT id FROM local_artifact_uploads)').get().count
+        :db.prepare('SELECT count(*) AS count FROM saved_execution_artifacts WHERE uploaded=0').get().count,
       journal:lane('journal'),artifacts:lane('artifacts')}
+  }
+  // The active publication target: this machine's library whenever it has a
+  // library host (history waits while the host restarts, and never goes to a
+  // single Mac meanwhile); a Mac's publisher grant only on hosts without one.
+  function target() {
+    if (localLibrary) {
+      if (!localLibrary.available()) return null
+      let own
+      try { own = identity() } catch { return null }
+      const headers = {'x-woven-workspace':own.libraryID,'x-woven-workspace-id':own.id,'x-woven-execution-device-id':own.executionDeviceID}
+      return {kind:'local',libraryID:own.libraryID,workspaceID:own.id,grantID:null,
+        post:(path,body)=>localPost(path,body,headers),
+        cursor:()=>db.prepare('SELECT acknowledged FROM local_library_publication WHERE id=1').get().acknowledged,
+        advance:value=>db.prepare('UPDATE local_library_publication SET acknowledged=max(acknowledged,?) WHERE id=1').run(value),
+        receipts:'local_retained_publication_receipts',
+        pendingArtifacts:()=>db.prepare('SELECT id,manifest,bytes FROM saved_execution_artifacts WHERE id NOT IN (SELECT id FROM local_artifact_uploads) ORDER BY id').all(),
+        uploaded:(id,manifest)=>db.prepare('INSERT OR REPLACE INTO local_artifact_uploads VALUES (?,?)').run(id,JSON.stringify(manifest))}
+    }
+    const value = grant()
+    if (!value) return null
+    return {...value,kind:'central',post:(path,body)=>post(value,path,body),
+      cursor:()=>db.prepare('SELECT acknowledged FROM central_publication WHERE id=1').get().acknowledged,
+      advance:acknowledged=>db.prepare('UPDATE central_publication SET acknowledged=max(acknowledged,?) WHERE id=1').run(acknowledged),
+      receipts:'retained_publication_receipts',
+      pendingArtifacts:()=>db.prepare('SELECT id,manifest,bytes FROM saved_execution_artifacts WHERE uploaded=0 ORDER BY id').all(),
+      uploaded:(id,manifest)=>db.prepare('UPDATE saved_execution_artifacts SET manifest=?,uploaded=1 WHERE id=?').run(JSON.stringify(manifest),id)}
+  }
+  async function localPost(path, body, headers) {
+    if (stopped) throw fail(503,'The workspace publisher is stopped.')
+    const controller = new AbortController();controllers.add(controller)
+    try { return await localLibrary.post(path, body, headers, {signal:controller.signal}) }
+    finally { controllers.delete(controller) }
   }
   async function post(value, path, body) {
     if (stopped) throw fail(503,'The workspace publisher is stopped.')
@@ -70,28 +112,28 @@ export function createClientExecutionPublisher({ db, identity, secret, events, f
     let sent=false
     for(;;) {
       const rows=db.prepare(`SELECT body FROM events WHERE json_extract(body,'$.retainedExecution') IS NOT NULL
-        AND json_extract(body,'$.eventID') NOT IN (SELECT event_id FROM retained_publication_receipts) ORDER BY sequence LIMIT 100`).all()
+        AND json_extract(body,'$.eventID') NOT IN (SELECT event_id FROM ${value.receipts}) ORDER BY sequence LIMIT 100`).all()
       const entries=[];let bytes=0
       for(const row of rows) {const size=Buffer.byteLength(row.body);if(entries.length&&bytes+size>4*1024*1024)break;entries.push(JSON.parse(row.body));bytes+=size}
       if(!entries.length)return sent
-      const result=await post(value,'retained/settle',{libraryID:value.libraryID,entries})
+      const result=await value.post('retained/settle',{libraryID:value.libraryID,entries})
       const ids=entries.map(entry=>entry.eventID)
       if(result.libraryID!==value.libraryID||!Array.isArray(result.acceptedEventIDs)||result.acceptedEventIDs.length!==ids.length
         ||new Set(result.acceptedEventIDs).size!==ids.length||!ids.every(id=>result.acceptedEventIDs.includes(id)))throw fail(409,'The central library returned an incomplete retained-run receipt.')
       if(stopped)return sent
-      for(const id of ids)db.prepare('INSERT OR IGNORE INTO retained_publication_receipts VALUES (?)').run(id)
+      for(const id of ids)db.prepare(`INSERT OR IGNORE INTO ${value.receipts} VALUES (?)`).run(id)
       sent=true
     }
   }
   async function publishJournal(value) {
     flush()
     let sent = await settleRetainedRuns(value)
-    let acknowledged = db.prepare('SELECT acknowledged FROM central_publication WHERE id=1').get().acknowledged
+    let acknowledged = value.cursor()
     for (;;) {
       const page = events(acknowledged)
       if (!page.entries.length) break
       if (page.entries.some(entry=>entry.workspaceID!==value.workspaceID)) throw fail(409,'Foreign workspace records cannot enter this publisher.')
-      const result = await post(value,'journal',{libraryID:value.libraryID,entries:page.entries})
+      const result = await value.post('journal',{libraryID:value.libraryID,entries:page.entries})
       sent = true
       const ids = page.entries.map(entry=>entry.eventID)
       if (result.libraryID!==value.libraryID || !Array.isArray(result.acceptedEventIDs) || result.acceptedEventIDs.length!==ids.length
@@ -100,29 +142,29 @@ export function createClientExecutionPublisher({ db, identity, secret, events, f
       if (stopped) return
       acknowledged = page.cursor
       // Only this exact accepted origin batch advances the durable origin cursor.
-      db.prepare('UPDATE central_publication SET acknowledged=max(acknowledged,?) WHERE id=1').run(acknowledged)
+      value.advance(acknowledged)
       if (!page.hasMore) break
     }
     return sent
   }
   async function publishArtifacts(value) {
     let sent = false
-    for (const row of db.prepare('SELECT id,manifest,bytes FROM saved_execution_artifacts WHERE uploaded=0 ORDER BY id').all()) {
+    for (const row of value.pendingArtifacts()) {
       const manifest = JSON.parse(row.manifest), bytes = Buffer.from(row.bytes)
-      let transfer = await post(value,'artifacts/register',{manifest})
+      let transfer = await value.post('artifacts/register',{manifest})
       sent = true
       const check = () => { if (!sameArtifact(transfer.manifest,manifest) || !Number.isSafeInteger(transfer.manifest.revision) || transfer.manifest.revision<1
         || !Number.isSafeInteger(transfer.nextOffset) || transfer.nextOffset<0 || transfer.nextOffset>bytes.length || (transfer.complete && transfer.nextOffset!==bytes.length)) throw fail(409,'Invalid saved artifact receipt.') }
       check()
       while (!transfer.complete && transfer.nextOffset<bytes.length) {
         const offset=transfer.nextOffset, data=bytes.subarray(offset,offset+1048576)
-        transfer=await post(value,'artifacts/chunk',{id:manifest.id,revision:transfer.manifest.revision,offset,data:data.toString('base64')});check()
+        transfer=await value.post('artifacts/chunk',{id:manifest.id,revision:transfer.manifest.revision,offset,data:data.toString('base64')});check()
         if(transfer.nextOffset!==offset+data.length)throw fail(409,'Saved artifact acknowledgement did not advance by its submitted bytes.')
       }
-      const committed=transfer.complete?transfer.manifest:await post(value,'artifacts/commit',{id:manifest.id,revision:transfer.manifest.revision})
+      const committed=transfer.complete?transfer.manifest:await value.post('artifacts/commit',{id:manifest.id,revision:transfer.manifest.revision})
       if(!sameArtifact(committed,manifest)||committed.revision!==transfer.manifest.revision)throw fail(409,'Saved artifact commit did not match its source.')
       if(stopped)return
-      db.prepare('UPDATE saved_execution_artifacts SET manifest=?,uploaded=1 WHERE id=?').run(JSON.stringify(committed),manifest.id)
+      value.uploaded(manifest.id,committed)
     }
     return sent
   }
@@ -145,7 +187,7 @@ export function createClientExecutionPublisher({ db, identity, secret, events, f
     }
   }
   async function publish(automatic) {
-    const value=grant();if(!value||stopped)return
+    const value=target();if(!value||stopped)return
     const results=await Promise.allSettled([
       runLane('journal',()=>publishJournal(value),automatic),
       runLane('artifacts',()=>publishArtifacts(value),automatic)
@@ -162,7 +204,7 @@ export function createClientExecutionPublisher({ db, identity, secret, events, f
     if(stopped || intervalMilliseconds<=0)return
     clearTimeout(timer)
     const next=Math.min(laneRow('journal').next_attempt,laneRow('artifacts').next_attempt)
-    const delay=milliseconds??(grant()?Math.max(1,next-Date.now()):intervalMilliseconds)
+    const delay=milliseconds??(target()?Math.max(1,next-Date.now()):intervalMilliseconds)
     timer=setTimeout(()=>{void syncNow({automatic:true}).catch(()=>{}).finally(()=>schedule())},delay);timer.unref()
   }
   function saveArtifact({id=randomUUID(),title,mediaType,data}) {
@@ -178,8 +220,8 @@ export function createClientExecutionPublisher({ db, identity, secret, events, f
   }
   schedule(0)
   async function resolveRetainedAssociation(request) {
-    const value=grant();if(!value||!uuid(request?.runID))return null
-    try { return await post(value,'association',request) } catch(error) { if(error.statusCode===404)return null;throw error }
+    const value=target();if(!value||!uuid(request?.runID))return null
+    try { return await value.post('association',request) } catch(error) { if(error.statusCode===404)return null;throw error }
   }
-  return {configure,status,syncNow,saveArtifact,resolveRetainedAssociation,async close(){stopped=true;clearTimeout(timer);for(const controller of controllers)controller.abort();await inFlight?.catch(()=>{})}}
+  return {configure,status,syncNow,saveArtifact,resolveRetainedAssociation,kick:()=>schedule(0),async close(){stopped=true;clearTimeout(timer);for(const controller of controllers)controller.abort();await inFlight?.catch(()=>{})}}
 }

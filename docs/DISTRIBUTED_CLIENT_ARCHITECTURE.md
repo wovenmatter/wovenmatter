@@ -40,12 +40,16 @@ files follow [the workspace data model](WORKSPACE_DATA_MODEL.md), outside librar
 synchronization. A local upgrade can import a former node's native database on
 the same physical Mac; that path is never available over the network.
 
-Workspace administrator and provider credentials stay with their installation.
-Every requesting device receives its own scoped direct-execution credential.
-Once enrolled, it can use a reachable workspace independently of the Mac that
-added it. Initial enrollment of a newly added remote workspace still needs the
-Mac holding that workspace's management credential to be reachable. Owning that
-execution capability does not confer library authority.
+Workspace provider credentials stay with their installation. Macs and Linux
+hosts reach every other Mac and Linux workspace with signed member requests
+(see [Woven everywhere](architecture/WOVEN_EVERYWHERE.md), "Membership and
+device keys"): nothing is issued or enrolled, so any Mac uses, and manages, a
+Linux host whichever Mac added it, and a Linux host creates sessions on
+another Linux host with every Mac offline. The Mac that added a Linux host
+keeps its SSH link only for first install and as an update fallback. Phones
+that still pair with a bearer receive their own scoped direct-execution
+credential, which any Mac can request from a Linux host. Owning execution
+does not confer library authority.
 
 ## Offline changes and reconnection
 

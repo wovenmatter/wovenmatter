@@ -1,6 +1,10 @@
 import WorkspaceFixtures
 import Foundation
+#if canImport(SQLite3)
 import SQLite3
+#else
+import CSQLite
+#endif
 import Testing
 import WovenMatterCore
 @testable import WovenMatterDashboardStore

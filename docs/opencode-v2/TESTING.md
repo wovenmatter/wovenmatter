@@ -9,8 +9,8 @@ scripts/build_and_run.sh --mode snapshot --instance opencode
 ```
 
 The app is `Woven Matter opencode snapshot Dev.app` under
-`/private/tmp/wovenmatter-development/opencode/snapshot/DerivedData/Build/Products/Debug`
-(`WOVENMATTER_DEV_CACHE_DIR` replaces the `/private/tmp/wovenmatter-development`
+`~/Library/Developer/Woven Matter Dev/opencode/snapshot/DerivedData/Build/Products/Debug`
+(`WOVENMATTER_DEV_CACHE_DIR` replaces the `~/Library/Developer/Woven Matter Dev`
 base). The instance isolates only Woven Matter's database/settings; it connects to the standard local OpenCode service and data, not an isolated OpenCode test server.
 
 ## Manual acceptance

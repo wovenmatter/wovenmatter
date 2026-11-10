@@ -28,6 +28,7 @@ private enum SettingsSection: Equatable {
     case landing
     case agents
     case general
+    case permissions
     case backgroundServer
     case connections(String)
     case defaultAgent(String, HarnessSettingsOrigin)
@@ -40,6 +41,9 @@ private enum SettingsSection: Equatable {
     case remoteWorkspaces
     case usage
     case dictation
+    case bots
+    case botsSection(machineID: String, PiBotSettingsSection)
+    case botsResources(machineID: String)
 }
 
 struct SettingsView: View {
@@ -48,6 +52,7 @@ struct SettingsView: View {
     @AppStorage(DashboardTheme.storageKey) private var storedTheme = DashboardTheme.green.rawValue
     @State private var section: SettingsSection = .landing
     @State private var providerReturnSection: SettingsSection = .openCode
+    @State private var macAccess = MacAccessSetupModel.shared
 
     private var theme: DashboardTheme {
         DashboardTheme(rawValue: storedTheme) ?? .green
@@ -75,6 +80,13 @@ struct SettingsView: View {
                 SettingsBackgroundServerView(model: model, reservesRailControlSpace: reservesRailControlSpace, onBack: { section = .landing })
             case .general:
                 SettingsGeneralView(
+                    model: model,
+                    reservesRailControlSpace: reservesRailControlSpace,
+                    onBack: { section = .landing },
+                    onOpenPermissions: { section = .permissions }
+                )
+            case .permissions:
+                SettingsPermissionsView(
                     model: model,
                     reservesRailControlSpace: reservesRailControlSpace,
                     onBack: { section = .landing }
@@ -135,12 +147,40 @@ struct SettingsView: View {
                 )
             case .dictation:
                 SettingsDictationView(model: model,
-                    reservesRailControlSpace: reservesRailControlSpace, onBack: { section = .landing })
+                    reservesRailControlSpace: reservesRailControlSpace, onBack: { section = .landing },
+                    onOpenPermissions: { section = .permissions })
             case .usage:
                 SettingsUsageView(
                     model: model,
                     reservesRailControlSpace: reservesRailControlSpace,
                     onBack: { section = .landing }
+                )
+            case .bots:
+                SettingsBotsView(
+                    model: model,
+                    reservesRailControlSpace: reservesRailControlSpace,
+                    onBack: { section = .landing },
+                    onOpenSection: { section = .botsSection(machineID: $0, $1) },
+                    onOpenResources: { section = .botsResources(machineID: $0) },
+                    onOpenConnections: { section = .connections("global") }
+                )
+            case let .botsSection(machineID, botSection):
+                if let session = model.bots.session(for: machineID) {
+                    SettingsBotsSectionPage(
+                        bots: session,
+                        section: botSection,
+                        reservesRailControlSpace: reservesRailControlSpace,
+                        onBack: { section = .bots }
+                    )
+                } else {
+                    SettingsPage(title: botSection.title, reservesRailControlSpace: reservesRailControlSpace, backTitle: "Bots",
+                                 onBack: { section = .bots }) { SettingsEmpty("That machine's bots are not connected.") }
+                }
+            case .botsResources(let machineID):
+                SettingsBotsResourcesView(
+                    bots: model.bots, machineID: machineID,
+                    reservesRailControlSpace: reservesRailControlSpace,
+                    onBack: { section = .bots }
                 )
             }
         }
@@ -151,12 +191,14 @@ struct SettingsView: View {
         .task {
             model.refreshLocalACPRuntimesNow()
         }
-        .onAppear { openPendingDefaultAgentSettings(); openPendingConnections() }
+        .onAppear { openPendingDefaultAgentSettings(); openPendingConnections(); openPendingBotsSettings() }
+        .onChange(of: model.pendingBotsSettings) { _, _ in openPendingBotsSettings() }
         .onChange(of: model.pendingConnectionsScope) { _, _ in openPendingConnections() }
         .onReceive(NotificationCenter.default.publisher(for: .init("wovenmatter.open-connections"))) { event in
             section = .connections(event.object as? String ?? "global")
         }
         .onReceive(NotificationCenter.default.publisher(for: .init("wovenmatter.open-usage-settings"))) { _ in section = .usage }
+        .onReceive(NotificationCenter.default.publisher(for: MacAccessSetupModel.openSettingsNotification)) { _ in section = .permissions }
         .onChange(of: model.pendingDefaultAgentSettingsScope) { _, _ in openPendingDefaultAgentSettings() }
     }
 
@@ -165,9 +207,20 @@ struct SettingsView: View {
         section = .defaultAgent(scope, .agents)
         model.pendingDefaultAgentSettingsScope = nil
     }
+    private func openPendingBotsSettings() {
+        guard model.pendingBotsSettings else { return }
+        section = .bots
+        model.pendingBotsSettings = false
+    }
     private func openPendingConnections() {
         guard let scope = model.pendingConnectionsScope else { return }
-        section = scope == "usage" ? .usage : .connections(scope); model.pendingConnectionsScope = nil
+        section = switch scope {
+        case "usage": .usage
+        case "general": .general
+        case "permissions": .permissions
+        default: .connections(scope)
+        }
+        model.pendingConnectionsScope = nil
     }
 
     private var landing: some View {
@@ -183,10 +236,22 @@ struct SettingsView: View {
                     action: { section = .general }
                 )
                 SettingsDestinationRow(
+                    title: "Permissions & Access",
+                    detail: macAccess.summary,
+                    icon: { DashboardLucideIcon(glyph: .keyRound, size: 15) },
+                    action: { section = .permissions }
+                )
+                SettingsDestinationRow(
                     title: "Agents",
                     detail: "Accounts, installation, and chat settings.",
                     icon: { DashboardLucideIcon(glyph: .bot, size: 15) },
                     action: { section = .agents }
+                )
+                SettingsDestinationRow(
+                    title: "Bots",
+                    detail: "Where your bots run, their resources, models, and Woven MCP access.",
+                    icon: { DashboardLucideIcon(glyph: .sparkles, size: 15) },
+                    action: { section = .bots }
                 )
                 SettingsDestinationRow(
                     title: "Dictation",
@@ -226,6 +291,7 @@ struct SettingsView: View {
                 )
             }
         }
+        .task { macAccess.refresh(keychainReady: model.keychainAccessReady) }
     }
 
     private var agents: some View {

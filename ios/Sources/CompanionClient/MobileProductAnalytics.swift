@@ -163,7 +163,7 @@ public actor MobileProductAnalytics {
     sends.removeAll()
   }
   private func persist() throws {
-    try MobileStorePersistence.writeDurably(JSONEncoder().encode(state), at: file)
+    try MobileStorePersistence.writeDurably(JSONEncoder().encode(state), at: file, backup: .exclude)
   }
 }
 public protocol ProductAnalyticsTransport: Sendable {

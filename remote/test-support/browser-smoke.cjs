@@ -119,7 +119,13 @@ async function main() {
     assert.equal((await request('frame', { tabID: sharedTab.id })).status, 200);
     browser = await chromium.connectOverCDP(stdout.trim(), { noDefaults: true });
     await browser.contexts()[0].pages().find(page => page.url() === sharedPage.url()).close();
-    assert.equal((await request('frame', { tabID: sharedTab.id })).status, 410);
+    // CDP reports the closed target a moment later; until then a frame read can fail.
+    let gone;
+    for (const deadline = Date.now() + 5000; Date.now() < deadline; await new Promise(resolve => setTimeout(resolve, 100))) {
+      gone = (await request('frame', { tabID: sharedTab.id })).status;
+      if (gone === 410) break;
+    }
+    assert.equal(gone, 410);
     await browser.close(); browser = undefined;
     console.log('Workspace Chromium: navigation, forms, screenshots, CLI, shared live view and bundled core passed.');
   } finally {

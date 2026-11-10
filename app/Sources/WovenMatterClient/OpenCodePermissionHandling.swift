@@ -11,7 +11,7 @@ public enum OpenCodePermissionHandling {
         return suffix.hasPrefix("/form/")
     }
 
-    public static let options = ["ask", "allow", "deny"]
+    public static let options = AgentRuntimeKind.opencode.orderedPermissionOptions(["ask", "allow", "deny"])
     public static let metadata: [String: SessionOptionMetadata] = [
         "ask": .init(name: "Ask for approval", description: "Use OpenCode’s native ask effect for session actions and resources."),
         "allow": .init(name: "Full access", description: "Use OpenCode’s native allow effect for session actions and resources. Required input forms remain interactive."),

@@ -1,8 +1,10 @@
 # Woven Matter for iPhone and iPad
 
-Native clients share a central Woven Matter database while Pi Durable executes
-on the device. Inference uses provider connections signed in on that device or
-an explicitly selected Tailscale host. Mac pairing is optional for local work.
+Native clients share a central Woven Matter database. On the device, Quick Chat
+runs Pi Durable for notes, web search, simple questions, timers and reminders; Mac
+and Linux workspace agents handle everything else. Inference uses provider
+connections signed in on that device or an explicitly selected Tailscale host.
+Mac pairing is optional for local work. See [Quick Chat](../docs/IOS_CONTINUED_EXECUTION.md).
 
 ## Build and validate
 
@@ -30,11 +32,11 @@ that mode. Use a separate simulator without fixture variables for real pairing.
 
 ## Source layout
 
-- `CompanionApp`: SwiftUI/UIKit navigation, device execution and lifecycle.
+- `CompanionApp`: SwiftUI/UIKit navigation, Quick Chat, timers and lifecycle.
 - `CompanionClient`: durable local data, offline mutations and owner journal.
 - `CompanionInference`: provider connections, credentials and streaming.
 - `PiDurableRuntime`: bundled SDK hosted by JavaScriptCore; see [runtime](Runtime/README.md).
-- `EmbeddedExecution`: confined Python/WASM commands; see [execution](../docs/IOS_EMBEDDED_EXECUTION.md).
+- `EmbeddedExecution`: confined Python/WASM test package, not linked in the app; see [execution](../docs/IOS_EMBEDDED_EXECUTION.md).
 - `../shared`: portable note types and versioned wire contracts.
 
 Both apps compile the desktop's `DashboardStyle.swift` and bundle the same
@@ -42,5 +44,5 @@ Both apps compile the desktop's `DashboardStyle.swift` and bundle the same
 
 See [distributed architecture](../docs/DISTRIBUTED_CLIENT_ARCHITECTURE.md),
 [device acceptance](../docs/DISTRIBUTED_CLIENT_TESTING.md), and
-[background execution](../docs/IOS_CONTINUED_EXECUTION.md) for the shared contracts
+[Quick Chat lifecycle](../docs/IOS_CONTINUED_EXECUTION.md) for the shared contracts
 and remaining hardware/provider checks.

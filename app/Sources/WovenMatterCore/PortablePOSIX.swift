@@ -1,0 +1,124 @@
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
+import Foundation
+
+/// The few socket and descriptor details that differ between Darwin and Linux.
+/// Darwin branches are the original Mac calls.
+public enum PortablePOSIX {
+  public static var streamSocket: Int32 {
+    #if canImport(Glibc)
+    Int32(SOCK_STREAM.rawValue)
+    #else
+    SOCK_STREAM
+    #endif
+  }
+
+  public static var shutdownBoth: Int32 { Int32(SHUT_RDWR) }
+
+  /// QoS for work someone is waiting on. Linux libdispatch maps userInitiated
+  /// to nice -2, which an unprivileged service may not set: every new worker
+  /// thread then logs "Failed to set thread priority … errno=13" and runs at
+  /// nice 0 anyway. Default QoS is that same nice 0 without the failing call.
+  public static var waitedOnQoS: DispatchQoS.QoSClass {
+    #if os(Linux)
+    .default
+    #else
+    .userInitiated
+    #endif
+  }
+
+  /// Darwin suppresses SIGPIPE per socket. Linux has no such option, so Linux
+  /// hosts ignore SIGPIPE process-wide (see `ignoreBrokenPipes`) and this is a no-op.
+  public static func disableBrokenPipeSignal(_ fd: Int32) -> Bool {
+    #if canImport(Darwin)
+    var one: Int32 = 1
+    return setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout<Int32>.size)) == 0
+    #else
+    return true
+    #endif
+  }
+
+  public static func ignoreBrokenPipes() {
+    #if !canImport(Darwin)
+    _ = signal(SIGPIPE, SIG_IGN)
+    #endif
+  }
+
+  /// The connecting process's user, from the kernel rather than the peer.
+  public static func peerUser(_ fd: Int32) -> uid_t? {
+    #if canImport(Darwin)
+    var uid: uid_t = 0; var gid: gid_t = 0
+    return getpeereid(fd, &uid, &gid) == 0 ? uid : nil
+    #else
+    // struct ucred { pid_t pid; uid_t uid; gid_t gid; }, which Glibc hides behind _GNU_SOURCE.
+    var credentials: (pid_t, uid_t, gid_t) = (0, 0, 0)
+    var length = socklen_t(MemoryLayout<(pid_t, uid_t, gid_t)>.size)
+    return getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &credentials, &length) == 0 ? credentials.1 : nil
+    #endif
+  }
+
+  /// The connecting process, from the kernel at connect time.
+  public static func peerProcess(_ fd: Int32) -> Int32? {
+    #if canImport(Darwin)
+    var pid: pid_t = 0
+    var length = socklen_t(MemoryLayout<pid_t>.size)
+    return getsockopt(fd, SOL_LOCAL, LOCAL_PEERPID, &pid, &length) == 0 ? pid : nil
+    #else
+    var credentials: (pid_t, uid_t, gid_t) = (0, 0, 0)
+    var length = socklen_t(MemoryLayout<(pid_t, uid_t, gid_t)>.size)
+    return getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &credentials, &length) == 0 ? credentials.0 : nil
+    #endif
+  }
+
+  /// One read of whatever bytes are available, up to `maximum`. An empty
+  /// result is end of file. `FileHandle.read(upToCount:)` on a Darwin pipe
+  /// waits to fill its whole count, so a short line from a live child never
+  /// arrives; `availableData` raises instead of throwing on a closed handle.
+  public static func readAvailable(_ handle: FileHandle, maximum: Int = 65_536) throws -> Data {
+    precondition(maximum > 0)
+    var buffer = [UInt8](repeating: 0, count: maximum)
+    while true {
+      let count = buffer.withUnsafeMutableBytes { Darwin.read(handle.fileDescriptor, $0.baseAddress, $0.count) }
+      if count >= 0 { return Data(buffer.prefix(count)) }
+      if errno == EINTR { continue }
+      throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+    }
+  }
+
+  public static func unixAddress(path: String) -> sockaddr_un? {
+    var address = sockaddr_un()
+    let bytes = Array(path.utf8) + [0]
+    guard bytes.count <= MemoryLayout.size(ofValue: address.sun_path) else { return nil }
+    address.sun_family = sa_family_t(AF_UNIX)
+    #if canImport(Darwin)
+    address.sun_len = UInt8(MemoryLayout<sockaddr_un>.size)
+    #endif
+    withUnsafeMutableBytes(of: &address.sun_path) { target in target.copyBytes(from: bytes) }
+    return address
+  }
+
+  public static func modificationTime(_ info: stat) -> timespec {
+    #if canImport(Darwin)
+    info.st_mtimespec
+    #else
+    info.st_mtim
+    #endif
+  }
+
+  /// The path of an open descriptor, used to confirm a no-follow open reached
+  /// the expected file.
+  public static func path(of fd: Int32) -> String? {
+    #if canImport(Darwin)
+    var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+    guard fcntl(fd, F_GETPATH, &buffer) == 0 else { return nil }
+    return String(cString: buffer)
+    #else
+    return try? FileManager.default.destinationOfSymbolicLink(atPath: "/proc/self/fd/\(fd)")
+    #endif
+  }
+}

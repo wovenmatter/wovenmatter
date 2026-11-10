@@ -12,8 +12,10 @@ RUN export DEBIAN_FRONTEND=noninteractive \
     && make install DESTDIR=/archive-tar-install
 
 FROM node:26-trixie-slim AS executor-security-build
+# curl's build dependencies come from trixie-backports (see build-backports.py).
 RUN sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/debian.sources \
     && echo 'deb-src http://deb.debian.org/debian sid main' > /etc/apt/sources.list.d/wovenmatter-sid-source.list \
+    && echo 'deb http://deb.debian.org/debian trixie-backports main' > /etc/apt/sources.list.d/wovenmatter-backports.list \
     && apt-get update \
     && apt-get install --yes --no-install-recommends python3 devscripts debhelper patch autoconf automake libtool util-linux \
     && useradd --system --create-home wm-build

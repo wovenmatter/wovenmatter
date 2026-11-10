@@ -39,11 +39,14 @@ uses the existing authenticated Tailscale HTTPS routes.
 
 Other Macs retain their own execution identity and use their paired-library
 adapters. Linux execution workspaces serve MCP themselves. They handle local
-execution and managed data locally and use a separately provisioned, revocable
-workspace grant for central-library tools. A publisher credential is not a tool
-grant. An unavailable library returns an explicit unavailable result; the
-workspace never adopts another device's execution or turns its replica into a
-replacement library.
+execution and managed data locally, run notes, history, calendar, library and
+session folders against their own library copy, and send the tools only a Mac
+serves (timers, usage, HTML preview) to any reachable Mac member with a signed
+request. No single Mac's grant is needed; one saved from an earlier version is
+only a fallback. A publisher credential is not a tool grant. An unavailable
+library or Mac returns an explicit unavailable result; the workspace never
+adopts another device's execution or turns its replica into a replacement
+library.
 
 Ordinary Linux-owned sessions retain local goals and session coordination.
 Independent scheduled runs keep their scheduler as execution owner and expose
@@ -85,6 +88,52 @@ has no Woven runtime to receive coordinator wakeups. Outside clients can poll
 status and receipts. Usage remains read-only; enabling Calendar grants writes
 independently of the Calendar access default for Woven chats. Goals and visual
 replies remain included with exposure, matching Woven's always-available tools.
+
+## Bot callers
+
+Each bot has its own Woven MCP key, issued by the Woven server on the machine that
+runs it (`WorkspaceAgentToolsModel.issueBotKey(machineID:botID:botName:)` on a Mac,
+reached by the bots runtime through `POST /v1/bots-host/mcp-keys`). The principal is
+`woven:bot:<machine-device-id>:<bot-id>`; the key alone names the bot, so request
+headers never choose or change the caller. Issuing a key replaces the bot's previous
+one, and Woven stores only its SHA-256 digest in `mcp-access.json`. No conversation is
+created to represent a bot.
+
+Attribution comes from the name registered with the key, bounded to 128 characters
+and stripped of control and bidirectional-override characters. Names appear on
+delivery receipts and incoming messages. Settings → Bots lists every bot that holds a
+key here:
+
+- **Revoke** removes one bot's key at once, cancels its preparation fences, and retires
+  what it started: planned creations, grants, pending access requests, coordination and
+  undelivered messages. The bot stays revoked, and its runtime cannot get a new key,
+  until the user reinstates it. A bot its runtime deletes loses its key the same way
+  but is not marked revoked.
+- **Pause Woven MCP for every bot on this Mac** stops every bot of this machine from calling and
+  retires the same state; resuming keeps their keys.
+
+`WorkspaceToolSettings.botMCP` is independent of **Expose Woven MCP** and starts on,
+with Computer Use and Executor off. Old settings acquire these defaults. The host
+exposes `setBotsEnabled` and `setBotsGroup` through its access API and returns
+`botSettings` in its snapshot. The runtime runs on the host, so bots use the loopback
+HTTP endpoint even when outside exposure is off; issuing a key creates no network route.
+
+With Session management enabled, bots manage sessions under the same app-wide
+authority as outside callers, reaching only Woven workspaces under each workspace's
+own permissions. Bots can explicitly target sessions for goals, timers and HTML.
+`woven_context` returns null. Bot-created sessions are managed by that bot unless
+`independent` is true, and notification controls remain available. Completion,
+failure and needs-input observations reserve durable deliveries whose text contains
+the session ID, title and status. `botNotificationSink` receives `WovenBotNotification`
+values (`id`, `machineID`, `botID`, `text`) and sends them to the bot's main channel as
+`message.send` with `deliveryId`. Missing or throwing sinks leave deliveries queued with
+a 30-second backoff without blocking other recipients. Successful deliveries do not
+replay, including after restart; the runtime uses `deliveryId` as its durable
+deduplication key. Bot schedules are Woven MCP timers delivered the same way.
+
+Relationships synchronize between machines and bot keys do not. A machine that does
+not serve a bot's keys keeps that bot's coordination and does not consume its events.
+Dev snapshots discard keys and bot coordination.
 
 ## Open asset context
 
@@ -245,6 +294,18 @@ Revocation blocks future reads; it cannot erase content already retrieved.
 
 ## Sessions and coordination
 
+`woven_sessions_create` and `woven_sessions_harnesses` reach every Mac and Linux
+workspace, from a Mac or a Linux host. Name the destination with `workspace`: a
+workspace ID from `woven_sessions_harnesses` (or an unambiguous workspace name).
+`local` is not a destination, an iPhone never is, and omitting `workspace`
+means the caller's own workspace. The harness list shows the caller's workspace
+first, with its real ID and name, then paired Macs and Linux workspaces; a
+workspace that does not answer is listed with `online: false`. A session on
+another workspace is created there directly with a signed request, so it works
+with every other Mac offline. It uses that workspace's saved defaults and comes
+back as `independent: true`: the caller does not coordinate it, and reads its
+progress from synchronized history.
+
 New sessions inherit the source harness, working location, and folder unless
 explicitly overridden. Model and thinking accept
 the existing explicit creation arguments. Remaining selections resolve from the
@@ -253,7 +314,9 @@ defaults, in that order. The source chat's selections do not become defaults for
 the new chat. General Agent tools settings supply the native tool fallback.
 
 Permissions and tools come from user controls and cannot be overridden by agent
-tool calls. A user-saved empty Tools default disables every tool group for new chats
+tool calls. They are the destination's own saved defaults (Full access unless the
+user chose otherwise), never capped to or inherited from the calling session's
+permission or tools, on Mac and Linux alike. A user-saved empty Tools default disables every tool group for new chats
 in that scope. Creation binds the working location before resolving defaults and
 freezes every choice with the request, so retries survive changed defaults.
 Native settings must be accepted before the initial instruction is sent. Provider

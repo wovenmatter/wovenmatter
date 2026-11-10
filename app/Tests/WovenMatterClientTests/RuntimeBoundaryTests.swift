@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 import Testing
 @testable import WovenMatterClient
@@ -311,3 +312,4 @@ extension RuntimeBoundaryTests {
     #expect(executable == prefix.appending(path: "bin/codex-acp"))
   }
 }
+#endif

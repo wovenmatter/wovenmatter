@@ -1,6 +1,19 @@
+#if canImport(CryptoKit)
 import CryptoKit
+#else
+import Crypto
+#endif
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
+#if canImport(Darwin)
 import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 import WovenMatterCore
 
 public enum LocalACPRuntimeInstallComponent: Sendable {
@@ -1001,6 +1014,9 @@ enum LocalACPProcessRunner {
         currentDirectoryURL: URL? = nil,
         timeout: TimeInterval = 600
     ) throws -> LocalACPProcessResult {
+        #if !os(macOS)
+        throw RuntimeMaintenanceError.unavailable
+        #else
         let outputURL = FileManager.default.temporaryDirectory.appending(path: "runtime-output-\(UUID().uuidString)")
         FileManager.default.createFile(atPath: outputURL.path, contents: nil, attributes: [.posixPermissions: 0o600])
         defer { try? FileManager.default.removeItem(at: outputURL) }
@@ -1056,6 +1072,7 @@ enum LocalACPProcessRunner {
         let outputData = try input.read(upToCount: 128 * 1_024) ?? Data()
         return LocalACPProcessResult(terminationStatus: (status & 0x7f) == 0 ? (status >> 8) & 0xff : 128 + (status & 0x7f),
             stdout: String(decoding: outputData, as: UTF8.self))
+        #endif
     }
 }
 

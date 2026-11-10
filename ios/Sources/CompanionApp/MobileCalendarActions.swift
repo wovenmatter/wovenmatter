@@ -17,8 +17,15 @@ extension CompanionModel {
       switch action {
       case .saveCalendar(let id, let revision, let draft):
         let previous = await store.calendar.record(id: id)
-        let owner = previous?.ownerDeviceID ?? (draft.task?.workspaceID == deviceWorkspaceID ? state.deviceID : nil)
-        _ = try await store.calendar.save(id: id, expectedRevision: revision, draft: draft, ownerDeviceID: owner)
+        if let previous, let revision, previous.ownerDeviceID == state.deviceID, previous.event.draft.task != nil,
+           let task = draft.task, task.workspaceID != deviceWorkspaceID {
+          // Earlier builds ran tasks on this phone. Moving one to a Mac or Linux
+          // agent replaces it rather than changing its owner in place.
+          _ = try await store.calendar.reassign(id: id, expectedRevision: revision, draft: draft)
+        } else {
+          let owner = previous?.ownerDeviceID ?? (draft.task?.workspaceID == deviceWorkspaceID ? state.deviceID : nil)
+          _ = try await store.calendar.save(id: id, expectedRevision: revision, draft: draft, ownerDeviceID: owner)
+        }
       case .deleteCalendar(let id, let revision, let occurrence):
         try await store.calendar.delete(id: id, expectedRevision: revision, occurrence: occurrence)
       default: return nil

@@ -7,12 +7,12 @@ struct SettingsGeneralView: View {
     @Bindable var model: ApplicationModel
     var reservesRailControlSpace = false
     var onBack: () -> Void
+    var onOpenPermissions: () -> Void = {}
 
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dashboardTheme) private var theme
     @AppStorage(DashboardTheme.storageKey) private var storedTheme = DashboardTheme.green.rawValue
     @AppStorage(DashboardSidebarStyle.storageKey) private var storedSidebarStyle = DashboardSidebarStyle.defaultStyle.rawValue
-    @State private var showsCredentialDisclosure = false
     @State private var closedLidHelperSetup: ClosedLidHelperSetup = .unavailable
 
     private var sidebarStyleBinding: Binding<DashboardSidebarStyle> {
@@ -32,12 +32,11 @@ struct SettingsGeneralView: View {
             onBack: onBack
         ) {
             releaseUpdateCard
-            credentialAccessCard
             harnessSetupCard
             appearanceCard
             sidebarLayoutCard
             if let tools = model.agentTools {
-                WorkspaceToolDefaultsCard(tools: tools)
+                WorkspaceToolDefaultsCard(tools: tools, onOpenPermissions: onOpenPermissions)
                 DisclosureGroup("Connected apps · Executor") { ExecutorConnectionsCard(model: model, tools: tools) }
             }
             SettingsMCPAccessSection(model: model)
@@ -47,28 +46,11 @@ struct SettingsGeneralView: View {
             closedLidProtectionCard
             ProductAnalyticsSettingsCard(analytics: model.analytics)
         }
-        .task { await model.checkSavedCredentialAccess() }
-        .onReceive(NotificationCenter.default.publisher(for: KeychainAccess.accessNeedsAttention).receive(on: DispatchQueue.main)) { _ in
-            model.keychainAccessNeedsAttention()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            if !model.isReconnectingSavedCredentials { Task { await model.checkSavedCredentialAccess() } }
-        }
         .onChange(of: storedTheme) { _, _ in
             model.persistMacSurfaceProfileFromUserDefaults()
         }
         .onChange(of: storedSidebarStyle) { _, _ in
             model.persistMacSurfaceProfileFromUserDefaults()
-        }
-        .sheet(isPresented: $showsCredentialDisclosure) {
-            CredentialAccessDisclosureView(
-                purpose: "Use saved credentials across the Woven Matter features you enable, including website sessions and passwords.",
-                onEnable: {
-                    showsCredentialDisclosure = false
-                    Task { await model.reconnectSavedCredentials() }
-                },
-                onCancel: { showsCredentialDisclosure = false }
-            )
         }
     }
 
@@ -169,39 +151,6 @@ struct SettingsGeneralView: View {
         }
     }
 
-    private var credentialAccessCard: some View {
-        SettingsCard(
-            title: "Keychain access",
-            detail: "Credentials are stored in Apple Keychain."
-        ) {
-            HStack(alignment: .center, spacing: 16) {
-                SettingsPill(model.isReconnectingSavedCredentials ? "Checking…"
-                    : model.keychainAccessReady == true ? "Access ready"
-                    : model.keychainAccessReady == false ? "Access needs attention"
-                    : model.hasAcknowledgedCredentialAccessDisclosure ? "Checking…" : "Not enabled",
-                    tone: model.keychainAccessReady == false ? .warning : .neutral)
-                    .help(model.credentialAccessStatus ?? "Enable access to use saved credentials.")
-                Spacer(minLength: 12)
-                Button(model.isReconnectingSavedCredentials ? "Checking…"
-                       : model.keychainAccessReady == true ? "Check access"
-                       : model.hasAcknowledgedCredentialAccessDisclosure || model.keychainAccessReady == false
-                         ? "Restore Keychain access" : "Enable Keychain access") {
-                    if model.keychainAccessReady == true {
-                        Task { await model.checkSavedCredentialAccess() }
-                    } else if model.hasAcknowledgedCredentialAccessDisclosure {
-                        Task { await model.reconnectSavedCredentials() }
-                    } else {
-                        showsCredentialDisclosure = true
-                    }
-                }
-                .buttonStyle(SettingsQuietButtonStyle())
-                .disabled(model.isAuthorizingUsageCredential || model.isReconnectingSavedCredentials)
-            }
-            if model.keychainAccessReady != true {
-                SettingsNote("Choose Always Allow when macOS asks to avoid repeated prompts.")
-            }
-        }
-    }
     private var dictationCard: some View {
         @Bindable var dictation = DictationModel.shared
         return SettingsCard(title: "Dictation", detail: "Dictate into conversations and notes with Apple on-device speech.") {
@@ -213,6 +162,7 @@ struct SettingsGeneralView: View {
             }
             .disabled(dictation.isBusy)
             Text(dictation.availability).font(.caption).foregroundStyle(.secondary)
+            MacPermissionStatusLink(items: [.microphone], onOpen: onOpenPermissions)
             Text("Audio stays on this Mac. Apple may download language support the first time you dictate. Transcripts remain drafts for review. Use ⇧⌘D to start or stop in the focused editor.")
                 .font(.caption).foregroundStyle(.secondary)
         }.task { await dictation.refreshAvailability() }

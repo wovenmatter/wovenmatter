@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 import Security
 
@@ -42,3 +43,4 @@ enum ClosedLidPowerError: LocalizedError {
         switch self { case .unavailable(let message): message }
     }
 }
+#endif

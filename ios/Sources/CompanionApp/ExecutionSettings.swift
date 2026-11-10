@@ -23,6 +23,9 @@ struct ExecutionSettingsPane: View {
         }
       }
       Section {
+        NavigationLink("Web search") { QuickChatSearchSettingsPane(model: model) }.accessibilityIdentifier("connections-web-search")
+      }
+      Section {
         NavigationLink("Tailscale inference") { HostedInferenceSettingsPane(model: model) }
       }
     }.listStyle(.insetGrouped).scrollContentBackground(.hidden).scrollIndicators(.never).mobileNavigationPage(model.deviceConnectionsTitle)
@@ -70,6 +73,9 @@ struct DeviceAgentSettingsPane: View {
   }
   var body: some View {
     Form {
+      Section {
+        Text("Quick questions, web search, notes, timers and reminders. Powered by Pi Durable. Use a Mac or Linux agent for repositories, shell commands, scheduled tasks and longer work.").font(.callout).foregroundStyle(.secondary)
+      }
       Section("New conversations") {
         Picker("Connection", selection: $connectionID) {
           Text("Choose a connection").tag("")
@@ -87,11 +93,9 @@ struct DeviceAgentSettingsPane: View {
           if loading { ProgressView() }
         }
         NavigationLink(model.deviceConnectionsTitle) { ExecutionSettingsPane(model: model) }
+        NavigationLink("Web search") { QuickChatSearchSettingsPane(model: model) }
       }
       Section("Instructions") { TextEditor(text: $defaults.instructions).frame(minHeight: 130).accessibilityLabel("Pi Durable instructions") }
-      Section("Execution") {
-        Stepper("Concurrent subagents: \(policy.concurrentSubagents)", value: policyBinding(\.concurrentSubagents), in: 1...16)
-      }
 
       Section {
         ForEach(toolDefinitions, id: \.id) { tool in
@@ -114,7 +118,7 @@ struct DeviceAgentSettingsPane: View {
         }.textCase(nil)
       }
       if let failure { Section { Text(failure).foregroundStyle(DashboardPalette.danger); Button("Retry") { loadModels() } } }
-    }.disabled(saving).scrollIndicators(.never).mobileNavigationPage("Pi Durable")
+    }.disabled(saving).scrollIndicators(.never).mobileNavigationPage("Quick Chat")
       .toolbar { ToolbarItem(placement: .confirmationAction) { Button(saving ? "Saving…" : "Save") { save() }.disabled(saving || loading) } }
       .onAppear {
         if !loaded {
@@ -153,7 +157,9 @@ struct DeviceAgentSettingsPane: View {
   }
   private func save() {
     guard !saving else { return }; saving = true; failure = nil
-    let defaults = defaults, id = connectionID, selected = models.first { $0.id == selectedModelID }
+    // Web search is chosen on its own page; keep that choice.
+    var updated = defaults; updated.webSearchProvider = model.deviceAgentDefaults.webSearchProvider
+    let defaults = updated, id = connectionID, selected = models.first { $0.id == selectedModelID }
     var connection = selectedConnection
     if let selected { connection?.modelID = selected.id; connection?.selectedModel = selected }
     saveTask = Task {
@@ -457,7 +463,8 @@ private struct InferenceConnectionEditor: View {
         let credential = try await model.authorizedWorkspaceCredential(selectedHost)
         let catalog = InferenceConnection(name: "Host catalog", provider: provider, accountID: "catalog", route: .adapter,
           baseURL: credential.endpoint.absoluteString, modelID: "catalog",
-          hostScope: .init(libraryID: credential.libraryID, workspaceID: credential.workspaceID, deviceID: credential.deviceID, protocolVersion: CompanionProtocol.version))
+          hostScope: .init(libraryID: credential.libraryID, workspaceID: credential.workspaceID, deviceID: credential.deviceID, protocolVersion: CompanionProtocol.version,
+                           hostDeviceID: model.inferenceHostDeviceID(credential.workspaceID)))
         let result = try await CompanionInferenceService(connection: catalog, credentials: InferenceSetupCredential(value: credential.token)).hostCatalog()
         guard !Task.isCancelled, state.catalogGeneration == generation else { return }
         state.endpoint = credential.endpoint.absoluteString
@@ -547,7 +554,8 @@ private struct InferenceConnectionEditor: View {
         if value.route == .adapter, !hostID.isEmpty {
           let credential = try await model.authorizedWorkspaceCredential(hostID)
           value.baseURL = credential.endpoint.absoluteString
-          value.hostScope = .init(libraryID: credential.libraryID, workspaceID: credential.workspaceID, deviceID: credential.deviceID, protocolVersion: CompanionProtocol.version)
+          value.hostScope = .init(libraryID: credential.libraryID, workspaceID: credential.workspaceID, deviceID: credential.deviceID, protocolVersion: CompanionProtocol.version,
+                                  hostDeviceID: model.inferenceHostDeviceID(credential.workspaceID))
           secret = credential.token
         }
         try Task.checkCancellation()

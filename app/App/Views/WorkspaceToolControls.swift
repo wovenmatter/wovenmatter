@@ -3,6 +3,7 @@ import WovenMatterCore
 
 struct WorkspaceToolDefaultsCard: View {
     @Bindable var tools: WorkspaceAgentToolsModel
+    var onOpenPermissions: () -> Void = MacAccessSetupModel.openSettings
 
     private func setting<Value>(_ key: WritableKeyPath<WorkspaceToolSettings, Value>) -> Binding<Value> {
         Binding(get: { tools.settings[keyPath: key] }, set: { value in
@@ -43,7 +44,7 @@ struct WorkspaceToolDefaultsCard: View {
                     if group == .browser {
                         Text("Controls the browser inside Woven Matter.").font(.system(size: 11.5)).foregroundStyle(DashboardPalette.mutedForeground)
                     }
-                    if group == .computer { WorkspaceComputerUseExplanation() }
+                    if group == .computer { WorkspaceComputerUseExplanation(onOpenPermissions: onOpenPermissions) }
                 }
                 Divider()
                 HStack {
@@ -67,6 +68,7 @@ struct WorkspaceSessionToolsMenu: View {
     @State private var showsExecutorApps = false
     @State private var confirmsTimerPause = false
     @State private var error: String?
+    @Environment(\.dismiss) private var dismiss
 
     private func set(_ group: WorkspaceToolGroup, enabled: Bool, confirmed: Bool = false) {
         Task {
@@ -98,7 +100,9 @@ struct WorkspaceSessionToolsMenu: View {
                                 .font(.system(size: 10.5)).foregroundStyle(DashboardPalette.mutedForeground)
                         }
                     }
-                    if group == .computer { WorkspaceComputerUseExplanation() }
+                    if group == .computer {
+                        WorkspaceComputerUseExplanation { MacAccessSetupModel.openSettings(); dismiss() }
+                    }
                 }
                 }
                 WorkspaceSessionManagementControls(tools: tools, sessionID: sessionID)
@@ -118,17 +122,15 @@ struct WorkspaceSessionToolsMenu: View {
     }
 }
 
+/// Computer Use's macOS permissions live in Settings → Permissions & Access;
+/// this shows their status and links there.
 private struct WorkspaceComputerUseExplanation: View {
+    let onOpenPermissions: () -> Void
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Allows agents to see and control this Mac’s desktop and apps. Requires macOS permissions.")
-            HStack(spacing: 12) {
-                Button("Screen Recording") { open("Privacy_ScreenCapture") }
-                Button("Accessibility") { open("Privacy_Accessibility") }
-            }.buttonStyle(.plain).foregroundStyle(DashboardPalette.foreground)
+            Text("Allows agents to see and control this Mac’s desktop and apps.")
+            MacPermissionStatusLink(items: CompanionMacAccessStatus.computerUseRequirements, onOpen: onOpenPermissions)
         }.font(.system(size: 11.5)).foregroundStyle(DashboardPalette.mutedForeground)
-    }
-    private func open(_ pane: String) {
-        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?" + pane) { NSWorkspace.shared.open(url) }
     }
 }

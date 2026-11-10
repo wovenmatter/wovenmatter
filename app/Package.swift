@@ -2,6 +2,9 @@
 
 import PackageDescription
 
+let linuxCrypto: Target.Dependency = .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: [.linux]))
+let linuxSQLite: Target.Dependency = .target(name: "CSQLite", condition: .when(platforms: [.linux]))
+
 let package = Package(
   name: "WovenMatterMacOS",
   platforms: [
@@ -12,29 +15,36 @@ let package = Package(
     .library(name: "WovenMatterClient", targets: ["WovenMatterClient"]),
     .library(name: "WovenMatterAutomation", targets: ["WovenMatterAutomation"]),
     .library(name: "WovenMatterDashboardStore", targets: ["WovenMatterDashboardStore"]),
+    .executable(name: "wovenmatter-library", targets: ["WovenMatterLibraryDaemon"]),
     .executable(name: "WovenCuaDesktopFixture", targets: ["WovenCuaDesktopFixture"])
   ],
   dependencies: [
-    .package(path: "../shared"), .package(path: "../ios")
+    .package(path: "../shared"), .package(path: "../ios"),
+    // Linux-only replacement for CryptoKit; see docs/DEPENDENCIES.md.
+    .package(url: "https://github.com/apple/swift-crypto.git", "5.1.1"..<"1000.0.0")
   ],
   targets: [
+    // Linux links the system or pinned static SQLite; Apple platforms use the SDK module.
+    // No pkg-config: its host search paths would leak glibc libraries into static musl links.
+    .systemLibrary(name: "CSQLite", providers: [.apt(["libsqlite3-dev"])]),
     .target(
       name: "WovenMatterCore",
-      dependencies: [.product(name: "WovenMatterCompanion", package: "shared")],
+      dependencies: [.product(name: "WovenMatterCompanion", package: "shared"), linuxCrypto],
       swiftSettings: [
         .enableUpcomingFeature("ExistentialAny")
       ]
     ),
     .target(
       name: "WovenMatterClient",
-      dependencies: ["WovenMatterCore"],
+      dependencies: ["WovenMatterCore", linuxCrypto, linuxSQLite],
       swiftSettings: [
         .enableUpcomingFeature("ExistentialAny")
       ],
       linkerSettings: [
-        .linkedFramework("Security"),
-        .linkedFramework("LocalAuthentication"),
-        .linkedLibrary("sqlite3")
+        .linkedFramework("Security", .when(platforms: [.macOS])),
+        .linkedFramework("LocalAuthentication", .when(platforms: [.macOS])),
+        .linkedFramework("SystemConfiguration", .when(platforms: [.macOS])),
+        .linkedLibrary("sqlite3", .when(platforms: [.macOS]))
       ]
     ),
     .target(
@@ -46,27 +56,44 @@ let package = Package(
     .executableTarget(name: "WovenCuaDesktopFixture", dependencies: ["WovenMatterAutomation", "WovenMatterCore", "WovenMatterClient"], path: "TestsSupport/CuaDesktopFixture"),
     .target(
       name: "WovenMatterDashboardStore",
-      dependencies: ["WovenMatterCore", "WovenMatterClient"],
+      dependencies: ["WovenMatterCore", "WovenMatterClient", linuxCrypto, linuxSQLite],
       swiftSettings: [
         .enableUpcomingFeature("ExistentialAny")
       ],
       linkerSettings: [
-        .linkedLibrary("sqlite3"),
-        .linkedFramework("LocalAuthentication"),
-        .linkedFramework("Security")
+        .linkedLibrary("sqlite3", .when(platforms: [.macOS])),
+        .linkedFramework("LocalAuthentication", .when(platforms: [.macOS])),
+        .linkedFramework("Security", .when(platforms: [.macOS]))
       ]
     ),
-    .target(name: "WorkspaceFixtures", dependencies: ["WovenMatterCore", "WovenMatterClient", "WovenMatterDashboardStore"], path: "TestsSupport/WorkspaceFixtures"),
+    // Headless library host for Linux machines (docs/architecture/WOVEN_EVERYWHERE.md).
+    .target(
+      name: "WovenMatterLibraryHost",
+      dependencies: ["WovenMatterCore", "WovenMatterClient", "WovenMatterDashboardStore", linuxCrypto, linuxSQLite],
+      swiftSettings: [.enableUpcomingFeature("ExistentialAny")]
+    ),
+    .executableTarget(
+      name: "WovenMatterLibraryDaemon",
+      dependencies: ["WovenMatterLibraryHost"],
+      swiftSettings: [.enableUpcomingFeature("ExistentialAny")]
+    ),
+    .testTarget(
+      name: "WovenMatterLibraryHostTests",
+      dependencies: ["WovenMatterLibraryHost", "WovenMatterDashboardStore", "WovenMatterCore", linuxSQLite,
+                     // The phone client, for the in-process Mac + Linux + phone reach test.
+                     .product(name: "CompanionClient", package: "ios", condition: .when(platforms: [.macOS]))]
+    ),
+    .target(name: "WorkspaceFixtures", dependencies: ["WovenMatterCore", "WovenMatterClient", "WovenMatterDashboardStore", linuxCrypto, linuxSQLite], path: "TestsSupport/WorkspaceFixtures"),
     .testTarget(
       name: "WovenMatterCoreTests",
       dependencies: [
         "WovenMatterCore",
-        "WovenMatterDashboardStore", "WorkspaceFixtures"
+        "WovenMatterDashboardStore", "WorkspaceFixtures", linuxCrypto, linuxSQLite
       ]
     ),
     .testTarget(
       name: "WovenMatterClientTests",
-      dependencies: ["WovenMatterClient"]
+      dependencies: ["WovenMatterClient", linuxCrypto, linuxSQLite]
     ),
     // A fail-closed bridge keeps provider-free facade tests independent of CEF.
     // The native Xcode target still compiles and validates the production bridge.
@@ -98,3 +125,14 @@ let package = Package(
     )
   ]
 )
+
+#if os(Linux)
+// A native Linux build covers the portable library targets only. Apple-only
+// targets stay declared for every macOS host, including Linux cross-builds.
+let appleOnlyTargets: Set<String> = [
+  "WovenMatterAutomation", "WovenMatterAutomationTests", "WovenCuaDesktopFixture", "CompanionBrowserTestBridge",
+  "WovenMatterAppFacade", "WovenMatterAgentToolsTests", "WovenMatterAppFacadeTests"
+]
+package.targets.removeAll { appleOnlyTargets.contains($0.name) }
+package.products.removeAll { appleOnlyTargets.contains($0.name) }
+#endif

@@ -1,9 +1,14 @@
+#if canImport(CryptoKit)
 import CryptoKit
+#else
+import Crypto
+#endif
 import Foundation
 import WovenMatterCore
 
 /// Identity of deployment inputs, independent of archive timestamps.
 struct RemoteWorkspaceDeployment {
+    static let botInputs: Set<String> = ["bots/package.json", "bots/package-lock.json", "bots/src", "bots/helper", "bots/image"]
     let fingerprint: String
     let script: String
     let sourceFiles: [String]
@@ -15,11 +20,15 @@ struct RemoteWorkspaceDeployment {
                "default-agent/package-lock.json", "default-agent/src", "default-agent/.node-version", "scripts/remote-host.sh"]
             : ["remote/Dockerfile", "remote/build-image.sh", "remote/entrypoint.sh", "remote/package.json",
                       "remote/src", "remote/security", "remote/npm-runtime/package.json", "remote/npm-runtime/package-lock.json", "harnesses", "default-agent/package.json", "default-agent/package-lock.json", "default-agent/src"]
+        // The bots runtime ships with host releases whenever this checkout or
+        // app bundle contains it; hosts require it only for the bots role.
+        let optionalInputs: Set<String> = kind == .host ? Self.botInputs : []
         var files: [String] = []
-        for input in inputs {
+        for input in inputs + (kind == .host ? Self.botInputs.sorted() : []) {
             let url = root.appending(path: input)
             var directory: ObjCBool = false
             guard manager.fileExists(atPath: url.path, isDirectory: &directory) else {
+                if optionalInputs.contains(input) { continue }
                 throw RemoteWorkspaceClientError.deploymentBundleUnavailable
             }
             if directory.boolValue {
@@ -88,6 +97,10 @@ final class RemoteWorkspaceBuildProgress: @unchecked Sendable {
             case "WM_PROGRESS dependencies": return "Installing agent dependencies…"
             case "WM_PROGRESS browser": return "Installing Chromium…"
             case "WM_PROGRESS activating": return "Starting the host service…"
+            case "WM_PROGRESS library": return "Updating the library…"
+            case "WM_PROGRESS bots": return "Setting up bots…"
+            case "WM_PROGRESS bots-engine": return "Installing the bots engine…"
+            case "WM_PROGRESS preparing": return "Preparing the host…"
             case "WM_PROGRESS selftest": return "Verifying the Chromium sandbox…"
             case "WM_PROGRESS rollback": return "Restoring the previous host service…"
             case "WM_PROGRESS ready": return "Host service ready."

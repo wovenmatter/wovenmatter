@@ -56,10 +56,28 @@ public extension ExecutionWorkspaceTransport {
 public final class HTTPSExecutionWorkspaceTransport: ExecutionWorkspaceTransport, @unchecked Sendable {
   private let credential: DirectWorkspaceCredential
   private let client: TailnetJSONClient
-  public init(credential: DirectWorkspaceCredential) throws {
+  public var isSigned: Bool { client.signer != nil }
+  public init(credential: DirectWorkspaceCredential, performer: (any MobileHTTPPerforming)? = nil) throws {
     self.credential = credential
     client = try TailnetJSONClient(endpoint: credential.endpoint, token: credential.token,
-      headers: ["X-Woven-Library": credential.libraryID, "X-Woven-Workspace": credential.workspaceID, "X-Woven-Device": credential.deviceID])
+      headers: ["X-Woven-Library": credential.libraryID, "X-Woven-Workspace": credential.workspaceID, "X-Woven-Device": credential.deviceID],
+      performer: performer)
+  }
+  /// Signed member requests straight to a Mac or Linux workspace's own
+  /// execution endpoint. No grant is issued; the workspace checks the
+  /// signature against its member list, whichever Macs are offline.
+  /// `audience` is the member that serves the workspace (`MobileMembershipState.audience(for:)`);
+  /// by default its execution device, which is a Mac's member ID.
+  public init(workspace: CompanionExecutionWorkspace, identity: MobileMemberIdentity, audience: String? = nil,
+              performer: (any MobileHTTPPerforming)? = nil) throws {
+    guard let endpoint = workspace.endpoint, !workspace.deleted else { throw MobileConnectionError.offline }
+    guard let audience = (audience ?? workspace.executionDeviceID)?.lowercased(), MemberRequestSignature.isDeviceID(audience) else {
+      throw MobileConnectionError.memberUnknown
+    }
+    credential = .init(endpoint: endpoint, libraryID: workspace.libraryID, workspaceID: workspace.id, deviceID: identity.deviceID, token: "")
+    client = try TailnetJSONClient(endpoint: endpoint, token: "",
+      headers: ["X-Woven-Library": workspace.libraryID, "X-Woven-Workspace": workspace.id, "X-Woven-Device": identity.deviceID],
+      signer: identity.signer, audience: audience, performer: performer)
   }
   public func identity() async throws -> CompanionExecutionWorkspace {
     let value: CompanionExecutionWorkspace = try await client.request("v1/execution")
@@ -107,16 +125,16 @@ final class TailnetJSONClient: @unchecked Sendable {
   private let endpoint: URL
   private let token: String
   private let headers: [String: String]
-  private let session: URLSession
-  init(endpoint: URL, token: String, headers: [String: String]) throws {
+  let signer: MemberRequestSigner?
+  private let audience: String
+  private let performer: any MobileHTTPPerforming
+  init(endpoint: URL, token: String, headers: [String: String], signer: MemberRequestSigner? = nil, audience: String = "",
+       performer: (any MobileHTTPPerforming)? = nil) throws {
     guard endpoint.scheme == "https", endpoint.host?.lowercased().hasSuffix(".ts.net") == true,
       endpoint.user == nil, endpoint.password == nil, endpoint.query == nil, endpoint.fragment == nil,
       !endpoint.pathComponents.contains("..") else { throw MobileConnectionError.insecureEndpoint }
-    self.endpoint = endpoint; self.token = token; self.headers = headers
-    let configuration = URLSessionConfiguration.ephemeral
-    configuration.httpCookieStorage = nil; configuration.urlCache = nil
-    configuration.timeoutIntervalForRequest = 30; configuration.timeoutIntervalForResource = 60
-    session = URLSession(configuration: configuration, delegate: NoRedirects(), delegateQueue: nil)
+    self.endpoint = endpoint; self.token = token; self.headers = headers; self.signer = signer; self.audience = audience
+    self.performer = performer ?? URLSessionMobileHTTP(requestTimeout: 30, resourceTimeout: 60)
   }
   static func safeID(_ value: String) throws -> String {
     guard !value.isEmpty, value.utf8.count <= 200, value.unicodeScalars.allSatisfy({ CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_")).contains($0) }) else { throw MobileConnectionError.invalidResponse }
@@ -126,33 +144,18 @@ final class TailnetJSONClient: @unchecked Sendable {
     var components = URLComponents(url: endpoint.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
     components.queryItems = query.isEmpty ? nil : query
     var request = URLRequest(url: components.url!); request.httpMethod = method; request.httpBody = body
-    request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization")
     request.setValue("application/json", forHTTPHeaderField: "Accept")
     request.setValue(String(CompanionProtocol.version), forHTTPHeaderField: "X-Woven-Protocol")
     if body != nil { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
     for (key, value) in headers { request.setValue(value, forHTTPHeaderField: key) }
-    let maximum = 80 * 1_024 * 1_024
-    #if !os(Linux)
-    let (bytes, response) = try await session.bytes(for: request)
-    guard let response = response as? HTTPURLResponse else { throw MobileConnectionError.invalidResponse }
-    guard response.expectedContentLength <= maximum else { throw MobileConnectionError.responseTooLarge }
-    var data = Data()
-    for try await byte in bytes {
-      guard data.count < maximum else { throw MobileConnectionError.responseTooLarge }; data.append(byte)
+    if let signer { try MobileRequestSigning.sign(&request, with: signer, audience: audience) }
+    else { request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization") }
+    let (data, response) = try await performer.perform(request, maximumBytes: 80 * 1_024 * 1_024, longLived: false)
+    guard (200..<300).contains(response.statusCode) else {
+      throw MobileRequestSigning.failure(status: response.statusCode, data: data, signed: signer != nil,
+                                         fallback: "Workspace request failed (\(response.statusCode)).")
     }
-    #else
-    let (data, rawResponse) = try await session.data(for: request)
-    guard let response = rawResponse as? HTTPURLResponse else { throw MobileConnectionError.invalidResponse }
-    guard data.count <= maximum else { throw MobileConnectionError.responseTooLarge }
-    #endif
-    switch response.statusCode {
-    case 200..<300: return try JSONDecoder().decode(Value.self, from: data)
-    case 401, 403: throw MobileConnectionError.revoked
-    case 426: throw MobileConnectionError.versionMismatch
-    default:
-      let error = try? JSONDecoder().decode(CompanionAPIError.self, from: data)
-      throw MobileConnectionError.http(response.statusCode, error?.message ?? "Workspace request failed (\(response.statusCode)).")
-    }
+    return try JSONDecoder().decode(Value.self, from: data)
   }
 }
 

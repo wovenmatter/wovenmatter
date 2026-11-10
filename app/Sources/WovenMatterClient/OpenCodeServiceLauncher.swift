@@ -1,5 +1,11 @@
 import Foundation
+#if canImport(Darwin)
 import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 
 public enum OpenCodeServiceLauncher {
     /// Reuse the standard service. Only a missing or dead process permits a
@@ -116,6 +122,8 @@ public enum OpenCodeServiceLauncher {
         process.standardError = FileHandle.nullDevice
         var environment = ProcessInfo.processInfo.environment
         environment["XDG_STATE_HOME"] = registration.deletingLastPathComponent().deletingLastPathComponent().path
+        // OpenCode runs session tools in this service process.
+        WovenSessionEnvironment.apply(to: &environment)
         process.environment = environment
         // This process intentionally outlives Woven Matter and is never registered
         // with LocalACPClient's process cleanup or panel lifecycle.

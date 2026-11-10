@@ -1,0 +1,7 @@
+#!/bin/sh
+# Woven Matter askpass for sessions (git, ssh, sudo -A). Nobody may be at this
+# device's screen, so refuse at once instead of waiting for an answer.
+device=${WOVENMATTER_DEVICE_NAME:-$(hostname 2>/dev/null)}
+device=${device:-this device}
+echo "Woven Matter: ${1:-A credential prompt} was requested on $device. Sessions started by Woven Matter cannot answer password prompts, so it stopped instead of waiting." >&2
+exit 1

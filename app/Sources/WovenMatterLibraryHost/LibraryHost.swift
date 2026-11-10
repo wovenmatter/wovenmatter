@@ -1,0 +1,487 @@
+import Foundation
+import WovenMatterClient
+import WovenMatterCore
+import WovenMatterDashboardStore
+
+/// The headless library host (`wovenmatter-library`). It owns one library
+/// database and serves:
+/// - on the loopback port, the network routes a machine publishes with
+///   Tailscale Serve under `/wovenmatter`: health, identity, peer sync among
+///   every Mac and Linux member, and the mobile library API for phones, all
+///   authenticated by signed member requests;
+/// - on its Unix socket, the local API for this machine's Node server:
+///   health, caller registration, the library-backed Woven MCP tools, the
+///   member list, local session-history publishing and bot conversations.
+/// See docs/architecture/WOVEN_EVERYWHERE.md, "Library host".
+public final class LibraryHost: @unchecked Sendable {
+  public static let version = "1"
+  /// Groups whose tools run entirely against the library database. Note
+  /// artifacts (spreadsheet and HTML notes) are part of notes. Rendering an
+  /// HTML reply needs the caller's active run, which the Node server owns until
+  /// Linux session history is written into this library, so it stays there.
+  /// Timers live in this library and fire here (`LibraryHostTimers`), so a
+  /// Linux session's or bot's timers need no Mac.
+  public static let servedGroups: Set<WorkspaceToolGroup> = [.notes, .history, .calendar, .library, .timers]
+  /// Single library-backed tools of groups this host does not otherwise serve:
+  /// session folders are library rows, so a Linux session lists them without
+  /// any Mac. The rest of `sessions` stays in the Node server.
+  public static let servedTools: [WorkspaceToolGroup: Set<String>] = [.sessions: ["woven_sessions_folders"]]
+  static func allowedTools(_ groups: Set<WorkspaceToolGroup>, context: Bool) -> Set<String> {
+    let served = groups.intersection(servedGroups)
+    return Set(WovenMCPCatalog.tools.filter { tool in
+      (context && tool.name == "woven_context") || tool.group.map(served.contains) == true
+        || tool.group.map { groups.contains($0) && servedTools[$0]?.contains(tool.name) == true } == true
+    }.map(\.name))
+  }
+  public static let maximumRequestBytes = WovenMatterToolRequest.maximumHTMLRequestBytes
+  /// Mobile library routes (today's `CompanionWorkspaceAPI`), mounted under
+  /// these prefixes so a phone can synchronize with this machine.
+  public static let mobilePrefixes = [
+    "/v1/hello", "/v1/snapshot", "/v1/changes", "/v1/mutations", "/v1/commands", "/v1/command-receipts/", "/v1/federation/",
+    "/v1/calendar", "/v1/dictations", "/v1/notes/", "/v1/assets/", "/v1/sessions/", "/v1/devices", "/v1/providers",
+    "/v1/pending", "/v1/workspace-read", "/v1/sync/status", "/v1/members", "/mcp"
+  ]
+
+  public let layout: LibraryHostLayout
+  public let store: DashboardStore
+  public let database: WorkspaceDatabase
+  public let identity: MemberIdentity
+  public let members: MemberDirectory
+  public let sync: LibraryPeerSync
+  private let token: LibraryHostToken
+  private let executor: WorkspaceToolExecutor
+  public let timers: LibraryHostTimers
+  private let startedAt = Date()
+  private let lock = NSLock()
+  private var mounts: [(prefix: String, handler: CompanionHTTPResponseHandler)] = []
+  private var servers: [CompanionSocketHTTPServer] = []
+  private var mobile: CompanionWorkspaceAPI?
+
+  /// `name` and `endpoints` are this machine's own advertised entry (the Mac
+  /// that adds it signs the authoritative one); `transport` is for tests.
+  public init(layout: LibraryHostLayout, tokenFile: URL? = nil, name: String? = nil, endpoints: [URL] = [],
+              transport: LibraryPeerTransport = .urlSession(), presenceInterval: TimeInterval = 60) async throws {
+    try layout.prepare()
+    LinuxSecretStore.directory = layout.secrets
+    self.layout = layout
+    token = try LibraryHostToken.load(tokenFile ?? layout.defaultTokenFile)
+    store = try await DashboardStore(supportDirectory: layout.library)
+    try await store.prepareLocalWorkspace()
+    database = store.database
+    executor = WorkspaceToolExecutor(database: database)
+    let library = try await database.companionLibraryIdentity()
+    identity = try MemberIdentity.loadOrCreate(file: layout.memberKeyFile, deviceID: library.hostDeviceID, kind: .linux)
+    members = MemberDirectory(database: database, identity: identity)
+    timers = LibraryHostTimers(database: database, machineID: identity.deviceID)
+    try await members.ensureSelf(name: name ?? ProcessInfo.processInfo.hostName, endpoints: endpoints)
+    var configuration = LibraryPeerSync.Configuration(version: "wovenmatter-library " + Self.version)
+    configuration.presenceInterval = presenceInterval
+    sync = LibraryPeerSync(directory: members, transport: transport, configuration: configuration)
+    let sync = sync
+    for prefix in ["/v1/peers/sync", "/v1/peers/notify", "/v1/peers/files", "/v1/peers/file"] {
+      mount(prefix: prefix) { await sync.handle($0) ?? .error("unauthorized", "Peer routes need a signed member request.", status: 401) }
+    }
+    // Bearer grants are never issued here; the store only backs the API.
+    let authentication = try CompanionAuthentication(fileURL: layout.library.appending(path: "companion-devices.json"))
+    let api = await MainActor.run { [database, members, executor, sync, ownID = identity.deviceID] in
+      CompanionWorkspaceAPI(database: database, authentication: authentication, commands: LibraryHostCommands(executor: executor),
+                            isActive: { true }, members: members, syncStatus: { await sync.status() },
+                            // This machine's own member entry carries its signed, user-visible name.
+                            hostName: { await members.member(ownID)?.name })
+    }
+    mobile = api
+    for prefix in Self.mobilePrefixes {
+      mount(prefix: prefix) { request in
+        // Phones authenticate only by member signature here.
+        guard MemberRequestVerifier.isSigned(request.headers) else {
+          return .error("unauthorized", "Sign this request with a member device key.", status: 401)
+        }
+        return await api.handle(request)
+      }
+    }
+  }
+
+  /// Starts peer synchronization: one catch-up with every peer, then
+  /// change-driven announcements and a slow presence check.
+  public func startSync() async { await sync.start() }
+
+  /// Routes another handler under a loopback path prefix, such as `/v1/peers/`
+  /// for peer sync or `/v1/workspace/` for the mobile API. Requests reach it
+  /// with the `/wovenmatter` Serve prefix already removed.
+  public func mount(prefix: String, _ handler: @escaping CompanionHTTPResponseHandler) {
+    lock.withLock { mounts.append((prefix, handler)); mounts.sort { $0.prefix.count > $1.prefix.count } }
+  }
+
+  @discardableResult
+  public func listen(port: UInt16, socket: URL) throws -> UInt16 {
+    let network = CompanionSocketHTTPServer { [weak self] request in
+      await self?.handleNetwork(request) ?? .error("unavailable", "The library host stopped.", status: 503)
+    }
+    let local = CompanionSocketHTTPServer(admitUnixPeer: Self.localPeerAdmission()) { [weak self] request in
+      await self?.handleLocal(request) ?? .error("unavailable", "The library host stopped.", status: 503)
+    }
+    let bound = try network.start(.loopback(port: port))
+    do { try local.start(.unix(path: socket.path)) } catch { network.stop(); throw error }
+    lock.withLock { servers = [network, local] }
+    return bound
+  }
+
+  public func stop() {
+    let current = lock.withLock { defer { servers = [] }; return servers }
+    for server in current { server.stop() }
+    let sync = sync
+    Task { await sync.stop() }
+  }
+
+  // MARK: Loopback routes
+
+  func handleNetwork(_ request: CompanionHTTPRequest) async -> CompanionHTTPResponse {
+    guard var path = URLComponents(string: "http://localhost" + request.target)?.path else {
+      return .error("invalid_request", "Invalid request path.", status: 400)
+    }
+    if path.hasPrefix("/wovenmatter/") { path = String(path.dropFirst("/wovenmatter".count)) }
+    if path == "/v1/health" { return await health(request) }
+    if path == "/v1/identity" { return await identityResponse(request) }
+    // The mobile API serves only `GET /v1/members`; `/v1/members/sign`,
+    // `adopt` and `self` exist on the socket alone.
+    if path.hasPrefix("/v1/members/") { return .error("not_found", "This library route is not served here.", status: 404) }
+    // Whole path segments only, so a prefix never mounts a longer name.
+    let handler = lock.withLock { mounts.first { mount in
+      path == mount.prefix || path.hasPrefix(mount.prefix.hasSuffix("/") ? mount.prefix : mount.prefix + "/")
+    }?.handler }
+    guard let handler else { return .error("not_found", "This library route is not served here.", status: 404) }
+    return await handler(request)
+  }
+
+  // MARK: Local (Unix socket) routes
+
+  func handleLocal(_ request: CompanionHTTPRequest) async -> CompanionHTTPResponse {
+    guard token.accepts(request.bearer) else {
+      return .init(status: 401, headers: ["WWW-Authenticate": "Bearer realm=\"woven-library\""],
+                   body: Data("{\"code\":\"unauthorized\",\"message\":\"A valid library API token is required.\"}".utf8))
+    }
+    guard let path = URLComponents(string: "http://localhost" + request.target)?.path else {
+      return .error("invalid_request", "Invalid request path.", status: 400)
+    }
+    do {
+      switch path {
+      case "/v1/health": return await health(request)
+      case "/v1/identity": return await identityResponse(request)
+      case "/v1/callers": return try await registerCaller(request)
+      case "/v1/mcp": return try await mcp(request)
+      case "/v1/members":
+        guard request.method == "GET" else { return .error("method_not_allowed", "Use GET.", status: 405) }
+        return try .json(try await members.list())
+      case "/v1/members/adopt":
+        guard request.method == "POST", request.body.count <= 1_048_576 else { return .error("invalid_request", "POST an adoption of at most 1 MiB.", status: 400) }
+        let list = try await members.adopt(JSONDecoder().decode(LibraryMemberAdoption.self, from: request.body))
+        await sync.scheduleAll()
+        return try .json(list)
+      case "/v1/members/self":
+        guard request.method == "POST", request.body.count <= 8_192 else { return .error("invalid_request", "POST at most 8 KiB.", status: 400) }
+        struct Update: Decodable { var name: String?; var endpoints: [URL] }
+        let update = try JSONDecoder().decode(Update.self, from: request.body)
+        guard update.endpoints.count <= 8, update.endpoints.allSatisfy({ CompanionPairingPayload.isValidEndpoint($0) }) else {
+          return .error("invalid_request", "Endpoints must be HTTPS tailnet addresses.", status: 400)
+        }
+        try await members.ensureSelf(name: update.name ?? ProcessInfo.processInfo.hostName, endpoints: update.endpoints)
+        return try .json(try await members.list())
+      case "/v1/sync/status":
+        return try .json(await sync.status())
+      case "/v1/timers/due":
+        guard request.method == "POST" else { return .error("method_not_allowed", "Use POST.", status: 405) }
+        return try .json(await timers.due())
+      case "/v1/timers/settle":
+        guard request.method == "POST", request.body.count <= 16_384 else { return .error("invalid_request", "POST at most 16 KiB.", status: 400) }
+        try await timers.settle(JSONDecoder().decode(LibraryHostTimers.Settlement.self, from: request.body))
+        return try .json(["settled": true])
+      case "/v1/members/sign":
+        return try await signForServer(request)
+      case "/v1/workspaces":
+        guard request.method == "GET" else { return .error("method_not_allowed", "Use GET.", status: 405) }
+        struct Workspaces: Encodable { let workspaces: [CompanionExecutionWorkspace] }
+        return try .json(Workspaces(workspaces: try await database.companionExecutionWorkspaces().filter { !$0.deleted }))
+      default:
+        if path.hasPrefix("/v1/publisher/") {
+          return try await CompanionWorkspacePublisherAPI.handleLocal(request, path: path, database: database)
+        }
+        let parts = path.split(separator: "/").map(String.init)
+        if parts.count == 4, parts[0] == "v1", parts[1] == "bots", parts[3] == "entries" {
+          guard request.method == "POST" else { return .error("method_not_allowed", "Use POST.", status: 405) }
+          guard request.body.count <= 8 * 1_024 * 1_024 else { return .error("too_large", "The conversation batch is too large.", status: 413) }
+          let batch = try JSONDecoder().decode(BotConversationMirror.self, from: request.body)
+          guard batch.bot.id.lowercased() == parts[2].lowercased() else {
+            return .error("invalid_request", "The batch must name the bot in its path.", status: 400)
+          }
+          let added = try await database.recordBotConversation(machineID: identity.deviceID, batch)
+          return try .json(["conversations": batch.conversations.count, "entries": batch.entries.count, "added": added])
+        }
+        // The bots runtime deleted this bot: its conversations stop syncing as live ones.
+        if parts.count == 4, parts[0] == "v1", parts[1] == "bots", parts[3] == "conversations" {
+          guard request.method == "DELETE" else { return .error("method_not_allowed", "Use DELETE.", status: 405) }
+          guard WovenMCPCaller.isIdentifier(parts[2]) else { return .error("invalid_request", "A bot ID is required.", status: 400) }
+          try await database.deleteBotConversations(machineID: identity.deviceID, botID: parts[2])
+          return try .json(["deleted": true])
+        }
+        return .error("not_found", "Unknown library API route.", status: 404)
+      }
+    } catch let error as CompanionAPIError {
+      return .error(error.code, error.message, status: error.code == "too_large" ? 413 : error.code == "wrong_owner" ? 403 : 400)
+    } catch let error as WorkspaceToolError {
+      return .error("invalid_request", error.localizedDescription, status: 400)
+    } catch {
+      return .error("invalid_request", error.localizedDescription, status: 400)
+    }
+  }
+
+  /// `POST /v1/members/sign {method, target, bodySHA256, audience}` →
+  /// `{headers}`: the Node server's requests to other members are signed with
+  /// this machine's member key, which never leaves this process. `target` is
+  /// the path with query exactly as the Node server sends it; `audience` is
+  /// the destination member's device ID.
+  public struct SignatureRequest: Codable, Sendable {
+    public var method: String
+    public var target: String
+    public var bodySHA256: String
+    public var audience: String
+    public init(method: String, target: String, bodySHA256: String, audience: String) {
+      self.method = method; self.target = target; self.bodySHA256 = bodySHA256; self.audience = audience
+    }
+  }
+  private func signForServer(_ request: CompanionHTTPRequest) async throws -> CompanionHTTPResponse {
+    guard request.method == "POST", request.body.count <= 16_384 else { return .error("invalid_request", "POST at most 16 KiB.", status: 400) }
+    let value = try JSONDecoder().decode(SignatureRequest.self, from: request.body)
+    guard value.target.hasPrefix("/"), !value.target.hasPrefix("//"), value.target.utf8.count <= 8_192,
+          value.target.unicodeScalars.allSatisfy({ $0.value > 0x20 && $0.value < 0x7f }),
+          value.bodySHA256.utf8.count == 64, value.bodySHA256.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }),
+          MemberRequestSignature.isDeviceID(value.audience), value.audience != identity.deviceID else {
+      return .error("invalid_request", "Sign a method, an absolute request target, a lowercase hex SHA-256 and another member's device ID.", status: 400)
+    }
+    // Only the requests the Node server makes, to the members they are for.
+    guard let audiences = Self.signableAudiences(method: value.method.uppercased(), target: value.target),
+          let member = await members.member(value.audience), audiences.contains(member.kind) else {
+      return .error("not_signable", "This machine signs only its server's execution and Woven MCP requests to a Mac or Linux member.", status: 403)
+    }
+    return try .json(["headers": try identity.signer.headers(method: value.method.uppercased(), target: value.target, bodySHA256: value.bodySHA256,
+                                                             audience: value.audience)])
+  }
+
+  /// The member kinds a Node server request may be signed for, or nil when
+  /// it is not one of the requests that server sends
+  /// (`remote/src/member-sessions.mjs`, `member-client.mjs`): the execution
+  /// API of a Mac or Linux workspace and a Mac's `/mcp/workspace`. The base is
+  /// a member endpoint (`/wovenmatter`) or a Linux execution endpoint
+  /// (`/wovenmatter-execution/<id>`).
+  static func signableAudiences(method: String, target: String) -> Set<MemberKind>? {
+    let parts = target.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false)
+    var path = Substring(parts[0])
+    if path.hasPrefix("/wovenmatter-execution/") {
+      let rest = path.dropFirst("/wovenmatter-execution/".count)
+      guard let slash = rest.firstIndex(of: "/"), rest[..<slash].allSatisfy({ $0.isLetter || $0.isNumber || $0 == "-" }), slash > rest.startIndex else { return nil }
+      path = rest[slash...]
+    } else if path.hasPrefix("/wovenmatter/") { path = path.dropFirst("/wovenmatter".count) }
+    let query = parts.count > 1 ? String(parts[1]) : nil
+    let segments = path.split(separator: "/", omittingEmptySubsequences: false).dropFirst().map(String.init)
+    let id = { (value: String) in UUID(uuidString: value) != nil }
+    switch (method, segments) {
+    case ("POST", ["mcp", "workspace"]), ("POST", ["mcp", "workspace", "prepare"]):
+      return query == nil ? [.mac] : nil
+    case ("POST", ["v1", "execution", "commands"]), ("GET", ["v1", "execution", "providers"]),
+         ("GET", ["v1", "execution", "conversations"]), ("GET", ["v1", "execution", "interactions"]):
+      return query == nil ? [.mac, .linux] : nil
+    case ("GET", let segments) where segments.count == 5 && Array(segments[0...2]) == ["v1", "execution", "conversations"] && id(segments[3]):
+      if segments[4] == "capabilities" { return query == nil ? [.mac, .linux] : nil }
+      guard segments[4] == "transcript" else { return nil }
+      return query == nil || query?.hasPrefix("before=") == true && query?.contains("&") == false ? [.mac, .linux] : nil
+    default: return nil
+    }
+  }
+
+  /// The local API answers only the Node server that launched this process
+  /// (Linux: the peer process of the socket connection, from the kernel, is
+  /// this process's parent and that parent is `node`), so another program of
+  /// the same account that read the token file still cannot sign as this
+  /// machine or call its tools. Outside that arrangement (tests, a manual
+  /// run) any process of this user may connect, as before.
+  static func localPeerAdmission() -> (@Sendable (Int32?) -> Bool)? {
+    #if os(Linux)
+    let parent = getppid()
+    guard parent > 1, let executable = try? FileManager.default.destinationOfSymbolicLink(atPath: "/proc/\(parent)/exe"),
+          URL(fileURLWithPath: executable).lastPathComponent.hasPrefix("node") else { return nil }
+    return { peer in allowsLocalPeer(peer, launchedBy: parent, currentParent: getppid()) }
+    #else
+    return nil
+    #endif
+  }
+  /// A peer is admitted only while this process still belongs to the parent
+  /// that launched it, and only that parent connects.
+  static func allowsLocalPeer(_ peer: Int32?, launchedBy parent: Int32, currentParent: Int32) -> Bool {
+    peer == parent && currentParent == parent
+  }
+
+  public struct Identity: Codable, Sendable, Equatable {
+    public let deviceID: String
+    public let kind: MemberKind
+    public let name: String
+    /// Raw 32-byte Ed25519 public key, base64.
+    public let publicKey: Data
+    /// This machine's own advertised base URLs (its self entry).
+    public var endpoints: [URL] = []
+  }
+  public func identityValue() async -> Identity {
+    let own = await members.member(identity.deviceID)
+    return .init(deviceID: identity.deviceID, kind: identity.kind, name: own?.name ?? ProcessInfo.processInfo.hostName,
+                 publicKey: identity.publicKey, endpoints: own?.endpoints ?? [])
+  }
+  /// Public by design: the adding Mac reads it to sign this machine's entry.
+  private func identityResponse(_ request: CompanionHTTPRequest) async -> CompanionHTTPResponse {
+    guard request.method == "GET" else { return .error("method_not_allowed", "Use GET.", status: 405) }
+    return (try? .json(await identityValue())) ?? .error("unavailable", "Identity unavailable.", status: 503)
+  }
+
+  private func health(_ request: CompanionHTTPRequest) async -> CompanionHTTPResponse {
+    guard request.method == "GET" else { return .error("method_not_allowed", "Use GET.", status: 405) }
+    struct Health: Encodable {
+      let status: String; let service: String; let version: String
+      let deviceID: String; let uptimeSeconds: Int
+    }
+    do {
+      _ = try await database.toolSettings()
+      return try .json(Health(status: "ok", service: "wovenmatter-library", version: Self.version,
+        deviceID: identity.deviceID, uptimeSeconds: Int(Date().timeIntervalSince(startedAt))))
+    } catch {
+      return .error("unavailable", "The library database is unavailable: \(error.localizedDescription)", status: 503)
+    }
+  }
+
+  /// `POST /v1/callers` registers one of the Node server's conversations as a
+  /// local session, so Woven tools attribute notes, receipts and versions to it.
+  public struct CallerRegistration: Codable, Sendable {
+    public var conversationID: String
+    public var title: String?
+    public var runtimeKind: String?
+    public var workingDirectory: String?
+    public var enabledGroups: [String]?
+  }
+
+  private func registerCaller(_ request: CompanionHTTPRequest) async throws -> CompanionHTTPResponse {
+    guard request.method == "POST" else { return .error("method_not_allowed", "Use POST.", status: 405) }
+    guard request.body.count <= 16_384 else { return .error("too_large", "The caller registration is too large.", status: 413) }
+    let registration = try JSONDecoder().decode(CallerRegistration.self, from: request.body)
+    let groups = try Self.groups(registration.enabledGroups ?? [])
+    let id = try await ensureCaller(registration.conversationID, groups: groups, title: registration.title,
+      runtimeKind: registration.runtimeKind, workingDirectory: registration.workingDirectory)
+    return try .json(["conversationID": id, "enabledGroups": groups.map(\.rawValue).sorted().joined(separator: ",")])
+  }
+
+  /// Creates the caller on first use, then applies the Node server's current
+  /// tool selection, limited to the groups this host serves.
+  @discardableResult
+  public func ensureCaller(_ rawID: String, groups: Set<WorkspaceToolGroup>, title: String? = nil,
+                           runtimeKind: String? = nil, workingDirectory: String? = nil) async throws -> String {
+    guard let uuid = UUID(uuidString: rawID) else {
+      throw CompanionAPIError(code: "invalid_request", message: "Callers are identified by conversation UUIDs.")
+    }
+    let id = uuid.uuidString.lowercased()
+    let exists = try await database.hasActiveConversation(id)
+    if !exists {
+      let kind = runtimeKind.flatMap(AgentRuntimeKind.init(rawValue:)) ?? .defaultAgent
+      let directory = workingDirectory ?? FileManager.default.homeDirectoryForCurrentUser.path
+      let location = WorkspaceFolderLocation(workspaceID: try await store.executionWorkspaceID(), rootPath: directory, managed: false)
+      let cleanTitle = title?.trimmingCharacters(in: .whitespacesAndNewlines)
+      _ = try await store.createLocalACPSession(runtimeKind: kind,
+        title: String((cleanTitle?.isEmpty == false ? cleanTitle! : "Linux session").prefix(512)),
+        requestedConversationID: uuid,
+        executionRoot: .init(folderID: nil, location: location, defaultPath: directory))
+    }
+    let current = try await database.sessionTools(id)
+    let selected = groups.intersection(Self.servedGroups.union(Self.servedTools.keys))
+    if current.enabled != selected {
+      try await database.setSessionTools(.init(enabled: selected, executorProfiles: current.executorProfiles),
+        sessionID: id, confirmedPausingTimers: true)
+    }
+    return id
+  }
+
+  /// `POST /v1/mcp`: stateless MCP JSON-RPC, the same messages the Node server
+  /// sends a Mac's `/mcp/workspace`. The caller and its tool selection come
+  /// from `X-Woven-Conversation-ID` and `X-Woven-Enabled-Groups`.
+  private func mcp(_ request: CompanionHTTPRequest) async throws -> CompanionHTTPResponse {
+    guard request.method == "POST" else {
+      return .error("method_not_allowed", "Woven MCP accepts stateless JSON-RPC POST requests.", status: 405)
+    }
+    if let version = request.headers["mcp-protocol-version"], !WovenMCPServer.supportedProtocolVersions.contains(version) {
+      return .error("protocol_version", "Unsupported MCP protocol version.", status: 400)
+    }
+    guard let rawGroups = request.headers["x-woven-enabled-groups"], rawGroups.utf8.count <= 512,
+          request.headers["x-woven-conversation-id"] != nil || request.headers["x-woven-caller"] != nil else {
+      return .error("invalid_request", "MCP requires a conversation binding (or a bot caller) and its current tool selection.", status: 400)
+    }
+    let groups = try Self.groups(rawGroups.split(separator: ",").map(String.init))
+    let message: GatewayJSONValue
+    do { message = try JSONDecoder().decode(GatewayJSONValue.self, from: request.body) }
+    catch { return try .json(WovenMCPServer.error(code: -32700, message: "The MCP request could not be decoded.")) }
+    guard request.body.count <= WovenMCPServer.maximumRequestBytes(for: message) else {
+      return .error("too_large", "The MCP request exceeds its size limit.", status: 413)
+    }
+    // A bot is an app-wide caller (`woven:bot:<machine-device-id>:<bot-id>`):
+    // it has no conversation here, and this library's `botMCP` settings
+    // decide its groups, further limited by the Node server's selection.
+    if let caller = request.headers["x-woven-caller"] {
+      guard request.headers["x-woven-conversation-id"] == nil, let bot = WovenMCPCaller.parseBot(caller),
+            request.headers["x-woven-bot-id"]?.lowercased() == bot.botID else {
+        return .error("invalid_request", "A bot caller is woven:bot:<machine>:<bot> with a matching X-Woven-Bot-ID.", status: 400)
+      }
+      let callerID = WovenMCPCaller.bot(machineID: bot.machineID, botID: bot.botID)
+      let name = request.headers["x-woven-bot-name"].flatMap { $0.removingPercentEncoding } ?? "Bot"
+      try await database.registerBotCaller(callerID, displayName: String(name.prefix(128)))
+      let allowed = Self.allowedTools(groups, context: false)
+      let executor = executor
+      let result = await WovenMCPServer.handle(message, contextID: nil, allowedTools: allowed, outsideCaller: true, botCaller: true) { call in
+        await executor.execute(call, callerID: callerID, handlers: WorkspaceToolHandlers()).bounded()
+      }
+      guard let result else { return .init(status: 202, body: Data()) }
+      return try .json(result)
+    }
+    let callerID = try await ensureCaller(request.headers["x-woven-conversation-id"] ?? "", groups: groups)
+    let allowed = Self.allowedTools(groups, context: true)
+    let contextID = request.headers["x-woven-context-id"]
+      ?? message.objectValue?["params"]?.objectValue?["_meta"]?.objectValue?["wovenContextID"]?.stringValue
+    let executor = executor
+    let result = await WovenMCPServer.handle(message, contextID: contextID, allowedTools: allowed) { call in
+      await executor.execute(call, callerID: callerID, handlers: WorkspaceToolHandlers()).bounded()
+    }
+    guard let result else { return .init(status: 202, body: Data()) }
+    return try .json(result)
+  }
+
+  static func groups(_ names: [String]) throws -> Set<WorkspaceToolGroup> {
+    let values = names.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+    let groups = values.compactMap(WorkspaceToolGroup.init(rawValue:))
+    guard groups.count == values.count else {
+      throw CompanionAPIError(code: "invalid_request", message: "An unknown tool group was selected.")
+    }
+    return Set(groups)
+  }
+}
+
+/// The mobile API's command surface on a headless host: library tools run
+/// against this database; sessions are started on a Mac or this machine's
+/// own workspace, never from the phone through the library host.
+@MainActor
+final class LibraryHostCommands: CompanionCommandServing {
+  private let executor: WorkspaceToolExecutor
+  init(executor: WorkspaceToolExecutor) { self.executor = executor }
+  private var unsupported: CompanionAPIError {
+    .init(code: "unsupported", message: "This Linux machine's library does not run sessions for other devices. Use its workspace.")
+  }
+  func executeTool(_ request: CompanionToolRequest, deviceID: String) async throws -> WovenMatterToolResponse {
+    await executor.execute(request.request, callerID: request.conversationID, handlers: WorkspaceToolHandlers())
+  }
+  func providers() -> [CompanionProvider] { [] }
+  func pendingInteractions() async -> [CompanionPendingInteraction] { [] }
+  func sessionCapabilities(conversationID: String) async throws -> CompanionProvider { throw unsupported }
+  func transcript(conversationID: String, before: String?) async throws -> CompanionTranscript { throw unsupported }
+  func receipt(commandID: String, deviceID: String) async throws -> CompanionCommandReceipt? { nil }
+  func execute(_ command: CompanionCommand, deviceID: String) async throws -> CompanionCommandReceipt { throw unsupported }
+}

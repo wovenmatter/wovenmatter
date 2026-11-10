@@ -88,8 +88,15 @@ final class PairedMacSyncController {
     private(set) var lastSynchronized: [String: Date] = [:]
     private var restored = false
     private var files: PairedLibraryFiles?
-    private var nextFileAttempt: [String: Date] = [:]
     private let storage: PairedMacDeviceStorage
+    /// Signed member records and change-driven peer synchronization
+    /// (docs/architecture/WOVEN_EVERYWHERE.md). Pairing still uses the
+    /// existing link and confirmation flow; its result is a member entry.
+    private(set) var memberDirectory: MemberDirectory?
+    private(set) var librarySync: LibraryPeerSync?
+    private(set) var syncStatus: LibrarySyncStatus?
+    @ObservationIgnored var peerTransport: LibraryPeerTransport = .urlSession()
+    private var appliedMemberRemovals: Set<String> = []
     init(host: CompanionHostController, network: PairedMacNetwork = .init(), storage: PairedMacDeviceStorage) {
         self.host = host; self.network = network; self.storage = storage; self.restoresPairing = storage.restoresPairing
         self.loadCredentials = storage.loadCredentials; self.saveCredentials = storage.saveCredentials
@@ -122,6 +129,120 @@ final class PairedMacSyncController {
         return identity
     }
 
+    /// This Mac's member directory, keyed by the same identity as pairing.
+    func members() async throws -> MemberDirectory {
+        if let memberDirectory { return memberDirectory }
+        guard let database = host?.model?.dashboardStore?.database else { throw CancellationError() }
+        let directory = MemberDirectory(database: database, identity: MemberIdentity(try await identity(), kind: .mac))
+        memberDirectory = directory
+        return directory
+    }
+
+    /// Anchors this Mac, keeps its own entry's address current, converts Macs
+    /// paired before members existed into members (their keys were already
+    /// pinned by a signed join), and starts change-driven synchronization.
+    private func startMembers(own: PairedMacRoute) async throws {
+        guard let host else { return }
+        let directory = try await members()
+        try await directory.ensureSelf(name: own.name, endpoints: [own.endpoint])
+        let authentication = try await host.peerAuthentication()
+        let current = try await directory.list()
+        for route in routes where route.deviceID != own.deviceID && current.active(route.deviceID) == nil {
+            guard await authentication.isActiveMac(route.deviceID), let pin = await authentication.pin(for: route.deviceID),
+                  pin.libraryID == route.libraryID else { continue }
+            do { try await directory.add(deviceID: route.deviceID, kind: .mac, name: route.name, publicKey: pin.publicKey, endpoints: [route.endpoint]) }
+            catch { errors[route.deviceID] = error.localizedDescription }
+        }
+        if librarySync == nil {
+            let version = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "development"
+            // The bearer-era roster (phone names for delegation, Mac
+            // introductions and signed unpairs) still rides along each
+            // exchange until phones pair as members.
+            let attachments = LibraryPeerSync.Attachments(outgoing: { _ in
+                try? JSONEncoder().encode(await authentication.peerMembership())
+            }, incoming: { [weak self] data, peer in
+                let membership = try JSONDecoder().decode(PeerMembership.self, from: data)
+                guard let self else { return }
+                try await self.mergeMembership(membership)
+                // An unpair learned here ends the exchange before its page.
+                guard await authentication.isActiveMac(peer) else {
+                    throw CompanionAPIError(code: "unauthorized", message: "This Mac is no longer paired.")
+                }
+            })
+            let sync = LibraryPeerSync(directory: directory, transport: peerTransport, configuration: .init(version: version), attachments: attachments)
+            librarySync = sync
+            await sync.start { [weak self] in await self?.peersChanged() }
+            // After sleep every peer may have changed; catch up at once
+            // instead of waiting out the offline backoff.
+            NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { _ in
+                Task { await sync.resume(reason: "wake") }
+            }
+        }
+    }
+
+    /// The other Mac's key was proven by the signed join; record it as a member.
+    private func addMember(route: PairedMacRoute, publicKey: Data) async {
+        do {
+            try await members().add(deviceID: route.deviceID, kind: .mac, name: route.name, publicKey: publicKey, endpoints: [route.endpoint])
+            await librarySync?.scheduleAll()
+        } catch { errors[route.deviceID] = error.localizedDescription }
+    }
+
+    /// A user's unpair on this Mac also removes the device's membership,
+    /// which every device applies as soon as it synchronizes.
+    func removeMember(_ deviceID: String) async throws {
+        let directory = try await members()
+        guard try await directory.list().members.contains(where: { $0.deviceID == deviceID && !$0.revoked }) else { return }
+        try await directory.remove(deviceID)
+        appliedMemberRemovals.insert(deviceID)
+    }
+
+    /// Rows from a peer were applied: apply member removals learned there to
+    /// this Mac's own grants, then refresh status and views.
+    private func peersChanged() async {
+        guard let host, let directory = memberDirectory else { return }
+        await directory.invalidate()
+        if let list = try? await directory.list() {
+            let own = directory.identity.deviceID
+            for member in list.members where member.revoked && member.deviceID != own && !appliedMemberRemovals.contains(member.deviceID) {
+                appliedMemberRemovals.insert(member.deviceID)
+                await host.applyMemberRemoval(member.deviceID)
+            }
+        }
+        do { try await host.applyPeerRevocations() } catch { errors["revocations"] = error.localizedDescription }
+        await refreshSyncStatus()
+        await host.model?.refreshWorkspace()
+    }
+
+    private func mergeMembership(_ membership: PeerMembership) async throws {
+        guard let host else { return }
+        try await host.peerAuthentication().mergeMembership(membership, own: identity())
+        do { try await host.applyPeerRevocations(); errors.removeValue(forKey: "revocations") }
+        catch { errors["revocations"] = error.localizedDescription }
+    }
+
+    func refreshSyncStatus() async {
+        guard let librarySync, let database = host?.model?.dashboardStore?.database else { return }
+        let status = await librarySync.status()
+        syncStatus = status
+        for peer in status.peers {
+            switch peer.state {
+            case .updateRequired: errors[peer.deviceID] = peer.error ?? "Update Woven Matter on every device to synchronize with \(peer.name)."
+            case .failing: errors[peer.deviceID] = peer.error
+            case .online, .offline: errors.removeValue(forKey: peer.deviceID)
+            }
+        }
+        conflicts = (try? await database.pairedLibraryConflicts()) ?? conflicts
+        if status.quarantined > 0 { errors["quarantine"] = "\(status.quarantined) shared record\(status.quarantined == 1 ? "" : "s") could not be applied. Local data is retained; update Woven Matter on every device." }
+        else { errors.removeValue(forKey: "quarantine") }
+        for peer in status.peers { if let date = peer.lastSynchronized { lastSynchronized[peer.deviceID] = date } }
+    }
+
+    func stopMembers() async {
+        await librarySync?.stop()
+        librarySync = nil
+    }
+
     /// Never fails library or phone availability. A device-only storage error is
     /// recorded for Settings and retried on the next synchronization turn.
     func restoreRecordingFailures() async {
@@ -135,6 +256,7 @@ final class PairedMacSyncController {
         files = PairedLibraryFiles(root: database.supportDirectory)
         try await database.savePairedMacRoute(own)
         routes = try await database.pairedMacRoutes()
+        try await startMembers(own: own)
         if !restored && restoresPairing { await pairing.restorePendingRequest() }
         restored = true
         for credential in try loadCredentials() where credential.deviceID == own.deviceID && credential.needsJoin == true {
@@ -241,6 +363,7 @@ final class PairedMacSyncController {
         try await authentication.enrollPeer(route: route, token: reciprocal, publicKey: reply.publicKey,
             subjectSignature: reply.subjectSignature, acknowledgedRevocations: join.reciprocalRevocations, own: identity)
         try await database.savePairedMacRoute(route)
+        await addMember(route: route, publicKey: reply.publicKey)
         var credentials = try loadCredentials()
         if let index = credentials.firstIndex(where: { $0.route.deviceID == route.deviceID && $0.token == credential.token }) {
             credentials[index].needsJoin = nil; credentials[index].confirmationPending = nil
@@ -254,6 +377,12 @@ final class PairedMacSyncController {
     func handle(_ request: CompanionHTTPRequest) async -> CompanionHTTPResponse? {
         let path = request.target.replacingOccurrences(of: "/wovenmatter/", with: "/")
         guard path.hasPrefix("/v1/peers/") else { return nil }
+        if MemberRequestVerifier.isSigned(request.headers) {
+            guard let host, !host.peerSyncPaused, let librarySync else {
+                return .error("unavailable", "This Mac is not ready to synchronize.", status: 503)
+            }
+            return await librarySync.handle(request) ?? .error("not_found", "Unknown peer endpoint.", status: 404)
+        }
         do {
             guard let host, let database = host.model?.dashboardStore?.database, !host.peerSyncPaused,
                   request.headers["x-woven-protocol"] == String(CompanionProtocol.version) else {
@@ -307,6 +436,7 @@ final class PairedMacSyncController {
                 try await database.savePairedMacRoute(join.route)
                 routes = try await database.pairedMacRoutes()
                 nextAttempt[principal.id] = .distantPast
+                await addMember(route: join.route, publicKey: join.publicKey)
                 return try .json(PairedMacJoinReply(route: try await host.peerRoute(), publicKey: identity.publicKey,
                     subjectSignature: try identity.key.signature(for: reciprocal)))
             }
@@ -317,10 +447,10 @@ final class PairedMacSyncController {
             }
             if path == "/v1/peers/credential", request.method == "POST", request.body.count <= 4096 {
                 let enrollment = try JSONDecoder().decode(PairedWorkspaceEnrollment.self, from: request.body)
-                let own = try await host.peerRoute()
-                guard let workspace = try await database.companionExecutionWorkspaces().first(where: { $0.id == enrollment.workspaceID && !$0.deleted }),
-                      workspace.ownerDeviceID == own.deviceID else {
-                    return .error("unauthorized", "Request this workspace's grant from the Mac that manages it.", status: 403)
+                // Any Mac enrolls a device for any workspace it knows: Linux hosts
+                // issue grants to every Mac member, and a Mac issues its own.
+                guard try await database.companionExecutionWorkspaces().contains(where: { $0.id == enrollment.workspaceID && !$0.deleted && $0.kind != .ios }) else {
+                    return .error("unknown_workspace", "This Mac does not know that workspace yet.", status: 404)
                 }
                 // A Mac enrolls itself directly. It may also enroll one of its own
                 // mobile devices; that grant records the Mac as its provenance.
@@ -374,110 +504,20 @@ final class PairedMacSyncController {
         catch { return .error("peer_sync", "Synchronization paused; all local writing is retained. " + error.localizedDescription, status: 409) }
     }
 
+    /// Called by the host's local housekeeping loop. Peer synchronization
+    /// itself is change-driven inside `LibraryPeerSync`; this only refreshes
+    /// local state, and with `force` ("Sync now") catches up every peer once.
     func synchronize(force: Bool = false) async {
         guard !syncing, let host, !host.peerSyncPaused, let database = host.model?.dashboardStore?.database else { return }
         syncing = true; defer { syncing = false }
-        if force { nextAttempt = [:]; nextFileAttempt = [:] }
+        await restoreRecordingFailures()
+        if force { await librarySync?.synchronizeAll() }
+        do { try await host.applyPeerRevocations() } catch { errors["revocations"] = error.localizedDescription }
         do {
-            await restoreRecordingFailures()
-            let authentication = try await host.peerAuthentication()
-            let own = try await host.peerRoute()
-            let identity = try await identity()
-            var credentials = (try? loadCredentials()) ?? []
-            routes = try await database.pairedMacRoutes()
-            for route in routes where route.deviceID != own.deviceID {
-                guard !Task.isCancelled, (nextAttempt[route.deviceID] ?? .distantPast) <= Date(),
-                      await authentication.isActiveMac(route.deviceID) else { continue }
-                // A pending explicit pairing with this Mac finishes through its own
-                // join; nothing may replace its reciprocal state.
-                if credentials.contains(where: { $0.route.deviceID == route.deviceID && !$0.isCompleted }) { continue }
-                // A route is dialed only with a key pinned from explicit pairing
-                // or a signed admission. Unsigned earlier grants need re-pairing.
-                guard let pin = await authentication.pin(for: route.deviceID), pin.libraryID == route.libraryID else {
-                    errors[route.deviceID] = "Pair with \(route.name) again to use signed synchronization."
-                    continue
-                }
-                do {
-                    // Each Mac accepts only grants it issued itself. Without one for
-                    // this Mac, obtain it directly from that Mac through a pinned
-                    // mutual handshake; another Mac's bearer is never presented.
-                    var credential = credentials.first(where: { $0.route.deviceID == route.deviceID && $0.deviceID == own.deviceID && $0.isCompleted })
-                    if credential == nil {
-                        let grant = try await network.handshake(route, own: identity, pin: pin, operationID: UUID().uuidString.lowercased())
-                        let issued = PairedMacCredential(route: grant.route, deviceID: own.deviceID, token: grant.token)
-                        credentials = try loadCredentials()
-                        credentials.removeAll { $0.route.deviceID == route.deviceID && $0.isCompleted }
-                        credentials.append(issued); try saveCredentials(credentials)
-                        credential = issued
-                    }
-                    guard var credential else { continue }
-                    // The target proves its pinned key before receiving the bearer.
-                    // A signed display-name change is adopted, never an identity change.
-                    let verified = try await network.verify(route, deviceID: own.deviceID, token: credential.token, pin: pin)
-                    if verified != credential.route {
-                        credential.route = verified
-                        credentials = try loadCredentials()
-                        if let index = credentials.firstIndex(where: { $0.route.deviceID == route.deviceID && $0.token == credential.token }) {
-                            credentials[index].route = verified; try saveCredentials(credentials)
-                        }
-                    }
-                    if verified.name != route.name { try await database.savePairedMacRoute(verified) }
-                    // Bound each turn so a slow peer never starves other peers.
-                    for _ in 0..<8 {
-                        // An unpair made here meanwhile sends no further page.
-                        guard await authentication.isActiveMac(route.deviceID) else {
-                            throw CompanionAPIError(code: "peer_unpaired", message: "\(route.name) is no longer paired.")
-                        }
-                        let cursors = try await database.pairedLibraryCursors(route.deviceID)
-                        let page = try await database.pairedLibraryPage(after: cursors.pushed)
-                        let exchange = PairedMacExchange(deviceID: own.deviceID, after: cursors.pulled, page: page, membership: await authentication.peerMembership())
-                        let reply: PairedMacExchange = try await network.request(route.endpoint, path: "v1/peers/exchange", token: credential.token, body: JSONEncoder().encode(exchange))
-                        guard reply.deviceID == route.deviceID, reply.after == page.cursor else { throw CompanionAPIError(code: "wrong_peer", message: "The peer did not acknowledge this exact page.") }
-                        try await authentication.mergeMembership(reply.membership, own: identity)
-                        // An unpair learned from this reply, or made here while the
-                        // request was in flight, stops this exchange before its page.
-                        guard await authentication.isActiveMac(route.deviceID) else {
-                            throw CompanionAPIError(code: "peer_unpaired", message: "\(route.name) is no longer paired.")
-                        }
-                        try await database.receivePairedLibrary(reply.page, from: route.deviceID)
-                        try await database.acknowledgePairedLibrary(peer: route.deviceID, cursor: page.cursor)
-                        if !page.hasMore && !reply.page.hasMore { break }
-                    }
-                    if (nextFileAttempt[route.deviceID] ?? .distantPast) <= Date(), await authentication.isActiveMac(route.deviceID) {
-                        // File failure is independent of durable row acceptance.
-                        do { try await synchronizeFiles(route: route, credential: credential) }
-                        catch { errors["files:" + route.deviceID] = error.localizedDescription }
-                        nextFileAttempt[route.deviceID] = Date().addingTimeInterval(30)
-                    }
-                    nextAttempt[route.deviceID] = Date().addingTimeInterval(5)
-                    lastSynchronized[route.deviceID] = Date(); errors.removeValue(forKey: route.deviceID)
-                } catch {
-                    nextAttempt[route.deviceID] = Date().addingTimeInterval(20)
-                    // A grant that Mac no longer honors is dropped; the next turn
-                    // obtains a fresh one through the pinned handshake.
-                    if let error = error as? CompanionAPIError, error.code == "unauthorized" {
-                        credentials = (try? loadCredentials()) ?? credentials
-                        credentials.removeAll { $0.route.deviceID == route.deviceID && $0.isCompleted }
-                        try? saveCredentials(credentials)
-                    }
-                    if let error = error as? CompanionAPIError {
-                        if !["peer_unavailable", "unauthorized"].contains(error.code) { errors[route.deviceID] = error.message }
-                    } else if !(error is URLError) { errors[route.deviceID] = error.localizedDescription }
-                }
-            }
-            // Membership changes are independent of row materialization: a
-            // waiting or malformed record can never delay a revocation.
-            do { try await host.applyPeerRevocations() } catch { errors["revocations"] = error.localizedDescription }
-            do {
-                try await database.materializePendingPeerRecords()
-                errors.removeValue(forKey: "pending")
-            } catch { errors["pending"] = error.localizedDescription }
-            conflicts = (try? await database.pairedLibraryConflicts()) ?? conflicts
-            let quarantined = (try? await database.pairedLibraryQuarantineCount()) ?? 0
-            if quarantined > 0 { errors["quarantine"] = "\(quarantined) shared record\(quarantined == 1 ? "" : "s") could not be applied. Local data is retained; update Woven Matter on every paired Mac." }
-            else { errors.removeValue(forKey: "quarantine") }
-            await host.model?.refreshWorkspace()
-        } catch { errors["local"] = error.localizedDescription }
+            try await database.materializePendingPeerRecords()
+            errors.removeValue(forKey: "pending")
+        } catch { errors["pending"] = error.localizedDescription }
+        await refreshSyncStatus()
     }
 
     /// Execution access comes directly from the Mac that manages the
@@ -509,38 +549,6 @@ final class PairedMacSyncController {
             throw CompanionAPIError(code: "wrong_workspace", message: "The workspace returned a different execution identity.")
         }
         return result
-    }
-
-    private func synchronizeFiles(route: PairedMacRoute, credential: PairedMacCredential) async throws {
-        guard let files, let database = host?.model?.dashboardStore?.database, let authentication = try? await host?.peerAuthentication() else { return }
-        var cursor = try await database.pairedLibraryFileCursor(route.deviceID), chunks = 0
-        for _ in 0..<8 {
-            // An unpair made during a transfer sends no further request.
-            guard await authentication.isActiveMac(route.deviceID) else { return }
-            let page: PairedLibraryFilePage = try await network.request(route.endpoint, path: "v1/peers/files", token: credential.token, body: JSONEncoder().encode(cursor))
-            for file in page.files {
-                let errorKey = "file:" + route.deviceID + ":" + file.id
-                do {
-                    while let offset = try await files.nextOffset(file) {
-                        guard !Task.isCancelled, chunks < 32, await authentication.isActiveMac(route.deviceID) else { return }
-                        let chunk: PairedLibraryFileChunk = try await network.request(route.endpoint, path: "v1/peers/file", token: credential.token,
-                            body: JSONEncoder().encode(PairedLibraryFileRequest(file: file, offset: offset)))
-                        guard chunk.file == file, chunk.offset == offset else { throw CompanionAPIError(code: "peer_file", message: "Shared file identity changed.") }
-                        try await files.receive(chunk); chunks += 1
-                    }
-                    errors.removeValue(forKey: errorKey)
-                } catch {
-                    if error is URLError || Task.isCancelled { throw error }
-                    errors[errorKey] = error.localizedDescription
-                }
-            }
-            // Resume beyond the per-turn page bound. Wrap after a full scan so
-            // newly added hashes before this cursor are discovered next time.
-            cursor = page.hasMore ? page.cursor : ""
-            try await database.savePairedLibraryFileCursor(cursor, peer: route.deviceID)
-            if !page.hasMore { break }
-        }
-        errors.removeValue(forKey: "files:" + route.deviceID)
     }
 
     func revoke(_ deviceID: String) throws {

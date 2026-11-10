@@ -38,11 +38,17 @@ test('runtime inspection is authenticated and never starts a Pi worker', async c
   const service = await startService({workspace:root, home:root, catalog:catalogPath, token})
   context.after(() => stopService(service.child))
   assert.equal((await fetch(service.url+'/v1/runtime/inspection')).status,401)
+  // observedAt is seconds since 2001 (Apple's reference date), taken while the
+  // request is served. Bracket the request rather than allow a fixed skew,
+  // which a loaded machine exceeds.
+  const reference = () => Date.now()/1000-978307200
+  const requested = reference()
   const response = await fetch(service.url+'/v1/runtime/inspection', {headers:{Authorization:'Bearer '+token}})
   assert.equal(response.status,200)
   const snapshot = await response.json()
+  const answered = reference()
   assert.equal(snapshot.ownerID,'remote')
-  assert.ok(Math.abs(snapshot.observedAt - (Date.now()/1000-978307200)) < 5)
+  assert.ok(snapshot.observedAt >= requested-1 && snapshot.observedAt <= answered+1, `observedAt ${snapshot.observedAt} outside ${requested}...${answered}`)
   assert.equal(snapshot.items.find(item=>item.kind==='service').processID,service.child.pid)
   assert.ok(!snapshot.items.some(item=>item.id==='pi-worker'))
   assert.ok(!JSON.stringify(snapshot).includes(token))
@@ -499,14 +505,17 @@ test('host health reports native paths and source inventory without exposing its
   const service = await startService({ workspace, home, catalog: catalogPath, token, environmentOverrides: {
     WOVENMATTER_RUNTIME_KIND: 'host', WOVENMATTER_ACCESS_MODE: 'fullRoot',
     WOVENMATTER_DATA_DIRECTORY: databases, WOVENMATTER_STATE_DIRECTORY: resolve(home, 'data/run'),
-    WOVENMATTER_SERVICE_FINGERPRINT: 'a'.repeat(64),
+    WOVENMATTER_SERVICE_FINGERPRINT: 'a'.repeat(64), WOVENMATTER_RELEASE_VERSION: '1.4.0', WOVENMATTER_LIBRARY: '0',
   } })
   context.after(() => stopService(service.child))
   const headers = { Authorization: 'Bearer ' + token }
   const health = await (await fetch(service.url + '/v1/health', { headers })).json()
   assert.deepEqual(health, { status: 'ready', version: '0.1.0', workspaceRoot: workspace, harnessCount: 4,
     runtimeKind: 'host', serviceFingerprint: 'a'.repeat(64), databasesDirectory: databases,
-    attachmentsDirectory: resolve(workspace, '.wovenmatter/attachments'), dataRoot: resolve(home, 'data'), accessMode: 'fullRoot' })
+    // What apps compare to tell an out-of-date host (no library host here, so no schema).
+    release: { version: '1.4.0', fingerprint: 'a'.repeat(64), librarySchema: null },
+    attachmentsDirectory: resolve(workspace, '.wovenmatter/attachments'), dataRoot: resolve(home, 'data'), accessMode: 'fullRoot',
+    workspaceEnabled: true, botsEnabled: false, library: null, memberIdentity: null })
   const body = await (await fetch(service.url + '/v1/harnesses', { headers })).json()
   assert.ok(body.harnesses.every(row => ['system', 'managed', 'missing'].includes(row.source)))
   assert.equal(body.harnesses.find(row => row.id === 'default_agent').source, 'managed')

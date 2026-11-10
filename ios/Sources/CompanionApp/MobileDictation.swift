@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import AVFoundation
 import WovenMatterCompanion
 
 @MainActor @Observable final class MobileDictationEditor {
@@ -15,6 +16,16 @@ import WovenMatterCompanion
   }
 }
 
+/// How an editor admits text inserted on the user's behalf.
+enum MobileTextAdmission { case rejected, insertNatively, applied }
+
+/// An editor that may apply some insertions itself, such as a line break that
+/// becomes a new note paragraph. `.applied` means the text was saved exactly
+/// once and must not also be inserted into the text view.
+@MainActor protocol MobileTextAdmitting: AnyObject {
+  func admit(_ view: UITextView, range: NSRange, text: String) -> MobileTextAdmission
+}
+
 @MainActor struct MobileDictationTicket {
   let editor: MobileDictationEditor
   let identity: String
@@ -25,7 +36,16 @@ import WovenMatterCompanion
     let expected = ((view.text ?? "") as NSString).replacingCharacters(in: range, with: text)
     // Programmatic insertText preserves native undo and change notifications,
     // but does not invoke shouldChangeTextIn. Admit the note edit exactly once.
-    guard view.delegate?.textView?(view, shouldChangeTextIn: range, replacementText: text) != false else { return false }
+    let admission: MobileTextAdmission = if let admitting = view.delegate as? MobileTextAdmitting {
+      admitting.admit(view, range: range, text: text)
+    } else {
+      view.delegate?.textView?(view, shouldChangeTextIn: range, replacementText: text) != false ? .insertNatively : .rejected
+    }
+    switch admission {
+    case .rejected: return false
+    case .applied: return true
+    case .insertNatively: break
+    }
     view.selectedRange = range
     view.undoManager?.beginUndoGrouping()
     view.insertText(text)
@@ -44,6 +64,10 @@ import WovenMatterCompanion
     if session.retainedTranscript != nil { session.insertRetained { editor.ticket()?.insert($0) == true }; return }
     if session.isRecording { stop(); return }
     guard editor.ticket() != nil else { session.error = "Place the cursor in an editable text input first."; return }
+    // Tests and UI fixtures never raise the microphone prompt; nothing would dismiss it.
+    guard CompanionModel.systemPermissionPromptsAllowed || AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
+      session.error = "Dictation is unavailable in this test build."; return
+    }
     session.start()
   }
   func stop() {

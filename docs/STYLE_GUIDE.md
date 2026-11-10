@@ -29,6 +29,10 @@ when an intentional design change is accepted.
   without all-caps styling or expanded letter spacing. Keep saved-default actions
   out of the conversation selector popouts. Composer model buttons show only the
   model name and version; connection attribution belongs in the model popout.
+  Permission menus use each harness's own mode names, except that every
+  harness's full mode is shown as Full access. List Full access first (the
+  default everywhere), then the harness's auto-approve modes, then its other
+  modes, with ask-for-approval last.
   Permission buttons use the fullest label that fits, then explicit shorter
   labels, then an icon. Never ellipsize these labels or collapse distinct modes
   such as Auto and Auto Accept into the same text. Popouts retain full labels
@@ -45,6 +49,18 @@ when an intentional design change is accepted.
   patterns in
   [SettingsComponents.swift](../app/App/Views/SettingsComponents.swift).
   Preserve intentional differences such as borderless Usage sections.
+- **Mobile Quick Chat:** name the device conversation feature **Quick Chat**,
+  with **Powered by Pi Durable** in its setup explanation. Mac/Linux agents retain
+  their harness names. On the mobile home page and in the New Chat menu Quick
+  Chat comes first and the workspaces follow it, each once under its own name.
+  A message sent to a Mac or Linux session shows at once with quiet caption
+  progress ("Sending to …", "Starting on …"), never a spinner. Home, Folders, New Chat and Calendar list only paired
+  Mac and Linux workspaces that are reachable now; Settings → Workspaces keeps
+  every saved workspace with its connection state. Never add an "Unavailable
+  workspace" group: folders whose workspace is not listed stay in All Workspaces.
+  Web search connections (Exa, Brave Search, Firecrawl) live under Connections →
+  Web search with the model connections. Do not add data-sharing prompts:
+  connecting a provider is the user's choice to use it.
 - **Agent naming:** use **Pi Durable** for the agent in navigation, settings,
   conversation labels, and actions. Use **Pi Durable SDK** for the underlying SDK
   in technical descriptions and version/update controls. Keep the agent name
@@ -52,8 +68,20 @@ when an intentional design change is accepted.
 - **Settings navigation:** group Pi Durable, Codex, Claude Code, Grok Build, and
   OpenCode under **Settings → Agents**. Harness pages return to Agents unless
   opened from a workspace's settings. Spell **OpenCode** as one word throughout
-  the app. Order the main Settings page as General, Agents, Dictation, Local
-  Workspace, Remote Workspaces, Apple Devices, Background Server, then Usage.
+  the app. Order the main Settings page as General, Permissions & Access, Agents,
+  Bots, Dictation, Local Workspace, Remote Workspaces, Apple Devices, Background
+  Server, then Usage.
+- **Bots:** the Bots section sits above New chat in the navigation rail, using the
+  rail's own disclosure headings and rows; with bots on more than one machine, each
+  machine gets its own "Bots on <name>" heading. A bot's row shows only its name and
+  opens its main channel; a chevron reveals its threads, pinned first and then newest
+  created. Thread dropdowns start closed. Everything about bots is native and uses the
+  components regular chats and Settings use: the shared transcript text, user bubble and
+  composer, and Settings cards. A thread sits beside its bot's main channel at 760
+  points and wider. Message actions appear on hover. Settings → Bots holds this Mac's
+  switch, every machine, Discover devices, version notices with "Update everything",
+  and Woven MCP access, and drills down into Resources, Profiles, and Bots and teams per
+  machine. Bots use Woven's provider connections; there is no separate bot sign-in.
 - **Harness setup:** use compact rows grouped on the theme-whisper surface for
   both harness installation and Pi Durable setup, with the same typography,
   padding, inset dividers, and quiet actions. Keep provider setup limited to
@@ -68,10 +96,19 @@ when an intentional design change is accepted.
   on limits-account switches or credentials.
 - **Tool defaults:** settings say Woven MCP and show effective defaults,
   rather than an off-looking inheritance switch. Composer controls retain Tools.
-- **Keychain:** General uses Keychain access, Enable/Restore Keychain access,
-  Access ready, and Access needs attention. Keep one storage sentence, a status
-  pill, and an action; show the Always Allow hint only when access is not ready.
-  Consent is not verification.
+- **Permissions & Access:** every macOS permission Woven Matter uses lives on
+  this one Settings page, directly after General. It opens with one sentence:
+  agents on this Mac or the user's other devices stop at a prompt here without
+  these permissions. Everything is one card: a header with how many are not
+  allowed yet and one **Allow all** button, then one row per permission with its
+  System Settings name, one short line, and a quiet "Allowed" check or its own
+  **Allow** button. Allow all brings up each prompt in turn with no steps, Skip or
+  Stop. A row shows **Reopen** only when macOS needs the app reopened. Other
+  settings that depend on a permission (Dictation, Computer Use) show a one-line
+  status with a Permissions & Access link instead of their own controls; the
+  Settings landing row summarizes "All allowed" or "N to allow". A session on a
+  Mac missing a permission it needs shows a full-width quiet notice above its
+  composer, like the composer setup notices.
 - **Harness lists:** local and remote workspaces use compact expandable harness
   rows. Keep versions and labeled maintenance controls inside the expanded row,
   rather than a horizontal strip of actions. Remote workspaces have no global
