@@ -17,8 +17,8 @@ extension WorkspaceDatabaseConnection {
       }
       var rows = try historyRowsUnlocked("""
         SELECT t.rowid AS sequence,t.* FROM workspace_session_timers t
-        JOIN dashboard_conversations c ON c.id=t.session_id
-        WHERE c.deleted_at IS NULL AND t.session_id=? AND t.rowid>?
+        LEFT JOIN dashboard_conversations c ON c.id=t.session_id
+        WHERE \(Self.liveTimerTarget) AND t.session_id=? AND t.rowid>?
         ORDER BY t.rowid LIMIT ?
         """, values: [sessionID, String(after), String(limit + 1)])
       let more = rows.count > limit
@@ -41,8 +41,12 @@ extension WorkspaceDatabaseConnection {
     }
   }
 
+  /// A timer delivers to a live session, or back to the bot that set it (bots
+  /// have no conversation row; their schedules are their own timers).
+  static let liveTimerTarget = "((c.id IS NOT NULL AND c.deleted_at IS NULL) OR t.session_id LIKE 'woven:bot:%')"
+
   private func timersUnlocked(sessionID: String? = nil) throws -> [WorkspaceSessionTimer] {
-    let sql = "SELECT t.* FROM workspace_session_timers t JOIN dashboard_conversations c ON c.id=t.session_id WHERE c.deleted_at IS NULL"
+    let sql = "SELECT t.* FROM workspace_session_timers t LEFT JOIN dashboard_conversations c ON c.id=t.session_id WHERE " + Self.liveTimerTarget
       + (sessionID == nil ? "" : " AND t.session_id=?") + " ORDER BY t.next_fire_at,t.id"
     return try historyRowsUnlocked(sql, values: sessionID.map { [$0] } ?? []).map { value in
       let r = value.objectValue ?? [:]
@@ -56,6 +60,10 @@ extension WorkspaceDatabaseConnection {
   func requireTimerAccessUnlocked(sourceID: String, targetID: String) throws {
     try requireToolUnlocked(.timers, sessionID: sourceID)
     if WovenMCPCaller.isAppWide(sourceID) {
+      // A bot's own timers come back to it; no caller sets another bot's.
+      if WovenMCPCaller.parseBot(targetID) != nil, targetID != sourceID {
+        throw WorkspaceToolError.invalid("A bot's timers deliver only to that bot.")
+      }
       try requireToolSessionUnlocked(targetID)
       return
     }
@@ -140,6 +148,10 @@ extension WorkspaceDatabaseConnection {
   /// Explicit pauses and removals still fence pending occurrences normally.
   func timerExecutionEnabledUnlocked(id: String, sessionID: String) throws -> Bool {
     let row = try historyRowsUnlocked("SELECT outside_mcp FROM workspace_session_timers WHERE id=?", values: [id]).first
+    // A paused, revoked or disabled bot skips its timers without stopping the scheduler.
+    if WovenMCPCaller.parseBot(sessionID) != nil {
+      return (try? sessionToolsUnlocked(sessionID))?.enabled.contains(.timers) ?? false
+    }
     if row?.objectValue?["outside_mcp"]?.intValue == 1 { return true }
     return try sessionToolsUnlocked(sessionID).enabled.contains(.timers)
   }

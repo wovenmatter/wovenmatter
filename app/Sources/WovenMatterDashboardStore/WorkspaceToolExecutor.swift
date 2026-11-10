@@ -347,7 +347,8 @@ public struct WorkspaceToolExecutor: Sendable {
 
   private func timer(_ command: WovenMatterToolCommand, callerID: String, requestID: String, targetID: String? = nil) async throws -> WovenMatterToolResponse {
     let target = targetID ?? command.options["session"] ?? callerID
-    if WovenMCPCaller.isAppWide(callerID), target == callerID {
+    // A bot without a session sets its own timers: they are its schedules.
+    if WovenMCPCaller.isAppWide(callerID), target == callerID, WovenMCPCaller.parseBot(callerID) == nil {
       throw WorkspaceToolError.invalid("App-wide callers must supply sessionID for timers.")
     }
     if target != callerID && !WovenMCPCaller.isAppWide(callerID) {

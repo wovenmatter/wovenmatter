@@ -30,7 +30,7 @@ async function writePrivateJSON(path, value) {
  * reports resources, and proxies /v1/bots/ws for Woven apps.
  */
 export function createBotsService({ configuration, mcp, defaultAgent, serverPort, library, libraryHost, engine, runtime, previews,
-  authorizeClient, machine, memberIdentity, release, engineWatchMilliseconds = 5000, log = message => process.stderr.write(message + '\n') }) {
+  authorizeClient, machine, memberIdentity, release, engineWatchMilliseconds = 5000, webSocket = globalThis.WebSocket, log = message => process.stderr.write(message + '\n') }) {
   const stateDirectory = join(configuration.stateDirectory, 'bots')
   const settingsPath = join(stateDirectory, 'settings.json')
   const dataDirectory = configuration.botsData ?? join(configuration.dataRoot, 'bots')
@@ -234,6 +234,36 @@ export function createBotsService({ configuration, mcp, defaultAgent, serverPort
     upstream.on('end', close); upstream.on('close', close)
   }
 
-  return { start, close, status, handleHost, handleClient, upgrade, runtimeConfiguration, hostToken: () => hostToken,
+  // A due timer reaches its bot as `message.send` with the occurrence's delivery
+  // ID, which the runtime accepts once (docs: "Timers on a library host").
+  function deliver({ botID, text, deliveryID }, { timeout = 30_000 } = {}) {
+    const target = configuration.botsEnabled ? runtime?.endpoint() : null
+    if (!target) return Promise.reject(fail(503, 'The bots runtime is not running.'))
+    if (!uuid(botID) || typeof text !== 'string' || !text || typeof deliveryID !== 'string') return Promise.reject(fail(400, 'Invalid bot delivery.'))
+    return new Promise((resolve, reject) => {
+      const id = 'woven-delivery-' + deliveryID
+      let settled = false, socket
+      const done = (error, value) => {
+        if (settled) return
+        settled = true; clearTimeout(timer)
+        try { socket?.close() } catch {}
+        if (error) reject(error); else resolve(value)
+      }
+      const timer = setTimeout(() => done(fail(504, 'The bots runtime did not answer in time.')), timeout); timer.unref?.()
+      try { socket = new webSocket(`ws://${target.host}:${target.port}/ws`, { headers: { authorization: 'Bearer ' + target.token } }) }
+      catch (error) { done(fail(503, 'The bots runtime is unreachable: ' + error.message)); return }
+      socket.onopen = () => socket.send(JSON.stringify({ id, type: 'message.send', botId: botID.toLowerCase(), text: text.slice(0, 100_000), deliveryId: deliveryID }))
+      socket.onmessage = event => {
+        let message; try { message = JSON.parse(String(event.data)) } catch { return }
+        if (message?.id !== id) return
+        if (message.type === 'result') done(null, message.data)
+        else if (message.type === 'error') done(fail(502, typeof message.message === 'string' ? message.message.slice(0, 512) : 'The bots runtime refused the message.'))
+      }
+      socket.onerror = () => done(fail(503, 'The bots runtime is unreachable.'))
+      socket.onclose = () => done(fail(503, 'The bots runtime closed the connection.'))
+    })
+  }
+
+  return { start, close, status, handleHost, deliver, handleClient, upgrade, runtimeConfiguration, hostToken: () => hostToken,
     drainLibrary: () => libraryAdapter.drain?.() ?? Promise.resolve(0) }
 }

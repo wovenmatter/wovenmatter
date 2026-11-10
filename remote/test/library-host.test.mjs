@@ -53,6 +53,7 @@ test('the supervisor creates a private token, waits for ready, keeps its port ac
   const health = await library.client.health()
   assert.equal(health.service, 'wovenmatter-library'); assert.match(health.deviceID, /^[0-9a-f-]{36}$/)
   const first = library.endpoint()
+  assert.equal(library.status().schema, 'fake-library-schema', 'the ready line carries the paired-library schema')
   assert.equal(JSON.parse(readFileSync(join(directory, 'data/run/library.json'), 'utf8')).pid, first.pid)
   process.kill(first.pid, 'SIGKILL')
   for (let i = 0; i < 200 && (!library.endpoint() || library.endpoint().pid === first.pid); i++) await new Promise(r => setTimeout(r, 25))
@@ -106,10 +107,11 @@ test('a Linux session reads and edits notes in its own library with no Mac grant
   const calls = readFileSync(logPath, 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(entry => entry.path === '/v1/mcp')
   for (const call of calls) {
     assert.equal(call.headers['x-woven-conversation-id'], f.id)
-    assert.ok(call.headers['x-woven-enabled-groups'].split(',').every(group => ['notes', 'history', 'calendar', 'library', 'sessions'].includes(group)), call.headers['x-woven-enabled-groups'])
+    assert.ok(call.headers['x-woven-enabled-groups'].split(',').every(group => ['notes', 'history', 'calendar', 'library', 'timers', 'sessions'].includes(group)), call.headers['x-woven-enabled-groups'])
   }
-  // Groups the library host does not serve need a reachable Mac member.
-  assert.equal((await f.call('woven_timers_list')).error.code, -32602)
+  // Groups the library host does not serve need a reachable Mac member; timers are served here.
+  assert.equal((await f.call('woven_usage_read')).error.code, -32602)
+  assert.equal((await f.call('woven_timers_list')).result.isError, false)
   // Turning notes off for the session takes effect at once.
   await f.command('workspace', { conversationID: f.id, workspaceAction: { sessionTools: { id: f.id, enabled: ['calendar'] } } })
   assert.equal((await f.call('woven_notes_list')).error.code, -32602)

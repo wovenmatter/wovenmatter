@@ -157,17 +157,19 @@ test('Mac-only tools go to any reachable Mac member with a signed request', asyn
     members: { transport: createMemberTransport({ library: lHost.client, allowEndpoint: loopback }), deviceID: () => lIdentity.deviceID, hasMac: () => true } })
   assert.equal(l.service.mcp.libraryStatus().configured, false, 'no Mac grant exists')
   const caller = await session(l)
-  const timers = await caller.call('woven_timers_list')
-  assert.equal(timers.result.isError, false, JSON.stringify(timers))
+  const usage = await caller.call('woven_usage_read')
+  assert.equal(usage.result.isError, false, JSON.stringify(usage))
   const [call] = calls
   assert.equal(call.device, lIdentity.deviceID)
   assert.equal(call.headers['x-woven-workspace-id'], l.enrollment.workspaceID)
   assert.equal(call.headers['x-woven-conversation-id'], caller.id)
   assert.equal(call.headers.authorization, undefined, 'no bearer is sent')
-  assert.equal(call.message.params.name, 'woven_timers_list')
-  // Session folders are library rows: they come from this host's own library.
+  assert.equal(call.message.params.name, 'woven_usage_read')
+  // Session folders are library rows and timers fire here: both come from this host's own library.
   const folders = await caller.call('woven_sessions_folders')
-  assert.equal(folders.result.isError, false, JSON.stringify(folders)); assert.equal(calls.length, 1)
+  assert.equal(folders.result.isError, false, JSON.stringify(folders))
+  assert.equal((await caller.call('woven_timers_list')).result.isError, false)
+  assert.equal(calls.length, 1)
 })
 
 test('bots use this host’s library as app-wide callers and get no Mac-only tools without a grant', async t => {
@@ -187,7 +189,9 @@ test('bots use this host’s library as app-wide callers and get no Mac-only too
   assert.equal(request.headers['x-woven-bot-id'], botID)
   assert.equal(decodeURIComponent(request.headers['x-woven-bot-name']), 'Ops Bot')
   assert.equal(request.headers['x-woven-conversation-id'], undefined)
-  assert.equal((await call('woven_timers_list')).error?.code, -32602, 'a Mac’s /mcp/workspace binds conversations, so bots need the grant for it')
+  assert.equal((await call('woven_usage_read')).error?.code, -32602, 'a Mac’s /mcp/workspace binds conversations, so bots need the grant for it')
+  // A bot's timers are its schedule, kept and fired by this host's library.
+  assert.equal((await call('woven_timers_list')).result?.isError, false)
 })
 
 // The installer's bearer adopts the first Mac; after that only a signed Mac

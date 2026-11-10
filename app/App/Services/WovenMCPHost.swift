@@ -220,7 +220,8 @@ final class WovenMCPHost {
     }
 
     func deliverBotNotification(_ delivery: WorkspaceSessionDelivery) async throws -> Bool {
-        guard [.notification, .message].contains(delivery.kind), let bot = WovenMCPCaller.parseBot(delivery.targetID) else { return false }
+        // A bot's own timers are its schedules: they come back to it as messages.
+        guard [.notification, .message, .timer].contains(delivery.kind), let bot = WovenMCPCaller.parseBot(delivery.targetID) else { return false }
         try await revocationTask?.value
         guard let claimed = try await database.claimToolDelivery(id: delivery.id) else { return true }
         do {
@@ -364,7 +365,8 @@ final class WovenMCPHost {
             let contextID = outside ? nil : metadata?["wovenContextID"]?.stringValue ?? request.headers["x-woven-context-id"]
             if message.objectValue?["params"]?.objectValue?["name"] == .string("woven_context"),
                let contextID, !contextID.isEmpty { _ = try await database.inputContext(id: contextID, callerID: callerID) }
-            let result = await WovenMCPServer.handle(message, contextID: contextID, allowedTools: allowed, outsideCaller: outside) { [weak self] call in
+            let result = await WovenMCPServer.handle(message, contextID: contextID, allowedTools: allowed, outsideCaller: outside,
+                                                       botCaller: WovenMCPCaller.parseBot(callerID) != nil) { [weak self] call in
                 guard let self else { return .init(success: false, error: "Woven MCP stopped.", code: "unavailable", requestID: call.requestID) }
                 if let authorizedCredential { return await self.authorizedPerform(call, credential: authorizedCredential) }
                 return await self.authorizedAppWidePerform(call, callerID: callerID, botKeyHash: authorizedBot)

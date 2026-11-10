@@ -26,7 +26,7 @@ function inputMessages(command,runID) {
 
 // This store is owned by the workspace service (the existing host lock fences
 // competing owners). Neither a phone nor an SSH attachment owns these runs.
-export function createClientExecution({ directory, runtime, kind = 'linux', name = 'Workspace', publisherKey, publisherFetch, publisherIntervalMilliseconds, goalIntervalMilliseconds = 1000, mcpEndpointURL = 'http://127.0.0.1:7337/mcp', managedDataRoot = resolve(directory, '../databases'), externalRunningSessions=()=>0,workspaceBrowser, library = null, members = null }) {
+export function createClientExecution({ directory, runtime, kind = 'linux', name = 'Workspace', publisherKey, publisherFetch, publisherIntervalMilliseconds, goalIntervalMilliseconds = 1000, mcpEndpointURL = 'http://127.0.0.1:7337/mcp', managedDataRoot = resolve(directory, '../databases'), externalRunningSessions=()=>0,workspaceBrowser, library = null, members = null, onTimersChanged = () => {} }) {
   mkdirSync(directory, { recursive: true, mode: 0o700 })
   const path = resolve(directory, 'execution.sqlite')
   const db = new DatabaseSync(path)
@@ -595,7 +595,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
     localProviders:async()=>(await runtime.providers()).filter(provider=>provider.available!==false)}):null
   const mcp=createWorkspaceMCP({db,identity:descriptor,secret:publisherKey,endpointURL:mcpEndpointURL,
     policy:id=>getRecord(id).enabledTools??mcp.settings().enabledByDefault,localTools:localMCPTools,localCall:performMCP,fetchImpl:publisherFetch,beforeLibraryCall:()=>publisher.syncNow(),
-    scopedHistoryAccess:scope=>orchestration.readableConversationIDs(scope.conversationID).size>0,localLibrary:libraryTools,memberDelegate})
+    scopedHistoryAccess:scope=>orchestration.readableConversationIDs(scope.conversationID).size>0,localLibrary:libraryTools,memberDelegate,onTimersChanged})
   // Workspaces are named by ID; `local` is not one. Without a library host
   // this workspace can only create sessions on itself.
   async function sessionDestination(raw) {
@@ -692,6 +692,15 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
       throw fail(400,'This content belongs to the central library and is unavailable through execution transport.')
     },
     tickGoals,
+    // A timer occurrence from this machine's library (library-timers.mjs). The
+    // delivery ID names the command, so a retry replays its receipt.
+    async deliverTimer(sessionID, text, deliveryID) {
+      if (!identifier(sessionID) || !db.prepare('SELECT id FROM conversations WHERE id=?').get(sessionID)) throw Object.assign(fail(404, 'This session does not run on this workspace.'), { code: 'not_here' })
+      const value = await orchestration.deliverTimer(sessionID, text, deliveryID)
+      // A receipt is final for its command ID: a refused occurrence is not retried.
+      if (!['accepted', 'completed', 'queued'].includes(value.status)) throw Object.assign(fail(409, value.message ?? 'The session did not accept the timer.'), { code: 'not_here' })
+      return value
+    },
     async close() { closed=true;clearInterval(goalTimer);mcp.close();await publisher.close(); clearTimeout(flushTimer); for (const id of dirty.keys()) flush(id,true); unlockMaterial = undefined; await runtime.close?.(); await Promise.allSettled([...jobs.values()].map(job => job.completion)); await Promise.allSettled([...queues.values()]); db.close() },
   }
 }

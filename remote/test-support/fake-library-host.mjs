@@ -23,6 +23,8 @@ const keyFile = join(dataRoot, 'secrets/member-signing.key')
 if (!existsSync(keyFile)) writeFileSync(keyFile, randomBytes(32).toString('base64') + '\n', { mode: 0o600 })
 const memberKey = createPrivateKey({ key: Buffer.concat([Buffer.from('302e020100300506032b657004220420', 'hex'), Buffer.from(readFileSync(keyFile, 'utf8').trim(), 'base64')]), format: 'der', type: 'pkcs8' })
 const memberPublicKey = Buffer.from(createPublicKey(memberKey).export({ format: 'jwk' }).x, 'base64url').toString('base64')
+// Timers as LibraryHostTimers keeps them: due occurrences are offered until settled.
+const timers = new Map(), settlements = []
 const notes = new Map(), callers = new Map(), journal = [], botEntries = [], adoptions = [], selfUpdates = [], signatures = []
 const readJSONFile = (name, fallback) => process.env[name] ? JSON.parse(readFileSync(process.env[name], 'utf8')) : fallback
 const log = value => { if (process.env.FAKE_LIBRARY_LOG) appendFileSync(process.env.FAKE_LIBRARY_LOG, JSON.stringify(value) + '\n') }
@@ -39,6 +41,12 @@ function mcp(message, caller, groups) {
   if (name === 'woven_notes_append') { const note = notes.get(input.noteID); note.text += input.text; return tool(message.id, { noteID: note.id }) }
   if (name === 'woven_notes_read') { const note = notes.get(input.noteID); return tool(message.id, note ?? null) }
   if (name === 'woven_notes_list') return tool(message.id, { notes: [...notes.values()] })
+  if (name === 'woven_timers_create') {
+    const id = input.requestID ?? randomUUID()
+    timers.set(id, { timerID: id, target: input.session ?? caller, text: input.text, at: Date.parse(input.at), every: input.every ?? null, paused: input.paused === true, deliveryID: null })
+    return tool(message.id, { id, sessionID: input.session ?? caller })
+  }
+  if (name === 'woven_timers_list') return tool(message.id, { rows: [...timers.values()].filter(timer => timer.target === (input.session ?? caller)).map(timer => ({ id: timer.timerID, nextFireAt: new Date(timer.at).toISOString(), isPaused: timer.paused })), hasMore: false })
   if (name === 'woven_history_search') return tool(message.id, { entries: journal.filter(entry => !input.search || JSON.stringify(entry).includes(input.search)).map(entry => entry.eventID) })
   return tool(message.id, { name })
 }
@@ -81,6 +89,28 @@ const local = createServer(async (request, response) => {
     if (!caller) return reply(response, 400, { code: 'invalid_request', message: 'MCP requires a conversation binding and its current tool selection.' })
     return reply(response, 200, mcp(body, caller, groups))
   }
+  if (path === '/v1/timers/due') {
+    const now = Date.now(), occurrences = []
+    for (const timer of timers.values()) {
+      if (timer.paused || timer.at > now) continue
+      const bot = timer.target.startsWith('woven:bot:') ? timer.target.split(':') : null
+      if (bot && bot[2] !== deviceID) continue
+      timer.deliveryID ??= randomUUID()
+      occurrences.push({ timerID: timer.timerID, deliveryID: timer.deliveryID, target: timer.target, kind: bot ? 'bot' : 'session', ...(bot ? { botID: bot[3] } : {}), text: timer.text })
+    }
+    const next = Math.min(...[...timers.values()].filter(timer => !timer.paused && timer.at > now).map(timer => timer.at))
+    return reply(response, 200, { occurrences, ...(Number.isFinite(next) ? { nextFireAt: new Date(next).toISOString() } : {}) })
+  }
+  if (path === '/v1/timers/settle') {
+    const timer = timers.get(body.timerID)
+    settlements.push(body)
+    if (!timer || timer.deliveryID !== body.deliveryID) return reply(response, 200, { settled: true })
+    if (body.outcome !== 'retry') {
+      timer.deliveryID = null
+      if (timer.every) { while (timer.at <= Date.now()) timer.at += timer.every * 1000 } else timer.paused = true
+    }
+    return reply(response, 200, { settled: true })
+  }
   if (path === '/v1/publisher/journal') {
     journal.push(...body.entries)
     return reply(response, 200, { libraryID: body.libraryID, acceptedEventIDs: body.entries.map(entry => entry.eventID), cursor: journal.length })
@@ -88,7 +118,7 @@ const local = createServer(async (request, response) => {
   if (path === '/v1/publisher/retained/settle') return reply(response, 200, { libraryID: body.libraryID, acceptedEventIDs: body.entries.map(entry => entry.eventID) })
   const bots = path.match(/^\/v1\/bots\/([0-9a-f-]{36})\/entries$/)
   if (bots && process.env.FAKE_LIBRARY_BOTS !== '0') { botEntries.push(body); return reply(response, 200, { conversations: body.conversations.length, entries: body.entries.length }) }
-  if (path === '/v1/debug/state') return reply(response, 200, { notes: [...notes.values()], callers: Object.fromEntries(callers), journal, botEntries, adoptions, selfUpdates, signatures })
+  if (path === '/v1/debug/state') return reply(response, 200, { notes: [...notes.values()], timers: [...timers.values()], settlements, callers: Object.fromEntries(callers), journal, botEntries, adoptions, selfUpdates, signatures })
   reply(response, 404, { code: 'not_found', message: 'Unknown library API route.' })
 })
 const network = createServer((request, response) => {
@@ -99,7 +129,7 @@ const network = createServer((request, response) => {
 rmSync(socketPath, { force: true })
 network.listen(Number(option('--port') ?? 0), '127.0.0.1', () => local.listen(socketPath, () => {
   chmodSync(socketPath, 0o600)
-  const ready = { event: 'ready', pid: process.pid, port: network.address().port, socket: socketPath, version: '1' }
+  const ready = { event: 'ready', pid: process.pid, port: network.address().port, socket: socketPath, version: '1', schema: 'fake-library-schema' }
   writeFileSync(join(dataRoot, 'run/library.json'), JSON.stringify(ready) + '\n', { mode: 0o600 })
   process.stdout.write(JSON.stringify(ready) + '\n')
 }))
