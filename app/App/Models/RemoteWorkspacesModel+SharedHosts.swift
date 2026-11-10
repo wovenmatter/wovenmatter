@@ -38,6 +38,17 @@ extension RemoteWorkspacesModel {
     func performSharedHost(_ workspaceID: String, _ action: SharedHostAction,
                            pollInterval: Duration = .seconds(3), updateTimeout: Duration = .seconds(900)) async {
         guard sharedHosts[workspaceID]?.busy != true else { return }
+        // A failure is recorded in `sharedHosts` for the settings row.
+        try? await runSharedHost(workspaceID, action, pollInterval: pollInterval, updateTimeout: updateTimeout)
+    }
+
+    /// The same, reporting failure to the caller ("Update everything" falls
+    /// back to SSH for a host this Mac added). The outcome is also recorded.
+    func runSharedHost(_ workspaceID: String, _ action: SharedHostAction,
+                       pollInterval: Duration = .seconds(3), updateTimeout: Duration = .seconds(900)) async throws {
+        guard sharedHosts[workspaceID]?.busy != true else {
+            throw RemoteWorkspaceClientError.invalidResponse("This host is already busy with another change.")
+        }
         sharedHosts[workspaceID, default: .init()].busy = true
         sharedHosts[workspaceID]?.error = nil
         defer { sharedHosts[workspaceID]?.busy = false; sharedHosts[workspaceID]?.progress = nil }
@@ -57,7 +68,8 @@ extension RemoteWorkspacesModel {
                 sharedHosts[workspaceID]?.status = try await client.status()
             case .update:
                 sharedHosts[workspaceID]?.progress = "Preparing the host service bundle…"
-                let prepared = try await Task.detached { try RemoteHostAdministrationClient.hostBundle() }.value
+                let bundle = sharedHostBundle
+                let prepared = try await Task.detached { try bundle() }.value
                 sharedHosts[workspaceID]?.progress = "Uploading the host service…"
                 try await client.update(bundle: prepared.bundle, fingerprint: prepared.fingerprint)
                 sharedHosts[workspaceID]?.progress = "Updating…"
@@ -82,6 +94,7 @@ extension RemoteWorkspacesModel {
             sharedHosts[workspaceID]?.updatedAt = Date()
         } catch {
             sharedHosts[workspaceID]?.error = error.localizedDescription
+            throw error
         }
     }
 }

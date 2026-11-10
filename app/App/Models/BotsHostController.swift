@@ -23,6 +23,9 @@ enum BotsCommand: Codable, Sendable {
     /// that machine: `updating`, then `engineUpdateFailure` if it was rolled back.
     case updateEngine(machineID: String)
     case restartRuntime
+    /// Fresh headers for one signed upgrade of another member's bots socket
+    /// (`audience`: its member device ID). The window process holds no member key.
+    case signSocket(url: URL, audience: String)
 }
 
 struct BotsCommandResult: Codable, Sendable {
@@ -33,6 +36,8 @@ struct BotsCommandResult: Codable, Sendable {
     var devices: [BotDiscoveredDevice]?
     var syncErrors: [String] = []
     var botMCP: WorkspaceExternalMCPSettings?
+    /// The reply to `signSocket`.
+    var socketHeaders: [String: String]?
 }
 
 typealias BotsHostDeploy = @MainActor (RemoteWorkspaceConfiguration, String) async throws -> RemoteWorkspaceStatus
@@ -65,6 +70,9 @@ struct BotsHostDependencies {
         throw BotsError.unavailable("That machine is unavailable.")
     }
     var syncErrors: @MainActor () -> [String] = { [] }
+    var signSocket: @MainActor (_ url: URL, _ audience: String) async throws -> [String: String] = { _, _ in
+        throw BotsError.unavailable("This Mac cannot sign bots connections yet.")
+    }
     var capacity: @MainActor (_ directory: URL) async -> BotMachineCapacity = BotsHostController.localCapacity
 }
 
@@ -153,6 +161,10 @@ final class BotsHostController {
     // MARK: Commands
 
     func perform(_ command: BotsCommand) async throws -> BotsCommandResult {
+        // Signing is not a state change: no snapshot, no remote probes.
+        if case let .signSocket(url, audience) = command {
+            return BotsCommandResult(socketHeaders: try await dependencies.signSocket(url, audience))
+        }
         var devices: [BotDiscoveredDevice]?
         if case .status = command {} else { remoteCache = nil }
         switch command {
@@ -194,6 +206,7 @@ final class BotsHostController {
             else { try await dependencies.updateRemoteEngine(machineID) }
         case .restartRuntime:
             if persisted.enabled { await supervisor?.stop(); bringUp() }
+        case .signSocket: break
         }
         return await snapshot(devices: devices ?? lastDevices)
     }

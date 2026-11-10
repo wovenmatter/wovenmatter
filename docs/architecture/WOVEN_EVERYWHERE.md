@@ -1138,10 +1138,19 @@ under `/wovenmatter` when reached through Tailscale Serve:
 | `POST /v1/bots/resources` `{ resources: { poolBytes, perBotBytes, diskBytes } }` | the status after applying; `null` is no cap (Linux also leaves a missing field as it is) |
 | `GET /v1/bots/ws` (WebSocket upgrade) | proxied to the runtime's `/ws` with the runtime's own bearer |
 
-Until member auth lands, a Mac's server accepts any current execution grant
-(`CompanionExecutionAuthentication`) for these routes, and a Linux server accepts its
-workspace API token through the SSH tunnel. On the Mac, `ApplicationModel.botsAccess`
-is the one function member auth replaces.
+A Mac reaches every other member's bots with signed requests
+(`ApplicationModel.botsClient(for:)`, a `MemberSignedHTTPClient` addressed to the
+workspace's `executionDeviceID`): every Mac and Linux workspace in the synced
+registry, whichever Mac added it, at `<endpoint>/v1/bots/*` (a Linux host's execution
+endpoint `…/wovenmatter-execution/<id>/`, a Mac's `…/wovenmatter`). The status reply
+must name that device. The socket is `BotSocketEndpoint.signed(url, audience:)`: the
+window asks the process that holds the member key for fresh upgrade headers before
+every connection attempt (`BotsCommand.signSocket(url:audience:)`, which signs only a
+member's `…/v1/bots/ws` on a `.ts.net` address), and `PiBotClient(authorize:)` sends
+them instead of a bearer. A Linux host this Mac added that is not in the registry (a
+bots-only server) is still reached through its SSH tunnel with the installer's
+bearer. A Mac's server keeps accepting a current execution grant beside signatures
+for phones paired before members.
 
 **Linux bots-only install.** The Mac runs `remote-host.sh prepare AUTHORIZED
 <access-mode> bots`, then `remote-host.sh install <workspace-id> <port> <access-mode>

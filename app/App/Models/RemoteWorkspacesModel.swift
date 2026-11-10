@@ -47,6 +47,8 @@ final class RemoteWorkspacesModel {
     var sharedHosts: [String: SharedHostState] = [:]
     /// Builds the signed administration client for a registered Linux host.
     @ObservationIgnored var sharedHostAdministration: (@MainActor (String) async throws -> RemoteHostAdministrationClient)?
+    /// The host bundle a signed update uploads; tests replace it.
+    @ObservationIgnored var sharedHostBundle: @Sendable () throws -> (bundle: Data, fingerprint: String) = { try RemoteHostAdministrationClient.hostBundle() }
 
     private(set) var workspaces: [RemoteWorkspaceConfiguration] = []
     private(set) var taskGatewayStatuses: [UUID: RemoteTaskGatewayStatus] = [:]

@@ -25,8 +25,14 @@ public actor PiBotClient {
         public var errorDescription: String? { message }
     }
 
+    /// Headers for one connection attempt (a signed member upgrade), fetched
+    /// fresh each time because a signature's nonce is single use.
+    public typealias Authorize = @Sendable (_ socketURL: URL) async throws -> [String: String]
     private let socketURL: URL
     private let bearer: String?
+    private let authorize: Authorize?
+    /// The generation whose signed headers are being fetched.
+    private var authorizing: Int?
     private let onEvent: @Sendable (Event) -> Void
     private let session: URLSession
     private var task: URLSessionWebSocketTask?
@@ -41,12 +47,13 @@ public actor PiBotClient {
 
     /// `socketURL` is the full WebSocket address: `ws://127.0.0.1:<port>/ws` for this Mac's
     /// runtime, or `<server>/v1/bots/ws` on another machine. An http(s) scheme is converted.
-    public init(socketURL: URL, bearer: String?, onEvent: @escaping @Sendable (Event) -> Void) {
+    public init(socketURL: URL, bearer: String?, authorize: Authorize? = nil, onEvent: @escaping @Sendable (Event) -> Void) {
         var components = URLComponents(url: socketURL, resolvingAgainstBaseURL: false)!
         if components.scheme == "https" { components.scheme = "wss" }
         if components.scheme == "http" { components.scheme = "ws" }
         self.socketURL = components.url!
         self.bearer = bearer
+        self.authorize = authorize
         self.onEvent = onEvent
         let configuration = URLSessionConfiguration.ephemeral
         configuration.httpCookieStorage = nil
@@ -57,7 +64,7 @@ public actor PiBotClient {
 
     public func connect() {
         stopped = false
-        guard task == nil else { return }
+        guard task == nil, authorizing == nil else { return }
         open()
     }
 
@@ -65,6 +72,7 @@ public actor PiBotClient {
         stopped = true
         reconnect?.cancel(); reconnect = nil
         generation += 1
+        authorizing = nil
         task?.cancel(with: .goingAway, reason: nil); task = nil
         failPending("Connection closed.")
         update(.closed)
@@ -80,8 +88,29 @@ public actor PiBotClient {
         generation += 1
         let current = generation
         update(.connecting)
+        guard let authorize else {
+            start(current, headers: bearer.map { ["Authorization": "Bearer " + $0] } ?? [:])
+            return
+        }
+        authorizing = current
+        let url = socketURL
+        Task { [weak self] in
+            let headers = try? await authorize(url)
+            await self?.authorized(current, headers: headers)
+        }
+    }
+
+    private func authorized(_ current: Int, headers: [String: String]?) {
+        guard authorizing == current, generation == current, !stopped else { return }
+        authorizing = nil
+        // Could not sign (this Mac is still starting): retry like a lost connection.
+        guard let headers else { disconnected(); return }
+        start(current, headers: headers)
+    }
+
+    private func start(_ current: Int, headers: [String: String]) {
         var request = URLRequest(url: socketURL)
-        if let bearer { request.setValue("Bearer " + bearer, forHTTPHeaderField: "Authorization") }
+        for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
         let socket = session.webSocketTask(with: request)
         // A conversation snapshot carries up to 200 entries of any length.
         socket.maximumMessageSize = 256 * 1024 * 1024
@@ -125,7 +154,7 @@ public actor PiBotClient {
     public func expectRestart() { expectingRestart = true }
 
     private func reopen() {
-        guard !stopped, task == nil else { return }
+        guard !stopped, task == nil, authorizing == nil else { return }
         open()
     }
 
