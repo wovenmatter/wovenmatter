@@ -1024,62 +1024,231 @@ struct CredentialAccessDisclosureView: View {
     }
 }
 
-/// Shared native-harness account controls for setup and local settings.
+/// Shared native-harness account controls for setup and local settings: the signed-in
+/// account with Remove account, or Sign in. Codex, Claude Code, and Grok Build sign in
+/// inside the app; OpenCode adds keys with its own picker in Terminal.
 struct SettingsHarnessSignInControl: View {
     @Bindable var model: ApplicationModel
     let runtimeKind: AgentRuntimeKind
     var compact = false
-
-    private func accountDetails(fallback: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text("Account").font(.settingsRow)
-            SettingsHarnessAccountDetails(status: signIn.statuses[runtimeKind], fallback: fallback)
-        }
-    }
+    @State private var keyMethod: HarnessSignInFlow.Method?
+    @State private var key = ""
+    @State private var confirmsRemoval = false
+    @State private var removingCredential: AgentSignInStatus.Account?
 
     private var signIn: HarnessSignInModel { model.harnessSignIn }
+    private var status: AgentSignInStatus? { signIn.statuses[runtimeKind] }
+    private var methods: [HarnessSignInFlow.Method] { HarnessSignInFlow.methods(runtimeKind) }
     private var hasCredentials: Bool {
-        ["verified", "credentials_present"].contains(signIn.statuses[runtimeKind]?.state ?? "")
+        ["verified", "credentials_present"].contains(status?.state ?? "")
+    }
+    private var busy: Bool {
+        model.runtimeMaintenanceBusy(runtimeKind) || signIn.opening.contains(runtimeKind)
+            || signIn.removing.contains(runtimeKind) || signIn.sessions[runtimeKind]?.isActive == true
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 8) {
-                if hasCredentials {
-                    if compact {
-                        Text(signIn.statuses[runtimeKind]?.label ?? "Signed in")
-                            .font(.system(size: 11.5)).foregroundStyle(DashboardPalette.mutedForeground)
+            if compact {
+                HStack(spacing: 8) {
+                    if hasCredentials {
+                        Text(status?.accounts?.first?.name ?? status?.label ?? "Signed in")
+                            .font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground)
                     } else {
-                        accountDetails(fallback: "Signed in")
+                        signInButton
                     }
-                    if !compact {
-                        Spacer()
-                        Button("Change sign-in…") { signIn.signIn(runtimeKind) }
-                            .buttonStyle(SettingsQuietButtonStyle())
-                            .disabled(model.runtimeMaintenanceBusy(runtimeKind) || signIn.opening.contains(runtimeKind))
-                    }
-                } else {
-                    if !compact {
-                        accountDetails(fallback: "Checking sign-in…")
-                        Spacer()
-                    }
-                    Button(signIn.opening.contains(runtimeKind) ? "Opening…" : "Sign in…") {
-                        signIn.signIn(runtimeKind)
-                    }
-                    .buttonStyle(SettingsQuietButtonStyle())
-                    .disabled(model.runtimeMaintenanceBusy(runtimeKind) || signIn.opening.contains(runtimeKind)
-                        || signIn.statuses[runtimeKind]?.state == "not_installed")
-                    .help("Open \(runtimeKind.displayName)’s sign-in in Terminal. Return here when finished.")
-                    .accessibilityLabel("Sign in to \(runtimeKind.displayName)")
                 }
+            } else {
+                if hasCredentials { accountRows } else { signedOutRow }
+                if let keyMethod { keyEntry(keyMethod) }
+                SettingsHarnessSignInPanel(model: model, runtimeKind: runtimeKind)
+                if let message = signIn.messages[runtimeKind] { SettingsNote(message) }
             }
-            if let message = signIn.messages[runtimeKind], !compact { SettingsNote(message) }
         }
         .frame(minHeight: compact ? nil : SettingsMetrics.rowHeight)
         .task { await model.refreshHarnessSignIn(runtimeKind) }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             Task { await model.refreshHarnessSignIn(runtimeKind) }
         }
+        .onChange(of: signIn.sessions[runtimeKind]?.state) { _, state in
+            if state == .succeeded { Task { await model.refreshHarnessSignIn(runtimeKind) } }
+        }
+        .confirmationDialog("Remove your \(runtimeKind.displayName) account from this Mac?", isPresented: $confirmsRemoval,
+                            titleVisibility: .visible) {
+            Button("Remove account", role: .destructive) {
+                Task { await signIn.signOut(runtimeKind); await model.refreshHarnessSignIn(runtimeKind) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("\(runtimeKind.displayName) signs out on this Mac. Sign in again to use it here.")
+        }
+        .confirmationDialog("Remove \(removingCredential?.name ?? "this key") from OpenCode?",
+                            isPresented: Binding(get: { removingCredential != nil }, set: { if !$0 { removingCredential = nil } }),
+                            titleVisibility: .visible, presenting: removingCredential) { account in
+            Button("Remove", role: .destructive) {
+                Task { await signIn.remove(account); await model.refreshHarnessSignIn(runtimeKind) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text("OpenCode stops using this saved key.")
+        }
+    }
+
+    /// Each account the harness reports. Most sign in once, so Remove account signs out;
+    /// OpenCode keeps several keys and removes them one at a time.
+    @ViewBuilder private var accountRows: some View {
+        let accounts = status?.accounts ?? []
+        if accounts.isEmpty {
+            SettingsRow(title: status?.label ?? "Signed in",
+                        detail: "\(runtimeKind.displayName) didn't share the account name.") { removeButton }
+        }
+        ForEach(Array(accounts.enumerated()), id: \.offset) { index, account in
+            SettingsRow(title: account.name ?? account.method, detail: account.name == nil ? nil : account.method) {
+                if runtimeKind == .opencode {
+                    if account.target != nil {
+                        Button("Remove") { removingCredential = account }
+                            .buttonStyle(SettingsQuietButtonStyle())
+                            .disabled(busy)
+                            .accessibilityLabel("Remove \(account.name ?? account.method)")
+                    }
+                } else if index == 0 {
+                    removeButton
+                }
+            }
+        }
+        if runtimeKind == .opencode {
+            SettingsRow(title: "Add another key", detail: "OpenCode's picker opens in Terminal.") { signInButton }
+        }
+    }
+
+    private var removeButton: some View {
+        Button(signIn.removing.contains(runtimeKind) ? "Removing…" : "Remove account") { confirmsRemoval = true }
+            .buttonStyle(SettingsQuietButtonStyle())
+            .disabled(busy)
+    }
+
+    private var signedOutRow: some View {
+        SettingsRow(title: status?.state == "not_installed" ? "Not installed" : status == nil ? "Checking sign-in…" : "Not signed in",
+                    detail: status.map { $0.state == "sign_in_required" ? nil : $0.detail } ?? nil) {
+            signInButton
+        }
+    }
+
+    @ViewBuilder private var signInButton: some View {
+        if runtimeKind == .opencode {
+            Button(signIn.opening.contains(runtimeKind) ? "Opening…" : "Add key…") { signIn.signIn(runtimeKind) }
+                .buttonStyle(SettingsQuietButtonStyle())
+                .disabled(busy || status?.state == "not_installed")
+                .help("Opens OpenCode's sign-in in Terminal. Return here when finished.")
+        } else if methods.count == 1, let method = methods.first {
+            Button(method.title) { begin(method) }
+                .buttonStyle(SettingsQuietButtonStyle())
+                .disabled(busy || status?.state == "not_installed")
+        } else {
+            Menu("Sign in") {
+                ForEach(methods) { method in Button(method.title) { begin(method) } }
+            }
+            .menuStyle(.button)
+            .fixedSize()
+            .buttonStyle(SettingsQuietButtonStyle())
+            .disabled(busy || status?.state == "not_installed")
+            .accessibilityLabel("Sign in to \(runtimeKind.displayName)")
+        }
+    }
+
+    private func begin(_ method: HarnessSignInFlow.Method) {
+        if case .keyBeforeStart = method.input {
+            key = ""
+            keyMethod = method
+        } else {
+            keyMethod = nil
+            signIn.start(runtimeKind, method: method)
+        }
+    }
+
+    private func keyEntry(_ method: HarnessSignInFlow.Method) -> some View {
+        HStack(spacing: 8) {
+            SecureField({ if case .keyBeforeStart(let label) = method.input { label } else { "Key" } }(), text: $key)
+                .dashboardInput()
+                .onSubmit { saveKey(method) }
+            Button("Save key") { saveKey(method) }
+                .disabled(key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            Button("Cancel") { keyMethod = nil; key = "" }
+        }
+        .buttonStyle(SettingsQuietButtonStyle())
+    }
+
+    private func saveKey(_ method: HarnessSignInFlow.Method) {
+        let value = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return }
+        signIn.start(runtimeKind, method: method, key: value)
+        key = ""
+        keyMethod = nil
+    }
+}
+
+/// The in-app sign-in under a harness's account: the sign-in link, the one-time code,
+/// and a field for the code a sign-in page shows, styled like Subscriptions & API Keys.
+struct SettingsHarnessSignInPanel: View {
+    @Bindable var model: ApplicationModel
+    let runtimeKind: AgentRuntimeKind
+    @State private var code = ""
+
+    var body: some View {
+        if let session = model.harnessSignIn.sessions[runtimeKind], session.state != .succeeded {
+            VStack(alignment: .leading, spacing: 8) {
+                if let url = session.url {
+                    HStack {
+                        Link("Open sign-in page", destination: url)
+                            .foregroundStyle(DashboardPalette.success)
+                        Button("Copy link") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(url.absoluteString, forType: .string)
+                        }
+                    }
+                    Link(destination: url) {
+                        Text(url.absoluteString).font(.settingsSecondary).multilineTextAlignment(.leading)
+                    }
+                    .foregroundStyle(DashboardPalette.success)
+                }
+                if let value = session.code {
+                    HStack {
+                        Text(value).font(.system(.title3, design: .monospaced)).textSelection(.enabled)
+                        Button("Copy code") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(value, forType: .string)
+                        }
+                    }
+                }
+                if case .codeFromPage(let label) = session.method.input, session.state == .waiting, session.url != nil {
+                    HStack {
+                        TextField(label, text: $code).dashboardInput()
+                            .onSubmit { send() }
+                        Button(session.sentCode ? "Sent" : "Continue") { send() }
+                            .disabled(code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                    SettingsNote("If the page shows a code instead of finishing on its own, paste it here.")
+                }
+                if session.state == .failed { SettingsError(session.message) }
+                else { SettingsNote(session.message) }
+                if session.isActive {
+                    HStack {
+                        ProgressView().controlSize(.small)
+                        Text(session.url == nil ? "Preparing sign-in…" : "Waiting for sign-in…").font(.settingsBody)
+                        Button("Cancel") { model.harnessSignIn.cancel(runtimeKind) }
+                    }
+                } else {
+                    Button("Done") { model.harnessSignIn.dismiss(runtimeKind) }
+                }
+            }
+            .buttonStyle(SettingsQuietButtonStyle())
+            .padding(.vertical, 4)
+        }
+    }
+
+    private func send() {
+        model.harnessSignIn.submit(runtimeKind, code: code)
+        code = ""
     }
 }
 

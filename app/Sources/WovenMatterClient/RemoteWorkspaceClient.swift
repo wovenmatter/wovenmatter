@@ -1378,6 +1378,12 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         )
     }
 
+    /// Runs the harness's own sign-out on the workspace and returns its new status.
+    public func signOut(harnessID: AgentRuntimeKind) async throws -> RemoteHarnessStatus {
+        try await request(path: "v1/harnesses/\(harnessID.rawValue)/sign-out", method: "POST",
+                          body: Data("{}".utf8))
+    }
+
     public func authenticationSession(
         id: UUID
     ) async throws -> RemoteHarnessAuthenticationSession {
@@ -1509,6 +1515,13 @@ public struct RemoteWorkspaceServiceClient: Sendable {
                 }
                 let detail = (try? JSONDecoder().decode([String: String].self, from: data))?["error"]
                 throw RemoteWorkspaceClientError.invalidResponse(detail ?? "SDK maintenance could not complete in this workspace.")
+            }
+            if path.hasPrefix("v1/harnesses/"), path.hasSuffix("/sign-out") {
+                throw RemoteWorkspaceClientError.invalidResponse(
+                    (response as? HTTPURLResponse)?.statusCode == 404
+                    ? "Update this workspace in Settings → Workspaces to remove accounts from here."
+                    : "The account couldn't be removed. Reconnect to the workspace and try again."
+                )
             }
             if path.hasPrefix("v1/task-gateway") {
                 throw RemoteWorkspaceClientError.invalidResponse(

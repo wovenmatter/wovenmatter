@@ -6,8 +6,15 @@ Technical reference. For everyday setup, start with [Agent setup](guide/agents.m
 
 Each page under **Settings → Agents** shows the executable and components used
 by that harness. Missing components show **Install**; verified installations
-appear in the sidebar automatically. **Sign in…** opens the native harness's
-account flow in Terminal, and returning to Woven Matter refreshes its status.
+appear in the sidebar automatically. Codex, Claude Code, and Grok Build sign in
+inside Settings: the harness's own command runs in the background and its sign-in
+link and one-time code (`codex login --device-auth`, `grok login --device-auth`) or
+Claude's browser sign-in, with a field for the page's code, appear under the account.
+The account shows its name or email with **Remove account**, which runs the harness's
+own logout. OpenCode adds keys with its own picker in Terminal and removes each saved
+key individually (`opencode auth logout <integration> <label>`). Remote workspaces use
+the same panel with each harness's headless sign-in and a `/v1/harnesses/:id/sign-out`
+route.
 Opening settings refreshes the inventory and available versions, without a
 repeating timer. **Settings → Agents → Set up harnesses** reopens the first-launch
 guide, including optional Pi Durable provider and Exa setup. The provider page

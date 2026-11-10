@@ -74,17 +74,12 @@ public enum HarnessOnboarding {
         return status(kind, state: succeeded ? "not_checked" : "check_failed")
     }
 
-    /// A script for the user's explicit Sign in action. Building this value
-    /// performs no authentication and contains no credentials.
+    /// OpenCode's interactive `auth login` picks an integration and stores a key, so it
+    /// runs in Terminal. Other harnesses sign in inside the app (`HarnessSignInFlow`).
+    /// Building this value performs no authentication and contains no credentials.
     public static func signInScript(_ kind: AgentRuntimeKind, executable: URL, searchPath: String) -> String? {
-        let arguments: [String]
-        switch kind {
-        case .codex: arguments = ["login"]
-        case .claudeCode: arguments = ["auth", "login"]
-        case .grokBuild: arguments = ["login", "--oauth"]
-        case .opencode: arguments = ["auth", "login"]
-        default: return nil
-        }
+        guard kind == .opencode else { return nil }
+        let arguments = ["auth", "login"]
         return "#!/bin/zsh\nexport PATH=" + RemoteWorkspaceExecTarget.quote(searchPath) + "\n"
             + ([executable.path] + arguments).map(RemoteWorkspaceExecTarget.quote).joined(separator: " ") + "\n"
     }
@@ -140,7 +135,8 @@ public enum HarnessOnboarding {
             guard !name.isEmpty, name.count <= 160,
                   !name.contains(where: { $0.asciiValue.map { $0 < 32 || $0 == 127 } == true }),
                   !name.contains("sk-"), !name.contains("Bearer "), !name.hasPrefix("eyJ") else { return nil }
-            return .init(method: account == "API key" ? "API key" : account == "OAuth" ? "OAuth" : "Saved credential", name: name)
+            return .init(method: account == "API key" ? "API key" : account == "OAuth" ? "OAuth" : "Saved credential", name: name,
+                         target: provider, credential: account)
         }
     }
 

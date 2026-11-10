@@ -154,6 +154,12 @@ when an intentional design change is accepted.
 - **Harness accounts:** sign-in belongs to each harness settings page, scoped to
   Local workspace or a named remote workspace. Workspace inventory shows status and links
   to that scoped page. Never label credentials present as verified sign-in.
+  Sign-in happens in the app, never in Terminal, except OpenCode's key picker: the
+  same panel as Subscriptions & API Keys (Open sign-in page, Copy link, the one-time
+  code with Copy code, and a field for a page's code), using the regular browser
+  sign-in on this Mac and each harness's headless sign-in on remote machines. A
+  signed-in account shows its name or email with **Remove account**; **Sign in**
+  shows only when nothing is signed in. There is no "Change sign-in".
   New remote workspaces offer skippable, reopenable setup with only Pi Durable
   selected by default; additional installations retain installer source review.
 - **Chat defaults:** use Defaults for new chats on every harness page. Group

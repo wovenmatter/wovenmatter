@@ -154,10 +154,12 @@ struct SettingsView: View {
                 SettingsBotsMachineView(
                     bots: model.bots,
                     machineID: machineID,
+                    workspaces: model.remoteWorkspaces.workspaces,
                     reservesRailControlSpace: reservesRailControlSpace,
                     onBack: { route = .bots },
                     onOpenSection: { route = .botsSection(machineID: machineID, $0) },
-                    onOpenResources: { route = .botsResources(machineID: machineID) }
+                    onOpenResources: { route = .botsResources(machineID: machineID) },
+                    onOpenAccounts: { open(.accounts, .accounts($0), from: .botsMachine(machineID)) }
                 )
             case let .botsSection(machineID, botSection):
                 if let session = model.bots.session(for: machineID) {

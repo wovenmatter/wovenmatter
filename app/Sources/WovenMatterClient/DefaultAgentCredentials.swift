@@ -70,6 +70,9 @@ public struct AgentSignInStatus: Codable, Identifiable, Sendable {
     public struct Account: Codable, Equatable, Sendable {
         public let method: String
         public let name: String?
+        /// OpenCode only: the integration and credential label `opencode auth logout` removes.
+        public var target: String? = nil
+        public var credential: String? = nil
     }
     public var accounts: [Account]? = nil
     public var displayName: String {

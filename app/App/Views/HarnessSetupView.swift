@@ -124,6 +124,7 @@ struct HarnessSetupView: View {
                 }
             }
             .frame(minHeight: 44)
+            SettingsHarnessSignInPanel(model: model, runtimeKind: kind)
             if let message = model.harnessSignIn.messages[kind] { SettingsNote(message) }
             if let error = setup.errors[kind] ?? model.runtimeFailureDetails[kind] { SettingsError(error) }
             if setup.activeInstall == kind, let prepared = model.preparedLocalACPRuntimeInstall,

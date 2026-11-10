@@ -14,7 +14,7 @@ A **harness** is the software that runs the agent. Settings also calls it a
    it under **Applies to**, or open it from **Settings → Workspaces**.
 2. If the harness is missing, select **Install** and review the installer before
    confirming.
-3. Installed harnesses appear in the sidebar automatically. Choose **Sign in…** if its native account is not connected.
+3. Installed harnesses appear in the sidebar automatically. Choose **Sign in** on the harness's agent page if its account is not connected. A link and one-time code appear right there; Claude Code opens its sign-in in your browser. **Remove account** signs the harness out.
 4. Choose **New chat** and select the agent in that workspace.
 
 Start with a harness you already use and have provider access for. WovenMatter

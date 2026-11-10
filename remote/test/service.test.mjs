@@ -128,10 +128,12 @@ test('native sign-in reports a real handoff and verifies provider state', async 
       ...codex,
       authentication: {
         ...codex.authentication,
-        statusCommands: [`test -f '${authenticated}'`],
+        // Builtins only: the fixture PATH holds just the fake harness.
+        statusCommands: [`test -f '${authenticated}' && ! test -f '${authenticated}.out'`],
+        signOutCommand: `: > '${authenticated}.out'`,
         discoveries: [{
           displayName: 'Codex account',
-          statusCommand: `test -f '${authenticated}'`,
+          statusCommand: `test -f '${authenticated}' && ! test -f '${authenticated}.out'`,
         }],
         methods: [{
           ...codex.authentication.methods[0],
@@ -188,6 +190,10 @@ test('native sign-in reports a real handoff and verifies provider state', async 
   )
   assert.equal(terminalCancellation.status, 409)
   assert.equal((await terminalCancellation.json()).error, 'authentication_session_not_active')
+  const signedOut = await fetch(`${service.url}/v1/harnesses/codex/sign-out`, { method: 'POST', headers, body: '{}' })
+  assert.equal(signedOut.status, 200)
+  assert.notEqual((await signedOut.json()).authenticationStatus, 'configured')
+  assert.equal((await fetch(`${service.url}/v1/harnesses/opencode/sign-out`, { method: 'POST', headers, body: '{}' })).status, 404)
 })
 
 async function temporaryFixture(context, prefix) {

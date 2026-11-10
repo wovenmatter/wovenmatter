@@ -105,10 +105,13 @@ struct SettingsBotsView: View {
 struct SettingsBotsMachineView: View {
     @Bindable var bots: BotsModel
     let machineID: String
+    /// Remote machines this Mac added; a machine's sign-ins live in its own scope.
+    var workspaces: [RemoteWorkspaceConfiguration] = []
     var reservesRailControlSpace = false
     let onBack: () -> Void
     let onOpenSection: (PiBotSettingsSection) -> Void
     let onOpenResources: () -> Void
+    var onOpenAccounts: (String) -> Void = { _ in }
     @State private var confirmation: BotsConfirmation?
 
     private var machine: BotMachine? { bots.machines.first { $0.id == machineID } }
@@ -197,6 +200,27 @@ struct SettingsBotsMachineView: View {
             if machine.state != .unreachable {
                 SettingsSummaryLink(title: "Resources", value: BotMachineText.resources(machine), action: onOpenResources)
             }
+            accountsLink(machine)
+        }
+    }
+
+    /// Bots use the subscriptions and API keys of the machine they run on. Bots on
+    /// another machine sign in there, through that machine's scope.
+    @ViewBuilder private func accountsLink(_ machine: BotMachine) -> some View {
+        if machine.kind == .thisMac {
+            SettingsSummaryLink(title: "Subscriptions & API Keys", detail: "The sign-ins bots on this Mac use.") {
+                onOpenAccounts("global")
+            }
+        } else if let workspace = workspaces.first(where: {
+            $0.name.caseInsensitiveCompare(machine.name) == .orderedSame
+                || $0.hostName.caseInsensitiveCompare(machine.name) == .orderedSame
+        }) {
+            SettingsSummaryLink(title: "Subscriptions & API Keys",
+                                detail: "Sign in for bots on \(machine.displayName). Claude signs in on that machine.") {
+                onOpenAccounts(workspace.id.uuidString.lowercased())
+            }
+        } else {
+            SettingsNote("Bots on \(machine.displayName) use the sign-ins set up from the Mac that added it.")
         }
     }
 }
