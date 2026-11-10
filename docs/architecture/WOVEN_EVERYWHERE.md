@@ -361,12 +361,23 @@ among Macs that still stand; they never decide who wins a dispute.
     `mac` and `linux` members only, all signed: `POST /v1/peers/sync`
     (`LibraryPeerExchange {deviceID, after, page, version, attachment?}`: push
     this device's page after its last pushed cursor, receive the peer's after
-    `after`; repeated until neither has more), `POST /v1/peers/notify
+    `after`; repeated until neither has more). `after` is the caller's
+    committed receive cursor for the answering device, so the answering
+    device also records it as what that caller holds (its pushed cursor for
+    the caller becomes the larger of the two, never past its own change log)
+    and its own later pushes start there. At most the last page of an exchange
+    is sent back once, as an idempotent echo. `POST /v1/peers/notify
     {deviceID, cursor}` (the receiver pulls when `cursor` is past what it has),
     `POST /v1/peers/files` and `POST /v1/peers/file` (content-addressed files,
     as before). A device sends only to advertised endpoints that are tailnet
     HTTPS (`LibraryPeerSync.isTailnetEndpoint`: `https://<name>.ts.net`, no
     credentials, query or fragment), as Node and the phone do.
+  - Only a real change enters the change log: an update that leaves every
+    column as it was records nothing. Writers that run on a timer compare
+    first: the Mac's 5-second registry refresh rewrites a
+    `paired_remote_workspaces` configuration (stored as sorted-key JSON) or a
+    `companion_execution_workspaces` registration only when its decoded value
+    changed.
   - Triggers: a write that appends to the change log
     (`WorkspaceDatabase.observePeerChanges`) is announced, debounced 300 ms,
     to peers that are online; starting, a newly learned member and a contact
@@ -408,7 +419,18 @@ among Macs that still stand; they never decide who wins a dispute.
   sessions (updated in the last 3 days, or running), plus any session the
   user opens or keeps offline. Large files are fetched when opened.
 - **Versions.** Sync requires matching schemas (`PairedLibraryStore` already
-  rejects a mismatch). When peers disagree, every device shows which part
+  rejects a mismatch). The schema is the SHA-256 hash of the shared tables
+  (`PairedLibraryTables`): per table, its column names with their declared
+  types, sorted by name, and its key columns in key order. Physical column
+  order is not part of it, so a library migrated over many releases (columns
+  added at the end) and a freshly created one, such as a Linux host's, agree;
+  rows are exchanged by column name. A column that only older libraries still
+  have is removed by a migration rather than tolerated: opening a library
+  drops `dashboard_conversations.is_main` (unused since September 2026) and
+  removes it from the change log and merge state. Builds before this format
+  computed the hash over physical column order, so every device must run a
+  build with this format to sync; an older one answers or receives
+  `update_required`. When peers disagree, every device shows which part
   needs updating and offers "Update everything". There is no compatibility
   layer. A mismatched exchange answers 409 `{code: "update_required",
   message, version, schema}`; `LibrarySyncStatus` (`{deviceID, version,

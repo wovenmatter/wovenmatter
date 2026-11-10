@@ -350,6 +350,40 @@ struct MemberSyncTests {
     #expect(await mac2.directory.audience(for: seen) == mac1.id)
   }
 
+  /// The device answering an exchange learns from the caller's `after` what
+  /// the caller already holds, so its own later pushes never resend it.
+  @Test func answeringAnExchangeRecordsWhatTheCallerAlreadyHolds() async throws {
+    let network = Network()
+    let a = try await Member("a.test", kind: .mac, network: network), b = try await Member("b.test", kind: .mac, network: network)
+    defer { Task { await a.remove(); await b.remove() } }
+    try await a.add(b); try await b.add(a)
+    let notes = (0..<3).map { _ in UUID().uuidString.lowercased() }
+    for (index, note) in notes.enumerated() { try await a.note(note, "Written on A \(index)") }
+    let memberA = try #require(await b.directory.member(a.id))
+    // B pulls everything A has, then contacts A again with its receive cursor.
+    await b.sync.synchronize(with: memberA)
+    for note in notes { #expect(await b.has(note)) }
+    await b.sync.synchronize(with: memberA)
+    let pulled = try await b.database.pairedLibraryCursors(a.id).pulled
+    let pushed = try await a.database.pairedLibraryCursors(b.id).pushed
+    #expect(pulled > 0 && pushed == pulled)
+    // A's next push to B starts after what B holds: nothing is resent.
+    #expect(try await a.database.pairedLibraryPage(after: pushed).entries.isEmpty)
+    let memberB = try #require(await a.directory.member(b.id))
+    await a.sync.synchronize(with: memberB)
+    #expect(try await a.database.pairedLibraryCursors(b.id).pushed == a.database.pairedLibraryHead())
+
+    // A claim beyond this device's own change log is never recorded.
+    let schema = try await b.database.pairedLibrarySchema()
+    let page = PairedLibraryPage(schema: schema, entries: [], cursor: 0, hasMore: false)
+    let body = try JSONEncoder().encode(LibraryPeerExchange(deviceID: b.id, after: 1_000_000_000, page: page, version: "test"))
+    var headers = try b.identity.signer.headers(method: "POST", target: "/v1/peers/sync", body: body, audience: a.id)
+    headers = Dictionary(uniqueKeysWithValues: headers.map { ($0.key.lowercased(), $0.value) })
+    let response = try #require(await a.sync.handle(.init(method: "POST", target: "/v1/peers/sync", headers: headers, body: body)))
+    #expect(response.status == 200)
+    #expect(try await a.database.pairedLibraryCursors(b.id).pushed == a.database.pairedLibraryHead())
+  }
+
   @Test func differentSchemasReportUpdateRequired() async throws {
     let network = Network()
     let a = try await Member("a.test", kind: .mac, network: network), b = try await Member("b.test", kind: .mac, network: network)
