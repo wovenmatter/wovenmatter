@@ -188,11 +188,14 @@ extension WorkspaceDatabaseConnection {
   }
 
   /// The principal for a signed request from a Linux member: allowed only for
-  /// the non-deleted Linux execution workspace that member executes.
-  public func companionWorkspaceMCPMember(workspaceID: String, deviceID: String) throws -> CompanionWorkspaceMCPPrincipal {
+  /// the non-deleted Linux execution workspace that member executes. `serving`
+  /// is the member that serves the workspace's endpoint (`MemberAudience`),
+  /// since a Linux host's Node server names its own execution device ID.
+  public func companionWorkspaceMCPMember(workspaceID: String, deviceID: String, serving: String? = nil) throws -> CompanionWorkspaceMCPPrincipal {
     try withLock {
       guard let workspace = try federationWorkspaceUnlocked(workspaceID), !workspace.deleted, workspace.kind == .linux,
-            let executor = workspace.executionDeviceID, executor == deviceID.lowercased() else {
+            let executor = workspace.executionDeviceID,
+            executor == deviceID.lowercased() || serving?.lowercased() == deviceID.lowercased() else {
         throw federationError("wrong_owner", "This member does not execute that Linux workspace.")
       }
       return .init(grantID: "member:" + executor, libraryID: workspace.libraryID, workspaceID: workspace.id,
@@ -243,8 +246,8 @@ extension WorkspaceDatabase {
   public func revokeCompanionWorkspaceMCP(workspaceID: String, deviceID: String) async throws {
     try await write { try $0.revokeCompanionWorkspaceMCP(workspaceID: workspaceID, deviceID: deviceID) }
   }
-  public func companionWorkspaceMCPMember(workspaceID: String, deviceID: String) async throws -> CompanionWorkspaceMCPPrincipal {
-    try await read { try $0.companionWorkspaceMCPMember(workspaceID: workspaceID, deviceID: deviceID) }
+  public func companionWorkspaceMCPMember(workspaceID: String, deviceID: String, serving: String? = nil) async throws -> CompanionWorkspaceMCPPrincipal {
+    try await read { try $0.companionWorkspaceMCPMember(workspaceID: workspaceID, deviceID: deviceID, serving: serving) }
   }
   public func authorizeCompanionWorkspaceMCPCaller(conversationID: String, principal: CompanionWorkspaceMCPPrincipal) async throws {
     try await read { try $0.authorizeCompanionWorkspaceMCPCaller(conversationID: conversationID, principal: principal) }

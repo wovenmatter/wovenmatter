@@ -121,9 +121,17 @@ same commit.
     endpoint says about itself (a member that answered for another could
     otherwise collect requests to replay there): a member list entry
     (`deviceID` beside its `endpoints`; peer sync, Node's Mac delegate, the
-    phone's host choice) or the workspace registry's `executionDeviceID`
-    (execution, bots, host administration and inference, for Mac and Linux
-    workspaces alike). The installing Mac addresses its first adoption to the
+    phone's host choice) or, for a workspace (execution, bots, host
+    administration, inference, `/mcp/workspace`), `MemberAudience.serving`
+    (shared Swift; Node `createMemberTransport().audienceFor`): the
+    registry's `executionDeviceID` when that is an active member, or a Mac
+    workspace's (a Mac's execution device is its member ID); otherwise, for a
+    Linux workspace, the one active `linux` member whose advertised endpoints
+    share the workspace endpoint's `.ts.net` host, because a Linux host's Node
+    server names its own random execution device ID, not its member ID. Two
+    members claiming one host: nobody. A Mac accepts a Linux host's
+    `/mcp/workspace` call from that serving member as well as from the
+    execution device. The installing Mac addresses its first adoption to the
     `memberIdentity.deviceID` it read over SSH. A phone learns the pairing
     Mac's ID from `CompanionPairResponse.hostDeviceID`. `GET /v1/identity`
     is used only by the Mac that is about to sign that host's entry. A
@@ -476,8 +484,9 @@ proof) with `X-Woven-Protocol: 3`, `X-Woven-Workspace-ID: <this workspace>`,
 `MCP-Protocol-Version`, and no bearer (`createMemberMacDelegate`). Macs are
 tried in sync-status order, online first; another Mac is tried only when the
 request never reached one or was refused before any effect (401, 403, 404,
-426, 503). The Mac accepts the call when the signer is the execution device
-of that non-deleted Linux workspace and the conversation belongs to it. Bots
+426, 503). The Mac accepts the call when the signer serves that non-deleted
+Linux workspace (its execution device, or the member `MemberAudience.serving`
+names) and the conversation belongs to it. Bots
 cannot use this route (it binds a conversation), so their Mac-only tools are
 unavailable unless the legacy grant exists. The single-Mac grant
 (`/v1/execution/mcp-library`, `mcp_library_connection`) is no longer

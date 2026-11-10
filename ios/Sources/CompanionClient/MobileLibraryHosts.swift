@@ -60,6 +60,15 @@ public struct MobileMembershipState: Codable, Equatable, Sendable {
     return value
   }
 
+  /// The member that serves a workspace's endpoint, from the member list this
+  /// phone learned (`MemberAudience.serving`): the audience of its signed
+  /// requests there. Nil until the phone has learned it.
+  public func audience(for workspace: CompanionExecutionWorkspace) -> String? {
+    MemberAudience.serving(workspace, members: members.compactMap { member in
+      MemberKind(rawValue: member.kind).map { .init(deviceID: member.deviceID, kind: $0, endpoints: member.endpoints, revoked: member.revoked) }
+    })
+  }
+
   /// Every Mac and Linux host to try, best first: the last one that worked,
   /// then the paired Mac, other Macs, then Linux hosts. A Mac without a member
   /// endpoint is reached at its registered execution workspace address, which

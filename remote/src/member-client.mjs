@@ -27,18 +27,38 @@ export function createMemberTransport({ library, fetchImpl = globalThis.fetch, a
   let peers = { at: 0, states: new Map() }
 
   /**
-   * `audience` is the destination member's device ID, taken from a signed
-   * record (the member list or the workspace registry's `executionDeviceID`),
-   * never from what the endpoint says about itself.
+   * The member a request is addressed to, from synced records only, never
+   * from what the endpoint says about itself (Swift `MemberAudience.serving`):
+   * a device ID from the member list, or a registry workspace, served by its
+   * execution device when that is an active member (or a Mac's own ID), else
+   * by the one active Linux member advertising the endpoint's host (a Linux
+   * host's Node server names its own execution device ID).
    */
-  async function request(url, { method = 'GET', body, headers = {}, signal, timeout = timeoutMilliseconds, audience } = {}) {
+  async function audienceFor(audience) {
+    const id = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value) ? value.toLowerCase() : null
+    if (typeof audience === 'string') return id(audience)
+    if (!audience || typeof audience !== 'object' || audience.deleted || audience.kind === 'ios') return null
+    const list = ((await library.members()).members ?? []).map(item => ({ ...item, deviceID: id(item.deviceID) })).filter(item => item.deviceID)
+    const active = list.filter(item => !item.revoked && item.kind !== 'ios'), execution = id(audience.executionDeviceID)
+    if (execution && active.some(item => item.deviceID === execution)) return execution
+    if (audience.kind === 'mac' && execution && !list.some(item => item.deviceID === execution && (item.revoked || item.kind !== 'mac'))) return execution
+    let host = null
+    try { host = audience.kind === 'linux' && audience.endpoint ? new URL(audience.endpoint).hostname.toLowerCase() : null } catch {}
+    if (!host?.endsWith('.ts.net')) return null
+    const matches = active.filter(item => item.kind === 'linux' && (item.endpoints ?? []).some(endpoint => { try { return new URL(endpoint).hostname.toLowerCase() === host } catch { return false } }))
+    return matches.length === 1 ? matches[0].deviceID : null
+  }
+
+  /** `audience`: the destination member's device ID or its registry workspace (`audienceFor`). */
+  async function request(url, { method = 'GET', body, headers = {}, signal, timeout = timeoutMilliseconds, audience: destination } = {}) {
     const target = url instanceof URL ? url : new URL(url)
     if (!allowEndpoint(target.origin + target.pathname)) throw fail(400, 'Members are reached only over tailnet HTTPS.', 'member_endpoint_invalid')
-    if (typeof audience !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(audience)) {
+    const audience = await audienceFor(destination)
+    if (!audience) {
       throw fail(409, 'This device has not learned that member’s identity yet. Try again once the libraries have synchronized.', 'member_audience_unknown')
     }
     const payload = body === undefined || body === null ? null : Buffer.isBuffer(body) ? body : Buffer.from(typeof body === 'string' ? body : JSON.stringify(body))
-    const signed = (await library.sign({ method, target: target.pathname + target.search, audience: audience.toLowerCase(),
+    const signed = (await library.sign({ method, target: target.pathname + target.search, audience,
       bodySHA256: createHash('sha256').update(payload ?? Buffer.alloc(0)).digest('hex') })).headers ?? {}
     const outgoing = { accept: 'application/json', ...(payload ? { 'content-type': 'application/json' } : {}), ...headers }
     for (const [name, value] of Object.entries(signed)) outgoing[name.toLowerCase()] = String(value)
@@ -90,7 +110,7 @@ export function createMemberTransport({ library, fetchImpl = globalThis.fetch, a
   /** The synced execution workspace registry (every Mac and Linux workspace). */
   async function workspaces() { return ((await library.workspaces()).workspaces ?? []).filter(item => item && !item.deleted) }
 
-  return { request, json, macs, workspaces }
+  return { request, json, macs, workspaces, audienceFor }
 }
 
 /**

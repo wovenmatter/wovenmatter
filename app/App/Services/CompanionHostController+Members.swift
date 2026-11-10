@@ -12,10 +12,11 @@ extension CompanionHostController {
     /// Signed administration of any Linux host in the registry, whichever Mac
     /// added it. Nothing is issued to this Mac; the host verifies each request.
     func hostAdministration(for workspace: CompanionExecutionWorkspace) async throws -> RemoteHostAdministrationClient {
-        guard workspace.kind == .linux, !workspace.deleted, let endpoint = workspace.endpoint, let host = workspace.executionDeviceID else {
-            throw CompanionAPIError(code: "workspace_unavailable", message: "\(workspace.name)'s address has not reached this Mac yet.")
+        let directory = try await peerSync.members()
+        guard workspace.kind == .linux, !workspace.deleted, let endpoint = workspace.endpoint, let host = await directory.audience(for: workspace) else {
+            throw CompanionAPIError(code: "workspace_unavailable", message: "\(workspace.name)'s address or member identity has not reached this Mac yet.")
         }
-        return try RemoteHostAdministrationClient(endpoint: endpoint, signer: try await memberSigner(), audience: host, send: remoteHostSend)
+        return try RemoteHostAdministrationClient(endpoint: endpoint, signer: directory.identity.signer, audience: host, send: remoteHostSend)
     }
 
     /// A delegated device grant issued by the Linux host itself, so enrolling a

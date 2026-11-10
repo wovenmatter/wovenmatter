@@ -168,7 +168,7 @@ extension ApplicationModel {
             return status.machine(kind: kind, socket: socket, thisMacVersion: thisMacVersion,
                                   expectedHostFingerprint: kind == .linux ? await RemoteWorkspaceSSHClient.bundledHostFingerprint() : nil)
         } catch {
-            return BotMachine(id: workspace.executionDeviceID ?? workspace.ownerDeviceID, name: workspace.name, kind: kind,
+            return BotMachine(id: "member:" + workspace.id, name: workspace.name, kind: kind,
                               state: .unreachable, message: Self.botsUnavailableText(error))
         }
     }
@@ -182,17 +182,18 @@ extension ApplicationModel {
     }
 
     /// Every other Mac and Linux workspace in the registry that can be addressed:
-    /// an endpoint and the member device ID that serves it.
-    func memberBotWorkspaces() async -> [CompanionExecutionWorkspace] {
-        guard let database = dashboardStore?.database,
-              let own = try? await database.companionLibraryIdentity().hostDeviceID,
+    /// an endpoint and the member that serves it, one workspace per member.
+    func memberBotTargets() async -> [(workspace: CompanionExecutionWorkspace, audience: String)] {
+        guard let database = dashboardStore?.database, let directory = try? await companionHost.peerSync.members(),
               let workspaces = try? await database.companionExecutionWorkspaces() else { return [] }
-        var seen = Set<String>()
-        return workspaces.filter {
-            ($0.kind == .mac || $0.kind == .linux) && $0.isVisibleInConnections && $0.endpoint != nil
-                && $0.executionDeviceID.map { $0 != own && seen.insert($0).inserted } == true
+        var seen: Set<String> = [directory.identity.deviceID], targets: [(workspace: CompanionExecutionWorkspace, audience: String)] = []
+        for workspace in workspaces where (workspace.kind == .mac || workspace.kind == .linux) && workspace.isVisibleInConnections && workspace.endpoint != nil {
+            guard let audience = await directory.audience(for: workspace), seen.insert(audience).inserted else { continue }
+            targets.append((workspace, audience))
         }
+        return targets
     }
+    func memberBotWorkspaces() async -> [CompanionExecutionWorkspace] { await memberBotTargets().map(\.workspace) }
 
     private func otherMacWorkspaces() async -> [CompanionExecutionWorkspace] {
         await memberBotWorkspaces().filter { $0.kind == .mac }
@@ -201,10 +202,11 @@ extension ApplicationModel {
     /// How this Mac reaches another member's `/v1/bots/*`: its own member signature,
     /// addressed to the workspace's execution device. Nothing is issued or stored.
     func botsClient(for workspace: CompanionExecutionWorkspace) async throws -> MemberSignedHTTPClient {
-        guard let endpoint = workspace.endpoint, let audience = workspace.executionDeviceID else {
-            throw BotsError.unavailable("\(workspace.name)'s address has not reached this Mac yet.")
+        let directory = try await companionHost.peerSync.members()
+        guard let endpoint = workspace.endpoint, let audience = await directory.audience(for: workspace) else {
+            throw BotsError.unavailable("\(workspace.name)'s address or member identity has not reached this Mac yet.")
         }
-        return try MemberSignedHTTPClient(endpoint: endpoint, signer: try await companionHost.memberSigner(), audience: audience,
+        return try MemberSignedHTTPClient(endpoint: endpoint, signer: directory.identity.signer, audience: audience,
                                           send: companionHost.remoteHostSend)
     }
 
@@ -213,7 +215,7 @@ extension ApplicationModel {
     func signBotSocket(url: URL, audience: String) async throws -> [String: String] {
         guard ["wss", "https"].contains(url.scheme?.lowercased() ?? ""), url.host?.lowercased().hasSuffix(".ts.net") == true,
               url.user == nil, url.password == nil, url.path.hasSuffix("/v1/bots/ws"),
-              await memberBotWorkspaces().contains(where: { $0.executionDeviceID == audience.lowercased() }),
+              await memberBotTargets().contains(where: { $0.audience == audience.lowercased() }),
               let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
             throw BotsError.unavailable("That bots connection is not a member's.")
         }

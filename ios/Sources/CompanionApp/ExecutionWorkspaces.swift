@@ -183,11 +183,13 @@ extension CompanionModel {
         if !force, let after = workspaceRefreshAfter[workspace.id], after > Date() { continue }
         // Member mode: signed requests straight to the workspace's own
         // endpoint, whichever Macs are offline. No grant is issued or stored.
-        if let memberIdentity, memberMode, let endpoint = workspace.endpoint, !memberUnsupportedWorkspaceIDs.contains(workspace.id),
+        // Only a workspace whose serving member is known can be addressed; others keep their grant.
+        if let memberIdentity, memberMode, let endpoint = workspace.endpoint, let audience = membership?.audience(for: workspace),
+           !memberUnsupportedWorkspaceIDs.contains(workspace.id),
            workspaceClients[workspace.id] == nil || memberClientEndpoints[workspace.id] != endpoint {
           workspacePollTasks.removeValue(forKey: workspace.id)?.cancel()
           workspaceClients[workspace.id] = WorkspaceClient(store: store, workspaceID: workspace.id,
-            transport: try HTTPSExecutionWorkspaceTransport(workspace: workspace, identity: memberIdentity, performer: httpPerformer))
+            transport: try HTTPSExecutionWorkspaceTransport(workspace: workspace, identity: memberIdentity, audience: audience, performer: httpPerformer))
           memberClientEndpoints[workspace.id] = endpoint
         }
         if workspaceClients[workspace.id] == nil {

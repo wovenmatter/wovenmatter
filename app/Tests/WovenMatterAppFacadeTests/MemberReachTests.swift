@@ -69,7 +69,7 @@ struct MemberReachTests {
             commandJournalURL: macA.directory.appending(path: "commands.json"),
             provision: { _ in throw CompanionAPIError(code: "unauthorized", message: "No grants in this test.") },
             loadCredential: { _ in nil }, saveCredential: { _ in },
-            makeSignedTransport: { workspace in try SignedExecutionWorkspaceTransport(workspace: workspace, signer: signer.signer, send: linux.send) })
+            makeSignedTransport: { workspace in try SignedExecutionWorkspaceTransport(workspace: workspace, signer: signer.signer, audience: linux.memberID, send: linux.send) })
 
         #expect(try await macA.model.resolveAgentToolDestination(workspace.id, callerWorkspace: nil) == .member(workspace))
         do {
@@ -113,7 +113,7 @@ struct MemberReachTests {
             commandJournalURL: macB.directory.appending(path: "commands.json"),
             provision: { _ in throw CompanionAPIError(code: "unauthorized", message: "No grants in this test.") },
             loadCredential: { _ in nil }, saveCredential: { _ in },
-            makeSignedTransport: { workspace in try SignedExecutionWorkspaceTransport(workspace: workspace, signer: signer.signer, send: linux.send) })
+            makeSignedTransport: { workspace in try SignedExecutionWorkspaceTransport(workspace: workspace, signer: signer.signer, audience: linux.memberID, send: linux.send) })
         // Mac A's agent for the host, as peer sync delivers it.
         let macA = UUID()
         let agentID = try await macB.database.ensureRemoteHarnessAgent(runtimeKind: .codex, remoteWorkspaceID: try #require(UUID(uuidString: workspace.id)),
@@ -138,6 +138,7 @@ struct MemberReachTests {
         let linux = ReachLinuxHost(prefix: "/wovenmatter-execution/linux-l", workspaceID: UUID().uuidString.lowercased(),
                                    libraryID: UUID().uuidString.lowercased(), members: [signer.deviceID: macBKey])
         let workspace = try await macB.database.receiveSyncedWorkspace(linux.descriptor)
+        try await linux.join(host.peerSync.members())
         host.remoteHostSend = linux.send
         macB.model.remoteWorkspaces.sharedHostAdministration = { _ in try await host.hostAdministration(for: workspace) }
 
@@ -167,7 +168,7 @@ struct MemberReachTests {
         // A stranger's signature is refused.
         let stranger = MemberIdentity(deviceID: UUID().uuidString.lowercased(), kind: .mac, key: .init())
         let refused = try RemoteHostAdministrationClient(endpoint: workspace.endpoint!, signer: stranger.signer,
-                                                         audience: workspace.executionDeviceID!, send: linux.send)
+                                                         audience: linux.memberID, send: linux.send)
         await #expect(throws: MemberSignedHTTPError.self) { _ = try await refused.status() }
     }
 
@@ -189,10 +190,10 @@ struct MemberReachTests {
             authentication: try CompanionAuthentication(fileURL: fixture.directory.appending(path: "mcp-devices.json")),
             commands: fixture.model.companionCommands, isActive: { true }, members: mac)
         let message = Data(#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#.utf8)
-        func call(_ signer: MemberIdentity, conversation: String = UUID().uuidString.lowercased()) async throws -> (Int, String?) {
+        func call(_ signer: MemberIdentity, conversation: String = UUID().uuidString.lowercased(), workspace named: String? = nil) async throws -> (Int, String?) {
             var headers = try signer.signer.headers(method: "POST", target: "/wovenmatter/mcp/workspace", body: message, audience: device)
             headers["X-Woven-Protocol"] = String(CompanionProtocol.version)
-            headers["X-Woven-Workspace-ID"] = workspace.id
+            headers["X-Woven-Workspace-ID"] = named ?? workspace.id
             headers["X-Woven-Conversation-ID"] = conversation
             headers["X-Woven-Enabled-Groups"] = "timers"
             let lowered = Dictionary(uniqueKeysWithValues: headers.map { ($0.key.lowercased(), $0.value) })
@@ -220,6 +221,31 @@ struct MemberReachTests {
         let served = try await call(linux, conversation: session)
         #expect(served.0 == 200, "\(served)")
         #expect(try await call(other, conversation: session).1?.contains("does not execute") == true)
+
+        // A real host's registry row names its Node server's own execution device ID; the
+        // member that serves that endpoint's host (from the synced member list) is accepted.
+        let hostM = MemberIdentity(deviceID: UUID().uuidString.lowercased(), kind: .linux, key: .init())
+        try await mac.add(deviceID: hostM.deviceID, kind: .linux, name: "Linux M", publicKey: hostM.publicKey,
+                          endpoints: [URL(string: "https://linux-m.fixture.ts.net:8443/wovenmatter/")!])
+        let m = try await fixture.database.receiveSyncedWorkspace(.init(id: UUID().uuidString.lowercased(), libraryID: UUID().uuidString.lowercased(),
+            ownerDeviceID: UUID().uuidString.lowercased(), kind: .linux, name: "Linux M",
+            endpoint: URL(string: "https://linux-m.fixture.ts.net/wovenmatter-execution/m"), executionDeviceID: UUID().uuidString.lowercased()))
+        let mSession = UUID().uuidString.lowercased()
+        let mRow = CompanionConversation(id: mSession, title: "M session", providerID: "local:codex", routeID: "local:codex",
+                                         runtimeKind: "codex", libraryID: m.libraryID, workspaceID: m.id)
+        try await fixture.database.write { db in
+            try db.toolsExecuteUnlocked("INSERT INTO companion_execution_conversations(id,workspace_id,conversation) VALUES(?,?,?)",
+                                        [mSession, m.id, String(decoding: try JSONEncoder().encode(mRow), as: UTF8.self)])
+        }
+        #expect(await mac.audience(for: m) == hostM.deviceID)
+        let fromM = try await call(hostM, conversation: mSession, workspace: m.id)
+        #expect(fromM.0 == 200, "\(fromM)")
+        #expect(try await call(linux, conversation: mSession, workspace: m.id).1?.contains("does not execute") == true)
+        // Two members claiming that host: nobody is trusted to serve it.
+        try await mac.add(deviceID: other.deviceID, kind: .linux, name: "Linux", publicKey: other.publicKey,
+                          endpoints: [URL(string: "https://linux-m.fixture.ts.net/wovenmatter/")!])
+        #expect(await mac.audience(for: m) == nil)
+        #expect(try await call(hostM, conversation: mSession, workspace: m.id).1?.contains("does not execute") == true)
     }
 
     /// Bots on a Linux host another Mac added: this Mac lists it from the registry, reads its
@@ -233,8 +259,11 @@ struct MemberReachTests {
         let linux = ReachLinuxHost(prefix: "/wovenmatter-execution/linux-l", workspaceID: UUID().uuidString.lowercased(),
                                    libraryID: UUID().uuidString.lowercased(), members: [signer.deviceID: macBKey])
         let workspace = try await macB.database.receiveSyncedWorkspace(linux.descriptor)
+        try await linux.join(host.peerSync.members())
         host.remoteHostSend = linux.send
-        let machineID = try #require(workspace.executionDeviceID)
+        // The host's member ID, not the execution device ID its Node server names.
+        let machineID = linux.memberID
+        #expect(workspace.executionDeviceID != machineID)
 
         #expect(await macB.model.memberBotWorkspaces().map(\.id) == [workspace.id])
         let client = try await macB.model.botsClient(for: workspace)
@@ -317,11 +346,22 @@ private final class ReachLinuxHost: @unchecked Sendable {
     init(prefix: String, workspaceID: String, libraryID: String, members: [String: Data]) {
         self.prefix = prefix
         let host = UUID().uuidString.lowercased()
+        memberID = host
+        // As on a real host, the Node server's execution device ID is its own, not the member ID.
         descriptor = .init(id: workspaceID, libraryID: libraryID, ownerDeviceID: UUID().uuidString.lowercased(), kind: .linux, name: "Linux L",
             endpoint: URL(string: "https://linux-l.fixture.ts.net" + prefix)!, capabilities: ["execution", "historyReplay"],
-            executionDeviceID: host)
+            executionDeviceID: UUID().uuidString.lowercased())
         // Like the Node server, it accepts only requests addressed to its own member device ID.
         verifier = MemberRequestVerifier(audience: host, lookup: { id in members[id].map { MemberKey(deviceID: id, kind: .mac, name: "Member", publicKey: $0) } })
+    }
+
+    /// The host's member ID, as the library host's identity names it.
+    let memberID: String
+    /// The host's member entry as a Mac's library receives it by sync.
+    func join(_ directory: MemberDirectory) async throws {
+        try await directory.ensureSelf(name: "Mac", endpoints: [])
+        try await directory.add(deviceID: memberID, kind: .linux, name: "Linux L", publicKey: Curve25519.Signing.PrivateKey().publicKey.rawRepresentation,
+                                endpoints: [URL(string: "https://linux-l.fixture.ts.net/wovenmatter/")!])
     }
 
     var send: MemberSignedHTTPClient.Send {
@@ -370,7 +410,7 @@ private final class ReachLinuxHost: @unchecked Sendable {
                 return try reply(202, ["state": "running"])
             case ("GET", "/v1/host/update"): return try reply(200, ["state": "succeeded", "result": ["state": "running"]])
             case ("GET", "/v1/bots/status"):
-                let status = BotsRemoteStatus(machine: .init(deviceID: descriptor.executionDeviceID ?? "", name: "Linux L", kind: "linux"),
+                let status = BotsRemoteStatus(machine: .init(deviceID: memberID, name: "Linux L", kind: "linux"),
                                               enabled: true, state: "ready", versions: .init(runtime: "0.1.0", protocol: 1))
                 return (try JSONEncoder().encode(status), HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
             case ("POST", "/v1/host/bots-configure"):

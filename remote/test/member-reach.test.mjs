@@ -77,9 +77,11 @@ test('a Linux host creates a session on another Linux host with every Mac offlin
   const lHost = await library(t, directory, { FAKE_LIBRARY_MEMBERS: membersFile, FAKE_LIBRARY_WORKSPACES: workspacesFile })
   const lIdentity = await lHost.client.identity()
   const offlineMac = { deviceID: randomUUID(), kind: 'mac', name: 'Studio Mac', publicKey: Buffer.alloc(32, 1).toString('base64'), endpoints: ['https://studio.invalid.ts.net:8443/wovenmatter'], revoked: false }
-  writeFileSync(membersFile, JSON.stringify({ revision: '1', members: [{ ...lIdentity, endpoints: [], revoked: false }, offlineMac] }))
-  // M's server: signed members get execution scopes; the Serve prefix is restored for the check.
+  // M's member entry, as L's library knows it once synced.
   const mDeviceID = randomUUID()
+  const mMember = { deviceID: mDeviceID, kind: 'linux', name: 'Workstation M', publicKey: Buffer.alloc(32, 4).toString('base64'), endpoints: [], revoked: false }
+  writeFileSync(membersFile, JSON.stringify({ revision: '1', members: [{ ...lIdentity, endpoints: [], revoked: false }, offlineMac, mMember] }))
+  // M's server: signed members get execution scopes; the Serve prefix is restored for the check.
   const verifier = createMemberVerifier({ loadMembers: async () => ({ revision: '1', members: [{ ...lIdentity, revoked: false }] }), audience: mDeviceID })
   t.after(() => verifier.close())
   const seen = []
@@ -214,4 +216,24 @@ test('member adoption takes the installer bearer only until a Mac is a member', 
   assert.equal(await adopt({ installer: true }), 403, 'later adoptions need a signed Mac')
   assert.equal(await adopt({ member: { kind: 'linux' } }), 403)
   assert.equal(await adopt({ member: { kind: 'mac' } }), 200)
+})
+
+// A Linux host's registry row names its Node server's own execution device ID; the
+// audience is the member serving that endpoint's host, from synced records only.
+test('the audience of a workspace comes from the member list and registry, never the endpoint', async () => {
+  const id = n => `0000000${n}-0000-4000-8000-00000000000${n}`
+  let members = [{ deviceID: id(1), kind: 'mac', endpoints: ['https://studio.tail1.ts.net:8443/wovenmatter'], revoked: false },
+    { deviceID: id(2), kind: 'linux', endpoints: ['https://box.tail1.ts.net:8443/wovenmatter/'], revoked: false }]
+  const transport = createMemberTransport({ library: { members: async () => ({ members }) } })
+  const box = { id: 'w', kind: 'linux', executionDeviceID: id(3), endpoint: 'https://box.tail1.ts.net/wovenmatter-execution/w' }
+  assert.equal(await transport.audienceFor(box), id(2))
+  assert.equal(await transport.audienceFor({ ...box, endpoint: 'https://other.tail1.ts.net/wovenmatter-execution/w' }), null)
+  assert.equal(await transport.audienceFor({ id: 'm', kind: 'mac', executionDeviceID: id(1), endpoint: 'https://studio.tail1.ts.net:8443/wovenmatter' }), id(1))
+  assert.equal(await transport.audienceFor({ id: 'm', kind: 'mac', executionDeviceID: id(5), endpoint: 'https://mini.tail1.ts.net:8443/wovenmatter' }), id(5), 'a Mac workspace names its member ID')
+  assert.equal(await transport.audienceFor({ ...box, kind: 'ios' }), null)
+  members = [...members, { deviceID: id(4), kind: 'linux', endpoints: ['https://box.tail1.ts.net/wovenmatter/'], revoked: false }]
+  assert.equal(await transport.audienceFor(box), null, 'two members claiming one host serve nothing')
+  members = [{ ...members[0], revoked: true }]
+  assert.equal(await transport.audienceFor({ id: 'm', kind: 'mac', executionDeviceID: id(1) }), null, 'a removed Mac is not addressed')
+  await assert.rejects(transport.request('https://box.tail1.ts.net/wovenmatter-execution/w/v1/execution', { audience: box }), error => error.code === 'member_audience_unknown')
 })

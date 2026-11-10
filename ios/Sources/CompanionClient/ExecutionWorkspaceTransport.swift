@@ -66,10 +66,12 @@ public final class HTTPSExecutionWorkspaceTransport: ExecutionWorkspaceTransport
   /// Signed member requests straight to a Mac or Linux workspace's own
   /// execution endpoint. No grant is issued; the workspace checks the
   /// signature against its member list, whichever Macs are offline.
-  public init(workspace: CompanionExecutionWorkspace, identity: MobileMemberIdentity, performer: (any MobileHTTPPerforming)? = nil) throws {
+  /// `audience` is the member that serves the workspace (`MobileMembershipState.audience(for:)`);
+  /// by default its execution device, which is a Mac's member ID.
+  public init(workspace: CompanionExecutionWorkspace, identity: MobileMemberIdentity, audience: String? = nil,
+              performer: (any MobileHTTPPerforming)? = nil) throws {
     guard let endpoint = workspace.endpoint, !workspace.deleted else { throw MobileConnectionError.offline }
-    // The registry's execution device is the member that serves this endpoint.
-    guard let audience = workspace.executionDeviceID?.lowercased(), MemberRequestSignature.isDeviceID(audience) else {
+    guard let audience = (audience ?? workspace.executionDeviceID)?.lowercased(), MemberRequestSignature.isDeviceID(audience) else {
       throw MobileConnectionError.memberUnknown
     }
     credential = .init(endpoint: endpoint, libraryID: workspace.libraryID, workspaceID: workspace.id, deviceID: identity.deviceID, token: "")

@@ -43,7 +43,7 @@ export function createMemberSessions({ transport, identity, deviceID, localProvi
   }
 
   async function command(workspace, body, signal) {
-    const receipt = await transport.json(memberURL(workspace.endpoint, 'v1/execution/commands'), { method: 'POST', headers: headers(workspace), signal, audience: workspace.executionDeviceID,
+    const receipt = await transport.json(memberURL(workspace.endpoint, 'v1/execution/commands'), { method: 'POST', headers: headers(workspace), signal, audience: workspace,
       body: { ...body, deviceID: deviceID(), libraryID: workspace.libraryID, workspaceID: workspace.id } })
     if (receipt?.commandID !== body.commandID) throw fail(502, 'The workspace returned another command’s receipt.')
     return receipt
@@ -56,7 +56,7 @@ export function createMemberSessions({ transport, identity, deviceID, localProvi
    */
   async function create({ callerID, requestID, workspace, runtimeKind, input, signal }) {
     const base = [callerID, requestID, workspace.id].join(':'), conversationID = stableID(base + ':conversation')
-    const providers = await transport.json(memberURL(workspace.endpoint, 'v1/execution/providers'), { headers: headers(workspace), signal, audience: workspace.executionDeviceID })
+    const providers = await transport.json(memberURL(workspace.endpoint, 'v1/execution/providers'), { headers: headers(workspace), signal, audience: workspace })
     const kind = input.harness ?? runtimeKind
     const provider = Array.isArray(providers) ? providers.find(item => item.runtimeKind === kind && item.available !== false && item.canStart !== false) : null
     if (!provider) throw fail(409, `${kind} is not ready on ${workspace.name}. Call woven_sessions_harnesses to see what it offers.`)
@@ -80,7 +80,7 @@ export function createMemberSessions({ transport, identity, deviceID, localProvi
     try { others = await targets() } catch {}
     const replies = await Promise.all(others.filter(item => item.endpoint).map(async workspace => {
       try {
-        const list = await transport.json(memberURL(workspace.endpoint, 'v1/execution/providers'), { headers: headers(workspace), timeout: probeTimeout, audience: workspace.executionDeviceID })
+        const list = await transport.json(memberURL(workspace.endpoint, 'v1/execution/providers'), { headers: headers(workspace), timeout: probeTimeout, audience: workspace })
         return (Array.isArray(list) ? list : []).map(provider => ({ id: provider.id, harness: provider.runtimeKind, runtimeKind: provider.runtimeKind, name: provider.name,
           ready: provider.available !== false && provider.canStart !== false, workspace: workspace.id, workspaceName: workspace.name, workspaceKind: workspace.kind, online: true }))
       } catch (error) {

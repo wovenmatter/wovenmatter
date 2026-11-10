@@ -51,10 +51,10 @@ extension ApplicationModel {
             }, loadCredential: storage.loadExecutionCredential, saveCredential: storage.saveExecutionCredential,
             makeSignedTransport: { [weak self] workspace in
                 // The iPhone is never an execution destination for signed calls.
-                // Without its execution device a workspace cannot be addressed; its saved grant (if any) still works.
-                guard let self, workspace.kind != .ios, workspace.executionDeviceID != nil,
-                      let directory = try? await self.companionHost.peerSync.members() else { return nil }
-                return try SignedExecutionWorkspaceTransport(workspace: workspace, signer: directory.identity.signer)
+                // A workspace whose serving member is unknown cannot be addressed; its saved grant (if any) still works.
+                guard let self, workspace.kind != .ios, let directory = try? await self.companionHost.peerSync.members(),
+                      let audience = await directory.audience(for: workspace) else { return nil }
+                return try SignedExecutionWorkspaceTransport(workspace: workspace, signer: directory.identity.signer, audience: audience)
             },
             onChange: { [weak self] in await self?.refreshWorkspace() })
         federatedExecutionClient = client

@@ -126,7 +126,10 @@ private extension CompanionWorkspaceAPI {
             let database = database
             let current: @Sendable () async throws -> CompanionWorkspaceMCPPrincipal = {
                 guard await members.member(key.deviceID) != nil else { throw CompanionAPIError(code: "unauthorized", message: MemberRequestError.unknown.message) }
-                return try await database.companionWorkspaceMCPMember(workspaceID: workspaceID, deviceID: key.deviceID)
+                // Any Mac checks the same synced rows: the registry and the member list.
+                let workspace = try await database.companionExecutionWorkspaces().first { $0.id == workspaceID }
+                let serving = if let workspace { await members.audience(for: workspace) } else { String?.none }
+                return try await database.companionWorkspaceMCPMember(workspaceID: workspaceID, deviceID: key.deviceID, serving: serving)
             }
             return .success(.init(principal: try await current(), current: current))
         }

@@ -57,6 +57,32 @@ struct MemberRequestSignatureTests {
       == MemberRequestSignature.message(audience: audience, method: "GET", target: "/v1/a?b=1", time: 1, nonce: "n", body: Data()))
   }
 
+  @Test func theAudienceComesFromSyncedRecordsOnly() {
+    let mac = "a0000000-0000-4000-8000-00000000000a", linux = "b0000000-0000-4000-8000-00000000000b"
+    let members: [MemberAudience.Member] = [
+      .init(deviceID: mac, kind: .mac, endpoints: [URL(string: "https://studio.tail1.ts.net:8443/wovenmatter")!], revoked: false),
+      .init(deviceID: linux, kind: .linux, endpoints: [URL(string: "https://box.tail1.ts.net:8443/wovenmatter/")!], revoked: false)]
+    let macWorkspace = CompanionExecutionWorkspace(id: "m", libraryID: "l", ownerDeviceID: mac, kind: .mac, name: "Studio",
+      endpoint: URL(string: "https://studio.tail1.ts.net:8443/wovenmatter"), executionDeviceID: mac)
+    #expect(MemberAudience.serving(macWorkspace, members: members) == mac)
+    // A Linux host's execution device is its Node server's own ID: matched by host instead.
+    let box = CompanionExecutionWorkspace(id: "w", libraryID: "l", ownerDeviceID: mac, kind: .linux, name: "Box",
+      endpoint: URL(string: "https://box.tail1.ts.net/wovenmatter-execution/w"), executionDeviceID: "c0000000-0000-4000-8000-00000000000c")
+    #expect(MemberAudience.serving(box, members: members) == linux)
+    var elsewhere = box; elsewhere.endpoint = URL(string: "https://other.tail1.ts.net/wovenmatter-execution/w")
+    #expect(MemberAudience.serving(elsewhere, members: members) == nil)
+    // Removed, ambiguous or phone members never serve a workspace.
+    #expect(MemberAudience.serving(box, members: [.init(deviceID: linux, kind: .linux, endpoints: members[1].endpoints, revoked: true)]) == nil)
+    #expect(MemberAudience.serving(box, members: members + [.init(deviceID: "d0000000-0000-4000-8000-00000000000d", kind: .linux,
+      endpoints: [URL(string: "https://box.tail1.ts.net/wovenmatter/")!], revoked: false)]) == nil)
+    #expect(MemberAudience.serving(box, members: [.init(deviceID: linux, kind: .ios, endpoints: members[1].endpoints, revoked: false)]) == nil)
+    var macByHost = macWorkspace; macByHost.executionDeviceID = nil
+    #expect(MemberAudience.serving(macByHost, members: members) == nil, "a Mac workspace is addressed only by its execution device")
+    // A Mac workspace's execution device is that Mac's member ID, even before the list arrives; a removed Mac is not.
+    #expect(MemberAudience.serving(macWorkspace, members: []) == mac)
+    #expect(MemberAudience.serving(macWorkspace, members: [.init(deviceID: mac, kind: .mac, endpoints: [], revoked: true)]) == nil)
+  }
+
   @Test func base64URLIsStrict() {
     #expect(MemberRequestSignature.decodeBase64URL("AAECAwQFBgcICQoLDA0ODw") == Data(0..<16))
     #expect(MemberRequestSignature.decodeBase64URL("AAECAwQFBgcICQoLDA0ODw==") == nil)

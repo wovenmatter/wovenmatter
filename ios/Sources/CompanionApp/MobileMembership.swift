@@ -56,9 +56,8 @@ extension CompanionModel {
   /// The host Mac's member device ID for an inference connection to
   /// `workspaceID`, in member mode; nil keeps that connection on its grant.
   func inferenceHostDeviceID(_ workspaceID: String) -> String? {
-    guard memberMode, let workspace = executionWorkspaces.first(where: { $0.id == workspaceID }), workspace.kind != .ios,
-          let device = workspace.executionDeviceID?.lowercased(), MemberRequestSignature.isDeviceID(device) else { return nil }
-    return device
+    guard memberMode, let workspace = executionWorkspaces.first(where: { $0.id == workspaceID }) else { return nil }
+    return membership?.audience(for: workspace)
   }
 
   /// Member mode when this phone paired with its key and the Mac accepted it.
