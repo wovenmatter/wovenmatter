@@ -124,15 +124,17 @@ struct DesktopJourneyTests {
         #expect(try journal.entries().isEmpty)
         try await f.model.mutateNote(id: id, mutation: .rename("Renamed"))
         // Exports are staged with complete file protection. Since macOS 27.2 such
-        // a file cannot be created while the session is locked, as during an
-        // unattended test run; the export then fails rather than leak plaintext.
-        if sessionIsLocked() {
-            await #expect(throws: (any Error).self) { _ = try await f.model.exportNote(id: id) }
-        } else {
+        // a file cannot be created while the session's data protection keys are
+        // locked, as in some unattended runs; the export then fails rather than
+        // leak plaintext. A locked screen does not always lock those keys, so a
+        // locked session accepts either outcome and an export must be exact.
+        do {
             let export = try await f.model.exportNote(id: id)
             defer { try? FileManager.default.removeItem(at: export.url) }
             let exported = try String(contentsOf: export.url, encoding: .utf8)
             #expect(Data(exported.utf8) == Data(("# Renamed\n\n" + content + "\n").utf8))
+        } catch {
+            #expect(sessionIsLocked(), "The export failed in an unlocked session: \(error)")
         }
         await #expect(throws: (any Error).self) {
             _ = try await f.database.persistNoteDraft(id: id, title: "Stale", content: "Lost edit", expectedRevision: originalRevision)
