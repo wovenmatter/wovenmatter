@@ -29,5 +29,9 @@ struct UsageSampleMergeTests {
         #expect(after.tokens.inputTokens == before.tokens.inputTokens && after.tokens.outputTokens == before.tokens.outputTokens)
         #expect(merged.samples.first { $0.id.hasPrefix("1") }?.costUSD == 1.0)
         #expect(merged.samples.first { $0.id.hasPrefix("1") }?.timestamp == base.addingTimeInterval(120))
+        // Still over the limit hourly: merge by day instead.
+        let daily = snapshot.mergingSamplesForTransport(limit: 2)
+        #expect(daily.samples.count == 2)
+        #expect(UsageAnalyticsSummary(samples: daily.samples).requests == before.requests)
     }
 }

@@ -104,9 +104,9 @@ final class ApplicationUsageModel {
 
     func backendSnapshot() -> BackendUsageSnapshot {
         // Per-call samples for a busy month exceed the RPC frame; the window only
-        // needs them merged per session, model and hour.
+        // needs them merged per session, model and hour (or day, when still large).
         let projected = localUsage.map {
-            LocalUsageSnapshot(analytics: $0.analytics.mergingSamplesByHour(), limits: $0.limits,
+            LocalUsageSnapshot(analytics: $0.analytics.mergingSamplesForTransport(), limits: $0.limits,
                                hasOpenRouterCredential: $0.hasOpenRouterCredential)
         }
         return BackendUsageSnapshot(localUsage: projected, localUsageError: localUsageError,
