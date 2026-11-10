@@ -1,6 +1,14 @@
+#if canImport(CryptoKit)
 import CryptoKit
+#else
+import Crypto
+#endif
 import Foundation
+#if canImport(SQLite3)
 import SQLite3
+#else
+import CSQLite
+#endif
 import WovenMatterCore
 
 extension WorkspaceDatabaseConnection {
@@ -77,7 +85,13 @@ extension WorkspaceDatabaseConnection {
       return try result(.accepted, folder: companionFolderUnlocked(id: request.resourceID))
     case .createNote:
       if try companionVersionUnlocked(kind: "note", id: request.resourceID) != nil {
-        return try result(.conflict, "This note ID already exists or was deleted.", note: companionNoteUnlocked(id: request.resourceID))
+        // Deleted here: a phone re-creating its unchanged copy after moving
+        // to this host applies the deletion instead of showing a conflict.
+        guard let existing = try companionNoteUnlocked(id: request.resourceID) else {
+          var deleted = result(.notFound, "This note was deleted on another device."); deleted.deleted = true
+          return deleted
+        }
+        return result(.conflict, "This note ID already exists.", note: existing)
       }
       guard let title = request.title, let content = request.content else { return result(.invalid, "The note needs a title and a document.") }
       do {

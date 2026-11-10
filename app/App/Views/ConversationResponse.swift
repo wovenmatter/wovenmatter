@@ -11,18 +11,24 @@ private typealias ResponseFont = UIFont
 import SwiftUI
 
 /// One selectable text surface and one copy action for the complete response.
+extension EnvironmentValues {
+    /// When set, links in a response go here instead of asking to open them externally.
+    @Entry var conversationLinkHandler: ((URL) -> Void)?
+}
+
 struct ConversationResponse: View {
     let content: String
     var document: ConversationMarkdownDocument? = nil
     let isStreaming: Bool
     var showsCopyButton = true
+    @Environment(\.conversationLinkHandler) private var linkHandler
     @State private var copied = false
     @State private var pendingExternalURL: URL?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ConversationResponseText(content: content, document: document, isStreaming: isStreaming) {
-                pendingExternalURL = $0
+            ConversationResponseText(content: content, document: document, isStreaming: isStreaming) { url in
+                if let linkHandler { linkHandler(url) } else { pendingExternalURL = url }
             }
             .frame(maxWidth: 680, alignment: .leading)
 

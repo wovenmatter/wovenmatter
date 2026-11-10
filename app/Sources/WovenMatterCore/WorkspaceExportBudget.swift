@@ -48,7 +48,7 @@ public enum WorkspaceExportFileIO {
     try Task.checkCancellation()
     try await withTaskCancellationHandler {
       try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
-        DispatchQueue.global(qos: .userInitiated).async {
+        DispatchQueue.global(qos: PortablePOSIX.waitedOnQoS).async {
           do {
             try cancellation.check()
             try operation()

@@ -57,6 +57,9 @@ public struct MobileStoreState: Codable, Equatable, Sendable {
   public var toolNoteVersions: [MobileToolNoteVersion]?
   public var toolTimers: [String: MobileToolTimer]?
   public var pendingFolderDeletions: [String: CompanionFolder]?
+  /// Clean notes a move to another host re-created there: if that host
+  /// deleted one, the deletion is applied instead of a conflict.
+  public var rebindRecreatedNoteIDs: Set<String>?
   public init() {}
   public func isDirty(_ id: String) -> Bool { outbox.contains { $0.mutation.resourceID == id } || conflicts[id] != nil }
 }
@@ -383,6 +386,7 @@ public actor MobileStore {
           }
         }
         if mutation.kind == .deleteNote { next.notes.removeValue(forKey: mutation.resourceID); next.pendingNoteDeletions?.removeValue(forKey: mutation.resourceID) }
+        if mutation.kind == .createNote { next.rebindRecreatedNoteIDs?.remove(mutation.resourceID) }
         if mutation.kind == .deleteFolder { next.folders.removeValue(forKey: mutation.resourceID); next.pendingFolderDeletions?.removeValue(forKey: mutation.resourceID) }
         next.outbox.removeAll { $0.mutation.operationID == result.operationID }
       case .conflict, .notFound, .invalid:
@@ -397,6 +401,15 @@ public actor MobileStore {
         if mutation.kind == .deleteFolder, let saved = next.pendingFolderDeletions?.removeValue(forKey: mutation.resourceID) {
           next.outbox.removeAll { $0.mutation.operationID == result.operationID }
           if result.status != .notFound { next.folders[saved.id] = result.folder ?? saved }
+          return
+        }
+        // Re-creating an unchanged copy of a note the host deleted (after a
+        // move to another host): the deletion wins, as it would have there.
+        if mutation.kind == .createNote, result.status == .notFound, result.deleted == true,
+           next.rebindRecreatedNoteIDs?.remove(mutation.resourceID) != nil, let local = next.notes[mutation.resourceID],
+           local.title == mutation.title, local.content == mutation.content, local.folderID == mutation.folderID {
+          next.outbox.removeAll { $0.mutation.resourceID == mutation.resourceID }
+          Self.remoteDeletion(mutation.resourceID, state: &next)
           return
         }
         if let local = next.notes[mutation.resourceID] {
@@ -599,7 +612,7 @@ public actor MobileStore {
       (state.workspaceID ?? state.detachedWorkspaceID) == nil || (state.workspaceID ?? state.detachedWorkspaceID) == id else { throw Failure.wrongWorkspace }
     state.workspaceID = id; state.detachedWorkspaceID = nil
   }
-  private static func remoteNote(_ note: CompanionNote, state: inout MobileStoreState) {
+  static func remoteNote(_ note: CompanionNote, state: inout MobileStoreState) {
     if state.deletedNotes.contains(note.id), state.bases[note.id]?.revision ?? 0 >= note.revision { return }
     if state.isDirty(note.id) {
       if var conflict = state.conflicts[note.id] {

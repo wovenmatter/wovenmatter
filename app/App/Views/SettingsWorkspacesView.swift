@@ -24,12 +24,55 @@ struct SettingsWorkspacesView: View {
     @State private var pendingDeletion: RemoteWorkspaceConfiguration?
     @State private var browserWorkspace: RemoteWorkspaceConfiguration?
     @State private var logsWorkspace: RemoteWorkspaceConfiguration?
+    @State private var sharedLogsWorkspace: CompanionExecutionWorkspace?
 
-    /// Workspaces owned by other paired devices, which this Mac can use but not manage.
+    /// Workspaces this Mac did not add. Other paired devices own their Mac and iPhone or iPad
+    /// workspaces; every Linux host without an SSH setup here is managed by signed request.
     private var sharedWorkspaces: [CompanionExecutionWorkspace] {
-        application.companionHost.executionWorkspaces.filter {
-            $0.isVisibleInConnections && $0.ownerDeviceID != application.companionHost.peerIdentity?.deviceID
+        let configured = Set(model.workspaces.map { $0.id.uuidString.lowercased() })
+        let thisDevice = application.companionHost.peerIdentity?.deviceID
+        return application.companionHost.executionWorkspaces.filter {
+            $0.isVisibleInConnections && !configured.contains($0.id)
+                && ($0.kind == .linux || $0.ownerDeviceID != thisDevice)
         }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    /// A workspace another device added. Linux hosts without an SSH setup here are
+    /// managed by signed request; other devices' Mac and iPhone or iPad workspaces are listed.
+    @ViewBuilder
+    private func sharedWorkspaceRow(_ workspace: CompanionExecutionWorkspace) -> some View {
+        let addedOn = application.companionHost.connectedPeerRoutes.first(where: { $0.deviceID == workspace.ownerDeviceID })?.name
+        let detail = [sharedWorkspaceKind(workspace.kind), addedOn.map { "Added on " + $0 }].compactMap { $0 }.joined(separator: " · ")
+        if workspace.kind == .linux {
+            let state = model.sharedHosts[workspace.id]
+            let ready = state?.serviceState == "running" || state?.serviceState == "ready"
+            VStack(alignment: .leading, spacing: 4) {
+                SettingsRow(title: workspace.name, detail: detail) {
+                    if state?.busy == true { ProgressView().controlSize(.small) }
+                    if let service = state?.serviceState {
+                        SettingsStatus(ready ? "Ready" : service.capitalized, tone: ready ? .good : .warning)
+                    } else if state?.error != nil {
+                        SettingsStatus("Needs attention", tone: .warning)
+                    }
+                    Menu("Manage") {
+                        Button("Refresh status") { model.manageSharedHost(workspace.id, .refresh) }
+                        Button("Restart") { model.manageSharedHost(workspace.id, .restart) }
+                        Button("Update server") { model.manageSharedHost(workspace.id, .update) }
+                        Divider()
+                        Button("Logs") { model.manageSharedHost(workspace.id, .logs); sharedLogsWorkspace = workspace }
+                    }
+                    .menuStyle(.button)
+                    .fixedSize()
+                    .buttonStyle(SettingsQuietButtonStyle())
+                    .disabled(state?.busy == true)
+                }
+                if let progress = state?.progress { SettingsNote(progress) }
+                if let error = state?.error { SettingsError(error) }
+            }
+            .task(id: workspace.id) { if model.sharedHosts[workspace.id] == nil { model.manageSharedHost(workspace.id, .refresh) } }
+        } else {
+            SettingsRow(title: workspace.name, detail: detail) { EmptyView() }
+        }
     }
 
     private func deploymentProgress(_ message: String) -> some View {
@@ -114,6 +157,25 @@ struct SettingsWorkspacesView: View {
                 if let error = model.errorMessage { SettingsError(error) }
                 ScrollView {
                     Text(model.workspaceLogs[workspace.id] ?? "Loading logs…")
+                        .font(.system(size: 11.5, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }.scrollIndicators(.never)
+            }
+            .padding(24).frame(width: 760, height: 520)
+            .foregroundStyle(DashboardPalette.foreground).background(DashboardPalette.background)
+        }
+        .sheet(item: $sharedLogsWorkspace) { workspace in
+            VStack(alignment: .leading, spacing: 16) {
+                HStack {
+                    Text("\(workspace.name) logs").font(.settingsSection)
+                    Spacer()
+                    Button("Refresh") { model.manageSharedHost(workspace.id, .logs) }
+                    Button("Done") { sharedLogsWorkspace = nil }
+                }.buttonStyle(SettingsQuietButtonStyle())
+                if let error = model.sharedHosts[workspace.id]?.error { SettingsError(error) }
+                ScrollView {
+                    Text(model.sharedHosts[workspace.id]?.logs ?? "Loading logs…")
                         .font(.system(size: 11.5, design: .monospaced))
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -286,13 +348,8 @@ struct SettingsWorkspacesView: View {
                 .buttonStyle(SettingsQuietButtonStyle())
         }
         if !sharedWorkspaces.isEmpty {
-            SettingsSection(title: "From other devices", detail: "Agents keep running on their own workspace.") {
-                ForEach(sharedWorkspaces) { workspace in
-                    SettingsRow(title: workspace.name, detail: sharedWorkspaceKind(workspace.kind)) {
-                        Text("Added on " + (application.companionHost.connectedPeerRoutes.first(where: { $0.deviceID == workspace.ownerDeviceID })?.name ?? "a paired device"))
-                            .font(.settingsSecondary).foregroundStyle(DashboardPalette.mutedForeground)
-                    }
-                }
+            SettingsSection(title: "From other devices", detail: "Every Mac can manage these and start sessions there. Agents keep running on their own workspace.") {
+                ForEach(sharedWorkspaces) { workspace in sharedWorkspaceRow(workspace) }
             }
         }
     }

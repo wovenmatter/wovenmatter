@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 import Testing
 import WovenMatterCore
@@ -181,3 +182,4 @@ private struct ActiveInputFixture {
     }
     func remove() { try? FileManager.default.removeItem(at: root) }
 }
+#endif

@@ -85,7 +85,7 @@ public struct WovenMatterToolCommand: Sendable {
     switch group {
     case .notes: return !["database-list", "database-query", "list", "folders", "read", "versions", "version"].contains(action)
     case .history, .usage, .library: return false
-    case .sessions: return ["create", "send", "manage", "release", "notifications"].contains(action)
+    case .sessions: return ["create", "send", "stop", "respond", "manage", "release", "notifications"].contains(action)
     case .executor: return action == "execute" || action == "cancel"
     case .goals: return action != "get"
     case .browser, .computer, .html: return action == "call"
@@ -118,7 +118,7 @@ public struct WovenMatterToolCommand: Sendable {
     let allowedActions: [WorkspaceToolGroup: Set<String>] = [
       .notes: ["database-list", "database-create", "database-query", "database-execute", "list", "folders", "create", "read", "append", "insert", "replace-block", "delete-block", "format", "set-title", "table", "set-html", "link", "unlink", "apply", "versions", "version", "restore"],
       .history: ["search", "conversations", "conversation", "message", "runs", "trace", "events", "event"],
-      .sessions: ["list", "status", "create", "send", "manage", "release", "notifications", "receipts", "folders", "harnesses"],
+      .sessions: ["list", "status", "create", "send", "stop", "respond", "manage", "release", "notifications", "receipts", "folders", "harnesses"],
       .goals: ["get", "set", "pause", "resume", "clear", "complete", "block", "checkpoint"],
       .timers: ["list", "create", "update", "pause", "resume", "remove"],
       .executor: ["execute", "search", "skills", "status", "cancel"],
@@ -126,8 +126,8 @@ public struct WovenMatterToolCommand: Sendable {
       .usage: ["read"], .calendar: ["list", "read", "occurrences", "create", "update", "remove", "copy", "detach"], .library: ["list", "read"]
     ]
     guard allowedActions[group]?.contains(action) == true else { throw WorkspaceToolError.invalid("Unknown \(domain) command '\(action)'.") }
-    let booleanFlags: Set<String> = ["all-workspace", "independent", "no-notify", "paused", "all-day", "timed", "no-repeat", "regular-event", "json", "header"]
-    let valueFlags: Set<String> = ["id", "session", "conversation", "note-id", "folder", "workspace", "directory", "harness", "model", "thinking", "title", "text", "purpose", "request-id", "search", "run", "kind", "sender", "since", "until", "after", "before", "limit", "offset", "characters", "sort", "epoch", "at", "every", "starts-at", "ends-at", "description", "prompt", "time-zone", "repeat-unit", "repeat-interval", "session-mode", "occurrence", "enabled", "revision", "version", "html", "style", "block-id", "table-id", "row", "column", "rows", "columns", "source-id", "native-session-id", "native-record-id", "native-conversation-id", "database-id", "path", "query", "code", "objective", "evidence", "token-budget", "turn-budget"]
+    let booleanFlags: Set<String> = ["all-workspace", "independent", "no-notify", "cancelled", "paused", "all-day", "timed", "no-repeat", "regular-event", "json", "header"]
+    let valueFlags: Set<String> = ["id", "session", "conversation", "note-id", "folder", "workspace", "directory", "harness", "model", "thinking", "title", "text", "purpose", "request-id", "search", "run", "kind", "sender", "since", "until", "after", "before", "limit", "offset", "characters", "sort", "epoch", "at", "every", "starts-at", "ends-at", "description", "prompt", "time-zone", "repeat-unit", "repeat-interval", "session-mode", "occurrence", "enabled", "revision", "version", "html", "style", "block-id", "table-id", "row", "column", "rows", "columns", "source-id", "native-session-id", "native-record-id", "native-conversation-id", "database-id", "path", "query", "code", "objective", "evidence", "token-budget", "turn-budget", "interaction", "option-id", "answers"]
     var positional: [String] = [], options: [String: String] = [:]
     var operationArguments = Array(arguments.prefix(2))
     while !args.isEmpty {
@@ -209,10 +209,12 @@ public struct WovenMatterToolCommand: Sendable {
     case (.history, "conversation"): allowed = ["id"] + pagination + bodyChunk; maximumPositionals = 1
     case (.history, "message"): allowed = ["id"] + bodyChunk; maximumPositionals = 1
     case (.history, "runs"): allowed = ["conversation"] + pagination; maximumPositionals = 0
-    case (.sessions, "list"): allowed = ["search", "folder", "all-workspace", "sort"] + pagination; maximumPositionals = 0
-    case (.sessions, "status"): allowed = ["id"]; maximumPositionals = 1
+    case (.sessions, "list"): allowed = ["search", "folder", "all-workspace", "sort", "workspace"] + pagination; maximumPositionals = 0
+    case (.sessions, "status"): allowed = ["id", "before", "workspace"]; maximumPositionals = 1
     case (.sessions, "create"): allowed = ["title", "text", "purpose", "independent", "harness", "model", "thinking", "folder", "workspace", "directory"] + request; maximumPositionals = 0
-    case (.sessions, "send"): allowed = ["id", "text"] + request; maximumPositionals = 1
+    case (.sessions, "send"): allowed = ["id", "text", "workspace"] + request; maximumPositionals = 1
+    case (.sessions, "stop"): allowed = ["id", "workspace"] + request; maximumPositionals = 1
+    case (.sessions, "respond"): allowed = ["id", "interaction", "option-id", "answers", "cancelled", "workspace"] + request; maximumPositionals = 1
     case (.sessions, "manage"): allowed = ["id", "purpose", "no-notify"] + request; maximumPositionals = 1
     case (.sessions, "release"): allowed = ["id", "epoch"] + request; maximumPositionals = 1
     case (.sessions, "notifications"): allowed = ["id", "epoch", "enabled"] + request; maximumPositionals = 1
@@ -253,7 +255,7 @@ public struct WovenMatterToolCommand: Sendable {
     case (.history, "search"): positionalAliases = ["search"]
     case (.history, "trace"): positionalAliases = ["id", "run"]
     case (.history, "event"), (.history, "conversation"), (.history, "message"),
-         (.sessions, "status"), (.sessions, "send"), (.sessions, "manage"),
+         (.sessions, "status"), (.sessions, "send"), (.sessions, "stop"), (.sessions, "respond"), (.sessions, "manage"),
          (.sessions, "release"), (.sessions, "notifications"),
          (.timers, "update"), (.timers, "pause"), (.timers, "resume"), (.timers, "remove"),
          (.calendar, "read"), (.calendar, "occurrences"), (.calendar, "update"),

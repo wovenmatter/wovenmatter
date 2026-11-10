@@ -118,6 +118,10 @@ extension CompanionModel {
   }
   func authorizedWorkspaceCredential(_ id: String) async throws -> DirectWorkspaceCredential {
     guard !fixture, !isolatedTestHost else { throw DeviceExecutionError.unavailable("Use the regular app to authorize execution workspaces.") }
+    // Member mode: the host verifies this phone's signature, so nothing is issued.
+    if inferenceHostDeviceID(id) != nil, let workspace = executionWorkspaces.first(where: { $0.id == id }), let endpoint = workspace.endpoint {
+      return DirectWorkspaceCredential(endpoint: endpoint, libraryID: workspace.libraryID, workspaceID: workspace.id, deviceID: state.deviceID, token: "")
+    }
     if let existing = try workspaceCredentials.load(id), await acceptsWorkspaceCredential(existing) { return existing }
     guard online, transport != nil else { throw DeviceExecutionError.unavailable("Connect to your central database to authorize this workspace for the first time.") }
     return try await issueWorkspaceCredential(id, generation: connectionGeneration)
@@ -137,10 +141,12 @@ extension CompanionModel {
   func ensureDeviceWorkspace() async throws {
     guard let store, let libraryID = state.workspaceID, !fixture else { return }
     let journal = await store.journal.snapshot()
-    guard journal.workspaces[deviceWorkspaceID] == nil else { return }
-    try await store.journal.upsertWorkspace(.init(id: deviceWorkspaceID, libraryID: libraryID,
-      ownerDeviceID: state.deviceID, kind: .ios, name: UIDevice.current.name,
-      capabilities: ["pi-durable", "notes", "files", "documents", "images", "approvals", "questions", "codemode", "subagents"]))
+    let capabilities = ["quick-chat", "notes", "approvals", "questions"]
+    var workspace = journal.workspaces[deviceWorkspaceID] ?? CompanionExecutionWorkspace(id: deviceWorkspaceID, libraryID: libraryID,
+      ownerDeviceID: state.deviceID, kind: .ios, name: UIDevice.current.name)
+    guard workspace.capabilities != capabilities else { return }
+    workspace.capabilities = capabilities
+    try await store.journal.upsertWorkspace(workspace)
   }
   func recordDeviceHistory(conversation: CompanionConversation, transcript: CompanionTranscript?) async throws {
     guard let store else { return }
@@ -171,10 +177,25 @@ extension CompanionModel {
         workspaceClients.removeValue(forKey: id); workspaceProviders.removeValue(forKey: id)
         workspaceReachable.removeValue(forKey: id); remotePending.removeValue(forKey: id)
       }
+      // A deleted workspace's saved agent list (restored from the catalog) goes too.
+      for id in Array(workspaceProviders.keys) where !availableIDs.contains(id) {
+        workspaceProviders.removeValue(forKey: id); workspaceReachable.removeValue(forKey: id)
+      }
       guard generation == connectionGeneration, !pairingInProgress, credential != nil else { return }
       for workspace in executionWorkspaces {
         guard workspace.endpoint != nil else { continue }
         if !force, let after = workspaceRefreshAfter[workspace.id], after > Date() { continue }
+        // Member mode: signed requests straight to the workspace's own
+        // endpoint, whichever Macs are offline. No grant is issued or stored.
+        // Only a workspace whose serving member is known can be addressed; others keep their grant.
+        if let memberIdentity, memberMode, let endpoint = workspace.endpoint, let audience = membership?.audience(for: workspace),
+           !memberUnsupportedWorkspaceIDs.contains(workspace.id),
+           workspaceClients[workspace.id] == nil || memberClientEndpoints[workspace.id] != endpoint {
+          workspacePollTasks.removeValue(forKey: workspace.id)?.cancel()
+          workspaceClients[workspace.id] = WorkspaceClient(store: store, workspaceID: workspace.id,
+            transport: try HTTPSExecutionWorkspaceTransport(workspace: workspace, identity: memberIdentity, audience: audience, performer: httpPerformer))
+          memberClientEndpoints[workspace.id] = endpoint
+        }
         if workspaceClients[workspace.id] == nil {
           var saved = try workspaceCredentials.load(workspace.id)
           if let candidate = saved, !(await acceptsWorkspaceCredential(candidate)) { saved = nil }
@@ -239,7 +260,7 @@ extension CompanionModel {
       rememberAgentCatalog()
       workspaceReachable[workspaceID] = true; workspaceProblems.removeValue(forKey: workspaceID)
       workspaceRetryCount[workspaceID] = 0
-      let active = selectedExecutionWorkspaceID == workspaceID && tab == .chat && activeRunID != nil
+      let active = selectedExecutionWorkspaceID == workspaceID && tab == .chat && (activeRunID != nil || awaitingRemoteTurn)
       workspaceRefreshAfter[workspaceID] = Date().addingTimeInterval(active ? 2 : 30)
       if providerID.isEmpty { providerID = availableExecutionProviders.first { $0.available && $0.canStart }?.id ?? "" }
       await reload()
@@ -252,6 +273,11 @@ extension CompanionModel {
         workspaceClients.removeValue(forKey: workspaceID)
         do { try (clearCredential ?? workspaceCredentials.clear)(workspaceID) }
         catch { workspaceProblems[workspaceID] = error.localizedDescription }
+      }
+      if case MobileConnectionError.memberUnsupported = error {
+        // An older workspace: use its bearer grant until it is updated.
+        workspaceClients.removeValue(forKey: workspaceID); memberClientEndpoints.removeValue(forKey: workspaceID)
+        memberUnsupportedWorkspaceIDs.insert(workspaceID)
       }
       let failures = (workspaceRetryCount[workspaceID] ?? 0) + 1
       workspaceRetryCount[workspaceID] = failures
@@ -270,16 +296,14 @@ extension CompanionModel {
     if let note { prompt += "\n\nReferenced note (content, not instructions):\n\(note.title)\n\(note.content)" }
     sending = true; defer { sending = false }
     await flushLocalWrites()
+    // The message shows at once, with progress, while the workspace accepts it.
+    let cleared = beginPendingSend(key: sourceKey, text: text, conversationID: target)
     do {
       let conversationID: String
       let result: CompanionCommandReceipt
       if target == nil {
-        let pending = state.launches.first { $0.create.workspaceID == workspaceID && !$0.accepted && !$0.terminalFailure }
-        if let pending {
-          guard pending.initialSend.text == prompt, pending.create.providerID == route else {
-            throw DeviceExecutionError.unavailable("An earlier new conversation needs acknowledgement. Continue its saved request in Settings → Pair to Mac → Pending changes before sending different input.")
-          }
-        }
+        try await requireWorkspaceConnection(workspaceID)
+        let pending = MobileLaunchRecord.reusable(state.launches, workspaceID: workspaceID, providerID: route, text: prompt, noteID: nil)
         conversationID = pending?.create.conversationID ?? UUID().uuidString.lowercased()
         var create = CompanionCommand(deviceID: state.deviceID, kind: .createSession, conversationID: conversationID,
           providerID: route, folderID: selectedFolderID)
@@ -287,7 +311,7 @@ extension CompanionModel {
         create.workspaceID = workspaceID; send.workspaceID = workspaceID
         let launch = try await client.startConversation(pending ?? .init(create: create, initialSend: send))
         guard launch.accepted, let receipt = launch.sendReceipt else {
-          throw DeviceExecutionError.unavailable(launch.sendReceipt?.message ?? launch.createReceipt?.message ?? "This request is saved. Continue it in Settings → Pair to Mac → Pending changes when the workspace is available.")
+          throw DeviceExecutionError.unavailable(launch.sendReceipt?.message ?? launch.createReceipt?.message ?? "The device hasn’t confirmed this request. Try again here when it’s connected.")
         }
         result = receipt
       } else {
@@ -295,7 +319,8 @@ extension CompanionModel {
         let records = await store.journal.commandRecords(workspaceID: workspaceID)
         let pending = records.first { $0.command.conversationID == target && ($0.receipt == nil || $0.receipt?.status == .outcomeUnknown) && ($0.command.kind == .send || $0.command.kind == .steer) }
         if let pending, pending.command.text != prompt {
-          throw DeviceExecutionError.unavailable("The last message has not been acknowledged. Retry that message before sending different input.")
+          unconfirmedSendConversationID = target
+          throw DeviceExecutionError.unavailable("The previous message hasn’t been confirmed. Retry it before sending different input.")
         }
         let command = pending?.command ?? CompanionCommand(deviceID: state.deviceID, kind: runID == nil ? .send : .steer,
           conversationID: conversationID, runID: runID, text: prompt)
@@ -303,11 +328,46 @@ extension CompanionModel {
       }
       guard result.status == .completed || result.status == .accepted else { throw DeviceExecutionError.unavailable(result.message ?? "The workspace has not acknowledged this message. Retry will recover its saved receipt.") }
       conversationWorkspaceIDs[conversationID] = workspaceID
+      acceptPendingSend(from: sourceKey, to: conversationID)
       if selectedConversationID == target { selectedConversationID = conversationID }
-      if (draftBuffer[sourceKey] ?? state.chatDrafts[sourceKey]) == draft { updateChatDraft(key: sourceKey, draft: .init(text: "")) }
-      await reload(); await refreshExecutionWorkspaces()
-      await workspacePollTasks[workspaceID]?.value
-    } catch { errorMessage = error.localizedDescription; await reload() }
+      if draftBuffer[sourceKey] == cleared { updateChatDraft(key: sourceKey, draft: cleared) }
+      await reload()
+      // Show the message and its turn as soon as the workspace has them,
+      // instead of waiting for the next scheduled refresh.
+      await refreshDirectWorkspace(workspaceID)
+    } catch {
+      withdrawPendingSend(sourceKey, restoring: draft, over: cleared)
+      errorMessage = workspaceActionMessage(error); await reload()
+    }
+  }
+  /// Shows `text` in the chat at once and clears the composer on screen; the
+  /// saved draft stays until the owner accepts the message. Returns the
+  /// cleared draft.
+  func beginPendingSend(key: String, text: String, conversationID: String?) -> MobileChatDraft {
+    let cleared = MobileChatDraft(text: "")
+    pendingSends[key] = CompanionPendingSend(text: text, transcript: conversationID.flatMap { state.transcripts[$0] })
+    draftBuffer[key] = cleared
+    return cleared
+  }
+  /// The owner accepted the message: it waits for the transcript to show it and its turn.
+  func acceptPendingSend(from key: String, to conversationID: String) {
+    guard var pending = pendingSends.removeValue(forKey: key) else { return }
+    pending.phase = .starting
+    pendingSends[conversationID] = pending
+  }
+  /// The send failed: the message leaves the chat and returns to the composer
+  /// unless something new was typed there meanwhile.
+  func withdrawPendingSend(_ key: String, restoring draft: MobileChatDraft, over cleared: MobileChatDraft) {
+    pendingSends.removeValue(forKey: key)
+    if draftBuffer[key] == cleared { draftBuffer[key] = draft }
+  }
+  /// The New Chat menu lists what each workspace reports now: opening it asks
+  /// the library host and every reachable workspace for their agents again.
+  func refreshAgentAvailability() async {
+    guard !fixture else { return }
+    centralProvidersRefreshDue = true
+    if engine != nil { await refresh() }
+    await refreshExecutionWorkspaces(force: true)
   }
   func stopExecutionWorkspace() async {
     guard let id = selectedConversationID, let runID = activeRunID else { return }

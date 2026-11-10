@@ -25,6 +25,23 @@ public struct CompanionPairingPayload: Codable, Equatable, Sendable {
     return value.port == nil || (1...65535).contains(value.port!)
   }
 
+  /// An execution workspace's address: `/wovenmatter`, or for a Linux host also its
+  /// per-workspace `/wovenmatter-execution/<id>` route. Same tailnet HTTPS rules.
+  public static func isValidExecutionEndpoint(_ url: URL, linux: Bool) -> Bool {
+    if isValidEndpoint(url) { return true }
+    guard linux else { return false }
+    guard let value = URLComponents(url: url, resolvingAgainstBaseURL: false),
+          value.scheme == "https", let host = value.host?.lowercased(),
+          host.hasSuffix(".ts.net"), host.count > 7,
+          value.user == nil, value.password == nil, value.query == nil, value.fragment == nil else { return false }
+    let prefix = "/wovenmatter-execution/"
+    guard value.path.hasPrefix(prefix) else { return false }
+    let id = value.path.dropFirst(prefix.count)
+    guard (1...64).contains(id.count), id.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || "-_.".contains($0)) }),
+          id != ".", id != ".." else { return false }
+    return value.port == nil || (1...65535).contains(value.port!)
+  }
+
   public var encodedURL: URL {
     var value = URLComponents()
     value.scheme = "wovenmatter"
@@ -67,6 +84,10 @@ public struct CompanionPairRequest: Codable, Equatable, Sendable {
   /// Explicit pairing purpose. Only `CompanionPairingPurpose.peerMac` can
   /// become a paired-Mac grant; device metadata never selects that role.
   public let purpose: String?
+  /// The device's raw 32-byte Ed25519 member key. When present, the Mac
+  /// that accepts the pairing signs a member entry for it, so the device
+  /// then signs its requests to every Mac and Linux member.
+  public var memberPublicKey: Data? = nil
   public init(token: String, deviceID: String, deviceName: String, protocolVersion: Int = CompanionProtocol.version,
               metadata: CompanionDeviceMetadata? = nil, expectedWorkspaceID: String? = nil, requiresConfirmation: Bool? = nil,
               purpose: String? = nil) {
@@ -87,10 +108,16 @@ public struct CompanionPairResponse: Codable, Equatable, Sendable {
   public let credential: String
   public let protocolVersion: Int
   public let confirmationRequired: Bool?
+  /// The pairing Mac's member device ID: the audience of the phone's signed
+  /// requests to it. Absent from Macs that predate member requests.
+  public var hostDeviceID: String?
+  /// The libraries in the pairing Mac's workspace registry, for a phone that
+  /// sent a member key: a phone already holding one of them keeps its copy.
+  public var libraryIDs: [String]?
   public init(workspaceID: String, deviceID: String, credential: String, protocolVersion: Int = CompanionProtocol.version,
-              confirmationRequired: Bool? = nil) {
+              confirmationRequired: Bool? = nil, hostDeviceID: String? = nil) {
     self.workspaceID = workspaceID; self.deviceID = deviceID; self.credential = credential; self.protocolVersion = protocolVersion
-    self.confirmationRequired = confirmationRequired
+    self.confirmationRequired = confirmationRequired; self.hostDeviceID = hostDeviceID
   }
 }
 

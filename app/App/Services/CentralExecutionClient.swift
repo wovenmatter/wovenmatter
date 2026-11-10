@@ -12,11 +12,15 @@ import WovenMatterDashboardStore
 final class CentralExecutionClient {
     typealias Provision = @MainActor (String) async throws -> CompanionExecutionCredential
     typealias MakeTransport = @MainActor (DirectWorkspaceCredential) throws -> any ExecutionWorkspaceTransport
+    /// A transport signed with this Mac's member key, or nil when this Mac has
+    /// no member identity yet. It replaces provisioned grants for every member.
+    typealias MakeSignedTransport = @MainActor (CompanionExecutionWorkspace) async throws -> (any ExecutionWorkspaceTransport)?
     private var foreignHistoryJournals: [String: WorkspaceJournal] = [:]
     private let database: WorkspaceDatabase
     private let commandJournal: WorkspaceJournal
     private let provision: Provision
     private let makeTransport: MakeTransport
+    private let makeSignedTransport: MakeSignedTransport?
     private let loadCredential: @MainActor (String) throws -> DirectWorkspaceCredential?
     private let saveCredential: @MainActor (DirectWorkspaceCredential) throws -> Void
     private let onChange: @MainActor () async -> Void
@@ -35,7 +39,9 @@ final class CentralExecutionClient {
          makeTransport: @escaping MakeTransport = { try HTTPSExecutionWorkspaceTransport(credential: $0) },
          loadCredential: @escaping @MainActor (String) throws -> DirectWorkspaceCredential? = CentralExecutionCredentialVault.load,
          saveCredential: @escaping @MainActor (DirectWorkspaceCredential) throws -> Void = CentralExecutionCredentialVault.save,
+         makeSignedTransport: MakeSignedTransport? = nil,
          onChange: @escaping @MainActor () async -> Void = {}) throws {
+        self.makeSignedTransport = makeSignedTransport
         self.database = database; self.commandJournal = try WorkspaceJournal(file: commandJournalURL)
         self.provision = provision; self.makeTransport = makeTransport; self.onChange = onChange
         self.loadCredential = loadCredential; self.saveCredential = saveCredential
@@ -60,7 +66,7 @@ final class CentralExecutionClient {
         backgroundRefreshInProgress = true
         defer { backgroundRefreshInProgress = false }
         guard let workspaces = try? await database.companionExecutionWorkspaces() else { return }
-        for workspace in workspaces where !workspace.deleted && workspace.endpoint != nil &&
+        for workspace in workspaces where !workspace.deleted && workspace.endpoint != nil && workspace.retainedHistory != true &&
             !workspace.capabilities.contains("history.central.v1") {
             guard !Task.isCancelled else { return }
             guard nextBackgroundRefresh[workspace.id].map({ $0 <= Date() }) ?? true else { continue }
@@ -120,11 +126,31 @@ final class CentralExecutionClient {
         }
     }
 
+
     private func transport(for workspace: CompanionExecutionWorkspace) async throws -> any ExecutionWorkspaceTransport {
         if let transport = transports[workspace.id], transportEndpoints[workspace.id] == workspace.endpoint { return transport }
         transports.removeValue(forKey: workspace.id)
+        // A copied owner (a Dev snapshot's, or a Mac unpaired from this one) is
+        // history only: it is never signed for, granted or provisioned.
+        guard workspace.retainedHistory != true else {
+            throw CompanionAPIError(code: "workspace_unavailable", message: "\(workspace.name) is retained history here. Its chats stay readable; start a new session to run work.")
+        }
         guard !workspace.deleted, workspace.kind != .ios || workspace.endpoint != nil else {
             throw CompanionAPIError(code: "workspace_unavailable", message: "Open Woven Matter on the device that owns this conversation to continue its on-device agent.")
+        }
+        // Members sign every request; nothing is provisioned, so the Mac that
+        // added the workspace does not need to be online.
+        if workspace.endpoint != nil, let signed = try await makeSignedTransport?(workspace) {
+            do {
+                let remote = try await signed.identity()
+                guard remote.id == workspace.id, remote.libraryID == workspace.libraryID else { throw MobileStore.Failure.wrongWorkspace }
+                transports[workspace.id] = signed; transportEndpoints[workspace.id] = workspace.endpoint
+                return signed
+            } catch MobileConnectionError.revoked {
+                // No grant stands in for a member: the peer has not synchronized
+                // this Mac's membership yet, or it removed this Mac.
+                throw CompanionAPIError(code: "unauthorized", message: "\(workspace.name) does not recognize this Mac yet. It does once the two devices synchronize their member list.")
+            }
         }
         let identity = try await database.companionLibraryIdentity()
         let account = CentralExecutionCredentialVault.account(libraryID: workspace.libraryID, workspaceID: workspace.id, deviceID: identity.hostDeviceID)
@@ -144,7 +170,11 @@ final class CentralExecutionClient {
                 // A network failure retains the existing scoped credential.
             }
         }
-        let issued = try await provision(workspace.id)
+        let issued: CompanionExecutionCredential
+        do { issued = try await provision(workspace.id) }
+        catch where makeSignedTransport != nil {
+            throw CompanionAPIError(code: "unauthorized", message: "\(workspace.name) does not recognize this Mac yet. It does once the two devices synchronize their member list.")
+        }
         guard issued.workspace.id == workspace.id, issued.workspace.libraryID == workspace.libraryID,
               issued.deviceID == identity.hostDeviceID, let endpoint = issued.workspace.endpoint else { throw MobileConnectionError.invalidResponse }
         let credential = DirectWorkspaceCredential(endpoint: endpoint, libraryID: workspace.libraryID,
@@ -206,10 +236,40 @@ final class CentralExecutionClient {
             libraryID: workspace.libraryID, workspaceID: workspace.id), workspace: workspace)
     }
 
+    /// The destination's agent routes, for choosing a harness on another member.
+    func providers(workspace: CompanionExecutionWorkspace) async throws -> [CompanionProvider] {
+        try await transport(for: workspace).providers()
+    }
+
+    // Direct reads of another member's workspace, for agents that manage the
+    // sessions they started there (`woven_sessions_status`, `_list`, `_respond`).
+    func conversations(workspace: CompanionExecutionWorkspace) async throws -> [CompanionConversation] {
+        try await transport(for: workspace).conversations()
+    }
+    func transcript(workspace: CompanionExecutionWorkspace, conversationID: String, before: String?) async throws -> CompanionTranscript {
+        let transport = try await transport(for: workspace)
+        if let before { return try await transport.transcript(conversationID, before: before) }
+        return try await transport.transcript(conversationID)
+    }
+    func pendingInteractions(workspace: CompanionExecutionWorkspace) async throws -> [CompanionPendingInteraction] {
+        try await transport(for: workspace).pending()
+    }
+    func capabilities(workspace: CompanionExecutionWorkspace, conversationID: String) async throws -> CompanionProvider {
+        try await transport(for: workspace).capabilities(conversationID)
+    }
+
     @discardableResult
     func send(conversationID: String, text: String, expectedRunID: String? = nil,
               beforeDispatch: @escaping @MainActor () throws -> Void = {}) async throws -> CompanionCommandReceipt {
-        let workspace = try await requiredWorkspace(conversationID)
+        try await send(to: requiredWorkspace(conversationID), conversationID: conversationID, text: text,
+            expectedRunID: expectedRunID, beforeDispatch: beforeDispatch)
+    }
+
+    /// Sends to a conversation whose workspace is already known, such as one
+    /// just created there before its history has reached this library.
+    @discardableResult
+    func send(to workspace: CompanionExecutionWorkspace, conversationID: String, text: String, expectedRunID: String? = nil,
+              beforeDispatch: @escaping @MainActor () throws -> Void = {}) async throws -> CompanionCommandReceipt {
         let identity = try await database.companionLibraryIdentity()
         let kind: CompanionCommand.Kind = expectedRunID == nil ? .send : .steer
         let existing = await commandJournal.commandRecords(workspaceID: workspace.id).first {
@@ -271,7 +331,9 @@ final class CentralExecutionClient {
         }
         return workspace
     }
-    private func submit(_ requested: CompanionCommand, workspace: CompanionExecutionWorkspace,
+    /// Sends one durable command to `workspace`, replaying its receipt when the
+    /// destination already accepted it (command IDs make retries exact).
+    func submit(_ requested: CompanionCommand, workspace: CompanionExecutionWorkspace,
                         beforeDispatch: @MainActor () throws -> Void = {}) async throws -> CompanionCommandReceipt {
         let unresolved = await commandJournal.commandRecords(workspaceID: workspace.id).first {
             ($0.receipt == nil || $0.receipt?.status == .outcomeUnknown) &&

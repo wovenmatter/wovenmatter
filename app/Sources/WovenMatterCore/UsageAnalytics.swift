@@ -598,3 +598,64 @@ public struct LocalUsageSnapshot: Codable, Equatable, Sendable {
     self.hasOpenRouterCredential = hasOpenRouterCredential
   }
 }
+
+extension UsageAnalyticsSnapshot {
+  /// The same analytics with samples merged per session, model, route and hour.
+  /// Totals, request counts and session counts are unchanged; only per-call
+  /// timing inside an hour is dropped. Used where the snapshot crosses a
+  /// process boundary, so a busy month stays a small message.
+  public func mergingSamplesByHour() -> UsageAnalyticsSnapshot { mergingSamples(bucket: 3600) }
+
+  /// Hourly merging, falling back to whole days when the hourly result is still
+  /// larger than `limit` samples, so the snapshot stays bounded by sessions x days.
+  public func mergingSamplesForTransport(limit: Int = 20_000) -> UsageAnalyticsSnapshot {
+    let hourly = mergingSamples(bucket: 3600)
+    return hourly.samples.count <= limit ? hourly : mergingSamples(bucket: 86_400)
+  }
+
+  private func mergingSamples(bucket: TimeInterval) -> UsageAnalyticsSnapshot {
+    struct Key: Hashable {
+      let provider: ProviderKind, sessionID: String, accountLabel: String, model: String
+      let billingProvider: String, billingRoute: String, reasoningLevel: String?
+      let harness: String, application: String, agent: String?, workspace: String?
+      let confidence: UsageAttributionConfidence, granularity: UsageGranularity, sourceID: String
+      let hour: Int64
+    }
+    var order: [Key] = []
+    var groups: [Key: [UsageSample]] = [:]
+    for sample in samples {
+      let key = Key(provider: sample.provider, sessionID: sample.sessionID, accountLabel: sample.accountLabel,
+                    model: sample.model, billingProvider: sample.billingProvider, billingRoute: sample.billingRoute,
+                    reasoningLevel: sample.reasoningLevel, harness: sample.harness, application: sample.application,
+                    agent: sample.agent, workspace: sample.workspace, confidence: sample.attributionConfidence,
+                    granularity: sample.granularity, sourceID: sample.sourceID,
+                    hour: Int64((sample.timestamp.timeIntervalSince1970 / bucket).rounded(.down)))
+      if groups[key] == nil { order.append(key) }
+      groups[key, default: []].append(sample)
+    }
+    let merged = order.map { key -> UsageSample in
+      let group = groups[key] ?? []
+      let first = group[0]
+      guard group.count > 1 else { return first }
+      let costs = group.compactMap(\.costUSD)
+      let reported = group.map(\.tokens.reportedTotalTokens)
+      let tokens = UsageTokenCounts(
+        inputTokens: group.reduce(0) { $0 &+ $1.tokens.inputTokens },
+        cachedInputTokens: group.reduce(0) { $0 &+ $1.tokens.cachedInputTokens },
+        cacheCreationTokens: group.reduce(0) { $0 &+ $1.tokens.cacheCreationTokens },
+        outputTokens: group.reduce(0) { $0 &+ $1.tokens.outputTokens },
+        reasoningTokens: group.reduce(0) { $0 &+ $1.tokens.reasoningTokens },
+        reportedTotalTokens: reported.contains(nil) ? nil : reported.reduce(0) { $0 &+ ($1 ?? 0) })
+      return UsageSample(
+        id: first.id + "+\(group.count)", provider: first.provider,
+        timestamp: group.map(\.timestamp).max() ?? first.timestamp, sessionID: first.sessionID,
+        accountLabel: first.accountLabel, model: first.model, billingProvider: first.billingProvider,
+        billingRoute: first.billingRoute, reasoningLevel: first.reasoningLevel, harness: first.harness,
+        application: first.application, agent: first.agent, workspace: first.workspace, tokens: tokens,
+        requestCount: group.reduce(0) { $0 &+ $1.requestCount },
+        costUSD: costs.isEmpty ? nil : costs.reduce(0, +), attributionConfidence: first.attributionConfidence,
+        granularity: first.granularity, sourceID: first.sourceID, sourceEventID: first.sourceEventID, dedupeKey: nil)
+    }
+    return UsageAnalyticsSnapshot(range: range, generatedAt: generatedAt, samples: merged, sources: sources)
+  }
+}

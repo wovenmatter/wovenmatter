@@ -3,6 +3,7 @@
 // vendor-repair graph. Never change the Node archive or a system installation.
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
+import { realpathSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, writeFile, rm, cp, symlink, rename, realpath } from 'node:fs/promises';
 import { resolve, join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -58,7 +59,7 @@ export async function prepareNPM({ prefix, node, bootstrap, securityGraph = reso
     return join(prefix, 'bin/npm');
   } finally { await rm(stage, { force: true, recursive: true }); }
 }
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try { console.log(await prepareNPM(JSON.parse(process.argv[2]))); }
   catch (error) { console.error(error.message); process.exitCode = 1; }
 }

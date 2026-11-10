@@ -236,6 +236,9 @@ final class ApplicationModel {
     private(set) var noteMutationError: String?
     var agentTools: WorkspaceAgentToolsModel?
     let workspaceAssets: WorkspaceAssetSession
+    let bots = BotsModel()
+    var pendingBotsSettings = false
+    var botsHost: BotsHostController?
     @ObservationIgnored var clientExecutionDirectory: URL?
     @ObservationIgnored var automationHost: WovenAutomationHost?
     var activeSessionLimitPresented = false
@@ -346,11 +349,16 @@ final class ApplicationModel {
     private(set) var dashboardStore: DashboardStore?
     @ObservationIgnored
     var federatedExecutionClient: CentralExecutionClient?
+    /// A Dev snapshot's copied conversations are read-only history; its own
+    /// sessions run. Test seam: fixtures exercise the snapshot rule.
+    @ObservationIgnored var readsCopiedHistoryOnly = DevelopmentLaunch.isSnapshot
     @ObservationIgnored var federatedAdoptionTasks: [String: Task<Void, any Error>] = [:]
     @ObservationIgnored var adoptedExecutionConversations: Set<String> = []
     var federatedExecutionSnapshots: [String: FederatedExecutionSnapshot] = [:]
     private(set) var peerAgentWorkspaces: [UUID: CompanionExecutionWorkspace] = [:]
     var federatedExecutionOwners: [String: String] = [:]
+    /// The synced execution workspace registry, including iPhone and iPad Quick Chat workspaces.
+    var executionWorkspaceRegistry: [CompanionExecutionWorkspace] = []
     @ObservationIgnored
     lazy var companionCommands = CompanionCommandService(model: self)
     @ObservationIgnored
@@ -578,6 +586,7 @@ final class ApplicationModel {
         await openCode.restore()
         await refreshWorkspace()
         state = .ready
+        startBotsClient()
         startAgentToolRuntime()
         startDashboardStoreIfReady()
         refreshLocalACPRuntimesNow()
@@ -629,8 +638,13 @@ final class ApplicationModel {
             return try await self.handleAutomationTool(callerID: caller, command: command, request: request)
         }
         agentTools?.automationDidDisable = { [weak self] caller in await self?.cancelAutomation(callerID: caller) }
+        agentTools?.memberSessionHandler = { [weak self] request, command, caller in
+            guard let self else { throw CancellationError() }
+            return try await self.handleMemberSessionTool(callerID: caller, command: command, request: request)
+        }
         try await recoverExecutorSetup()
         configureSessionToolSelectionAdapter()
+        configureBotsRuntime()
     }
 
     private func start() async {
@@ -672,6 +686,16 @@ final class ApplicationModel {
             remoteWorkspaces.onTaskGatewayChangeRequested = { [weak self] configuration, enabled in
                 guard let self else { throw ApplicationModelError.dashboardStoreUnavailable }
                 return try await self.changeRemoteCalendarGateway(configuration, enabled: enabled)
+            }
+            remoteWorkspaces.sharedHostAdministration = { [weak self] id in
+                guard let self, let database = self.dashboardStore?.database,
+                      let workspace = try await database.companionExecutionWorkspaces().first(where: { $0.id == id && !$0.deleted }) else {
+                    throw RemoteWorkspaceClientError.invalidResponse("This host is no longer in the workspace registry.")
+                }
+                return try await self.companionHost.hostAdministration(for: workspace)
+            }
+            remoteWorkspaces.onHostInstalled = { [weak self] configuration in
+                self?.companionHost.setUpLinuxHost(configuration, restart: true)
             }
             remoteWorkspaces.onRuntimeMaintenanceChanged = { [weak self] in
                 await self?.synchronizeRemoteAgentCatalog()
@@ -715,6 +739,7 @@ final class ApplicationModel {
             await recoverPendingRemoteNoteEdits(store: dashboardStore)
             await refreshWorkspace()
             state = .ready
+            startBotsClient()
             startAgentToolRuntime()
             startDashboardStoreIfReady()
             await companionHost.startForCentralDatabase()
@@ -1199,6 +1224,9 @@ final class ApplicationModel {
             }
             guard self.dashboardStore === dashboardStore, generation == workspaceRefreshGeneration, !Task.isCancelled else { return }
             federatedExecutionOwners = try await dashboardStore.database.companionExecutionOwners()
+            var registry = try await dashboardStore.database.companionExecutionWorkspaces()
+            for workspace in liveLibraryClient?.executionWorkspaces ?? [] where !registry.contains(where: { $0.id == workspace.id }) { registry.append(workspace) }
+            if executionWorkspaceRegistry != registry { executionWorkspaceRegistry = registry }
             for (id, owner) in backendReplica.owners { federatedExecutionOwners[id] = owner }
             if let client = liveLibraryClient {
                 for conversation in client.conversations where client.isForeignConversation(conversation.id) {
@@ -2099,6 +2127,8 @@ final class ApplicationModel {
         usage.acknowledgeCredentialAccessDisclosure()
     }
 
+    private static let keychainLog = Logger(subsystem: "wovenmatter.desktop", category: "keychain-access")
+
     func reconnectSavedCredentials() async {
         guard !isReconnectingSavedCredentials, usage.beginCredentialAuthorization() else { return }
         isReconnectingSavedCredentials = true
@@ -2118,23 +2148,20 @@ final class ApplicationModel {
                         try BrowserCredentialStore.shared.prepare(consented: true, authorize: true)
                     }
                 }.value
-                try await usage.authorizeSavedCredentials()
+                // Keychain items owned by the process that caches them (the
+                // background server when it runs). One small request, no usage data.
                 try await authorizeSavedConnections()
             }
             try Task.checkCancellation()
             acknowledgeCredentialAccessDisclosure()
-            await refreshLocalUsage(
-                range: currentUsageRange,
-                refreshLimits: true,
-                reason: .credentialChanged
-            )
             remoteWorkspaces.refreshAll()
             await checkSavedCredentialAccess()
 
         } catch is CancellationError {
             keychainAccessReady = false
-            credentialAccessStatus = "Keychain access was cancelled. Use Restore Keychain access to try again."
+            credentialAccessStatus = "Keychain access was cancelled. Choose Allow to try again."
         } catch {
+            Self.keychainLog.error("Keychain authorization failed: \(String(describing: error), privacy: .public)")
             keychainAccessReady = false
             credentialAccessStatus = "Keychain access needs attention: \(error.localizedDescription)"
         }
@@ -2142,7 +2169,7 @@ final class ApplicationModel {
 
     func keychainAccessNeedsAttention() {
         keychainAccessReady = false
-        credentialAccessStatus = "A saved credential needs permission. Restore Keychain access to continue."
+        credentialAccessStatus = "A saved sign-in needs Keychain permission. Choose Allow to continue."
     }
 
     func checkSavedCredentialAccess() async {
@@ -2161,8 +2188,9 @@ final class ApplicationModel {
             keychainAccessReady = true
             credentialAccessStatus = "Saved credentials are accessible. Background checks stay silent."
         } catch {
+            Self.keychainLog.error("Keychain check failed: \(String(describing: error), privacy: .public)")
             keychainAccessReady = false
-            credentialAccessStatus = "Keychain access needs attention. Restore access to use saved credentials."
+            credentialAccessStatus = "Woven Matter can't read your saved sign-ins. Choose Allow to restore access."
         }
     }
 
@@ -2180,6 +2208,9 @@ final class ApplicationModel {
             try Task.checkCancellation()
             try await remoteWorkspaces.authorizeCredentialAccess(for: workspace)
         }
+        // The usage service's saved OpenRouter key is a Keychain item too. A key
+        // that isn't saved is not a Keychain permission problem.
+        do { try await usage.authorizeSavedCredentials() } catch LocalUsageServiceError.missingCredential {}
 
     }
 
@@ -2983,6 +3014,13 @@ final class ApplicationModel {
         return conversationID.uuidString.lowercased()
     }
 
+    /// A requested title names the session from its creation; without one the
+    /// session is "New <harness> chat" until its first message titles it.
+    nonisolated static func initialSessionTitle(_ requested: String?, harness: String) -> String {
+        let title = requested?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return title.isEmpty ? "New \(harness) chat" : String(title.prefix(256))
+    }
+
     func createLocalACPSession(
         runtimeKind: AgentRuntimeKind,
         requestedConversationID: UUID? = nil,
@@ -3032,7 +3070,7 @@ final class ApplicationModel {
             }
             let conversationID = try await dashboardStore.createLocalACPSession(
                 runtimeKind: runtimeKind,
-                title: "New \(runtimeKind.displayName) chat",
+                title: Self.initialSessionTitle(initialTitle, harness: runtimeKind.displayName),
                 requestedConversationID: requestedConversationID,
                 allowMissingCalendarFolder: calendarExecutionRoot != nil,
                 executionRoot: try await sessionCreationRoot(folderID: folderID, workspaceID: nil, root: resolvedRoot)
@@ -3108,7 +3146,7 @@ final class ApplicationModel {
                 runtimeKind: target.harness.id,
                 remoteWorkspaceID: target.configuration.id,
                 remoteWorkspaceName: target.configuration.name,
-                title: "New \(target.harness.displayName) chat",
+                title: Self.initialSessionTitle(initialTitle, harness: target.harness.displayName),
                 requestedConversationID: requestedConversationID,
                 allowMissingCalendarFolder: calendarExecutionRoot != nil,
                 executionRoot: try await sessionCreationRoot(folderID: folderID, workspaceID: target.configuration.id, root: resolvedRoot)
@@ -3478,6 +3516,7 @@ final class ApplicationModel {
 
     func shutdownLocalACPSessions() {
         guard localSessionShutdownTask == nil else { return }
+        botsHost?.terminateImmediately()
         automationHost?.stop(); automationHost = nil
         executorRuntime.setupTask?.cancel()
         for session in Set(executorRuntime.sessions.values) { executorRuntime.cancel(session) }
@@ -3512,6 +3551,7 @@ final class ApplicationModel {
     func finishBackendShutdown() async {
         startupTask?.cancel()
         await startupTask?.value
+        await botsHost?.shutdown()
         shutdownLocalACPSessions()
         await localSessionShutdownTask?.value
         backendRPCServer?.stop()
@@ -4550,6 +4590,7 @@ extension ApplicationModel {
             await usage.refreshBackendSnapshot()
             try Task.checkCancellation()
             state = .ready
+            startBotsClient()
             backendClientTask?.cancel()
             backendConversationClientTask?.cancel()
             // The journal supports independent bounded waiters. Transcript
@@ -4590,6 +4631,7 @@ extension ApplicationModel {
                         try await self.refreshBackendApplicationState()
                     }
                     if change.requiresReload || change.scopes.contains(.databases) { try await self.refreshBackendDatabasesState() }
+                    if change.requiresReload || change.scopes.contains(.bots) { await self.bots.refresh() }
                     if change.requiresReload || change.scopes.contains(.remoteWorkspaces) { try await self.refreshBackendRemoteState() }
                     if change.requiresReload || change.scopes.contains(.openCode) { try await self.refreshBackendOpenCodeState() }
                     if change.requiresReload || change.scopes.contains(.settings) {

@@ -16,7 +16,6 @@ struct SettingsGeneralView: View {
         DashboardCodexLogoStyle.defaultStyle.rawValue
     @AppStorage(DashboardWorkspaceSidebarVisibility.localWorkspace.storageKey) private var showsLocalWorkspace = true
     @AppStorage(DashboardWorkspaceSidebarVisibility.remoteWorkspaces.storageKey) private var showsRemoteWorkspaces = true
-    @State private var showsCredentialDisclosure = false
 
     private var themeBinding: Binding<DashboardTheme> {
         Binding(
@@ -45,28 +44,11 @@ struct SettingsGeneralView: View {
             softwareSection
             ProductAnalyticsSettingsSection(analytics: model.analytics)
         }
-        .task { await model.checkSavedCredentialAccess() }
-        .onReceive(NotificationCenter.default.publisher(for: KeychainAccess.accessNeedsAttention).receive(on: DispatchQueue.main)) { _ in
-            model.keychainAccessNeedsAttention()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            if !model.isReconnectingSavedCredentials { Task { await model.checkSavedCredentialAccess() } }
-        }
         .onChange(of: storedTheme) { _, _ in
             model.persistMacSurfaceProfileFromUserDefaults()
         }
         .onChange(of: storedSidebarStyle) { _, _ in
             model.persistMacSurfaceProfileFromUserDefaults()
-        }
-        .sheet(isPresented: $showsCredentialDisclosure) {
-            CredentialAccessDisclosureView(
-                purpose: "Use saved credentials across the Woven Matter features you enable, including website sessions and passwords.",
-                onEnable: {
-                    showsCredentialDisclosure = false
-                    Task { await model.reconnectSavedCredentials() }
-                },
-                onCancel: { showsCredentialDisclosure = false }
-            )
         }
     }
 
@@ -126,37 +108,6 @@ struct SettingsGeneralView: View {
                 Button("Check for updates") { updater.checkForUpdates() }
                     .buttonStyle(SettingsQuietButtonStyle())
                     .disabled(!updater.canCheckForUpdates)
-            }
-            credentialAccessRow
-        }
-    }
-
-    private var credentialAccessRow: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            SettingsRow(title: "Keychain access", detail: "Credentials are stored in Apple Keychain.") {
-                SettingsStatus(model.isReconnectingSavedCredentials ? "Checking…"
-                    : model.keychainAccessReady == true ? "Access ready"
-                    : model.keychainAccessReady == false ? "Access needs attention"
-                    : model.hasAcknowledgedCredentialAccessDisclosure ? "Checking…" : "Not enabled",
-                    tone: model.keychainAccessReady == false ? .warning : model.keychainAccessReady == true ? .good : .neutral)
-                    .help(model.credentialAccessStatus ?? "Enable access to use saved credentials.")
-                Button(model.isReconnectingSavedCredentials ? "Checking…"
-                       : model.keychainAccessReady == true ? "Check access"
-                       : model.hasAcknowledgedCredentialAccessDisclosure || model.keychainAccessReady == false
-                         ? "Restore Keychain access" : "Enable Keychain access") {
-                    if model.keychainAccessReady == true {
-                        Task { await model.checkSavedCredentialAccess() }
-                    } else if model.hasAcknowledgedCredentialAccessDisclosure {
-                        Task { await model.reconnectSavedCredentials() }
-                    } else {
-                        showsCredentialDisclosure = true
-                    }
-                }
-                .buttonStyle(SettingsQuietButtonStyle())
-                .disabled(model.isAuthorizingUsageCredential || model.isReconnectingSavedCredentials)
-            }
-            if model.keychainAccessReady != true {
-                SettingsNote("Choose Always Allow when macOS asks to avoid repeated prompts.")
             }
         }
     }

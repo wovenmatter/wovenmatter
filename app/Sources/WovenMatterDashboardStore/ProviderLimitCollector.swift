@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 import WovenMatterClient
 import WovenMatterCore
 
@@ -85,7 +88,7 @@ enum ProviderLimitCollector {
       return UsageLimitAccount(provider: provider, accountScopeID: choice.map { "wovenmatter.shared." + $0.id },
         accountLabel: choice?.label ?? provider.displayName, status: choice == nil ? .needsCredential : .unavailable,
         source: "Saved accounts", detail: choice == nil ? "Not signed in. Add an account in Settings → Accounts."
-          : "This saved account could not be read. Check Keychain access in Settings → General.", observedAt: now)
+          : "This saved account could not be read. Check Keychain in Settings → Permissions & Access.", observedAt: now)
     }
     do {
       let account: UsageLimitAccount

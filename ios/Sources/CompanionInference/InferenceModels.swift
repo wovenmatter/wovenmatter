@@ -19,8 +19,32 @@ public struct InferenceHostScope: Codable, Sendable, Equatable {
   public var workspaceID: String
   public var deviceID: String
   public var protocolVersion: Int
-  public init(libraryID: String, workspaceID: String, deviceID: String, protocolVersion: Int) {
+  /// The host Mac's member device ID. When set and this device signs as a
+  /// member (`InferenceMemberSigning`), adapter requests are signed and carry
+  /// no bearer; otherwise the saved grant is presented.
+  public var hostDeviceID: String?
+  public init(libraryID: String, workspaceID: String, deviceID: String, protocolVersion: Int, hostDeviceID: String? = nil) {
     self.libraryID = libraryID; self.workspaceID = workspaceID; self.deviceID = deviceID; self.protocolVersion = protocolVersion
+    self.hostDeviceID = hostDeviceID
+  }
+}
+
+/// Signs adapter requests to a Mac's inference host with this device's member
+/// key (docs/architecture/WOVEN_EVERYWHERE.md, "iPhone reach"). The app
+/// installs the signer once its member identity is loaded; this module never
+/// holds the key. `audience` is the host's member device ID.
+public enum InferenceMemberSigning {
+  public typealias Sign = @Sendable (_ request: inout URLRequest, _ audience: String) throws -> Void
+  private final class Box: @unchecked Sendable { let lock = NSLock(); var sign: Sign? }
+  private static let box = Box()
+  public static func install(_ sign: Sign?) { box.lock.withLock { box.sign = sign } }
+  public static var current: Sign? { box.lock.withLock { box.sign } }
+  /// True when requests for `scope` are signed rather than carrying a grant.
+  public static func signs(_ scope: InferenceHostScope?) -> Bool { signer(for: scope) != nil }
+  /// The signer to use for `scope`, when both a signer and the host's identity are known.
+  static func signer(for scope: InferenceHostScope?) -> (Sign, String)? {
+    guard let audience = scope?.hostDeviceID, !audience.isEmpty, let sign = current else { return nil }
+    return (sign, audience)
   }
 }
 

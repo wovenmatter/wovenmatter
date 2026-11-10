@@ -242,8 +242,12 @@ public struct CompanionMutationResult: Codable, Equatable, Sendable {
   public var folder: CompanionFolder?
   public var note: CompanionNote?
   public var message: String?
-  public init(operationID: String, status: Status, folder: CompanionFolder? = nil, note: CompanionNote? = nil, message: String? = nil) {
-    self.operationID = operationID; self.status = status; self.folder = folder; self.note = note; self.message = message
+  /// With `notFound` for a note: it exists on the host only as a deletion,
+  /// so a client whose copy was unchanged applies the deletion.
+  public var deleted: Bool?
+  public init(operationID: String, status: Status, folder: CompanionFolder? = nil, note: CompanionNote? = nil, message: String? = nil,
+              deleted: Bool? = nil) {
+    self.operationID = operationID; self.status = status; self.folder = folder; self.note = note; self.message = message; self.deleted = deleted
   }
 }
 public struct CompanionChange: Codable, Equatable, Identifiable, Sendable {
@@ -292,8 +296,11 @@ public struct CompanionCommand: Codable, Equatable, Sendable {
   public var interactionID: String?
   public var workspaceAction: CompanionWorkspaceAction?
   public var response: CompanionInteractionResponse?
-  public init(commandID: String = UUID().uuidString.lowercased(), deviceID: String, kind: Kind, conversationID: String? = nil, runID: String? = nil, providerID: String? = nil, routeID: String? = nil, runtimeKind: String? = nil, folderID: String? = nil, text: String? = nil, noteID: String? = nil, noteRevision: Int64? = nil, interactionID: String? = nil, response: CompanionInteractionResponse? = nil, workspaceAction: CompanionWorkspaceAction? = nil, libraryID: String? = nil, workspaceID: String? = nil) {
-    self.libraryID = libraryID; self.workspaceID = workspaceID
+  /// `createSession` only: the new session's title, applied as it is created.
+  /// Older destinations ignore it, so callers still follow with a rename.
+  public var title: String?
+  public init(commandID: String = UUID().uuidString.lowercased(), deviceID: String, kind: Kind, conversationID: String? = nil, runID: String? = nil, providerID: String? = nil, routeID: String? = nil, runtimeKind: String? = nil, folderID: String? = nil, text: String? = nil, noteID: String? = nil, noteRevision: Int64? = nil, interactionID: String? = nil, response: CompanionInteractionResponse? = nil, workspaceAction: CompanionWorkspaceAction? = nil, libraryID: String? = nil, workspaceID: String? = nil, title: String? = nil) {
+    self.libraryID = libraryID; self.workspaceID = workspaceID; self.title = title
     self.commandID = commandID; self.deviceID = deviceID; self.kind = kind; self.conversationID = conversationID
     self.runID = runID; self.providerID = providerID; self.routeID = routeID; self.runtimeKind = runtimeKind; self.folderID = folderID
     self.text = text; self.noteID = noteID; self.noteRevision = noteRevision; self.interactionID = interactionID; self.response = response; self.workspaceAction = workspaceAction

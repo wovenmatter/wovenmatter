@@ -101,6 +101,36 @@ final class PiDurableRuntimeTests: XCTestCase {
       inference: { try await host.inference($0, emit: $1) }, tool: { try await host.tool($0) }, onEvents: events)
   }
 
+  func testQuickChatRegistryKeepsNativeNotesButOmitsCodeAndSubagents() async throws {
+    let path = directory(); defer { try? FileManager.default.removeItem(at: path) }
+    let host = ControlledHost()
+    let runtime = try PiDurableRuntime(storageDirectory: path,
+      configuration: .init(conversationID: "quick-chat", modelJSON: testModel, toolsJSON: testTools, quickChat: true),
+      inference: { try await host.inference($0, emit: $1) }, tool: { try await host.tool($0) })
+    try await runtime.open()
+    let receipt = try object(await runtime.submit(text: "Save a note", requestID: "quick-chat-input"))
+    _ = try await runtime.wait(submissionID: XCTUnwrap(receipt["id"] as? Int))
+    let calls = await host.toolCalls
+    XCTAssertEqual(calls, 1)
+    try await runtime.close()
+  }
+
+  func testQuickChatCannotExecuteModelRequestedCodeOrSubagents() async throws {
+    for mode in [ControlledHost.Mode.code, .subagent] {
+      let path = directory(); defer { try? FileManager.default.removeItem(at: path) }
+      let host = ControlledHost(); await host.mode(mode)
+      let runtime = try PiDurableRuntime(storageDirectory: path,
+        configuration: .init(conversationID: "restricted", modelJSON: testModel, toolsJSON: testTools, quickChat: true),
+        inference: { try await host.inference($0, emit: $1) }, tool: { try await host.tool($0) })
+      try await runtime.open()
+      let receipt = try object(await runtime.submit(text: "Attempt unsupported work", requestID: "restricted-input"))
+      _ = try await runtime.wait(submissionID: XCTUnwrap(receipt["id"] as? Int))
+      let calls = await host.toolCalls
+      XCTAssertEqual(calls, 0, "Unknown agent tools must not reach native effects")
+      try await runtime.close()
+    }
+  }
+
   func testThinkingLevelReachesInferenceAndCanChangeBetweenTurns() async throws {
     let path = directory(); defer { try? FileManager.default.removeItem(at: path) }
     let host = ControlledHost()

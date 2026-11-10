@@ -1,6 +1,9 @@
+#if canImport(CryptoKit)
 import CryptoKit
+#else
+import Crypto
+#endif
 import Foundation
-import UniformTypeIdentifiers
 import WovenMatterCore
 
 public struct SavedArtifactLibraryItem: Identifiable, Equatable, Sendable {
@@ -127,7 +130,7 @@ public actor SavedArtifactLibraryService {
     var name = String(String.UnicodeScalarView(manifest.title.unicodeScalars.filter { !forbidden.contains($0) }))
       .trimmingCharacters(in: .whitespacesAndNewlines)
     if name.isEmpty || name == "." || name == ".." { name = "Saved artifact" }
-    if (name as NSString).pathExtension.isEmpty, let suffix = UTType(mimeType: manifest.mediaType)?.preferredFilenameExtension {
+    if (name as NSString).pathExtension.isEmpty, let suffix = PortableMIME.preferredFilenameExtension(for: manifest.mediaType) {
       name += "." + suffix
     }
     let suffix = String((name as NSString).pathExtension.prefix(32))

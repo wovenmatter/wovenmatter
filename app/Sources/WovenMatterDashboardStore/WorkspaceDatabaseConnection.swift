@@ -1,5 +1,9 @@
 import Foundation
+#if canImport(SQLite3)
 import SQLite3
+#else
+import CSQLite
+#endif
 import WovenMatterCore
 
 public enum WorkspaceDatabaseError: Error, Equatable {
@@ -52,6 +56,9 @@ final class WorkspaceDatabaseConnection {
       try migrateLibrary()
       try createNativeRunArchive()
       try createConversationActivityIndex()
+      try migrateLibraryMembers()
+      try migrateMemberToolSessions()
+      try migrateBotConversations()
       try migratePairedLibrary()
     } catch {
       sqlite3_close(database)

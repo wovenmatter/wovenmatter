@@ -52,7 +52,8 @@ support is installed, speech recognition works offline. Audio and live previews
 are not written to files or sent to a workspace, provider, or agent.
 
 Dictation is always available. **Settings → Dictation** on Mac has a
-language selector. Automatic follows your preferred
+language selector and shows whether the microphone is allowed; Microphone itself
+is set up in **Settings → Permissions & Access**. Automatic follows your preferred
 languages. On iPhone, touch and hold the microphone to choose a language. Language
 changes apply to the next recording. Standard keyboard dictation remains available.
 

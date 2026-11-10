@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 import Observation
 import ServiceManagement
@@ -204,3 +205,4 @@ public final class ClosedLidWorkProtection {
     // also expires it independently if the process disappears or stops responding.
     deinit { heartbeat?.cancel() }
 }
+#endif

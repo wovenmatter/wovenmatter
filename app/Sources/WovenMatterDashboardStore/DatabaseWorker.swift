@@ -1,4 +1,5 @@
 import Foundation
+import WovenMatterCore
 
 public enum DatabaseWorkerError: Error, LocalizedError, Equatable, Sendable {
   case atCapacity
@@ -59,7 +60,7 @@ final class DatabaseWorker: @unchecked Sendable {
   init(label: String, capacity: Int = 256) {
     precondition(capacity > 0)
     self.capacity = capacity
-    queue = DispatchQueue(label: label, qos: .userInitiated)
+    queue = DispatchQueue(label: label, qos: DispatchQoS(qosClass: PortablePOSIX.waitedOnQoS, relativePriority: 0))
     let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
     timer.schedule(deadline: .now() + .milliseconds(100), repeating: .milliseconds(100))
     timer.setEventHandler { [weak self] in self?.expireQueuedJobs() }

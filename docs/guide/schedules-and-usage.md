@@ -76,4 +76,5 @@ in **Settings → Accounts**. These accounts are shared with Pi Durable. Provide
 without a supported limits response link to their usage dashboard; unavailable
 data is never shown as zero usage or a full allowance.
 
-Saved keys use Apple Keychain. Enable or restore access in **Settings → General**.
+Saved keys use Apple Keychain. Allow access under Saved sign-ins in
+**Settings → Permissions & Access**.

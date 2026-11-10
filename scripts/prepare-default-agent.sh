@@ -20,6 +20,8 @@ if [ ! -x "$cache/bin/node" ]; then
   mkdir -p "$cache"
   tar -xzf "$archive" --strip-components=1 -C "$cache"
 fi
+# Test scripts run suites on this same verified Node without building a bundle.
+if [ "${1:-}" = --print-node-bin ]; then printf '%s\n' "$cache/bin"; exit 0; fi
 export PATH="$cache/bin:$PATH"
 # Bootstrap npm only prepares the verified current private tooling. Use that
 # tooling for the locked SDK install as well as the installed Settings updater.

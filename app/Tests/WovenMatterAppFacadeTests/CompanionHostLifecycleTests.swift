@@ -137,7 +137,8 @@ struct CompanionHostLifecycleTests {
     @Test func clickPairingHTTPRequiresLocalApprovalAndReturnsAccurateMetadata() async throws {
         let fixture = try await HostFixture(); defer { fixture.remove() }
         await fixture.host.startForCentralDatabase()
-        try await waitUntil { fixture.host.endpoint != nil }
+        // The address is published before the workspace API is ready; wait for both.
+        try await waitUntil { fixture.host.endpoint != nil && !fixture.host.isStarting && fixture.host.status == "Available to your paired devices" }
         let target = try #require(fixture.children.last?.target)
         let base = try #require(URL(string: target))
         func post(_ path: String, _ body: Data) async throws -> (Data, Int) {
@@ -225,6 +226,36 @@ private enum HostFixtureError: Error { case timeout }
         let store = try await DashboardStore(supportDirectory: directory)
         model = ApplicationModel(applicationDefaults: defaults, dashboardStore: store, startsAutomatically: false)
     }
+    /// Local folders are bound to `device:<dashboard device id>`, generated apart
+    /// from the registry id and host device id. A record an earlier build
+    /// published without the folder owner gains it on the next refresh, under
+    /// the same workspace id, so existing folders are never rewritten.
+    @Test func theCentralMacPublishesTheFolderOwnerItsFoldersUse() async throws {
+        let fixture = try await HostFixture(); defer { fixture.remove() }
+        await fixture.host.start()
+        let database = try #require(fixture.model.dashboardStore?.database)
+        let identity = try await database.companionLibraryIdentity()
+        let folderOwner = try await fixture.model.executionWorkspaceIdentity(workspaceID: nil)
+        try await fixture.host.refreshExecutionRegistry()
+        let published = try #require(try await database.companionExecutionWorkspaces().first { $0.kind == .mac && $0.ownerDeviceID == identity.hostDeviceID })
+        #expect(CompanionExecutionWorkspace.displayID(folderOwner) != published.id)
+        #expect(CompanionExecutionWorkspace.displayID(folderOwner) != identity.hostDeviceID)
+        #expect(published.folderOwnerID == folderOwner)
+        #expect(CompanionExecutionWorkspace.displayOwner(of: folderOwner, in: [published]) == published.id)
+
+        var legacy = published; legacy.folderOwnerID = nil
+        let downgraded = try await database.registerCompanionExecutionWorkspace(.init(workspace: legacy, expectedRevision: published.revision), deviceID: identity.hostDeviceID)
+        #expect(CompanionExecutionWorkspace.displayOwner(of: folderOwner, in: [downgraded]) == nil)
+        try await fixture.host.refreshExecutionRegistry()
+        let upgraded = try #require(try await database.companionExecutionWorkspaces().first { $0.id == published.id })
+        #expect(upgraded.folderOwnerID == folderOwner && upgraded.revision == downgraded.revision + 1)
+
+        var forged = upgraded; forged.folderOwnerID = "remote:" + UUID().uuidString
+        await #expect(throws: (any Error).self) {
+            try await database.registerCompanionExecutionWorkspace(.init(workspace: forged, expectedRevision: upgraded.revision), deviceID: identity.hostDeviceID)
+        }
+    }
+
     func makeHost() -> CompanionHostController {
         // Fixtures never reach the user's Keychain: paired grants, pending
         // claims, legacy and direct execution credentials stay in memory.
@@ -338,10 +369,39 @@ private enum HostFixtureError: Error { case timeout }
         storage.loadCredentials = { [self] in credentials[name] ?? [] }
         storage.saveCredentials = { [self] in credentials[name] = $0 }
         fixture.host.peerSync = PairedMacSyncController(host: fixture.host, network: network, storage: storage)
+        fixture.host.peerSync.peerTransport = LibraryPeerTransport { [weak self] endpoint, request in
+            guard let self else { throw URLError(.cancelled) }
+            return try await self.member(endpoint, request)
+        }
         await fixture.host.start()
         let route = try await fixture.host.peerRoute()
         hosts[route.endpoint.absoluteString] = fixture
+        deviceEndpoints[route.deviceID] = route.endpoint.absoluteString
         return fixture
+    }
+    var deviceEndpoints: [String: String] = [:]
+    /// Signed member requests between Macs: the same offline rules, request
+    /// log and lost-reply hook as bearer requests. An offline Mac also sends nothing.
+    func member(_ endpoint: URL, _ request: CompanionHTTPRequest) async throws -> CompanionHTTPResponse {
+        let caller = request.headers[MemberRequestSignature.deviceHeader].flatMap { deviceEndpoints[$0] }
+        guard !offline.contains(endpoint.absoluteString), caller.map({ !offline.contains($0) }) ?? true,
+              let fixture = hosts[endpoint.absoluteString] else { throw URLError(.notConnectedToInternet) }
+        let path = String(MemberRequestSignature.canonicalTarget(request.target).drop { $0 == "/" })
+        requested.append(endpoint.absoluteString + " " + path)
+        let response: CompanionHTTPResponse
+        if overHTTP {
+            var http = URLRequest(url: try fixture.loopbackURL(path: path))
+            http.httpMethod = request.method; http.httpBody = request.body
+            for (name, value) in request.headers where name != "Host" { http.setValue(value, forHTTPHeaderField: name) }
+            let (data, reply) = try await URLSession.shared.data(for: http)
+            response = .init(status: (reply as? HTTPURLResponse)?.statusCode ?? 0, body: data)
+        } else {
+            let headers = Dictionary(uniqueKeysWithValues: request.headers.map { ($0.key.lowercased(), $0.value) })
+            response = try #require(await fixture.host.peerSync.handle(.init(method: request.method, target: request.target, headers: headers, body: request.body)))
+        }
+        if response.status == 200, loseReplyOnce.remove(path) != nil { throw URLError(.networkConnectionLost) }
+        if response.status == 200 { try await afterResponse?(endpoint, path) }
+        return response
     }
     func request(_ endpoint: URL, path: String, token: String?, libraryID: String?, body: Data?) async throws -> Data {
         guard !offline.contains(endpoint.absoluteString), let fixture = hosts[endpoint.absoluteString] else { throw URLError(.notConnectedToInternet) }
@@ -485,7 +545,10 @@ extension CompanionHostLifecycleTests {
         }
         // The unpair still took effect before the page was rejected...
         #expect(try await air.executionStatus(execution) == 401)
-        #expect(failures == 1)
+        // The exchange attempted local revocation. The Air's own change-driven
+        // sync may also learn the unpair from the Mini meanwhile and retry it
+        // (and fail the same way), so more than one attempt is legitimate.
+        #expect(failures >= 1)
         // ...but is recorded as applied only once local revocation succeeds.
         let applied = { air.defaults.stringArray(forKey: "companion.peers.applied-revocations") ?? [] }
         #expect(!applied().contains { $0.hasPrefix(phoneID + ":") })
@@ -522,7 +585,7 @@ extension CompanionHostLifecycleTests {
         mesh.offline.insert(try await mini.host.peerRoute().endpoint.absoluteString)
         let first = UUID().uuidString.lowercased(), second = UUID().uuidString.lowercased()
         try await writeNote(air, first, "Air over HTTP"); try await writeNote(third, second, "Third over HTTP")
-        mesh.loseReplyOnce = ["v1/peers/exchange"]
+        mesh.loseReplyOnce = ["v1/peers/sync"]
         await air.host.peerSync.synchronize(force: true)
         #expect(mesh.loseReplyOnce.isEmpty)
         var storage = air.storage
@@ -761,11 +824,14 @@ extension CompanionHostLifecycleTests {
         contents.sort { $0.0 < $1.0 }
         for item in contents.prefix(800) { _ = try target.retain(item.1) }
         try await mesh.pair(mini, with: air)
-        await mini.host.peerSync.synchronize(force: true)
+        // One turn walks at most eight manifest pages; later exchanges (forced
+        // here, change-driven or presence in production) continue from the cursor.
         let database = try #require(mini.model.dashboardStore?.database)
         let peer = try await air.host.peerRoute()
-        #expect(try await database.pairedLibraryFileCursor(peer.deviceID) != "")
-        await mini.host.peerSync.synchronize(force: true)
+        for _ in 0..<4 {
+            await mini.host.peerSync.synchronize(force: true)
+            if try await database.pairedLibraryFileCursor(peer.deviceID) == "" { break }
+        }
         #expect(mini.host.peerSync.errors.isEmpty)
         #expect(try await database.pairedLibraryFileCursor(peer.deviceID) == "")
         for item in contents.suffix(10) {

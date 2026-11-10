@@ -90,6 +90,35 @@ class DevelopmentBuildTests(unittest.TestCase):
         self.assertEqual(other["support"], production)
         self.assertNotEqual(other["bundle"], profiles["live"]["bundle"])
 
+    def test_snapshot_discards_bot_grants_and_coordination(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); source = root / "source"; source.mkdir()
+            with sqlite3.connect(source / "workspace.sqlite") as db:
+                db.executescript("""
+                  CREATE TABLE workspace_mcp_bot_machines(machine_id TEXT,active INTEGER);
+                  INSERT INTO workspace_mcp_bot_machines VALUES('fixture',1);
+                  CREATE TABLE workspace_session_relationships(session_id TEXT,coordinator_id TEXT,coordination_epoch TEXT,coordination_since TEXT);
+                  INSERT INTO workspace_session_relationships VALUES('session','woven:bot:fixture:bot','epoch','since');
+                  CREATE TABLE workspace_session_grants(source_id TEXT,kind TEXT);
+                  INSERT INTO workspace_session_grants VALUES('woven:bot:fixture:bot','approved');
+                  CREATE TABLE workspace_session_deliveries(id TEXT,status TEXT);
+                  INSERT INTO workspace_session_deliveries VALUES('event','queued');
+                  CREATE TABLE workspace_coordination_access_requests(source_id TEXT,state TEXT);
+                  INSERT INTO workspace_coordination_access_requests VALUES('woven:bot:fixture:bot','pending');
+                """)
+            (source / "mcp-access.json").write_text(json.dumps({"port": 12345, "botKeys": {"woven:bot:fixture:bot": "fixture-digest"}}))
+            target = root / "snapshot"
+            dev.snapshot(source, target)
+            self.assertFalse((target / "mcp-access.json").exists())
+            with sqlite3.connect(target / "workspace.sqlite") as db:
+                self.assertEqual(db.execute("SELECT active FROM workspace_mcp_bot_machines").fetchone(), (0,))
+                self.assertEqual(db.execute("SELECT coordinator_id,coordination_epoch,coordination_since FROM workspace_session_relationships").fetchone(), (None, None, None))
+                self.assertEqual(db.execute("SELECT count(*) FROM workspace_session_grants").fetchone(), (0,))
+                self.assertEqual(db.execute("SELECT status FROM workspace_session_deliveries").fetchone(), ('cancelled',))
+                self.assertEqual(db.execute("SELECT state FROM workspace_coordination_access_requests").fetchone(), ('cancelled',))
+            with sqlite3.connect(source / "workspace.sqlite") as db:
+                self.assertEqual(db.execute("SELECT active FROM workspace_mcp_bot_machines").fetchone(), (1,))
+
     def test_snapshot_includes_wal_and_assets_without_changing_source(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); source = root / "production"; source.mkdir()
@@ -187,6 +216,47 @@ class DevelopmentBuildTests(unittest.TestCase):
             (source / "library-files").symlink_to(root, target_is_directory=True)
             with self.assertRaises(ValueError): dev.snapshot(source, root / "dev")
             self.assertFalse((root / "dev").exists())
+
+    def test_missing_linux_library_hosts_are_built_with_docker_or_stop_the_build(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            def ship(arch, *names):
+                directory = root / "remote/host/library" / ("linux-" + arch); directory.mkdir(parents=True, exist_ok=True)
+                for name in names: (directory / name).write_bytes(b"fixture")
+            calls = []
+            def run(command, **kwargs):
+                calls.append([str(part) for part in command])
+                if command[-1] != "info":
+                    # The build script writes what was asked for.
+                    for arch in ([command[command.index("--arch") + 1]] if "--arch" in command else dev.LINUX_LIBRARY_ARCHITECTURES):
+                        ship(arch, "wovenmatter-library.gz", "wovenmatter-library.sha256")
+                return subprocess.CompletedProcess(command, 0)
+            docker = lambda name: "/usr/local/bin/docker"
+            # Nothing shipped: both are missing; without Docker the build stops and says how.
+            self.assertEqual(dev.missing_linux_libraries(root), ["x86_64", "aarch64"])
+            with self.assertRaises(SystemExit) as stopped:
+                dev.ensure_linux_library(root, environ={}, which=lambda name: None, run=run)
+            self.assertIn("scripts/build-linux-library.sh", str(stopped.exception.code))
+            self.assertIn("WOVENMATTER_DEV_LINUX_LIBRARY=skip", str(stopped.exception.code))
+            failing = lambda command, **kwargs: subprocess.CompletedProcess(command, 1)
+            with self.assertRaises(SystemExit): dev.ensure_linux_library(root, environ={}, which=docker, run=failing)
+            self.assertEqual(calls, [])
+            # An explicit skip builds nothing and names what is missing.
+            self.assertEqual(dev.ensure_linux_library(root, environ={"WOVENMATTER_DEV_LINUX_LIBRARY": "skip"}, which=docker, run=run), ["x86_64", "aarch64"])
+            self.assertEqual(calls, [])
+            # A plain binary kept for local runs counts, and is never rebuilt over: only the other architecture is built.
+            ship("x86_64", "wovenmatter-library")
+            self.assertEqual(dev.ensure_linux_library(root, environ={}, which=docker, run=run), [])
+            self.assertEqual(calls[-1][-3:], ["--docker", "--arch", "aarch64"])
+            self.assertTrue(calls[-1][0].endswith("scripts/build-linux-library.sh"))
+            self.assertEqual((root / "remote/host/library/linux-x86_64/wovenmatter-library").read_bytes(), b"fixture")
+            # Everything present: nothing runs.
+            calls.clear()
+            self.assertEqual(dev.ensure_linux_library(root, environ={}, which=docker, run=run), [])
+            self.assertEqual(calls, [])
+            # A packed binary needs its recorded checksum beside it.
+            (root / "remote/host/library/linux-aarch64/wovenmatter-library.sha256").unlink()
+            self.assertEqual(dev.missing_linux_libraries(root), ["aarch64"])
 
 
 if __name__ == "__main__": unittest.main()

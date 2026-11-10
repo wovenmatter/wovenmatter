@@ -975,7 +975,7 @@ struct CredentialAccessDisclosureView: View {
             }
 
             DisclosureGroup("Keychain prompts") {
-                Text("macOS may ask when you use Keychain access in General settings. Choose Always Allow to remember access to the requested item. Background refreshes stay silent.")
+                Text("macOS may ask when you use Keychain in Settings → Permissions & Access. Choose Always Allow to remember access to the requested item. Background refreshes stay silent.")
                     .font(.system(size: 11.5))
                     .foregroundStyle(DashboardPalette.mutedForeground)
                     .fixedSize(horizontal: false, vertical: true)

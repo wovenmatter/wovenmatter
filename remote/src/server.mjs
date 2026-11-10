@@ -16,10 +16,19 @@ import { createWorkspaceInstances } from './workspace-instances.mjs'
 import { createWorkspaceBrowser, streamBrowserFrames } from './workspace-browser.mjs'
 import { browserSelfTest } from './browser-selftest.mjs'
 import { loadWorkspaceMCPCatalog, validateInput, maximumMCPRequestBytes } from './workspace-mcp.mjs'
-import { runtimeConfiguration as configuration, runtimeHarnessEnvironment, shellQuote } from './config.mjs'
+import { runtimeConfiguration as configuration, runtimeHarnessEnvironment, nonInteractiveSessionEnvironment, shellQuote } from './config.mjs'
+import { createBotsService } from './bots-service.mjs'
+import { createLibraryHostSupervisor, libraryBinaryPath } from './library-host.mjs'
+import { createLibraryServe } from './library-serve.mjs'
+import { createLibraryTimers } from './library-timers.mjs'
+import { createMemberVerifier, hasMemberSignature } from './member-auth.mjs'
+import { createMemberTransport } from './member-client.mjs'
+import { createHostAdministration, runHostScript } from './host-admin.mjs'
+import { createInstallerBearer } from './installer-bearer.mjs'
 import { createServer } from 'node:http'
-import { timingSafeEqual, randomUUID, createHash } from 'node:crypto'
-import { readFile, writeFile, mkdir, realpath } from 'node:fs/promises'
+import { randomUUID, createHash } from 'node:crypto'
+import { readFile, writeFile, mkdir, realpath, rename, rm } from 'node:fs/promises'
+import { hostname } from 'node:os'
 import { spawn } from 'node:child_process'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -33,7 +42,12 @@ const { catalogPath, workspaceRoot, managedDataRoot, listenHost, listenPort } = 
 const apiToken = runningAsService
   ? validatedAPIToken(configuration.apiToken)
   : configuration.apiToken
-const apiTokenDigest = createHash('sha256').update(apiToken).digest()
+// The installer's bearer administers this host only over the installing Mac's
+// SSH tunnel, never through Tailscale Serve, and any Mac can rotate it.
+const installerBearer = createInstallerBearer({ token: apiToken, rotate: async () => {
+  const { id } = JSON.parse(await readFile(resolve(configuration.dataRoot, 'installation.json'), 'utf8'))
+  return (await runHostScript(process.env.WOVENMATTER_HOST_SCRIPT || resolve(configuration.serviceRoot, 'host/remote-host.sh'), ['rotate-token', id])).token
+} })
 const catalogDocument = runningAsService
   ? JSON.parse(await readFile(catalogPath, 'utf8'))
   : { schemaVersion: 4, harnesses: [] }
@@ -41,7 +55,8 @@ if (catalogDocument.schemaVersion !== 4 || !Array.isArray(catalogDocument.harnes
   throw new Error('Unsupported harness catalog')
 }
 const catalog = new Map(catalogDocument.harnesses.map((entry) => [entry.id, entry]))
-const defaultAgent = createManagedDefaultAgentService({ cwd: workspaceRoot, directory: resolve(workspaceRoot, '.wovenmatter/default-agent') })
+// Pi Durable's tools run in this worker, so it gets the same no-prompt session environment.
+const defaultAgent = createManagedDefaultAgentService({ cwd: workspaceRoot, directory: resolve(workspaceRoot, '.wovenmatter/default-agent'), environment: nonInteractiveSessionEnvironment(process.env, configuration) })
 const authenticationSessions = new Map()
 const foregroundDefaultRuns = new Map()
 const maximumRetainedTerminalRecords = 64
@@ -85,15 +100,67 @@ const workspaceBrowser = createWorkspaceBrowser({ profile: configuration.legacyB
 let browserSelfTestPending
 const browserMCPSchemas = new Map(loadWorkspaceMCPCatalog().filter(tool => ['woven_browser_use', 'woven_browser_use_cancel'].includes(tool.name)).map(tool => [tool.name, tool.inputSchema]))
 
+// This machine's own library copy (docs/architecture/WOVEN_EVERYWHERE.md,
+// "Library host"): native Linux hosts supervise `wovenmatter-library`, publish
+// its peer and mobile routes at /wovenmatter with Tailscale Serve, serve the
+// library-backed Woven MCP tools from it, write session history into it, and
+// verify signed member requests against its member list.
+// WOVENMATTER_LIBRARY=0 turns it off; WOVENMATTER_LIBRARY_BINARY,
+// _DATA_ROOT, _SERVE=0 and _HTTPS_PORT let isolated tests run side by side.
+const nativeLinuxHost = runningAsService && configuration.runtimeKind === 'host' && process.platform === 'linux'
+const libraryState = resolve(configuration.stateDirectory, 'library')
+let memberIdentityRecord = null
+const library = runningAsService && (nativeLinuxHost || process.env.WOVENMATTER_LIBRARY_BINARY) && process.env.WOVENMATTER_LIBRARY !== '0' ? createLibraryHostSupervisor({
+  binary: process.env.WOVENMATTER_LIBRARY_BINARY || libraryBinaryPath(configuration.serviceRoot),
+  dataRoot: process.env.WOVENMATTER_LIBRARY_DATA_ROOT || configuration.dataRoot,
+  harnessCatalog: catalogPath, statePath: resolve(libraryState, 'host.json'),
+  log: message => process.stderr.write(message + '\n'), onReady: ready => libraryReady(ready),
+}) : null
+const libraryServe = library && process.env.WOVENMATTER_LIBRARY_SERVE !== '0' ? createLibraryServe({ statePath: resolve(libraryState, 'serve.json'),
+  ...(/^\d{1,5}$/.test(process.env.WOVENMATTER_LIBRARY_HTTPS_PORT ?? '') ? { candidates: [Number(process.env.WOVENMATTER_LIBRARY_HTTPS_PORT)] } : {}) }) : null
+// Signed requests must name this host's own member device ID as their audience.
+const members = library ? createMemberVerifier({ loadMembers: () => library.client.members(),
+  audience: async () => memberIdentityRecord?.deviceID ?? (await library.client.identity()).deviceID }) : null
+const hostAdmin = nativeLinuxHost ? createHostAdministration({ serviceRoot: configuration.serviceRoot, dataRoot: configuration.dataRoot, stateDirectory: configuration.stateDirectory,
+  extra: async () => ({ library: library?.status() ?? null, memberIdentity: memberIdentityRecord }),
+  ...(library ? {
+    adoptMembers: async body => { const list = await library.client.adoptMembers(body); await members.refresh().catch(() => {}); return list },
+    // A library host that predates `adopted` reports none: fall back to any Mac member.
+    adopted: async () => { const list = await library.client.members(); return typeof list.adopted === 'boolean' ? list.adopted : (list.members ?? []).some(item => item.kind === 'mac') },
+  } : {}) }) : null
+// Requests this host makes to other members, signed by its library host.
+const memberTransport = library ? createMemberTransport({ library: library.client }) : null
+// Whether any Mac could serve the Mac-only tools; the cached list refreshes
+// in the background, since only signed requests otherwise refresh it.
+let memberListCheckedAt = 0
+function knownMacMember() {
+  if (Date.now() - memberListCheckedAt > 15_000) { memberListCheckedAt = Date.now(); void members.refresh().catch(() => {}) }
+  return members.members().some(item => item.kind === 'mac' && !item.revoked && item.endpoints.length > 0)
+}
+const maximumSignedBodyBytes = 50 * 1024 * 1024
+
 const clientExecution = runningAsService ? createClientExecution({
   directory: resolve(workspaceRoot, '.wovenmatter/client-execution'),
-  publisherKey: apiToken,
+  // Stable across bearer rotations: it keys the publisher and MCP grants at rest.
+  publisherKey: configuration.serviceSecret || apiToken,
   mcpEndpointURL: () => `http://127.0.0.1:${server.address()?.port ?? listenPort}/mcp`, managedDataRoot,externalRunningSessions:()=>taskGateway.status().activeRuns,
   kind: process.platform === 'darwin' ? 'mac' : 'linux',
   workspaceBrowser,
+  library: library ? { client: library.client, available: library.available } : null,
+  onTimersChanged: () => timers?.kick(),
+  // Without it the host runs only bots; with it, bots wait for its enrollment.
+  workspaceRole: () => configuration.workspaceEnabled !== false,
+  members: memberTransport ? { transport: memberTransport, deviceID: () => memberIdentityRecord?.deviceID ?? null,
+    hasMac: () => library.available() && knownMacMember() } : null,
   runtime: createClientExecutionRuntime({defaultAgent,durableACP,catalog,workspaceRoot,harnessStatus,
     environment:harnessEnvironment,instances,isExecutionEnabled:()=>taskGateway.enabled()}),
 }) : null
+
+// Timers of this machine's sessions and bots fire here, with every Mac offline.
+const timers = library && clientExecution ? createLibraryTimers({ library,
+  deliverSession: (sessionID, text, deliveryID) => clientExecution.deliverTimer(sessionID, text, deliveryID),
+  deliverBot: delivery => bots ? bots.deliver(delivery) : Promise.reject(Object.assign(new Error('Bots are not enabled on this machine.'), { statusCode: 503 })),
+  log: message => process.stderr.write(message + '\n') }) : null
 
 const retainedExecution = runningAsService ? createRetainedExecutionCapture({
   directory:resolve(workspaceRoot,'.wovenmatter/retained-execution'),
@@ -101,14 +168,68 @@ const retainedExecution = runningAsService ? createRetainedExecutionCapture({
   resolveAssociation:request=>clientExecution.resolveRetainedAssociation(request),
 }) : null
 
+// Bots run only on native Linux hosts. The service exists whenever bots may be
+// enabled, so its routes answer clearly while the engine is being installed.
+// What apps compare to tell an out-of-date host: the release, its fingerprint and the
+// library's paired-library schema hash (reported once the library host announces one).
+function hostRelease() {
+  const ready = library?.status() ?? null
+  return { version: configuration.releaseVersion, fingerprint: configuration.serviceFingerprint, librarySchema: ready?.schema ?? null }
+}
+
+const bots = runningAsService && configuration.runtimeKind === 'host' && process.platform === 'linux' ? createBotsService({
+  configuration, mcp: clientExecution.mcp, release: hostRelease, defaultAgent, serverPort: () => server.address()?.port ?? listenPort,
+  libraryHost: library, memberIdentity,
+  // Any member may open the bots socket; the bearers remain for the transition.
+  authorizeClient: async request => authorized(request) || !!clientExecution.principal(request.headers.authorization, 'execution')
+    || !!(members && hasMemberSignature(request.headers) && await members.verify({ method: request.method, target: request.url, alternateTargets: await servedTargets(request.url), headers: request.headers, body: Buffer.alloc(0) }).catch(() => null)),
+}) : null
+// A bots-only machine keeps its server, data root and connections but runs no
+// workspace agents, schedules or projects until the workspace is added.
+const workspaceRoutes = ['/v1/execution/commands', '/v1/task-gateway', '/v1/durable-acp/', '/v1/default-agent/rpc', '/v1/default-agent/runs/',
+  '/v1/projects', '/v1/scratch', '/v1/directories', '/v1/databases', '/v1/browser/', '/v1/harnesses/', '/v1/runtime-maintenance', '/v1/workspace-instances']
+const workspaceRoute = pathname => workspaceRoutes.some(prefix => pathname === prefix || pathname.startsWith(prefix.endsWith('/') ? prefix : prefix + '/'))
+
 const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
   requestTimeout: 30_000, connectionsCheckingInterval: 1_000 }, async (request, response) => {
+  // A signed host-update upload, removed after the request unless the update took it.
+  let bodyFile = null
   try {
     // This control service is called by native clients, never browser pages.
     if (request.headers.origin) return json(response, 403, { error: 'browser_origin_forbidden' })
     if (!request.url?.startsWith('/') || request.url.startsWith('//')) return json(response, 400, { error: 'invalid_request_target' })
-    const administrator = authorized(request)
     const url = new URL(request.url, 'http://localhost')
+    // A signed member request: the body is read (or, for a host update,
+    // streamed to a file) only after the device, time and nonce checks pass.
+    let member = null
+    if (hasMemberSignature(request.headers)) {
+      if (!members) return json(response, 401, { error: 'member_auth_unavailable' })
+      const upload = url.pathname === '/v1/host/update' && request.method === 'POST' && hostAdmin
+      // Only an administrator's upload is received: the claimed member is
+      // known by now, and its signature is checked against the received body.
+      const receiveUpload = async () => {
+        const claimed = members.members().find(item => item.deviceID === request.headers['x-woven-member-device'])
+        if (claimed?.kind !== 'mac' && !authorized(request)) throw Object.assign(new Error('administrator_required'), { statusCode: 403 })
+        return (bodyFile = await hostAdmin.receive(request))
+      }
+      try {
+        member = await members.verify({ method: request.method, target: request.url, alternateTargets: await servedTargets(request.url), headers: request.headers,
+          body: async () => upload ? receiveUpload() : (request.wovenBody = await readBody(request, maximumSignedBodyBytes)) })
+      } catch (error) {
+        // An upload already received is gone with its file, so it cannot fall back to the bearer.
+        const consumed = !!bodyFile
+        if (bodyFile) await rm(bodyFile.path, { force: true }).catch(() => {})
+        bodyFile = null
+        if (error.statusCode === 403) return json(response, 403, { error: 'administrator_required' })
+        if (error.statusCode === 413) return json(response, 413, { error: 'request_too_large' })
+        // The installing Mac signs its first adoption before this host knows
+        // it; the installer bearer it also sends still authenticates it.
+        if (!authorized(request) || consumed) return json(response, error.statusCode === 503 ? 503 : 401, { error: error.code ?? 'unauthorized' })
+        member = null
+      }
+    }
+    // Mac members administer this host, as the installing Mac's bearer does.
+    const administrator = authorized(request) || member?.kind === 'mac'
     if (url.pathname === '/mcp') {
       const principal=clientExecution?.mcp.resolvePrincipal(request.headers.authorization)
       if(!principal){response.writeHead(401,{'content-type':'application/json','cache-control':'no-store','www-authenticate':'Bearer'});response.end(JSON.stringify({error:'invalid_mcp_credential'}));return}
@@ -126,13 +247,26 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
         return json(response,200,result)
       } finally {response.removeListener('close',disconnected)}
     }
+    if (bots && await bots.handleHost(request, response, url, { readJSON, json })) return
     const scope = url.pathname.startsWith('/v1/inference/') ? 'inference' : 'execution'
-    const device = clientExecution?.principal(request.headers.authorization, scope)
+    // Every member gets the execution and inference scopes a device grant had.
+    const device = member ? { id: member.deviceID, name: member.name, scopes: ['execution', 'inference'], memberKind: member.kind }
+      : clientExecution?.principal(request.headers.authorization, scope)
     if (!administrator && !device) return json(response, 401, { error: 'unauthorized' })
-    if (device) {
+    if (device && !member) {
       const material = clientExecution.unlockMaterial(request.headers.authorization)
       if (material) await defaultAgent.unlockForClient(material)
     }
+    if (bots && await bots.handleClient(request, response, url, { readJSON, json, administrator, device })) return
+    if (url.pathname === '/v1/host/installer-bearer' && request.method === 'POST') {
+      if (configuration.runtimeKind !== 'host') return json(response, 404, { error: 'not_found' })
+      if (!administrator) return json(response, 403, { error: 'administrator_required' })
+      const installer = authorized(request), bearer = await installerBearer.rotate()
+      // Only the installing Mac, on its own SSH tunnel, learns the new value.
+      return json(response, 200, installer ? { rotated: true, bearer } : { rotated: true })
+    }
+    if (hostAdmin && await hostAdmin.handle(request, response, url, { readJSON, readBody, json, administrator, bodyFile, member, installer: authorized(request) })) return
+    if (!configuration.workspaceEnabled && workspaceRoute(url.pathname)) return json(response, 409, { error: 'workspace_disabled' })
     if (url.pathname === '/v1/runtime/inspection' && request.method === 'GET') {
       if (!administrator) return json(response,403,{error:'administrator_required'})
       return json(response,200,{ownerID:'remote',observedAt:Date.now()/1000-978307200,items:await inspectProcesses([
@@ -145,7 +279,7 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
     }
     if (url.pathname === '/v1/execution/devices' && request.method === 'POST') {
       if (!administrator) return json(response,403,{error:'administrator_required'})
-      return json(response,201,clientExecution.provision(await readJSON(request)))
+      return json(response,201,clientExecution.provision(await readJSON(request),{executionDeviceID:(await memberIdentity())?.deviceID??null}))
     }
     if(url.pathname==='/v1/execution/mcp-settings') {
       if(!administrator)return json(response,403,{error:'administrator_required'})
@@ -373,11 +507,16 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
         workspaceRoot,
         runtimeKind: configuration.runtimeKind,
         serviceFingerprint: configuration.serviceFingerprint,
+        release: hostRelease(),
         databasesDirectory: managedDataRoot,
         attachmentsDirectory: resolve(workspaceRoot, '.wovenmatter/attachments'),
         dataRoot: configuration.dataRoot,
         accessMode: configuration.accessMode,
         harnessCount: catalog.size,
+        workspaceEnabled: configuration.workspaceEnabled,
+        botsEnabled: configuration.botsEnabled,
+        library: library?.status() ?? null,
+        memberIdentity: memberIdentityRecord,
       })
     }
 
@@ -459,14 +598,20 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
     const status = Number.isInteger(error.statusCode) && error.statusCode >= 400 && error.statusCode <= 599 ? error.statusCode : 500
     if (response.headersSent) { response.destroy(); return }
     return json(response, status, { error: status === 500 ? 'internal_error' : error.message ?? 'invalid_request' })
+  } finally {
+    if (bodyFile && !bodyFile.owned) await rm(bodyFile.path, { force: true }).catch(() => {})
   }
 })
 
 server.maxConnections = 256
 server.maxRequestsPerSocket = 1_000
+server.on('upgrade', (request, socket, head) => {
+  socket.on('error', () => {})
+  if (!bots?.upgrade(request, socket, head)) socket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n')
+})
 
 if (runningAsService) {
-  taskGateway.start()
+  if (configuration.workspaceEnabled) taskGateway.start()
   retainedExecution.start()
   setInterval(() => {
     for (const [id, lease] of foregroundDefaultRuns) {
@@ -477,21 +622,84 @@ if (runningAsService) {
       }
     }
   }, 5000).unref()
+  library?.start()
+  timers?.start()
   server.listen(listenPort, listenHost, () => {
     process.stdout.write(`Woven Matter remote service listening on ${listenHost}:${listenPort}\n`)
+    bots?.start().catch(error => process.stderr.write('Bots could not start: ' + error.message + '\n'))
   })
+  // Any exit, including a crash, also stops the library host it supervises.
+  process.once('exit', () => library?.terminate())
   process.once('SIGTERM', async () => {
+    library?.quiesce()
     server.close()
-    try { await workspaceBrowser.close(); await taskGateway.close(); await retainedExecution.close(); await clientExecution.close(); await durableACP.stopAll(); await defaultAgent.close(); releaseTaskOwner?.(); process.exit(0) }
-    catch { process.exit(1) }
+    let code = 0
+    try { timers?.close(); await bots?.close(); await workspaceBrowser.close(); await taskGateway.close(); await retainedExecution.close(); await clientExecution.close(); await durableACP.stopAll(); await defaultAgent.close(); releaseTaskOwner?.() }
+    catch { code = 1 }
+    await library?.stop().catch(() => {}); members?.close()
+    process.exit(code)
   })
 }
 
+// After each library host start: publish its routes, record this machine's
+// member identity (remote-host.sh inspect/status read it), refresh members,
+// and flush history and bot conversations that waited for it.
+async function libraryReady(ready) {
+  let endpoint = null
+  if (libraryServe) {
+    try { endpoint = (await libraryServe.publish(ready.port)).endpoint }
+    catch (error) { process.stderr.write('The library route could not be published: ' + error.message + '\n') }
+  }
+  // Peers reach this library at the published route: advertise it in this
+  // machine's own member entry (the adding Mac's entry stays authoritative).
+  if (endpoint) await library.client.updateSelf({ name: hostname(), endpoints: [endpoint] })
+    .catch(error => process.stderr.write('The member entry could not be updated: ' + error.message + '\n'))
+  await refreshMemberIdentity(endpoint).catch(error => process.stderr.write('The member identity could not be read: ' + error.message + '\n'))
+  await members?.refresh().catch(() => {})
+  clientExecution?.kickPublisher()
+  timers?.kick()
+  await bots?.drainLibrary().catch(() => {})
+}
+
+// The machine's member identity is the library host's (`GET /v1/identity`);
+// until that route exists, its device ID comes from `/v1/health`.
+async function refreshMemberIdentity(endpoint) {
+  let value = await library.client.identity().catch(() => null)
+  if (!value?.deviceID) value = { deviceID: (await library.client.health()).deviceID }
+  if (typeof value.deviceID !== 'string') return null
+  const libraryEndpoint = endpoint ?? (await libraryServe?.recorded().catch(() => null))?.endpoint ?? memberIdentityRecord?.libraryEndpoint ?? null
+  const record = { deviceID: value.deviceID.toLowerCase(), kind: value.kind ?? 'linux', name: value.name ?? hostname(), publicKey: value.publicKey ?? null,
+    endpoints: Array.isArray(value.endpoints) ? value.endpoints : [], libraryEndpoint, updatedAt: new Date().toISOString() }
+  await mkdir(libraryState, { recursive: true, mode: 0o700 })
+  const temporary = resolve(libraryState, '.identity.' + randomUUID())
+  await writeFile(temporary, JSON.stringify(record) + '\n', { mode: 0o600 })
+  await rename(temporary, resolve(libraryState, 'identity.json'))
+  // Reported only once identity.json (which remote-host.sh reads) is in place.
+  memberIdentityRecord = record
+  return memberIdentityRecord
+}
+
+// Members sign the path they send. Tailscale Serve reaches this server through
+// `/wovenmatter-execution/<id>` and strips that prefix, so a request may also
+// verify with it put back.
+let executionRoutePrefix = null
+async function servedTargets(target) {
+  if (!executionRoutePrefix) {
+    try {
+      const { id } = JSON.parse(await readFile(resolve(configuration.dataRoot, 'installation.json'), 'utf8'))
+      if (/^[a-z0-9][a-z0-9-]{0,47}$/.test(id)) executionRoutePrefix = '/wovenmatter-execution/' + id
+    } catch {}
+  }
+  return executionRoutePrefix ? [executionRoutePrefix + target] : []
+}
+
+async function memberIdentity() {
+  if (!library || !await library.whenReady(15_000)) return null
+  return memberIdentityRecord ?? await refreshMemberIdentity(null).catch(() => null)
+}
+
 function authorized(request) {
-  const value = request.headers.authorization ?? ''
-  if (!value.startsWith('Bearer ')) return false
-  const presented = createHash('sha256').update(value.slice(7)).digest()
-  return timingSafeEqual(presented, apiTokenDigest)
+  return installerBearer.authorizes(request)
 }
 
 async function harnessStatus(harness) {
@@ -1105,7 +1313,7 @@ function harnessEnvironment() {
   return runtimeHarnessEnvironment(process.env, configuration)
 }
 
-async function readJSON(request, maximumBytes = 1_048_576) {
+async function readBody(request, maximumBytes) {
   const chunks = []
   let bytes = 0
   for await (const chunk of request) {
@@ -1113,8 +1321,15 @@ async function readJSON(request, maximumBytes = 1_048_576) {
     if (bytes > maximumBytes) throw httpError(413, 'request_too_large')
     chunks.push(chunk)
   }
-  if (chunks.length === 0) return {}
-  try { return JSON.parse(Buffer.concat(chunks).toString('utf8')) }
+  return Buffer.concat(chunks, bytes)
+}
+
+// A signed request's body was already read to check its signature.
+async function readJSON(request, maximumBytes = 1_048_576) {
+  const body = request.wovenBody ?? await readBody(request, maximumBytes)
+  if (body.length > maximumBytes) throw httpError(413, 'request_too_large')
+  if (body.length === 0) return {}
+  try { return JSON.parse(body.toString('utf8')) }
   catch { throw httpError(400, 'invalid_json') }
 }
 

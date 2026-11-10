@@ -31,11 +31,16 @@ struct ConversationHTMLScrollTests {
         let event = try wheelEvent(window: window, web: web)
         let point = web.convert(NSPoint(x: 100, y: 100), to: scroll)
         let target = try #require(scroll.hitTest(point))
-        let before = scroll.contentView.bounds.origin.y
         target.scrollWheel(with: event)
         try await Task.sleep(for: .milliseconds(100))
-        #expect(scroll.wheelEvents > 0, "WebKit swallowed the conversation's wheel event")
-        #expect(scroll.contentView.bounds.origin.y > before, "Wheeling over the embedded visual reply did not move the transcript")
+        // The transcript must receive the user's own event, unchanged, exactly as
+        // if WebKit were not there; AppKit then scrolls it. The scroll position is
+        // not asserted: since macOS 27.2 the legacy NSScrollView path (SwiftUI's
+        // transcript scroll view, and this spy) ignores synthesized CGEvent wheels,
+        // and the responsive path stops the test runner's main run loop.
+        #expect(scroll.wheelEvents == 1, "WebKit swallowed the conversation's wheel event")
+        #expect(scroll.received.first === event, "The transcript did not receive the user's wheel event itself")
+        #expect(scroll.received.first?.scrollingDeltaY == -80 && scroll.received.first?.scrollingDeltaX == 0)
 
         // Chart zoom/pan modifiers and horizontal wheel gestures stay with
         // WebKit instead of being stolen by the transcript bridge.
@@ -159,8 +164,10 @@ struct ConversationHTMLScrollTests {
 
 @MainActor private final class HTMLScrollSpy: NSScrollView {
     var wheelEvents = 0
+    var received: [NSEvent] = []
     override func scrollWheel(with event: NSEvent) {
         wheelEvents += 1
+        received.append(event)
         super.scrollWheel(with: event)
     }
 }

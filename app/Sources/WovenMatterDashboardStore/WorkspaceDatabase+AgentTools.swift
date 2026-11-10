@@ -1,6 +1,14 @@
 import Foundation
+#if canImport(CryptoKit)
 import CryptoKit
+#else
+import Crypto
+#endif
+#if canImport(SQLite3)
 import SQLite3
+#else
+import CSQLite
+#endif
 import WovenMatterCore
 import WovenMatterClient
 
@@ -76,7 +84,7 @@ extension WorkspaceDatabaseConnection {
           CHECK(session_id != created_by), CHECK(session_id != coordinator_id));
         CREATE INDEX IF NOT EXISTS workspace_coordinator ON workspace_session_relationships(coordinator_id);
         CREATE TABLE IF NOT EXISTS workspace_session_timers(
-          id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES dashboard_conversations(id),
+          id TEXT PRIMARY KEY, session_id TEXT NOT NULL,
           instruction TEXT NOT NULL, next_fire_at REAL NOT NULL, interval_seconds REAL,
           is_paused INTEGER NOT NULL DEFAULT 0, pending_delivery_id TEXT);
         CREATE INDEX IF NOT EXISTS workspace_timer_due ON workspace_session_timers(is_paused,next_fire_at);
@@ -180,6 +188,22 @@ extension WorkspaceDatabaseConnection {
       if !timerColumns.contains("outside_mcp") {
         try executeUnlocked("ALTER TABLE workspace_session_timers ADD COLUMN outside_mcp INTEGER NOT NULL DEFAULT 0")
       }
+      // A timer's target is a conversation or a bot principal (a bot's own
+      // schedule), so the table no longer references conversations. Timers of a
+      // missing conversation are never listed or fired.
+      if !(try historyRowsUnlocked("PRAGMA foreign_key_list(workspace_session_timers)", values: [])).isEmpty {
+        try executeUnlocked("""
+          CREATE TABLE workspace_session_timers_v2(
+            id TEXT PRIMARY KEY, session_id TEXT NOT NULL,
+            instruction TEXT NOT NULL, next_fire_at REAL NOT NULL, interval_seconds REAL,
+            is_paused INTEGER NOT NULL DEFAULT 0, pending_delivery_id TEXT, outside_mcp INTEGER NOT NULL DEFAULT 0);
+          INSERT INTO workspace_session_timers_v2(id,session_id,instruction,next_fire_at,interval_seconds,is_paused,pending_delivery_id,outside_mcp)
+            SELECT id,session_id,instruction,next_fire_at,interval_seconds,is_paused,pending_delivery_id,outside_mcp FROM workspace_session_timers;
+          DROP TABLE workspace_session_timers;
+          ALTER TABLE workspace_session_timers_v2 RENAME TO workspace_session_timers;
+          CREATE INDEX IF NOT EXISTS workspace_timer_due ON workspace_session_timers(is_paused,next_fire_at);
+          """)
+      }
       try migrateMCPCallersUnlocked()
     }
   }
@@ -192,6 +216,11 @@ extension WorkspaceDatabaseConnection {
     try settings.validate()
     try transaction {
       try toolsExecuteUnlocked("UPDATE workspace_tool_settings SET value=? WHERE id=1", [try toolsJSON(settings)])
+      if !settings.botMCP.enabledGroups.contains(.sessions) {
+        try executeUnlocked("UPDATE workspace_session_relationships SET coordinator_id=NULL,coordination_epoch=NULL,coordination_since=NULL WHERE coordinator_id IN (SELECT id FROM workspace_mcp_callers WHERE machine_id IS NOT NULL)")
+        try executeUnlocked("DELETE FROM workspace_session_grants WHERE kind='approved' AND source_id IN (SELECT id FROM workspace_mcp_callers WHERE machine_id IS NOT NULL)")
+        try executeUnlocked("UPDATE workspace_session_deliveries SET status='cancelled' WHERE status='queued' AND (source_id IN (SELECT id FROM workspace_mcp_callers WHERE machine_id IS NOT NULL) OR target_id IN (SELECT id FROM workspace_mcp_callers WHERE machine_id IS NOT NULL))")
+      }
       if settings.externalMCP?.enabledGroups.contains(.sessions) != true {
         try toolsExecuteUnlocked("UPDATE workspace_session_relationships SET coordinator_id=NULL,coordination_epoch=NULL,coordination_since=NULL WHERE coordinator_id=?", [WovenMCPCaller.outside])
         try toolsExecuteUnlocked("DELETE FROM workspace_session_grants WHERE source_id=? AND kind='approved'", [WovenMCPCaller.outside])
@@ -215,9 +244,10 @@ extension WorkspaceDatabaseConnection {
   }
 
   func sessionToolsUnlocked(_ id: String) throws -> WorkspaceSessionTools {
-    if id == WovenMCPCaller.outside {
+    if WovenMCPCaller.isAppWide(id) {
       let settings = try toolSettingsUnlocked()
-      let access = settings.externalMCP ?? .init()
+      try requireActiveBotUnlocked(id)
+      let access = WovenMCPCaller.parseBot(id) != nil ? settings.botMCP : settings.externalMCP ?? .init()
       guard access.isEnabled else { throw WorkspaceToolError.invalid("Outside MCP access is disabled.") }
       return .init(enabled: access.enabledGroups, executorProfiles: settings.executor?.defaultProfiles ?? [])
     }
@@ -287,14 +317,16 @@ extension WorkspaceDatabaseConnection {
 
   func requireToolUnlocked(_ group: WorkspaceToolGroup, sessionID: String, writesCalendar: Bool = false) throws {
     guard try sessionToolsUnlocked(sessionID).enabled.contains(group) else { throw WorkspaceToolError.disabled(group) }
-    if group == .calendar, writesCalendar, sessionID != WovenMCPCaller.outside, try toolSettingsUnlocked().calendarAccess != .full {
+    if group == .calendar, writesCalendar, !WovenMCPCaller.isAppWide(sessionID), try toolSettingsUnlocked().calendarAccess != .full {
       throw WorkspaceToolError.invalid("Calendar is read only. Change its access in Settings → Woven MCP.")
     }
   }
 
   func requireToolSessionUnlocked(_ id: String) throws {
-    if id == WovenMCPCaller.outside {
-      guard try toolSettingsUnlocked().externalMCP?.isEnabled == true else {
+    if WovenMCPCaller.isAppWide(id) {
+      try requireActiveBotUnlocked(id)
+      let settings = try toolSettingsUnlocked()
+      guard WovenMCPCaller.parseBot(id) != nil ? settings.botMCP.isEnabled : settings.externalMCP?.isEnabled == true else {
         throw WorkspaceToolError.invalid("Outside MCP access is disabled.")
       }
       return

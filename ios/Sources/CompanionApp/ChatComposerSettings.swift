@@ -146,7 +146,11 @@ struct ChatComposerSettings<Accessory: View, Submission: View>: View {
         DashboardLucideIcon(glyph: .settings, size: 18).frame(width: 44, height: 44)
       }.buttonStyle(.plain).accessibilityLabel("Session tools").accessibilityIdentifier("chat-tools").disabled(saving)
         .popover(isPresented: $toolsOpen) {
-          popout("Tools") {
+          // Each 44pt toggle row plus 6pt spacing; 64pt covers padding and the title, and a
+          // status line gets room only while one shows. Every Quick Chat tool stays visible
+          // without empty space below the last toggle.
+          popout("Tools", height: local ? CGFloat(max(1, toolOptions.count)) * 50 + 64
+                   + (loading || saving || problem != nil ? 28 : 0) : 380) {
             ForEach(toolOptions) { tool in
               Toggle(tool.label, isOn: Binding(get: { enabledTools.contains(tool.id) }, set: { enabled in
                 var tools = Set(enabledTools)
@@ -168,7 +172,7 @@ struct ChatComposerSettings<Accessory: View, Submission: View>: View {
     .task(id: context) {
       settings = nil; problem = nil
       if !local { await loadSession() }
-      if model.fixture, ProcessInfo.processInfo.environment["WOVENMATTER_UI_SCENARIO"] == "tools-menu" { toolsOpen = true }
+      if model.fixture, CompanionModel.uiScenario == "tools-menu" { toolsOpen = true }
     }
     .onChange(of: model.activeRunID) { Task { if !local { await loadSession() } } }
   }

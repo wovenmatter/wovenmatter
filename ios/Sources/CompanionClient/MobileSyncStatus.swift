@@ -16,5 +16,9 @@ public struct MobileSynchronizationStatus: Codable, Equatable, Sendable {
   public var centralReachable: Bool?
   public var lastContactAt: Date?
   public var lanes: [MobileSyncLane: MobileSyncLaneStatus] = [:]
+  /// The Mac or Linux host the phone synced with last (it has no home Mac).
+  public var libraryHost: MobileLibraryHost?
+  /// Some device needs a newer version before everything syncs again.
+  public var updateRequired: String?
   public init() {}
 }

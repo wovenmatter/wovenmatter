@@ -10,3 +10,5 @@ xcuserdata/
 build/
 
 default-agent/bin/
+# Built by scripts/build-linux-library.sh; shipped in host bundles, never committed.
+remote/host/library/

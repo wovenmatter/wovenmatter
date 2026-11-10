@@ -18,7 +18,37 @@ struct RemoteWorkspaceDeploymentTests {
         try Data(#"{"nodeVersion":"26.12.1","playwrightVersion":"1.64.1"}"#.utf8).write(to: root.appending(path: "remote/host/runtime-versions.json"))
         try Data("26.12.1\n".utf8).write(to: root.appending(path: "default-agent/.node-version"))
         try Data(#"{"packages":{"node_modules/playwright-core":{"version":"1.64.1"}}}"#.utf8).write(to: root.appending(path: "default-agent/package-lock.json"))
+        // Every host holds a library copy, so a host bundle carries its binary.
+        let library = root.appending(path: "remote/host/library/linux-x86_64")
+        try FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
+        try Data("fixture library".utf8).write(to: library.appending(path: "wovenmatter-library.gz"))
+        try Data((String(repeating: "0", count: 64) + "  wovenmatter-library\n").utf8).write(to: library.appending(path: "wovenmatter-library.sha256"))
         return root
+    }
+
+    @Test func aHostBundleWithoutTheHostsLibraryIsNeverSent() async throws {
+        let root = try hostFixture(); defer { try? FileManager.default.removeItem(at: root) }
+        let client = RemoteWorkspaceSSHClient(runner: { _, _, _ in Data() }, scriptLoader: { Data("container-lifecycle".utf8) },
+            deploymentRoot: root, streamingRunner: { _, _, _, _ in
+                Issue.record("A bundle without the host's library host was sent")
+                return Data()
+            }, hostScriptLoader: { Data("host-lifecycle".utf8) })
+        let configuration = RemoteWorkspaceConfiguration(name: "box", workspaceID: "bots", hostName: "host.invalid", userName: "alice", kind: .host)
+        #expect(RemoteHostLibrary.bundled(root: root) == ["x86_64"])
+        await #expect(throws: RemoteWorkspaceClientError.self) {
+            try await client.deployHost(configuration: configuration, token: "fixture-secret", mode: .botsOnly, architecture: "arm64")
+        }
+        #expect(throws: Never.self) { try RemoteHostLibrary.require(root: root, architecture: "amd64") }
+        #expect(throws: Never.self) { try RemoteHostLibrary.require(root: root, architecture: nil) }
+        try FileManager.default.removeItem(at: root.appending(path: "remote/host/library"))
+        #expect(RemoteHostLibrary.bundled(root: root).isEmpty)
+        do {
+            try await client.deployHost(configuration: configuration, token: "fixture-secret", update: true)
+            Issue.record("An update without any library host was sent")
+        } catch {
+            #expect(error.localizedDescription.contains("scripts/build-linux-library.sh"))
+        }
+        #expect(throws: (any Error).self) { try RemoteHostAdministrationClient.hostBundle(root: root) }
     }
 
     @Test func hostFingerprintTracksNativeInstallerRuntimeAndService() throws {
@@ -62,6 +92,53 @@ struct RemoteWorkspaceDeploymentTests {
         #expect(status.running && status.kind == .host)
     }
 
+    /// Bots-only hosts use remote-host.sh's roles argument, not a second subcommand.
+    @Test func botsOnlyHostUsesTheBotsRole() async throws {
+        let root = try hostFixture(); defer { try? FileManager.default.removeItem(at: root) }
+        let commands = LockedCommands()
+        let status = #"{"id":"bots","name":"box","state":"running","running":true,"startedAt":"","image":"native","memoryBytes":0,"swapBytes":0,"hostPort":7337,"persistentVolume":"/home/alice/.local/share/wovenmatter","capabilities":{"memory":false,"swap":false},"storageKind":"host","hostStorageLow":false,"legacyStorage":false,"kind":"host"}"#
+        let client = RemoteWorkspaceSSHClient(runner: { _, command, _ in
+            commands.append(command)
+            return Data(#"{"ready":true,"runtime":"host","version":"","architecture":"x86_64","capabilities":{"memory":false,"swap":false},"limitations":[],"hostStorageLow":false,"blockingIssues":[]}"#.utf8)
+        }, scriptLoader: { Data("container-lifecycle".utf8) }, deploymentRoot: root,
+        streamingRunner: { _, command, _, _ in commands.append(command); return Data(status.utf8) },
+        hostScriptLoader: { Data("host-lifecycle".utf8) })
+        let configuration = RemoteWorkspaceConfiguration(name: "box", workspaceID: "bots", hostName: "host.invalid",
+            userName: "alice", kind: .host, accessMode: .user)
+        _ = try await client.prepareHost(hostName: "host.invalid", userName: "alice", kind: .host, accessMode: .user,
+            roles: RemoteHostInstallMode.botsOnly.roles)
+        _ = try await client.deployHost(configuration: configuration, token: "fixture-secret", mode: .botsOnly)
+        _ = try await client.deployHost(configuration: configuration, token: "fixture-secret")
+        // Adding the workspace later: the real id, on the same server, with the workspace role.
+        var studio = configuration; studio.workspaceID = "studio"
+        _ = try await client.deployHost(configuration: studio, token: "fixture-secret", mode: .addWorkspace)
+        // Bots on a workspace host: an update with the bots role, since roles only grow.
+        _ = try await client.deployHost(configuration: studio, update: true, mode: .addBots)
+        let sent = commands.values
+        #expect(sent.count == 5)
+        #expect(sent[4].contains("'update' 'studio' '") && sent[4].hasSuffix(" 'bots'"))
+        #expect(sent[0].contains("'prepare' 'AUTHORIZED' 'user' 'bots'"))
+        #expect(sent[1].contains("'install' 'bots' '") && sent[1].hasSuffix(" 'bots'"))
+        #expect(!sent[2].hasSuffix(" 'bots'"), "a workspace install keeps the host's recorded roles")
+        #expect(sent[3].contains("'install' 'studio' '") && sent[3].hasSuffix(" 'workspace'"))
+        #expect(RemoteHostInstallMode.botsOnlyWorkspaceID == configuration.workspaceID)
+    }
+
+    @Test func hostBundlesRecordTheReleaseVersionOutsideTheFingerprint() throws {
+        let root = try hostFixture(); defer { try? FileManager.default.removeItem(at: root) }
+        let deployment = try RemoteWorkspaceDeployment(root: root, kind: .host)
+        func manifest(_ version: String?) throws -> [String: Any] {
+            let archive = try RemoteHostBundle.archive(root: root, deployment: deployment, releaseVersion: version)
+            let extracted = try RemoteWorkspaceProcess.run(executable: "/usr/bin/tar", arguments: ["-xzOf", "-", "manifest.json"], input: archive)
+            return try #require(JSONSerialization.jsonObject(with: extracted.data) as? [String: Any])
+        }
+        #expect(try manifest("1.4.0")["releaseVersion"] as? String == "1.4.0")
+        #expect(try manifest("1.4.0")["fingerprint"] as? String == deployment.fingerprint)
+        // Free text never reaches the host's environment.
+        #expect(try manifest("1.4\nX=1")["releaseVersion"] == nil)
+        #expect(try manifest(nil)["releaseVersion"] == nil)
+    }
+
     @Test func nativeHostArchiveIsDeterministicAndRejectsSourceDrift() throws {
         let root = try hostFixture(); defer { try? FileManager.default.removeItem(at: root) }
         let deployment = try RemoteWorkspaceDeployment(root: root, kind: .host)
@@ -83,6 +160,26 @@ struct RemoteWorkspaceDeploymentTests {
         try Data("26.12.2\n".utf8).write(to: root.appending(path: "default-agent/.node-version"))
         let mismatched = try RemoteWorkspaceDeployment(root: root, kind: .host)
         #expect(throws: RemoteWorkspaceClientError.self) { try RemoteHostBundle.archive(root: root, deployment: mismatched) }
+    }
+
+    /// scripts/build-linux-library.sh writes remote/host/library/linux-<arch>/;
+    /// installs and updates ship whatever binaries are present, as executables.
+    @Test func builtLinuxLibraryBinariesShipAsHostExecutables() throws {
+        let root = try hostFixture(); defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.removeItem(at: root.appending(path: "remote/host/library"))
+        let without = try RemoteWorkspaceDeployment(root: root, kind: .host)
+        #expect(!without.sourceFiles.contains { $0.hasPrefix("remote/host/library/") })
+        let binary = root.appending(path: "remote/host/library/linux-x86_64/wovenmatter-library")
+        try FileManager.default.createDirectory(at: binary.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("\u{7f}ELF fixture".utf8).write(to: binary)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: binary.path)
+        let deployment = try RemoteWorkspaceDeployment(root: root, kind: .host)
+        #expect(deployment.fingerprint != without.fingerprint)
+        let archive = try RemoteHostBundle.archive(root: root, deployment: deployment)
+        let listing = try RemoteWorkspaceProcess.run(executable: "/usr/bin/tar", arguments: ["-tvzf", "-"], input: archive)
+        let line = try #require(String(decoding: listing.data, as: UTF8.self).split(separator: "\n")
+            .first { $0.hasSuffix("host/library/linux-x86_64/wovenmatter-library") })
+        #expect(line.hasPrefix("-rwx------"))
     }
 
     @Test func hostNpmSecurityGraphIsBundledAndBoundToTheSourceIdentity() throws {
@@ -135,4 +232,11 @@ private final class ProgressState: @unchecked Sendable {
     var pid: pid_t = 0
     var messages: [String] { lock.withLock { values } }
     func append(_ value: String) { lock.withLock { values.append(value) } }
+}
+
+private final class LockedCommands: @unchecked Sendable {
+    private let lock = NSLock()
+    private var commands: [String] = []
+    var values: [String] { lock.withLock { commands } }
+    func append(_ value: String) { lock.withLock { commands.append(value) } }
 }

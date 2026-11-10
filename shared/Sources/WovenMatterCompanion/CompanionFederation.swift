@@ -38,16 +38,48 @@ public struct CompanionExecutionWorkspace: Codable, Equatable, Identifiable, Sen
   public var developmentInstance: String?
   /// Copied snapshot owners retain history, not a live connection.
   public var retainedHistory: Bool?
+  /// A Mac's one-time access setup status (Keychain and macOS privacy permissions).
+  public var macAccess: CompanionMacAccessStatus?
+  /// The owner a Mac writes into its folders' execution bindings
+  /// (`device:<id>`). The central Mac's registry id is a separate random value,
+  /// so devices group its folders through this. Display grouping only.
+  public var folderOwnerID: String?
   public var isVisibleInConnections: Bool {
     !deleted && retainedHistory != true && (developmentInstance == nil || endpoint != nil)
   }
   public init(id: String, libraryID: String, ownerDeviceID: String, kind: Kind, name: String,
-              endpoint: URL? = nil, capabilities: [String] = [], executionDeviceID: String? = nil, journalDeviceIDs: [String] = [], revision: Int64 = 0, deleted: Bool = false, developmentInstance: String? = nil, retainedHistory: Bool? = nil) {
+              endpoint: URL? = nil, capabilities: [String] = [], executionDeviceID: String? = nil, journalDeviceIDs: [String] = [], revision: Int64 = 0, deleted: Bool = false, developmentInstance: String? = nil, retainedHistory: Bool? = nil, macAccess: CompanionMacAccessStatus? = nil, folderOwnerID: String? = nil) {
     self.id = id; self.libraryID = libraryID; self.ownerDeviceID = ownerDeviceID; self.kind = kind; self.name = name
     self.executionDeviceID = executionDeviceID
     self.endpoint = endpoint; self.capabilities = capabilities; self.journalDeviceIDs = journalDeviceIDs
     self.revision = revision; self.deleted = deleted
     self.developmentInstance = developmentInstance; self.retainedHistory = retainedHistory
+    self.macAccess = macAccess
+    self.folderOwnerID = folderOwnerID
+  }
+
+  /// Folder bindings and registry rows name the same device with or without a
+  /// `device:`/`remote:` prefix; this returns the lowercased bare UUID when there is one.
+  public static func displayID(_ value: String) -> String {
+    for prefix in ["device:", "remote:"] where value.hasPrefix(prefix) {
+      if let id = UUID(uuidString: String(value.dropFirst(prefix.count))) { return id.uuidString.lowercased() }
+    }
+    return UUID(uuidString: value)?.uuidString.lowercased() ?? value
+  }
+
+  /// A valid `folderOwnerID`: `device:` followed by a UUID.
+  public static func isValidFolderOwnerID(_ value: String) -> Bool {
+    value.hasPrefix("device:") && UUID(uuidString: String(value.dropFirst("device:".count))) != nil
+  }
+
+  /// The display id of the registry workspace that owns `owner`, a folder
+  /// binding or registry reference. A workspace whose own id matches wins; else
+  /// the live workspace that names it as `folderOwnerID`. Nil when none does.
+  public static func displayOwner(of owner: String, in registry: [CompanionExecutionWorkspace]) -> String? {
+    let id = displayID(owner)
+    if registry.contains(where: { displayID($0.id) == id }) { return id }
+    let claims = registry.filter { !$0.deleted && $0.folderOwnerID.map(displayID) == id }
+    return (claims.first { $0.retainedHistory != true } ?? claims.first).map { displayID($0.id) }
   }
 }
 public struct CompanionWorkspaceRegistration: Codable, Equatable, Sendable {

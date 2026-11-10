@@ -51,7 +51,8 @@ final class SecondaryMacExecutionWorkspace: ExecutionWorkspaceTransport {
         try await model.configureClientExecutionWorkspace(directory: directory, executionWorkspaceDeviceID: ownerDeviceID, store: store)
         let descriptor = CompanionExecutionWorkspace(id: state.deviceID, libraryID: libraryID, ownerDeviceID: state.deviceID,
             kind: .mac, name: DevelopmentLaunch.deviceName(),
-            capabilities: ["execution.v1", "inference.v1", "execution.local"], executionDeviceID: state.deviceID, journalDeviceIDs: [state.deviceID], developmentInstance: DevelopmentLaunch.instance)
+            capabilities: ["execution.v1", "inference.v1", "execution.local"], executionDeviceID: state.deviceID, journalDeviceIDs: [state.deviceID], developmentInstance: DevelopmentLaunch.instance,
+            macAccess: MacAccessSetupModel.current(keychainReady: model.keychainAccessReady))
         return try await SecondaryMacExecutionWorkspace(descriptor: descriptor, model: model, replica: replica, directory: directory)
     }
     init(descriptor: CompanionExecutionWorkspace, model: ApplicationModel, replica: MobileStore, directory: URL) async throws {
@@ -85,7 +86,18 @@ final class SecondaryMacExecutionWorkspace: ExecutionWorkspaceTransport {
     func reconcileCalendar() async throws { try await calendarProjection.reconcile() }
     func setEndpoint(_ endpoint: URL?) async throws {
         descriptor.endpoint = endpoint
+        descriptor.macAccess = MacAccessSetupModel.current(keychainReady: model.keychainAccessReady)
         try await origin.upsertWorkspace(descriptor, pending: false)
+    }
+    /// Publishes this Mac's access setup status when it changes, so paired
+    /// devices can explain a session that is missing a permission it needs.
+    @discardableResult
+    func refreshMacAccess() async throws -> Bool {
+        let current = MacAccessSetupModel.current(keychainReady: model.keychainAccessReady)
+        guard current != descriptor.macAccess else { return false }
+        descriptor.macAccess = current
+        try await origin.upsertWorkspace(descriptor, pending: false)
+        return true
     }
     var hasActiveRuns: Bool { !model.localRunningConversationIDs.isEmpty }
     func prepareToStop() async throws {

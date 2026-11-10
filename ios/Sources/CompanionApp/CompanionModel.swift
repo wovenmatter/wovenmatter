@@ -36,6 +36,8 @@ import CompanionInference
   @ObservationIgnored let transcriptStates = MobileConversationStates()
   var loadingHistory = false
   var selectedFolderID: String?
+  var selectedFolderWorkspaceID: String?
+  var folderContentsUnfiled = false
   var folderContentsPresented = false
   var selectedNoteID: String?
   var selectedConversationID: String?
@@ -79,6 +81,22 @@ import CompanionInference
   var store: MobileStore?
   var engine: MobileSyncEngine?
   var transport: HTTPSCompanionTransport?
+  /// This phone's member identity and the Mac and Linux hosts it can sync
+  /// with. Nil until the phone pairs with its member key (or for an older Mac).
+  var memberIdentity: MobileMemberIdentity?
+  var libraryHosts: MobileLibraryHosts?
+  var membership: MobileMembershipState?
+  var membershipFile: URL?
+  @ObservationIgnored var memberKeyStorage: MobileMemberKeyStorage = .keychain
+  /// Test routing for in-process hosts; production uses URLSession.
+  @ObservationIgnored var httpPerformer: (any MobileHTTPPerforming)?
+  /// The endpoint each signed workspace client was made for.
+  var memberClientEndpoints: [String: URL] = [:]
+  /// Workspaces too old for member requests keep their bearer grant.
+  var memberUnsupportedWorkspaceIDs: Set<String> = []
+  /// Pairing confirmation and unpairing for a paired transport. Tests record
+  /// these requests instead of contacting central.
+  @ObservationIgnored var pairingRequests: (HTTPSCompanionTransport) -> any MobilePairingRequests = { $0 }
   var saveTask: Task<Void, Never>?
   private var saveGenerations: [String: Int] = [:]
   private var refreshInProgress = false
@@ -131,7 +149,20 @@ import CompanionInference
   var executionCredentialStore: any InferenceCredentialUpdating = InferenceCredentialStore()
   /// Device-only storage for direct workspace credentials; tests inject memory.
   var workspaceCredentials = WorkspaceCredentialStorage.keychain
-  let deviceBackgroundExecution = DeviceBackgroundExecution()
+  var quickChatSearchResults: [String: Set<String>] = [:]
+  /// Web search requests; tests inject a fixture transport.
+  @ObservationIgnored var searchTransport: any InferenceHTTPTransport = InferenceURLSessionTransport()
+  /// Timer reminder notifications; test models and UI fixtures record them in memory so
+  /// nothing asks the system for notification permission.
+  @ObservationIgnored var quickChatNotifications = QuickChatNotifications.shared
+  var unconfirmedSendConversationID: String?
+  /// Messages sent to a Mac or Linux workspace that its transcript does not
+  /// show yet, by conversation ID (`new-chat` until a new chat is accepted).
+  var pendingSends: [String: CompanionPendingSend] = [:]
+  /// The library host that reported `providers`, and whether the next
+  /// refresh must ask it again (launch, reconnect, New Chat, a new host).
+  var centralProvidersHostID: String?
+  var centralProvidersRefreshDue = true
   var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
   var backgroundFallbackToken: UUID?
   var calendarRevision = 0
@@ -149,6 +180,22 @@ import CompanionInference
     return false
     #endif
   }
+  /// The UI-test scenario and tab. Release builds compile no fixture environment
+  /// lookups at all, rather than relying on the optimizer to remove them.
+  static var uiScenario: String? {
+    #if DEBUG
+    ProcessInfo.processInfo.environment["WOVENMATTER_UI_SCENARIO"]
+    #else
+    nil
+    #endif
+  }
+  static var uiTab: String? {
+    #if DEBUG
+    ProcessInfo.processInfo.environment["WOVENMATTER_UI_TAB"]
+    #else
+    nil
+    #endif
+  }
   init() {
     let environment = ProcessInfo.processInfo.environment
     isolatedTestHost = Self.smokeIsolationRequested || environment["XCTestConfigurationFilePath"] != nil || environment["XCTestBundlePath"] != nil || NSClassFromString("XCTestCase") != nil || NSClassFromString("XCTest.XCTestCase") != nil
@@ -157,6 +204,7 @@ import CompanionInference
     #else
     fixture = false
     #endif
+    if isolatedTestHost || fixture { quickChatNotifications = QuickChatNotifications(center: RecordingQuickChatNotificationCenter()) }
     if isolatedTestHost {
       // App-hosted unit tests must never open the real library or Keychain.
       // Explicit injected models exercise networking against their fake transport.
@@ -166,16 +214,26 @@ import CompanionInference
     }
     do {
       let root = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+      // Release builds carry no fixture plumbing; scripts/verify-ios-app.sh checks the binary.
+      #if DEBUG
       let namespace = ProcessInfo.processInfo.environment["WOVENMATTER_UI_FIXTURE_NAMESPACE"] ?? "default"
+      #else
+      let namespace = "default"
+      #endif
       let safeNamespace = namespace.filter { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") }
       let filename = fixture ? "fixture-library-\(safeNamespace).json" : "mobile-library.json"
       let libraryRoot = root.appendingPathComponent("WovenMatterCompanion")
       store = try MobileStore(file: libraryRoot.appendingPathComponent(filename))
+      membershipFile = libraryRoot.appendingPathComponent(fixture ? "fixture-membership-\(safeNamespace).json" : "membership.json")
       executionDirectory = libraryRoot.appendingPathComponent(fixture ? "fixture-execution-\(safeNamespace)" : "execution", isDirectory: true)
+      #if DEBUG
+      httpPerformer = DevelopmentTailnet(ProcessInfo.processInfo.environment["WOVENMATTER_DEV_TAILNET"])
+      #endif
     } catch { errorMessage = "The local library could not open: " + error.localizedDescription }
   }
   init(store: MobileStore, transport: any CompanionTransport) {
     fixture = false; isolatedTestHost = false; automaticSynchronization = false; self.store = store
+    quickChatNotifications = QuickChatNotifications(center: RecordingQuickChatNotificationCenter())
     executionWorkspaceID = "central"
     engine = MobileSyncEngine(store: store, transport: transport)
     online = true
@@ -187,6 +245,23 @@ import CompanionInference
   var selectedNote: CompanionNote? { selectedNoteID.flatMap { state.notes[$0] } }
   var selectedConversation: CompanionConversation? { selectedConversationID.flatMap { state.conversations[$0] } }
   var transcript: CompanionTranscript? { selectedConversationID.flatMap { historyPages[$0] ?? state.transcripts[$0] } }
+  /// The selected chat's message that its workspace has not shown with its turn yet.
+  var pendingSend: CompanionPendingSend? {
+    pendingSends[draftKey].flatMap { $0.isFinished(in: transcript) ? nil : $0 }
+  }
+  /// The transcript the chat shows: the owner's, plus a message just sent
+  /// that the owner does not show yet. Earlier history pages show as stored.
+  var displayedTranscript: CompanionTranscript? {
+    guard let pending = pendingSend, selectedConversationID.map({ historyPages[$0] == nil }) ?? true else { return transcript }
+    return pending.displayed(in: transcript, conversationID: draftKey)
+  }
+  /// Quiet progress under a message just sent, until its turn appears.
+  var sendProgress: String? {
+    guard let pending = pendingSend, !pending.hasStarted(in: transcript) else { return nil }
+    return (pending.phase == .sending ? "Sending to " : "Starting on ") + executionName + "…"
+  }
+  /// A message was just sent and its turn has not appeared: refresh quickly.
+  var awaitingRemoteTurn: Bool { pendingSend != nil }
   var activeRunID: String? {
     if let id = selectedConversationID, let record = executionRecords[id] { return (record.status == "running" || record.status == "stopping") ? record.runID : nil }
     return selectedConversationID.flatMap { state.transcripts[$0]?.activeRunID } ?? selectedConversation?.activeRunID
@@ -214,10 +289,14 @@ import CompanionInference
           if let pending = credential, pending.confirmationPending == true {
             credential = nil
             try await acceptPairing(pending, allowingLibraryChange: true) { try MobileCredentialVault.save($0) }
+            await completeMemberPairing(endpoint: pending.endpoint, hostDeviceID: pending.hostDeviceID)
           } else { try configureTransport() }
         } catch { pairingError = error.localizedDescription; credential = nil }
         do { try await store?.interruptExecutorJobs(); try await loadExecutionConfiguration() }
         catch { errorMessage = error.localizedDescription }
+        #if DEBUG
+        await DevelopmentTailnet.applyLaunchOptions(to: self)
+        #endif
       }
     }
     if let store { await analytics.configure(store.analytics, transport: transport) }
@@ -232,13 +311,16 @@ import CompanionInference
       if next != state { state = next }
       if changedOutbox && !next.outbox.isEmpty { requestSynchronization() }
     }
+    let unfinished = pendingSends.filter { key, pending in pending.phase == .sending || !pending.isFinished(in: state.transcripts[key]) }
+    if unfinished.count != pendingSends.count { pendingSends = unfinished }
     calendarRevision &+= 1
     await refreshSynchronizationStatus()
   }
-  private func configureTransport() throws {
+  func configureTransport() throws {
     guard let credential, let store else { connectionLabel = "Saved on this device"; return }
     guard credential.deviceID == state.deviceID else { throw CompanionAPIError(code: "device_identity_changed", message: "Pair this local library with your Mac again. The saved credential belongs to a previous app installation; your local notes are safe.") }
-    let client = try HTTPSCompanionTransport(credential: credential, metadata: deviceMetadata)
+    if try configureMemberTransport() { return }
+    let client = try HTTPSCompanionTransport(credential: credential, metadata: deviceMetadata, performer: httpPerformer)
     transport = client; engine = MobileSyncEngine(store: store, transport: client)
   }
   func pair(url: URL) async {
@@ -261,6 +343,7 @@ import CompanionInference
         defer { if connectionForeground { startDeviceScheduler() } }
         do {
           try await acceptPairing(pending, allowingLibraryChange: true) { try MobileCredentialVault.save($0) }
+          await completeMemberPairing(endpoint: payload.endpoint, hostDeviceID: pending.hostDeviceID)
           pairingText = ""
           await refresh(); await refreshExecutionWorkspaces(force: true)
           return
@@ -270,7 +353,7 @@ import CompanionInference
         }
       }
       let target = try await HTTPSCompanionTransport.previewPairing(payload, deviceID: current.deviceID,
-        deviceName: UIDevice.current.name, metadata: deviceMetadata)
+        deviceName: UIDevice.current.name, metadata: deviceMetadata, performer: httpPerformer)
       if (current.workspaceID ?? current.detachedWorkspaceID) != target,
         !localRunTasks.isEmpty || processingDeviceSchedule {
         throw DeviceExecutionError.unavailable("Finish the running device agents before changing the central database.")
@@ -278,9 +361,24 @@ import CompanionInference
       await flushLocalWrites()
       stopDeviceScheduler()
       defer { if connectionForeground { startDeviceScheduler() } }
+      // The member key: the Mac adds this phone as a member, and every later
+      // request to any Mac or Linux member is signed with it.
+      let identity = try loadMemberIdentity()
       let paired = try await HTTPSCompanionTransport.pair(payload, deviceID: current.deviceID,
-        deviceName: UIDevice.current.name, metadata: deviceMetadata, expectedWorkspaceID: target, requiresConfirmation: true)
-      try await acceptPairing(paired, allowingLibraryChange: true) { try MobileCredentialVault.save($0) }
+        deviceName: UIDevice.current.name, metadata: deviceMetadata, expectedWorkspaceID: target, requiresConfirmation: true,
+        memberPublicKey: identity.publicKey, performer: httpPerformer)
+      // Pairing again with another Mac of the same library moves nothing:
+      // the next sync rebinds to it like to any other member host. The Mac
+      // names its registry's libraries, because it adds this phone as a
+      // member only once the pairing is confirmed.
+      let previous = current.workspaceID ?? current.detachedWorkspaceID
+      let keepLibrary = paired.hostDeviceID != nil && previous != nil && previous != target
+        && (paired.libraryIDs ?? []).contains(previous ?? "")
+      try await acceptPairing(paired, allowingLibraryChange: true, keepLibrary: keepLibrary) { try MobileCredentialVault.save($0) }
+      await completeMemberPairing(endpoint: payload.endpoint, hostDeviceID: paired.hostDeviceID)
+      // Kept for member sync, which this Mac refused after all: bind the
+      // replica to it the way a first pairing does.
+      if keepLibrary, membership?.memberRequestsAccepted == false { try await store.prepareForPairing(paired.workspaceID) }
       pairingText = ""
       await refresh()
       await refreshExecutionWorkspaces(force: true)
@@ -290,29 +388,35 @@ import CompanionInference
     guard let engine, !refreshInProgress else { return }
     refreshInProgress = true; connecting = true
     let generation = connectionGeneration
-    let activeTransport = transport
     defer { refreshInProgress = false; connecting = false }
     let targetConversationID = selectedExecutionWorkspaceID == "central" ? selectedConversationID : nil
     do {
       try await engine.synchronize()
       guard generation == connectionGeneration, !Task.isCancelled else { return }
-      let refreshedProviders = frame % 5 == 0 || providers.isEmpty ? try await engine.providers() : providers
+      await adoptCurrentLibraryHost(engine)
+      // The central list is the current host's: asked again after launch, a
+      // reconnect, a new host or when New Chat opens, and every fifth refresh.
+      let host = libraryHostDeviceID
+      let refreshProviders = centralProvidersRefreshDue || frame % 5 == 0 || providers.isEmpty || host != centralProvidersHostID
+      let refreshedProviders = refreshProviders ? try await engine.providers() : providers
       let refreshedPending = try await engine.pending()
       var capability: CompanionProvider?
       if let targetConversationID {
         try await engine.refreshTranscriptIfNeeded(targetConversationID)
-        if let activeTransport { capability = try await activeTransport.capabilities(targetConversationID) }
+        // The host this synchronization chose (member mode can fail over).
+        if let activeTransport = transport { capability = try? await activeTransport.capabilities(targetConversationID) }
       }
       if frame % 5 == 0 { try await engine.recoverCommandReceipts() }
       let status = await engine.synchronizationStatus()
       guard generation == connectionGeneration, !Task.isCancelled else { return }
       providers = refreshedProviders; pending = refreshedPending
+      if refreshProviders { centralProvidersHostID = host; centralProvidersRefreshDue = false }
       if let capability, let targetConversationID { sessionCapabilities[targetConversationID] = capability }
       synchronizationStatus = status
       frame += 1
       online = true; connectionLabel = "Connected"
       centralRetryCount = 0
-      centralRefreshAfter = Date().addingTimeInterval(tab == .chat && selectedExecutionWorkspaceID == "central" && activeRunID != nil ? 2 : 15)
+      centralRefreshAfter = Date().addingTimeInterval(tab == .chat && selectedExecutionWorkspaceID == "central" && (activeRunID != nil || awaitingRemoteTurn) ? 2 : 15)
       if providerID.isEmpty { providerID = providers.first(where: { $0.available })?.id ?? "" }
       await reload(); rememberAgentCatalog()
     } catch {
@@ -320,17 +424,21 @@ import CompanionInference
       let status = await engine.synchronizationStatus()
       guard generation == connectionGeneration else { return }
       synchronizationStatus = status
+      await adoptCurrentLibraryHost(engine)
       online = status.centralReachable == true
+      centralProvidersRefreshDue = true
       connectionLabel = online ? "Connected" : "Disconnected"
       centralRetryCount += 1
       centralRefreshAfter = Date().addingTimeInterval(Self.connectionRetryDelay(centralRetryCount))
       await reload()
     }
   }
-  func openFolder(_ id: String?) {
-    selectedFolderID = id; folderContentsPresented = true; tab = .folders
+  func openFolder(_ id: String?, workspaceID: String? = nil, unfiled: Bool = false) {
+    selectedFolderID = id
+    selectedFolderWorkspaceID = (workspaceID ?? id.flatMap { state.folders[$0]?.execution?.workspaceID }).map(canonicalWorkspaceID)
+    folderContentsUnfiled = unfiled; folderContentsPresented = true; tab = .folders
   }
-  func closeFolder() { selectedFolderID = nil; folderContentsPresented = false }
+  func closeFolder() { selectedFolderID = nil; selectedFolderWorkspaceID = nil; folderContentsUnfiled = false; folderContentsPresented = false }
   func newFolder(name: String) async {
     guard let store, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
     do { let folder = try await store.createFolder(name: name); await analytics.record(.active); await reload(); openFolder(folder.id) }
@@ -339,7 +447,8 @@ import CompanionInference
   func newNote() async {
     guard let store else { return }
     do {
-      let note = try await store.createNote(folderID: selectedFolderID, title: "Untitled note", content: NoteDocument().encoded())
+      let scoped = tab == .folders && folderContentsPresented
+      let note = try await store.createNote(folderID: scoped ? selectedFolderID : nil, title: "Untitled note", content: NoteDocument().encoded())
       await analytics.record(.active)
       selectedNoteID = note.id; tab = .note; await reload()
     } catch { errorMessage = error.localizedDescription }
@@ -354,13 +463,15 @@ import CompanionInference
   func selectConversation(_ id: String, workspaceID: String? = nil) async {
     selectedConversationRoute = (id, workspaceID ?? preferredExecutionRoute(for: id))
     selectedConversationID = id; tab = .chat
-    if selectedExecutionWorkspaceID == "local" { await openDeviceConversation(id) }
+    if isViewingRemoteQuickChat { await refreshRemoteQuickChatHistory() }
+    else if selectedExecutionWorkspaceID == "local" { await openDeviceConversation(id) }
     else if selectedExecutionWorkspaceID == "central" { await refresh() }
     else { await refreshExecutionWorkspaces(force: true) }
   }
   func refreshConversation() async {
     let owner = selectedExecutionWorkspaceID
-    if owner == "local", let id = selectedConversationID { await openDeviceConversation(id) }
+    if isViewingRemoteQuickChat { await refreshRemoteQuickChatHistory() }
+    else if owner == "local", let id = selectedConversationID { await openDeviceConversation(id) }
     else if owner == "central" { await refresh() }
     else { await refreshDirectWorkspace(owner) }
   }
@@ -379,7 +490,9 @@ import CompanionInference
     catch { errorMessage = error.localizedDescription }
   }
   func showLatestMessages() { if let selectedConversationID { historyPages.removeValue(forKey: selectedConversationID) } }
-  func newChat(referencing noteID: String? = nil) {
+  func newChat(referencing noteID: String? = nil, workspaceID: String? = nil) {
+    if tab != .folders || !folderContentsPresented { selectedFolderID = nil; selectedFolderWorkspaceID = nil }
+    if let workspaceID { selectedFolderWorkspaceID = workspaceID }
     newChatNoteID = noteID; chatSetupProblem = nil; chatChooserPresented = true
   }
   func saveNote(id: String, title: String, content: String, base: CompanionNote) {
@@ -401,6 +514,14 @@ import CompanionInference
         }
       } catch { if saveGenerations[id] == generation { saveStates[id] = "Couldn’t save · writing kept open"; errorMessage = error.localizedDescription } }
     }
+  }
+  func compactSaveLabel(_ id: String) -> String {
+    if let value = saveStates[id], value != "Saved on this device" {
+      return value.hasPrefix("Saving") ? "Saving…" : "Save failed"
+    }
+    if state.conflicts[id] != nil { return "Sync conflict" }
+    if state.workspaceID != nil && state.isDirty(id) { return "Sync pending" }
+    return "Saved"
   }
   func saveLabel(_ id: String) -> String {
     if let value = saveStates[id], value != "Saved on this device" { return value }
@@ -447,24 +568,23 @@ import CompanionInference
     let provider = activeProvider
     let draftContext = currentDraft
     let deviceID = state.deviceID
-    let pendingLaunch = target == nil ? state.launches.first(where: { $0.create.workspaceID == nil && !$0.accepted && !$0.terminalFailure }) : nil
+    let pendingLaunch = target == nil ? MobileLaunchRecord.reusable(state.launches, workspaceID: nil, providerID: route, text: text, noteID: noteID) : nil
     sending = true
     defer { sending = false }
     await saveTask?.value
     await chatDraftTask?.value
     if runID != nil && provider?.canSteer != true { errorMessage = "This session does not currently support steering. Stop it or wait for completion."; return }
     if target == nil && (provider?.available != true || provider?.canStart != true) { errorMessage = "Choose an available agent route on your Mac."; return }
+    let cleared = beginPendingSend(key: sourceKey, text: text, conversationID: target)
+    var accepted = false
+    defer { if !accepted { withdrawPendingSend(sourceKey, restoring: draftContext, over: cleared) } }
     do {
       let receipt: CompanionCommandReceipt
       if target == nil {
+        try await requireWorkspaceConnection("central")
         let conversationID = pendingLaunch?.create.conversationID ?? UUID().uuidString.lowercased()
         let launch: MobileLaunchRecord
-        if let pendingLaunch {
-          guard pendingLaunch.initialSend.text == text, pendingLaunch.initialSend.noteID == noteID else {
-            errorMessage = "A previous new-chat request still needs acknowledgement. Continue it in Settings → Pair to Mac → Pending changes before starting another."; return
-          }
-          launch = pendingLaunch
-        } else {
+        if let pendingLaunch { launch = pendingLaunch } else {
           launch = .init(create: .init(deviceID: deviceID, kind: .createSession, conversationID: conversationID, providerID: route, folderID: folder),
             initialSend: .init(deviceID: deviceID, kind: .send, conversationID: conversationID, text: text, noteID: noteID))
         }
@@ -474,7 +594,7 @@ import CompanionInference
             updateChatDraft(key: conversationID, draft: .init(text: text, noteID: noteID))
             selectedConversationID = conversationID
           }
-          await reload(); errorMessage = result.sendReceipt?.message ?? result.createReceipt?.message ?? "The session request is saved. Continue it in Settings → Pair to Mac → Pending changes when the Mac is available."; return
+          await reload(); errorMessage = result.sendReceipt?.message ?? result.createReceipt?.message ?? "The Mac hasn’t confirmed this request. Try again here when it’s connected."; return
         }
         receipt = accepted
         if selectedConversationID == target { selectedConversationID = receipt.conversationID ?? conversationID }
@@ -483,7 +603,9 @@ import CompanionInference
         let command: CompanionCommand
         if let unresolved {
           guard unresolved.command.text == text, unresolved.command.noteID == noteID else {
-            errorMessage = "This conversation has an unacknowledged command. Resolve it in Settings → Pair to Mac → Pending changes before sending different input."; return
+            // Later input must not overtake it; offer to resend the saved original instead.
+            unconfirmedSendConversationID = target
+            errorMessage = "The previous message hasn’t been confirmed. Retry it before sending different input."; return
           }
           command = unresolved.command
         } else {
@@ -492,10 +614,66 @@ import CompanionInference
         receipt = try await engine.submit(command)
       }
       guard receipt.status != .rejected, receipt.status != .outcomeUnknown else { errorMessage = receipt.message ?? "The Mac did not accept this command."; await reload(); return }
-      let original = draftBuffer[sourceKey] ?? state.chatDrafts[sourceKey]
-      if original == draftContext && providerID == route { updateChatDraft(key: sourceKey, draft: .init(text: "")) }
+      let conversationID = receipt.conversationID ?? target ?? selectedConversationID ?? sourceKey
+      acceptPendingSend(from: sourceKey, to: conversationID); accepted = true
+      if draftBuffer[sourceKey] == cleared && providerID == route { updateChatDraft(key: sourceKey, draft: cleared) }
+      try? await engine.refreshTranscript(conversationID)
       await refresh()
-    } catch { errorMessage = error.localizedDescription; await reload() }
+    } catch { errorMessage = workspaceActionMessage(error); await reload() }
+  }
+  /// Resends the saved unconfirmed message with its original command ID. The
+  /// owner deduplicates by that ID, so a message that did arrive is not repeated.
+  func retryUnconfirmedSend() async {
+    guard let id = unconfirmedSendConversationID, !sending else { return }
+    sending = true; defer { sending = false }
+    let route = executionRoute(for: id)
+    do {
+      var receipt: CompanionCommandReceipt?
+      let unresolved: (MobileCommandRecord) -> Bool = { $0.command.conversationID == id && ($0.receipt == nil || $0.receipt?.status == .outcomeUnknown) && ($0.command.kind == .send || $0.command.kind == .steer) }
+      if route == "central" {
+        guard let engine else { throw MobileConnectionError.offline }
+        if let pending = state.commands.first(where: unresolved) { receipt = try await engine.submit(pending.command) }
+      } else {
+        guard let client = workspaceClients[route], let store else { throw DeviceExecutionError.unavailable("This execution workspace is unavailable.") }
+        if let pending = await store.journal.commandRecords(workspaceID: route).first(where: unresolved) { receipt = try await client.submit(pending.command) }
+      }
+      if let receipt, receipt.status == .outcomeUnknown {
+        errorMessage = receipt.message ?? "The previous message still hasn’t been confirmed. Try again when the device is connected."
+      } else {
+        unconfirmedSendConversationID = nil; errorMessage = receipt?.status == .rejected ? receipt?.message ?? "The previous message was not accepted." : nil
+      }
+      await refresh()
+    } catch { errorMessage = workspaceActionMessage(error) }
+  }
+  /// New chats whose first message has no confirmed outcome. Each keeps its
+  /// original command IDs and text until its owner confirms or rejects it.
+  var unconfirmedLaunches: [MobileLaunchRecord] { state.launches.filter { !$0.accepted && !$0.terminalFailure } }
+  /// Resends a saved launch with its original IDs. An owner that already ran it
+  /// answers from its receipt, so the first message is never sent twice.
+  func retryUnconfirmedLaunch(_ id: String) async {
+    guard !sending, let launch = unconfirmedLaunches.first(where: { $0.id == id }) else { return }
+    sending = true; defer { sending = false }
+    do {
+      let result: MobileLaunchRecord
+      if let workspaceID = launch.create.workspaceID {
+        guard let client = workspaceClients[workspaceID] else { throw DeviceExecutionError.unavailable("This execution workspace is unavailable.") }
+        result = try await client.startConversation(launch)
+      } else {
+        guard online, let engine else { throw MobileConnectionError.offline }
+        result = try await engine.startConversation(launch)
+      }
+      await reload()
+      if result.accepted { errorMessage = nil; selectedConversationID = result.create.conversationID }
+      else { errorMessage = result.sendReceipt?.message ?? result.createReceipt?.message ?? "This new chat still hasn’t been confirmed. It stays saved; try again when connected." }
+      await refresh()
+    } catch { errorMessage = workspaceActionMessage(error); await reload() }
+  }
+  /// Shows a saved launch's first message in the new-chat composer. The launch
+  /// itself stays saved; sending the same message to the same agent reuses it.
+  func restoreUnconfirmedLaunch(_ id: String) {
+    guard let launch = unconfirmedLaunches.first(where: { $0.id == id }) else { return }
+    selectedConversationID = nil
+    updateChatDraft(key: draftKey, draft: .init(text: launch.initialSend.text ?? "", noteID: launch.initialSend.noteID, providerID: launch.create.providerID))
   }
   func stop() async {
     if selectedExecutionWorkspaceID == "local" { await stopOnDevice(); return }
@@ -509,7 +687,8 @@ import CompanionInference
       if !response.answers.isEmpty {
         localQuestionAnswers[interaction.id] = response.answers.values.flatMap { $0 }.joined(separator: "\n")
       }
-      approval.continuation.resume(returning: !response.cancelled && (response.optionID == "allow" || !response.answers.isEmpty))
+      approval.continuation.resume(returning: response.cancelled ? .withdrawn
+        : response.optionID == "allow" || !response.answers.isEmpty ? .allowed : .declined)
       return
     }
     if executionRoute(for: interaction.conversationID) != "central" { await respondInExecutionWorkspace(interaction, response: response); return }
@@ -564,9 +743,12 @@ import CompanionInference
     guard !workspaceActionInProgress else { return false }
     workspaceActionInProgress = true; defer { workspaceActionInProgress = false }
     await reload()
-    let pending = state.commands.first { $0.command.kind == .workspace && ($0.receipt == nil || $0.receipt?.status == .accepted || $0.receipt?.status == .outcomeUnknown) }
+    // An unconfirmed change orders only later changes to the same item. Repeating
+    // it resends its original command; other items proceed independently.
+    let pending = state.commands.first { $0.command.kind == .workspace && ($0.receipt == nil || $0.receipt?.status == .accepted || $0.receipt?.status == .outcomeUnknown)
+      && $0.command.workspaceAction?.confirmationScope == action.confirmationScope }
     if let pending, pending.command.workspaceAction != action {
-      errorMessage = "An earlier workspace change still needs acknowledgement. Review it in Settings → Pair to Mac → Pending changes before making another change."
+      errorMessage = "The previous change to this item hasn’t been confirmed yet. Repeat that change to retry it, or try again shortly."
       return false
     }
     errorMessage = nil
@@ -582,6 +764,30 @@ import CompanionInference
       await refresh()
       return true
     } catch { errorMessage = error.localizedDescription; await reload(); return false }
+  }
+  func canEditNoteDetails(_ id: String) -> Bool {
+    store != nil && state.notes[id]?.contentIncluded == true && !state.uncachedNoteIDs.contains(id) && state.conflicts[id] == nil
+  }
+  /// Rename and move use the same durable local edits as the note editor. They
+  /// must work before a new phone note has ever reached the central library.
+  func editNoteDetails(_ id: String, action: String, title: String, folderID: String?) async -> Bool {
+    guard ["rename", "move"].contains(action), let store else { return false }
+    await flushLocalWrites()
+    await reload()
+    guard canEditNoteDetails(id), let note = state.notes[id] else {
+      errorMessage = "Download this note and resolve any saved conflict before changing its details."
+      return false
+    }
+    let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard action != "rename" || !name.isEmpty else { errorMessage = "Enter a note title."; return false }
+    guard action != "move" || folderID == nil || state.folders[folderID!] != nil else {
+      errorMessage = "This folder is no longer available."; return false
+    }
+    do {
+      try await store.editNote(id: id, title: action == "rename" ? name : note.title, content: note.content,
+        folderID: action == "move" ? folderID : note.folderID, base: note)
+      await reload(); return true
+    } catch { errorMessage = error.localizedDescription; return false }
   }
   func canonicalNoteForAction(_ id: String) async throws -> CompanionNote {
     guard online, let engine, let store else { throw MobileConnectionError.offline }
@@ -624,7 +830,7 @@ import CompanionInference
           .init(id: "assistant", conversationID: "fixture-chat", runID: "11111111-1111-4111-8111-111111111111", role: "assistant", content: "A focused plan for the next release.\n\n• Capture the idea in a note.\n• Review it together on the Mac.\n• Keep the next step small and clear.", status: "completed", sequence: 2)], activities: [.init(id: "activity", runID: "11111111-1111-4111-8111-111111111111", title: "Run finished", detail: "The plan is ready for review.", status: "completed", sequence: 1)], runs: [.init(id: "11111111-1111-4111-8111-111111111111", status: "completed")]))
       }
       await reload()
-      if ProcessInfo.processInfo.environment["WOVENMATTER_UI_SCENARIO"] == "conflict", state.conflicts.isEmpty,
+      if Self.uiScenario == "conflict", state.conflicts.isEmpty,
          let base = state.notes["11111111-1111-4111-8111-111111111111"] {
         let localContent = try NoteDocument(blocks: [.richText(.init(text: "The idea I captured on the train: make the next release small, focused, and easy to try."))]).encoded()
         try await store.editNote(id: base.id, title: base.title, content: localContent, folderID: base.folderID, base: base)
@@ -635,7 +841,7 @@ import CompanionInference
         }
         await reload()
       }
-      let scenario = ProcessInfo.processInfo.environment["WOVENMATTER_UI_SCENARIO"] ?? ""
+      let scenario = Self.uiScenario ?? ""
       if scenario.hasPrefix("running-tools") {
         let runID = "11111111-1111-4111-8111-111111111111"
         let startedAt = ISO8601DateFormatter().string(from: Date().addingTimeInterval(-8))
@@ -663,9 +869,99 @@ import CompanionInference
         let descriptor = InferenceModel(id: "gpt-fixture", name: "GPT-6.1 Sol", provider: "openai", api: "openai-responses", baseUrl: "https://example.invalid", reasoning: true)
         executionRecords["fixture-chat"] = .init(id: "fixture-chat", title: "Launch plan", thinkingLevel: "high", connectionID: "fixture", modelJSON: try descriptor.descriptorJSON(), status: "ready", updatedAt: "")
       }
-      selectedNoteID = notes.first?.id; selectedConversationID = "fixture-chat"
-      if ProcessInfo.processInfo.environment["WOVENMATTER_UI_SCENARIO"] == "pairing" { pairingPresented = true }
-      tab = Tab(rawValue: ProcessInfo.processInfo.environment["WOVENMATTER_UI_TAB"] ?? "Folders") ?? .folders
+      var scenarioNoteID: String?
+      if scenario == "table-note" {
+        // A note whose only block is a read-only table; relaunches reuse it.
+        if let existing = state.notes.values.first(where: { $0.title == "Table only" }) { scenarioNoteID = existing.id }
+        else {
+          let table = NoteTableBlock(id: "fixture-table", columns: [.init(width: 120), .init(width: 120)],
+            rows: [.init(cells: [.init(text: "Item"), .init(text: "Owner")]), .init(cells: [.init(text: "Launch"), .init(text: "Mac")])], headerRowCount: 1)
+          scenarioNoteID = try await store.createNote(folderID: nil, title: "Table only", content: NoteDocument(blocks: [.table(table)]).encoded()).id
+        }
+        await reload()
+      }
+      if scenario == "offline-device" {
+        let workspace = CompanionExecutionWorkspace(id: "11111111-2222-4333-8444-555555555555", libraryID: "fixture", ownerDeviceID: "fixture-host", kind: .linux, name: "Offline Linux")
+        executionWorkspaces = [workspace]
+        workspaceProviders[workspace.id] = [.init(id: "pi", runtimeKind: "pi", displayName: "Pi Durable", available: true)]
+        workspaceReachable[workspace.id] = false
+      }
+      if scenario == "workspace-organization" || scenario == "remote-folders-empty" {
+        let mac = "aaaaaaaa-1111-4111-8111-111111111111", linux = "bbbbbbbb-2222-4222-8222-222222222222", ipad = "cccccccc-3333-4333-8333-333333333333"
+        executionWorkspaces = [
+          .init(id: mac, libraryID: "fixture", ownerDeviceID: mac, kind: .mac, name: "Studio Mac", capabilities: ["history.central.v1"]),
+          .init(id: linux, libraryID: "fixture", ownerDeviceID: mac, kind: .linux, name: "Linux workspace"),
+          .init(id: ipad, libraryID: "fixture", ownerDeviceID: ipad, kind: .ios, name: "Travel iPad", capabilities: ["quick-chat", "notes"])
+        ]
+        providers = [.init(id: "pi", runtimeKind: "pi", displayName: "Pi Durable", available: true)]
+        workspaceProviders[mac] = providers; workspaceProviders[linux] = providers
+        workspaceReachable[mac] = true; workspaceReachable[linux] = true
+        let localFolder = CompanionFolder(id: "dddddddd-4444-4444-8444-444444444444", name: "Phone ideas", execution: .init(workspaceID: "device:" + state.deviceID, rootPath: "/fixture/phone"))
+        let macFolder = CompanionFolder(id: "eeeeeeee-5555-4555-8555-555555555555", name: "Mac projects", execution: .init(workspaceID: "device:" + mac, rootPath: "/fixture/mac"))
+        let ipadFolder = CompanionFolder(id: "ffffffff-6666-4666-8666-666666666666", name: "Travel notes", execution: .init(workspaceID: "device:" + ipad, rootPath: "/fixture/ipad"))
+        let document = try NoteDocument().encoded()
+        let localNote = CompanionNote(id: "organization-local-note", title: "Unfiled phone idea", content: document)
+        let ipadNote = CompanionNote(id: "organization-ipad-note", folderID: ipadFolder.id, title: "Packing list", content: document)
+        let chat = CompanionConversation(id: "organization-ipad-chat", title: "Weekend plans", providerID: "pi-durable-device", runtimeKind: "pi", workspaceID: ipad)
+        let fixtureFolders = [localFolder, macFolder, ipadFolder]
+        let fixtureNotes = [localNote, ipadNote]
+        // Fixture launches can reuse a namespace to verify persistence. Replace
+        // the seeded rows instead of handing duplicate IDs to the snapshot.
+        try await store.apply(.init(workspaceID: "fixture", cursor: 2,
+          folders: folders.filter { row in !fixtureFolders.contains { $0.id == row.id } } + fixtureFolders,
+          notes: notes.filter { row in !fixtureNotes.contains { $0.id == row.id } } + fixtureNotes,
+          conversations: conversations.filter { $0.id != chat.id } + [chat]))
+        try await store.cache(.init(conversationID: chat.id, messages: [
+          .init(id: "organization-message", conversationID: chat.id, role: "assistant", content: "Your weekend plan, saved from the iPad.", sequence: 0)
+        ]))
+        await reload()
+      }
+      if scenario == "unreachable-workspaces" {
+        // A saved Mac and Linux workspace that are not reachable, beside one
+        // reachable Linux workspace whose Mac reports some agents not ready.
+        let mac = "aaaaaaaa-7777-4777-8777-777777777777", stale = "bbbbbbbb-8888-4888-8888-888888888888", linux = "cccccccc-9999-4999-8999-999999999999"
+        let copied = "dddddddd-0000-4000-8000-000000000000"
+        executionWorkspaces = [
+          .init(id: mac, libraryID: "fixture", ownerDeviceID: mac, kind: .mac, name: "Office Mac", capabilities: ["history.central.v1"]),
+          .init(id: stale, libraryID: "fixture", ownerDeviceID: mac, kind: .linux, name: "Old Linux box"),
+          .init(id: linux, libraryID: "fixture", ownerDeviceID: linux, kind: .linux, name: "Build server"),
+          // A library copied from another Mac keeps that Mac's row as history only.
+          .init(id: copied, libraryID: "fixture", ownerDeviceID: copied, kind: .mac, name: "Copied MacBook Air", capabilities: ["history.central.v1"], retainedHistory: true)
+        ]
+        func agent(_ id: String, _ name: String, ready: Bool) -> CompanionProvider { .init(id: id, runtimeKind: id, displayName: name, available: ready, canStart: ready) }
+        let cached = [agent("default_agent", "Pi Durable", ready: true), agent("codex", "Codex", ready: false), agent("claude_code", "Claude Code", ready: false),
+          agent("grok_build", "Grok Build", ready: true), agent("opencode", "OpenCode", ready: false)]
+        workspaceProviders[mac] = cached; workspaceProviders[stale] = cached; workspaceProviders[copied] = cached
+        workspaceProviders[linux] = [agent("default_agent", "Pi Durable", ready: true), agent("codex", "Codex", ready: false)]
+        knownAgentIDs = Set([mac, stale, linux, copied].flatMap { id in cached.map { id + ":" + $0.id } })
+        workspaceReachable[mac] = false; workspaceReachable[linux] = true; workspaceReachable[copied] = true
+        let fixtureFolders = [
+          CompanionFolder(id: "dddddddd-7777-4777-8777-777777777777", name: "Mac projects", execution: .init(workspaceID: "device:" + mac, rootPath: "/fixture/mac")),
+          CompanionFolder(id: "eeeeeeee-8888-4888-8888-888888888888", name: "Retired machine", execution: .init(workspaceID: "device:ffffffff-0000-4000-8000-000000000000", rootPath: "/fixture/old")),
+          CompanionFolder(id: "ffffffff-9999-4999-8999-999999999999", name: "Releases", execution: .init(workspaceID: "remote:" + linux, rootPath: "/srv/releases"))
+        ]
+        try await store.apply(.init(workspaceID: "fixture", cursor: 2,
+          folders: folders.filter { row in !fixtureFolders.contains { $0.id == row.id } } + fixtureFolders, notes: notes, conversations: conversations))
+        await reload()
+      }
+      if scenario.hasPrefix("member-macs") { try await seedMemberMacsFixture(store, send: scenario == "member-macs-send") }
+      selectedNoteID = scenarioNoteID ?? notes.first?.id
+      selectedConversationID = scenario == "member-macs-send" ? Self.memberMacsFixtureChat : "fixture-chat"
+      if Self.uiScenario == "pairing" { pairingPresented = true }
+      tab = Tab(rawValue: Self.uiTab ?? "Folders") ?? .folders
+      if scenario == "member-macs-chooser" { newChat() }
     } catch { errorMessage = error.localizedDescription }
+  }
+}
+
+extension CompanionWorkspaceAction {
+  /// The item whose changes must be confirmed in order.
+  var confirmationScope: String {
+    switch self {
+    case .conversation(let id, _, _, _), .goal(let id, _), .configureSession(let id, _, _, _), .sessionTools(let id, _, _): "conversation:" + id
+    case .note(let id, _, _, _, _): "note:" + id
+    case .saveCalendar(let id, _, _), .deleteCalendar(let id, _, _): "calendar:" + id
+    case .retryLibrary(let id): "library:" + id
+    }
   }
 }

@@ -22,14 +22,18 @@ for every package update. Three separate mechanisms do that:
 | Record | Kind | Updated by |
 | --- | --- | --- |
 | `package.json` minimum-only ranges (`>=version`) | Declaration. The floor is the current tested release; there is no upper cap on stable releases. | Maintenance PRs raise floors, including majors |
-| `default-agent/package-lock.json`, `ios/EmbeddedRuntime/package-lock.json` | Exact tested snapshot with integrity hashes, installed with `npm ci` | The same PRs |
+| `default-agent/package-lock.json`, `ios/EmbeddedRuntime/package-lock.json`, `bots/package-lock.json` | Exact tested snapshot with integrity hashes, installed with `npm ci` | The same PRs |
 | `app/Package.resolved` | Shared SwiftPM/Xcode graph: Sparkle and any transitive packages | Native package-manager tooling during maintenance |
 | `default-agent/.node-version` and the Node checksums in `scripts/prepare-default-agent.sh` and `LocalACPManagedRuntime.swift` | One current stable Node release and its official archive SHA-256 values | Maintenance PR, all copies together |
 | `remote/host/runtime-versions.json` | The same Node release's Linux archive SHA-256 values and the lockfile's Playwright version | The same maintenance PR; host bundle tests reject drift |
+| `dockerVersion` and `dockerSHA256` in `remote/host/runtime-versions.json` | The Docker Engine static release (`download.docker.com/linux/static/stable`) that Linux bot engines install, with its x86_64 and aarch64 archive SHA-256 values | Maintenance PR; both checksums together |
+| `bots/image/Dockerfile` (`NODE_VERSION` with its two Linux SHA-256 values, `PLAYWRIGHT_VERSION`) | The bot image's copy of the same Node and Playwright selections; Ubuntu 26.04 packages float and are upgraded at build and by the bots Update | The same maintenance PR, kept equal to `remote/host/runtime-versions.json` |
 | `remote/npm-runtime/package-lock.json` | Locked security replacements for npm's vendored dependencies, shared by image builds and each native host release's private npm | Dependency maintenance; runtime API and installer tests validate both uses |
 | `harnesses/npm-version.json` | Current private Mac npm archive and registry integrity, with the existing locked `remote/npm-runtime` vendor repairs | Maintenance PR; managed CLI and bundled SDK updater verification |
 | `app/Automation/cua-version.json` | Exact Cua Driver archive/executable digests, source and signing identity | Maintenance PR with desktop acceptance |
 | `app/Browser/cef-version.json` | Exact CEF build and archive SHA-1 values per architecture | Maintenance PR |
+| `remote/library/build-version.json` | Swift toolchain image digest, Static Linux SDK archive SHA-256, and SQLite amalgamation SHA-256 for the Linux `wovenmatter-library` build | Maintenance PR, all together with `app/Package.resolved` |
+| `app/VMHelper/guest-version.json` and `app/VMHelper/Guest/docker-archive-keyring.asc` | Woven Mac VM guest: Ubuntu cloud image serial, URL, size and SHA-256; Docker apt repository, signing-key fingerprint and file SHA-256, exact `docker-ce` and `containerd.io` versions | Maintenance PR, record and key together |
 | `app/Updater/sparkle-version.json` and the Xcode Sparkle revision | Release, exact commit, and tools archive SHA-256 for the updater | Maintenance PR, both together |
 | Generated iOS bundles and `provenance.json` | Output of the locked packages, verified by `--check` in CI | Regenerated from the updated lockfiles during maintenance |
 
@@ -39,12 +43,24 @@ Security-critical runtimes retain verified exact selections. Ordinary libraries
 use minimum-only ranges with their resolved versions recorded in lockfiles.
 Maintenance checks both for newer releases; recorded does not mean frozen.
 
+- **Docker Engine** for Linux bots is an exact static release, because the
+  bot engine runs as root with a verified, distribution-independent binary set
+  (dockerd, containerd, runc, docker-proxy, docker-init) on Ubuntu, Debian and
+  Arch alike. `remote-host.sh` downloads it once per host and the root helper
+  re-verifies the SHA-256 before installing it. Maintenance selects the newest
+  stable `docker-<version>.tgz` (no release candidates) and records both
+  architectures' checksums. Validation: `scripts/test-support/test_bots_engine.py`
+  in CI, and the bots install, egress and uninstall checks on a Linux host
+  before release. Installed hosts pick up a new selection on update; the
+  engine restarts only when its binaries or configuration changed.
 - **Node** runs the signed Built-in agent and managed adapter tools.
   Launch reuses the recorded installed runtime without a metadata lookup; a
   first installation may download its checksummed archive. Select the newest
   stable release, including Current; do not restrict selection to LTS. Exclude
   nightlies and prereleases. CI and release builds use the same release
-  (`node-version-file: default-agent/.node-version`). Linux images follow the
+  (`node-version-file: default-agent/.node-version`); local test scripts run the
+  bots suite through `scripts/with-pinned-node.sh`, which on a Mac with another
+  default Node uses the checksummed copy `prepare-default-agent.sh` caches. Linux images follow the
   same stable major (`node:<major>-trixie-slim`); `--pull --no-cache` picks up its
   newest patch and Debian security updates on every image build. Workspace
   creation may reuse matching local contents for less than 24 hours; an explicit
@@ -81,7 +97,7 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   repository (tested minimum 2.103.3), with the published keyring SHA-256 checked
   before trusting it. Debian's older CLI retains CVE-2026-48501. Maintenance
   reviews both the floor and signing-key record against upstream.
-  OpenSSH clients are built from the current 10.6p1 source in a separate image
+  OpenSSH clients are built from the current 10.6p2 source in a separate image
   stage: the Dockerfile records the exact release/SHA-256 and verifies its
   detached signature against the upstream release-key fingerprint. This
   security exception replaces Debian's client, which retains CVE-2026-60002
@@ -107,7 +123,7 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   The workspace image retains the same reviewed current HTTP dispatcher across
   Mac and Linux tooling, with tuple-header redirect credential stripping covered
   by provider-free fixtures. It applies the independently locked security selection
-  in `remote/npm-runtime` (tested undici 8.12.4, ip-address 10.7.6 and minimatch 11.0.4), addressing CVE-2026-111997,
+  in `remote/npm-runtime` (tested undici 8.12.4, ip-address 10.7.6 and minimatch 11.0.5), addressing CVE-2026-111997,
   GHSA-xjj6-f33q-929c and the
   related denial-of-service advisories. npm ignores overrides for its bundled
   dependencies, so this replacement is explicit in the image definition.
@@ -133,7 +149,7 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   needs; do not install the workspace browser-library repairs into that smaller
   image without a runtime dependency.
   npm also vendors minimatch 10.2.5, affected by GHSA-g3hv-75wg-m249. The
-  same graph replaces minimatch with 11.0.4 and its locked dependency closure.
+  same graph replaces minimatch with 11.0.5 and its locked dependency closure.
   Mac, native Linux and both container paths copy and verify every graph module,
   including scoped dependencies; npm's actual install/ci behavior and bounded
   glob-pattern fixtures validate this major migration. Keep this replacement
@@ -151,6 +167,23 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   actual registry installs, lockfiles, SDK updates and patched runtime APIs.
 - **CEF** is compiled and signed into the app. The newest stable build is
   always proposed: Chromium ships security fixes only on its current major.
+- **Woven Mac VM guest** (bots engine on a Mac, see
+  [Woven everywhere](architecture/WOVEN_EVERYWHERE.md#mac-vm)) is an exact
+  selection for security and core function: a VM that changed itself broke
+  earlier tests (the guest auto-upgraded its kernel), and Woven must be able
+  to snapshot, update and roll back as one step. The official Ubuntu 26.04 LTS
+  arm64 cloud image is pinned by serial directory and SHA-256 rather than
+  built locally, so it stays Canonical's signed, reproducibly published
+  artifact; the helper verifies size and digest before converting it.
+  `docker-ce`, `docker-ce-cli` and `containerd.io` are pinned to exact
+  versions from Docker's apt repository, verified with the bundled signing key
+  whose fingerprint and digest are recorded (the helper refuses a key that
+  does not match). Maintenance proposes the newest image serial and Docker
+  Engine release together; validation boots a fresh VM and runs the Mac VM
+  checks (engine socket, egress, exec half-close, previews). Installed VMs
+  move to new Docker pins and current Ubuntu security updates only through
+  Woven's Update action, which snapshots first and rolls back on failure; a
+  new image serial affects only new installs.
 - **Sparkle** delivers every later fix, so the Xcode project requires the exact
   release commit, and its signing tools come from the same release record.
   Major lines are proposed with the other majors and need careful review.
@@ -163,14 +196,38 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   and notices. Builds never run an upstream installer or update the runtime.
   Maintenance checks Cua's non-nightly release channel, including new majors and
   0.x minors, and refreshes every record and notice together. Upstream currently
-  marks even its numbered driver releases as GitHub prereleases; 0.38.0 is the
-  numbered published driver selection, rather than a nightly build.
+  marks even its numbered driver releases as GitHub prereleases to keep the
+  monorepo Latest pointer separate. Its release notes identify plain SemVer
+  driver releases as stable; the current selection is 0.46.1.
   The driver is spawned directly by the signed GUI, without a Node SDK or
-  additional native libraries. Provider-free tests cover the MCP contract,
+  additional native libraries. Woven negotiates MCP 2025-06-18 and refuses an
+  unsupported initialize response before dispatching desktop tools.
+  Provider-free tests cover the MCP contract,
   authorization, lifecycle, cancellation, and packaging integrity. The opt-in
   `scripts/test-cua-desktop.sh` verifies actual input and capture through Woven MCP
   against a disposable native fixture, including background focus preservation.
   Signed-app Accessibility/Screen Recording grants are required for that check.
+- **Swift on Linux** (`wovenmatter-library` and the portable library targets).
+  `apple/swift-crypto` (floor 5.1.1, transitive `swift-asn1`) replaces CryptoKit
+  only on Linux: every use is `#if canImport(CryptoKit) … #else import Crypto`,
+  and the package product is conditioned on `.linux`, so Apple builds never
+  compile it. Its declaration is a minimum-only range (`"5.1.1"..<"1000.0.0"`)
+  and `app/Package.resolved` records the selection; generate both SwiftPM and
+  Xcode pins with tooling (`swift package resolve`, then
+  `xcodebuild -resolvePackageDependencies`). `shared/` has no Linux dependency:
+  it derives identifiers with an internal SHA-256 that its tests check
+  against published vectors and CryptoKit. On Linux, `CSQLite` links the
+  distribution's SQLite for tests (`libsqlite3-dev`, FTS5 and JSON required);
+  the shipped static binary links the SQLite amalgamation recorded in
+  `remote/library/build-version.json`, compiled with FTS5 and math functions.
+  That binary is an exact selection because it is fully static: the Swift
+  toolchain image (by digest), the Static Linux SDK (musl) archive and the
+  amalgamation are verified by SHA-256 before use, and SwiftPM verifies the SDK
+  again on install. Maintenance moves all three to the current stable
+  releases together (the SDK must match the toolchain exactly), regenerates
+  the resolved graph, and validates with `scripts/test-linux-library.sh` and
+  `scripts/build-linux-library.sh` (manual `linux` validation scope). Hosts
+  receive a new binary only in a host bundle from an updated app.
 - **MCP TypeScript SDK** uses the current v2 client and server packages. Woven MCP and
   Executor use the supported Streamable HTTP client, with the shared native MCP
   protocol core serving the same focused schemas on Mac, Linux and iOS adapters;
@@ -186,14 +243,14 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   Pi refresh and remove it once Pi's own requirement excludes the affected
   releases. Provider-free HTTP security fixtures and the coding-agent suites
   validate the overridden Node dependency; it is not part of the mobile bundle.
-  Chord 1.5.0 declares an optional exact ws 8.21.0 peer, which conflicts with
-  the app's current ws 8.22.1 transport. A scoped `$ws` override shares the
+  Chord 1.5.2 declares an optional exact ws 8.21.0 peer, which conflicts with
+  the app's current ws 8.22.2 transport. A scoped `$ws` override shares the
   app's tested current transport without editing vendor manifests or ignoring
   peer validation. Real local WebSocket streaming/cancellation fixtures and the
   Chord/Durable suites validate this selection; review it on each Chord refresh.
-  Pi AI 1.5.0 also pins older provider clients. Consumer-scoped minimum-only
-  overrides select the tested OpenAI 7.52.0, Anthropic 1.6.0, Google GenAI 2.32.0,
-  Bedrock Runtime and token providers 3.1163.0, and Smithy Node HTTP handler
+  Pi AI 1.5.2 also pins older provider clients. Consumer-scoped minimum-only
+  overrides select the tested OpenAI 7.55.0, Anthropic 1.7.0, Google GenAI 3.0.0,
+  Bedrock Runtime and token providers 3.1165.0, and Smithy Node HTTP handler
   4.14.2 releases without
   changing vendor manifests. Keeping these clients current is required for
   provider API and transport compatibility, including Anthropic's 2026-10-21
@@ -206,9 +263,20 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   serialization, streaming text/tools, usage and cancellation. They do not
   establish authenticated provider acceptance. The iOS bundle excludes these
   network clients; its generated provenance still follows the shared lock.
-  Pi Coding Agent 1.5.0 now selects minimatch 11.0.3, which includes the
+  Smithy core 3.40 enables its new retry defaults unconditionally. Pi's Bedrock
+  adapter does not forward `maxRetries`, so the dedicated Built-in agent process
+  sets Smithy's supported `AWS_MAX_ATTEMPTS=1` before creating clients. Woven's
+  conversation boundary owns retries; a real loopback 503 fixture verifies that
+  even an inherited retry setting cannot silently replay a provider request.
+  GenAI 3 requires Node 22 or newer and defaults the Gemini Developer API to
+  `v1`. The recorded Node 26 satisfies that requirement. Pi supplies each model's
+  complete versioned base URL with an explicit empty SDK API version, preserving
+  existing `v1beta` models and custom endpoints even when the new
+  `GOOGLE_GENAI_API_VERSION` environment variable is set. Loopback fixtures cover
+  exact versioned paths, streaming tools/usage, and cancellation with GenAI 3.
+  Pi Coding Agent 1.5.2 now selects minimatch 11.0.3, which includes the
   GHSA-g3hv-75wg-m249 repair. The consumer-scoped floor advances to the current
-  `>=11.0.4` patch without changing the named matching API. Provider-free
+  `>=11.0.5` patch without changing the named matching API. Provider-free
   model-scope matching and bounded adversarial-pattern fixtures validate this
   selection; review the override on every refresh and remove it when Pi itself
   selects the current tested release.
@@ -217,6 +285,17 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   recover transcript window gaps, and derive progress receipts only from new
   committed entries. Archive/subagent observers use `observeCommits`; SQLite
   migration verifies each batched commit receipt before activation.
+- **Bots runtime** (`bots/`) consumes the same Pi family, Chord, Claude Agent
+  SDK, typebox and ws selections as `default-agent`, with the same
+  consumer-scoped pi-ai provider and Chord `ws` overrides, and minimum-only
+  ranges. Its in-container helper ships the runtime's own locked Pi Durable,
+  Chord and Pi telemetry packages (copied from `bots/node_modules` into the
+  helper volume), so they never drift from the runtime. The bot image builds
+  through the Engine API from `bots/image` under a content-hash tag, so a
+  changed recipe gives a new image; existing bots move to it with Rebuild.
+  `npm test --prefix bots` (type check plus faux-provider suites) validates
+  it; `npm run test:engine --prefix bots` with `WOVEN_BOTS_ENGINE_SOCKET` set
+  exercises a real engine on request.
 - **Pyodide and esbuild** produce the offline iOS resources and their
   provenance. They refresh together with the generated files.
 
@@ -251,21 +330,22 @@ an older configured channel. OpenCode and Executor retain the documented v2 API 
 maintenance must review a newer stable API major and implement its migration.
 
 `harnesses/catalog.json` records tested connector and engine minimums separately:
-Codex ACP 2.5.0 with Codex 0.166.0, and Claude ACP 0.101.0 with Claude SDK 0.3.318
-(native Claude Code 2.1.318). The standalone Codex and Claude sign-in CLIs use their
-official current stable release channels. Codex ACP's `^0.165.0` engine range
-otherwise keeps its chat engine behind; its ACP TypeScript SDK also retains 2.1
-through a restrictive range. Claude ACP 0.101.0 now selects SDK 0.3.318 directly; the consumer-scoped override
-keeps its independently selected engine current on later explicit updates. Transcript-write loss
+Codex ACP 2.6.0 with Codex 0.167.0, and Claude ACP 0.104.0 with Claude SDK 0.3.322
+(native Claude Code 2.1.322). The standalone Codex and Claude sign-in CLIs use their
+official current stable release channels. Codex ACP's `^0.166.0` engine range
+otherwise keeps its chat engine behind; its `~2.4.0` ACP TypeScript SDK range
+also excludes the current 2.5.0. Claude ACP 0.104.0 still pins SDK 0.3.321;
+the consumer-scoped override selects SDK 0.3.322 independently so engine-only updates
+remain eligible when the connector's pin lags. Transcript-write loss
 invalidates the native resume marker and refuses tool dispatch/continuation commits;
 config-only write loss leaves a valid response intact. Provider-free persistence
-fixtures verify canonical replay after recovery. The connector selects protocol SDK
-2.4.0 directly. The catalog's independent ACP SDK floor is 2.4.0. Mac and native
+fixtures verify canonical replay after recovery. Claude's connector selects protocol SDK
+2.5.0 directly. The catalog's independent ACP SDK floor is 2.5.0. Mac and native
 Linux/container explicit updates resolve its newest nondeprecated stable
 publication independently, retain the vendor manifests, and verify the exact
 consumer graph and ACP v1 handshake before activation. SDK-only updates appear
 in inventory even when connector and engine are current. Failed candidates
-leave the active generation intact. The 2.4 SDK retains stable v1;
+leave the active generation intact. The 2.5 SDK retains stable v1;
 its v2 changes remain experimental and do not change Woven Matter's wire API.
 The consumer graph created by `harnesses/install-adapter.mjs` therefore declares
 the independently selected engine and scopes an npm override to that connector.

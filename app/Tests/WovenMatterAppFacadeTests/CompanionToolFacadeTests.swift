@@ -72,6 +72,89 @@ struct CompanionToolFacadeTests {
         #expect(try await fixture.database.companionSnapshot().notes.count == 1)
     }
 
+    /// A phone that pairs with its member key becomes a member; its signed
+    /// requests then work without the bearer, until a Mac removes it.
+    @Test func phonePairedWithAMemberKeySignsItsRequests() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        let auth = try CompanionAuthentication(fileURL: fixture.directory.appending(path: "member-devices.json"))
+        let mac = MemberDirectory(database: fixture.database, identity: try MemberIdentity.loadOrCreate(
+            file: fixture.directory.appending(path: "mac.key"), deviceID: try await fixture.database.companionLibraryIdentity().hostDeviceID, kind: .mac), cacheLifetime: 0)
+        try await mac.ensureSelf(name: "Mac", endpoints: [])
+        let phone = try MemberIdentity.loadOrCreate(file: fixture.directory.appending(path: "phone.key"), deviceID: UUID().uuidString.lowercased(), kind: .ios)
+        let api = CompanionWorkspaceAPI(database: fixture.database, authentication: auth, commands: fixture.model.companionCommands,
+            isActive: { true }, members: mac, onMemberPaired: { id, name, key in
+                _ = try? await mac.add(deviceID: id, kind: .ios, name: name, publicKey: key, endpoints: [])
+            })
+        let offer = try await auth.createOffer(endpoint: URL(string: "https://fixture.ts.net/wovenmatter")!)
+        var pair = CompanionPairRequest(token: offer.payload.token, deviceID: phone.deviceID, deviceName: "Member phone", metadata: .init(kind: .iPhone))
+        pair.memberPublicKey = phone.publicKey
+        let paired = await api.handle(.init(method: "POST", target: "/v1/pair", headers: [:], body: try JSONEncoder().encode(pair)))
+        #expect(paired.status == 200)
+        #expect(await mac.member(phone.deviceID)?.kind == .ios)
+        // The reply names the Mac's member device ID: the phone's audience.
+        let reply = try JSONDecoder().decode(CompanionPairResponse.self, from: paired.body)
+        #expect(reply.hostDeviceID == mac.identity.deviceID)
+        func hello() async throws -> Int {
+            var headers = try phone.signer.headers(method: "GET", target: "/wovenmatter/v1/hello", audience: mac.identity.deviceID)
+            headers["X-Woven-Protocol"] = String(CompanionProtocol.version)
+            let lowered = Dictionary(uniqueKeysWithValues: headers.map { ($0.key.lowercased(), $0.value) })
+            return await api.handle(.init(method: "GET", target: "/wovenmatter/v1/hello", headers: lowered)).status
+        }
+        #expect(try await hello() == 200)
+        try await mac.remove(phone.deviceID)
+        #expect(try await hello() == 401)
+    }
+
+    /// The member entry is signed when the phone confirms; a refusal reaches
+    /// the phone before the code is spent; pairing again (a phone restored
+    /// from a backup has a new key) replaces the key.
+    @Test func phoneMemberIsAddedAtConfirmationAndRefusalsReachThePhone() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        let auth = try CompanionAuthentication(fileURL: fixture.directory.appending(path: "member-devices.json"))
+        let mac = MemberDirectory(database: fixture.database, identity: try MemberIdentity.loadOrCreate(
+            file: fixture.directory.appending(path: "mac.key"), deviceID: try await fixture.database.companionLibraryIdentity().hostDeviceID, kind: .mac), cacheLifetime: 0)
+        try await mac.ensureSelf(name: "Mac", endpoints: [])
+        let api = CompanionWorkspaceAPI(database: fixture.database, authentication: auth, commands: fixture.model.companionCommands,
+            isActive: { true }, members: mac, onMemberPaired: { id, name, key in
+                try await mac.add(deviceID: id, kind: .ios, name: name, publicKey: key, endpoints: [], replacingKey: true)
+            })
+        let workspaceID = try await fixture.database.companionWorkspaceID()
+        let phoneID = UUID().uuidString.lowercased()
+        func pair(_ device: String, key: Data) async throws -> CompanionHTTPResponse {
+            let offer = try await auth.createOffer(endpoint: URL(string: "https://fixture.ts.net/wovenmatter")!)
+            var request = CompanionPairRequest(token: offer.payload.token, deviceID: device, deviceName: "Member phone",
+                                               metadata: .init(kind: .iPhone), requiresConfirmation: true)
+            request.memberPublicKey = key
+            return await api.handle(.init(method: "POST", target: "/v1/pair", headers: [:], body: try JSONEncoder().encode(request)))
+        }
+        func confirm(_ paired: CompanionHTTPResponse) async throws -> Int {
+            let reply = try JSONDecoder().decode(CompanionPairResponse.self, from: paired.body)
+            return await api.handle(.init(method: "POST", target: "/v1/pair/confirm", headers: [
+                "x-woven-protocol": String(CompanionProtocol.version), "x-woven-workspace": workspaceID,
+                "authorization": "Bearer " + reply.credential])).status
+        }
+        let first = Data((0..<32).map { _ in UInt8.random(in: 0...255) })
+        let paired = try await pair(phoneID, key: first)
+        #expect(paired.status == 200)
+        #expect(try JSONDecoder().decode(CompanionPairResponse.self, from: paired.body).libraryIDs != nil)
+        #expect(await mac.member(phoneID) == nil, "not a member before it confirms")
+        #expect(try await confirm(paired) == 200)
+        #expect(await mac.member(phoneID)?.publicKey == first)
+        // A device ID that belongs to a Mac member is refused with the reason.
+        let otherMac = UUID().uuidString.lowercased()
+        try await mac.add(deviceID: otherMac, kind: .mac, name: "Other", publicKey: Data((0..<32).map { _ in UInt8.random(in: 0...255) }), endpoints: [])
+        let refused = try await pair(otherMac, key: first)
+        #expect(refused.status == 409)
+        #expect(try JSONDecoder().decode(CompanionAPIError.self, from: refused.body).code == "member_key_changed")
+        // Restored from a backup: the Mac removes the old pairing, the phone pairs again with a new key.
+        try await auth.revoke(deviceID: phoneID)
+        let restored = Data((0..<32).map { _ in UInt8.random(in: 0...255) })
+        let again = try await pair(phoneID, key: restored)
+        #expect(again.status == 200)
+        #expect(try await confirm(again) == 200)
+        #expect(await mac.member(phoneID)?.publicKey == restored)
+    }
+
     @Test func httpEndpointUsesPairedIdentityAndCurrentRevocation() async throws {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
         let caller = try await importPhone(fixture)

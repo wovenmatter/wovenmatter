@@ -6,6 +6,7 @@ struct SettingsDictationView: View {
     let model: ApplicationModel
     var reservesRailControlSpace = false
     let onBack: () -> Void
+    var onOpenPermissions: () -> Void = {}
     @State private var records: [DictationRecord] = []
     private let pageSize = 20
     @State private var page = 0
@@ -72,6 +73,7 @@ struct SettingsDictationView: View {
                 }
                 .disabled(dictation.isBusy)
             }
+            MacPermissionStatusLink(items: [.microphone], onOpen: onOpenPermissions)
             SettingsHelp {
                 SettingsNote("Audio stays on this Mac. Apple may download language support the first time you dictate. Transcripts remain drafts for review.")
             }

@@ -25,6 +25,23 @@ test "$(/usr/libexec/PlistBuddy -c 'Print :BundleProgram' "$power_daemon")" = Co
 test "$(/usr/libexec/PlistBuddy -c 'Print :UserName' "$power_daemon")" = root
 test "$(/usr/libexec/PlistBuddy -c 'Print :KeepAlive' "$power_daemon")" = true
 
+# The Woven VM helper exists on Apple silicon builds only (the guest is arm64).
+vm_helper="${app}/Contents/Helpers/WovenMatterVMHelper"
+if lipo -archs "$main_executable" | grep -qw arm64; then
+  test -x "$vm_helper"
+  codesign --verify --strict "$vm_helper"
+  # grep reads all input (no -q): an early exit would SIGPIPE codesign under pipefail.
+  codesign -d --entitlements :- "$vm_helper" 2>/dev/null | grep com.apple.security.virtualization >/dev/null
+  # Signed with the hardened runtime by build-vm-helper.sh, like every shipped executable.
+  codesign -dvv "$vm_helper" 2>&1 | grep -E 'flags=0x[0-9a-f]*\(.*runtime' >/dev/null
+  # The guest files are sealed resources: exactly the committed copies, one pin for the guest.
+  cmp "$repo_root/app/VMHelper/guest-version.json" "${app}/Contents/Resources/WovenVM/guest-version.json"
+  for file in agent.py provision.sh egress.sh disk-cap.sh docker-archive-keyring.asc \
+      woven-agent.service woven-provision.service woven-update.service woven-egress.service; do
+    cmp "$repo_root/app/VMHelper/Guest/$file" "${app}/Contents/Resources/WovenVM/$file"
+  done
+fi
+
 frameworks="$app/Contents/Frameworks"
 cef="$frameworks/Chromium Embedded Framework.framework"
 test -f "$cef/Resources/Info.plist"
@@ -85,6 +102,19 @@ if [ "$claude_arch" = x86_64 ]; then claude_arch=x64; fi
 claude_binary="${resources}/default-agent/node_modules/@anthropic-ai/claude-agent-sdk-darwin-$claude_arch/claude"
 test -x "$claude_binary"
 codesign --verify --strict "$claude_binary"
+# The bots runtime (Resources/bots): its sources and production dependencies only. It
+# runs the default agent's signed Claude binary above (prepare-bots.sh), so it carries
+# no copy of its own.
+bots="${resources}/bots"
+for file in package.json package-lock.json src/cli.ts helper/supervisor.mjs helper/agent.mjs image/Dockerfile; do
+  test -f "$bots/$file"
+done
+test ! -e "$bots/test"
+test ! -e "$bots/node_modules/vitest"
+test ! -e "$bots/node_modules/typescript"
+test -f "$bots/node_modules/@anthropic-ai/claude-agent-sdk/package.json"
+test -z "$(find "$bots/node_modules/@anthropic-ai" -maxdepth 1 -name 'claude-agent-sdk-*' -print -quit)"
+test "$("${resources}/default-agent/bin/node" "$bots/src/cli.ts" --version)" = "$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["version"])' "$bots/package.json")"
 test -f "${resources}/harnesses/catalog.json"
 for integration in adapter.mjs hook.mjs binding.mjs proxy.mjs instructions.mjs opencode.mjs install.mjs; do
   test -f "${resources}/harnesses/mcp/$integration"

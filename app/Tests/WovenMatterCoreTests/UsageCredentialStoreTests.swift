@@ -1,3 +1,4 @@
+#if canImport(Security)
 import Foundation
 import LocalAuthentication
 import Security
@@ -266,3 +267,4 @@ private final class ConnectionRevisionFixture: @unchecked Sendable {
   var value: UInt64 { lock.withLock { revision } }
   func advance() { lock.withLock { revision += 1 } }
 }
+#endif

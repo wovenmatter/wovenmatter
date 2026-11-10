@@ -39,7 +39,10 @@ if "$plan_only"; then printf '%s\n' "$profile"; exit 0; fi
 instance="$(printf '%s' "$profile" | python3 -c 'import json,sys; print(json.load(sys.stdin)["instance"])')"
 data_mode="$(printf '%s' "$profile" | python3 -c 'import json,sys; print(json.load(sys.stdin)["mode"])')"
 support_directory="$(printf '%s' "$profile" | python3 -c 'import json,sys; print(json.load(sys.stdin)["support"])')"
-cache_base="${WOVENMATTER_DEV_CACHE_DIR:-/private/tmp/wovenmatter-development}"
+# Not under /tmp: macOS marks apps in temporary folders "in-temp-dir" and leaves
+# them out of bundle-ID lookups, so System Settings can't list a Dev app there and
+# its Accessibility and Screen Recording prompts fail.
+cache_base="${WOVENMATTER_DEV_CACHE_DIR:-$HOME/Library/Developer/Woven Matter Dev}"
 cache_root="$cache_base/$instance/$data_mode"
 derived_data="${cache_root}/DerivedData"
 package_cache="${cache_root}/SourcePackages"
@@ -77,6 +80,10 @@ if [ "$backend_running" = true ]; then
   exit 75
 fi
 
+# Every Linux host holds a library copy, and the app's host bundle carries the
+# binary. Build any missing architecture with Docker, or stop and say how.
+python3 "$repo_root/scripts/dev-build.py" linux-library --root "$repo_root"
+
 # A stable certificate-backed identity lets macOS recognize subsequent Dev
 # builds. Linker/ad-hoc signatures change identity whenever the binary changes.
 # Keep the selected certificate pinned in this build cache; never silently
@@ -91,7 +98,17 @@ if [ -z "$signing_identity" ]; then
   identity_count="$(printf '%s\n' "$development_identities" | sed '/^$/d' | wc -l | tr -d ' ')"
   case "$identity_count" in
     1) signing_identity="$development_identities" ;;
-    0) printf '%s\n' 'No Apple Development identity is available; Dev will use ad-hoc signing. Keychain trust may not survive rebuilds.' >&2 ;;
+    0)
+      # Ad-hoc signing changes the app's identity on every rebuild, so macOS drops
+      # its permissions and its Keychain items (pairing keys) each time. Refuse
+      # unless asked for explicitly with WOVENMATTER_DEV_SIGNING_IDENTITY=-.
+      if security find-identity -p codesigning | grep -q '"Apple Development:'; then
+        printf '%s\n' 'An Apple Development certificate is installed but macOS does not trust it, usually because Apple'"'"'s WWDR intermediate certificate (G3 or later) is missing. Install it from https://www.apple.com/certificateauthority/ and run this again.' >&2
+      else
+        printf '%s\n' 'No Apple Development certificate is installed. In Xcode: Settings > Apple Accounts > your account > your team > Manage Certificates > + > Apple Development. Then run this again.' >&2
+      fi
+      printf '%s\n' 'Without one, permissions and Keychain access reset on every rebuild. To build unsigned anyway, set WOVENMATTER_DEV_SIGNING_IDENTITY=-.' >&2
+      exit 65 ;;
     *) printf '%s\n' 'Multiple Apple Development identities are available. Set WOVENMATTER_DEV_SIGNING_IDENTITY to the intended certificate fingerprint.' >&2; exit 65 ;;
   esac
 fi

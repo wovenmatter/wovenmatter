@@ -3,8 +3,8 @@
 # Debian's current/backports OpenSSH clients retain CVE-2026-60002. Build
 # current upstream clients separately; only verified binaries enter the image.
 FROM node:26-trixie-slim AS workspace-ssh-build
-ARG OPENSSH_VERSION=10.6p1
-ARG OPENSSH_SHA256=a9dc9565dffe8640f64d863cd29a32bc4a3dbdec0566a7fc44c5d6ee767d5f39
+ARG OPENSSH_VERSION=10.6p2
+ARG OPENSSH_SHA256=9ae44872090cf2f06b3cf9ff147e7f16f309671340763ed2f99248398ae29d5b
 RUN export DEBIAN_FRONTEND=noninteractive \
     && echo 'deb http://deb.debian.org/debian trixie-backports main' > /etc/apt/sources.list.d/wovenmatter-backports.list \
     && apt-get update && apt-get upgrade -y \
@@ -32,7 +32,7 @@ RUN export DEBIAN_FRONTEND=noninteractive \
 # The official image now publishes the required Python security release for both
 # native architectures. Record its verified manifest index; maintenance refreshes
 # this runtime selection together with docs/DEPENDENCIES.md.
-FROM python:3.15.2-slim-trixie@sha256:e97b88e416c3c01eb427b21fd8cd3ebf006e6ee38afcfcc3cae1c54ee2ab0a75 AS workspace-python
+FROM python:3.15.2-slim-trixie@sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87e4b031bc36928 AS workspace-python
 RUN python3 -m pip install --no-cache-dir --upgrade 'pip>=26.3' 'setuptools>=84.2.1' \
     && find /usr/local -type f -executable ! -name '*tkinter*' -exec ldd '{}' ';' 2>/dev/null \
       | awk '/=>/ { so = $(NF-1); if (index(so, "/usr/local/") == 1) next; gsub("^/(usr/)?", "", so); printf "*%s\n", so }' \

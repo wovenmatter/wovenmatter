@@ -32,6 +32,47 @@ struct CompanionInferenceHostTests {
         #expect(await probe.preparationCount == 1)
     }
 
+    /// A phone member signs its inference requests: no grant exists, the
+    /// principal is its member device, and removing it ends access at once.
+    @Test func signedMembersUseInferenceWithoutAGrant() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        let identity = try await fixture.database.companionLibraryIdentity()
+        let mac = MemberDirectory(database: fixture.database, identity: MemberIdentity(deviceID: identity.hostDeviceID, kind: .mac, key: .init()), cacheLifetime: 0)
+        try await mac.ensureSelf(name: "Mac", endpoints: [])
+        let phone = MemberIdentity(deviceID: UUID().uuidString.lowercased(), kind: .ios, key: .init())
+        let linux = MemberIdentity(deviceID: UUID().uuidString.lowercased(), kind: .linux, key: .init())
+        try await mac.add(deviceID: phone.deviceID, kind: .ios, name: "Phone", publicKey: phone.publicKey, endpoints: [])
+        try await mac.add(deviceID: linux.deviceID, kind: .linux, name: "Linux", publicKey: linux.publicKey, endpoints: [])
+        let auth = try CompanionExecutionAuthentication(fileURL: fixture.directory.appendingPathComponent("inference-devices.json"))
+        let workspace = UUID().uuidString.lowercased()
+        let descriptor = CompanionExecutionWorkspace(id: workspace, libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID, kind: .mac, name: "Mac")
+        let probe = InferenceHostProbe(), principals = InferenceLines()
+        let host = CompanionInferenceHost(authentication: auth, descriptor: descriptor, directory: fixture.directory, isActive: { true },
+            authorize: { _, _ in Issue.record("A signed caller has no grant to authorize.") }, members: mac,
+            preparePayload: { await probe.prepared(); return Data("{\"config\":{},\"credentials\":{}}".utf8) },
+            run: { body, emit in
+                principals.append(Data(((try? JSONSerialization.jsonObject(with: body) as? [String: Any])?["principalID"] as? String ?? "").utf8))
+                try await emit(Data("{\"models\":[],\"accounts\":[]}\n".utf8))
+            })
+        func catalog(_ member: MemberIdentity, audience: String? = nil, workspace named: String? = nil) async throws -> Int {
+            var headers = try member.signer.headers(method: "GET", target: "/wovenmatter/v1/inference/catalog?provider=fixture",
+                                                    audience: audience ?? identity.hostDeviceID)
+            headers["X-Woven-Protocol"] = String(CompanionProtocol.version); headers["X-Woven-Workspace"] = named ?? workspace
+            let lowered = Dictionary(uniqueKeysWithValues: headers.map { ($0.key.lowercased(), $0.value) })
+            return await host.handle(.init(method: "GET", target: "/wovenmatter/v1/inference/catalog?provider=fixture", headers: lowered)).status
+        }
+        #expect(try await catalog(phone) == 200)
+        #expect(principals.text == phone.deviceID)
+        // Addressed to another member, naming another workspace, or from a Linux host: refused before credentials.
+        #expect(try await catalog(phone, audience: UUID().uuidString.lowercased()) == 401)
+        #expect(try await catalog(phone, workspace: UUID().uuidString.lowercased()) == 403)
+        #expect(try await catalog(linux) == 403)
+        #expect(await probe.preparationCount == 1)
+        try await mac.remove(phone.deviceID)
+        #expect(try await catalog(phone) == 401)
+        #expect(await probe.preparationCount == 1)
+    }
+
     @Test func aDelegatedGrantLosesInferenceAsSoonAsItsProvisioningMacIsUnpaired() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("InferenceLive-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

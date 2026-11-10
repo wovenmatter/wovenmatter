@@ -10,17 +10,17 @@
     "test": "node --test --test-concurrency=1 test/*.test.mjs"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": ">=0.3.318",
-    "@earendil-works/chord": ">=1.5.0",
-    "@earendil-works/pi-ai": ">=1.5.0",
-    "@earendil-works/pi-coding-agent": ">=1.5.0",
-    "@earendil-works/pi-durable": ">=1.5.0",
+    "@anthropic-ai/claude-agent-sdk": ">=0.3.322",
+    "@earendil-works/chord": ">=1.5.2",
+    "@earendil-works/pi-ai": ">=1.5.2",
+    "@earendil-works/pi-coding-agent": ">=1.5.2",
+    "@earendil-works/pi-durable": ">=1.5.2",
     "@modelcontextprotocol/client": ">=2.4.0",
     "@modelcontextprotocol/server": ">=2.4.0",
     "playwright-core": ">=1.65.0",
     "proper-lockfile": ">=4.1.2",
-    "typebox": ">=1.4.4",
-    "ws": ">=8.22.1"
+    "typebox": ">=1.4.6",
+    "ws": ">=8.22.2"
   },
   "devDependencies": {
     "esbuild": ">=0.28.2"
@@ -28,15 +28,15 @@
   "overrides": {
     "@earendil-works/pi-coding-agent": {
       "undici": ">=8.12.4",
-      "minimatch": ">=11.0.4"
+      "minimatch": ">=11.0.5"
     },
     "@earendil-works/pi-ai": {
-      "openai": ">=7.52.0",
-      "@anthropic-ai/sdk": ">=1.6.0",
-      "@google/genai": ">=2.32.0",
-      "@aws-sdk/client-bedrock-runtime": ">=3.1163.0",
+      "openai": ">=7.55.0",
+      "@anthropic-ai/sdk": ">=1.7.0",
+      "@google/genai": ">=3.0.0",
+      "@aws-sdk/client-bedrock-runtime": ">=3.1165.0",
       "@smithy/node-http-handler": ">=4.14.2",
-      "@aws-sdk/token-providers": ">=3.1163.0"
+      "@aws-sdk/token-providers": ">=3.1165.0"
     },
     "@earendil-works/chord": {
       "ws": "$ws"

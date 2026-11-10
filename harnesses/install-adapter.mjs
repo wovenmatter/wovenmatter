@@ -2,7 +2,7 @@
 // npm graph. Upstream's engine range is overridden only in this consumer graph;
 // vendor manifests, executable signatures and the generated lock stay intact.
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { mkdir, mkdtemp, readFile, writeFile, rm, symlink, rename, realpath } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
@@ -133,7 +133,7 @@ export async function installAdapter({ prefix, adapter, adapterVersion, engineVe
   }
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
     if (process.argv.length !== 3) throw new Error('Adapter installation requires one selection.');
     console.log(await installAdapter(JSON.parse(process.argv[2])));

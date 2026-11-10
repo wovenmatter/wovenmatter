@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import Observation
 import Security
+import WovenMatterClient
 import WovenMatterCore
 import WovenMatterDashboardStore
 
@@ -74,13 +75,29 @@ final class CompanionHostController {
     private var authentication: CompanionAuthentication?
     private var executionAPI: CompanionMacExecutionAPI?
     private var inferenceHost: CompanionInferenceHost?
+    /// Who may use this Mac's bots from another device (`/v1/bots/*`).
+    private var authorizeBots: (@MainActor (CompanionHTTPRequest) async throws -> Void)?
     private var executionAuthentication: CompanionExecutionAuthentication?
     private var provisioningWorkspaceIDs: Set<String> = []
     private var revokingDeviceIDs: Set<String> = []
     var mcpSettingsFingerprints: [String: String] = [:]
     private var registryRefreshInProgress = false
+    /// Linux hosts this Mac finished setting up this launch, and those whose
+    /// setup is retrying (`setUpLinuxHost`).
+    @ObservationIgnored private var readyLinuxHosts: Set<String> = []
+    @ObservationIgnored private var linuxHostSetups: [String: (id: UUID, task: Task<Void, Never>)] = [:]
+    /// Test seam: the first retry delay, doubled after each failure up to ten minutes.
+    @ObservationIgnored var linuxHostSetupRetry: Duration = .seconds(5)
+    /// Test seam: adoption and enrollment of a Linux host. A test process sets
+    /// up no host unless a fixture supplies these, so it never reaches SSH or Keychain.
+    struct LinuxHostSetupSteps {
+        var adopt: @MainActor (RemoteWorkspaceConfiguration) async throws -> Void
+        var enroll: @MainActor (String) async throws -> Void
+    }
+    @ObservationIgnored var linuxHostSetupSteps: LinuxHostSetupSteps?
     private var revocationRetryInProgress = false
     private static let pendingRevocationsKey = "companion.execution.pending-revocations"
+    private static let pendingInstallerRotationsKey = "companion.execution.pending-installer-rotations"
     private var server: CompanionHTTPServer?
     private var serve: CompanionTailscaleServe?
     private var stoppingExposures: [CompanionTailscaleServe] = []
@@ -164,8 +181,18 @@ final class CompanionHostController {
                     guard let model else { throw CompanionAPIError(code: "unavailable", message: "The Mac workspace is closed.") }
                     do { return try await model.linkedData(for: link) }
                     catch { throw CompanionAPIError(code: "linked_data_unavailable", message: error.localizedDescription) }
-                })
-            let listener = CompanionHTTPServer { [weak self] request in
+                }, members: try? await peerSync.members(),
+                onMemberPaired: { [weak self] deviceID, name, key in
+                    // Pairing again on this Mac replaces the phone's key (a
+                    // restored backup); a refusal is returned to the phone.
+                    guard let self else { throw CompanionAPIError(code: "unavailable", message: "This sharing session stopped.") }
+                    try await self.peerSync.members().add(deviceID: deviceID, kind: .ios, name: name, publicKey: key, endpoints: [], replacingKey: true)
+                    await self.peerSync.librarySync?.scheduleAll()
+                }, syncStatus: { [weak self] in await self?.peerSync.librarySync?.status() })
+            let listener = CompanionHTTPServer(upgradeHandler: { [weak self] request in
+                guard let self else { return .reject(.error("unavailable", "This sharing session has stopped.", status: 503)) }
+                return await self.upgrade(request, generation: expectedGeneration)
+            }) { [weak self] request in
                 guard let self else { return .error("unavailable", "This sharing session has stopped.", status: 503) }
                 return await self.handle(request, generation: expectedGeneration, libraryAPI: api)
             }
@@ -213,10 +240,20 @@ final class CompanionHostController {
                     guard await authentication.mayExecute(deviceID: deviceID) else {
                         throw CompanionAPIError(code: "unauthorized", message: "This device is no longer paired.")
                     }
-                }, authorizeGrant: authorizeGrant)
+                }, authorizeGrant: authorizeGrant, members: try? await peerSync.members())
+            // Only a signed member request (a Mac or phone member). Other Macs
+            // reach this Mac's bots with their member key; no grant is accepted.
+            authorizeBots = { [weak self] request in
+                guard MemberRequestVerifier.isSigned(request.headers) else {
+                    throw CompanionAPIError(code: "unauthorized", message: "Sign this request with a member device key.")
+                }
+                guard let self else { throw CompanionAPIError(code: "unavailable", message: "This sharing session has stopped.") }
+                _ = try await self.authenticateMember(request, allowing: [.mac, .ios])
+            }
             inferenceHost = CompanionInferenceHost(authentication: executionAuth, descriptor: local,
                 directory: try supportDirectory ?? ApplicationModel.dashboardSupportDirectory(),
-                isActive: { [weak self] in self?.generation == expectedGeneration && self?.endpoint != nil }, authorize: authorizeGrant)
+                isActive: { [weak self] in self?.generation == expectedGeneration && self?.endpoint != nil }, authorize: authorizeGrant,
+                members: try? await peerSync.members())
             isStarting = false; status = "Available to your paired devices"
             // Paired-Mac credential storage is independent of phone and library
             // availability. A failure is reported and retried, never fatal.
@@ -271,7 +308,27 @@ final class CompanionHostController {
             guard let inferenceHost else { return .error("unavailable", "This inference host is starting.", status: 503) }
             return await inferenceHost.handle(request)
         }
+        let botsPath = path.hasPrefix("/wovenmatter/") ? String(path.dropFirst("/wovenmatter".count)) : path
+        if botsPath.hasPrefix("/v1/bots/") {
+            guard let authorizeBots, let host = model?.botsHost else { return .error("unavailable", "Bots on this Mac are starting.", status: 503) }
+            do { try await authorizeBots(request) }
+            catch { return .error("unauthorized", error.localizedDescription, status: 401) }
+            return await host.remoteRequest(request, path: botsPath)
+        }
         return await libraryAPI.handle(request)
+    }
+
+    /// Only `/v1/bots/ws` upgrades: a member's WebSocket to this Mac's bots runtime.
+    private func upgrade(_ request: CompanionHTTPRequest, generation expected: UUID) async -> CompanionUpgradeDecision {
+        guard generation == expected else { return .reject(.error("unavailable", "This sharing session has stopped.", status: 503)) }
+        let path = request.target.split(separator: "?", maxSplits: 1).first.map(String.init) ?? request.target
+        guard path == "/v1/bots/ws" || path == "/wovenmatter/v1/bots/ws" else {
+            return .reject(.error("not_found", "Unknown upgrade route.", status: 404))
+        }
+        guard let authorizeBots, let host = model?.botsHost else { return .reject(.error("unavailable", "Bots on this Mac are starting.", status: 503)) }
+        do { try await authorizeBots(request) }
+        catch { return .reject(.error("unauthorized", error.localizedDescription, status: 401)) }
+        return host.remoteUpgrade(request)
     }
 
     /// Quit and role changes cancel recovery as well as the owned listener.
@@ -284,7 +341,11 @@ final class CompanionHostController {
 
     private func stopService() {
         generation = UUID(); healthTask?.cancel(); healthTask = nil
-        server?.stop(); server = nil; executionAPI = nil; inferenceHost = nil
+        let peerSync = peerSync
+        Task { await peerSync.stopMembers() }
+        server?.stop(); server = nil; executionAPI = nil; inferenceHost = nil; authorizeBots = nil
+        for setup in linuxHostSetups.values { setup.task.cancel() }
+        linuxHostSetups.removeAll()
         if let serve {
             serve.stop()
             if !stoppingExposures.contains(where: { $0 === serve }) { stoppingExposures.append(serve) }
@@ -383,6 +444,8 @@ final class CompanionHostController {
             if let signer {
                 await authentication?.useIdentity(signer)
                 try await authentication?.revoke(deviceID: deviceID, expected: expected)
+                try await peerSync.removeMember(deviceID)
+                try await queueInstallerRotations(installedBy: deviceID)
             } else {
                 try await authentication?.revokeLocally(deviceID: deviceID)
             }
@@ -396,6 +459,35 @@ final class CompanionHostController {
             await retryPendingRevocations()
         }
     }
+    /// Linux hosts the removed Mac added hold that Mac's installer bearer;
+    /// each is asked to replace it, durably retried until it answers.
+    private func queueInstallerRotations(installedBy deviceID: String) async throws {
+        guard let database = model?.dashboardStore?.database else { return }
+        let hosts = try await database.companionExecutionWorkspaces()
+            .filter { $0.kind == .linux && !$0.deleted && $0.ownerDeviceID == deviceID }.map(\.id)
+        guard !hosts.isEmpty else { return }
+        pendingInstallerRotations = Array(Set(pendingInstallerRotations + hosts)).sorted()
+    }
+
+    private func retryInstallerRotations() async {
+        guard let database = model?.dashboardStore?.database, !pendingInstallerRotations.isEmpty else { return }
+        let workspaces = (try? await database.companionExecutionWorkspaces()) ?? []
+        for id in pendingInstallerRotations {
+            guard let workspace = workspaces.first(where: { $0.id == id }), !workspace.deleted else {
+                pendingInstallerRotations.removeAll { $0 == id }; continue
+            }
+            do {
+                try await hostAdministration(for: workspace).rotateInstallerBearer()
+                pendingInstallerRotations.removeAll { $0 == id }
+            } catch { /* Retained until the host answers. */ }
+        }
+    }
+
+    private var pendingInstallerRotations: [String] {
+        get { defaults.stringArray(forKey: Self.pendingInstallerRotationsKey) ?? [] }
+        set { defaults.set(newValue, forKey: Self.pendingInstallerRotationsKey) }
+    }
+
     private var pendingRevocations: [String: [String]] {
         get { defaults.dictionary(forKey: Self.pendingRevocationsKey) as? [String: [String]] ?? [:] }
         set { defaults.set(newValue, forKey: Self.pendingRevocationsKey) }
@@ -419,6 +511,8 @@ final class CompanionHostController {
         var revoke: @MainActor (_ workspaceID: String, _ deviceID: String) async throws -> Void
     }
     @ObservationIgnored var remoteExecutionRequests: RemoteExecutionRequests?
+    /// Test seam: carries signed requests to Linux hosts in process.
+    @ObservationIgnored var remoteHostSend: MemberSignedHTTPClient.Send?
 
     private func localExecutionWorkspaceID(libraryID: String) -> String {
         let key = "companion.execution.local-id." + libraryID
@@ -440,6 +534,11 @@ final class CompanionHostController {
         try await database.savePairedRemoteWorkspaces(model.remoteWorkspaces.workspaces)
         let existing = try await database.companionExecutionWorkspaces()
         let localID = localExecutionWorkspaceID(libraryID: identity.libraryID)
+        // Local folders are bound to `device:<dashboard device id>`, which is
+        // neither `localID` nor the host device ID; naming it lets paired
+        // devices group existing folders under this Mac without rewriting them.
+        let folderOwnerID = (try? await model.executionWorkspaceIdentity(workspaceID: nil))
+            .flatMap { CompanionExecutionWorkspace.isValidFolderOwnerID($0) ? $0 : nil }
         if retiresCopiedExecutionOwners {
             // Upgrade existing snapshots too. New paired owners remain live; copied
             // owners retain their identity for history without becoming connections.
@@ -458,7 +557,10 @@ final class CompanionHostController {
         var desired: [CompanionExecutionWorkspace] = [
             .init(id: localID, libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID,
                   kind: .mac, name: DevelopmentLaunch.deviceName(), endpoint: endpoint,
-                  capabilities: ["execution.v1", "history.central.v1", "inference.v1"], executionDeviceID: identity.hostDeviceID, developmentInstance: DevelopmentLaunch.instance)
+                  capabilities: ["execution.v1", "history.central.v1", "inference.v1"], executionDeviceID: identity.hostDeviceID, developmentInstance: DevelopmentLaunch.instance,
+                  // Paired devices show sessions here a clear message when a permission is missing.
+                  macAccess: MacAccessSetupModel.current(keychainReady: model.keychainAccessReady),
+                  folderOwnerID: folderOwnerID)
         ]
         desired += model.remoteWorkspaces.workspaces.map { configuration in
             let id = configuration.id.uuidString.lowercased()
@@ -479,11 +581,73 @@ final class CompanionHostController {
         }
         guard generation == expectedGeneration, !Task.isCancelled else { return }
         executionWorkspaces = try await database.companionExecutionWorkspaces()
-        for workspace in executionWorkspaces where workspace.kind == .linux && workspace.executionDeviceID != nil && !workspace.deleted {
-            if let configuration = model.remoteWorkspaces.workspaces.first(where: { $0.id.uuidString.lowercased() == workspace.id }) {
+        for configuration in model.remoteWorkspaces.workspaces {
+            // Adoption and enrollment do not wait for an earlier enrollment.
+            setUpLinuxHost(configuration)
+            if let workspace = executionWorkspaces.first(where: { $0.id == configuration.id.uuidString.lowercased() }),
+               workspace.kind == .linux, workspace.executionDeviceID != nil, !workspace.deleted {
                 try? await ensureExecutionPublisher(workspace: workspace, configuration: configuration)
             }
         }
+    }
+
+    /// Sets up a Linux host this Mac manages: adopts it (this Mac becomes its
+    /// anchor and signs its member entry, `ensureLinuxMember`), then exposes and
+    /// enrolls its workspace (`provisionCentralExecutionWorkspace`, which sets
+    /// the registry row's endpoint and `executionDeviceID`). It starts as soon
+    /// as the host is installed or gains its workspace (`restart`), and on each
+    /// launch, and retries with backoff until both steps succeed. A bots-only
+    /// host is only adopted.
+    func setUpLinuxHost(_ configuration: RemoteWorkspaceConfiguration, restart: Bool = false) {
+        guard let model, !model.isBackendFrontend, linuxHostSetupSteps != nil || !PairedMacDeviceStorage.isTestProcess else { return }
+        let id = configuration.id.uuidString.lowercased()
+        if restart {
+            readyLinuxHosts.remove(id)
+            linuxHostSetups.removeValue(forKey: id)?.task.cancel()
+        }
+        guard !readyLinuxHosts.contains(id), linuxHostSetups[id] == nil else { return }
+        let token = UUID(), expectedGeneration = generation, workspaceID = configuration.id
+        let task = Task { [weak self] in
+            var delay = self?.linuxHostSetupRetry ?? .seconds(5)
+            while !Task.isCancelled,
+                  let done = await self?.attemptLinuxHostSetup(workspaceID, generation: expectedGeneration), !done {
+                try? await Task.sleep(for: delay)
+                delay = min(delay * 2, .seconds(600))
+            }
+            if self?.linuxHostSetups[id]?.id == token { self?.linuxHostSetups.removeValue(forKey: id) }
+        }
+        linuxHostSetups[id] = (token, task)
+    }
+
+    /// True once the host is set up, false to retry, nil when the host was
+    /// removed or this Mac's service restarted (which sets it up again).
+    private func attemptLinuxHostSetup(_ workspaceID: UUID, generation expected: UUID) async -> Bool? {
+        guard generation == expected, let configuration = model?.remoteWorkspaces.configuration(id: workspaceID) else { return nil }
+        do {
+            try await completeLinuxHostSetup(configuration)
+            guard generation == expected, !Task.isCancelled else { return nil }
+            readyLinuxHosts.insert(workspaceID.uuidString.lowercased())
+            return true
+        } catch {
+            NSLog("Setup of Linux host %@ is pending: %@", configuration.name, error.localizedDescription)
+            return false
+        }
+    }
+
+    /// One attempt at each step that has not succeeded; the first failure is rethrown.
+    private func completeLinuxHostSetup(_ configuration: RemoteWorkspaceConfiguration) async throws {
+        let steps = linuxHostSetupSteps ?? .init(adopt: { [weak self] in try await self?.ensureLinuxMember(configuration: $0) },
+                                                 enroll: { [weak self] in _ = try await self?.provisionCentralExecutionWorkspace(id: $0) })
+        var failure: (any Error)?
+        do { try await steps.adopt(configuration) } catch { failure = error }
+        if configuration.workspaceID != RemoteHostInstallMode.botsOnlyWorkspaceID {
+            let id = configuration.id.uuidString.lowercased()
+            let registered = try await model?.dashboardStore?.database.companionExecutionWorkspaces().first { $0.id == id && !$0.deleted }
+            if registered?.endpoint == nil || registered?.executionDeviceID == nil {
+                do { try await steps.enroll(id) } catch { failure = failure ?? error }
+            }
+        }
+        if let failure { throw failure }
     }
 
     func provisionExecutionWorkspace(id: String, device: CompanionPairedDevice) async throws -> CompanionExecutionCredential {
@@ -541,7 +705,11 @@ final class CompanionHostController {
         defer { provisioningWorkspaceIDs.remove(id) }
         let identity = try await database.companionLibraryIdentity()
         if let workspace = try await database.companionExecutionWorkspaces().first(where: { $0.id == id && !$0.deleted }), workspace.libraryID != identity.libraryID {
-            let credential = try await peerSync.provision(workspace: workspace, deviceID: deviceID)
+            // A Linux host issues its own grants to any Mac member; only a
+            // paired Mac's own workspace is asked through that Mac.
+            let credential = workspace.kind == .linux && workspace.endpoint != nil
+                ? try await provisionAtLinuxHost(workspace, deviceID: deviceID, name: name)
+                : try await peerSync.provision(workspace: workspace, deviceID: deviceID)
             try await commit()
             return credential
         }
@@ -576,8 +744,10 @@ final class CompanionHostController {
                 libraryID: identity.libraryID, ownerDeviceID: identity.hostDeviceID, deviceID: deviceID, deviceName: name)
         } else if let registered, registered.kind == .mac {
             credential = try await managedExecutionRequest(workspace: registered, deviceID: deviceID, revoke: false)
+        } else if let registered, registered.kind == .linux, registered.endpoint != nil {
+            credential = try await provisionAtLinuxHost(registered, deviceID: deviceID, name: name)
         } else {
-            throw CompanionAPIError(code: "unknown_workspace", message: "Enable client access on this workspace's managing device first.")
+            throw CompanionAPIError(code: "unknown_workspace", message: "This workspace's address has not reached this Mac yet. Retry after the devices synchronize.")
         }
         do {
             guard credential.deviceID == deviceID, credential.workspace.id == id,
@@ -637,8 +807,14 @@ final class CompanionHostController {
         provisioningWorkspaceIDs.insert(id)
         defer { provisioningWorkspaceIDs.remove(id) }
         let identity = try await database.companionLibraryIdentity()
-        if let workspace = try await database.companionExecutionWorkspaces().first(where: { $0.id == id && !$0.deleted }), workspace.libraryID != identity.libraryID {
-            return try await peerSync.provision(workspace: workspace, deviceID: identity.hostDeviceID)
+        if let workspace = try await database.companionExecutionWorkspaces().first(where: { $0.id == id && !$0.deleted }) {
+            // Copied history is never enrolled, whatever grant path it names.
+            guard workspace.retainedHistory != true else {
+                throw CompanionAPIError(code: "unavailable", message: "\(workspace.name) is retained history here and runs no work.")
+            }
+            if workspace.libraryID != identity.libraryID {
+                return try await peerSync.provision(workspace: workspace, deviceID: identity.hostDeviceID)
+            }
         }
         try await completePendingRevocation(workspaceID: id, deviceID: identity.hostDeviceID)
         let registered = try await database.companionExecutionWorkspaces().first { $0.id == id && !$0.deleted }
@@ -811,8 +987,9 @@ final class CompanionHostController {
                 provisioningWorkspaceIDs.remove(id)
             }
         }
+        await retryInstallerRotations()
         let pendingMessage = "Device access changes are pending on workspaces that have not reconnected yet."
-        if !pendingRevocations.isEmpty { errorMessage = pendingMessage }
+        if !pendingRevocations.isEmpty || !pendingInstallerRotations.isEmpty { errorMessage = pendingMessage }
         else if errorMessage == pendingMessage { errorMessage = nil }
     }
 
@@ -821,7 +998,8 @@ final class CompanionHostController {
               errorMessage: errorMessage, pairingPayload: pairingPayload, pairingExpiresAt: pairingExpiresAt,
               pairedDevices: pairedDevices, lastSeenAt: lastSeenAt, discoveredPeers: discoveredPeers,
               pendingPairingRequests: pendingPairingRequests, isDiscovering: isDiscovering, executionWorkspaces: executionWorkspaces,
-              pendingDeviceRevocations: pendingRevocations, peerPairingStatus: peerSync.pairing.status, peerPairingError: peerSync.pairing.errorMessage, peerSyncErrors: peerSync.errors, peerRoutes: peerSync.routes, peerIdentity: discoveryIdentity)
+              pendingDeviceRevocations: pendingRevocations, peerPairingStatus: peerSync.pairing.status, peerPairingError: peerSync.pairing.errorMessage, peerSyncErrors: peerSync.errors, peerRoutes: peerSync.routes, peerIdentity: discoveryIdentity,
+              librarySync: peerSync.syncStatus)
     }
 
     func refreshStatus() async {
@@ -902,6 +1080,20 @@ final class CompanionHostController {
         if model?.isBackendFrontend == true { await forward(.cancelPeerPairing); return }
         peerSync.pairing.cancelRequest()
     }
+    /// A member removal learned from a peer: withdraw this Mac's own grants
+    /// and routes for that device without minting another removal.
+    func applyMemberRemoval(_ deviceID: String) async {
+        guard deviceID != discoveryIdentity?.deviceID else { return }
+        do { try await performRevocation(deviceID, recordsUnpair: false) }
+        catch { errorMessage = error.localizedDescription }
+    }
+
+    /// Verifies a signed member request for any route this Mac serves (for
+    /// example the bots WebSocket upgrade) and returns the member.
+    func authenticateMember(_ request: CompanionHTTPRequest, allowing kinds: Set<MemberKind> = Set(MemberKind.allCases)) async throws -> LibraryMember {
+        try await peerSync.members().authenticate(request, allowing: kinds)
+    }
+
     func applyPeerRevocations() async throws {
         guard let authentication else { return }
         var processed = Set(defaults.stringArray(forKey: "companion.peers.applied-revocations") ?? [])
@@ -979,6 +1171,8 @@ struct CompanionHostSnapshot: Codable, Sendable {
     var peerSyncErrors: [String: String]? = nil
     var peerRoutes: [PairedMacRoute]? = nil
     var peerIdentity: CompanionPairingDeviceIdentity? = nil
+    /// Every peer's synchronization state, including "update required".
+    var librarySync: LibrarySyncStatus? = nil
 }
 
 private struct ExecutionManagementAcknowledgement: Decodable { let revoked: Bool }

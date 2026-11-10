@@ -1,0 +1,166 @@
+import { appendFile, mkdir, readdir, readFile, unlink, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
+
+const fail = (statusCode, message) => Object.assign(new Error(message), { statusCode })
+const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
+const text = (value, limit) => typeof value === 'string' && value.length > 0 && value.length <= limit
+const object = value => value && typeof value === 'object' && !Array.isArray(value)
+// The runtime's conversation and entry ids are integers, which the library
+// host decodes as Swift `Int` (BotConversationMirror).
+const id = value => Number.isSafeInteger(value) && value >= 0
+const optionalID = value => value === undefined || value === null || id(value)
+
+/**
+ * The seam between bot conversations and this machine's library copy.
+ *
+ * An adapter implements `writeBotEntries(botID, batch)`, where `batch` is the
+ * runtime's `{bot: {id, name}, conversations, entries}`. It must upsert
+ * entries by `(botID, entry.id)` and conversations by `(botID,
+ * conversationId)`, so a resent batch changes nothing. `deleteBot(botID)`
+ * marks the bot's conversations deleted (entries stay), after every batch
+ * written before it. The local library daemon (`wovenmatter-library`) provides
+ * the production adapter; without one, batches and deletions go to a durable
+ * journal it can import.
+ */
+export function createBotConversationLibrary(adapter) {
+  return {
+    async writeBotEntries(botID, batch) {
+      if (!uuid(botID)) throw fail(400, 'A bot UUID is required.')
+      if (!object(batch) || !object(batch.bot) || String(batch.bot.id).toLowerCase() !== botID.toLowerCase() || !text(batch.bot.name, 256)) throw fail(400, 'The batch must name its bot.')
+      const { conversations = [], entries = [] } = batch
+      if (!Array.isArray(conversations) || conversations.length > 10000 || conversations.some(item => !object(item) || !id(item.conversationId) || !['main', 'thread'].includes(item.kind)
+        || !optionalID(item.parentConversationId) || !optionalID(item.forkedAt))) throw fail(400, 'Invalid bot conversations.')
+      if (!Array.isArray(entries) || entries.length > 200) throw fail(400, 'Send at most 200 conversation entries per batch.')
+      const known = new Set(conversations.map(item => item.conversationId))
+      for (const entry of entries) {
+        if (!object(entry) || !id(entry.id) || !known.has(entry.conversationId) || !['user', 'assistant'].includes(entry.role) || typeof entry.text !== 'string') throw fail(400, 'Every entry needs an id, a listed conversation, a role and text.')
+      }
+      if (Buffer.byteLength(JSON.stringify(batch)) > 8 * 1024 * 1024) throw fail(413, 'The conversation batch is too large.')
+      return adapter.writeBotEntries(botID.toLowerCase(), { bot: { id: botID.toLowerCase(), name: batch.bot.name }, conversations, entries })
+    },
+    async deleteBot(botID) {
+      if (!uuid(botID)) throw fail(400, 'A bot UUID is required.')
+      return adapter.deleteBot(botID.toLowerCase())
+    },
+  }
+}
+
+// Tests and hosts without durable storage.
+export function createMemoryBotLibraryAdapter() {
+  const bots = new Map()
+  return {
+    bot: botID => bots.get(botID),
+    entries: botID => [...(bots.get(botID)?.entries.values() ?? [])],
+    async writeBotEntries(botID, batch) {
+      const stored = bots.get(botID) ?? { conversations: new Map(), entries: new Map() }; bots.set(botID, stored)
+      stored.name = batch.bot.name
+      for (const item of batch.conversations) stored.conversations.set(item.conversationId, structuredClone(item))
+      for (const entry of batch.entries) stored.entries.set(entry.id, structuredClone(entry))
+      // A later batch brings the conversations back, as the library's upsert does.
+      if (batch.conversations.length) stored.deleted = false
+      return { conversations: batch.conversations.length, entries: batch.entries.length }
+    },
+    async deleteBot(botID) {
+      const stored = bots.get(botID)
+      if (stored) stored.deleted = true
+      return { deleted: true }
+    },
+  }
+}
+
+// One append-only JSON-lines file per bot under the Woven data root. Each line
+// is `{ "receivedAt", "bot", "conversations", "entries" }`, or `{ "receivedAt",
+// "deleteBot": true }` for a deleted bot; importing replays lines in order, so a
+// later line's upsert or deletion wins.
+export function createJournalBotLibraryAdapter(directory) {
+  const queues = new Map()
+  const append = (botID, line, result) => {
+    const run = (queues.get(botID) ?? Promise.resolve()).then(async () => {
+      await mkdir(directory, { recursive: true, mode: 0o700 })
+      await appendFile(join(directory, botID + '.jsonl'), JSON.stringify({ receivedAt: new Date().toISOString(), ...line }) + '\n', { mode: 0o600 })
+      return result
+    })
+    queues.set(botID, run.catch(() => {}))
+    return run
+  }
+  return {
+    directory,
+    writeBotEntries: (botID, batch) => append(botID, batch, { conversations: batch.conversations.length, entries: batch.entries.length }),
+    deleteBot: botID => append(botID, { deleteBot: true }, { deleted: true }),
+  }
+}
+
+/**
+ * The production adapter: batches go to the local library host's
+ * `POST /v1/bots/{botID}/entries`. While the host is down (or refuses a
+ * batch), they are kept in the journal outbox above and accepted; `drain()`
+ * replays the outbox in order once the host is ready and removes each file.
+ * Per-bot order holds because writes and drains share one queue.
+ */
+export function createLocalLibraryBotAdapter({ client, available, directory, log = () => {} }) {
+  const journal = createJournalBotLibraryAdapter(directory)
+  const queues = new Map()
+  const serialized = (botID, operation) => {
+    const run = (queues.get(botID) ?? Promise.resolve()).then(operation)
+    queues.set(botID, run.catch(() => {}))
+    return run
+  }
+  async function drainBot(botID) {
+    const path = join(directory, botID + '.jsonl')
+    let lines
+    try { lines = (await readFile(path, 'utf8')).split('\n').filter(Boolean) } catch (error) { if (error.code === 'ENOENT') return 0; throw error }
+    let sent = 0
+    for (const line of lines) {
+      let value
+      try { value = JSON.parse(line) } catch { log('Skipping an unreadable bot outbox line for ' + botID); sent++; continue }
+      const { receivedAt, deleteBot, ...batch } = value
+      try { await (deleteBot ? client.deleteBotConversations(botID) : client.botEntries(botID, batch)) } catch (error) {
+        // Keep what is left, in order; upserts make the sent part harmless to resend.
+        if (sent) await writeFile(path, lines.slice(sent).join('\n') + '\n', { mode: 0o600 })
+        throw error
+      }
+      sent++
+    }
+    await unlink(path).catch(error => { if (error.code !== 'ENOENT') throw error })
+    return sent
+  }
+  async function pendingBots() {
+    try { return (await readdir(directory)).filter(name => /^[0-9a-f-]{36}\.jsonl$/.test(name)).map(name => name.slice(0, -6)) } catch { return [] }
+  }
+  return {
+    directory,
+    writeBotEntries(botID, batch) {
+      return serialized(botID, async () => {
+        if (available()) {
+          try {
+            await drainBot(botID)
+            await client.botEntries(botID, batch)
+            return { conversations: batch.conversations.length, entries: batch.entries.length }
+          } catch (error) { log('Bot entries for ' + botID + ' were kept in the outbox: ' + error.message) }
+        }
+        return journal.writeBotEntries(botID, batch)
+      })
+    },
+    // After the bot's pending batches, so a replayed batch cannot bring its conversations back.
+    deleteBot(botID) {
+      return serialized(botID, async () => {
+        if (available()) {
+          try {
+            await drainBot(botID)
+            await client.deleteBotConversations(botID)
+            return { deleted: true }
+          } catch (error) { log('Deleting conversations for bot ' + botID + ' was kept in the outbox: ' + error.message) }
+        }
+        return journal.deleteBot(botID)
+      })
+    },
+    async drain() {
+      if (!available()) return 0
+      let total = 0
+      for (const botID of await pendingBots()) {
+        total += await serialized(botID, () => drainBot(botID)).catch(error => { log('Bot outbox for ' + botID + ' is still pending: ' + error.message); return 0 })
+      }
+      return total
+    },
+  }
+}

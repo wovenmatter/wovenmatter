@@ -21,8 +21,14 @@ for source, target in [('remote/src','src'), ('remote/package.json','package.jso
     ('default-agent/src','default-agent/src'), ('default-agent/package.json','default-agent/package.json'),
     ('default-agent/package-lock.json','default-agent/package-lock.json'), ('harnesses','harnesses'),
     ('remote/host','host'), ('default-agent/.node-version','default-agent/.node-version'),
-    ('scripts/remote-host.sh','host/remote-host.sh')]:
+    ('scripts/remote-host.sh','host/remote-host.sh'),
+    # Optional until a checkout contains the bots runtime; hosts require it
+    # only when bots are enabled.
+    ('bots/package.json','bots/package.json'), ('bots/package-lock.json','bots/package-lock.json'),
+    ('bots/src','bots/src'), ('bots/helper','bots/helper'), ('bots/image','bots/image')]:
     path = root/source
+    if source.startswith('bots/') and not path.exists():
+        continue
     for item in sorted(path.rglob('*')) if path.is_dir() else [path]:
         if item.name == '.DS_Store':
             continue

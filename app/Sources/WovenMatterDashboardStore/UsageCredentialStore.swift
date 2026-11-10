@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(Security)
 import Security
+#endif
 import WovenMatterClient
 
 protocol UsageCredentialStoring: Sendable {
@@ -88,7 +90,7 @@ enum UsageCredentialStoreError: LocalizedError {
   var errorDescription: String? {
     switch self {
     case .keychain(let status):
-      "The usage credential is unavailable from this Mac's Keychain (status \(status)). Automatic refresh will not prompt. Use Reconnect saved credentials in Settings > General to restore access."
+      "The usage credential is unavailable from this Mac's Keychain (status \(status)). Automatic refresh will not prompt. Allow Keychain in Settings → Permissions & Access to restore access."
     }
   }
 }

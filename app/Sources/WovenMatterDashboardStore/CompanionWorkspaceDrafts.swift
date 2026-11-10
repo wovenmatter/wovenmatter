@@ -1,6 +1,14 @@
+#if canImport(CryptoKit)
 import CryptoKit
+#else
+import Crypto
+#endif
 import Foundation
+#if canImport(SQLite3)
 import SQLite3
+#else
+import CSQLite
+#endif
 
 extension WorkspaceDatabaseConnection {
   static func companionContentFingerprint(_ content: String) -> String {

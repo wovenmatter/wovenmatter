@@ -1,5 +1,8 @@
 import WorkspaceFixtures
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 import Testing
 import WovenMatterClient
 import WovenMatterCore
@@ -219,6 +222,107 @@ struct OpenCodeIntegrationTests {
             throw error
         }
         await coordinator.shutdown()
+    }
+
+    @Test func idleSessionBacksOffRepairAndRecordsOnlyChangedReads() async throws {
+        let fixture = OpenCodeFixture(); fixture.streamEvents = true; fixture.pendingInteractions = false
+        fixture.messages = [message("first")]
+        FixtureProtocol.fixture = fixture
+        let persistence = try PersistenceFixture(); defer { persistence.remove() }
+        let database = try await persistence.openDatabase()
+        let id = try await database.createOpenCodeFixtureSession(runtimeKind: .opencode, title: "Idle", ownerDeviceID: UUID(), openCodeAssociation: ("fixture", "ses_fixture"))
+        let link = OpenCodeSessionLink(conversationID: id, connectionID: "fixture", sessionID: "ses_fixture")
+        let session = fixtureSession()
+        defer { session.invalidateAndCancel() }
+        let coordinator = OpenCodeSessionCoordinator(database: database, clientFactory: { OpenCodeHTTPClient(connection: $0, session: session) },
+            repairInterval: .milliseconds(20), idleRepairCeiling: .milliseconds(400))
+        func refreshes() -> Int { fixture.lock.withLock { fixture.inboxRequests } }
+        func recordedAnswers(_ path: String) async throws -> Int {
+            try await database.read { try $0.historyRowsUnlocked(
+                "SELECT id FROM workspace_history_events WHERE kind='wire.in' AND source_connection_id='fixture' AND json_extract(payload,'$.path')=?",
+                values: [path]) }.count
+        }
+        do {
+            try await coordinator.connect(connection())
+            await coordinator.watch(link)
+            // Idle repairs double from 20 ms; by now they run at the 400 ms ceiling.
+            try await Task.sleep(for: .milliseconds(1200))
+            #expect(refreshes() >= 3)
+            let idleStart = refreshes()
+            try await Task.sleep(for: .seconds(1))
+            // A fixed 20 ms poll would refresh about 50 times here.
+            #expect(refreshes() - idleStart <= 4)
+            #expect(try await recordedAnswers("/api/session/ses%5Ffixture/inbox") == 1)
+            #expect(try await recordedAnswers("/api/session/ses%5Ffixture") == 1)
+            #expect(try await recordedAnswers("/api/info") == 1)
+
+            // A turn starts natively; its durable event restores the base rate.
+            fixture.lock.withLock { fixture.activeSession = true }
+            await coordinator.receiveLogEvent(["type": "session.execution.started", "durable": ["seq": .number(1)]], link: link)
+            _ = try await committedSnapshot(coordinator, conversationID: id, cursor: 1)
+            let activeStart = refreshes()
+            try await Task.sleep(for: .seconds(1))
+            #expect(refreshes() - activeStart >= 8)
+            // Only the changed activity answer was recorded again.
+            #expect(try await recordedAnswers("/api/session/active") == 2)
+            #expect(try await recordedAnswers("/api/session/ses%5Ffixture/inbox") == 1)
+        } catch {
+            await coordinator.shutdown()
+            throw error
+        }
+        await coordinator.shutdown()
+    }
+
+    @Test func savingKeepsUnchangedRowsAndTextlessMessagesKeepThePreview() async throws {
+        let persistence = try PersistenceFixture(); defer { persistence.remove() }
+        let database = try await persistence.openDatabase()
+        let id = try await database.createOpenCodeFixtureSession(runtimeKind: .opencode, title: "Preview", ownerDeviceID: UUID(), openCodeAssociation: ("fixture", "ses_fixture"))
+        func reply(_ text: String) -> OpenCodeValue {
+            ["id": "reply", "type": "assistant", "time": ["created": .number(2), "completed": .number(3)], "content": .array([
+                ["type": "text", "text": .string(text)],
+                ["type": "tool", "id": "tool-1", "name": "bash", "state": ["status": "completed", "output": "ok"]]])]
+        }
+        var snapshot = OpenCodeSessionSnapshot()
+        snapshot.info = ["id": "ses_fixture", "title": "Preview", "time": ["updated": .number(1000)]]
+        snapshot.messages = [message("question"), reply("Final answer")]
+        try await database.saveOpenCodeSnapshot(snapshot, conversationID: id)
+        func rows() async throws -> [String] {
+            try await database.read { try $0.historyRowsUnlocked("""
+                SELECT id || ' ' || updated_at || ' ' || status AS row FROM dashboard_messages WHERE conversation_id=?1
+                UNION ALL SELECT id || ' ' || updated_at || ' ' || status FROM dashboard_runs WHERE conversation_id=?1
+                UNION ALL SELECT id || ' ' || updated_at FROM dashboard_conversations WHERE id=?1 ORDER BY 1
+                """, values: [id]) }.compactMap { $0.objectValue?["row"]?.stringValue }
+        }
+        func journal() async throws -> [String] {
+            try await database.read { try $0.historyRowsUnlocked(
+                "SELECT kind FROM workspace_history_events WHERE conversation_id=? AND kind IN ('message.update','run.update','activity.final') ORDER BY sequence",
+                values: [id]) }.compactMap { $0.objectValue?["kind"]?.stringValue }
+        }
+        func preview() async throws -> String? {
+            try await database.read { try $0.historyRowsUnlocked("SELECT last_message_preview FROM dashboard_conversations WHERE id=?", values: [id]) }
+                .first?.objectValue?["last_message_preview"]?.stringValue
+        }
+        #expect(try await preview() == "Final answer")
+        let saved = try await rows(), journaled = try await journal()
+        #expect(saved.contains { $0.hasPrefix("opencode:\(id):reply:run ") && $0.hasSuffix(" completed") })
+
+        try await Task.sleep(for: .milliseconds(20))
+        try await database.saveOpenCodeSnapshot(snapshot, conversationID: id)
+        #expect(try await rows() == saved)
+        #expect(try await journal() == journaled)
+
+        // A later native configuration record has no visible text.
+        snapshot.messages.append(["id": "config", "type": "system", "text": "", "time": ["created": .number(4)]])
+        try await database.saveOpenCodeSnapshot(snapshot, conversationID: id)
+        #expect(try await preview() == "Final answer")
+        #expect(try await rows().filter { !$0.contains(":config ") } == saved)
+        #expect(try await journal() == journaled)
+
+        // A changed reply is still written and journaled.
+        snapshot.messages[1] = reply("Revised answer")
+        try await database.saveOpenCodeSnapshot(snapshot, conversationID: id)
+        #expect(try await preview() == "Revised answer")
+        #expect(try await journal() == journaled + ["message.update"])
     }
 
     private func committedSnapshot(_ coordinator: OpenCodeSessionCoordinator, conversationID: String,
@@ -498,6 +602,9 @@ private final class OpenCodeFixture: @unchecked Sendable {
     var streamEvents = false
     var liveRequests = 0
     var durableRequests = 0
+    var pendingInteractions = true
+    var activeSession = false
+    var inboxRequests = 0
     private func requestBody(_ request: URLRequest) throws -> OpenCodeValue {
         var bytes = request.httpBody ?? Data()
         if let stream = request.httpBodyStream {
@@ -523,7 +630,7 @@ private final class OpenCodeFixture: @unchecked Sendable {
             if path == "/api/info" || path == "/api/health" {
                 return (200, ["healthy": .bool(true), "version": .string("2.0.22"), "pid": .number(Double(ProcessInfo.processInfo.processIdentifier))])
             }
-            if path == "/api/session/active" { return (200, ["data": [:]]) }
+            if path == "/api/session/active" { return (200, ["data": activeSession ? ["ses_fixture": ["type": "busy"]] : [:]]) }
             if path.hasSuffix("/interrupt") { return (200, [:]) }
             if path == "/api/rpc/woven-mcp/connect" {
                 lastMCPConnect = try requestBody(request)
@@ -565,13 +672,13 @@ private final class OpenCodeFixture: @unchecked Sendable {
                 guard let message = messages.first(where: { $0["id"].text == request.url!.lastPathComponent }) else { return (404, [:]) }
                 return (200, ["data": message])
             }
-            if path.hasSuffix("/permission") { return (200, ["data": .array([["id": "perm_pending", "sessionID": "ses_fixture", "action": "shell", "resources": .array(["ls"]) ]])]) }
-            if path.hasSuffix("/form") { return (200, ["data": .array([["id": "form_pending"], ["id": "form_done"]])]) }
+            if path.hasSuffix("/permission") { return (200, ["data": .array(pendingInteractions ? [["id": "perm_pending", "sessionID": "ses_fixture", "action": "shell", "resources": .array(["ls"]) ]] : [])]) }
+            if path.hasSuffix("/form") { return (200, ["data": .array(pendingInteractions ? [["id": "form_pending"], ["id": "form_done"]] : [])]) }
             if path.contains("/form/") {
                 if request.httpMethod == "DELETE" { return (204, .null) }
                 return (200, ["data": ["state": ["status": path.contains("form_pending") ? "pending" : "answered"]]])
             }
-            if path.hasSuffix("/inbox") { return (200, ["data": .array([])]) }
+            if path.hasSuffix("/inbox") { inboxRequests += 1; return (200, ["data": .array([])]) }
             if path == "/api/session", request.httpMethod == "GET" {
                 let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems ?? []
                 let offset = query.first { $0.name == "cursor" }?.value.flatMap(Int.init) ?? 0

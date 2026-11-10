@@ -79,7 +79,7 @@ private extension CompanionWorkspaceAPI {
         let result = await WovenMCPServer.handle(message, contextID: captureID, allowedTools: mcpTools(groups: groups)) { call in
             await self.performMCP(call, conversationID: conversationID, groups: groups, device: device)
         }
-        guard isActive(), await authentication.isCurrent(device) else {
+        guard isActive(), await isCurrent(device) else {
             return .error("unauthorized", "This paired device's MCP access has stopped.", status: 401)
         }
         guard let result else { return .init(status: 202, body: Data()) }
@@ -89,7 +89,7 @@ private extension CompanionWorkspaceAPI {
     func performMCP(_ call: WovenMatterToolRequest, conversationID: String, groups: [WorkspaceToolGroup],
                     device: CompanionPairedDevice) async -> WovenMatterToolResponse {
         do {
-            guard isActive(), await authentication.isCurrent(device) else {
+            guard isActive(), await isCurrent(device) else {
                 throw CompanionAPIError(code: "unauthorized", message: "This paired device's MCP access was revoked.")
             }
             let request = CompanionToolRequest(conversationID: conversationID, request: call, enabledGroups: groups)
@@ -104,21 +104,67 @@ private extension CompanionWorkspaceAPI {
         }
     }
 
-    func handleWorkspaceMCP(_ request: CompanionHTTPRequest) async throws -> CompanionHTTPResponse {
-        guard request.headers["x-woven-protocol"] == String(CompanionProtocol.version), let bearer = request.bearer else {
-            return .error("unauthorized", "A library MCP grant is required.", status: 401)
+    /// The caller of `/mcp/workspace`: a library MCP grant, or a signed request
+    /// from the Linux member that executes the workspace named by
+    /// `X-Woven-Workspace-ID` (so a Linux host needs no grant from any one Mac).
+    /// `current` re-checks it during and after a long call.
+    struct WorkspaceMCPCaller: Sendable {
+        let principal: CompanionWorkspaceMCPPrincipal
+        let current: @Sendable () async throws -> CompanionWorkspaceMCPPrincipal
+    }
+    func authenticateWorkspaceMCP(_ request: CompanionHTTPRequest) async throws -> Result<WorkspaceMCPCaller, CompanionAPIError> {
+        if MemberRequestVerifier.isSigned(request.headers) {
+            guard let members else { return .failure(.init(code: "unauthorized", message: "This Mac does not accept member requests yet.")) }
+            let key: MemberKey
+            do {
+                key = try await members.verifier.verify(method: request.method, target: request.target, headers: request.headers,
+                                                        body: request.body, allowing: [.linux])
+            } catch let error as MemberRequestError { return .failure(.init(code: error.code, message: error.message)) }
+            guard let workspaceID = request.headers["x-woven-workspace-id"]?.lowercased() else {
+                return .failure(.init(code: "invalid_request", message: "Name the Linux workspace in X-Woven-Workspace-ID."))
+            }
+            let database = database
+            let current: @Sendable () async throws -> CompanionWorkspaceMCPPrincipal = {
+                guard await members.member(key.deviceID) != nil else { throw CompanionAPIError(code: "unauthorized", message: MemberRequestError.unknown.message) }
+                // Any Mac checks the same synced rows: the registry and the member list.
+                let workspace = try await database.companionExecutionWorkspaces().first { $0.id == workspaceID }
+                let serving = if let workspace { await members.audience(for: workspace) } else { String?.none }
+                return try await database.companionWorkspaceMCPMember(workspaceID: workspaceID, deviceID: key.deviceID, serving: serving)
+            }
+            return .success(.init(principal: try await current(), current: current))
         }
+        guard let bearer = request.bearer else { return .failure(.init(code: "unauthorized", message: "A library MCP grant is required.")) }
         let principal = try await database.authenticateCompanionWorkspaceMCP(bearer: bearer)
         guard request.headers["x-woven-workspace"] == principal.libraryID else {
-            return .error("library_mismatch", "This MCP grant belongs to another library.", status: 409)
+            return .failure(.init(code: "library_mismatch", message: "This MCP grant belongs to another library."))
         }
+        let database = database
+        return .success(.init(principal: principal, current: {
+            let current = try await database.authenticateCompanionWorkspaceMCP(bearer: bearer)
+            guard current.grantID == principal.grantID else {
+                throw CompanionAPIError(code: "unauthorized", message: "The workspace's library MCP grant changed.")
+            }
+            return current
+        }))
+    }
+
+    func handleWorkspaceMCP(_ request: CompanionHTTPRequest) async throws -> CompanionHTTPResponse {
+        guard request.headers["x-woven-protocol"] == String(CompanionProtocol.version) else {
+            return .error("unauthorized", "A library MCP grant is required.", status: 401)
+        }
+        let caller: WorkspaceMCPCaller
+        switch try await authenticateWorkspaceMCP(request) {
+        case .success(let value): caller = value
+        case .failure(let error): return .error(error.code, error.message, status: error.code == "library_mismatch" ? 409 : 401)
+        }
+        let principal = caller.principal
         let (message, conversationID, groups, captureID) = try mcpInput(request)
         try await database.authorizeCompanionWorkspaceMCPCaller(conversationID: conversationID, principal: principal)
         let result = await WovenMCPServer.handle(message, contextID: captureID, allowedTools: mcpTools(groups: groups)) { call in
-            await self.performWorkspaceMCP(call, conversationID: conversationID, groups: groups, bearer: bearer, principal: principal)
+            await self.performWorkspaceMCP(call, conversationID: conversationID, groups: groups, caller: caller)
         }
         guard isActive() else { return .error("unavailable", "The library MCP host stopped.", status: 503) }
-        _ = try await database.authenticateCompanionWorkspaceMCP(bearer: bearer)
+        _ = try await caller.current()
         guard let result else { return .init(status: 202, body: Data()) }
         return try .json(result)
     }
@@ -127,11 +173,12 @@ private extension CompanionWorkspaceAPI {
         guard request.method == "POST" else { return .error("method_not_allowed", "Scheduled caller registration uses POST.", status: 405) }
         guard request.headers["x-woven-protocol"] == String(CompanionProtocol.version) else { return .error("version_mismatch", "Update the execution workspace to a compatible version.", status: 426) }
         guard request.body.count <= 1_048_576 else { return .error("too_large", "The scheduled caller registration exceeds 1 MiB.", status: 413) }
-        guard let bearer = request.bearer else { return .error("unauthorized", "A library MCP grant is required.", status: 401) }
-        let principal = try await database.authenticateCompanionWorkspaceMCP(bearer: bearer)
-        guard request.headers["x-woven-workspace"] == principal.libraryID else {
-            return .error("library_mismatch", "This MCP grant belongs to another library.", status: 409)
+        let caller: WorkspaceMCPCaller
+        switch try await authenticateWorkspaceMCP(request) {
+        case .success(let value): caller = value
+        case .failure(let error): return .error(error.code, error.message, status: error.code == "library_mismatch" ? 409 : 401)
         }
+        let principal = caller.principal
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .custom { decoder in
             let value = try decoder.singleValueContainer().decode(String.self)
@@ -143,19 +190,16 @@ private extension CompanionWorkspaceAPI {
         let preparation = try decoder.decode(CompanionScheduledMCPPreparation.self, from: request.body)
         let enabled = try await database.prepareCompanionScheduledMCP(preparation, principal: principal)
         guard isActive() else { return .error("unavailable", "The library MCP host stopped.", status: 503) }
-        _ = try await database.authenticateCompanionWorkspaceMCP(bearer: bearer)
+        _ = try await caller.current()
         onMutation()
         return try .json(["enabledGroups": enabled.map(\.rawValue)])
     }
 
     func performWorkspaceMCP(_ call: WovenMatterToolRequest, conversationID: String, groups: [WorkspaceToolGroup],
-                             bearer: String, principal: CompanionWorkspaceMCPPrincipal) async -> WovenMatterToolResponse {
+                             caller: WorkspaceMCPCaller) async -> WovenMatterToolResponse {
         do {
             guard isActive() else { throw CompanionAPIError(code: "unavailable", message: "The library MCP host stopped.") }
-            let current = try await database.authenticateCompanionWorkspaceMCP(bearer: bearer)
-            guard current.grantID == principal.grantID else {
-                throw CompanionAPIError(code: "unauthorized", message: "The workspace's library MCP grant changed.")
-            }
+            let current = try await caller.current()
             try await database.authorizeCompanionWorkspaceMCPCaller(conversationID: conversationID, principal: current)
             let request = CompanionToolRequest(conversationID: conversationID, request: call, enabledGroups: groups)
             try await database.authorizeCompanionTool(request, deviceID: current.executionDeviceID)
@@ -204,6 +248,17 @@ public final class CompanionWorkspaceAPI {
     private let onRequest: @MainActor @Sendable () -> Void
     private let linkedData: @MainActor @Sendable (DatabaseArtifactLink) async throws -> DatabaseTabularData
     private var linkedReadInFlight = false
+    /// Signed member requests (any Mac or Linux library host). A phone or Mac
+    /// member is authenticated by its signature; no grant is issued.
+    private let members: MemberDirectory?
+    /// A phone paired with its member key: the host signs its member entry
+    /// (replacing an earlier key the user is pairing again). Throws to refuse.
+    private let onMemberPaired: @MainActor @Sendable (_ deviceID: String, _ name: String, _ publicKey: Data) async throws -> Void
+    /// `GET /v1/sync/status`: every peer's state, so a phone can show
+    /// "Update everything" when devices disagree on versions.
+    private let syncStatus: @MainActor @Sendable () async -> LibrarySyncStatus?
+    /// The name `GET /v1/hello` reports; nil falls back to this machine's name.
+    private let hostName: @MainActor @Sendable () async -> String?
     public init(database: WorkspaceDatabase, authentication: CompanionAuthentication,
                 commands: any CompanionCommandServing,
                 isActive: @escaping @MainActor @Sendable () -> Bool,
@@ -216,10 +271,37 @@ public final class CompanionWorkspaceAPI {
                 onRequest: @escaping @MainActor @Sendable () -> Void = {},
                 linkedData: @escaping @MainActor @Sendable (DatabaseArtifactLink) async throws -> DatabaseTabularData = { _ in
                     throw CompanionAPIError(code: "linked_data_unavailable", message: "This database is unavailable on the Mac.")
-                }) {
+                }, members: MemberDirectory? = nil,
+                onMemberPaired: @escaping @MainActor @Sendable (String, String, Data) async throws -> Void = { _, _, _ in },
+                syncStatus: @escaping @MainActor @Sendable () async -> LibrarySyncStatus? = { nil },
+                hostName: @escaping @MainActor @Sendable () async -> String? = { nil }) {
+        self.hostName = hostName
+        self.members = members; self.onMemberPaired = onMemberPaired; self.syncStatus = syncStatus
         self.database = database; self.authentication = authentication; self.commands = commands
         self.isActive = isActive; self.onPair = onPair; self.onMutation = onMutation; self.onRequest = onRequest
         self.linkedData = linkedData; self.discovery = discovery; self.onCancelPairing = onCancelPairing
+    }
+
+    /// The Mac's user-facing computer name; Linux Foundation has none, so
+    /// other platforms report the host name.
+    static var machineName: String {
+        #if os(macOS)
+        Host.current().localizedName ?? ProcessInfo.processInfo.hostName
+        #else
+        ProcessInfo.processInfo.hostName
+        #endif
+    }
+
+    /// A long request re-checks its principal: a grant must still be issued,
+    /// a member must still be on the member list.
+    func isCurrent(_ device: CompanionPairedDevice) async -> Bool {
+        if device.isMember { return await members?.member(device.id) != nil }
+        return await authentication.isCurrent(device)
+    }
+    func reauthenticate(_ device: CompanionPairedDevice, bearer: String) async throws {
+        if device.isMember {
+            guard await members?.member(device.id) != nil else { throw CompanionAPIError(code: "unauthorized", message: MemberRequestError.unknown.message) }
+        } else { _ = try await authentication.authenticate(bearer: bearer) }
     }
 
     public func handle(_ request: CompanionHTTPRequest) async -> CompanionHTTPResponse {
@@ -281,6 +363,13 @@ public final class CompanionWorkspaceAPI {
                     request.headers["x-woven-workspace"] == workspaceID, let bearer = request.bearer else {
                     return .error("unauthorized", "Complete pairing on this device.", status: 401)
                 }
+                // The phone's member entry is signed when its pairing is
+                // confirmed, before the grant is issued, so a pairing that is
+                // never confirmed adds no member and a refusal reaches the phone.
+                if members != nil, let pending = await authentication.pendingPhoneMember(bearer: bearer, workspaceID: workspaceID) {
+                    do { try await onMemberPaired(pending.deviceID, pending.name, pending.publicKey) }
+                    catch let error as CompanionAPIError { return .error(error.code, error.message, status: 409) }
+                }
                 try await authentication.confirmPairing(bearer: bearer, workspaceID: workspaceID)
                 await onPair()
                 return try .json(["confirmed": true])
@@ -288,28 +377,67 @@ public final class CompanionWorkspaceAPI {
             if request.method == "POST", path == "/v1/pair" {
                 guard request.body.count <= 8_192 else { return .error("too_large", "The pairing request is too large.", status: 413) }
                 let command = try JSONDecoder().decode(CompanionPairRequest.self, from: request.body)
-                let result = try await authentication.pair(command, workspaceID: workspaceID)
+                let memberKey = command.memberPublicKey.flatMap { key in
+                    key.count == 32 && command.purpose != CompanionPairingPurpose.peerMac
+                        && [.iPhone, .iPad].contains(command.metadata?.kind ?? .unknown) ? key : nil
+                }
+                // Refuse before the pairing code is spent when this Mac could
+                // not add the phone with that key.
+                if let members, let memberKey {
+                    do { try await members.checkAdd(deviceID: command.deviceID, kind: .ios, publicKey: memberKey, replacingKey: true) }
+                    catch let error as CompanionAPIError { return .error(error.code, error.message, status: 409) }
+                }
+                var result = try await authentication.pair(command, workspaceID: workspaceID)
+                if let members {
+                    result.hostDeviceID = members.identity.deviceID
+                    // Whether the phone's current library is one this Mac
+                    // shares, decided before any signed request can work.
+                    if memberKey != nil {
+                        result.libraryIDs = Array(Set(try await database.companionExecutionWorkspaces().filter { !$0.deleted }.map(\.libraryID))).sorted()
+                    }
+                }
+                // A client that confirms nothing is added at once, as before.
+                if let memberKey, command.requiresConfirmation != true {
+                    do { try await onMemberPaired(command.deviceID.lowercased(), command.deviceName, memberKey) }
+                    catch let error as CompanionAPIError { return .error(error.code, error.message, status: 409) }
+                }
                 await onPair()
                 return try .json(result)
             }
             guard request.headers["x-woven-protocol"] == String(CompanionProtocol.version) else {
                 return .error("version_mismatch", "Update Woven Matter on both devices to compatible versions.", status: 426)
             }
-            guard let bearer = request.bearer else { return .error("unauthorized", "Pair this iPhone in Mac Settings.", status: 401) }
-            let metadata: CompanionDeviceMetadata?
-            if let rawKind = request.headers["x-woven-device-kind"], let kind = CompanionDeviceKind(rawValue: rawKind) {
-                metadata = .init(kind: kind, osVersion: request.headers["x-woven-os-version"], appVersion: request.headers["x-woven-app-version"], developmentInstance: request.headers["x-woven-development-instance"])
-            } else { metadata = nil }
-            let device = try await authentication.authenticate(bearer: bearer, metadata: metadata)
+            let device: CompanionPairedDevice
+            let bearer: String
+            if MemberRequestVerifier.isSigned(request.headers) {
+                guard let members else { return .error("unauthorized", "This device does not accept member requests yet.", status: 401) }
+                let key: MemberKey
+                do {
+                    key = try await members.verifier.verify(method: request.method, target: request.target, headers: request.headers,
+                                                            body: request.body, allowing: [.ios, .mac])
+                } catch let error as MemberRequestError {
+                    return .error(error.code, error.message, status: error.code == "wrong_device" ? 403 : 401)
+                }
+                guard let member = await members.member(key.deviceID) else { return .error("unauthorized", MemberRequestError.unknown.message, status: 401) }
+                device = .member(member); bearer = ""
+            } else {
+                guard let presented = request.bearer else { return .error("unauthorized", "Pair this iPhone in Mac Settings.", status: 401) }
+                let metadata: CompanionDeviceMetadata?
+                if let rawKind = request.headers["x-woven-device-kind"], let kind = CompanionDeviceKind(rawValue: rawKind) {
+                    metadata = .init(kind: kind, osVersion: request.headers["x-woven-os-version"], appVersion: request.headers["x-woven-app-version"], developmentInstance: request.headers["x-woven-development-instance"])
+                } else { metadata = nil }
+                device = try await authentication.authenticate(bearer: presented, metadata: metadata)
+                bearer = presented
+            }
             guard isActive() else {
                 return .error("unavailable", "Companion sharing stopped before this request was accepted.", status: 503)
             }
-            guard request.headers["x-woven-workspace"] == workspaceID else {
+            guard request.headers["x-woven-workspace"] == workspaceID || (device.isMember && request.headers["x-woven-workspace"] == nil) else {
                 return .error("workspace_mismatch", "This credential belongs to a different workspace. Your local writing is preserved.", status: 409)
             }
             onRequest()
             if request.method == "POST", path == "/v1/devices/development/disconnect" {
-                guard device.isDevelopment else { return .error("invalid_device", "Only a development connection has temporary presence.", status: 403) }
+                guard device.isDevelopment, !device.isMember else { return .error("invalid_device", "Only a development connection has temporary presence.", status: 403) }
                 try await authentication.suspendLocalDevelopment(deviceID: device.id, credential: bearer)
                 try await database.withdrawDevelopmentWorkspaces(ownedBy: device.id)
                 onMutation()
@@ -322,6 +450,7 @@ public final class CompanionWorkspaceAPI {
             if path == "/v1/analytics/preference", request.method == "POST" { return try .json(await commands.setAnalyticsPreference(JSONDecoder().decode(ProductAnalyticsPreferenceChange.self,from:request.body))) }
             if path == "/v1/analytics/events", request.method == "POST" { return try .json(await commands.ingestAnalytics(JSONDecoder().decode(ProductAnalyticsBatch.self,from:request.body))) }
             if request.method == "POST", path == "/v1/pair/unpair" {
+                guard !device.isMember else { return .error("unsupported", "Remove this device from a Mac's device list.", status: 400) }
                 try await onCancelPairing(device)
                 if await authentication.isCurrent(device) { try await authentication.revoke(deviceID: device.id, expected: device) }
                 await onPair()
@@ -330,8 +459,9 @@ public final class CompanionWorkspaceAPI {
             let values = target.queryItems ?? []
             func query(_ name: String) -> String? { values.first(where: { $0.name == name })?.value }
             if request.method == "GET", path == "/v1/federation/workspaces" {
-                let roster = await authentication.devices()
-                return try .json(try await database.companionConnectionWorkspaces(activeDeviceIDs: Set(roster.map(\.id))))
+                var active = Set(await authentication.devices().map(\.id))
+                if let members { active.formUnion(((try? await members.list().members) ?? []).filter { !$0.revoked }.map(\.deviceID)) }
+                return try .json(try await database.companionConnectionWorkspaces(activeDeviceIDs: active))
             }
             if path.hasPrefix("/v1/federation/") {
                 let response = try await CompanionFederationAPI.handle(request, path: path, query: values, device: device, database: database, commands: commands)
@@ -369,7 +499,7 @@ public final class CompanionWorkspaceAPI {
                 case "/v1/devices": return try .json(await authentication.deviceConnections())
                 case "/v1/hello":
                     return try .json(CompanionHello(workspaceID: workspaceID,
-                        hostName: Host.current().localizedName ?? "Woven Matter Mac",
+                        hostName: await hostName() ?? Self.machineName,
                         capabilities: [CompanionFederationProtocol.capability, "notes.conditional.v1", "folders.flat.v1", "changes.replay.v1", "commands.receipts.v1", "interactions.first-response.v1", "transcripts.paged.v1", "assets.linked-data.v1", "workspace.library.v1", "workspace.calendar.v1", "calendar.replicas.v1", "workspace.management.v1", "workspace.tools.v1"]))
                 case "/v1/snapshot": return try .json(try await database.companionSnapshot())
                 case "/v1/changes":
@@ -382,11 +512,19 @@ public final class CompanionWorkspaceAPI {
                     var page = try await database.companionChanges(after: after, limit: limit)
                     while page.changes.isEmpty && !page.resetRequired && Date() < deadline && isActive() {
                         try await Task.sleep(for: .milliseconds(250))
-                        _ = try await authentication.authenticate(bearer: bearer)
+                        try await reauthenticate(device, bearer: bearer)
                         page = try await database.companionChanges(after: after, limit: limit)
                     }
                     return try .json(page)
                 case "/v1/providers": return try .json(commands.providers())
+                case "/v1/members":
+                    // A phone learns every Mac and Linux member (with endpoints)
+                    // from whichever one it syncs with, so it has no home Mac.
+                    guard let members else { return .error("unavailable", "This device does not serve members yet.", status: 503) }
+                    return try .json(try await members.list())
+                case "/v1/sync/status":
+                    guard let status = await syncStatus() else { return .error("unavailable", "Synchronization has not started.", status: 503) }
+                    return try .json(status)
                 case "/v1/pending": return try .json(await commands.pendingInteractions())
                 default: break
                 }
@@ -412,7 +550,7 @@ public final class CompanionWorkspaceAPI {
                     defer { linkedReadInFlight = false }
                     let data = try await linkedData(link)
                     guard isActive() else { return .error("unavailable", "Companion sharing is stopped.", status: 503) }
-                    _ = try await authentication.authenticate(bearer: bearer)
+                    try await reauthenticate(device, bearer: bearer)
                     let response = try CompanionHTTPResponse.json(CompanionLinkedData(noteID: note.id, noteRevision: note.revision,
                         tableID: tableID, columns: data.columns, rows: data.rows, json: data.json))
                     guard response.body.count <= 32 * 1_024 * 1_024 else {
@@ -448,7 +586,7 @@ public final class CompanionWorkspaceAPI {
                     let read = try JSONDecoder().decode(CompanionWorkspaceRead.self, from: request.body)
                     let value = try await commands.readWorkspace(read)
                     guard isActive() else { return .error("unavailable", "Companion sharing is stopped.", status: 503) }
-                    _ = try await authentication.authenticate(bearer: bearer)
+                    try await reauthenticate(device, bearer: bearer)
                     return try .json(value)
                 }
                 if path == "/v1/mutations" {

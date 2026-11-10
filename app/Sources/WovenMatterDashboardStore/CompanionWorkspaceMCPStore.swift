@@ -1,6 +1,14 @@
+#if canImport(CryptoKit)
 import CryptoKit
+#else
+import Crypto
+#endif
 import Foundation
+#if canImport(SQLite3)
 import SQLite3
+#else
+import CSQLite
+#endif
 import WovenMatterCore
 
 /// A library-tool grant is separate from the write-only execution publisher.
@@ -19,6 +27,9 @@ public struct CompanionWorkspaceMCPPrincipal: Sendable {
   public let libraryID: String
   public let workspaceID: String
   public let executionDeviceID: String
+  /// A signed request from the workspace's own execution device (a Linux
+  /// member) rather than a library MCP grant; `grantID` is then `member:<device>`.
+  public var isMember = false
 }
 
 public struct CompanionScheduledMCPPreparation: Codable, Sendable {
@@ -52,9 +63,7 @@ extension WorkspaceDatabaseConnection {
             preparation.nativeSessionID?.isEmpty != true,
             let workspace = try federationWorkspaceUnlocked(principal.workspaceID), !workspace.deleted,
             workspace.executionDeviceID == principal.executionDeviceID,
-            let grant = try federationValuesUnlocked("SELECT payload FROM companion_workspace_mcp_grants WHERE workspace_id=?",
-              bindings: [principal.workspaceID], as: WorkspaceMCPRecord.self).first,
-            grant.grantID == principal.grantID,
+            try workspaceMCPPrincipalCurrentUnlocked(principal),
             try companionIDsUnlocked("SELECT workspace_id FROM workspace_calendar_remote_ownership WHERE workspace_id=? AND state='remote'",
               bindings: [principal.workspaceID]).isEmpty == false,
             let event = try calendarItemsUnlocked().first(where: { $0.id == incoming.eventID }),
@@ -170,6 +179,30 @@ extension WorkspaceDatabaseConnection {
     }
   }
 
+  /// A grant principal is current while its grant is; a member principal was
+  /// just verified by signature against the current member list.
+  func workspaceMCPPrincipalCurrentUnlocked(_ principal: CompanionWorkspaceMCPPrincipal) throws -> Bool {
+    if principal.isMember { return principal.grantID == "member:" + principal.executionDeviceID }
+    return try federationValuesUnlocked("SELECT payload FROM companion_workspace_mcp_grants WHERE workspace_id=?",
+      bindings: [principal.workspaceID], as: WorkspaceMCPRecord.self).first?.grantID == principal.grantID
+  }
+
+  /// The principal for a signed request from a Linux member: allowed only for
+  /// the non-deleted Linux execution workspace that member executes. `serving`
+  /// is the member that serves the workspace's endpoint (`MemberAudience`),
+  /// since an older Linux record names its Node server's own execution device ID.
+  public func companionWorkspaceMCPMember(workspaceID: String, deviceID: String, serving: String? = nil) throws -> CompanionWorkspaceMCPPrincipal {
+    try withLock {
+      guard let workspace = try federationWorkspaceUnlocked(workspaceID), !workspace.deleted, workspace.kind == .linux,
+            let executor = workspace.executionDeviceID,
+            executor == deviceID.lowercased() || serving?.lowercased() == deviceID.lowercased() else {
+        throw federationError("wrong_owner", "This member does not execute that Linux workspace.")
+      }
+      return .init(grantID: "member:" + executor, libraryID: workspace.libraryID, workspaceID: workspace.id,
+                   executionDeviceID: executor, isMember: true)
+    }
+  }
+
   public func revokeCompanionWorkspaceMCP(workspaceID: String, deviceID: String) throws {
     try transaction {
       guard deviceID == (try companionLibraryIdentityUnlocked()).hostDeviceID else {
@@ -189,9 +222,7 @@ extension WorkspaceDatabaseConnection {
             let workspace = try federationWorkspaceUnlocked(owner), !workspace.deleted,
             workspace.libraryID == principal.libraryID, workspace.kind == .linux,
             workspace.executionDeviceID == principal.executionDeviceID,
-            let record = try federationValuesUnlocked("SELECT payload FROM companion_workspace_mcp_grants WHERE workspace_id=?",
-              bindings: [owner], as: WorkspaceMCPRecord.self).first,
-            record.grantID == principal.grantID else {
+            try workspaceMCPPrincipalCurrentUnlocked(principal) else {
         throw federationError("wrong_owner", "A library MCP grant may act only for its execution workspace's conversations.")
       }
     }
@@ -214,6 +245,9 @@ extension WorkspaceDatabase {
   }
   public func revokeCompanionWorkspaceMCP(workspaceID: String, deviceID: String) async throws {
     try await write { try $0.revokeCompanionWorkspaceMCP(workspaceID: workspaceID, deviceID: deviceID) }
+  }
+  public func companionWorkspaceMCPMember(workspaceID: String, deviceID: String, serving: String? = nil) async throws -> CompanionWorkspaceMCPPrincipal {
+    try await read { try $0.companionWorkspaceMCPMember(workspaceID: workspaceID, deviceID: deviceID, serving: serving) }
   }
   public func authorizeCompanionWorkspaceMCPCaller(conversationID: String, principal: CompanionWorkspaceMCPPrincipal) async throws {
     try await read { try $0.authorizeCompanionWorkspaceMCPCaller(conversationID: conversationID, principal: principal) }

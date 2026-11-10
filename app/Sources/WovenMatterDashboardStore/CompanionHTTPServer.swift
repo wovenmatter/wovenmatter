@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(Network)
 import Network
+#endif
 import WovenMatterCore
 
 public struct CompanionHTTPRequest: Sendable {
@@ -40,13 +42,48 @@ public struct CompanionHTTPResponse: Sendable {
   }
 }
 
+/// What a server with an upgrade handler does with a WebSocket upgrade request.
+public enum CompanionUpgradeDecision: Sendable {
+  case reject(CompanionHTTPResponse)
+  /// Relay raw bytes with a loopback port after sending `head` there as the request.
+  case tunnel(port: UInt16, head: Data)
+
+  /// A WebSocket handshake for `path` on the loopback target, carrying only the
+  /// client's handshake fields and the target's own bearer.
+  public static func webSocketHead(for request: CompanionHTTPRequest, port: UInt16, path: String, bearer: String) -> Data? {
+    guard let key = request.headers["sec-websocket-key"], let version = request.headers["sec-websocket-version"] else { return nil }
+    var lines = ["GET \(path) HTTP/1.1", "Host: 127.0.0.1:\(port)", "Upgrade: websocket", "Connection: Upgrade",
+                 "Sec-WebSocket-Key: \(key)", "Sec-WebSocket-Version: \(version)", "Authorization: Bearer \(bearer)"]
+    for name in ["sec-websocket-protocol", "sec-websocket-extensions"] {
+      if let value = request.headers[name] { lines.append(name.split(separator: "-").map { $0.capitalized }.joined(separator: "-") + ": " + value) }
+    }
+    return Data((lines.joined(separator: "\r\n") + "\r\n\r\n").utf8)
+  }
+}
+
 /// A deliberately narrow HTTP/1.1 reader for Tailscale's loopback reverse proxy.
-/// No upgrades, chunking, request pipelining, cookies or browser origins are accepted.
+/// No chunking, request pipelining, cookies or browser origins are accepted, and no
+/// upgrades unless the server was given an upgrade handler (WebSocket GET only).
 public struct CompanionHTTPParser: Sendable {
   public static let maximumHeaderBytes = 32 * 1_024
   public static let maximumBodyBytes = 64 * 1_024 * 1_024
+  /// Connection deadlines: the request head must arrive within `header`;
+  /// after it the body may take up to `body` in all, as long as bytes keep
+  /// arriving at least every `bodyIdle` (a 64 MiB upload over a slow relayed
+  /// path takes minutes); a complete non-streaming request is answered
+  /// within `response`.
+  public struct Deadlines: Sendable {
+    public var header: TimeInterval = 15
+    public var bodyIdle: TimeInterval = 30
+    public var body: TimeInterval = 15 * 60
+    public var response: TimeInterval = 60
+    public init() {}
+  }
   private var buffer = Data()
-  public init() {}
+  private let allowsUpgrade: Bool
+  /// The request head was received and is valid; only body bytes remain.
+  public private(set) var headersComplete = false
+  public init(allowsUpgrade: Bool = false) { self.allowsUpgrade = allowsUpgrade }
   public mutating func append(_ bytes: Data) throws -> CompanionHTTPRequest? {
     guard bytes.count <= Self.maximumBodyBytes + Self.maximumHeaderBytes - buffer.count else {
       throw CompanionAPIError(code: "too_large", message: "Request exceeds the size limit.")
@@ -74,8 +111,11 @@ public struct CompanionHTTPParser: Sendable {
             headers[name] == nil else { throw malformed }
       headers[name] = value
     }
+    let upgrade = headers["upgrade"]
+    guard upgrade == nil || (allowsUpgrade && parts[0] == "GET" && upgrade?.lowercased() == "websocket"
+                             && headers["connection"]?.lowercased().contains("upgrade") == true) else { throw malformed }
     guard headers["host"] != nil, headers["transfer-encoding"] == nil,
-          headers["upgrade"] == nil, headers["expect"] == nil,
+          headers["expect"] == nil,
           headers["origin"] == nil, headers["cookie"] == nil else { throw malformed }
     let length: Int
     if let raw = headers["content-length"] {
@@ -87,6 +127,7 @@ public struct CompanionHTTPParser: Sendable {
           parts[0] != "POST" || headers["content-type"]?.lowercased().hasPrefix("application/json") == true else { throw malformed }
     let count = buffer.count - separator.upperBound
     guard count <= length else { throw malformed }
+    headersComplete = true
     guard count == length else { return nil }
     return CompanionHTTPRequest(method: String(parts[0]), target: String(parts[1]), headers: headers,
                                 body: Data(buffer[separator.upperBound...]))
@@ -94,20 +135,25 @@ public struct CompanionHTTPParser: Sendable {
   private var malformed: CompanionAPIError { CompanionAPIError(code: "invalid_request", message: "Invalid companion request.") }
 }
 
+#if canImport(Network)
 /// Each connection has its own bounded reader. Ordinary request tasks do not own
 /// Mac runs, so disconnecting never cancels an accepted execution command. An
 /// inference-only streaming response does own its producer and cancels it on close.
 public final class CompanionHTTPServer: @unchecked Sendable {
   public typealias Handler = @Sendable (CompanionHTTPRequest) async -> CompanionHTTPResponse
+  public typealias UpgradeHandler = @Sendable (CompanionHTTPRequest) async -> CompanionUpgradeDecision
   private let queue = DispatchQueue(label: "com.wovenmatter.companion.http")
   private let handler: Handler
+  private let upgradeHandler: UpgradeHandler?
   private let streamIdleTimeout: TimeInterval
+  private let deadlines: CompanionHTTPParser.Deadlines
   private var listener: NWListener?
   private var clients: [UUID: CompanionHTTPConnection] = [:]
   private var startContinuation: CheckedContinuation<UInt16, any Error>?
-  public init(streamIdleTimeout: TimeInterval = 180, handler: @escaping Handler) {
+  public init(streamIdleTimeout: TimeInterval = 180, deadlines: CompanionHTTPParser.Deadlines = .init(),
+              upgradeHandler: UpgradeHandler? = nil, handler: @escaping Handler) {
     precondition(streamIdleTimeout.isFinite && streamIdleTimeout > 0)
-    self.handler = handler; self.streamIdleTimeout = streamIdleTimeout
+    self.handler = handler; self.upgradeHandler = upgradeHandler; self.streamIdleTimeout = streamIdleTimeout; self.deadlines = deadlines
   }
 
   public func start(port: UInt16 = 0) async throws -> UInt16 {
@@ -156,7 +202,8 @@ public final class CompanionHTTPServer: @unchecked Sendable {
   private func accept(_ connection: NWConnection) {
     guard clients.count < 32 else { connection.cancel(); return }
     let id = UUID()
-    let client = CompanionHTTPConnection(connection: connection, queue: queue, handler: handler, streamIdleTimeout: streamIdleTimeout) { [weak self] in
+    let client = CompanionHTTPConnection(connection: connection, queue: queue, handler: handler, upgradeHandler: upgradeHandler,
+                                         streamIdleTimeout: streamIdleTimeout, deadlines: deadlines) { [weak self] in
       self?.clients.removeValue(forKey: id)
     }
     clients[id] = client
@@ -168,9 +215,14 @@ private final class CompanionHTTPConnection: @unchecked Sendable {
   private let connection: NWConnection
   private let queue: DispatchQueue
   private let handler: CompanionHTTPServer.Handler
+  private let upgradeHandler: CompanionHTTPServer.UpgradeHandler?
   private let streamIdleTimeout: TimeInterval
+  private let deadlines: CompanionHTTPParser.Deadlines
   private let onClose: @Sendable () -> Void
-  private var parser = CompanionHTTPParser()
+  private var parser: CompanionHTTPParser
+  private var bodyIdle: DispatchWorkItem?
+  private var replying = false
+  private var tunnel: NWConnection?
   // All mutable connection state is confined to queue, including NW callbacks.
   private var closed = false
   private var processing = false
@@ -179,9 +231,11 @@ private final class CompanionHTTPConnection: @unchecked Sendable {
   private var streamTask: Task<Void, Never>?
   private var streamIdleTimer: (any DispatchSourceTimer)?
   init(connection: NWConnection, queue: DispatchQueue, handler: @escaping CompanionHTTPServer.Handler,
-       streamIdleTimeout: TimeInterval, onClose: @escaping @Sendable () -> Void) {
-    self.connection = connection; self.queue = queue; self.handler = handler
-    self.streamIdleTimeout = streamIdleTimeout; self.onClose = onClose
+       upgradeHandler: CompanionHTTPServer.UpgradeHandler? = nil,
+       streamIdleTimeout: TimeInterval, deadlines: CompanionHTTPParser.Deadlines, onClose: @escaping @Sendable () -> Void) {
+    self.connection = connection; self.queue = queue; self.handler = handler; self.upgradeHandler = upgradeHandler
+    self.streamIdleTimeout = streamIdleTimeout; self.deadlines = deadlines; self.onClose = onClose
+    parser = CompanionHTTPParser(allowsUpgrade: upgradeHandler != nil)
   }
   func start() {
     connection.stateUpdateHandler = { [weak self] state in
@@ -189,17 +243,35 @@ private final class CompanionHTTPConnection: @unchecked Sendable {
     }
     connection.start(queue: queue)
     receive()
-    queue.asyncAfter(deadline: .now() + 15) { [weak self] in
+    // The head has a fixed deadline; a body only needs to keep moving.
+    queue.asyncAfter(deadline: .now() + deadlines.header) { [weak self] in
+      guard let self, !self.processing, !self.parser.headersComplete else { return }; self.cancel()
+    }
+    queue.asyncAfter(deadline: .now() + deadlines.body) { [weak self] in
       guard let self, !self.processing else { return }; self.cancel()
     }
-    queue.asyncAfter(deadline: .now() + 60) { [weak self] in
-      guard let self, !self.streaming else { return }; self.cancel()
+  }
+  private func armBodyIdle() {
+    bodyIdle?.cancel()
+    let item = DispatchWorkItem { [weak self] in
+      guard let self, !self.processing else { return }; self.cancel()
+    }
+    bodyIdle = item
+    queue.asyncAfter(deadline: .now() + deadlines.bodyIdle, execute: item)
+  }
+  private func beginProcessing() {
+    processing = true
+    bodyIdle?.cancel(); bodyIdle = nil
+    queue.asyncAfter(deadline: .now() + deadlines.response) { [weak self] in
+      guard let self, !self.streaming, !self.replying else { return }; self.cancel()
     }
   }
   func cancel() {
     guard !closed else { return }; closed = true
     streamTask?.cancel(); streamTask = nil
     streamIdleTimer?.cancel(); streamIdleTimer = nil
+    bodyIdle?.cancel(); bodyIdle = nil
+    tunnel?.cancel(); tunnel = nil
     connection.cancel(); onClose()
   }
   private func receive() {
@@ -207,7 +279,19 @@ private final class CompanionHTTPConnection: @unchecked Sendable {
       guard let self, !self.closed else { return }
       do {
         if let request = try self.parser.append(data ?? Data()) {
-          self.processing = true
+          self.beginProcessing()
+          if request.headers["upgrade"] != nil, let upgradeHandler = self.upgradeHandler {
+            Task { [self] in
+              let decision = await upgradeHandler(request)
+              queue.async { [self] in
+                switch decision {
+                case .reject(let response): send(response)
+                case let .tunnel(port, head): openTunnel(port: port, head: head)
+                }
+              }
+            }
+            return
+          }
           self.peerClosed = complete || error != nil
           if !self.peerClosed { self.monitorDisconnect() }
           Task { [self] in
@@ -215,12 +299,46 @@ private final class CompanionHTTPConnection: @unchecked Sendable {
             queue.async { [self] in send(response) }
           }
         } else if complete || error != nil { self.cancel() }
-        else { self.receive() }
+        else {
+          if self.parser.headersComplete, data?.isEmpty == false { self.armBodyIdle() }
+          self.receive()
+        }
       } catch {
         self.send(.error("invalid_request", "Invalid or oversized companion request.", status: 400))
       }
     }
   }
+  /// After the handshake this is a byte relay; WebSocket framing passes through unchanged.
+  private func openTunnel(port: UInt16, head: Data) {
+    guard !closed, let target = NWEndpoint.Port(rawValue: port) else { cancel(); return }
+    streaming = true
+    let upstream = NWConnection(host: "127.0.0.1", port: target, using: .tcp)
+    tunnel = upstream
+    upstream.stateUpdateHandler = { [weak self] state in
+      switch state { case .failed, .cancelled: self?.queue.async { self?.cancel() }; default: break }
+    }
+    upstream.start(queue: queue)
+    upstream.send(content: head, completion: .contentProcessed { [weak self] error in
+      guard let self else { return }
+      if error != nil { self.cancel(); return }
+      self.relay(from: self.connection, to: upstream)
+      self.relay(from: upstream, to: self.connection)
+    })
+  }
+
+  private func relay(from source: NWConnection, to destination: NWConnection) {
+    source.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1_024) { [weak self] data, _, complete, error in
+      guard let self, !self.closed else { return }
+      if let data, !data.isEmpty {
+        destination.send(content: data, completion: .contentProcessed { [weak self] sendError in
+          guard let self, !self.closed else { return }
+          if sendError != nil || complete || error != nil { self.cancel() } else { self.relay(from: source, to: destination) }
+        })
+      } else if complete || error != nil { self.cancel() }
+      else { self.relay(from: source, to: destination) }
+    }
+  }
+
   private func monitorDisconnect() {
     // There is exactly one request per connection. This read detects a closed
     // inference client even while its producer is waiting for model output.
@@ -250,6 +368,10 @@ private final class CompanionHTTPConnection: @unchecked Sendable {
     var wire = Data("HTTP/1.1 \(response.status) \(reason)\r\nContent-Type: \(response.contentType)\r\n\(extraHeaders)\(framing)\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n".utf8)
     guard let producer = response.stream else {
       wire.append(response.body)
+      // A reply being written is bounded by the body cap, not the 60 s
+      // answer deadline, so a large page over a slow path completes.
+      replying = true
+      queue.asyncAfter(deadline: .now() + deadlines.body) { [weak self] in self?.cancel() }
       connection.send(content: wire, completion: .contentProcessed { [weak self] _ in self?.cancel() })
       return
     }
@@ -305,3 +427,4 @@ private final class CompanionHTTPConnection: @unchecked Sendable {
     }
   }
 }
+#endif

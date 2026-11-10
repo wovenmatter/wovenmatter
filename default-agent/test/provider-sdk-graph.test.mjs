@@ -4,6 +4,8 @@ import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { crc32 } from 'node:zlib';
 import { streamSimple as anthropic } from '@earendil-works/pi-ai/api/anthropic-messages';
@@ -13,6 +15,8 @@ import { streamSimple as google } from '@earendil-works/pi-ai/api/google-generat
 import { streamSimple as bedrock } from '@earendil-works/pi-ai/api/bedrock-converse-stream';
 import { normalizeContext } from '@earendil-works/pi-ai/utils/transcript';
 import { satisfiesRange } from '../src/package-versions.mjs';
+import { DefaultAgentEngine } from '../src/engine.mjs';
+import { fakeClaudeRuntime } from './fixtures/claude-runtime.mjs';
 
 const fromPi = createRequire(import.meta.resolve('@earendil-works/pi-ai'));
 const tool = { name: 'lookup', description: 'Offline fixture', parameters: {
@@ -130,14 +134,37 @@ test('Pi and current OpenAI SDK preserve compatible Chat Completions tool stream
 });
 
 test('Pi and current Google SDK preserve streaming function calls and token accounting', { timeout: 10000 }, async t => {
+  const previousVersion = process.env.GOOGLE_GENAI_API_VERSION;
+  process.env.GOOGLE_GENAI_API_VERSION = 'v1alpha';
+  t.after(() => {
+    if (previousVersion === undefined) delete process.env.GOOGLE_GENAI_API_VERSION;
+    else process.env.GOOGLE_GENAI_API_VERSION = previousVersion;
+  });
   const f = await fixture(t, response => {
     response.writeHead(200, { 'content-type': 'text/event-stream' });
     response.end(sse([['', { responseId: 'google_fixture', candidates: [{ content: { role: 'model', parts: [{ text: 'Offline text' }, { functionCall: { name: 'lookup', args: { key: 'fixture' } } }] }, finishReason: 'STOP' }], usageMetadata: { promptTokenCount: 11, candidatesTokenCount: 7, totalTokenCount: 18 } }]]));
   });
-  checkResult(await google(model('google-generative-ai', 'google', f.baseUrl), context, { apiKey: 'fixture-key', maxRetries: 0 }).result());
+  // GenAI 3 defaults to v1 and adds an environment override. Pi supplies the
+  // complete versioned endpoint, so neither may replace or append to its path.
+  checkResult(await google(model('google-generative-ai', 'google', f.baseUrl + '/v1beta'), context, { apiKey: 'fixture-key', maxRetries: 0 }).result());
   assert.equal(f.requests.length, 1);
-  assert.match(f.requests[0].url, /streamGenerateContent/);
+  assert.equal(f.requests[0].url, '/v1beta/models/fixture-model:streamGenerateContent?alt=sse');
+  assert.equal(f.requests[0].headers['x-goog-api-key'], 'fixture-key');
   assert.equal(f.requests[0].body.tools[0].functionDeclarations[0].name, 'lookup');
+});
+
+test('Pi and GenAI 3 cancel an unfinished response on the configured versioned endpoint', { timeout: 10000 }, async t => {
+  const controller = new AbortController();
+  const f = await fixture(t, response => {
+    response.writeHead(200, { 'content-type': 'text/event-stream' });
+    response.write(sse([['', { candidates: [{ content: { role: 'model', parts: [{ text: 'Partial fixture' }] } }] }]]));
+  });
+  const stream = google(model('google-generative-ai', 'google', f.baseUrl + '/v1'), context,
+    { apiKey: 'fixture-key', signal: controller.signal, maxRetries: 0 });
+  for await (const event of stream) if (event.type === 'text_delta') { controller.abort(); break; }
+  assert.equal((await stream.result()).stopReason, 'aborted');
+  assert.equal(f.requests.length, 1);
+  assert.equal(f.requests[0].url, '/v1/models/fixture-model:streamGenerateContent?alt=sse');
 });
 
 // AWS EventStream wire encoding, including both CRCs; the real Smithy transport
@@ -172,6 +199,31 @@ test('Pi and current Bedrock/Smithy SDKs decode actual event-stream text, tools 
   assert.equal(f.requests[1].headers.authorization, 'Bearer fixture-bedrock-token');
   assert.match(f.requests[0].url, /converse-stream/);
   assert.equal(f.requests[0].body.toolConfig.tools[0].toolSpec.name, 'lookup');
+});
+
+test('Pi keeps Bedrock retries disabled for transient HTTP failures', { timeout: 10000 }, async t => {
+  const previousAttempts = process.env.AWS_MAX_ATTEMPTS;
+  t.after(() => {
+    if (previousAttempts === undefined) delete process.env.AWS_MAX_ATTEMPTS;
+    else process.env.AWS_MAX_ATTEMPTS = previousAttempts;
+  });
+  process.env.AWS_MAX_ATTEMPTS = '9';
+  const directory = await mkdtemp(join(tmpdir(), 'woven-bedrock-retries-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await new DefaultAgentEngine({ cwd: directory, directory, claude: fakeClaudeRuntime() }).initialize();
+  const f = await fixture(t, response => {
+    response.writeHead(503, { 'content-type': 'application/json', 'x-amzn-errortype': 'ServiceUnavailableException' });
+    response.end(JSON.stringify({ message: 'Offline transient failure' }));
+  });
+  // Woven owns retries at the conversation boundary. Smithy 3.40 changes its
+  // default retry behavior, but Pi must still honor Woven's explicit opt-out.
+  const result = await bedrock(model('bedrock-converse-stream', 'amazon-bedrock', f.baseUrl), context, {
+    maxRetries: 0, env: { AWS_BEDROCK_SKIP_AUTH: '1', AWS_BEDROCK_FORCE_HTTP1: '1', AWS_REGION: 'us-east-1' },
+  }).result();
+  assert.equal(result.stopReason, 'error');
+  assert.match(result.errorMessage, /Offline transient failure/);
+  assert.equal(f.requests.length, 1, 'a transient failure must not replay the provider request');
+  assert.equal(result.content.some(block => block.type === 'toolCall'), false);
 });
 
 test('Bedrock preserves Smithy idle timeout errors after response headers', { timeout: 10000 }, async t => {

@@ -1,4 +1,5 @@
 import Foundation
+import WovenMatterCore
 
 /// Serialized private stdio to the backend-owned Node manager. Responses are
 /// bounded; stderr is never recorded because runtime errors may contain secrets.
@@ -37,7 +38,7 @@ public actor ExecutorBrokerClient {
             var message = data; message.append(10)
             try pipe.input.fileHandleForWriting.write(contentsOf: message)
             var response = Data()
-            while let chunk = try pipe.output.fileHandleForReading.read(upToCount: 65_536), !chunk.isEmpty {
+            while case let chunk = try PortablePOSIX.readAvailable(pipe.output.fileHandleForReading), !chunk.isEmpty {
                 response.append(chunk)
                 guard response.count <= 1_048_576 else { pipe.process.terminate(); throw DefaultAgentError.message("Executor manager returned too much data.") }
                 if response.last == 10 { break }

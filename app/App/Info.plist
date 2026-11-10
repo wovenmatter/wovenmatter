@@ -8,6 +8,8 @@
     <string>$(WOVENMATTER_DEV_MODE)</string>
     <key>WovenMatterDevelopmentInstance</key>
     <string>$(WOVENMATTER_DEV_INSTANCE)</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Woven Matter lets agents you start control apps such as System Events and Finder on this Mac.</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>Woven Matter uses your microphone to transcribe dictation on your Mac. Audio stays on this device.</string>
     <key>CFBundleShortVersionString</key>
