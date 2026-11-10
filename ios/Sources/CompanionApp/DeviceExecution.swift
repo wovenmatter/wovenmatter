@@ -93,6 +93,13 @@ struct InferenceSetupCredential: InferenceCredentialReading {
     try saved.validate()
     try InferenceConnectionPolicy.validateSave(saved, existing: existing)
     try Task.checkCancellation()
+    // A member-signed host connection has no credential to store.
+    if InferenceMemberSigning.signs(saved.hostScope), saved.route == .adapter {
+      saved.selectedModel = try await resolveModel(saved, "")
+      try Task.checkCancellation()
+      try persist(saved)
+      return saved
+    }
     let previous = existing.first { $0.id == proposed.id }
     let previousSecret = try await credentials.read(connectionID: proposed.id)
     let supplied = secret.trimmingCharacters(in: .whitespacesAndNewlines)

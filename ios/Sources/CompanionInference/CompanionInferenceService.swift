@@ -55,9 +55,9 @@ public actor CompanionInferenceService {
     var components = URLComponents(url: try adapterURL("catalog"), resolvingAgainstBaseURL: false)!
     components.queryItems = [URLQueryItem(name: "provider", value: connection.provider)]
     var request = URLRequest(url: components.url!)
-    request.setValue("Bearer \(try await secret())", forHTTPHeaderField: "Authorization")
     request.setValue("application/json", forHTTPHeaderField: "Accept")
     applyHostScope(to: &request)
+    try await authorize(&request)
     var data = Data()
     for try await event in try await transport.stream(request) {
       switch event {
@@ -78,18 +78,17 @@ public actor CompanionInferenceService {
     let selected = connection.route == .direct ? try await model() : nil
     let oauth = connection.route == .direct && InferenceOAuthSession.supports(connection.provider)
       ? try await oauthResolver.resolve(connection: connection, credentials: credentials) : nil
-    let secret: String
-    if let oauth { secret = oauth.access } else { secret = try await self.secret() }
     if connection.route == .adapter {
       input["accountID"] = connection.accountID
       // Endpoint selection, native directories, auth and credential headers are server-owned.
       input["model"] = ["id": connection.modelID, "provider": connection.provider]
       var request = URLRequest(url: try adapterURL("stream")); request.httpMethod = "POST"
-      request.setValue("Bearer \(secret)", forHTTPHeaderField: "Authorization")
       request.setValue("application/json", forHTTPHeaderField: "Content-Type")
       request.setValue("application/x-ndjson", forHTTPHeaderField: "Accept")
       request.httpBody = try JSONSerialization.data(withJSONObject: input)
       applyHostScope(to: &request)
+      // Signed last: the signature covers the final target and body.
+      try await authorize(&request)
       var terminal = false
       for try await event in try await transport.stream(request) {
         try Task.checkCancellation()
@@ -107,6 +106,8 @@ public actor CompanionInferenceService {
       }
       guard terminal else { throw InferenceError.interrupted }
     } else {
+      let secret: String
+      if let oauth { secret = oauth.access } else { secret = try await self.secret() }
       guard let selected else { throw InferenceError.modelUnavailable }
       // A credential replacement must not replay account-bound thinking signatures to another principal.
       var route = connection
@@ -140,6 +141,15 @@ public actor CompanionInferenceService {
     request.setValue(scope.libraryID, forHTTPHeaderField: "X-Woven-Library")
     request.setValue(scope.workspaceID, forHTTPHeaderField: "X-Woven-Workspace")
     request.setValue(scope.deviceID, forHTTPHeaderField: "X-Woven-Device")
+  }
+  /// A member signature when this device signs as a member and the host
+  /// scope names the host; otherwise the saved grant as the bearer.
+  private func authorize(_ request: inout URLRequest) async throws {
+    if let (sign, audience) = InferenceMemberSigning.signer(for: connection.hostScope) {
+      try sign(&request, audience)
+      return
+    }
+    request.setValue("Bearer \(try await secret())", forHTTPHeaderField: "Authorization")
   }
   private func secret() async throws -> String {
     guard let value = try await credentials.read(connectionID: connection.id), !value.isEmpty else { throw InferenceError.missingCredential }

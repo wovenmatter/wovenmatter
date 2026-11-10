@@ -239,7 +239,8 @@ final class CompanionHostController {
             }
             inferenceHost = CompanionInferenceHost(authentication: executionAuth, descriptor: local,
                 directory: try supportDirectory ?? ApplicationModel.dashboardSupportDirectory(),
-                isActive: { [weak self] in self?.generation == expectedGeneration && self?.endpoint != nil }, authorize: authorizeGrant)
+                isActive: { [weak self] in self?.generation == expectedGeneration && self?.endpoint != nil }, authorize: authorizeGrant,
+                members: try? await peerSync.members())
             isStarting = false; status = "Available to your paired devices"
             // Paired-Mac credential storage is independent of phone and library
             // availability. A failure is reported and retried, never fatal.

@@ -554,8 +554,17 @@ hands them to the macOS job, which checks them with
   its own sessions use the mobile API, and every other workspace with an
   endpoint (each Mac's own and each Linux workspace) gets a signed direct
   client, with no execution grant. A workspace too old for signatures keeps
-  its bearer grant. Inference adapters on a Mac still use their bearer grant
-  (the Mac's inference host does not accept signatures yet).
+  its bearer grant.
+- **Inference.** A Mac's inference host (`/v1/inference/catalog`,
+  `/v1/inference/stream`, `CompanionInferenceHost`) accepts signed `ios` and
+  `mac` members: the principal is the member's device ID, a named
+  `X-Woven-Workspace` / `X-Woven-Library` / `X-Woven-Device` must match it and
+  this Mac, and removal is checked before credentials are prepared and again
+  before a stream starts. In member mode the phone saves hosted connections
+  with `InferenceHostScope.hostDeviceID` (the workspace's `executionDeviceID`)
+  and no credential, and `CompanionInferenceService` signs them through
+  `InferenceMemberSigning` (installed with the phone's member key); a
+  connection without `hostDeviceID` keeps presenting its grant.
 - **Migration.** Existing phone data stays. A phone paired before members
   shows "Pair again once with any Mac"; pairing with a Mac of the same
   library set (its registry holds the phone's previous library) keeps the

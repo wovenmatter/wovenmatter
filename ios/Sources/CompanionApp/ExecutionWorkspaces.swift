@@ -118,6 +118,10 @@ extension CompanionModel {
   }
   func authorizedWorkspaceCredential(_ id: String) async throws -> DirectWorkspaceCredential {
     guard !fixture, !isolatedTestHost else { throw DeviceExecutionError.unavailable("Use the regular app to authorize execution workspaces.") }
+    // Member mode: the host verifies this phone's signature, so nothing is issued.
+    if inferenceHostDeviceID(id) != nil, let workspace = executionWorkspaces.first(where: { $0.id == id }), let endpoint = workspace.endpoint {
+      return DirectWorkspaceCredential(endpoint: endpoint, libraryID: workspace.libraryID, workspaceID: workspace.id, deviceID: state.deviceID, token: "")
+    }
     if let existing = try workspaceCredentials.load(id), await acceptsWorkspaceCredential(existing) { return existing }
     guard online, transport != nil else { throw DeviceExecutionError.unavailable("Connect to your central database to authorize this workspace for the first time.") }
     return try await issueWorkspaceCredential(id, generation: connectionGeneration)

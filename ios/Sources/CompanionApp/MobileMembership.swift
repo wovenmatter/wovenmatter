@@ -1,6 +1,7 @@
 import Foundation
 import UIKit
 import CompanionClient
+import CompanionInference
 import WovenMatterCompanion
 
 /// Member mode (docs/architecture/WOVEN_EVERYWHERE.md): the phone pairs once
@@ -46,7 +47,18 @@ extension CompanionModel {
     if let memberIdentity, memberIdentity.deviceID == state.deviceID { return memberIdentity }
     let identity = try MobileMemberKeyVault.loadOrCreate(deviceID: state.deviceID, storage: memberKeyStorage)
     memberIdentity = identity
+    // Inference connections whose host scope names the host Mac sign with this key.
+    let signer = identity.signer
+    InferenceMemberSigning.install { request, audience in try MobileRequestSigning.sign(&request, with: signer, audience: audience) }
     return identity
+  }
+
+  /// The host Mac's member device ID for an inference connection to
+  /// `workspaceID`, in member mode; nil keeps that connection on its grant.
+  func inferenceHostDeviceID(_ workspaceID: String) -> String? {
+    guard memberMode, let workspace = executionWorkspaces.first(where: { $0.id == workspaceID }), workspace.kind != .ios,
+          let device = workspace.executionDeviceID?.lowercased(), MemberRequestSignature.isDeviceID(device) else { return nil }
+    return device
   }
 
   /// Member mode when this phone paired with its key and the Mac accepted it.
