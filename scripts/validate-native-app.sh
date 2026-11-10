@@ -101,8 +101,9 @@ if [ "$claude_arch" = x86_64 ]; then claude_arch=x64; fi
 claude_binary="${resources}/default-agent/node_modules/@anthropic-ai/claude-agent-sdk-darwin-$claude_arch/claude"
 test -x "$claude_binary"
 codesign --verify --strict "$claude_binary"
-# The bots runtime (Resources/bots): its sources, production dependencies only, and
-# Anthropic's signed Claude runtime, unmodified (prepare-bots.sh).
+# The bots runtime (Resources/bots): its sources and production dependencies only. It
+# runs the default agent's signed Claude binary above (prepare-bots.sh), so it carries
+# no copy of its own.
 bots="${resources}/bots"
 for file in package.json package-lock.json src/cli.ts helper/supervisor.mjs helper/agent.mjs image/Dockerfile; do
   test -f "$bots/$file"
@@ -110,9 +111,8 @@ done
 test ! -e "$bots/test"
 test ! -e "$bots/node_modules/vitest"
 test ! -e "$bots/node_modules/typescript"
-bots_claude="$bots/node_modules/@anthropic-ai/claude-agent-sdk-darwin-$claude_arch/claude"
-test -x "$bots_claude"
-codesign --verify --strict "$bots_claude"
+test -f "$bots/node_modules/@anthropic-ai/claude-agent-sdk/package.json"
+test -z "$(find "$bots/node_modules/@anthropic-ai" -maxdepth 1 -name 'claude-agent-sdk-*' -print -quit)"
 test "$("${resources}/default-agent/bin/node" "$bots/src/cli.ts" --version)" = "$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["version"])' "$bots/package.json")"
 test -f "${resources}/harnesses/catalog.json"
 for integration in adapter.mjs hook.mjs binding.mjs proxy.mjs instructions.mjs opencode.mjs install.mjs; do

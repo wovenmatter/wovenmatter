@@ -170,7 +170,13 @@ export async function startRuntime(
   }
   try {
     const models =
-      options.models ?? createBotModels(credentials, { claude: { directory: config.paths.claude } });
+      options.models ??
+      createBotModels(credentials, {
+        claude: {
+          directory: config.paths.claude,
+          ...(config.claude?.executable ? { executable: config.claude.executable } : {}),
+        },
+      });
     const profileSet = normalizeProfiles(settings.current);
     if (!options.models) {
       const refs: Record<string, ModelRef> = {

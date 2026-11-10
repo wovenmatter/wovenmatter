@@ -29,7 +29,7 @@ export function loadWorkspaceMCPCatalog() {
 // `memberDelegate` reaches any Mac member with signed requests for the tools
 // the library host does not serve (member-client.mjs). The saved single-Mac
 // grant (`mcp_library_connection`) is only a fallback for hosts without either.
-export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localTools,localCall,fetchImpl=globalThis.fetch,catalog=loadWorkspaceMCPCatalog(),beforeLibraryCall=async()=>{},scopedHistoryAccess=()=>false,localLibrary=null,memberDelegate=null}) {
+export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localTools,localCall,fetchImpl=globalThis.fetch,catalog=loadWorkspaceMCPCatalog(),beforeLibraryCall=async()=>{},scopedHistoryAccess=()=>false,localLibrary=null,memberDelegate=null,onTimersChanged=()=>{},botTools=[]}) {
   db.exec(`CREATE TABLE IF NOT EXISTS mcp_external_clients (id TEXT PRIMARY KEY, digest TEXT NOT NULL UNIQUE, body TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS mcp_library_connection (id INTEGER PRIMARY KEY CHECK(id=1), envelope TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS mcp_preferences (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL);
@@ -39,6 +39,8 @@ export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localT
   let stopped = false
   const definition = new Map(catalog.map(tool=>[tool.name,tool]))
   const local = new Set(localTools)
+  // Session tools this server runs for bots itself (member-sessions.mjs).
+  const forBots = new Set(botTools)
   const own = () => identity()
   const defaultSettings={enabledByDefault:['notes','history','sessions','goals','timers','usage','calendar','library','browser'],maximumManagedSessions:4,maximumRunningSessions:16,harnessDefaults:{},botMCP:{isEnabled:true,groups:defaultBotGroups}}
   function settings(){
@@ -174,7 +176,7 @@ export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localT
       // Conversation-bound local tools have no meaning for a bot; library
       // tools reach the library with the bot's own attribution.
       const bot=settings().botMCP
-      return catalog.filter(tool=>bot.isEnabled&&new Set([...bot.groups,'goals','html']).has(groupFor(tool.name))&&!local.has(tool.name))
+      return catalog.filter(tool=>bot.isEnabled&&new Set([...bot.groups,'goals','html']).has(groupFor(tool.name))&&(!local.has(tool.name)||forBots.has(tool.name)))
     }
     return catalog.filter(tool=>{
       const group=groupFor(tool.name)
@@ -185,7 +187,7 @@ export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localT
   }
   function available(scope) {
     const current=activeGroups(scope),hasLibrary=delegated(scope)
-    if(isBot(scope))return inventory(scope).filter(tool=>current.has(groupFor(tool.name))&&(servedLocally(scope,tool.name)||hasLibrary))
+    if(isBot(scope))return inventory(scope).filter(tool=>current.has(groupFor(tool.name))&&(servedLocally(scope,tool.name)||forBots.has(tool.name)||hasLibrary))
     return inventory(scope).filter(tool=>{
       const group=groupFor(tool.name)
       const cleanup=['woven_browser_use_cancel','woven_computer_use_cancel','woven_html_cancel'].includes(tool.name)
@@ -268,7 +270,7 @@ export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localT
     }
     if(message.params!==undefined&&(!message.params||typeof message.params!=='object'||Array.isArray(message.params)))return errorReply(id,-32602,'Parameters must be an object.')
     if(message.method==='initialize'&&(!message.params?.protocolVersion||!message.params?.capabilities||!message.params?.clientInfo))return errorReply(id,-32602,'Initialization requires protocolVersion, capabilities and clientInfo.')
-    if(message.method==='initialize')return {jsonrpc:'2.0',id,result:{protocolVersion:['2025-11-25','2025-06-18','2025-03-26'].includes(message.params?.protocolVersion)?message.params.protocolVersion:'2025-11-25',capabilities:{tools:{listChanged:false}},serverInfo:{name:'Woven MCP',version:'1.0.0'},instructions:'Use named Woven tools within this credential’s conversation and current permissions. Notes, calendar, history and library tools use this machine’s library copy; timers and usage need any online Mac, and this workspace’s own tools work with every Mac offline. Never replay an uncertain external effect.'}}
+    if(message.method==='initialize')return {jsonrpc:'2.0',id,result:{protocolVersion:['2025-11-25','2025-06-18','2025-03-26'].includes(message.params?.protocolVersion)?message.params.protocolVersion:'2025-11-25',capabilities:{tools:{listChanged:false}},serverInfo:{name:'Woven MCP',version:'1.0.0'},instructions:'Use named Woven tools within this credential’s conversation and current permissions. Notes, calendar, history, library and timer tools use this machine’s library copy; usage and HTML preview need any online Mac, and this workspace’s own tools work with every Mac offline. Never replay an uncertain external effect.'}}
     if(message.method==='ping')return {jsonrpc:'2.0',id,result:{}}
     let requestKey,requestController,operationRequestID
     try {
@@ -291,8 +293,12 @@ export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localT
       if(inFlight.has(requestKey))return errorReply(id,-32600,'This JSON-RPC request ID is already active for this caller.')
       requestController=new AbortController();inFlight.set(requestKey,requestController)
       const invocationSignal=signal?AbortSignal.any([signal,requestController.signal]):requestController.signal
-      if(servedLocally(scope,name))return await localLibraryCall(scope,{...message,params:{...message.params,arguments:{...input,requestID:operationRequestID}}},invocationSignal)
-      if(isBot(scope)||!local.has(name)||scope.taskProof&&!name.startsWith('woven_databases_')&&name!=='woven_context'&&groupFor(name)!=='browser')return await libraryCall(scope,{...message,params:{...message.params,arguments:{...input,requestID:operationRequestID}}},invocationSignal)
+      if(servedLocally(scope,name)) {
+        try {return await localLibraryCall(scope,{...message,params:{...message.params,arguments:{...input,requestID:operationRequestID}}},invocationSignal)}
+        // A new or changed timer may fire sooner than the dispatcher's next check.
+        finally {if(groupFor(name)==='timers'&&!tool.annotations?.readOnlyHint)try{onTimersChanged()}catch{}}
+      }
+      if(isBot(scope)&&!forBots.has(name)||!isBot(scope)&&!local.has(name)||scope.taskProof&&!name.startsWith('woven_databases_')&&name!=='woven_context'&&groupFor(name)!=='browser')return await libraryCall(scope,{...message,params:{...message.params,arguments:{...input,requestID:operationRequestID}}},invocationSignal)
       const value=await localCall(scope,name,{...input,requestID:operationRequestID},{signal:invocationSignal})
       const reply=result(value)
       if(Buffer.byteLength(JSON.stringify(reply))>1048576)throw fail(413,'The response exceeds 1 MiB. Request a smaller page or character window.')

@@ -20,6 +20,7 @@ import { runtimeConfiguration as configuration, runtimeHarnessEnvironment, nonIn
 import { createBotsService } from './bots-service.mjs'
 import { createLibraryHostSupervisor, libraryBinaryPath } from './library-host.mjs'
 import { createLibraryServe } from './library-serve.mjs'
+import { createLibraryTimers } from './library-timers.mjs'
 import { createMemberVerifier, hasMemberSignature } from './member-auth.mjs'
 import { createMemberTransport } from './member-client.mjs'
 import { createHostAdministration } from './host-admin.mjs'
@@ -136,11 +137,18 @@ const clientExecution = runningAsService ? createClientExecution({
   kind: process.platform === 'darwin' ? 'mac' : 'linux',
   workspaceBrowser,
   library: library ? { client: library.client, available: library.available } : null,
+  onTimersChanged: () => timers?.kick(),
   members: memberTransport ? { transport: memberTransport, deviceID: () => memberIdentityRecord?.deviceID ?? null,
     hasMac: () => library.available() && knownMacMember() } : null,
   runtime: createClientExecutionRuntime({defaultAgent,durableACP,catalog,workspaceRoot,harnessStatus,
     environment:harnessEnvironment,instances,isExecutionEnabled:()=>taskGateway.enabled()}),
 }) : null
+
+// Timers of this machine's sessions and bots fire here, with every Mac offline.
+const timers = library && clientExecution ? createLibraryTimers({ library,
+  deliverSession: (sessionID, text, deliveryID) => clientExecution.deliverTimer(sessionID, text, deliveryID),
+  deliverBot: delivery => bots ? bots.deliver(delivery) : Promise.reject(Object.assign(new Error('Bots are not enabled on this machine.'), { statusCode: 503 })),
+  log: message => process.stderr.write(message + '\n') }) : null
 
 const retainedExecution = runningAsService ? createRetainedExecutionCapture({
   directory:resolve(workspaceRoot,'.wovenmatter/retained-execution'),
@@ -581,6 +589,7 @@ if (runningAsService) {
     }
   }, 5000).unref()
   library?.start()
+  timers?.start()
   server.listen(listenPort, listenHost, () => {
     process.stdout.write(`Woven Matter remote service listening on ${listenHost}:${listenPort}\n`)
     bots?.start().catch(error => process.stderr.write('Bots could not start: ' + error.message + '\n'))
@@ -590,7 +599,7 @@ if (runningAsService) {
   process.once('SIGTERM', async () => {
     server.close()
     let code = 0
-    try { await bots?.close(); await workspaceBrowser.close(); await taskGateway.close(); await retainedExecution.close(); await clientExecution.close(); await durableACP.stopAll(); await defaultAgent.close(); releaseTaskOwner?.() }
+    try { timers?.close(); await bots?.close(); await workspaceBrowser.close(); await taskGateway.close(); await retainedExecution.close(); await clientExecution.close(); await durableACP.stopAll(); await defaultAgent.close(); releaseTaskOwner?.() }
     catch { code = 1 }
     await library?.stop().catch(() => {}); members?.close()
     process.exit(code)
@@ -613,6 +622,7 @@ async function libraryReady(ready) {
   await refreshMemberIdentity(endpoint).catch(error => process.stderr.write('The member identity could not be read: ' + error.message + '\n'))
   await members?.refresh().catch(() => {})
   clientExecution?.kickPublisher()
+  timers?.kick()
   await bots?.drainLibrary().catch(() => {})
 }
 
@@ -623,12 +633,14 @@ async function refreshMemberIdentity(endpoint) {
   if (!value?.deviceID) value = { deviceID: (await library.client.health()).deviceID }
   if (typeof value.deviceID !== 'string') return null
   const libraryEndpoint = endpoint ?? (await libraryServe?.recorded().catch(() => null))?.endpoint ?? memberIdentityRecord?.libraryEndpoint ?? null
-  memberIdentityRecord = { deviceID: value.deviceID.toLowerCase(), kind: value.kind ?? 'linux', name: value.name ?? hostname(), publicKey: value.publicKey ?? null,
+  const record = { deviceID: value.deviceID.toLowerCase(), kind: value.kind ?? 'linux', name: value.name ?? hostname(), publicKey: value.publicKey ?? null,
     endpoints: Array.isArray(value.endpoints) ? value.endpoints : [], libraryEndpoint, updatedAt: new Date().toISOString() }
   await mkdir(libraryState, { recursive: true, mode: 0o700 })
   const temporary = resolve(libraryState, '.identity.' + randomUUID())
-  await writeFile(temporary, JSON.stringify(memberIdentityRecord) + '\n', { mode: 0o600 })
+  await writeFile(temporary, JSON.stringify(record) + '\n', { mode: 0o600 })
   await rename(temporary, resolve(libraryState, 'identity.json'))
+  // Reported only once identity.json (which remote-host.sh reads) is in place.
+  memberIdentityRecord = record
   return memberIdentityRecord
 }
 

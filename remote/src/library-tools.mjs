@@ -2,7 +2,8 @@ const fail = (statusCode, message) => Object.assign(new Error(message), { status
 
 // The Woven MCP groups this machine's library host serves (docs: "Library
 // host", local API). Spreadsheet and HTML note artifacts are part of notes.
-export const libraryServedGroups = Object.freeze(new Set(['notes', 'history', 'calendar', 'library']))
+// Timers live in this library copy and fire on this machine (library-timers.mjs).
+export const libraryServedGroups = Object.freeze(new Set(['notes', 'history', 'calendar', 'library', 'timers']))
 // Single library-backed tools of other groups (LibraryHost.servedTools).
 export const libraryServedTools = Object.freeze(new Set(['woven_sessions_folders']))
 const toolGroups = new Set([...libraryServedGroups, 'sessions'])

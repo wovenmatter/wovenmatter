@@ -325,7 +325,8 @@ final class BotsHostController {
             engine: .init(socket: socket), image: .init(tag: bundle.imageTag),
             limits: .init(botMemoryBytes: resources.perBotBytes),
             host: .init(url: "http://127.0.0.1:\(hostPort)/", token: persisted.hostToken),
-            machine: .init(deviceID: identity.deviceID, name: identity.name))
+            machine: .init(deviceID: identity.deviceID, name: identity.name),
+            claude: bundle.claudeExecutable.map { .init(executable: $0.path) })
         try supervisor.run(config)
     }
 

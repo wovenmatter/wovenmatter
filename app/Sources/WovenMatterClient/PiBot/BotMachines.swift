@@ -102,12 +102,14 @@ public struct BotsRemoteStatus: Codable, Equatable, Sendable {
 
     /// The machine as the Bots UI lists it, reached through `socket`. `expectedHostFingerprint`
     /// is the host release this Mac would install (its bundled host sources): a Linux host on
-    /// any other release is out of date, whatever version it names.
+    /// any other release is out of date, whatever version it names. `thisMacLibrarySchema`
+    /// is this Mac's paired-library schema hash: a machine whose library reports another
+    /// cannot sync with this Mac.
     public func machine(kind: BotMachine.Kind, socket: BotSocketEndpoint?, thisMacVersion: String?,
-                        expectedHostFingerprint: String? = nil) -> BotMachine {
+                        expectedHostFingerprint: String? = nil, thisMacLibrarySchema: String? = nil) -> BotMachine {
         let base: BotMachine.State = switch state { case "ready": .ready; case "starting": .starting; case "failed": .failed; default: .off }
         let mismatch = Self.mismatch(kind: kind, versions: versions, thisMacVersion: thisMacVersion,
-                                     expectedHostFingerprint: expectedHostFingerprint)
+                                     expectedHostFingerprint: expectedHostFingerprint, thisMacLibrarySchema: thisMacLibrarySchema)
         var result = BotMachine(id: machine.deviceID, name: machine.name, kind: kind, state: mismatch == nil ? base : .needsUpdate,
                                 message: mismatch ?? message,
                                 socket: enabled ? socket : nil, versions: versions, resources: resources, capacity: capacity,
@@ -118,8 +120,11 @@ public struct BotsRemoteStatus: Codable, Equatable, Sendable {
 
     /// Why a machine cannot be used until it is updated, or nil when it matches this Mac.
     static func mismatch(kind: BotMachine.Kind, versions: BotMachineVersions, thisMacVersion: String?,
-                         expectedHostFingerprint: String?) -> String? {
+                         expectedHostFingerprint: String?, thisMacLibrarySchema: String? = nil) -> String? {
         guard kind != .thisMac else { return nil }
+        if let ours = thisMacLibrarySchema, let theirs = versions.librarySchema, ours != theirs {
+            return "Its library format differs from this Mac's, so the two cannot sync. Update everything to use its bots."
+        }
         if kind == .linux, let expected = expectedHostFingerprint, versions.fingerprint != expected {
             if let app = versions.app, let ours = thisMacVersion, app != ours {
                 return "Runs Woven Matter \(app) and this Mac runs \(ours). Update everything to use its bots."

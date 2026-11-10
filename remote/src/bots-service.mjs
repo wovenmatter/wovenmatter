@@ -1,5 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { mkdir, open, readFile, rename } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import { connect } from 'node:net'
 import { hostname } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -16,6 +17,22 @@ const digest = value => createHash('sha256').update(String(value)).digest()
 // never forwarded: the proxy authenticates to the runtime with its own token.
 const forwardedSocketHeaders = ['sec-websocket-key', 'sec-websocket-version', 'sec-websocket-protocol', 'sec-websocket-extensions', 'user-agent']
 
+/**
+ * The default agent's Claude binary in this release, which the bots runtime runs
+ * (`claude.executable`) instead of shipping a second copy: the glibc package, or
+ * the musl one where that is what npm installed.
+ */
+export function defaultAgentClaude(serviceRoot, { platform = process.platform, arch = process.arch, exists = existsSync } = {}) {
+  // A host release ships default-agent/ beside src/; a checkout has it beside remote/.
+  for (const root of [join(serviceRoot, 'default-agent'), join(serviceRoot, '..', 'default-agent')]) {
+    for (const name of [`claude-agent-sdk-${platform}-${arch}`, `claude-agent-sdk-${platform}-${arch}-musl`]) {
+      const binary = join(root, 'node_modules/@anthropic-ai', name, 'claude')
+      if (exists(binary)) return binary
+    }
+  }
+  return null
+}
+
 async function readJSONFile(path, fallback) { try { return JSON.parse(await readFile(path, 'utf8')) } catch { return fallback } }
 async function writePrivateJSON(path, value) {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 })
@@ -30,12 +47,13 @@ async function writePrivateJSON(path, value) {
  * reports resources, and proxies /v1/bots/ws for Woven apps.
  */
 export function createBotsService({ configuration, mcp, defaultAgent, serverPort, library, libraryHost, engine, runtime, previews,
-  authorizeClient, machine, memberIdentity, release, engineWatchMilliseconds = 5000, log = message => process.stderr.write(message + '\n') }) {
+  authorizeClient, machine, memberIdentity, release, engineWatchMilliseconds = 5000, webSocket = globalThis.WebSocket, log = message => process.stderr.write(message + '\n') }) {
   const stateDirectory = join(configuration.stateDirectory, 'bots')
   const settingsPath = join(stateDirectory, 'settings.json')
   const dataDirectory = configuration.botsData ?? join(configuration.dataRoot, 'bots')
   const hostToken = randomBytes(32).toString('base64url'), hostDigest = digest(hostToken)
   const packageRoot = botsPackageRoot(configuration.serviceRoot)
+  const claudeExecutable = configuration.claudeExecutable ?? defaultAgentClaude(configuration.serviceRoot)
   engine ??= createBotEngine({ instance: configuration.botsInstance })
   // With this machine's library host, batches go into its library copy; the
   // outbox keeps them while it is down and is drained when it is ready.
@@ -64,6 +82,7 @@ export function createBotsService({ configuration, mcp, defaultAgent, serverPort
       limits: { botMemoryBytes: (await settings()).botMemoryBytes ?? null },
       host: { url: `http://127.0.0.1:${serverPort()}/`, token: hostToken },
       machine: await machineInfo(),
+      ...(claudeExecutable ? { claude: { executable: claudeExecutable } } : {}),
     }
   }
   runtime ??= packageRoot ? createBotsRuntime({ packageRoot, configPath: join(stateDirectory, 'runtime.json'), configuration: runtimeConfiguration, log }) : null
@@ -234,6 +253,36 @@ export function createBotsService({ configuration, mcp, defaultAgent, serverPort
     upstream.on('end', close); upstream.on('close', close)
   }
 
-  return { start, close, status, handleHost, handleClient, upgrade, runtimeConfiguration, hostToken: () => hostToken,
+  // A due timer reaches its bot as `message.send` with the occurrence's delivery
+  // ID, which the runtime accepts once (docs: "Timers on a library host").
+  function deliver({ botID, text, deliveryID }, { timeout = 30_000 } = {}) {
+    const target = configuration.botsEnabled ? runtime?.endpoint() : null
+    if (!target) return Promise.reject(fail(503, 'The bots runtime is not running.'))
+    if (!uuid(botID) || typeof text !== 'string' || !text || typeof deliveryID !== 'string') return Promise.reject(fail(400, 'Invalid bot delivery.'))
+    return new Promise((resolve, reject) => {
+      const id = 'woven-delivery-' + deliveryID
+      let settled = false, socket
+      const done = (error, value) => {
+        if (settled) return
+        settled = true; clearTimeout(timer)
+        try { socket?.close() } catch {}
+        if (error) reject(error); else resolve(value)
+      }
+      const timer = setTimeout(() => done(fail(504, 'The bots runtime did not answer in time.')), timeout); timer.unref?.()
+      try { socket = new webSocket(`ws://${target.host}:${target.port}/ws`, { headers: { authorization: 'Bearer ' + target.token } }) }
+      catch (error) { done(fail(503, 'The bots runtime is unreachable: ' + error.message)); return }
+      socket.onopen = () => socket.send(JSON.stringify({ id, type: 'message.send', botId: botID.toLowerCase(), text: text.slice(0, 100_000), deliveryId: deliveryID }))
+      socket.onmessage = event => {
+        let message; try { message = JSON.parse(String(event.data)) } catch { return }
+        if (message?.id !== id) return
+        if (message.type === 'result') done(null, message.data)
+        else if (message.type === 'error') done(fail(502, typeof message.message === 'string' ? message.message.slice(0, 512) : 'The bots runtime refused the message.'))
+      }
+      socket.onerror = () => done(fail(503, 'The bots runtime is unreachable.'))
+      socket.onclose = () => done(fail(503, 'The bots runtime closed the connection.'))
+    })
+  }
+
+  return { start, close, status, handleHost, deliver, handleClient, upgrade, runtimeConfiguration, hostToken: () => hostToken,
     drainLibrary: () => libraryAdapter.drain?.() ?? Promise.resolve(0) }
 }

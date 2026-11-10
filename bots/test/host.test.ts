@@ -30,6 +30,8 @@ describe("runtime config", () => {
     ["an unknown engine kind", { engine: { socket: "/s", kind: "podman" } }],
     ["a relative data dir", { dataDir: "data" }],
     ["unknown keys", { extra: true }],
+    ["a relative Claude executable", { claude: { executable: "claude" } }],
+    ["unknown Claude keys", { claude: { executable: "/x/claude", version: "1" } }],
   ])("refuses %s", (_name, override) => {
     expect(() => testConfig("/data", override as Record<string, unknown>)).toThrow(ConfigError);
   });
@@ -42,6 +44,9 @@ describe("runtime config", () => {
     });
     expect(config.listen.host).toBe("::1");
     expect(config.limits.botMemoryBytes).toBe(4 * 1024 ** 3);
+    // The default agent's Claude binary, so the bots package ships none of its own.
+    const shared = "/Applications/Woven Matter.app/Contents/Resources/default-agent/node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/claude";
+    expect(testConfig("/d", { claude: { executable: shared } }).claude?.executable).toBe(shared);
     expect(() =>
       validateRuntimeConfig({ ...testConfig("/d"), paths: undefined }),
     ).toThrow(ConfigError);

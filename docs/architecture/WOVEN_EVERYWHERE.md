@@ -267,7 +267,9 @@ wovenmatter-library --version
   list and exit (the same as the socket's `POST /v1/members/adopt`).
 - When both listeners are ready it prints one line to stdout and writes the
   same object to `DIR/run/library.json` (0600):
-  `{"event":"ready","pid":N,"port":N,"socket":"…","version":"1"}`. SIGTERM or
+  `{"event":"ready","pid":N,"port":N,"socket":"…","version":"1","schema":"<hex>"}`,
+  where `schema` is the paired-library schema hash (`pairedLibrarySchema()`),
+  which the Node server reports as `librarySchema`. SIGTERM or
   SIGINT stops it cleanly and removes that file. Exit codes: 0 clean, 1
   startup failure, 64 usage.
 
@@ -317,7 +319,8 @@ one per connection, with `Host`; POST bodies are `application/json`.
   the caller's current selection; the Node server is the authority for its own
   sessions' tool policy), optional `X-Woven-Context-ID` and
   `MCP-Protocol-Version`. Served groups: `notes` (including spreadsheet and
-  HTML note artifacts), `history`, `calendar` and `library`, plus
+  HTML note artifacts), `history`, `calendar`, `library` and `timers` (see
+  "Timers on a library host"), plus
   `woven_context` and, from `sessions`, only `woven_sessions_folders`
   (`LibraryHost.servedTools`; folders are library rows). Other tools are not
   listed and are refused; `woven_html_render`
@@ -360,6 +363,10 @@ Membership, publishing and bot routes on the local API
   workspace this library knows, deleted ones left out), which the server
   routes cross-workspace sessions with.
 - `GET /v1/sync/status` → `LibrarySyncStatus`.
+- `POST /v1/timers/due` (`{}`) → `{occurrences: [{timerID, deliveryID, target,
+  kind: "session"|"bot", botID?, text}], nextFireAt?}` and `POST
+  /v1/timers/settle {timerID, deliveryID, outcome: "accepted"|"retry"|"cancelled",
+  reason?}` (`LibraryHostTimers`); see "Timers on a library host".
 - `POST /v1/publisher/{journal,retained/settle,association,artifacts/register,artifacts/chunk,artifacts/commit}`:
   the bodies and replies of a Mac's `/v1/federation/publisher/*`, written into
   this library copy. The workspace is the one the entries (or the artifact
@@ -398,7 +405,7 @@ the database files and the previous release. Isolated tests use
 `WOVENMATTER_LIBRARY_SERVE=0` or `WOVENMATTER_LIBRARY_HTTPS_PORT`;
 `WOVENMATTER_LIBRARY=0` turns it off.
 
-The server sends a session's notes, history, calendar and library tools to
+The server sends a session's notes, history, calendar, library and timer tools to
 `POST /v1/mcp` (registering it with `POST /v1/callers` first), so they work
 with every Mac offline and no single-Mac library grant. History the caller may
 read only through its managed sessions, and all history while the library host
@@ -408,8 +415,9 @@ is down, comes from the Node journal. Databases, `woven_context` and
 Bot callers' library tools go to `/v1/mcp` as app-wide callers (above), with
 `X-Woven-Caller` built from this host's member device ID.
 
-Tools that only a Mac serves (timers, usage, HTML preview, and a scheduled
-task's tool policy) go to any Mac member, signed with this host's key: `POST
+Tools that only a Mac serves (usage, which is the Mac's own provider usage
+data, HTML preview, which needs a Mac's renderer, and a scheduled task's tool
+policy, which the Mac that holds the schedule decides) go to any Mac member, signed with this host's key: `POST
 <mac endpoint>/mcp/workspace` (and `/mcp/workspace/prepare` with the task
 proof) with `X-Woven-Protocol: 3`, `X-Woven-Workspace-ID: <this workspace>`,
 `X-Woven-Conversation-ID`, `X-Woven-Enabled-Groups` and
@@ -419,13 +427,44 @@ request never reached one or was refused before any effect (401, 403, 404,
 426, 503). The Mac accepts the call when the signer is the execution device
 of that non-deleted Linux workspace and the conversation belongs to it. Bots
 cannot use this route (it binds a conversation), so their Mac-only tools are
-unavailable unless the legacy grant exists. The single-Mac grant
+unavailable unless the legacy grant exists; their timers are served and fired
+locally. The single-Mac grant
 (`/v1/execution/mcp-library`, `mcp_library_connection`) is no longer
 required for anything; it stays as a fallback when no Mac member answers and
 for hosts without a library host. Session history is published to the local
 publisher routes (the Mac grant is only a fallback without a library host),
 and bot conversation batches go to `/v1/bots/{botID}/entries`, waiting in the
 outbox while the host is down.
+
+**Timers on a library host.** Timers (`workspace_session_timers`) are not in
+the paired sync table set: each lives in the library copy of the machine that
+fires it, so a Linux session's or bot's timers keep firing with every Mac off.
+The timers group is served by `POST /v1/mcp` like the other library groups.
+A bot without `session` (Node catalog) or `sessionID` (an app-wide caller on a
+Mac or the library host, `WovenMCPServer.handle(botCaller:)`) sets its own
+timers, whose target is its principal `woven:bot:<machine>:<bot>`; no caller
+may set another bot's. `woven_timers_list` without a session lists the bot's
+own schedule, which its idle check reads. The table has no foreign key to
+conversations (migrated in place); timers of a missing conversation are never
+listed or fired, and a paused, revoked or disabled bot's are skipped.
+- Firing (`remote/src/library-timers.mjs`, started by `server.mjs`): the Node
+  server asks `POST /v1/timers/due`, which reserves and claims each due
+  occurrence as a `timer` delivery whose ID is stable across retries, and
+  returns the occurrences of this machine's sessions and of bots whose
+  principal names this host's member device ID. A session occurrence becomes
+  a `send` (or `steer` when the harness can, else queued until the turn ends)
+  with command IDs derived from the delivery ID; a bot occurrence is the bots
+  runtime's `message.send {botId, text, deliveryId}` over the loopback `/ws`
+  (`bots-service.mjs` `deliver`), which accepts each delivery ID once. The
+  server then settles it: `accepted` advances a repeating timer or ends a
+  one-shot one; `retry` (runtime down, library busy) offers it again after 30
+  s; `cancelled` (a session this workspace does not run, or a refused
+  command) ends that occurrence. It sleeps until `nextFireAt` (at most 60 s,
+  30 s after a failure) and is woken by every timer change made through Woven
+  MCP and whenever the library host becomes ready. There is no other polling.
+- On a Mac the app's agent tool tick fires the Mac's own timers as before and
+  now also delivers a bot's own timers to it (`deliverBotNotification` accepts
+  `timer` deliveries).
 
 Tool execution is `WorkspaceToolExecutor` in `WovenMatterDashboardStore`, the
 same code the Mac app's `WorkspaceAgentToolsModel` now delegates to. Note edits
@@ -474,8 +513,38 @@ hands them to the macOS job, which checks them with
   from the caller, request ID and destination, so a retry replays receipts.
   The reply is `{session: {id, title, harness, workspace, workspaceName,
   workspaceKind}, independent: true, receipt}`: the caller does not
-  coordinate it, and reads its progress from synced history. Linux:
-  `remote/src/member-sessions.mjs`; Mac: `ApplicationModel+MemberSessions.swift`.
+  coordinate it. Linux: `remote/src/member-sessions.mjs`; Mac:
+  `ApplicationModel+MemberSessions.swift`.
+- **Managing them (Linux).** The Linux server remembers each session a caller
+  created on another workspace (`member_sessions` in its execution database),
+  so these tools name it by `id` alone, or by `id` plus `workspace` for one it
+  did not create. Each is one or more signed calls to the destination's
+  execution API (`GET v1/execution/conversations`, `…/conversations/<id>/transcript`,
+  `…/capabilities`, `GET v1/execution/interactions`, `POST v1/execution/commands`):
+  - `woven_sessions_status {id, workspace?, before?}` → `{session: {id, title,
+    harness, workspace, workspaceName, workspaceKind, state:
+    running|idle|needsInput, runID?}, pending: [{id, kind, title, detail?,
+    runID, options, questions}], transcript: {messages (latest 20, 4000
+    characters each), before?}}`; `before` pages older messages.
+  - `woven_sessions_send {id, text, workspace?}`: `send` when idle; `steer`
+    when running and the harness can, otherwise 409 (send when idle).
+  - `woven_sessions_stop {id, workspace?}` (new): `stop` of the current run.
+  - `woven_sessions_respond {id, interaction, optionID?, answers?, cancelled?,
+    workspace?}` (new): `respond` to one pending question or approval.
+  - `woven_sessions_list {workspace}`: that workspace's sessions; without
+    `workspace`, a bot gets every session it created, each with its live state.
+  Command IDs derive from the caller, request ID, workspace and session, so a
+  retry replays the receipt. Reading a session the caller did not create needs
+  Conversation history. `stop` and `respond` on this workspace apply only to
+  sessions the caller created or coordinates. There are no notifications back
+  to the caller; it polls `woven_sessions_status`.
+- **Bots** get `woven_sessions_create`, `_send`, `_status`, `_list`, `_stop`,
+  `_respond` and `_harnesses` from the Node server itself (no Mac): a bot's
+  sessions on its own machine's workspace go through that workspace's own
+  execution commands, as another member's would; coordination tools
+  (`manage`, `release`, `notifications`, `receipts`) bind a conversation and
+  stay unavailable to bots. The Mac's own catalog does not have these
+  additions yet.
 - The iPhone connects directly to every Mac and Linux workspace with its own
   member key. It has no home Mac.
 
@@ -592,7 +661,8 @@ Woven server writes (mode 0600). Unknown keys are refused.
   "image": { "tag": "wovenmatter-bots" },
   "limits": { "botMemoryBytes": 4294967296 },
   "host": { "url": "http://127.0.0.1:<port>/", "token": "bearer for the host API" },
-  "machine": { "deviceID": "<member device id>", "name": "Studio" }
+  "machine": { "deviceID": "<member device id>", "name": "Studio" },
+  "claude": { "executable": "/abs/path/to/claude" }
 }
 ```
 
@@ -604,6 +674,16 @@ Woven server writes (mode 0600). Unknown keys are refused.
   built through the Engine API when missing; a tagged name is used as is.
 - `limits.botMemoryBytes` is each container's memory limit (`Memory` and
   `MemorySwap`); `null` means no cap.
+- `claude` is optional: `executable` (absolute) is the Claude runtime binary
+  the machine's default agent ships, passed to the Claude Agent SDK as
+  `pathToClaudeCodeExecutable`, so the bots package carries no copy of its
+  own. A Mac passes `<Resources>/default-agent/node_modules/@anthropic-ai/claude-agent-sdk-darwin-<arch>/claude`
+  and a Linux host `<release>/default-agent/node_modules/@anthropic-ai/claude-agent-sdk-linux-<arch>[-musl]/claude`.
+  `scripts/prepare-bots.sh` drops the bots package's own
+  `claude-agent-sdk-<platform>` packages (and refuses lockfiles that select
+  different Claude Agent SDK versions for `bots/` and `default-agent/`), and
+  `remote-host.sh` removes them after `npm ci`; the default agent's copy keeps
+  its signature check.
 - `host.url` must be loopback `http`. The runtime keeps its own state under
   `dataDir`: `bots.sqlite` (bots, threads, Pi Durable tables, memory, limits,
   cached Woven tool lists, previews), `settings.json` (model profiles, title

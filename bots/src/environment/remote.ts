@@ -196,6 +196,13 @@ export class AgentConnection {
       if (generation !== this.#generation) return;
       this.#retire(new Error(`environment agent exited (${code ?? "signal"})`));
     });
+    // No more replies can come once its output ends (the container or its engine went away):
+    // retire it now, not after the exit code arrives, so the next call starts a new agent
+    // instead of writing into the dead stream.
+    child.stdout.once("end", () => {
+      if (generation !== this.#generation) return;
+      this.#retire(new Error("environment agent exited (its stream ended)"));
+    });
     return child;
   }
 

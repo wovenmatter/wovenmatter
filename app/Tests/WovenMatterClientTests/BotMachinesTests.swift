@@ -184,6 +184,12 @@ struct BotMachinesTests {
                                                              expectedHostFingerprint: ours).state == .needsUpdate)
         // Without bundled host sources this Mac can only compare version names.
         #expect(status(app: "1.4.0", fingerprint: theirs).machine(kind: .linux, socket: nil, thisMacVersion: "1.4.0").state == .ready)
+        // A library whose paired-library schema differs cannot sync, whatever the release says.
+        let schema = status(app: "1.4.0", fingerprint: ours).machine(kind: .linux, socket: nil, thisMacVersion: "1.4.0",
+                                                                    expectedHostFingerprint: ours, thisMacLibrarySchema: "s2")
+        #expect(schema.state == .needsUpdate && schema.message?.contains("library format") == true)
+        #expect(status(app: "1.4.0", fingerprint: ours).machine(kind: .linux, socket: nil, thisMacVersion: "1.4.0",
+                                                                  expectedHostFingerprint: ours, thisMacLibrarySchema: "s1").state == .ready)
 
         var stale = machine("box", kind: .linux, app: "1.4.0", state: .needsUpdate); stale.versions.fingerprint = theirs
         var current = machine("same", kind: .linux, app: "1.3.0"); current.versions.fingerprint = ours

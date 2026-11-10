@@ -84,7 +84,7 @@ extension WorkspaceDatabaseConnection {
           CHECK(session_id != created_by), CHECK(session_id != coordinator_id));
         CREATE INDEX IF NOT EXISTS workspace_coordinator ON workspace_session_relationships(coordinator_id);
         CREATE TABLE IF NOT EXISTS workspace_session_timers(
-          id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES dashboard_conversations(id),
+          id TEXT PRIMARY KEY, session_id TEXT NOT NULL,
           instruction TEXT NOT NULL, next_fire_at REAL NOT NULL, interval_seconds REAL,
           is_paused INTEGER NOT NULL DEFAULT 0, pending_delivery_id TEXT);
         CREATE INDEX IF NOT EXISTS workspace_timer_due ON workspace_session_timers(is_paused,next_fire_at);
@@ -187,6 +187,22 @@ extension WorkspaceDatabaseConnection {
       let timerColumns = Set(try historyRowsUnlocked("PRAGMA table_info(workspace_session_timers)", values: []).compactMap { $0.objectValue?["name"]?.stringValue })
       if !timerColumns.contains("outside_mcp") {
         try executeUnlocked("ALTER TABLE workspace_session_timers ADD COLUMN outside_mcp INTEGER NOT NULL DEFAULT 0")
+      }
+      // A timer's target is a conversation or a bot principal (a bot's own
+      // schedule), so the table no longer references conversations. Timers of a
+      // missing conversation are never listed or fired.
+      if !(try historyRowsUnlocked("PRAGMA foreign_key_list(workspace_session_timers)", values: [])).isEmpty {
+        try executeUnlocked("""
+          CREATE TABLE workspace_session_timers_v2(
+            id TEXT PRIMARY KEY, session_id TEXT NOT NULL,
+            instruction TEXT NOT NULL, next_fire_at REAL NOT NULL, interval_seconds REAL,
+            is_paused INTEGER NOT NULL DEFAULT 0, pending_delivery_id TEXT, outside_mcp INTEGER NOT NULL DEFAULT 0);
+          INSERT INTO workspace_session_timers_v2(id,session_id,instruction,next_fire_at,interval_seconds,is_paused,pending_delivery_id,outside_mcp)
+            SELECT id,session_id,instruction,next_fire_at,interval_seconds,is_paused,pending_delivery_id,outside_mcp FROM workspace_session_timers;
+          DROP TABLE workspace_session_timers;
+          ALTER TABLE workspace_session_timers_v2 RENAME TO workspace_session_timers;
+          CREATE INDEX IF NOT EXISTS workspace_timer_due ON workspace_session_timers(is_paused,next_fire_at);
+          """)
       }
       try migrateMCPCallersUnlocked()
     }

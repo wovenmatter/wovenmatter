@@ -1,13 +1,17 @@
 // Woven bot browser: Chromium through Playwright with a persistent profile in the bot's storage,
 // so cookies and sign-ins survive container stops. Open tabs are saved on every change and on
 // shutdown, and reopened when the browser starts again. Controlled by the supervisor over IPC.
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+// The container can be killed without any grace (a Mac VM reboot), so the tab list is written
+// durably on each change, and the profile lock a killed Chromium leaves behind is cleared.
+import { mkdir, open as openFile, readFile, rename, rm } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 
 const STATE = process.env.WOVEN_BROWSER_STATE ?? "/workspace/.woven/browser";
 const PROFILE = join(STATE, "profile");
 const TABS = join(STATE, "tabs.json");
+// Chromium's single-instance lock: a symlink to "<hostname>-<pid>", plus its socket and cookie.
+const PROFILE_LOCKS = ["SingletonLock", "SingletonSocket", "SingletonCookie"];
 const MAX_TEXT = 100_000;
 const NAV_TIMEOUT = 45_000;
 const ACTION_TIMEOUT = 15_000;
@@ -18,10 +22,17 @@ const { chromium } = require(process.env.WOVEN_PLAYWRIGHT_MODULE ?? "playwright"
 let context;
 const ids = new WeakMap();
 const pages = new Map(); // id → page
+// The URL a tab was opened for: kept while it shows an error page (a site still unreachable
+// right after a reboot) so the tab is not dropped from the saved list.
+const wanted = new WeakMap();
 let nextId = 1;
 let active;
 let saveTimer;
-// Once shutdown begins the tab list is final: closing pages must not overwrite it.
+let saving = Promise.resolve();
+// While saved tabs are reopening the list is incomplete and must not replace the saved one.
+let restoring = true;
+// Once shutdown begins (or the browser died) the tab list is final: closing pages must not
+// overwrite it.
 let closing = false;
 
 function idOf(page) {
@@ -43,18 +54,37 @@ function idOf(page) {
 }
 
 function scheduleSave() {
-  if (closing) return;
+  if (closing || restoring) return;
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => void saveTabs(), 500);
+  saveTimer = setTimeout(() => {
+    if (!closing) void saveTabs().catch(() => {});
+  }, 500);
 }
 
-async function saveTabs() {
-  const tabs = [...pages.values()]
-    .map((page) => page.url())
-    .filter((url) => url && url !== "about:blank" && !url.startsWith("chrome-error:"));
-  await mkdir(STATE, { recursive: true });
-  await writeFile(`${TABS}.tmp`, JSON.stringify({ tabs, savedAt: new Date().toISOString() }));
-  await rename(`${TABS}.tmp`, TABS);
+function usable(url) {
+  return Boolean(url) && url !== "about:blank" && !url.startsWith("chrome-error:");
+}
+
+/** Write the open tabs, one save at a time, synced to disk before it replaces the last list. */
+function saveTabs() {
+  const write = async () => {
+    if (restoring) return;
+    const tabs = [...pages.values()]
+      .map((page) => (usable(page.url()) ? page.url() : wanted.get(page)))
+      .filter(usable);
+    await mkdir(STATE, { recursive: true });
+    const temporary = `${TABS}.tmp`;
+    const file = await openFile(temporary, "w");
+    try {
+      await file.writeFile(JSON.stringify({ tabs, savedAt: new Date().toISOString() }));
+      await file.sync();
+    } finally {
+      await file.close();
+    }
+    await rename(temporary, TABS);
+  };
+  saving = saving.then(write, write);
+  return saving;
 }
 
 async function describeTab(page) {
@@ -78,7 +108,10 @@ function checkURL(value) {
 async function open(url) {
   const page = await context.newPage();
   active = idOf(page);
-  if (url) await page.goto(url, { timeout: NAV_TIMEOUT, waitUntil: "domcontentloaded" }).catch(() => {});
+  if (url) {
+    wanted.set(page, url);
+    await page.goto(url, { timeout: NAV_TIMEOUT, waitUntil: "domcontentloaded" }).catch(() => {});
+  }
   return page;
 }
 
@@ -103,6 +136,7 @@ const methods = {
   async navigate(args) {
     const url = checkURL(args.url);
     const page = args.tab === undefined && active === undefined ? await open() : pageFor(args);
+    wanted.set(page, url);
     const response = await page.goto(url, { timeout: NAV_TIMEOUT, waitUntil: "domcontentloaded" });
     await page.waitForLoadState("load", { timeout: 10_000 }).catch(() => {});
     return { ...(await describeTab(page)), status: response?.status() };
@@ -148,27 +182,47 @@ const methods = {
   },
 };
 
+/**
+ * Clear the profile lock a killed Chromium left behind. Chromium refuses a profile locked by a
+ * live pid, and after a container restart the old pid can belong to another process. The
+ * supervisor runs one browser per container, so no other Chromium holds this profile now.
+ */
+async function clearProfileLock() {
+  await Promise.all(PROFILE_LOCKS.map((name) => rm(join(PROFILE, name), { force: true })));
+}
+
 async function start() {
   await mkdir(PROFILE, { recursive: true });
+  await clearProfileLock();
   context = await chromium.launchPersistentContext(PROFILE, {
     headless: true,
     viewport: { width: 1280, height: 800 },
+  });
+  // Chromium went away without a shutdown (crashed, killed): keep the saved tabs as they were and
+  // exit, so the supervisor starts a fresh browser that reopens them on next use.
+  context.on("close", () => {
+    if (closing) return;
+    closing = true;
+    clearTimeout(saveTimer);
+    process.exit(1);
   });
   // The profile may come back with Chromium's own blank page.
   for (const page of context.pages()) idOf(page);
   context.on("page", (page) => idOf(page));
   let saved = [];
   try {
-    saved = JSON.parse(await readFile(TABS, "utf8")).tabs ?? [];
+    const list = JSON.parse(await readFile(TABS, "utf8")).tabs;
+    saved = Array.isArray(list) ? list.filter((url) => typeof url === "string" && usable(url)) : [];
   } catch {
     // Nothing saved.
   }
   for (const url of saved.slice(0, 20)) await open(url);
-  // Drop the initial blank page once real tabs are back.
+  // Drop the initial blank page once real tabs are back (not a restored tab still loading).
   for (const page of context.pages()) {
-    if (saved.length && page.url() === "about:blank" && pages.size > 1) await page.close();
+    if (saved.length && page.url() === "about:blank" && !wanted.has(page) && pages.size > 1) await page.close();
   }
   active = [...pages.keys()].at(-1);
+  restoring = false;
 }
 
 process.on("message", async (message) => {

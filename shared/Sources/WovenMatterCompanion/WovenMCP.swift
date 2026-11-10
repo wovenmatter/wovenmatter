@@ -38,7 +38,7 @@ public enum WovenMCPServer {
   }
 
   public static func handle(_ message: GatewayJSONValue, contextID: String? = nil,
-                           allowedTools: Set<String>? = nil, outsideCaller: Bool = false,
+                           allowedTools: Set<String>? = nil, outsideCaller: Bool = false, botCaller: Bool = false,
                            perform: @Sendable (WovenMatterToolRequest) async -> WovenMatterToolResponse) async -> GatewayJSONValue? {
     guard let object = message.objectValue, object["jsonrpc"] == .string("2.0"),
           let method = object["method"]?.stringValue,
@@ -74,10 +74,15 @@ public enum WovenMCPServer {
            var schema = object["inputSchema"]?.objectValue, var properties = schema["properties"]?.objectValue {
           properties["sessionID"] = .object(["type": .string("string"), "description": .string("Target Woven chat ID.")])
           schema["properties"] = .object(properties)
-          var required = schema["required"]?.arrayValue ?? []
-          if !required.contains(.string("sessionID")) { required.append(.string("sessionID")) }
-          schema["required"] = .array(required); object["inputSchema"] = .object(schema)
-          object["description"] = .string((tool.description) + " App-wide callers must choose the target chat with sessionID.")
+          if botCaller, ownsTarget(tool.name) {
+            object["description"] = .string((tool.description) + " Omit sessionID for your own timers, which are delivered back to you as messages.")
+          } else {
+            var required = schema["required"]?.arrayValue ?? []
+            if !required.contains(.string("sessionID")) { required.append(.string("sessionID")) }
+            schema["required"] = .array(required)
+            object["description"] = .string((tool.description) + " App-wide callers must choose the target chat with sessionID.")
+          }
+          object["inputSchema"] = .object(schema)
           json = .object(object)
         }
         return json
@@ -93,7 +98,9 @@ public enum WovenMCPServer {
       do {
         var arguments = params["arguments"] ?? .object([:])
         var target: String?
-        if outsideCaller, needsOutsideTarget(name) {
+        // A bot's own timers need no chat: they are delivered back to the bot.
+        let ownTimer = botCaller && ownsTarget(name) && arguments.objectValue?["sessionID"] == nil
+        if outsideCaller, needsOutsideTarget(name), !ownTimer {
           guard var values = arguments.objectValue, let id = values["sessionID"]?.stringValue, UUID(uuidString: id) != nil else {
             return error(id: id, code: -32602, message: "Supply the target chat's sessionID.")
           }
@@ -116,6 +123,7 @@ public enum WovenMCPServer {
     .object(["jsonrpc": .string("2.0"), "id": id,
       "error": .object(["code": .number(Double(code)), "message": .string(message)])])
   }
+  private static func ownsTarget(_ name: String) -> Bool { name.hasPrefix("woven_timers_") }
   private static func needsOutsideTarget(_ name: String) -> Bool {
     name.hasPrefix("woven_goals_") || name.hasPrefix("woven_timers_") || name == "woven_html_render"
   }

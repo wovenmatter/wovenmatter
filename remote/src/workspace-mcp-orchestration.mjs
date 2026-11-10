@@ -76,6 +76,20 @@ export function createWorkspaceMCPOrchestration({db,identity,getRecord,command,r
     }
     return baseCommand('send',caller,requestID,suffix,{conversationID:target,text,agentSourceID:caller,...(suffix==='notification'?{coordinationNotification:true}:{})})
   }
+  // A timer's occurrence, from this machine's library (library-timers.mjs): the
+  // session's own follow-up, so it carries no sender. It steers a running turn
+  // when the harness can, and otherwise waits for the turn to end.
+  async function deliverTimer(target,text,deliveryID) {
+    const destination=getRecord(target)
+    if(destination.conversation.activeRunID) {
+      const capabilities=runtime.capabilities?await runtime.capabilities({native:destination.native,runtimeKind:destination.conversation.runtimeKind}):null
+      if(capabilities?.canSteer===true)return baseCommand('steer',target,deliveryID,'timer',{conversationID:target,runID:destination.conversation.activeRunID,text})
+      const id=stableID([target,deliveryID,'timer'].join(':'))
+      if(!db.prepare('SELECT id FROM mcp_session_messages WHERE id=?').get(id))db.prepare('INSERT INTO mcp_session_messages VALUES(?,?,?,?,?,?,?,?)').run(id,target,target,text,'queued',null,stamp(),0)
+      return {commandID:id,conversationID:target,status:'queued'}
+    }
+    return baseCommand('send',target,deliveryID,'timer',{conversationID:target,text})
+  }
   function canReadTarget(caller,target) {return policy(caller).includes('history')||readableConversationIDs(caller).has(target)}
   async function call(scope,name,input,{signal}={}) {
     signal?.throwIfAborted()
@@ -156,7 +170,8 @@ export function createWorkspaceMCPOrchestration({db,identity,getRecord,command,r
       if(getRecord(target).conversation.activeRunID)return
       const next=db.prepare("SELECT * FROM mcp_session_messages WHERE target=? AND status='queued' ORDER BY rowid LIMIT 1").get(target)
       if(!next)return
-      const receipt=await baseCommand('send',next.caller,next.id,'queue-delivery',{conversationID:target,text:next.text,agentSourceID:next.caller,...(next.notification===1?{coordinationNotification:true}:{})})
+      const sender=next.caller!==target?{agentSourceID:next.caller}:{}
+      const receipt=await baseCommand('send',next.caller,next.id,'queue-delivery',{conversationID:target,text:next.text,...sender,...(next.notification===1?{coordinationNotification:true}:{})})
       db.prepare('UPDATE mcp_session_messages SET status=?,receipt=? WHERE id=?').run(receipt.status,JSON.stringify(receipt),next.id)
     })().finally(()=>pumps.delete(target));pumps.set(target,pending);return pending
   }
@@ -169,7 +184,7 @@ export function createWorkspaceMCPOrchestration({db,identity,getRecord,command,r
     const receipt=await deliver(target,coordination.caller,message,id,'notification')
     if(['accepted','completed','queued'].includes(receipt.status))db.prepare('INSERT OR IGNORE INTO mcp_coordination_notifications VALUES(?)').run(id)
   }
-  return {call,relationship,readableConversationIDs,respondAccess,
+  return {call,relationship,readableConversationIDs,respondAccess,deliverTimer,
     settled(target,runID,error,notificationOnly=false){if(!notificationOnly)void notify(target,runID,error?'failed':'completed',error?.message).catch(()=>{});void pump(target).catch(()=>{})},
     needsInput(target,runID,interaction){void notify(target,runID,'needs-input',interaction.title,interaction.id).catch(()=>{})}}
 }

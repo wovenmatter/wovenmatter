@@ -89,6 +89,8 @@ export function createLibraryClient({ socket, token, timeoutMilliseconds = 120_0
     registerCaller: body => json('POST', '/v1/callers', { body, timeout: 30_000 }),
     mcp: (message, headers, options = {}) => request('POST', '/v1/mcp', { body: message, headers, ...options }),
     publisher: (path, body, headers = {}, options = {}) => json('POST', '/v1/publisher/' + path, { body, headers, timeout: 30_000, ...options }),
+    timersDue: () => json('POST', '/v1/timers/due', { body: {}, timeout: 30_000 }),
+    settleTimer: body => json('POST', '/v1/timers/settle', { body, timeout: 15_000 }),
     botEntries: (botID, batch) => json('POST', '/v1/bots/' + encodeURIComponent(botID) + '/entries', { body: batch, timeout: 30_000 }),
   }
 }
