@@ -163,7 +163,14 @@ public final class BackendRPCServer: @unchecked Sendable {
                             DispatchQueue.global(qos: .userInitiated).async {
                                 defer { Darwin.close(client); self.slots.signal() }
                                 // Fail closed; never log payloads or credentials.
-                                try? BackendSocket.writeFrame(JSONEncoder().encode(response), fd: client, deadline: deadline)
+                                var frame = (try? JSONEncoder().encode(response)) ?? Data()
+                                if frame.count > BackendSocket.maximumFrame {
+                                    // Answer with an error the caller can show instead of a silent close.
+                                    NSLog("Background service reply for %@ was too large (%ld bytes)", request.method, frame.count)
+                                    let error = BackendRPCResponse(id: request.id, error: "The background service's reply was too large to send.")
+                                    frame = (try? JSONEncoder().encode(error)) ?? Data()
+                                }
+                                try? BackendSocket.writeFrame(frame, fd: client, deadline: deadline)
                             }
                         }
                     } catch { Darwin.close(client); self.slots.signal() }

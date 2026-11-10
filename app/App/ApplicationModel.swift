@@ -2121,6 +2121,8 @@ final class ApplicationModel {
         usage.acknowledgeCredentialAccessDisclosure()
     }
 
+    private static let keychainLog = Logger(subsystem: "wovenmatter.desktop", category: "keychain-access")
+
     func reconnectSavedCredentials() async {
         guard !isReconnectingSavedCredentials, usage.beginCredentialAuthorization() else { return }
         isReconnectingSavedCredentials = true
@@ -2140,16 +2142,12 @@ final class ApplicationModel {
                         try BrowserCredentialStore.shared.prepare(consented: true, authorize: true)
                     }
                 }.value
-                try await usage.authorizeSavedCredentials()
+                // Keychain items owned by the process that caches them (the
+                // background server when it runs). One small request, no usage data.
                 try await authorizeSavedConnections()
             }
             try Task.checkCancellation()
             acknowledgeCredentialAccessDisclosure()
-            await refreshLocalUsage(
-                range: currentUsageRange,
-                refreshLimits: true,
-                reason: .credentialChanged
-            )
             remoteWorkspaces.refreshAll()
             await checkSavedCredentialAccess()
 
@@ -2157,6 +2155,7 @@ final class ApplicationModel {
             keychainAccessReady = false
             credentialAccessStatus = "Keychain access was cancelled. Choose Allow to try again."
         } catch {
+            Self.keychainLog.error("Keychain authorization failed: \(String(describing: error), privacy: .public)")
             keychainAccessReady = false
             credentialAccessStatus = "Keychain access needs attention: \(error.localizedDescription)"
         }
@@ -2183,6 +2182,7 @@ final class ApplicationModel {
             keychainAccessReady = true
             credentialAccessStatus = "Saved credentials are accessible. Background checks stay silent."
         } catch {
+            Self.keychainLog.error("Keychain check failed: \(String(describing: error), privacy: .public)")
             keychainAccessReady = false
             credentialAccessStatus = "Woven Matter can't read your saved sign-ins. Choose Allow to restore access."
         }
@@ -2202,6 +2202,9 @@ final class ApplicationModel {
             try Task.checkCancellation()
             try await remoteWorkspaces.authorizeCredentialAccess(for: workspace)
         }
+        // The usage service's saved OpenRouter key is a Keychain item too. A key
+        // that isn't saved is not a Keychain permission problem.
+        do { try await usage.authorizeSavedCredentials() } catch LocalUsageServiceError.missingCredential {}
 
     }
 

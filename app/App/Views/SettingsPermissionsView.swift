@@ -102,7 +102,9 @@ struct SettingsPermissionsView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(item.permissionTitle).font(.system(size: 13, weight: .medium))
                 Text(access == .needsReopen ? "Reopen Woven Matter so macOS applies it."
-                     : access == .allowed ? item.permissionDetail : item.howToAllow)
+                     : access == .allowed ? item.permissionDetail
+                     : item == .keychain && !isChecking(item) ? (model.credentialAccessStatus.flatMap { $0.hasPrefix("Keychain access needs attention") ? $0 : nil } ?? item.howToAllow)
+                     : item.howToAllow)
                     .font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground)
                     .fixedSize(horizontal: false, vertical: true)
             }
