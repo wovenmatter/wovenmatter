@@ -171,8 +171,11 @@ final class CompanionHostController {
                     catch { throw CompanionAPIError(code: "linked_data_unavailable", message: error.localizedDescription) }
                 }, members: try? await peerSync.members(),
                 onMemberPaired: { [weak self] deviceID, name, key in
-                    do { try await self?.peerSync.members().add(deviceID: deviceID, kind: .ios, name: name, publicKey: key, endpoints: []) }
-                    catch { self?.errorMessage = error.localizedDescription }
+                    // Pairing again on this Mac replaces the phone's key (a
+                    // restored backup); a refusal is returned to the phone.
+                    guard let self else { throw CompanionAPIError(code: "unavailable", message: "This sharing session stopped.") }
+                    try await self.peerSync.members().add(deviceID: deviceID, kind: .ios, name: name, publicKey: key, endpoints: [], replacingKey: true)
+                    await self.peerSync.librarySync?.scheduleAll()
                 }, syncStatus: { [weak self] in await self?.peerSync.librarySync?.status() })
             let listener = CompanionHTTPServer(upgradeHandler: { [weak self] request in
                 guard let self else { return .reject(.error("unavailable", "This sharing session has stopped.", status: 503)) }

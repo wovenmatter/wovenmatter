@@ -172,6 +172,11 @@ final class PairedMacSyncController {
             let sync = LibraryPeerSync(directory: directory, transport: peerTransport, configuration: .init(version: version), attachments: attachments)
             librarySync = sync
             await sync.start { [weak self] in await self?.peersChanged() }
+            // After sleep every peer may have changed; catch up at once
+            // instead of waiting out the offline backoff.
+            NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { _ in
+                Task { await sync.resume(reason: "wake") }
+            }
         }
     }
 

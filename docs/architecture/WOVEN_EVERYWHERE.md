@@ -51,31 +51,47 @@ same commit.
     `woven.member.entry.v1` (`device, kind, name, key, endpoints, added_by,
     added_at`) and `woven.member.revocation.v1` (`event, device, revoked_by,
     revoked_at`).
-  - Resolution (`LibraryMemberResolver`): trust starts at local anchors (this
-    device; on a Linux host also the Mac that adopted it) and flows only
-    through entries signed by trusted Macs. A device's kind comes from a Mac's
-    entry; its own self-signed entry may change only its name and endpoints.
-    Two trusted keys for one device: not trusted. A revocation counts when a
-    trusted Mac (or the device itself) signed it; removing a Mac keeps the
-    devices it added earlier but voids its entries from its removal on; a newer
-    entry from an unremoved Mac re-adds a removed device.
+  - Resolution (`LibraryMemberResolver`): trust starts at local anchors and
+    flows only through entries signed by Macs that still stand; see "Trust
+    model" below. A device's kind comes from a Mac's entry; its own
+    self-signed entry may change only its name and endpoints. Two live keys
+    for one device: not trusted. Removing a Mac voids everything it signed,
+    whatever the date; `MemberDirectory.remove` therefore first re-signs, from
+    the removing Mac, the entries and removals of the removed Mac that this
+    Mac still holds, so the devices it added stay. A newer entry from a
+    standing Mac re-adds a removed device, with a new key if it presents one.
+    Local, unsynced `library_member_pin_candidates` records when each Mac was
+    first trusted, for pinning.
   - Adding: Mac↔Mac pairing (link or nearby request, then the signed join)
     records the other Mac on both sides. A phone that includes
     `memberPublicKey` (raw 32 bytes) in `CompanionPairRequest` gets an `ios`
-    entry from the Mac it pairs with; phones without it keep their bearer
-    grant. A Linux host: the Mac that adds it reads `memberIdentity` from
+    entry from the Mac it pairs with, signed when the phone confirms the
+    pairing (`POST /v1/pair/confirm`), before its grant is issued; a pairing
+    that is never confirmed adds no member. `POST /v1/pair` first checks that
+    the Mac can add that key (`MemberDirectory.checkAdd`) and otherwise answers
+    409 with the reason (`member_key_changed`) before the code is spent; it
+    also returns `CompanionPairResponse.libraryIDs` (the libraries in its
+    registry). Pairing a phone again on a Mac replaces its key
+    (`add(…, replacingKey: true)`: a removal of the old key, then the new
+    entry), as for a phone restored from a backup, whose Keychain key is this
+    device only; a Mac's key never changes. Phones without a member key keep
+    their bearer grant. A Linux host: the Mac that adds it reads `memberIdentity` from
     `GET /v1/host/status`, signs its entry (endpoint: `libraryEndpoint`, else
     `https://<host>/wovenmatter/`) and sends `POST /v1/host/members/adopt` with
     a `LibraryMemberAdoption` `{anchor: {deviceID, kind: "mac", publicKey},
     entries, revocations}` through the administrative link, signed and with
     the installer's bearer. The Linux server accepts the installer's API bearer
-    only while its member list has no `mac` member (the first adoption, when
-    it cannot yet verify any Mac); after that it needs a signed `mac` member
-    request. A request whose signature does not verify but that carries the
+    only while the host has never been adopted (`GET /v1/members` reports
+    `adopted: false`; anchors are never removed, so this stays true even once
+    every Mac is removed); after that it needs a signed `mac` member request.
+    A request whose signature does not verify but that carries the
     installer's bearer is handled as the bearer alone. The body reaches the
-    library socket's `POST /v1/members/adopt` byte for byte. The library host
-    refuses an adoption whose anchor did not sign this host's current key.
-    Later member changes reach the host by peer sync.
+    library socket's `POST /v1/members/adopt` byte for byte. The first
+    adoption anchors its Mac, which must have signed this host's current key.
+    A later adoption only carries entries and removals (which also arrive by
+    sync): its anchor must already be a standing Mac with the key this host
+    trusts (else 400 `already_adopted`), and it never adds or replaces an
+    anchor. Later member changes reach the host by peer sync.
   - Upgrade: Macs paired before members existed (a key pinned by a signed
     join) are converted into members on launch. Phones and Linux hosts pair
     again. Library content is never touched.
@@ -193,7 +209,24 @@ same commit.
 - Node signs through its library host: `POST /v1/members/sign` on the
   library socket returns the headers for one request, so the Linux private
   key never leaves `wovenmatter-library` (`remote/src/member-client.mjs`).
-  Node signs only for tailnet HTTPS endpoints (`https://*.ts.net`).
+  Node signs only for tailnet HTTPS endpoints (`https://*.ts.net`). The
+  library host signs only the requests Node makes
+  (`LibraryHost.signableAudiences`): the execution API (`GET
+  /v1/execution/{providers,conversations,interactions}`, `GET
+  /v1/execution/conversations/<uuid>/{transcript[?before=…],capabilities}`,
+  `POST /v1/execution/commands`) to an active `mac` or `linux` member, and
+  `POST /mcp/workspace[/prepare]` to an active `mac` member, under a
+  `/wovenmatter` or `/wovenmatter-execution/<id>` base; anything else is 403
+  `not_signable`. The whole local socket answers only the Node server that
+  launched the library host: when its parent process is `node`, a connection
+  is admitted only if the kernel names that parent as the peer
+  (`SO_PEERCRED`) and the host has not been orphaned, so another program of
+  the same account that reads the token file can neither sign as this
+  machine nor call its tools with its own tool selection. Limit: code of the
+  same account that can attach to the Node process (`ptrace`, refused by the
+  default Yama `ptrace_scope=1` for non-descendants) or that replaces the
+  installed service could still act as it; only a separate account for the
+  agents would remove that, which their full-access contract rules out.
 - Remote host administration (status, logs, restart, update) is available to
   every Mac member, as signed requests to the Linux server:
   `GET /v1/host/status` (remote-host.sh `status` plus `library` and
@@ -226,8 +259,8 @@ same commit.
 - Bots are not members. Each bot has its own Woven MCP key (see Bots).
 - **Bearers that remain**, and why:
   - The installer's API bearer, through the SSH tunnel of the Mac that added
-    a host: first install, the first member adoption (before the host knows
-    any Mac), the SSH update fallback, that Mac's own management link
+    a host: first install, the first member adoption (before the host was ever
+    adopted), the SSH update fallback, that Mac's own management link
     (`RemoteWorkspaceServiceClient`) and a bots-only host that is not in the
     registry. **Installer bearer:** the server accepts it only on that
     SSH/loopback path, never through Tailscale Serve: a request carrying any
@@ -260,6 +293,43 @@ same commit.
     host or with no Mac member answering.
   - A Mac's saved execution grant for a workspace with no `executionDeviceID`
     (a library client's secondary execution workspace).
+
+### Trust model
+
+Every device decides membership for itself, from its own anchors
+(`LibraryMemberResolver.resolve(…, own:)`). Signed times only order records
+among Macs that still stand; they never decide who wins a dispute.
+
+- **Anchors.** This device (removed only by itself), the Mac that adopted a
+  Linux host, and every Mac this device has trusted continuously for 24 hours
+  (pinned in `library_member_anchors`, never synced, never removed, key never
+  replaced). A pinned Mac stays a root when the Mac that introduced it is
+  removed, but it can itself be removed. The wait keeps a Mac vouched for by a
+  key whose removal is still on its way from ever being pinned.
+- **Entries** count while their signer stands and while they are newer than
+  every effective removal of their device. Everything a removed Mac signed is
+  void, so backdating does nothing; a removal older than a standing Mac's
+  entry for the device does nothing either. Records dated more than 10
+  minutes ahead are ignored until then. A new signature from this device is
+  dated after every record about that device it holds
+  (`MemberDirectory.after`), so clock skew never hides it.
+- **Removals** are effective when a standing Mac (or the device itself)
+  signed them. A Mac that removed this device, unless a standing Mac re-added
+  this device afterwards, removes nobody here. Removals that depend on each
+  other are settled from the anchors outward (the well-founded alternating
+  fixpoint): a Mac stands only if no Mac that might stand removed it.
+- **What this guarantees.** Once an honest Mac's removal of a stolen key
+  reaches a device, that key is untrusted there for good, whatever it signs
+  or dates. A stolen key that removes honest Macs is itself ignored by every
+  device it removed, so the honest Macs keep trusting each other there.
+- **Limits.** While a stolen Mac key is not yet removed it is a member and can
+  do anything a Mac can (add devices, remove devices); removing it re-signs
+  the devices it added, so review the device list afterwards. On a device the
+  attacker did not remove, an honest Mac and the attacker that removed each
+  other both lose, and so does every Mac the attacker removed there, until
+  that device's own user re-adds the honest Macs; a Linux host in that state
+  is added again. A device that knew the other Macs only through the removed
+  Mac, and had not yet pinned them, pairs again with a remaining Mac.
 
 ## Library on every surface
 
@@ -294,12 +364,40 @@ same commit.
     `after`; repeated until neither has more), `POST /v1/peers/notify
     {deviceID, cursor}` (the receiver pulls when `cursor` is past what it has),
     `POST /v1/peers/files` and `POST /v1/peers/file` (content-addressed files,
-    as before).
+    as before). A device sends only to advertised endpoints that are tailnet
+    HTTPS (`LibraryPeerSync.isTailnetEndpoint`: `https://<name>.ts.net`, no
+    credentials, query or fragment), as Node and the phone do.
   - Triggers: a write that appends to the change log
     (`WorkspaceDatabase.observePeerChanges`) is announced, debounced 300 ms,
     to peers that are online; starting, a newly learned member and a contact
     from a peer each catch up once; a presence check every 60 s (doubling to
-    15 minutes for an offline peer) is the only timer.
+    15 minutes for an offline peer) is the only timer. `resume(reason:)`
+    clears every backoff and catches up with each peer once: on a Mac on wake
+    (`NSWorkspace.didWakeNotification`) and on a network path change
+    (`NWPathMonitor`); on Linux when a presence tick comes far later than
+    scheduled (the machine slept) or the interfaces' addresses changed. Any
+    signed request from a peer that was not online clears its backoff and
+    catches it up. A notice that arrives during "Sync now" runs once more
+    afterwards.
+  - Receiving (`PairedLibraryStore.peerRecordAllowed`, given the sending
+    member as `PairedLibrarySender`): origins are self-declared and records
+    are relayed, so rows whose meaning depends on their author are checked
+    against the sender. Member entries and removals are never deleted, must
+    match their signed payload, never roll back to an older entry and never
+    rewrite a removal (otherwise quarantined, or skipped when merely stale).
+    A Linux host (any sender but a Mac) writes `companion_execution_workspaces`
+    only for the workspace it serves itself (`MemberAudience.serving`, before
+    and after the change), `companion_execution_conversations` only for that
+    workspace's sessions, owner rows (`paired_*_owners`,
+    `companion_calendar_owners`, `companion_calendar_run_owners`) only naming
+    itself, and never `paired_mac_routes` or `paired_remote_workspaces`. Other
+    such rows it relays are skipped; they arrive from a Mac directly.
+  - HTTP deadlines (both the Mac listener and `CompanionSocketHTTPServer`,
+    `CompanionHTTPParser.Deadlines`): the request head within 15 s; then the
+    body for up to 15 minutes as long as bytes arrive at least every 30 s; a
+    complete request is answered within 60 s, and a reply being written may
+    take up to 15 minutes while it moves. An 8 MiB page or a 64 MiB upload
+    over a slow relayed path therefore completes.
   - A Mac also carries its bearer-era pairing roster (`PeerMembership`) in
     `attachment` until phones pair as members; Linux hosts send none.
 - Linux session history is written into the machine's own library copy, which
@@ -367,7 +465,7 @@ owned by the running user.
 | --- | --- |
 | `DIR/library/` | The `DashboardStore` support directory: `workspace.sqlite` (+ WAL), `dashboard-device-id` (this machine's device ID), library and attachment files |
 | `DIR/secrets/` | 0600 files that replace Keychain items (`LinuxSecretStore`), one per generic-password item, and `member-signing.key` (this machine's member key) |
-| `DIR/run/library.sock` | Local API socket, 0600; peers must also be this user (checked with `SO_PEERCRED`) |
+| `DIR/run/library.sock` | Local API socket, 0600; peers must also be this user (checked with `SO_PEERCRED`) and, when the host was launched by `node`, that very parent process (see "Node signs through its library host") |
 | `DIR/run/library-api.token` | Local API bearer, 0600, 43–256 base64url characters. The Node server may create it before starting the host; otherwise the host creates it |
 | `DIR/run/library.json` | Ready record (above) |
 
@@ -430,11 +528,12 @@ Membership, publishing and bot routes on the local API
 (`remote/src/library-host.mjs` calls them):
 
 - `GET /v1/identity`: as on loopback.
-- `GET /v1/members` → `{revision, members: [{deviceID, kind, name, publicKey
+- `GET /v1/members` → `{revision, adopted, members: [{deviceID, kind, name, publicKey
   (base64), endpoints, addedBy, revoked}]}` (see "Membership"). `revision` is
-  an opaque string that changes whenever the resolved list changes.
+  an opaque string that changes whenever the resolved list changes; `adopted`
+  is true once this host anchored a Mac, and stays true.
 - `POST /v1/members/adopt` (`LibraryMemberAdoption`) → the member list, or 400
-  `invalid_member`.
+  `invalid_member` or `already_adopted` (see "Adding").
 - `POST /v1/members/self {name?, endpoints}` updates this machine's own
   entry; the server sends it (`{name: hostname, endpoints: [<published
   library route>]}`) after each Serve publish so peers use that address.
@@ -445,7 +544,9 @@ Membership, publishing and bot routes on the local API
   key. `target` is the path with query exactly as sent (an absolute,
   printable ASCII target of at most 8 KiB), `bodySHA256` the body's lowercase
   hex SHA-256 and `audience` the destination member's lowercase device ID
-  (not this machine's); methods are GET, POST, PUT, PATCH and DELETE. Only
+  (not this machine's, an active member of the kind the route is for); only
+  the method and route pairs listed under "Node signs through its library
+  host" are signed, anything else is 403 `not_signable`. Only
   the socket serves it: on loopback every `/v1/members/…` path is 404, and
   mounts match whole path segments. `remote/src/member-client.mjs` requires
   `audience` on every request (`macs()` entries and registry rows carry it).
@@ -670,7 +771,16 @@ hands them to the macOS job, which checks them with
   in its Keychain (`MobileMemberKeyVault`, service
   `com.wovenmatter.companion.member`, this device only), bound to its library
   device ID, and sends it as `CompanionPairRequest.memberPublicKey`. A re-pair
-  presents the same key (a Mac refuses a known device with a new key).
+  presents the same key. The Mac adds the phone when the pairing is
+  confirmed, so the phone probes it (a signed `GET /v1/hello`) only after
+  confirming: a signed 401 then means the Mac did not add it (`rejected`,
+  never taken as acceptance), and the phone keeps its grant and shows "Pair
+  again" (`MobileMembershipState.memberRejected`). A backup restored onto
+  another device brings `membership.json` but not the this-device-only key;
+  finding the key missing, the phone marks that membership refused instead of
+  signing with a key no Mac knows, and pairing again replaces the key on the
+  Mac. Whether to keep the replica (same library set) comes from
+  `CompanionPairResponse.libraryIDs`, before any signed request works.
 - **Signed requests.** `HTTPSCompanionTransport(host:identity:)` and
   `HTTPSExecutionWorkspaceTransport(workspace:identity:)` sign every request
   (`MobileRequestSigning`: the target is the percent-encoded path and query as
@@ -699,7 +809,10 @@ hands them to the macOS job, which checks them with
   re-uploading: the host's snapshot replaces revision baselines; a pending note
   edit is acknowledged (already there), resent (the host has its base), kept
   as a conflict with both versions (the host has another version) or created
-  there (the host never got it); calendar edits are rebased on the next
+  there (the host never got it). A note the host has only as a deletion
+  answers that create with `notFound` and `CompanionMutationResult.deleted`,
+  and an unchanged phone copy is then deleted instead of becoming a conflict;
+  calendar edits are rebased on the next
   snapshot the same way; the journal keeps all history, resets its cursor and
   offers this phone's own records again (the host keeps those it has);
   dictation and artifact cursors restart. The phone's device workspace is

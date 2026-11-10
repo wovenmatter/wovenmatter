@@ -26,15 +26,20 @@ public final class CompanionSocketHTTPServer: @unchecked Sendable {
 
   private let handler: Handler
   private let streamIdleTimeout: TimeInterval
+  private let deadlines: CompanionHTTPParser.Deadlines
+  private let admitUnixPeer: (@Sendable (Int32?) -> Bool)?
   private let lock = NSLock()
   private var listener: Int32 = -1
   private var stopped = false
   private var clients = 0
   private var socketPath: String?
 
-  public init(streamIdleTimeout: TimeInterval = 180, handler: @escaping Handler) {
+  /// `admitUnixPeer` decides, from the connecting process ID the kernel
+  /// reports, whether a Unix socket peer of this user may talk to the server.
+  public init(streamIdleTimeout: TimeInterval = 180, deadlines: CompanionHTTPParser.Deadlines = .init(),
+              admitUnixPeer: (@Sendable (Int32?) -> Bool)? = nil, handler: @escaping Handler) {
     precondition(streamIdleTimeout.isFinite && streamIdleTimeout > 0)
-    self.handler = handler; self.streamIdleTimeout = streamIdleTimeout
+    self.handler = handler; self.streamIdleTimeout = streamIdleTimeout; self.deadlines = deadlines; self.admitUnixPeer = admitUnixPeer
     PortablePOSIX.ignoreBrokenPipes()
   }
 
@@ -127,7 +132,9 @@ public final class CompanionSocketHTTPServer: @unchecked Sendable {
       guard client >= 0 else { continue }
       _ = fcntl(client, F_SETFD, FD_CLOEXEC)
       // The Unix socket is private to this user; the kernel names the peer.
-      if unix, PortablePOSIX.peerUser(client) != getuid() { Darwin.close(client); continue }
+      if unix, PortablePOSIX.peerUser(client) != getuid() || admitUnixPeer.map({ !$0(PortablePOSIX.peerProcess(client)) }) == true {
+        Darwin.close(client); continue
+      }
       let admitted = lock.withLock { () -> Bool in
         guard clients < 32, !stopped else { return false }
         clients += 1; return true
@@ -145,15 +152,20 @@ public final class CompanionSocketHTTPServer: @unchecked Sendable {
 
   private func serve(_ fd: Int32) {
     var parser = CompanionHTTPParser()
-    let headerDeadline = Date().addingTimeInterval(15)
+    let started = Date()
+    let headerDeadline = started.addingTimeInterval(deadlines.header), bodyDeadline = started.addingTimeInterval(deadlines.body)
+    var progress = started
     var buffer = [UInt8](repeating: 0, count: 64 * 1_024)
     let request: CompanionHTTPRequest
     do {
       while true {
-        guard try wait(fd, events: Int16(POLLIN), until: headerDeadline) else { return }
+        // A fixed deadline for the head; after it the body must keep moving.
+        let deadline = parser.headersComplete ? min(bodyDeadline, progress.addingTimeInterval(deadlines.bodyIdle)) : headerDeadline
+        guard try wait(fd, events: Int16(POLLIN), until: deadline) else { return }
         let count = buffer.withUnsafeMutableBytes { Darwin.read(fd, $0.baseAddress, $0.count) }
         if count < 0 { if errno == EINTR || errno == EAGAIN { continue }; return }
         if count == 0 { return }
+        progress = Date()
         if let parsed = try parser.append(Data(buffer[0..<count])) { request = parsed; break }
       }
     } catch {
@@ -164,7 +176,8 @@ public final class CompanionSocketHTTPServer: @unchecked Sendable {
     let response = Self.wait { [handler] in await handler(request) }
     let framed = Self.frame(response)
     guard let producer = framed.stream else {
-      _ = write(fd, framed.head, deadline: Date().addingTimeInterval(60))
+      // A large reply (a peer page) over a slow path keeps going while it moves.
+      _ = write(fd, framed.head, deadline: Date().addingTimeInterval(deadlines.body), idle: deadlines.bodyIdle)
       return
     }
     stream(fd, head: framed.head, producer: producer)
@@ -232,10 +245,11 @@ public final class CompanionSocketHTTPServer: @unchecked Sendable {
     }
   }
 
-  private func write(_ fd: Int32, _ data: Data, deadline: Date) -> Bool {
-    var offset = 0
+  private func write(_ fd: Int32, _ data: Data, deadline: Date, idle: TimeInterval? = nil) -> Bool {
+    var offset = 0, progress = Date()
     while offset < data.count {
-      guard (try? wait(fd, events: Int16(POLLOUT), until: deadline)) == true else { return false }
+      let limit = idle.map { min(deadline, progress.addingTimeInterval($0)) } ?? deadline
+      guard (try? wait(fd, events: Int16(POLLOUT), until: limit)) == true else { return false }
       let written = data.withUnsafeBytes { bytes in
         #if canImport(Darwin)
         Darwin.write(fd, bytes.baseAddress!.advanced(by: offset), data.count - offset)
@@ -244,7 +258,7 @@ public final class CompanionSocketHTTPServer: @unchecked Sendable {
         #endif
       }
       if written < 0 { if errno == EINTR || errno == EAGAIN { continue }; return false }
-      offset += written
+      offset += written; progress = Date()
     }
     return true
   }

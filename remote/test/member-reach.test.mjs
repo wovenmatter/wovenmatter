@@ -200,12 +200,13 @@ test('bots use this host’s library as app-wide callers and get no Mac-only too
 })
 
 // The installer's bearer adopts the first Mac; after that only a signed Mac
-// member may hand this host member records, which reach the library unchanged.
-test('member adoption takes the installer bearer only until a Mac is a member', async t => {
-  let macs = false
+// member may hand this host member records, which reach the library unchanged,
+// even once every Mac was removed: a host adopted once stays adopted.
+test('member adoption takes the installer bearer only until the host was adopted', async t => {
+  let adopted = false
   const forwarded = []
   const admin = createHostAdministration({ serviceRoot: '/nonexistent', dataRoot: '/nonexistent', stateDirectory: scratch(t, 'wm-adopt-'),
-    adoptMembers: async raw => { forwarded.push(raw); macs = true; return { revision: '2', members: [] } }, hasMacMember: async () => macs })
+    adoptMembers: async raw => { forwarded.push(raw); adopted = true; return { revision: '2', members: [], adopted: true } }, adopted: async () => adopted })
   const payload = Buffer.from('{"anchor":{"deviceID":"x"},"entries":[],  "revocations":[]}')
   async function adopt(context) {
     const reply = {}
@@ -220,6 +221,8 @@ test('member adoption takes the installer bearer only until a Mac is a member', 
   assert.equal(await adopt({ installer: true }), 403, 'later adoptions need a signed Mac')
   assert.equal(await adopt({ member: { kind: 'linux' } }), 403)
   assert.equal(await adopt({ member: { kind: 'mac' } }), 200)
+  // With every Mac removed the host has no Mac member, yet stays adopted.
+  assert.equal(await adopt({ installer: true }), 403, 'the bearer never re-adopts')
 })
 
 // A Linux host's registry row names its Node server's own execution device ID; the

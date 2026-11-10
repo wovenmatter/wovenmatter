@@ -2,6 +2,12 @@ import Foundation
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
+#if canImport(Network)
+import Network
+#endif
+#if canImport(Glibc)
+import Glibc
+#endif
 import WovenMatterClient
 import WovenMatterCore
 
@@ -124,7 +130,19 @@ public actor LibraryPeerSync {
     public var maximumBackoff: TimeInterval = 900
     public var announceDelay: TimeInterval = 0.3
     public var fileInterval: TimeInterval = 30
+    /// Which advertised endpoints this device sends to: tailnet HTTPS only,
+    /// as the Node server and the phone require.
+    public var allowEndpoint: @Sendable (URL) -> Bool = LibraryPeerSync.isTailnetEndpoint
     public init(version: String) { self.version = version }
+  }
+
+  /// `https://<name>.ts.net[:port]/...` with no credentials, query or fragment.
+  public static func isTailnetEndpoint(_ url: URL) -> Bool {
+    guard let parts = URLComponents(url: url, resolvingAgainstBaseURL: false), parts.scheme?.lowercased() == "https",
+          let host = parts.host?.lowercased(), host.hasSuffix(".ts.net"), host.split(separator: ".").count >= 3,
+          host.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "." || $0 == "-" }),
+          parts.user == nil, parts.password == nil, parts.query == nil, parts.fragment == nil else { return false }
+    return true
   }
 
   public nonisolated let directory: MemberDirectory
@@ -147,6 +165,12 @@ public actor LibraryPeerSync {
   /// caught up as soon as its entry arrives.
   private var known: Set<String> = []
   private var onChange: (@Sendable () async -> Void)?
+  private var lastTick = Date()
+  private var networkFingerprint: String?
+  private var pathSeen = false
+  #if canImport(Network)
+  private var pathMonitor: NWPathMonitor?
+  #endif
   /// Counts for tests and diagnostics: how each exchange was triggered.
   public private(set) var exchanges: [String: Int] = [:]
 
@@ -168,14 +192,78 @@ public actor LibraryPeerSync {
       guard let self else { return }
       Task { await self.localChanged() }
     }
+    lastTick = Date()
     presence = Task { [weak self] in
       await self?.presenceTick(force: true)
       while !Task.isCancelled {
         guard let interval = await self?.configuration.presenceInterval else { return }
         try? await Task.sleep(for: .seconds(min(interval, 30)))
+        await self?.checkResumption()
         await self?.presenceTick(force: false)
       }
     }
+    #if canImport(Network)
+    // A network change (Wi-Fi to cellular, a VPN coming up) may make every
+    // offline peer reachable again; the first update is the current path.
+    let monitor = NWPathMonitor()
+    monitor.pathUpdateHandler = { [weak self] path in
+      let satisfied = path.status == .satisfied
+      Task { await self?.pathChanged(satisfied: satisfied) }
+    }
+    monitor.start(queue: DispatchQueue(label: "com.wovenmatter.library-sync.path"))
+    pathMonitor = monitor
+    #endif
+  }
+
+  /// Something that may have made peers reachable again (wake from sleep, a
+  /// network change): forget every backoff and catch up with each peer once.
+  public func resume(reason: String = "wake") async {
+    guard started else { return }
+    backoff = [:]; nextPresence = [:]
+    guard let peers = try? await peers() else { return }
+    for member in peers { known.insert(member.deviceID); scheduleSync(member.deviceID, reason: reason) }
+  }
+
+  private func pathChanged(satisfied: Bool) async {
+    defer { pathSeen = true }
+    guard pathSeen, satisfied else { return }
+    await resume(reason: "network")
+  }
+
+  /// Without system notifications (Linux): a tick that came far later than
+  /// scheduled means the machine slept; a change in its interface addresses
+  /// means the network changed.
+  private func checkResumption() async {
+    let now = Date(), expected = min(configuration.presenceInterval, 30)
+    defer { lastTick = now }
+    let slept = now.timeIntervalSince(lastTick) > expected * 2 + 30
+    let fingerprint = Self.interfaceFingerprint()
+    let moved = networkFingerprint != nil && fingerprint != networkFingerprint
+    networkFingerprint = fingerprint
+    if slept || moved { await resume(reason: slept ? "wake" : "network") }
+  }
+
+  /// The addresses of the interfaces that are up, sorted; cheap to compare.
+  static func interfaceFingerprint() -> String {
+    var addresses: UnsafeMutablePointer<ifaddrs>?
+    guard getifaddrs(&addresses) == 0, let first = addresses else { return "" }
+    defer { freeifaddrs(addresses) }
+    var items: [String] = []
+    for pointer in sequence(first: first, next: { $0.pointee.ifa_next }) {
+      let entry = pointer.pointee
+      guard (entry.ifa_flags & UInt32(IFF_UP)) != 0, let address = entry.ifa_addr else { continue }
+      // Container and VM bridges come and go with bots; they are not the network.
+      let name = String(cString: entry.ifa_name)
+      if ["veth", "docker", "br-", "virbr", "vmnet", "bridge"].contains(where: name.hasPrefix) { continue }
+      let family = Int32(address.pointee.sa_family)
+      guard family == AF_INET || family == AF_INET6 else { continue }
+      var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+      let length = socklen_t(family == AF_INET ? MemoryLayout<sockaddr_in>.size : MemoryLayout<sockaddr_in6>.size)
+      if getnameinfo(address, length, &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0 {
+        items.append(name + "=" + String(cString: host))
+      }
+    }
+    return items.sorted().joined(separator: ",")
   }
 
   public func stop() {
@@ -184,6 +272,9 @@ public actor LibraryPeerSync {
     observer = nil
     presence?.cancel(); presence = nil
     announcing?.cancel(); announcing = nil
+    #if canImport(Network)
+    pathMonitor?.cancel(); pathMonitor = nil
+    #endif
   }
 
   // MARK: Status
@@ -272,7 +363,11 @@ public actor LibraryPeerSync {
       running.insert(member.deviceID)
       exchanges["now", default: 0] += 1
       await synchronize(with: member, includingFiles: true)
-      running.remove(member.deviceID)
+      // A notice that arrived meanwhile was queued behind this exchange.
+      if again.contains(member.deviceID) && started {
+        let id = member.deviceID
+        Task { [weak self] in await self?.runSync(id, reason: "notice") }
+      } else { running.remove(member.deviceID) }
     }
   }
 
@@ -319,7 +414,7 @@ public actor LibraryPeerSync {
         if let data = reply.attachment, let attachments { try await attachments.incoming(data, member.deviceID) }
         // A removal learned meanwhile stops the exchange before its page.
         guard await directory.member(member.deviceID) != nil else { return }
-        try await database.receivePairedLibrary(reply.page, from: member.deviceID)
+        try await database.receivePairedLibrary(reply.page, from: member.deviceID, sender: try await sender(member))
         try await database.acknowledgePairedLibrary(peer: member.deviceID, cursor: page.cursor)
         if !reply.page.entries.isEmpty { received = true; await directory.invalidate(); await meetNewPeers() }
         update(member) { $0.version = reply.version }
@@ -400,11 +495,18 @@ public actor LibraryPeerSync {
     offline(member, error)
   }
 
-  /// Tries each advertised endpoint in order. The signature covers the exact
-  /// target sent to that endpoint (minus any `/wovenmatter` prefix).
+  private func sender(_ member: LibraryMember) async throws -> PairedLibrarySender {
+    .init(deviceID: member.deviceID, kind: member.kind, members: try await directory.list().members.map {
+      .init(deviceID: $0.deviceID, kind: $0.kind, endpoints: $0.endpoints, revoked: $0.revoked)
+    })
+  }
+
+  /// Tries each advertised tailnet endpoint in order. The signature covers
+  /// the exact target sent to that endpoint (minus any `/wovenmatter` prefix).
+  /// An endpoint is self-advertised, so one outside the tailnet is never used.
   private func send(_ member: LibraryMember, path: String, body: Data) async throws -> CompanionHTTPResponse {
-    var lastError: (any Error) = CompanionAPIError(code: "peer_unavailable", message: "\(member.name) has no address yet.")
-    for endpoint in member.endpoints {
+    var lastError: (any Error) = CompanionAPIError(code: "peer_unavailable", message: "\(member.name) has no tailnet address yet.")
+    for endpoint in member.endpoints where configuration.allowEndpoint(endpoint) {
       var base = endpoint.path
       if !base.hasSuffix("/") { base += "/" }
       let target = base + path
@@ -438,6 +540,12 @@ public actor LibraryPeerSync {
       return .error(error.code, error.message, status: error.code == "wrong_device" ? 403 : 401)
     } catch { return .error("unauthorized", error.localizedDescription, status: 401) }
     guard let resolved = await directory.member(member.deviceID) else { return .error("unauthorized", MemberRequestError.unknown.message, status: 401) }
+    // A peer that reaches this device is back: what was announced while it
+    // was away never reached it, so catch it up once.
+    if started, statuses[resolved.deviceID]?.state != .online || backoff[resolved.deviceID] != nil {
+      backoff[resolved.deviceID] = nil; nextPresence[resolved.deviceID] = nil
+      if path != "/v1/peers/sync" { scheduleSync(resolved.deviceID, reason: "contact") }
+    }
     do {
       switch path {
       case "/v1/peers/notify":
@@ -463,7 +571,7 @@ public actor LibraryPeerSync {
             version: configuration.version, schema: schema), status: 409)
         }
         if let data = exchange.attachment, let attachments { try await attachments.incoming(data, member.deviceID) }
-        try await database.receivePairedLibrary(exchange.page, from: member.deviceID)
+        try await database.receivePairedLibrary(exchange.page, from: member.deviceID, sender: try await sender(resolved))
         // A removal learned in this page ends access before anything returns.
         await directory.invalidate()
         if !exchange.page.entries.isEmpty { await meetNewPeers() }

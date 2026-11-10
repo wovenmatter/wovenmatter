@@ -33,6 +33,9 @@ extension CompanionModel {
   }
   /// "Update everything" and re-pairing notices for Settings and the sync status.
   var membershipNotice: String? {
+    if membership?.memberRejected == true {
+      return "Pair again: \(membership?.pairedName ?? "your Mac") did not accept this iPhone's key, so it syncs only through that Mac. In that Mac's device list remove this iPhone if it is listed, then pair again."
+    }
     if membership?.memberRequestsAccepted == false {
       return "Update everything: \(membership?.pairedName ?? "your Mac") needs a newer Woven Matter so this iPhone can reach every device directly. Until then it syncs only through that Mac."
     }
@@ -45,7 +48,15 @@ extension CompanionModel {
 
   func loadMemberIdentity() throws -> MobileMemberIdentity {
     if let memberIdentity, memberIdentity.deviceID == state.deviceID { return memberIdentity }
-    let identity = try MobileMemberKeyVault.loadOrCreate(deviceID: state.deviceID, storage: memberKeyStorage)
+    let (identity, created) = try MobileMemberKeyVault.loadOrCreateReportingNew(deviceID: state.deviceID, storage: memberKeyStorage)
+    // The key is this device only, so a restored backup brings the
+    // membership but not the key: no Mac knows the new key until this phone
+    // pairs again, so say so instead of signing requests nobody accepts.
+    if created, let file = membershipFile, var saved = try? MobileLibraryHosts.load(file: file), saved.deviceID == state.deviceID,
+       saved.memberRequestsAccepted != false {
+      saved.memberRequestsAccepted = false; saved.memberRejected = true
+      try? MobileLibraryHosts.save(saved, to: file)
+    }
     memberIdentity = identity
     // Inference connections whose host scope names the host Mac sign with this key.
     let signer = identity.signer
@@ -63,6 +74,8 @@ extension CompanionModel {
   /// Member mode when this phone paired with its key and the Mac accepted it.
   /// Returns false to keep the bearer-era connection.
   func configureMemberTransport() throws -> Bool {
+    // First, so a membership whose key was lost reads as refused below.
+    _ = try? loadMemberIdentity()
     guard let store, let file = membershipFile, let saved = try MobileLibraryHosts.load(file: file),
           saved.deviceID == state.deviceID, saved.memberRequestsAccepted != false else {
       libraryHosts = nil; membership = nil
@@ -91,38 +104,42 @@ extension CompanionModel {
     if membership != snapshot { membership = snapshot }
   }
 
-  /// Right after a pairing: does the Mac accept this phone's signature?
-  /// An older Mac answers that it does not accept member requests.
-  func probeMemberPairing(endpoint: URL, hostDeviceID: String?, identity: MobileMemberIdentity) async -> Bool? {
+  enum MemberPairingProbe: Equatable { case accepted, unsupported, rejected, unknown }
+
+  /// Right after a confirmed pairing: does the Mac accept this phone's
+  /// signature? An older Mac answers that it does not accept member requests;
+  /// a refusal (it does not list this key) means it did not add this phone,
+  /// which is never taken as acceptance.
+  func probeMemberPairing(endpoint: URL, hostDeviceID: String?, identity: MobileMemberIdentity) async -> MemberPairingProbe {
     // A Mac that did not name its member device ID predates member requests.
-    guard let hostDeviceID else { return false }
+    guard let hostDeviceID else { return .unsupported }
     do {
       _ = try await HTTPSCompanionTransport(host: endpoint, hostDeviceID: hostDeviceID, identity: identity, metadata: deviceMetadata, performer: httpPerformer).probe()
-      return true
-    } catch MobileConnectionError.memberUnsupported { return false }
-    catch { return nil }
+      return .accepted
+    } catch MobileConnectionError.memberUnsupported { return .unsupported }
+    catch MobileConnectionError.memberUnknown { return .rejected }
+    catch { return .unknown }
   }
 
-  /// Whether a Mac paired with now belongs to the same library set as this
-  /// phone's existing replica: its registry holds a workspace of the library
-  /// the phone was bound to. Then nothing is re-uploaded; the next sync moves
-  /// the replica to it like any other host.
-  func joinsSameLibrarySet(endpoint: URL, hostDeviceID: String?, identity: MobileMemberIdentity, previousLibraryID: String?) async -> Bool {
-    guard let previousLibraryID, let hostDeviceID else { return false }
-    guard let registry = try? await HTTPSCompanionTransport(host: endpoint, hostDeviceID: hostDeviceID, identity: identity, metadata: deviceMetadata,
-                                                           performer: httpPerformer).executionWorkspaces() else { return false }
-    return registry.contains { $0.libraryID == previousLibraryID }
+  /// Probes the Mac once the pairing is confirmed (it signs this phone's
+  /// member entry then) and records the result.
+  func completeMemberPairing(endpoint: URL, hostDeviceID: String?) async {
+    guard let identity = try? loadMemberIdentity() else { return }
+    let probe = await probeMemberPairing(endpoint: endpoint, hostDeviceID: hostDeviceID, identity: identity)
+    await finishMemberPairing(endpoint: endpoint, hostDeviceID: hostDeviceID,
+                              accepted: probe == .accepted ? true : probe == .unknown ? nil : false, rejected: probe == .rejected)
   }
 
   /// Records the membership after a successful pairing and switches to signed
   /// requests. `accepted == false` keeps the bearer connection and shows
-  /// "Update everything".
-  func finishMemberPairing(endpoint: URL, hostDeviceID: String?, accepted: Bool?) async {
+  /// "Update everything", or "Pair again" when the Mac refused the key.
+  func finishMemberPairing(endpoint: URL, hostDeviceID: String?, accepted: Bool?, rejected: Bool = false) async {
     guard let file = membershipFile else { return }
     do {
       let identity = try loadMemberIdentity()
       var next = MobileMembershipState(deviceID: state.deviceID, pairedEndpoint: endpoint, pairedHostDeviceID: hostDeviceID)
       next.memberRequestsAccepted = accepted
+      next.memberRejected = rejected ? true : nil
       if let previous = try MobileLibraryHosts.load(file: file), previous.deviceID == state.deviceID {
         // Keep what the phone already knows about the other members.
         next.members = previous.members; next.membersRevision = previous.membersRevision

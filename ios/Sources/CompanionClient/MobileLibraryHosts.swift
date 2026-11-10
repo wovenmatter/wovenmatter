@@ -31,6 +31,10 @@ public struct MobileMembershipState: Codable, Equatable, Sendable {
   /// False once the paired Mac answered that it does not accept member
   /// requests; the phone then keeps its bearer grant and says "Update everything".
   public var memberRequestsAccepted: Bool?
+  /// True when the paired Mac answered that it does not list this phone's
+  /// key (it did not add it, or the key changed, as after a backup is
+  /// restored): pair again. Also keeps the bearer grant.
+  public var memberRejected: Bool?
   public var syncStatus: MobileLibrarySyncStatus?
   public var updatedAt: Date?
   public init(deviceID: String, pairedEndpoint: URL, pairedHostDeviceID: String? = nil, pairedName: String? = nil) {
@@ -124,6 +128,7 @@ public actor MobileLibraryHosts {
     guard FileManager.default.fileExists(atPath: file.path) else { return nil }
     return try JSONDecoder().decode(MobileMembershipState.self, from: Data(contentsOf: file))
   }
+  public static func save(_ state: MobileMembershipState, to file: URL) throws { try persist(state, to: file) }
   public static func clear(file: URL) throws {
     if FileManager.default.fileExists(atPath: file.path) { try FileManager.default.removeItem(at: file) }
   }
@@ -160,7 +165,7 @@ public actor MobileLibraryHosts {
         let hello = try await transport.probe()
         update { next in
           next.preferredHostDeviceID = host.deviceID; next.currentHost = host
-          if host.endpoint == next.pairedEndpoint || host.deviceID == next.pairedHostDeviceID { next.memberRequestsAccepted = true }
+          if host.endpoint == next.pairedEndpoint || host.deviceID == next.pairedHostDeviceID { next.memberRequestsAccepted = true; next.memberRejected = nil }
         }
         return (transport, hello, host)
       } catch {

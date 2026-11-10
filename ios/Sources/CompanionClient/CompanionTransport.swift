@@ -15,9 +15,12 @@ public struct MobileCredential: Codable, Sendable, Equatable {
   public var confirmationPending: Bool?
   /// The paired Mac's member device ID, when it reported one.
   public var hostDeviceID: String?
-  public init(endpoint: URL, workspaceID: String, deviceID: String, token: String, confirmationPending: Bool? = nil, hostDeviceID: String? = nil) {
+  /// The libraries in that Mac's workspace registry, when it reported them.
+  public var libraryIDs: [String]?
+  public init(endpoint: URL, workspaceID: String, deviceID: String, token: String, confirmationPending: Bool? = nil, hostDeviceID: String? = nil,
+              libraryIDs: [String]? = nil) {
     self.endpoint = endpoint; self.workspaceID = workspaceID; self.deviceID = deviceID; self.token = token; self.confirmationPending = confirmationPending
-    self.hostDeviceID = hostDeviceID?.lowercased()
+    self.hostDeviceID = hostDeviceID?.lowercased(); self.libraryIDs = libraryIDs
   }
 }
 
@@ -155,7 +158,8 @@ public final class HTTPSCompanionTransport: CompanionTransport, MobilePairingReq
       !requiresConfirmation || result.confirmationRequired == true else { throw MobileConnectionError.versionMismatch }
     return MobileCredential(endpoint: payload.endpoint, workspaceID: result.workspaceID, deviceID: result.deviceID,
       token: result.credential, confirmationPending: result.confirmationRequired,
-      hostDeviceID: result.hostDeviceID.flatMap { MemberRequestSignature.isDeviceID($0.lowercased()) ? $0 : nil })
+      hostDeviceID: result.hostDeviceID.flatMap { MemberRequestSignature.isDeviceID($0.lowercased()) ? $0 : nil },
+      libraryIDs: result.libraryIDs)
   }
   public func executeMCP(_ message: GatewayJSONValue, conversationID: String, enabledGroups: [WorkspaceToolGroup], contextID: String? = nil) async throws -> GatewayJSONValue {
     guard UUID(uuidString: conversationID) != nil else { throw MobileConnectionError.invalidResponse }

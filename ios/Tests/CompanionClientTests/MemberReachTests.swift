@@ -150,6 +150,41 @@ final class MemberReachTests: XCTestCase {
     try await store.bindWorkspace("library-b")
   }
 
+  /// A clean note the new host deleted is deleted here too, not a conflict.
+  func testRebindingAppliesADeletionMadeOnTheNewHost() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let store = try MobileStore(file: directory.appendingPathComponent("library.json"))
+    let gone = UUID().uuidString.lowercased(), kept = UUID().uuidString.lowercased()
+    try await store.apply(CompanionSnapshot(workspaceID: "library-a", cursor: 4, notes: [
+      CompanionNote(id: gone, title: "Deleted elsewhere", content: "base", revision: 2),
+      CompanionNote(id: kept, title: "Edited here", content: "base", revision: 2)]))
+    try await store.editNote(id: kept, title: "Edited here", content: "phone edit", folderID: nil)
+    try await store.rebindLibrary(to: CompanionSnapshot(workspaceID: "library-b", cursor: 9, notes: []), bodies: [:])
+    let state = await store.snapshot()
+    for id in [gone, kept] {
+      let create = try XCTUnwrap(state.outbox.first { $0.mutation.resourceID == id }?.mutation)
+      XCTAssertEqual(create.kind, .createNote)
+      try await store.acknowledge(.init(operationID: create.operationID, status: .notFound, message: "Deleted", deleted: true))
+    }
+    let after = await store.snapshot()
+    XCTAssertNil(after.notes[gone]); XCTAssertNil(after.conflicts[gone])
+    XCTAssertTrue(after.outbox.isEmpty)
+    XCTAssertEqual(after.conflicts[kept]?.local.content, "phone edit", "writing the host never saw is preserved")
+  }
+
+  func testAMissingMemberKeyIsReportedAsNew() throws {
+    let storage = MobileMemberKeyStorage.memory()
+    let device = UUID().uuidString.lowercased()
+    let first = try MobileMemberKeyVault.loadOrCreateReportingNew(deviceID: device, storage: storage)
+    XCTAssertTrue(first.created)
+    let again = try MobileMemberKeyVault.loadOrCreateReportingNew(deviceID: device, storage: storage)
+    XCTAssertFalse(again.created); XCTAssertEqual(again.identity.publicKey, first.identity.publicKey)
+    // A restored backup: the same device ID, but this device's Keychain never held the key.
+    let restored = try MobileMemberKeyVault.loadOrCreateReportingNew(deviceID: device, storage: .memory())
+    XCTAssertTrue(restored.created); XCTAssertNotEqual(restored.identity.publicKey, first.identity.publicKey)
+  }
+
   func testJournalRebindKeepsHistoryAndOffersOwnRecordsAgain() async throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: directory) }

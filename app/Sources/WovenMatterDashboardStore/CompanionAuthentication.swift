@@ -66,6 +66,13 @@ public enum CompanionGrantRole: String, Codable, Sendable {
 
 /// App-owned credentials. Only random-token digests are written to disk; pairing
 /// secrets are memory-only. A save must reach stable storage before acknowledgement.
+/// A phone waiting for its pairing confirmation, with the member key it sent.
+public struct CompanionPendingMember: Equatable, Sendable {
+  public let deviceID: String
+  public let name: String
+  public let publicKey: Data
+}
+
 public actor CompanionAuthentication {
   private struct Approval: Codable {
     var request: CompanionPendingPairingRequest
@@ -83,6 +90,8 @@ public actor CompanionAuthentication {
     var offerProof: Data
     var encryptedCredential: Data
     var purpose: String?
+    /// A phone's member key, signed into its member entry at confirmation.
+    var memberPublicKey: Data?
   }
   private struct State: Codable {
     var version = 1
@@ -647,6 +656,17 @@ public actor CompanionAuthentication {
     return .init(workspaceID: workspaceID)
   }
 
+  /// The phone whose pending pairing `bearer` confirms, when it paired with a
+  /// member key: the Mac signs its member entry before the grant is issued.
+  /// Nil once confirmed (a retry after a lost reply) or for any other device.
+  public func pendingPhoneMember(bearer: String, workspaceID: String) -> CompanionPendingMember? {
+    let hash = Self.digest(bearer)
+    guard let entry = state.pendingQRPairings?.first(where: { $0.expiresAt > now() && $0.workspaceID == workspaceID && CompanionSecrets.constantTimeEqual($0.device.credentialHash, hash) }),
+          let key = entry.memberPublicKey, key.count == 32, entry.purpose != CompanionPairingPurpose.peerMac,
+          [.iPhone, .iPad].contains(entry.device.metadata?.kind ?? .unknown) else { return nil }
+    return .init(deviceID: entry.device.id.lowercased(), name: entry.device.name, publicKey: key)
+  }
+
   /// Pending credentials cannot read data or appear in the paired-device list.
   /// Confirmation is idempotent when its response is lost after the commit.
   public func confirmPairing(bearer: String, workspaceID: String) throws {
@@ -691,7 +711,8 @@ public actor CompanionAuthentication {
       let encrypted = try AES.GCM.seal(Data(credential.utf8), using: Self.key(request.token)).combined!
       next.pendingQRPairings = (next.pendingQRPairings ?? []).filter { $0.expiresAt > instant && $0.device.id != request.deviceID }
       next.pendingQRPairings?.append(.init(device: device, workspaceID: workspaceID,
-        expiresAt: instant.addingTimeInterval(300), offerProof: Self.digest(request.token), encryptedCredential: encrypted, purpose: request.purpose))
+        expiresAt: instant.addingTimeInterval(300), offerProof: Self.digest(request.token), encryptedCredential: encrypted, purpose: request.purpose,
+        memberPublicKey: request.memberPublicKey?.count == 32 ? request.memberPublicKey : nil))
     } else {
       // Legacy clients retain their v3 pairing contract.
       next.devices.append(Self.issued(device, in: next, purpose: request.purpose))

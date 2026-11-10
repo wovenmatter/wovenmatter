@@ -62,16 +62,22 @@ public enum MobileMemberKeyVault {
   private struct Record: Codable { var deviceID: String; var key: Data }
 
   /// The key for this library device, created on first use. A re-pair keeps the
-  /// same key, because a Mac refuses a known device that presents a new one.
+  /// same key; a Mac takes a new key for a known phone only when the user
+  /// pairs it again there.
   /// A key saved for another device ID (a reinstalled library) is replaced.
   public static func loadOrCreate(deviceID: String, storage: MobileMemberKeyStorage) throws -> MobileMemberIdentity {
+    try loadOrCreateReportingNew(deviceID: deviceID, storage: storage).identity
+  }
+  /// `created` is true when no key existed for this device ID (first use,
+  /// or a backup restored onto a device whose Keychain never held it).
+  public static func loadOrCreateReportingNew(deviceID: String, storage: MobileMemberKeyStorage) throws -> (identity: MobileMemberIdentity, created: Bool) {
     let deviceID = deviceID.lowercased()
     if let data = try storage.load(), let record = try? JSONDecoder().decode(Record.self, from: data), record.deviceID == deviceID,
        let key = try? Curve25519.Signing.PrivateKey(rawRepresentation: record.key) {
-      return MobileMemberIdentity(deviceID: deviceID, privateKey: key)
+      return (MobileMemberIdentity(deviceID: deviceID, privateKey: key), false)
     }
     let key = Curve25519.Signing.PrivateKey()
     try storage.save(JSONEncoder().encode(Record(deviceID: deviceID, key: key.rawRepresentation)))
-    return MobileMemberIdentity(deviceID: deviceID, privateKey: key)
+    return (MobileMemberIdentity(deviceID: deviceID, privateKey: key), true)
   }
 }
