@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type { ToolResultMessage } from "@earendil-works/pi-ai";
 import { defineExtension, defineTool, type Extension, section } from "@earendil-works/pi-durable";
 import { Type } from "typebox";

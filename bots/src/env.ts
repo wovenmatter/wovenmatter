@@ -1,4 +1,4 @@
-import type { Context } from "@earendil-works/chord";
+import type { Context } from "@earendil-works/chord/context";
 import type { HarnessOptions } from "@earendil-works/pi-durable";
 import type { Duplex } from "node:stream";
 

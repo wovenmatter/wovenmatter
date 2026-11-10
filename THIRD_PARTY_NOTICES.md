@@ -36,12 +36,12 @@ SOFTWARE.
 
 ## Pi Durable runtime
 
-Pi Durable bundles `@earendil-works/pi-durable` 1.5.0 from
-[Earendil Works Pi](https://github.com/earendil-works/pi/tree/v1.5.0/packages/durable)
+Pi Durable bundles `@earendil-works/pi-durable` 1.5.1 from
+[Earendil Works Pi](https://github.com/earendil-works/pi/tree/v1.5.1/packages/durable)
 for native execution and persistence. The format-1 JSONL migration reader in
 `default-agent/src/legacy-jsonl-migration.mjs` adapts its recovery and reclamation
 rules under the same license. Its
-[upstream license](https://github.com/earendil-works/pi/blob/v1.5.0/LICENSE)
+[upstream license](https://github.com/earendil-works/pi/blob/v1.5.1/LICENSE)
 is MIT, with `Copyright (c) 2025 Mario Zechner`.
 
 Native store ownership uses `proper-lockfile` from
@@ -53,7 +53,7 @@ Bundled dependencies retain their own upstream licenses and notices.
 
 ## Lucide
 
-The dashboard icon assets are derived from `lucide-static` 1.70.0.
+The dashboard icon assets are derived from `lucide-static` 1.71.0.
 Published tarball integrity and per-asset hashes are recorded in
 `docs/assets/lucide-provenance.json`.
 

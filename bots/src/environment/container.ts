@@ -1,5 +1,5 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import type { Context } from "@earendil-works/chord";
+import type { Context } from "@earendil-works/chord/context";
 import { Duplex } from "node:stream";
 import type { BotEnvironmentAdapter, HarnessEnvFactory } from "../env.ts";
 import { type DockerEngineAPI, EngineError, type ExecProcess } from "./engine-api.ts";
