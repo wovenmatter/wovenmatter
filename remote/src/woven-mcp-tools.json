@@ -1449,6 +1449,9 @@
             "oldest"
           ],
           "type" : "string"
+        },
+        "workspace" : {
+          "type" : "string"
         }
       },
       "required" : [
@@ -1463,15 +1466,21 @@
       "openWorldHint" : true,
       "readOnlyHint" : true
     },
-    "description" : "Read status and coordination epoch. Permission, question and authentication states require the user; status never grants approval.",
+    "description" : "Read status and coordination epoch. Permission, question and authentication states require the user; status never grants approval. For a session on another workspace (one you created there, or one named with workspace) it returns its state, pending questions and recent transcript; page older messages with before.",
     "inputSchema" : {
       "additionalProperties" : false,
       "properties" : {
+        "before" : {
+          "type" : "string"
+        },
         "id" : {
           "type" : "string"
         },
         "requestID" : {
           "format" : "uuid",
+          "type" : "string"
+        },
+        "workspace" : {
           "type" : "string"
         }
       },
@@ -1540,7 +1549,7 @@
       "openWorldHint" : true,
       "readOnlyHint" : false
     },
-    "description" : "Sessions Send using the authenticated caller's current Woven permissions. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
+    "description" : "Send a message to a session, or steer its running turn when its harness can. Sessions you created on another workspace are reached there; name workspace for any other. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
     "inputSchema" : {
       "additionalProperties" : false,
       "properties" : {
@@ -1553,6 +1562,9 @@
         },
         "text" : {
           "type" : "string"
+        },
+        "workspace" : {
+          "type" : "string"
         }
       },
       "required" : [
@@ -1562,6 +1574,73 @@
       "type" : "object"
     },
     "name" : "woven_sessions_send"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : false
+    },
+    "description" : "Stop the running turn of a session on this or another workspace. Sessions you created on another workspace are reached there; name workspace for any other. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "id" : {
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        },
+        "workspace" : {
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "id"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_sessions_stop"
+  },
+  {
+    "annotations" : {
+      "openWorldHint" : true,
+      "readOnlyHint" : false
+    },
+    "description" : "Answer a pending question or approval of a session (woven_sessions_status lists them): optionID for an offered option, answers for questions (question ID to selected values), or cancelled. Permission approvals stay with the user unless the session’s workspace grants full access. Optionally supply a stable requestID UUID; the response returns one when omitted. Reuse the same UUID only for an identical retry; inspect current state after an uncertain external effect.",
+    "inputSchema" : {
+      "additionalProperties" : false,
+      "properties" : {
+        "answers" : {
+          "type" : "object"
+        },
+        "cancelled" : {
+          "type" : "boolean"
+        },
+        "id" : {
+          "type" : "string"
+        },
+        "interaction" : {
+          "type" : "string"
+        },
+        "optionID" : {
+          "type" : "string"
+        },
+        "requestID" : {
+          "format" : "uuid",
+          "type" : "string"
+        },
+        "workspace" : {
+          "type" : "string"
+        }
+      },
+      "required" : [
+        "id",
+        "interaction"
+      ],
+      "type" : "object"
+    },
+    "name" : "woven_sessions_respond"
   },
   {
     "annotations" : {

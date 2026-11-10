@@ -584,18 +584,24 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
     callerInfo:id=>{const {conversation}=getRecord(id);return {...(conversation.title?{title:String(conversation.title).slice(0,512)}:{}),runtimeKind:conversation.runtimeKind}}}):null
   const allToolGroups=['notes','history','sessions','goals','timers','usage','calendar','library','browser','computer','executor','html']
   const toolLabels={notes:'Notes',history:'Conversation history',sessions:'Session management',timers:'Timers',usage:'Usage data',calendar:'Calendar',library:'Library',browser:'Browser Use',computer:'Computer Use',executor:'Executor'}
-  const localMCPTools=['woven_sessions_create','woven_sessions_send','woven_sessions_manage','woven_sessions_release','woven_sessions_notifications','woven_sessions_receipts','woven_context','woven_goals_get','woven_goals_set','woven_goals_pause','woven_goals_resume','woven_goals_clear','woven_goals_complete','woven_goals_block','woven_goals_checkpoint',
+  const localMCPTools=['woven_sessions_create','woven_sessions_send','woven_sessions_stop','woven_sessions_respond','woven_sessions_manage','woven_sessions_release','woven_sessions_notifications','woven_sessions_receipts','woven_context','woven_goals_get','woven_goals_set','woven_goals_pause','woven_goals_resume','woven_goals_clear','woven_goals_complete','woven_goals_block','woven_goals_checkpoint',
     'woven_sessions_list','woven_sessions_status','woven_sessions_harnesses','woven_history_search','woven_history_conversations','woven_history_conversation','woven_history_message','woven_history_runs','woven_history_trace','woven_history_events','woven_history_event',
     'woven_databases_list','woven_databases_create','woven_databases_query','woven_databases_execute',...(workspaceBrowser?['woven_browser_use','woven_browser_use_cancel']:[])]
   db.exec('CREATE TABLE IF NOT EXISTS mcp_tool_receipts (caller TEXT NOT NULL, request_id TEXT NOT NULL, fingerprint TEXT NOT NULL, response TEXT, PRIMARY KEY(caller,request_id))')
   // `members` ({transport, deviceID, hasMac}) reaches other members with this
   // host's signed requests: sessions on any workspace, and the Mac-only tools.
   const memberDelegate=members?createMemberMacDelegate({transport:members.transport,workspaceID:()=>descriptor().id,hasMac:members.hasMac}):null
-  const memberSessions=members?createMemberSessions({transport:members.transport,identity:descriptor,deviceID:members.deviceID,
+  // Bots have no conversation here: they reach this workspace through its own
+  // execution API, as another member would (`local`).
+  const memberSessions=members?createMemberSessions({transport:members.transport,identity:descriptor,deviceID:members.deviceID,db,
+    local:{providers:()=>runtime.providers(),conversations:()=>service.conversations(),transcript:(id,before)=>service.transcript(id,before),
+      interactions:()=>service.interactions(),capabilities:id=>service.capabilities(id),command:body=>command(body,{id:body.deviceID},{internal:true})},
     localProviders:async()=>(await runtime.providers()).filter(provider=>provider.available!==false)}):null
+  // Bots manage sessions on this and every other workspace with these tools.
+  const botSessionTools=memberSessions?['woven_sessions_create','woven_sessions_send','woven_sessions_status','woven_sessions_list','woven_sessions_stop','woven_sessions_respond','woven_sessions_harnesses']:[]
   const mcp=createWorkspaceMCP({db,identity:descriptor,secret:publisherKey,endpointURL:mcpEndpointURL,
     policy:id=>getRecord(id).enabledTools??mcp.settings().enabledByDefault,localTools:localMCPTools,localCall:performMCP,fetchImpl:publisherFetch,beforeLibraryCall:()=>publisher.syncNow(),
-    scopedHistoryAccess:scope=>orchestration.readableConversationIDs(scope.conversationID).size>0,localLibrary:libraryTools,memberDelegate,onTimersChanged})
+    scopedHistoryAccess:scope=>orchestration.readableConversationIDs(scope.conversationID).size>0,localLibrary:libraryTools,memberDelegate,onTimersChanged,botTools:botSessionTools})
   // Workspaces are named by ID; `local` is not one. Without a library host
   // this workspace can only create sessions on itself.
   async function sessionDestination(raw) {
@@ -605,7 +611,43 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
     throw fail(503,'This workspace reaches other workspaces through its library host, which is not running.')
   }
   const orchestration=createWorkspaceMCPOrchestration({db,identity:descriptor,getRecord,command:(body,device)=>command(body,device,{internal:true}),runtime,settings:()=>mcp.settings(),runningSessions:()=>Number(db.prepare("SELECT count(*) AS count FROM conversations WHERE json_extract(body,'$.conversation.activeRunID') IS NOT NULL").get().count)+externalRunningSessions(),policy:id=>getRecord(id).enabledTools??mcp.settings().enabledByDefault,notifyApproval:setInteraction})
+  // One operation on a session another workspace runs (or, for stop and
+  // respond, one this caller coordinates here), through that workspace's
+  // execution API.
+  function memberOperation(client,callerID,name,input,canReadAll,signal) {
+    const common={client,callerID,requestID:input.requestID,id:input.id,signal}
+    if(name==='woven_sessions_status')return memberSessions.status({...common,before:input.before,canReadAll})
+    if(name==='woven_sessions_send')return memberSessions.send({...common,text:input.text})
+    if(name==='woven_sessions_stop')return memberSessions.stop(common)
+    return memberSessions.respond({...common,interaction:input.interaction,optionID:input.optionID,answers:input.answers,cancelled:input.cancelled})
+  }
+  const managed=['woven_sessions_status','woven_sessions_send','woven_sessions_stop','woven_sessions_respond']
+  async function botSessionCall(scope,name,input,signal) {
+    const callerID=scope.principal,canReadAll=mcp.settings().botMCP.groups.includes('history')
+    if(name==='woven_sessions_harnesses')return memberSessions.harnesses(input)
+    if(name==='woven_sessions_create')return memberSessions.create({callerID,requestID:input.requestID,workspace:await memberSessions.destination(input.workspace),runtimeKind:'default_agent',input,signal})
+    if(name==='woven_sessions_list')return memberSessions.list({callerID,workspace:input.workspace,canReadAll,signal,limit:input.limit})
+    if(!managed.includes(name))throw fail(400,'This session tool is not available to bots.')
+    return memberOperation(await memberSessions.resolve(callerID,input.id,input.workspace,{bot:true}),callerID,name,input,canReadAll,signal)
+  }
   async function performMCP(scope,name,input,{signal}={}) {
+    if(scope?.kind==='bot')return {success:true,result:await botSessionCall(scope,name,input,signal),requestID:input.requestID}
+    let client
+    if(memberSessions&&managed.includes(name)&&(client=await memberSessions.resolve(scope.conversationID,input.id,input.workspace))) {
+      const canReadAll=(getRecord(scope.conversationID).enabledTools??mcp.settings().enabledByDefault).includes('history')
+      return {success:true,result:await memberOperation(client,scope.conversationID,name,input,canReadAll,signal),requestID:input.requestID}
+    }
+    if(name==='woven_sessions_list'&&memberSessions&&input.workspace!=null&&await memberSessions.destination(input.workspace)) {
+      const canReadAll=(getRecord(scope.conversationID).enabledTools??mcp.settings().enabledByDefault).includes('history')
+      return {success:true,result:await memberSessions.list({callerID:scope.conversationID,workspace:input.workspace,canReadAll,signal,limit:input.limit}),requestID:input.requestID}
+    }
+    if(name==='woven_sessions_stop'||name==='woven_sessions_respond') {
+      // Here, only a session this caller created or coordinates.
+      const relation=orchestration.relationship(input.id)
+      if(relation.createdBy!==scope.conversationID&&relation.coordinatorID!==scope.conversationID)throw fail(403,'Stop or answer only the sessions you created or coordinate.')
+      if(!memberSessions)throw fail(503,'This workspace reaches its sessions through its library host, which is not running.')
+      return {success:true,result:await memberOperation(memberSessions.here(),scope.conversationID,name,input,true,signal),requestID:input.requestID}
+    }
     const caller=name==='woven_context'||name.startsWith('woven_databases_')||name.startsWith('woven_browser_use')?null:getRecord(scope.conversationID),requestID=input.requestID
     let value,destination
     if(name==='woven_context')value=null // Device-originated inputs have no borrowed Mac asset capture.
@@ -652,7 +694,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
     }
     return {success:true,result:value,requestID}
   }
-  return { runningSessionCount:()=>Number(db.prepare("SELECT count(*) AS count FROM conversations WHERE json_extract(body,'$.conversation.activeRunID') IS NOT NULL").get().count), descriptor, provision, principal, revoke, adopt, importRetainedEvents, mcp, prepareTaskMCP:mcp.prepareTask,
+  const service = { runningSessionCount:()=>Number(db.prepare("SELECT count(*) AS count FROM conversations WHERE json_extract(body,'$.conversation.activeRunID') IS NOT NULL").get().count), descriptor, provision, principal, revoke, adopt, importRetainedEvents, mcp, prepareTaskMCP:mcp.prepareTask,
     configurePublisher:publisher.configure, publisherStatus:publisher.status, synchronizePublisher:publisher.syncNow, kickPublisher:publisher.kick, saveArtifact:publisher.saveArtifact,
     resolveRetainedAssociation:publisher.resolveRetainedAssociation, hasRun:runID=>!!db.prepare('SELECT id FROM runs WHERE id=?').get(runID),
     hasActiveRuntime:kind => [...jobs.values()].some(job=>job.runtimeKind===kind),
@@ -703,4 +745,5 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
     },
     async close() { closed=true;clearInterval(goalTimer);mcp.close();await publisher.close(); clearTimeout(flushTimer); for (const id of dirty.keys()) flush(id,true); unlockMaterial = undefined; await runtime.close?.(); await Promise.allSettled([...jobs.values()].map(job => job.completion)); await Promise.allSettled([...queues.values()]); db.close() },
   }
+  return service
 }

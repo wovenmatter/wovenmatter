@@ -513,8 +513,38 @@ hands them to the macOS job, which checks them with
   from the caller, request ID and destination, so a retry replays receipts.
   The reply is `{session: {id, title, harness, workspace, workspaceName,
   workspaceKind}, independent: true, receipt}`: the caller does not
-  coordinate it, and reads its progress from synced history. Linux:
-  `remote/src/member-sessions.mjs`; Mac: `ApplicationModel+MemberSessions.swift`.
+  coordinate it. Linux: `remote/src/member-sessions.mjs`; Mac:
+  `ApplicationModel+MemberSessions.swift`.
+- **Managing them (Linux).** The Linux server remembers each session a caller
+  created on another workspace (`member_sessions` in its execution database),
+  so these tools name it by `id` alone, or by `id` plus `workspace` for one it
+  did not create. Each is one or more signed calls to the destination's
+  execution API (`GET v1/execution/conversations`, `…/conversations/<id>/transcript`,
+  `…/capabilities`, `GET v1/execution/interactions`, `POST v1/execution/commands`):
+  - `woven_sessions_status {id, workspace?, before?}` → `{session: {id, title,
+    harness, workspace, workspaceName, workspaceKind, state:
+    running|idle|needsInput, runID?}, pending: [{id, kind, title, detail?,
+    runID, options, questions}], transcript: {messages (latest 20, 4000
+    characters each), before?}}`; `before` pages older messages.
+  - `woven_sessions_send {id, text, workspace?}`: `send` when idle; `steer`
+    when running and the harness can, otherwise 409 (send when idle).
+  - `woven_sessions_stop {id, workspace?}` (new): `stop` of the current run.
+  - `woven_sessions_respond {id, interaction, optionID?, answers?, cancelled?,
+    workspace?}` (new): `respond` to one pending question or approval.
+  - `woven_sessions_list {workspace}`: that workspace's sessions; without
+    `workspace`, a bot gets every session it created, each with its live state.
+  Command IDs derive from the caller, request ID, workspace and session, so a
+  retry replays the receipt. Reading a session the caller did not create needs
+  Conversation history. `stop` and `respond` on this workspace apply only to
+  sessions the caller created or coordinates. There are no notifications back
+  to the caller; it polls `woven_sessions_status`.
+- **Bots** get `woven_sessions_create`, `_send`, `_status`, `_list`, `_stop`,
+  `_respond` and `_harnesses` from the Node server itself (no Mac): a bot's
+  sessions on its own machine's workspace go through that workspace's own
+  execution commands, as another member's would; coordination tools
+  (`manage`, `release`, `notifications`, `receipts`) bind a conversation and
+  stay unavailable to bots. The Mac's own catalog does not have these
+  additions yet.
 - The iPhone connects directly to every Mac and Linux workspace with its own
   member key. It has no home Mac.
 
