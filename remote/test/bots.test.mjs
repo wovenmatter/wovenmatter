@@ -75,6 +75,26 @@ test('bot MCP keys rotate, attribute library calls to the bot, honor botMCP grou
   assert.equal(mcp.resolvePrincipal('Bearer ' + second.bearerToken), null)
 })
 
+test('a user revoke of a bot MCP key sticks through the runtime refresh until reinstated', async t => {
+  const service = await execution(t, async () => ({ ok: true, status: 200, text: async () => '{}' }))
+  const { enroll } = await import('./fixtures/execution.mjs'); enroll(service)
+  const mcp = service.mcp, deviceID = randomUUID(), botID = randomUUID(), other = randomUUID()
+  const key = mcp.issueBotKey({ botID, botName: 'Helper', deviceID })
+  mcp.revokeBotKey(botID.toUpperCase(), { sticky: true })
+  assert.equal(mcp.resolvePrincipal('Bearer ' + key.bearerToken), null)
+  // The runtime's next 401 asks for a key again: refused, not reissued.
+  assert.throws(() => mcp.issueBotKey({ botID, botName: 'Helper', deviceID }), error => error.statusCode === 403 && error.code === 'revoked')
+  assert.deepEqual(mcp.revokedBots().map(item => item.botID), [botID])
+  assert.deepEqual(mcp.botKeys(), [])
+  mcp.reinstateBot(botID)
+  assert.deepEqual(mcp.revokedBots(), [])
+  const again = mcp.issueBotKey({ botID, botName: 'Helper', deviceID })
+  assert.equal(mcp.resolvePrincipal('Bearer ' + again.bearerToken).botID, botID)
+  // A runtime deleting its bot is not a user's revoke.
+  mcp.issueBotKey({ botID: other, botName: 'Other', deviceID }); mcp.revokeBotKey(other)
+  assert.ok(mcp.issueBotKey({ botID: other, botName: 'Other', deviceID }).bearerToken)
+})
+
 test('bot conversation batches validate and upsert by id, and the journal keeps every batch durably', async t => {
   const memory = createMemoryBotLibraryAdapter(), library = createBotConversationLibrary(memory), botID = randomUUID()
   const batch = (entries, extra = {}) => ({ bot: { id: botID, name: 'Helper' }, conversations: [{ conversationId: 'main', kind: 'main' }, { conversationId: 't1', kind: 'thread', parentConversationId: 'main', title: 'Plan' }], entries, ...extra })
@@ -233,10 +253,13 @@ async function serviceFixture(t, overrides = {}) {
   const directory = temporary(t)
   const { root } = engineFixture(t)
   const engine = createBotEngine({ instance: 'wmtest', root, docker: async () => 'OK' })
-  const keys = new Map(), credentialsCalls = []
+  const keys = new Map(), revoked = new Set(), credentialsCalls = []
   const mcp = {
-    issueBotKey: ({ botID, botName, deviceID }) => { keys.set(botID, botName); return { endpointURL: 'http://127.0.0.1:1/mcp', bearerToken: 'bot-token', principal: botPrincipal(deviceID, botID) } },
-    revokeBotKey: botID => ({ revoked: keys.delete(botID) }),
+    issueBotKey: ({ botID, botName, deviceID }) => {
+      if (revoked.has(botID)) throw Object.assign(new Error('revoked'), { statusCode: 403, code: 'revoked' })
+      keys.set(botID, botName); return { endpointURL: 'http://127.0.0.1:1/mcp', bearerToken: 'bot-token', principal: botPrincipal(deviceID, botID) } },
+    revokeBotKey: (botID, options = {}) => { if (options.sticky) revoked.add(botID); return { revoked: keys.delete(botID) } },
+    reinstateBot: botID => ({ reinstated: revoked.delete(botID) }), revokedBots: () => [...revoked].map(botID => ({ botID })),
     settings: () => ({ botMCP: { isEnabled: true, groups: ['notes'] } }), botKeys: () => [...keys.keys()], configureBots: value => ({ settings: value }),
   }
   const memory = createMemoryBotLibraryAdapter()
@@ -284,6 +307,18 @@ test('the runtime host API requires its own bearer and serves keys, previews, cr
   const entries = await f.call(`/v1/bots-host/conversations/${botID}/entries`, { method: 'POST', body: { bot: { id: botID, name: 'Helper' }, conversations: [{ conversationId: 'main', kind: 'main' }], entries: [{ id: 'e1', conversationId: 'main', role: 'assistant', text: 'hi' }] } })
   assert.deepEqual(entries.body, { conversations: 1, entries: 1 })
   assert.deepEqual(f.memory.entries(botID).map(entry => entry.id), ['e1'])
+})
+
+test('the user revoke route sticks and the runtime cannot get a new key until reinstated', async t => {
+  const f = await serviceFixture(t), botID = randomUUID()
+  assert.equal((await f.call('/v1/bots-host/mcp-keys', { method: 'POST', body: { botID, botName: 'Helper' } })).status, 201)
+  assert.equal((await f.call('/v1/bots/mcp/keys/' + botID, { method: 'DELETE', token: 'device' })).status, 403)
+  assert.equal((await f.call('/v1/bots/mcp/keys/' + botID, { method: 'DELETE', token: 'admin' })).status, 200)
+  assert.deepEqual((await f.call('/v1/bots-host/mcp-keys', { method: 'POST', body: { botID, botName: 'Helper' } })), { status: 403, body: { error: 'revoked', message: 'revoked' } })
+  assert.deepEqual((await f.call('/v1/bots/mcp', { token: 'admin' })).body.revoked, [{ botID }])
+  assert.equal((await f.call('/v1/bots/mcp/keys/' + botID + '/reinstate', { method: 'POST', token: 'device' })).status, 403)
+  assert.equal((await f.call('/v1/bots/mcp/keys/' + botID + '/reinstate', { method: 'POST', token: 'admin' })).body.reinstated, true)
+  assert.equal((await f.call('/v1/bots-host/mcp-keys', { method: 'POST', body: { botID, botName: 'Helper' } })).status, 201)
 })
 
 test('client routes read with device grants, change only as administrator, and report resources', async t => {

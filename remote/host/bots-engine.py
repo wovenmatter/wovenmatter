@@ -142,6 +142,8 @@ def render_daemon(layout,config):
         'bridge':layout.bridge,
         # This engine never edits iptables. Its egress and NAT rules live in
         # the Woven-owned nftables table below, which dockerd cannot flush.
+        # dockerd refuses icc=false without iptables; the nftables bridge
+        # table below keeps bot containers apart instead.
         'iptables':False,'ip6tables':False,'ip-forward':False,'ip-masq':False,'ipv6':False,
         'userland-proxy':True,
         # Never set default-address-pools: with it (and live-restore off),
@@ -179,14 +181,29 @@ oom_score = -999
   address = ""
 '''
 
-def render_ruleset(layout,config):
+def render_ruleset(layout,config,drop_foreign=False):
+    """`drop_foreign`: this engine turned host forwarding on and no iptables
+    exists to hold the FORWARD policy, so it drops all non-bot forwarding."""
     subnet=config['subnet']; bridge=layout.bridge
     blocked=', '.join(BLOCKED_IPV4)
+    foreign=f'\n    iifname != "{bridge}" oifname != "{bridge}" drop' if drop_foreign else ''
     # One atomic transaction: create-or-keep, delete, then define, so a reload
     # never leaves bots without their egress policy. Drops are final across
     # every table at a hook, so other firewalls' accepts cannot reopen them.
+    # Frames bridged between two bot containers never reach the inet hooks
+    # (no br_netfilter needed or loaded): the bridge table drops them, which
+    # touches no other bridge on the host. Bots need no path to each other;
+    # the runtime reaches them through the engine's exec API.
     return f'''table inet {layout.table} {{}}
 delete table inet {layout.table}
+table bridge {layout.table} {{}}
+delete table bridge {layout.table}
+table bridge {layout.table} {{
+  chain forward {{
+    type filter hook forward priority filter - 10; policy accept;
+    meta ibrname "{bridge}" meta obrname "{bridge}" drop
+  }}
+}}
 table inet {layout.table} {{
   set blocked4 {{ type ipv4_addr; flags interval; elements = {{ {blocked} }} }}
   chain forward {{
@@ -196,7 +213,7 @@ table inet {layout.table} {{
     oifname "{bridge}" ct state established,related accept
     oifname "{bridge}" drop
     iifname "{bridge}" ip saddr != {subnet} drop
-    iifname "{bridge}" ip daddr @blocked4 drop
+    iifname "{bridge}" ip daddr @blocked4 drop{foreign}
   }}
   chain input {{
     type filter hook input priority filter - 10; policy accept;
@@ -396,6 +413,7 @@ def account(user):
 class Engine:
     def __init__(self,layout,host=None,python=None):
         self.layout=layout; self.host=host or Host(); self.python=python or sys.executable
+        self.forwarding_path=Path('/proc/sys/net/ipv4/ip_forward')
     def config(self,required=True):
         value=read_json(self.layout.config)
         if value is None and required: fail('engine_not_installed','The Woven bot engine is not installed.',66)
@@ -654,11 +672,23 @@ class Engine:
 
     def firewall(self):
         layout=self.layout; config=self.config()
-        self.host.run(['nft','-f','-'],input=render_ruleset(layout,config).encode())
-        if self.host.which('iptables'): self.accept_forwarding(config)
-        if Path('/proc/sys/net/ipv4/ip_forward').read_text().strip()!='1':
-            Path('/proc/sys/net/ipv4/ip_forward').write_text('1\n')
-        self.record_state({'firewallAppliedAt':time.time(),'firewallTable':'inet '+layout.table})
+        forwarding=self.forwarding_path; marker=layout.run/'forwarding-enabled'
+        # Bots need host-wide IPv4 forwarding. When nothing else had turned it
+        # on, this engine owns what that does to the host's other interfaces:
+        # like dockerd, it sets the FORWARD policy to DROP (others add their
+        # own accepts there); with no iptables, its own table drops non-bot
+        # forwarding. The marker in /run keeps that until the next boot.
+        owned=marker.exists() or forwarding.read_text().strip()!='1'
+        iptables=self.host.which('iptables')
+        self.host.run(['nft','-f','-'],input=render_ruleset(layout,config,drop_foreign=owned and not iptables).encode())
+        if iptables:
+            self.accept_forwarding(config)
+            if owned: self.host.run(['iptables','-w','-P','FORWARD','DROP'])
+        if forwarding.read_text().strip()!='1':
+            layout.run.mkdir(mode=0o755,parents=True,exist_ok=True); marker.write_text('1\n')
+            forwarding.write_text('1\n')
+        self.record_state({'firewallAppliedAt':time.time(),'firewallTable':'inet '+layout.table,
+            'forwardPolicy':('iptables' if iptables else 'nftables') if owned else None})
 
     def accept_forwarding(self,config):
         # Hosts whose FORWARD policy is DROP (any Docker install sets this)
@@ -685,6 +715,7 @@ class Engine:
     def remove_firewall(self):
         run=self.host.run
         run(['nft','delete','table','inet',self.layout.table],check=False)
+        run(['nft','delete','table','bridge',self.layout.table],check=False)
         if self.host.which('iptables'):
             while run(['iptables','-w','-C','FORWARD','-j',self.layout.chain],check=False).returncode==0:
                 run(['iptables','-w','-D','FORWARD','-j',self.layout.chain],check=False)

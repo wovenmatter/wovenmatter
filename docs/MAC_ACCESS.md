@@ -69,7 +69,9 @@ at once with a message instead of hanging a PTY:
   real `/usr/bin/sudo -n`, so passwordless rules (Linux Full root) work unchanged
   and anything needing a password fails immediately with "This command needs
   <device>'s password…". Under Linux Normal user (`NoNewPrivileges`) it explains
-  that sudo is unavailable.
+  that sudo is unavailable. A `sudo -n true` probe, which runs nothing, decides
+  this; the command itself runs with its output untouched (nothing is
+  captured or buffered).
 - `GIT_ASKPASS`, `SSH_ASKPASS` (with `SSH_ASKPASS_REQUIRE=force`) and
   `SUDO_ASKPASS` point to a helper that refuses with a message;
   `GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=never`, `DEBIAN_FRONTEND=noninteractive`.

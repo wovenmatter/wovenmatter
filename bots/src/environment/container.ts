@@ -21,6 +21,13 @@ export const MACHINE_LABEL = "woven.bots.machine";
 export const IDLE_STOP_MS = 15 * 60_000;
 const AGENT_COMMAND = ["node", `${HELPER_MOUNT}/agent.mjs`];
 const SHM_BYTES = 512 * 1024 * 1024;
+/**
+ * Default capabilities a bot never needs. Without NET_RAW a bot cannot forge packets or spoof ARP
+ * on the bot network (ping stops working); MKNOD is device creation. sudo (SETUID, SETGID,
+ * AUDIT_WRITE), apt (CHOWN, DAC_OVERRIDE, FOWNER, SETFCAP) and Chromium (Playwright launches it
+ * without its sandbox) keep everything else Docker grants by default.
+ */
+export const DROPPED_CAPABILITIES = ["NET_RAW", "MKNOD"] as const;
 const STOP_SECONDS = 20;
 /** How long a container start waits for an engine that is coming back (a Mac VM rebooting). */
 const ENGINE_WAIT_MS = 90_000;
@@ -280,6 +287,7 @@ export class BotEnvironment implements BotEnvironmentAdapter {
           { Type: "volume", Source: helper, Target: HELPER_MOUNT, ReadOnly: true },
         ],
         RestartPolicy: { Name: "no" },
+        CapDrop: [...DROPPED_CAPABILITIES],
         ShmSize: SHM_BYTES,
         ...(memory ? { Memory: memory, MemorySwap: memory } : {}),
       },

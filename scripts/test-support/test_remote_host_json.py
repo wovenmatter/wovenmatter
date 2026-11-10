@@ -38,7 +38,7 @@ class HostFixtures(unittest.TestCase):
         # Never read a real engine on the machine running these tests.
         self.m.BOTS_ETC=self.home/'etc/wovenmatter-bots'; self.m.BOTS_VAR=self.home/'var/lib/wovenmatter-bots'
         self.m.BOTS_HELPER=self.home/'usr/local/lib/wovenmatter-bots/bots-engine'
-        self.engine_calls=[]; self.fail_migration=False; self.migrations=[]
+        self.engine_calls=[]; self.fail_migration=False; self.migrations=[]; self.service_starts=[]
     def tearDown(self):
         for patcher in reversed(self.patchers): patcher.stop()
         self.temp.cleanup()
@@ -70,8 +70,10 @@ class HostFixtures(unittest.TestCase):
             if action=='is-active': output=b'active\n' if self.active else b'inactive\n'; code=0 if self.active else 3
             elif action=='is-enabled': code=0 if self.enabled else 1
             elif action=='stop': self.active=False
-            elif action in ('start','restart'): self.active=True
-            elif action=='enable': self.enabled=True; self.active=self.active or '--now' in args
+            elif action in ('start','restart'): self.active=True; self.service_starts.append(self.m.ENV_FILE.read_text() if self.m.ENV_FILE.exists() else '')
+            elif action=='enable':
+                self.enabled=True; self.active=self.active or '--now' in args
+                if '--now' in args: self.service_starts.append(self.m.ENV_FILE.read_text())
             elif action=='disable': self.enabled=False; self.active=False if '--now' in args else self.active
         elif args[0]=='tailscale':
             if args[1]=='status': output=json.dumps({'BackendState':'Running','Self':{'DNSName':'fixture.test.ts.net.'}}).encode()
@@ -585,6 +587,62 @@ class HostFixtures(unittest.TestCase):
         finally:
             if saved_fd is not None: os.dup2(saved_fd,3); os.close(saved_fd)
             source.close()
+    def library_update_fixture(self):
+        self.m.ROOT.mkdir(parents=True)
+        fp,stream=self.install_bundle(library=True); self.m.TOKEN=''
+        self.m.LIBRARY_STATE.mkdir(parents=True); (self.m.LIBRARY_STATE/'identity.json').write_text(json.dumps({'deviceID':'6f1c2a5e-8b3d-4c7a-9e21-0d4b5c6a7f80'}))
+        self.m.health=lambda *a:{'serviceFingerprint':fp,'runtimeKind':'host'}
+        source=self.feed(stream)
+        self.m.install('fixture','7337','fullRoot',fp)
+        database=self.m.ROOT/'library/workspace.sqlite'; database.write_bytes(b'user data')
+        stream.write_bytes(b'\n'+self.home.joinpath('bundle.tar').read_bytes()); source.seek(0); self.m.TOKEN=''
+        self.service_starts.clear()
+        return fp,database
+    def test_update_checks_run_before_the_library_serves_and_a_failed_check_restores_its_database(self):
+        fp,database=self.library_update_fixture(); self.fail_selftest=True
+        with self.assertRaises(self.m.Failure) as error: self.m.install('fixture','7337','fullRoot',fp,True)
+        self.assertEqual(error.exception.code,'browser_selftest_failed')
+        # The checked service never ran its library host, so the backup is still current.
+        self.assertIn('WOVENMATTER_LIBRARY="0"',self.service_starts[0])
+        self.assertEqual(database.read_bytes(),b'user data')
+        self.assertNotIn('WOVENMATTER_LIBRARY=',self.m.ENV_FILE.read_text()); self.assertTrue(self.active)
+    def test_a_failure_after_the_library_host_starts_keeps_the_migrated_database(self):
+        fp,database=self.library_update_fixture()
+        # Healthy while checked; unhealthy once restarted with the library host.
+        self.m.health=lambda *a:None if len(self.service_starts)>1 else {'serviceFingerprint':fp,'runtimeKind':'host'}
+        self.m.HEALTH_SECONDS=1
+        with self.assertRaises(self.m.Failure) as error: self.m.install('fixture','7337','fullRoot',fp,True)
+        self.assertEqual(error.exception.code,'host_health_failed')
+        self.assertIn('migrated library was kept',error.exception.detail)
+        self.assertEqual(len(self.service_starts),2)
+        self.assertIn('WOVENMATTER_LIBRARY="0"',self.service_starts[0]); self.assertNotIn('WOVENMATTER_LIBRARY=',self.service_starts[1])
+        # No rollback: the database the new library host may have served stays.
+        self.assertEqual(database.read_bytes(),b'migrated'); self.assertTrue(self.active)
+        self.assertEqual(os.readlink(self.m.ROOT/'current'),str(self.m.ROOT/'releases'/fp))
+        self.assertNotIn('WOVENMATTER_LIBRARY=',self.m.ENV_FILE.read_text())
+    def test_rotating_the_installer_bearer_keeps_the_service_secret(self):
+        self.save_install()
+        first=self.m.rotate_token('fixture'); settings=self.m.parse_env()
+        self.assertTrue(first['rotated']); self.assertRegex(first['token'],'^[A-Za-z0-9_-]{64}$')
+        self.assertEqual(settings['WOVENMATTER_API_TOKEN'],first['token']); self.assertEqual(settings['WOVENMATTER_SERVICE_SECRET'],TOKEN)
+        second=self.m.rotate_token('fixture'); settings=self.m.parse_env()
+        self.assertNotEqual(second['token'],first['token'])
+        self.assertEqual(settings['WOVENMATTER_API_TOKEN'],second['token']); self.assertEqual(settings['WOVENMATTER_SERVICE_SECRET'],TOKEN)
+        self.assertEqual(self.m.ENV_FILE.stat().st_mode&0o777,0o600)
+        self.assertNotIn(second['token'],self.m.main(['logs','fixture'])['logs'])
+        with self.assertRaises(self.m.Failure): self.m.rotate_token('other')
+    def test_an_update_keeps_the_service_secret_whatever_bearer_it_streams(self):
+        self.m.ROOT.mkdir(parents=True)
+        fp,stream=self.install_bundle(); self.m.TOKEN=''
+        self.m.health=lambda *a:{'serviceFingerprint':fp,'runtimeKind':'host'}
+        source=self.feed(stream)
+        self.m.install('fixture','7337','fullRoot',fp)
+        self.assertEqual(self.m.parse_env()['WOVENMATTER_SERVICE_SECRET'],TOKEN)
+        rotated=self.m.rotate_token('fixture')['token']
+        stream.write_bytes(b'\n'+self.home.joinpath('bundle.tar').read_bytes()); source.seek(0); self.m.TOKEN=''
+        self.m.install('fixture','7337','fullRoot',fp,True)
+        settings=self.m.parse_env()
+        self.assertEqual(settings['WOVENMATTER_API_TOKEN'],rotated); self.assertEqual(settings['WOVENMATTER_SERVICE_SECRET'],TOKEN)
     def test_a_compressed_library_binary_is_unpacked_and_verified_before_it_runs(self):
         binary=b'\x7fELF fixture library host '*4096
         self.m.ROOT.mkdir(parents=True)

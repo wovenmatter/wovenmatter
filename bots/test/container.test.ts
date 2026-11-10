@@ -72,8 +72,11 @@ describe("bot containers on the Engine API", () => {
       Memory: 2 * 1024 * 1024 * 1024,
       MemorySwap: 2 * 1024 * 1024 * 1024,
       RestartPolicy: { Name: "no" },
+      CapDrop: ["NET_RAW", "MKNOD"],
     });
     expect(host.PortBindings).toBeUndefined();
+    expect(host.Privileged).toBeUndefined();
+    expect(host.CapAdd).toBeUndefined();
     expect(JSON.stringify(host)).not.toContain("docker.sock");
     expect(host.Mounts).toEqual([
       { Type: "volume", Source: volumeName(BOT), Target: "/workspace" },

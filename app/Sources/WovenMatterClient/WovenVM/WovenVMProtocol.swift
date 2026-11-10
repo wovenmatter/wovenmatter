@@ -196,6 +196,25 @@ public struct WovenVMPaths: Sendable, Equatable {
         let digest = SHA256.hash(data: Data(root.path.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
         return URL(fileURLWithPath: "/private/tmp/wovenmatter-vm-\(getuid())-\(digest)", isDirectory: true)
     }
+
+    /// Creates `directory` (mode 0700) when missing, then requires it to be a
+    /// real directory owned by this user that nobody else can enter. The short
+    /// socket path lives in the shared /private/tmp, where another local user
+    /// could create it first and receive the engine and control connections.
+    public static func preparePrivateDirectory(_ directory: URL, create: Bool = true) throws {
+        let path = directory.path
+        if create, mkdir(path, 0o700) != 0, errno != EEXIST {
+            throw WovenVMError.unavailable("The Woven VM socket directory could not be created.")
+        }
+        var info = stat()
+        guard lstat(path, &info) == 0 else { throw WovenVMError.unavailable("The Woven VM socket directory is missing.") }
+        guard info.st_mode & S_IFMT == S_IFDIR, info.st_uid == getuid() else {
+            throw WovenVMError.invalid("\(path) belongs to another user or is not a directory. Remove it, then start the Woven VM again.")
+        }
+        if info.st_mode & 0o077 != 0, chmod(path, 0o700) != 0 {
+            throw WovenVMError.invalid("\(path) could not be made private.")
+        }
+    }
 }
 
 /// launchd owns the helper: unexpected exits restart it, and a clean exit

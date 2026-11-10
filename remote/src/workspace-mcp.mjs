@@ -33,7 +33,8 @@ export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localT
   db.exec(`CREATE TABLE IF NOT EXISTS mcp_external_clients (id TEXT PRIMARY KEY, digest TEXT NOT NULL UNIQUE, body TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS mcp_library_connection (id INTEGER PRIMARY KEY CHECK(id=1), envelope TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS mcp_preferences (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS mcp_bot_keys (bot_id TEXT PRIMARY KEY, digest TEXT NOT NULL UNIQUE, body TEXT NOT NULL);`)
+    CREATE TABLE IF NOT EXISTS mcp_bot_keys (bot_id TEXT PRIMARY KEY, digest TEXT NOT NULL UNIQUE, body TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS mcp_bot_revocations (bot_id TEXT PRIMARY KEY, revoked_at TEXT NOT NULL);`)
   const key = typeof secret === 'string' && secret.length >= 16 ? createHash('sha256').update('wovenmatter-workspace-mcp-library-v1\0'+secret).digest() : null
   const sessions = new Map(), controllers = new Set(), taskPolicies=new Map(),inFlight=new Map()
   let stopped = false
@@ -115,16 +116,29 @@ export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localT
     const row=db.prepare('SELECT body FROM mcp_external_clients WHERE digest=?').get(digest)??db.prepare('SELECT body FROM mcp_bot_keys WHERE digest=?').get(digest)
     return row?JSON.parse(row.body):null
   }
-  // One key per bot. Issuing again rotates it; only its digest is stored.
+  // One key per bot. Issuing again rotates it; only its digest is stored. A
+  // bot the user revoked gets no key until reinstated, as on a Mac
+  // (WovenMCPHost.issueBotKey): its runtime's refresh after a 401 is refused.
   function issueBotKey({botID,botName,deviceID}) {
     if(!uuid(botID)||!uuid(deviceID)||typeof botName!=='string'||!botName.trim()||botName.length>256)throw fail(400,'A bot UUID, name and machine identity are required.')
     const id=botID.toLowerCase(),bearerToken=randomBytes(32).toString('base64url')
+    if(db.prepare('SELECT 1 FROM mcp_bot_revocations WHERE bot_id=?').get(id))throw Object.assign(fail(403,'This bot’s Woven tools were revoked. Reinstate it to reconnect.'),{code:'revoked'})
     const scope={id:'bot:'+id,kind:'bot',botID:id,botName:botName.trim().replace(/[\u0000-\u001f\u007f]/g,' '),principal:botPrincipal(deviceID,id),createdAt:new Date(Date.now()).toISOString()}
     db.prepare('INSERT INTO mcp_bot_keys VALUES(?,?,?) ON CONFLICT(bot_id) DO UPDATE SET digest=excluded.digest,body=excluded.body').run(id,hash(bearerToken),JSON.stringify(scope))
     return {endpointURL:endpoint(),bearerToken,principal:scope.principal}
   }
-  function revokeBotKey(botID){if(!uuid(botID))throw fail(400,'Invalid bot identifier.');db.prepare('DELETE FROM mcp_bot_keys WHERE bot_id=?').run(botID.toLowerCase());return {revoked:true}}
+  // `sticky` is the user's revoke; without it the runtime deleted the bot.
+  function revokeBotKey(botID,{sticky=false}={}){
+    if(!uuid(botID))throw fail(400,'Invalid bot identifier.')
+    const id=botID.toLowerCase()
+    // The revocation is recorded before the key goes, so no refresh slips between.
+    if(sticky)db.prepare('INSERT INTO mcp_bot_revocations VALUES(?,?) ON CONFLICT(bot_id) DO NOTHING').run(id,new Date(Date.now()).toISOString())
+    db.prepare('DELETE FROM mcp_bot_keys WHERE bot_id=?').run(id)
+    return {revoked:true}
+  }
+  function reinstateBot(botID){if(!uuid(botID))throw fail(400,'Invalid bot identifier.');db.prepare('DELETE FROM mcp_bot_revocations WHERE bot_id=?').run(botID.toLowerCase());return {reinstated:true}}
   function botKeys(){return db.prepare('SELECT body FROM mcp_bot_keys ORDER BY bot_id').all().map(row=>JSON.parse(row.body))}
+  function revokedBots(){return db.prepare('SELECT bot_id,revoked_at FROM mcp_bot_revocations ORDER BY bot_id').all().map(row=>({botID:row.bot_id,revokedAt:row.revoked_at}))}
   function configureBots(value) {
     const current=settings(),botMCP=normalizedBotSettings({...current.botMCP,...value},current.botMCP)
     db.prepare('INSERT INTO mcp_preferences VALUES(1,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body').run(JSON.stringify({...current,botMCP}))
@@ -308,7 +322,7 @@ export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localT
     } finally {if(requestKey&&inFlight.get(requestKey)===requestController)inFlight.delete(requestKey)}
   }
   return {settings,configureSettings,sessionConnection,prepareTask,resolvePrincipal,handle,libraryStatus,configureLibrary,clearLibrary,provisionClient,clients,revokeClient,
-    issueBotKey,revokeBotKey,botKeys,configureBots,
+    issueBotKey,revokeBotKey,reinstateBot,botKeys,revokedBots,configureBots,
     revokeSession:conversationID=>sessions.delete(conversationID),close(){stopped=true;sessions.clear();taskPolicies.clear();for(const controller of inFlight.values())controller.abort();inFlight.clear();for(const controller of controllers)controller.abort();controllers.clear()}}
 }
 
