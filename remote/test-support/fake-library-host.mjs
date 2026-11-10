@@ -117,6 +117,8 @@ const local = createServer(async (request, response) => {
     return reply(response, 200, { libraryID: body.libraryID, acceptedEventIDs: body.entries.map(entry => entry.eventID), cursor: journal.length })
   }
   if (path === '/v1/publisher/retained/settle') return reply(response, 200, { libraryID: body.libraryID, acceptedEventIDs: body.entries.map(entry => entry.eventID) })
+  const deletion = path.match(/^\/v1\/bots\/([0-9a-f-]{36})\/conversations$/)
+  if (deletion && request.method === 'DELETE' && process.env.FAKE_LIBRARY_BOTS !== '0') { botEntries.push({ deleted: deletion[1] }); return reply(response, 200, { deleted: true }) }
   const bots = path.match(/^\/v1\/bots\/([0-9a-f-]{36})\/entries$/)
   if (bots && process.env.FAKE_LIBRARY_BOTS !== '0') { botEntries.push(body); return reply(response, 200, { conversations: body.conversations.length, entries: body.entries.length }) }
   if (path === '/v1/debug/state') return reply(response, 200, { notes: [...notes.values()], timers: [...timers.values()], settlements, callers: Object.fromEntries(callers), journal, botEntries, adoptions, selfUpdates, signatures })

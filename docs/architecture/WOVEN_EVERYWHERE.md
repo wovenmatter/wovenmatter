@@ -577,6 +577,9 @@ Membership, publishing and bot routes on the local API
   conversations, entries}`, see "Runtime host API"), recorded with
   `WorkspaceDatabase.recordBotConversation(machineID:_:)` under this host's
   member device ID → `{conversations, entries, added}`.
+- `DELETE /v1/bots/{botID}/conversations`: the bot was deleted; marks its
+  conversations deleted with `WorkspaceDatabase.deleteBotConversations(machineID:botID:)`
+  under this host's member device ID (entries stay) → `{deleted: true}`.
 
 **Node server supervision** (`remote/src/library-host.mjs`, wired in
 `server.mjs`). On native Linux hosts the server starts
@@ -976,7 +979,7 @@ reply body. Replies are at most 1 MiB.
 | Request | Body | Reply |
 | --- | --- | --- |
 | `POST /v1/bots-host/mcp-keys` | `{botID, botName}` | `{endpoint, token}`: the bot's Woven MCP key, principal `woven:bot:<machine.deviceID>:<botID>`. The same bot may ask again (after a restart, or a 401 from MCP); the host returns its current key or rotates it. |
-| `DELETE /v1/bots-host/mcp-keys/{botID}` | none | 2xx. Sent when the user purges a bot. |
+| `DELETE /v1/bots-host/mcp-keys/{botID}` | none | 2xx. Sent when the user purges a bot. The host drops the key and marks the bot's library conversations deleted. |
 | `POST /v1/bots-host/previews` | `{botID, port, containerPort}` | `{url}`. `port` is the runtime's loopback activity proxy; the host publishes `http://127.0.0.1:<port>` with Tailscale Serve (its own HTTPS port, inbound only, never Funnel). Idempotent for the same `(botID, port)`; sent again after a runtime restart. |
 | `DELETE /v1/bots-host/previews/{botID}/{port}` | none | 2xx. |
 | `POST /v1/bots-host/inference-credentials` | `{provider}` | `{credential}`, where `credential` is `null` (not connected), `{type: "api_key", key}`, `{type: "oauth", access, expires, accountId?}` (access only; `expires` epoch ms; the host renews, the runtime asks again a minute before expiry), or `{type: "native", configDir, secureStorageDir?}` (Claude subscription: the machine's native Claude runtime directories, which the default agent uses, passed to the Claude Agent SDK as `CLAUDE_CONFIG_DIR` and `CLAUDE_SECURESTORAGE_CONFIG_DIR`; no token material). `provider` is a Woven connection id: `openai-codex`, `openai`, `openrouter`, `opencode-go`, `xai`, `xai-api`, `claude-subscription`, `anthropic`, `exa`, `brave`, `firecrawl`, or `web-search`, which also returns `searchProvider` (`exa`, `brave` or `firecrawl`, the selected web search provider) with that provider's key. |
@@ -1379,8 +1382,12 @@ one request per connection on `control.sock` (e.g.
   revoke and sticks, as on a Mac (`WovenMCPHost`): the bot is recorded in
   `mcp_bot_revocations`, and the runtime's `POST /v1/bots-host/mcp-keys`
   for it answers `403 {error: "revoked"}` until reinstated. The runtime's
-  own `DELETE /v1/bots-host/mcp-keys/{botID}` (a bot it deleted) only drops
-  the key. `GET /v1/bots/status` and the
+  own `DELETE /v1/bots-host/mcp-keys/{botID}` (a bot it deleted) drops the
+  key without that record and, as on a Mac, marks the bot's library
+  conversations deleted: `library.deleteBot(botID)` calls the library host's
+  `DELETE /v1/bots/{botID}/conversations` after the bot's outbox has drained,
+  or appends `{"deleteBot": true}` to the outbox while the host is down, so a
+  replayed batch cannot bring them back. `GET /v1/bots/status` and the
   resources reply use the shape in "Woven server routes for bots" below,
   plus `workspaceEnabled`, `runtimeAvailable`, `engine`, `runtime` and
   `settings`. On Linux `versions.app` is the Woven Matter version that shipped

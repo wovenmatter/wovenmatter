@@ -93,6 +93,8 @@ export function createLibraryClient({ socket, token, timeoutMilliseconds = 120_0
     timersDue: () => json('POST', '/v1/timers/due', { body: {}, timeout: 30_000 }),
     settleTimer: body => json('POST', '/v1/timers/settle', { body, timeout: 15_000 }),
     botEntries: (botID, batch) => json('POST', '/v1/bots/' + encodeURIComponent(botID) + '/entries', { body: batch, timeout: 30_000 }),
+    // Marks a deleted bot's conversations deleted in this library copy (entries stay).
+    deleteBotConversations: botID => json('DELETE', '/v1/bots/' + encodeURIComponent(botID) + '/conversations', { timeout: 30_000 }),
   }
 }
 

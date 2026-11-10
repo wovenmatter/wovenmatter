@@ -129,8 +129,14 @@ export function createBotsService({ configuration, mcp, defaultAgent, serverPort
       json(response, 201, { endpoint: key.endpointURL, token: key.bearerToken, principal: key.principal }); return true
     }
     const revoke = path.match(/^\/v1\/bots-host\/mcp-keys\/([0-9a-fA-F-]{36})$/)
-    // The runtime deleted the bot; a user's revoke is the client route below.
-    if (revoke && method === 'DELETE') { json(response, 200, mcp.revokeBotKey(revoke[1])); return true }
+    // The runtime deleted the bot; a user's revoke is the client route below. Its
+    // library conversations are marked deleted too, as on a Mac, so the transcript
+    // stops syncing as a live conversation.
+    if (revoke && method === 'DELETE') {
+      const result = mcp.revokeBotKey(revoke[1])
+      await library.deleteBot(revoke[1])
+      json(response, 200, result); return true
+    }
     if (path === '/v1/bots-host/previews' && method === 'POST') {
       const body = await readJSON(request, 16384)
       json(response, 201, await previews.publish({ botID: body.botID, port: body.port, containerPort: body.containerPort })); return true
