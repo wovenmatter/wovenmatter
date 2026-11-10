@@ -9,16 +9,17 @@ if [ ! -x "$real" ]; then
   echo "Woven Matter: sudo is not installed on $device." >&2
   exit 1
 fi
-errors=$(mktemp "${TMPDIR:-/tmp}/woven-sudo.XXXXXX" 2>/dev/null) || exec "$real" -n "$@"
-"$real" -n "$@" 2>"$errors"
+# A probe that runs nothing says whether sudo works here without a password.
+# The command itself then runs with its output untouched, so a long-running
+# one streams its errors as they happen and nothing is buffered in a file.
+if reason=$("$real" -n true 2>&1 >/dev/null); then exec "$real" -n "$@"; fi
+"$real" -n "$@"
 status=$?
-cat "$errors" >&2
 if [ "$status" -ne 0 ]; then
-  if grep -qi -e 'password is required' -e 'terminal is required' -e 'no askpass program' "$errors"; then
+  if printf '%s\n' "$reason" | grep -qi -e 'password is required' -e 'terminal is required' -e 'no askpass program'; then
     echo "Woven Matter: This command needs $device's password. Sessions started by Woven Matter cannot answer password prompts, so it stopped instead of waiting. Run it yourself on $device, or use a way that does not need administrator rights." >&2
-  elif grep -qi -e 'no new privileges' "$errors"; then
+  elif printf '%s\n' "$reason" | grep -qi -e 'no new privileges'; then
     echo "Woven Matter: This workspace runs agents with normal user permissions, so sudo is unavailable on $device." >&2
   fi
 fi
-rm -f "$errors"
 exit "$status"
