@@ -63,11 +63,26 @@ final class MobileStoreBackupTests: XCTestCase {
   }
   private func document(_ text: String) throws -> String { try NoteDocument(blocks: [.richText(.init(text: text))]).encoded() }
   /// What a device restored from backup receives: excluded files are absent.
-  private func restore(_ file: URL) throws {
+  /// A flag changed in this process settles asynchronously and can flip back to
+  /// excluded for a while, longer on a loaded machine (see the deadline test
+  /// below). A backup taken later sees the settled flags, so wait until every
+  /// flag has been unchanged for a full second, within 15 s.
+  private func restore(_ file: URL) async throws {
     let root = file.deletingLastPathComponent()
-    for case let url as URL in FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isExcludedFromBackupKey])! {
-      if try excluded(url) { try FileManager.default.removeItem(at: url) }
+    let urls = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil)!.compactMap { $0 as? URL }
+    let deadline = ContinuousClock.now + .seconds(15)
+    var flags = try urls.map(excluded), since = ContinuousClock.now
+    while since.duration(to: .now) < .seconds(1) {
+      guard ContinuousClock.now < deadline else {
+        XCTFail("The backup flags under \(root.lastPathComponent) did not settle within the deadline")
+        throw UnsettledBackupFlag()
+      }
+      try await Task.sleep(for: .milliseconds(5))
+      let now = try urls.map(excluded)
+      if now != flags { flags = now; since = .now }
     }
+    // Deepest first, so removing an excluded directory never hides a file in it.
+    for (url, flag) in zip(urls, flags).reversed() where flag { try FileManager.default.removeItem(at: url) }
     MobileStorePersistence.forgetAppliedBackups()
   }
 
@@ -79,7 +94,7 @@ final class MobileStoreBackupTests: XCTestCase {
     XCTAssertFalse(try excluded(file))
     XCTAssertFalse(try excluded(body(content, in: file)))
     XCTAssertFalse(try excluded(body("An unsent message", in: file)))
-    try restore(file)
+    try await restore(file)
     let restored = try await MobileStore(file: file).snapshot()
     XCTAssertEqual(restored.notes.values.first?.content, content)
     XCTAssertEqual(restored.chatDrafts["new-chat"]?.text, "An unsent message")
@@ -101,7 +116,7 @@ final class MobileStoreBackupTests: XCTestCase {
     XCTAssertFalse(try excluded(body(edited.content, in: file)), "The edit's base is needed to detect a conflict")
     XCTAssertFalse(try excluded(file))
 
-    try restore(file)
+    try await restore(file)
     let reopened = try MobileStore(file: file)
     let state = await reopened.snapshot()
     XCTAssertEqual(state.notes["cached"]?.title, "From the Mac", "Metadata stays discoverable")
@@ -167,7 +182,7 @@ final class MobileStoreBackupTests: XCTestCase {
     XCTAssertFalse(try excluded(file))
     XCTAssertFalse(try excluded(note))
     XCTAssertFalse(try foundationExcluded(file)); XCTAssertFalse(try foundationExcluded(note))
-    try restore(file)
+    try await restore(file)
     let restored = try await MobileStore(file: file).snapshot()
     XCTAssertEqual(restored.notes.values.first?.content, content)
   }
@@ -233,7 +248,7 @@ final class MobileStoreBackupTests: XCTestCase {
       XCTAssertFalse(try excluded(url), url.lastPathComponent)
     }
 
-    try restore(file)
+    try await restore(file)
     let restored = try MobileStore(file: file)
     let journal = await restored.journal.snapshot()
     XCTAssertTrue(journal.entries.values.contains { $0.nativeRecord?.data == Data("native before upgrading".utf8) })
@@ -262,7 +277,7 @@ final class MobileStoreBackupTests: XCTestCase {
     XCTAssertEqual(downloaded.lastPathComponent, local.sha256 + ".blob", "Both records share one blob")
     XCTAssertFalse(try excluded(downloaded), "A pending local file still needs these bytes")
 
-    try restore(root.appendingPathComponent("index.json"))
+    try await restore(root.appendingPathComponent("index.json"))
     let restored = try SavedArtifactStore(directory: root)
     let source = await restored.localURL(id: local.id)
     XCTAssertEqual(try Data(contentsOf: try XCTUnwrap(source)), bytes)
@@ -379,7 +394,7 @@ final class MobileStoreBackupTests: XCTestCase {
 
     _ = try MobileStore(file: file) // Open only; no edit.
     XCTAssertFalse(try excluded(file))
-    try restore(file)
+    try await restore(file)
     let restored = try await MobileStore(file: file).snapshot()
     XCTAssertEqual(restored.chatDrafts["new-chat"]?.text, "Unsent before upgrading")
   }
