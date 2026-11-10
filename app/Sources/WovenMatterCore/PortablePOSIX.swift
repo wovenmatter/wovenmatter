@@ -50,6 +50,19 @@ public enum PortablePOSIX {
     #endif
   }
 
+  /// The connecting process, from the kernel at connect time.
+  public static func peerProcess(_ fd: Int32) -> Int32? {
+    #if canImport(Darwin)
+    var pid: pid_t = 0
+    var length = socklen_t(MemoryLayout<pid_t>.size)
+    return getsockopt(fd, SOL_LOCAL, LOCAL_PEERPID, &pid, &length) == 0 ? pid : nil
+    #else
+    var credentials: (pid_t, uid_t, gid_t) = (0, 0, 0)
+    var length = socklen_t(MemoryLayout<(pid_t, uid_t, gid_t)>.size)
+    return getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &credentials, &length) == 0 ? credentials.0 : nil
+    #endif
+  }
+
   public static func unixAddress(path: String) -> sockaddr_un? {
     var address = sockaddr_un()
     let bytes = Array(path.utf8) + [0]
