@@ -514,7 +514,10 @@ extension CompanionHostLifecycleTests {
         }
         // The unpair still took effect before the page was rejected...
         #expect(try await air.executionStatus(execution) == 401)
-        #expect(failures == 1)
+        // The exchange attempted local revocation. The Air's own change-driven
+        // sync may also learn the unpair from the Mini meanwhile and retry it
+        // (and fail the same way), so more than one attempt is legitimate.
+        #expect(failures >= 1)
         // ...but is recorded as applied only once local revocation succeeds.
         let applied = { air.defaults.stringArray(forKey: "companion.peers.applied-revocations") ?? [] }
         #expect(!applied().contains { $0.hasPrefix(phoneID + ":") })
