@@ -57,6 +57,7 @@ final class WorkspaceDatabaseConnection {
       try createNativeRunArchive()
       try createConversationActivityIndex()
       try migrateLibraryMembers()
+      try migrateMemberToolSessions()
       try migrateBotConversations()
       try migratePairedLibrary()
     } catch {

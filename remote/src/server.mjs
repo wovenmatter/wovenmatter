@@ -250,7 +250,7 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
     }
     if (url.pathname === '/v1/execution/devices' && request.method === 'POST') {
       if (!administrator) return json(response,403,{error:'administrator_required'})
-      return json(response,201,clientExecution.provision(await readJSON(request)))
+      return json(response,201,clientExecution.provision(await readJSON(request),{executionDeviceID:(await memberIdentity())?.deviceID??null}))
     }
     if(url.pathname==='/v1/execution/mcp-settings') {
       if(!administrator)return json(response,403,{error:'administrator_required'})

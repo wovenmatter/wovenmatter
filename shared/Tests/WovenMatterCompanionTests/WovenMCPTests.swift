@@ -6,6 +6,35 @@ import Testing
 struct WovenMCPTests {
   private let requestID = "11111111-1111-4111-8111-111111111111"
 
+  /// Linux's Node server serves the bundled export of this catalog
+  /// (`WovenMCPCatalogExport remote/src/woven-mcp-tools.json`); both list the same tools.
+  @Test func linuxBundledCatalogMatchesThisCatalog() throws {
+    let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+      .deletingLastPathComponent().deletingLastPathComponent()
+    let bundled = try JSONDecoder().decode([WovenMCPToolDefinition].self,
+      from: Data(contentsOf: root.appending(path: "remote/src/woven-mcp-tools.json")))
+    #expect(bundled.map(\.name) == WovenMCPCatalog.tools.map(\.name))
+    for (linux, swift) in zip(bundled, WovenMCPCatalog.tools) { #expect(linux == swift, "\(swift.name) differs") }
+  }
+
+  /// Session management on another workspace: status pages with `before`, send
+  /// steers, stop and respond are mutations, and every one may name a workspace.
+  @Test func sessionManagementToolsNameWorkspaces() throws {
+    let id = "22222222-2222-4222-8222-222222222222", workspace = "33333333-3333-4333-8333-333333333333"
+    let status = try WovenMatterToolCommand(WovenMCPCatalog.request(name: "woven_sessions_status",
+      arguments: .object(["id": .string(id), "workspace": .string(workspace), "before": .string("c1")])).arguments)
+    #expect(status.action == "status" && status.options["workspace"] == workspace && status.options["before"] == "c1" && !status.isMutation)
+    let respond = try WovenMatterToolCommand(WovenMCPCatalog.request(name: "woven_sessions_respond", arguments: .object([
+      "id": .string(id), "interaction": .string("q1"), "answers": .object(["a": .array([.string("yes")])]), "cancelled": .bool(true)])).arguments)
+    #expect(respond.isMutation && respond.options["interaction"] == "q1" && respond.options["cancelled"] == "true")
+    #expect(try JSONDecoder().decode([String: [String]].self, from: Data(respond.required("answers").utf8)) == ["a": ["yes"]])
+    let stop = try WovenMatterToolCommand(WovenMCPCatalog.request(name: "woven_sessions_stop", arguments: .object(["id": .string(id)])).arguments)
+    #expect(stop.isMutation && stop.action == "stop")
+    let list = try WovenMatterToolCommand(WovenMCPCatalog.request(name: "woven_sessions_list", arguments: .object(["workspace": .string(workspace)])).arguments)
+    #expect(list.options["workspace"] == workspace)
+    #expect(throws: WorkspaceToolError.self) { try WovenMatterToolCommand(["sessions", "stop", "--id", id, "--text", "no"]) }
+  }
+
   @Test func computerAndBrowserUseNamesAndCuaTargetsAreCanonical() throws {
     let names = Set(WovenMCPCatalog.tools.map(\.name))
     #expect(names.contains("woven_browser_use") && names.contains("woven_browser_use_cancel"))

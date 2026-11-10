@@ -124,15 +124,17 @@ extension ApplicationModel {
     /// Linux workspace in the synced registry, reached with this Mac's member signature
     /// whichever Mac added it. A Linux host this Mac added that is not in the registry
     /// (a bots-only server) is still reached through its SSH tunnel.
-    fileprivate func remoteBotMachines(thisMacVersion: String?, directory: BotsRemoteDirectory) async -> [BotMachine] {
+    func remoteBotMachines(thisMacVersion: String?, directory: BotsRemoteDirectory) async -> [BotMachine] {
         let members = await memberBotWorkspaces()
+        // A machine whose library schema differs cannot sync with this Mac: it needs Update everything.
+        let schema = try? await dashboardStore?.database.pairedLibrarySchema()
         let signedIDs = Set(members.map(\.id))
         let tunnelled = remoteWorkspaces.workspaces.filter { $0.kind == .host && !signedIDs.contains($0.id.uuidString.lowercased()) }
         let linux = tunnelled.map { configuration in
-            Task { await self.linuxBotMachine(configuration, thisMacVersion: thisMacVersion, directory: directory) }
+            Task { await self.linuxBotMachine(configuration, thisMacVersion: thisMacVersion, schema: schema, directory: directory) }
         }
         let signed = members.map { workspace in
-            Task { await self.memberBotMachine(workspace, thisMacVersion: thisMacVersion, directory: directory) }
+            Task { await self.memberBotMachine(workspace, thisMacVersion: thisMacVersion, schema: schema, directory: directory) }
         }
         var machines: [BotMachine] = []
         for task in linux + signed { machines.append(await task.value) }
@@ -140,14 +142,15 @@ extension ApplicationModel {
     }
 
     /// A Linux host this Mac added, over its SSH tunnel with the installer's bearer.
-    private func linuxBotMachine(_ configuration: RemoteWorkspaceConfiguration, thisMacVersion: String?,
+    private func linuxBotMachine(_ configuration: RemoteWorkspaceConfiguration, thisMacVersion: String?, schema: String?,
                                  directory: BotsRemoteDirectory) async -> BotMachine {
         do {
             let client = try await remoteWorkspaces.botsService(for: configuration)
             let status = try await botsTimeout { try await client.botsStatus() }
             directory.linux[status.machine.deviceID.lowercased()] = configuration.id
             return status.machine(kind: .linux, socket: client.botsSocket, thisMacVersion: thisMacVersion,
-                                  expectedHostFingerprint: await RemoteWorkspaceSSHClient.bundledHostFingerprint())
+                                  expectedHostFingerprint: await RemoteWorkspaceSSHClient.bundledHostFingerprint(),
+                                  thisMacLibrarySchema: schema)
         } catch {
             return BotMachine(id: "linux:" + configuration.id.uuidString.lowercased(), name: configuration.name, kind: .linux,
                               state: .unreachable, message: Self.botsUnavailableText(error))
@@ -155,7 +158,7 @@ extension ApplicationModel {
     }
 
     /// Another Mac or a Linux host from the registry, with signed requests and a signed socket.
-    private func memberBotMachine(_ workspace: CompanionExecutionWorkspace, thisMacVersion: String?,
+    private func memberBotMachine(_ workspace: CompanionExecutionWorkspace, thisMacVersion: String?, schema: String?,
                                   directory: BotsRemoteDirectory) async -> BotMachine {
         let kind: BotMachine.Kind = workspace.kind == .linux ? .linux : .mac
         do {
@@ -166,7 +169,8 @@ extension ApplicationModel {
             directory.members[client.audience] = workspace.id
             let socket = BotSocketEndpoint.signed(client.endpoint.appending(path: "v1/bots/ws"), audience: client.audience)
             return status.machine(kind: kind, socket: socket, thisMacVersion: thisMacVersion,
-                                  expectedHostFingerprint: kind == .linux ? await RemoteWorkspaceSSHClient.bundledHostFingerprint() : nil)
+                                  expectedHostFingerprint: kind == .linux ? await RemoteWorkspaceSSHClient.bundledHostFingerprint() : nil,
+                                  thisMacLibrarySchema: schema)
         } catch {
             return BotMachine(id: "member:" + workspace.id, name: workspace.name, kind: kind,
                               state: .unreachable, message: Self.botsUnavailableText(error))

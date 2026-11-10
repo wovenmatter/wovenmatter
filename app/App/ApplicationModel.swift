@@ -635,6 +635,10 @@ final class ApplicationModel {
             return try await self.handleAutomationTool(callerID: caller, command: command, request: request)
         }
         agentTools?.automationDidDisable = { [weak self] caller in await self?.cancelAutomation(callerID: caller) }
+        agentTools?.memberSessionHandler = { [weak self] request, command, caller in
+            guard let self else { throw CancellationError() }
+            return try await self.handleMemberSessionTool(callerID: caller, command: command, request: request)
+        }
         try await recoverExecutorSetup()
         configureSessionToolSelectionAdapter()
         configureBotsRuntime()

@@ -291,7 +291,11 @@ test('the server accepts signed member requests and rejects wrong keys, replays,
   assert.equal((await signed(phone, 'GET', '/v1/execution')).status, 409)
   // A signed JSON body is checked byte for byte and still parsed by the route.
   const provision = JSON.stringify({ libraryID: randomUUID(), workspaceID: randomUUID(), deviceID: randomUUID(), ownerDeviceID: mac.deviceID, scopes: ['execution'] })
-  assert.equal((await signed(mac, 'POST', '/v1/execution/devices', provision)).status, 201)
+  const enrolled = await signed(mac, 'POST', '/v1/execution/devices', provision)
+  assert.equal(enrolled.status, 201)
+  // The workspace's execution device is this host's member device ID, so
+  // members address it from the registry alone.
+  assert.equal((await enrolled.json()).workspace.executionDeviceID, audience)
   assert.equal((await signed(phone, 'GET', '/v1/execution')).status, 200)
 
   const stranger = { deviceID: phone.deviceID, key: privateKeyFromSeed(strangerSeed) }

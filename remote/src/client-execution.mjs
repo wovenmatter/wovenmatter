@@ -125,7 +125,10 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
     }
   })
   function descriptor() { assertIdentity(); return copy(identity) }
-  function provision(body) {
+  // A new workspace's execution device is this host's member device ID (its
+  // library host's identity), so other members address it from the registry
+  // alone; without a library host it gets its own random ID.
+  function provision(body, { executionDeviceID = null } = {}) {
     if (!identifier(body.libraryID) || !identifier(body.workspaceID) || !identifier(body.deviceID) || !identifier(body.ownerDeviceID)
       || !Array.isArray(body.scopes) || !body.scopes.length || body.scopes.some(scope => !['execution','inference'].includes(scope))) throw fail(400, 'Invalid device enrollment.')
     if (identity && (identity.id !== body.workspaceID || identity.libraryID !== body.libraryID)) throw fail(409, 'This workspace already belongs to a different library.')
@@ -140,7 +143,7 @@ export function createClientExecution({ directory, runtime, kind = 'linux', name
     }
     let nextIdentity
     transaction(() => {
-      nextIdentity = identity ? copy(identity) : { id: body.workspaceID, libraryID: body.libraryID, ownerDeviceID: body.ownerDeviceID, executionDeviceID: randomUUID(),
+      nextIdentity = identity ? copy(identity) : { id: body.workspaceID, libraryID: body.libraryID, ownerDeviceID: body.ownerDeviceID, executionDeviceID: identifier(executionDeviceID) ? executionDeviceID : randomUUID(),
         kind, name: typeof body.workspaceName === 'string' ? body.workspaceName.slice(0,256) : name,
         capabilities: ['execution','historyReplay','idempotentCommands','inference'], journalDeviceIDs: [], revision: 1, deleted: false }
       if (body.endpoint) {

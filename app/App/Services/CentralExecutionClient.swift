@@ -236,6 +236,23 @@ final class CentralExecutionClient {
         try await transport(for: workspace).providers()
     }
 
+    // Direct reads of another member's workspace, for agents that manage the
+    // sessions they started there (`woven_sessions_status`, `_list`, `_respond`).
+    func conversations(workspace: CompanionExecutionWorkspace) async throws -> [CompanionConversation] {
+        try await transport(for: workspace).conversations()
+    }
+    func transcript(workspace: CompanionExecutionWorkspace, conversationID: String, before: String?) async throws -> CompanionTranscript {
+        let transport = try await transport(for: workspace)
+        if let before { return try await transport.transcript(conversationID, before: before) }
+        return try await transport.transcript(conversationID)
+    }
+    func pendingInteractions(workspace: CompanionExecutionWorkspace) async throws -> [CompanionPendingInteraction] {
+        try await transport(for: workspace).pending()
+    }
+    func capabilities(workspace: CompanionExecutionWorkspace, conversationID: String) async throws -> CompanionProvider {
+        try await transport(for: workspace).capabilities(conversationID)
+    }
+
     @discardableResult
     func send(conversationID: String, text: String, expectedRunID: String? = nil,
               beforeDispatch: @escaping @MainActor () throws -> Void = {}) async throws -> CompanionCommandReceipt {

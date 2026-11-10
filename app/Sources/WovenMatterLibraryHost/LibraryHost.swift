@@ -19,7 +19,9 @@ public final class LibraryHost: @unchecked Sendable {
   /// artifacts (spreadsheet and HTML notes) are part of notes. Rendering an
   /// HTML reply needs the caller's active run, which the Node server owns until
   /// Linux session history is written into this library, so it stays there.
-  public static let servedGroups: Set<WorkspaceToolGroup> = [.notes, .history, .calendar, .library]
+  /// Timers live in this library and fire here (`LibraryHostTimers`), so a
+  /// Linux session's or bot's timers need no Mac.
+  public static let servedGroups: Set<WorkspaceToolGroup> = [.notes, .history, .calendar, .library, .timers]
   /// Single library-backed tools of groups this host does not otherwise serve:
   /// session folders are library rows, so a Linux session lists them without
   /// any Mac. The rest of `sessions` stays in the Node server.
@@ -48,6 +50,7 @@ public final class LibraryHost: @unchecked Sendable {
   public let sync: LibraryPeerSync
   private let token: LibraryHostToken
   private let executor: WorkspaceToolExecutor
+  public let timers: LibraryHostTimers
   private let startedAt = Date()
   private let lock = NSLock()
   private var mounts: [(prefix: String, handler: CompanionHTTPResponseHandler)] = []
@@ -69,6 +72,7 @@ public final class LibraryHost: @unchecked Sendable {
     let library = try await database.companionLibraryIdentity()
     identity = try MemberIdentity.loadOrCreate(file: layout.memberKeyFile, deviceID: library.hostDeviceID, kind: .linux)
     members = MemberDirectory(database: database, identity: identity)
+    timers = LibraryHostTimers(database: database, machineID: identity.deviceID)
     try await members.ensureSelf(name: name ?? ProcessInfo.processInfo.hostName, endpoints: endpoints)
     var configuration = LibraryPeerSync.Configuration(version: "wovenmatter-library " + Self.version)
     configuration.presenceInterval = presenceInterval
@@ -182,6 +186,13 @@ public final class LibraryHost: @unchecked Sendable {
         return try .json(try await members.list())
       case "/v1/sync/status":
         return try .json(await sync.status())
+      case "/v1/timers/due":
+        guard request.method == "POST" else { return .error("method_not_allowed", "Use POST.", status: 405) }
+        return try .json(await timers.due())
+      case "/v1/timers/settle":
+        guard request.method == "POST", request.body.count <= 16_384 else { return .error("invalid_request", "POST at most 16 KiB.", status: 400) }
+        try await timers.settle(JSONDecoder().decode(LibraryHostTimers.Settlement.self, from: request.body))
+        return try .json(["settled": true])
       case "/v1/members/sign":
         return try await signForServer(request)
       case "/v1/workspaces":
@@ -417,7 +428,7 @@ public final class LibraryHost: @unchecked Sendable {
       try await database.registerBotCaller(callerID, displayName: String(name.prefix(128)))
       let allowed = Self.allowedTools(groups, context: false)
       let executor = executor
-      let result = await WovenMCPServer.handle(message, contextID: nil, allowedTools: allowed, outsideCaller: true) { call in
+      let result = await WovenMCPServer.handle(message, contextID: nil, allowedTools: allowed, outsideCaller: true, botCaller: true) { call in
         await executor.execute(call, callerID: callerID, handlers: WorkspaceToolHandlers()).bounded()
       }
       guard let result else { return .init(status: 202, body: Data()) }

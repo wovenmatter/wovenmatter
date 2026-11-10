@@ -141,11 +141,14 @@ same commit.
     administration, inference, `/mcp/workspace`), `MemberAudience.serving`
     (shared Swift; Node `createMemberTransport().audienceFor`): the
     registry's `executionDeviceID` when that is an active member, or a Mac
-    workspace's (a Mac's execution device is its member ID); otherwise, for a
-    Linux workspace, the one active `linux` member whose advertised endpoints
-    share the workspace endpoint's `.ts.net` host, because a Linux host's Node
-    server names its own random execution device ID, not its member ID. Two
-    members claiming one host: nobody. A Mac accepts a Linux host's
+    workspace's (a Mac's execution device is its member ID). A Linux host
+    registers a new workspace with its member device ID as `executionDeviceID`
+    too (`clientExecution.provision`, given the library host's identity), so
+    the registry alone names its audience. Only for an older Linux record,
+    whose Node server named its own random execution device ID, the audience
+    falls back to the one active `linux` member whose advertised endpoints
+    share the workspace endpoint's `.ts.net` host. Two members claiming one
+    host: nobody. A Mac accepts a Linux host's
     `/mcp/workspace` call from that serving member as well as from the
     execution device. The installing Mac addresses its first adoption to the
     `memberIdentity.deviceID` it read over SSH. A phone learns the pairing
@@ -595,7 +598,12 @@ tried in sync-status order, online first; another Mac is tried only when the
 request never reached one or was refused before any effect (401, 403, 404,
 426, 503). The Mac accepts the call when the signer serves that non-deleted
 Linux workspace (its execution device, or the member `MemberAudience.serving`
-names) and the conversation belongs to it. Bots
+names) and the conversation belongs to it. A scheduled task's caller record
+(`companion_scheduled_mcp_callers`, written by `/mcp/workspace/prepare`) is not
+synced, so another Mac refuses the task's calls until the session's own row
+reaches it. The Node delegate therefore sends a task's calls to the Mac that
+last prepared it first, and prepares any other Mac (the same idempotent
+request) before asking it, so prepare and call always land on the same Mac. Bots
 cannot use this route (it binds a conversation), so their Mac-only tools are
 unavailable unless the legacy grant exists; their timers are served and fired
 locally. The single-Mac grant
@@ -634,7 +642,9 @@ listed or fired, and a paused, revoked or disabled bot's are skipped.
   MCP and whenever the library host becomes ready. There is no other polling.
 - On a Mac the app's agent tool tick fires the Mac's own timers as before and
   now also delivers a bot's own timers to it (`deliverBotNotification` accepts
-  `timer` deliveries).
+  `timer` deliveries). Its UI shows a bot's timers in that bot's conversation
+  header, by the bot's name (`WorkspaceAgentToolsModel.timers(forBot:on:)`);
+  session views never list them.
 
 Tool execution is `WorkspaceToolExecutor` in `WovenMatterDashboardStore`, the
 same code the Mac app's `WorkspaceAgentToolsModel` now delegates to. Note edits
@@ -685,10 +695,17 @@ hands them to the macOS job, which checks them with
   workspaceKind}, independent: true, receipt}`: the caller does not
   coordinate it. Linux: `remote/src/member-sessions.mjs`; Mac:
   `ApplicationModel+MemberSessions.swift`.
-- **Managing them (Linux).** The Linux server remembers each session a caller
-  created on another workspace (`member_sessions` in its execution database),
+- **Managing them (Linux and Mac).** The Linux server remembers each session a caller
+  created on another workspace (`member_sessions` in its execution database;
+  on a Mac, the local, unsynced `member_tool_sessions` table of its library),
   so these tools name it by `id` alone, or by `id` plus `workspace` for one it
-  did not create. Each is one or more signed calls to the destination's
+  did not create. The Mac's catalog (`WovenMCPCatalog`) is the source of
+  `remote/src/woven-mcp-tools.json` (regenerate it with `WovenMCPCatalogExport`;
+  `WovenMCPTests` checks that they agree). On a Mac,
+  `WorkspaceToolHandlers.memberSession` sends a call for a remembered or named
+  member session to `ApplicationModel+MemberSessions.swift`, which signs it
+  through `CentralExecutionClient` (`SignedExecutionWorkspaceTransport`); a
+  session on that Mac or on a Linux host it manages over SSH stays local. Each is one or more signed calls to the destination's
   execution API (`GET v1/execution/conversations`, `…/conversations/<id>/transcript`,
   `…/capabilities`, `GET v1/execution/interactions`, `POST v1/execution/commands`):
   - `woven_sessions_status {id, workspace?, before?}` → `{session: {id, title,
@@ -713,8 +730,9 @@ hands them to the macOS job, which checks them with
   sessions on its own machine's workspace go through that workspace's own
   execution commands, as another member's would; coordination tools
   (`manage`, `release`, `notifications`, `receipts`) bind a conversation and
-  stay unavailable to bots. The Mac's own catalog does not have these
-  additions yet.
+  stay unavailable to bots. A Mac's bots, which are app-wide callers there,
+  get the same tools from the Mac; `woven_sessions_list` without `workspace`
+  lists a bot's sessions on other workspaces.
 - The iPhone connects directly to every Mac and Linux workspace with its own
   member key. It has no home Mac.
 

@@ -38,6 +38,29 @@ struct BotSessionTests {
         #expect(context.success && context.result == GatewayJSONValue.null)
     }
 
+    /// A bot's own timers appear under the bot (its principal), never under a chat.
+    @Test func aBotsOwnTimersAreListedUnderTheBotOnly() async throws {
+        let fixture = try await FacadeFixture(); defer { fixture.remove() }
+        let tools = try #require(fixture.model.agentTools)
+        let machine = UUID().uuidString.lowercased(), botID = UUID().uuidString.lowercased()
+        _ = try await tools.issueBotKey(machineID: machine, botID: botID, botName: "Builder")
+        let caller = WovenMCPCaller.bot(machineID: machine, botID: botID)
+        let formatter = ISO8601DateFormatter()
+        for (text, offset) in [("Later", 7_200.0), ("Sooner", 600.0)] {
+            let created = await tools.handle(.init(arguments: ["timers", "create", "--text", text, "--at",
+                formatter.string(from: Date().addingTimeInterval(offset))]), callerID: caller)
+            #expect(created.success, "\(created.error ?? "")")
+        }
+        try await tools.reload()
+        #expect(tools.timers(forBot: botID, on: machine).map(\.instruction) == ["Sooner", "Later"])
+        #expect(tools.timers(forBot: UUID().uuidString.lowercased(), on: machine).isEmpty)
+        let chat = try #require(await fixture.model.createLocalACPSession(runtimeKind: .codex))
+        #expect(!tools.timers.contains { $0.sessionID == chat })
+        let paused = try #require(tools.timers(forBot: botID, on: machine).first)
+        await tools.pauseTimer(paused, paused: true)
+        #expect(tools.timers(forBot: botID, on: machine).map(\.instruction) == ["Later", "Sooner"])
+    }
+
     @Test(arguments: 0..<5) func revokingBotDuringSendPreparationPreventsProviderSubmission(attempt: Int) async throws {
         let fixture = try await FacadeFixture(); defer { fixture.remove() }
         let tools = try #require(fixture.model.agentTools)
