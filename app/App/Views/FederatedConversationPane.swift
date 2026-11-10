@@ -18,6 +18,11 @@ struct FederatedConversationPane: View {
     @State private var hasLoadedEarlier = false
     @State private var historyGeneration = UUID()
     private var snapshot: FederatedExecutionSnapshot? { model.federatedExecutionSnapshots[conversation.id] }
+    /// Quick Chat runs only on its iPhone or iPad; every Mac shows its synced history read-only.
+    private var isPhoneHistory: Bool {
+        snapshot?.workspace.kind == .ios || DashboardPairedWorkspaceSidebarModel.isPhoneHistory(
+            owner: model.federatedExecutionOwners[conversation.id], registry: model.executionWorkspaceRegistry)
+    }
     private var runID: String? { snapshot?.transcript?.activeRunID }
     private var messages: [CompanionMessage] {
         let current = snapshot?.transcript?.messages ?? savedMessages.map {
@@ -70,6 +75,12 @@ struct FederatedConversationPane: View {
                 }
                 .onChange(of: conversation.id, initial: true) { _, _ in proxy.scrollTo("federated-bottom", anchor: .bottom) }
             }
+            if isPhoneHistory {
+                Text("Quick Chat history · Continue on its iPhone or iPad")
+                    .font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(20)
+                    .accessibilityIdentifier("federated-quick-chat-history")
+            } else {
             VStack(alignment: .leading, spacing: 12) {
                 if let error = snapshot?.error { Text(error).font(.caption).foregroundStyle(DashboardPalette.mutedForeground).textSelection(.enabled) }
                 ForEach(snapshot?.interactions ?? []) { interaction in
@@ -110,6 +121,7 @@ struct FederatedConversationPane: View {
                         .disabled(sendInProgress || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || snapshot?.online != true || (runID != nil && snapshot?.capability?.canSteer != true))
                 }
             }.padding(20)
+            }
         }
         .onChange(of: snapshot?.online) { _, _ in
             // Switching between the owner's live history and the central archive

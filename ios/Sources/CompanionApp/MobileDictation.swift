@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import AVFoundation
 import WovenMatterCompanion
 
 @MainActor @Observable final class MobileDictationEditor {
@@ -63,6 +64,10 @@ enum MobileTextAdmission { case rejected, insertNatively, applied }
     if session.retainedTranscript != nil { session.insertRetained { editor.ticket()?.insert($0) == true }; return }
     if session.isRecording { stop(); return }
     guard editor.ticket() != nil else { session.error = "Place the cursor in an editable text input first."; return }
+    // Tests and UI fixtures never raise the microphone prompt; nothing would dismiss it.
+    guard CompanionModel.systemPermissionPromptsAllowed || AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
+      session.error = "Dictation is unavailable in this test build."; return
+    }
     session.start()
   }
   func stop() {

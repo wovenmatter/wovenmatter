@@ -330,7 +330,8 @@ final class ExecutionRoutingTests: XCTestCase {
     let created = try XCTUnwrap(model.selectedConversationID)
     XCTAssertEqual(model.executionRecords[created]?.status, "ready")
     XCTAssertEqual(model.executionRecords[created]?.thinkingLevel, "medium", "New chats use the middle supported non-Off level")
-    XCTAssertEqual(model.executionRecords[created]?.permissionMode, .ask, "A new chat saves the mode it starts with, so a later default cannot change it")
+    XCTAssertEqual(model.executionRecords[created]?.permissionMode ?? .defaultMode, .full, "A new chat starts in Full Access unless the draft chose otherwise")
+    XCTAssertEqual(model.deviceChatPermission, .full)
     XCTAssertTrue(model.localRuntimes.isEmpty, "Choosing an agent must not start inference")
     XCTAssertEqual(model.state.transcripts[created]?.messages, [])
     let record = DeviceConversationRecord(id: "first", title: "First", connectionID: connection.id, connection: connection, modelJSON: try descriptor.descriptorJSON(), status: "ready", updatedAt: "")
@@ -346,7 +347,7 @@ final class ExecutionRoutingTests: XCTestCase {
     XCTAssertEqual(saved.conversations[record.id]?.permissionMode, .full)
     guard case .session(let settings) = try await model.readDeviceWorkspace(.session(id: record.id)) else { return XCTFail("Missing settings") }
     XCTAssertEqual(settings.permission, "full")
-    XCTAssertEqual(settings.permissions.map(\.id), ["ask", "full"])
+    XCTAssertEqual(settings.permissions.map(\.id), ["full", "ask"], "Full Access is listed first")
     let changed = await model.performDeviceAction(.configureSession(id: record.id, model: nil, thinking: nil, permission: "ask"))
     XCTAssertTrue(changed)
     XCTAssertEqual(model.executionRecords[record.id]?.permissionMode, .ask)
@@ -412,7 +413,7 @@ final class ExecutionRoutingTests: XCTestCase {
     model.executionRecords[record.id] = record
     let tools = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(model.toolsJSON(for: record).utf8)) as? [[String: Any]])
     let names = Set(tools.compactMap { $0["name"] as? String })
-    XCTAssertEqual(names, ["ask_user"])
+    XCTAssertEqual(names, ["ask_user", "clock"], "Only the always-on native tools remain when every group is off")
     XCTAssertFalse(names.contains { $0.hasPrefix("wovenmatter_") })
     XCTAssertFalse(names.contains("read_note"))
     XCTAssertFalse(names.contains("woven_notes_read"))
@@ -430,7 +431,8 @@ final class ExecutionRoutingTests: XCTestCase {
     XCTAssertFalse(CompanionModel.deviceToolEnabled("woven_computer_use", selection: ["wovenmatter_computer"]))
     XCTAssertTrue(CompanionModel.deviceToolEnabled("woven_notes_read", selection: ["read_note"]))
     XCTAssertFalse(CompanionModel.deviceToolEnabled("woven_notes_create", selection: ["read_note"]))
-    XCTAssertEqual(Set(CompanionModel.deviceToolAccessOptions.map(\.id)), ["woven_notes", "quick_chat_web"])
+    XCTAssertEqual(CompanionModel.deviceToolAccessOptions.map(\.id), ["woven_notes", "woven_timers", "woven_calendar", "quick_chat_web"],
+      "Quick Chat offers notes, timers and reminders, calendar and web; other Woven tools stay with Mac and Linux agents")
     XCTAssertFalse(CompanionModel.deviceMCPTools.contains { $0["name"] as? String == "woven_goals_get" })
     for tool in CompanionModel.deviceMCPTools {
       let schema = try XCTUnwrap(tool["parameters"] as? [String: Any])
@@ -599,6 +601,11 @@ final class ExecutionRoutingTests: XCTestCase {
     let timers = try XCTUnwrap(snapshot?.toolTimers)
     XCTAssertEqual(timers.values.filter { !$0.removed }.map(\.sessionID), [chat.id])
     XCTAssertEqual(model.quickChatSessionIDs, [chat.id])
+    // The reminder goes to the injected in-memory center; the system permission prompt never appears.
+    let notifications = try XCTUnwrap(model.quickChatNotifications.center as? RecordingQuickChatNotificationCenter)
+    XCTAssertEqual(notifications.requests.values.map { $0.content.userInfo["conversationID"] as? String }, [chat.id])
+    XCTAssertEqual(notifications.authorizationRequests, 1)
+    XCTAssertFalse(CompanionModel.systemPermissionPromptsAllowed, "Test hosts never raise system permission prompts")
     XCTAssertTrue(CompanionModel.timerDeliveryPrompt("Tea").contains("Tea"))
     let clock = try result(await model.performDeviceTool(try CompanionModel.toolJSON(["name": "clock", "conversationID": chat.id, "arguments": [:]])))
     XCTAssertTrue(clock.text.hasPrefix("Now: "), clock.text)

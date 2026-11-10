@@ -152,6 +152,9 @@ import CompanionInference
   var quickChatSearchResults: [String: Set<String>] = [:]
   /// Web search requests; tests inject a fixture transport.
   @ObservationIgnored var searchTransport: any InferenceHTTPTransport = InferenceURLSessionTransport()
+  /// Timer reminder notifications; test models and UI fixtures record them in memory so
+  /// nothing asks the system for notification permission.
+  @ObservationIgnored var quickChatNotifications = QuickChatNotifications.shared
   var unconfirmedSendConversationID: String?
   var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
   var backgroundFallbackToken: UUID?
@@ -194,6 +197,7 @@ import CompanionInference
     #else
     fixture = false
     #endif
+    if isolatedTestHost || fixture { quickChatNotifications = QuickChatNotifications(center: RecordingQuickChatNotificationCenter()) }
     if isolatedTestHost {
       // App-hosted unit tests must never open the real library or Keychain.
       // Explicit injected models exercise networking against their fake transport.
@@ -222,6 +226,7 @@ import CompanionInference
   }
   init(store: MobileStore, transport: any CompanionTransport) {
     fixture = false; isolatedTestHost = false; automaticSynchronization = false; self.store = store
+    quickChatNotifications = QuickChatNotifications(center: RecordingQuickChatNotificationCenter())
     executionWorkspaceID = "central"
     engine = MobileSyncEngine(store: store, transport: transport)
     online = true
@@ -844,7 +849,7 @@ import CompanionInference
         workspaceProviders[workspace.id] = [.init(id: "pi", runtimeKind: "pi", displayName: "Pi Durable", available: true)]
         workspaceReachable[workspace.id] = false
       }
-      if scenario == "workspace-organization" {
+      if scenario == "workspace-organization" || scenario == "remote-folders-empty" {
         let mac = "aaaaaaaa-1111-4111-8111-111111111111", linux = "bbbbbbbb-2222-4222-8222-222222222222", ipad = "cccccccc-3333-4333-8333-333333333333"
         executionWorkspaces = [
           .init(id: mac, libraryID: "fixture", ownerDeviceID: mac, kind: .mac, name: "Studio Mac", capabilities: ["history.central.v1"]),

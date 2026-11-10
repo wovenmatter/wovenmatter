@@ -62,7 +62,7 @@ extension CompanionModel {
     guard let reminders = try? await store.reconcileTimerReminders(sessionIDs: quickChatSessionIDs) else { return }
     if await store.calendar.allRecords() != previous { calendarRevision &+= 1 }
     let titles = Dictionary(uniqueKeysWithValues: reminders.map { ($0.timerID, executionRecords[$0.sessionID]?.title ?? "Quick Chat") })
-    await QuickChatNotifications.shared.schedule(reminders, chatTitles: titles)
+    await quickChatNotifications.schedule(reminders, chatTitles: titles)
   }
 
   /// A notification tap opens the chat that set the timer.
@@ -73,14 +73,63 @@ extension CompanionModel {
   }
 }
 
+/// The notification calls timer reminders need. Production uses the system
+/// center; tests and UI fixtures use `RecordingQuickChatNotificationCenter`,
+/// because nothing dismisses an authorization prompt there and CI hangs.
+@MainActor protocol QuickChatNotificationCenter: AnyObject {
+  func requestAuthorization() async -> Bool
+  func pendingIdentifiers() async -> [String]
+  func removePending(_ identifiers: [String])
+  func add(_ request: UNNotificationRequest) async throws
+}
+
+@MainActor final class SystemQuickChatNotificationCenter: QuickChatNotificationCenter {
+  private var center: UNUserNotificationCenter { .current() }
+  func requestAuthorization() async -> Bool {
+    // A last guard: no test host or UI fixture ever shows the system prompt.
+    guard CompanionModel.systemPermissionPromptsAllowed else { return false }
+    return (try? await center.requestAuthorization(options: [.alert, .sound])) ?? false
+  }
+  func pendingIdentifiers() async -> [String] { await center.pendingNotificationRequests().map(\.identifier) }
+  func removePending(_ identifiers: [String]) { center.removePendingNotificationRequests(withIdentifiers: identifiers) }
+  func add(_ request: UNNotificationRequest) async throws { try await center.add(request) }
+}
+
+/// Keeps scheduled requests in memory and never asks the system for anything.
+@MainActor final class RecordingQuickChatNotificationCenter: QuickChatNotificationCenter {
+  private(set) var authorizationRequests = 0
+  private(set) var requests: [String: UNNotificationRequest] = [:]
+  func requestAuthorization() async -> Bool { authorizationRequests += 1; return true }
+  func pendingIdentifiers() async -> [String] { requests.keys.sorted() }
+  func removePending(_ identifiers: [String]) { for id in identifiers { requests[id] = nil } }
+  func add(_ request: UNNotificationRequest) async throws { requests[request.identifier] = request }
+}
+
+extension CompanionModel {
+  /// Unit tests, app-hosted test runs and UI fixtures never trigger system
+  /// permission prompts (notifications, camera, microphone): nothing dismisses them.
+  static var systemPermissionPromptsAllowed: Bool {
+    let environment = ProcessInfo.processInfo.environment
+    if environment["XCTestConfigurationFilePath"] != nil || environment["XCTestBundlePath"] != nil
+      || NSClassFromString("XCTestCase") != nil || NSClassFromString("XCTest.XCTestCase") != nil { return false }
+    #if DEBUG
+    if environment["WOVENMATTER_UI_FIXTURE"] == "1" || DeviceRuntimeSmoke.enabled { return false }
+    #endif
+    return true
+  }
+}
+
 /// Owns this app's timer notifications. Other notification requests are untouched.
 @MainActor final class QuickChatNotifications: NSObject, UNUserNotificationCenterDelegate {
-  static let shared = QuickChatNotifications()
+  static let shared = QuickChatNotifications(center: SystemQuickChatNotificationCenter())
   /// Set by the app; called with the chat a tapped timer belongs to.
   var open: ((String) -> Void)?
+  let center: any QuickChatNotificationCenter
   /// Nil until this process has reconciled once, so stale requests from an earlier launch are removed.
   private var lastScheduled: [String: Date]?
   private var authorizationRequested = false
+
+  init(center: any QuickChatNotificationCenter) { self.center = center }
 
   func install() { UNUserNotificationCenter.current().delegate = self }
 
@@ -89,14 +138,13 @@ extension CompanionModel {
     let upcoming = Array(reminders.prefix(60))
     let wanted = Dictionary(uniqueKeysWithValues: upcoming.map { ($0.notificationID, $0.fireAt) })
     guard wanted != lastScheduled else { return }
-    let center = UNUserNotificationCenter.current()
     if !upcoming.isEmpty, !authorizationRequested {
       authorizationRequested = true
-      _ = try? await center.requestAuthorization(options: [.alert, .sound])
+      _ = await center.requestAuthorization()
     }
-    let pending = await center.pendingNotificationRequests().map(\.identifier)
+    let pending = await center.pendingIdentifiers()
     let stale = pending.filter { $0.hasPrefix(MobileTimerReminder.notificationPrefix) && wanted[$0] == nil }
-    center.removePendingNotificationRequests(withIdentifiers: stale)
+    center.removePending(stale)
     for reminder in upcoming where lastScheduled?[reminder.notificationID] != reminder.fireAt || !pending.contains(reminder.notificationID) {
       let content = UNMutableNotificationContent()
       content.title = chatTitles[reminder.timerID] ?? "Quick Chat"
