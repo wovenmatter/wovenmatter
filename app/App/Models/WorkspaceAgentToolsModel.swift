@@ -252,6 +252,21 @@ final class WorkspaceAgentToolsModel {
         catch { self.error = error.localizedDescription }
     }
 
+    /// A bot's own timers (its schedule): this Mac keeps and fires them for its
+    /// own bots. Their target is the bot's principal, never a chat, so session
+    /// views do not list them; the bot's conversation does, by its name.
+    func timers(forBot botID: String, on machineID: String) -> [WorkspaceSessionTimer] {
+        Self.botTimers(timers, machineID: machineID, botID: botID)
+    }
+
+    /// Active timers soonest first, then paused ones.
+    nonisolated static func botTimers(_ timers: [WorkspaceSessionTimer], machineID: String, botID: String) -> [WorkspaceSessionTimer] {
+        let principal = WovenMCPCaller.bot(machineID: machineID, botID: botID)
+        return timers.filter { $0.sessionID == principal }.sorted {
+            ($0.isPaused ? 1 : 0, $0.nextFireAt, $0.id) < ($1.isPaused ? 1 : 0, $1.nextFireAt, $1.id)
+        }
+    }
+
     /// SwiftUI reads a published value; loading is done by observeSession/reload.
     func policy(for sessionID: String) -> WorkspaceSessionTools {
         sessionPolicies[sessionID] ?? WorkspaceSessionTools(enabled: [])
