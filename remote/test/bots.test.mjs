@@ -103,21 +103,25 @@ test('a user revoke of a bot MCP key sticks through the runtime refresh until re
 
 test('bot conversation batches validate and upsert by id, and the journal keeps every batch durably', async t => {
   const memory = createMemoryBotLibraryAdapter(), library = createBotConversationLibrary(memory), botID = randomUUID()
-  const batch = (entries, extra = {}) => ({ bot: { id: botID, name: 'Helper' }, conversations: [{ conversationId: 'main', kind: 'main' }, { conversationId: 't1', kind: 'thread', parentConversationId: 'main', title: 'Plan' }], entries, ...extra })
+  const batch = (entries, extra = {}) => ({ bot: { id: botID, name: 'Helper' }, conversations: [{ conversationId: 1, kind: 'main' }, { conversationId: 2, kind: 'thread', parentConversationId: 1, forkedAt: 3, title: 'Plan' }], entries, ...extra })
   await assert.rejects(library.writeBotEntries('bot', batch([])), /bot UUID/)
   await assert.rejects(library.writeBotEntries(botID, { ...batch([]), bot: { id: randomUUID(), name: 'x' } }), /name its bot/)
-  await assert.rejects(library.writeBotEntries(botID, batch([{ id: 'a', conversationId: 'missing', role: 'user', text: 'hi' }])), /listed conversation/)
-  await assert.rejects(library.writeBotEntries(botID, batch(Array.from({ length: 201 }, (_, i) => ({ id: 'e' + i, conversationId: 'main', role: 'user', text: '' }))) ), /at most 200/)
-  assert.deepEqual(await library.writeBotEntries(botID, batch([{ id: 'a', conversationId: 'main', role: 'user', text: 'hi', createdAt: 1 }])), { conversations: 2, entries: 1 })
+  await assert.rejects(library.writeBotEntries(botID, batch([{ id: 1, conversationId: 9, role: 'user', text: 'hi' }])), /listed conversation/)
+  // The runtime's ids are integers, as the library host decodes them (Swift Int).
+  await assert.rejects(library.writeBotEntries(botID, batch([{ id: 'a', conversationId: 1, role: 'user', text: 'hi' }])), /needs an id/)
+  await assert.rejects(library.writeBotEntries(botID, { ...batch([]), conversations: [{ conversationId: 'main', kind: 'main' }] }), /Invalid bot conversations/)
+  await assert.rejects(library.writeBotEntries(botID, { ...batch([]), conversations: [{ conversationId: 1, kind: 'thread', parentConversationId: 'main' }] }), /Invalid bot conversations/)
+  await assert.rejects(library.writeBotEntries(botID, batch(Array.from({ length: 201 }, (_, i) => ({ id: i, conversationId: 1, role: 'user', text: '' }))) ), /at most 200/)
+  assert.deepEqual(await library.writeBotEntries(botID, batch([{ id: 4, conversationId: 1, role: 'user', text: 'hi', createdAt: 1 }])), { conversations: 2, entries: 1 })
   // Metadata-only batches and resends are valid; an entry id upserts.
   assert.deepEqual(await library.writeBotEntries(botID.toUpperCase(), batch([])), { conversations: 2, entries: 0 })
-  await library.writeBotEntries(botID, batch([{ id: 'a', conversationId: 'main', role: 'user', text: 'hi', createdAt: 1 }, { id: 'b', conversationId: 't1', role: 'assistant', text: 'ok' }]))
-  assert.deepEqual(memory.entries(botID).map(entry => entry.id), ['a', 'b'])
-  assert.equal(memory.bot(botID).conversations.get('t1').title, 'Plan')
+  await library.writeBotEntries(botID, batch([{ id: 4, conversationId: 1, role: 'user', text: 'hi', createdAt: 1 }, { id: 5, conversationId: 2, role: 'assistant', text: 'ok' }]))
+  assert.deepEqual(memory.entries(botID).map(entry => entry.id), [4, 5])
+  assert.equal(memory.bot(botID).conversations.get(2).title, 'Plan')
 
   const directory = temporary(t)
   const journal = createBotConversationLibrary(createJournalBotLibraryAdapter(directory))
-  await journal.writeBotEntries(botID, batch([{ id: 'a', conversationId: 'main', role: 'user', text: 'hi' }]))
+  await journal.writeBotEntries(botID, batch([{ id: 4, conversationId: 1, role: 'user', text: 'hi' }]))
   await journal.writeBotEntries(botID, batch([]))
   const lines = readFileSync(join(directory, botID + '.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line))
   assert.deepEqual(lines.map(line => line.entries.length), [1, 0])
@@ -310,9 +314,9 @@ test('the runtime host API requires its own bearer and serves keys, previews, cr
   assert.equal((await f.call(`/v1/bots-host/previews/${botID}/41000`, { method: 'DELETE' })).body.removed, true)
   const credentials = await f.call('/v1/bots-host/inference-credentials', { method: 'POST', body: { provider: 'anthropic' } })
   assert.equal(credentials.body.credential.type, 'api_key'); assert.deepEqual(f.credentialsCalls, [{ provider: 'anthropic' }])
-  const entries = await f.call(`/v1/bots-host/conversations/${botID}/entries`, { method: 'POST', body: { bot: { id: botID, name: 'Helper' }, conversations: [{ conversationId: 'main', kind: 'main' }], entries: [{ id: 'e1', conversationId: 'main', role: 'assistant', text: 'hi' }] } })
+  const entries = await f.call(`/v1/bots-host/conversations/${botID}/entries`, { method: 'POST', body: { bot: { id: botID, name: 'Helper' }, conversations: [{ conversationId: 1, kind: 'main' }], entries: [{ id: 7, conversationId: 1, role: 'assistant', text: 'hi' }] } })
   assert.deepEqual(entries.body, { conversations: 1, entries: 1 })
-  assert.deepEqual(f.memory.entries(botID).map(entry => entry.id), ['e1'])
+  assert.deepEqual(f.memory.entries(botID).map(entry => entry.id), [7])
 })
 
 test('the user revoke route sticks and the runtime cannot get a new key until reinstated', async t => {
