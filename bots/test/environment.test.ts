@@ -8,8 +8,8 @@ import { BACKGROUND_CONTEXT, withCancel } from "@earendil-works/chord/context";
 import { FileError } from "@earendil-works/pi-durable/env";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runningWork } from "../src/environment/container.ts";
-import { StreamDemuxer } from "../src/environment/engine-api.ts";
-import { helperArchive, imageTag } from "../src/environment/images.ts";
+import { EngineError, StreamDemuxer } from "../src/environment/engine-api.ts";
+import { BUILD_OUTPUT_TAIL_BYTES, ensureImage, helperArchive, imageTag } from "../src/environment/images.ts";
 import { PreviewManager } from "../src/environment/previews.ts";
 import { AgentConnection, RemoteExecutionEnv } from "../src/environment/remote.ts";
 import { createTar } from "../src/environment/tar.ts";
@@ -318,6 +318,56 @@ describe("engine streams and archives", () => {
     expect(text).toContain("node_modules/@earendil-works/pi-durable/package.json");
     expect(text.lastIndexOf(".complete")).toBeGreaterThan(text.lastIndexOf("pi-durable"));
     expect((await helperArchive()).hash).toBe(hash);
+  });
+
+  /** An engine whose builds print `lines` and fail with `failures[attempt]`, if any. */
+  function buildingEngine(lines: (attempt: number) => string[], failures: (string | undefined)[]) {
+    const engine = {
+      builds: 0,
+      imageExists: async () => false,
+      build: async (_context: Buffer, _tags: readonly string[], options: { log?: (line: string) => void } = {}) => {
+        const attempt = engine.builds++;
+        for (const line of lines(attempt)) options.log?.(line);
+        const failure = failures[attempt];
+        if (failure) throw new EngineError(`image build failed: ${failure}`);
+      },
+    };
+    return engine;
+  }
+  const imageDir = fileURLToPath(new URL("../image/", import.meta.url));
+
+  it("keeps the end of a failed image build's output in the log and the error", async () => {
+    const noise = Array.from({ length: 4000 }, (_, index) => `step output ${index} ${"x".repeat(40)}`);
+    const engine = buildingEngine(
+      () => [...noise, "E: Unable to locate package nonexistent-package"],
+      ["The command '/bin/sh -c apt-get install -y nonexistent-package' returned a non-zero code: 100"],
+    );
+    const logs: string[] = [];
+    const failure = await ensureImage(engine as never, "woven-bots-test", (line) => logs.push(line), imageDir).catch(
+      (error: unknown) => error,
+    );
+    expect(failure).toBeInstanceOf(EngineError);
+    expect((failure as Error).message).toContain("returned a non-zero code: 100");
+    expect((failure as Error).message).toContain("Unable to locate package nonexistent-package");
+    const output = logs.find((line) => line.includes("build output")) ?? "";
+    expect(output).toContain("Unable to locate package nonexistent-package");
+    expect(output).not.toContain("step output 0 ");
+    expect(Buffer.byteLength(output)).toBeLessThan(BUILD_OUTPUT_TAIL_BYTES + 200);
+    expect(engine.builds).toBe(1);
+  });
+
+  it("retries an image build once when packages could not be fetched", async () => {
+    const fetchFailure = "E: Failed to fetch http://deb.debian.org/debian/pool/main/c/curl.deb  Temporary failure resolving 'deb.debian.org'";
+    const engine = buildingEngine((attempt) => (attempt === 0 ? [fetchFailure] : ["ok"]), ["returned a non-zero code: 100"]);
+    const logs: string[] = [];
+    const tag = await ensureImage(engine as never, "woven-bots-test", (line) => logs.push(line), imageDir);
+    expect(tag).toMatch(/^woven-bots-test:/);
+    expect(engine.builds).toBe(2);
+    expect(logs.some((line) => line.includes("retrying once"))).toBe(true);
+    // A second fetch failure is final.
+    const stubborn = buildingEngine(() => [fetchFailure], ["code: 100", "code: 100"]);
+    await expect(ensureImage(stubborn as never, "woven-bots-test", () => {}, imageDir)).rejects.toThrow(/Temporary failure resolving/);
+    expect(stubborn.builds).toBe(2);
   });
 });
 
