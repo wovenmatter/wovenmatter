@@ -166,6 +166,15 @@ struct LibraryHostTests {
     #endif
   }
 
+  @Test func waitedOnWorkAvoidsAPriorityLinuxRefuses() {
+    // Linux maps userInitiated to a nice value an unprivileged host may not set.
+    #if os(Linux)
+    #expect(PortablePOSIX.waitedOnQoS == .default)
+    #else
+    #expect(PortablePOSIX.waitedOnQoS == .userInitiated)
+    #endif
+  }
+
   @Test func healthAndMountsOnLoopbackAndTokenOnTheSocket() async throws {
     let fixture = try await HostFixture(); defer { fixture.remove() }
     let health = try send("GET", "/v1/health", port: fixture.port)
