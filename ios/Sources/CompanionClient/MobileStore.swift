@@ -57,6 +57,9 @@ public struct MobileStoreState: Codable, Equatable, Sendable {
   public var toolNoteVersions: [MobileToolNoteVersion]?
   public var toolTimers: [String: MobileToolTimer]?
   public var pendingFolderDeletions: [String: CompanionFolder]?
+  /// Clean notes a move to another host re-created there: if that host
+  /// deleted one, the deletion is applied instead of a conflict.
+  public var rebindRecreatedNoteIDs: Set<String>?
   public init() {}
   public func isDirty(_ id: String) -> Bool { outbox.contains { $0.mutation.resourceID == id } || conflicts[id] != nil }
 }
@@ -383,6 +386,7 @@ public actor MobileStore {
           }
         }
         if mutation.kind == .deleteNote { next.notes.removeValue(forKey: mutation.resourceID); next.pendingNoteDeletions?.removeValue(forKey: mutation.resourceID) }
+        if mutation.kind == .createNote { next.rebindRecreatedNoteIDs?.remove(mutation.resourceID) }
         if mutation.kind == .deleteFolder { next.folders.removeValue(forKey: mutation.resourceID); next.pendingFolderDeletions?.removeValue(forKey: mutation.resourceID) }
         next.outbox.removeAll { $0.mutation.operationID == result.operationID }
       case .conflict, .notFound, .invalid:
@@ -401,7 +405,8 @@ public actor MobileStore {
         }
         // Re-creating an unchanged copy of a note the host deleted (after a
         // move to another host): the deletion wins, as it would have there.
-        if mutation.kind == .createNote, result.status == .notFound, result.deleted == true, let local = next.notes[mutation.resourceID],
+        if mutation.kind == .createNote, result.status == .notFound, result.deleted == true,
+           next.rebindRecreatedNoteIDs?.remove(mutation.resourceID) != nil, let local = next.notes[mutation.resourceID],
            local.title == mutation.title, local.content == mutation.content, local.folderID == mutation.folderID {
           next.outbox.removeAll { $0.mutation.resourceID == mutation.resourceID }
           Self.remoteDeletion(mutation.resourceID, state: &next)

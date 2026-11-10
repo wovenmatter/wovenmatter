@@ -11,7 +11,7 @@ import WovenMatterCore
 
 /// The trust model (docs/architecture/WOVEN_EVERYWHERE.md, "Trust model"):
 /// signer times never decide which side of a dispute wins.
-@Suite("Member trust")
+@Suite("Member trust", .serialized)
 struct MemberTrustTests {
   private static func identity(_ kind: MemberKind) -> MemberIdentity {
     MemberIdentity(deviceID: UUID().uuidString.lowercased(), kind: kind, key: .init())

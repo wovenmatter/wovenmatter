@@ -440,16 +440,16 @@ struct LibraryHostTests {
     }
     let one = try await HostFixture(transport: transport), two = try await HostFixture(transport: transport)
     defer { one.remove(); two.remove() }
-    routes.hosts = ["one.test": one.host, "two.test": two.host]
+    routes.hosts = ["one.tail1.ts.net": one.host, "two.tail1.ts.net": two.host]
     let macRoot = one.directory.appending(path: "mac")
     try FileManager.default.createDirectory(at: macRoot, withIntermediateDirectories: true)
     let macDatabase = try await WorkspaceDatabase(url: macRoot.appending(path: "workspace.sqlite"))
     let mac = MemberDirectory(database: macDatabase, identity: try MemberIdentity.loadOrCreate(file: macRoot.appending(path: "mac.key"),
       deviceID: try await macDatabase.companionLibraryIdentity().hostDeviceID, kind: .mac), cacheLifetime: 0)
-    try await mac.ensureSelf(name: "Offline Mac", endpoints: [URL(string: "https://mac.test/")!])
+    try await mac.ensureSelf(name: "Offline Mac", endpoints: [URL(string: "https://mac.tail1.ts.net/wovenmatter")!])
     for (fixture, name) in [(one, "one"), (two, "two")] {
       try await mac.add(deviceID: fixture.host.identity.deviceID, kind: .linux, name: name, publicKey: fixture.host.identity.publicKey,
-                        endpoints: [URL(string: "https://\(name).test/wovenmatter/")!])
+                        endpoints: [URL(string: "https://\(name).tail1.ts.net/wovenmatter/")!])
     }
     for fixture in [one, two] {
       #expect(try send("POST", "/v1/members/adopt", unix: fixture.socket, headers: ["Authorization": "Bearer " + fixture.token],

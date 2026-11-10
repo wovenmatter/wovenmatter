@@ -189,7 +189,8 @@ public enum LibraryMemberResolver {
       var changed = true
       while changed {
         changed = false
-        for (index, entry) in entries.enumerated() where entry.addedBy != entry.deviceID && entry.deviceID != own
+        // Entries for this device only add vouchers (its name and endpoints): its anchor fixes its key.
+        for (index, entry) in entries.enumerated() where entry.addedBy != entry.deviceID
           && !conflicted.contains(entry.deviceID) && entry.addedAt > (cut[entry.deviceID] ?? 0) {
           guard let adder = trusted[entry.addedBy], adder.kind == .mac, !conflicted.contains(entry.addedBy),
                 anchors[entry.deviceID].map({ $0.publicKey == entry.publicKey }) ?? true,

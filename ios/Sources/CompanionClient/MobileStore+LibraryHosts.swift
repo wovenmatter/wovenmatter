@@ -89,6 +89,7 @@ extension MobileStore {
           var created = local; created.revision = 0
           next.notes[id] = created; next.bases.removeValue(forKey: id)
           next.outbox.append(.init(mutation: Self.mutation(for: created, kind: .createNote, deviceID: deviceID)))
+          next.rebindRecreatedNoteIDs = (next.rebindRecreatedNoteIDs ?? []).union([id])
         } else {
           next.notes.removeValue(forKey: id); next.bases.removeValue(forKey: id); next.uncachedNoteIDs.remove(id)
         }
