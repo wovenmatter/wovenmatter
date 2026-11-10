@@ -190,7 +190,7 @@ extension WorkspaceDatabaseConnection {
   /// The principal for a signed request from a Linux member: allowed only for
   /// the non-deleted Linux execution workspace that member executes. `serving`
   /// is the member that serves the workspace's endpoint (`MemberAudience`),
-  /// since a Linux host's Node server names its own execution device ID.
+  /// since an older Linux record names its Node server's own execution device ID.
   public func companionWorkspaceMCPMember(workspaceID: String, deviceID: String, serving: String? = nil) throws -> CompanionWorkspaceMCPPrincipal {
     try withLock {
       guard let workspace = try federationWorkspaceUnlocked(workspaceID), !workspace.deleted, workspace.kind == .linux,

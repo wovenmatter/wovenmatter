@@ -222,6 +222,8 @@ extension ApplicationModel {
             let delivery = try await database.reserveToolDelivery(sourceID: callerID,
                 targetID: command.required("id", allowPositional: true), text: command.required("text"), requestID: request.requestID)
             return try await dispatchToolDelivery(delivery)
+        case "stop", "respond":
+            return try await handleLocalSessionControl(callerID: callerID, command: command, request: request)
         case "manage":
             let outcome = try await database.requestCoordinationAccess(sourceID: callerID,
                 targetID: command.required("id", allowPositional: true), purpose: command.required("purpose"),

@@ -207,10 +207,17 @@ public enum WovenMCPCatalog {
     add("history runs", fields("conversation") + page)
     add("history trace", [id] + fields("kind since until") + page, required: "id")
     add("history events", filters + fields("search") + page)
-    add("sessions list", fields("search folder") + [scope, field("sort", choices: ["newest", "oldest"])] + page)
-    add("sessions status", [id], required: "id", description: "Read status and coordination epoch. Permission, question and authentication states require the user; status never grants approval.")
+    // Sessions on other workspaces are managed with signed calls to their
+    // execution API (Mac and Linux alike); `workspace` names one by ID.
+    let workspace = field("workspace")
+    let elsewhere = " Sessions you created on another workspace are reached there; name workspace for any other."
+    add("sessions list", fields("search folder") + [scope, field("sort", choices: ["newest", "oldest"]), workspace] + page)
+    add("sessions status", [id, field("before"), workspace], required: "id", description: "Read status and coordination epoch. Permission, question and authentication states require the user; status never grants approval. For a session on another workspace (one you created there, or one named with workspace) it returns its state, pending questions and recent transcript; page older messages with before.")
     add("sessions create", fields("title text purpose harness model thinking folder workspace directory") + [field("independent", type: "boolean", flag: true)], required: "title text purpose", mutation: true, description: "Create a conversation and normally begin coordination. Inherit destination defaults unless overridden. Permissions and enabled tools come only from user controls. Pending approval is not approval; retry the identical requestID after the user resolves it.")
-    add("sessions send", [id, field("text")], required: "id text", mutation: true)
+    add("sessions send", [id, field("text"), workspace], required: "id text", mutation: true, description: "Send a message to a session, or steer its running turn when its harness can." + elsewhere)
+    add("sessions stop", [id, workspace], required: "id", mutation: true, description: "Stop the running turn of a session on this or another workspace." + elsewhere)
+    add("sessions respond", [id, field("interaction"), field("option-id"), field("answers", type: "object", json: true), field("cancelled", type: "boolean", flag: true), workspace],
+        required: "id interaction", mutation: true, description: "Answer a pending question or approval of a session (woven_sessions_status lists them): optionID for an offered option, answers for questions (question ID to selected values), or cancelled. Permission approvals stay with the user unless the session’s workspace grants full access.")
     add("sessions manage", [id, field("purpose"), field("no-notify", type: "boolean", flag: true)], required: "id purpose", mutation: true)
     add("sessions release", [id, field("epoch")], required: "id epoch", mutation: true)
     add("sessions notifications", [id, field("epoch"), field("enabled", type: "boolean")], required: "id epoch enabled", mutation: true)
