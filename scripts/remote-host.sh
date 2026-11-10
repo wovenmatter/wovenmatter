@@ -209,6 +209,14 @@ def inventory(paths):
     return result
 
 LIBRARY_MAX_BYTES=1024**3
+def library_shipped(release):
+    # Every host holds a library copy, so a release without this machine's library
+    # host binary cannot be installed: the host would have no member identity.
+    arch={'x86_64':'x86_64','aarch64':'aarch64','arm64':'aarch64'}.get(platform.machine())
+    if not arch: return False
+    directory=Path(release)/'host/library'/('linux-'+arch)
+    return any((directory/name).is_file() and not (directory/name).is_symlink() for name in ('wovenmatter-library.gz','wovenmatter-library'))
+LIBRARY_MISSING='This host release has no library host for this machine, so it could not hold a library copy or join your devices. Build it with scripts/build-linux-library.sh, then rebuild Woven Matter.'
 def library_binary(release):
     arch={'x86_64':'x86_64','aarch64':'aarch64','arm64':'aarch64'}.get(platform.machine())
     if not arch: return None
@@ -724,7 +732,7 @@ def install(workspace_id,requested_port,mode,fingerprint,updating=False,roles=No
     saved_links={p:os.readlink(p) if p.is_symlink() else None for p in links}
     old_active=run(['systemctl','--user','is-active','--quiet',UNIT_NAME]).returncode==0
     old_enabled=run(['systemctl','--user','is-enabled','--quiet',UNIT_NAME]).returncode==0
-    activated=False; library_backup=None
+    activated=False; library_backup=None; node_root=None; created_node=False
     try:
         archive=stage/'bundle.tar.gz'
         with archive.open('wb') as output:
@@ -742,6 +750,7 @@ def install(workspace_id,requested_port,mode,fingerprint,updating=False,roles=No
             fail('runtime_record_mismatch','The host manifest runtime versions disagree.',78)
         locked=json.loads((release/'default-agent/package-lock.json').read_text())['packages']['node_modules/playwright-core']['version']
         if locked!=versions['playwrightVersion']: fail('runtime_record_mismatch','The Chromium tooling must match the committed lockfile.',78)
+        if not library_shipped(release): fail('library_missing',LIBRARY_MISSING,78)
         arch={'x86_64':'x64','aarch64':'arm64','arm64':'arm64'}.get(platform.machine())
         if not arch: fail('unsupported_architecture','Native hosts support amd64 and arm64 only.',78)
         node_version=versions['nodeVersion']
@@ -757,7 +766,7 @@ def install(workspace_id,requested_port,mode,fingerprint,updating=False,roles=No
             node_stage=stage/'node'; safe_extract(node_archive,node_stage)
             children=list(node_stage.iterdir())
             if len(children)!=1 or not (children[0]/'bin/node').is_file(): fail('invalid_node_archive','The Node archive layout was invalid.',78)
-            os.replace(children[0],node_root)
+            os.replace(children[0],node_root); created_node=True
         if text(run([node_root/'bin/node','--version']))!='v'+node_version: fail('node_runtime_mismatch','The installed Node runtime differs from its pinned record.',78)
         environment={**os.environ,'PATH':str(node_root/'bin')+':'+':'.join(harness_path()),'npm_config_cache':str(ROOT/'workspace/.wovenmatter/npm-cache')}
         environment.pop('WOVENMATTER_API_TOKEN',None)
@@ -819,17 +828,17 @@ def install(workspace_id,requested_port,mode,fingerprint,updating=False,roles=No
         run(['systemctl','--user','stop',UNIT_NAME])
         activated=True
         library=library_binary(destination)
-        if library:
-            # Migrate with the old server stopped and before switching releases.
-            # A failure, or any later one, restores the database and the old release.
-            progress('library')
-            owned_directory(ROOT/'library')
-            library_backup=stage/'library-backup'; library_backup.mkdir(mode=0o700)
-            for name in LIBRARY_DATABASE:
-                if (ROOT/'library'/name).is_file(): shutil.copy2(ROOT/'library'/name,library_backup/name)
-            migrated=run([library,'--data-root',ROOT,'--migrate-only','--harness-catalog',destination/'harnesses/catalog.json'],timeout=900)
-            if migrated.returncode or b'"event":"migrated"' not in migrated.stdout:
-                fail('library_migration_failed','The library database could not be migrated; the previous version was restored.',70)
+        if not library: fail('library_missing',LIBRARY_MISSING,78)
+        # Migrate with the old server stopped and before switching releases.
+        # A failure, or any later one, restores the database and the old release.
+        progress('library')
+        owned_directory(ROOT/'library')
+        library_backup=stage/'library-backup'; library_backup.mkdir(mode=0o700)
+        for name in LIBRARY_DATABASE:
+            if (ROOT/'library'/name).is_file(): shutil.copy2(ROOT/'library'/name,library_backup/name)
+        migrated=run([library,'--data-root',ROOT,'--migrate-only','--harness-catalog',destination/'harnesses/catalog.json'],timeout=900)
+        if migrated.returncode or b'"event":"migrated"' not in migrated.stdout:
+            fail('library_migration_failed','The library database could not be migrated; the previous version was restored.',70)
         atomic_link(ROOT/'current',destination)
         atomic_link(ROOT/'node/current',node_root)
         if roles['workspace']: atomic_link(ROOT/'browsers/current',browser_root)
@@ -837,7 +846,7 @@ def install(workspace_id,requested_port,mode,fingerprint,updating=False,roles=No
         # until they pass, nothing has served or synchronized the migrated
         # database, so a failure may still restore the backup. Starting the
         # library host below commits the update (docs: "Host updates").
-        private_file(ENV_FILE,render_environment({**settings,'WOVENMATTER_LIBRARY':'0'} if library else settings))
+        private_file(ENV_FILE,render_environment({**settings,'WOVENMATTER_LIBRARY':'0'}))
         private_file(UNIT,unit.encode())
         run(['systemctl','--user','daemon-reload'],check=True)
         run(['systemctl','--user','enable','--now',UNIT_NAME],check=True)
@@ -864,14 +873,13 @@ def install(workspace_id,requested_port,mode,fingerprint,updating=False,roles=No
         # cannot be assumed to open the migrated database). Later trouble is
         # reported with the new version left installed.
         activated=False
-        if library:
-            private_file(ENV_FILE,render_environment(settings))
-            run(['systemctl','--user','restart',UNIT_NAME],check=True)
-            if not wait_healthy(port,fingerprint): fail('host_health_failed','The new version is installed but its service did not become healthy with the library host; the migrated library was kept.',70)
-            # The server records the library host's identity once it is ready.
-            deadline=time.monotonic()+30
-            while member_identity() is None and time.monotonic()<deadline: time.sleep(.5)
-            verify_user_files(snapshot)
+        private_file(ENV_FILE,render_environment(settings))
+        run(['systemctl','--user','restart',UNIT_NAME],check=True)
+        if not wait_healthy(port,fingerprint): fail('host_health_failed','The new version is installed but its service did not become healthy with the library host; the migrated library was kept.',70)
+        # The server records the library host's identity once it is ready.
+        deadline=time.monotonic()+30
+        while member_identity() is None and time.monotonic()<deadline: time.sleep(.5)
+        verify_user_files(snapshot)
         if roles['bots']:
             # After activation: the server stays installed if the engine step
             # fails, and bots-enable retries it without a second install.
@@ -899,6 +907,10 @@ def install(workspace_id,requested_port,mode,fingerprint,updating=False,roles=No
             if old_enabled: run(['systemctl','--user','enable',UNIT_NAME])
             else: run(['systemctl','--user','disable',UNIT_NAME])
             if old_active: run(['systemctl','--user','start',UNIT_NAME])
+        # A Node runtime this attempt downloaded that no release uses is removed;
+        # one an earlier install verified stays for the next attempt.
+        if created_node and node_root and os.path.realpath(ROOT/'node/current')!=os.path.realpath(node_root):
+            shutil.rmtree(node_root,ignore_errors=True)
         verify_user_files(snapshot)
         raise
     finally:

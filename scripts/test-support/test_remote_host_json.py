@@ -6,6 +6,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tarfile
 import tempfile
@@ -38,7 +39,7 @@ class HostFixtures(unittest.TestCase):
         # Never read a real engine on the machine running these tests.
         self.m.BOTS_ETC=self.home/'etc/wovenmatter-bots'; self.m.BOTS_VAR=self.home/'var/lib/wovenmatter-bots'
         self.m.BOTS_HELPER=self.home/'usr/local/lib/wovenmatter-bots/bots-engine'
-        self.engine_calls=[]; self.fail_migration=False; self.migrations=[]; self.service_starts=[]
+        self.engine_calls=[]; self.fail_migration=False; self.migrations=[]; self.service_starts=[]; self.node_archive=None
     def tearDown(self):
         for patcher in reversed(self.patchers): patcher.stop()
         self.temp.cleanup()
@@ -55,7 +56,8 @@ class HostFixtures(unittest.TestCase):
             elif command=='uninstall': self.m.BOTS_ETC.joinpath('instance.json').unlink()
             output=b'{"ok":true}\n'
         elif args[0]=='curl':
-            Path(args[args.index('--output')+1]).write_bytes(b'docker-fixture')
+            output_path=Path(args[args.index('--output')+1])
+            output_path.write_bytes(self.node_archive if output_path.name=='node.tar.gz' and self.node_archive else b'docker-fixture')
         elif args[0]=='sudo':
             if args[2:4]==['tailscale','set']:
                 self.tail_operator=args[4].removeprefix('--operator=')
@@ -244,8 +246,8 @@ class HostFixtures(unittest.TestCase):
         content=b'tampered'; manifest['files']['src/server.mjs']['sha256']=hashlib.sha256(content).hexdigest()
         path=self.archive([('src/server.mjs',content,tarfile.REGTYPE,''),('manifest.json',json.dumps(manifest).encode(),tarfile.REGTYPE,'')])
         with self.assertRaises(self.m.Failure): self.m.safe_extract(path,self.home/'tampered',fp)
-    def install_bundle(self,bots=False,library=False,release_version=None,packed_library=None):
-        versions={'nodeVersion':'26.12.1','playwrightVersion':'1.64.1','nodeSHA256':{'linux-x64':'a'*64},
+    def install_bundle(self,bots=False,library=True,release_version=None,packed_library=None,node_sha256='a'*64):
+        versions={'nodeVersion':'26.12.1','playwrightVersion':'1.64.1','nodeSHA256':{'linux-x64':node_sha256},
             'dockerVersion':'29.9.3','dockerSHA256':{'linux-x64':hashlib.sha256(b'docker-fixture').hexdigest(),'linux-arm64':'b'*64}}
         files={'host/runtime-versions.json':json.dumps(versions).encode(),
             'default-agent/package-lock.json':json.dumps({'packages':{'node_modules/playwright-core':{'version':'1.64.1'}}}).encode(),
@@ -253,7 +255,7 @@ class HostFixtures(unittest.TestCase):
             'npm-runtime/package.json':(ROOT/'remote/npm-runtime/package.json').read_bytes(),
             'npm-runtime/package-lock.json':(ROOT/'remote/npm-runtime/package-lock.json').read_bytes()}
         if bots: files.update({'bots/package.json':b'{"version":"0.1.0"}','bots/package-lock.json':b'{}','bots/src/cli.ts':b'fixture','host/bots-engine.py':b'# fixture helper\n'})
-        if library: files['host/library/linux-x86_64/wovenmatter-library']=b'fixture library host'
+        if library and packed_library is None: files['host/library/linux-x86_64/wovenmatter-library']=b'fixture library host'
         if packed_library is not None:
             # As build-linux-library.sh ships it: the gzip and the uncompressed binary's SHA-256.
             binary,recorded=packed_library
@@ -269,6 +271,11 @@ class HostFixtures(unittest.TestCase):
         path=self.archive([(name,data,tarfile.REGTYPE,'') for name,data in files.items()]+[('manifest.json',json.dumps(manifest).encode(),tarfile.REGTYPE,'')])
         data=path.read_bytes(); stream=self.home/'stream'; stream.write_bytes((TOKEN+'\n').encode()+data)
         node=self.m.ROOT/'node/26.12.1/bin/node'; node.parent.mkdir(parents=True,exist_ok=True); node.write_bytes(b'fixture')
+        # Every host runs its library host, which records this identity once ready.
+        if library or packed_library is not None:
+            self.m.LIBRARY_STATE.mkdir(parents=True,exist_ok=True)
+            identity=self.m.LIBRARY_STATE/'identity.json'
+            if not identity.exists(): identity.write_text(json.dumps({'deviceID':'6f1c2a5e-8b3d-4c7a-9e21-0d4b5c6a7f80'}))
         return fp,stream
     def test_install_update_and_failed_selftest_restore_all_activation_state(self):
         self.m.ROOT.mkdir(parents=True)
@@ -562,7 +569,7 @@ class HostFixtures(unittest.TestCase):
         fp,stream=self.install_bundle(library=True); self.m.TOKEN=''
         self.m.health=lambda *a:{'serviceFingerprint':fp,'runtimeKind':'host'}
         identity={'deviceID':'6f1c2a5e-8b3d-4c7a-9e21-0d4b5c6a7f80','kind':'linux','name':'Fixture','publicKey':'FcjTkjz8DN0RYScE/kWqgsa7w7ns8c2d0RfOoCRv1n0=','libraryEndpoint':'https://fixture.test.ts.net:10000/wovenmatter'}
-        self.m.LIBRARY_STATE.mkdir(parents=True); (self.m.LIBRARY_STATE/'identity.json').write_text(json.dumps(identity))
+        self.m.LIBRARY_STATE.mkdir(parents=True,exist_ok=True); (self.m.LIBRARY_STATE/'identity.json').write_text(json.dumps(identity))
         source=open(stream,'rb'); saved_fd=None
         try:
             try: saved_fd=os.dup(3)
@@ -590,7 +597,7 @@ class HostFixtures(unittest.TestCase):
     def library_update_fixture(self):
         self.m.ROOT.mkdir(parents=True)
         fp,stream=self.install_bundle(library=True); self.m.TOKEN=''
-        self.m.LIBRARY_STATE.mkdir(parents=True); (self.m.LIBRARY_STATE/'identity.json').write_text(json.dumps({'deviceID':'6f1c2a5e-8b3d-4c7a-9e21-0d4b5c6a7f80'}))
+        self.m.LIBRARY_STATE.mkdir(parents=True,exist_ok=True); (self.m.LIBRARY_STATE/'identity.json').write_text(json.dumps({'deviceID':'6f1c2a5e-8b3d-4c7a-9e21-0d4b5c6a7f80'}))
         self.m.health=lambda *a:{'serviceFingerprint':fp,'runtimeKind':'host'}
         source=self.feed(stream)
         self.m.install('fixture','7337','fullRoot',fp)
@@ -649,7 +656,7 @@ class HostFixtures(unittest.TestCase):
         fp,stream=self.install_bundle(packed_library=(binary,hashlib.sha256(binary).hexdigest())); self.m.TOKEN=''
         self.m.health=lambda *a:{'serviceFingerprint':fp,'runtimeKind':'host'}
         # The installer waits for the library host's identity; this one is already known.
-        self.m.LIBRARY_STATE.mkdir(parents=True); (self.m.LIBRARY_STATE/'identity.json').write_text(json.dumps({'deviceID':'6f1c2a5e-8b3d-4c7a-9e21-0d4b5c6a7f80'}))
+        self.m.LIBRARY_STATE.mkdir(parents=True,exist_ok=True); (self.m.LIBRARY_STATE/'identity.json').write_text(json.dumps({'deviceID':'6f1c2a5e-8b3d-4c7a-9e21-0d4b5c6a7f80'}))
         source=self.feed(stream)
         self.m.install('fixture','7337','fullRoot',fp)
         unpacked=self.m.ROOT/'releases'/fp/'host/library/linux-x86_64/wovenmatter-library'
@@ -667,6 +674,47 @@ class HostFixtures(unittest.TestCase):
         self.assertEqual(error.exception.code,'library_verification_failed')
         self.assertFalse(unpacked.exists())
         self.assertEqual([path.name for path in directory.iterdir() if path.name.startswith('.')],[])
+    def stream_install(self,stream,*args,**kwargs):
+        source=open(stream,'rb'); saved_fd=None
+        try:
+            try: saved_fd=os.dup(3)
+            except OSError: pass
+            os.dup2(source.fileno(),3)
+            return self.m.install(*args,**kwargs)
+        finally:
+            if saved_fd is not None: os.dup2(saved_fd,3); os.close(saved_fd)
+            source.close()
+    def test_a_release_without_this_machines_library_host_is_refused_before_anything_changes(self):
+        self.m.ROOT.mkdir(parents=True)
+        fp,stream=self.install_bundle(bots=True,library=False); self.m.TOKEN=''
+        self.m.health=lambda *a:{'serviceFingerprint':fp,'runtimeKind':'host'}
+        with self.assertRaises(self.m.Failure) as error: self.stream_install(stream,'bots','7337','user',fp,roles='bots')
+        self.assertEqual(error.exception.code,'library_missing')
+        self.assertIn('build-linux-library.sh',error.exception.detail)
+        self.assertFalse(self.m.RECORD.exists()); self.assertFalse((self.m.ROOT/'current').exists())
+        self.assertFalse(any(call[:2]==['systemctl','--user'] and call[2] in ('stop','enable') for call in self.calls))
+        self.assertEqual(self.engine_calls,[])
+        # Another machine's binary is not this one's.
+        release=self.home/'release'; packed=release/'host/library/linux-x86_64/wovenmatter-library.gz'
+        packed.parent.mkdir(parents=True); packed.write_bytes(b'fixture')
+        self.assertTrue(self.m.library_shipped(release))
+        with mock.patch.object(self.m.platform,'machine',return_value='aarch64'):
+            self.assertFalse(self.m.library_shipped(release))
+    def test_a_failed_install_removes_the_node_runtime_it_downloaded(self):
+        self.m.ROOT.mkdir(parents=True)
+        node=io.BytesIO()
+        with tarfile.open(fileobj=node,mode='w:gz') as archive:
+            entry=tarfile.TarInfo('node-v26.12.1-linux-x64/bin/node'); data=b'fixture node'; entry.size=len(data); entry.mode=0o700
+            archive.addfile(entry,io.BytesIO(data))
+        self.node_archive=node.getvalue()
+        fp,stream=self.install_bundle(node_sha256=hashlib.sha256(self.node_archive).hexdigest()); self.m.TOKEN=''
+        shutil.rmtree(self.m.ROOT/'node')
+        self.bad_npm_vendor=True
+        with self.assertRaises(self.m.Failure) as error: self.stream_install(stream,'fixture','7337','fullRoot',fp)
+        self.assertEqual(error.exception.code,'npm_security_verification_failed')
+        self.assertTrue(any(call[0]=='curl' and 'node-v26.12.1-linux-x64.tar.gz' in call[-3] for call in self.calls))
+        self.assertFalse((self.m.ROOT/'node/26.12.1').exists())
+        self.assertFalse(self.m.RECORD.exists())
     def test_uninstall_removes_only_the_recorded_library_route(self):
         self.save_install(); (self.m.ROOT/'releases').mkdir(); self.m.UNIT.parent.mkdir(parents=True); self.m.UNIT.write_text('fixture')
         endpoint='fixture.test.ts.net:10000'
