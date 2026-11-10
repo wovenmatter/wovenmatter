@@ -4,19 +4,15 @@ import WovenMatterCompanion
 
 extension CompanionModel {
   /// Groups content by the workspace that owns it. Folder bindings and registry
-  /// rows name the same device with or without a `device:`/`remote:` prefix; this
-  /// is display grouping only and never decides execution ownership.
+  /// rows name the same device with or without a `device:`/`remote:` prefix, and
+  /// the central Mac's folders name the owner its registry row lists as
+  /// `folderOwnerID`; this is display grouping only and never decides execution ownership.
   func canonicalWorkspaceID(_ id: String) -> String {
     if id == "local" || id == "device" { return Self.displayWorkspaceID(deviceWorkspaceID) }
     if id == "central", let central = centralExecutionWorkspace { return Self.displayWorkspaceID(central.id) }
-    return Self.displayWorkspaceID(id)
+    return CompanionExecutionWorkspace.displayOwner(of: id, in: executionWorkspaces) ?? Self.displayWorkspaceID(id)
   }
-  static func displayWorkspaceID(_ value: String) -> String {
-    for prefix in ["device:", "remote:"] where value.hasPrefix(prefix) {
-      if let id = UUID(uuidString: String(value.dropFirst(prefix.count))) { return id.uuidString.lowercased() }
-    }
-    return UUID(uuidString: value)?.uuidString.lowercased() ?? value
-  }
+  static func displayWorkspaceID(_ value: String) -> String { CompanionExecutionWorkspace.displayID(value) }
   func folderOwner(_ folder: CompanionFolder) -> String? { folder.execution.map { canonicalWorkspaceID($0.workspaceID) } }
   /// Notes belong to their folder's workspace; unfiled notes appear in All Workspaces.
   func noteOwner(_ note: CompanionNote) -> String? {

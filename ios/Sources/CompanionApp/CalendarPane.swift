@@ -157,9 +157,9 @@ struct CalendarEventSheet: View {
       Picker("Session folder", selection: Binding(get: { draft.task?.folderID ?? "" }, set: { draft.task?.folderID = $0.isEmpty ? nil : $0 })) {
         Text("No folder").tag("")
         ForEach(model.folders.filter { folder in
-          guard let owner = folder.execution?.workspaceID else { return true }
+          guard let owner = model.folderOwner(folder) else { return true }
           let selected = draft.task?.workspaceID ?? (model.centralExecutionWorkspace ?? model.folderWorkspaces.first(where: { $0.capabilities.contains("history.central.v1") }))?.id
-          return owner == selected
+          return selected.map(model.canonicalWorkspaceID) == owner
         }) { Text($0.name).tag($0.id) }
       }
       if draft.recurrenceUnit != nil { Toggle("New session each time", isOn: Binding(get: { draft.task?.newSessionEachTime ?? false }, set: { draft.task?.newSessionEachTime = $0 })) }

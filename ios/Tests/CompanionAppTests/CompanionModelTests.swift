@@ -112,6 +112,31 @@ final class CompanionModelTests: XCTestCase {
     XCTAssertEqual(model.selectedFolderWorkspaceID, registryID)
   }
 
+  /// The central Mac's registry id and host device id are generated apart from
+  /// the `device:<dashboard device id>` its existing folders are bound to.
+  @MainActor func testCentralMacFoldersGroupUnderItsWorkspaceThroughPublishedFolderOwner() {
+    let model = CompanionModel()
+    let registryID = UUID().uuidString.lowercased(), hostDeviceID = UUID().uuidString.lowercased()
+    let folderOwner = "device:" + UUID().uuidString.lowercased()
+    var mac = CompanionExecutionWorkspace(id: registryID, libraryID: "library", ownerDeviceID: hostDeviceID, kind: .mac, name: "Mac Mini",
+                                          capabilities: ["history.central.v1"], executionDeviceID: hostDeviceID)
+    let folder = CompanionFolder(id: "launch", name: "Launch research", execution: .init(workspaceID: folderOwner, rootPath: "/Users/me/Launch"))
+    let note = CompanionNote(id: "pilot", folderID: folder.id, title: "Pilot checklist", content: "")
+    model.state.folders[folder.id] = folder; model.state.notes[note.id] = note
+    model.executionWorkspaces = [mac]
+    XCTAssertTrue(model.folderWorkspaceGroups.contains { $0.name == "Unavailable workspace" }, "A Mac that does not name its folder owner leaves them unplaced")
+
+    mac.folderOwnerID = folderOwner
+    model.executionWorkspaces = [mac]
+    XCTAssertEqual(model.folderWorkspaceGroups.map(\.id), [model.canonicalWorkspaceID(model.deviceWorkspaceID), registryID])
+    XCTAssertFalse(model.folderWorkspaceGroups.contains { $0.name == "Unavailable workspace" })
+    XCTAssertEqual(model.folderOwner(folder), registryID)
+    XCTAssertEqual(model.noteOwner(note), registryID)
+    XCTAssertTrue(model.routeOwnsFolder(workspaceID: registryID, folderID: folder.id), "The Mac's agents may start chats in its folders")
+    XCTAssertEqual(model.workspaceRoute(for: folderOwner), registryID)
+    XCTAssertEqual(model.state.folders[folder.id]?.execution?.workspaceID, folderOwner, "Stored bindings are not rewritten")
+  }
+
   @MainActor func testRecentsCompareActualTimesAcrossFractionalSecondsAndOffsets() {
     let model = CompanionModel()
     model.state.notes["fraction"] = .init(id: "fraction", title: "Fraction", content: "", updatedAt: "2026-10-30T10:00:00.500Z")

@@ -765,6 +765,21 @@ hands them to the macOS job, which checks them with
   lists a bot's sessions on other workspaces.
 - The iPhone connects directly to every Mac and Linux workspace with its own
   member key. It has no home Mac.
+- **Folder owners.** A folder's `execution.workspaceID` names the workspace
+  whose files it is bound to: `device:<id>` (an iPhone, or a library client's
+  secondary Mac, whose registry id is that `<id>`), `remote:<id>` (a Linux
+  workspace, registry id `<id>`), or, for the central Mac,
+  `device:<dashboard device id>`, which is neither its registry id (a random
+  per-library value) nor its `hostDeviceID`. The central Mac's registry row
+  therefore names that value as `folderOwnerID` (optional, `device:<UUID>`,
+  `.mac` rows only; the library rejects anything else). Devices group a
+  folder under the registry row whose own id matches, else under the live row
+  that names it as `folderOwnerID`
+  (`CompanionExecutionWorkspace.displayOwner(of:in:)`). This is display and
+  routing-choice grouping only; stored folder bindings are never rewritten, so
+  existing folders appear under their Mac once it republishes its row (each
+  registry refresh). A row without the field (an older Mac) leaves its
+  folders under "Unavailable workspace" on the iPhone, as before.
 
 ### iPhone reach
 

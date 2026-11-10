@@ -520,6 +520,11 @@ final class CompanionHostController {
         try await database.savePairedRemoteWorkspaces(model.remoteWorkspaces.workspaces)
         let existing = try await database.companionExecutionWorkspaces()
         let localID = localExecutionWorkspaceID(libraryID: identity.libraryID)
+        // Local folders are bound to `device:<dashboard device id>`, which is
+        // neither `localID` nor the host device ID; naming it lets paired
+        // devices group existing folders under this Mac without rewriting them.
+        let folderOwnerID = (try? await model.executionWorkspaceIdentity(workspaceID: nil))
+            .flatMap { CompanionExecutionWorkspace.isValidFolderOwnerID($0) ? $0 : nil }
         if retiresCopiedExecutionOwners {
             // Upgrade existing snapshots too. New paired owners remain live; copied
             // owners retain their identity for history without becoming connections.
@@ -540,7 +545,8 @@ final class CompanionHostController {
                   kind: .mac, name: DevelopmentLaunch.deviceName(), endpoint: endpoint,
                   capabilities: ["execution.v1", "history.central.v1", "inference.v1"], executionDeviceID: identity.hostDeviceID, developmentInstance: DevelopmentLaunch.instance,
                   // Paired devices show sessions here a clear message when a permission is missing.
-                  macAccess: MacAccessSetupModel.current(keychainReady: model.keychainAccessReady))
+                  macAccess: MacAccessSetupModel.current(keychainReady: model.keychainAccessReady),
+                  folderOwnerID: folderOwnerID)
         ]
         desired += model.remoteWorkspaces.workspaces.map { configuration in
             let id = configuration.id.uuidString.lowercased()
