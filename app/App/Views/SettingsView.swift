@@ -14,6 +14,11 @@ private enum HarnessSettingsOrigin: Equatable {
     }
 }
 
+/// Pages other pages link to. Each returns to the page that opened it.
+private enum CrossLinkedPage: Hashable {
+    case accounts, permissions, wovenMCP, bots
+}
+
 private enum SettingsRoute: Equatable {
     case landing
     case general
@@ -38,9 +43,8 @@ struct SettingsView: View {
     var reservesRailControlSpace = false
     @AppStorage(DashboardTheme.storageKey) private var storedTheme = DashboardTheme.green.rawValue
     @State private var route: SettingsRoute = .landing
-    /// Accounts and Permissions & Access open from several pages and return to where they came from.
-    @State private var accountsOrigin: SettingsRoute = .landing
-    @State private var permissionsOrigin: SettingsRoute = .landing
+    /// Where each cross-linked page was opened from; Back returns there.
+    @State private var origins: [CrossLinkedPage: SettingsRoute] = [:]
     @State private var macAccess = MacAccessSetupModel.shared
 
     private var theme: DashboardTheme {
@@ -65,16 +69,16 @@ struct SettingsView: View {
                 SettingsPermissionsView(
                     model: model,
                     reservesRailControlSpace: reservesRailControlSpace,
-                    backTitle: title(permissionsOrigin),
-                    onBack: { route = permissionsOrigin; permissionsOrigin = .landing }
+                    backTitle: backTitle(.permissions),
+                    onBack: { back(from: .permissions) }
                 )
             case .accounts(let scope):
                 SettingsAccountsView(
                     model: model,
                     initialScope: scope,
                     reservesRailControlSpace: reservesRailControlSpace,
-                    backTitle: title(accountsOrigin),
-                    onBack: { route = accountsOrigin; accountsOrigin = .landing }
+                    backTitle: backTitle(.accounts),
+                    onBack: { back(from: .accounts) }
                 )
             case .agents:
                 SettingsAgentsView(
@@ -91,7 +95,7 @@ struct SettingsView: View {
                     backTitle: backTitle(origin),
                     onBack: { route = origin.route },
                     onOpenAccounts: { accountScope in
-                        openAccounts(accountScope, from: .piDurable(accountScope, origin))
+                        open(.accounts, .accounts(accountScope), from: .piDurable(accountScope, origin))
                     }
                 )
             case .harness(let runtimeKind, let workspaceID, let origin):
@@ -108,8 +112,9 @@ struct SettingsView: View {
                 SettingsWovenMCPView(
                     model: model,
                     reservesRailControlSpace: reservesRailControlSpace,
-                    onBack: { route = .landing },
-                    onOpenPermissions: { openPermissions(from: .wovenMCP) }
+                    backTitle: backTitle(.wovenMCP),
+                    onBack: { back(from: .wovenMCP) },
+                    onOpenPermissions: { open(.permissions, .permissions, from: .wovenMCP) }
                 )
             case .workspaces(let workspaceID):
                 SettingsWorkspacesView(
@@ -126,20 +131,21 @@ struct SettingsView: View {
                 SettingsCompanionView(model: model, host: model.companionHost,
                     reservesRailControlSpace: reservesRailControlSpace,
                     onBack: { route = .landing },
-                    onOpenBots: { route = .bots })
+                    onOpenBots: { open(.bots, .bots, from: .companion) })
             case .backgroundServer:
                 SettingsBackgroundServerView(model: model, reservesRailControlSpace: reservesRailControlSpace, onBack: { route = .landing })
             case .dictation:
                 SettingsDictationView(model: model,
                     reservesRailControlSpace: reservesRailControlSpace, onBack: { route = .landing },
-                    onOpenPermissions: { openPermissions(from: .dictation) })
+                    onOpenPermissions: { open(.permissions, .permissions, from: .dictation) })
             case .bots:
                 SettingsBotsView(
                     model: model,
                     reservesRailControlSpace: reservesRailControlSpace,
-                    onBack: { route = .landing },
+                    backTitle: backTitle(.bots),
+                    onBack: { back(from: .bots) },
                     onOpenMachine: { route = .botsMachine($0) },
-                    onOpenWovenMCP: { route = .wovenMCP }
+                    onOpenWovenMCP: { open(.wovenMCP, .wovenMCP, from: .bots) }
                 )
             case .botsMachine(let machineID):
                 SettingsBotsMachineView(
@@ -184,11 +190,13 @@ struct SettingsView: View {
         .onAppear { openPendingDefaultAgentSettings(); openPendingConnections(); openPendingBotsSettings() }
         .onChange(of: model.pendingBotsSettings) { _, _ in openPendingBotsSettings() }
         .onChange(of: model.pendingConnectionsScope) { _, _ in openPendingConnections() }
+        // Links inside Settings post these too; Back returns to the page that posted them.
         .onReceive(NotificationCenter.default.publisher(for: .init("wovenmatter.open-connections"))) { event in
-            openAccounts(event.object as? String ?? "global", from: .landing)
+            let target = SettingsRoute.accounts(event.object as? String ?? "global")
+            if route != target { open(.accounts, target, from: route) }
         }
         .onReceive(NotificationCenter.default.publisher(for: MacAccessSetupModel.openSettingsNotification)) { _ in
-            if route != .permissions { openPermissions(from: route) }
+            if route != .permissions { open(.permissions, .permissions, from: route) }
         }
         .onChange(of: model.pendingDefaultAgentSettingsScope) { _, _ in openPendingDefaultAgentSettings() }
     }
@@ -201,39 +209,56 @@ struct SettingsView: View {
 
     private func openPendingBotsSettings() {
         guard model.pendingBotsSettings else { return }
-        route = .bots
+        if route != .bots { open(.bots, .bots, from: .landing) }
         model.pendingBotsSettings = false
     }
 
     /// Requests from outside Settings open their page with Back returning to the landing list.
+    /// The window also forwards the in-Settings notifications here; a page that is already
+    /// open keeps the origin its notification recorded.
     private func openPendingConnections() {
         guard let scope = model.pendingConnectionsScope else { return }
         switch scope {
         case "general": route = .general
-        case "permissions": openPermissions(from: .landing)
-        default: openAccounts(scope, from: .landing)
+        case "permissions": if route != .permissions { open(.permissions, .permissions, from: .landing) }
+        default: if route != .accounts(scope) { open(.accounts, .accounts(scope), from: .landing) }
         }
         model.pendingConnectionsScope = nil
     }
 
-    private func openAccounts(_ scope: String, from origin: SettingsRoute) {
-        accountsOrigin = origin
-        route = .accounts(scope)
+    private func open(_ page: CrossLinkedPage, _ target: SettingsRoute, from origin: SettingsRoute) {
+        origins[page] = origin
+        route = target
     }
 
-    private func openPermissions(from origin: SettingsRoute) {
-        permissionsOrigin = origin
-        route = .permissions
+    private func back(from page: CrossLinkedPage) {
+        route = origins[page] ?? .landing
+        origins[page] = nil
+    }
+
+    private func backTitle(_ page: CrossLinkedPage) -> String {
+        title(origins[page] ?? .landing)
     }
 
     /// The page name a Back button shows when it returns to `route`.
     private func title(_ route: SettingsRoute) -> String {
         switch route {
+        case .landing: "Settings"
+        case .general: "General"
+        case .permissions: "Permissions & Access"
+        case .accounts: "Accounts"
+        case .agents: "Agents"
         case .piDurable: "Pi Durable"
-        case .dictation: "Dictation"
+        case .harness(let kind, _, _): kind.displayName
         case .wovenMCP: "Woven MCP"
+        case .workspaces(let id): id.flatMap { model.remoteWorkspaces.configuration(id: $0)?.name } ?? "Workspaces"
+        case .companion: "Apple Devices"
+        case .backgroundServer: "Background Server"
+        case .dictation: "Dictation"
         case .bots: "Bots"
-        default: "Settings"
+        case .botsMachine(let id): machineTitle(id)
+        case .botsSection(_, let section): section.title
+        case .botsResources: "Resources"
         }
     }
 
@@ -275,13 +300,13 @@ struct SettingsView: View {
                     status: macAccess.summary,
                     statusTone: macAccess.remaining.isEmpty ? .good : .warning,
                     icon: { DashboardLucideIcon(glyph: .shieldCheck, size: 15) },
-                    action: { openPermissions(from: .landing) }
+                    action: { open(.permissions, .permissions, from: .landing) }
                 )
                 SettingsDestinationRow(
                     title: "Accounts",
                     detail: "Provider sign-ins, API keys, and web search.",
                     icon: { DashboardLucideIcon(glyph: .keyRound, size: 15) },
-                    action: { openAccounts("global", from: .landing) }
+                    action: { open(.accounts, .accounts("global"), from: .landing) }
                 )
                 SettingsDestinationRow(
                     title: "Agents",
@@ -293,13 +318,13 @@ struct SettingsView: View {
                     title: "Bots",
                     detail: "Where your bots run, their models, and their resources.",
                     icon: { DashboardLucideIcon(glyph: .sparkles, size: 15) },
-                    action: { route = .bots }
+                    action: { open(.bots, .bots, from: .landing) }
                 )
                 SettingsDestinationRow(
                     title: "Woven MCP",
                     detail: "Agent tools, connected apps, bots, and outside access.",
                     icon: { DashboardLucideIcon(glyph: .plug, size: 15) },
-                    action: { route = .wovenMCP }
+                    action: { open(.wovenMCP, .wovenMCP, from: .landing) }
                 )
                 SettingsDestinationRow(
                     title: "Workspaces",

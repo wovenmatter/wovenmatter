@@ -83,7 +83,8 @@ when an intentional design change is accepted.
   opened from a remote workspace's page. Spell **OpenCode** as one word throughout
   the app. Order the main Settings page as General, Permissions & Access, Accounts,
   Agents, Bots, Woven MCP, Workspaces, Apple Devices, Background Server, then
-  Dictation. Accounts and Permissions & Access return to the page that opened them.
+  Dictation. Accounts, Permissions & Access, Woven MCP, and Bots return to the page
+  whose link opened them.
 - **General:** Appearance, Software, and Privacy only. Other settings live on the
   page for what they affect.
 - **Bots:** the Bots section sits above New chat in the navigation rail, using the

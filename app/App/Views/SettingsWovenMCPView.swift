@@ -6,6 +6,7 @@ import WovenMatterCore
 struct SettingsWovenMCPView: View {
     @Bindable var model: ApplicationModel
     var reservesRailControlSpace = false
+    var backTitle = "Settings"
     var onBack: () -> Void
     var onOpenPermissions: () -> Void = MacAccessSetupModel.openSettings
 
@@ -14,6 +15,7 @@ struct SettingsWovenMCPView: View {
             title: "Woven MCP",
             detail: "Tools that agents can use inside Woven Matter.",
             reservesRailControlSpace: reservesRailControlSpace,
+            backTitle: backTitle,
             onBack: onBack
         ) {
             if let tools = model.agentTools {

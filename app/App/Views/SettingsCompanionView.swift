@@ -16,6 +16,7 @@ struct SettingsCompanionView: View {
 
     var body: some View {
         SettingsPage(title: "Apple Devices", reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
+            BotsVersionStatusLink(bots: model.bots, onOpen: onOpenBots)
             if DevelopmentLaunch.isClient {
                 SettingsSection {
                     deviceRow(icon: .mac, title: model.backendReplica.endpoint?.host ?? "Live library", detail: model.backendReplica.status)
@@ -25,7 +26,6 @@ struct SettingsCompanionView: View {
                 SettingsSection {
                     deviceRow(icon: .mac, title: DevelopmentLaunch.deviceName(), detail: "This Mac")
                 }
-                BotsVersionStatusLink(bots: model.bots, onOpen: onOpenBots)
                 if !host.pendingPairingRequests.isEmpty { pairingRequests }
                 if host.pairedDevices.contains(where: { $0.id != host.peerIdentity?.deviceID }) { pairedDevices }
                 if !host.pendingDeviceRevocations.isEmpty { pendingRevocations }

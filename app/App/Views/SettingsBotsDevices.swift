@@ -19,7 +19,12 @@ struct BotsDiscoverDevicesRow: View {
         starting != nil || bots.devices?.contains(where: \.isInstalling) == true
     }
 
+    private var failed: Bool {
+        bots.devices?.contains { if case .failed = $0.state { true } else { false } } == true
+    }
+
     private var value: String? {
+        if failed { return "Needs attention" }
         if installing { return "Installing…" }
         guard let devices = bots.devices else { return nil }
         let waiting = devices.filter { $0.state != .ready }.count
@@ -28,7 +33,9 @@ struct BotsDiscoverDevicesRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            SettingsSummaryRow("Install on another device", value: value) {
+            // Opens on its own when an install is running or failed.
+            SettingsSummaryRow("Install on another device", value: value, tone: failed ? .warning : nil,
+                               initiallyExpanded: failed || installing) {
                 SettingsNote("Finds online Macs and Linux machines on your Tailscale network.")
                 Button(searching ? "Searching…" : "Find devices") { discover() }
                     .buttonStyle(SettingsQuietButtonStyle())
@@ -60,7 +67,7 @@ struct BotsDiscoverDevicesRow: View {
             switch device.state {
             case .installApp:
                 VStack(alignment: .leading, spacing: 2) {
-                    SettingsNote("Install Woven Matter on this Mac first:")
+                    SettingsNote("Install Woven Matter on \(device.displayName) first:")
                     ForEach(Array(BotDiscoveredDevice.macSetupSteps.enumerated()), id: \.offset) { index, step in
                         SettingsNote("\(index + 1). \(step)")
                     }

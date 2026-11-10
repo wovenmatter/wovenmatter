@@ -9,6 +9,7 @@ import WovenMatterDashboardStore
 struct SettingsBotsView: View {
     @Bindable var model: ApplicationModel
     var reservesRailControlSpace = false
+    var backTitle = "Settings"
     let onBack: () -> Void
     let onOpenMachine: (String) -> Void
     let onOpenWovenMCP: () -> Void
@@ -23,6 +24,7 @@ struct SettingsBotsView: View {
             title: "Bots",
             detail: "Bots run on your Macs and Linux machines and use your accounts in Woven Matter.",
             reservesRailControlSpace: reservesRailControlSpace,
+            backTitle: backTitle,
             onBack: onBack
         ) {
             BotsVersionNotice(bots: bots)
@@ -124,7 +126,7 @@ struct SettingsBotsMachineView: View {
         ) {
             if let machine {
                 statusSection(machine)
-                if machine.state != .off { contentSection(machine) }
+                if machine.kind != .thisMac || machine.state != .off { contentSection(machine) }
             } else {
                 SettingsEmpty(bots.loadError ?? "That machine isn't connected.")
             }
@@ -236,14 +238,17 @@ struct SettingsBotsMCPAccessSection: View {
                     .disabled(busy)
                     SettingsNote("Goals and visual replies are included. Sessions reach only your Woven workspaces, under each workspace's own permissions.")
                 }
+            }
+            // A pause or a revoked key outlasts turning access off, so both stay reachable.
+            if snapshot?.botSettings.isEnabled == true || bots.thisMachine?.paused == true {
                 SettingsToggleRow(
                     title: "Pause for every bot on this Mac",
                     isOn: Binding(get: { bots.thisMachine?.paused ?? false },
                                   set: { paused in Task { await bots.attempt(.setPaused(paused)) } })
                 )
                 .disabled(bots.busy || bots.thisMachine == nil)
-                if !callers.isEmpty { keysRow }
             }
+            if !callers.isEmpty { keysRow }
             SettingsHelp {
                 SettingsNote("Bots on other machines get their keys from that machine. Outside agents have their own access below.")
             }
