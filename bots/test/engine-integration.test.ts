@@ -180,7 +180,10 @@ describe.skipIf(!SOCKET)("bots on a real Docker Engine", () => {
     // Nothing runs now but the supervisor's own processes: the bot goes idle and stops.
     expect(await env.runningWork(bot.id)).toEqual([]);
     await expect.poll(() => env.state(bot.id), { timeout: 120_000, interval: 1_000 }).toBe("stopped");
-    expect(log.some((line) => line.includes("stopped idle container"))).toBe(true);
+    // The runtime logs the stop once the engine call returns, a moment after the state changes.
+    await expect
+      .poll(() => log.some((line) => line.includes("stopped idle container")), { timeout: 10_000, interval: 200 })
+      .toBe(true);
   }, 10 * 60_000);
 
   it("replies at once on wake, then starts the container on the first tool call with its services and tabs back", async () => {
