@@ -786,7 +786,21 @@ hands them to the macOS job, which checks them with
   routing-choice grouping only; stored folder bindings are never rewritten, so
   existing folders appear under their Mac once it republishes its row (each
   registry refresh). A row without the field (an older Mac) leaves its
-  folders under "Unavailable workspace" on the iPhone, as before.
+  folders out of that Mac's section on the iPhone; they stay in All
+  Workspaces and Recents.
+- **Listed workspaces.** The iPhone's Home, Folders, New Chat and Calendar
+  list Quick Chat plus only the Mac and Linux workspaces that are paired and
+  reachable now (`CompanionModel.workspaceIsActive`, `agentGroupIsActive`):
+  the workspace's own connection answered its last refresh, it is the library
+  host the phone is synced with, or one of its agents can start now through
+  that host. A registry row or saved agent catalog alone never lists a
+  workspace, and nothing stored is removed; the next refresh that reaches it
+  lists it again. A copied snapshot owner (`retainedHistory`) is never
+  listed or used as an agent source, even when its copied endpoint answers;
+  its chats stay readable in All Workspaces and Recents. Within a listed workspace, an agent the workspace reports as
+  not ready stays listed, dimmed. Settings → Workspaces keeps every saved
+  workspace with its connection state. Other Apple devices are never
+  connections; their synced Quick Chat history and folders stay listed.
 
 ### iPhone reach
 

@@ -99,7 +99,7 @@ final class CompanionModelTests: XCTestCase {
     let model = CompanionModel()
     let registryID = UUID().uuidString.lowercased()
     let mac = CompanionExecutionWorkspace(id: registryID, libraryID: "library", ownerDeviceID: registryID, kind: .mac, name: "Mac", capabilities: ["history.central.v1"], executionDeviceID: registryID)
-    model.executionWorkspaces = [mac]
+    model.executionWorkspaces = [mac]; model.workspaceReachable[registryID] = true
     let folder = CompanionFolder(id: "project", name: "Project", execution: .init(workspaceID: "device:" + registryID.uppercased(), rootPath: "/project"))
     let chat = CompanionConversation(id: "chat", title: "Chat", providerID: "pi", workspaceID: registryID)
     model.state.folders[folder.id] = folder; model.state.conversations[chat.id] = chat
@@ -123,8 +123,10 @@ final class CompanionModelTests: XCTestCase {
     let folder = CompanionFolder(id: "launch", name: "Launch research", execution: .init(workspaceID: folderOwner, rootPath: "/tmp/Launch"))
     let note = CompanionNote(id: "pilot", folderID: folder.id, title: "Pilot checklist", content: "")
     model.state.folders[folder.id] = folder; model.state.notes[note.id] = note
-    model.executionWorkspaces = [mac]
-    XCTAssertTrue(model.folderWorkspaceGroups.contains { $0.name == "Unavailable workspace" }, "A Mac that does not name its folder owner leaves them unplaced")
+    model.executionWorkspaces = [mac]; model.workspaceReachable[registryID] = true
+    XCTAssertEqual(model.folderWorkspaceGroups.map(\.id), [model.canonicalWorkspaceID(model.deviceWorkspaceID), registryID])
+    XCTAssertNotEqual(model.folderOwner(folder), registryID, "A Mac that does not name its folder owner leaves them in All Workspaces only")
+    XCTAssertFalse(model.folderWorkspaceGroups.contains { $0.name == "Unavailable workspace" })
 
     mac.folderOwnerID = folderOwner
     model.executionWorkspaces = [mac]
@@ -135,6 +137,79 @@ final class CompanionModelTests: XCTestCase {
     XCTAssertTrue(model.routeOwnsFolder(workspaceID: registryID, folderID: folder.id), "The Mac's agents may start chats in its folders")
     XCTAssertEqual(model.workspaceRoute(for: folderOwner), registryID)
     XCTAssertEqual(model.state.folders[folder.id]?.execution?.workspaceID, folderOwner, "Stored bindings are not rewritten")
+  }
+
+  /// A saved registry row and cached agent catalog never list a workspace:
+  /// Home, Folders, New Chat and Calendar show Quick Chat plus the paired
+  /// workspaces reachable now, and a workspace comes back by itself once a
+  /// refresh reaches it. Nothing stored is removed.
+  @MainActor func testOnlyReachableWorkspacesAreListedAndReappearWhenReachable() {
+    let model = CompanionModel()
+    let macID = UUID().uuidString.lowercased(), linuxID = UUID().uuidString.lowercased()
+    let mac = CompanionExecutionWorkspace(id: macID, libraryID: "library", ownerDeviceID: macID, kind: .mac, name: "James's MacBook Air",
+                                          capabilities: ["history.central.v1"], executionDeviceID: macID)
+    let linux = CompanionExecutionWorkspace(id: linuxID, libraryID: "library", ownerDeviceID: macID, kind: .linux, name: "Build server")
+    model.executionWorkspaces = [mac, linux]
+    let ready = CompanionProvider(id: "local:default_agent", runtimeKind: "default_agent", displayName: "Pi Durable", available: true)
+    let notReady = CompanionProvider(id: "local:codex", runtimeKind: "codex", displayName: "Codex", available: false, canStart: false)
+    // The saved catalog from an earlier connection.
+    model.providers = [ready, notReady]
+    model.workspaceProviders = [macID: [ready, notReady], linuxID: [.init(id: "pi", runtimeKind: "pi", displayName: "Pi Durable", available: true)]]
+    model.knownAgentIDs = ["central:local:codex", macID + ":local:codex", linuxID + ":pi"]
+    let orphan = CompanionFolder(id: "orphan", name: "Old Mac folder", execution: .init(workspaceID: "device:" + UUID().uuidString.lowercased(), rootPath: "/old"))
+    let linuxFolder = CompanionFolder(id: "linux-folder", name: "Releases", execution: .init(workspaceID: "remote:" + linuxID, rootPath: "/srv"))
+    model.state.folders = [orphan.id: orphan, linuxFolder.id: linuxFolder]
+    let local = model.canonicalWorkspaceID(model.deviceWorkspaceID)
+
+    XCTAssertEqual(model.launcherGroups.map(\.id), ["local"], "Cached workspaces are not listed as if connected")
+    XCTAssertEqual(model.folderWorkspaceGroups.map(\.id), [local])
+    XCTAssertFalse(model.folderWorkspaceGroups.contains { $0.name == "Unavailable workspace" })
+    XCTAssertEqual(model.chatLauncherGroups.map(\.id), ["local"])
+    XCTAssertEqual(model.listedLauncherAgents.map(\.workspaceID), ["local"])
+    XCTAssertFalse(model.workspaceIsActive(mac)); XCTAssertFalse(model.workspaceIsActive(linux))
+    XCTAssertEqual(model.state.folders.count, 2, "Nothing stored is removed")
+    model.openFolder(nil)
+    XCTAssertTrue(model.folderScopeIncludes(owner: model.folderOwner(orphan), folderID: nil), "Unlisted owners' folders stay in All Workspaces")
+
+    // A direct refresh reaches the Linux workspace: it reappears with its folders.
+    model.workspaceReachable[linuxID] = true
+    XCTAssertEqual(model.launcherGroups.map(\.id), [linuxID, "local"])
+    XCTAssertEqual(model.folderWorkspaceGroups.map(\.id), [local, linuxID])
+    XCTAssertEqual(model.folderOwner(linuxFolder), linuxID)
+    XCTAssertEqual(model.chatLauncherGroups.map(\.id), [linuxID, "local"])
+    model.workspaceReachable[linuxID] = false
+    XCTAssertEqual(model.launcherGroups.map(\.id), ["local"], "A workspace that stops answering is no longer listed")
+
+    // The library host this phone syncs with is reachable; its agents that are
+    // not ready there are listed dimmed rather than hidden.
+    model.online = true
+    let central = try? XCTUnwrap(model.launcherGroups.first { $0.id == "central" })
+    XCTAssertEqual(central?.name, mac.name)
+    XCTAssertEqual(central?.agents.map(\.name), ["Pi Durable", "Codex"])
+    XCTAssertEqual(central?.agents.map(\.isAvailable), [true, false])
+    XCTAssertEqual(model.folderWorkspaceGroups.map(\.id), [local, macID])
+    XCTAssertFalse(model.launcherGroups.contains { $0.id == linuxID })
+    model.online = false
+    XCTAssertEqual(model.launcherGroups.map(\.id), ["local"])
+
+    // A copied snapshot owner is history only, even when its copied endpoint answers.
+    let copiedID = UUID().uuidString.lowercased()
+    var copied = CompanionExecutionWorkspace(id: copiedID, libraryID: "library", ownerDeviceID: copiedID, kind: .mac, name: "James's MacBook Air",
+                                             capabilities: ["history.central.v1"], executionDeviceID: copiedID)
+    copied.retainedHistory = true
+    var copiedPhone = CompanionExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: "library", ownerDeviceID: "phone", kind: .ios, name: "iPhone")
+    copiedPhone.retainedHistory = true
+    model.executionWorkspaces = [mac, linux, copied, copiedPhone]
+    model.workspaceProviders[copiedID] = [ready, notReady]
+    model.workspaceReachable[copiedID] = true
+    XCTAssertFalse(model.workspaceIsActive(copied))
+    XCTAssertEqual(model.launcherGroups.map(\.id), ["local"])
+    XCTAssertEqual(model.chatLauncherGroups.map(\.id), ["local"])
+    XCTAssertFalse(model.listedLauncherAgents.contains { $0.workspaceID == copiedID })
+    XCTAssertEqual(model.folderWorkspaceGroups.map(\.id), [local])
+    model.online = true
+    XCTAssertEqual(model.launcherGroups.first { $0.id == "central" }?.workspace?.id, macID, "The live Mac, not the copy, is the central workspace")
+    XCTAssertFalse(model.launcherGroups.contains { $0.id == copiedID })
   }
 
   @MainActor func testRecentsCompareActualTimesAcrossFractionalSecondsAndOffsets() {

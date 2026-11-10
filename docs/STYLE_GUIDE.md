@@ -51,7 +51,11 @@ when an intentional design change is accepted.
   Preserve intentional differences such as borderless Usage sections.
 - **Mobile Quick Chat:** name the device conversation feature **Quick Chat**,
   with **Powered by Pi Durable** in its setup explanation. Mac/Linux agents retain
-  their harness names. Workspaces lead mobile navigation; Quick Chat follows them.
+  their harness names. On the mobile home page Quick Chat comes first and
+  Workspaces follow it. Home, Folders, New Chat and Calendar list only paired
+  Mac and Linux workspaces that are reachable now; Settings → Workspaces keeps
+  every saved workspace with its connection state. Never add an "Unavailable
+  workspace" group: folders whose workspace is not listed stay in All Workspaces.
   Web search connections (Exa, Brave Search, Firecrawl) live under Connections →
   Web search with the model connections. Do not add data-sharing prompts:
   connecting a provider is the user's choice to use it.
@@ -62,8 +66,9 @@ when an intentional design change is accepted.
 - **Settings navigation:** group Pi Durable, Codex, Claude Code, Grok Build, and
   OpenCode under **Settings → Agents**. Harness pages return to Agents unless
   opened from a workspace's settings. Spell **OpenCode** as one word throughout
-  the app. Order the main Settings page as General, Agents, Bots, Dictation, Local
-  Workspace, Remote Workspaces, Apple Devices, Background Server, then Usage.
+  the app. Order the main Settings page as General, Permissions & Access, Agents,
+  Bots, Dictation, Local Workspace, Remote Workspaces, Apple Devices, Background
+  Server, then Usage.
 - **Bots:** the Bots section sits above New chat in the navigation rail, using the
   rail's own disclosure headings and rows; with bots on more than one machine, each
   machine gets its own "Bots on <name>" heading. A bot's row shows only its name and
@@ -89,13 +94,24 @@ when an intentional design change is accepted.
   on limits-account switches or credentials.
 - **Tool defaults:** settings say Woven MCP and show effective defaults,
   rather than an off-looking inheritance switch. Composer controls retain Tools.
-- **Mac access:** General has one Mac access card that sets up everything a
-  session may need once: Keychain access, then Full Disk Access, Accessibility,
-  Screen Recording, Automation and Microphone. Each row has its name, one purpose
-  sentence, a status pill (Ready, Needs attention, Not set up) and, until ready,
-  one quiet action. Keychain keeps Enable/Restore Keychain access, Access ready,
-  and Access needs attention, with one storage sentence; show the Always Allow
-  hint only when access is not ready. Consent is not verification. A session on a
+- **Permissions & Access:** every macOS permission Woven Matter uses lives on
+  this one Settings page, directly after General. It opens with one sentence:
+  agents on this Mac or the user's other devices stop at a prompt here without
+  these permissions. A top card offers **Set up all**, which works through the
+  permissions not yet allowed (in-app prompts first, Screen Recording last), shows
+  "Step N of M", that step's hint (such as Always Allow for Keychain) and Ask
+  again/Open System Settings, Skip and Stop; it becomes **All set** when nothing is
+  left. Cards group permissions by what they let Woven Matter do, in plain words:
+  Files and folders (Full Disk Access), Saved sign-ins (Keychain), Control apps
+  and see the screen (Accessibility, Screen Recording, Automation), and Dictation
+  (Microphone). Rows use System Settings' names and one status vocabulary:
+  Allowed (a quiet check; the row collapses to one line), Not allowed yet (Allow
+  or Open System Settings), Switched off (warning; Open System Settings) and
+  Reopen to finish (Reopen Woven Matter), never a quit-and-reopen footnote. Step
+  hints appear only during their step. Consent is not verification. Other
+  settings that depend on a permission (Dictation, Computer Use) show a one-line
+  status with a Permissions & Access link instead of their own controls; the
+  Settings landing row summarizes "All allowed" or "N to allow". A session on a
   Mac missing a permission it needs shows a full-width quiet notice above its
   composer, like the composer setup notices.
 - **Harness lists:** local and remote workspaces use compact expandable harness

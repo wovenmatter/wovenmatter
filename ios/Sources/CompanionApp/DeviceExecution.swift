@@ -173,9 +173,16 @@ extension CompanionModel {
     return CompanionAgentLauncher.list(deviceName: deviceWorkspaceName, centralOnline: online, providers: providers,
       workspaces: executionWorkspaces, workspaceProviders: workspaceProviders, reachable: workspaceReachable, knownAgentIDs: known)
   }
+  /// Quick Chat and the paired Mac and Linux workspaces reachable now
+  /// (`agentGroupIsActive`). Home, Folders, New Chat and Calendar list these.
   var launcherGroups: [CompanionAgentGroup] {
-    CompanionAgentGroup.list(agents: launcherAgents, workspaces: executionWorkspaces)
+    // A copied snapshot owner (`retainedHistory`) is history, never an agent source.
+    let historyOnly = Set(executionWorkspaces.filter { $0.retainedHistory == true }.map(\.id))
+    return CompanionAgentGroup.list(agents: launcherAgents.filter { !historyOnly.contains($0.workspaceID) && !historyOnly.contains($0.groupID) },
+      workspaces: executionWorkspaces).filter(agentGroupIsActive)
   }
+  /// The agents of `launcherGroups`, for pickers that list agents without groups.
+  var listedLauncherAgents: [CompanionAgentLauncher] { launcherGroups.flatMap(\.agents) }
   func launchAgent(_ launcher: CompanionAgentLauncher) async {
     guard let current = launcherAgents.first(where: { $0.id == launcher.id }), current.isAvailable else { return }
     selectedFolderID = nil; folderContentsPresented = false

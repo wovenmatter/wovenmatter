@@ -858,6 +858,7 @@ import CompanionInference
         ]
         providers = [.init(id: "pi", runtimeKind: "pi", displayName: "Pi Durable", available: true)]
         workspaceProviders[mac] = providers; workspaceProviders[linux] = providers
+        workspaceReachable[mac] = true; workspaceReachable[linux] = true
         let localFolder = CompanionFolder(id: "dddddddd-4444-4444-8444-444444444444", name: "Phone ideas", execution: .init(workspaceID: "device:" + state.deviceID, rootPath: "/fixture/phone"))
         let macFolder = CompanionFolder(id: "eeeeeeee-5555-4555-8555-555555555555", name: "Mac projects", execution: .init(workspaceID: "device:" + mac, rootPath: "/fixture/mac"))
         let ipadFolder = CompanionFolder(id: "ffffffff-6666-4666-8666-666666666666", name: "Travel notes", execution: .init(workspaceID: "device:" + ipad, rootPath: "/fixture/ipad"))
@@ -876,6 +877,34 @@ import CompanionInference
         try await store.cache(.init(conversationID: chat.id, messages: [
           .init(id: "organization-message", conversationID: chat.id, role: "assistant", content: "Your weekend plan, saved from the iPad.", sequence: 0)
         ]))
+        await reload()
+      }
+      if scenario == "unreachable-workspaces" {
+        // A saved Mac and Linux workspace that are not reachable, beside one
+        // reachable Linux workspace whose Mac reports some agents not ready.
+        let mac = "aaaaaaaa-7777-4777-8777-777777777777", stale = "bbbbbbbb-8888-4888-8888-888888888888", linux = "cccccccc-9999-4999-8999-999999999999"
+        let copied = "dddddddd-0000-4000-8000-000000000000"
+        executionWorkspaces = [
+          .init(id: mac, libraryID: "fixture", ownerDeviceID: mac, kind: .mac, name: "Office Mac", capabilities: ["history.central.v1"]),
+          .init(id: stale, libraryID: "fixture", ownerDeviceID: mac, kind: .linux, name: "Old Linux box"),
+          .init(id: linux, libraryID: "fixture", ownerDeviceID: linux, kind: .linux, name: "Build server"),
+          // A library copied from another Mac keeps that Mac's row as history only.
+          .init(id: copied, libraryID: "fixture", ownerDeviceID: copied, kind: .mac, name: "Copied MacBook Air", capabilities: ["history.central.v1"], retainedHistory: true)
+        ]
+        func agent(_ id: String, _ name: String, ready: Bool) -> CompanionProvider { .init(id: id, runtimeKind: id, displayName: name, available: ready, canStart: ready) }
+        let cached = [agent("default_agent", "Pi Durable", ready: true), agent("codex", "Codex", ready: false), agent("claude_code", "Claude Code", ready: false),
+          agent("grok_build", "Grok Build", ready: true), agent("opencode", "OpenCode", ready: false)]
+        workspaceProviders[mac] = cached; workspaceProviders[stale] = cached; workspaceProviders[copied] = cached
+        workspaceProviders[linux] = [agent("default_agent", "Pi Durable", ready: true), agent("codex", "Codex", ready: false)]
+        knownAgentIDs = Set([mac, stale, linux, copied].flatMap { id in cached.map { id + ":" + $0.id } })
+        workspaceReachable[mac] = false; workspaceReachable[linux] = true; workspaceReachable[copied] = true
+        let fixtureFolders = [
+          CompanionFolder(id: "dddddddd-7777-4777-8777-777777777777", name: "Mac projects", execution: .init(workspaceID: "device:" + mac, rootPath: "/fixture/mac")),
+          CompanionFolder(id: "eeeeeeee-8888-4888-8888-888888888888", name: "Retired machine", execution: .init(workspaceID: "device:ffffffff-0000-4000-8000-000000000000", rootPath: "/fixture/old")),
+          CompanionFolder(id: "ffffffff-9999-4999-8999-999999999999", name: "Releases", execution: .init(workspaceID: "remote:" + linux, rootPath: "/srv/releases"))
+        ]
+        try await store.apply(.init(workspaceID: "fixture", cursor: 2,
+          folders: folders.filter { row in !fixtureFolders.contains { $0.id == row.id } } + fixtureFolders, notes: notes, conversations: conversations))
         await reload()
       }
       selectedNoteID = scenarioNoteID ?? notes.first?.id; selectedConversationID = "fixture-chat"

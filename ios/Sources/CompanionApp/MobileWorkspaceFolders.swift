@@ -31,17 +31,40 @@ extension CompanionModel {
     }
     return nil
   }
+  /// The iPhone lists a Mac or Linux workspace, with its agents and folders,
+  /// only while it is paired and reachable now: its own connection answered,
+  /// or it is the library host this phone is synced with. A registry row or
+  /// saved agent catalog alone never lists it. Nothing stored is removed, and
+  /// the next refresh that reaches it lists it again. Settings → Workspaces
+  /// keeps every saved workspace with its connection state.
+  func workspaceIsActive(_ workspace: CompanionExecutionWorkspace) -> Bool {
+    guard !workspace.deleted, workspace.retainedHistory != true, workspace.kind != .ios else { return false }
+    if workspaceReachable[workspace.id] == true { return true }
+    return online && centralExecutionWorkspace?.id == workspace.id
+  }
+  /// Quick Chat is always listed. A copied snapshot owner (`retainedHistory`)
+  /// never is, even when its copied endpoint answers; its chats stay readable
+  /// in All Workspaces and Recents. A workspace's group is listed while that
+  /// workspace is active or any of its agents can start now (a Linux
+  /// workspace reached through the central Mac).
+  func agentGroupIsActive(_ group: CompanionAgentGroup) -> Bool {
+    if group.id == "local" { return true }
+    if executionWorkspaces.contains(where: { $0.id == group.id && ($0.retainedHistory == true || $0.deleted) }) { return false }
+    if let workspace = group.workspace, workspaceIsActive(workspace) { return true }
+    return group.agents.contains(where: \.isAvailable)
+  }
+  /// The local workspace, the active Mac and Linux workspaces, and other
+  /// Apple devices' synced Quick Chat history (never a connection). Content
+  /// whose owner is not listed stays in All Workspaces and Recents.
   var folderWorkspaceGroups: [MobileFolderWorkspace] {
     let localID = canonicalWorkspaceID(deviceWorkspaceID)
     var result = [MobileFolderWorkspace(id: localID, name: deviceWorkspaceName, kind: .ios, isLocal: true)]
+    let active = Set(launcherGroups.compactMap { $0.workspace.map { canonicalWorkspaceID($0.id) } })
     for workspace in executionWorkspaces where !workspace.deleted {
       let id = canonicalWorkspaceID(workspace.id)
-      guard !result.contains(where: { $0.id == id }) else { continue }
+      guard workspace.retainedHistory != true, workspace.kind == .ios || active.contains(id),
+            !result.contains(where: { $0.id == id }) else { continue }
       result.append(.init(id: id, name: workspace.name, kind: workspace.kind, isLocal: false))
-    }
-    let observed = Set(folders.compactMap(folderOwner) + notes.compactMap(noteOwner) + conversations.compactMap(conversationOwner))
-    for id in observed.sorted() where !result.contains(where: { $0.id == id }) {
-      result.append(.init(id: id, name: "Unavailable workspace", kind: nil, isLocal: false))
     }
     return result
   }
@@ -72,7 +95,8 @@ extension CompanionModel {
     if let id = selectedFolderID { return state.folders[id]?.name ?? "Folder" }
     if selectedFolderWorkspaceID == "unassigned" { return "Unassigned items" }
     guard let owner = selectedFolderWorkspaceID else { return "All Workspaces" }
-    let name = folderWorkspaceGroups.first { $0.id == owner }?.name ?? "Workspace"
+    let name = folderWorkspaceGroups.first { $0.id == owner }?.name
+      ?? executionWorkspaces.first { canonicalWorkspaceID($0.id) == owner }?.name ?? "Workspace"
     return folderContentsUnfiled ? "Unfiled · " + name : name
   }
   func folderScopeIncludes(owner: String?, folderID: String?) -> Bool {

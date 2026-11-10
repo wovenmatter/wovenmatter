@@ -225,19 +225,17 @@ struct HomePane: View {
             HStack(spacing: 12) { quickActions }
             VStack(spacing: 12) { quickActions }
           }.padding(.vertical, 12)
+          // Quick Chat leads; Workspaces lists only paired Macs and Linux
+          // workspaces that are reachable now.
           let groups = model.launcherGroups
-          GroupLabel(text: "Workspaces")
+          GroupLabel(text: "Quick Chat").accessibilityIdentifier("home-quick-chat")
+          ForEach(groups.first(where: { $0.id == "local" })?.agents ?? []) { agent in agentRow(agent) }
+          GroupLabel(text: "Workspaces").accessibilityIdentifier("home-workspaces")
           ForEach(groups.filter { $0.id != "local" }) { group in
             GroupLabel(text: group.name)
             workspaceAgents(group)
           }
-          if groups.allSatisfy({ $0.id == "local" }) {
-            SettingsNavigationRow(title: "Connect your Mac", icon: .monitor) { PairingPane(model: model) }
-            Text("Pair once over Tailscale to use your Mac and Linux workspaces. Authorized Linux workspaces remain available when the Mac is offline.")
-              .font(.caption).foregroundStyle(DashboardPalette.mutedForeground).padding(.horizontal, 14).padding(.bottom, 12)
-          }
-          GroupLabel(text: "Quick Chat")
-          ForEach(groups.first(where: { $0.id == "local" })?.agents ?? []) { agent in agentRow(agent) }
+          if groups.allSatisfy({ $0.id == "local" }) { noConnectedWorkspaces }
           Divider().padding(.horizontal, 14).padding(.vertical, 18)
           ForEach([CompanionModel.Tab.calendar, .scheduledTasks, .library, .databases, .usage], id: \.self) { tab in
             SettingsNavigationRow(title: tab.rawValue, icon: tab.icon) { destination(tab) }
@@ -246,6 +244,22 @@ struct HomePane: View {
         }.padding(.horizontal, 18).padding(.bottom, 24)
       }.refreshable { await model.refresh() }
     }
+  }
+  @ViewBuilder private var noConnectedWorkspaces: some View {
+    if model.credential == nil {
+      SettingsNavigationRow(title: "Connect your Mac", icon: .monitor) { PairingPane(model: model) }
+      homeCaption("Pair once over Tailscale to use your Mac and Linux workspaces. Authorized Linux workspaces remain available when the Mac is offline.")
+    } else {
+      if model.needsMemberPairing {
+        SettingsNavigationRow(title: "Pair again", icon: .monitor) { PairingPane(model: model) }
+      }
+      homeCaption("No paired Mac or Linux workspace is reachable right now. Each one appears here when it reconnects.")
+        .accessibilityIdentifier("home-no-workspaces")
+    }
+  }
+  private func homeCaption(_ text: String) -> some View {
+    Text(text).font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+      .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 14).padding(.bottom, 12)
   }
   @ViewBuilder private func workspaceAgents(_ group: CompanionAgentGroup) -> some View {
     if group.agents.isEmpty, let workspace = group.workspace {
@@ -329,6 +343,12 @@ struct FoldersPane: View {
                 sectionHeading("Remote Workspaces", key: "remote", identifier: "folders-remote")
                   .padding(.top, 12)
                 if isExpanded("remote") {
+                  if !groups.contains(where: { !$0.isLocal }) {
+                    Text("No paired Mac or Linux workspace is reachable right now. Its folders stay in All Workspaces.").font(.caption)
+                      .foregroundStyle(DashboardPalette.mutedForeground)
+                      .frame(maxWidth: .infinity, alignment: .leading).padding(14)
+                      .accessibilityIdentifier("folders-remote-empty")
+                  }
                   ForEach(groups.filter { !$0.isLocal }) { workspace in
                     sectionHeading(workspace.name, key: workspace.id, identifier: "folder-workspace-" + workspace.id)
                     if isExpanded(workspace.id) { workspaceContents(workspace) }
@@ -596,10 +616,12 @@ struct WorkspacesSettingsPane: View {
             Label("Central database", glyph: .monitor).opacity(model.online ? 1 : 0.5)
           }
         }
+        // Every saved workspace stays here with its connection state, so a
+        // disconnected one can be checked or refreshed.
         ForEach(model.executionWorkspaces) { workspace in
           NavigationLink { WorkspaceSettingsPane(model: model, workspace: workspace) } label: {
             Label(workspace.name, glyph: workspace.kind == .mac ? .monitor : .container)
-              .opacity(model.workspaceReachable[workspace.id] == true ? 1 : 0.5)
+              .opacity(model.workspaceIsActive(workspace) ? 1 : 0.5)
           }
         }
       }
@@ -630,18 +652,25 @@ private struct CentralWorkspaceSettingsPane: View {
 private struct WorkspaceSettingsPane: View {
   @Bindable var model: CompanionModel
   let workspace: CompanionExecutionWorkspace
+  private var active: Bool { model.workspaceIsActive(workspace) }
   var body: some View {
     List {
       Section {
-        LabeledContent("Connection", value: model.workspaceReachable[workspace.id] == true ? "Connected" : "Disconnected")
+        LabeledContent("Connection", value: active ? "Connected" : "Disconnected")
         if let endpoint = workspace.endpoint { Text(endpoint.host ?? endpoint.absoluteString).textSelection(.enabled) }
+        if !active {
+          Text("Its agents and folders appear when this workspace is reachable again.").font(.caption)
+            .foregroundStyle(DashboardPalette.mutedForeground)
+        }
       }
-      Section { NavigationLink("Folders") { FoldersPane(model: model, workspaceID: workspace.id) } }
-      Section("Agents") {
-        ForEach(model.launcherAgents.filter { $0.workspaceID == workspace.id }) { agent in
-          Button { Task { await model.launchAgent(agent) } } label: {
-            Label { Text(agent.name) } icon: { MobileAgentIcon(runtimeKind: agent.runtimeKind, size: 22) }
-          }.disabled(!agent.isAvailable)
+      if active {
+        Section { NavigationLink("Folders") { FoldersPane(model: model, workspaceID: workspace.id) } }
+        Section("Agents") {
+          ForEach(model.listedLauncherAgents.filter { $0.workspaceID == workspace.id }) { agent in
+            Button { Task { await model.launchAgent(agent) } } label: {
+              Label { Text(agent.name) } icon: { MobileAgentIcon(runtimeKind: agent.runtimeKind, size: 22) }
+            }.disabled(!agent.isAvailable)
+          }
         }
       }
       Section {

@@ -171,12 +171,13 @@ struct CalendarEventSheet: View {
     return task.workspaceID.map { "remote:\($0):\(task.runtime)" } ?? "local:\(task.runtime)"
   }
   private static func defaultTask(_ model: CompanionModel) -> CompanionScheduledTask {
-    let agent = model.launcherAgents.first { $0.workspaceID != "local" && $0.isAvailable }
+    let agent = model.listedLauncherAgents.first { $0.workspaceID != "local" && $0.isAvailable }
     return .init(runtime: agent?.runtimeKind ?? "", workspaceID: agent.flatMap { $0.workspaceID == "central" ? nil : $0.workspaceID })
   }
   private var routeChoices: [CompanionSelection] {
     var values = [CompanionSelection(id: "", label: "Choose a Mac or Linux agent")]
-    for agent in model.launcherAgents where agent.workspaceID != "local" {
+    // Only reachable workspaces are offered; a saved route stays selected below.
+    for agent in model.listedLauncherAgents where agent.workspaceID != "local" {
       let owner = agent.workspaceID == "central" ? "local:" + agent.runtimeKind : "remote:" + agent.workspaceID + ":" + agent.runtimeKind
       if !values.contains(where: { $0.id == owner }) { values.append(.init(id: owner, label: agent.name + " · " + agent.workspaceName)) }
     }

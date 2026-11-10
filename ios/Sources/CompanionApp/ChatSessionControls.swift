@@ -182,7 +182,14 @@ struct NewChatChooser: View {
       }
       ScrollView {
         VStack(alignment: .leading, spacing: 8) {
-          ForEach(model.chatLauncherGroups) { workspace in workspaceSection(workspace) }
+          let groups = model.chatLauncherGroups
+          ForEach(groups) { workspace in workspaceSection(workspace) }
+          // A folder whose workspace is not reachable now offers no agents.
+          if groups.isEmpty {
+            Text(CompanionModel.deviceConnectionMessage).font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+              .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 12)
+              .accessibilityIdentifier("chat-no-agents")
+          }
         }.padding(.horizontal, 20).padding(.bottom, 24)
       }.scrollIndicators(.never)
     }.background(theme.palette.workspace).foregroundStyle(DashboardPalette.foreground)

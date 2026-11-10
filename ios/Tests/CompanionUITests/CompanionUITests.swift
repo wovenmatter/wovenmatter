@@ -317,25 +317,51 @@ final class CompanionUITests: XCTestCase {
     XCTAssertTrue(composer.exists)
   }
 
-  @MainActor func testOfflineDeviceCreationExplainsConnectionAndSettingsHasNoPendingPage() {
+  /// An unreachable workspace is not offered anywhere a chat starts; it waits
+  /// in Settings → Workspaces until it reconnects.
+  @MainActor func testOfflineDeviceIsNotOfferedAndSettingsHasNoPendingPage() {
     let app = launch(tab: "Home", scenario: "offline-device")
-    let message = "Can’t connect to this device. Make sure it’s online and connected to the internet."
+    let offline = "11111111-2222-4333-8444-555555555555"
+    XCTAssertTrue(app.buttons["launch-agent-local:pi-durable-device"].waitForExistence(timeout: 5))
+    XCTAssertFalse(app.buttons["launch-agent-" + offline + ":pi"].exists)
+    XCTAssertFalse(app.staticTexts["Offline Linux"].exists)
     app.buttons["action-new-chat"].tap()
-    let agent = app.buttons["choose-chat-agent-11111111-2222-4333-8444-555555555555:pi"]
-    XCTAssertTrue(agent.waitForExistence(timeout: 5))
-    agent.tap()
-    let chatError = app.staticTexts["chat-setup-problem"]
-    XCTAssertTrue(chatError.waitForExistence(timeout: 5))
-    XCTAssertEqual(chatError.label, message)
+    XCTAssertTrue(app.buttons["choose-chat-agent-local:pi-durable-device"].waitForExistence(timeout: 5))
+    XCTAssertFalse(app.buttons["choose-chat-agent-" + offline + ":pi"].exists)
     app.buttons["Close agent chooser"].tap()
     app.buttons["tab-folders"].tap()
-    reveal(app.buttons["folder-workspace-11111111-2222-4333-8444-555555555555"], in: app)
-    app.buttons["folder-workspace-11111111-2222-4333-8444-555555555555"].tap()
-    // Folders for another device's files are created on that device.
-    XCTAssertFalse(app.buttons["action-new-folder-11111111-2222-4333-8444-555555555555"].exists)
+    XCTAssertTrue(app.buttons["folders-remote"].waitForExistence(timeout: 5))
+    XCTAssertFalse(app.buttons["folder-workspace-" + offline].exists)
+    XCTAssertTrue(app.staticTexts["folders-remote-empty"].exists)
     app.buttons["tab-settings"].tap()
     XCTAssertTrue(app.buttons["General"].waitForExistence(timeout: 5))
     XCTAssertFalse(app.buttons["Pending changes"].exists)
+  }
+
+  /// Home lists Quick Chat before Workspaces, and Home and Folders list only
+  /// reachable workspaces: no saved-but-unreachable Mac or Linux workspace and
+  /// no "Unavailable workspace" for folders whose owner is not listed.
+  @MainActor func testHomeLeadsWithQuickChatAndListsOnlyReachableWorkspaces() {
+    let app = launch(tab: "Home", scenario: "unreachable-workspaces")
+    let build = "cccccccc-9999-4999-8999-999999999999"
+    let quickChat = app.staticTexts["home-quick-chat"], workspaces = app.staticTexts["home-workspaces"]
+    XCTAssertTrue(quickChat.waitForExistence(timeout: 5))
+    XCTAssertTrue(workspaces.exists)
+    XCTAssertLessThan(quickChat.frame.minY, workspaces.frame.minY, "Quick Chat leads the home page")
+    XCTAssertLessThan(app.buttons["launch-agent-local:pi-durable-device"].frame.minY, workspaces.frame.minY)
+    XCTAssertTrue(app.staticTexts["Build server"].exists)
+    XCTAssertTrue(app.buttons["launch-agent-" + build + ":default_agent"].isEnabled)
+    XCTAssertFalse(app.buttons["launch-agent-" + build + ":codex"].isEnabled, "An agent its workspace reports not ready stays dimmed")
+    XCTAssertFalse(app.staticTexts["Office Mac"].exists)
+    XCTAssertFalse(app.staticTexts["Old Linux box"].exists)
+    XCTAssertFalse(app.staticTexts["Copied MacBook Air"].exists, "A copied snapshot owner is history, not a workspace")
+    app.buttons["tab-folders"].tap()
+    XCTAssertTrue(app.buttons["folder-workspace-" + build].waitForExistence(timeout: 5))
+    XCTAssertFalse(app.buttons["folder-workspace-aaaaaaaa-7777-4777-8777-777777777777"].exists)
+    XCTAssertFalse(app.buttons["folder-workspace-bbbbbbbb-8888-4888-8888-888888888888"].exists)
+    XCTAssertFalse(app.buttons["folder-workspace-dddddddd-0000-4000-8000-000000000000"].exists)
+    XCTAssertFalse(app.buttons["Unavailable workspace"].exists)
+    XCTAssertFalse(app.staticTexts["Unavailable workspace"].exists)
   }
 
   @MainActor func testNoteControlsAndCompactFooter() {
