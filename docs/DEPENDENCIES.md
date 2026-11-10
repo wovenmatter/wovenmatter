@@ -189,12 +189,12 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   Pi refresh and remove it once Pi's own requirement excludes the affected
   releases. Provider-free HTTP security fixtures and the coding-agent suites
   validate the overridden Node dependency; it is not part of the mobile bundle.
-  Chord 1.5.1 declares an optional exact ws 8.21.0 peer, which conflicts with
+  Chord 1.5.2 declares an optional exact ws 8.21.0 peer, which conflicts with
   the app's current ws 8.22.2 transport. A scoped `$ws` override shares the
   app's tested current transport without editing vendor manifests or ignoring
   peer validation. Real local WebSocket streaming/cancellation fixtures and the
   Chord/Durable suites validate this selection; review it on each Chord refresh.
-  Pi AI 1.5.1 also pins older provider clients. Consumer-scoped minimum-only
+  Pi AI 1.5.2 also pins older provider clients. Consumer-scoped minimum-only
   overrides select the tested OpenAI 7.55.0, Anthropic 1.7.0, Google GenAI 3.0.0,
   Bedrock Runtime and token providers 3.1165.0, and Smithy Node HTTP handler
   4.14.2 releases without
@@ -209,13 +209,18 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   serialization, streaming text/tools, usage and cancellation. They do not
   establish authenticated provider acceptance. The iOS bundle excludes these
   network clients; its generated provenance still follows the shared lock.
+  Smithy core 3.40 enables its new retry defaults unconditionally. Pi's Bedrock
+  adapter does not forward `maxRetries`, so the dedicated Built-in agent process
+  sets Smithy's supported `AWS_MAX_ATTEMPTS=1` before creating clients. Woven's
+  conversation boundary owns retries; a real loopback 503 fixture verifies that
+  even an inherited retry setting cannot silently replay a provider request.
   GenAI 3 requires Node 22 or newer and defaults the Gemini Developer API to
   `v1`. The recorded Node 26 satisfies that requirement. Pi supplies each model's
   complete versioned base URL with an explicit empty SDK API version, preserving
   existing `v1beta` models and custom endpoints even when the new
   `GOOGLE_GENAI_API_VERSION` environment variable is set. Loopback fixtures cover
   exact versioned paths, streaming tools/usage, and cancellation with GenAI 3.
-  Pi Coding Agent 1.5.1 now selects minimatch 11.0.3, which includes the
+  Pi Coding Agent 1.5.2 now selects minimatch 11.0.3, which includes the
   GHSA-g3hv-75wg-m249 repair. The consumer-scoped floor advances to the current
   `>=11.0.5` patch without changing the named matching API. Provider-free
   model-scope matching and bounded adversarial-pattern fixtures validate this
@@ -260,11 +265,11 @@ an older configured channel. OpenCode and Executor retain the documented v2 API 
 maintenance must review a newer stable API major and implement its migration.
 
 `harnesses/catalog.json` records tested connector and engine minimums separately:
-Codex ACP 2.6.0 with Codex 0.167.0, and Claude ACP 0.103.0 with Claude SDK 0.3.322
+Codex ACP 2.6.0 with Codex 0.167.0, and Claude ACP 0.104.0 with Claude SDK 0.3.322
 (native Claude Code 2.1.322). The standalone Codex and Claude sign-in CLIs use their
 official current stable release channels. Codex ACP's `^0.166.0` engine range
 otherwise keeps its chat engine behind; its `~2.4.0` ACP TypeScript SDK range
-also excludes the current 2.5.0. Claude ACP 0.103.0 still pins SDK 0.3.321;
+also excludes the current 2.5.0. Claude ACP 0.104.0 still pins SDK 0.3.321;
 the consumer-scoped override selects SDK 0.3.322 independently so engine-only updates
 remain eligible when the connector's pin lags. Transcript-write loss
 invalidates the native resume marker and refuses tool dispatch/continuation commits;
