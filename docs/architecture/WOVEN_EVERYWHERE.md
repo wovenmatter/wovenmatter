@@ -584,10 +584,17 @@ hands them to the macOS job, which checks them with
   workspaceKind}, independent: true, receipt}`: the caller does not
   coordinate it. Linux: `remote/src/member-sessions.mjs`; Mac:
   `ApplicationModel+MemberSessions.swift`.
-- **Managing them (Linux).** The Linux server remembers each session a caller
-  created on another workspace (`member_sessions` in its execution database),
+- **Managing them (Linux and Mac).** The Linux server remembers each session a caller
+  created on another workspace (`member_sessions` in its execution database;
+  on a Mac, the local, unsynced `member_tool_sessions` table of its library),
   so these tools name it by `id` alone, or by `id` plus `workspace` for one it
-  did not create. Each is one or more signed calls to the destination's
+  did not create. The Mac's catalog (`WovenMCPCatalog`) is the source of
+  `remote/src/woven-mcp-tools.json` (regenerate it with `WovenMCPCatalogExport`;
+  `WovenMCPTests` checks that they agree). On a Mac,
+  `WorkspaceToolHandlers.memberSession` sends a call for a remembered or named
+  member session to `ApplicationModel+MemberSessions.swift`, which signs it
+  through `CentralExecutionClient` (`SignedExecutionWorkspaceTransport`); a
+  session on that Mac or on a Linux host it manages over SSH stays local. Each is one or more signed calls to the destination's
   execution API (`GET v1/execution/conversations`, `…/conversations/<id>/transcript`,
   `…/capabilities`, `GET v1/execution/interactions`, `POST v1/execution/commands`):
   - `woven_sessions_status {id, workspace?, before?}` → `{session: {id, title,
@@ -612,8 +619,9 @@ hands them to the macOS job, which checks them with
   sessions on its own machine's workspace go through that workspace's own
   execution commands, as another member's would; coordination tools
   (`manage`, `release`, `notifications`, `receipts`) bind a conversation and
-  stay unavailable to bots. The Mac's own catalog does not have these
-  additions yet.
+  stay unavailable to bots. A Mac's bots, which are app-wide callers there,
+  get the same tools from the Mac; `woven_sessions_list` without `workspace`
+  lists a bot's sessions on other workspaces.
 - The iPhone connects directly to every Mac and Linux workspace with its own
   member key. It has no home Mac.
 

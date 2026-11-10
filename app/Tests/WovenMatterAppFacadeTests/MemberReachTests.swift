@@ -100,6 +100,90 @@ struct MemberReachTests {
         }
     }
 
+    /// An agent manages a session it created on a Linux host by ID alone, as on
+    /// Linux: status (state, pending questions, recent transcript), send or steer,
+    /// stop and respond are signed calls to that host, and retries replay.
+    @Test func agentsManageTheSessionsTheyCreateOnAnotherWorkspace() async throws {
+        let macA = try await FacadeFixture(); defer { macA.remove() }
+        let identity = try await macA.database.companionLibraryIdentity()
+        let signer = MemberIdentity(deviceID: identity.hostDeviceID, kind: .mac, key: .init())
+        let linux = ReachLinuxHost(prefix: "/wovenmatter-execution/linux-l", workspaceID: UUID().uuidString.lowercased(),
+                                   libraryID: identity.libraryID, members: [signer.deviceID: signer.publicKey])
+        let workspace = try await macA.database.receiveSyncedWorkspace(linux.descriptor)
+        macA.model.federatedExecutionClient = try CentralExecutionClient(database: macA.database,
+            commandJournalURL: macA.directory.appending(path: "commands.json"),
+            provision: { _ in throw CompanionAPIError(code: "unauthorized", message: "No grants in this test.") },
+            loadCredential: { _ in nil }, saveCredential: { _ in },
+            makeSignedTransport: { workspace in try SignedExecutionWorkspaceTransport(workspace: workspace, signer: signer.signer, audience: linux.memberID, send: linux.send) })
+        let tools = try #require(macA.model.agentTools)
+        let botID = UUID().uuidString.lowercased()
+        _ = try await tools.issueBotKey(machineID: identity.hostDeviceID, botID: botID, botName: "Builder")
+        let caller = WovenMCPCaller.bot(machineID: identity.hostDeviceID, botID: botID)
+        func call(_ name: String, _ arguments: [String: GatewayJSONValue]) async throws -> WovenMatterToolResponse {
+            await tools.handle(try WovenMCPCatalog.request(name: name, arguments: .object(arguments)), callerID: caller)
+        }
+
+        let created = try await call("woven_sessions_create", ["title": .string("Build it"), "text": .string("Start here"),
+            "purpose": .string("Fixture"), "harness": .string("codex"), "workspace": .string(workspace.id)])
+        #expect(created.success, "\(created.error ?? "")")
+        let id = try #require(created.result?.objectValue?["session"]?.objectValue?["id"]?.stringValue)
+        #expect(try await macA.database.memberToolSession(id: id)?.workspaceID == workspace.id)
+
+        // Status needs only the ID: state, the latest 20 messages (each clipped) and an older page.
+        let status = try await call("woven_sessions_status", ["id": .string(id)])
+        #expect(status.success, "\(status.error ?? "")")
+        let session = status.result?.objectValue?["session"]?.objectValue
+        #expect(session?["state"]?.stringValue == "idle" && session?["workspace"]?.stringValue == workspace.id && session?["workspaceKind"]?.stringValue == "linux")
+        let page = try #require(status.result?.objectValue?["transcript"]?.objectValue)
+        let messages = page["messages"]?.arrayValue ?? []
+        #expect(messages.count == 20 && page["before"]?.stringValue == "cursor-1")
+        #expect(messages.allSatisfy { ($0.objectValue?["content"]?.stringValue?.count ?? 0) <= 4_001 })
+        let older = try await call("woven_sessions_status", ["id": .string(id), "before": .string("cursor-1")])
+        #expect(older.result?.objectValue?["transcript"]?.objectValue?["messages"]?.arrayValue?.count == 1)
+
+        // Running: a harness that cannot steer is refused; one that can is steered.
+        linux.running = [id: "run-1"]
+        let refused = try await call("woven_sessions_send", ["id": .string(id), "text": .string("More")])
+        #expect(!refused.success && refused.error?.contains("mid-turn") == true)
+        linux.canSteer = true
+        let steered = try await call("woven_sessions_send", ["id": .string(id), "text": .string("More")])
+        #expect(steered.success, "\(steered.error ?? "")")
+        #expect(linux.commands.last?.kind == .steer && linux.commands.last?.runID == "run-1" && linux.commands.last?.text == "More")
+
+        // A pending approval: status reports it; only an offered option is accepted.
+        linux.pending = [.init(id: "approval-1", conversationID: id, runID: "run-1", kind: .approval, title: "Run tests?",
+                               options: [.init(id: "allow", label: "Allow")])]
+        let waiting = try await call("woven_sessions_status", ["id": .string(id)])
+        #expect(waiting.result?.objectValue?["session"]?.objectValue?["state"]?.stringValue == "needsInput")
+        #expect(waiting.result?.objectValue?["pending"]?.arrayValue?.first?.objectValue?["id"]?.stringValue == "approval-1")
+        let wrong = try await call("woven_sessions_respond", ["id": .string(id), "interaction": .string("approval-1"), "optionID": .string("nope")])
+        #expect(!wrong.success)
+        let answered = try await call("woven_sessions_respond", ["id": .string(id), "interaction": .string("approval-1"), "optionID": .string("allow")])
+        #expect(answered.success, "\(answered.error ?? "")")
+        #expect(linux.commands.last?.kind == .respond && linux.commands.last?.interactionID == "approval-1" && linux.commands.last?.response?.optionID == "allow")
+
+        // Stop, then the identical retry replays the receipt.
+        let stopRequest = UUID().uuidString.lowercased()
+        let stopped = try await call("woven_sessions_stop", ["id": .string(id), "requestID": .string(stopRequest)])
+        #expect(stopped.success && stopped.result?.objectValue?["stopped"] == .bool(true), "\(stopped.error ?? "")")
+        #expect(linux.commands.last?.kind == .stop && linux.commands.last?.runID == "run-1")
+        let count = linux.commands.count
+        _ = try await call("woven_sessions_stop", ["id": .string(id), "requestID": .string(stopRequest)])
+        #expect(linux.commands.count == count)
+
+        // The workspace's list, and a bot's own list without a workspace.
+        let listed = try await call("woven_sessions_list", ["workspace": .string(workspace.id)])
+        #expect(listed.result?.objectValue?["rows"]?.arrayValue?.map { $0.objectValue?["id"]?.stringValue } == [id])
+        let mine = try await call("woven_sessions_list", [:])
+        #expect(mine.result?.objectValue?["rows"]?.arrayValue?.first?.objectValue?["state"]?.stringValue == "running")
+        #expect(linux.commands.allSatisfy { $0.deviceID == signer.deviceID })
+
+        // A session on this Mac that the bot neither created nor coordinates cannot be stopped by it.
+        let local = try #require(await macA.model.createLocalACPSession(runtimeKind: .codex))
+        let foreign = try await call("woven_sessions_stop", ["id": .string(local)])
+        #expect(!foreign.success && foreign.error?.contains("created or coordinate") == true)
+    }
+
     /// The sidebar lists another Mac's agents, including those for a Linux host that Mac
     /// added. Starting a chat with one goes straight to that host, signed by this Mac.
     @Test func aChatWithAnAgentAnotherMacAddedStartsOnItsHostSigned() async throws {
@@ -337,6 +421,13 @@ private final class ReachLinuxHost: @unchecked Sendable {
     var botsBody: NSDictionary? { lock.withLock { _botsBody } }
     var botsRequests: [String] { lock.withLock { _botsRequests } }
     var uploaded: Data? { lock.withLock { _uploaded } }
+    // Live session state the host reports: running runs by session, pending
+    // questions, whether its harness steers, and the library schema it reports.
+    private var _running: [String: String] = [:], _pending: [CompanionPendingInteraction] = [], _canSteer = false, _librarySchema: String?
+    var running: [String: String] { get { lock.withLock { _running } } set { lock.withLock { _running = newValue } } }
+    var pending: [CompanionPendingInteraction] { get { lock.withLock { _pending } } set { lock.withLock { _pending = newValue } } }
+    var canSteer: Bool { get { lock.withLock { _canSteer } } set { lock.withLock { _canSteer = newValue } } }
+    var librarySchema: String? { get { lock.withLock { _librarySchema } } set { lock.withLock { _librarySchema = newValue } } }
     /// Whether a signed upgrade would be accepted here, as the server's socket handler checks it.
     func verifies(method: String, target: String, headers: [String: String]) async throws -> Bool {
         let lowered = Dictionary(uniqueKeysWithValues: headers.map { ($0.key.lowercased(), $0.value) })
@@ -400,7 +491,27 @@ private final class ReachLinuxHost: @unchecked Sendable {
                 let id = String(route.dropFirst("/v1/execution/commands/".count))
                 guard let saved = lock.withLock({ _receipts[id] }) else { return try reply(404, ["error": "not_found"]) }
                 return (try JSONEncoder().encode(saved), HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
-            case ("GET", "/v1/execution/interactions"): return try reply(200, [] as [Any])
+            case ("GET", "/v1/execution/interactions"):
+                return (try JSONEncoder().encode(pending), HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            case ("GET", "/v1/execution/conversations"):
+                let running = running
+                let sessions = created.compactMap(\.conversationID).map { id in
+                    CompanionConversation(id: id, title: "Build it", providerID: "codex", runtimeKind: "codex", activeRunID: running[id],
+                                          preview: "Working", updatedAt: "2026-11-09T12:00:00Z", libraryID: descriptor.libraryID, workspaceID: descriptor.id)
+                }
+                return (try JSONEncoder().encode(sessions), HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            case ("GET", let route) where route.hasPrefix("/v1/execution/conversations/") && route.hasSuffix("/transcript"):
+                let id = String(route.dropFirst("/v1/execution/conversations/".count).dropLast("/transcript".count))
+                let paged = target.contains("before=")
+                let messages = (paged ? ["Earlier"] : (0..<25).map { "Message \($0)" }).enumerated().map { index, text in
+                    CompanionMessage(id: "\(id)-\(paged ? "old" : "new")-\(index)", conversationID: id, role: "assistant",
+                                     content: index == 0 && !paged ? String(repeating: "x", count: 5000) : text, createdAt: "2026-11-09T12:00:00Z")
+                }
+                return (try JSONEncoder().encode(CompanionTranscript(conversationID: id, messages: messages, olderCursor: paged ? nil : "cursor-1")),
+                        HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+            case ("GET", let route) where route.hasPrefix("/v1/execution/conversations/") && route.hasSuffix("/capabilities"):
+                let provider = CompanionProvider(id: "codex", runtimeKind: "codex", displayName: "Codex", available: true, canSteer: canSteer)
+                return (try JSONEncoder().encode(provider), HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
             case ("GET", "/v1/execution/events"): return (try JSONEncoder().encode(CompanionJournalPage(libraryID: descriptor.libraryID, cursor: 0)), HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
             case ("GET", "/v1/host/status"): return try reply(200, ["state": "running", "roles": ["workspace": true]])
             case ("GET", "/v1/host/logs"): return try reply(200, ["logs": "server started"])

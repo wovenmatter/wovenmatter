@@ -52,6 +52,8 @@ final class WorkspaceAgentToolsModel {
     let calendarTaskHandler: CalendarTaskHandler?
     var calendarProjection: (@MainActor () async throws -> Void)?
     var replicaReadHandler: (@MainActor (WovenMatterToolRequest, WovenMatterToolCommand, String) async throws -> WovenMatterToolResponse?)?
+    /// Sessions other members' workspaces run (`WorkspaceToolHandlers.memberSession`).
+    var memberSessionHandler: (@MainActor (WovenMatterToolRequest, WovenMatterToolCommand, String) async throws -> WovenMatterToolResponse?)?
     let database: WorkspaceDatabase
     private(set) var settings: WorkspaceToolSettings
     private(set) var sessionPolicies: [String: WorkspaceSessionTools] = [:]
@@ -444,6 +446,9 @@ final class WorkspaceAgentToolsModel {
         if let projection = calendarProjection { handlers.calendarProjection = { try await projection() } }
         if let handler = replicaReadHandler {
             handlers.replicaRead = { request, command, caller in try await handler(request, command, caller) }
+        }
+        if let handler = memberSessionHandler {
+            handlers.memberSession = { request, command, caller in try await handler(request, command, caller) }
         }
         if let handler = automationHandler {
             handlers.automation = { caller, command, request in try await handler(caller, command, request) }
