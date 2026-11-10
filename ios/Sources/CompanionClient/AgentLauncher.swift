@@ -46,7 +46,7 @@ public struct CompanionAgentLauncher: Identifiable, Equatable, Sendable {
       (provider.available && provider.canStart) || knownAgentIDs.contains(workspace + ":" + provider.id)
     }
     let workspaces = workspaces.filter { !$0.deleted }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
-    let central = workspaces.first { $0.kind == .mac && $0.capabilities.contains("history.central.v1") }
+    let central = workspaces.first(where: \.isLiveCentralMac)
     var result: [Self] = [.init(workspaceID: "local", workspaceName: deviceName, providerID: "pi-durable-device", name: "Quick Chat", runtimeKind: "pi")]
     var representedDirectAgents = Set<String>()
     for provider in providers where known(provider, workspace: "central") {
@@ -93,6 +93,14 @@ public struct CompanionAgentLauncher: Identifiable, Equatable, Sendable {
   }
 }
 
+extension CompanionExecutionWorkspace {
+  /// The central Mac's live workspace. A copied snapshot owner (`retainedHistory`)
+  /// keeps the capability for its history but is not the central Mac.
+  public var isLiveCentralMac: Bool {
+    kind == .mac && capabilities.contains("history.central.v1") && !deleted && retainedHistory != true
+  }
+}
+
 /// The directory, rather than available agents, determines which workspaces exist.
 public struct CompanionAgentGroup: Identifiable, Equatable, Sendable {
   public var id: String
@@ -106,8 +114,9 @@ public struct CompanionAgentGroup: Identifiable, Equatable, Sendable {
       if let index = groups.firstIndex(where: { $0.id == agent.groupID }) { groups[index].agents.append(agent) }
       else { groups.append(.init(id: agent.groupID, name: agent.workspaceName, agents: [agent])) }
     }
-    for workspace in workspaces where !workspace.deleted {
-      let id = workspace.kind == .mac && workspace.capabilities.contains("history.central.v1") ? "central" : workspace.id
+    // A copied snapshot owner is history, not a workspace to launch in; it must not rename the central group.
+    for workspace in workspaces where !workspace.deleted && workspace.retainedHistory != true {
+      let id = workspace.isLiveCentralMac ? "central" : workspace.id
       if let index = groups.firstIndex(where: { $0.id == id }) {
         groups[index].workspace = workspace; groups[index].name = workspace.name
       } else { groups.append(.init(id: id, name: workspace.name, workspace: workspace, agents: [])) }
