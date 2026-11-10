@@ -225,21 +225,19 @@ final class CompanionHostController {
                         throw CompanionAPIError(code: "unauthorized", message: "This device is no longer paired.")
                     }
                 }, authorizeGrant: authorizeGrant, members: try? await peerSync.members())
-            // A signed member request (any Mac or phone member), or for devices
-            // paired before members, a current execution grant.
+            // Only a signed member request (a Mac or phone member). Other Macs
+            // reach this Mac's bots with their member key; no grant is accepted.
             authorizeBots = { [weak self] request in
-                if MemberRequestVerifier.isSigned(request.headers) {
-                    guard let self else { throw CompanionAPIError(code: "unavailable", message: "This sharing session has stopped.") }
-                    _ = try await self.authenticateMember(request, allowing: [.mac, .ios])
-                    return
+                guard MemberRequestVerifier.isSigned(request.headers) else {
+                    throw CompanionAPIError(code: "unauthorized", message: "Sign this request with a member device key.")
                 }
-                guard let bearer = request.bearer else { throw CompanionAPIError(code: "unauthorized", message: "A device credential is required.") }
-                let grant = try await executionAuth.authenticateGrant(bearer: bearer)
-                try await authorizeGrant(grant.scope.deviceID, grant.provisionedBy)
+                guard let self else { throw CompanionAPIError(code: "unavailable", message: "This sharing session has stopped.") }
+                _ = try await self.authenticateMember(request, allowing: [.mac, .ios])
             }
             inferenceHost = CompanionInferenceHost(authentication: executionAuth, descriptor: local,
                 directory: try supportDirectory ?? ApplicationModel.dashboardSupportDirectory(),
-                isActive: { [weak self] in self?.generation == expectedGeneration && self?.endpoint != nil }, authorize: authorizeGrant)
+                isActive: { [weak self] in self?.generation == expectedGeneration && self?.endpoint != nil }, authorize: authorizeGrant,
+                members: try? await peerSync.members())
             isStarting = false; status = "Available to your paired devices"
             // Paired-Mac credential storage is independent of phone and library
             // availability. A failure is reported and retried, never fatal.

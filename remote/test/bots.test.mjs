@@ -14,6 +14,7 @@ import { createBotPreviews } from '../src/bots-previews.mjs'
 import { createBotsRuntime } from '../src/bots-runtime.mjs'
 import { botEngineLayout, createBotEngine, machineIdentity } from '../src/bots-engine.mjs'
 import { createBotsService } from '../src/bots-service.mjs'
+import { createMemberVerifier, privateKeyFromSeed, rawPublicKeyFor, signMemberRequest } from '../src/member-auth.mjs'
 
 const temporary = t => { const directory = mkdtempSync(join(tmpdir(), 'woven-bots-')); t.after(() => rmSync(directory, { recursive: true, force: true })); return directory }
 const listen = server => new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve(server.address().port)))
@@ -247,7 +248,7 @@ async function serviceFixture(t, overrides = {}) {
   const service = createBotsService({ configuration: { stateDirectory: directory, dataRoot: directory, botsData: join(directory, 'bots'), serviceRoot: directory, botsEnabled: true, workspaceEnabled: false, botsInstance: 'wmtest' },
     mcp, defaultAgent: { botCredentials: async value => { credentialsCalls.push(value); return { provider: value.provider, credential: { type: 'api_key', key: 'k' } } } },
     serverPort: () => port, library: createBotConversationLibrary(memory), engine, runtime: runtimeStub, previews, machine,
-    authorizeClient: request => request.headers.authorization === 'Bearer device', log: () => {} })
+    authorizeClient: overrides.authorizeClient ?? (request => request.headers.authorization === 'Bearer device'), log: () => {} })
   const json = (response, status, value) => { response.writeHead(status, { 'content-type': 'application/json' }); response.end(JSON.stringify(value)) }
   const readJSON = async request => { let text = ''; for await (const chunk of request) text += chunk; return text ? JSON.parse(text) : {} }
   const server = createServer(async (request, response) => {
@@ -345,6 +346,39 @@ test('the runtime starts once the engine finishes installing, and lowering the p
   await service.handleClient({ method: 'POST', headers: {} }, response, new URL('http://x/v1/bots/resources'), { readJSON: async () => ({ resources: { poolBytes: 2 * 1024 ** 3 } }), json, administrator: true, device: null })
   assert.equal(response.statusCode, 200)
   assert.equal(response.value.resources.perBotBytes, 2 * 1024 ** 3)
+})
+
+// The Mac signs its bots socket upgrade for this host (WOVEN_EVERYWHERE.md, "Membership and
+// device keys"): the server verifies it as server.mjs does, with the Serve prefix restored.
+test('a signed member upgrade opens the bots socket only at the member it names', async t => {
+  const runtimeServer = createServer()
+  runtimeServer.on('upgrade', (request, socket) => {
+    socket.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n')
+    socket.on('data', data => socket.write(data)); socket.on('error', () => {})
+  })
+  const runtimePort = await listen(runtimeServer); t.after(() => runtimeServer.close())
+  const runtime = { start() {}, stop: async () => {}, restart: async () => {}, status: () => ({ running: true }), endpoint: () => ({ host: '127.0.0.1', port: runtimePort, token: 'runtime-token' }) }
+  const mac = { deviceID: randomUUID(), key: privateKeyFromSeed(Buffer.alloc(32, 7)) }, here = randomUUID(), prefix = '/wovenmatter-execution/box'
+  const verifier = createMemberVerifier({ audience: here, loadMembers: async () => ({ revision: '1', members: [
+    { deviceID: mac.deviceID, kind: 'mac', name: 'Studio', publicKey: rawPublicKeyFor(mac.key).toString('base64'), endpoints: [], revoked: false }] }) })
+  t.after(() => verifier.close())
+  const authorizeClient = request => verifier.verify({ method: request.method, target: request.url, alternateTargets: [prefix + request.url],
+    headers: request.headers, body: Buffer.alloc(0) }).then(() => true)
+  const f = await serviceFixture(t, { runtime, authorizeClient })
+  const handshake = headers => new Promise(resolve => {
+    const socket = connect(f.port, '127.0.0.1'); let text = ''
+    socket.on('data', data => { text += data; if (text.includes('\r\n\r\n')) { if (text.includes('101')) socket.write('echo'); if (!text.includes('101') || text.includes('echo')) { socket.destroy(); resolve(text) } } })
+    socket.on('close', () => resolve(text))
+    const lines = Object.entries(headers).map(([name, value]) => `${name}: ${value}\r\n`).join('')
+    socket.write(`GET /v1/bots/ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n${lines}\r\n`)
+  })
+  // The Mac signs the full execution path it sends; Serve strips the prefix before this server.
+  const signed = (audience, options = {}) => signMemberRequest({ deviceID: mac.deviceID, privateKey: mac.key, audience, method: 'GET', target: prefix + '/v1/bots/ws', ...options })
+  const fresh = signed(here)
+  assert.match(await handshake(fresh), /101[\s\S]*echo/)
+  assert.match(await handshake(fresh), /401/, 'an upgrade cannot be replayed')
+  assert.match(await handshake(signed(randomUUID())), /401/, 'an upgrade signed for another member is refused')
+  assert.match(await handshake({ ...signed(here), 'x-woven-member-audience': randomUUID() }), /401/)
 })
 
 test('the bots socket requires client authorization and reaches the runtime with the runtime token only', async t => {

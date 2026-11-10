@@ -118,6 +118,10 @@ extension CompanionModel {
   }
   func authorizedWorkspaceCredential(_ id: String) async throws -> DirectWorkspaceCredential {
     guard !fixture, !isolatedTestHost else { throw DeviceExecutionError.unavailable("Use the regular app to authorize execution workspaces.") }
+    // Member mode: the host verifies this phone's signature, so nothing is issued.
+    if inferenceHostDeviceID(id) != nil, let workspace = executionWorkspaces.first(where: { $0.id == id }), let endpoint = workspace.endpoint {
+      return DirectWorkspaceCredential(endpoint: endpoint, libraryID: workspace.libraryID, workspaceID: workspace.id, deviceID: state.deviceID, token: "")
+    }
     if let existing = try workspaceCredentials.load(id), await acceptsWorkspaceCredential(existing) { return existing }
     guard online, transport != nil else { throw DeviceExecutionError.unavailable("Connect to your central database to authorize this workspace for the first time.") }
     return try await issueWorkspaceCredential(id, generation: connectionGeneration)
@@ -179,11 +183,13 @@ extension CompanionModel {
         if !force, let after = workspaceRefreshAfter[workspace.id], after > Date() { continue }
         // Member mode: signed requests straight to the workspace's own
         // endpoint, whichever Macs are offline. No grant is issued or stored.
-        if let memberIdentity, memberMode, let endpoint = workspace.endpoint, !memberUnsupportedWorkspaceIDs.contains(workspace.id),
+        // Only a workspace whose serving member is known can be addressed; others keep their grant.
+        if let memberIdentity, memberMode, let endpoint = workspace.endpoint, let audience = membership?.audience(for: workspace),
+           !memberUnsupportedWorkspaceIDs.contains(workspace.id),
            workspaceClients[workspace.id] == nil || memberClientEndpoints[workspace.id] != endpoint {
           workspacePollTasks.removeValue(forKey: workspace.id)?.cancel()
           workspaceClients[workspace.id] = WorkspaceClient(store: store, workspaceID: workspace.id,
-            transport: try HTTPSExecutionWorkspaceTransport(workspace: workspace, identity: memberIdentity, performer: httpPerformer))
+            transport: try HTTPSExecutionWorkspaceTransport(workspace: workspace, identity: memberIdentity, audience: audience, performer: httpPerformer))
           memberClientEndpoints[workspace.id] = endpoint
         }
         if workspaceClients[workspace.id] == nil {

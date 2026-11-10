@@ -266,19 +266,23 @@ test('the server accepts signed member requests and rejects wrong keys, replays,
   let output = ''
   child.stdout.on('data', data => { output += data }); child.stderr.on('data', data => { output += data })
   const base = 'http://127.0.0.1:' + port
+  let audience = null
   const signed = (who, method, path, body, options = {}) => {
-    const headers = signMemberRequest({ deviceID: who.deviceID, privateKey: who.key, method, target: path, body: body ? Buffer.from(body) : Buffer.alloc(0), ...options })
+    const headers = signMemberRequest({ deviceID: who.deviceID, privateKey: who.key, audience, method, target: path, body: body ? Buffer.from(body) : Buffer.alloc(0), ...options })
     return fetch(base + path, { method, headers: { ...headers, ...(body ? { 'content-type': 'application/json' } : {}) }, ...(body ? { body } : {}) })
   }
   let identity
   for (let i = 0; i < 200; i++) {
-    try { identity = await (await fetch(base + '/v1/health', { headers: { authorization: 'Bearer ' + token } })).json(); if (identity.memberIdentity) break } catch {}
+    // identity.json is written beside the health report; wait for both.
+    try { identity = await (await fetch(base + '/v1/health', { headers: { authorization: 'Bearer ' + token } })).json(); if (identity.memberIdentity && existsSync(join(home, 'state/library/identity.json'))) break } catch {}
     await new Promise(r => setTimeout(r, 50))
   }
   assert.ok(identity?.memberIdentity, output)
   assert.equal(identity.memberIdentity.kind, 'linux'); assert.match(identity.memberIdentity.publicKey, /^[A-Za-z0-9+/]+=*$/)
   assert.equal(JSON.parse(readFileSync(join(home, 'state/library/identity.json'), 'utf8')).deviceID, identity.memberIdentity.deviceID)
   assert.equal(identity.library.ready, true)
+  // Requests are addressed to this host's own member device ID.
+  audience = identity.memberIdentity.deviceID
 
   // A Mac member administers the host; a phone member does not.
   assert.equal((await signed(mac, 'GET', '/v1/health')).status, 200)
@@ -299,11 +303,14 @@ test('the server accepts signed member requests and rejects wrong keys, replays,
   assert.equal((await signed(phone, 'GET', '/v1/execution', null, { nonce })).status, 200)
   await refused(await signed(phone, 'GET', '/v1/execution', null, { nonce }), 'member_nonce_replayed')
   // A body that differs from the signed one is refused.
-  const headers = signMemberRequest({ deviceID: mac.deviceID, privateKey: mac.key, method: 'POST', target: '/v1/execution/devices', body: Buffer.from(provision) })
+  const headers = signMemberRequest({ deviceID: mac.deviceID, privateKey: mac.key, audience, method: 'POST', target: '/v1/execution/devices', body: Buffer.from(provision) })
   await refused(await fetch(base + '/v1/execution/devices', { method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: provision.replace('execution', 'inference') }), 'member_signature_mismatch')
   // A Mac signs the execution endpoint's full path, which Serve strips.
   assert.equal((await signed(phone, 'GET', '/v1/execution', null, { target: '/wovenmatter-execution/studio/v1/execution' })).status, 200)
   await refused(await signed(phone, 'GET', '/v1/execution', null, { target: '/wovenmatter-execution/other/v1/execution' }), 'member_signature_mismatch')
+  // A request addressed to another member (captured on its way there) is
+  // refused here even though its nonce is new to this host.
+  await refused(await signed(phone, 'GET', '/v1/execution', null, { audience: randomUUID() }), 'member_audience_mismatch')
   // (Revocation is applied on the next member list refresh; member-auth.test.mjs covers it.)
   // The installer's bearer still works during the transition.
   assert.equal((await fetch(base + '/v1/health', { headers: { authorization: 'Bearer ' + token } })).status, 200)

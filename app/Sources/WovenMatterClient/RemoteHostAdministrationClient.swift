@@ -9,9 +9,10 @@ public struct RemoteHostAdministrationClient: Sendable {
     private let client: MemberSignedHTTPClient
 
     /// `endpoint` is the host's execution endpoint, such as
-    /// `https://host.tailnet.ts.net/wovenmatter-execution/<id>`.
-    public init(endpoint: URL, signer: MemberRequestSigner, send: MemberSignedHTTPClient.Send? = nil) throws {
-        client = try MemberSignedHTTPClient(endpoint: endpoint, signer: signer, send: send)
+    /// `https://host.tailnet.ts.net/wovenmatter-execution/<id>`, and `audience`
+    /// the host's member device ID (the registry's `executionDeviceID`).
+    public init(endpoint: URL, signer: MemberRequestSigner, audience: String, send: MemberSignedHTTPClient.Send? = nil) throws {
+        client = try MemberSignedHTTPClient(endpoint: endpoint, signer: signer, audience: audience, send: send)
     }
 
     /// `remote-host.sh status` plus `library` and `memberIdentity`.

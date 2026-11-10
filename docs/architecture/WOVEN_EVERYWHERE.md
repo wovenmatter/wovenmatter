@@ -85,13 +85,17 @@ same commit.
   takes effect as soon as the revocation syncs.
   - Headers:
     - `X-Woven-Member-Device`: the caller's device ID.
+    - `X-Woven-Member-Audience`: the destination member's device ID. Every
+      member keeps its own nonce cache, so without it a request captured on
+      its way to one member could be replayed to another within the window.
     - `X-Woven-Member-Time`: Unix time in milliseconds.
     - `X-Woven-Member-Nonce`: 16 random bytes, base64url without padding.
     - `X-Woven-Member-Signature`: an Ed25519 signature, base64url without
       padding.
   - The signed message is the UTF-8 string
-    `woven-member-v1\n<METHOD>\n<path with query>\n<time>\n<nonce>\n<hex SHA-256 of body>`.
-    An empty body hashes the empty string. A WebSocket upgrade signs its
+    `woven-member-v2\n<audience>\n<METHOD>\n<path with query>\n<time>\n<nonce>\n<hex SHA-256 of body>`.
+    Device IDs (caller and audience) are lowercase UUIDs. An empty body
+    hashes the empty string. There is no `v1` fallback. A WebSocket upgrade signs its
     `GET` request. The path is the request target exactly as the client
     sends it, except that a leading `/wovenmatter` mount is dropped
     (`MemberRequestSignature.canonicalTarget`: `/wovenmatter/v1/x?y` and
@@ -102,15 +106,43 @@ same commit.
     path, and the Node server, which sees the path with that prefix stripped,
     also accepts a signature over the path with it restored.
   - The verifier accepts a request when:
+    - the audience is its own member device ID (checked first). A Linux
+      host's Node server and library host share the machine's ID and keep
+      separate nonce caches; their signed routes do not overlap, so a
+      request for one does nothing at the other;
     - the device is on the current member list and not revoked;
     - the time is within 300 seconds of its own clock;
     - it has not seen the nonce in that window;
     - the signature verifies with the member's raw 32-byte Ed25519 public key.
       That key is CryptoKit `Curve25519.Signing` compatible, and Node verifies
       it with `crypto.verify(null, …)`.
+  - **Where the audience comes from.** A caller takes the destination's
+    device ID only from a signed or synced record, never from what the
+    endpoint says about itself (a member that answered for another could
+    otherwise collect requests to replay there): a member list entry
+    (`deviceID` beside its `endpoints`; peer sync, Node's Mac delegate, the
+    phone's host choice) or, for a workspace (execution, bots, host
+    administration, inference, `/mcp/workspace`), `MemberAudience.serving`
+    (shared Swift; Node `createMemberTransport().audienceFor`): the
+    registry's `executionDeviceID` when that is an active member, or a Mac
+    workspace's (a Mac's execution device is its member ID); otherwise, for a
+    Linux workspace, the one active `linux` member whose advertised endpoints
+    share the workspace endpoint's `.ts.net` host, because a Linux host's Node
+    server names its own random execution device ID, not its member ID. Two
+    members claiming one host: nobody. A Mac accepts a Linux host's
+    `/mcp/workspace` call from that serving member as well as from the
+    execution device. The installing Mac addresses its first adoption to the
+    `memberIdentity.deviceID` it read over SSH. A phone learns the pairing
+    Mac's ID from `CompanionPairResponse.hostDeviceID`. `GET /v1/identity`
+    is used only by the Mac that is about to sign that host's entry. A
+    workspace or host without a known device ID is not signed for
+    (`member_audience_unknown`); the caller treats it as not reachable yet.
   - The shared test vectors in
-    `shared/Tests/WovenMatterCompanionTests/MemberSignatureVectors.json` are
-    checked by Swift and by Node (`remote/test/member-auth.test.mjs`).
+    `shared/Tests/WovenMatterCompanionTests/MemberSignatureVectors.json`
+    (regenerate with `generate-member-signature-vectors.mjs` there) are
+    checked by Swift (CryptoKit, and swift-crypto through
+    `MemberSyncTests`) and by Node (`remote/test/member-auth.test.mjs`),
+    including an `audience-changed` reject.
 - Pairing a new device still uses the existing pairing link and confirmation
   UI on a Mac. Its result is a signed member entry instead of a bearer grant.
 - The Linux Node server verifies member signatures itself. It reads the member
@@ -123,14 +155,15 @@ same commit.
   request from any member gets what a device grant had: execution and
   inference routes, `GET /v1/bots/status|resources` and `GET /v1/bots/ws`. A
   `mac` member is also an administrator, like the installing Mac's bearer:
-  every administrator route, the bots changes and `/v1/host/*`. During the
-  transition the installer's API bearer and existing device grants keep
-  working beside signatures; the runtime host API (`/v1/bots-host/*`) and
-  session MCP (`/mcp`) keep their own bearers.
+  every administrator route, the bots changes and `/v1/host/*`. The bearers
+  it still accepts are listed under "Bearers that remain".
 - Swift (`shared/…/MemberRequestSignature.swift`): `MemberRequestSigner`
-  (`headers(method:target:body:)`) and `MemberRequestVerifier` (nonce cache,
+  (`headers(method:target:body:audience:)`, or `bodySHA256:` for a hashed
+  body) and `MemberRequestVerifier(audience:…)` (own device ID, nonce cache,
   window) are portable; `MemberIdentity.signer` and `MemberDirectory.verifier`
-  bind them to a device key and the resolved list.
+  bind them to a device key and the resolved list. Node:
+  `signMemberRequest({…, audience})` and `createMemberVerifier({loadMembers,
+  audience})`, where the server's audience is its library host's identity.
   `MemberDirectory.authenticate(_:allowing:)` checks any request (the Mac's
   bots WebSocket upgrade uses it through
   `CompanionHostController.authenticateMember`). On a Mac, signed requests are
@@ -138,18 +171,21 @@ same commit.
   `mac`), `/v1/execution/*` (`mac`, `ios`, `linux`; no execution grant
   needed), `/mcp/workspace` and `/mcp/workspace/prepare` (`linux`, in place
   of the single-Mac library grant; see "Sessions across devices") and
-  `/v1/bots/*` (`mac`, `ios`). Bearer grants keep working beside them until
-  every phone pairs as a member.
-- Swift clients sign with `MemberSignedHTTPClient`
+  `/v1/bots/*` (`mac`, `ios`; signed only, no grant). The inference host
+  takes signed `ios` and `mac` members too ("iPhone reach"). Grants for
+  phones paired before members keep working on the mobile, execution and
+  inference routes.
+- Swift clients sign with `MemberSignedHTTPClient(endpoint:signer:audience:)`
   (`app/Sources/WovenMatterClient`): the target is the exact path sent, so a
   Mac endpoint (`https://<mac>.<tailnet>.ts.net:<port>/wovenmatter`, no
   trailing slash) signs `/wovenmatter/…` and a Linux execution endpoint
   (`…/wovenmatter-execution/<id>/`) signs its full path. The Mac app's
   `SignedExecutionWorkspaceTransport` replaces execution grants for every
-  other Mac and Linux workspace; `CentralExecutionClient` falls back to a
-  saved grant only when an older peer answers 401/403, and nothing is
-  provisioned (`/v1/peers/credential` no longer requires the workspace's
-  owner Mac). A phone grant for a Linux workspace is issued by that host
+  other Mac and Linux workspace with a known `executionDeviceID`; a signed
+  refusal is final ("does not recognize this Mac yet" until the member lists
+  synchronize), with no saved-grant fallback, and nothing is provisioned
+  (`/v1/peers/credential` no longer requires the workspace's owner Mac). A
+  workspace without an `executionDeviceID` still uses a saved grant. A phone grant for a Linux workspace is issued by that host
   (signed `POST /v1/execution/devices`) from any Mac.
 - Node signs through its library host: `POST /v1/members/sign` on the
   library socket returns the headers for one request, so the Linux private
@@ -171,8 +207,36 @@ same commit.
   Linux hosts") and manages it with these signed routes
   (`RemoteHostAdministrationClient`): status, logs, restart, bots-configure
   and update, which uploads this Mac's host bundle and polls `GET
-  /v1/host/update`. Nothing says which Mac added a host.
+  /v1/host/update`. Nothing says which Mac added a host. "Update everything"
+  (`BotUpdatePlan.Step.linuxHost`) updates every Linux host in the registry
+  this way (`RemoteWorkspacesModel.runSharedHost(_:.update)`); SSH is only
+  the fallback for a host this Mac added. A Linux host's sessions use any
+  Mac's `/mcp/workspace` once the session's `companion_execution_conversations`
+  row has synchronized there, whichever Mac added the host. On a Mac, other
+  Macs' agents (including those for Linux hosts they added) sync as peer
+  agents (`pairedAgentWorkspaces`), and a new chat with one is created on its
+  workspace with signed requests (`createPairedMacSession`).
 - Bots are not members. Each bot has its own Woven MCP key (see Bots).
+- **Bearers that remain**, and why:
+  - The installer's API bearer, through the SSH tunnel of the Mac that added
+    a host: first install, the first member adoption (before the host knows
+    any Mac), the SSH update fallback, that Mac's own management link
+    (`RemoteWorkspaceServiceClient`) and a bots-only host that is not in the
+    registry.
+  - Outside-client and session MCP bearers (`/mcp`, agent tool sessions),
+    bot MCP keys (bots are not members), the runtime host API
+    (`/v1/bots-host/*`) and runtime token, and the library socket's local
+    bearer: none of these is a call between members.
+  - Grants for phones paired before members: the Mac's mobile API pairing
+    credential and execution and inference grants
+    (`CompanionExecutionAuthentication`), Linux device grants
+    (`POST /v1/execution/devices`, issued from any Mac), and the phone's
+    saved grants for workspaces too old for signatures.
+  - The Linux host's single-Mac library MCP grant and publisher grant, issued
+    by the Mac that added it: only a fallback for a host without a library
+    host or with no Mac member answering.
+  - A Mac's saved execution grant for a workspace with no `executionDeviceID`
+    (a library client's secondary execution workspace).
 
 ## Library on every surface
 
@@ -351,13 +415,17 @@ Membership, publishing and bot routes on the local API
 - `POST /v1/members/self {name?, endpoints}` updates this machine's own
   entry; the server sends it (`{name: hostname, endpoints: [<published
   library route>]}`) after each Serve publish so peers use that address.
-- `POST /v1/members/sign {method, target, bodySHA256}` → `{headers:
-  {X-Woven-Member-Device, X-Woven-Member-Time, X-Woven-Member-Nonce,
-  X-Woven-Member-Signature}}`: signs one outgoing request of the Node server
-  with this machine's member key. `target` is the path with query exactly as
-  sent (an absolute, printable ASCII target of at most 8 KiB), `bodySHA256`
-  the body's lowercase hex SHA-256; methods are GET, POST, PUT, PATCH and
-  DELETE. Only the socket serves it.
+- `POST /v1/members/sign {method, target, bodySHA256, audience}` →
+  `{headers: {X-Woven-Member-Device, X-Woven-Member-Audience,
+  X-Woven-Member-Time, X-Woven-Member-Nonce, X-Woven-Member-Signature}}`:
+  signs one outgoing request of the Node server with this machine's member
+  key. `target` is the path with query exactly as sent (an absolute,
+  printable ASCII target of at most 8 KiB), `bodySHA256` the body's lowercase
+  hex SHA-256 and `audience` the destination member's lowercase device ID
+  (not this machine's); methods are GET, POST, PUT, PATCH and DELETE. Only
+  the socket serves it: on loopback every `/v1/members/…` path is 404, and
+  mounts match whole path segments. `remote/src/member-client.mjs` requires
+  `audience` on every request (`macs()` entries and registry rows carry it).
 - `GET /v1/workspaces` → `{workspaces: [CompanionExecutionWorkspace]}`: the
   synced execution workspace registry (every Mac, Linux and iPhone
   workspace this library knows, deleted ones left out), which the server
@@ -424,8 +492,9 @@ proof) with `X-Woven-Protocol: 3`, `X-Woven-Workspace-ID: <this workspace>`,
 `MCP-Protocol-Version`, and no bearer (`createMemberMacDelegate`). Macs are
 tried in sync-status order, online first; another Mac is tried only when the
 request never reached one or was refused before any effect (401, 403, 404,
-426, 503). The Mac accepts the call when the signer is the execution device
-of that non-deleted Linux workspace and the conversation belongs to it. Bots
+426, 503). The Mac accepts the call when the signer serves that non-deleted
+Linux workspace (its execution device, or the member `MemberAudience.serving`
+names) and the conversation belongs to it. Bots
 cannot use this route (it binds a conversation), so their Mac-only tools are
 unavailable unless the legacy grant exists; their timers are served and fired
 locally. The single-Mac grant
@@ -592,8 +661,17 @@ hands them to the macOS job, which checks them with
   its own sessions use the mobile API, and every other workspace with an
   endpoint (each Mac's own and each Linux workspace) gets a signed direct
   client, with no execution grant. A workspace too old for signatures keeps
-  its bearer grant. Inference adapters on a Mac still use their bearer grant
-  (the Mac's inference host does not accept signatures yet).
+  its bearer grant.
+- **Inference.** A Mac's inference host (`/v1/inference/catalog`,
+  `/v1/inference/stream`, `CompanionInferenceHost`) accepts signed `ios` and
+  `mac` members: the principal is the member's device ID, a named
+  `X-Woven-Workspace` / `X-Woven-Library` / `X-Woven-Device` must match it and
+  this Mac, and removal is checked before credentials are prepared and again
+  before a stream starts. In member mode the phone saves hosted connections
+  with `InferenceHostScope.hostDeviceID` (the workspace's `executionDeviceID`)
+  and no credential, and `CompanionInferenceService` signs them through
+  `InferenceMemberSigning` (installed with the phone's member key); a
+  connection without `hostDeviceID` keeps presenting its grant.
 - **Migration.** Existing phone data stays. A phone paired before members
   shows "Pair again once with any Mac"; pairing with a Mac of the same
   library set (its registry holds the phone's previous library) keeps the
@@ -1178,10 +1256,18 @@ under `/wovenmatter` when reached through Tailscale Serve:
 | `POST /v1/bots/resources` `{ resources: { poolBytes, perBotBytes, diskBytes } }` | the status after applying; `null` is no cap (Linux also leaves a missing field as it is) |
 | `GET /v1/bots/ws` (WebSocket upgrade) | proxied to the runtime's `/ws` with the runtime's own bearer |
 
-Until member auth lands, a Mac's server accepts any current execution grant
-(`CompanionExecutionAuthentication`) for these routes, and a Linux server accepts its
-workspace API token through the SSH tunnel. On the Mac, `ApplicationModel.botsAccess`
-is the one function member auth replaces.
+A Mac reaches every other member's bots with signed requests
+(`ApplicationModel.botsClient(for:)`, a `MemberSignedHTTPClient` addressed to the
+workspace's `executionDeviceID`): every Mac and Linux workspace in the synced
+registry, whichever Mac added it, at `<endpoint>/v1/bots/*` (a Linux host's execution
+endpoint `…/wovenmatter-execution/<id>/`, a Mac's `…/wovenmatter`). The status reply
+must name that device. The socket is `BotSocketEndpoint.signed(url, audience:)`: the
+window asks the process that holds the member key for fresh upgrade headers before
+every connection attempt (`BotsCommand.signSocket(url:audience:)`, which signs only a
+member's `…/v1/bots/ws` on a `.ts.net` address), and `PiBotClient(authorize:)` sends
+them instead of a bearer. A Linux host this Mac added that is not in the registry (a
+bots-only server) is still reached through its SSH tunnel with the installer's
+bearer. A Mac's server accepts only signed members on `/v1/bots/*`.
 
 **Linux bots-only install.** The Mac runs `remote-host.sh prepare AUTHORIZED
 <access-mode> bots`, then `remote-host.sh install <workspace-id> <port> <access-mode>

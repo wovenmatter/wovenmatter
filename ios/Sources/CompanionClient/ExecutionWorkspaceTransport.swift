@@ -66,12 +66,18 @@ public final class HTTPSExecutionWorkspaceTransport: ExecutionWorkspaceTransport
   /// Signed member requests straight to a Mac or Linux workspace's own
   /// execution endpoint. No grant is issued; the workspace checks the
   /// signature against its member list, whichever Macs are offline.
-  public init(workspace: CompanionExecutionWorkspace, identity: MobileMemberIdentity, performer: (any MobileHTTPPerforming)? = nil) throws {
+  /// `audience` is the member that serves the workspace (`MobileMembershipState.audience(for:)`);
+  /// by default its execution device, which is a Mac's member ID.
+  public init(workspace: CompanionExecutionWorkspace, identity: MobileMemberIdentity, audience: String? = nil,
+              performer: (any MobileHTTPPerforming)? = nil) throws {
     guard let endpoint = workspace.endpoint, !workspace.deleted else { throw MobileConnectionError.offline }
+    guard let audience = (audience ?? workspace.executionDeviceID)?.lowercased(), MemberRequestSignature.isDeviceID(audience) else {
+      throw MobileConnectionError.memberUnknown
+    }
     credential = .init(endpoint: endpoint, libraryID: workspace.libraryID, workspaceID: workspace.id, deviceID: identity.deviceID, token: "")
     client = try TailnetJSONClient(endpoint: endpoint, token: "",
       headers: ["X-Woven-Library": workspace.libraryID, "X-Woven-Workspace": workspace.id, "X-Woven-Device": identity.deviceID],
-      signer: identity.signer, performer: performer)
+      signer: identity.signer, audience: audience, performer: performer)
   }
   public func identity() async throws -> CompanionExecutionWorkspace {
     let value: CompanionExecutionWorkspace = try await client.request("v1/execution")
@@ -120,13 +126,14 @@ final class TailnetJSONClient: @unchecked Sendable {
   private let token: String
   private let headers: [String: String]
   let signer: MemberRequestSigner?
+  private let audience: String
   private let performer: any MobileHTTPPerforming
-  init(endpoint: URL, token: String, headers: [String: String], signer: MemberRequestSigner? = nil,
+  init(endpoint: URL, token: String, headers: [String: String], signer: MemberRequestSigner? = nil, audience: String = "",
        performer: (any MobileHTTPPerforming)? = nil) throws {
     guard endpoint.scheme == "https", endpoint.host?.lowercased().hasSuffix(".ts.net") == true,
       endpoint.user == nil, endpoint.password == nil, endpoint.query == nil, endpoint.fragment == nil,
       !endpoint.pathComponents.contains("..") else { throw MobileConnectionError.insecureEndpoint }
-    self.endpoint = endpoint; self.token = token; self.headers = headers; self.signer = signer
+    self.endpoint = endpoint; self.token = token; self.headers = headers; self.signer = signer; self.audience = audience
     self.performer = performer ?? URLSessionMobileHTTP(requestTimeout: 30, resourceTimeout: 60)
   }
   static func safeID(_ value: String) throws -> String {
@@ -141,7 +148,7 @@ final class TailnetJSONClient: @unchecked Sendable {
     request.setValue(String(CompanionProtocol.version), forHTTPHeaderField: "X-Woven-Protocol")
     if body != nil { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
     for (key, value) in headers { request.setValue(value, forHTTPHeaderField: key) }
-    if let signer { try MobileRequestSigning.sign(&request, with: signer) }
+    if let signer { try MobileRequestSigning.sign(&request, with: signer, audience: audience) }
     else { request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization") }
     let (data, response) = try await performer.perform(request, maximumBytes: 80 * 1_024 * 1_024, longLived: false)
     guard (200..<300).contains(response.statusCode) else {

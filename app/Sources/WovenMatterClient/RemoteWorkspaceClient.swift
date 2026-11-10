@@ -1098,8 +1098,9 @@ public struct RemoteWorkspaceServiceClient: Sendable {
     /// the server forwards them to its library socket's `POST /v1/members/adopt`.
     /// The server accepts the installer bearer only for the first adoption;
     /// after that it needs a signed `mac` member, so `signer` signs the request.
-    public func adoptMembers(_ adoption: Data, signer: MemberRequestSigner? = nil) async throws -> GatewayJSONValue {
-        try await request(path: "v1/host/members/adopt", method: "POST", body: adoption, signer: signer)
+    /// `audience` is the host's member device ID from its `memberIdentity`.
+    public func adoptMembers(_ adoption: Data, signer: MemberRequestSigner? = nil, audience: String? = nil) async throws -> GatewayJSONValue {
+        try await request(path: "v1/host/members/adopt", method: "POST", body: adoption, signer: signer.map { ($0, audience ?? "") })
     }
 
     public func executionPublisherStatus() async throws -> CompanionWorkspacePublisherStatus {
@@ -1424,7 +1425,7 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         method: String,
         body: Data?,
         queryItems: [URLQueryItem]? = nil,
-        signer: MemberRequestSigner? = nil
+        signer: (MemberRequestSigner, audience: String)? = nil
     ) async throws -> Value {
         try validateOrigin()
         let endpoint = baseURL.appending(path: path)
@@ -1450,9 +1451,9 @@ public struct RemoteWorkspaceServiceClient: Sendable {
         if body != nil {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
-        if let signer {
+        if let (signer, audience) = signer {
             let target = components.percentEncodedPath + (components.percentEncodedQuery.map { "?" + $0 } ?? "")
-            for (key, value) in try signer.headers(method: method, target: target, body: body ?? Data()) {
+            for (key, value) in try signer.headers(method: method, target: target, body: body ?? Data(), audience: audience) {
                 request.setValue(value, forHTTPHeaderField: key)
             }
         }

@@ -83,7 +83,8 @@ export function createLibraryClient({ socket, token, timeoutMilliseconds = 120_0
     adoptMembers: body => json('POST', '/v1/members/adopt', { body: Buffer.from(body), timeout: 30_000 }),
     updateSelf: body => json('POST', '/v1/members/self', { body, timeout: 10_000 }),
     // Signs one outgoing request with this machine's member key, which stays in the host.
-    sign: ({ method, target, bodySHA256 }) => json('POST', '/v1/members/sign', { body: { method, target, bodySHA256 }, timeout: 5000 }),
+    // `audience` is the destination member's device ID (it is signed too).
+    sign: ({ method, target, bodySHA256, audience }) => json('POST', '/v1/members/sign', { body: { method, target, bodySHA256, audience }, timeout: 5000 }),
     workspaces: () => json('GET', '/v1/workspaces', { timeout: 10_000 }),
     syncStatus: () => json('GET', '/v1/sync/status', { timeout: 10_000 }),
     registerCaller: body => json('POST', '/v1/callers', { body, timeout: 30_000 }),

@@ -47,6 +47,8 @@ final class RemoteWorkspacesModel {
     var sharedHosts: [String: SharedHostState] = [:]
     /// Builds the signed administration client for a registered Linux host.
     @ObservationIgnored var sharedHostAdministration: (@MainActor (String) async throws -> RemoteHostAdministrationClient)?
+    /// The host bundle a signed update uploads; tests replace it.
+    @ObservationIgnored var sharedHostBundle: @Sendable () throws -> (bundle: Data, fingerprint: String) = { try RemoteHostAdministrationClient.hostBundle() }
 
     private(set) var workspaces: [RemoteWorkspaceConfiguration] = []
     private(set) var taskGatewayStatuses: [UUID: RemoteTaskGatewayStatus] = [:]
@@ -1304,7 +1306,7 @@ final class RemoteWorkspacesModel {
     }
     /// The installer bearer adopts a fresh host; once the host knows a Mac it
     /// needs a signed `mac` member, so a refusal is retried signed.
-    func adoptMembers(configuration: RemoteWorkspaceConfiguration, adoption: Data, signer: MemberRequestSigner? = nil) async throws {
+    func adoptMembers(configuration: RemoteWorkspaceConfiguration, adoption: Data, signer: MemberRequestSigner? = nil, audience: String? = nil) async throws {
         let identity = try requestIdentity(configuration)
         let client = try await serviceClient(for: configuration)
         try requireCurrent(identity)
@@ -1312,7 +1314,7 @@ final class RemoteWorkspacesModel {
         catch {
             guard let signer else { throw error }
             try requireCurrent(identity)
-            _ = try await client.adoptMembers(adoption, signer: signer)
+            _ = try await client.adoptMembers(adoption, signer: signer, audience: audience)
         }
         try requireCurrent(identity)
     }

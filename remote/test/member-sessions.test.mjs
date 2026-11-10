@@ -71,8 +71,10 @@ async function hosts(t, prefix) {
   const lHost = await library(t, directory, { FAKE_LIBRARY_MEMBERS: membersFile, FAKE_LIBRARY_WORKSPACES: workspacesFile })
   const lIdentity = await lHost.client.identity()
   const offlineMac = { deviceID: randomUUID(), kind: 'mac', name: 'Studio Mac', publicKey: Buffer.alloc(32, 1).toString('base64'), endpoints: ['https://studio.invalid.ts.net:8443/wovenmatter'], revoked: false }
-  writeFileSync(membersFile, JSON.stringify({ revision: '1', members: [{ ...lIdentity, endpoints: [], revoked: false }, offlineMac] }))
-  const verifier = createMemberVerifier({ loadMembers: async () => ({ revision: '1', members: [{ ...lIdentity, revoked: false }] }) })
+  const mDeviceID = randomUUID()
+  const mMember = { deviceID: mDeviceID, kind: 'linux', name: 'Workstation M', publicKey: Buffer.alloc(32, 4).toString('base64'), endpoints: [], revoked: false }
+  writeFileSync(membersFile, JSON.stringify({ revision: '1', members: [{ ...lIdentity, endpoints: [], revoked: false }, offlineMac, mMember] }))
+  const verifier = createMemberVerifier({ loadMembers: async () => ({ revision: '1', members: [{ ...lIdentity, revoked: false }] }), audience: mDeviceID })
   t.after(() => verifier.close())
   const seen = []
   const server = createServer(async (request, response) => {
@@ -94,7 +96,7 @@ async function hosts(t, prefix) {
   })
   t.after(() => new Promise(closed => { server.closeAllConnections(); server.close(closed) }))
   const port = await new Promise(done => server.listen(0, '127.0.0.1', () => done(server.address().port)))
-  const mWorkspace = { id: m.enrollment.workspaceID, libraryID: m.enrollment.libraryID, ownerDeviceID: offlineMac.deviceID, kind: 'linux', name: 'Workstation M',
+  const mWorkspace = { id: m.enrollment.workspaceID, libraryID: m.enrollment.libraryID, ownerDeviceID: offlineMac.deviceID, executionDeviceID: mDeviceID, kind: 'linux', name: 'Workstation M',
     endpoint: `http://127.0.0.1:${port}/wovenmatter-execution/m/`, capabilities: [], journalDeviceIDs: [], revision: 1, deleted: false }
   writeFileSync(workspacesFile, JSON.stringify([mWorkspace]))
   const l = workspace(t, { library: { client: lHost.client, available: lHost.available },

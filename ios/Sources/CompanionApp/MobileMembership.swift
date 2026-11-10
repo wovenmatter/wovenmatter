@@ -1,6 +1,7 @@
 import Foundation
 import UIKit
 import CompanionClient
+import CompanionInference
 import WovenMatterCompanion
 
 /// Member mode (docs/architecture/WOVEN_EVERYWHERE.md): the phone pairs once
@@ -46,7 +47,17 @@ extension CompanionModel {
     if let memberIdentity, memberIdentity.deviceID == state.deviceID { return memberIdentity }
     let identity = try MobileMemberKeyVault.loadOrCreate(deviceID: state.deviceID, storage: memberKeyStorage)
     memberIdentity = identity
+    // Inference connections whose host scope names the host Mac sign with this key.
+    let signer = identity.signer
+    InferenceMemberSigning.install { request, audience in try MobileRequestSigning.sign(&request, with: signer, audience: audience) }
     return identity
+  }
+
+  /// The host Mac's member device ID for an inference connection to
+  /// `workspaceID`, in member mode; nil keeps that connection on its grant.
+  func inferenceHostDeviceID(_ workspaceID: String) -> String? {
+    guard memberMode, let workspace = executionWorkspaces.first(where: { $0.id == workspaceID }) else { return nil }
+    return membership?.audience(for: workspace)
   }
 
   /// Member mode when this phone paired with its key and the Mac accepted it.
@@ -62,7 +73,9 @@ extension CompanionModel {
     let hosts = try MobileLibraryHosts(state: saved, identity: identity, file: file, metadata: deviceMetadata, performer: httpPerformer)
     let first = saved.candidates(registry: executionWorkspaces).first
       ?? MobileLibraryHost(deviceID: saved.pairedHostDeviceID ?? "paired", kind: "mac", name: saved.pairedName ?? "Mac", endpoint: saved.pairedEndpoint)
-    let initial = try HTTPSCompanionTransport(host: first.endpoint, identity: identity, metadata: deviceMetadata, performer: httpPerformer)
+    // A paired Mac whose member device ID is unknown cannot be addressed; keep the bearer connection.
+    guard MemberRequestSignature.isDeviceID(first.deviceID) else { libraryHosts = nil; membership = saved; return false }
+    let initial = try HTTPSCompanionTransport(host: first.endpoint, hostDeviceID: first.deviceID, identity: identity, metadata: deviceMetadata, performer: httpPerformer)
     libraryHosts = hosts; membership = saved
     transport = initial
     engine = MobileSyncEngine(store: store, hosts: hosts, initial: initial)
@@ -80,9 +93,11 @@ extension CompanionModel {
 
   /// Right after a pairing: does the Mac accept this phone's signature?
   /// An older Mac answers that it does not accept member requests.
-  func probeMemberPairing(endpoint: URL, identity: MobileMemberIdentity) async -> Bool? {
+  func probeMemberPairing(endpoint: URL, hostDeviceID: String?, identity: MobileMemberIdentity) async -> Bool? {
+    // A Mac that did not name its member device ID predates member requests.
+    guard let hostDeviceID else { return false }
     do {
-      _ = try await HTTPSCompanionTransport(host: endpoint, identity: identity, metadata: deviceMetadata, performer: httpPerformer).probe()
+      _ = try await HTTPSCompanionTransport(host: endpoint, hostDeviceID: hostDeviceID, identity: identity, metadata: deviceMetadata, performer: httpPerformer).probe()
       return true
     } catch MobileConnectionError.memberUnsupported { return false }
     catch { return nil }
@@ -92,9 +107,9 @@ extension CompanionModel {
   /// phone's existing replica: its registry holds a workspace of the library
   /// the phone was bound to. Then nothing is re-uploaded; the next sync moves
   /// the replica to it like any other host.
-  func joinsSameLibrarySet(endpoint: URL, identity: MobileMemberIdentity, previousLibraryID: String?) async -> Bool {
-    guard let previousLibraryID else { return false }
-    guard let registry = try? await HTTPSCompanionTransport(host: endpoint, identity: identity, metadata: deviceMetadata,
+  func joinsSameLibrarySet(endpoint: URL, hostDeviceID: String?, identity: MobileMemberIdentity, previousLibraryID: String?) async -> Bool {
+    guard let previousLibraryID, let hostDeviceID else { return false }
+    guard let registry = try? await HTTPSCompanionTransport(host: endpoint, hostDeviceID: hostDeviceID, identity: identity, metadata: deviceMetadata,
                                                            performer: httpPerformer).executionWorkspaces() else { return false }
     return registry.contains { $0.libraryID == previousLibraryID }
   }
@@ -102,11 +117,11 @@ extension CompanionModel {
   /// Records the membership after a successful pairing and switches to signed
   /// requests. `accepted == false` keeps the bearer connection and shows
   /// "Update everything".
-  func finishMemberPairing(endpoint: URL, accepted: Bool?) async {
+  func finishMemberPairing(endpoint: URL, hostDeviceID: String?, accepted: Bool?) async {
     guard let file = membershipFile else { return }
     do {
       let identity = try loadMemberIdentity()
-      var next = MobileMembershipState(deviceID: state.deviceID, pairedEndpoint: endpoint)
+      var next = MobileMembershipState(deviceID: state.deviceID, pairedEndpoint: endpoint, pairedHostDeviceID: hostDeviceID)
       next.memberRequestsAccepted = accepted
       if let previous = try MobileLibraryHosts.load(file: file), previous.deviceID == state.deviceID {
         // Keep what the phone already knows about the other members.

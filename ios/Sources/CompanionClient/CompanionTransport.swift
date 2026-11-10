@@ -13,8 +13,11 @@ public struct MobileCredential: Codable, Sendable, Equatable {
   public var deviceID: String
   public var token: String
   public var confirmationPending: Bool?
-  public init(endpoint: URL, workspaceID: String, deviceID: String, token: String, confirmationPending: Bool? = nil) {
+  /// The paired Mac's member device ID, when it reported one.
+  public var hostDeviceID: String?
+  public init(endpoint: URL, workspaceID: String, deviceID: String, token: String, confirmationPending: Bool? = nil, hostDeviceID: String? = nil) {
     self.endpoint = endpoint; self.workspaceID = workspaceID; self.deviceID = deviceID; self.token = token; self.confirmationPending = confirmationPending
+    self.hostDeviceID = hostDeviceID?.lowercased()
   }
 }
 
@@ -97,23 +100,29 @@ public final class HTTPSCompanionTransport: CompanionTransport, MobilePairingReq
   let credential: MobileCredential
   /// Signed member requests (no bearer). Nil for bearer-era pairing.
   let signer: MemberRequestSigner?
+  /// The host's member device ID, which every signed request names.
+  let audience: String
   private let performer: any MobileHTTPPerforming
   private let mcpConnections = CompanionMCPConnections()
   private let deviceMetadata: CompanionDeviceMetadata?
   public var endpoint: URL { credential.endpoint }
   public var isSigned: Bool { signer != nil }
   public init(credential: MobileCredential, metadata: CompanionDeviceMetadata? = nil, signer: MemberRequestSigner? = nil,
-              performer: (any MobileHTTPPerforming)? = nil) throws {
+              audience: String? = nil, performer: (any MobileHTTPPerforming)? = nil) throws {
     guard CompanionPairingPayload.isValidEndpoint(credential.endpoint) else { throw MobileConnectionError.insecureEndpoint }
-    self.credential = credential; self.deviceMetadata = metadata; self.signer = signer
+    let audience = (audience ?? credential.hostDeviceID ?? "").lowercased()
+    // A signed connection needs the host's member device ID; skip a host whose identity is not known yet.
+    if signer != nil, !MemberRequestSignature.isDeviceID(audience) { throw MobileConnectionError.memberUnknown }
+    self.credential = credential; self.deviceMetadata = metadata; self.signer = signer; self.audience = audience
     self.performer = performer ?? URLSessionMobileHTTP()
   }
-  /// A signed connection to any Mac or Linux library host. Its library ID is
-  /// whatever the host reports; the store decides whether to rebind.
-  public convenience init(host endpoint: URL, identity: MobileMemberIdentity, metadata: CompanionDeviceMetadata? = nil,
+  /// A signed connection to any Mac or Linux library host, the member
+  /// `hostDeviceID`. Its library ID is whatever the host reports; the store
+  /// decides whether to rebind.
+  public convenience init(host endpoint: URL, hostDeviceID: String, identity: MobileMemberIdentity, metadata: CompanionDeviceMetadata? = nil,
                           performer: (any MobileHTTPPerforming)? = nil) throws {
     try self.init(credential: .init(endpoint: endpoint, workspaceID: "", deviceID: identity.deviceID, token: ""),
-                  metadata: metadata, signer: identity.signer, performer: performer)
+                  metadata: metadata, signer: identity.signer, audience: hostDeviceID, performer: performer)
   }
   public static func previewPairing(_ payload: CompanionPairingPayload, deviceID: String, deviceName: String,
                                     metadata: CompanionDeviceMetadata? = nil, performer: (any MobileHTTPPerforming)? = nil) async throws -> String {
@@ -145,7 +154,8 @@ public final class HTTPSCompanionTransport: CompanionTransport, MobilePairingReq
     guard expectedWorkspaceID == nil || result.workspaceID == expectedWorkspaceID,
       !requiresConfirmation || result.confirmationRequired == true else { throw MobileConnectionError.versionMismatch }
     return MobileCredential(endpoint: payload.endpoint, workspaceID: result.workspaceID, deviceID: result.deviceID,
-      token: result.credential, confirmationPending: result.confirmationRequired)
+      token: result.credential, confirmationPending: result.confirmationRequired,
+      hostDeviceID: result.hostDeviceID.flatMap { MemberRequestSignature.isDeviceID($0.lowercased()) ? $0 : nil })
   }
   public func executeMCP(_ message: GatewayJSONValue, conversationID: String, enabledGroups: [WorkspaceToolGroup], contextID: String? = nil) async throws -> GatewayJSONValue {
     guard UUID(uuidString: conversationID) != nil else { throw MobileConnectionError.invalidResponse }
@@ -240,7 +250,7 @@ public final class HTTPSCompanionTransport: CompanionTransport, MobilePairingReq
     for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
     if let signer {
       if !credential.workspaceID.isEmpty { request.setValue(credential.workspaceID, forHTTPHeaderField: "X-Woven-Workspace") }
-      try MobileRequestSigning.sign(&request, with: signer)
+      try MobileRequestSigning.sign(&request, with: signer, audience: audience)
     } else if !credential.token.isEmpty {
       request.setValue("Bearer " + credential.token, forHTTPHeaderField: "Authorization")
       request.setValue(credential.workspaceID, forHTTPHeaderField: "X-Woven-Workspace")

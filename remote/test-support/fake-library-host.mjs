@@ -65,12 +65,13 @@ const local = createServer(async (request, response) => {
   }
   // Signing for the Node server: the exact message of member-auth.mjs.
   if (path === '/v1/members/sign') {
-    if (!/^[0-9a-f]{64}$/.test(body?.bodySHA256 ?? '') || !String(body?.target).startsWith('/')) return reply(response, 400, { code: 'invalid_request', message: 'Invalid signature request.' })
+    if (!/^[0-9a-f]{64}$/.test(body?.bodySHA256 ?? '') || !String(body?.target).startsWith('/')
+      || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(body?.audience ?? '')) return reply(response, 400, { code: 'invalid_request', message: 'Invalid signature request.' })
     const time = String(Date.now()), nonce = randomBytes(16).toString('base64url'), method = String(body.method).toUpperCase()
     const target = body.target === '/wovenmatter' ? '/' : body.target.startsWith('/wovenmatter/') || body.target.startsWith('/wovenmatter?') ? (body.target.slice('/wovenmatter'.length).replace(/^\?/, '/?')) : body.target
-    const message = `woven-member-v1\n${method}\n${target}\n${time}\n${nonce}\n${body.bodySHA256}`
-    signatures.push({ method, target: body.target })
-    return reply(response, 200, { headers: { 'X-Woven-Member-Device': deviceID, 'X-Woven-Member-Time': time, 'X-Woven-Member-Nonce': nonce,
+    const message = `woven-member-v2\n${body.audience}\n${method}\n${target}\n${time}\n${nonce}\n${body.bodySHA256}`
+    signatures.push({ method, target: body.target, audience: body.audience })
+    return reply(response, 200, { headers: { 'X-Woven-Member-Device': deviceID, 'X-Woven-Member-Audience': body.audience, 'X-Woven-Member-Time': time, 'X-Woven-Member-Nonce': nonce,
       'X-Woven-Member-Signature': sign(null, Buffer.from(message), memberKey).toString('base64url') } })
   }
   if (path === '/v1/workspaces') return reply(response, 200, { workspaces: readJSONFile('FAKE_LIBRARY_WORKSPACES', []) })

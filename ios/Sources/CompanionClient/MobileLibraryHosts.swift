@@ -60,6 +60,15 @@ public struct MobileMembershipState: Codable, Equatable, Sendable {
     return value
   }
 
+  /// The member that serves a workspace's endpoint, from the member list this
+  /// phone learned (`MemberAudience.serving`): the audience of its signed
+  /// requests there. Nil until the phone has learned it.
+  public func audience(for workspace: CompanionExecutionWorkspace) -> String? {
+    MemberAudience.serving(workspace, members: members.compactMap { member in
+      MemberKind(rawValue: member.kind).map { .init(deviceID: member.deviceID, kind: $0, endpoints: member.endpoints, revoked: member.revoked) }
+    })
+  }
+
   /// Every Mac and Linux host to try, best first: the last one that worked,
   /// then the paired Mac, other Macs, then Linux hosts. A Mac without a member
   /// endpoint is reached at its registered execution workspace address, which
@@ -133,7 +142,9 @@ public actor MobileLibraryHosts {
 
   public func snapshot() -> MobileMembershipState { state }
   public func transport(for host: MobileLibraryHost) throws -> HTTPSCompanionTransport {
-    try HTTPSCompanionTransport(host: host.endpoint, identity: identity, metadata: metadata, performer: performer)
+    // A paired Mac that never named its member device ID predates member requests.
+    guard MemberRequestSignature.isDeviceID(host.deviceID) else { throw MobileConnectionError.memberUnsupported }
+    return try HTTPSCompanionTransport(host: host.endpoint, hostDeviceID: host.deviceID, identity: identity, metadata: metadata, performer: performer)
   }
 
   /// Chooses a reachable host, trying candidates in order and failing over

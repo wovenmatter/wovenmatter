@@ -8,22 +8,27 @@ import FoundationNetworking
 /// by this device's member signature (docs/architecture/WOVEN_EVERYWHERE.md,
 /// "Membership and device keys"). Nothing is issued or stored: every request
 /// signs its exact wire target, so `/wovenmatter/…` on a Mac and
-/// `/wovenmatter-execution/<id>/…` on a Linux host both verify.
+/// `/wovenmatter-execution/<id>/…` on a Linux host both verify, and names the
+/// destination member (`audience`), so it verifies only there.
 public struct MemberSignedHTTPClient: Sendable {
   public typealias Send = @Sendable (URLRequest) async throws -> (Data, HTTPURLResponse)
   public let endpoint: URL
   public let signer: MemberRequestSigner
+  /// The destination member's device ID, from the member list or registry.
+  public let audience: String
   private let headers: [String: String]
   private let send: Send
   public static let maximumResponseBytes = 80 * 1_024 * 1_024
 
-  /// `endpoint` is a private tailnet HTTPS base URL. `send` replaces the
-  /// network for in-process tests.
-  public init(endpoint: URL, signer: MemberRequestSigner, headers: [String: String] = [:], send: Send? = nil) throws {
+  /// `endpoint` is a private tailnet HTTPS base URL and `audience` the device
+  /// ID of the member that serves it. `send` replaces the network for
+  /// in-process tests.
+  public init(endpoint: URL, signer: MemberRequestSigner, audience: String, headers: [String: String] = [:], send: Send? = nil) throws {
     guard endpoint.scheme == "https", endpoint.host?.lowercased().hasSuffix(".ts.net") == true,
           endpoint.user == nil, endpoint.password == nil, endpoint.query == nil, endpoint.fragment == nil,
           !endpoint.pathComponents.contains("..") else { throw MemberSignedHTTPError.insecureEndpoint }
-    self.endpoint = endpoint; self.signer = signer; self.headers = headers
+    guard MemberRequestSignature.isDeviceID(audience.lowercased()) else { throw MemberRequestError.audienceUnknown }
+    self.endpoint = endpoint; self.signer = signer; self.audience = audience.lowercased(); self.headers = headers
     self.send = send ?? Self.network
   }
 
@@ -41,7 +46,7 @@ public struct MemberSignedHTTPClient: Sendable {
     request.setValue("application/json", forHTTPHeaderField: "Accept")
     if body != nil { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
     for (key, value) in headers.merging(extra, uniquingKeysWith: { $1 }) { request.setValue(value, forHTTPHeaderField: key) }
-    for (key, value) in try signer.headers(method: method, target: target, body: body ?? Data()) {
+    for (key, value) in try signer.headers(method: method, target: target, body: body ?? Data(), audience: audience) {
       request.setValue(value, forHTTPHeaderField: key)
     }
     return request

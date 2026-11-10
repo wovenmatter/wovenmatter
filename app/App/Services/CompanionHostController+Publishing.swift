@@ -25,7 +25,7 @@ extension CompanionHostController {
             try await directory.add(deviceID: deviceID, kind: .linux, name: configuration.name, publicKey: key, endpoints: [endpoint])
         }
         try await model.remoteWorkspaces.adoptMembers(configuration: configuration, adoption: JSONEncoder().encode(directory.adoption()),
-            signer: directory.identity.signer)
+            signer: directory.identity.signer, audience: deviceID.lowercased())
         await peerSync.librarySync?.scheduleAll()
     }
 

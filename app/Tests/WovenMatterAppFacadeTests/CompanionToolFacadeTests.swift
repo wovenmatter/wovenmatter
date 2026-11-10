@@ -91,8 +91,11 @@ struct CompanionToolFacadeTests {
         let paired = await api.handle(.init(method: "POST", target: "/v1/pair", headers: [:], body: try JSONEncoder().encode(pair)))
         #expect(paired.status == 200)
         #expect(await mac.member(phone.deviceID)?.kind == .ios)
+        // The reply names the Mac's member device ID: the phone's audience.
+        let reply = try JSONDecoder().decode(CompanionPairResponse.self, from: paired.body)
+        #expect(reply.hostDeviceID == mac.identity.deviceID)
         func hello() async throws -> Int {
-            var headers = try phone.signer.headers(method: "GET", target: "/wovenmatter/v1/hello")
+            var headers = try phone.signer.headers(method: "GET", target: "/wovenmatter/v1/hello", audience: mac.identity.deviceID)
             headers["X-Woven-Protocol"] = String(CompanionProtocol.version)
             let lowered = Dictionary(uniqueKeysWithValues: headers.map { ($0.key.lowercased(), $0.value) })
             return await api.handle(.init(method: "GET", target: "/wovenmatter/v1/hello", headers: lowered)).status

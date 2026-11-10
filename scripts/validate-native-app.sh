@@ -30,9 +30,10 @@ vm_helper="${app}/Contents/Helpers/WovenMatterVMHelper"
 if lipo -archs "$main_executable" | grep -qw arm64; then
   test -x "$vm_helper"
   codesign --verify --strict "$vm_helper"
-  codesign -d --entitlements :- "$vm_helper" 2>/dev/null | grep -q com.apple.security.virtualization
+  # grep reads all input (no -q): an early exit would SIGPIPE codesign under pipefail.
+  codesign -d --entitlements :- "$vm_helper" 2>/dev/null | grep com.apple.security.virtualization >/dev/null
   # Signed with the hardened runtime by build-vm-helper.sh, like every shipped executable.
-  codesign -dvv "$vm_helper" 2>&1 | grep -Eq 'flags=0x[0-9a-f]*\(.*runtime'
+  codesign -dvv "$vm_helper" 2>&1 | grep -E 'flags=0x[0-9a-f]*\(.*runtime' >/dev/null
   # The guest files are sealed resources: exactly the committed copies, one pin for the guest.
   cmp "$repo_root/app/VMHelper/guest-version.json" "${app}/Contents/Resources/WovenVM/guest-version.json"
   for file in agent.py provision.sh egress.sh disk-cap.sh docker-archive-keyring.asc \

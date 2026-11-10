@@ -409,7 +409,7 @@ public actor LibraryPeerSync {
       if !base.hasSuffix("/") { base += "/" }
       let target = base + path
       do {
-        var headers = try directory.identity.signer.headers(method: "POST", target: target, body: body)
+        var headers = try directory.identity.signer.headers(method: "POST", target: target, body: body, audience: member.deviceID)
         headers["Content-Type"] = "application/json"
         headers["X-Woven-Protocol"] = String(CompanionProtocol.version)
         headers["Host"] = endpoint.host ?? "localhost"

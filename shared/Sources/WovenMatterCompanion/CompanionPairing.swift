@@ -91,10 +91,13 @@ public struct CompanionPairResponse: Codable, Equatable, Sendable {
   public let credential: String
   public let protocolVersion: Int
   public let confirmationRequired: Bool?
+  /// The pairing Mac's member device ID: the audience of the phone's signed
+  /// requests to it. Absent from Macs that predate member requests.
+  public var hostDeviceID: String?
   public init(workspaceID: String, deviceID: String, credential: String, protocolVersion: Int = CompanionProtocol.version,
-              confirmationRequired: Bool? = nil) {
+              confirmationRequired: Bool? = nil, hostDeviceID: String? = nil) {
     self.workspaceID = workspaceID; self.deviceID = deviceID; self.credential = credential; self.protocolVersion = protocolVersion
-    self.confirmationRequired = confirmationRequired
+    self.confirmationRequired = confirmationRequired; self.hostDeviceID = hostDeviceID
   }
 }
 

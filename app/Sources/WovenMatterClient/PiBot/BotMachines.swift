@@ -1,11 +1,17 @@
 import Foundation
 
 /// How a Woven app reaches one machine's bots runtime: the loopback socket on this
-/// Mac, or another machine's Woven server at `/v1/bots/ws`.
+/// Mac with its runtime bearer, or another member's Woven server at `/v1/bots/ws`
+/// with a member signature addressed to `audience` (that machine's member device ID;
+/// a fresh signature for every connection, so `bearer` is empty).
 public struct BotSocketEndpoint: Codable, Equatable, Sendable, CustomStringConvertible {
     public var url: URL
     public var bearer: String
-    public init(url: URL, bearer: String) { self.url = url; self.bearer = bearer }
+    public var audience: String?
+    public init(url: URL, bearer: String, audience: String? = nil) { self.url = url; self.bearer = bearer; self.audience = audience }
+    /// Another member's server, reached with signed upgrades.
+    public static func signed(_ url: URL, audience: String) -> BotSocketEndpoint { .init(url: url, bearer: "", audience: audience) }
+    public var isSigned: Bool { audience != nil }
     /// Never print the bearer.
     public var description: String { "BotSocketEndpoint(\(url.absoluteString))" }
 }

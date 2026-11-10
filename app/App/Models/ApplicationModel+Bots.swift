@@ -100,39 +100,46 @@ extension ApplicationModel {
                 try await self.remoteWorkspaces.installBotsHost(hostName: hostName, userName: userName)
             },
             updateLinuxHost: { [weak self] machineID in
-                guard let self, let id = directory.linux[machineID], let configuration = self.remoteWorkspaces.configuration(id: id) else {
-                    throw BotsError.unavailable("That Linux host is unavailable.")
-                }
-                self.remoteWorkspaces.updateContainer(configuration)
+                guard let self else { throw CancellationError() }
+                try await self.updateLinuxBotHost(machineID: machineID, directory: directory)
             },
             updateRemoteEngine: { [weak self] machineID in
-                guard let self, let workspaceID = directory.macs[machineID.lowercased()],
+                guard let self, let workspaceID = directory.members[machineID.lowercased()],
                       let workspace = await self.otherMacWorkspaces().first(where: { $0.id == workspaceID }) else {
                     throw BotsError.unavailable("That Mac is unavailable.")
                 }
-                let access = try await self.botsAccess(for: workspace)
-                let _: BotsRemoteStatus = try await BotsRemoteHTTP.request(access.endpoint, path: "v1/bots/engine/update",
-                                                                          bearer: access.token, body: Data("{}".utf8))
+                let _: BotsRemoteStatus = try await self.botsClient(for: workspace).request("v1/bots/engine/update", method: "POST",
+                                                                                            body: Data("{}".utf8))
             },
-            syncErrors: { [weak self] in self.map { Array($0.companionHost.peerSync.errors.values) + Self.libraryUpdateNotices($0.companionHost.peerSync.syncStatus) } ?? [] })
+            syncErrors: { [weak self] in self.map { Array($0.companionHost.peerSync.errors.values) + Self.libraryUpdateNotices($0.companionHost.peerSync.syncStatus) } ?? [] },
+            signSocket: { [weak self] url, audience in
+                guard let self else { throw CancellationError() }
+                return try await self.signBotSocket(url: url, audience: audience)
+            })
     }
 
     // MARK: Other machines
 
-    /// Every other machine whose Woven server answers `/v1/bots/status`. Linux hosts are
-    /// reached through their SSH tunnel; other Macs through their companion endpoint.
+    /// Every other machine whose Woven server answers `/v1/bots/status`: every Mac and
+    /// Linux workspace in the synced registry, reached with this Mac's member signature
+    /// whichever Mac added it. A Linux host this Mac added that is not in the registry
+    /// (a bots-only server) is still reached through its SSH tunnel.
     fileprivate func remoteBotMachines(thisMacVersion: String?, directory: BotsRemoteDirectory) async -> [BotMachine] {
-        let linux = remoteWorkspaces.workspaces.filter { $0.kind == .host }.map { configuration in
+        let members = await memberBotWorkspaces()
+        let signedIDs = Set(members.map(\.id))
+        let tunnelled = remoteWorkspaces.workspaces.filter { $0.kind == .host && !signedIDs.contains($0.id.uuidString.lowercased()) }
+        let linux = tunnelled.map { configuration in
             Task { await self.linuxBotMachine(configuration, thisMacVersion: thisMacVersion, directory: directory) }
         }
-        let macs = await otherMacWorkspaces().map { workspace in
-            Task { await self.macBotMachine(workspace, thisMacVersion: thisMacVersion, directory: directory) }
+        let signed = members.map { workspace in
+            Task { await self.memberBotMachine(workspace, thisMacVersion: thisMacVersion, directory: directory) }
         }
         var machines: [BotMachine] = []
-        for task in linux + macs { machines.append(await task.value) }
+        for task in linux + signed { machines.append(await task.value) }
         return machines.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
+    /// A Linux host this Mac added, over its SSH tunnel with the installer's bearer.
     private func linuxBotMachine(_ configuration: RemoteWorkspaceConfiguration, thisMacVersion: String?,
                                  directory: BotsRemoteDirectory) async -> BotMachine {
         do {
@@ -147,64 +154,119 @@ extension ApplicationModel {
         }
     }
 
-    private func macBotMachine(_ workspace: CompanionExecutionWorkspace, thisMacVersion: String?,
-                               directory: BotsRemoteDirectory) async -> BotMachine {
+    /// Another Mac or a Linux host from the registry, with signed requests and a signed socket.
+    private func memberBotMachine(_ workspace: CompanionExecutionWorkspace, thisMacVersion: String?,
+                                  directory: BotsRemoteDirectory) async -> BotMachine {
+        let kind: BotMachine.Kind = workspace.kind == .linux ? .linux : .mac
         do {
-            let access = try await botsAccess(for: workspace)
-            let status: BotsRemoteStatus = try await botsTimeout {
-                try await BotsRemoteHTTP.request(access.endpoint, path: "v1/bots/status", bearer: access.token)
-            }
-            directory.macs[status.machine.deviceID.lowercased()] = workspace.id
-            let socket = BotSocketEndpoint(url: access.endpoint.appending(path: "v1/bots/ws"), bearer: access.token)
-            return status.machine(kind: .mac, socket: socket, thisMacVersion: thisMacVersion)
+            let client = try await botsClient(for: workspace)
+            let status: BotsRemoteStatus = try await botsTimeout { try await client.request("v1/bots/status", timeout: 10) }
+            // A server that answers for another device is not this workspace's.
+            guard status.machine.deviceID.lowercased() == client.audience else { throw BotsError.unavailable("It answered as another device.") }
+            directory.members[client.audience] = workspace.id
+            let socket = BotSocketEndpoint.signed(client.endpoint.appending(path: "v1/bots/ws"), audience: client.audience)
+            return status.machine(kind: kind, socket: socket, thisMacVersion: thisMacVersion,
+                                  expectedHostFingerprint: kind == .linux ? await RemoteWorkspaceSSHClient.bundledHostFingerprint() : nil)
         } catch {
-            return BotMachine(id: workspace.executionDeviceID ?? workspace.ownerDeviceID, name: workspace.name, kind: .mac,
+            return BotMachine(id: "member:" + workspace.id, name: workspace.name, kind: kind,
                               state: .unreachable, message: Self.botsUnavailableText(error))
         }
     }
 
     private static func botsUnavailableText(_ error: any Error) -> String {
+        if case MemberSignedHTTPError.http(404, _, _)? = error as? MemberSignedHTTPError {
+            return "Its Woven server doesn't run bots yet. Update it to use bots there."
+        }
         let text = error.localizedDescription
         return text.contains("404") ? "Its Woven server doesn't run bots yet. Update it to use bots there." : text
     }
 
-    private func otherMacWorkspaces() async -> [CompanionExecutionWorkspace] {
-        guard let database = dashboardStore?.database,
-              let own = try? await database.companionLibraryIdentity().hostDeviceID,
+    /// Every other Mac and Linux workspace in the registry that can be addressed:
+    /// an endpoint and the member that serves it, one workspace per member.
+    func memberBotTargets() async -> [(workspace: CompanionExecutionWorkspace, audience: String)] {
+        guard let database = dashboardStore?.database, let directory = try? await companionHost.peerSync.members(),
               let workspaces = try? await database.companionExecutionWorkspaces() else { return [] }
-        return workspaces.filter {
-            $0.kind == .mac && $0.isVisibleInConnections && $0.endpoint != nil && ($0.executionDeviceID ?? $0.ownerDeviceID) != own
+        var seen: Set<String> = [directory.identity.deviceID], targets: [(workspace: CompanionExecutionWorkspace, audience: String)] = []
+        for workspace in workspaces where (workspace.kind == .mac || workspace.kind == .linux) && workspace.isVisibleInConnections && workspace.endpoint != nil {
+            guard let audience = await directory.audience(for: workspace), seen.insert(audience).inserted else { continue }
+            targets.append((workspace, audience))
         }
+        return targets
+    }
+    func memberBotWorkspaces() async -> [CompanionExecutionWorkspace] { await memberBotTargets().map(\.workspace) }
+
+    private func otherMacWorkspaces() async -> [CompanionExecutionWorkspace] {
+        await memberBotWorkspaces().filter { $0.kind == .mac }
     }
 
-    /// How this Mac authenticates to another member's `/v1/bots/*`. Today: the
-    /// execution grant it already holds for that Mac. Member auth replaces this one function.
-    func botsAccess(for workspace: CompanionExecutionWorkspace) async throws -> (endpoint: URL, token: String) {
-        let credential = try await centralExecutionClient().directCredential(for: workspace)
-        return (credential.endpoint, credential.token)
+    /// How this Mac reaches another member's `/v1/bots/*`: its own member signature,
+    /// addressed to the workspace's execution device. Nothing is issued or stored.
+    func botsClient(for workspace: CompanionExecutionWorkspace) async throws -> MemberSignedHTTPClient {
+        let directory = try await companionHost.peerSync.members()
+        guard let endpoint = workspace.endpoint, let audience = await directory.audience(for: workspace) else {
+            throw BotsError.unavailable("\(workspace.name)'s address or member identity has not reached this Mac yet.")
+        }
+        return try MemberSignedHTTPClient(endpoint: endpoint, signer: directory.identity.signer, audience: audience,
+                                          send: companionHost.remoteHostSend)
+    }
+
+    /// Headers for one signed bots socket upgrade. Only `/v1/bots/ws` on a member's
+    /// private tailnet address is signed, and only for a member in the registry.
+    func signBotSocket(url: URL, audience: String) async throws -> [String: String] {
+        guard ["wss", "https"].contains(url.scheme?.lowercased() ?? ""), url.host?.lowercased().hasSuffix(".ts.net") == true,
+              url.user == nil, url.password == nil, url.path.hasSuffix("/v1/bots/ws"),
+              await memberBotTargets().contains(where: { $0.audience == audience.lowercased() }),
+              let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            throw BotsError.unavailable("That bots connection is not a member's.")
+        }
+        let target = components.percentEncodedPath + (components.percentEncodedQuery.map { "?" + $0 } ?? "")
+        return try await companionHost.memberSigner().headers(method: "GET", target: target, audience: audience)
     }
 
     fileprivate func setRemoteBotResources(machineID: String, _ resources: BotResourceSettings, directory: BotsRemoteDirectory) async throws {
         let id = machineID.lowercased()
-        if let configurationID = directory.linux[id], let configuration = remoteWorkspaces.configuration(id: configurationID) {
-            _ = try await remoteWorkspaces.botsService(for: configuration).setBotsResources(resources)
+        if let workspaceID = directory.members[id], let workspace = await memberBotWorkspaces().first(where: { $0.id == workspaceID }) {
+            struct Body: Encodable { let resources: BotResourceSettings }
+            let _: BotsRemoteStatus = try await botsClient(for: workspace).request("v1/bots/resources", method: "POST",
+                body: JSONEncoder().encode(Body(resources: resources)))
             return
         }
-        if let workspaceID = directory.macs[id], let workspace = await otherMacWorkspaces().first(where: { $0.id == workspaceID }) {
-            let access = try await botsAccess(for: workspace)
-            struct Body: Encodable { let resources: BotResourceSettings }
-            let _: BotsRemoteStatus = try await BotsRemoteHTTP.request(access.endpoint, path: "v1/bots/resources", bearer: access.token,
-                                                                      body: JSONEncoder().encode(Body(resources: resources)))
+        if let configurationID = directory.linux[id], let configuration = remoteWorkspaces.configuration(id: configurationID) {
+            _ = try await remoteWorkspaces.botsService(for: configuration).setBotsResources(resources)
             return
         }
         throw BotsError.unavailable("That machine is unavailable.")
     }
 
+    /// "Update everything" for one Linux host: the signed `/v1/host/update` from any
+    /// Mac. SSH is only the fallback for a host this Mac added itself.
+    fileprivate func updateLinuxBotHost(machineID: String, directory: BotsRemoteDirectory) async throws {
+        let id = machineID.lowercased()
+        if let workspaceID = directory.members[id] {
+            do {
+                try await remoteWorkspaces.runSharedHost(workspaceID, .update)
+                return
+            } catch {
+                guard let configuration = UUID(uuidString: workspaceID).flatMap(remoteWorkspaces.configuration(id:)) else { throw error }
+                remoteWorkspaces.updateContainer(configuration)
+                return
+            }
+        }
+        guard let configurationID = directory.linux[id], let configuration = remoteWorkspaces.configuration(id: configurationID) else {
+            throw BotsError.unavailable("That Linux host is unavailable.")
+        }
+        remoteWorkspaces.updateContainer(configuration)
+    }
+
     /// Online Linux and macOS tailnet peers and what each needs before it can run bots.
     func discoverBotDevices() async throws -> [BotDiscoveredDevice] {
         let peers = try await Task.detached { try RemoteMachineDiscovery.tailnetMachines(includeMacs: true) }.value
+        // A Linux host another Mac added is already installed: it is in the registry.
+        let members = await memberBotWorkspaces()
         let linuxHosts = Set(remoteWorkspaces.workspaces.filter { $0.kind == .host }.map { $0.hostName.lowercased() })
-        let macs = await otherMacWorkspaces()
+            .union(members.filter { $0.kind == .linux }.compactMap { $0.endpoint?.host?.lowercased() }
+                .flatMap { [$0, String($0.split(separator: ".").first ?? "")] })
+        let macs = members.filter { $0.kind == .mac }
         let macHosts = Set(macs.compactMap { $0.endpoint?.host?.lowercased() })
         let macNames = Set(macs.map { $0.name.lowercased() })
         return peers.map { peer in
@@ -224,30 +286,10 @@ extension ApplicationModel {
 /// Which local record reaches each remote machine, learned from its status reply.
 @MainActor
 final class BotsRemoteDirectory {
+    /// Linux hosts reached through this Mac's SSH tunnel, by machine ID.
     var linux: [String: UUID] = [:]
-    var macs: [String: String] = [:]
-}
-
-/// `/v1/bots/*` on another Mac's companion endpoint, with this Mac's grant.
-enum BotsRemoteHTTP {
-    static func request<T: Decodable>(_ endpoint: URL, path: String, bearer: String, body: Data? = nil) async throws -> T {
-        var request = URLRequest(url: endpoint.appending(path: path), timeoutInterval: 10)
-        request.httpMethod = body == nil ? "GET" : "POST"
-        request.httpBody = body
-        request.setValue("Bearer " + bearer, forHTTPHeaderField: "Authorization")
-        if body != nil { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.httpCookieStorage = nil; configuration.urlCredentialStorage = nil
-        let session = URLSession(configuration: configuration)
-        defer { session.finishTasksAndInvalidate() }
-        let (data, response) = try await session.data(for: request)
-        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-        guard (200..<300).contains(status) else {
-            let message = (try? JSONDecoder().decode(CompanionAPIError.self, from: data))?.message
-            throw BotsError.unavailable(message ?? "That Mac answered \(status).")
-        }
-        return try JSONDecoder().decode(T.self, from: data)
-    }
+    /// Members reached with signed requests: machine ID to registry workspace ID.
+    var members: [String: String] = [:]
 }
 
 /// A status probe must not hold the whole list: a silent machine is reported unavailable.

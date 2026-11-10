@@ -274,7 +274,8 @@ struct LibraryHostTests {
     try await mac.add(deviceID: phone.deviceID, kind: .ios, name: "iPhone", publicKey: phone.publicKey, endpoints: [])
 
     func signed(_ path: String, as member: MemberIdentity = phone) throws -> HTTPReply {
-      let headers = try member.signer.headers(method: "GET", target: path).merging(["X-Woven-Protocol": String(CompanionProtocol.version)]) { a, _ in a }
+      let headers = try member.signer.headers(method: "GET", target: path, audience: identity.deviceID)
+        .merging(["X-Woven-Protocol": String(CompanionProtocol.version)]) { a, _ in a }
       return try send("GET", path, port: fixture.port, headers: headers)
     }
     // Unsigned or from a stranger: refused before adoption.
@@ -301,9 +302,14 @@ struct LibraryHostTests {
     let syncStatus = try signed("/wovenmatter/v1/sync/status")
     #expect(syncStatus.status == 200 && syncStatus.json?.objectValue?["deviceID"]?.stringValue == identity.deviceID)
     // A signed request cannot be replayed.
-    let headers = try phone.signer.headers(method: "GET", target: "/v1/hello").merging(["X-Woven-Protocol": String(CompanionProtocol.version)]) { a, _ in a }
+    let headers = try phone.signer.headers(method: "GET", target: "/v1/hello", audience: identity.deviceID)
+      .merging(["X-Woven-Protocol": String(CompanionProtocol.version)]) { a, _ in a }
     #expect(try send("GET", "/v1/hello", port: fixture.port, headers: headers).status == 200)
     #expect(try send("GET", "/v1/hello", port: fixture.port, headers: headers).status == 401)
+    // A request the phone addressed to another member is refused here, with a fresh nonce.
+    let elsewhere = try phone.signer.headers(method: "GET", target: "/v1/hello", audience: mac.identity.deviceID)
+      .merging(["X-Woven-Protocol": String(CompanionProtocol.version)]) { a, _ in a }
+    #expect(try send("GET", "/v1/hello", port: fixture.port, headers: elsewhere).status == 401)
 
     try await mac.remove(phone.deviceID)
     #expect(try send("POST", "/v1/members/adopt", unix: fixture.socket, headers: auth, body: JSONEncoder().encode(await mac.adoption())).status == 200)
@@ -320,21 +326,29 @@ struct LibraryHostTests {
     let auth = ["Authorization": "Bearer " + fixture.token]
     let identity = try JSONDecoder().decode(LibraryHost.Identity.self, from: send("GET", "/v1/identity", unix: fixture.socket, headers: auth).body)
     let body = Data("{\"kind\":\"send\"}".utf8), target = "/wovenmatter-execution/abc/v1/execution/commands"
-    let request = LibraryHost.SignatureRequest(method: "post", target: target, bodySHA256: MemberRequestSignature.bodyHash(body))
+    let peer = UUID().uuidString.lowercased()
+    let request = LibraryHost.SignatureRequest(method: "post", target: target, bodySHA256: MemberRequestSignature.bodyHash(body), audience: peer)
     let reply = try send("POST", "/v1/members/sign", unix: fixture.socket, headers: auth, body: JSONEncoder().encode(request))
     #expect(reply.status == 200, "\(String(decoding: reply.body, as: UTF8.self))")
     let headers = try #require(reply.json?.objectValue?["headers"]?.objectValue)
     #expect(headers[MemberRequestSignature.deviceHeader]?.stringValue == identity.deviceID)
+    #expect(headers[MemberRequestSignature.audienceHeader]?.stringValue == peer)
     let time = try #require(headers[MemberRequestSignature.timeHeader]?.stringValue.flatMap { Int64($0) })
     let nonce = try #require(headers[MemberRequestSignature.nonceHeader]?.stringValue)
     let signature = try #require(headers[MemberRequestSignature.signatureHeader]?.stringValue.flatMap(MemberRequestSignature.decodeBase64URL))
     #expect(MemberIdentity.verify(publicKey: identity.publicKey, signature: signature,
-      message: MemberRequestSignature.message(method: "POST", target: target, time: time, nonce: nonce, body: body)))
+      message: MemberRequestSignature.message(audience: peer, method: "POST", target: target, time: time, nonce: nonce, body: body)))
     // Not a bearer for anything else: malformed requests and other callers are refused.
-    let bad = LibraryHost.SignatureRequest(method: "TRACE", target: "relative", bodySHA256: "zz")
+    let bad = LibraryHost.SignatureRequest(method: "TRACE", target: "relative", bodySHA256: "zz", audience: peer)
     #expect(try send("POST", "/v1/members/sign", unix: fixture.socket, headers: auth, body: JSONEncoder().encode(bad)).status == 400)
+    // Every signature names a destination other than this host.
+    for audience in ["", "not-a-device", peer.uppercased(), identity.deviceID] {
+      let unaddressed = LibraryHost.SignatureRequest(method: "GET", target: "/v1/hello", bodySHA256: MemberRequestSignature.bodyHash(Data()), audience: audience)
+      #expect(try send("POST", "/v1/members/sign", unix: fixture.socket, headers: auth, body: JSONEncoder().encode(unaddressed)).status == 400, "\(audience)")
+    }
     #expect(try send("POST", "/v1/members/sign", unix: fixture.socket, body: JSONEncoder().encode(request)).status == 401)
     #expect(try send("POST", "/v1/members/sign", port: fixture.port, body: JSONEncoder().encode(request)).status == 404)
+    #expect(try send("POST", "/wovenmatter/v1/members/adopt", port: fixture.port, body: Data("{}".utf8)).status == 404)
     let workspaces = try #require(send("GET", "/v1/workspaces", unix: fixture.socket, headers: auth).json?.objectValue?["workspaces"]?.arrayValue)
     #expect(workspaces.allSatisfy { $0.objectValue?["deleted"]?.boolValue != true })
   }

@@ -126,7 +126,10 @@ private extension CompanionWorkspaceAPI {
             let database = database
             let current: @Sendable () async throws -> CompanionWorkspaceMCPPrincipal = {
                 guard await members.member(key.deviceID) != nil else { throw CompanionAPIError(code: "unauthorized", message: MemberRequestError.unknown.message) }
-                return try await database.companionWorkspaceMCPMember(workspaceID: workspaceID, deviceID: key.deviceID)
+                // Any Mac checks the same synced rows: the registry and the member list.
+                let workspace = try await database.companionExecutionWorkspaces().first { $0.id == workspaceID }
+                let serving = if let workspace { await members.audience(for: workspace) } else { String?.none }
+                return try await database.companionWorkspaceMCPMember(workspaceID: workspaceID, deviceID: key.deviceID, serving: serving)
             }
             return .success(.init(principal: try await current(), current: current))
         }
@@ -352,7 +355,8 @@ public final class CompanionWorkspaceAPI {
             if request.method == "POST", path == "/v1/pair" {
                 guard request.body.count <= 8_192 else { return .error("too_large", "The pairing request is too large.", status: 413) }
                 let command = try JSONDecoder().decode(CompanionPairRequest.self, from: request.body)
-                let result = try await authentication.pair(command, workspaceID: workspaceID)
+                var result = try await authentication.pair(command, workspaceID: workspaceID)
+                result.hostDeviceID = members?.identity.deviceID
                 if let key = command.memberPublicKey, key.count == 32, command.purpose != CompanionPairingPurpose.peerMac,
                    [.iPhone, .iPad].contains(command.metadata?.kind ?? .unknown) {
                     await onMemberPaired(command.deviceID.lowercased(), command.deviceName, key)

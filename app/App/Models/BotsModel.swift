@@ -83,10 +83,20 @@ final class BotsModel {
             sessions[id] = nil
         }
         for (id, machine) in live {
-            let session = sessions[id] ?? BotMachineSession(machineID: id, drafts: drafts, notice: { [weak self] in self?.notice = $0 })
+            let session = sessions[id] ?? BotMachineSession(machineID: id, drafts: drafts, notice: { [weak self] in self?.notice = $0 },
+                                                            signSocket: { [weak self] url, audience in try await self?.socketHeaders(url, audience) ?? [:] })
             sessions[id] = session
             session.apply(machine)
         }
+    }
+
+    /// Signed upgrade headers from the process that holds this Mac's member key.
+    func socketHeaders(_ url: URL, _ audience: String) async throws -> [String: String] {
+        guard let perform else { throw BotsError.unavailable("Bots are still starting.") }
+        guard let headers = try await perform(.signSocket(url: url, audience: audience)).socketHeaders else {
+            throw BotsError.unavailable("This Mac could not sign the bots connection.")
+        }
+        return headers
     }
 
     func conversation(_ target: DashboardBotTarget) -> BotConversationController? {
@@ -122,6 +132,7 @@ final class BotMachineSession: Identifiable {
     let drafts: BotDraftStore
 
     @ObservationIgnored private let report: (String) -> Void
+    @ObservationIgnored private let signSocket: @MainActor @Sendable (URL, String) async throws -> [String: String]
     @ObservationIgnored private var client: PiBotClient?
     @ObservationIgnored private var clientEndpoint: BotSocketEndpoint?
     @ObservationIgnored private var eventTask: Task<Void, Never>?
@@ -131,10 +142,14 @@ final class BotMachineSession: Identifiable {
     @ObservationIgnored private var conversations: [BotConversationKey: BotConversationController] = [:]
     @ObservationIgnored private var memoryObservers: [UUID: (String) -> Void] = [:]
 
-    init(machineID: String, drafts: BotDraftStore, notice: @escaping (String) -> Void = { _ in }) {
+    init(machineID: String, drafts: BotDraftStore, notice: @escaping (String) -> Void = { _ in },
+         signSocket: @escaping @MainActor @Sendable (URL, String) async throws -> [String: String] = { _, _ in
+             throw BotsError.unavailable("Bots on other machines need this Mac's member key.")
+         }) {
         self.machineID = machineID
         self.drafts = drafts
         report = notice
+        self.signSocket = signSocket
         machine = BotMachine(id: machineID, name: "", kind: .linux, state: .unreachable)
     }
 
@@ -161,7 +176,13 @@ final class BotMachineSession: Identifiable {
         guard let endpoint else { return }
         clientEndpoint = endpoint
         let (stream, continuation) = AsyncStream<PiBotClient.Event>.makeStream()
-        let next = PiBotClient(socketURL: endpoint.url, bearer: endpoint.bearer) { continuation.yield($0) }
+        // Another member's socket is signed afresh for every connection attempt.
+        var authorize: PiBotClient.Authorize?
+        if let audience = endpoint.audience {
+            let sign = signSocket
+            authorize = { @Sendable url in try await sign(url, audience) }
+        }
+        let next = PiBotClient(socketURL: endpoint.url, bearer: endpoint.isSigned ? nil : endpoint.bearer, authorize: authorize) { continuation.yield($0) }
         client = next
         eventTask = Task { [weak self] in
             for await event in stream { self?.handle(event) }

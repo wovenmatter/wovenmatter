@@ -35,7 +35,8 @@ final class MemberReachTests: XCTestCase {
     let identity = try MobileMemberKeyVault.loadOrCreate(deviceID: phoneID, storage: .memory())
     let hello = try JSONEncoder().encode(CompanionHello(workspaceID: "library-b", hostName: "Box", capabilities: []))
     let http = RecordingHTTP { _ in (200, hello) }
-    let transport = try HTTPSCompanionTransport(host: URL(string: "https://box.tail1.ts.net/wovenmatter")!, identity: identity, performer: http)
+    let box = UUID().uuidString.lowercased()
+    let transport = try HTTPSCompanionTransport(host: URL(string: "https://box.tail1.ts.net/wovenmatter")!, hostDeviceID: box, identity: identity, performer: http)
     let bound = try await transport.workspaceIdentity()
     XCTAssertEqual(bound, "library-b")
     let request = try XCTUnwrap(http.requests.first)
@@ -44,11 +45,18 @@ final class MemberReachTests: XCTestCase {
     var headers: [String: String] = [:]
     for (key, value) in request.allHTTPHeaderFields ?? [:] { headers[key.lowercased()] = value }
     let key = identity.publicKey
-    let verifier = MemberRequestVerifier(lookup: { id in id == identity.deviceID ? .init(deviceID: id, kind: .ios, name: "iPhone", publicKey: key) : nil })
+    let verifier = MemberRequestVerifier(audience: box, lookup: { id in id == identity.deviceID ? .init(deviceID: id, kind: .ios, name: "iPhone", publicKey: key) : nil })
     // A Linux host sees the path with Serve's `/wovenmatter` mount removed; both verify.
     let member = try await verifier.verify(method: "GET", target: "/v1/hello", headers: headers, body: Data(), allowing: [.ios])
     XCTAssertEqual(member.deviceID, identity.deviceID)
     XCTAssertEqual(MobileRequestSigning.target(of: request.url!), "/wovenmatter/v1/hello")
+    XCTAssertEqual(headers["x-woven-member-audience"], box)
+    // The same request at any other member is refused.
+    let other = MemberRequestVerifier(audience: UUID().uuidString.lowercased(), lookup: { id in id == identity.deviceID ? .init(deviceID: id, kind: .ios, name: "iPhone", publicKey: key) : nil })
+    do { _ = try await other.verify(method: "GET", target: "/v1/hello", headers: headers, body: Data(), allowing: [.ios]); XCTFail("Accepted elsewhere") }
+    catch { XCTAssertEqual(error as? MemberRequestError, .audience) }
+    // A host whose member device ID is unknown is skipped rather than signed for.
+    XCTAssertThrowsError(try HTTPSCompanionTransport(host: URL(string: "https://box.tail1.ts.net/wovenmatter")!, hostDeviceID: "paired", identity: identity, performer: http))
   }
 
   func testSignedFailuresDistinguishUnknownOldAndUpdateRequired() {

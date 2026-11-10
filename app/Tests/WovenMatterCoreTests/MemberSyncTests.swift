@@ -105,15 +105,21 @@ struct MemberSyncTests {
       .appending(path: "../../../shared/Tests/WovenMatterCompanionTests/MemberSignatureVectors.json").standardizedFileURL
     let vectors = try #require(try JSONDecoder().decode(GatewayJSONValue.self, from: Data(contentsOf: url)).objectValue)
     let key = try #require(vectors["publicKeyBase64"]?.stringValue.flatMap { Data(base64Encoded: $0) })
-    let device = try #require(vectors["deviceID"]?.stringValue)
+    let device = try #require(vectors["deviceID"]?.stringValue), audience = try #require(vectors["audience"]?.stringValue)
     for vector in try #require(vectors["cases"]?.arrayValue).compactMap(\.objectValue) {
       let time = Int64(try #require(vectors["windowMilliseconds"] != nil ? vector["time"]?.doubleValue : nil))
       let headers = try #require(vector["headers"]?.objectValue).reduce(into: [String: String]()) { $0[$1.key.lowercased()] = $1.value.stringValue }
-      let verifier = MemberRequestVerifier(lookup: { $0 == device ? MemberKey(deviceID: device, kind: .linux, name: "Vector", publicKey: key) : nil },
-        verify: { MemberIdentity.verify(publicKey: $0, signature: $1, message: $2) }, clock: { time })
-      let member = try await verifier.verify(method: try #require(vector["method"]?.stringValue), target: try #require(vector["target"]?.stringValue),
-                                             headers: headers, body: Data(try #require(vector["body"]?.stringValue).utf8))
+      let verifier = { (own: String) in MemberRequestVerifier(audience: own,
+        lookup: { $0 == device ? MemberKey(deviceID: device, kind: .linux, name: "Vector", publicKey: key) : nil },
+        verify: { MemberIdentity.verify(publicKey: $0, signature: $1, message: $2) }, clock: { time }) }
+      let method = try #require(vector["method"]?.stringValue), target = try #require(vector["target"]?.stringValue)
+      let body = Data(try #require(vector["body"]?.stringValue).utf8)
+      let member = try await verifier(audience).verify(method: method, target: target, headers: headers, body: body)
       #expect(member.deviceID == device)
+      // The same request presented to any other member is refused.
+      await #expect(throws: MemberRequestError.audience) {
+        try await verifier(UUID().uuidString.lowercased()).verify(method: method, target: target, headers: headers, body: body)
+      }
     }
   }
 
@@ -231,7 +237,7 @@ struct MemberSyncTests {
     try await a.add(b); try await b.add(a)
     let page = PairedLibraryPage(schema: "older", entries: [], cursor: 0, hasMore: false)
     let body = try JSONEncoder().encode(LibraryPeerExchange(deviceID: b.id, after: 0, page: page, version: "0.9"))
-    var headers = try b.identity.signer.headers(method: "POST", target: "/v1/peers/sync", body: body)
+    var headers = try b.identity.signer.headers(method: "POST", target: "/v1/peers/sync", body: body, audience: a.id)
     headers = Dictionary(uniqueKeysWithValues: headers.map { ($0.key.lowercased(), $0.value) })
     let response = try #require(await a.sync.handle(.init(method: "POST", target: "/v1/peers/sync", headers: headers, body: body)))
     #expect(response.status == 409)

@@ -134,4 +134,36 @@ final class InferenceTests: XCTestCase {
     XCTAssertEqual(request.value(forHTTPHeaderField: "X-Woven-Library"), "library")
     XCTAssertEqual(request.value(forHTTPHeaderField: "X-Woven-Protocol"), "3")
   }
+  /// A host scope that names the host Mac is signed as this device's member:
+  /// no grant is read or sent, and the signature covers the final request.
+  func testSignedAdapterRequestsCarryNoGrant() async throws {
+    struct NoCredentials: InferenceCredentialReading {
+      func read(connectionID: String) async throws -> String? { XCTFail("A signed host request read a grant"); return nil }
+    }
+    final class Signed: @unchecked Sendable { let lock = NSLock(); var calls: [(String, String, Int)] = [] }
+    let signed = Signed()
+    InferenceMemberSigning.install { request, audience in
+      signed.lock.withLock { signed.calls.append((audience, request.url?.path ?? "", request.httpBody?.count ?? 0)) }
+      request.setValue("signed", forHTTPHeaderField: "X-Woven-Member-Signature")
+    }
+    defer { InferenceMemberSigning.install(nil) }
+    let host = "a0000000-0000-4000-8000-00000000000a"
+    let connection = InferenceConnection(id: "adapter", name: "Host", provider: "openai-codex", accountID: "account-b", route: .adapter,
+      baseURL: "https://host.example.ts.net/wovenmatter", modelID: "m",
+      hostScope: .init(libraryID: "library", workspaceID: "workspace", deviceID: "phone", protocolVersion: 3, hostDeviceID: host))
+    XCTAssertTrue(InferenceMemberSigning.signs(connection.hostScope))
+    let transport = FixtureTransport([.response(200), .line("{\"type\":\"done\",\"reason\":\"stop\",\"message\":{\"content\":[]}}")])
+    let service = CompanionInferenceService(connection: connection, credentials: NoCredentials(), transport: transport, model: model)
+    try await service.stream(requestJSON: "{\"model\":{\"id\":\"m\",\"provider\":\"openai-codex\"},\"context\":{\"messages\":[]}}", emit: { _ in })
+    let requests = await transport.requests
+    let request = try XCTUnwrap(requests.first)
+    XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+    XCTAssertEqual(request.value(forHTTPHeaderField: "X-Woven-Member-Signature"), "signed")
+    let call = try XCTUnwrap(signed.lock.withLock { signed.calls.first })
+    XCTAssertEqual(call.0, host); XCTAssertEqual(call.1, "/wovenmatter/v1/inference/stream")
+    XCTAssertEqual(call.2, request.httpBody?.count, "signed after the body was set")
+    // Without the host's identity the saved grant is still presented.
+    var unsigned = connection; unsigned.hostScope?.hostDeviceID = nil
+    XCTAssertFalse(InferenceMemberSigning.signs(unsigned.hostScope))
+  }
 }
