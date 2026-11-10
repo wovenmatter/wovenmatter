@@ -133,7 +133,9 @@ public actor MobileLibraryHosts {
 
   public func snapshot() -> MobileMembershipState { state }
   public func transport(for host: MobileLibraryHost) throws -> HTTPSCompanionTransport {
-    try HTTPSCompanionTransport(host: host.endpoint, hostDeviceID: host.deviceID, identity: identity, metadata: metadata, performer: performer)
+    // A paired Mac that never named its member device ID predates member requests.
+    guard MemberRequestSignature.isDeviceID(host.deviceID) else { throw MobileConnectionError.memberUnsupported }
+    return try HTTPSCompanionTransport(host: host.endpoint, hostDeviceID: host.deviceID, identity: identity, metadata: metadata, performer: performer)
   }
 
   /// Chooses a reachable host, trying candidates in order and failing over

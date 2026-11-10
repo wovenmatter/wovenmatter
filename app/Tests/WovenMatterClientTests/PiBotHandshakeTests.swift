@@ -1,3 +1,5 @@
+// The bots client and Network.framework exist only on macOS.
+#if os(macOS)
 import CryptoKit
 import Foundation
 import Network
@@ -76,3 +78,4 @@ struct PiBotHandshakeTests {
         }, uniquingKeysWith: { first, _ in first })
     }
 }
+#endif
