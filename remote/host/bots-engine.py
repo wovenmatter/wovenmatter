@@ -29,7 +29,11 @@ def cidr(octets,prefix): return str(ipaddress.IPv4Network((bytes(octets+(0,)*(4-
 def address(*octets): return str(ipaddress.IPv4Address(bytes(octets)))
 BLOCKED_IPV4 = [cidr(*value) for value in (((0,),8),((10,),8),((100,64),10),((127,),8),((169,254),16),((172,16),12),
     ((192,0,0),24),((192,0,2),24),((192,168),16),((198,18),15),((198,51,100),24),((203,0,113),24),((224,),4),((240,),4))]
-SUBNET_CANDIDATES = [cidr((10,n),16) for n in range(237,252)]
+# The bot bridge's network: dockerd takes the bridge's own address as the
+# network it hands containers, so the bridge address, the recorded subnet and
+# every firewall rule all name this one /24.
+BRIDGE_PREFIX = 24
+SUBNET_CANDIDATES = [cidr((10,n),BRIDGE_PREFIX) for n in range(237,252)]
 # Public resolvers (Cloudflare, Google): host resolvers are usually loopback,
 # LAN or MagicDNS addresses, all of which the egress policy blocks.
 DNS = [address(1,1,1,1),address(8,8,8,8)]
@@ -119,7 +123,7 @@ def normalize_disk(value,total_disk):
     return value-value%(4*MiB)
 
 def choose_subnet(existing):
-    """First candidate /16 that overlaps no existing route or address."""
+    """First candidate /24 that overlaps no existing route or address."""
     taken=[]
     for value in existing:
         with contextlib.suppress(ValueError): taken.append(ipaddress.ip_network(value,strict=False))
@@ -128,9 +132,13 @@ def choose_subnet(existing):
         if not any(network.overlaps(other) for other in taken if other.version==4 and other.prefixlen>0): return candidate
     fail('no_free_subnet','No private bridge subnet is free on this host.',73)
 
+def bridge_network(subnet):
+    """The /24 the bridge serves. Installs before this recorded a /16 around it."""
+    return str(ipaddress.IPv4Network((ipaddress.ip_network(subnet,strict=False).network_address,BRIDGE_PREFIX)))
+
 def bridge_address(subnet):
-    network=ipaddress.ip_network(subnet)
-    return str(network.network_address+1)+'/24'
+    network=ipaddress.ip_network(bridge_network(subnet))
+    return str(network.network_address+1)+'/'+str(BRIDGE_PREFIX)
 
 def render_daemon(layout,config):
     return {
@@ -184,7 +192,7 @@ oom_score = -999
 def render_ruleset(layout,config,drop_foreign=False):
     """`drop_foreign`: this engine turned host forwarding on and no iptables
     exists to hold the FORWARD policy, so it drops all non-bot forwarding."""
-    subnet=config['subnet']; bridge=layout.bridge
+    subnet=bridge_network(config['subnet']); bridge=layout.bridge
     blocked=', '.join(BLOCKED_IPV4)
     foreign=f'\n    iifname != "{bridge}" oifname != "{bridge}" drop' if drop_foreign else ''
     # One atomic transaction: create-or-keep, delete, then define, so a reload
@@ -494,7 +502,7 @@ class Engine:
         memory=total_memory(); storage=filesystem(layout.var)
         ip_forward=Path('/proc/sys/net/ipv4/ip_forward').read_text().strip()=='1'
         config={'schemaVersion':1,'instance':layout.instance,'user':user,'uid':entry.pw_uid,'group':group,'gid':entry.pw_gid,
-            'subnet':existing['subnet'] if existing else choose_subnet(existing_networks(self.host)),
+            'subnet':bridge_network(existing['subnet']) if existing else choose_subnet(existing_networks(self.host)),
             'bridge':layout.bridge,'socket':str(layout.socket),'dockerVersion':version,
             'ipForwardWasEnabled':existing.get('ipForwardWasEnabled',ip_forward) if existing else ip_forward,
             'poolBytes':existing.get('poolBytes') if existing else None,'diskBytes':existing.get('diskBytes') if existing else None}
@@ -698,7 +706,7 @@ class Engine:
         if run(['iptables','-w','-S',chain],check=False).returncode: run(['iptables','-w','-N',chain])
         run(['iptables','-w','-F',chain])
         run(['iptables','-w','-A',chain,'-o',bridge,'-m','conntrack','--ctstate','RELATED,ESTABLISHED','-j','ACCEPT'])
-        run(['iptables','-w','-A',chain,'-i',bridge,'-s',config['subnet'],'!','-o',bridge,'-j','ACCEPT'])
+        run(['iptables','-w','-A',chain,'-i',bridge,'-s',bridge_network(config['subnet']),'!','-o',bridge,'-j','ACCEPT'])
         if run(['iptables','-w','-C','FORWARD','-j',chain],check=False).returncode: run(['iptables','-w','-I','FORWARD','1','-j',chain])
 
     def prestart(self):
@@ -766,7 +774,7 @@ class Engine:
             memory=int(Path('/sys/fs/cgroup',*slice_path(layout.slice),'memory.current').read_text())
         return {'installed':True,'instance':layout.instance,'state':text(active) or 'inactive','running':text(active)=='active',
             'socket':str(layout.socket),'socketReady':layout.socket.is_socket(),'user':config['user'],'dockerVersion':config.get('dockerVersion'),
-            'bridge':layout.bridge,'subnet':config['subnet'],'slice':layout.slice,
+            'bridge':layout.bridge,'subnet':bridge_network(config['subnet']),'slice':layout.slice,
             'poolBytes':config.get('poolBytes'),'diskBytes':config.get('diskBytes'),'diskImageBytes':self.image_size(),
             'diskUsedBytes':used,'memoryUsedBytes':memory,'memoryTotalBytes':total_memory(),
             'hostDiskTotalBytes':storage['totalBytes'],'hostDiskFreeBytes':storage['freeBytes'],'dataPath':str(layout.var),

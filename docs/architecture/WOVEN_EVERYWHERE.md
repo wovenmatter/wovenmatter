@@ -1271,9 +1271,14 @@ one request per connection on `control.sock` (e.g.
   `/var/lib/wovenmatter-bots/docker`: a sparse ext4 image (`disk.img`) mounted
   by `var-lib-wovenmatter\x2dbots-docker.mount` when there is a disk cap, a
   plain directory when there is none.
-- **Network.** Bridge `br-wovenbots` on a free private /16 (first of
-  `10.237–251.0.0/16`). dockerd runs with `iptables`/`ip6tables`/`ip-forward`
-  off and never touches the user's chains. The Woven nftables table `inet
+- **Network.** Bridge `br-wovenbots` on a free private /24 (the first of
+  `10.237–251.0.0/24` that overlaps no route or address; the bridge is `.1`).
+  dockerd hands containers addresses from the bridge's own network, so the
+  recorded `subnet` and every rule that names it (the drop of bridge traffic
+  from any other source, the masquerade, and the `WOVENMATTER-BOTS` accept)
+  use that /24; an engine whose record still says /16 is filtered as its /24
+  and rewritten on the next install or update. dockerd runs with
+  `iptables`/`ip6tables`/`ip-forward` off and never touches the user's chains. The Woven nftables table `inet
   wovenmatter_bots`, replaced atomically on every engine start and after
   `nftables.service` reloads, drops all IPv6, all traffic from the bridge to
   the host itself, new connections into the bridge, and forwarded traffic to
