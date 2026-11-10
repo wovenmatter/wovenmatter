@@ -126,9 +126,12 @@ public enum LibraryHostCommand {
       }
       let socket = options.socket ?? layout.defaultSocket
       let port = try host.listen(port: options.port, socket: socket)
-      struct Ready: Encodable { let event = "ready"; let pid: Int32; let port: UInt16; let socket: String; let version: String }
+      // `schema` is the paired-library schema hash: the Node server reports it as
+      // `librarySchema`, so apps can tell a host whose library cannot sync with theirs.
+      struct Ready: Encodable { let event = "ready"; let pid: Int32; let port: UInt16; let socket: String; let version: String; let schema: String }
       let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-      let ready = try encoder.encode(Ready(pid: getpid(), port: port, socket: socket.path, version: LibraryHost.version))
+      let ready = try encoder.encode(Ready(pid: getpid(), port: port, socket: socket.path, version: LibraryHost.version,
+                                           schema: try await host.database.pairedLibrarySchema()))
       try? FileManager.default.removeItem(at: layout.endpointFile)
       guard FileManager.default.createFile(atPath: layout.endpointFile.path, contents: ready + Data([10]), attributes: [.posixPermissions: 0o600]) else {
         throw LibraryHostError.unsafePath(layout.endpointFile.path)
