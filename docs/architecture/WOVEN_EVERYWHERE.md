@@ -760,7 +760,9 @@ hands them to the macOS job, which checks them with
   sessions on its own machine's workspace go through that workspace's own
   execution commands, as another member's would; coordination tools
   (`manage`, `release`, `notifications`, `receipts`) bind a conversation and
-  stay unavailable to bots. A Mac's bots, which are app-wide callers there,
+  stay unavailable to bots. On a bots-only host (no workspace enrolled) the
+  same tools reach only other workspaces: `_harnesses` lists theirs, and a
+  session without `workspace` is refused. A Mac's bots, which are app-wide callers there,
   get the same tools from the Mac; `woven_sessions_list` without `workspace`
   lists a bot's sessions on other workspaces.
 - The iPhone connects directly to every Mac and Linux workspace with its own
