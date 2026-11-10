@@ -468,10 +468,15 @@ public struct UsageAnalyticsSnapshot: Codable, Equatable, Sendable {
 }
 
 extension UsageSample {
-  /// The harness's current name for rows saved under an earlier one. Pi Durable ran
-  /// as "Built-in" until October 2026.
+  /// The name a harness is shown under. Pi Durable ran as "Built-in" until October
+  /// 2026. Pi CLI rows are stored as "Pi", because their row identities are built
+  /// from that name, and shown as "Pi CLI" so they read apart from Pi Durable.
   public static func currentHarnessName(_ name: String) -> String {
-    name == "Built-in" ? AgentRuntimeKind.defaultAgent.displayName : name
+    switch name {
+    case "Built-in": AgentRuntimeKind.defaultAgent.displayName
+    case "Pi": "Pi CLI"
+    default: name
+    }
   }
 }
 

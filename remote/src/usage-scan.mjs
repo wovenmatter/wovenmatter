@@ -407,6 +407,7 @@ export function createUsageScanner({ env = process.env, home = homedir(), refres
       }))
     }
     add(await cached(roots.opencode, readOpenCode))
+    // Reported as "Pi", which record IDs are built from; the desktop shows it as "Pi CLI".
     for (const path of await walk(roots.pi, file => file.endsWith('.jsonl'))) add(await cached(path, file => readFile(file, piSessionParser('Pi'))))
     for (const directory of agentDirectories) {
       for (const path of await walk(join(directory, 'sessions'), file => file.endsWith('.jsonl'))) {

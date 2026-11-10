@@ -734,9 +734,9 @@ public actor LocalUsageService {
       await sources.append(sourceCoverage(
         id: "pi",
         prefix: "pi:file:",
-        sourceName: "Pi",
+        sourceName: "Pi CLI",
         provider: .unknown,
-        harness: "Pi",
+        harness: UsageSample.currentHarnessName("Pi"),
         location: homeDirectory.appending(path: ".pi/agent/sessions"),
         store: store,
         interval: interval,

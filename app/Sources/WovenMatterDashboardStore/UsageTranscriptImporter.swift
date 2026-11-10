@@ -173,6 +173,7 @@ actor UsageTranscriptImporter {
     now: Date
   ) async throws {
     let enabled: @Sendable (UsageSample) -> Bool = { enabledProviders.contains($0.provider) }
+    // Stored as "Pi" (row identities use it) and shown as "Pi CLI".
     importOutcomes["pi:file:"] = try await importTranscriptFiles(
       root: homeDirectory.appending(path: ".pi/agent/sessions", directoryHint: .isDirectory),
       prefix: "pi:file:",

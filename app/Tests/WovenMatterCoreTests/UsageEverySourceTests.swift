@@ -111,7 +111,7 @@ struct UsageEverySourceTests {
     let snapshot = try await usage.analyticsSnapshot(range: .allTime, refreshReason: .startup, now: Self.now)
     func total(_ samples: [UsageSample]) -> Int64 { samples.reduce(0) { $0 + $1.tokens.totalTokens } }
     #expect(total(snapshot.samples.filter { $0.harness == "Codex" }) == 220)
-    let piCLI = snapshot.samples.filter { $0.harness == "Pi" }
+    let piCLI = snapshot.samples.filter { $0.harness == "Pi CLI" }
     #expect(total(piCLI) == 14)
     #expect(piCLI.first?.provider == .claude)
     let durable = snapshot.samples.filter { $0.harness == "Pi Durable" }
@@ -163,9 +163,10 @@ struct UsageEverySourceTests {
     #expect(Set(kept.map(\.id)) == ["history-1", "history-2", "history-3", "durable-store", "unseen", "old-history"])
   }
 
-  @Test("rows saved under the Built-in harness read as Pi Durable")
+  @Test("rows saved under Built-in read as Pi Durable, and Pi rows as Pi CLI")
   func builtInIsPiDurable() {
     #expect(UsageSample.currentHarnessName("Built-in") == "Pi Durable")
+    #expect(UsageSample.currentHarnessName("Pi") == "Pi CLI")
     #expect(UsageSample.currentHarnessName("Codex") == "Codex")
   }
 
