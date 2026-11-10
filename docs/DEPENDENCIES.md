@@ -58,7 +58,9 @@ Maintenance checks both for newer releases; recorded does not mean frozen.
   first installation may download its checksummed archive. Select the newest
   stable release, including Current; do not restrict selection to LTS. Exclude
   nightlies and prereleases. CI and release builds use the same release
-  (`node-version-file: default-agent/.node-version`). Linux images follow the
+  (`node-version-file: default-agent/.node-version`); local test scripts run the
+  bots suite through `scripts/with-pinned-node.sh`, which on a Mac with another
+  default Node uses the checksummed copy `prepare-default-agent.sh` caches. Linux images follow the
   same stable major (`node:<major>-trixie-slim`); `--pull --no-cache` picks up its
   newest patch and Debian security updates on every image build. Workspace
   creation may reuse matching local contents for less than 24 hours; an explicit

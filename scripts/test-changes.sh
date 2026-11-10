@@ -93,8 +93,9 @@ run_remote_tests() {
 }
 
 run_bots_tests() {
-  npm ci --prefix bots --ignore-scripts --no-audit --no-fund
-  npm test --prefix bots
+  # The bots runtime requires Node 26 (bots/package.json engines).
+  scripts/with-pinned-node.sh npm ci --prefix bots --ignore-scripts --no-audit --no-fund
+  scripts/with-pinned-node.sh npm test --prefix bots
   bots_tested=1
 }
 
