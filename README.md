@@ -1,169 +1,177 @@
 # Woven Matter
 
-[![Download Woven Matter for Apple silicon](https://img.shields.io/badge/Download-Woven_Matter_for_Apple_silicon-000000?logo=apple&logoColor=white)](https://github.com/wovenmatter/wovenmatter/releases/latest)
+Woven Matter runs and manages coding agents across your own devices. It has a
+Mac app, an iPhone app, and a headless Linux host. All of them join one
+Tailscale network (tailnet) and share one synced library of notes,
+conversations, calendar, and artifacts.
 
-**The workspace for all of your harnesses.**
+Supported harnesses are Pi Durable (built in), Codex, Claude Code, Grok Build,
+and OpenCode. Third-party harness CLIs are not bundled. Settings can install
+them, or use the installations and provider accounts you already have.
 
-WovenMatter brings **Pi Durable, Codex, Claude Code, Grok Build, and OpenCode** together in one workspace. Work with all of your harnesses
-in a simple, easy-to-use interface that keeps all of your work organized in one
-place. Each project folder owns one directory in one execution workspace,
-so its agents collaborate on the files you choose. WovenMatter ships
-with a local agent workspace, which runs locally on your Mac. You can also
-launch remote agent workspaces on Linux machines in your Tailnet and work with
-those agents from the same interface.
+[Releases](https://github.com/wovenmatter/wovenmatter/releases) ·
+[Documentation](docs/README.md) ·
+[Getting started](docs/guide/getting-started.md)
 
-WovenMatter is essentially a user interface built on top of a SQLite database.
-This database saves all of your conversations, notes, and any other items
-created within WovenMatter. This gives you control over your data by saving all
-of your work history in one location, so you can return to earlier conversations
-and keep related work together. This, along with our user interface and
-shared workspace design, allows for seamless collaboration between your agents,
-allowing you the freedom to work across the harnesses and models of your choice.
+## Surfaces
 
-[Download](https://github.com/wovenmatter/wovenmatter/releases/latest) ·
-[Getting started](docs/guide/getting-started.md) · [Documentation](docs/README.md) ·
-[Website](https://wovenmatter.com)
+| Surface | Role |
+| --- | --- |
+| Mac | The full interface. It runs a background server that holds a library copy, runs agents, and serves Woven MCP. Closing the window leaves that server running. |
+| Linux host | Headless. It runs one Woven server: an optional workspace for agents, a library copy, Woven MCP and, when enabled, bots. A Mac installs it over Tailscale SSH. |
+| iPhone | A focused interface. It runs Quick Chat on the device and works with sessions on every Mac and Linux workspace. |
 
-The **Pi Durable** agent is ready in local and remote workspaces. Connect your providers,
-choose models and fallbacks, and add an Exa search key in Settings.
-See [Pi Durable](docs/guide/default-agent.md).
+Each Mac or Linux machine runs one Woven server. A Linux machine can run bots
+without a workspace. Adding the workspace later reuses the same server.
 
-## Your agents, working in the same place
+## How devices reach each other
 
-WovenMatter is a lightweight macOS app designed to let you work and collaborate
-with all of your different harnesses. Each supported harness has a
-dedicated first-class integration. Use your existing installations or install
-harnesses in the settings page. Use your existing provider accounts and/or API keys.
-Models, authentication, and controls depend on the harness you use.
+- **Members.** Every device has its own long-lived signing key: in the Keychain
+  on a Mac or iPhone, and in a `0600` file on Linux. The member list is a
+  signed record set that syncs to every device. Any Mac can add a device.
+  Removing a device is a signed revocation. It takes effect on each device as
+  soon as that device syncs.
+- **Signed requests.** Every request from one member to another is signed
+  with the caller's device key. No tokens are issued, cached, or renewed.
+- **Direct reach.** Once paired, each device talks directly to every other
+  online device over tailnet HTTPS (`*.ts.net`). No single Mac is required.
+  The iPhone has no home Mac. It syncs with whichever Mac or Linux host
+  answers first.
+- **Pairing.** Macs pair with each other on the Mac connections page, by link
+  or nearby request. An iPhone pairs with any Mac. Linux hosts are added from
+  a Mac, under Settings > Remote workspaces.
 
-Each project folder has one fixed root directory and one owning **execution
-workspace**. Create a blank project on your Mac or in a connected remote
-workspace, or link an existing directory on your Mac. Agents in that workspace
-can work on the project's files using their native permissions and project
-instructions.
+## Library
 
-Choose the folder before a chat's first message. The folder and working
-directory are then fixed for that session. **Ungrouped** chats use one default
-directory per execution workspace.
+- Every Mac and Linux host keeps a full copy of the library in SQLite. Linux
+  runs the same Swift library code as the Mac, as the `wovenmatter-library`
+  executable, so agents read and edit notes, calendar, history, and artifacts
+  the same way on both.
+- Sync is peer-to-peer between every online Mac and Linux member. It runs on
+  changes, not on a polling loop, and a device catches up when it comes back
+  online. Conflicts are kept as conflict copies.
+- Peers must have matching library schemas to sync. When versions differ, each device
+  shows which part needs updating and offers **Update everything**.
+- The iPhone keeps full copies of notes, Quick Chats, calendar, and timers and
+  reminders. It also keeps the list of every session on every device, plus
+  transcripts of recent or opened sessions. Large files download when opened.
+  Writing that exists only on the phone is included in iCloud and computer
+  backups. Caches the library can supply again are excluded. Credentials stay
+  in device-only Keychain items.
 
-## Your conversations, saved together
+## Agents and sessions
 
-Conversations with different harnesses, on your Mac or in remote agent
-workspaces, are saved in the same local SQLite database as your notes and other
-items created while working in WovenMatter. This gives you a central work
-history alongside the histories each harness already independently maintains.
+- Every harness runs in full access by default on every workspace, including
+  sessions started by other agents. Each harness's full mode is labeled
+  "Full access".
+- Through Woven MCP, an agent on any Mac or Linux host can create, message,
+  inspect, stop, and answer sessions on any other Mac or Linux workspace. The
+  request goes straight to that workspace, so it works while other Macs are
+  offline. Woven MCP also covers notes, calendar, history, the library,
+  timers, the browser, and more.
+- iPhone Quick Chat runs Pi Durable on the phone in full access. Its tools
+  are notes, web search and read (Exa, Brave, or Firecrawl), questions to you,
+  timers and reminders, and calendar. It has no shell or file tools and no
+  background execution. Other devices see Quick Chats as read-only history.
 
-Return to earlier conversations, review what an agent did, and continue
-supported sessions when the agent is connected. Organize a project's
-conversations together even when you use several harnesses to work on it.
+## Bots
 
-Project files stay in their respective workspaces. Saving transcripts centrally
-does not automatically copy every file an agent creates or synchronize local
-and remote folders.
+Bots are long-running agents, each with its own Linux container.
 
-## Work on your Mac and other machines
+- One Node runtime per machine (`bots/`) runs every bot's agent loop on
+  Pi Durable. Each bot's tools run inside its own Ubuntu container.
+- Linux hosts use a Woven-owned Docker Engine, separate from any Docker you
+  run yourself. Installing it needs `sudo` once. Macs use a Woven-managed
+  Ubuntu VM through Apple's Virtualization framework, on Apple silicon only.
+- Provider credentials never enter a container. Each bot gets its own Woven
+  MCP key, which can be revoked per bot.
+- Containers have internet access but cannot reach the tailnet, private
+  networks, the host, or each other. A bot can share a preview of a container
+  port at a tailnet HTTPS address.
+- A bot stops after 15 minutes idle and starts again on its next tool call.
+  Its browser profile and its registered long-running services come back on
+  restart.
+- Bot conversations sync to every device through the library. You can manage
+  bots on any Mac or Linux member from the Bots page in the Mac app.
+  **Discover devices** lists the Macs and Linux machines on your tailnet and
+  what each one needs before it can run bots.
 
-Start with the local agent workspace on your Mac. If you have another Linux
-machine connected to your Tailnet, you can create a remote agent workspace on
-it from Woven Matter. A rented Linux host is supported after it joins the same
-Tailnet. Tailscale is required for every remote-workspace connection.
+## Repository layout
 
-Each remote workspace is a container with a persistent home for its files,
-harnesses, and credentials. You can create multiple workspaces, run agents in
-parallel, and work with them from the same Mac interface. Their conversation
-transcripts are saved in Woven Matter's database alongside your local chats.
+| Path | Contents |
+| --- | --- |
+| `app/` | macOS app (`WovenMatter.xcodeproj`) and Swift package: core, library store, library host and daemon, client, automation, browser (CEF), VM helper, power helper, updater records |
+| `ios/` | iPhone and iPad app, its on-device Pi Durable runtime, and tests |
+| `shared/` | Foundation-only package of note models and wire contracts used by both apps |
+| `remote/` | Linux Woven server (Node), host install and engine scripts, container workspace images |
+| `bots/` | Bots runtime, in-container helper, and container image |
+| `default-agent/` | Pi Durable runtime that the Mac app and Linux hosts run |
+| `harnesses/` | Harness catalog, adapter installation, and the bridge that connects harnesses to Woven MCP |
+| `integration/` | End-to-end checks between the iPhone client and the Mac library API |
+| `scripts/` | Build, launch, test, and release tooling |
+| `docs/` | User guides, architecture contracts, and references |
 
-Woven Matter inspects the host and asks you to authorize any preparation before
-creating a workspace. Remote hosts need compatible Docker support. See
-[Remote workspaces](docs/guide/remote-workspaces.md) for setup and management.
+## Development
 
-Whether work continues after you close the app depends on the harness, its
-service, and the machine running it. See [Scheduled work](docs/guide/schedules-and-usage.md)
-for the conditions around background jobs.
+Development needs macOS 26, Xcode 26, the Node release in
+`default-agent/.node-version`, and `jq`. Building and testing need no provider
+credentials. See [Contributing](CONTRIBUTING.md).
 
-## Work across sessions in parallel
+### Build and run
 
-Run multiple sessions in parallel with the same harness or across different
-harnesses. Use panels to view up to five sessions at once, while additional
-sessions can continue running in the background. Open a note beside your
-conversation to work on it with your agent. Organize your notes and
-conversations in folders to keep related work together.
+`scripts/build_and_run.sh` is the only development launcher. Each worktree
+gets its own instance, bundle ID, caches, and data.
 
-Agents can also read and edit a note you're working on through Woven Matter's
-note tools. This gives longer responses and reference material a place beside
-the chat, where you can keep reading without scrolling back through messages.
+```sh
+scripts/build_and_run.sh                    # snapshot (the default)
+scripts/build_and_run.sh --mode snapshot
+scripts/build_and_run.sh --mode client
+scripts/build_and_run.sh --mode live
+scripts/build_and_run.sh --mode snapshot --instance NAME
+scripts/build_and_run.sh --plan             # print the resolved profile only
+```
 
-Woven MCP exposes focused app tools over authenticated HTTP. Supported harnesses
-receive session-scoped access automatically. You can also grant an outside agent
-access to a chosen conversation and tool groups, then revoke that access in Woven.
-The same permissions govern notes, orchestration, calendar, Executor, and embedded
-browser tools across local Macs, connected workspaces, and the iPhone app. See
-[agent tools and access](docs/AGENT_TOOLS.md).
+- **snapshot** (default): the full desktop app with its own background server,
+  backed by an isolated copy of the library. It never syncs back to
+  production.
+- **client**: the full app as a connected client of the production library on
+  the same Mac. Use it only when testing a connected client.
+- **live**: the branch hosts the production library directly. Use it only when
+  asked explicitly. Stop the production host first. An exclusive lease blocks
+  a second owner.
 
-Managed SQLite databases let agents curate data that you can revisit in live
-note tables and values, spreadsheets, and HTML artifacts. Each database has one
-writable workspace owner; the Mac keeps complete readable replicas of remote
-data. Usage, Calendar, Library, and Scheduled Tasks add other ways to organize
-and follow your work.
+`debug`, `logs`, and `verify` replace the default `run` action. See
+[development builds](docs/DEVELOPMENT_BUILDS.md) for details.
 
-Read more about [conversations and panels](docs/guide/conversations.md),
-[notes and data](docs/guide/notes-and-data.md), and
-[schedules and usage](docs/guide/schedules-and-usage.md).
+The iPhone app builds with `scripts/build-ios.sh`. See [ios/README.md](ios/README.md).
 
-## Get started
+### Validate
 
-You need an **Apple silicon Mac running macOS 26 or later** for the published
-app. No Woven Matter account is required. You use your own AI subscriptions or
-API keys; model availability and costs depend on your providers.
+```sh
+scripts/test-changes.sh          # suites chosen from files changed against origin/main
+scripts/test-changes.sh --all    # changes that span components
+scripts/test-changes.sh --ci     # the portable Linux check that PR CI runs
+```
 
-1. [Download Woven Matter](https://github.com/wovenmatter/wovenmatter/releases/latest)
-   and move it into Applications.
-2. Open **Settings → Local agent workspace** to see the harnesses discovered
-   on your Mac, or install one you want to try.
-3. Enable it and complete its sign-in or connection setup.
-4. Choose **New chat**, select your agent, and give it a task.
+Narrower options are `--desktop`, `--macos`, `--native`, `--companion`,
+`--companion-desktop`, `--remote`, and `--linux`. Use `scripts/test-container.sh`
+for container lifecycle changes when Docker is available. Tests never call
+provider services.
 
-Start with a harness you already use and have provider access for. If you're
-looking for an example, the [getting-started guide](docs/guide/getting-started.md)
-can help you choose and set one up. You don't need a remote machine to begin.
+`scripts/with-pinned-node.sh COMMAND` runs a command with the pinned Node first
+on `PATH`. The bots runtime requires it.
 
-Woven Matter and the harnesses you enable need access to the files and accounts
-used for your work. Review the credential-access disclosure and any macOS
-permission prompts during setup. [Agent setup](docs/guide/agents.md) explains
-the installation and connection steps.
+## Documentation
 
-## Workspace layout
+- [Woven everywhere](docs/architecture/WOVEN_EVERYWHERE.md): devices, membership, library sync, sessions, and bots
+- [Development builds](docs/DEVELOPMENT_BUILDS.md)
+- [Dependency policy](docs/DEPENDENCIES.md)
+- [UI style guide](docs/STYLE_GUIDE.md)
+- [Background execution](docs/architecture/BACKGROUND_EXECUTION.md)
+- [Default agent credentials](docs/architecture/DEFAULT_AGENT_CREDENTIALS.md)
+- [Documentation index](docs/README.md)
+- [Agent guidance](AGENTS.md)
 
-Managed project directories live under `~/.woven-matter` on your Mac and
-`/home/.woven-matter` inside each remote container. A newly created project is
-blank: Woven does not add preset folders, `AGENTS.md`, or `CLAUDE.md`. Existing
-linked directories and their instructions remain yours.
-
-Renaming a folder changes its display name only. Removing it can preserve its
-files; deleting its physical root is offered only for managed project
-directories. Additional reference locations belong to the same execution
-workspace. Project files are not synchronized between devices.
-
-Named databases live in Woven's application or service storage, separate from
-project directories and the internal history/settings database. See
-[Workspaces and storage](docs/guide/workspaces.md) and
-[Notes and data](docs/guide/notes-and-data.md) for folder, replica, and copy
-behavior.
-
-## Help and feedback
-
-Browse the [documentation](docs/README.md), check
-[troubleshooting](docs/guide/troubleshooting.md), or read the
-[release notes](https://github.com/wovenmatter/wovenmatter/releases).
-Report bugs and suggest improvements through [GitHub issues](https://github.com/wovenmatter/wovenmatter/issues).
-For vulnerabilities, follow the [security policy](SECURITY.md).
-
-## Build and contribute
-
-Start with [Contributing](CONTRIBUTING.md) for development requirements, build
-commands, and validation. Xcode is needed to build from source, not to use the
-published app. Integration references and maintainer procedures are listed in
-the [documentation index](docs/README.md).
-
-Woven Matter is [MIT licensed](LICENSE). See [third-party notices](THIRD_PARTY_NOTICES.md)
-and [trademarks](TRADEMARKS.md) for redistribution details.
+Report vulnerabilities through the [security policy](SECURITY.md). Woven
+Matter is [MIT licensed](LICENSE). See [third-party notices](THIRD_PARTY_NOTICES.md)
+and [trademarks](TRADEMARKS.md).
