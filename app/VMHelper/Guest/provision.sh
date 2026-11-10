@@ -149,8 +149,13 @@ EOF
 ExecStartPost=/usr/local/lib/woven/egress.sh apply
 EOF
   # The Mac's console is hvc0; boot messages there make failures diagnosable.
-  if [ -d /etc/default/grub.d ] && ! grep -qs hvc0 /etc/default/grub.d/90-woven.cfg; then
-    echo 'GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT console=hvc0"' >/etc/default/grub.d/90-woven.cfg
+  # init_on_alloc=0: Ubuntu's kernel zeroes every page it allocates, including
+  # the pages it hands to the balloon, and the Mac then has to back each one
+  # (Virtualization never discards ballooned pages). Left untouched, they cost
+  # the Mac nothing. The helper reboots the guest once to apply this.
+  local options='console=hvc0 init_on_alloc=0'
+  if [ -d /etc/default/grub.d ] && ! grep -qs "$options" /etc/default/grub.d/90-woven.cfg; then
+    echo "GRUB_CMDLINE_LINUX_DEFAULT=\"\$GRUB_CMDLINE_LINUX_DEFAULT $options\"" >/etc/default/grub.d/90-woven.cfg
     update-grub || true
   fi
   systemctl daemon-reload

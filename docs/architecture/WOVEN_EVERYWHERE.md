@@ -1047,10 +1047,11 @@ Pi Bot's Admin Bot config tools (`read_config`, `update_config`,
   it needs sudo once.
 - **Mac:** a Woven-managed Linux VM (Virtualization framework) runs Docker
   Engine. Its socket is forwarded over vsock to a Unix socket under the app's
-  support directory. The VM stays running so a wake only starts a container,
-  and it returns unused memory to the Mac through the balloon (see Mac VM:
-  Virtualization offers no free page reporting, so the balloon follows the
-  guest's demand instead).
+  support directory. The VM stays running so a wake only starts a container.
+  Virtualization never takes back memory a guest once touched, so the balloon
+  caps the guest at what it uses plus headroom from boot on, and the helper
+  restarts the VM when no container has run for a while and it holds much
+  more than that (see Mac VM, Resources).
 
 #### Mac VM
 
@@ -1105,22 +1106,62 @@ login until `stop()`.
   the hard limit. A change applies fully at the next VM restart, which the
   helper performs by itself when no container runs; until then a lower pool
   is applied through the balloon, which the guest may deflate under memory
-  pressure (Virtualization's balloon offers deflate-on-OOM). Unused guest
-  memory returns to the Mac through the balloon. Virtualization offers no
-  free page reporting, and it frees ballooned pages on the Mac only while
-  they stay in the balloon (deflating re-commits them), so the balloon
-  follows demand: every second the helper reads guest memory and sets the
-  target to what the guest uses (page cache counts as free) plus headroom
-  (the larger of 1 GiB and a quarter of the pool). It grows back at once
-  when the guest needs more, opens fully when guest available memory falls
-  below half the headroom or the guest agent does not answer within a
-  second, and shrinks only after demand stayed lower for 30 seconds. An
-  allocation faster than the headroom can stall for about a second until the
-  balloon opens; it is not killed. Ballooned pages become clean at once and
-  leave the VM process within about 20 seconds; `vmMemoryFootprintBytes` is
-  the process's `phys_footprint` (what Activity Monitor shows) and can lag.
-  Per-container memory limits (`Memory`, `MemorySwap`) are enforced by the
-  guest kernel (cgroup v2). The disk cap is enforced inside the guest by a
+  pressure (Virtualization's balloon offers deflate-on-OOM).
+- **Memory on the Mac.** Measured on macOS 27.2: Virtualization's balloon
+  never discards the pages a guest puts in it (no free page reporting or
+  hinting either), so the VM process's footprint is the high-water mark of
+  the memory the guest ever touched, and only a VM restart lowers it.
+  Ballooning memory the guest has used gives nothing back. Ubuntu's kernel
+  also zeroes every page it allocates, including pages for the balloon,
+  which made inflating it cost the Mac those pages (an idle 8 GiB VM went
+  from 1.3 to 7.2 GB footprint when the balloon closed to 2 GiB). Apple
+  silicon cannot run 64 KiB-page guests and Ubuntu ships no 16 KiB kernel,
+  so larger guest pages are no way out. What works:
+  - The guest boots with `init_on_alloc=0` (provisioning and Woven's update
+    set it in GRUB; the helper reboots a guest once when it is ready without
+    it). Ballooned pages are then never touched and cost nothing.
+    The helper uses the balloon only on a guest whose `/proc/cmdline`
+    (guest agent `status`) shows it; for any other guest it stays open.
+  - The balloon caps the guest from boot (`state.json`
+    `guestLeavesBalloonUntouched` remembers the last guest's kernel): it
+    starts at 1 GiB plus the headroom (3 GiB for an 8 GiB pool) and follows
+    the guest's demand, so Linux cannot spread page cache over memory it does
+    not need. Demand
+    is used memory (MemTotal - MemAvailable) minus what the balloon really
+    holds (`balloon_inflate - balloon_deflate` from `/proc/vmstat`) plus
+    dirty and writeback pages; clean page cache counts as free. The target is
+    demand plus headroom (the larger of 1 GiB and a quarter of the pool), at
+    least 1.5 GiB, at most the pool.
+  - Every second the helper reads the guest's memory. It raises the target
+    at once when demand grows. It opens the balloon fully when the guest is
+    under memory pressure: stalls of 1% or more (`/proc/pressure/memory`
+    `some`), page cache read back at 8 MiB/s or more
+    (`workingset_refault_file`), available memory below half the headroom,
+    or no answer from the guest agent within a second. It lowers only after
+    demand stayed lower for 30 seconds and the guest has had no pressure for
+    60, by at most 1 GiB every 5 seconds, so the first sign of pressure
+    stops it; stalls within 3 seconds of a step are the balloon's own
+    reclaim and do not count. An allocation faster than the headroom can
+    stall for about a second until the balloon opens; it is not killed.
+  - When the guest has been idle for 10 minutes (no running container and a
+    load average below 0.5, since an image build runs no listed container;
+    the RAM pool restart uses the same idle test) and the footprint exceeds the
+    current target by more than 1 GiB, the helper restarts the VM (at most
+    every 30 minutes), which returns everything the guest touched; stopped
+    bots lose nothing. Running containers keep the footprint at its
+    high-water mark until they stop.
+  - `vmMemoryFootprintBytes` is the VM process's `phys_footprint` (what
+    Activity Monitor shows), `guestMemoryUsedBytes` the demand above and
+    `balloonTargetBytes` the cap in effect.
+  - Measured on the Mac Mini, macOS 27.2 (8 GiB pool, guest idle at about
+    0.6 GiB). Before: the first image build ended at 8.2 GB footprint and
+    stayed there idle. After: fresh boot 1.3 GB; the first image build (3.3
+    minutes, capped at 3 GiB until a stall opened it) 5.3 GB; idle restart
+    10 minutes later back to 1.3 GB, capped at 2.6 GiB; one bot through the
+    real-engine test 3.5 GB (its snapshot commit re-read evicted cache and
+    opened the balloon).
+- **Limits and disk.** Per-container memory limits (`Memory`, `MemorySwap`)
+  are enforced by the guest kernel (cgroup v2). The disk cap is enforced inside the guest by a
   reserve file of unwritten extents on the data disk, so raising and lowering both apply at
   once while running; lowering stops at what is used. Freed blocks are
   trimmed back to the Mac every ten minutes.

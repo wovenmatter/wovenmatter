@@ -9,6 +9,9 @@ struct HelperState: Codable {
     var instanceID = "woven-" + UUID().uuidString.lowercased()
     var forwards: [WovenVMForward] = []
     var updateFailure: String?
+    /// The guest kernel last seen leaves the pages it hands to the balloon
+    /// untouched, so the next boot can be capped from the start.
+    var guestLeavesBalloonUntouched: Bool?
 }
 
 /// Owns the Woven VM. All mutable state is confined to `queue`, which is also
@@ -225,9 +228,13 @@ final class VMHelper: NSObject, VZVirtualMachineDelegate, @unchecked Sendable {
             machine = vm
             bootedMemory = configuration.memorySize
             balloonTarget = nil
+            balloon = WovenVMBalloonPolicy.State()
+            balloonAllowed = state.guestLeavesBalloonUntouched == true
+            agentAnswered = false
+            guestCommandLine = nil
+            idleSince = nil
             vmProcess = nil
             guestDemand = nil
-            balloonLowerSince = nil
             guestDisk = nil
             vm.start { result in
                 if case .failure(let error) = result { outcome.error = error }
@@ -239,7 +246,17 @@ final class VMHelper: NSObject, VZVirtualMachineDelegate, @unchecked Sendable {
             queue.sync { machine = nil }
             throw WovenVMError.failed("The VM did not start: \(error.localizedDescription)")
         }
-        log("VM started with \(configuration.memorySize >> 20) MiB and \(configuration.cpuCount) CPUs")
+        // Cap the guest before it touches memory it will not need: untouched
+        // pages cost the Mac nothing, touched ones stay until the VM restarts.
+        let capped = queue.sync { () -> UInt64? in
+            guard balloonAllowed else { return nil }
+            let target = WovenVMBalloonPolicy.bootTarget(ceiling: ceiling())
+            balloon.target = target
+            applyBalloon(target: target)
+            return target
+        }
+        log("VM started with \(configuration.memorySize >> 20) MiB and \(configuration.cpuCount) CPUs"
+            + (capped.map { ", capped at \($0 >> 20) MiB" } ?? ""))
     }
 
     /// Waits until the guest is provisioned and Docker Engine answers.
@@ -247,6 +264,15 @@ final class VMHelper: NSObject, VZVirtualMachineDelegate, @unchecked Sendable {
         if report { set(.booting, "Starting the VM") }
         try boot()
         try waitUntilReady(timeout: timeout, report: report)
+        // Provisioning sets the guest kernel's memory options; they apply from
+        // its next boot. Once, so a guest that keeps refusing them still runs.
+        if queue.sync(execute: { guestCommandLine.map { !WovenVMBalloonPolicy.guestLeavesBalloonUntouched(commandLine: $0) } ?? false }) {
+            log("restarting the guest once to apply its memory settings")
+            if report { set(.booting, "Restarting the VM to apply its memory settings") }
+            stopGuest()
+            try boot()
+            try waitUntilReady(timeout: timeout, report: report)
+        }
         if report { set(.ready, nil) }
         afterReady()
     }
@@ -285,7 +311,20 @@ final class VMHelper: NSObject, VZVirtualMachineDelegate, @unchecked Sendable {
         let provisioned = (status["provisioned"] as? [String: Any])?["guestVersion"] as? Int
         let info = WovenVMGuestInfo(os: status["os"] as? String, kernel: status["kernel"] as? String,
                                     docker: status["docker"] as? String, provisionedVersion: provisioned)
-        queue.async { self.guest = info }
+        let commandLine = status["cmdline"] as? String
+        queue.async { [self] in
+            guest = info
+            // An older guest agent does not say; its balloon stays open.
+            guard let commandLine, commandLine != guestCommandLine else { return }
+            guestCommandLine = commandLine
+            let untouched = WovenVMBalloonPolicy.guestLeavesBalloonUntouched(commandLine: commandLine)
+            balloonAllowed = untouched
+            if state.guestLeavesBalloonUntouched != untouched {
+                state.guestLeavesBalloonUntouched = untouched
+                saveState()
+            }
+            if !untouched { applyBalloon(target: nil) }
+        }
     }
 
     private func afterReady() {
@@ -293,7 +332,8 @@ final class VMHelper: NSObject, VZVirtualMachineDelegate, @unchecked Sendable {
         pushHostAddresses()
         applyDiskCap()
         refreshUsage()
-        queue.sync { applyBalloon(target: nil) }
+        // A guest that zeroes ballooned pages would make the Mac back them all.
+        queue.sync { if !balloonAllowed { applyBalloon(target: nil) } }
     }
 
     func guestDidStop(_ virtualMachine: VZVirtualMachine) { handleStop(virtualMachine, error: nil) }
@@ -333,6 +373,8 @@ final class VMHelper: NSObject, VZVirtualMachineDelegate, @unchecked Sendable {
         let waiter = DispatchSemaphore(value: 0)
         let running = queue.sync { () -> Bool in
             guard machine != nil else { return false }
+            // A guest shutting down stops answering; that is not pressure.
+            agentAnswered = false
             stopWaiters.append(waiter)
             return true
         }
@@ -467,66 +509,73 @@ final class VMHelper: NSObject, VZVirtualMachineDelegate, @unchecked Sendable {
         }
     }
 
+    /// Runs on `queue`.
+    private func ceiling() -> UInt64 {
+        WovenVMBalloonPolicy.ceiling(bootedBytes: bootedMemory, requestedBytes: desiredMemory())
+    }
+
     /// Runs on `queue`. `target` nil restores the ceiling.
     private func applyBalloon(target: UInt64?) {
-        guard let vm = machine, let balloon = vm.memoryBalloonDevices.first as? VZVirtioTraditionalMemoryBalloonDevice else { return }
-        let ceiling = WovenVMBalloonPolicy.ceiling(bootedBytes: bootedMemory, requestedBytes: desiredMemory())
+        guard let vm = machine, let device = vm.memoryBalloonDevices.first as? VZVirtioTraditionalMemoryBalloonDevice else { return }
+        let ceiling = ceiling()
         let value = (min(target ?? ceiling, ceiling)) / (1 << 20) * (1 << 20)
+        if target == nil { balloon.target = nil }
         if balloonTarget != value {
-            balloon.targetVirtualMachineMemorySize = value
+            device.targetVirtualMachineMemorySize = value
             balloonTarget = value
         }
     }
 
-    /// Every second: keep the balloon over what the guest does not need, so the
-    /// Mac keeps that memory (see `WovenVMBalloonPolicy`). It fails open: a
-    /// guest too starved to answer gets its whole pool back at once, because
-    /// Linux's own deflate-on-OOM frees only 1 MiB per OOM round and a fast
-    /// allocation would otherwise stall until the balloon opens.
+    /// Every second, while the VM runs: keep the guest capped at what it uses
+    /// plus headroom (see `WovenVMBalloonPolicy`). It fails open: a guest too
+    /// starved to answer gets its whole pool back at once, because Linux's own
+    /// deflate-on-OOM frees only 1 MiB per OOM round and a fast allocation
+    /// would otherwise stall until the balloon opens.
     private func balloonTick() {
         let proceed = queue.sync { () -> Bool in
-            guard phase == .ready, !busy, !ballooning, machine != nil else { return false }
+            guard balloonAllowed, !ballooning, machine != nil else { return false }
             ballooning = true
             return true
         }
         guard proceed else { return }
         defer { queue.sync { ballooning = false } }
-        guard let memory = try? agent(["op": "meminfo"], timeout: 1),
-              let total = (memory["total"] as? NSNumber)?.uint64Value,
-              let available = (memory["available"] as? NSNumber)?.uint64Value else {
+        guard let reply = try? agent(["op": "meminfo"], timeout: 1),
+              let memory = WovenVMGuestMemory(agentReply: reply) else {
+            // Before the agent first answers, the guest is still booting.
             let opened = queue.sync { () -> Bool in
-                guard phase == .ready, machine != nil, balloonTarget != nil else { return false }
-                let before = balloonTarget
-                balloonLowerSince = nil
+                guard agentAnswered, stopWaiters.isEmpty, machine != nil, balloonTarget != ceiling() else { return false }
+                _ = WovenVMBalloonPolicy.unanswered(&balloon, ceiling: ceiling(), now: Date())
                 applyBalloon(target: nil)
-                return before != balloonTarget
+                return true
             }
             if opened { log("balloon opened: the guest agent did not answer in time") }
             return
         }
-        let change = queue.sync { () -> (from: UInt64, to: UInt64)? in
-            let ceiling = WovenVMBalloonPolicy.ceiling(bootedBytes: bootedMemory, requestedBytes: desiredMemory())
-            let current = balloonTarget ?? ceiling
-            let desired = WovenVMBalloonPolicy.desiredTarget(ceiling: ceiling, booted: bootedMemory, current: current,
-                                                             guestTotal: total, guestAvailable: available)
-            let ballooned = bootedMemory > current ? bootedMemory - current : 0
-            let used = total > available ? total - available : 0
-            guestDemand = used > ballooned ? used - ballooned : 0
-            let (target, since) = WovenVMBalloonPolicy.next(current: current, desired: desired,
-                                                            lowerSince: balloonLowerSince, now: Date())
-            balloonLowerSince = since
-            guard target != current else { return nil }
-            applyBalloon(target: target)
-            return (current, target)
+        let change = queue.sync { () -> (from: UInt64, to: UInt64, pressure: Bool)? in
+            guard machine != nil, balloonAllowed else { return nil }
+            agentAnswered = true
+            let current = balloonTarget ?? ceiling()
+            let decision = WovenVMBalloonPolicy.step(&balloon, memory: memory, ceiling: ceiling(),
+                                                     booted: bootedMemory, now: Date())
+            guestDemand = decision.demand
+            guard decision.target != current else { return nil }
+            applyBalloon(target: decision.target)
+            return (current, decision.target, decision.underPressure)
         }
         if let change, max(change.from, change.to) - min(change.from, change.to) >= 512 << 20 {
-            log("balloon target \(change.from >> 20) -> \(change.to >> 20) MiB")
+            log("balloon target \(change.from >> 20) -> \(change.to >> 20) MiB" + (change.pressure ? " (memory pressure)" : ""))
         }
     }
 
     private var ballooning = false
-    private var balloonLowerSince: Date?
+    private var balloon = WovenVMBalloonPolicy.State()
+    /// This boot's guest kernel leaves ballooned pages untouched.
+    private var balloonAllowed = false
+    private var agentAnswered = false
+    private var guestCommandLine: String?
     private var guestDemand: UInt64?
+    private var idleSince: Date?
+    private var lastIdleRestart: Date?
 
     private func maintain() {
         let proceed = queue.sync { () -> Bool in
@@ -546,10 +595,26 @@ final class VMHelper: NSObject, VZVirtualMachineDelegate, @unchecked Sendable {
         // Blocks bots delete stay allocated in the sparse images until trimmed.
         // ext4 skips groups already trimmed since mount, so this is cheap.
         if tick % 40 == 0 { _ = try? agent(["op": "trim"], timeout: 600) }
-        let restart = queue.sync { bootedMemory != desiredMemory() }
-        if restart, let running = try? agent(["op": "running_containers"], timeout: 10),
-           running["running"] as? Int == 0 {
-            log("restarting the idle VM to apply the new RAM pool")
+        // Idle: no container runs and nothing else is busy (an image build runs
+        // no listed container). An older agent does not report the load.
+        let activity = try? agent(["op": "running_containers"], timeout: 10)
+        let idle = activity?["running"] as? Int == 0 && ((activity?["load"] as? NSNumber)?.doubleValue ?? 0) < 0.5
+        let reason = queue.sync { () -> String? in
+            let now = Date()
+            idleSince = idle ? (idleSince ?? now) : nil
+            guard idle else { return nil }
+            if bootedMemory != desiredMemory() { return "to apply the new RAM pool" }
+            // Virtualization never takes back memory the guest once touched;
+            // only a restart does. Bots are stopped, so nothing is lost.
+            guard let footprint = vmProcess.flatMap(HostMetrics.footprint),
+                  WovenVMBalloonPolicy.shouldRestartIdle(footprint: footprint, target: balloonTarget ?? ceiling(),
+                                                         idleSince: idleSince, lastRestart: lastIdleRestart, now: now)
+            else { return nil }
+            lastIdleRestart = now
+            return "to give \((footprint - min(footprint, balloonTarget ?? ceiling())) >> 20) MiB back to the Mac"
+        }
+        if let reason {
+            log("restarting the idle VM \(reason)")
             restartVM()
         }
     }

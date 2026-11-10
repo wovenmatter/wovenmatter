@@ -132,13 +132,58 @@ def op_status(_):
     return {"agent": AGENT_VERSION, "os": os_name(), "kernel": os.uname().release, "docker": docker_version,
             "provision": read_json(STATE + "/status.json"), "update": read_json(STATE + "/update.json"),
             "provisioned": read_json(STATE + "/provisioned"), "balloon": balloon_features(),
-            "boot_id": open("/proc/sys/kernel/random/boot_id").read().strip()}
+            "boot_id": open("/proc/sys/kernel/random/boot_id").read().strip(),
+            "cmdline": open("/proc/cmdline").read().strip()}
+
+
+def vmstat():
+    counts = {}
+    try:
+        with open("/proc/vmstat") as handle:
+            for line in handle:
+                name, _, value = line.partition(" ")
+                counts[name] = int(value)
+    except (OSError, ValueError):
+        pass
+    return counts
+
+
+def balloon_bytes(counts):
+    """What the balloon holds now. The Mac only sets a target; the guest reaches
+    it gradually (or not at all when it cannot reclaim), so the target is not
+    the balloon's size."""
+    if "balloon_inflate" not in counts or "balloon_deflate" not in counts:
+        return None
+    return max(0, counts["balloon_inflate"] - counts["balloon_deflate"]) * os.sysconf("SC_PAGE_SIZE")
+
+
+def refault_bytes(counts):
+    """Evicted page cache read back in, cumulative: a cache too small for the work."""
+    if "workingset_refault_file" not in counts:
+        return None
+    return counts["workingset_refault_file"] * os.sysconf("SC_PAGE_SIZE")
+
+
+def memory_pressure():
+    """/proc/pressure/memory: the share of time tasks stalled on memory."""
+    result = {}
+    try:
+        with open("/proc/pressure/memory") as handle:
+            for line in handle:
+                kind, *fields = line.split()
+                values = dict(field.split("=", 1) for field in fields)
+                result[kind] = {"avg10": float(values["avg10"]), "total_us": int(values["total"])}
+    except (OSError, KeyError, ValueError):
+        return None
+    return result
 
 
 def op_meminfo(_):
-    info = meminfo()
+    info, counts = meminfo(), vmstat()
     return {"total": info["MemTotal"], "free": info["MemFree"], "available": info["MemAvailable"],
-            "cached": info.get("Cached", 0), "shmem": info.get("Shmem", 0), "dirty": info.get("Dirty", 0)}
+            "cached": info.get("Cached", 0), "shmem": info.get("Shmem", 0), "dirty": info.get("Dirty", 0),
+            "writeback": info.get("Writeback", 0), "balloon": balloon_bytes(counts),
+            "refault": refault_bytes(counts), "pressure": memory_pressure()}
 
 
 def op_set_time(request):
@@ -179,7 +224,8 @@ def op_running_containers(_):
     code, body = docker("/containers/json")
     if code != 200:
         raise RuntimeError("Docker Engine returned %d" % code)
-    return {"running": len(body)}
+    # Image builds run no listed container; the load shows them.
+    return {"running": len(body), "load": os.getloadavg()[0]}
 
 
 def op_update(request):

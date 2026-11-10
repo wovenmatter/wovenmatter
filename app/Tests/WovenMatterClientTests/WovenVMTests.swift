@@ -136,32 +136,150 @@ struct WovenVMTests {
         #expect(WovenVMLaunchAgent.label(bundleIdentifier: "wovenmatter.desktop.dev") == "wovenmatter.desktop.dev.vm")
     }
 
-    @Test func balloonFollowsDemandWithHeadroomAndHysteresis() {
-        let gib: UInt64 = 1 << 30, mib: UInt64 = 1 << 20
-        // An idle 8 GiB VM using 700 MiB keeps 700 MiB plus 2 GiB headroom.
-        let idle = WovenVMBalloonPolicy.desiredTarget(ceiling: 8 * gib, booted: 8 * gib, current: 8 * gib,
-                                                      guestTotal: 7992 * mib, guestAvailable: 7292 * mib)
-        #expect(idle == 700 * mib + 2 * gib)
-        // Ballooned pages count as used in the guest; they are not demand.
-        let inflated = WovenVMBalloonPolicy.desiredTarget(ceiling: 8 * gib, booted: 8 * gib, current: idle,
-                                                          guestTotal: 7992 * mib,
-                                                          guestAvailable: 7292 * mib - (8 * gib - idle))
-        #expect(inflated == idle)
-        // Pressure inside the balloon opens it fully.
-        #expect(WovenVMBalloonPolicy.desiredTarget(ceiling: 8 * gib, booted: 8 * gib, current: 3 * gib,
-                                                   guestTotal: 7992 * mib, guestAvailable: 900 * mib) == 8 * gib)
-        // A bot allocating 4 GiB raises it; never above the pool, never below the floor.
-        #expect(WovenVMBalloonPolicy.desiredTarget(ceiling: 8 * gib, booted: 8 * gib, current: 8 * gib,
-                                                   guestTotal: 8 * gib, guestAvailable: gib / 2) == 8 * gib)
-        #expect(WovenVMBalloonPolicy.desiredTarget(ceiling: gib, booted: gib, current: gib,
-                                                   guestTotal: gib, guestAvailable: gib) == gib)
-        // Raise at once; lower only after demand stayed lower for 30 s.
+    private let gib: UInt64 = 1 << 30, mib: UInt64 = 1 << 20
+
+    /// A guest reading: `used` excludes the balloon, which Linux counts as used.
+    private func memory(used: UInt64, balloon: UInt64, total: UInt64 = 7992 << 20, dirty: UInt64 = 0,
+                        stall: UInt64 = 0, refault: UInt64 = 0) -> WovenVMGuestMemory {
+        WovenVMGuestMemory(total: total, available: total - min(total, used + balloon), balloon: balloon,
+                           dirty: dirty, stallMicroseconds: stall, refaultBytes: refault)
+    }
+
+    @Test func balloonDemandUsesWhatTheBalloonReallyHolds() {
+        // Ballooned pages and dirty page cache: the first is not demand, the second is.
+        #expect(WovenVMBalloonPolicy.demand(memory(used: 700 * mib, balloon: 5 * gib, dirty: 100 * mib),
+                                            booted: 8 * gib, target: 3 * gib) == 800 * mib)
+        // An older agent does not report the balloon: the target stands in for it.
+        let old = WovenVMGuestMemory(total: 8 * gib, available: 8 * gib - (700 * mib + 5 * gib))
+        #expect(WovenVMBalloonPolicy.demand(old, booted: 8 * gib, target: 3 * gib) == 700 * mib)
+        // A balloon still inflating toward its target holds less than the target says.
+        #expect(WovenVMBalloonPolicy.demand(memory(used: 700 * mib, balloon: 2 * gib), booted: 8 * gib,
+                                            target: 3 * gib) == 700 * mib)
+        let reply: [String: Any] = ["total": 8 * gib, "available": 6 * gib, "balloon": gib, "dirty": 10 * mib,
+                                    "writeback": 5 * mib, "refault": 7 * mib,
+                                    "pressure": ["some": ["avg10": 0.5, "total_us": 1234], "full": ["avg10": 0.0, "total_us": 12]]]
+        #expect(WovenVMGuestMemory(agentReply: reply)
+                == WovenVMGuestMemory(total: 8 * gib, available: 6 * gib, balloon: gib, dirty: 15 * mib,
+                                      stallMicroseconds: 1234, refaultBytes: 7 * mib))
+        #expect(WovenVMGuestMemory(agentReply: ["total": 1]) == nil)
+    }
+
+    @Test func balloonRaisesAtOnceAndOpensUnderPressure() {
         let now = Date()
-        #expect(WovenVMBalloonPolicy.next(current: 3 * gib, desired: 5 * gib, lowerSince: now, now: now) == (5 * gib, nil))
-        let pending = WovenVMBalloonPolicy.next(current: 5 * gib, desired: 3 * gib, lowerSince: nil, now: now)
-        #expect(pending.target == 5 * gib && pending.lowerSince == now)
-        #expect(WovenVMBalloonPolicy.next(current: 5 * gib, desired: 3 * gib, lowerSince: now, now: now + 31).target == 3 * gib)
-        #expect(WovenVMBalloonPolicy.next(current: 5 * gib, desired: 5 * gib - 100 * mib, lowerSince: now, now: now + 60).target == 5 * gib)
+        var state = WovenVMBalloonPolicy.State(target: 3 * gib)
+        // More demand raises the cap at once: demand plus 2 GiB of headroom.
+        var decision = WovenVMBalloonPolicy.step(&state, memory: memory(used: 1536 * mib, balloon: 5 * gib),
+                                                 ceiling: 8 * gib, booted: 8 * gib, now: now)
+        #expect(decision.target == 3584 * mib && !decision.underPressure)
+        // A stall of 1% of the next second opens it fully.
+        decision = WovenVMBalloonPolicy.step(&state, memory: memory(used: 1536 * mib, balloon: 4608 * mib, stall: 10_000),
+                                             ceiling: 8 * gib, booted: 8 * gib, now: now + 1)
+        #expect(decision.target == 8 * gib && decision.underPressure && state.pressureAt == now + 1)
+        // So does page cache read back faster than 8 MiB/s (an image build re-reading layers),
+        state = .init(target: 3 * gib)
+        _ = WovenVMBalloonPolicy.step(&state, memory: memory(used: gib, balloon: 5 * gib), ceiling: 8 * gib, booted: 8 * gib, now: now)
+        decision = WovenVMBalloonPolicy.step(&state, memory: memory(used: gib, balloon: 5 * gib, refault: 40 * mib),
+                                             ceiling: 8 * gib, booted: 8 * gib, now: now + 2)
+        #expect(decision.target == 8 * gib && decision.underPressure)
+        // and available memory under half the headroom, even on the first reading.
+        state = .init(target: 3 * gib)
+        decision = WovenVMBalloonPolicy.step(&state, memory: memory(used: 2 * gib + 200 * mib, balloon: 5 * gib),
+                                             ceiling: 8 * gib, booted: 8 * gib, now: now)
+        #expect(decision.target == 8 * gib && decision.underPressure)
+        // Small pools keep the floor; the pool is the limit.
+        state = .init()
+        #expect(WovenVMBalloonPolicy.step(&state, memory: memory(used: 0, balloon: 0, total: gib), ceiling: gib,
+                                          booted: gib, now: now).target == gib)
+        // An unanswered agent opens it too.
+        state = .init(target: 3 * gib)
+        #expect(WovenVMBalloonPolicy.unanswered(&state, ceiling: 8 * gib, now: now) == 8 * gib)
+        #expect(state.target == 8 * gib && state.pressureAt == now)
+    }
+
+    @Test func balloonLowersOnlyWhenCalmAndInSteps() {
+        let start = Date()
+        var state = WovenVMBalloonPolicy.State()
+        var targets: [UInt64] = []
+        // An idle guest using 700 MiB, after pressure at the start: nothing for
+        // 60 s, then 1 GiB every 5 s down to 700 MiB plus 2 GiB headroom.
+        state.pressureAt = start
+        for second in 0...120 {
+            let current = state.target ?? 8 * gib
+            let decision = WovenVMBalloonPolicy.step(&state, memory: memory(used: 700 * mib, balloon: 8 * gib - current),
+                                                     ceiling: 8 * gib, booted: 8 * gib, now: start + TimeInterval(second))
+            targets.append(decision.target)
+        }
+        #expect(targets[59] == 8 * gib)
+        #expect(targets[60] == 7 * gib && targets[64] == 7 * gib && targets[65] == 6 * gib)
+        #expect(targets.last == 700 * mib + 2 * gib)
+        #expect(zip(targets, targets.dropFirst()).allSatisfy { $0 >= $1 && $0 - $1 <= gib })
+
+        // Without earlier pressure, lowering still waits 30 s of lower demand.
+        state = .init(target: 8 * gib)
+        for second in 0..<30 {
+            #expect(WovenVMBalloonPolicy.step(&state, memory: memory(used: 700 * mib, balloon: 0), ceiling: 8 * gib,
+                                              booted: 8 * gib, now: start + TimeInterval(second)).target == 8 * gib)
+        }
+        #expect(WovenVMBalloonPolicy.step(&state, memory: memory(used: 700 * mib, balloon: 0), ceiling: 8 * gib,
+                                          booted: 8 * gib, now: start + 30).target == 7 * gib)
+        // The balloon's own reclaim right after a step is not pressure,
+        var stall: UInt64 = 200_000
+        #expect(!WovenVMBalloonPolicy.step(&state, memory: memory(used: 700 * mib, balloon: gib, stall: stall), ceiling: 8 * gib,
+                                           booted: 8 * gib, now: start + 31).underPressure)
+        // but a stall once the step has settled is, and opens the balloon.
+        stall += 200_000
+        let late = WovenVMBalloonPolicy.step(&state, memory: memory(used: 700 * mib, balloon: gib, stall: stall), ceiling: 8 * gib,
+                                             booted: 8 * gib, now: start + 34)
+        #expect(late.underPressure && late.target == 8 * gib)
+        // Differences under 256 MiB are left alone.
+        state = .init(target: 2 * gib + 900 * mib)
+        for second in 0...100 {
+            #expect(WovenVMBalloonPolicy.step(&state, memory: memory(used: 700 * mib, balloon: 0), ceiling: 8 * gib,
+                                              booted: 8 * gib, now: start + TimeInterval(second)).target == 2 * gib + 900 * mib)
+        }
+    }
+
+    /// The first image build: quiet downloads, then layers unpacked and
+    /// committed with page cache churning. The balloon never closes in on it.
+    @Test func balloonStaysOpenThroughAnImageBuild() {
+        let start = Date()
+        var state = WovenVMBalloonPolicy.State()
+        var refault: UInt64 = 0, stall: UInt64 = 0, lowest = UInt64.max
+        for second in 0..<600 {
+            let busy = second >= 20 && second % 40 < 30
+            if busy { refault += 30 * mib; stall += 2_000 }
+            let current = state.target ?? 8 * gib
+            let used = busy ? 1500 * mib : 900 * mib
+            let decision = WovenVMBalloonPolicy.step(&state, memory: memory(used: used, balloon: 8 * gib - current,
+                                                                             stall: stall, refault: refault),
+                                                     ceiling: 8 * gib, booted: 8 * gib, now: start + TimeInterval(second))
+            if second >= 20 { lowest = min(lowest, decision.target) }
+        }
+        #expect(lowest == 8 * gib)
+    }
+
+    @Test func balloonNeedsAGuestThatLeavesItsPagesUntouched() {
+        #expect(!WovenVMBalloonPolicy.guestLeavesBalloonUntouched(commandLine: "BOOT_IMAGE=/vmlinuz root=LABEL=cloudimg-rootfs ro console=hvc0"))
+        #expect(WovenVMBalloonPolicy.guestLeavesBalloonUntouched(commandLine: "ro console=tty1 console=hvc0 init_on_alloc=0"))
+        #expect(!WovenVMBalloonPolicy.guestLeavesBalloonUntouched(commandLine: "init_on_alloc=0 init_on_alloc=1"))
+        #expect(WovenVMBalloonPolicy.guestLeavesBalloonUntouched(commandLine: "init_on_alloc=off"))
+        #expect(WovenVMBalloonPolicy.bootTarget(ceiling: 8 * gib) == 3 * gib)
+        #expect(WovenVMBalloonPolicy.bootTarget(ceiling: gib) == gib)
+    }
+
+    @Test func idleVMRestartsOnlyToGiveBackRealMemory() {
+        let now = Date()
+        func restart(footprint: UInt64, idleFor: TimeInterval?, lastRestartAgo: TimeInterval? = nil) -> Bool {
+            WovenVMBalloonPolicy.shouldRestartIdle(footprint: footprint, target: 3 * gib,
+                                                   idleSince: idleFor.map { now - $0 },
+                                                   lastRestart: lastRestartAgo.map { now - $0 }, now: now)
+        }
+        #expect(restart(footprint: 8 * gib, idleFor: 600))
+        #expect(!restart(footprint: 8 * gib, idleFor: 599))
+        #expect(!restart(footprint: 8 * gib, idleFor: nil))
+        #expect(!restart(footprint: 4 * gib, idleFor: 3600))
+        #expect(!restart(footprint: 8 * gib, idleFor: 3600, lastRestartAgo: 1000))
+        #expect(restart(footprint: 8 * gib, idleFor: 3600, lastRestartAgo: 1800))
         #expect(WovenVMBalloonPolicy.ceiling(bootedBytes: 8 * gib, requestedBytes: 4 * gib) == 4 * gib)
         #expect(WovenVMBalloonPolicy.ceiling(bootedBytes: 8 * gib, requestedBytes: 16 * gib) == 8 * gib)
     }
