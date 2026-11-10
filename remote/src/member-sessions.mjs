@@ -30,23 +30,27 @@ const own = Symbol('this workspace')
 export function createMemberSessions({ transport, identity, deviceID, localProviders, db = null, local = null, probeTimeout = 5000 }) {
   db?.exec('CREATE TABLE IF NOT EXISTS member_sessions (id TEXT PRIMARY KEY, caller TEXT NOT NULL, workspace TEXT NOT NULL, created_at TEXT NOT NULL)')
   const headers = workspace => ({ 'x-woven-protocol': '3', 'x-woven-library': workspace.libraryID, 'x-woven-workspace': workspace.id, 'x-woven-device': deviceID() })
-  const targets = async () => (await transport.workspaces()).filter(item => item.kind !== 'ios' && item.id !== identity().id)
+  // A bots-only host has no workspace of its own (`identity` throws until one
+  // is enrolled); its bots still reach every other workspace.
+  const enrolled = () => { try { return identity() } catch { return null } }
+  const targets = async () => { const self = enrolled(); return (await transport.workspaces()).filter(item => item.kind !== 'ios' && item.id !== self?.id) }
 
   async function choices() {
-    try { return [identity(), ...await targets()].map(label).join('; ') } catch { return label(identity()) }
+    const self = enrolled()
+    try { return [...(self ? [self] : []), ...await targets()].map(label).join('; ') || 'none is known here' } catch { return self ? label(self) : 'none is known here' }
   }
 
   /** `null` for this workspace; otherwise the destination's registry entry. */
   async function destination(raw) {
     if (raw == null) return null
-    const value = String(raw).trim(), self = identity()
+    const value = String(raw).trim(), self = enrolled()
     if (!value) throw fail(400, 'Name the destination workspace by ID.')
-    if (value.toLowerCase() === self.id.toLowerCase()) return null
+    if (self && value.toLowerCase() === self.id.toLowerCase()) return null
     if (['local', 'current'].includes(value.toLowerCase())) throw fail(400, `"${value}" is not a workspace name. Name the destination by ID: ${await choices()}.`)
-    const all = (await transport.workspaces()).filter(item => item.id !== self.id)
+    const all = (await transport.workspaces()).filter(item => item.id !== self?.id)
     const byID = all.find(item => item.id.toLowerCase() === value.toLowerCase())
     const named = byID ? [byID] : all.filter(item => String(item.name).toLowerCase() === value.toLowerCase())
-    if (!byID && String(self.name ?? '').toLowerCase() === value.toLowerCase() && !named.length) return null
+    if (self && !byID && String(self.name ?? '').toLowerCase() === value.toLowerCase() && !named.length) return null
     if (named.length > 1) throw fail(400, `More than one workspace is named "${value}". Name it by ID: ${named.map(label).join('; ')}.`)
     const workspace = named[0]
     if (!workspace) throw fail(404, `No workspace "${value}" is known here. Name one by ID: ${await choices()}.`)
@@ -59,7 +63,8 @@ export function createMemberSessions({ transport, identity, deviceID, localProvi
   function api(workspace) {
     if (workspace === own) {
       if (!local) throw fail(503, 'This workspace cannot run sessions for this caller.')
-      const self = identity()
+      const self = enrolled()
+      if (!self) throw fail(409, 'This machine runs only bots and has no workspace of its own. Name another workspace by ID; woven_sessions_harnesses lists them.')
       return { ...local, workspace: { ...self, kind: self.kind ?? 'linux' },
         command: body => local.command({ ...body, deviceID: self.executionDeviceID, libraryID: self.libraryID, workspaceID: self.id }) }
     }
@@ -124,7 +129,7 @@ export function createMemberSessions({ transport, identity, deviceID, localProvi
     }
     const row = uuid(id) ? db?.prepare('SELECT workspace FROM member_sessions WHERE id=?').get(String(id).toLowerCase()) : null
     if (!row) return bot ? api(own) : null
-    if (row.workspace === identity().id) return bot ? api(own) : null
+    if (row.workspace === enrolled()?.id) return bot ? api(own) : null
     const workspace = (await transport.workspaces()).find(item => item.id === row.workspace)
     if (!workspace?.endpoint) throw fail(409, 'The workspace that runs this session is no longer known here.')
     return api(workspace)
@@ -204,7 +209,7 @@ export function createMemberSessions({ transport, identity, deviceID, localProvi
     const registry = await transport.workspaces().catch(() => [])
     const rows = []
     for (const [workspaceID, ids] of byWorkspace) {
-      const entry = workspaceID === identity().id ? own : registry.find(item => item.id === workspaceID)
+      const entry = workspaceID === enrolled()?.id ? own : registry.find(item => item.id === workspaceID)
       if (!entry || (entry !== own && !entry.endpoint) || (entry === own && !local)) { rows.push(...ids.map(id => ({ id, workspace: workspaceID, online: false }))); continue }
       const client = api(entry)
       try {
@@ -219,8 +224,8 @@ export function createMemberSessions({ transport, identity, deviceID, localProvi
 
   /** Harnesses on this workspace, then every other Mac and Linux workspace that answers. */
   async function harnesses(input = {}) {
-    const self = identity(), rows = []
-    for (const provider of await localProviders()) rows.push({ ...provider, harness: provider.runtimeKind, workspace: self.id, workspaceName: self.name, workspaceKind: self.kind ?? 'linux', online: true })
+    const self = enrolled(), rows = []
+    if (self) for (const provider of await localProviders()) rows.push({ ...provider, harness: provider.runtimeKind, workspace: self.id, workspaceName: self.name, workspaceKind: self.kind ?? 'linux', online: true })
     let others = []
     try { others = await targets() } catch {}
     const replies = await Promise.all(others.filter(item => item.endpoint).map(async workspace => {

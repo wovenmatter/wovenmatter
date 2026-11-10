@@ -629,6 +629,7 @@ if (runningAsService) {
   // Any exit, including a crash, also stops the library host it supervises.
   process.once('exit', () => library?.terminate())
   process.once('SIGTERM', async () => {
+    library?.quiesce()
     server.close()
     let code = 0
     try { timers?.close(); await bots?.close(); await workspaceBrowser.close(); await taskGateway.close(); await retainedExecution.close(); await clientExecution.close(); await durableACP.stopAll(); await defaultAgent.close(); releaseTaskOwner?.() }

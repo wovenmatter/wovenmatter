@@ -148,6 +148,33 @@ struct LibraryHostTests {
     #expect(throws: LibraryHostError.self) { try LibraryHostToken.load(file) }
   }
 
+  @Test func foundationFilesStayInTheDataRoot() throws {
+    let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let layout = LibraryHostLayout(root: root)
+    #expect(Set(layout.foundationEnvironment.keys) == ["XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME"])
+    #expect(layout.foundationEnvironment.values.allSatisfy { $0.hasPrefix(layout.foundation.path) })
+    #if os(Linux)
+    // URLSession's cookie store and cache resolve these search paths on Linux.
+    let saved = layout.foundationEnvironment.keys.map { ($0, ProcessInfo.processInfo.environment[$0]) }
+    defer { for (name, value) in saved { if let value { setenv(name, value, 1) } else { unsetenv(name) } } }
+    try layout.confineFoundation()
+    for directory in [FileManager.SearchPathDirectory.applicationSupportDirectory, .cachesDirectory] {
+      let resolved = try #require(FileManager.default.urls(for: directory, in: .userDomainMask).first)
+      #expect(resolved.standardizedFileURL.path.hasPrefix(layout.foundation.path), "\(directory): \(resolved.path)")
+    }
+    #endif
+  }
+
+  @Test func waitedOnWorkAvoidsAPriorityLinuxRefuses() {
+    // Linux maps userInitiated to a nice value an unprivileged host may not set.
+    #if os(Linux)
+    #expect(PortablePOSIX.waitedOnQoS == .default)
+    #else
+    #expect(PortablePOSIX.waitedOnQoS == .userInitiated)
+    #endif
+  }
+
   @Test func healthAndMountsOnLoopbackAndTokenOnTheSocket() async throws {
     let fixture = try await HostFixture(); defer { fixture.remove() }
     let health = try send("GET", "/v1/health", port: fixture.port)
@@ -184,6 +211,25 @@ struct LibraryHostTests {
     // A caller without the group is refused by the shared executor's policy check.
     let narrowed = try fixture.mcp(caller, groups: "history", "tools/call", ["name": .string("woven_notes_list"), "arguments": .object([:])])
     #expect(narrowed.objectValue?["error"] != nil)
+  }
+
+  @Test func historyCursorsStayExactThroughJSON() async throws {
+    let fixture = try await HostFixture(); defer { fixture.remove() }
+    let caller = UUID().uuidString.lowercased()
+    // An empty newest-first page returns its start cursor; Int64.max came back as 9.223372036854776e+18.
+    let message: GatewayJSONValue = .object(["jsonrpc": .string("2.0"), "id": .number(1), "method": .string("tools/call"),
+      "params": .object(["name": .string("woven_history_conversations"), "arguments": .object(["search": .string("no such conversation")])])])
+    let reply = try send("POST", "/v1/mcp", unix: fixture.socket, headers: [
+      "Authorization": "Bearer " + fixture.token, "X-Woven-Conversation-ID": caller, "X-Woven-Enabled-Groups": "history",
+      "MCP-Protocol-Version": "2025-06-18"], body: try JSONEncoder().encode(message))
+    let text = String(decoding: reply.body, as: UTF8.self)
+    #expect(text.contains("\"nextCursor\":\(WorkspaceToolExecutor.maximumCursor)"), "\(text)")
+    #expect(!text.contains("e+"), "\(text)")
+    let notes = try fixture.call(caller, "woven_notes_list", ["search": .string("no such note")])
+    #expect(notes.value["nextCursor"]?.intValue == WorkspaceToolExecutor.maximumCursor)
+    // A cursor that JSON numbers cannot carry exactly is refused, not rounded.
+    let tooLarge = try fixture.call(caller, "woven_history_conversations", ["after": .number(Double(WorkspaceToolExecutor.maximumCursor) * 2)])
+    #expect(!tooLarge.success)
   }
 
   /// Creates, reads and edits a note through the socket API and checks the
@@ -297,6 +343,8 @@ struct LibraryHostTests {
 
     let hello = try signed("/wovenmatter/v1/hello")
     #expect(hello.status == 200, "\(String(decoding: hello.body, as: UTF8.self))")
+    // The phone sees this machine's own member name, not a Mac placeholder.
+    #expect(hello.json?.objectValue?["hostName"]?.stringValue == "Box")
     #expect(try signed("/v1/snapshot").status == 200)
     // The phone can show whether some device needs an update.
     let syncStatus = try signed("/wovenmatter/v1/sync/status")

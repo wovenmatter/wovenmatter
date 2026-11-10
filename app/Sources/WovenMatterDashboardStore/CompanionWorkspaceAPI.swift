@@ -257,6 +257,8 @@ public final class CompanionWorkspaceAPI {
     /// `GET /v1/sync/status`: every peer's state, so a phone can show
     /// "Update everything" when devices disagree on versions.
     private let syncStatus: @MainActor @Sendable () async -> LibrarySyncStatus?
+    /// The name `GET /v1/hello` reports; nil falls back to this machine's name.
+    private let hostName: @MainActor @Sendable () async -> String?
     public init(database: WorkspaceDatabase, authentication: CompanionAuthentication,
                 commands: any CompanionCommandServing,
                 isActive: @escaping @MainActor @Sendable () -> Bool,
@@ -271,11 +273,23 @@ public final class CompanionWorkspaceAPI {
                     throw CompanionAPIError(code: "linked_data_unavailable", message: "This database is unavailable on the Mac.")
                 }, members: MemberDirectory? = nil,
                 onMemberPaired: @escaping @MainActor @Sendable (String, String, Data) async throws -> Void = { _, _, _ in },
-                syncStatus: @escaping @MainActor @Sendable () async -> LibrarySyncStatus? = { nil }) {
+                syncStatus: @escaping @MainActor @Sendable () async -> LibrarySyncStatus? = { nil },
+                hostName: @escaping @MainActor @Sendable () async -> String? = { nil }) {
+        self.hostName = hostName
         self.members = members; self.onMemberPaired = onMemberPaired; self.syncStatus = syncStatus
         self.database = database; self.authentication = authentication; self.commands = commands
         self.isActive = isActive; self.onPair = onPair; self.onMutation = onMutation; self.onRequest = onRequest
         self.linkedData = linkedData; self.discovery = discovery; self.onCancelPairing = onCancelPairing
+    }
+
+    /// The Mac's user-facing computer name; Linux Foundation has none, so
+    /// other platforms report the host name.
+    static var machineName: String {
+        #if os(macOS)
+        Host.current().localizedName ?? ProcessInfo.processInfo.hostName
+        #else
+        ProcessInfo.processInfo.hostName
+        #endif
     }
 
     /// A long request re-checks its principal: a grant must still be issued,
@@ -485,7 +499,7 @@ public final class CompanionWorkspaceAPI {
                 case "/v1/devices": return try .json(await authentication.deviceConnections())
                 case "/v1/hello":
                     return try .json(CompanionHello(workspaceID: workspaceID,
-                        hostName: Host.current().localizedName ?? "Woven Matter Mac",
+                        hostName: await hostName() ?? Self.machineName,
                         capabilities: [CompanionFederationProtocol.capability, "notes.conditional.v1", "folders.flat.v1", "changes.replay.v1", "commands.receipts.v1", "interactions.first-response.v1", "transcripts.paged.v1", "assets.linked-data.v1", "workspace.library.v1", "workspace.calendar.v1", "calendar.replicas.v1", "workspace.management.v1", "workspace.tools.v1"]))
                 case "/v1/snapshot": return try .json(try await database.companionSnapshot())
                 case "/v1/changes":

@@ -77,9 +77,50 @@ export async function ensureImage(
   if (await engine.imageExists(tag)) return tag;
   // A missing explicitly tagged image is built from the same context under that tag.
   log(`building bot image ${tag} (the first build takes several minutes)`);
-  await engine.build(context, [tag], { log: () => {} });
+  for (let attempt = 1; ; attempt += 1) {
+    const output = new BuildOutputTail();
+    try {
+      await engine.build(context, [tag], { log: (line) => output.add(line) });
+      break;
+    } catch (error) {
+      const tail = output.text();
+      // The engine's error names only the failing step; the cause (apt's own message) is in the output.
+      if (tail) log(`bot image ${tag} build output (last ${BUILD_OUTPUT_TAIL_BYTES / 1024} KB):\n${tail}`);
+      if (attempt === 1 && TRANSIENT_FETCH.test(tail)) {
+        log(`bot image ${tag} build could not fetch packages; retrying once`);
+        continue;
+      }
+      // Keep the error's type (callers classify EngineError) and add the output's end.
+      if (tail && error instanceof Error) error.message += `\n${tail.slice(-BUILD_ERROR_CAUSE_CHARS)}`;
+      throw error;
+    }
+  }
   log(`built bot image ${tag}`);
   return tag;
+}
+
+/** How much build output a failed build keeps for the runtime log and the error. */
+export const BUILD_OUTPUT_TAIL_BYTES = 64 * 1024;
+const BUILD_ERROR_CAUSE_CHARS = 2000;
+/** Package fetch failures that a second attempt can clear (DNS, connection, mirror sync). */
+const TRANSIENT_FETCH =
+  /Temporary failure resolving|Could not resolve|Failed to fetch|Unable to connect to|Could not connect to|Connection (timed out|reset|refused)|Hash Sum mismatch|File has unexpected size/;
+
+/** The last BUILD_OUTPUT_TAIL_BYTES of build output, whole lines only. */
+class BuildOutputTail {
+  #lines: string[] = [];
+  #bytes = 0;
+  add(line: string): void {
+    const kept = line.length > BUILD_OUTPUT_TAIL_BYTES ? line.slice(-BUILD_OUTPUT_TAIL_BYTES) : line;
+    this.#lines.push(kept);
+    this.#bytes += Buffer.byteLength(kept) + 1;
+    while (this.#bytes > BUILD_OUTPUT_TAIL_BYTES && this.#lines.length > 1) {
+      this.#bytes -= Buffer.byteLength(this.#lines.shift() ?? "") + 1;
+    }
+  }
+  text(): string {
+    return this.#lines.join("\n");
+  }
 }
 
 /**

@@ -468,6 +468,7 @@ owned by the running user.
 | `DIR/run/library.sock` | Local API socket, 0600; peers must also be this user (checked with `SO_PEERCRED`) and, when the host was launched by `node`, that very parent process (see "Node signs through its library host") |
 | `DIR/run/library-api.token` | Local API bearer, 0600, 43–256 base64url characters. The Node server may create it before starting the host; otherwise the host creates it |
 | `DIR/run/library.json` | Ready record (above) |
+| `DIR/foundation/` | Linux Foundation's own per-user files (URLSession's cookie store and URL cache): the host points `XDG_DATA_HOME`, `XDG_CACHE_HOME`, `XDG_CONFIG_HOME` and `XDG_STATE_HOME` here at startup, so nothing lands in `~/.local/share` or `~/.cache` |
 
 **Loopback routes** (published with Tailscale Serve under `/wovenmatter`,
 which the host strips):
@@ -514,6 +515,10 @@ one per connection, with `Host`; POST bodies are `application/json`.
   `structuredContent` is the `WovenMatterToolResponse`
   (`{success,result,error,code,requestID}`); errors use the usual codes
   (`tool_disabled`, `revision_required`, `revision_conflict`, `not_found`, …).
+  Integer `after` cursors (and `nextCursor`) stay within 0…2^53−1
+  (`WorkspaceToolExecutor.maximumCursor`, also the newest-first start), since
+  tool results carry numbers as Double and JavaScript callers parse them as
+  one; a larger `after` is refused rather than rounded.
 
 - Bot callers on `POST /v1/mcp`: instead of `X-Woven-Conversation-ID`, send
   `X-Woven-Caller: woven:bot:<machine-device-id>:<bot-id>` (use this host's
@@ -760,7 +765,9 @@ hands them to the macOS job, which checks them with
   sessions on its own machine's workspace go through that workspace's own
   execution commands, as another member's would; coordination tools
   (`manage`, `release`, `notifications`, `receipts`) bind a conversation and
-  stay unavailable to bots. A Mac's bots, which are app-wide callers there,
+  stay unavailable to bots. On a bots-only host (no workspace enrolled) the
+  same tools reach only other workspaces: `_harnesses` lists theirs, and a
+  session without `workspace` is refused. A Mac's bots, which are app-wide callers there,
   get the same tools from the Mac; `woven_sessions_list` without `workspace`
   lists a bot's sessions on other workspaces.
 - The iPhone connects directly to every Mac and Linux workspace with its own

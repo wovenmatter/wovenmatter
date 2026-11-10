@@ -20,6 +20,18 @@ public enum PortablePOSIX {
 
   public static var shutdownBoth: Int32 { Int32(SHUT_RDWR) }
 
+  /// QoS for work someone is waiting on. Linux libdispatch maps userInitiated
+  /// to nice -2, which an unprivileged service may not set: every new worker
+  /// thread then logs "Failed to set thread priority … errno=13" and runs at
+  /// nice 0 anyway. Default QoS is that same nice 0 without the failing call.
+  public static var waitedOnQoS: DispatchQoS.QoSClass {
+    #if os(Linux)
+    .default
+    #else
+    .userInitiated
+    #endif
+  }
+
   /// Darwin suppresses SIGPIPE per socket. Linux has no such option, so Linux
   /// hosts ignore SIGPIPE process-wide (see `ignoreBrokenPipes`) and this is a no-op.
   public static func disableBrokenPipeSignal(_ fd: Int32) -> Bool {

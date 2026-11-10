@@ -31,8 +31,31 @@ public struct LibraryHostLayout: Sendable, Equatable {
   /// Written once listeners are ready; removed on clean shutdown.
   public var endpointFile: URL { run.appending(path: "library.json") }
 
+  /// Linux Foundation's own per-user files. URLSession's shared cookie store
+  /// and URL cache live under the XDG data and cache homes, named after the
+  /// binary's directory (`~/.local/share/linux-x86_64`); pointing the XDG
+  /// homes here keeps them, and any other search-path lookup, in the root.
+  public var foundation: URL { root.appending(path: "foundation", directoryHint: .isDirectory) }
+  public var foundationEnvironment: [String: String] {
+    ["XDG_DATA_HOME": "data", "XDG_CACHE_HOME": "cache", "XDG_CONFIG_HOME": "config", "XDG_STATE_HOME": "state"]
+      .mapValues { foundation.appending(path: $0, directoryHint: .isDirectory).path }
+  }
+
   public func prepare() throws {
     for directory in [root, library, secrets, run] { try Self.privateDirectory(directory) }
+  }
+
+  /// Applies `foundationEnvironment` to this process before Foundation first
+  /// resolves a search path. The host starts no child processes, so nothing
+  /// else inherits it. Darwin's search paths ignore XDG; there it is a no-op.
+  public func confineFoundation() throws {
+    #if os(Linux)
+    try Self.privateDirectory(foundation)
+    for (name, path) in foundationEnvironment {
+      try Self.privateDirectory(URL(fileURLWithPath: path, isDirectory: true))
+      setenv(name, path, 1)
+    }
+    #endif
   }
 
   static func privateDirectory(_ url: URL) throws {

@@ -74,6 +74,25 @@ test('a missing binary is reported and retried instead of crashing the server', 
   assert.match(library.status().lastError, /no library host/)
 })
 
+test('a host that exits while the server is shutting down is not restarted', async t => {
+  const directory = scratch(t, 'wl-quiet-'), logs = []
+  const library = createLibraryHostSupervisor({ binary: fakeBinary(directory), dataRoot: join(directory, 'data'), statePath: join(directory, 'state/library/host.json'),
+    log: line => logs.push(line), minimumBackoff: 20, maximumBackoff: 50 })
+  t.after(() => library.stop())
+  library.start()
+  const ready = await library.whenReady(10_000)
+  assert.ok(ready)
+  library.quiesce()
+  assert.equal(library.available(), true, 'a quiesced host keeps serving the shutdown')
+  // systemd signals the whole service, so the host can exit before stop().
+  process.kill(ready.pid, 'SIGTERM')
+  for (let i = 0; i < 200 && library.status().running; i++) await new Promise(r => setTimeout(r, 25))
+  await new Promise(r => setTimeout(r, 150))
+  assert.equal(library.status().running, false); assert.equal(library.status().restarts, 0)
+  assert.deepEqual(logs.filter(line => /restarting/.test(line)), [])
+  await library.stop()
+})
+
 async function executionFixture(t, library, { fetchImpl } = {}) {
   const directory = mkdtempSync(join(tmpdir(), 'woven-linux-library-'))
   const runtime = { providers: async () => [{ id: 'default_agent', runtimeKind: 'default_agent', available: true }], create: async () => ({ sessionID: randomUUID() }), close: async () => {} }

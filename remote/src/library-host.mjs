@@ -218,11 +218,16 @@ export function createLibraryHostSupervisor({ binary, dataRoot, harnessCatalog, 
     })
   }
 
+  // The server is shutting down: a running host keeps serving until stop(), but
+  // an exit is final. systemd signals the host with the server, so its exit
+  // must not be restarted while the server is still closing other services.
+  function quiesce() { stopping = true; generation++; clearTimeout(timer); timer = null }
+
   // Synchronous last resort for process exit: the host never outlives this server.
   function terminate() { stopping = true; generation++; clearTimeout(timer); child?.kill('SIGTERM') }
 
   return {
-    layout, client, start, stop, terminate, whenReady,
+    layout, client, start, stop, quiesce, terminate, whenReady,
     available: () => !!ready,
     endpoint: () => ready ? { port: ready.port, socket: ready.socket, pid: ready.pid } : null,
     status: () => ({ running: !!child, ready: !!ready, pid: child?.pid ?? null, port: ready?.port ?? null, version: ready?.version ?? null,
