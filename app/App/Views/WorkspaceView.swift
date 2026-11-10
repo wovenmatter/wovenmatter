@@ -1147,6 +1147,8 @@ struct WorkspaceView: View {
             startDirectChat(runtimeKind)
         case .remoteWorkspace(let target):
             startRemoteChat(target)
+        case .peerAgent(let id):
+            createAgentChat(id)
         }
     }
 

@@ -9,7 +9,7 @@ import { createClientExecution } from '../src/client-execution.mjs'
 import { createHostAdministration } from '../src/host-admin.mjs'
 import { createLibraryHostSupervisor } from '../src/library-host.mjs'
 import { createMemberVerifier } from '../src/member-auth.mjs'
-import { createMemberTransport, tailnetEndpoint } from '../src/member-client.mjs'
+import { createMemberMacDelegate, createMemberTransport, tailnetEndpoint } from '../src/member-client.mjs'
 import { enroll } from './fixtures/execution.mjs'
 
 // Everything reaches everything (docs/architecture/WOVEN_EVERYWHERE.md,
@@ -240,4 +240,42 @@ test('the audience of a workspace comes from the member list and registry, never
   members = [{ ...members[0], revoked: true }]
   assert.equal(await transport.audienceFor({ id: 'm', kind: 'mac', executionDeviceID: id(1) }), null, 'a removed Mac is not addressed')
   await assert.rejects(transport.request('https://box.tail1.ts.net/wovenmatter-execution/w/v1/execution', { audience: box }), error => error.code === 'member_audience_unknown')
+})
+
+// A scheduled task's prepare record is not synced, so its calls must reach a
+// Mac that holds it, whichever Mac answers first.
+test('a scheduled task’s Mac-only calls go to a Mac that prepared it', async () => {
+  const studio = { deviceID: randomUUID(), name: 'Studio', endpoint: 'https://studio.tail.ts.net/wovenmatter' }
+  const laptop = { deviceID: randomUUID(), name: 'Laptop', endpoint: 'https://laptop.tail.ts.net/wovenmatter' }
+  const prepared = new Set(), calls = [], down = new Set()
+  let order = [studio, laptop]
+  const transport = {
+    macs: async () => order,
+    request: async (url, { audience, headers }) => {
+      const mac = audience === studio.deviceID ? 'Studio' : 'Laptop', path = url.pathname.replace('/wovenmatter/', '')
+      const record = audience + ':' + headers['x-woven-conversation-id']
+      calls.push(`${mac} ${path}`)
+      if (down.has(audience)) throw Object.assign(new Error('offline'), { code: 'member_unreachable' })
+      if (path === 'mcp/workspace/prepare') { prepared.add(record); return { status: 200, body: { enabledGroups: ['usage'] } } }
+      // A Mac without the record refuses before any effect, as the real one does.
+      return prepared.has(record) ? { status: 200, body: { jsonrpc: '2.0', id: 1, result: {} } } : { status: 403, body: { message: 'wrong_owner' } }
+    },
+  }
+  const delegate = createMemberMacDelegate({ transport, workspaceID: () => randomUUID() })
+  const task = { conversationID: randomUUID(), taskProof: { run: { id: randomUUID() }, eventRevision: 1 } }
+  const message = { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'woven_usage_read', arguments: {} } }
+
+  assert.deepEqual(await delegate.prepare(task), { enabledGroups: ['usage'] })
+  // The Macs' order changed since (another came online): the call still goes to the Mac that prepared it.
+  order = [laptop, studio]; calls.length = 0
+  assert.ok(await delegate.call(task, message))
+  assert.deepEqual(calls, ['Studio mcp/workspace'])
+  // That Mac went offline: the next is prepared before it is asked.
+  down.add(studio.deviceID); calls.length = 0
+  assert.ok(await delegate.call(task, message))
+  assert.deepEqual(calls, ['Studio mcp/workspace', 'Laptop mcp/workspace/prepare', 'Laptop mcp/workspace'])
+  // Conversation calls are unchanged: the first Mac that answers serves them.
+  down.clear(); calls.length = 0
+  await assert.rejects(delegate.call({ conversationID: randomUUID() }, message), error => error.statusCode === 503)
+  assert.deepEqual(calls, ['Laptop mcp/workspace', 'Studio mcp/workspace'])
 })

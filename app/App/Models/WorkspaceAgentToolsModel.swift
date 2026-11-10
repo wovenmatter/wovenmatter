@@ -52,6 +52,8 @@ final class WorkspaceAgentToolsModel {
     let calendarTaskHandler: CalendarTaskHandler?
     var calendarProjection: (@MainActor () async throws -> Void)?
     var replicaReadHandler: (@MainActor (WovenMatterToolRequest, WovenMatterToolCommand, String) async throws -> WovenMatterToolResponse?)?
+    /// Sessions other members' workspaces run (`WorkspaceToolHandlers.memberSession`).
+    var memberSessionHandler: (@MainActor (WovenMatterToolRequest, WovenMatterToolCommand, String) async throws -> WovenMatterToolResponse?)?
     let database: WorkspaceDatabase
     private(set) var settings: WorkspaceToolSettings
     private(set) var sessionPolicies: [String: WorkspaceSessionTools] = [:]
@@ -250,6 +252,21 @@ final class WorkspaceAgentToolsModel {
         catch { self.error = error.localizedDescription }
     }
 
+    /// A bot's own timers (its schedule): this Mac keeps and fires them for its
+    /// own bots. Their target is the bot's principal, never a chat, so session
+    /// views do not list them; the bot's conversation does, by its name.
+    func timers(forBot botID: String, on machineID: String) -> [WorkspaceSessionTimer] {
+        Self.botTimers(timers, machineID: machineID, botID: botID)
+    }
+
+    /// Active timers soonest first, then paused ones.
+    nonisolated static func botTimers(_ timers: [WorkspaceSessionTimer], machineID: String, botID: String) -> [WorkspaceSessionTimer] {
+        let principal = WovenMCPCaller.bot(machineID: machineID, botID: botID)
+        return timers.filter { $0.sessionID == principal }.sorted {
+            ($0.isPaused ? 1 : 0, $0.nextFireAt, $0.id) < ($1.isPaused ? 1 : 0, $1.nextFireAt, $1.id)
+        }
+    }
+
     /// SwiftUI reads a published value; loading is done by observeSession/reload.
     func policy(for sessionID: String) -> WorkspaceSessionTools {
         sessionPolicies[sessionID] ?? WorkspaceSessionTools(enabled: [])
@@ -444,6 +461,9 @@ final class WorkspaceAgentToolsModel {
         if let projection = calendarProjection { handlers.calendarProjection = { try await projection() } }
         if let handler = replicaReadHandler {
             handlers.replicaRead = { request, command, caller in try await handler(request, command, caller) }
+        }
+        if let handler = memberSessionHandler {
+            handlers.memberSession = { request, command, caller in try await handler(request, command, caller) }
         }
         if let handler = automationHandler {
             handlers.automation = { caller, command, request in try await handler(caller, command, request) }

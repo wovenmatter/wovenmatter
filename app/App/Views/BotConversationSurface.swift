@@ -254,6 +254,7 @@ private struct BotConversationPane: View {
     let onOpenLink: (URL) -> Void
 
     @Environment(\.dashboardTheme) private var theme
+    @Environment(\.workspaceApplicationModel) private var appModel
     @State private var attached: BotConversationController?
     @State private var following = true
     @State private var isUserScrolling = false
@@ -336,6 +337,10 @@ private struct BotConversationPane: View {
                     .foregroundStyle(DashboardPalette.mutedForeground)
                     .lineLimit(1)
                     .help("Profile")
+            }
+            if !isThread, let tools = appModel?.agentTools {
+                let timers = tools.timers(forBot: bot.id, on: bots.machineID)
+                if !timers.isEmpty { BotTimersButton(botName: bot.name, timers: timers, tools: tools) }
             }
             ForEach(headerActions) { item in
                 Button(action: item.action) {
@@ -664,6 +669,74 @@ private struct BotConversationPane: View {
 
     private func stop() {
         Task { await controller.stop() }
+    }
+}
+
+/// The bot's own Woven timers (its schedule), labelled with its name. Each one
+/// reaches the bot as a message when it fires; this Mac keeps and fires them.
+private struct BotTimersButton: View {
+    let botName: String
+    let timers: [WorkspaceSessionTimer]
+    let tools: WorkspaceAgentToolsModel
+    @State private var shown = false
+
+    private var title: String { "\(botName)’s timers" }
+
+    var body: some View {
+        Button { shown.toggle() } label: {
+            HStack(spacing: 4) {
+                DashboardLucideIcon(glyph: .calendarClockControl, size: 14)
+                Text("\(timers.count)")
+                    .font(.system(size: 12))
+                    .monospacedDigit()
+            }
+            .padding(.horizontal, 6)
+            .frame(height: 28)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(DashboardIconButtonStyle())
+        .accessibilityLabel(timers.count == 1 ? "1 timer for \(botName)" : "\(timers.count) timers for \(botName)")
+        .help(title)
+        .popover(isPresented: $shown, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.system(size: 13, weight: .semibold))
+                    Text("Each one reaches \(botName) as a message when it fires.")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(DashboardPalette.mutedForeground)
+                }
+                ForEach(timers) { timer in
+                    HStack(alignment: .center, spacing: 8) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(timer.instruction)
+                                .font(.system(size: 12))
+                                .lineLimit(2)
+                            Group {
+                                if timer.isPaused { Text("Paused") }
+                                else { Text(timer.nextFireAt, format: .dateTime.month(.abbreviated).day().hour().minute()) }
+                            }
+                            .font(.system(size: 11))
+                            .foregroundStyle(DashboardPalette.mutedForeground)
+                        }
+                        Spacer(minLength: 8)
+                        Button(timer.isPaused ? "Resume" : "Pause") {
+                            Task { await tools.pauseTimer(timer, paused: !timer.isPaused) }
+                        }
+                        .buttonStyle(DashboardQuietButtonStyle())
+                        Button { Task { await tools.removeTimer(timer) } } label: {
+                            DashboardLucideIcon(glyph: .trash, size: 14)
+                                .frame(width: 24, height: 24)
+                        }
+                        .buttonStyle(DashboardIconButtonStyle())
+                        .accessibilityLabel("Remove timer: \(timer.instruction)")
+                        .help("Remove timer")
+                    }
+                }
+            }
+            .padding(14)
+            .frame(width: 320)
+        }
     }
 }
 
