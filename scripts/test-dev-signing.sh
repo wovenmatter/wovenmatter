@@ -90,8 +90,13 @@ elif name == 'ps':
     result, recorded = run(fixture / 'explicit', 2, identity='2' * 40)
     assert result.returncode == 0
     assert not any(name == 'security' for name, _ in recorded)
-    result, recorded = run(fixture / 'unsigned', 0)
-    assert result.returncode == 0 and 'ad-hoc' in result.stderr
+    # Without a certificate the launcher stops instead of silently signing ad-hoc.
+    result, recorded = run(fixture / 'no-certificate', 0)
+    assert result.returncode == 65 and 'No Apple Development certificate' in result.stderr, result.stderr
+    assert not any(name == 'xcodebuild' for name, _ in recorded)
+    # Unsigned only when asked for explicitly.
+    result, recorded = run(fixture / 'unsigned', 0, identity='-')
+    assert result.returncode == 0, result.stderr
     assert 'CODE_SIGNING_ALLOWED=NO' in next(args for name, args in recorded if name == 'xcodebuild')
     assert not any(name == 'codesign' for name, _ in recorded)
     # A running backend may report the logical /tmp path while the build cache
