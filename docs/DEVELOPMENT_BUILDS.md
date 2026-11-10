@@ -7,6 +7,12 @@ have independent device credentials. Client and snapshot instances also have
 independent data and process leases.
 An explicit live host uses production's data and exclusive execution lease.
 
+Builds live under `~/Library/Developer/Woven Matter Dev/<instance>/<mode>`
+(`WOVENMATTER_DEV_CACHE_DIR` overrides it). Never put them under `/tmp`: macOS
+marks apps in temporary folders "in-temp-dir" and leaves them out of bundle-ID
+lookups, so System Settings cannot list the Dev app and its Accessibility and
+Screen Recording prompts fail.
+
 ```sh
 scripts/build_and_run.sh
 scripts/build_and_run.sh --mode snapshot

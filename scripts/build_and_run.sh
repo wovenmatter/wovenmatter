@@ -39,7 +39,10 @@ if "$plan_only"; then printf '%s\n' "$profile"; exit 0; fi
 instance="$(printf '%s' "$profile" | python3 -c 'import json,sys; print(json.load(sys.stdin)["instance"])')"
 data_mode="$(printf '%s' "$profile" | python3 -c 'import json,sys; print(json.load(sys.stdin)["mode"])')"
 support_directory="$(printf '%s' "$profile" | python3 -c 'import json,sys; print(json.load(sys.stdin)["support"])')"
-cache_base="${WOVENMATTER_DEV_CACHE_DIR:-/private/tmp/wovenmatter-development}"
+# Not under /tmp: macOS marks apps in temporary folders "in-temp-dir" and leaves
+# them out of bundle-ID lookups, so System Settings can't list a Dev app there and
+# its Accessibility and Screen Recording prompts fail.
+cache_base="${WOVENMATTER_DEV_CACHE_DIR:-$HOME/Library/Developer/Woven Matter Dev}"
 cache_root="$cache_base/$instance/$data_mode"
 derived_data="${cache_root}/DerivedData"
 package_cache="${cache_root}/SourcePackages"

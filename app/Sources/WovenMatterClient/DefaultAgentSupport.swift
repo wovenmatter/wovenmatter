@@ -235,7 +235,7 @@ public enum DefaultAgentSupport {
     }
     public static func checkKeychainAccess(authorize: Bool = false, keychain: KeychainAccess = .init()) throws {
         try keychain.checkStoredItems(services: [WovenMatterKeychainService.current + ".default-agent",
-            WovenMatterKeychainService.current + ".usage", "com.wovenmatter.remote-workspaces"], authorize: authorize)
+            WovenMatterKeychainService.current + ".usage", WovenMatterKeychainService.remoteWorkspaces], authorize: authorize)
     }
 
     private static func keyQuery(_ provider: String, scope: String) -> [String: Any] {

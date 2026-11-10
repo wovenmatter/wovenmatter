@@ -1519,7 +1519,7 @@ public struct RemoteWorkspaceServiceClient: Sendable {
 }
 
 public actor RemoteWorkspaceCredentialStore {
-    private let service = "com.wovenmatter.remote-workspaces"
+    private let service = WovenMatterKeychainService.remoteWorkspaces
     private let keychain: KeychainAccess
     private var cachedTokens: [UUID: String] = [:]
     private var blocked: [UUID: OSStatus] = [:]
