@@ -1200,6 +1200,38 @@ login until `stop()`.
   repository (packages held). The guest changes only through Woven's update.
   It has no user, password or SSH key; the Mac reaches it over vsock only,
   and the guest agent accepts only the host CID.
+- **Provisioning steps.** `provision.sh` runs each step under its own time
+  limit (first boot: turning off automatic updates 15 min, the bot disk 15,
+  installing Docker Engine 30, network rules 5, starting Docker Engine 5;
+  the update adds guest packages 60 and removing unused packages 15). A step
+  that hangs is ended with its whole process group and fails as "<step> did
+  not finish within N minutes". The guest's status records the step, its
+  limit and the boot ID. The helper follows it through the agent's `status`,
+  which answers at once: it asks Docker Engine (2 s at most) only once the
+  guest is provisioned. The helper enforces the same limits 2 minutes later,
+  for a guest too stuck to report. It also fails when the agent stops
+  answering for 5 minutes, when the guest never answers within 10, or when a
+  provisioned guest's Docker Engine does not answer within 5. A failure
+  writes the guest's diagnostics to `helper.log` and names a guest kernel
+  fault if there was one. The helper then reboots the VM once and lets
+  provisioning resume, since it runs on every boot until it succeeds. A
+  second failure leaves the VM `failed` with the reason, still running for
+  `GET /v1/diagnostics`. Measured on a MacBook Air (M4, macOS 27.2): in the
+  first incident, a slab fault in the guest kernel (Ubuntu 7.0.0-38) while
+  loading `overlay` wedged every later module load, so containerd never
+  started. The guest reported the failure within three minutes, but the
+  helper missed it: the agent's `status` waited 10 s on a Docker Engine that
+  was still starting, and the helper gave up after 5 s, so it saw no answer
+  for 21 minutes.
+- **Disk caching.** All three disks attach with `cachingMode: .cached` and
+  `synchronizationMode: .full`, so every guest flush is still durable on the
+  Mac. With `.automatic`, 4 of 16 first boots on the MacBook Air from a root
+  disk the helper had just converted hit guest kernel faults in unrelated
+  subsystems (slab, seccomp, PSI, the scheduler); one also corrupted ext4.
+  None of 11 boots from an APFS clone of the same disk faulted. Others
+  report that `.automatic` corrupts sparse virtio disks. With `.cached`, 3
+  of 3 fresh first boots under host CPU load were clean, a sample too small
+  to prove the fix. Healthy first boots provision in about 1 to 2 minutes.
 - **Engine socket.** `docker.sock` carries the Docker Engine API to the
   guest's dockerd (vsock 2375). It is byte-transparent: HTTP upgrade and
   hijack (attach, exec) work, and each direction ends independently, so an
@@ -1212,7 +1244,8 @@ login until `stop()`.
   container traffic to the guest itself. DNS to the NAT gateway is the one
   exception. Containers on one bridge reach each other only through
   `br_netfilter`, which `egress.sh` loads before setting
-  `bridge-nf-call-iptables`, so the private-range rejects stop that too. Containers have no `CAP_NET_ADMIN` in the guest namespace and
+  `bridge-nf-call-iptables`, so the private-range rejects stop that too.
+  Each iptables call waits at most 30 s for the xtables lock. Containers have no `CAP_NET_ADMIN` in the guest namespace and
   cannot open vsock sockets. The bots runtime must never create
   privileged or host-network containers, or mount the socket.
 - **Resources.** The VM boots with the RAM pool (no cap: all RAM), which is
@@ -1294,6 +1327,7 @@ login until `stop()`.
 | `WovenVMController.forApp(supportDirectory:)` | Nil on Intel or without the helper |
 | `ensureRunning()` | Install/refresh the launch agent, start the helper, return status |
 | `status()`, `waitUntilReady(timeout:progress:)` | `WovenVMStatus`: `phase` (`stopped`, `downloading`, `preparing`, `booting`, `provisioning`, `ready`, `updating`, `failed`), `detail`, `failure`, `progress`, `engineSocket`, `resources`, `guest`, `forwards`, `updateFailure`, `snapshotAvailable` |
+| `diagnostics()` | `WovenVMDiagnostics`: the status, the ends of `helper.log` and `console.log`, and the guest agent's report as text (`provision`, `update`, `provision_log`, `kernel_alerts`, `kernel_log`, `failed_units`, `jobs`, `processes`, `load`, `uptime`, `cloud_init`), or `guestError` when the guest does not answer |
 | `engineSocket` | Docker Engine API Unix socket for the bots runtime |
 | `applyResources(WovenVMResources(memoryBytes:diskBytes:))` | `nil` means no cap |
 | `forwardPreview(WovenVMForwardRequest(container:port:hostPort:))` | Optional; the runtime carries previews over Engine API exec streams and does not use it. Returns `WovenVMForward` with the `127.0.0.1` `hostPort`; idempotent; resolved by container name at connect time; survives restarts |
@@ -1310,7 +1344,8 @@ guest disk use, and `restartPending`.
 **Control API** for other processes: HTTP/1.1, JSON,
 one request per connection on `control.sock` (e.g.
 `curl --unix-socket <control.sock> http://vm/v1/status`):
-`GET /v1/status`; `PUT /v1/resources`; (optional forwards) `GET /v1/forwards`;
+`GET /v1/status`; `GET /v1/diagnostics` (up to a minute while the guest
+answers); `PUT /v1/resources`; (optional forwards) `GET /v1/forwards`;
 `POST /v1/forwards` with `{"container": "<name or id>", "port": 3000}` (or
 `"address"` instead of `"container"`, optional `"hostPort"`) returning
 `{"id", "hostPort", ...}` with 201; `DELETE /v1/forwards/<id>`;

@@ -127,6 +127,159 @@ public enum WovenVMGuestFiles {
     }
 }
 
+/// Follows the guest's provisioning (first boot, or Woven's update) through
+/// the guest agent's `status` and decides when it has failed, so a stuck guest
+/// ends as a failure naming its step instead of an endless wait.
+///
+/// Each step carries its own time limit (`provision.sh` reports it). The guest
+/// enforces it first; the watch enforces it too, `grace` later, for a guest too
+/// stuck to report (a crashed kernel can wedge every later module load). A
+/// report from an earlier boot (another `boot_id`) counts as no report yet.
+public struct WovenVMProvisionWatch: Sendable {
+    /// One `status` reading of the provisioning (or update) state.
+    public struct Report: Sendable, Equatable {
+        /// `running`, `failed` or `ready`; nil before this boot's provisioning reported.
+        public var phase: String?
+        public var step: String?
+        public var error: String?
+        public var limit: TimeInterval?
+        /// Done: provisioned with Docker Engine answering, or the update finished.
+        public var done: Bool
+        /// Provisioned, so only Docker Engine is still to answer.
+        public var provisioned: Bool
+
+        public init(phase: String? = nil, step: String? = nil, error: String? = nil, limit: TimeInterval? = nil,
+                    done: Bool = false, provisioned: Bool = false) {
+            self.phase = phase
+            self.step = step
+            self.error = error
+            self.limit = limit
+            self.done = done
+            self.provisioned = provisioned
+        }
+
+        /// First-boot provisioning, from the agent's `status`.
+        public init(provisioningIn status: [String: Any]) {
+            let provisioned = status["provisioned"] is [String: Any]
+            self.init(current: Self.current(status["provision"], status), provisioned: provisioned,
+                      done: provisioned && status["docker"] is String)
+        }
+
+        /// Woven's update, from the agent's `status`.
+        public init(updateIn status: [String: Any]) {
+            let update = Self.current(status["update"], status)
+            self.init(current: update, provisioned: false, done: update?["phase"] as? String == "ready")
+        }
+
+        private init(current: [String: Any]?, provisioned: Bool, done: Bool) {
+            self.init(phase: current?["phase"] as? String, step: current?["step"] as? String,
+                      error: current?["error"] as? String,
+                      limit: (current?["timeout"] as? NSNumber)?.doubleValue,
+                      done: done, provisioned: provisioned)
+        }
+
+        /// The record unless an earlier boot wrote it. An older guest's
+        /// records carry no boot ID and always count.
+        private static func current(_ record: Any?, _ status: [String: Any]) -> [String: Any]? {
+            guard let record = record as? [String: Any] else { return nil }
+            if let written = record["boot_id"] as? String, let boot = status["boot_id"] as? String, written != boot {
+                return nil
+            }
+            return record
+        }
+    }
+
+    public enum Verdict: Sendable, Equatable {
+        case waiting(step: String)
+        case done
+        case failed(String)
+    }
+
+    /// Before this boot's provisioning first reports (cloud-init runs first).
+    public static let startingLimit: TimeInterval = 600
+    /// A provisioned guest's Docker Engine must answer within this.
+    public static let engineLimit: TimeInterval = 300
+    /// A step from an older guest that reports no limit.
+    public static let unknownStepLimit: TimeInterval = 1800
+    /// The guest's own limit fires first and reports the clearer reason.
+    public static let grace: TimeInterval = 120
+    /// The agent answered before and then stopped answering for this long.
+    public static let silenceLimit: TimeInterval = 300
+    public static let startingStep = "Starting the guest"
+    public static let engineStep = "Waiting for Docker Engine"
+
+    private let started: Date
+    private var lastAnswer: Date?
+    private var step: String?
+    private var stepSince: Date
+
+    public init(now: Date) {
+        started = now
+        stepSince = now
+    }
+
+    /// `report` nil: the guest agent did not answer.
+    public mutating func observe(_ report: Report?, now: Date) -> Verdict {
+        guard let report else {
+            if let lastAnswer {
+                if now.timeIntervalSince(lastAnswer) >= Self.silenceLimit {
+                    return .failed("The guest stopped answering (last step: \(step ?? Self.startingStep)).")
+                }
+            } else if now.timeIntervalSince(started) >= Self.startingLimit {
+                return .failed("The guest did not start.")
+            }
+            return .waiting(step: step ?? Self.startingStep)
+        }
+        lastAnswer = now
+        if report.done { return .done }
+        // `limit` is the step's own; the watch gives a guest-enforced one `grace` more.
+        let current: String, limit: TimeInterval, extra: TimeInterval
+        if report.provisioned {
+            (current, limit, extra) = (Self.engineStep, Self.engineLimit, 0)
+        } else if report.phase == "failed" {
+            return .failed(report.error ?? "\(report.step ?? "Provisioning") failed.")
+        } else if report.phase == nil {
+            (current, limit, extra) = (Self.startingStep, Self.startingLimit, 0)
+        } else if let stated = report.limit {
+            (current, limit, extra) = (report.step ?? Self.startingStep, stated, Self.grace)
+        } else {
+            (current, limit, extra) = (report.step ?? Self.startingStep, Self.unknownStepLimit, 0)
+        }
+        if current != step {
+            step = current
+            stepSince = now
+        }
+        if now.timeIntervalSince(stepSince) >= limit + extra {
+            return .failed("\(current) did not finish within \(Int((limit / 60).rounded())) minutes.")
+        }
+        return .waiting(step: current)
+    }
+}
+
+/// The guest agent's `diagnostics` reply, as `WovenVMDiagnostics.guest` carries it.
+public enum WovenVMGuestDiagnostics {
+    /// Every item as text: strings as they are, anything else as JSON.
+    public static func texts(_ reply: [String: Any]) -> [String: String] {
+        reply.compactMapValues { value in
+            if let text = value as? String { return text }
+            guard let data = try? JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed, .sortedKeys])
+            else { return String(describing: value) }
+            return String(decoding: data, as: UTF8.self)
+        }
+    }
+
+    /// The first line of a guest kernel fault (oops, BUG, soft lockup, hung
+    /// task, panic) among the kernel's alert-level messages, if any.
+    public static func kernelFault(_ texts: [String: String]) -> String? {
+        let markers = ["Unable to handle kernel", "Internal error: Oops", "BUG:", "soft lockup",
+                       "blocked for more than", "Kernel panic", "general protection fault"]
+        let line = texts["kernel_alerts"]?.split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .first { line in markers.contains { line.contains($0) } }
+        return line.map { String($0.prefix(200)) }
+    }
+}
+
 /// One reading of the guest's memory, from the guest agent's `meminfo`.
 public struct WovenVMGuestMemory: Sendable, Equatable {
     public var total: UInt64

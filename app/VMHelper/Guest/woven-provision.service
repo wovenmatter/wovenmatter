@@ -7,7 +7,7 @@ ConditionPathExists=!/var/lib/woven/provisioned
 [Service]
 Type=oneshot
 ExecStart=/usr/local/lib/woven/provision.sh first-boot
-TimeoutStartSec=3600
+TimeoutStartSec=10800
 
 [Install]
 WantedBy=multi-user.target

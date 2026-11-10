@@ -155,6 +155,29 @@ public struct WovenVMStatus: Codable, Sendable, Equatable {
     }
 }
 
+/// What explains a stuck or failed VM (`GET /v1/diagnostics`).
+public struct WovenVMDiagnostics: Codable, Sendable, Equatable {
+    public var status: WovenVMStatus
+    /// The end of `helper.log`.
+    public var helperLog: String
+    /// The end of `console.log` (the guest's hvc0 console).
+    public var console: String
+    /// The guest agent's `diagnostics`, one text per item: `provision`,
+    /// `update` (status JSON), `provision_log`, `kernel_alerts`, `kernel_log`,
+    /// `failed_units`, `jobs`, `processes`, `load`, `uptime`, `cloud_init`.
+    /// nil when the guest did not answer (`guestError` says why).
+    public var guest: [String: String]?
+    public var guestError: String?
+    public init(status: WovenVMStatus, helperLog: String, console: String, guest: [String: String]?,
+                guestError: String?) {
+        self.status = status
+        self.helperLog = helperLog
+        self.console = console
+        self.guest = guest
+        self.guestError = guestError
+    }
+}
+
 public enum WovenVMError: Error, LocalizedError, Equatable {
     case invalid(String)
     case unavailable(String)
