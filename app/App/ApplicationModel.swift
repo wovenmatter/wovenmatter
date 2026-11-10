@@ -2155,7 +2155,7 @@ final class ApplicationModel {
 
         } catch is CancellationError {
             keychainAccessReady = false
-            credentialAccessStatus = "Keychain access was cancelled. Use Restore Keychain access to try again."
+            credentialAccessStatus = "Keychain access was cancelled. Choose Allow to try again."
         } catch {
             keychainAccessReady = false
             credentialAccessStatus = "Keychain access needs attention: \(error.localizedDescription)"
@@ -2164,7 +2164,7 @@ final class ApplicationModel {
 
     func keychainAccessNeedsAttention() {
         keychainAccessReady = false
-        credentialAccessStatus = "A saved credential needs permission. Restore Keychain access to continue."
+        credentialAccessStatus = "A saved sign-in needs Keychain permission. Choose Allow to continue."
     }
 
     func checkSavedCredentialAccess() async {
@@ -2184,7 +2184,7 @@ final class ApplicationModel {
             credentialAccessStatus = "Saved credentials are accessible. Background checks stay silent."
         } catch {
             keychainAccessReady = false
-            credentialAccessStatus = "Keychain access needs attention. Restore access to use saved credentials."
+            credentialAccessStatus = "Woven Matter can't read your saved sign-ins. Choose Allow to restore access."
         }
     }
 

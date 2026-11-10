@@ -8,9 +8,9 @@ struct CompanionMacAccessTests {
   func sessionNotice() {
     let status = CompanionMacAccessStatus(items: [.fullDiskAccess: .needsAttention, .keychain: .ready, .accessibility: .needsAttention])
     #expect(status.sessionNotice(deviceName: "Mac Mini", isThisDevice: false)
-      == "Mac Mini is missing Full Disk Access for Woven Matter. Open Settings → General on that Mac.")
+      == "Mac Mini is missing Full Disk Access for Woven Matter. Open Settings → Permissions & Access on that Mac.")
     #expect(status.sessionNotice(deviceName: "Mac Mini", isThisDevice: true, computerUse: true)
-      == "This Mac is missing Full Disk Access and Accessibility for Woven Matter. Open Settings → General to set it up.")
+      == "This Mac is missing Full Disk Access and Accessibility for Woven Matter. Open Settings → Permissions & Access to set it up.")
     #expect(CompanionMacAccessStatus(items: [.fullDiskAccess: .ready, .keychain: .unknown])
       .sessionNotice(deviceName: "Mac Mini", isThisDevice: false) == nil)
   }
@@ -23,7 +23,7 @@ struct CompanionMacAccessTests {
     // A record an older Dev build published with an empty name.
     let published = CompanionMacAccessStatus(items: [.fullDiskAccess: .needsAttention], appName: "")
     #expect(published.sessionNotice(deviceName: "Mac Mini", isThisDevice: false)
-      == "Mac Mini is missing Full Disk Access for Woven Matter. Open Settings → General on that Mac.")
+      == "Mac Mini is missing Full Disk Access for Woven Matter. Open Settings → Permissions & Access on that Mac.")
   }
 
   @Test("the record travels inside the workspace descriptor and tolerates older and newer peers")

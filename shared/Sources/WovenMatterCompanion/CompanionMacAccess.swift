@@ -1,6 +1,6 @@
 import Foundation
 
-/// One Mac's one-time access setup (Settings → General on that Mac), published
+/// One Mac's one-time permission setup (Settings → Permissions & Access on that Mac), published
 /// with its execution workspace so every paired device can explain a session
 /// that cannot use something it needs. Transport-agnostic: plain Codable
 /// values with no credentials, paths or timestamps, so a status change is the
@@ -68,7 +68,7 @@ public struct CompanionMacAccessStatus: Codable, Equatable, Sendable {
     let list = names.count <= 2 ? names.joined(separator: " and ")
       : names.dropLast().joined(separator: ", ") + ", and " + names.last!
     let subject = isThisDevice ? "This Mac" : deviceName
-    let action = isThisDevice ? "Open Settings → General to set it up." : "Open Settings → General on that Mac."
+    let action = isThisDevice ? "Open Settings → Permissions & Access to set it up." : "Open Settings → Permissions & Access on that Mac."
     // Records published by those Dev builds still carry a blank name.
     let app = Self.appName(displayName: appName, bundleName: nil)
     return "\(subject) is missing \(list) for \(app). \(action)"

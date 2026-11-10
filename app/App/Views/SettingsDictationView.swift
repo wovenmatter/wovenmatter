@@ -6,6 +6,7 @@ struct SettingsDictationView: View {
     let model: ApplicationModel
     var reservesRailControlSpace = false
     let onBack: () -> Void
+    var onOpenPermissions: () -> Void = {}
     @State private var records: [DictationRecord] = []
     private let pageSize = 20
     @State private var page = 0
@@ -16,6 +17,7 @@ struct SettingsDictationView: View {
     var body: some View {
         SettingsPage(title: "Dictation", detail: "Your completed dictations. Click on an entry to see it in full.",
             reservesRailControlSpace: reservesRailControlSpace, onBack: onBack) {
+            MacPermissionStatusLink(items: [.microphone], onOpen: onOpenPermissions)
             if let problem = DictationSession.shared.historyError {
                 Text(problem).font(.system(size: 13)).foregroundStyle(DashboardPalette.danger)
                 Button("Retry saving") { DictationSession.shared.retrySavingHistory() }.buttonStyle(SettingsQuietButtonStyle())

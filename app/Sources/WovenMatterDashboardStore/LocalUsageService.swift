@@ -147,7 +147,7 @@ public actor LocalUsageService {
       guard request.allowCredentialAccess else {
         return request.enabledProviders.map { provider in
           UsageLimitAccount(provider: provider, accountLabel: provider.displayName, status: .unavailable,
-            source: "Saved accounts", detail: "Enable Keychain access in Settings → General to check saved accounts.",
+            source: "Saved accounts", detail: "Allow Keychain in Settings → Permissions & Access to check saved accounts.",
             observedAt: request.now)
         }
       }

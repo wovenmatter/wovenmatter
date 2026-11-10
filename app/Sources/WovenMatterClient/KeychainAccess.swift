@@ -69,7 +69,7 @@ public struct KeychainOperations: Sendable {
 /// Noninteractive by default, including the legacy macOS login Keychain.
 /// Interactive calls must come directly from an explicit credential action.
 public struct KeychainAccess: Sendable {
-  /// Only Settings > General's deliberate recovery action enables this scope.
+  /// Only Settings → Permissions & Access's deliberate Keychain action enables this scope.
   /// Task-local authorization follows actor calls without authorizing other tasks.
   @TaskLocal public static var isCredentialAuthorizationActive = false
   public static let accessNeedsAttention = Notification.Name("wovenmatter.keychain-access-needs-attention")

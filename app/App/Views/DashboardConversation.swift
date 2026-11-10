@@ -441,7 +441,7 @@ struct DashboardCloudConversation: View {
                     VStack(spacing: 8) {
                         if let macAccessNotice {
                             DashboardMacAccessNotice(message: macAccessNotice.message,
-                                openSettings: macAccessNotice.isThisMac ? { model.pendingConnectionsScope = "general" } : nil)
+                                openSettings: macAccessNotice.isThisMac ? { model.pendingConnectionsScope = "permissions" } : nil)
                         }
                         if let conversation, !conversation.isArchived, conversation.localRuntimeKind == .defaultAgent,
                            model.localACPSessionMetadata[conversation.id]?.selectableModels.isEmpty == true {
@@ -1410,7 +1410,7 @@ private struct DashboardMacAccessNotice: View {
                 .buttonStyle(SettingsQuietButtonStyle(horizontalPadding: 12, minimumHeight: 32))
                 .background(theme.palette.themeWhisper,
                     in: RoundedRectangle(cornerRadius: DashboardMetrics.controlRadius, style: .continuous))
-                .help("Open Settings → General")
+                .help("Open Settings → Permissions & Access")
         } else {
             label(showsArrow: false)
                 .padding(.horizontal, 12)

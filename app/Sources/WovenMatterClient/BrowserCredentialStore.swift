@@ -18,8 +18,8 @@ public final class BrowserCredentialStore: @unchecked Sendable {
     case consentRequired, unavailable(OSStatus), invalidOrigin, invalidCredential
     public var errorDescription: String? {
       switch self {
-      case .consentRequired: "Enable Keychain access in Settings > General to use saved website sessions and passwords."
-      case .unavailable: "Browser credential access is unavailable. Use Restore Keychain access in Settings > General, then reopen the browser."
+      case .consentRequired: "Allow Keychain in Settings → Permissions & Access to use saved website sessions and passwords."
+      case .unavailable: "Browser credential access is unavailable. Allow Keychain in Settings → Permissions & Access, then reopen the browser."
       case .invalidOrigin: "Passwords can only be saved and filled on a secure website."
       case .invalidCredential: "This website password could not be saved."
       }

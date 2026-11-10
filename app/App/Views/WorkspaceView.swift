@@ -179,6 +179,10 @@ struct WorkspaceView: View {
             model.pendingConnectionsScope = "usage"
             openUtility(.settings)
         }
+        .onReceive(NotificationCenter.default.publisher(for: MacAccessSetupModel.openSettingsNotification)) { _ in
+            model.pendingConnectionsScope = "permissions"
+            openUtility(.settings)
+        }
         .onReceive(NotificationCenter.default.publisher(for: .init("wovenmatter.open-connections"))) { event in
             model.pendingConnectionsScope = event.object as? String ?? "global"
             openUtility(.settings)

@@ -52,6 +52,7 @@
 		5E7A00000000000000000001 /* SettingsComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E7A00000000000000000002 /* SettingsComponents.swift */; };
 		5E7A00000000000000000003 /* SettingsGeneralView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E7A00000000000000000004 /* SettingsGeneralView.swift */; };
 		A85FEEADAEA25A9757CBE5F6 /* SettingsDictationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 013E364D3F71552BF924C602 /* SettingsDictationView.swift */; };
+		B7E2C41A9D3F4E5A6B7C8D90 /* SettingsPermissionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7E2C41A9D3F4E5A6B7C8D91 /* SettingsPermissionsView.swift */; };
 		5E7A00000000000000000007 /* SettingsLocalWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E7A00000000000000000008 /* SettingsLocalWorkspaceView.swift */; };
 		5E7A0000000000000000000D /* SettingsUsageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E7A0000000000000000000E /* SettingsUsageView.swift */; };
 		49BB9C77C988D34AA1B69E70 /* ApplicationModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A0B27571F91CCF38534BB90 /* ApplicationModel.swift */; };
@@ -242,6 +243,7 @@
 		5E7A00000000000000000002 /* SettingsComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsComponents.swift; sourceTree = "<group>"; };
 		5E7A00000000000000000004 /* SettingsGeneralView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsGeneralView.swift; sourceTree = "<group>"; };
 		013E364D3F71552BF924C602 /* SettingsDictationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsDictationView.swift; sourceTree = "<group>"; };
+		B7E2C41A9D3F4E5A6B7C8D91 /* SettingsPermissionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsPermissionsView.swift; sourceTree = "<group>"; };
 		5E7A00000000000000000008 /* SettingsLocalWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsLocalWorkspaceView.swift; sourceTree = "<group>"; };
 		5E7A0000000000000000000E /* SettingsUsageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsUsageView.swift; sourceTree = "<group>"; };
 		DBB4B07F8994DA5A755EAF99 /* wovenmatter-macos */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "wovenmatter-macos"; path = .; sourceTree = SOURCE_ROOT; };
@@ -581,6 +583,7 @@
 				FBC100000000000000000002 /* SettingsBackgroundServerView.swift */,
 				FBC100000000000000000006 /* RuntimeInspectionInventoryView.swift */,
 				013E364D3F71552BF924C602 /* SettingsDictationView.swift */,
+				B7E2C41A9D3F4E5A6B7C8D91 /* SettingsPermissionsView.swift */,
 				5E7A00000000000000000008 /* SettingsLocalWorkspaceView.swift */,
 				A13000000000000000000004 /* SettingsRemoteWorkspacesView.swift */,
 				A27AC6B860EE8FB41BD42099 /* RemoteHarnessSetupView.swift */,
@@ -932,6 +935,7 @@
 				FBC100000000000000000001 /* SettingsBackgroundServerView.swift in Sources */,
 				FBC100000000000000000005 /* RuntimeInspectionInventoryView.swift in Sources */,
 				A85FEEADAEA25A9757CBE5F6 /* SettingsDictationView.swift in Sources */,
+				B7E2C41A9D3F4E5A6B7C8D90 /* SettingsPermissionsView.swift in Sources */,
 				5E7A00000000000000000007 /* SettingsLocalWorkspaceView.swift in Sources */,
 				5E7A0000000000000000000D /* SettingsUsageView.swift in Sources */,
 				5AECF7B494583F056FBE596C /* WovenMatterApp.swift in Sources */,
