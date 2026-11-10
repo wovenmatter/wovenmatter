@@ -116,6 +116,9 @@ extension WorkspaceDatabaseConnection {
       defer { sqlite3_finalize(state) }
       try bind(json, at: 1, to: state); try bind(conversationID, at: 2, to: state); try stepDone(state)
       guard changedRowCountUnlocked == 1 else { throw LocalACPSessionDatabaseError.sessionNotFound }
+      // Each save covers the whole loaded tail. Only rows whose content or
+      // state changed are written, so an unrelated native change does not
+      // rewrite, journal, and sync every message and run again.
       for message in snapshot.messages {
         let nativeID = message["id"].text
         guard !nativeID.isEmpty else { continue }
@@ -130,6 +133,7 @@ extension WorkspaceDatabaseConnection {
           SELECT ?, c.id, ?, ?, ?, ?, ?, ?, ?, 1, c.authority_device_id, c.authority_agent_id
           FROM dashboard_conversations c WHERE c.id = ?
           ON CONFLICT(id) DO UPDATE SET content=excluded.content, status=excluded.status, updated_at=excluded.updated_at
+            WHERE dashboard_messages.content IS NOT excluded.content OR dashboard_messages.status IS NOT excluded.status
           """)
         defer { sqlite3_finalize(insert) }
         try bind(id, at: 1, to: insert); try bind(nativeID, at: 2, to: insert)
@@ -161,7 +165,8 @@ extension WorkspaceDatabaseConnection {
               completed_at, created_at, updated_at, desktop_owned)
             SELECT ?, c.id, c.user_id, c.agent_id, c.agent_codename, c.authority_device_id,
               c.authority_agent_id, ?, ?, ?, ?, ?, ?, 1 FROM dashboard_conversations c WHERE c.id = ?
-            ON CONFLICT(id) DO UPDATE SET status=excluded.status, completed_at=excluded.completed_at, updated_at=excluded.updated_at
+            ON CONFLICT(id) DO UPDATE SET completed_at=excluded.completed_at, updated_at=excluded.updated_at
+              WHERE dashboard_runs.completed_at IS NOT excluded.completed_at
             """)
           defer { sqlite3_finalize(run) }
           try bind(runID, at: 1, to: run); try bind(id, at: 2, to: run); try bind("running", at: 3, to: run)
@@ -217,21 +222,42 @@ extension WorkspaceDatabaseConnection {
             try bind(conversationID, at: 2, to: restore); try stepDone(restore)
           }
           for activity in activities {
-            try upsertDeviceOwnedRunActivityUnlocked(runID: runID, activity: activity, appendingContent: false, updatedAt: Date(), replacingActivity: true)
+            try upsertDeviceOwnedRunActivityUnlocked(runID: runID, activity: activity, appendingContent: false, updatedAt: Date(),
+              replacingActivity: true, allowingSettledRun: true)
           }
-          let finish = try prepareUnlocked("UPDATE dashboard_runs SET status=? WHERE id=?")
+          // A new run settles after its parts, so its final activity archive
+          // sees them. An unchanged status is not rewritten.
+          let finish = try prepareUnlocked("UPDATE dashboard_runs SET status=?1, updated_at=?2 WHERE id=?3 AND status IS NOT ?1")
           defer { sqlite3_finalize(finish) }
-          try bind(runStatus, at: 1, to: finish); try bind(runID, at: 2, to: finish); try stepDone(finish)
+          try bind(runStatus, at: 1, to: finish); try bind(now, at: 2, to: finish); try bind(runID, at: 3, to: finish); try stepDone(finish)
         }
       }
-      let update = try prepareUnlocked("UPDATE dashboard_conversations SET title=COALESCE((SELECT title FROM desktop_conversation_titles WHERE conversation_id=dashboard_conversations.id), ?), last_message_preview=?, last_message_at=MAX(?, COALESCE((SELECT imported_at FROM desktop_session_imports WHERE conversation_id=dashboard_conversations.id), '')), updated_at=? WHERE id=?")
+      // ?1 title, ?2 preview (NULL keeps the current one), ?3 activity time, ?4 now, ?5 conversation.
+      let title = "COALESCE((SELECT title FROM desktop_conversation_titles WHERE conversation_id=?5), ?1)"
+      let lastAt = "MAX(?3, COALESCE((SELECT imported_at FROM desktop_session_imports WHERE conversation_id=?5), ''))"
+      let preview = "COALESCE(?2, last_message_preview)"
+      let update = try prepareUnlocked("""
+        UPDATE dashboard_conversations SET title=\(title), last_message_preview=\(preview), last_message_at=\(lastAt), updated_at=?4
+        WHERE id=?5 AND (title IS NOT \(title) OR last_message_preview IS NOT \(preview) OR last_message_at IS NOT \(lastAt))
+        """)
       defer { sqlite3_finalize(update) }
       try bind(snapshot.info["title"].string ?? fallbackTitle, at: 1, to: update)
-      let lastID = snapshot.messages.last?["id"].text ?? ""
-      let originalPreview = try historyRowsUnlocked("SELECT visible_text FROM workspace_opencode_input_context WHERE id=? AND conversation_id=?", values: [lastID, conversationID]).first?.objectValue?["visible_text"]?.stringValue
-      try bind(String((originalPreview ?? snapshot.messages.last.map(OpenCodeSessionSnapshot.text) ?? "").prefix(240)), at: 2, to: update)
+      try bindNullable(try openCodePreviewUnlocked(snapshot, conversationID: conversationID).map { String($0.prefix(240)) }, at: 2, to: update)
       try bind(Self.timestamp(Date(timeIntervalSince1970: (snapshot.info["time"]["updated"].number ?? Date().timeIntervalSince1970 * 1000) / 1000)), at: 3, to: update)
       try bind(now, at: 4, to: update); try bind(conversationID, at: 5, to: update); try stepDone(update)
+  }
+
+  /// The latest message with visible text. Native configuration and other
+  /// textless records never replace the preview; the input the user typed
+  /// takes precedence over the transport text Woven sent for it.
+  private func openCodePreviewUnlocked(_ snapshot: OpenCodeSessionSnapshot, conversationID: String) throws -> String? {
+    for message in snapshot.messages.reversed() {
+      let original = try historyRowsUnlocked("SELECT visible_text FROM workspace_opencode_input_context WHERE id=? AND conversation_id=?",
+        values: [message["id"].text, conversationID]).first?.objectValue?["visible_text"]?.stringValue
+      let text = original ?? OpenCodeSessionSnapshot.text(message)
+      if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return text }
+    }
+    return nil
   }
 
   public func saveOpenCodeSubmission(conversationID: String, id: String, payload: OpenCodeValue, status: String, visibleText: String? = nil, deliveryID: String? = nil, input: AgentMessageInput? = nil) throws {

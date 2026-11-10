@@ -83,11 +83,30 @@ public struct OpenCodeConnection: Equatable, Sendable {
     }
 }
 
+/// The last recorded answer to each read on one connection. A repeated read
+/// whose status and body are unchanged adds nothing to history, so it is not
+/// recorded again; any change, including an error, is recorded as usual.
+public final class OpenCodeReadJournal: @unchecked Sendable {
+    private let lock = NSLock()
+    private var digests: [String: String] = [:]
+    public init() {}
+    func matches(_ key: String, digest: String) -> Bool { lock.withLock { digests[key] == digest } }
+    func remember(_ key: String, digest: String) {
+        lock.withLock {
+            // Cursor pages make the key space open-ended; forgetting only
+            // records one more copy of an unchanged read.
+            if digests.count >= 1_024 { digests.removeAll() }
+            digests[key] = digest
+        }
+    }
+}
+
 public struct OpenCodeHTTPClient: Sendable {
     public let connection: OpenCodeConnection
     private let session: URLSession
     private let eventSession: URLSession
     private var historyRecorder: WorkspaceWireRecorder?
+    private var readJournal: OpenCodeReadJournal?
     public init(connection: OpenCodeConnection, session: URLSession? = nil) {
         self.connection = connection
         let config = URLSessionConfiguration.ephemeral
@@ -106,9 +125,12 @@ public struct OpenCodeHTTPClient: Sendable {
     public static func segment(_ value: String) -> String {
         value.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? ""
     }
-    public func recording(_ recorder: @escaping WorkspaceWireRecorder) -> Self {
+    /// With a read journal, a GET is recorded once its answer is known, and
+    /// only when that answer differs from the last one recorded for it.
+    public func recording(_ recorder: @escaping WorkspaceWireRecorder, readJournal: OpenCodeReadJournal? = nil) -> Self {
         var copy = self
         copy.historyRecorder = recorder
+        copy.readJournal = readJournal
         return copy
     }
     private func record(_ direction: String, method: String, path: String,
@@ -145,24 +167,52 @@ public struct OpenCodeHTTPClient: Sendable {
                      dispatchFence: AgentDispatchFence? = nil) async throws -> OpenCodeValue {
         try dispatchFence?.check()
         let request = try request(method, path, query: query, body: body)
-        try await record("out", method: method, path: path, query: query, data: request.httpBody ?? Data())
+        let journal = method == "GET" && historyRecorder != nil ? readJournal : nil
+        if journal == nil {
+            try await record("out", method: method, path: path, query: query, data: request.httpBody ?? Data())
+        }
         try Task.checkCancellation()
         try dispatchFence?.claimDispatch()
-        let (bytes, response) = try await session.bytes(for: request)
-        defer { bytes.task.cancel() }
         var data = Data()
-        for try await byte in bytes {
-            try Task.checkCancellation()
-            guard data.count < 32 * 1_024 * 1_024 else { bytes.task.cancel(); throw OpenCodeError.message("OpenCode response exceeds the 32 MB limit. Use a smaller page or file.") }
-            data.append(byte)
+        let response: URLResponse
+        do {
+            let (bytes, received) = try await session.bytes(for: request)
+            defer { bytes.task.cancel() }
+            response = received
+            for try await byte in bytes {
+                try Task.checkCancellation()
+                guard data.count < 32 * 1_024 * 1_024 else { bytes.task.cancel(); throw OpenCodeError.message("OpenCode response exceeds the 32 MB limit. Use a smaller page or file.") }
+                data.append(byte)
+            }
+        } catch {
+            // A read that never received an answer is still recorded.
+            if journal != nil, !(error is CancellationError) {
+                try? await record("out", method: method, path: path, query: query, data: request.httpBody ?? Data())
+            }
+            throw error
         }
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-        try await record("in", method: method, path: path, query: query, data: data, status: status)
-        guard (200...299).contains(status) else { throw OpenCodeError.http(status) }
-        let value = data.isEmpty ? OpenCodeValue.null : try OpenCodeValue.decode(data)
-        if method == "GET", let batch = try Self.nativeSnapshot(path: path, value: value, sourceID: connection.identity) {
+        let decoded: OpenCodeValue? = data.isEmpty ? .null : try? OpenCodeValue.decode(data)
+        // Compare JSON answers by value, so key order alone is not a change.
+        let read = journal.map { journal in
+            (journal: journal, key: path + "?" + query.sorted { $0.key < $1.key }.map { $0.key + "=" + $0.value }.joined(separator: "&"),
+             digest: NativeHarnessArchive.digest(Data(String(status).utf8) + Data([0])
+                + ((decoded.flatMap { try? NativeHarnessArchive.encode($0) }) ?? data)))
+        }
+        let unchanged = read.map { $0.journal.matches($0.key, digest: $0.digest) } ?? false
+        if !unchanged {
+            if journal != nil { try await record("out", method: method, path: path, query: query, data: request.httpBody ?? Data()) }
+            try await record("in", method: method, path: path, query: query, data: data, status: status)
+        }
+        guard (200...299).contains(status) else {
+            if let read { read.journal.remember(read.key, digest: read.digest) }
+            throw OpenCodeError.http(status)
+        }
+        let value = try decoded ?? OpenCodeValue.decode(data)
+        if method == "GET", !unchanged, let batch = try Self.nativeSnapshot(path: path, value: value, sourceID: connection.identity) {
             try await historyRecorder?("native", NativeHarnessArchive.encode(batch))
         }
+        if let read { read.journal.remember(read.key, digest: read.digest) }
         return value
     }
 

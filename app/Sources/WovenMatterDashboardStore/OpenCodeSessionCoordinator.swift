@@ -58,10 +58,16 @@ public actor OpenCodeSessionCoordinator {
     }
     private var resolvingNativeInteractions: Set<NativeInteractionKey> = []
     private var resolvedNativeInteractions: Set<NativeInteractionKey> = []
+    private var readJournals: [String: OpenCodeReadJournal] = [:]
+    private let repairInterval: Duration
+    private let idleRepairCeiling: Duration
 
-    public init(database: WorkspaceDatabase, clientFactory: @escaping @Sendable (OpenCodeConnection) -> OpenCodeHTTPClient = { OpenCodeHTTPClient(connection: $0) }) {
+    public init(database: WorkspaceDatabase, clientFactory: @escaping @Sendable (OpenCodeConnection) -> OpenCodeHTTPClient = { OpenCodeHTTPClient(connection: $0) },
+                repairInterval: Duration = .milliseconds(2500), idleRepairCeiling: Duration = .seconds(300)) {
         self.clientFactory = clientFactory
         self.database = database
+        self.repairInterval = repairInterval
+        self.idleRepairCeiling = max(repairInterval, idleRepairCeiling)
         let stream = AsyncStream<OpenCodeSessionUpdate>.makeStream(bufferingPolicy: .bufferingNewest(256))
         updates = stream.stream; continuation = stream.continuation
     }
@@ -73,6 +79,7 @@ public actor OpenCodeSessionCoordinator {
 
     public func connect(_ connection: OpenCodeConnection) async throws {
         let token = UUID(); connectionTokens[connection.identity] = token
+        readJournals[connection.identity] = OpenCodeReadJournal()
         let client = recordedClient(connection, token: token)
         _ = try await client.health()
         try Task.checkCancellation()
@@ -85,17 +92,18 @@ public actor OpenCodeSessionCoordinator {
     }
     private func recordedClient(_ connection: OpenCodeConnection, token: UUID) -> OpenCodeHTTPClient {
         let recorder = database.openCodeHistoryRecorder(connectionID: connection.identity)
-        return clientFactory(connection).recording { [weak self] direction, data in
+        return clientFactory(connection).recording({ [weak self] direction, data in
             guard await self?.isCurrentConnection(connection.identity, token: token) == true else { throw CancellationError() }
             try await recorder(direction, data)
             // A disconnect may occur while outbound history is queued. Never
             // send that old client's request after the replacement takes over.
             guard await self?.isCurrentConnection(connection.identity, token: token) == true else { throw CancellationError() }
-        }
+        }, readJournal: readJournals[connection.identity])
     }
     public func disconnect(connectionID: String) async {
         for value in pendingDispatches.values where value.link.connectionID == connectionID { value.fence.cancel() }
         connectionTokens.removeValue(forKey: connectionID)
+        readJournals.removeValue(forKey: connectionID)
         liveConnections.removeValue(forKey: connectionID)?.task.cancel()
         clients.removeValue(forKey: connectionID)
         let links = (try? await database.openCodeLinks()) ?? []
@@ -129,6 +137,7 @@ public actor OpenCodeSessionCoordinator {
         liveFlushTokens.removeAll(); liveRevisions.removeAll(); liveDirty.removeAll(); liveProjections.removeAll()
         workers.removeAll(); eventRefreshes.removeAll(); eventRefreshTokens.removeAll(); eventRefreshDirty.removeAll()
         generations.removeAll(); clients.removeAll(); connectionTokens.removeAll(); pendingCursors.removeAll()
+        readJournals.removeAll()
         Task { await pruneNativeInteractionGuards() }
     }
     public func call(connectionID: String, method: String = "GET", path: String,
@@ -354,14 +363,7 @@ public actor OpenCodeSessionCoordinator {
                         }
                         throw OpenCodeError.message("OpenCode event connection ended.")
                     }
-                    group.addTask {
-                        while !Task.isCancelled {
-                            // Durable events trigger a coalesced authoritative
-                            // refresh. Polling remains a low-frequency repair path.
-                            try await Task.sleep(for: .milliseconds(2500))
-                            try await self.refresh(link, generation: generation)
-                        }
-                    }
+                    group.addTask { try await self.repair(link, generation: generation) }
                     defer { group.cancelAll() }
                     _ = try await group.next()
                 }
@@ -388,6 +390,30 @@ public actor OpenCodeSessionCoordinator {
                 liveConnections.removeValue(forKey: link.connectionID)?.task.cancel()
             }
         }
+    }
+    /// Durable events trigger a coalesced authoritative refresh. This poll
+    /// repairs a missed event while work is pending. An idle session doubles
+    /// its interval up to the ceiling, and pending work restores the base rate
+    /// at the next tick.
+    private func repair(_ link: OpenCodeSessionLink, generation: UUID) async throws {
+        var interval = repairInterval, waited = Duration.zero
+        while !Task.isCancelled {
+            try await Task.sleep(for: repairInterval)
+            waited += repairInterval
+            guard try await hasPendingWork(link) || waited >= interval else { continue }
+            try await refresh(link, generation: generation)
+            waited = .zero
+            interval = try await hasPendingWork(link) ? repairInterval : min(interval * 2, idleRepairCeiling)
+        }
+    }
+    /// A running turn, an open question or queued input, or input whose
+    /// native acceptance is still unconfirmed.
+    private func hasPendingWork(_ link: OpenCodeSessionLink) async throws -> Bool {
+        let id = link.conversationID
+        if let snapshot = snapshots[id], snapshot.active || !snapshot.permissions.isEmpty
+            || !snapshot.forms.isEmpty || !snapshot.inbox.isEmpty { return true }
+        if sending.contains(id) || pendingDispatches[id] != nil || eventRefreshes[id] != nil || liveFlushes[id] != nil { return true }
+        return !(try await database.openCodeUncertainSubmissions(conversationID: id)).isEmpty
     }
     private func acceptsLiveEvent(_ event: OpenCodeValue, connectionID: String, token: UUID) -> Bool {
         connectionTokens[connectionID] == token && liveLinks.values.contains {
