@@ -1369,7 +1369,9 @@ one request per connection on `control.sock` (e.g.
   binding to an existing container without recreating it, and this works
   the same through a Mac VM's forwarded socket, so no container port is ever
   published and the Mac VM needs no port forwarding. A preview connection
-  starts a stopped container. The transport is a replaceable hook
+  starts a stopped container, and the forwarder retries a refused port for up
+  to 20 seconds, so the request that woke the bot reaches its service once the
+  restart list has started it. The transport is a replaceable hook
   (`PreviewTransport` in `bots/src/environment/previews.ts`, passed as
   `previewTransport` to `startRuntime`) should a host integration want a
   direct path.

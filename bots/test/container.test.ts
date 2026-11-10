@@ -134,6 +134,31 @@ describe("bot containers on the Engine API", () => {
     }
   });
 
+  it("waits for a preview port that is still starting, as after a wake", async () => {
+    // Reserve a free port, then start the service only after the connection was opened.
+    const probe = createServer();
+    await new Promise<void>((resolve) => probe.listen(0, "127.0.0.1", resolve));
+    const port = (probe.address() as { port: number }).port;
+    await new Promise<void>((resolve) => probe.close(() => resolve()));
+    const service = createServer((socket) => socket.end("late pong"));
+    try {
+      const stream = await env.connectPort(BOT, port);
+      const chunks: Buffer[] = [];
+      const done = new Promise<void>((resolve, reject) => {
+        stream.on("data", (chunk: Buffer) => chunks.push(chunk));
+        stream.on("end", () => resolve());
+        stream.on("error", reject);
+      });
+      stream.end("ping");
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await new Promise<void>((resolve) => service.listen(port, "127.0.0.1", resolve));
+      await done;
+      expect(Buffer.concat(chunks).toString()).toBe("late pong");
+    } finally {
+      service.close();
+    }
+  });
+
   it("runs the restart list through the supervisor across stops", async () => {
     await env.control(BOT, "services.add", { name: "web", command: "exec sleep 30", cwd: "/tmp" }, ctx);
     const list = async () => (await env.control(BOT, "services.list", {}, ctx)) as { running: boolean }[];
