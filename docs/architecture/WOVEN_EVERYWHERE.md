@@ -468,6 +468,7 @@ owned by the running user.
 | `DIR/run/library.sock` | Local API socket, 0600; peers must also be this user (checked with `SO_PEERCRED`) and, when the host was launched by `node`, that very parent process (see "Node signs through its library host") |
 | `DIR/run/library-api.token` | Local API bearer, 0600, 43–256 base64url characters. The Node server may create it before starting the host; otherwise the host creates it |
 | `DIR/run/library.json` | Ready record (above) |
+| `DIR/foundation/` | Linux Foundation's own per-user files (URLSession's cookie store and URL cache): the host points `XDG_DATA_HOME`, `XDG_CACHE_HOME`, `XDG_CONFIG_HOME` and `XDG_STATE_HOME` here at startup, so nothing lands in `~/.local/share` or `~/.cache` |
 
 **Loopback routes** (published with Tailscale Serve under `/wovenmatter`,
 which the host strips):

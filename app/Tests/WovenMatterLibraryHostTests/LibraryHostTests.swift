@@ -148,6 +148,24 @@ struct LibraryHostTests {
     #expect(throws: LibraryHostError.self) { try LibraryHostToken.load(file) }
   }
 
+  @Test func foundationFilesStayInTheDataRoot() throws {
+    let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let layout = LibraryHostLayout(root: root)
+    #expect(Set(layout.foundationEnvironment.keys) == ["XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME"])
+    #expect(layout.foundationEnvironment.values.allSatisfy { $0.hasPrefix(layout.foundation.path) })
+    #if os(Linux)
+    // URLSession's cookie store and cache resolve these search paths on Linux.
+    let saved = layout.foundationEnvironment.keys.map { ($0, ProcessInfo.processInfo.environment[$0]) }
+    defer { for (name, value) in saved { if let value { setenv(name, value, 1) } else { unsetenv(name) } } }
+    try layout.confineFoundation()
+    for directory in [FileManager.SearchPathDirectory.applicationSupportDirectory, .cachesDirectory] {
+      let resolved = try #require(FileManager.default.urls(for: directory, in: .userDomainMask).first)
+      #expect(resolved.standardizedFileURL.path.hasPrefix(layout.foundation.path), "\(directory): \(resolved.path)")
+    }
+    #endif
+  }
+
   @Test func healthAndMountsOnLoopbackAndTokenOnTheSocket() async throws {
     let fixture = try await HostFixture(); defer { fixture.remove() }
     let health = try send("GET", "/v1/health", port: fixture.port)

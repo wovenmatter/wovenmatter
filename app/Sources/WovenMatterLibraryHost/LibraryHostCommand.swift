@@ -106,6 +106,9 @@ public enum LibraryHostCommand {
       FileHandle.standardError.write(Data((error.localizedDescription + "\n").utf8)); return 64
     }
     let layout = LibraryHostLayout(root: options.dataRoot)
+    do { try layout.confineFoundation() } catch {
+      FileHandle.standardError.write(Data(("wovenmatter-library: " + error.localizedDescription + "\n").utf8)); return 1
+    }
     // Sessions are created against the shared harness catalog. A host bundle
     // ships it at <release>/harnesses; this binary is <release>/host/library/<platform>/.
     HarnessCatalog.hostCatalogURL = options.harnessCatalog ?? Bundle.main.executableURL?.resolvingSymlinksInPath()
