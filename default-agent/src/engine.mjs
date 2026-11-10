@@ -24,6 +24,10 @@ export class DefaultAgentEngine {
     this.programStatusContext = new AsyncLocalStorage();
   }
   async initialize() {
+    // This dedicated agent process owns provider retries at the conversation
+    // boundary. Pi's Bedrock client does not forward maxRetries to Smithy;
+    // use Smithy's supported process setting before any clients are created.
+    process.env.AWS_MAX_ATTEMPTS = '1';
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
     await this.claude.loadModels();
     this.credentials = await new Credentials(this.supplied, this.vault, this.credentialAccounts).initialize();

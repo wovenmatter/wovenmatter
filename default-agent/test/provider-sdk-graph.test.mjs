@@ -4,6 +4,8 @@ import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { crc32 } from 'node:zlib';
 import { streamSimple as anthropic } from '@earendil-works/pi-ai/api/anthropic-messages';
@@ -13,6 +15,8 @@ import { streamSimple as google } from '@earendil-works/pi-ai/api/google-generat
 import { streamSimple as bedrock } from '@earendil-works/pi-ai/api/bedrock-converse-stream';
 import { normalizeContext } from '@earendil-works/pi-ai/utils/transcript';
 import { satisfiesRange } from '../src/package-versions.mjs';
+import { DefaultAgentEngine } from '../src/engine.mjs';
+import { fakeClaudeRuntime } from './fixtures/claude-runtime.mjs';
 
 const fromPi = createRequire(import.meta.resolve('@earendil-works/pi-ai'));
 const tool = { name: 'lookup', description: 'Offline fixture', parameters: {
@@ -195,6 +199,31 @@ test('Pi and current Bedrock/Smithy SDKs decode actual event-stream text, tools 
   assert.equal(f.requests[1].headers.authorization, 'Bearer fixture-bedrock-token');
   assert.match(f.requests[0].url, /converse-stream/);
   assert.equal(f.requests[0].body.toolConfig.tools[0].toolSpec.name, 'lookup');
+});
+
+test('Pi keeps Bedrock retries disabled for transient HTTP failures', { timeout: 10000 }, async t => {
+  const previousAttempts = process.env.AWS_MAX_ATTEMPTS;
+  t.after(() => {
+    if (previousAttempts === undefined) delete process.env.AWS_MAX_ATTEMPTS;
+    else process.env.AWS_MAX_ATTEMPTS = previousAttempts;
+  });
+  process.env.AWS_MAX_ATTEMPTS = '9';
+  const directory = await mkdtemp(join(tmpdir(), 'woven-bedrock-retries-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await new DefaultAgentEngine({ cwd: directory, directory, claude: fakeClaudeRuntime() }).initialize();
+  const f = await fixture(t, response => {
+    response.writeHead(503, { 'content-type': 'application/json', 'x-amzn-errortype': 'ServiceUnavailableException' });
+    response.end(JSON.stringify({ message: 'Offline transient failure' }));
+  });
+  // Woven owns retries at the conversation boundary. Smithy 3.40 changes its
+  // default retry behavior, but Pi must still honor Woven's explicit opt-out.
+  const result = await bedrock(model('bedrock-converse-stream', 'amazon-bedrock', f.baseUrl), context, {
+    maxRetries: 0, env: { AWS_BEDROCK_SKIP_AUTH: '1', AWS_BEDROCK_FORCE_HTTP1: '1', AWS_REGION: 'us-east-1' },
+  }).result();
+  assert.equal(result.stopReason, 'error');
+  assert.match(result.errorMessage, /Offline transient failure/);
+  assert.equal(f.requests.length, 1, 'a transient failure must not replay the provider request');
+  assert.equal(result.content.some(block => block.type === 'toolCall'), false);
 });
 
 test('Bedrock preserves Smithy idle timeout errors after response headers', { timeout: 10000 }, async t => {
