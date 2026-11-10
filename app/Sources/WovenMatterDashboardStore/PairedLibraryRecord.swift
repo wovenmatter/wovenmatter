@@ -42,6 +42,19 @@ public struct PairedLibraryRecord: Codable, Equatable, Sendable {
   }
 }
 
+/// The member a page came from. Records are relayed and their origins are
+/// self-declared, so a receiver checks ownership-bearing rows against the
+/// sender alone (`peerRecordAllowed`).
+public struct PairedLibrarySender: Sendable {
+  public let deviceID: String
+  public let kind: MemberKind
+  /// The receiver's current member list, to decide which workspace the sender serves.
+  public let members: [MemberAudience.Member]
+  public init(deviceID: String, kind: MemberKind, members: [MemberAudience.Member]) {
+    self.deviceID = deviceID.lowercased(); self.kind = kind; self.members = members
+  }
+}
+
 public struct PairedLibraryPage: Codable, Sendable {
   public let schema: String
   public let entries: [PairedLibraryRecord]

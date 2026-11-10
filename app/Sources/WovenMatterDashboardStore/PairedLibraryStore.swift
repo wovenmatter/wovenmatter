@@ -284,17 +284,106 @@ extension WorkspaceDatabaseConnection {
   /// durable causal frontier, so arrival order, exact retries and restarts all
   /// converge on the same winner without executing a command or creating a
   /// second conflict/recovery copy.
-  func receivePairedLibrary(_ page: PairedLibraryPage, from peer: String) throws {
+  func receivePairedLibrary(_ page: PairedLibraryPage, from peer: String, sender: PairedLibrarySender? = nil) throws {
     guard UUID(uuidString: peer) != nil, page.entries.count <= 100, page.cursor >= 0,
           page.schema == (try peerSchema()) else { throw peerError("Update both Macs to the same Woven Matter version before synchronizing.") }
-    try applyPeerRecords(page.entries.map { ($0, nil) }, from: peer, cursor: page.cursor)
+    try applyPeerRecords(page.entries.map { ($0, nil) }, from: peer, cursor: page.cursor, sender: sender)
   }
 
   private struct PeerRecordRejected: Error { let message: String }
+
+  private func peerText(_ value: PairedLibraryValue?) -> String? {
+    guard let value, let raw = value.value else { return nil }
+    switch value.type {
+    case "text", "integer": return raw
+    case "blob":
+      let chars = Array(raw.utf8)
+      guard chars.count.isMultiple(of: 2) else { return nil }
+      var bytes = Data(); bytes.reserveCapacity(chars.count / 2)
+      for index in stride(from: 0, to: chars.count, by: 2) {
+        guard let byte = UInt8(String(decoding: chars[index...index + 1], as: UTF8.self), radix: 16) else { return nil }
+        bytes.append(byte)
+      }
+      return String(data: bytes, encoding: .utf8)
+    default: return nil
+    }
+  }
+
+  /// Rows whose meaning depends on who wrote them, checked as they arrive.
+  /// Origins are self-declared and records are relayed, so only the sender
+  /// is known. Returns false to skip a record (it arrives again from a
+  /// device allowed to send it); throws to quarantine a forged one.
+  /// - Member entries and revocations are signed records: they are never
+  ///   deleted, must match their signed payload, and never roll back to an
+  ///   older entry or rewrite a revocation.
+  /// - A Linux host (any sender but a Mac) writes registry and ownership rows
+  ///   only for what it serves itself: its own workspace's registration and
+  ///   that workspace's sessions, and owner rows naming itself. Everything
+  ///   else it relays is skipped, so it can never point a Mac's workspace or
+  ///   sessions at itself.
+  private func peerRecordAllowed(_ record: PairedLibraryRecord, sender: PairedLibrarySender?) throws -> Bool {
+    func column(_ name: String) -> String? { peerText(record.row[name]) }
+    switch record.table {
+    case "library_members":
+      guard !record.deleted else { throw PeerRecordRejected(message: "A member entry cannot be deleted.") }
+      guard let payload = column("payload"), let entry = try? JSONDecoder().decode(LibraryMemberEntry.self, from: Data(payload.utf8)), entry.isWellFormed,
+            column("device_id") == entry.deviceID, column("added_by") == entry.addedBy, column("added_at") == String(entry.addedAt) else {
+        throw PeerRecordRejected(message: "A member entry does not match its signed record.")
+      }
+      guard let existing = try historyRowsUnlocked("SELECT added_at,payload FROM library_members WHERE device_id=? AND added_by=?",
+                                                  values: [entry.deviceID, entry.addedBy]).first?.objectValue else { return true }
+      let time = existing["added_at"]?.intValue.map(Int64.init) ?? 0
+      if time > entry.addedAt { return false }
+      if time == entry.addedAt, existing["payload"]?.stringValue != payload { throw PeerRecordRejected(message: "A member entry was rewritten.") }
+      return true
+    case "library_member_revocations":
+      guard !record.deleted else { throw PeerRecordRejected(message: "A member removal cannot be deleted.") }
+      guard let payload = column("payload"), let revocation = try? JSONDecoder().decode(LibraryMemberRevocation.self, from: Data(payload.utf8)),
+            revocation.isWellFormed, column("event_id") == revocation.eventID, column("device_id") == revocation.deviceID else {
+        throw PeerRecordRejected(message: "A member removal does not match its signed record.")
+      }
+      if let existing = try historyRowsUnlocked("SELECT payload FROM library_member_revocations WHERE event_id=?", values: [revocation.eventID])
+        .first?.objectValue?["payload"]?.stringValue, existing != payload { throw PeerRecordRejected(message: "A member removal was rewritten.") }
+      return true
+    default: break
+    }
+    guard let sender, sender.kind != .mac else { return true }
+    let own = sender.deviceID.lowercased()
+    func serves(_ workspace: CompanionExecutionWorkspace?) -> Bool {
+      workspace.map { MemberAudience.serving($0, members: sender.members) == own } ?? false
+    }
+    func servesWorkspace(_ id: String?) throws -> Bool { try serves(id.flatMap { try federationWorkspaceUnlocked($0) }) }
+    switch record.table {
+    case "companion_execution_workspaces":
+      guard let id = column("id"), let payload = column("payload"),
+            let incoming = try? JSONDecoder().decode(CompanionExecutionWorkspace.self, from: Data(payload.utf8)), incoming.id == id else { return false }
+      let existing = try federationWorkspaceUnlocked(id)
+      return serves(incoming) && (existing == nil || serves(existing))
+    case "companion_execution_conversations":
+      guard let id = column("id"), try servesWorkspace(column("workspace_id")) else { return false }
+      let current = try historyRowsUnlocked("SELECT workspace_id FROM companion_execution_conversations WHERE id=?", values: [id])
+        .first?.objectValue?["workspace_id"]?.stringValue
+      return try current == nil || servesWorkspace(current)
+    case "paired_mac_routes", "paired_remote_workspaces":
+      return false
+    case "paired_agent_owners", "paired_conversation_owners", "paired_calendar_owners":
+      guard column("device_id")?.lowercased() == own, let id = column("id") else { return false }
+      let current = try historyRowsUnlocked("SELECT device_id FROM \(record.table) WHERE id=?", values: [id]).first?.objectValue?["device_id"]?.stringValue
+      return current == nil || current?.lowercased() == own
+    case "companion_calendar_owners":
+      guard column("device_id")?.lowercased() == own, let id = column("event_id") else { return false }
+      let current = try historyRowsUnlocked("SELECT device_id FROM companion_calendar_owners WHERE event_id=?", values: [id]).first?.objectValue?["device_id"]?.stringValue
+      return current == nil || current?.lowercased() == own
+    case "companion_calendar_run_owners":
+      return column("device_id")?.lowercased() == own
+    default:
+      return true
+    }
+  }
   private struct ProjectionScope { var conversations = Set<String>(); var owners = Set<String>() }
 
   private func applyPeerRecords(_ entries: [(record: PairedLibraryRecord, pendingID: String?)], from peer: String,
-                                cursor: Int64?) throws {
+                                cursor: Int64?, sender: PairedLibrarySender? = nil) throws {
     let tables = Dictionary(uniqueKeysWithValues: try peerTables().map { ($0.name, $0) })
     // Foreign references can arrive in the next bounded page. Preserve them;
     // do not let a transient missing parent discard an offline child edit.
@@ -319,6 +408,11 @@ extension WorkspaceDatabaseConnection {
                 Set(received.row.keys) == Set(known.columns) else { throw PeerRecordRejected(message: "Invalid shared record in " + received.table + ".") }
           table = known
           try validatePeerKey(received, table: table)
+          guard try peerRecordAllowed(received, sender: sender) else {
+            try executeUnlocked("RELEASE paired_record")
+            if let pendingID { try toolsExecuteUnlocked("DELETE FROM paired_library_pending WHERE id=?", [pendingID]) }
+            continue
+          }
           guard let hydrated = try hydratePeerValues(received) else {
             if pendingID == nil {
               let payload = try peerJSON(received)
@@ -766,7 +860,11 @@ extension WorkspaceDatabase {
   }
   public func materializePendingPeerRecords() async throws { try await write { try $0.materializePendingPeerRecords() } }
   public func pairedLibraryPage(after cursor: Int64) async throws -> PairedLibraryPage { try await read { try $0.pairedLibraryPage(after: cursor) } }
-  public func receivePairedLibrary(_ page: PairedLibraryPage, from peer: String) async throws { try await write { try $0.receivePairedLibrary(page, from: peer) } }
+  /// `sender`: the member that sent the page, for the checks in
+  /// `peerRecordAllowed`; nil for a Mac's bearer-era pairing.
+  public func receivePairedLibrary(_ page: PairedLibraryPage, from peer: String, sender: PairedLibrarySender? = nil) async throws {
+    try await write { try $0.receivePairedLibrary(page, from: peer, sender: sender) }
+  }
   public func pairedLibraryCursors(_ peer: String) async throws -> (pulled: Int64, pushed: Int64) { try await read { try $0.pairedLibraryCursors(peer) } }
   public func acknowledgePairedLibrary(peer: String, cursor: Int64) async throws {
     try await write { try $0.toolsExecuteUnlocked("INSERT INTO paired_library_cursors(peer_id,pushed) VALUES(?,?) ON CONFLICT(peer_id) DO UPDATE SET pushed=MAX(pushed,excluded.pushed)", [peer, String(cursor)]) }

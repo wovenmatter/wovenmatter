@@ -9,20 +9,28 @@ import WorkspaceFixtures
 import WovenMatterCore
 @testable import WovenMatterDashboardStore
 
-/// In-process network of members. Each endpoint host routes to one peer's
-/// handler; Linux hosts sit behind a Serve-style `/wovenmatter` strip.
+/// In-process network of members. Each endpoint host (`<name>.ts.net`)
+/// routes to one peer's handler; Linux hosts sit behind a Serve-style
+/// `/wovenmatter` strip.
 private actor Network {
   var handlers: [String: LibraryPeerSync] = [:]
   var offline: Set<String> = []
+  var routed: [String: Int] = [:]
+  /// Each reply is delayed by this long after the request was handled.
+  var latency: Duration = .zero
   func register(_ host: String, _ sync: LibraryPeerSync) { handlers[host] = sync }
   func setOffline(_ hosts: Set<String>) { offline = hosts }
+  func setLatency(_ value: Duration) { latency = value }
   /// An offline device neither answers nor sends.
   func route(from caller: String, _ endpoint: URL, _ request: CompanionHTTPRequest) async throws -> CompanionHTTPResponse {
-    guard !offline.contains(caller), let host = endpoint.host, !offline.contains(host), let handler = handlers[host] else { throw URLError(.cannotConnectToHost) }
+    let host = endpoint.host.map { $0.hasSuffix(".ts.net") ? String($0.dropLast(".ts.net".count)) : $0 } ?? ""
+    routed[host, default: 0] += 1
+    guard !offline.contains(caller), !offline.contains(host), let handler = handlers[host] else { throw URLError(.cannotConnectToHost) }
     var target = request.target
     if endpoint.path.hasPrefix("/wovenmatter") { target = String(target.dropFirst("/wovenmatter".count)) }
     let lowered = Dictionary(uniqueKeysWithValues: request.headers.map { ($0.key.lowercased(), $0.value) })
     let response = await handler.handle(.init(method: request.method, target: target, headers: lowered, body: request.body))
+    if latency > .zero { try await Task.sleep(for: latency) }
     // A device that went offline mid-request never receives the reply.
     guard !offline.contains(caller), !offline.contains(host) else { throw URLError(.networkConnectionLost) }
     return response ?? .error("not_found", "Unrouted", status: 404)
@@ -50,7 +58,7 @@ private struct Member {
     let network = network
     sync = LibraryPeerSync(directory: directory, transport: .init { try await network.route(from: host, $0, $1) }, configuration: configuration)
     self.host = host
-    endpoint = URL(string: kind == .linux ? "https://\(host)/wovenmatter/" : "https://\(host)/")!
+    endpoint = URL(string: kind == .linux ? "https://\(host).ts.net/wovenmatter/" : "https://\(host).ts.net/wovenmatter")!
     try await directory.ensureSelf(name: host, endpoints: [endpoint])
     await network.register(host, sync)
   }
@@ -154,13 +162,18 @@ struct MemberSyncTests {
     let forged = LibraryMemberEntry(deviceID: host.deviceID, kind: .linux, name: "Host", publicKey: host.publicKey, endpoints: [],
       addedBy: mac.deviceID, addedAt: 40, signature: phoneEntry.signature)
     #expect(!LibraryMemberResolver.resolve(entries: [forged], revocations: [], anchors: [mac.anchor]).contains { $0.deviceID == host.deviceID })
-    // Removing the Mac that added the phone keeps the phone; the Mac's later entries are void.
+    // Everything a removed Mac signed is void, whatever its date: the phone
+    // it added drops out until a standing Mac re-signs it (MemberDirectory
+    // .remove does), and its later entries never count.
     let removeOther = try LibraryMemberRevocation.signed(deviceID: other.deviceID, by: mac, at: 50)
     let late = try LibraryMemberEntry.signed(deviceID: host.deviceID, kind: .linux, name: "Host", publicKey: host.publicKey, endpoints: [], by: other, at: 60)
-    members = LibraryMemberResolver.resolve(entries: [otherEntry, phoneEntry, late], revocations: [removeOther], anchors: [mac.anchor])
+    members = LibraryMemberResolver.resolve(entries: [otherEntry, phoneEntry, late], revocations: [removeOther], anchors: [mac.anchor], own: mac.deviceID)
     #expect(members.first { $0.deviceID == other.deviceID }?.revoked == true)
-    #expect(members.first { $0.deviceID == phone.deviceID }?.revoked == false)
+    #expect(!members.contains { $0.deviceID == phone.deviceID })
     #expect(!members.contains { $0.deviceID == host.deviceID })
+    let kept = try LibraryMemberEntry.signed(deviceID: phone.deviceID, kind: .ios, name: "Phone", publicKey: phone.publicKey, endpoints: [], by: mac, at: 51)
+    members = LibraryMemberResolver.resolve(entries: [otherEntry, phoneEntry, kept], revocations: [removeOther], anchors: [mac.anchor], own: mac.deviceID)
+    #expect(members.first { $0.deviceID == phone.deviceID }?.revoked == false)
     // A newer entry from an unremoved Mac re-adds.
     let readd = try LibraryMemberEntry.signed(deviceID: other.deviceID, kind: .mac, name: "Other", publicKey: other.publicKey, endpoints: [endpoint], by: mac, at: 70)
     members = LibraryMemberResolver.resolve(entries: [readd, phoneEntry], revocations: [removeOther], anchors: [mac.anchor])
@@ -228,6 +241,113 @@ struct MemberSyncTests {
     for member in others { await linux2.sync.scheduleSync(member.id, reason: "test") }
     try await Task.sleep(for: .milliseconds(500))
     for member in others { #expect(await !member.has(note)) }
+  }
+
+  /// A Mac removed while a Linux host is offline: the host applies it when it
+  /// is back, and keeps the phone the removed Mac added (re-signed by the remover).
+  @Test func removalReachesAnOfflineHostAndKeepsWhatTheRemovedMacAdded() async throws {
+    let (network, members, phone) = try await Self.mesh()
+    defer { Task { for member in members { await member.remove() } } }
+    for member in members { await member.sync.start() }
+    #expect(try await Self.settle(members) { (try? await $0.directory.list().members.filter { !$0.revoked }.count) == 6 })
+    let mac1 = members[0], mac3 = members[2], linux1 = members[3]
+    await network.setOffline(["linux1.test"])
+    try await mac1.directory.remove(mac3.id)
+    let others = [members[0], members[1], members[4]]
+    #expect(try await Self.settle(others) { await $0.directory.member(mac3.id) == nil })
+    #expect(await linux1.directory.member(mac3.id) != nil, "offline, the host has not heard yet")
+    await network.setOffline([])
+    await mac1.sync.scheduleSync(linux1.id, reason: "test")
+    #expect(try await Self.settle([linux1]) { await $0.directory.member(mac3.id) == nil })
+    for member in members where member.id != mac3.id {
+      #expect(await member.directory.member(phone.deviceID)?.addedBy == mac1.id, "\(member.host) keeps the phone")
+    }
+  }
+
+  /// Endpoints are self-advertised: peer sync never follows one outside the tailnet.
+  @Test func peerSyncSendsOnlyToTailnetEndpoints() async throws {
+    #expect(LibraryPeerSync.isTailnetEndpoint(URL(string: "https://mac.tail1.ts.net:8443/wovenmatter")!))
+    for bad in ["http://mac.tail1.ts.net/wovenmatter", "https://127.0.0.1/wovenmatter", "https://localhost/", "https://evil.example/ts.net",
+                "https://user:pass@mac.tail1.ts.net/", "https://mac.tail1.ts.net/?x=1"] {
+      #expect(!LibraryPeerSync.isTailnetEndpoint(URL(string: bad)!), "\(bad)")
+    }
+    let network = Network()
+    let a = try await Member("a", kind: .mac, network: network), b = try await Member("b", kind: .mac, network: network)
+    defer { Task { await a.remove(); await b.remove() } }
+    try await a.directory.add(deviceID: b.id, kind: .mac, name: "b", publicKey: b.identity.publicKey, endpoints: [URL(string: "http://b/wovenmatter")!])
+    try await b.directory.ensureSelf(name: "b", endpoints: [URL(string: "http://b/wovenmatter")!])
+    let member = try #require(await a.directory.member(b.id))
+    await a.sync.synchronize(with: member)
+    #expect(await network.routed["b", default: 0] == 0)
+  }
+
+  /// "Sync now" while a notice arrives: the notice runs once more afterwards.
+  @Test func aNoticeDuringSyncNowIsNotDropped() async throws {
+    let network = Network()
+    let a = try await Member("a", kind: .mac, network: network), b = try await Member("b", kind: .mac, network: network)
+    defer { Task { await a.remove(); await b.remove() } }
+    try await a.add(b); try await b.add(a)
+    await a.sync.start(); await b.sync.start()
+    #expect(try await Self.settle([a, b]) { await $0.sync.status().peers.first?.state == .online })
+    try await Task.sleep(for: .milliseconds(300))
+    await network.setLatency(.milliseconds(400))
+    let note = UUID().uuidString.lowercased()
+    async let now: Void = a.sync.synchronizeAll()
+    try await Task.sleep(for: .milliseconds(100))
+    try await b.note(note, "Written during Sync now")
+    await now
+    await network.setLatency(.zero)
+    #expect(try await Self.settle([a]) { await $0.has(note) })
+  }
+
+  /// Waking or a network change resets the offline backoff and catches up at once.
+  @Test func resumingCatchesUpWithOfflinePeers() async throws {
+    let network = Network()
+    let a = try await Member("a", kind: .mac, network: network), b = try await Member("b", kind: .mac, network: network)
+    defer { Task { await a.remove(); await b.remove() } }
+    try await a.add(b); try await b.add(a)
+    await network.setOffline(["b"])
+    await a.sync.start()
+    #expect(try await Self.settle([a]) { await $0.sync.status().peers.first?.state == .offline })
+    let note = UUID().uuidString.lowercased()
+    try await b.note(note, "Written while away")
+    await network.setOffline([])
+    await a.sync.resume(reason: "wake")
+    #expect(try await Self.settle([a]) { await $0.has(note) })
+    #expect(await a.sync.exchanges["wake", default: 0] >= 1)
+  }
+
+  /// A Linux host relays every row, but may write registry and ownership rows
+  /// only for what it serves: it cannot point a Mac's workspace at itself.
+  @Test func aLinuxHostCannotTakeOverAMacsWorkspace() async throws {
+    let (_, members, _) = try await Self.mesh()
+    defer { Task { for member in members { await member.remove() } } }
+    for member in members { await member.sync.start() }
+    #expect(try await Self.settle(members) { (try? await $0.directory.list().members.filter { !$0.revoked }.count) == 6 })
+    let mac1 = members[0], mac2 = members[1], linux1 = members[3]
+    let library = try await mac1.database.companionLibraryIdentity().libraryID
+    func insert(_ workspace: CompanionExecutionWorkspace, into member: Member) async throws {
+      let payload = String(decoding: try JSONEncoder().encode(workspace), as: UTF8.self)
+      try await member.database.write { connection in
+        try connection.toolsExecuteUnlocked("INSERT INTO companion_execution_workspaces(id,owner_device_id,revision,deleted,payload) VALUES(?,?,?,0,?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,payload=excluded.payload",
+                                            [workspace.id, workspace.ownerDeviceID, String(workspace.revision), payload])
+      }
+    }
+    let macWorkspace = CompanionExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: library, ownerDeviceID: mac1.id, kind: .mac,
+      name: "Mac 1", endpoint: URL(string: "https://mac1.test.ts.net/wovenmatter"), executionDeviceID: mac1.id, revision: 1)
+    try await insert(macWorkspace, into: mac1)
+    #expect(try await Self.settle([mac2, linux1]) { (try? await $0.database.companionExecutionWorkspaces().contains { $0.id == macWorkspace.id }) == true })
+    // The host rewrites the Mac's registration to name itself.
+    var forged = macWorkspace; forged.executionDeviceID = linux1.id; forged.revision = 2
+    try await insert(forged, into: linux1)
+    // Its own workspace's registration goes through.
+    let own = CompanionExecutionWorkspace(id: UUID().uuidString.lowercased(), libraryID: library, ownerDeviceID: mac1.id, kind: .linux,
+      name: "Linux 1", endpoint: URL(string: "https://linux1.test.ts.net/wovenmatter-execution/one"), executionDeviceID: UUID().uuidString.lowercased(), revision: 1)
+    try await insert(own, into: linux1)
+    #expect(try await Self.settle([mac2]) { (try? await $0.database.companionExecutionWorkspaces().contains { $0.id == own.id }) == true })
+    let seen = try #require(try await mac2.database.companionExecutionWorkspaces().first { $0.id == macWorkspace.id })
+    #expect(seen.executionDeviceID == mac1.id && seen.revision == 1)
+    #expect(await mac2.directory.audience(for: seen) == mac1.id)
   }
 
   @Test func differentSchemasReportUpdateRequired() async throws {
