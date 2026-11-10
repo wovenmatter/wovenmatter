@@ -94,6 +94,9 @@ public struct CompanionPairResponse: Codable, Equatable, Sendable {
   /// The pairing Mac's member device ID: the audience of the phone's signed
   /// requests to it. Absent from Macs that predate member requests.
   public var hostDeviceID: String?
+  /// The libraries in the pairing Mac's workspace registry, for a phone that
+  /// sent a member key: a phone already holding one of them keeps its copy.
+  public var libraryIDs: [String]?
   public init(workspaceID: String, deviceID: String, credential: String, protocolVersion: Int = CompanionProtocol.version,
               confirmationRequired: Bool? = nil, hostDeviceID: String? = nil) {
     self.workspaceID = workspaceID; self.deviceID = deviceID; self.credential = credential; self.protocolVersion = protocolVersion

@@ -242,8 +242,12 @@ public struct CompanionMutationResult: Codable, Equatable, Sendable {
   public var folder: CompanionFolder?
   public var note: CompanionNote?
   public var message: String?
-  public init(operationID: String, status: Status, folder: CompanionFolder? = nil, note: CompanionNote? = nil, message: String? = nil) {
-    self.operationID = operationID; self.status = status; self.folder = folder; self.note = note; self.message = message
+  /// With `notFound` for a note: it exists on the host only as a deletion,
+  /// so a client whose copy was unchanged applies the deletion.
+  public var deleted: Bool?
+  public init(operationID: String, status: Status, folder: CompanionFolder? = nil, note: CompanionNote? = nil, message: String? = nil,
+              deleted: Bool? = nil) {
+    self.operationID = operationID; self.status = status; self.folder = folder; self.note = note; self.message = message; self.deleted = deleted
   }
 }
 public struct CompanionChange: Codable, Equatable, Identifiable, Sendable {

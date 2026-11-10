@@ -251,8 +251,9 @@ public final class CompanionWorkspaceAPI {
     /// Signed member requests (any Mac or Linux library host). A phone or Mac
     /// member is authenticated by its signature; no grant is issued.
     private let members: MemberDirectory?
-    /// A phone paired with its member key: the host signs its member entry.
-    private let onMemberPaired: @MainActor @Sendable (_ deviceID: String, _ name: String, _ publicKey: Data) async -> Void
+    /// A phone paired with its member key: the host signs its member entry
+    /// (replacing an earlier key the user is pairing again). Throws to refuse.
+    private let onMemberPaired: @MainActor @Sendable (_ deviceID: String, _ name: String, _ publicKey: Data) async throws -> Void
     /// `GET /v1/sync/status`: every peer's state, so a phone can show
     /// "Update everything" when devices disagree on versions.
     private let syncStatus: @MainActor @Sendable () async -> LibrarySyncStatus?
@@ -269,7 +270,7 @@ public final class CompanionWorkspaceAPI {
                 linkedData: @escaping @MainActor @Sendable (DatabaseArtifactLink) async throws -> DatabaseTabularData = { _ in
                     throw CompanionAPIError(code: "linked_data_unavailable", message: "This database is unavailable on the Mac.")
                 }, members: MemberDirectory? = nil,
-                onMemberPaired: @escaping @MainActor @Sendable (String, String, Data) async -> Void = { _, _, _ in },
+                onMemberPaired: @escaping @MainActor @Sendable (String, String, Data) async throws -> Void = { _, _, _ in },
                 syncStatus: @escaping @MainActor @Sendable () async -> LibrarySyncStatus? = { nil }) {
         self.members = members; self.onMemberPaired = onMemberPaired; self.syncStatus = syncStatus
         self.database = database; self.authentication = authentication; self.commands = commands
@@ -348,6 +349,13 @@ public final class CompanionWorkspaceAPI {
                     request.headers["x-woven-workspace"] == workspaceID, let bearer = request.bearer else {
                     return .error("unauthorized", "Complete pairing on this device.", status: 401)
                 }
+                // The phone's member entry is signed when its pairing is
+                // confirmed, before the grant is issued, so a pairing that is
+                // never confirmed adds no member and a refusal reaches the phone.
+                if members != nil, let pending = await authentication.pendingPhoneMember(bearer: bearer, workspaceID: workspaceID) {
+                    do { try await onMemberPaired(pending.deviceID, pending.name, pending.publicKey) }
+                    catch let error as CompanionAPIError { return .error(error.code, error.message, status: 409) }
+                }
                 try await authentication.confirmPairing(bearer: bearer, workspaceID: workspaceID)
                 await onPair()
                 return try .json(["confirmed": true])
@@ -355,11 +363,29 @@ public final class CompanionWorkspaceAPI {
             if request.method == "POST", path == "/v1/pair" {
                 guard request.body.count <= 8_192 else { return .error("too_large", "The pairing request is too large.", status: 413) }
                 let command = try JSONDecoder().decode(CompanionPairRequest.self, from: request.body)
+                let memberKey = command.memberPublicKey.flatMap { key in
+                    key.count == 32 && command.purpose != CompanionPairingPurpose.peerMac
+                        && [.iPhone, .iPad].contains(command.metadata?.kind ?? .unknown) ? key : nil
+                }
+                // Refuse before the pairing code is spent when this Mac could
+                // not add the phone with that key.
+                if let members, let memberKey {
+                    do { try await members.checkAdd(deviceID: command.deviceID, kind: .ios, publicKey: memberKey, replacingKey: true) }
+                    catch let error as CompanionAPIError { return .error(error.code, error.message, status: 409) }
+                }
                 var result = try await authentication.pair(command, workspaceID: workspaceID)
-                result.hostDeviceID = members?.identity.deviceID
-                if let key = command.memberPublicKey, key.count == 32, command.purpose != CompanionPairingPurpose.peerMac,
-                   [.iPhone, .iPad].contains(command.metadata?.kind ?? .unknown) {
-                    await onMemberPaired(command.deviceID.lowercased(), command.deviceName, key)
+                if let members {
+                    result.hostDeviceID = members.identity.deviceID
+                    // Whether the phone's current library is one this Mac
+                    // shares, decided before any signed request can work.
+                    if memberKey != nil {
+                        result.libraryIDs = Array(Set(try await database.companionExecutionWorkspaces().filter { !$0.deleted }.map(\.libraryID))).sorted()
+                    }
+                }
+                // A client that confirms nothing is added at once, as before.
+                if let memberKey, command.requiresConfirmation != true {
+                    do { try await onMemberPaired(command.deviceID.lowercased(), command.deviceName, memberKey) }
+                    catch let error as CompanionAPIError { return .error(error.code, error.message, status: 409) }
                 }
                 await onPair()
                 return try .json(result)

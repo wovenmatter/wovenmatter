@@ -399,6 +399,14 @@ public actor MobileStore {
           if result.status != .notFound { next.folders[saved.id] = result.folder ?? saved }
           return
         }
+        // Re-creating an unchanged copy of a note the host deleted (after a
+        // move to another host): the deletion wins, as it would have there.
+        if mutation.kind == .createNote, result.status == .notFound, result.deleted == true, let local = next.notes[mutation.resourceID],
+           local.title == mutation.title, local.content == mutation.content, local.folderID == mutation.folderID {
+          next.outbox.removeAll { $0.mutation.resourceID == mutation.resourceID }
+          Self.remoteDeletion(mutation.resourceID, state: &next)
+          return
+        }
         if let local = next.notes[mutation.resourceID] {
           next.conflicts[local.id] = .init(base: next.bases[local.id], local: local, remote: result.note, reason: result.message ?? "The Mac version changed.")
         }

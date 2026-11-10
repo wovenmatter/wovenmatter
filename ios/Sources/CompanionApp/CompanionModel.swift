@@ -265,10 +265,7 @@ import CompanionInference
           if let pending = credential, pending.confirmationPending == true {
             credential = nil
             try await acceptPairing(pending, allowingLibraryChange: true) { try MobileCredentialVault.save($0) }
-            if let identity = try? loadMemberIdentity() {
-              await finishMemberPairing(endpoint: pending.endpoint, hostDeviceID: pending.hostDeviceID,
-                accepted: await probeMemberPairing(endpoint: pending.endpoint, hostDeviceID: pending.hostDeviceID, identity: identity))
-            }
+            await completeMemberPairing(endpoint: pending.endpoint, hostDeviceID: pending.hostDeviceID)
           } else { try configureTransport() }
         } catch { pairingError = error.localizedDescription; credential = nil }
         do { try await store?.interruptExecutorJobs(); try await loadExecutionConfiguration() }
@@ -320,10 +317,7 @@ import CompanionInference
         defer { if connectionForeground { startDeviceScheduler() } }
         do {
           try await acceptPairing(pending, allowingLibraryChange: true) { try MobileCredentialVault.save($0) }
-          if let identity = try? loadMemberIdentity() {
-            await finishMemberPairing(endpoint: payload.endpoint, hostDeviceID: pending.hostDeviceID,
-              accepted: await probeMemberPairing(endpoint: payload.endpoint, hostDeviceID: pending.hostDeviceID, identity: identity))
-          }
+          await completeMemberPairing(endpoint: payload.endpoint, hostDeviceID: pending.hostDeviceID)
           pairingText = ""
           await refresh(); await refreshExecutionWorkspaces(force: true)
           return
@@ -347,14 +341,18 @@ import CompanionInference
       let paired = try await HTTPSCompanionTransport.pair(payload, deviceID: current.deviceID,
         deviceName: UIDevice.current.name, metadata: deviceMetadata, expectedWorkspaceID: target, requiresConfirmation: true,
         memberPublicKey: identity.publicKey, performer: httpPerformer)
-      let accepted = await probeMemberPairing(endpoint: payload.endpoint, hostDeviceID: paired.hostDeviceID, identity: identity)
       // Pairing again with another Mac of the same library moves nothing:
-      // the next sync rebinds to it like to any other member host.
+      // the next sync rebinds to it like to any other member host. The Mac
+      // names its registry's libraries, because it adds this phone as a
+      // member only once the pairing is confirmed.
       let previous = current.workspaceID ?? current.detachedWorkspaceID
-      let keepLibrary = accepted == true && previous != nil && previous != target
-        ? await joinsSameLibrarySet(endpoint: payload.endpoint, hostDeviceID: paired.hostDeviceID, identity: identity, previousLibraryID: previous) : false
+      let keepLibrary = paired.hostDeviceID != nil && previous != nil && previous != target
+        && (paired.libraryIDs ?? []).contains(previous ?? "")
       try await acceptPairing(paired, allowingLibraryChange: true, keepLibrary: keepLibrary) { try MobileCredentialVault.save($0) }
-      await finishMemberPairing(endpoint: payload.endpoint, hostDeviceID: paired.hostDeviceID, accepted: accepted)
+      await completeMemberPairing(endpoint: payload.endpoint, hostDeviceID: paired.hostDeviceID)
+      // Kept for member sync, which this Mac refused after all: bind the
+      // replica to it the way a first pairing does.
+      if keepLibrary, membership?.memberRequestsAccepted == false { try await store.prepareForPairing(paired.workspaceID) }
       pairingText = ""
       await refresh()
       await refreshExecutionWorkspaces(force: true)
