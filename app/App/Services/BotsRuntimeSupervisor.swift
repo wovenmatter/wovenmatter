@@ -20,6 +20,8 @@ struct BotsRuntimeConfig: Codable, Equatable, Sendable {
     }
     struct Host: Codable, Equatable, Sendable { var url: String; var token: String }
     struct Machine: Codable, Equatable, Sendable { var deviceID: String; var name: String }
+    /// The default agent's Claude runtime, so `Resources/bots` ships no second copy.
+    struct Claude: Codable, Equatable, Sendable { var executable: String }
 
     var dataDir: String
     var listen: Listen
@@ -29,6 +31,7 @@ struct BotsRuntimeConfig: Codable, Equatable, Sendable {
     var limits: Limits
     var host: Host
     var machine: Machine
+    var claude: Claude? = nil
 }
 
 /// Where the bundled runtime lives: `<Resources>/bots` beside the Node the app
@@ -36,6 +39,9 @@ struct BotsRuntimeConfig: Codable, Equatable, Sendable {
 struct BotsRuntimeBundle: Equatable, Sendable {
     let node: URL
     let root: URL
+    /// Anthropic's signed Claude binary in the default agent's dependencies, shared with
+    /// the bots runtime (nil when this build has none, such as a checkout without it).
+    var claudeExecutable: URL? = nil
     var entry: URL { root.appending(path: "src/cli.ts") }
 
     static func locate() -> BotsRuntimeBundle? {
@@ -45,7 +51,18 @@ struct BotsRuntimeBundle: Equatable, Sendable {
                      URL(fileURLWithPath: FileManager.default.currentDirectoryPath).deletingLastPathComponent()]
             .compactMap { $0?.appending(path: "bots") }
         guard let root = roots.first(where: { FileManager.default.fileExists(atPath: $0.appending(path: "src/cli.ts").path) }) else { return nil }
-        return .init(node: node, root: root)
+        return .init(node: node, root: root, claudeExecutable: DefaultAgentSupport.resources.flatMap(Self.claudeExecutable(defaultAgent:)))
+    }
+
+    /// `<default-agent>/node_modules/@anthropic-ai/claude-agent-sdk-darwin-<arch>/claude`, when it is there.
+    static func claudeExecutable(defaultAgent: URL) -> URL? {
+        #if arch(arm64)
+        let architecture = "arm64"
+        #else
+        let architecture = "x64"
+        #endif
+        let binary = defaultAgent.appending(path: "node_modules/@anthropic-ai/claude-agent-sdk-darwin-\(architecture)/claude")
+        return FileManager.default.isExecutableFile(atPath: binary.path) ? binary : nil
     }
 
     /// The package version, which also names the bot image it was tested with.

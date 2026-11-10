@@ -1,5 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { mkdir, open, readFile, rename } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import { connect } from 'node:net'
 import { hostname } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -15,6 +16,22 @@ const digest = value => createHash('sha256').update(String(value)).digest()
 // Client headers the runtime's WebSocket handshake may see. Credentials are
 // never forwarded: the proxy authenticates to the runtime with its own token.
 const forwardedSocketHeaders = ['sec-websocket-key', 'sec-websocket-version', 'sec-websocket-protocol', 'sec-websocket-extensions', 'user-agent']
+
+/**
+ * The default agent's Claude binary in this release, which the bots runtime runs
+ * (`claude.executable`) instead of shipping a second copy: the glibc package, or
+ * the musl one where that is what npm installed.
+ */
+export function defaultAgentClaude(serviceRoot, { platform = process.platform, arch = process.arch, exists = existsSync } = {}) {
+  // A host release ships default-agent/ beside src/; a checkout has it beside remote/.
+  for (const root of [join(serviceRoot, 'default-agent'), join(serviceRoot, '..', 'default-agent')]) {
+    for (const name of [`claude-agent-sdk-${platform}-${arch}`, `claude-agent-sdk-${platform}-${arch}-musl`]) {
+      const binary = join(root, 'node_modules/@anthropic-ai', name, 'claude')
+      if (exists(binary)) return binary
+    }
+  }
+  return null
+}
 
 async function readJSONFile(path, fallback) { try { return JSON.parse(await readFile(path, 'utf8')) } catch { return fallback } }
 async function writePrivateJSON(path, value) {
@@ -36,6 +53,7 @@ export function createBotsService({ configuration, mcp, defaultAgent, serverPort
   const dataDirectory = configuration.botsData ?? join(configuration.dataRoot, 'bots')
   const hostToken = randomBytes(32).toString('base64url'), hostDigest = digest(hostToken)
   const packageRoot = botsPackageRoot(configuration.serviceRoot)
+  const claudeExecutable = configuration.claudeExecutable ?? defaultAgentClaude(configuration.serviceRoot)
   engine ??= createBotEngine({ instance: configuration.botsInstance })
   // With this machine's library host, batches go into its library copy; the
   // outbox keeps them while it is down and is drained when it is ready.
@@ -64,6 +82,7 @@ export function createBotsService({ configuration, mcp, defaultAgent, serverPort
       limits: { botMemoryBytes: (await settings()).botMemoryBytes ?? null },
       host: { url: `http://127.0.0.1:${serverPort()}/`, token: hostToken },
       machine: await machineInfo(),
+      ...(claudeExecutable ? { claude: { executable: claudeExecutable } } : {}),
     }
   }
   runtime ??= packageRoot ? createBotsRuntime({ packageRoot, configPath: join(stateDirectory, 'runtime.json'), configuration: runtimeConfiguration, log }) : null

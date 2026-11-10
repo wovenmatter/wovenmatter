@@ -661,7 +661,8 @@ Woven server writes (mode 0600). Unknown keys are refused.
   "image": { "tag": "wovenmatter-bots" },
   "limits": { "botMemoryBytes": 4294967296 },
   "host": { "url": "http://127.0.0.1:<port>/", "token": "bearer for the host API" },
-  "machine": { "deviceID": "<member device id>", "name": "Studio" }
+  "machine": { "deviceID": "<member device id>", "name": "Studio" },
+  "claude": { "executable": "/abs/path/to/claude" }
 }
 ```
 
@@ -673,6 +674,16 @@ Woven server writes (mode 0600). Unknown keys are refused.
   built through the Engine API when missing; a tagged name is used as is.
 - `limits.botMemoryBytes` is each container's memory limit (`Memory` and
   `MemorySwap`); `null` means no cap.
+- `claude` is optional: `executable` (absolute) is the Claude runtime binary
+  the machine's default agent ships, passed to the Claude Agent SDK as
+  `pathToClaudeCodeExecutable`, so the bots package carries no copy of its
+  own. A Mac passes `<Resources>/default-agent/node_modules/@anthropic-ai/claude-agent-sdk-darwin-<arch>/claude`
+  and a Linux host `<release>/default-agent/node_modules/@anthropic-ai/claude-agent-sdk-linux-<arch>[-musl]/claude`.
+  `scripts/prepare-bots.sh` drops the bots package's own
+  `claude-agent-sdk-<platform>` packages (and refuses lockfiles that select
+  different Claude Agent SDK versions for `bots/` and `default-agent/`), and
+  `remote-host.sh` removes them after `npm ci`; the default agent's copy keeps
+  its signature check.
 - `host.url` must be loopback `http`. The runtime keeps its own state under
   `dataDir`: `bots.sqlite` (bots, threads, Pi Durable tables, memory, limits,
   cached Woven tool lists, previews), `settings.json` (model profiles, title

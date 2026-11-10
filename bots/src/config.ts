@@ -81,6 +81,13 @@ export const runtimeConfigSchema = z.strictObject({
     deviceID: z.string().min(1).max(128),
     name: z.string().min(1).max(200),
   }),
+  /**
+   * The Claude runtime binary the machine's default agent ships (absolute), so the bots
+   * package carries no second copy. Omitted: the SDK's own platform package, if installed.
+   */
+  claude: z
+    .strictObject({ executable: z.string().min(1).max(4096).refine(isAbsolute, "must be absolute") })
+    .optional(),
 });
 
 export type RuntimeConfig = z.infer<typeof runtimeConfigSchema> & {
