@@ -13,6 +13,20 @@ marks apps in temporary folders "in-temp-dir" and leaves them out of bundle-ID
 lookups, so System Settings cannot list the Dev app and its Accessibility and
 Screen Recording prompts fail.
 
+Dev builds are signed with this Mac's Apple Development certificate, which keeps
+the app's identity stable across rebuilds; macOS ties privacy permissions and
+Keychain access (including the paired-Mac keys) to that identity. The launcher
+stops when no trusted certificate is installed instead of signing ad-hoc, which
+would give every rebuild a new identity. Add one in Xcode (Settings → Apple
+Accounts → account → team → Manage Certificates → + → Apple Development); a
+certificate macOS does not trust usually means Apple's WWDR G3 intermediate is
+missing. `WOVENMATTER_DEV_SIGNING_IDENTITY=-` builds unsigned on purpose.
+Signing needs the Mac's logged-in session: over SSH the login Keychain is not
+available to codesign (`errSecInternalComponent`), so start remote builds in
+that session (for example `open -a Terminal build.command`). Moving a Mac from
+unsigned to signed builds leaves old permission entries that no longer match;
+reset them once with `tccutil reset <Service> <bundle ID>` and allow again.
+
 ```sh
 scripts/build_and_run.sh
 scripts/build_and_run.sh --mode snapshot

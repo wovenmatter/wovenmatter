@@ -94,7 +94,17 @@ if [ -z "$signing_identity" ]; then
   identity_count="$(printf '%s\n' "$development_identities" | sed '/^$/d' | wc -l | tr -d ' ')"
   case "$identity_count" in
     1) signing_identity="$development_identities" ;;
-    0) printf '%s\n' 'No Apple Development identity is available; Dev will use ad-hoc signing. Keychain trust may not survive rebuilds.' >&2 ;;
+    0)
+      # Ad-hoc signing changes the app's identity on every rebuild, so macOS drops
+      # its permissions and its Keychain items (pairing keys) each time. Refuse
+      # unless asked for explicitly with WOVENMATTER_DEV_SIGNING_IDENTITY=-.
+      if security find-identity -p codesigning | grep -q '"Apple Development:'; then
+        printf '%s\n' 'An Apple Development certificate is installed but macOS does not trust it, usually because Apple'"'"'s WWDR intermediate certificate (G3 or later) is missing. Install it from https://www.apple.com/certificateauthority/ and run this again.' >&2
+      else
+        printf '%s\n' 'No Apple Development certificate is installed. In Xcode: Settings > Apple Accounts > your account > your team > Manage Certificates > + > Apple Development. Then run this again.' >&2
+      fi
+      printf '%s\n' 'Without one, permissions and Keychain access reset on every rebuild. To build unsigned anyway, set WOVENMATTER_DEV_SIGNING_IDENTITY=-.' >&2
+      exit 65 ;;
     *) printf '%s\n' 'Multiple Apple Development identities are available. Set WOVENMATTER_DEV_SIGNING_IDENTITY to the intended certificate fingerprint.' >&2; exit 65 ;;
   esac
 fi
