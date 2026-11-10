@@ -138,7 +138,7 @@ struct BotSettingsProfiles: View {
     }
 
     private func availableSection(_ providers: [PiBotProviderModels]) -> some View {
-        SettingsSection(title: "Available models", detail: "From the accounts in Settings → Accounts.") {
+        SettingsSection(title: "Available models", detail: "From Settings → Subscriptions & API Keys.") {
             if providers.isEmpty {
                 SettingsEmpty("No providers are connected.")
                 ManageAccountsLink()

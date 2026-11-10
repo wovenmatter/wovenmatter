@@ -17,7 +17,7 @@ struct ProductAnalyticsSettingsSection: View {
                 SettingsError(error)
             }
             SettingsHelp {
-                SettingsNote("App opens and active use are sampled at most once every six hours. No content or action details are sent. This choice applies to your whole central library; offline devices receive changes when they reconnect.")
+                SettingsNote("App opens and active use are sampled at most once every six hours. No content or action details are sent. This choice applies to this Mac and the iPhones and iPads that connect to it.")
                 Link("Privacy policy", destination: ProductAnalyticsPolicy.url)
                     .font(.settingsBody.weight(.medium))
                     .foregroundStyle(DashboardPalette.success)

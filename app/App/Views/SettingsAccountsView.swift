@@ -25,7 +25,7 @@ struct SettingsAccountsView: View {
 
     var body: some View {
         SettingsPage(
-            title: "Accounts",
+            title: "Subscriptions & API Keys",
             detail: "Used by Pi Durable and for usage limits. Codex, Claude Code, Grok Build, and OpenCode sign in on their own agent pages.",
             reservesRailControlSpace: reservesRailControlSpace,
             backTitle: backTitle,
@@ -99,7 +99,7 @@ struct SettingsAccountsView: View {
 /// Used where a screen points at the single account list.
 struct ManageAccountsLink: View {
     var body: some View {
-        Button("Manage accounts") {
+        Button("Manage subscriptions and keys") {
             NotificationCenter.default.post(name: .init("wovenmatter.open-connections"), object: "global")
         }.buttonStyle(SettingsQuietButtonStyle())
     }

@@ -3,8 +3,8 @@ import SwiftUI
 import WovenMatterClient
 import WovenMatterCore
 
-/// Sign-in, software, and diagnostics for one harness. This is the only place these
-/// controls live; workspace pages show status and link here.
+/// One harness's account, then its software and diagnostics. This is the only place
+/// these controls live; workspace pages show status and link here.
 struct SettingsHarnessAccounts: View {
     @Bindable var model: ApplicationModel
     let runtimeKind: AgentRuntimeKind
@@ -16,22 +16,22 @@ struct SettingsHarnessAccounts: View {
         }
     }
 
+    private var showsLocal: Bool { scope == "global" || scope == "local" }
+
     var body: some View {
-        SettingsSection(title: "Account and software") {
-            if scope == "global" || scope == "local" {
-                if scope == "global" && !remotes.isEmpty {
-                    Text("Local workspace")
-                        .font(.settingsBody)
-                        .foregroundStyle(DashboardPalette.mutedForeground)
-                }
-                localContent
+        SettingsSection(title: "\(runtimeKind.displayName) account") {
+            if showsLocal {
+                localLabel
+                SettingsHarnessSignInControl(model: model, runtimeKind: runtimeKind)
             }
             ForEach(remotes) { workspace in
-                if scope == "global" {
-                    SettingsSummaryRow(workspace.name) { remote(workspace) }
-                } else { remote(workspace) }
+                perWorkspace(workspace) {
+                    SettingsRemoteHarnessAccountView(model: model.remoteWorkspaces,
+                        runtimeKind: runtimeKind, workspace: workspace, embedded: true)
+                }
+                .task { model.remoteWorkspaces.refresh(workspace) }
             }
-            if scope != "global" && scope != "local", remotes.isEmpty {
+            if !showsLocal, remotes.isEmpty {
                 SettingsEmpty("This workspace is no longer configured.")
             }
             SettingsHelp {
@@ -39,10 +39,44 @@ struct SettingsHarnessAccounts: View {
                 SettingsNote(sharingDetail)
             }
         }
+        if showsLocal || !remotes.isEmpty {
+            SettingsSection(title: "Software") {
+                if showsLocal {
+                    localLabel
+                    localContent
+                }
+                ForEach(remotes) { workspace in
+                    perWorkspace(workspace) {
+                        SettingsRemoteHarnessSoftware(model: model.remoteWorkspaces,
+                            runtimeKind: runtimeKind, workspace: workspace)
+                    }
+                    .modifier(HarnessInstallerConfirmation(model: model, workspaceID: workspace.id))
+                }
+            }
+        }
+    }
+
+    /// With remote workspaces listed too, this Mac's part gets a label.
+    @ViewBuilder private var localLabel: some View {
+        if scope == "global" && !remotes.isEmpty {
+            Text("Local workspace")
+                .font(.settingsBody)
+                .foregroundStyle(DashboardPalette.mutedForeground)
+        }
+    }
+
+    /// Each remote workspace folds into a row when several are listed.
+    @ViewBuilder private func perWorkspace<Content: View>(
+        _ workspace: RemoteWorkspaceConfiguration, @ViewBuilder content: () -> Content
+    ) -> some View {
+        if scope == "global" {
+            SettingsSummaryRow(workspace.name) { content() }
+        } else {
+            content()
+        }
     }
 
     @ViewBuilder private var localContent: some View {
-        SettingsHarnessSignInControl(model: model, runtimeKind: runtimeKind)
         SettingsLocalRuntimeInventoryRow(model: model, runtimeKind: runtimeKind)
             .task { model.refreshRuntimeInventory() }
             .modifier(HarnessInstallerConfirmation(model: model))
@@ -77,16 +111,6 @@ struct SettingsHarnessAccounts: View {
         }
     }
 
-    private func remote(_ workspace: RemoteWorkspaceConfiguration) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            SettingsRemoteHarnessAccountView(model: model.remoteWorkspaces,
-                runtimeKind: runtimeKind, workspace: workspace, embedded: true)
-            SettingsRemoteHarnessSoftware(model: model.remoteWorkspaces,
-                runtimeKind: runtimeKind, workspace: workspace)
-        }
-        .task { model.remoteWorkspaces.refresh(workspace) }
-        .modifier(HarnessInstallerConfirmation(model: model, workspaceID: workspace.id))
-    }
 }
 
 struct SettingsRemoteHarnessSoftware: View {

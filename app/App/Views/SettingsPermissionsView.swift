@@ -14,7 +14,7 @@ struct SettingsPermissionsView: View {
     @State private var macAccess = MacAccessSetupModel.shared
     @State private var showsCredentialDisclosure = false
 
-    static let lead = "Agents on this Mac or your other devices stop and wait for a prompt here until these are allowed."
+    static let lead = "Allow these once so agents can use this Mac without stopping at a macOS prompt, including agents you start from your other devices."
 
     var body: some View {
         SettingsPage(
@@ -94,12 +94,14 @@ struct SettingsPermissionsView: View {
     @ViewBuilder
     private func row(_ item: MacAccessSetupModel.Item) -> some View {
         let access = macAccess.access(item)
+        // What each permission is for always shows; how to allow it is added until it is.
+        let next: String? = access == .allowed ? nil
+            : access == .needsReopen ? "Reopen Woven Matter so macOS applies it."
+            : item == .keychain && !isChecking(item) ? (model.credentialAccessStatus.flatMap { $0.hasPrefix("Keychain access needs attention") ? $0 : nil } ?? item.howToAllow)
+            : item.howToAllow
         SettingsRow(
             title: item.permissionTitle,
-            detail: access == .needsReopen ? "Reopen Woven Matter so macOS applies it."
-                : access == .allowed ? item.permissionDetail
-                : item == .keychain && !isChecking(item) ? (model.credentialAccessStatus.flatMap { $0.hasPrefix("Keychain access needs attention") ? $0 : nil } ?? item.howToAllow)
-                : item.howToAllow
+            detail: [item.permissionDetail, next].compactMap { $0 }.joined(separator: "\n")
         ) {
             if access == .allowed {
                 MacPermissionStatusLabel(access: access)
@@ -178,14 +180,15 @@ extension CompanionMacAccessStatus.Item {
         self == .keychain ? "Keychain" : displayName
     }
 
+    /// What the permission lets Woven Matter do, in one line.
     var permissionDetail: String {
         switch self {
-        case .keychain: "Use your saved accounts and keys."
-        case .microphone: "Dictation."
-        case .automation: "Control Finder and System Events."
-        case .fullDiskAccess: "Open files anywhere on this Mac."
-        case .accessibility: "Click and type in other apps."
-        case .screenRecording: "See what's on the screen."
+        case .keychain: "Use the subscriptions, API keys, and website passwords you've saved in Woven Matter. They stay in your Mac's Keychain."
+        case .microphone: "Dictate instead of typing in chats and notes. Audio stays on this Mac."
+        case .automation: "Control Finder and System Events. Other apps ask the first time an agent uses them."
+        case .fullDiskAccess: "Open and change files anywhere on this Mac, including Desktop, Documents, and Downloads, without asking each time."
+        case .accessibility: "Click, type, and use menus in other apps for Computer Use."
+        case .screenRecording: "See windows and what's on the screen for Computer Use."
         }
     }
 
@@ -195,7 +198,7 @@ extension CompanionMacAccessStatus.Item {
         case .keychain: "When macOS asks, enter your Mac password and choose Always Allow."
         case .fullDiskAccess: "Allow opens the list and shows this app in Finder. Drag it in, then switch it on."
         case .accessibility, .screenRecording: "Allow opens System Settings. Switch this app on."
-        default: permissionDetail
+        default: "Allow, then choose OK when macOS asks."
         }
     }
 

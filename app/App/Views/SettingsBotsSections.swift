@@ -3,7 +3,7 @@ import Observation
 import WovenMatterClient
 
 /// Bot settings that belong to one machine's runtime: profiles, bots and teams.
-/// Provider accounts, search and sign-ins are Woven's own, in Settings → Accounts.
+/// Provider accounts, search and sign-ins are Woven's own, in Settings → Subscriptions & API Keys.
 enum PiBotSettingsSection: String, CaseIterable, Identifiable, Sendable {
     case profiles, bots
     var id: String { rawValue }

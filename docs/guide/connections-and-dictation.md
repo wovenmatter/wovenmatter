@@ -1,6 +1,6 @@
 # Accounts and dictation
 
-Open **Settings → Accounts** to manage shared accounts. Account links in Usage and
+Open **Settings → Subscriptions & API Keys** to manage shared accounts. Account links in Usage and
 Pi Durable lead here.
 
 The page groups **Model providers**, **Web search**, and **Local model servers**.
@@ -94,7 +94,7 @@ accessing providers, Keychain, or the microphone.
 
 ## Local Model Server
 
-In **Settings → Accounts → Local model servers**, choose **Add model server**, enter a **Server URL** and **API key**, then click
+In **Settings → Subscriptions & API Keys → Local model servers**, choose **Add model server**, enter a **Server URL** and **API key**, then click
 **Connect**. Use an OpenAI Responses-compatible base URL, such as
 `http://localhost:32100/v1`, or the server's address on your Tailscale network.
 No advanced settings are needed. Add up to 12 servers.

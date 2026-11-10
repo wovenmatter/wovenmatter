@@ -1,5 +1,5 @@
 /**
- * Provider connections bots can use. They are Woven Matter accounts (Settings → Accounts),
+ * Provider connections bots can use. They are Woven Matter accounts (Settings → Subscriptions & API Keys),
  * with the same ids as the machine's default agent; the runtime only reads them through the host.
  */
 export type AccountSpec = {

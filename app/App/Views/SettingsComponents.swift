@@ -324,17 +324,27 @@ struct SettingsToggleRow: View {
 
 private struct SettingsSummaryLabel: View {
     let title: String
+    var detail: String? = nil
     let value: String?
     let tone: SettingsStatusTone?
     let chevronRotation: Double
 
     var body: some View {
         HStack(spacing: 12) {
-            Text(title)
-                .font(.settingsRow)
-                .foregroundStyle(DashboardPalette.foreground)
-                .lineLimit(1)
-                .frame(minWidth: SettingsMetrics.summaryTitleWidth, alignment: .leading)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.settingsRow)
+                    .foregroundStyle(DashboardPalette.foreground)
+                    .lineLimit(1)
+                if let detail {
+                    Text(detail)
+                        .font(.settingsSecondary)
+                        .foregroundStyle(DashboardPalette.mutedForeground)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .frame(minWidth: SettingsMetrics.summaryTitleWidth, alignment: .leading)
             if let value {
                 HStack(spacing: 6) {
                     if let tone { SettingsStatusDot(tone: tone) }
@@ -351,14 +361,16 @@ private struct SettingsSummaryLabel: View {
                 .rotationEffect(.degrees(chevronRotation))
         }
         .padding(.horizontal, 8)
+        .padding(.vertical, detail == nil ? 0 : 6)
         .frame(maxWidth: .infinity, minHeight: SettingsMetrics.rowHeight, alignment: .leading)
         .contentShape(Rectangle())
     }
 }
 
-/// Title, current value, and chevron. Details open only on request.
+/// Title, current value or a one-line description, and chevron. Details open only on request.
 struct SettingsSummaryRow<Content: View>: View {
     let title: String
+    var detail: String? = nil
     var value: String? = nil
     var tone: SettingsStatusTone? = nil
     @State private var isExpanded: Bool
@@ -366,12 +378,14 @@ struct SettingsSummaryRow<Content: View>: View {
 
     init(
         _ title: String,
+        detail: String? = nil,
         value: String? = nil,
         tone: SettingsStatusTone? = nil,
         initiallyExpanded: Bool = false,
         @ViewBuilder content: () -> Content
     ) {
         self.title = title
+        self.detail = detail
         self.value = value
         self.tone = tone
         _isExpanded = State(initialValue: initiallyExpanded)
@@ -381,7 +395,7 @@ struct SettingsSummaryRow<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button { isExpanded.toggle() } label: {
-                SettingsSummaryLabel(title: title, value: value, tone: tone, chevronRotation: isExpanded ? 0 : -90)
+                SettingsSummaryLabel(title: title, detail: detail, value: value, tone: tone, chevronRotation: isExpanded ? 0 : -90)
             }
             .buttonStyle(SettingsQuietButtonStyle(horizontalPadding: 0, minimumHeight: SettingsMetrics.rowHeight, idleFill: false))
             .padding(.horizontal, -8)
@@ -401,13 +415,14 @@ struct SettingsSummaryRow<Content: View>: View {
 /// The same row as `SettingsSummaryRow`, opening another page instead of expanding.
 struct SettingsSummaryLink: View {
     let title: String
+    var detail: String? = nil
     var value: String? = nil
     var tone: SettingsStatusTone? = nil
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            SettingsSummaryLabel(title: title, value: value, tone: tone, chevronRotation: -90)
+            SettingsSummaryLabel(title: title, detail: detail, value: value, tone: tone, chevronRotation: -90)
         }
         .buttonStyle(SettingsQuietButtonStyle(horizontalPadding: 0, minimumHeight: SettingsMetrics.rowHeight, idleFill: false))
         .padding(.horizontal, -8)

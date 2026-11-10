@@ -104,6 +104,7 @@ private struct DictationHistoryRow: View {
     let record: DictationRecord
     @State private var expanded = false
     @State private var copied = false
+    @Environment(\.dashboardTheme) private var theme
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(record.createdAt.formatted(date: .abbreviated, time: .shortened))
@@ -135,6 +136,8 @@ private struct DictationHistoryRow: View {
                     do { try await Task.sleep(for: .seconds(2)); copied = false } catch { }
                 }
         }.frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.top, 8)
+            // The 8-point row gap plus this 8-point top inset gives 16 points from copy button to next date.
+            .padding(.horizontal, 16).padding(.top, 8)
+            .background(theme.palette.workspace).clipShape(DashboardShapes.card)
     }
 }

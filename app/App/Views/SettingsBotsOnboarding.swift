@@ -49,8 +49,8 @@ struct BotOnboardingView: View {
             if bots.onboarding?.signedIn == true {
                 modelCard
             } else {
-                SettingsSection(title: "Connect a provider", detail: "Bots use the accounts in Woven Matter. One is enough to start.") {
-                    Button("Open Accounts", action: onOpenConnections)
+                SettingsSection(title: "Connect a provider", detail: "Bots use the subscriptions and API keys in Woven Matter. One is enough to start.") {
+                    Button("Open Subscriptions & API Keys", action: onOpenConnections)
                         .buttonStyle(DashboardPrimaryButtonStyle())
                 }
             }

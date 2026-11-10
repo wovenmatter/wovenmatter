@@ -20,12 +20,14 @@ struct SettingsWovenMCPView: View {
         ) {
             if let tools = model.agentTools {
                 WorkspaceToolDefaultsCard(tools: tools, onOpenPermissions: onOpenPermissions)
-                ExecutorConnectionsCard(model: model, tools: tools)
             } else {
                 SettingsEmpty("Tool settings are unavailable until the workspace finishes opening.")
             }
             SettingsBotsMCPAccessSection(model: model)
             SettingsMCPAccessSection(model: model)
+            if let tools = model.agentTools {
+                ExecutorConnectionsCard(model: model, tools: tools)
+            }
         }
     }
 }

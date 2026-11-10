@@ -55,7 +55,7 @@ public enum LocalModelServerStore {
             var values = servers
             if let existing {
                 guard values.contains(existing) else {
-                    throw DefaultAgentError.message("This server connection changed or was removed. Open Settings → Accounts and try again.")
+                    throw DefaultAgentError.message("This server connection changed or was removed. Open Settings → Subscriptions & API Keys and try again.")
                 }
             } else if values.count >= maximumServers {
                 throw DefaultAgentError.message("You can connect up to 12 local model servers.")

@@ -3,9 +3,9 @@
 Sessions are often started from another device while nobody is at the Mac
 that runs them. Nothing a session does may wait on a dialog, Keychain prompt or
 password there. **Settings → Permissions & Access** (directly after General)
-sets everything up once. Its lead sentence: "Agents running on this Mac or your
-other devices stop and wait for a prompt here unless Woven Matter has these
-permissions." It lists Keychain, Microphone, Automation, Full Disk Access,
+sets everything up once. Its lead sentence: "Allow these once so agents can use
+this Mac without stopping at a macOS prompt, including agents you start from your
+other devices." It lists Keychain, Microphone, Automation, Full Disk Access,
 Accessibility, and Screen Recording, one row each.
 
 | Item | Why sessions need it | How it is granted | Detection |
@@ -18,7 +18,8 @@ Accessibility, and Screen Recording, one row each.
 | Microphone | Dictation (attended) | `AVCaptureDevice.requestAccess` | `AVCaptureDevice.authorizationStatus` |
 
 The page is one section. Each permission is one row with its System Settings name,
-one short line, and either a quiet "Allowed" check or its own **Allow** button,
+what it lets Woven Matter do, how to allow it while it isn't allowed, and either a
+quiet "Allowed" check or its own **Allow** button,
 which asks for that permission only (an in-app prompt for Keychain, Automation
 and Microphone; the System Settings pane for the rest). Rows refresh every two
 seconds while the page is open, so a grant made in System Settings shows without
@@ -124,9 +125,9 @@ No credentials or Keychain values are returned to the presentation layer.
 | Credential or activity | Background behavior | Deliberate access |
 | --- | --- | --- |
 | OpenRouter usage key | Attributes-only presence checks; noninteractive secret reads; successful reads cached for the session and used by limits; device analytics does not read credentials | Saving/removing the key stays silent; Keychain recovery may authorize access |
-| Claude subscriptions | Usage reads the saved Pi Durable profile; native Claude owns its credential permissions | Sign-in lives in Settings → Accounts; Permissions & Access does not probe unrelated native profiles |
+| Claude subscriptions | Usage reads the saved Pi Durable profile; native Claude owns its credential permissions | Sign-in lives in Settings → Subscriptions & API Keys; Permissions & Access does not probe unrelated native profiles |
 | Remote workspace API token | Cached by workspace; noninteractive on service calls; denied reads are not repeated; disabling access clears the cache | Keychain recovery; provisioning, reconnect and deletion stay noninteractive |
-| Codex/Grok usage limits | Saved account API reads only; no native CLI fallback during refresh | Account management lives in Settings → Accounts; the limits page has no authentication controls |
+| Codex/Grok usage limits | Saved account API reads only; no native CLI fallback during refresh | Account management lives in Settings → Subscriptions & API Keys; the limits page has no authentication controls |
 | Browser encryption key and website passwords | Consent-gated, noninteractive preflight before CEF starts; exact-origin password vault cached in memory; writes suppress UI | Keychain recovery preauthorizes Chromium Safe Storage and the website-password vault |
 | Local runtime readiness | Startup, reopen, Settings, and passive refresh resolve installed executables without starting credential-sensitive provider sessions | Installed harnesses are available without an Enable step; explicit Sign in opens only the chosen native CLI flow |
 | Codex title options | No automatic session solely to discover models | Existing Refresh options action |

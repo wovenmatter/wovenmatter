@@ -176,7 +176,7 @@ public final class ProviderAccountCoordinator {
         try await waitForPending()
         try Task.checkCancellation()
         guard signInID == nil else {
-            throw DefaultAgentError.message("Finish the current sign-in in Settings → Accounts first.")
+            throw DefaultAgentError.message("Finish the current sign-in in Settings → Subscriptions & API Keys first.")
         }
         let id = UUID()
         signInID = id
@@ -204,7 +204,7 @@ public final class ProviderAccountCoordinator {
                 try updateCachedConfiguration()
                 return cached[workspace]!
             }
-            throw DefaultAgentError.message("Finish sign-in in Settings → Accounts before connecting this workspace.")
+            throw DefaultAgentError.message("Finish sign-in in Settings → Subscriptions & API Keys before connecting this workspace.")
         }
         let scopes = Array(knownScopes)
         let revision = version()
@@ -271,7 +271,7 @@ public final class ProviderAccountCoordinator {
     public func renewRejectedAccess(provider: String, access: String) async throws -> DefaultAgentCredential? {
         let current = try await prepare("global").credentials[provider]
         guard current?.access == access else { return current }
-        guard signInID == nil else { throw DefaultAgentError.message("Finish sign-in in Settings → Accounts first.") }
+        guard signInID == nil else { throw DefaultAgentError.message("Finish sign-in in Settings → Subscriptions & API Keys first.") }
         let operation = Task {
             try await renewRejected(provider, access)
             invalidate()
@@ -301,7 +301,7 @@ public final class ProviderAccountCoordinator {
             (renewed.expires ?? 0) > Date().timeIntervalSince1970 * 1000
         else {
             throw DefaultAgentError.message(
-                "This subscription could not be renewed. Reconnect it in Settings → Accounts.")
+                "This subscription could not be renewed. Reconnect it in Settings → Subscriptions & API Keys.")
         }
         try DefaultAgentSupport.saveRenewedOAuth(renewed, replacing: original, provider: provider, scope: "global")
     }

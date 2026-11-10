@@ -58,7 +58,7 @@ when an intentional design change is accepted.
   Mac and Linux workspaces that are reachable now; Settings → Workspaces keeps
   every saved workspace with its connection state. Never add an "Unavailable
   workspace" group: folders whose workspace is not listed stay in All Workspaces.
-  Web search keys (Exa, Brave Search, Firecrawl) live in Settings → Accounts with
+  Web search keys (Exa, Brave Search, Firecrawl) live in Settings → Subscriptions & API Keys with
   the model providers. Do not add data-sharing prompts:
   connecting a provider is the user's choice to use it.
 - **Agent naming:** use **Pi Durable** for the agent in navigation, settings,
@@ -81,12 +81,14 @@ when an intentional design change is accepted.
 - **Settings navigation:** group Pi Durable, Codex, Claude Code, Grok Build, and
   OpenCode under **Settings → Agents**. Agent pages return to Agents unless
   opened from a remote workspace's page. Spell **OpenCode** as one word throughout
-  the app. Order the main Settings page as General, Permissions & Access, Accounts,
-  Agents, Bots, Woven MCP, Workspaces, Apple Devices, Background Server, then
-  Dictation. Accounts, Permissions & Access, Woven MCP, and Bots return to the page
-  whose link opened them.
-- **General:** Appearance, Software, and Privacy only. Other settings live on the
-  page for what they affect.
+  the app. Order the main Settings page as General, Permissions & Access,
+  Subscriptions & API Keys, Agents, Bots, Woven MCP, Workspaces, Apple Devices,
+  Background Server, then Dictation. Subscriptions & API Keys, Permissions &
+  Access, Woven MCP, and Bots return to the page whose link opened them.
+- **General:** Appearance, Conversation titles, Software, and Privacy only. Other
+  settings live on the page for what they affect. Summary rows whose value would be
+  unclear before opening (Sidebar sections, Agent icons) show a one-line description
+  instead. Conversation titles show the Codex account they use and link to its page.
 - **Bots:** the Bots section sits above New chat in the navigation rail, using the
   rail's own disclosure headings and rows; with bots on more than one machine, each
   machine gets its own "Bots on <name>" heading. A bot's row shows only its name and
@@ -100,21 +102,23 @@ when an intentional design change is accepted.
   menu, then summary links to Profiles, Bots and teams, and Resources. Profiles and
   bots are summary rows that open for editing. Bots' Woven MCP access lives in
   Settings → Woven MCP; Bots shows it as one summary link. Apple Devices shows only a
-  version status link to Bots. Bots use the accounts in Settings → Accounts; there is
+  version status link to Bots. Bots use the accounts in Settings → Subscriptions & API Keys; there is
   no separate bot sign-in.
 - **Harness setup:** use compact rows grouped on the theme-whisper surface for
   both harness installation and Pi Durable setup, with the same typography,
   padding, inset dividers, and quiet actions. Keep provider setup limited to
   OpenAI, Anthropic, Grok, OpenRouter, and OpenCode; web-search setup shows only
-  the Exa key form. Both are optional and also accessible from Settings → Accounts.
-- **Accounts:** provider sign-ins, API keys, web search keys, and local model servers
-  have one home, **Settings → Accounts**, used by both Pi Durable and Usage. Each
+  the Exa key form. Both are optional and also accessible from Settings →
+  Subscriptions & API Keys.
+- **Subscriptions & API Keys:** provider sign-ins, API keys, web search keys, and
+  local model servers have one home, used by Pi Durable, Usage, and bots. Each
   provider is one summary row showing what is connected. Choose the web search
   provider on its row, beside its key. A new account offers Choose chat models, and
-  connecting one in the shared scope turns on its limit checks. Keep the Accounts
-  for selector visible, since saved workspace accounts take priority and must stay reachable. Native harnesses sign
-  in on their own agent pages.
-- **Agent setup:** Pi Durable links to Accounts, then shows Models, Defaults for new
+  connecting one in the shared scope turns on its limit checks. Keep the "Accounts
+  for" selector visible, since saved workspace accounts take priority and must stay
+  reachable. Native harnesses sign in on their own agent pages.
+- **Agent setup:** Pi Durable links to Subscriptions & API Keys with a one-line
+  description and how many are connected, then shows Models, Defaults for new
   chats, and More. Models holds the default model, In the composer, and Fallbacks. Add
   models opens the provider catalog with its filters and paging in a sheet. Guided
   setup opens that sheet after a successful sign-in or key addition.
@@ -129,8 +133,8 @@ when an intentional design change is accepted.
   agents on this Mac or the user's other devices stop at a prompt here without
   these permissions. Everything is one section: a header with how many are not
   allowed yet and one **Allow all** button, then one row per permission with its
-  System Settings name, one short line, and a quiet "Allowed" check or its own
-  **Allow** button. Allow all brings up each prompt in turn with no steps, Skip or
+  System Settings name, what it lets Woven Matter do, how to allow it while it isn't
+  allowed, and a quiet "Allowed" check or its own **Allow** button. Allow all brings up each prompt in turn with no steps, Skip or
   Stop. A row shows **Reopen** only when macOS needs the app reopened. Other
   settings that depend on a permission (Dictation, Computer Use) show a one-line
   status with a Permissions & Access link instead of their own controls; the
@@ -154,8 +158,8 @@ when an intentional design change is accepted.
   selected by default; additional installations retain installer source review.
 - **Chat defaults:** use Defaults for new chats on every harness page. Group
   thinking level and permissions together, with one short explanation.
-- **Agent pages:** one page with no area switcher: Account and software, then Defaults
-  for new chats, using the same layout for every harness. Pages have one Applies to
+- **Agent pages:** one page with no area switcher: the harness's account ("Codex
+  account"), Software, then Defaults for new chats, using the same layout for every harness. Pages have one Applies to
   selector, hidden when there is no remote workspace or local override. Keep Use shared
   chat settings inside Defaults for new chats. Changing chat inheritance must not
   change credential selection. Workspace Pi Durable accounts take priority per provider,

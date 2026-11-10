@@ -13,7 +13,7 @@ repeating timer. **Settings → Agents → Set up harnesses** reopens the first-
 guide, including optional Pi Durable provider and Exa setup. The provider page
 contains only OpenAI, Anthropic, Grok, OpenRouter, and OpenCode; the web-search
 page contains the Exa key form. Both are also available from
-**Settings → Accounts**.
+**Settings → Subscriptions & API Keys**.
 
 **Check for updates** reports available versions. **Update** installs an observed
 update. Network failures leave the latest version unknown. Both actions remain

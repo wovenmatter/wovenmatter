@@ -256,7 +256,7 @@ export class ClaudeAgentStream {
     const key = options.apiKey;
     if (typeof key !== "string" || !key) {
       throw new ClaudeAgentError(
-        "No Claude connection. Connect Claude in Woven Matter Settings → Accounts.",
+        "No Claude connection. Connect Claude in Woven Matter Settings → Subscriptions & API Keys.",
       );
     }
     const credential = claudeCredential(key);

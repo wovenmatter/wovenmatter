@@ -22,7 +22,7 @@ struct SettingsBotsView: View {
     var body: some View {
         SettingsPage(
             title: "Bots",
-            detail: "Bots run on your Macs and Linux machines and use your accounts in Woven Matter.",
+            detail: "Run bots on this Mac, or on another Mac or Linux machine on your tailnet.",
             reservesRailControlSpace: reservesRailControlSpace,
             backTitle: backTitle,
             onBack: onBack
@@ -32,9 +32,6 @@ struct SettingsBotsView: View {
             machinesSection
             SettingsSection {
                 SettingsSummaryLink(title: "Woven MCP access", value: mcpSummary, action: onOpenWovenMCP)
-            }
-            SettingsHelp {
-                SettingsNote("Each machine keeps its own bots; nothing moves between them. Closing this window leaves bots running.")
             }
         }
         .task {
@@ -50,7 +47,7 @@ struct SettingsBotsView: View {
         SettingsSection(title: "This Mac") {
             SettingsToggleRow(
                 title: "Run bots on this Mac",
-                detail: "In Woven's own Linux virtual machine, separate from any Docker you use.",
+                detail: "Bots run in a virtual machine on this Mac.",
                 isOn: Binding(
                     get: { bots.thisMachine.map { $0.state != .off } ?? false },
                     set: { enabled in
@@ -73,9 +70,9 @@ struct SettingsBotsView: View {
     }
 
     private var machinesSection: some View {
-        SettingsSection(title: "Machines", detail: "Every machine whose Woven server runs bots.") {
+        SettingsSection(title: "Machines", detail: "Where your bots run.") {
             if listedMachines.isEmpty {
-                SettingsEmpty(bots.machines.isEmpty ? bots.loadError ?? "Loading…" : "Turn on bots on this Mac, or install them on another device.")
+                SettingsEmpty(bots.machines.isEmpty ? bots.loadError ?? "Loading…" : "No machine runs bots yet.")
             } else {
                 VStack(spacing: 2) {
                     ForEach(listedMachines) { machine in

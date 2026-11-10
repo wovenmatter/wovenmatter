@@ -72,7 +72,7 @@ billing routes; account-wide API activity is excluded from device totals.
 
 **Usage limits** shows each saved account, its sign-in state, and the limits the
 provider makes available. Use **Manage accounts** to add or manage accounts
-in **Settings → Accounts**. These accounts are shared with Pi Durable. Providers
+in **Settings → Subscriptions & API Keys**. These accounts are shared with Pi Durable. Providers
 without a supported limits response link to their usage dashboard; unavailable
 data is never shown as zero usage or a full allowance.
 

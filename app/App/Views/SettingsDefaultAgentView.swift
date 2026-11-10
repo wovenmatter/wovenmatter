@@ -51,7 +51,8 @@ struct SettingsDefaultAgentView: View {
         ) {
             if showsWorkspacePicker { scopeSection }
             SettingsSection {
-                SettingsSummaryLink(title: "Accounts", value: accountsSummary,
+                SettingsSummaryLink(title: "Subscriptions & API Keys",
+                    detail: "Sign in to the providers whose models Pi Durable uses.", value: accountsSummary,
                     tone: agent.availableModelProviderIDs.isEmpty ? .warning : .good) {
                     onOpenAccounts(agent.scope)
                 }
@@ -592,7 +593,7 @@ private struct SettingsAgentCatalogBrowseControls: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if availableProviders.isEmpty {
-                SettingsNote("Add an account in Settings → Accounts to browse models.")
+                SettingsNote("Add an account in Settings → Subscriptions & API Keys to browse models.")
             } else {
                 SettingsPicker("Provider", selection: Binding(get: { agent.browsingProvider }, set: {
                     agent.browsingProvider = $0

@@ -5,7 +5,7 @@ your local agent workspace or a remote workspace.
 It includes Pi's file and shell tools, Woven Matter's existing note/workspace
 integration, and web search. You do not need to install Pi, Node, or Claude Code.
 
-Open **Settings → Accounts** to connect providers:
+Open **Settings → Subscriptions & API Keys** to connect providers:
 
 - **OpenAI:** connect a ChatGPT subscription, an OpenAI API key, or both.
 - **OpenRouter / OpenCode Go:** add an API key. The global OpenRouter key is
@@ -67,7 +67,7 @@ running. Reopening the conversation recovers the completed response; reconnectin
 to an unfinished response waits for that remote turn to finish. A container or
 service restart interrupts active work and requires an explicit retry.
 
-Pi Durable and Usage use the same saved provider accounts, managed in Settings → Accounts.
+Pi Durable and Usage use the same saved provider accounts, managed in Settings → Subscriptions & API Keys.
 Dictation uses on-device speech and needs no account. Subscription connections remain distinct from separately billed API
 keys. Signing in here does not sign in
 Codex, Claude Code, Grok Build, or OpenCode, and their
@@ -131,7 +131,7 @@ a separate boundary: interrupted sends are not automatically repeated. See
 
 ## Claude models
 
-In **Settings → Accounts**, expand **Anthropic** and click
+In **Settings → Subscriptions & API Keys**, expand **Anthropic** and click
 **Sign in with Claude**. Open the inline link and complete Anthropic’s sign-in flow.
 Paste the full code returned by Claude into the sign-in form and click **Continue**.
 The account list refreshes when sign-in completes. Woven Matter bundles the unmodified

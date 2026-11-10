@@ -7,6 +7,7 @@ struct SettingsGeneralView: View {
     @Bindable var model: ApplicationModel
     var reservesRailControlSpace = false
     var onBack: () -> Void
+    var onOpenCodex: () -> Void = {}
 
     @AppStorage(DashboardTheme.storageKey) private var storedTheme = DashboardTheme.green.rawValue
     @AppStorage(DashboardSidebarStyle.storageKey) private var storedSidebarStyle = DashboardSidebarStyle.defaultStyle.rawValue
@@ -41,6 +42,7 @@ struct SettingsGeneralView: View {
             onBack: onBack
         ) {
             appearanceSection
+            SettingsConversationTitlesSection(model: model, onOpenCodex: onOpenCodex)
             softwareSection
             ProductAnalyticsSettingsSection(analytics: model.analytics)
         }
@@ -64,12 +66,12 @@ struct SettingsGeneralView: View {
                 }
                 .frame(maxWidth: 300)
             }
-            SettingsSummaryRow("Sidebar sections", value: sidebarSectionsSummary) {
+            SettingsSummaryRow("Sidebar sections", detail: "Hide or show the workspace sections in the sidebar.") {
                 Toggle(DashboardWorkspaceSidebarVisibility.localWorkspace.title, isOn: $showsLocalWorkspace)
                 Toggle(DashboardWorkspaceSidebarVisibility.remoteWorkspaces.title, isOn: $showsRemoteWorkspaces)
                 SettingsNote("Hides or shows these sidebar sections. Workspaces and chats stay active.")
             }
-            SettingsSummaryRow("Agent icons", value: "\(piDurableLogoStyle.displayName), \(codexLogoStyle.displayName)") {
+            SettingsSummaryRow("Agent icons", detail: "Choose how the Pi Durable and Codex icons look throughout the app.") {
                 SettingsRow(title: "Pi Durable") {
                     SettingsPicker("Pi Durable icon", selection: Binding(
                         get: { piDurableLogoStyle }, set: { storedPiDurableLogoStyle = $0.rawValue }
@@ -81,15 +83,6 @@ struct SettingsGeneralView: View {
                     ), options: DashboardCodexLogoStyle.allCases) { $0.displayName }
                 }
             }
-        }
-    }
-
-    private var sidebarSectionsSummary: String {
-        switch (showsLocalWorkspace, showsRemoteWorkspaces) {
-        case (true, true): "Local and remote workspaces"
-        case (true, false): "Local workspace"
-        case (false, true): "Remote workspaces"
-        case (false, false): "Hidden"
         }
     }
 
@@ -115,5 +108,65 @@ struct SettingsGeneralView: View {
     private var currentVersion: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
             ?? "0.0.0"
+    }
+}
+
+/// Conversation titles use the Codex account on this Mac, so the section shows that
+/// account and links to the Codex page, where it signs in.
+private struct SettingsConversationTitlesSection: View {
+    @Bindable var model: ApplicationModel
+    let onOpenCodex: () -> Void
+
+    private var settings: ConversationTitleGenerationSettings { model.titleGenerationSettings }
+    private var codex: AgentSignInStatus? { model.harnessSignIn.statuses[.codex] }
+    private var signedIn: Bool { ["verified", "credentials_present"].contains(codex?.state ?? "") }
+
+    private var accountValue: String {
+        if signedIn { return codex?.accounts?.first?.name ?? "Signed in" }
+        if codex == nil || model.harnessSignIn.checking.contains(.codex) { return "Checking…" }
+        return codex?.state == "not_installed" ? "Codex isn't installed" : "Not signed in"
+    }
+
+    var body: some View {
+        SettingsSection(title: "Conversation titles", detail: "Names new chats from their first message using your Codex account on this Mac.") {
+            SettingsToggleRow(
+                title: "Generate titles",
+                detail: settings.isEnabled ? model.titleGenerationStatus : nil,
+                isOn: Binding(get: { settings.isEnabled }, set: { model.setTitleGenerationEnabled($0) })
+            )
+            SettingsSummaryLink(title: "Codex account", value: accountValue,
+                                tone: codex == nil ? nil : signedIn ? .good : .warning, action: onOpenCodex)
+            if settings.isEnabled {
+                if signedIn {
+                    SettingsRow(title: "Model") {
+                        SettingsPicker(
+                            "Title model",
+                            selection: Binding(get: { settings.model }, set: { model.setTitleGenerationModel($0) }),
+                            options: options(model.titleGenerationCapabilities?.models, selected: settings.model)
+                        ) { $0 }
+                    }
+                    SettingsRow(title: "Thinking level") {
+                        SettingsPicker(
+                            "Title thinking level",
+                            selection: Binding(get: { settings.thinking }, set: { model.setTitleGenerationThinking($0) }),
+                            options: options(model.titleGenerationCapabilities?.thinkingLevels, selected: settings.thinking)
+                        ) { $0.capitalized }
+                    }
+                    Button(model.isRefreshingTitleGenerationCapabilities ? "Checking…" : "Refresh options") {
+                        model.refreshTitleGenerationCapabilitiesNow()
+                    }
+                    .buttonStyle(SettingsQuietButtonStyle())
+                    .disabled(model.isRefreshingTitleGenerationCapabilities)
+                } else {
+                    SettingsNote("Sign in to Codex to choose a model and thinking level.")
+                }
+            }
+        }
+        .task { await model.refreshHarnessSignIn(.codex) }
+    }
+
+    private func options(_ available: [String]?, selected: String) -> [String] {
+        let available = available ?? []
+        return available.contains(selected) ? available : [selected] + available
     }
 }

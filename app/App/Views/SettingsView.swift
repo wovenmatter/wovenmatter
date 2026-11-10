@@ -4,11 +4,13 @@ import WovenMatterCore
 
 private enum HarnessSettingsOrigin: Equatable {
     case agents
+    case general
     case remoteWorkspace(UUID)
 
     var route: SettingsRoute {
         switch self {
         case .agents: .agents
+        case .general: .general
         case .remoteWorkspace(let id): .workspaces(id)
         }
     }
@@ -63,7 +65,8 @@ struct SettingsView: View {
                 SettingsGeneralView(
                     model: model,
                     reservesRailControlSpace: reservesRailControlSpace,
-                    onBack: { route = .landing }
+                    onBack: { route = .landing },
+                    onOpenCodex: { route = harnessRoute(.codex, workspaceID: nil, origin: .general) }
                 )
             case .permissions:
                 SettingsPermissionsView(
@@ -103,7 +106,7 @@ struct SettingsView: View {
                     model: model,
                     runtimeKind: runtimeKind,
                     workspaceID: workspaceID,
-                    isWorkspaceScoped: origin != .agents,
+                    isWorkspaceScoped: { if case .remoteWorkspace = origin { true } else { false } }(),
                     reservesRailControlSpace: reservesRailControlSpace,
                     backTitle: backTitle(origin),
                     onBack: { route = origin.route }
@@ -246,7 +249,7 @@ struct SettingsView: View {
         case .landing: "Settings"
         case .general: "General"
         case .permissions: "Permissions & Access"
-        case .accounts: "Accounts"
+        case .accounts: "Subscriptions & API Keys"
         case .agents: "Agents"
         case .piDurable: "Pi Durable"
         case .harness(let kind, _, _): kind.displayName
@@ -269,6 +272,7 @@ struct SettingsView: View {
     private func backTitle(_ origin: HarnessSettingsOrigin) -> String {
         switch origin {
         case .agents: "Agents"
+        case .general: "General"
         case .remoteWorkspace(let id): model.remoteWorkspaces.configuration(id: id)?.name ?? "Workspaces"
         }
     }
@@ -303,8 +307,8 @@ struct SettingsView: View {
                     action: { open(.permissions, .permissions, from: .landing) }
                 )
                 SettingsDestinationRow(
-                    title: "Accounts",
-                    detail: "Provider sign-ins, API keys, and web search.",
+                    title: "Subscriptions & API Keys",
+                    detail: "ChatGPT, Claude, Grok, and other providers, plus web search.",
                     icon: { DashboardLucideIcon(glyph: .keyRound, size: 15) },
                     action: { open(.accounts, .accounts("global"), from: .landing) }
                 )
@@ -384,7 +388,6 @@ private struct SettingsAgentsView: View {
                     Button("Set up harnesses") { openWindow(id: HarnessSetupPresentation.windowID) }
                         .buttonStyle(SettingsQuietButtonStyle())
                 }
-                SettingsConversationTitlesRow(model: model)
                 if let error = model.localACPAgentReconciliationError { SettingsError(error) }
                 if let error = model.openCode?.error { SettingsError(error) }
                 if let error = model.localRunError { SettingsError(error) }
@@ -428,51 +431,6 @@ private struct SettingsAgentsView: View {
 }
 
 /// Names new chats. A single row until opened.
-private struct SettingsConversationTitlesRow: View {
-    @Bindable var model: ApplicationModel
-
-    private var settings: ConversationTitleGenerationSettings { model.titleGenerationSettings }
-
-    var body: some View {
-        SettingsSummaryRow(
-            "Conversation titles",
-            value: settings.isEnabled ? "On, \(settings.model)" : "Off"
-        ) {
-            SettingsToggleRow(
-                title: "Generate with Codex",
-                detail: "Uses your local Codex account to name new chats. \(model.titleGenerationStatus)",
-                isOn: Binding(get: { settings.isEnabled }, set: { model.setTitleGenerationEnabled($0) })
-            )
-            if settings.isEnabled {
-                SettingsRow(title: "Model") {
-                    SettingsPicker(
-                        "Title model",
-                        selection: Binding(get: { settings.model }, set: { model.setTitleGenerationModel($0) }),
-                        options: options(model.titleGenerationCapabilities?.models, selected: settings.model)
-                    ) { $0 }
-                }
-                SettingsRow(title: "Thinking level") {
-                    SettingsPicker(
-                        "Title thinking level",
-                        selection: Binding(get: { settings.thinking }, set: { model.setTitleGenerationThinking($0) }),
-                        options: options(model.titleGenerationCapabilities?.thinkingLevels, selected: settings.thinking)
-                    ) { $0.capitalized }
-                }
-                Button(model.isRefreshingTitleGenerationCapabilities ? "Checking…" : "Refresh options") {
-                    model.refreshTitleGenerationCapabilitiesNow()
-                }
-                .buttonStyle(SettingsQuietButtonStyle())
-                .disabled(model.isRefreshingTitleGenerationCapabilities)
-            }
-        }
-    }
-
-    private func options(_ available: [String]?, selected: String) -> [String] {
-        let available = available ?? []
-        return available.contains(selected) ? available : [selected] + available
-    }
-}
-
 private struct SettingsHarnessView: View {
     @Bindable var model: ApplicationModel
     let runtimeKind: AgentRuntimeKind
