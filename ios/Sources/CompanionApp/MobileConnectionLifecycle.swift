@@ -39,7 +39,7 @@ extension CompanionModel {
     credential = committed; transport = connection
     engine = MobileSyncEngine(store: store, transport: connection)
     synchronizationStatus = .init(); online = false; connectionLabel = "Connecting"
-    centralRetryCount = 0; centralRefreshAfter = .distantPast
+    centralRetryCount = 0; centralRefreshAfter = .distantPast; centralProvidersRefreshDue = true
     pairingError = nil
     await reload()
     try await ensureDeviceWorkspace()
@@ -85,7 +85,7 @@ extension CompanionModel {
   func connectionDidBecomeActive() {
     connectionForeground = true
     guard automaticSynchronization, !fixture, !isolatedTestHost else { return }
-    centralRefreshAfter = .distantPast; workspaceRefreshAfter = [:]
+    centralRefreshAfter = .distantPast; workspaceRefreshAfter = [:]; centralProvidersRefreshDue = true
     requestSynchronization(immediately: true)
   }
 
@@ -117,14 +117,14 @@ extension CompanionModel {
       }
       // A viewed running chat receives live activity. Idle workspaces and failed
       // connections each have their own longer deadline before any network work.
-      let interval: Duration = tab == .chat && activeRunID != nil ? .seconds(2) : .seconds(15)
+      let interval: Duration = tab == .chat && (activeRunID != nil || awaitingRemoteTurn) ? .seconds(2) : .seconds(15)
       do { try await Task.sleep(for: interval) } catch { return }
     }
   }
 
   private func connectionDidBecomeReachable() {
     guard connectionForeground else { return }
-    centralRefreshAfter = .distantPast; workspaceRefreshAfter = [:]
+    centralRefreshAfter = .distantPast; workspaceRefreshAfter = [:]; centralProvidersRefreshDue = true
     requestSynchronization(immediately: true)
   }
 

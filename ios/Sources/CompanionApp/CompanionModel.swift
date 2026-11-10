@@ -156,6 +156,13 @@ import CompanionInference
   /// nothing asks the system for notification permission.
   @ObservationIgnored var quickChatNotifications = QuickChatNotifications.shared
   var unconfirmedSendConversationID: String?
+  /// Messages sent to a Mac or Linux workspace that its transcript does not
+  /// show yet, by conversation ID (`new-chat` until a new chat is accepted).
+  var pendingSends: [String: CompanionPendingSend] = [:]
+  /// The library host that reported `providers`, and whether the next
+  /// refresh must ask it again (launch, reconnect, New Chat, a new host).
+  var centralProvidersHostID: String?
+  var centralProvidersRefreshDue = true
   var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
   var backgroundFallbackToken: UUID?
   var calendarRevision = 0
@@ -238,6 +245,23 @@ import CompanionInference
   var selectedNote: CompanionNote? { selectedNoteID.flatMap { state.notes[$0] } }
   var selectedConversation: CompanionConversation? { selectedConversationID.flatMap { state.conversations[$0] } }
   var transcript: CompanionTranscript? { selectedConversationID.flatMap { historyPages[$0] ?? state.transcripts[$0] } }
+  /// The selected chat's message that its workspace has not shown with its turn yet.
+  var pendingSend: CompanionPendingSend? {
+    pendingSends[draftKey].flatMap { $0.isFinished(in: transcript) ? nil : $0 }
+  }
+  /// The transcript the chat shows: the owner's, plus a message just sent
+  /// that the owner does not show yet. Earlier history pages show as stored.
+  var displayedTranscript: CompanionTranscript? {
+    guard let pending = pendingSend, selectedConversationID.map({ historyPages[$0] == nil }) ?? true else { return transcript }
+    return pending.displayed(in: transcript, conversationID: draftKey)
+  }
+  /// Quiet progress under a message just sent, until its turn appears.
+  var sendProgress: String? {
+    guard let pending = pendingSend, !pending.hasStarted(in: transcript) else { return nil }
+    return (pending.phase == .sending ? "Sending to " : "Starting on ") + executionName + "…"
+  }
+  /// A message was just sent and its turn has not appeared: refresh quickly.
+  var awaitingRemoteTurn: Bool { pendingSend != nil }
   var activeRunID: String? {
     if let id = selectedConversationID, let record = executionRecords[id] { return (record.status == "running" || record.status == "stopping") ? record.runID : nil }
     return selectedConversationID.flatMap { state.transcripts[$0]?.activeRunID } ?? selectedConversation?.activeRunID
@@ -287,6 +311,8 @@ import CompanionInference
       if next != state { state = next }
       if changedOutbox && !next.outbox.isEmpty { requestSynchronization() }
     }
+    let unfinished = pendingSends.filter { key, pending in pending.phase == .sending || !pending.isFinished(in: state.transcripts[key]) }
+    if unfinished.count != pendingSends.count { pendingSends = unfinished }
     calendarRevision &+= 1
     await refreshSynchronizationStatus()
   }
@@ -368,7 +394,11 @@ import CompanionInference
       try await engine.synchronize()
       guard generation == connectionGeneration, !Task.isCancelled else { return }
       await adoptCurrentLibraryHost(engine)
-      let refreshedProviders = frame % 5 == 0 || providers.isEmpty ? try await engine.providers() : providers
+      // The central list is the current host's: asked again after launch, a
+      // reconnect, a new host or when New Chat opens, and every fifth refresh.
+      let host = libraryHostDeviceID
+      let refreshProviders = centralProvidersRefreshDue || frame % 5 == 0 || providers.isEmpty || host != centralProvidersHostID
+      let refreshedProviders = refreshProviders ? try await engine.providers() : providers
       let refreshedPending = try await engine.pending()
       var capability: CompanionProvider?
       if let targetConversationID {
@@ -380,12 +410,13 @@ import CompanionInference
       let status = await engine.synchronizationStatus()
       guard generation == connectionGeneration, !Task.isCancelled else { return }
       providers = refreshedProviders; pending = refreshedPending
+      if refreshProviders { centralProvidersHostID = host; centralProvidersRefreshDue = false }
       if let capability, let targetConversationID { sessionCapabilities[targetConversationID] = capability }
       synchronizationStatus = status
       frame += 1
       online = true; connectionLabel = "Connected"
       centralRetryCount = 0
-      centralRefreshAfter = Date().addingTimeInterval(tab == .chat && selectedExecutionWorkspaceID == "central" && activeRunID != nil ? 2 : 15)
+      centralRefreshAfter = Date().addingTimeInterval(tab == .chat && selectedExecutionWorkspaceID == "central" && (activeRunID != nil || awaitingRemoteTurn) ? 2 : 15)
       if providerID.isEmpty { providerID = providers.first(where: { $0.available })?.id ?? "" }
       await reload(); rememberAgentCatalog()
     } catch {
@@ -395,6 +426,7 @@ import CompanionInference
       synchronizationStatus = status
       await adoptCurrentLibraryHost(engine)
       online = status.centralReachable == true
+      centralProvidersRefreshDue = true
       connectionLabel = online ? "Connected" : "Disconnected"
       centralRetryCount += 1
       centralRefreshAfter = Date().addingTimeInterval(Self.connectionRetryDelay(centralRetryCount))
@@ -543,6 +575,9 @@ import CompanionInference
     await chatDraftTask?.value
     if runID != nil && provider?.canSteer != true { errorMessage = "This session does not currently support steering. Stop it or wait for completion."; return }
     if target == nil && (provider?.available != true || provider?.canStart != true) { errorMessage = "Choose an available agent route on your Mac."; return }
+    let cleared = beginPendingSend(key: sourceKey, text: text, conversationID: target)
+    var accepted = false
+    defer { if !accepted { withdrawPendingSend(sourceKey, restoring: draftContext, over: cleared) } }
     do {
       let receipt: CompanionCommandReceipt
       if target == nil {
@@ -579,8 +614,10 @@ import CompanionInference
         receipt = try await engine.submit(command)
       }
       guard receipt.status != .rejected, receipt.status != .outcomeUnknown else { errorMessage = receipt.message ?? "The Mac did not accept this command."; await reload(); return }
-      let original = draftBuffer[sourceKey] ?? state.chatDrafts[sourceKey]
-      if original == draftContext && providerID == route { updateChatDraft(key: sourceKey, draft: .init(text: "")) }
+      let conversationID = receipt.conversationID ?? target ?? selectedConversationID ?? sourceKey
+      acceptPendingSend(from: sourceKey, to: conversationID); accepted = true
+      if draftBuffer[sourceKey] == cleared && providerID == route { updateChatDraft(key: sourceKey, draft: cleared) }
+      try? await engine.refreshTranscript(conversationID)
       await refresh()
     } catch { errorMessage = workspaceActionMessage(error); await reload() }
   }
@@ -907,9 +944,12 @@ import CompanionInference
           folders: folders.filter { row in !fixtureFolders.contains { $0.id == row.id } } + fixtureFolders, notes: notes, conversations: conversations))
         await reload()
       }
-      selectedNoteID = scenarioNoteID ?? notes.first?.id; selectedConversationID = "fixture-chat"
+      if scenario.hasPrefix("member-macs") { try await seedMemberMacsFixture(store, send: scenario == "member-macs-send") }
+      selectedNoteID = scenarioNoteID ?? notes.first?.id
+      selectedConversationID = scenario == "member-macs-send" ? Self.memberMacsFixtureChat : "fixture-chat"
       if Self.uiScenario == "pairing" { pairingPresented = true }
       tab = Tab(rawValue: Self.uiTab ?? "Folders") ?? .folders
+      if scenario == "member-macs-chooser" { newChat() }
     } catch { errorMessage = error.localizedDescription }
   }
 }

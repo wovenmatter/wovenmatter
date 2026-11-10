@@ -47,16 +47,22 @@ struct ChatPane: View {
             if model.transcript?.olderCursor != nil {
               Button(model.loadingHistory ? "Loading…" : "Load older messages", systemImage: "arrow.up") { takeScrollOwnership(); Task { await model.loadEarlierMessages() } }.font(.caption).disabled(!model.historyAvailable || model.loadingHistory)
             }
-            if model.selectedConversationID != nil && model.transcript == nil {
+            if model.selectedConversationID != nil && model.displayedTranscript == nil {
               Button("Load conversation") { Task { await model.refreshConversation() } }.buttonStyle(DashboardQuietButtonStyle())
                 .disabled(!model.historyAvailable)
             }
-            if let transcript = model.transcript {
+            if let transcript = model.displayedTranscript {
               MobileConversationTranscript(transcript: transcript, disclosureState: model.transcriptStates.state(for: transcript.conversationID),
                 agentSourceTitle: { model.state.conversations[$0]?.title },
                 openAgentSource: { id in Task { await model.selectConversation(id) } }) { activityID in
                 try await model.conversationActivityDetail(conversationID: transcript.conversationID, activityID: activityID)
               }
+            }
+            if let progress = model.sendProgress {
+              // Quiet status under the message just sent, until its turn appears.
+              Text(progress).font(.caption).foregroundStyle(DashboardPalette.mutedForeground)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .accessibilityIdentifier("chat-send-progress")
             }
             ForEach(model.currentPending) { interaction in
               PendingInteractionView(model: model, interaction: interaction)
@@ -99,7 +105,7 @@ struct ChatPane: View {
           if isViewingHistory, let id { scrollState.sourceMessagePositioned(in: id) }
           else { contentChanged(using: proxy) }
         }
-        .onChange(of: model.transcript?.messages.last?.id) { _, _ in contentChanged(using: proxy) }
+        .onChange(of: model.displayedTranscript?.messages.last?.id) { _, _ in contentChanged(using: proxy) }
         .overlay(alignment: .bottomTrailing) {
           if !scrollState.isNearBottom, model.selectedConversationID != nil, !isViewingHistory {
             Button("Latest reply", systemImage: "arrow.down") { showLatest(using: proxy) }

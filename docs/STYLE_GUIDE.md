@@ -51,8 +51,10 @@ when an intentional design change is accepted.
   Preserve intentional differences such as borderless Usage sections.
 - **Mobile Quick Chat:** name the device conversation feature **Quick Chat**,
   with **Powered by Pi Durable** in its setup explanation. Mac/Linux agents retain
-  their harness names. On the mobile home page Quick Chat comes first and
-  Workspaces follow it. Home, Folders, New Chat and Calendar list only paired
+  their harness names. On the mobile home page and in the New Chat menu Quick
+  Chat comes first and the workspaces follow it, each once under its own name.
+  A message sent to a Mac or Linux session shows at once with quiet caption
+  progress ("Sending to …", "Starting on …"), never a spinner. Home, Folders, New Chat and Calendar list only paired
   Mac and Linux workspaces that are reachable now; Settings → Workspaces keeps
   every saved workspace with its connection state. Never add an "Unavailable
   workspace" group: folders whose workspace is not listed stay in All Workspaces.

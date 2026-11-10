@@ -173,10 +173,10 @@ final class CompanionModelTests: XCTestCase {
 
     // A direct refresh reaches the Linux workspace: it reappears with its folders.
     model.workspaceReachable[linuxID] = true
-    XCTAssertEqual(model.launcherGroups.map(\.id), [linuxID, "local"])
+    XCTAssertEqual(model.launcherGroups.map(\.id), ["local", linuxID], "Quick Chat leads")
     XCTAssertEqual(model.folderWorkspaceGroups.map(\.id), [local, linuxID])
     XCTAssertEqual(model.folderOwner(linuxFolder), linuxID)
-    XCTAssertEqual(model.chatLauncherGroups.map(\.id), [linuxID, "local"])
+    XCTAssertEqual(model.chatLauncherGroups.map(\.id), ["local", linuxID])
     model.workspaceReachable[linuxID] = false
     XCTAssertEqual(model.launcherGroups.map(\.id), ["local"], "A workspace that stops answering is no longer listed")
 

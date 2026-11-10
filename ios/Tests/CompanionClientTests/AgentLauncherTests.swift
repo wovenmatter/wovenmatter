@@ -45,9 +45,47 @@ final class AgentLauncherTests: XCTestCase {
     XCTAssertEqual(agents.map(\.providerID), ["pi-durable-device", "local:pi", "gateway:eddie"])
     XCTAssertTrue(agents.dropFirst().allSatisfy { $0.workspaceName == mac.name })
     let groups = CompanionAgentGroup.list(agents: agents, workspaces: [mac, empty])
-    XCTAssertEqual(groups.map(\.name), ["James’s MacBook Air", "Test", "This iPhone"])
+    XCTAssertEqual(groups.map(\.name), ["This iPhone", "James’s MacBook Air", "Test"], "Quick Chat leads, then the workspaces")
     XCTAssertEqual(groups.first(where: { $0.name == "Test" })?.agents, [])
     XCTAssertEqual(groups.first(where: { $0.name == "Test" })?.workspace?.kind, .linux)
+  }
+
+  /// From a phone paired as a member with two Dev Macs: both advertise central
+  /// history. The library host's central list ("This Mac") belongs to the
+  /// library host only, so each Mac is listed once, under its own name, with
+  /// its own agents, and Quick Chat leads.
+  func testMemberMacsEachAppearOnceUnderTheirOwnNames() {
+    let capabilities = ["execution.v1", "history.central.v1", "inference.v1"]
+    let air = CompanionExecutionWorkspace(id: "0446435c-8e64-440e-b9eb-3c5dadb27e04", libraryID: "air-library",
+      ownerDeviceID: "e775f2b2-1e79-4bc2-b723-39b3fab2d9c5", kind: .mac, name: "James’s MacBook Air (Dev) · worktrees-b8e80bfb02",
+      endpoint: URL(string: "https://air.example.ts.net/wovenmatter"), capabilities: capabilities)
+    let mini = CompanionExecutionWorkspace(id: "b03923c3-89d1-4f29-910a-b7e3ce7b586c", libraryID: "mini-library",
+      ownerDeviceID: "7c072eba-eb7c-490b-9434-fb710c7f828f", kind: .mac, name: "James’s Mac Mini (Dev) · woven-everywhere",
+      endpoint: URL(string: "https://mini.example.ts.net/wovenmatter"), capabilities: capabilities)
+    let copied = CompanionExecutionWorkspace(id: "3407decc-357c-4d96-a209-92be30520fb6", libraryID: "air-library",
+      ownerDeviceID: "old", kind: .mac, name: "James’s MacBook Air", capabilities: capabilities, retainedHistory: true)
+    func agent(_ kind: String, ready: Bool) -> CompanionProvider {
+      .init(id: "local:" + kind, runtimeKind: kind, displayName: kind, available: ready, canStart: ready)
+    }
+    let ready = [agent("default_agent", ready: true), agent("codex", ready: true), agent("claude_code", ready: true)]
+    // A stale central list from the library host still lists Codex as needing setup.
+    let central = [agent("default_agent", ready: true), agent("codex", ready: false), agent("claude_code", ready: true)]
+    for order in [[mini, air, copied], [air, copied, mini]] {
+      let agents = CompanionAgentLauncher.list(deviceName: "This iPhone", centralOnline: true, providers: central,
+        workspaces: order, workspaceProviders: [air.id: ready, mini.id: ready, copied.id: ready],
+        reachable: [air.id: true, mini.id: true], centralWorkspaceID: air.id)
+      let groups = CompanionAgentGroup.list(agents: agents.filter { $0.workspaceID != copied.id }, workspaces: order, centralWorkspaceID: air.id)
+      XCTAssertEqual(groups.map(\.name), ["This iPhone", air.name, mini.name])
+      XCTAssertEqual(groups.map(\.id), ["local", "central", mini.id])
+      XCTAssertEqual(groups[1].workspace?.id, air.id)
+      XCTAssertEqual(groups[2].workspace?.id, mini.id)
+      // The library host's own agents: the central route, or its direct route when the central entry is not ready.
+      XCTAssertEqual(groups[1].agents.map(\.workspaceID), ["central", "central", air.id])
+      XCTAssertEqual(groups[1].agents.map(\.providerID), ["local:default_agent", "local:claude_code", "local:codex"])
+      XCTAssertTrue(groups[1].agents.allSatisfy(\.isAvailable), "A stale central entry falls back to the Mac's own fresh list")
+      XCTAssertEqual(groups[2].agents.map(\.workspaceID), [mini.id, mini.id, mini.id])
+      XCTAssertTrue(groups[2].agents.allSatisfy { $0.workspaceName == mini.name })
+    }
   }
 
   func testCopiedSnapshotOwnerNeverNamesOrBecomesTheCentralMac() {
@@ -62,8 +100,8 @@ final class AgentLauncherTests: XCTestCase {
         workspaces: order, workspaceProviders: [:], reachable: [:])
       XCTAssertEqual(agents.last?.workspaceName, live.name)
       let groups = CompanionAgentGroup.list(agents: agents, workspaces: order)
-      XCTAssertEqual(groups.map(\.name), [live.name, "This iPhone"])
-      XCTAssertEqual(groups.first?.workspace?.id, live.id)
+      XCTAssertEqual(groups.map(\.name), ["This iPhone", live.name])
+      XCTAssertEqual(groups.last?.workspace?.id, live.id)
     }
   }
 

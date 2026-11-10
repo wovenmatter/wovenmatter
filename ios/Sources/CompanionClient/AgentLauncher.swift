@@ -39,14 +39,18 @@ public struct CompanionAgentLauncher: Identifiable, Equatable, Sendable {
       }
   }
 
+  /// `providers` is the central list: the agents of the library host this
+  /// phone syncs with (`centralWorkspaceID`, or `centralName` while its
+  /// registry row is unknown). Every other workspace lists its own agents.
   public static func list(deviceName: String, centralOnline: Bool, providers: [CompanionProvider],
                           workspaces: [CompanionExecutionWorkspace], workspaceProviders: [String: [CompanionProvider]],
-                          reachable: [String: Bool], knownAgentIDs: Set<String> = []) -> [Self] {
+                          reachable: [String: Bool], knownAgentIDs: Set<String> = [],
+                          centralWorkspaceID: String? = nil, centralName: String? = nil) -> [Self] {
     func known(_ provider: CompanionProvider, workspace: String) -> Bool {
       (provider.available && provider.canStart) || knownAgentIDs.contains(workspace + ":" + provider.id)
     }
     let workspaces = workspaces.filter { !$0.deleted }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
-    let central = workspaces.first(where: \.isLiveCentralMac)
+    let central = CompanionExecutionWorkspace.liveCentralMac(in: workspaces, id: centralWorkspaceID)
     var result: [Self] = [.init(workspaceID: "local", workspaceName: deviceName, providerID: "pi-durable-device", name: "Quick Chat", runtimeKind: "pi")]
     var representedDirectAgents = Set<String>()
     for provider in providers where known(provider, workspace: "central") {
@@ -54,7 +58,7 @@ public struct CompanionAgentLauncher: Identifiable, Equatable, Sendable {
       let remoteID = parts.count == 3 && parts[0] == "remote" ? UUID(uuidString: String(parts[1]))?.uuidString.lowercased() : nil
       let workspace = remoteID.flatMap { id in workspaces.first { $0.id == id } } ?? (remoteID == nil ? central : nil)
       let group = remoteID ?? "central"
-      let name = workspace?.name ?? (group == "central" ? "Mac" : provider.routeName)
+      let name = workspace?.name ?? (group == "central" ? centralName ?? "Mac" : provider.routeName)
       let direct = workspace.flatMap { workspace in
         workspaceProviders[workspace.id]?.first { candidate in
           known(candidate, workspace: workspace.id) &&
@@ -94,10 +98,18 @@ public struct CompanionAgentLauncher: Identifiable, Equatable, Sendable {
 }
 
 extension CompanionExecutionWorkspace {
-  /// The central Mac's live workspace. A copied snapshot owner (`retainedHistory`)
-  /// keeps the capability for its history but is not the central Mac.
+  /// A live Mac workspace that serves central history. A copied snapshot owner
+  /// (`retainedHistory`) keeps the capability for its history but is not live.
+  /// Every Mac that hosts a library advertises it, so several can be live.
   public var isLiveCentralMac: Bool {
     kind == .mac && capabilities.contains("history.central.v1") && !deleted && retainedHistory != true
+  }
+  /// The library host's workspace: the live central Mac with `id`, the
+  /// library host the phone syncs with. Without a known host (an older
+  /// pairing), the first live central Mac.
+  public static func liveCentralMac(in workspaces: [Self], id: String?) -> Self? {
+    guard let id else { return workspaces.first(where: \.isLiveCentralMac) }
+    return workspaces.first { $0.id == id && $0.isLiveCentralMac }
   }
 }
 
@@ -108,7 +120,11 @@ public struct CompanionAgentGroup: Identifiable, Equatable, Sendable {
   public var workspace: CompanionExecutionWorkspace?
   public var agents: [CompanionAgentLauncher]
 
-  public static func list(agents: [CompanionAgentLauncher], workspaces: [CompanionExecutionWorkspace]) -> [Self] {
+  /// Quick Chat first, then the library host (`centralWorkspaceID`), the
+  /// other Macs and the Linux workspaces, each by name.
+  public static func list(agents: [CompanionAgentLauncher], workspaces: [CompanionExecutionWorkspace],
+                          centralWorkspaceID: String? = nil) -> [Self] {
+    let central = CompanionExecutionWorkspace.liveCentralMac(in: workspaces, id: centralWorkspaceID)
     var groups: [Self] = []
     for agent in agents {
       if let index = groups.firstIndex(where: { $0.id == agent.groupID }) { groups[index].agents.append(agent) }
@@ -116,15 +132,15 @@ public struct CompanionAgentGroup: Identifiable, Equatable, Sendable {
     }
     // A copied snapshot owner is history, not a workspace to launch in; it must not rename the central group.
     for workspace in workspaces where !workspace.deleted && workspace.retainedHistory != true {
-      let id = workspace.isLiveCentralMac ? "central" : workspace.id
+      let id = workspace.id == central?.id ? "central" : workspace.id
       if let index = groups.firstIndex(where: { $0.id == id }) {
         groups[index].workspace = workspace; groups[index].name = workspace.name
       } else { groups.append(.init(id: id, name: workspace.name, workspace: workspace, agents: [])) }
     }
     func rank(_ group: Self) -> Int {
-      if group.id == "local" { return 3 }
-      if group.id == "central" { return 0 }
-      return group.workspace?.kind == .mac ? 1 : 2
+      if group.id == "local" { return 0 }
+      if group.id == "central" { return 1 }
+      return group.workspace?.kind == .mac ? 2 : 3
     }
     return groups.sorted {
       rank($0) == rank($1) ? $0.name.localizedStandardCompare($1.name) == .orderedAscending : rank($0) < rank($1)

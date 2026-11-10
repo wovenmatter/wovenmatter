@@ -195,6 +195,7 @@ struct NewChatChooser: View {
     }.background(theme.palette.workspace).foregroundStyle(DashboardPalette.foreground)
       .presentationDetents([.medium, .large]).presentationDragIndicator(.visible)
       .interactiveDismissDisabled(model.startingChat)
+      .task { await model.refreshAgentAvailability() }
   }
   private var header: some View {
     HStack {
@@ -207,7 +208,8 @@ struct NewChatChooser: View {
   }
   private func workspaceSection(_ workspace: CompanionAgentGroup) -> some View {
     VStack(alignment: .leading, spacing: 8) {
-      GroupLabel(text: workspace.name)
+      GroupLabel(text: workspace.id == "local" ? "Quick Chat" : workspace.name)
+        .accessibilityIdentifier("chooser-group-" + workspace.id)
       ForEach(workspace.agents) { agent in agentRow(agent) }
     }
   }
