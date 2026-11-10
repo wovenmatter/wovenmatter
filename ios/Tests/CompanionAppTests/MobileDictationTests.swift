@@ -114,13 +114,19 @@ import CompanionClient
 
     let engine = FinalizingEngine()
     let session = DictationSession(preferences: UserDefaults(suiteName: "dictation-\(UUID())")!, permission: { true }, makeEngine: { engine })
+    // The session hops through tasks; on a loaded simulator a fixed count of
+    // 2 ms polls (about a second) was not always enough. Wait up to 10 s.
+    func until(_ condition: () -> Bool) async throws {
+      let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+      while !condition(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(2)) }
+    }
     session.start()
-    for _ in 0..<500 where session.phase != .recording { try await Task.sleep(for: .milliseconds(2)) }
+    try await until { session.phase == .recording }
     XCTAssertEqual(session.phase, .recording)
     engine.continuation.yield(.init(start: 0, end: 1, text: " first line\nsecond line", isFinal: true))
-    for _ in 0..<500 where session.preview.isEmpty { try await Task.sleep(for: .milliseconds(2)) }
+    try await until { !session.preview.isEmpty }
     session.stop { ticket.insert($0) }
-    for _ in 0..<500 where session.phase != .idle { try await Task.sleep(for: .milliseconds(2)) }
+    try await until { session.phase == .idle }
 
     XCTAssertEqual(session.phase, .idle)
     XCTAssertEqual(breaks.count, 1, "The paragraph edit is applied exactly once")
