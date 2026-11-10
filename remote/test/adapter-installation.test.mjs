@@ -92,3 +92,18 @@ test('real npm installs a newer engine outside the adapter range; failed verific
   assert.equal(await readlink(executable), target, 'failed candidate must not retire or replace the working graph');
   assert.equal((await readdir(join(prefix, 'Installations'))).length, 1, 'failed generation is removed');
 });
+
+test('harness scripts run their entry point when started through a symlinked path', async t => {
+  // Dev bundles live under /private/tmp but Foundation reports /tmp; Node resolves import.meta.url through the link.
+  const { symlink } = await import('node:fs/promises');
+  const { fileURLToPath } = await import('node:url');
+  const root = await mkdtemp(join(tmpdir(), 'woven-harness-link-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const link = join(root, 'harnesses');
+  await symlink(fileURLToPath(new URL('../../harnesses', import.meta.url)), link);
+  for (const [script, message] of [['install-adapter.mjs', /requires one selection/], ['prepare-npm.mjs', /not valid JSON/]]) {
+    const failure = await exec(process.execPath, [join(link, script)]).then(() => null, error => error);
+    assert.ok(failure, `${script} must run and reject missing input instead of exiting silently`);
+    assert.match(failure.stderr, message);
+  }
+});
