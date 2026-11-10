@@ -38,20 +38,14 @@ final class MacAccessSetupModel {
 
     enum AutomationResult: Equatable, Sendable { case allowed, notAsked, denied }
 
-    /// "Set up all": the permissions still to allow, worked through in order.
-    struct SetupRun: Equatable {
-        var steps: [Item]
-        var index = 0
-        var current: Item { steps[index] }
-    }
-
     static let shared = MacAccessSetupModel(observesActivation: true)
     static let storageKey = "wovenmatter.mac-access.v1"
     /// Posted to open Settings → Permissions & Access from anywhere in the app.
     nonisolated static let openSettingsNotification = Notification.Name("wovenmatter.open-permissions-settings")
     nonisolated static func openSettings() { NotificationCenter.default.post(name: openSettingsNotification, object: nil) }
-    /// In-app prompts first; the ones macOS may make you reopen the app for last.
-    static let setupOrder: [Item] = [.keychain, .fullDiskAccess, .automation, .microphone, .accessibility, .screenRecording]
+    /// The order the page lists permissions in and "Allow all" asks: in-app
+    /// prompts first, then System Settings switches.
+    static let setupOrder: [Item] = [.keychain, .microphone, .automation, .fullDiskAccess, .accessibility, .screenRecording]
     /// macOS often applies these to a running app only after it is reopened.
     static let reopenSensitive: Set<Item> = [.accessibility, .screenRecording]
     /// Apps agents most often control. Others prompt the first time an agent uses them.
@@ -63,16 +57,19 @@ final class MacAccessSetupModel {
     private(set) var states: [Item: State] = [:]
     private(set) var turnedOff: Set<Item> = []
     private(set) var settingUp: Item?
-    private(set) var run: SetupRun?
+    /// "Allow all" is bringing up prompts.
+    private(set) var allowingAll = false
     /// The permission last asked for from its own row, so only that row shows its hint.
     private(set) var requested: Item?
     /// Starts the Keychain flow, which belongs to the application model and its consent sheet.
     @ObservationIgnored var keychainRequest: (@MainActor () -> Void)?
 
+    private var waitEnded = false
+    private var returnedToApp = false
+    private var leftApp = false
+    @ObservationIgnored private var resignObserver: (any NSObjectProtocol)?
     private var requestedThisLaunch: Set<Item> = []
     private var returnedAfterRequest: Set<Item> = []
-    private var skipsCurrentStep = false
-    private var runTask: Task<Void, Never>?
     private var automationTask: Task<Void, Never>?
     private var automationCheckedAt = Date.distantPast
     @ObservationIgnored private var activationObserver: (any NSObjectProtocol)?
@@ -101,6 +98,10 @@ final class MacAccessSetupModel {
             activationObserver = NotificationCenter.default.addObserver(
                 forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.appDidBecomeActive() }
+            }
+            resignObserver = NotificationCenter.default.addObserver(
+                forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.appDidResignActive() }
             }
         }
     }
@@ -203,7 +204,11 @@ final class MacAccessSetupModel {
     /// The user came back to the app, typically from System Settings. A
     /// permission asked for this launch that still reads as off may only need
     /// the app to be reopened.
+    func appDidResignActive() { leftApp = true }
+
     func appDidBecomeActive() {
+        // Only a return from System Settings counts, not a closing prompt from before it opened.
+        if leftApp { returnedToApp = true }
         let pending = requestedThisLaunch.intersection(Self.reopenSensitive).filter { states[$0] != .ready }
         if !pending.isSubset(of: returnedAfterRequest) { returnedAfterRequest.formUnion(pending) }
     }
@@ -250,49 +255,39 @@ final class MacAccessSetupModel {
         }
     }
 
-    // MARK: - Set up all
+    // MARK: - Allow all
 
-    /// Works through every permission not yet allowed, in `setupOrder`: asks
-    /// for each one, then waits until macOS reports it allowed before moving on.
-    func startSetUpAll() {
-        guard run == nil else { return }
-        let steps = remaining.filter { access($0) != .needsReopen }
-        guard !steps.isEmpty else { return }
-        run = SetupRun(steps: steps)
-        runTask = Task { [weak self] in await self?.performRun() }
-    }
-
-    func skipStep() { skipsCurrentStep = true }
-
-    func stopSetUpAll() {
-        runTask?.cancel()
-        runTask = nil
-        run = nil
-    }
-
-    /// Asks again for the current step, e.g. after a cancelled Keychain prompt.
-    func retryStep() async {
-        guard let item = run?.current else { return }
-        await setUp(item)
-    }
-
-    private func performRun() async {
-        while let current = run, !Task.isCancelled {
-            let item = current.current
-            skipsCurrentStep = false
-            if access(item) != .allowed {
-                await setUp(item)
-                while !Task.isCancelled, !skipsCurrentStep, access(item) != .allowed {
-                    do { try await Task.sleep(for: pollInterval) } catch { break }
-                    refresh(keychainReady: nil)
-                }
-            }
-            guard !Task.isCancelled, var next = run, next.index == current.index else { return }
-            guard next.index + 1 < next.steps.count else { break }
-            next.index += 1
-            run = next
+    /// One button: brings up each missing permission's prompt in turn, with no
+    /// steps to manage. An in-app prompt moves on once answered; a System
+    /// Settings switch moves on once it is switched on, or when the user comes
+    /// back to the app.
+    func allowAll() {
+        guard !allowingAll, settingUp == nil else { return }
+        let items = Self.setupOrder.filter { [.notAllowed, .turnedOff].contains(access($0)) }
+        guard !items.isEmpty else { return }
+        allowingAll = true
+        Task { [weak self] in
+            await self?.performAllowAll(items)
+            self?.allowingAll = false
         }
-        if !Task.isCancelled { run = nil; runTask = nil }
+    }
+
+    /// The Keychain consent sheet or its prompts finished, allowed or not.
+    func keychainRequestEnded() { waitEnded = true }
+
+    private func performAllowAll(_ items: [Item]) async {
+        for item in items where access(item) != .allowed {
+            waitEnded = false
+            returnedToApp = false
+            leftApp = false
+            await setUp(item)
+            // Microphone and Automation prompts return once answered.
+            guard item == .keychain || !item.asksInApp else { continue }
+            while access(item) != .allowed, !waitEnded, item == .keychain || !returnedToApp {
+                do { try await Task.sleep(for: pollInterval) } catch { return }
+                refresh(keychainReady: nil)
+            }
+        }
     }
 
     // MARK: - Reopening

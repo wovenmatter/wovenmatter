@@ -18,31 +18,23 @@ screen (Accessibility, Screen Recording, Automation) and Dictation (Microphone).
 | Automation | Agents scripting System Events and Finder (`osascript`) | Launches System Events hidden and asks with `AEDeterminePermissionToAutomateTarget`; the pane if denied | The same call without asking; a target that is not running is inconclusive |
 | Microphone | Dictation (attended) | `AVCaptureDevice.requestAccess` | `AVCaptureDevice.authorizationStatus` |
 
-Rows show one of four statuses and refresh every two seconds while the page is
-open, so a grant made in System Settings is detected without a button:
+The page is one card. Each permission is one row with its System Settings name,
+one short line, and either a quiet "Allowed" check or its own **Allow** button,
+which asks for that permission only (an in-app prompt for Keychain, Automation
+and Microphone; the System Settings pane for the rest). Rows refresh every two
+seconds while the page is open, so a grant made in System Settings shows without
+a button. When Accessibility or Screen Recording was asked for this launch and
+still reads as off after the user comes back, the row offers **Reopen**.
 
-| Status | When | Action |
-| --- | --- | --- |
-| Allowed | macOS reports the permission granted | None; the row collapses to one line |
-| Not allowed yet | Not granted, or never asked | Allow (Keychain, Automation, Microphone prompt in the app) or Open System Settings (the rest) |
-| Switched off | Known denied: Microphone denied/restricted, Automation `errAEEventNotPermitted` | Open System Settings |
-| Reopen to finish | Accessibility or Screen Recording was asked for this launch and still reads as off after the user returns to the app | Reopen Woven Matter (quits and relaunches the frontend) |
-
-macOS has no "denied" signal for Full Disk Access, Accessibility or Screen
-Recording, so those never claim Switched off. These presentation states are local
-to the page; the published record keeps its three wire states.
-
-**Set up all** works through every permission not yet allowed in this order:
-Keychain, Full Disk Access, Automation, Microphone, Accessibility, Screen
-Recording (Screen Recording last because macOS may offer Quit & Reopen). For each
-it triggers the prompt or opens the System Settings pane, shows that step's hint
-(Always Allow for Keychain, which item to switch on in System Settings), and
-moves on once the permission reads as allowed. Ask again/Open System Settings,
-Skip and Stop are available throughout; items that only a reopen can finish are
-left out. With nothing left the card reads **All set**. The Settings landing row
-summarizes "All allowed" or "N to allow". Dictation settings and Computer Use's
-tool descriptions show a one-line status linking here instead of their own
-controls.
+**Allow all**, at the top of the card, brings up each missing permission's prompt
+one after another with nothing else to press: Keychain, Microphone, Automation,
+then Full Disk Access, Accessibility and Screen Recording. An in-app prompt moves
+on once answered. A System Settings switch moves on as soon as it is switched on,
+or when the user comes back to Woven Matter without switching it. There are no
+steps, Skip or Stop. The Settings landing row summarizes "All allowed" or "N to
+allow". Dictation settings and Computer Use's tool descriptions show a one-line
+status linking here instead of their own controls. These presentation states are
+local to the page; the published record keeps its three wire states.
 
 Automation for other apps still asks the first time
 an agent controls them, and that macOS dialog needs a person at the Mac; it is a
@@ -201,7 +193,7 @@ Apple references: [Code signing requirements](https://developer.apple.com/docume
 ## Validation
 
 Mac access tests cover the status record's wire format and notice text
-(`CompanionMacAccessTests`), the page's statuses, grouping and Set up all
+(`CompanionMacAccessTests`), the page's statuses and Allow all
 sequencing against fake probes (`MacAccessSetupModelTests`), the session-tools scripts with a fake sudo on both
 platforms (`WovenSessionEnvironmentTests`, `remote/test/session-tools.test.mjs`)
 and the environment overlays. Real TCC prompts and System Settings grants need a

@@ -237,7 +237,7 @@ struct SettingsView: View {
                 )
                 SettingsDestinationRow(
                     title: "Permissions & Access",
-                    detail: "\(macAccess.summary) · Files, saved sign-ins, Computer Use, and microphone.",
+                    detail: macAccess.summary,
                     icon: { DashboardLucideIcon(glyph: .keyRound, size: 15) },
                     action: { section = .permissions }
                 )

@@ -97,18 +97,11 @@ when an intentional design change is accepted.
 - **Permissions & Access:** every macOS permission Woven Matter uses lives on
   this one Settings page, directly after General. It opens with one sentence:
   agents on this Mac or the user's other devices stop at a prompt here without
-  these permissions. A top card offers **Set up all**, which works through the
-  permissions not yet allowed (in-app prompts first, Screen Recording last), shows
-  "Step N of M", that step's hint (such as Always Allow for Keychain) and Ask
-  again/Open System Settings, Skip and Stop; it becomes **All set** when nothing is
-  left. Cards group permissions by what they let Woven Matter do, in plain words:
-  Files and folders (Full Disk Access), Saved sign-ins (Keychain), Control apps
-  and see the screen (Accessibility, Screen Recording, Automation), and Dictation
-  (Microphone). Rows use System Settings' names and one status vocabulary:
-  Allowed (a quiet check; the row collapses to one line), Not allowed yet (Allow
-  or Open System Settings), Switched off (warning; Open System Settings) and
-  Reopen to finish (Reopen Woven Matter), never a quit-and-reopen footnote. Step
-  hints appear only during their step. Consent is not verification. Other
+  these permissions. Everything is one card: a header with how many are not
+  allowed yet and one **Allow all** button, then one row per permission with its
+  System Settings name, one short line, and a quiet "Allowed" check or its own
+  **Allow** button. Allow all brings up each prompt in turn with no steps, Skip or
+  Stop. A row shows **Reopen** only when macOS needs the app reopened. Other
   settings that depend on a permission (Dictation, Computer Use) show a one-line
   status with a Permissions & Access link instead of their own controls; the
   Settings landing row summarizes "All allowed" or "N to allow". A session on a
