@@ -8,13 +8,31 @@ final class PiCodeModePolicyTests: XCTestCase {
   }
 
   func testWaitingForToolDoesNotConsumeResponsivenessBudget() async throws {
-    let executor = PiCodeModeExecutor()
+    // The budget clock moves only when this test moves it, one second at a time
+    // and only after the worker's next heartbeat arrived. The tool's wait spans
+    // five budget-clock seconds against a two-second budget, so the run completes
+    // only if the worker keeps heartbeating while it awaits the tool; a slow
+    // machine can delay heartbeats but can no longer age one past the budget.
+    let base = ContinuousClock.now
+    var elapsed = Duration.zero
+    let executor = PiCodeModeExecutor(now: { base.advanced(by: elapsed) })
     let output = try await executor.run(requestJSON: request("text(await tools.wait_for_approval({}));", tools: [["name": "wait_for_approval"]]),
       policy: .init(unresponsiveCodeSeconds: 2)) { _, _ in
-        try await Task.sleep(for: .seconds(3))
+        for _ in 0..<5 {
+          elapsed += .seconds(1)
+          let seen = executor.heartbeats, deadline = ContinuousClock.now.advanced(by: .seconds(30))
+          while executor.heartbeats == seen {
+            guard ContinuousClock.now < deadline else {
+              XCTFail("The worker stopped heartbeating while it awaited a tool.")
+              throw CancellationError()
+            }
+            try await Task.sleep(for: .milliseconds(10))
+          }
+        }
         return "{\"approved\":true}"
       }
     XCTAssertTrue(output.contains("approved"))
+    XCTAssertEqual(elapsed, .seconds(5))
   }
 
   func testWorkerStartsAllParallelToolsAndCheckpointsAfterCompletion() async throws {
