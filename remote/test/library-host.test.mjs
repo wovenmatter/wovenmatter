@@ -153,7 +153,7 @@ test('bot conversation batches wait in the outbox while the library is down and 
   const library = await startedLibrary(t, directory)
   const adapter = createLocalLibraryBotAdapter({ client: library.client, available: library.available, directory: outbox })
   const bots = createBotConversationLibrary(adapter), botID = randomUUID()
-  const batch = n => ({ bot: { id: botID, name: 'Scout' }, conversations: [{ conversationId: 'main', kind: 'main' }], entries: [{ id: String(n), conversationId: 'main', role: 'user', text: 'entry ' + n, createdAt: n }] })
+  const batch = n => ({ bot: { id: botID, name: 'Scout' }, conversations: [{ conversationId: 1, kind: 'main' }], entries: [{ id: n, conversationId: 1, role: 'user', text: 'entry ' + n, createdAt: n }] })
   await library.stop()
   await bots.writeBotEntries(botID, batch(1)); await bots.writeBotEntries(botID, batch(2))
   assert.equal(readFileSync(join(outbox, botID + '.jsonl'), 'utf8').trim().split('\n').length, 2)
@@ -161,14 +161,14 @@ test('bot conversation batches wait in the outbox while the library is down and 
   assert.equal(await adapter.drain(), 2)
   assert.equal(existsSync(join(outbox, botID + '.jsonl')), false)
   await bots.writeBotEntries(botID, batch(3))
-  assert.deepEqual((await debugState(library)).botEntries.map(item => item.entries[0].id), ['1', '2', '3'])
+  assert.deepEqual((await debugState(library)).botEntries.map(item => item.entries[0].id), [1, 2, 3])
 })
 
 test('a library host without the bot entries route keeps batches in the outbox', async t => {
   const directory = scratch(t, 'wl-bots404-'), outbox = join(directory, 'outbox')
   const library = await startedLibrary(t, directory, { FAKE_LIBRARY_BOTS: '0' })
   const bots = createBotConversationLibrary(createLocalLibraryBotAdapter({ client: library.client, available: library.available, directory: outbox })), botID = randomUUID()
-  await bots.writeBotEntries(botID, { bot: { id: botID, name: 'Scout' }, conversations: [{ conversationId: 'main', kind: 'main' }], entries: [] })
+  await bots.writeBotEntries(botID, { bot: { id: botID, name: 'Scout' }, conversations: [{ conversationId: 1, kind: 'main' }], entries: [] })
   assert.equal(readdirSync(outbox).length, 1)
 })
 

@@ -5,6 +5,10 @@ const fail = (statusCode, message) => Object.assign(new Error(message), { status
 const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
 const text = (value, limit) => typeof value === 'string' && value.length > 0 && value.length <= limit
 const object = value => value && typeof value === 'object' && !Array.isArray(value)
+// The runtime's conversation and entry ids are integers, which the library
+// host decodes as Swift `Int` (BotConversationMirror).
+const id = value => Number.isSafeInteger(value) && value >= 0
+const optionalID = value => value === undefined || value === null || id(value)
 
 /**
  * The seam between bot conversations and this machine's library copy.
@@ -22,11 +26,12 @@ export function createBotConversationLibrary(adapter) {
       if (!uuid(botID)) throw fail(400, 'A bot UUID is required.')
       if (!object(batch) || !object(batch.bot) || String(batch.bot.id).toLowerCase() !== botID.toLowerCase() || !text(batch.bot.name, 256)) throw fail(400, 'The batch must name its bot.')
       const { conversations = [], entries = [] } = batch
-      if (!Array.isArray(conversations) || conversations.length > 10000 || conversations.some(item => !object(item) || !text(item.conversationId, 128) || !['main', 'thread'].includes(item.kind))) throw fail(400, 'Invalid bot conversations.')
+      if (!Array.isArray(conversations) || conversations.length > 10000 || conversations.some(item => !object(item) || !id(item.conversationId) || !['main', 'thread'].includes(item.kind)
+        || !optionalID(item.parentConversationId) || !optionalID(item.forkedAt))) throw fail(400, 'Invalid bot conversations.')
       if (!Array.isArray(entries) || entries.length > 200) throw fail(400, 'Send at most 200 conversation entries per batch.')
       const known = new Set(conversations.map(item => item.conversationId))
       for (const entry of entries) {
-        if (!object(entry) || !text(entry.id, 128) || !known.has(entry.conversationId) || !['user', 'assistant'].includes(entry.role) || typeof entry.text !== 'string') throw fail(400, 'Every entry needs an id, a listed conversation, a role and text.')
+        if (!object(entry) || !id(entry.id) || !known.has(entry.conversationId) || !['user', 'assistant'].includes(entry.role) || typeof entry.text !== 'string') throw fail(400, 'Every entry needs an id, a listed conversation, a role and text.')
       }
       if (Buffer.byteLength(JSON.stringify(batch)) > 8 * 1024 * 1024) throw fail(413, 'The conversation batch is too large.')
       return adapter.writeBotEntries(botID.toLowerCase(), { bot: { id: botID.toLowerCase(), name: batch.bot.name }, conversations, entries })

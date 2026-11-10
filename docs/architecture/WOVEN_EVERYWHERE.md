@@ -944,7 +944,7 @@ reply body. Replies are at most 1 MiB.
 | `POST /v1/bots-host/previews` | `{botID, port, containerPort}` | `{url}`. `port` is the runtime's loopback activity proxy; the host publishes `http://127.0.0.1:<port>` with Tailscale Serve (its own HTTPS port, inbound only, never Funnel). Idempotent for the same `(botID, port)`; sent again after a runtime restart. |
 | `DELETE /v1/bots-host/previews/{botID}/{port}` | none | 2xx. |
 | `POST /v1/bots-host/inference-credentials` | `{provider}` | `{credential}`, where `credential` is `null` (not connected), `{type: "api_key", key}`, `{type: "oauth", access, expires, accountId?}` (access only; `expires` epoch ms; the host renews, the runtime asks again a minute before expiry), or `{type: "native", configDir, secureStorageDir?}` (Claude subscription: the machine's native Claude runtime directories, which the default agent uses, passed to the Claude Agent SDK as `CLAUDE_CONFIG_DIR` and `CLAUDE_SECURESTORAGE_CONFIG_DIR`; no token material). `provider` is a Woven connection id: `openai-codex`, `openai`, `openrouter`, `opencode-go`, `xai`, `xai-api`, `claude-subscription`, `anthropic`, `exa`, `brave`, `firecrawl`, or `web-search`, which also returns `searchProvider` (`exa`, `brave` or `firecrawl`, the selected web search provider) with that provider's key. |
-| `POST /v1/bots-host/conversations/{botID}/entries` | `{bot: {id, name}, conversations: [{conversationId, kind: "main"\|"thread", parentConversationId?, forkedAt?, title?, pinned?, createdAt?}], entries: [{id, conversationId, role: "user"\|"assistant", text, error?, stopped?, createdAt}]}` | 2xx. The host writes them into its library copy, upserting entries by `(botID, id)` and conversations by `(botID, conversationId)`. Entry ids are unique per bot and never reused. `conversations` always lists the bot's main channel and every thread; a batch may have no entries when only metadata (a title, a pin, a rename) changed. Batches hold at most 200 entries, in id order; the runtime resends after a failure. |
+| `POST /v1/bots-host/conversations/{botID}/entries` | `{bot: {id, name}, conversations: [{conversationId, kind: "main"\|"thread", parentConversationId?, forkedAt?, title?, pinned?, createdAt?}], entries: [{id, conversationId, role: "user"\|"assistant", text, error?, stopped?, createdAt}]}` | 2xx. The host writes them into its library copy, upserting entries by `(botID, id)` and conversations by `(botID, conversationId)`. Entry ids are unique per bot and never reused. `id`, `conversationId`, `parentConversationId` and `forkedAt` are non-negative integers (the runtime's own ids; the library host decodes them as integers), and the server refuses a batch with any other type. `conversations` always lists the bot's main channel and every thread; a batch may have no entries when only metadata (a title, a pin, a rename) changed. Batches hold at most 200 entries, in id order; the runtime resends after a failure. |
 
 The runtime caches credentials in memory only (keys 60 s, "not connected"
 15 s) and never stores them. A credential change in Woven settings takes
@@ -1369,7 +1369,9 @@ one request per connection on `control.sock` (e.g.
   binding to an existing container without recreating it, and this works
   the same through a Mac VM's forwarded socket, so no container port is ever
   published and the Mac VM needs no port forwarding. A preview connection
-  starts a stopped container. The transport is a replaceable hook
+  starts a stopped container, and the forwarder retries a refused port for up
+  to 20 seconds, so the request that woke the bot reaches its service once the
+  restart list has started it. The transport is a replaceable hook
   (`PreviewTransport` in `bots/src/environment/previews.ts`, passed as
   `previewTransport` to `startRuntime`) should a host integration want a
   direct path.

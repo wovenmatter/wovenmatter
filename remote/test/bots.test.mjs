@@ -26,18 +26,20 @@ async function eventually(condition, message, timeout = 10_000) {
 }
 const listen = server => new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve(server.address().port)))
 
-async function execution(t, fetchImpl) {
+async function execution(t, fetchImpl, extra = {}) {
   const directory = temporary(t)
   const runtime = { providers: async () => [], create: async () => ({ sessionID: randomUUID() }), close: async () => {} }
   const service = createClientExecution({ directory, runtime, managedDataRoot: join(directory, 'databases'), publisherKey: 'k'.repeat(40), publisherFetch: fetchImpl, publisherIntervalMilliseconds: 0,
-    mcpEndpointURL: () => 'http://127.0.0.1:7337/mcp' })
+    mcpEndpointURL: () => 'http://127.0.0.1:7337/mcp', ...extra })
   t.after(() => service.close())
   return service
 }
 
 test('bot MCP keys rotate, attribute library calls to the bot, honor botMCP groups and pause-all, and revoke', async t => {
   const requests = []
-  const service = await execution(t, async (url, options) => { requests.push({ url, options }); return { ok: true, status: 200, text: async () => JSON.stringify({ jsonrpc: '2.0', id: 'x', result: { content: [] } }) } })
+  // This host's library copy exists but is down, so the list stays stable while calls wait.
+  const service = await execution(t, async (url, options) => { requests.push({ url, options }); return { ok: true, status: 200, text: async () => JSON.stringify({ jsonrpc: '2.0', id: 'x', result: { content: [] } }) } },
+    { library: { client: {}, available: () => false } })
   const { enroll } = await import('./fixtures/execution.mjs'); enroll(service)
   const mcp = service.mcp, deviceID = randomUUID(), botID = randomUUID()
   assert.throws(() => mcp.issueBotKey({ botID: 'nope', botName: 'x', deviceID }), /bot UUID/)
@@ -56,15 +58,20 @@ test('bot MCP keys rotate, attribute library calls to the bot, honor botMCP grou
   assert.ok(names.includes('woven_notes_read'))
   assert.ok(!names.some(name => name.startsWith('woven_computer_') || name.startsWith('woven_executor_')), 'Computer Use and Executor start off')
   assert.ok(!names.includes('woven_sessions_send') && !names.includes('woven_goals_set'), 'conversation-bound local tools are not offered to bots')
-  // Without the library connection there is nowhere to send a bot's call.
-  assert.equal((await mcp.handle(scope, { jsonrpc: '2.0', id: 'n', method: 'tools/call', params: { name: 'woven_notes_read', arguments: { noteID: randomUUID() } } })).error.code, -32602)
+  // Bots list only what they can call: this host's library groups, history included, and never a
+  // tool only a Mac serves or one bound to a session's run.
+  assert.ok(names.includes('woven_history_search') && names.includes('woven_timers_list') && names.includes('woven_sessions_folders'))
+  for (const name of ['woven_usage_read', 'woven_html_preview', 'woven_html_render', 'woven_html_cancel', 'woven_context', 'woven_databases_query']) assert.ok(!names.includes(name), name + ' is not offered to bots')
+  // While the library copy is down a bot's call waits for it.
+  assert.equal((await mcp.handle(scope, { jsonrpc: '2.0', id: 'n', method: 'tools/call', params: { name: 'woven_notes_read', arguments: { noteID: randomUUID() } } })).result.structuredContent.code, 'unavailable')
   const own = service.descriptor()
   mcp.configureLibrary({ grantID: randomUUID(), libraryID: own.libraryID, workspaceID: own.id, executionDeviceID: own.executionDeviceID, endpointURL: 'https://central.example.ts.net/wovenmatter/mcp/workspace', bearerToken: 't'.repeat(43) })
   // A Mac's /mcp/workspace binds conversations, so the single-Mac grant never serves bots:
   // their library tools come only from this host's own library copy.
   const before = requests.length
   const called = await mcp.handle(scope, { jsonrpc: '2.0', id: 'n', method: 'tools/call', params: { name: 'woven_notes_read', arguments: { noteID: randomUUID() } } })
-  assert.equal(called.error?.code, -32602, JSON.stringify(called))
+  assert.equal(called.result?.structuredContent?.code, 'unavailable', JSON.stringify(called))
+  assert.equal((await mcp.handle(scope, { jsonrpc: '2.0', id: 'u', method: 'tools/call', params: { name: 'woven_usage_read', arguments: {} } })).error?.code, -32602)
   assert.equal(requests.length, before, 'nothing is sent to the Mac for a bot')
 
   mcp.configureBots({ groups: ['calendar'] })
@@ -103,21 +110,25 @@ test('a user revoke of a bot MCP key sticks through the runtime refresh until re
 
 test('bot conversation batches validate and upsert by id, and the journal keeps every batch durably', async t => {
   const memory = createMemoryBotLibraryAdapter(), library = createBotConversationLibrary(memory), botID = randomUUID()
-  const batch = (entries, extra = {}) => ({ bot: { id: botID, name: 'Helper' }, conversations: [{ conversationId: 'main', kind: 'main' }, { conversationId: 't1', kind: 'thread', parentConversationId: 'main', title: 'Plan' }], entries, ...extra })
+  const batch = (entries, extra = {}) => ({ bot: { id: botID, name: 'Helper' }, conversations: [{ conversationId: 1, kind: 'main' }, { conversationId: 2, kind: 'thread', parentConversationId: 1, forkedAt: 3, title: 'Plan' }], entries, ...extra })
   await assert.rejects(library.writeBotEntries('bot', batch([])), /bot UUID/)
   await assert.rejects(library.writeBotEntries(botID, { ...batch([]), bot: { id: randomUUID(), name: 'x' } }), /name its bot/)
-  await assert.rejects(library.writeBotEntries(botID, batch([{ id: 'a', conversationId: 'missing', role: 'user', text: 'hi' }])), /listed conversation/)
-  await assert.rejects(library.writeBotEntries(botID, batch(Array.from({ length: 201 }, (_, i) => ({ id: 'e' + i, conversationId: 'main', role: 'user', text: '' }))) ), /at most 200/)
-  assert.deepEqual(await library.writeBotEntries(botID, batch([{ id: 'a', conversationId: 'main', role: 'user', text: 'hi', createdAt: 1 }])), { conversations: 2, entries: 1 })
+  await assert.rejects(library.writeBotEntries(botID, batch([{ id: 1, conversationId: 9, role: 'user', text: 'hi' }])), /listed conversation/)
+  // The runtime's ids are integers, as the library host decodes them (Swift Int).
+  await assert.rejects(library.writeBotEntries(botID, batch([{ id: 'a', conversationId: 1, role: 'user', text: 'hi' }])), /needs an id/)
+  await assert.rejects(library.writeBotEntries(botID, { ...batch([]), conversations: [{ conversationId: 'main', kind: 'main' }] }), /Invalid bot conversations/)
+  await assert.rejects(library.writeBotEntries(botID, { ...batch([]), conversations: [{ conversationId: 1, kind: 'thread', parentConversationId: 'main' }] }), /Invalid bot conversations/)
+  await assert.rejects(library.writeBotEntries(botID, batch(Array.from({ length: 201 }, (_, i) => ({ id: i, conversationId: 1, role: 'user', text: '' }))) ), /at most 200/)
+  assert.deepEqual(await library.writeBotEntries(botID, batch([{ id: 4, conversationId: 1, role: 'user', text: 'hi', createdAt: 1 }])), { conversations: 2, entries: 1 })
   // Metadata-only batches and resends are valid; an entry id upserts.
   assert.deepEqual(await library.writeBotEntries(botID.toUpperCase(), batch([])), { conversations: 2, entries: 0 })
-  await library.writeBotEntries(botID, batch([{ id: 'a', conversationId: 'main', role: 'user', text: 'hi', createdAt: 1 }, { id: 'b', conversationId: 't1', role: 'assistant', text: 'ok' }]))
-  assert.deepEqual(memory.entries(botID).map(entry => entry.id), ['a', 'b'])
-  assert.equal(memory.bot(botID).conversations.get('t1').title, 'Plan')
+  await library.writeBotEntries(botID, batch([{ id: 4, conversationId: 1, role: 'user', text: 'hi', createdAt: 1 }, { id: 5, conversationId: 2, role: 'assistant', text: 'ok' }]))
+  assert.deepEqual(memory.entries(botID).map(entry => entry.id), [4, 5])
+  assert.equal(memory.bot(botID).conversations.get(2).title, 'Plan')
 
   const directory = temporary(t)
   const journal = createBotConversationLibrary(createJournalBotLibraryAdapter(directory))
-  await journal.writeBotEntries(botID, batch([{ id: 'a', conversationId: 'main', role: 'user', text: 'hi' }]))
+  await journal.writeBotEntries(botID, batch([{ id: 4, conversationId: 1, role: 'user', text: 'hi' }]))
   await journal.writeBotEntries(botID, batch([]))
   const lines = readFileSync(join(directory, botID + '.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line))
   assert.deepEqual(lines.map(line => line.entries.length), [1, 0])
@@ -310,9 +321,9 @@ test('the runtime host API requires its own bearer and serves keys, previews, cr
   assert.equal((await f.call(`/v1/bots-host/previews/${botID}/41000`, { method: 'DELETE' })).body.removed, true)
   const credentials = await f.call('/v1/bots-host/inference-credentials', { method: 'POST', body: { provider: 'anthropic' } })
   assert.equal(credentials.body.credential.type, 'api_key'); assert.deepEqual(f.credentialsCalls, [{ provider: 'anthropic' }])
-  const entries = await f.call(`/v1/bots-host/conversations/${botID}/entries`, { method: 'POST', body: { bot: { id: botID, name: 'Helper' }, conversations: [{ conversationId: 'main', kind: 'main' }], entries: [{ id: 'e1', conversationId: 'main', role: 'assistant', text: 'hi' }] } })
+  const entries = await f.call(`/v1/bots-host/conversations/${botID}/entries`, { method: 'POST', body: { bot: { id: botID, name: 'Helper' }, conversations: [{ conversationId: 1, kind: 'main' }], entries: [{ id: 7, conversationId: 1, role: 'assistant', text: 'hi' }] } })
   assert.deepEqual(entries.body, { conversations: 1, entries: 1 })
-  assert.deepEqual(f.memory.entries(botID).map(entry => entry.id), ['e1'])
+  assert.deepEqual(f.memory.entries(botID).map(entry => entry.id), [7])
 })
 
 test('the user revoke route sticks and the runtime cannot get a new key until reinstated', async t => {
