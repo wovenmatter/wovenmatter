@@ -271,7 +271,8 @@ test('the server accepts signed member requests and rejects wrong keys, replays,
   }
   let identity
   for (let i = 0; i < 200; i++) {
-    try { identity = await (await fetch(base + '/v1/health', { headers: { authorization: 'Bearer ' + token } })).json(); if (identity.memberIdentity) break } catch {}
+    // identity.json is written beside the health report; wait for both.
+    try { identity = await (await fetch(base + '/v1/health', { headers: { authorization: 'Bearer ' + token } })).json(); if (identity.memberIdentity && existsSync(join(home, 'state/library/identity.json'))) break } catch {}
     await new Promise(r => setTimeout(r, 50))
   }
   assert.ok(identity?.memberIdentity, output)
