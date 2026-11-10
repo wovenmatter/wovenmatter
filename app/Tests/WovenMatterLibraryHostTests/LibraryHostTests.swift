@@ -415,11 +415,25 @@ struct LibraryHostTests {
       try await mac.add(deviceID: fixture.host.identity.deviceID, kind: .linux, name: name, publicKey: fixture.host.identity.publicKey,
                         endpoints: [URL(string: "https://\(name).test/wovenmatter/")!])
     }
+    // Both hosts know each other before either starts. A host that starts
+    // first and is refused by a peer that has not adopted the list yet backs
+    // off for a presence interval, and announces new rows only to peers it
+    // sees online; the note below must travel by that announcement.
     for fixture in [one, two] {
       #expect(try send("POST", "/v1/members/adopt", unix: fixture.socket, headers: ["Authorization": "Bearer " + fixture.token],
                        body: JSONEncoder().encode(await mac.adoption())).status == 200)
-      await fixture.host.startSync()
     }
+    for fixture in [one, two] { await fixture.host.startSync() }
+    func online(_ fixture: HostFixture, sees peer: HostFixture) async -> Bool {
+      await fixture.host.sync.status().peers.first { $0.deviceID == peer.host.identity.deviceID }?.state == .online
+    }
+    var connected = false
+    for _ in 0..<400 where !connected {
+      let forward = await online(one, sees: two), backward = await online(two, sees: one)
+      connected = forward && backward
+      if !connected { try await Task.sleep(for: .milliseconds(25)) }
+    }
+    try #require(connected, "The hosts did not complete their start-up exchange")
     let caller = UUID().uuidString.lowercased()
     let created = try one.call(caller, "woven_notes_create", ["title": .string("From host one")])
     let noteID = try #require(created.value["id"]?.stringValue, "\(created.error ?? "")")
