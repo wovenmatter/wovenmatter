@@ -63,7 +63,12 @@ public enum BackendRPCError: Error, LocalizedError, Sendable {
 
 /// One bounded request per connection. Filesystem permissions and kernel peer credentials
 /// authenticate both ends; no bearer token is persisted or sent through this transport.
+/// A call waits at most `maximumWait` for its reply. Work that can take longer runs as
+/// a job in the background service and reports its progress and outcome through state
+/// the window reads (for bots, `BotsCommandResult.jobs`).
 public struct BackendRPCClient: Sendable {
+    /// The longest any call waits for its reply.
+    public static let maximumWait: TimeInterval = 30
     public let socketURL: URL
     public init(socketURL: URL) { self.socketURL = socketURL }
     public func call(method: String, payload: Data = Data(), requestID: String = UUID().uuidString, timeout: TimeInterval = 30) async throws -> Data {
@@ -86,7 +91,7 @@ public struct BackendRPCClient: Sendable {
                 }
             }
             if status != 0 && errno != EINPROGRESS { throw BackendRPCError.unavailable }
-            let deadline = Date().addingTimeInterval(max(0.05, min(timeout, 30)))
+            let deadline = Date().addingTimeInterval(max(0.05, min(timeout, Self.maximumWait)))
             try BackendSocket.ready(fd, events: Int16(POLLOUT), deadline: deadline)
             var socketError: Int32 = 0
             var size = socklen_t(MemoryLayout<Int32>.size)
@@ -150,8 +155,9 @@ public final class BackendRPCServer: @unchecked Sendable {
                     do {
                         try BackendSocket.configure(client)
                         try BackendSocket.authenticate(client)
-                        let deadline = Date().addingTimeInterval(30)
-                        let request = try JSONDecoder().decode(BackendRPCRequest.self, from: BackendSocket.readFrame(fd: client, deadline: deadline))
+                        let received = Date()
+                        let request = try JSONDecoder().decode(BackendRPCRequest.self,
+                            from: BackendSocket.readFrame(fd: client, deadline: received.addingTimeInterval(BackendRPCClient.maximumWait)))
                         Task {
                             let response: BackendRPCResponse
                             if request.method == "backend.ping" {
@@ -170,7 +176,14 @@ public final class BackendRPCServer: @unchecked Sendable {
                                     let error = BackendRPCResponse(id: request.id, error: "The background service's reply was too large to send.")
                                     frame = (try? JSONEncoder().encode(error)) ?? Data()
                                 }
-                                try? BackendSocket.writeFrame(frame, fd: client, deadline: deadline)
+                                // The reply gets its own short deadline, whatever the handler took.
+                                // A caller waits at most `maximumWait`, so a slower handler's reply
+                                // is lost: say so, since that work must run as a job instead.
+                                do { try BackendSocket.writeFrame(frame, fd: client, deadline: Date().addingTimeInterval(5)) }
+                                catch {
+                                    NSLog("Background service reply for %@ was not delivered after %.0f s; its caller had stopped waiting",
+                                          request.method, Date().timeIntervalSince(received))
+                                }
                             }
                         }
                     } catch { Darwin.close(client); self.slots.signal() }

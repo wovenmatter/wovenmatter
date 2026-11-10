@@ -51,7 +51,7 @@ private final class HostFixture {
     let host: BotsHostController
     let supervisor: BotsRuntimeSupervisor
 
-    init() throws {
+    init(configure: (inout BotsHostDependencies) -> Void = { _ in }) throws {
         directory = FileManager.default.temporaryDirectory.appending(path: "bots-host-\(UUID().uuidString)")
         let bundleRoot = directory.appending(path: "bundle")
         try FileManager.default.createDirectory(at: bundleRoot.appending(path: "src"), withIntermediateDirectories: true)
@@ -70,7 +70,7 @@ private final class HostFixture {
         var recorded: [(String, BotConversationMirror)] = []
         var deleted: [String] = []
         let gib = BotResourceSettings.gib
-        let dependencies = BotsHostDependencies(
+        var dependencies = BotsHostDependencies(
             identity: { ("D3VICE-0001", "Fixture Mac") }, appVersion: "1.4.0",
             issueKey: { machine, bot, name in issued.append((machine, bot, name)); return .init(endpointURL: "http://127.0.0.1:1/mcp", bearerToken: "bot-key") },
             revokeKey: { caller, sticky in revoked.append((caller, sticky)) },
@@ -86,6 +86,7 @@ private final class HostFixture {
                 }
             },
             capacity: { _ in BotMachineCapacity(memoryBytes: 16 * gib, diskTotalBytes: 500 * gib, diskFreeBytes: 200 * gib) })
+        configure(&dependencies)
         host = BotsHostController(directory: state, engine: engine, bundle: bundle, dependencies: dependencies, supervisor: supervisor)
         // Closures above write through these boxes; mirror them after each step.
         self.launches = launches; self.issued = issued; self.revoked = revoked; self.recorded = recorded
@@ -101,6 +102,18 @@ private final class HostFixture {
     }
 
     func remove() { try? FileManager.default.removeItem(at: directory) }
+}
+
+/// Holds a fake long command until the test lets it finish.
+@MainActor
+private final class Gate {
+    private var continuation: CheckedContinuation<Void, any Error>?
+    var waiting: Bool { continuation != nil }
+    func wait() async throws { try await withCheckedThrowingContinuation { continuation = $0 } }
+    func open(throwing error: (any Error)? = nil) {
+        let pending = continuation; continuation = nil
+        if let error { pending?.resume(throwing: error) } else { pending?.resume() }
+    }
 }
 
 @MainActor
@@ -255,6 +268,88 @@ struct BotsHostTests {
 
         _ = try await fixture.host.perform(.setEnabled(false))
         await #expect(throws: (any Error).self) { _ = try await fixture.host.perform(.updateEngine(machineID: "d3vice-0001")) }
+    }
+
+    /// Installing bots takes minutes, far longer than one window round trip: the command
+    /// answers at once, and progress and the outcome reach the window in snapshots.
+    @Test func installingBotsOnLinuxRunsAsAJobWhoseProgressAndFailureStayVisible() async throws {
+        let gate = Gate()
+        var reports: [@MainActor (String) -> Void] = []
+        var discovered = [BotDiscoveredDevice(hostName: "box", displayName: "Box", dnsName: "box.example.ts.net", system: .linux, state: .installBots)]
+        var changes = 0
+        let fixture = try HostFixture { dependencies in
+            dependencies.discover = { discovered }
+            dependencies.installBots = { host, user, progress in
+                #expect(host == "box" && user == "trey")
+                reports.append(progress)
+                progress("Installing agent dependencies…")
+                try await gate.wait()
+            }
+        }
+        defer { fixture.remove() }
+        fixture.host.onChange = { changes += 1 }
+        _ = try await fixture.host.perform(.discoverDevices)
+
+        let started = try await fixture.host.perform(.installBots(hostName: "box", userName: "trey"))
+        #expect(started.jobs.count == 1 && started.jobs.first?.running == true)
+        try await waitFor("progress") { reports.count == 1 && gate.waiting }
+        var snapshot = try await fixture.host.perform(.status)
+        #expect(snapshot.devices?.first?.state == .installing("Installing agent dependencies…"))
+        #expect(snapshot.jobs.first?.progress == "Installing agent dependencies…")
+        #expect(changes >= 2, "every step refreshes the windows")
+        await #expect(throws: (any Error).self) { _ = try await fixture.host.perform(.installBots(hostName: "box", userName: "trey")) }
+
+        // A failure is kept with the device, and progress is cleared.
+        gate.open(throwing: BotsError.unavailable("npm ci failed on box."))
+        try await waitFor("failure") { fixture.host.jobTasks.isEmpty }
+        snapshot = try await fixture.host.perform(.status)
+        #expect(snapshot.devices?.first?.state == .failed("npm ci failed on box."))
+        #expect(snapshot.jobs == [BotsJob(kind: .installBots, target: "box", running: false, progress: nil, error: "npm ci failed on box.")])
+
+        // A retry that succeeds shows the device as discovery now finds it.
+        discovered[0].state = .ready
+        _ = try await fixture.host.perform(.installBots(hostName: "box", userName: "trey"))
+        try await waitFor("retry") { reports.count == 2 && gate.waiting }
+        gate.open()
+        try await waitFor("success") { fixture.host.jobTasks.isEmpty }
+        snapshot = try await fixture.host.perform(.status)
+        #expect(snapshot.devices?.first?.state == .ready)
+        #expect(snapshot.jobs.first?.running == false && snapshot.jobs.first?.error == nil)
+        _ = try await fixture.host.perform(.discoverDevices)
+        #expect(try await fixture.host.perform(.status).jobs.isEmpty, "a fresh look clears finished installs")
+    }
+
+    @Test func aLinuxHostUpdateRunsAsAJobUntilItFinishes() async throws {
+        let gate = Gate()
+        var updated: [String] = []
+        let fixture = try HostFixture { dependencies in
+            dependencies.updateLinuxHost = { machine, progress in
+                updated.append(machine)
+                progress("Uploading the host service…")
+                try await gate.wait()
+            }
+        }
+        defer { fixture.remove() }
+        let started = try await fixture.host.perform(.updateLinuxHost(machineID: "LINUX-1"))
+        #expect(started.jobs.first?.kind == .updateLinuxHost && started.jobs.first?.target == "linux-1" && started.jobs.first?.running == true)
+        try await waitFor("update") { updated == ["LINUX-1"] && gate.waiting }
+        #expect(try await fixture.host.perform(.status).jobs.first?.progress == "Uploading the host service…")
+        gate.open(throwing: BotsError.unavailable("The host update failed and was rolled back."))
+        try await waitFor("update end") { fixture.host.jobTasks.isEmpty }
+        #expect(try await fixture.host.perform(.status).jobs.first?.error == "The host update failed and was rolled back.")
+    }
+
+    @Test func installJobsReplaceTheirDevicesStateAndAppearBeforeDiscoveryFindsThem() {
+        let devices = [BotDiscoveredDevice(hostName: "Box", displayName: "Box", dnsName: nil, system: .linux, state: .installBots),
+                       BotDiscoveredDevice(hostName: "mini", displayName: "Mini", dnsName: nil, system: .macOS, state: .installApp)]
+        let jobs = [BotsJob(kind: .installBots, target: "box", running: true, progress: "Preparing box…"),
+                    BotsJob(kind: .installBots, target: "other", running: false, error: "Bots require Linux."),
+                    BotsJob(kind: .installBots, target: "mini", running: false),
+                    BotsJob(kind: .updateLinuxHost, target: "box", running: true)]
+        let shown = BotsHostController.devices(devices, showing: jobs)
+        #expect(shown?.map(\.state) == [.installing("Preparing box…"), .installApp, .failed("Bots require Linux.")])
+        #expect(shown?.last?.hostName == "other" && shown?.last?.system == .linux)
+        #expect(BotsHostController.devices(nil, showing: []) == nil)
     }
 
     @Test func theCompanionParserAcceptsAWebSocketUpgradeOnlyWhenAsked() throws {

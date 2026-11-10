@@ -700,7 +700,13 @@ with those files present ships them to every host install and update; the bundle
 manifest verifies the `.gz`, and `remote-host.sh` unpacks it to
 `<release>/host/library/linux-<arch>/wovenmatter-library` (0700) and checks the
 recorded SHA-256 before the migration runs (`library_verification_failed`
-otherwise; a release with a plain binary is used as is). Starting and
+otherwise; a release with a plain binary is used as is). Every host holds a
+library copy, so the binary is required: `remote-host.sh install|update` fails
+with `library_missing` before changing anything when the release has none for
+the machine's architecture, and a Mac refuses to send a host bundle without one
+(`RemoteHostLibrary`: the host's architecture from `inspect`, or any while it is
+unknown). Development builds get theirs from `scripts/build_and_run.sh`, which
+builds missing architectures with Docker (see docs/DEVELOPMENT_BUILDS.md). Starting and
 supervising it is the Node server's job. `scripts/test-linux-library.sh` builds
 and tests the portable targets on Linux; the manual validation workflow
 (`linux` scope) runs both and keeps the binaries as an artifact. The release
@@ -1495,10 +1501,30 @@ one request per connection on `control.sock` (e.g.
 
 - **Discover devices**, on the Bots page and on Mac connections, lists every
   online Linux and macOS tailnet peer and its state:
-  - a Linux machine with no server: install bots (sudo once);
+  - a Linux machine with no server, or whose server has no bots: install bots
+    (sudo once). A Woven server is not a bots host until it says so: for a host
+    this Mac added the state is `remote-host.sh inspect`'s `bots.state`
+    (`bots_ready` is ready), for one another Mac added its `GET /v1/bots/status`
+    `enabled`. A check that fails shows its error, with Install bots to retry;
   - a Mac without the app: "Install Woven Matter on this Mac first", with the
     steps (download, open, connect on Mac connections, finish the setup card);
   - ready.
+- **Install bots** (`installBots`) inspects the peer first. No server: `prepare`
+  and `install` with the `bots` role, a new bots-only server this Mac records. A
+  server without bots (a workspace host, or one whose engine step failed):
+  `prepare` for its roles plus `bots`, then `update` with the `bots` role, which
+  keeps its workspace, its bearer and its record wherever it lives. A bots-only
+  server this Mac has no record of (an install that never reported back) is
+  installed again with a new bearer.
+- **Long commands are jobs.** A window reaches the background server in one
+  request that waits at most 30 s (`BackendRPCClient.maximumWait`), and an
+  install or a Linux host update takes minutes. So `installBots` and
+  `updateLinuxHost` start a job there and answer at once. Each job's step and,
+  when it fails, its error travel in every bots snapshot (`BotsCommandResult.jobs`;
+  an install also shows as its device's `installing` or `failed` state, an update
+  as the machine's `updating`) until the next run for that target, and every
+  change refreshes the windows. "Update everything" follows a host's update job
+  to its end. A fresh Find devices clears finished installs.
 - The native SwiftUI bot UI and settings come from PR #226, adapted to this
   runtime and to Woven's provider connections.
 

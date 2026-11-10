@@ -287,6 +287,8 @@ public struct BotDiscoveredDevice: Codable, Equatable, Identifiable, Sendable {
         self.hostName = hostName; self.displayName = displayName; self.dnsName = dnsName; self.system = system; self.state = state
     }
 
+    public var isInstalling: Bool { if case .installing = state { true } else { false } }
+
     /// The steps shown for a Mac that cannot host bots yet.
     public static let macSetupSteps = [
         "Download Woven Matter on that Mac from wovenmatter.com.",

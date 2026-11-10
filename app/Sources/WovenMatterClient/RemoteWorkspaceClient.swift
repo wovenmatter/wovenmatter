@@ -257,6 +257,35 @@ public struct RemoteWorkspacePreflight: Codable, Equatable, Sendable {
     public var fingerprint: String? = nil
     public var linger: Bool? = nil
     public var requiredPrivilegedActions: [String]? = nil
+    /// The Woven server this SSH account already runs there (native hosts).
+    public var installation: Installation? = nil
+    /// Whether that server hosts bots (native hosts).
+    public var bots: Bots? = nil
+
+    public struct Installation: Codable, Equatable, Sendable {
+        public struct Roles: Codable, Equatable, Sendable {
+            public var workspace: Bool
+            public var bots: Bool
+            public init(workspace: Bool, bots: Bool) { self.workspace = workspace; self.bots = bots }
+        }
+        public var id: String
+        public var port: Int
+        /// `fullRoot` or `user`.
+        public var accessMode: String
+        public var fingerprint: String?
+        public var roles: Roles?
+        public init(id: String, port: Int, accessMode: String, fingerprint: String? = nil, roles: Roles? = nil) {
+            self.id = id; self.port = port; self.accessMode = accessMode; self.fingerprint = fingerprint; self.roles = roles
+        }
+    }
+
+    public struct Bots: Codable, Equatable, Sendable {
+        /// `no_server`, `server_without_bots` or `bots_ready`.
+        public var state: String
+        public var blockingIssues: [String]?
+        public init(state: String, blockingIssues: [String]? = nil) { self.state = state; self.blockingIssues = blockingIssues }
+        public var isReady: Bool { state == "bots_ready" }
+    }
 }
 
 public struct RemoteWorkspaceStatus: Codable, Equatable, Sendable {
@@ -615,18 +644,21 @@ public actor RemoteWorkspaceSSHClient {
         self.hostScriptLoader = hostScriptLoader ?? scriptLoader
     }
 
+    /// `roles` (host only) is `remote-host.sh inspect`'s roles argument: the preparation
+    /// it lists is for those roles.
     public func preflight(
         hostName: String,
         userName: String?,
         kind: RemoteWorkspaceKind = .container,
-        accessMode: RemoteWorkspaceAccessMode = .user
+        accessMode: RemoteWorkspaceAccessMode = .user,
+        roles: String? = nil
     ) throws -> RemoteWorkspacePreflight {
         try decode(
             RemoteWorkspacePreflight.self,
             from: runScript(
                 hostName: hostName,
                 userName: userName,
-                arguments: kind == .host ? ["inspect", accessMode.rawValue] : ["inspect"],
+                arguments: kind == .host ? ["inspect", accessMode.rawValue] + (roles.map { [$0] } ?? []) : ["inspect"],
                 kind: kind
             )
         )
