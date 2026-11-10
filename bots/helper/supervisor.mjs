@@ -287,7 +287,14 @@ async function handle(method, args) {
   }
 }
 
+// sun_path holds 108 bytes on Linux and 104 on macOS, NUL included. Node 26 on macOS
+// accepts a longer path without binding it, so check the length here.
+const SUN_PATH_MAX = process.platform === "linux" ? 107 : 103;
+
 async function main() {
+  if (Buffer.byteLength(SOCKET) > SUN_PATH_MAX) {
+    throw new Error(`control socket path is ${Buffer.byteLength(SOCKET)} bytes, over the ${SUN_PATH_MAX}-byte limit: ${SOCKET}`);
+  }
   await mkdir(dirname(SOCKET), { recursive: true });
   await rm(SOCKET, { force: true });
   const server = createServer((socket) => {
