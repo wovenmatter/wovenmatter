@@ -101,7 +101,8 @@ struct SettingsPermissionsView: View {
         HStack(alignment: .center, spacing: 16) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(item.permissionTitle).font(.system(size: 13, weight: .medium))
-                Text(access == .needsReopen ? "Reopen Woven Matter so macOS applies it." : item.permissionDetail)
+                Text(access == .needsReopen ? "Reopen Woven Matter so macOS applies it."
+                     : access == .allowed ? item.permissionDetail : item.howToAllow)
                     .font(.system(size: 12)).foregroundStyle(DashboardPalette.mutedForeground)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -191,6 +192,16 @@ extension CompanionMacAccessStatus.Item {
         case .fullDiskAccess: "Open files anywhere on this Mac."
         case .accessibility: "Click and type in other apps."
         case .screenRecording: "See what's on the screen."
+        }
+    }
+
+    /// What to do when it isn't allowed yet, in one line.
+    var howToAllow: String {
+        switch self {
+        case .keychain: "When macOS asks, enter your Mac password and choose Always Allow."
+        case .fullDiskAccess: "Allow opens the list and shows this app in Finder. Drag it in, then switch it on."
+        case .accessibility, .screenRecording: "Allow opens System Settings. Switch this app on."
+        default: permissionDetail
         }
     }
 

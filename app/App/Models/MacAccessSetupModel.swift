@@ -231,7 +231,10 @@ final class MacAccessSetupModel {
     private func liveRequest(_ item: Item) async {
         switch item {
         case .fullDiskAccess:
+            // macOS has no request API and never lists an app here on its own:
+            // the user adds it with + or by dragging it in, so show it in Finder too.
             openPrivacyPane("Privacy_AllFiles")
+            NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL])
         case .accessibility:
             if !AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary) {
                 openPrivacyPane("Privacy_Accessibility")

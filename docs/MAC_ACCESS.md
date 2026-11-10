@@ -12,7 +12,7 @@ screen (Accessibility, Screen Recording, Automation) and Dictation (Microphone).
 | Item | Why sessions need it | How it is granted | Detection |
 | --- | --- | --- | --- |
 | Keychain access | Saved provider, workspace and browser credentials | Enable/Restore Keychain access (below) | The existing owner-process checks |
-| Full Disk Access | Files in protected folders (Desktop, Documents, Downloads, other apps' data) without a per-folder prompt | Opens Privacy & Security → Full Disk Access; macOS has no request API | Reads a file only Full Disk Access unlocks (`~/Library/Application Support/com.apple.TCC/TCC.db`, Safari bookmarks); a missing file is inconclusive |
+| Full Disk Access | Files in protected folders (Desktop, Documents, Downloads, other apps' data) without a per-folder prompt | Opens Privacy & Security → Full Disk Access and shows the app in Finder; macOS has no request API and lists an app there only after the user adds it (+ or drag) | Reads a file only Full Disk Access unlocks (`~/Library/Application Support/com.apple.TCC/TCC.db`, Safari bookmarks); a missing file is inconclusive |
 | Accessibility | Computer Use input | `AXIsProcessTrustedWithOptions` prompt, then the pane | `AXIsProcessTrusted` |
 | Screen Recording | Computer Use snapshots | `CGRequestScreenCaptureAccess`, then the pane | `CGPreflightScreenCaptureAccess` |
 | Automation | Agents scripting System Events and Finder (`osascript`) | Launches System Events hidden and asks with `AEDeterminePermissionToAutomateTarget`; the pane if denied | The same call without asking; a target that is not running is inconclusive |
