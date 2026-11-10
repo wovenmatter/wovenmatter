@@ -833,16 +833,15 @@ def install(workspace_id,requested_port,mode,fingerprint,updating=False,roles=No
         atomic_link(ROOT/'current',destination)
         atomic_link(ROOT/'node/current',node_root)
         if roles['workspace']: atomic_link(ROOT/'browsers/current',browser_root)
-        private_file(ENV_FILE,(''.join(key+'='+json.dumps(value,ensure_ascii=False)+'\n' for key,value in settings.items())).encode())
+        # The health check and browser selftest run with the library host off:
+        # until they pass, nothing has served or synchronized the migrated
+        # database, so a failure may still restore the backup. Starting the
+        # library host below commits the update (docs: "Host updates").
+        private_file(ENV_FILE,render_environment({**settings,'WOVENMATTER_LIBRARY':'0'} if library else settings))
         private_file(UNIT,unit.encode())
         run(['systemctl','--user','daemon-reload'],check=True)
         run(['systemctl','--user','enable','--now',UNIT_NAME],check=True)
-        deadline=time.monotonic()+45
-        while time.monotonic()<deadline:
-            response=health(port,TOKEN)
-            if response and response.get('serviceFingerprint')==fingerprint and response.get('runtimeKind')=='host': break
-            time.sleep(.3)
-        else: fail('host_health_failed','The new native service did not become healthy; the previous version was restored.',70)
+        if not wait_healthy(port,fingerprint): fail('host_health_failed','The new native service did not become healthy; the previous version was restored.',70)
         if roles['workspace']:
             progress('selftest')
             environment.update(settings)
@@ -859,12 +858,20 @@ def install(workspace_id,requested_port,mode,fingerprint,updating=False,roles=No
         previous=sorted(set((old or {}).get('previousIDs',[]))|({old['id']} if converting else set()))
         if previous: installed['previousIDs']=previous
         private_file(RECORD,json.dumps(installed,sort_keys=True).encode()+b'\n')
+        verify_user_files(snapshot)
+        # Committed: from here the new library host may serve peers and phones,
+        # so nothing restores the old database or release (the old release
+        # cannot be assumed to open the migrated database). Later trouble is
+        # reported with the new version left installed.
+        activated=False
         if library:
+            private_file(ENV_FILE,render_environment(settings))
+            run(['systemctl','--user','restart',UNIT_NAME],check=True)
+            if not wait_healthy(port,fingerprint): fail('host_health_failed','The new version is installed but its service did not become healthy with the library host; the migrated library was kept.',70)
             # The server records the library host's identity once it is ready.
             deadline=time.monotonic()+30
             while member_identity() is None and time.monotonic()<deadline: time.sleep(.5)
-        verify_user_files(snapshot)
-        activated=False
+            verify_user_files(snapshot)
         if roles['bots']:
             # After activation: the server stays installed if the engine step
             # fails, and bots-enable retries it without a second install.
@@ -896,6 +903,18 @@ def install(workspace_id,requested_port,mode,fingerprint,updating=False,roles=No
         raise
     finally:
         stream.close(); shutil.rmtree(stage,ignore_errors=True)
+
+def render_environment(settings):
+    return (''.join(key+'='+json.dumps(value,ensure_ascii=False)+'\n' for key,value in settings.items())).encode()
+
+HEALTH_SECONDS=45
+def wait_healthy(port,fingerprint):
+    deadline=time.monotonic()+HEALTH_SECONDS
+    while time.monotonic()<deadline:
+        response=health(port,TOKEN)
+        if response and response.get('serviceFingerprint')==fingerprint and response.get('runtimeKind')=='host': return True
+        time.sleep(.3)
+    return False
 
 def rotate_token(workspace_id):
     # Replaces the installer bearer (docs: "Installer bearer"). The service
