@@ -26,18 +26,20 @@ async function eventually(condition, message, timeout = 10_000) {
 }
 const listen = server => new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve(server.address().port)))
 
-async function execution(t, fetchImpl) {
+async function execution(t, fetchImpl, extra = {}) {
   const directory = temporary(t)
   const runtime = { providers: async () => [], create: async () => ({ sessionID: randomUUID() }), close: async () => {} }
   const service = createClientExecution({ directory, runtime, managedDataRoot: join(directory, 'databases'), publisherKey: 'k'.repeat(40), publisherFetch: fetchImpl, publisherIntervalMilliseconds: 0,
-    mcpEndpointURL: () => 'http://127.0.0.1:7337/mcp' })
+    mcpEndpointURL: () => 'http://127.0.0.1:7337/mcp', ...extra })
   t.after(() => service.close())
   return service
 }
 
 test('bot MCP keys rotate, attribute library calls to the bot, honor botMCP groups and pause-all, and revoke', async t => {
   const requests = []
-  const service = await execution(t, async (url, options) => { requests.push({ url, options }); return { ok: true, status: 200, text: async () => JSON.stringify({ jsonrpc: '2.0', id: 'x', result: { content: [] } }) } })
+  // This host's library copy exists but is down, so the list stays stable while calls wait.
+  const service = await execution(t, async (url, options) => { requests.push({ url, options }); return { ok: true, status: 200, text: async () => JSON.stringify({ jsonrpc: '2.0', id: 'x', result: { content: [] } }) } },
+    { library: { client: {}, available: () => false } })
   const { enroll } = await import('./fixtures/execution.mjs'); enroll(service)
   const mcp = service.mcp, deviceID = randomUUID(), botID = randomUUID()
   assert.throws(() => mcp.issueBotKey({ botID: 'nope', botName: 'x', deviceID }), /bot UUID/)
@@ -56,15 +58,20 @@ test('bot MCP keys rotate, attribute library calls to the bot, honor botMCP grou
   assert.ok(names.includes('woven_notes_read'))
   assert.ok(!names.some(name => name.startsWith('woven_computer_') || name.startsWith('woven_executor_')), 'Computer Use and Executor start off')
   assert.ok(!names.includes('woven_sessions_send') && !names.includes('woven_goals_set'), 'conversation-bound local tools are not offered to bots')
-  // Without the library connection there is nowhere to send a bot's call.
-  assert.equal((await mcp.handle(scope, { jsonrpc: '2.0', id: 'n', method: 'tools/call', params: { name: 'woven_notes_read', arguments: { noteID: randomUUID() } } })).error.code, -32602)
+  // Bots list only what they can call: this host's library groups, history included, and never a
+  // tool only a Mac serves or one bound to a session's run.
+  assert.ok(names.includes('woven_history_search') && names.includes('woven_timers_list') && names.includes('woven_sessions_folders'))
+  for (const name of ['woven_usage_read', 'woven_html_preview', 'woven_html_render', 'woven_html_cancel', 'woven_context', 'woven_databases_query']) assert.ok(!names.includes(name), name + ' is not offered to bots')
+  // While the library copy is down a bot's call waits for it.
+  assert.equal((await mcp.handle(scope, { jsonrpc: '2.0', id: 'n', method: 'tools/call', params: { name: 'woven_notes_read', arguments: { noteID: randomUUID() } } })).result.structuredContent.code, 'unavailable')
   const own = service.descriptor()
   mcp.configureLibrary({ grantID: randomUUID(), libraryID: own.libraryID, workspaceID: own.id, executionDeviceID: own.executionDeviceID, endpointURL: 'https://central.example.ts.net/wovenmatter/mcp/workspace', bearerToken: 't'.repeat(43) })
   // A Mac's /mcp/workspace binds conversations, so the single-Mac grant never serves bots:
   // their library tools come only from this host's own library copy.
   const before = requests.length
   const called = await mcp.handle(scope, { jsonrpc: '2.0', id: 'n', method: 'tools/call', params: { name: 'woven_notes_read', arguments: { noteID: randomUUID() } } })
-  assert.equal(called.error?.code, -32602, JSON.stringify(called))
+  assert.equal(called.result?.structuredContent?.code, 'unavailable', JSON.stringify(called))
+  assert.equal((await mcp.handle(scope, { jsonrpc: '2.0', id: 'u', method: 'tools/call', params: { name: 'woven_usage_read', arguments: {} } })).error?.code, -32602)
   assert.equal(requests.length, before, 'nothing is sent to the Mac for a bot')
 
   mcp.configureBots({ groups: ['calendar'] })

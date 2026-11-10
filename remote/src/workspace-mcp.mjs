@@ -169,8 +169,9 @@ export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localT
   // work with every Mac offline. History the caller may read only through its
   // managed sessions stays on the Node journal, which scopes it, as does all
   // history while the library host is down.
+  const libraryServed=name=>!!localLibrary&&!nodeOwned(name)&&(libraryServedGroups.has(groupFor(name))||libraryServedTools.has(name))
   function servedLocally(scope,name) {
-    if(!localLibrary||nodeOwned(name)||!libraryServedGroups.has(groupFor(name))&&!libraryServedTools.has(name))return false
+    if(!libraryServed(name))return false
     // A bot's library tools run as an app-wide caller of this library copy.
     if(isBot(scope))return true
     return groupFor(name)!=='history'||activeGroups(scope).has('history')&&(localLibrary.available()||!local.has(name))
@@ -188,10 +189,12 @@ export function createWorkspaceMCP({db,identity,secret,endpointURL,policy,localT
   const delegated=scope=>!isBot(scope)&&(!!libraryGrant()||!!memberDelegate?.available())
   function inventory(scope) {
     if(isBot(scope)) {
-      // Conversation-bound local tools have no meaning for a bot; library
-      // tools reach the library with the bot's own attribution.
+      // Only what a bot can call: the groups this host's own library copy
+      // serves (with the bot's attribution) and the session tools this server
+      // runs for bots. Never Mac-only tools (usage, HTML preview) or
+      // conversation-bound Node tools (goals, HTML render, databases).
       const bot=settings().botMCP
-      return catalog.filter(tool=>bot.isEnabled&&new Set([...bot.groups,'goals','html']).has(groupFor(tool.name))&&(!local.has(tool.name)||forBots.has(tool.name)))
+      return catalog.filter(tool=>bot.isEnabled&&new Set([...bot.groups,'goals','html']).has(groupFor(tool.name))&&(forBots.has(tool.name)||libraryServed(tool.name)))
     }
     return catalog.filter(tool=>{
       const group=groupFor(tool.name)
