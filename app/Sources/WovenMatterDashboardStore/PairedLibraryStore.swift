@@ -14,7 +14,13 @@ import WovenMatterCore
 extension WorkspaceDatabaseConnection {
   struct PeerTable {
     let name: String
+    /// Column names sorted by name, never by physical position: a library
+    /// migrated over time adds columns at the end, a fresh one declares them
+    /// in place, and both exchange rows by name.
     let columns: [String]
+    /// Declared type (upper case) of each column.
+    let types: [String: String]
+    /// Primary-key columns in key order; the record identity is their array.
     let keys: [String]
   }
   static func peerQuote(_ value: String) -> String { "\"" + value.replacingOccurrences(of: "\"", with: "\"\"") + "\"" }
@@ -25,12 +31,17 @@ extension WorkspaceDatabaseConnection {
       let sql = try historyRowsUnlocked("SELECT sql FROM sqlite_master WHERE name=?", values: [table]).first?.objectValue?["sql"]?.stringValue ?? ""
       let generated = sql.uppercased().contains("AUTOINCREMENT")
         ? columns.first { $0["pk"]?.doubleValue == 1 && $0["type"]?.stringValue?.uppercased() == "INTEGER" }?["name"]?.stringValue : nil
-      let names = columns.compactMap { $0["name"]?.stringValue }.filter { $0 != generated }
+      var types: [String: String] = [:]
+      for column in columns {
+        guard let name = column["name"]?.stringValue, name != generated else { continue }
+        types[name] = (column["type"]?.stringValue ?? "").trimmingCharacters(in: .whitespaces).uppercased()
+      }
+      let names = types.keys.sorted()
       var keys = columns.filter { ($0["pk"]?.doubleValue ?? 0) > 0 }.sorted { ($0["pk"]?.doubleValue ?? 0) < ($1["pk"]?.doubleValue ?? 0) }
         .compactMap { $0["name"]?.stringValue }.filter { $0 != generated }
       if keys.isEmpty { keys = names.contains("event_id") ? ["event_id"] : names.contains("id") ? ["id"] : [] }
       guard !keys.isEmpty else { throw peerError("A shared table has no stable identity: " + table) }
-      return PeerTable(name: table, columns: names, keys: keys)
+      return PeerTable(name: table, columns: names, types: types, keys: keys)
     }
   }
   private func peerError(_ message: String) -> CompanionAPIError { .init(code: "peer_sync", message: message) }
@@ -38,9 +49,44 @@ extension WorkspaceDatabaseConnection {
     let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
     return String(decoding: try encoder.encode(value), as: UTF8.self)
   }
+  /// The shared-table identity peers must agree on: per table, its column
+  /// names with their declared types, sorted by name, and its key columns in
+  /// key order. Physical column order is not part of it.
   private func peerSchema() throws -> String {
-    let graph = try peerTables().map { $0.name + ":" + $0.columns.joined(separator: ",") + ":" + $0.keys.joined(separator: ",") }.joined(separator: "\n")
-    return SHA256.hash(data: Data(graph.utf8)).hexString
+    let graph = try peerTables().map { table in
+      table.name + ":" + table.columns.map { $0 + " " + (table.types[$0] ?? "") }.joined(separator: ",") + ":" + table.keys.joined(separator: ",")
+    }.joined(separator: "\n")
+    return SHA256.hash(data: Data(("v2\n" + graph).utf8)).hexString
+  }
+
+  /// Libraries created before September 2026 still carry
+  /// `dashboard_conversations.is_main`, which nothing reads or writes any
+  /// more. It would make the shared schema differ from a fresh library's, so
+  /// it is dropped, and the change log and merge state stop carrying it, so
+  /// already-recorded versions still match what every peer now exchanges.
+  /// The paired triggers that name it are recreated by the caller.
+  private func dropLegacyConversationColumnsUnlocked() throws {
+    guard try historyRowsUnlocked("SELECT 1 AS present FROM pragma_table_info('dashboard_conversations') WHERE name='is_main'", values: []).isEmpty == false else { return }
+    try executeUnlocked("SAVEPOINT legacy_columns")
+    do {
+      for operation in ["INSERT", "UPDATE", "DELETE"] { try executeUnlocked("DROP TRIGGER IF EXISTS paired_dashboard_conversations_\(operation)") }
+      try executeUnlocked("ALTER TABLE dashboard_conversations DROP COLUMN is_main")
+    } catch {
+      // Something else still names the column. Opening never fails over
+      // this: the library keeps the column, and its schema still differs.
+      try executeUnlocked("ROLLBACK TO legacy_columns"); try executeUnlocked("RELEASE legacy_columns")
+      return
+    }
+    try executeUnlocked("RELEASE legacy_columns")
+    let stripped = "json_remove(payload,'$.row.is_main')"
+    let present = "json_type(payload,'$.row.is_main') IS NOT NULL"
+    try executeUnlocked("""
+      UPDATE paired_library_rows SET payload=\(stripped) WHERE table_name='dashboard_conversations' AND \(present);
+      UPDATE paired_library_frontier SET payload=\(stripped) WHERE table_name='dashboard_conversations' AND \(present);
+      UPDATE paired_library_changes SET payload=\(stripped) WHERE json_extract(payload,'$.table')='dashboard_conversations' AND \(present);
+      UPDATE paired_library_pending SET payload=\(stripped) WHERE json_extract(payload,'$.table')='dashboard_conversations' AND \(present);
+      UPDATE paired_library_conflicts SET payload=\(stripped) WHERE json_extract(payload,'$.table')='dashboard_conversations' AND \(present);
+      """)
   }
 
   /// Triggers commit a durable change in the same transaction as the content.
@@ -68,6 +114,7 @@ extension WorkspaceDatabaseConnection {
         CREATE TABLE IF NOT EXISTS paired_library_seeded(table_name TEXT PRIMARY KEY);
         CREATE TABLE IF NOT EXISTS paired_library_reassert(table_name TEXT NOT NULL,record_key TEXT NOT NULL,PRIMARY KEY(table_name,record_key));
         """)
+      try dropLegacyConversationColumnsUnlocked()
       // Ownership of pre-existing rows is claimed exactly once, before any peer
       // data can arrive. Rows later received without their owner record stay
       // read-only and are never adopted by a restart. A schedule assigned to
@@ -866,8 +913,15 @@ extension WorkspaceDatabase {
     try await write { try $0.receivePairedLibrary(page, from: peer, sender: sender) }
   }
   public func pairedLibraryCursors(_ peer: String) async throws -> (pulled: Int64, pushed: Int64) { try await read { try $0.pairedLibraryCursors(peer) } }
+  /// Records that `peer` holds this device's changes up to `cursor`, so later
+  /// pushes start after it. Never moves back, and never past this device's
+  /// own change log.
   public func acknowledgePairedLibrary(peer: String, cursor: Int64) async throws {
-    try await write { try $0.toolsExecuteUnlocked("INSERT INTO paired_library_cursors(peer_id,pushed) VALUES(?,?) ON CONFLICT(peer_id) DO UPDATE SET pushed=MAX(pushed,excluded.pushed)", [peer, String(cursor)]) }
+    try await write { try $0.toolsExecuteUnlocked("""
+      INSERT INTO paired_library_cursors(peer_id,pushed)
+        VALUES(?,MIN(CAST(? AS INTEGER),COALESCE((SELECT seq FROM sqlite_sequence WHERE name='paired_library_changes'),0)))
+      ON CONFLICT(peer_id) DO UPDATE SET pushed=MAX(pushed,excluded.pushed)
+      """, [peer, String(cursor)]) }
   }
   public func pairedLibraryConflicts() async throws -> [PairedLibraryConflict] { try await read { try $0.pairedLibraryConflicts() } }
   public func pairedLibraryQuarantineCount() async throws -> Int { try await read { try $0.pairedLibraryQuarantineCount() } }

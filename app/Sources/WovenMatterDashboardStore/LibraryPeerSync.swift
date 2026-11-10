@@ -579,6 +579,10 @@ public actor LibraryPeerSync {
         await directory.invalidate()
         if !exchange.page.entries.isEmpty { await meetNewPeers() }
         guard await directory.member(member.deviceID) != nil else { return .error("unauthorized", "This device was removed.", status: 401) }
+        // `after` is the caller's committed receive cursor for this device: it
+        // already holds everything up to there, so this device's own pushes to
+        // it resume after that point instead of resending it.
+        try await database.acknowledgePairedLibrary(peer: member.deviceID, cursor: exchange.after)
         let reply = LibraryPeerExchange(deviceID: directory.identity.deviceID, after: exchange.page.cursor,
           page: try await database.pairedLibraryPage(after: exchange.after), version: configuration.version,
           attachment: await attachments?.outgoing(member.deviceID))
