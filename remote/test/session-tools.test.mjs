@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { spawnSync } from 'node:child_process'
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { spawn, spawnSync } from 'node:child_process'
+import { chmodSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -51,6 +51,20 @@ test('session sudo explains Normal user workspaces instead of a password', t => 
   assert.equal(result.status, 1)
   assert.match(result.stderr, /normal user permissions/)
   assert.doesNotMatch(result.stderr, /needs Mac Mini's password/)
+})
+
+test('session sudo streams a long command’s errors as they happen and writes no temporary file', async t => {
+  const temporary = mkdtempSync(join(tmpdir(), 'woven-session-tmp-'))
+  t.after(() => rmSync(temporary, { recursive: true, force: true }))
+  const child = spawn(join(tools, 'sudo'), ['/bin/sh', '-c', 'echo early >&2; sleep 30'], { stdio: ['ignore', 'pipe', 'pipe'],
+    env: { PATH: '/usr/bin:/bin', WOVENMATTER_DEVICE_NAME: 'Mac Mini', WOVENMATTER_REAL_SUDO: fakeSudo(t), FAKE_MODE: 'nopasswd', TMPDIR: temporary } })
+  t.after(() => child.kill('SIGKILL'))
+  let errors = ''
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('stderr was held back: ' + JSON.stringify(errors))), 5_000)
+    child.stderr.on('data', data => { errors += data; if (errors.includes('early')) { clearTimeout(timer); resolve() } })
+  })
+  assert.deepEqual(readdirSync(temporary), [])
 })
 
 test('askpass refuses credential prompts immediately', () => {

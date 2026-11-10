@@ -59,24 +59,35 @@ export function createHostAdministration({ serviceRoot, dataRoot, stateDirectory
       : { ...saved, state: 'failed', error: parse(await read('update.err')) ?? { error: 'host_update_failed' } }
   }
 
+  // The uploaded bundle belongs to the detached update once it starts (which
+  // removes it when done); on every earlier failure it is removed here.
   async function startUpdate(request, url, bodyFile) {
-    const fingerprint = url.searchParams.get('fingerprint') ?? ''
-    if (!/^[a-f0-9]{64}$/.test(fingerprint)) throw fail(400, 'A SHA-256 deployment fingerprint is required.')
-    const roles = url.searchParams.get('roles')
-    if (roles !== null && !/^(workspace|bots)(,(workspace|bots))?$/.test(roles)) throw fail(400, 'Choose the workspace, bots, or both.')
-    const current = await installation()
-    if ((await lastUpdate()).state === 'running') throw fail(409, 'host_update_running')
-    await mkdir(updates, { recursive: true, mode: 0o700 })
-    for (const name of ['update.out', 'update.err', 'update.code', 'remote-host.sh']) await rm(join(updates, name), { force: true })
-    // The bundle carries its own lifecycle script; it verifies the bundle.
-    const stream = bodyFile ?? await receiveBundle(request, join(updates, 'bundle-' + randomBytes(6).toString('hex') + '.stream'))
-    const updateScript = await extractScript(stream.path, join(updates, 'remote-host.sh')).catch(() => script)
-    const roleText = roles ?? Object.entries(current.roles ?? { workspace: true }).filter(([, on]) => on).map(([name]) => name).join(',')
-    await writeFile(join(updates, 'update.json'), JSON.stringify({ fingerprint, roles: roleText, startedAt: new Date().toISOString() }) + '\n', { mode: 0o600 })
-    // An empty credential line keeps the installed API token.
-    await detach('update', ['/bin/bash', '-c', 'bash "$1" update "$2" "$3" "$4" "$5" "$6" <"$7" >"$8/update.out" 2>"$8/update.err"; echo $? >"$8/update.code"; rm -f "$7"',
-      'wovenmatter-update', updateScript, current.id, String(current.port), current.accessMode, fingerprint, roleText, stream.path, updates])
-    return { started: true, fingerprint }
+    let stream = bodyFile, recorded = false
+    try {
+      const fingerprint = url.searchParams.get('fingerprint') ?? ''
+      if (!/^[a-f0-9]{64}$/.test(fingerprint)) throw fail(400, 'A SHA-256 deployment fingerprint is required.')
+      const roles = url.searchParams.get('roles')
+      if (roles !== null && !/^(workspace|bots)(,(workspace|bots))?$/.test(roles)) throw fail(400, 'Choose the workspace, bots, or both.')
+      const current = await installation()
+      if ((await lastUpdate()).state === 'running') throw fail(409, 'host_update_running')
+      await mkdir(updates, { recursive: true, mode: 0o700 })
+      for (const name of ['update.out', 'update.err', 'update.code', 'remote-host.sh']) await rm(join(updates, name), { force: true })
+      // The bundle carries its own lifecycle script; it verifies the bundle.
+      stream ??= await receiveBundle(request, join(updates, 'bundle-' + randomBytes(6).toString('hex') + '.stream'))
+      const updateScript = await extractScript(stream.path, join(updates, 'remote-host.sh')).catch(() => script)
+      const roleText = roles ?? Object.entries(current.roles ?? { workspace: true }).filter(([, on]) => on).map(([name]) => name).join(',')
+      await writeFile(join(updates, 'update.json'), JSON.stringify({ fingerprint, roles: roleText, startedAt: new Date().toISOString() }) + '\n', { mode: 0o600 })
+      recorded = true
+      // An empty credential line keeps the installed API token.
+      await detach('update', ['/bin/bash', '-c', 'bash "$1" update "$2" "$3" "$4" "$5" "$6" <"$7" >"$8/update.out" 2>"$8/update.err"; echo $? >"$8/update.code"; rm -f "$7"',
+        'wovenmatter-update', updateScript, current.id, String(current.port), current.accessMode, fingerprint, roleText, stream.path, updates])
+      stream.owned = true
+      return { started: true, fingerprint }
+    } finally {
+      if (stream && !stream.owned) await rm(stream.path, { force: true }).catch(() => {})
+      // An update that never started must not read as running.
+      if (recorded && !stream?.owned) await rm(join(updates, 'update.json'), { force: true }).catch(() => {})
+    }
   }
 
   async function handle(request, response, url, { json, readJSON, readBody, administrator, bodyFile, member = null, installer = false }) {

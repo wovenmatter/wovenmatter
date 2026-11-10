@@ -235,7 +235,11 @@ same commit.
   `null`), and `POST /v1/host/update?fingerprint=<sha256>[&roles=…]` whose body
   is the host bundle (202; `GET /v1/host/update` reports `running`,
   `succeeded` with the status, or `failed` with the error), plus `POST
-  /v1/host/members/adopt` (above). Restart and update
+  /v1/host/members/adopt` (above). A signed upload is received (streamed to
+  `<state>/host-update/bundle-*.stream`) only when the claimed member is a
+  Mac or the installer's bearer comes with it, so other members get 403
+  before any of it is written; the file is removed on every outcome except a
+  started update, whose unit removes it when done. Restart and update
   run in a transient systemd user unit, because they stop the server. First
   install still runs over Tailscale SSH from the Mac that adds the machine,
   which also keeps SSH as its update fallback. Every other Mac lists every
@@ -258,7 +262,23 @@ same commit.
     a host: first install, the first member adoption (before the host was ever
     adopted), the SSH update fallback, that Mac's own management link
     (`RemoteWorkspaceServiceClient`) and a bots-only host that is not in the
-    registry.
+    registry. **Installer bearer:** the server accepts it only on that
+    SSH/loopback path, never through Tailscale Serve: a request carrying any
+    header Serve adds (`X-Forwarded-For`, `X-Forwarded-Host`,
+    `X-Forwarded-Proto`, `Forwarded`, `Via`, `Tailscale-User-*`,
+    `Tailscale-Headers-Info`, `Tailscale-App-Capabilities`) is never the
+    installer (`remote/src/installer-bearer.mjs`). `POST
+    /v1/host/installer-bearer` (a signed Mac member, or the installer itself)
+    rotates it: `remote-host.sh rotate-token ID` writes a new
+    `WOVENMATTER_API_TOKEN` to `service.env` and the running server switches
+    to it at once; the reply is `{rotated: true}`, plus `bearer` only for the
+    installer on its own tunnel. A Mac that removes another Mac queues a
+    rotation (durably, retried with pending revocations,
+    `companion.execution.pending-installer-rotations`) on every Linux host in
+    the registry whose `ownerDeviceID` is the removed Mac. Publisher and MCP
+    grants at rest are keyed by `WOVENMATTER_SERVICE_SECRET`, the first
+    install's bearer, which installs and rotations keep, so rotation never
+    orphans them.
   - Outside-client and session MCP bearers (`/mcp`, agent tool sessions),
     bot MCP keys (bots are not members), the runtime host API
     (`/v1/bots-host/*`) and runtime token, and the library socket's local
@@ -571,8 +591,17 @@ endpoints, libraryEndpoint, updatedAt}`, 0600), which `remote-host.sh inspect`
 and `status` return as `memberIdentity` for the Mac that creates this
 machine's member entry; `/v1/health` reports it too. `remote-host.sh
 install|update` runs `--migrate-only` after stopping the old service and
-before switching releases; a failed migration, or any later failure, restores
-the database files and the previous release. Isolated tests use
+before switching releases. **Host updates** then commit in two steps. The new
+service first starts with `WOVENMATTER_LIBRARY=0` for the health check and
+browser selftest, so nothing serves or synchronizes the migrated database
+yet; a failure up to here (migration included) restores the database files
+and the previous release. Restarting with the library host on commits the
+update: once it may have served peers or phones, restoring the old change
+log, clock and cursors would make peers skip this host's next writes and lose
+acknowledged phone mutations, and the old release cannot be assumed to open
+the migrated schema. So nothing is rolled back after that point; a later
+failure (`host_health_failed`, "the migrated library was kept") is reported
+with the new version left installed. Isolated tests use
 `WOVENMATTER_LIBRARY_BINARY`, `WOVENMATTER_LIBRARY_DATA_ROOT`,
 `WOVENMATTER_LIBRARY_SERVE=0` or `WOVENMATTER_LIBRARY_HTTPS_PORT`;
 `WOVENMATTER_LIBRARY=0` turns it off.
@@ -997,7 +1026,11 @@ Pi Bot's Admin Bot config tools (`read_config`, `update_config`,
 - User `bot` (passwordless sudo), `tini` as PID 1, the supervisor as its
   child, restart policy `no` (the runtime decides when bots run), 512 MiB
   `/dev/shm` for Chromium, no published ports, no host mounts, no Docker
-  socket.
+  socket. `CapDrop: [NET_RAW, MKNOD]` (`DROPPED_CAPABILITIES`): no raw
+  sockets (no packet forging or ARP spoofing on the bot network; `ping` does
+  not work) and no device nodes; sudo, apt and headless Chromium (Playwright
+  launches it without its sandbox) keep Docker's other default capabilities.
+  Existing containers pick this up when an update recreates them.
 - Bot state the runtime owns lives in the storage volume under
   `/workspace/.woven/`: `services.json` (restart list), `logs/<name>.log`,
   `browser/profile/` (Chromium profile) and `browser/tabs.json` (open tabs,
@@ -1040,7 +1073,10 @@ login until `stop()`.
   `state.json`, `console.log`, `helper.log` and `snapshot/`. Sockets are
   `docker.sock` and `control.sock` in the same folder (0600, folder 0700),
   or in `/private/tmp/wovenmatter-vm-<uid>-<digest>/` when that path would
-  exceed `sun_path`. Always read the socket path from the API, never build it.
+  exceed `sun_path`. The helper creates that folder 0700 and refuses to
+  listen, and the app to connect, unless `lstat` shows a real directory owned
+  by this user (`WovenVMPaths.preparePrivateDirectory`); a wider mode is
+  tightened. Always read the socket path from the API, never build it.
 - **Guest.** The pinned Ubuntu 26.04 LTS arm64 cloud image
   (`app/VMHelper/guest-version.json`), converted from QCOW2 to a raw disk on
   first run, EFI boot, cloud-init NoCloud seed. First boot purges
@@ -1059,7 +1095,9 @@ login until `stop()`.
   fd7a:115c:a1e0::/48, RFC 1918, link-local, ULA, loopback, multicast and
   every address of the Mac (pushed by the helper), and `WOVEN-INPUT` rejects
   container traffic to the guest itself. DNS to the NAT gateway is the one
-  exception. Containers have no `CAP_NET_ADMIN` in the guest namespace and
+  exception. Containers on one bridge reach each other only through
+  `br_netfilter`, which `egress.sh` loads before setting
+  `bridge-nf-call-iptables`, so the private-range rejects stop that too. Containers have no `CAP_NET_ADMIN` in the guest namespace and
   cannot open vsock sockets. The bots runtime must never create
   privileged or host-network containers, or mount the socket.
 - **Resources.** The VM boots with the RAM pool (no cap: all RAM), which is
@@ -1164,6 +1202,21 @@ one request per connection on `control.sock` (e.g.
   192.168/16 and the other special-use ranges; it masquerades the rest. A
   Woven iptables chain (`WOVENMATTER-BOTS`, jumped first from `FORWARD`) only
   accepts what that table allowed, for hosts whose `FORWARD` policy is DROP.
+  Bot containers cannot reach each other: the table `bridge
+  wovenmatter_bots` drops every frame bridged between two ports of
+  `br-wovenbots` (`meta ibrname/obrname`), without loading `br_netfilter` or
+  affecting any other bridge; bots need no path to each other, since the
+  runtime reaches them through the engine's exec API. (dockerd refuses
+  `icc=false` while `iptables` is off, so the engine does not set it.)
+- **Forwarding.** Bots need host-wide IPv4 forwarding. When the engine is
+  the one turning `ip_forward` on (marker `/run/wovenmatter/forwarding-enabled`
+  until the next boot), it also owns what that means for the host's other
+  interfaces: it sets the iptables `FORWARD` policy to DROP, as dockerd does
+  when it enables forwarding (Docker, libvirt and VPNs add their own accepts
+  there), or, with no iptables, drops all non-bot forwarding in its own inet
+  table. A host that already forwarded (the user's Docker, a VPN, a router)
+  is left to its owner. `state.json` records `forwardPolicy` (`iptables`,
+  `nftables` or `null`).
   Containers use Cloudflare's and Google's public resolvers. Bots use only the
   default bridge: the runtime creates no networks, and the engine sets no
   `default-address-pools` (with them, dockerd deletes the host's `docker0` on
@@ -1176,7 +1229,7 @@ one request per connection on `control.sock` (e.g.
   stops at the space in use; switching between a cap and no cap migrates the
   data. `remote-host.sh bots-configure ID POOL DISK` uses the same request.
 - **Uninstall.** `bots-disable` (workspace kept) or `uninstall` removes the
-  units, slice, mount, image, data, bridge, nftables table and iptables chain,
+  units, slice, mount, image, data, bridge, nftables tables and iptables chain,
   and restores `ip_forward` if Woven turned it on.
 
 #### One server, roles
@@ -1236,8 +1289,14 @@ one request per connection on `control.sock` (e.g.
   `URLSessionWebSocketTask` sends none, which `PiBotHandshakeTests` checks).
   Administrator only: `POST /v1/bots/resources {resources: {poolBytes?,
   perBotBytes?, diskBytes?}}` (a missing field stays; a pool below per-bot
-  RAM lowers it), `GET|POST /v1/bots/mcp {isEnabled?, groups?}` and
-  `DELETE /v1/bots/mcp/keys/{botID}`. `GET /v1/bots/status` and the
+  RAM lowers it), `GET|POST /v1/bots/mcp {isEnabled?, groups?}` (the `GET`
+  adds `revoked: [{botID, revokedAt}]`), `DELETE /v1/bots/mcp/keys/{botID}`
+  and `POST /v1/bots/mcp/keys/{botID}/reinstate`. That DELETE is the user's
+  revoke and sticks, as on a Mac (`WovenMCPHost`): the bot is recorded in
+  `mcp_bot_revocations`, and the runtime's `POST /v1/bots-host/mcp-keys`
+  for it answers `403 {error: "revoked"}` until reinstated. The runtime's
+  own `DELETE /v1/bots-host/mcp-keys/{botID}` (a bot it deleted) only drops
+  the key. `GET /v1/bots/status` and the
   resources reply use the shape in "Woven server routes for bots" below,
   plus `workspaceEnabled`, `runtimeAvailable`, `engine`, `runtime` and
   `settings`. On Linux `versions.app` is the Woven Matter version that shipped

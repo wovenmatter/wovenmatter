@@ -85,6 +85,7 @@ final class CompanionHostController {
     private var adoptedLinuxHosts: Set<String> = []
     private var revocationRetryInProgress = false
     private static let pendingRevocationsKey = "companion.execution.pending-revocations"
+    private static let pendingInstallerRotationsKey = "companion.execution.pending-installer-rotations"
     private var server: CompanionHTTPServer?
     private var serve: CompanionTailscaleServe?
     private var stoppingExposures: [CompanionTailscaleServe] = []
@@ -430,6 +431,7 @@ final class CompanionHostController {
                 await authentication?.useIdentity(signer)
                 try await authentication?.revoke(deviceID: deviceID, expected: expected)
                 try await peerSync.removeMember(deviceID)
+                try await queueInstallerRotations(installedBy: deviceID)
             } else {
                 try await authentication?.revokeLocally(deviceID: deviceID)
             }
@@ -443,6 +445,35 @@ final class CompanionHostController {
             await retryPendingRevocations()
         }
     }
+    /// Linux hosts the removed Mac added hold that Mac's installer bearer;
+    /// each is asked to replace it, durably retried until it answers.
+    private func queueInstallerRotations(installedBy deviceID: String) async throws {
+        guard let database = model?.dashboardStore?.database else { return }
+        let hosts = try await database.companionExecutionWorkspaces()
+            .filter { $0.kind == .linux && !$0.deleted && $0.ownerDeviceID == deviceID }.map(\.id)
+        guard !hosts.isEmpty else { return }
+        pendingInstallerRotations = Array(Set(pendingInstallerRotations + hosts)).sorted()
+    }
+
+    private func retryInstallerRotations() async {
+        guard let database = model?.dashboardStore?.database, !pendingInstallerRotations.isEmpty else { return }
+        let workspaces = (try? await database.companionExecutionWorkspaces()) ?? []
+        for id in pendingInstallerRotations {
+            guard let workspace = workspaces.first(where: { $0.id == id }), !workspace.deleted else {
+                pendingInstallerRotations.removeAll { $0 == id }; continue
+            }
+            do {
+                try await hostAdministration(for: workspace).rotateInstallerBearer()
+                pendingInstallerRotations.removeAll { $0 == id }
+            } catch { /* Retained until the host answers. */ }
+        }
+    }
+
+    private var pendingInstallerRotations: [String] {
+        get { defaults.stringArray(forKey: Self.pendingInstallerRotationsKey) ?? [] }
+        set { defaults.set(newValue, forKey: Self.pendingInstallerRotationsKey) }
+    }
+
     private var pendingRevocations: [String: [String]] {
         get { defaults.dictionary(forKey: Self.pendingRevocationsKey) as? [String: [String]] ?? [:] }
         set { defaults.set(newValue, forKey: Self.pendingRevocationsKey) }
@@ -874,8 +905,9 @@ final class CompanionHostController {
                 provisioningWorkspaceIDs.remove(id)
             }
         }
+        await retryInstallerRotations()
         let pendingMessage = "Device access changes are pending on workspaces that have not reconnected yet."
-        if !pendingRevocations.isEmpty { errorMessage = pendingMessage }
+        if !pendingRevocations.isEmpty || !pendingInstallerRotations.isEmpty { errorMessage = pendingMessage }
         else if errorMessage == pendingMessage { errorMessage = nil }
     }
 

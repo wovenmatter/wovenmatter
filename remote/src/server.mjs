@@ -23,9 +23,10 @@ import { createLibraryServe } from './library-serve.mjs'
 import { createLibraryTimers } from './library-timers.mjs'
 import { createMemberVerifier, hasMemberSignature } from './member-auth.mjs'
 import { createMemberTransport } from './member-client.mjs'
-import { createHostAdministration } from './host-admin.mjs'
+import { createHostAdministration, runHostScript } from './host-admin.mjs'
+import { createInstallerBearer } from './installer-bearer.mjs'
 import { createServer } from 'node:http'
-import { timingSafeEqual, randomUUID, createHash } from 'node:crypto'
+import { randomUUID, createHash } from 'node:crypto'
 import { readFile, writeFile, mkdir, realpath, rename, rm } from 'node:fs/promises'
 import { hostname } from 'node:os'
 import { spawn } from 'node:child_process'
@@ -41,7 +42,12 @@ const { catalogPath, workspaceRoot, managedDataRoot, listenHost, listenPort } = 
 const apiToken = runningAsService
   ? validatedAPIToken(configuration.apiToken)
   : configuration.apiToken
-const apiTokenDigest = createHash('sha256').update(apiToken).digest()
+// The installer's bearer administers this host only over the installing Mac's
+// SSH tunnel, never through Tailscale Serve, and any Mac can rotate it.
+const installerBearer = createInstallerBearer({ token: apiToken, rotate: async () => {
+  const { id } = JSON.parse(await readFile(resolve(configuration.dataRoot, 'installation.json'), 'utf8'))
+  return (await runHostScript(process.env.WOVENMATTER_HOST_SCRIPT || resolve(configuration.serviceRoot, 'host/remote-host.sh'), ['rotate-token', id])).token
+} })
 const catalogDocument = runningAsService
   ? JSON.parse(await readFile(catalogPath, 'utf8'))
   : { schemaVersion: 4, harnesses: [] }
@@ -135,7 +141,8 @@ const maximumSignedBodyBytes = 50 * 1024 * 1024
 
 const clientExecution = runningAsService ? createClientExecution({
   directory: resolve(workspaceRoot, '.wovenmatter/client-execution'),
-  publisherKey: apiToken,
+  // Stable across bearer rotations: it keys the publisher and MCP grants at rest.
+  publisherKey: configuration.serviceSecret || apiToken,
   mcpEndpointURL: () => `http://127.0.0.1:${server.address()?.port ?? listenPort}/mcp`, managedDataRoot,externalRunningSessions:()=>taskGateway.status().activeRuns,
   kind: process.platform === 'darwin' ? 'mac' : 'linux',
   workspaceBrowser,
@@ -183,6 +190,8 @@ const workspaceRoute = pathname => workspaceRoutes.some(prefix => pathname === p
 
 const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
   requestTimeout: 30_000, connectionsCheckingInterval: 1_000 }, async (request, response) => {
+  // A signed host-update upload, removed after the request unless the update took it.
+  let bodyFile = null
   try {
     // This control service is called by native clients, never browser pages.
     if (request.headers.origin) return json(response, 403, { error: 'browser_origin_forbidden' })
@@ -190,20 +199,31 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
     const url = new URL(request.url, 'http://localhost')
     // A signed member request: the body is read (or, for a host update,
     // streamed to a file) only after the device, time and nonce checks pass.
-    let member = null, bodyFile = null
+    let member = null
     if (hasMemberSignature(request.headers)) {
       if (!members) return json(response, 401, { error: 'member_auth_unavailable' })
       const upload = url.pathname === '/v1/host/update' && request.method === 'POST' && hostAdmin
+      // Only an administrator's upload is received: the claimed member is
+      // known by now, and its signature is checked against the received body.
+      const receiveUpload = async () => {
+        const claimed = members.members().find(item => item.deviceID === request.headers['x-woven-member-device'])
+        if (claimed?.kind !== 'mac' && !authorized(request)) throw Object.assign(new Error('administrator_required'), { statusCode: 403 })
+        return (bodyFile = await hostAdmin.receive(request))
+      }
       try {
         member = await members.verify({ method: request.method, target: request.url, alternateTargets: await servedTargets(request.url), headers: request.headers,
-          body: async () => upload ? (bodyFile = await hostAdmin.receive(request)) : (request.wovenBody = await readBody(request, maximumSignedBodyBytes)) })
+          body: async () => upload ? receiveUpload() : (request.wovenBody = await readBody(request, maximumSignedBodyBytes)) })
       } catch (error) {
+        // An upload already received is gone with its file, so it cannot fall back to the bearer.
+        const consumed = !!bodyFile
         if (bodyFile) await rm(bodyFile.path, { force: true }).catch(() => {})
+        bodyFile = null
+        if (error.statusCode === 403) return json(response, 403, { error: 'administrator_required' })
         if (error.statusCode === 413) return json(response, 413, { error: 'request_too_large' })
         // The installing Mac signs its first adoption before this host knows
         // it; the installer bearer it also sends still authenticates it.
-        if (!authorized(request) || request.wovenBody === undefined && bodyFile) return json(response, error.statusCode === 503 ? 503 : 401, { error: error.code ?? 'unauthorized' })
-        member = null; bodyFile = null
+        if (!authorized(request) || consumed) return json(response, error.statusCode === 503 ? 503 : 401, { error: error.code ?? 'unauthorized' })
+        member = null
       }
     }
     // Mac members administer this host, as the installing Mac's bearer does.
@@ -236,6 +256,13 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
       if (material) await defaultAgent.unlockForClient(material)
     }
     if (bots && await bots.handleClient(request, response, url, { readJSON, json, administrator, device })) return
+    if (url.pathname === '/v1/host/installer-bearer' && request.method === 'POST') {
+      if (configuration.runtimeKind !== 'host') return json(response, 404, { error: 'not_found' })
+      if (!administrator) return json(response, 403, { error: 'administrator_required' })
+      const installer = authorized(request), bearer = await installerBearer.rotate()
+      // Only the installing Mac, on its own SSH tunnel, learns the new value.
+      return json(response, 200, installer ? { rotated: true, bearer } : { rotated: true })
+    }
     if (hostAdmin && await hostAdmin.handle(request, response, url, { readJSON, readBody, json, administrator, bodyFile, member, installer: authorized(request) })) return
     if (!configuration.workspaceEnabled && workspaceRoute(url.pathname)) return json(response, 409, { error: 'workspace_disabled' })
     if (url.pathname === '/v1/runtime/inspection' && request.method === 'GET') {
@@ -569,6 +596,8 @@ const server = createServer({ maxHeaderSize: 16_384, headersTimeout: 10_000,
     const status = Number.isInteger(error.statusCode) && error.statusCode >= 400 && error.statusCode <= 599 ? error.statusCode : 500
     if (response.headersSent) { response.destroy(); return }
     return json(response, status, { error: status === 500 ? 'internal_error' : error.message ?? 'invalid_request' })
+  } finally {
+    if (bodyFile && !bodyFile.owned) await rm(bodyFile.path, { force: true }).catch(() => {})
   }
 })
 
@@ -667,10 +696,7 @@ async function memberIdentity() {
 }
 
 function authorized(request) {
-  const value = request.headers.authorization ?? ''
-  if (!value.startsWith('Bearer ')) return false
-  const presented = createHash('sha256').update(value.slice(7)).digest()
-  return timingSafeEqual(presented, apiTokenDigest)
+  return installerBearer.authorizes(request)
 }
 
 async function harnessStatus(harness) {

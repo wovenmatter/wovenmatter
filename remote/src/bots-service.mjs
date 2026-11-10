@@ -123,10 +123,13 @@ export function createBotsService({ configuration, mcp, defaultAgent, serverPort
     if (path === '/v1/bots-host/mcp-keys' && method === 'POST') {
       const body = await readJSON(request, 16384)
       if (!mcp) throw fail(503, 'woven_mcp_unavailable')
-      const key = mcp.issueBotKey({ botID: body.botID, botName: body.botName, deviceID: (await machineInfo()).deviceID })
+      let key
+      try { key = mcp.issueBotKey({ botID: body.botID, botName: body.botName, deviceID: (await machineInfo()).deviceID }) }
+      catch (error) { if (error.code !== 'revoked') throw error; json(response, 403, { error: 'revoked', message: error.message }); return true }
       json(response, 201, { endpoint: key.endpointURL, token: key.bearerToken, principal: key.principal }); return true
     }
     const revoke = path.match(/^\/v1\/bots-host\/mcp-keys\/([0-9a-fA-F-]{36})$/)
+    // The runtime deleted the bot; a user's revoke is the client route below.
     if (revoke && method === 'DELETE') { json(response, 200, mcp.revokeBotKey(revoke[1])); return true }
     if (path === '/v1/bots-host/previews' && method === 'POST') {
       const body = await readJSON(request, 16384)
@@ -212,13 +215,16 @@ export function createBotsService({ configuration, mcp, defaultAgent, serverPort
       }
       json(response, 200, await status()); return true
     }
-    if (path === '/v1/bots/mcp' && method === 'GET') { json(response, 200, { settings: mcp.settings().botMCP, keys: mcp.botKeys() }); return true }
+    if (path === '/v1/bots/mcp' && method === 'GET') { json(response, 200, { settings: mcp.settings().botMCP, keys: mcp.botKeys(), revoked: mcp.revokedBots?.() ?? [] }); return true }
     if (path === '/v1/bots/mcp' && method === 'POST') {
       const body = await readJSON(request, 4096)
       json(response, 200, mcp.configureBots({ ...(typeof body.isEnabled === 'boolean' ? { isEnabled: body.isEnabled } : {}), ...(body.groups ? { groups: body.groups } : {}) })); return true
     }
+    // The user's revoke sticks until reinstated, as on a Mac.
     const key = path.match(/^\/v1\/bots\/mcp\/keys\/([0-9a-fA-F-]{36})$/)
-    if (key && method === 'DELETE') { json(response, 200, mcp.revokeBotKey(key[1])); return true }
+    if (key && method === 'DELETE') { json(response, 200, mcp.revokeBotKey(key[1], { sticky: true })); return true }
+    const reinstate = path.match(/^\/v1\/bots\/mcp\/keys\/([0-9a-fA-F-]{36})\/reinstate$/)
+    if (reinstate && method === 'POST') { json(response, 200, mcp.reinstateBot(reinstate[1])); return true }
     json(response, 404, { error: 'not_found' }); return true
   }
 

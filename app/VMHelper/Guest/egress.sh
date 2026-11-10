@@ -65,6 +65,11 @@ apply_hosts() { # addresses...
 
 case "${1:-}" in
   apply)
+    # Bridged container-to-container frames reach DOCKER-USER (and the private
+    # range rejects there) only through br_netfilter. dockerd loads it too;
+    # loading it here keeps the rules in force whatever starts first. The guest
+    # runs bots only, so no other bridge is affected.
+    modprobe br_netfilter 2>/dev/null || true
     sysctl -qw net.bridge.bridge-nf-call-iptables=1 net.bridge.bridge-nf-call-ip6tables=1 2>/dev/null || true
     via='{for (i = 1; i < NF; i++) if ($i == "via") { print $(i + 1); exit }}'
     gateway4="$(ip -4 route show default | awk "$via")"
