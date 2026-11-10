@@ -167,9 +167,16 @@ final class VMHelper: NSObject, VZVirtualMachineDelegate, @unchecked Sendable {
             : try VZEFIVariableStore(creatingVariableStoreAt: paths.efiVariables)
         configuration.bootLoader = loader
 
+        // Host-cached I/O. With `.automatic` on a MacBook Air (macOS 27.2),
+        // 4 of 16 first boots from a root disk the helper had just written
+        // hit guest kernel faults in unrelated subsystems (slab, seccomp,
+        // PSI, the scheduler), once with ext4 corruption; 0 of 11 from a
+        // clone of the same disk did. Others report that `.automatic`
+        // corrupts sparse virtio disks through page cache and direct I/O
+        // incoherence. `.full` still makes every guest flush durable.
         func disk(_ url: URL, _ name: String, readOnly: Bool) throws -> VZVirtioBlockDeviceConfiguration {
             let attachment = try VZDiskImageStorageDeviceAttachment(url: url, readOnly: readOnly,
-                                                                    cachingMode: .automatic, synchronizationMode: .full)
+                                                                    cachingMode: .cached, synchronizationMode: .full)
             let device = VZVirtioBlockDeviceConfiguration(attachment: attachment)
             device.blockDeviceIdentifier = name
             return device

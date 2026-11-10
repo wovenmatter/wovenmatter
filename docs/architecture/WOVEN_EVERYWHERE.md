@@ -1139,14 +1139,22 @@ login until `stop()`.
   fault if there was one. The helper then reboots the VM once and lets
   provisioning resume, since it runs on every boot until it succeeds. A
   second failure leaves the VM `failed` with the reason, still running for
-  `GET /v1/diagnostics`. Measured on a MacBook Air (M4, macOS 27.2): one of
-  six fresh first boots hit a slab fault in the guest kernel (Ubuntu
-  7.0.0-38) while loading `overlay`. That wedged every later module load, so
-  containerd never started. The guest reported the failure within three
-  minutes, but the helper missed it: the agent's `status` waited 10 s on a
-  Docker Engine that was still starting, and the helper gave up after 5 s,
-  so it saw no answer for 21 minutes. The other five boots provisioned in
-  about 1.5 minutes.
+  `GET /v1/diagnostics`. Measured on a MacBook Air (M4, macOS 27.2): in the
+  first incident, a slab fault in the guest kernel (Ubuntu 7.0.0-38) while
+  loading `overlay` wedged every later module load, so containerd never
+  started. The guest reported the failure within three minutes, but the
+  helper missed it: the agent's `status` waited 10 s on a Docker Engine that
+  was still starting, and the helper gave up after 5 s, so it saw no answer
+  for 21 minutes.
+- **Disk caching.** All three disks attach with `cachingMode: .cached` and
+  `synchronizationMode: .full`, so every guest flush is still durable on the
+  Mac. With `.automatic`, 4 of 16 first boots on the MacBook Air from a root
+  disk the helper had just converted hit guest kernel faults in unrelated
+  subsystems (slab, seccomp, PSI, the scheduler); one also corrupted ext4.
+  None of 11 boots from an APFS clone of the same disk faulted. Others
+  report that `.automatic` corrupts sparse virtio disks. With `.cached`, 3
+  of 3 fresh first boots under host CPU load were clean, a sample too small
+  to prove the fix. Healthy first boots provision in about 1 to 2 minutes.
 - **Engine socket.** `docker.sock` carries the Docker Engine API to the
   guest's dockerd (vsock 2375). It is byte-transparent: HTTP upgrade and
   hijack (attach, exec) work, and each direction ends independently, so an
