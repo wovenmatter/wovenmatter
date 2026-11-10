@@ -111,7 +111,7 @@ public final class LibraryHost: @unchecked Sendable {
     let network = CompanionSocketHTTPServer { [weak self] request in
       await self?.handleNetwork(request) ?? .error("unavailable", "The library host stopped.", status: 503)
     }
-    let local = CompanionSocketHTTPServer { [weak self] request in
+    let local = CompanionSocketHTTPServer(admitUnixPeer: Self.localPeerAdmission()) { [weak self] request in
       await self?.handleLocal(request) ?? .error("unavailable", "The library host stopped.", status: 503)
     }
     let bound = try network.start(.loopback(port: port))
@@ -183,7 +183,7 @@ public final class LibraryHost: @unchecked Sendable {
       case "/v1/sync/status":
         return try .json(await sync.status())
       case "/v1/members/sign":
-        return try signForServer(request)
+        return try await signForServer(request)
       case "/v1/workspaces":
         guard request.method == "GET" else { return .error("method_not_allowed", "Use GET.", status: 405) }
         struct Workspaces: Encodable { let workspaces: [CompanionExecutionWorkspace] }
@@ -228,18 +228,75 @@ public final class LibraryHost: @unchecked Sendable {
       self.method = method; self.target = target; self.bodySHA256 = bodySHA256; self.audience = audience
     }
   }
-  private func signForServer(_ request: CompanionHTTPRequest) throws -> CompanionHTTPResponse {
+  private func signForServer(_ request: CompanionHTTPRequest) async throws -> CompanionHTTPResponse {
     guard request.method == "POST", request.body.count <= 16_384 else { return .error("invalid_request", "POST at most 16 KiB.", status: 400) }
     let value = try JSONDecoder().decode(SignatureRequest.self, from: request.body)
-    let methods: Set<String> = ["GET", "POST", "PUT", "PATCH", "DELETE"]
-    guard methods.contains(value.method.uppercased()), value.target.hasPrefix("/"), !value.target.hasPrefix("//"), value.target.utf8.count <= 8_192,
+    guard value.target.hasPrefix("/"), !value.target.hasPrefix("//"), value.target.utf8.count <= 8_192,
           value.target.unicodeScalars.allSatisfy({ $0.value > 0x20 && $0.value < 0x7f }),
           value.bodySHA256.utf8.count == 64, value.bodySHA256.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }),
           MemberRequestSignature.isDeviceID(value.audience), value.audience != identity.deviceID else {
       return .error("invalid_request", "Sign a method, an absolute request target, a lowercase hex SHA-256 and another member's device ID.", status: 400)
     }
+    // Only the requests the Node server makes, to the members they are for.
+    guard let audiences = Self.signableAudiences(method: value.method.uppercased(), target: value.target),
+          let member = await members.member(value.audience), audiences.contains(member.kind) else {
+      return .error("not_signable", "This machine signs only its server's execution and Woven MCP requests to a Mac or Linux member.", status: 403)
+    }
     return try .json(["headers": try identity.signer.headers(method: value.method.uppercased(), target: value.target, bodySHA256: value.bodySHA256,
                                                              audience: value.audience)])
+  }
+
+  /// The member kinds a Node server request may be signed for, or nil when
+  /// it is not one of the requests that server sends
+  /// (`remote/src/member-sessions.mjs`, `member-client.mjs`): the execution
+  /// API of a Mac or Linux workspace and a Mac's `/mcp/workspace`. The base is
+  /// a member endpoint (`/wovenmatter`) or a Linux execution endpoint
+  /// (`/wovenmatter-execution/<id>`).
+  static func signableAudiences(method: String, target: String) -> Set<MemberKind>? {
+    let parts = target.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false)
+    var path = Substring(parts[0])
+    if path.hasPrefix("/wovenmatter-execution/") {
+      let rest = path.dropFirst("/wovenmatter-execution/".count)
+      guard let slash = rest.firstIndex(of: "/"), rest[..<slash].allSatisfy({ $0.isLetter || $0.isNumber || $0 == "-" }), slash > rest.startIndex else { return nil }
+      path = rest[slash...]
+    } else if path.hasPrefix("/wovenmatter/") { path = path.dropFirst("/wovenmatter".count) }
+    let query = parts.count > 1 ? String(parts[1]) : nil
+    let segments = path.split(separator: "/", omittingEmptySubsequences: false).dropFirst().map(String.init)
+    let id = { (value: String) in UUID(uuidString: value) != nil }
+    switch (method, segments) {
+    case ("POST", ["mcp", "workspace"]), ("POST", ["mcp", "workspace", "prepare"]):
+      return query == nil ? [.mac] : nil
+    case ("POST", ["v1", "execution", "commands"]), ("GET", ["v1", "execution", "providers"]),
+         ("GET", ["v1", "execution", "conversations"]), ("GET", ["v1", "execution", "interactions"]):
+      return query == nil ? [.mac, .linux] : nil
+    case ("GET", let segments) where segments.count == 5 && Array(segments[0...2]) == ["v1", "execution", "conversations"] && id(segments[3]):
+      if segments[4] == "capabilities" { return query == nil ? [.mac, .linux] : nil }
+      guard segments[4] == "transcript" else { return nil }
+      return query == nil || query?.hasPrefix("before=") == true && query?.contains("&") == false ? [.mac, .linux] : nil
+    default: return nil
+    }
+  }
+
+  /// The local API answers only the Node server that launched this process
+  /// (Linux: the peer process of the socket connection, from the kernel, is
+  /// this process's parent and that parent is `node`), so another program of
+  /// the same account that read the token file still cannot sign as this
+  /// machine or call its tools. Outside that arrangement (tests, a manual
+  /// run) any process of this user may connect, as before.
+  static func localPeerAdmission() -> (@Sendable (Int32?) -> Bool)? {
+    #if os(Linux)
+    let parent = getppid()
+    guard parent > 1, let executable = try? FileManager.default.destinationOfSymbolicLink(atPath: "/proc/\(parent)/exe"),
+          URL(fileURLWithPath: executable).lastPathComponent.hasPrefix("node") else { return nil }
+    return { peer in allowsLocalPeer(peer, launchedBy: parent, currentParent: getppid()) }
+    #else
+    return nil
+    #endif
+  }
+  /// A peer is admitted only while this process still belongs to the parent
+  /// that launched it, and only that parent connects.
+  static func allowsLocalPeer(_ peer: Int32?, launchedBy parent: Int32, currentParent: Int32) -> Bool {
+    peer == parent && currentParent == parent
   }
 
   public struct Identity: Codable, Sendable, Equatable {
