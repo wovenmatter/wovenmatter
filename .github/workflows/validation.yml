@@ -116,7 +116,8 @@ jobs:
     name: iOS (${{ matrix.device }})
     if: inputs.scope == 'all' || inputs.scope == 'mobile'
     runs-on: macos-26
-    timeout-minutes: 25
+    # The iPad UI suite outgrew 25 minutes on hosted runners once member and send flows were added.
+    timeout-minutes: 40
     env:
       WOVENMATTER_IOS_TEST_CACHE_DIR: /private/tmp/wovenmatter-ios-${{ matrix.device }}
     strategy:
