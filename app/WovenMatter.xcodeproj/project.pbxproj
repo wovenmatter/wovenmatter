@@ -987,7 +987,7 @@
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = App/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "$(WOVENMATTER_APP_PRODUCT_NAME)";
+				INFOPLIST_KEY_CFBundleDisplayName = "$(WOVENMATTER_DEV_PRODUCT_NAME)";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright Woven Matter";
 				INFOPLIST_KEY_NSPrincipalClass = WMBrowserApplication;

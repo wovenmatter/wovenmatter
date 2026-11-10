@@ -15,6 +15,17 @@ struct CompanionMacAccessTests {
       .sessionNotice(deviceName: "Mac Mini", isThisDevice: false) == nil)
   }
 
+  @Test("a blank app name never reaches the notice")
+  func blankAppName() {
+    #expect(CompanionMacAccessStatus.appName(displayName: "", bundleName: "Woven Matter e2e snapshot Dev") == "Woven Matter e2e snapshot Dev")
+    #expect(CompanionMacAccessStatus.appName(displayName: " ", bundleName: nil) == "Woven Matter")
+    #expect(CompanionMacAccessStatus.appName(displayName: "Woven Matter", bundleName: "Other") == "Woven Matter")
+    // A record an older Dev build published with an empty name.
+    let published = CompanionMacAccessStatus(items: [.fullDiskAccess: .needsAttention], appName: "")
+    #expect(published.sessionNotice(deviceName: "Mac Mini", isThisDevice: false)
+      == "Mac Mini is missing Full Disk Access for Woven Matter. Open Settings → General on that Mac.")
+  }
+
   @Test("the record travels inside the workspace descriptor and tolerates older and newer peers")
   func workspaceRoundTrip() throws {
     let status = CompanionMacAccessStatus(items: [.screenRecording: .ready, .automation: .needsAttention], appName: "Woven Matter Dev")

@@ -51,8 +51,9 @@ final class MacAccessSetupModel {
     }
 
     static var appName: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
-            ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "Woven Matter"
+        CompanionMacAccessStatus.appName(
+            displayName: Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String,
+            bundleName: Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String)
     }
 
     /// Full Disk Access has no query API. Reading a file only it unlocks is the

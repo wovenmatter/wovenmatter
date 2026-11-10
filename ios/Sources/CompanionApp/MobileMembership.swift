@@ -25,7 +25,8 @@ extension CompanionModel {
   }
   /// The registered workspace of the library host itself, when it is a Mac.
   var centralExecutionWorkspace: CompanionExecutionWorkspace? {
-    let central = executionWorkspaces.filter { $0.capabilities.contains("history.central.v1") }
+    // A copied snapshot owner keeps the capability for its history only.
+    let central = executionWorkspaces.filter { $0.capabilities.contains("history.central.v1") && $0.retainedHistory != true }
     if memberMode, let host = libraryHostDeviceID {
       return central.first { $0.kind == .mac && $0.ownerDeviceID.lowercased() == host }
     }

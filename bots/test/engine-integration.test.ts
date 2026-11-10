@@ -231,4 +231,21 @@ describe.skipIf(!SOCKET)("bots on a real Docker Engine", () => {
     const services = await ask(bot, tool("keep_running_list", {}));
     expect(services).toContain('"running": true');
   }, 20 * 60_000);
+
+  it("rebuilds from a clean image, keeping storage and bringing the restart list back", async () => {
+    const before = (await engine.inspectContainer(containerName(bot.id)))?.Id;
+    await runtime.operations.rebuild(bot.id);
+    expect((await engine.inspectContainer(containerName(bot.id)))?.Id).not.toBe(before);
+    const after = await ask(
+      bot,
+      tool("bash", {
+        command:
+          "cat /workspace/marker; test -f /etc/woven-layer && echo layer-kept || echo layer-gone; " +
+          "for i in $(seq 1 40); do curl -fsS http://127.0.0.1:8000/ >/dev/null && echo served && exit 0; sleep 0.5; done; exit 1",
+      }),
+    );
+    expect(after).toContain("before-update");
+    expect(after).toContain("layer-gone");
+    expect(after).toContain("served");
+  }, 10 * 60_000);
 });

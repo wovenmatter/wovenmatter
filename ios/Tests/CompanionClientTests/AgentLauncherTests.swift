@@ -50,4 +50,21 @@ final class AgentLauncherTests: XCTestCase {
     XCTAssertEqual(groups.first(where: { $0.name == "Test" })?.workspace?.kind, .linux)
   }
 
+  func testCopiedSnapshotOwnerNeverNamesOrBecomesTheCentralMac() {
+    // A snapshot keeps its source Mac's workspace as retained history, with the same capability.
+    let copied = CompanionExecutionWorkspace(id: "copied", libraryID: "library", ownerDeviceID: "source", kind: .mac,
+      name: "Mac Mini (Dev) · source", capabilities: ["history.central.v1"], retainedHistory: true)
+    let live = CompanionExecutionWorkspace(id: "live", libraryID: "library", ownerDeviceID: "host", kind: .mac,
+      name: "Mac Mini (Dev) · e2e", capabilities: ["history.central.v1"])
+    let local = CompanionProvider(id: "local:pi", runtimeKind: "pi", displayName: "Pi Durable", available: true)
+    for order in [[copied, live], [live, copied]] {
+      let agents = CompanionAgentLauncher.list(deviceName: "This iPhone", centralOnline: true, providers: [local],
+        workspaces: order, workspaceProviders: [:], reachable: [:])
+      XCTAssertEqual(agents.last?.workspaceName, live.name)
+      let groups = CompanionAgentGroup.list(agents: agents, workspaces: order)
+      XCTAssertEqual(groups.map(\.name), [live.name, "This iPhone"])
+      XCTAssertEqual(groups.first?.workspace?.id, live.id)
+    }
+  }
+
 }

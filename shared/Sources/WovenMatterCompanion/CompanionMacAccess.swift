@@ -44,6 +44,13 @@ public struct CompanionMacAccessStatus: Codable, Equatable, Sendable {
     self.appName = appName
   }
 
+  /// The name macOS lists in Privacy & Security: the display name, else the
+  /// bundle name. Blank values are skipped; Dev builds carried an empty display name.
+  public static func appName(displayName: String?, bundleName: String?) -> String {
+    [displayName, bundleName].lazy.compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .first { !$0.isEmpty } ?? "Woven Matter"
+  }
+
   public func state(_ item: Item) -> State { items[item.rawValue] ?? .unknown }
 
   /// Required items known to be missing. Unknown items are not reported, so an
@@ -62,6 +69,8 @@ public struct CompanionMacAccessStatus: Codable, Equatable, Sendable {
       : names.dropLast().joined(separator: ", ") + ", and " + names.last!
     let subject = isThisDevice ? "This Mac" : deviceName
     let action = isThisDevice ? "Open Settings → General to set it up." : "Open Settings → General on that Mac."
-    return "\(subject) is missing \(list) for \(appName). \(action)"
+    // Records published by those Dev builds still carry a blank name.
+    let app = Self.appName(displayName: appName, bundleName: nil)
+    return "\(subject) is missing \(list) for \(app). \(action)"
   }
 }
