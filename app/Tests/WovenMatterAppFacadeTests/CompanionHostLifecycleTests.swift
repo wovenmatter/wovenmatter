@@ -225,6 +225,36 @@ private enum HostFixtureError: Error { case timeout }
         let store = try await DashboardStore(supportDirectory: directory)
         model = ApplicationModel(applicationDefaults: defaults, dashboardStore: store, startsAutomatically: false)
     }
+    /// Local folders are bound to `device:<dashboard device id>`, generated apart
+    /// from the registry id and host device id. A record an earlier build
+    /// published without the folder owner gains it on the next refresh, under
+    /// the same workspace id, so existing folders are never rewritten.
+    @Test func theCentralMacPublishesTheFolderOwnerItsFoldersUse() async throws {
+        let fixture = try await HostFixture(); defer { fixture.remove() }
+        await fixture.host.start()
+        let database = try #require(fixture.model.dashboardStore?.database)
+        let identity = try await database.companionLibraryIdentity()
+        let folderOwner = try await fixture.model.executionWorkspaceIdentity(workspaceID: nil)
+        try await fixture.host.refreshExecutionRegistry()
+        let published = try #require(try await database.companionExecutionWorkspaces().first { $0.kind == .mac && $0.ownerDeviceID == identity.hostDeviceID })
+        #expect(CompanionExecutionWorkspace.displayID(folderOwner) != published.id)
+        #expect(CompanionExecutionWorkspace.displayID(folderOwner) != identity.hostDeviceID)
+        #expect(published.folderOwnerID == folderOwner)
+        #expect(CompanionExecutionWorkspace.displayOwner(of: folderOwner, in: [published]) == published.id)
+
+        var legacy = published; legacy.folderOwnerID = nil
+        let downgraded = try await database.registerCompanionExecutionWorkspace(.init(workspace: legacy, expectedRevision: published.revision), deviceID: identity.hostDeviceID)
+        #expect(CompanionExecutionWorkspace.displayOwner(of: folderOwner, in: [downgraded]) == nil)
+        try await fixture.host.refreshExecutionRegistry()
+        let upgraded = try #require(try await database.companionExecutionWorkspaces().first { $0.id == published.id })
+        #expect(upgraded.folderOwnerID == folderOwner && upgraded.revision == downgraded.revision + 1)
+
+        var forged = upgraded; forged.folderOwnerID = "remote:" + UUID().uuidString
+        await #expect(throws: (any Error).self) {
+            try await database.registerCompanionExecutionWorkspace(.init(workspace: forged, expectedRevision: upgraded.revision), deviceID: identity.hostDeviceID)
+        }
+    }
+
     func makeHost() -> CompanionHostController {
         // Fixtures never reach the user's Keychain: paired grants, pending
         // claims, legacy and direct execution credentials stay in memory.
