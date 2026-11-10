@@ -17,7 +17,11 @@ enum BotsCommand: Codable, Sendable {
     case revokeBot(callerID: String)
     case reinstateBot(callerID: String)
     case discoverDevices
+    /// Starts installing bots on a Linux peer, or turning them on for its Woven server.
+    /// It runs as a job: the reply comes at once, and progress and the outcome reach the
+    /// window through `jobs` and the device's state.
     case installBots(hostName: String, userName: String?)
+    /// Starts updating a Linux host, as a job like `installBots`.
     case updateLinuxHost(machineID: String)
     /// Starts updating a Mac's bots engine (the Woven VM). Progress and the outcome show on
     /// that machine: `updating`, then `engineUpdateFailure` if it was rolled back.
@@ -38,9 +42,28 @@ struct BotsCommandResult: Codable, Sendable {
     var botMCP: WorkspaceExternalMCPSettings?
     /// The reply to `signSocket`.
     var socketHeaders: [String: String]?
+    /// Long bots commands running in the process that owns execution, and how the last
+    /// one for each target ended.
+    var jobs: [BotsJob] = []
 }
 
-typealias BotsHostDeploy = @MainActor (RemoteWorkspaceConfiguration, String) async throws -> RemoteWorkspaceStatus
+/// A bots command that outlasts one window round trip (the background server answers
+/// each within 30 s): installing bots on a Linux host takes minutes, updating one up to
+/// fifteen. It runs where execution lives; its progress, and the error when it fails,
+/// travel in every snapshot until the next run for the same target.
+struct BotsJob: Codable, Equatable, Sendable {
+    enum Kind: String, Codable, Sendable { case installBots, updateLinuxHost }
+    var kind: Kind
+    /// The Tailscale host name for an install, the machine ID for an update.
+    var target: String
+    var running: Bool
+    /// The current step while running.
+    var progress: String?
+    /// Why it failed, once it has finished.
+    var error: String?
+
+    var key: String { kind.rawValue + ":" + target.lowercased() }
+}
 
 /// What the bots host needs from the rest of the app, so it can be tested alone.
 struct BotsHostDependencies {
@@ -61,10 +84,10 @@ struct BotsHostDependencies {
         throw BotsError.unavailable("That machine is unavailable.")
     }
     var discover: @MainActor () async throws -> [BotDiscoveredDevice] = { [] }
-    var installBots: @MainActor (_ hostName: String, _ userName: String?) async throws -> Void = { _, _ in
+    var installBots: @MainActor (_ hostName: String, _ userName: String?, _ progress: @escaping @MainActor (String) -> Void) async throws -> Void = { _, _, _ in
         throw BotsError.unavailable("Installing bots on Linux is unavailable.")
     }
-    var updateLinuxHost: @MainActor (_ machineID: String) async throws -> Void = { _ in }
+    var updateLinuxHost: @MainActor (_ machineID: String, _ progress: @escaping @MainActor (String) -> Void) async throws -> Void = { _, _ in }
     /// Another Mac's `POST /v1/bots/engine/update`.
     var updateRemoteEngine: @MainActor (_ machineID: String) async throws -> Void = { _ in
         throw BotsError.unavailable("That machine is unavailable.")
@@ -108,6 +131,8 @@ final class BotsHostController {
     @ObservationIgnored private var bringUpTask: Task<Void, Never>?
     @ObservationIgnored private(set) var engineUpdateTask: Task<Void, Never>?
     @ObservationIgnored private var lastDevices: [BotDiscoveredDevice]?
+    @ObservationIgnored private var jobs: [String: BotsJob] = [:]
+    @ObservationIgnored private(set) var jobTasks: [String: Task<Void, Never>] = [:]
     /// Other machines answer slowly; a status refresh reuses a recent probe.
     @ObservationIgnored private var remoteCache: (at: Date, machines: [BotMachine])?
     static let remoteCacheLifetime: TimeInterval = 20
@@ -195,12 +220,20 @@ final class BotsHostController {
         case .discoverDevices:
             devices = try await dependencies.discover()
             lastDevices = devices
+            // A fresh look replaces how earlier installs ended.
+            jobs = jobs.filter { $0.value.kind != .installBots || $0.value.running }
         case let .installBots(hostName, userName):
-            try await dependencies.installBots(hostName, userName)
-            devices = try? await dependencies.discover()
-            lastDevices = devices
+            let host = hostName.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !host.isEmpty else { throw BotsError.unavailable("Choose a device to install bots on.") }
+            let install = dependencies.installBots
+            try startJob(.installBots, target: host, progress: "Starting…") { progress in
+                try await install(host, userName, progress)
+            }
         case .updateLinuxHost(let machineID):
-            try await dependencies.updateLinuxHost(machineID)
+            let update = dependencies.updateLinuxHost
+            try startJob(.updateLinuxHost, target: machineID.lowercased(), progress: "Starting the update…") { progress in
+                try await update(machineID, progress)
+            }
         case .updateEngine(let machineID):
             if try await isThisMac(machineID) { try startEngineUpdate() }
             else { try await dependencies.updateRemoteEngine(machineID) }
@@ -216,9 +249,64 @@ final class BotsHostController {
         var machines: [BotMachine] = []
         if let identity { machines.append(await thisMachine(identity)) }
         machines += await remoteMachines().filter { $0.id != identity?.deviceID }
+        for index in machines.indices where jobs[BotsJob(kind: .updateLinuxHost, target: machines[index].id, running: true).key]?.running == true {
+            machines[index].updating = true
+        }
         return BotsCommandResult(machines: machines, thisMachineID: identity?.deviceID, thisMacVersion: dependencies.appVersion,
-                                 callers: (try? await dependencies.callers()) ?? [], devices: devices,
-                                 syncErrors: dependencies.syncErrors(), botMCP: await dependencies.botMCP())
+                                 callers: (try? await dependencies.callers()) ?? [], devices: Self.devices(devices, showing: Array(jobs.values)),
+                                 syncErrors: dependencies.syncErrors(), botMCP: await dependencies.botMCP(),
+                                 jobs: jobs.values.sorted { $0.key < $1.key })
+    }
+
+    /// Discovered devices with each install's progress or failure in place of their state.
+    /// A host being installed that discovery has not listed is shown too.
+    static func devices(_ devices: [BotDiscoveredDevice]?, showing jobs: [BotsJob]) -> [BotDiscoveredDevice]? {
+        let installs = jobs.filter { $0.kind == .installBots && ($0.running || $0.error != nil) }.sorted { $0.key < $1.key }
+        guard devices != nil || !installs.isEmpty else { return devices }
+        var result = devices ?? []
+        for job in installs {
+            let state: BotDiscoveredDevice.State = job.running ? .installing(job.progress ?? "Installing…") : .failed(job.error ?? "The install failed.")
+            if let index = result.firstIndex(where: { $0.hostName.lowercased() == job.target.lowercased() }) {
+                result[index].state = state
+            } else {
+                result.append(.init(hostName: job.target, displayName: job.target, dnsName: nil, system: .linux, state: state))
+            }
+        }
+        return result
+    }
+
+    /// Runs a long command in the background. Its progress and outcome are recorded and
+    /// announced; the error is kept, so no failure goes unseen when nobody is waiting.
+    private func startJob(_ kind: BotsJob.Kind, target: String, progress: String,
+                          _ work: @escaping @MainActor (_ progress: @escaping @MainActor (String) -> Void) async throws -> Void) throws {
+        let job = BotsJob(kind: kind, target: target, running: true, progress: progress)
+        guard jobs[job.key]?.running != true else { throw BotsError.unavailable("That is already running.") }
+        jobs[job.key] = job
+        changed()
+        let key = job.key
+        jobTasks[key] = Task { [weak self] in
+            var failure: String?
+            do {
+                try await work { [weak self] message in
+                    guard let self, self.jobs[key]?.running == true, self.jobs[key]?.progress != message else { return }
+                    self.jobs[key]?.progress = message
+                    self.changed()
+                }
+            } catch {
+                failure = error is CancellationError ? "It was stopped before it finished." : error.localizedDescription
+            }
+            guard let self else { return }
+            self.jobs[key] = BotsJob(kind: kind, target: target, running: false, progress: nil, error: failure)
+            self.jobTasks[key] = nil
+            self.remoteCache = nil
+            if kind == .installBots {
+                if let devices = try? await self.dependencies.discover() { self.lastDevices = devices }
+                else if failure == nil, let index = self.lastDevices?.firstIndex(where: { $0.hostName.lowercased() == target.lowercased() }) {
+                    self.lastDevices?[index].state = .ready
+                }
+            }
+            self.changed()
+        }
     }
 
     private func remoteMachines() async -> [BotMachine] {

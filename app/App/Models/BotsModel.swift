@@ -15,6 +15,8 @@ final class BotsModel {
     private(set) var devices: [BotDiscoveredDevice]?
     private(set) var syncErrors: [String] = []
     private(set) var botMCP: WorkspaceExternalMCPSettings?
+    /// Long commands (installs and Linux host updates) and how each last ended.
+    private(set) var jobs: [BotsJob] = []
     private(set) var sessions: [String: BotMachineSession] = [:]
     private(set) var loadError: String?
     private(set) var busy = false
@@ -31,6 +33,10 @@ final class BotsModel {
     var versionReport: BotVersionReport { .init(thisMacVersion: thisMacVersion, machines: machines, syncErrors: syncErrors) }
 
     func session(for machineID: String) -> BotMachineSession? { sessions[machineID] }
+
+    func job(_ kind: BotsJob.Kind, target: String) -> BotsJob? {
+        jobs.first { $0.kind == kind && $0.target.lowercased() == target.lowercased() }
+    }
 
     func name(for target: DashboardBotTarget) -> String? {
         sessions[target.machineID]?.bots.first { $0.id == target.botID }?.name
@@ -77,6 +83,7 @@ final class BotsModel {
         if let devices = result.devices { self.devices = devices }
         syncErrors = result.syncErrors
         botMCP = result.botMCP
+        jobs = result.jobs
         let live = Dictionary(uniqueKeysWithValues: botMachines.map { ($0.id, $0) })
         for (id, session) in sessions where live[id] == nil {
             session.disconnect()

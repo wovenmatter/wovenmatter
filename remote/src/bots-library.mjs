@@ -16,9 +16,11 @@ const optionalID = value => value === undefined || value === null || id(value)
  * An adapter implements `writeBotEntries(botID, batch)`, where `batch` is the
  * runtime's `{bot: {id, name}, conversations, entries}`. It must upsert
  * entries by `(botID, entry.id)` and conversations by `(botID,
- * conversationId)`, so a resent batch changes nothing. The local library
- * daemon (`wovenmatter-library`) provides the production adapter; until the
- * Node server supervises it, batches go to a durable journal it can import.
+ * conversationId)`, so a resent batch changes nothing. `deleteBot(botID)`
+ * marks the bot's conversations deleted (entries stay), after every batch
+ * written before it. The local library daemon (`wovenmatter-library`) provides
+ * the production adapter; without one, batches and deletions go to a durable
+ * journal it can import.
  */
 export function createBotConversationLibrary(adapter) {
   return {
@@ -36,6 +38,10 @@ export function createBotConversationLibrary(adapter) {
       if (Buffer.byteLength(JSON.stringify(batch)) > 8 * 1024 * 1024) throw fail(413, 'The conversation batch is too large.')
       return adapter.writeBotEntries(botID.toLowerCase(), { bot: { id: botID.toLowerCase(), name: batch.bot.name }, conversations, entries })
     },
+    async deleteBot(botID) {
+      if (!uuid(botID)) throw fail(400, 'A bot UUID is required.')
+      return adapter.deleteBot(botID.toLowerCase())
+    },
   }
 }
 
@@ -50,27 +56,37 @@ export function createMemoryBotLibraryAdapter() {
       stored.name = batch.bot.name
       for (const item of batch.conversations) stored.conversations.set(item.conversationId, structuredClone(item))
       for (const entry of batch.entries) stored.entries.set(entry.id, structuredClone(entry))
+      // A later batch brings the conversations back, as the library's upsert does.
+      if (batch.conversations.length) stored.deleted = false
       return { conversations: batch.conversations.length, entries: batch.entries.length }
+    },
+    async deleteBot(botID) {
+      const stored = bots.get(botID)
+      if (stored) stored.deleted = true
+      return { deleted: true }
     },
   }
 }
 
 // One append-only JSON-lines file per bot under the Woven data root. Each line
-// is `{ "receivedAt", "bot", "conversations", "entries" }`; importing replays
-// lines in order, so a later line's upsert wins.
+// is `{ "receivedAt", "bot", "conversations", "entries" }`, or `{ "receivedAt",
+// "deleteBot": true }` for a deleted bot; importing replays lines in order, so a
+// later line's upsert or deletion wins.
 export function createJournalBotLibraryAdapter(directory) {
   const queues = new Map()
+  const append = (botID, line, result) => {
+    const run = (queues.get(botID) ?? Promise.resolve()).then(async () => {
+      await mkdir(directory, { recursive: true, mode: 0o700 })
+      await appendFile(join(directory, botID + '.jsonl'), JSON.stringify({ receivedAt: new Date().toISOString(), ...line }) + '\n', { mode: 0o600 })
+      return result
+    })
+    queues.set(botID, run.catch(() => {}))
+    return run
+  }
   return {
     directory,
-    writeBotEntries(botID, batch) {
-      const run = (queues.get(botID) ?? Promise.resolve()).then(async () => {
-        await mkdir(directory, { recursive: true, mode: 0o700 })
-        await appendFile(join(directory, botID + '.jsonl'), JSON.stringify({ receivedAt: new Date().toISOString(), ...batch }) + '\n', { mode: 0o600 })
-        return { conversations: batch.conversations.length, entries: batch.entries.length }
-      })
-      queues.set(botID, run.catch(() => {}))
-      return run
-    },
+    writeBotEntries: (botID, batch) => append(botID, batch, { conversations: batch.conversations.length, entries: batch.entries.length }),
+    deleteBot: botID => append(botID, { deleteBot: true }, { deleted: true }),
   }
 }
 
@@ -97,8 +113,8 @@ export function createLocalLibraryBotAdapter({ client, available, directory, log
     for (const line of lines) {
       let value
       try { value = JSON.parse(line) } catch { log('Skipping an unreadable bot outbox line for ' + botID); sent++; continue }
-      const { receivedAt, ...batch } = value
-      try { await client.botEntries(botID, batch) } catch (error) {
+      const { receivedAt, deleteBot, ...batch } = value
+      try { await (deleteBot ? client.deleteBotConversations(botID) : client.botEntries(botID, batch)) } catch (error) {
         // Keep what is left, in order; upserts make the sent part harmless to resend.
         if (sent) await writeFile(path, lines.slice(sent).join('\n') + '\n', { mode: 0o600 })
         throw error
@@ -123,6 +139,19 @@ export function createLocalLibraryBotAdapter({ client, available, directory, log
           } catch (error) { log('Bot entries for ' + botID + ' were kept in the outbox: ' + error.message) }
         }
         return journal.writeBotEntries(botID, batch)
+      })
+    },
+    // After the bot's pending batches, so a replayed batch cannot bring its conversations back.
+    deleteBot(botID) {
+      return serialized(botID, async () => {
+        if (available()) {
+          try {
+            await drainBot(botID)
+            await client.deleteBotConversations(botID)
+            return { deleted: true }
+          } catch (error) { log('Deleting conversations for bot ' + botID + ' was kept in the outbox: ' + error.message) }
+        }
+        return journal.deleteBot(botID)
       })
     },
     async drain() {

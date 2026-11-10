@@ -95,13 +95,13 @@ extension ApplicationModel {
                 try await self.setRemoteBotResources(machineID: machineID, resources, directory: directory)
             },
             discover: { [weak self] in try await self?.discoverBotDevices() ?? [] },
-            installBots: { [weak self] hostName, userName in
+            installBots: { [weak self] hostName, userName, progress in
                 guard let self else { throw CancellationError() }
-                try await self.remoteWorkspaces.installBotsHost(hostName: hostName, userName: userName)
+                try await self.remoteWorkspaces.installBotsHost(hostName: hostName, userName: userName, progress: progress)
             },
-            updateLinuxHost: { [weak self] machineID in
+            updateLinuxHost: { [weak self] machineID, progress in
                 guard let self else { throw CancellationError() }
-                try await self.updateLinuxBotHost(machineID: machineID, directory: directory)
+                try await self.updateLinuxBotHost(machineID: machineID, directory: directory, progress: progress)
             },
             updateRemoteEngine: { [weak self] machineID in
                 guard let self, let workspaceID = directory.members[machineID.lowercased()],
@@ -243,46 +243,91 @@ extension ApplicationModel {
     }
 
     /// "Update everything" for one Linux host: the signed `/v1/host/update` from any
-    /// Mac. SSH is only the fallback for a host this Mac added itself.
-    fileprivate func updateLinuxBotHost(machineID: String, directory: BotsRemoteDirectory) async throws {
+    /// Mac. SSH is only the fallback for a host this Mac added itself. Returns once the
+    /// update has finished.
+    fileprivate func updateLinuxBotHost(machineID: String, directory: BotsRemoteDirectory,
+                                        progress: @escaping @MainActor (String) -> Void) async throws {
         let id = machineID.lowercased()
         if let workspaceID = directory.members[id] {
             do {
+                progress("Updating…")
                 try await remoteWorkspaces.runSharedHost(workspaceID, .update)
                 return
             } catch {
                 guard let configuration = UUID(uuidString: workspaceID).flatMap(remoteWorkspaces.configuration(id:)) else { throw error }
-                remoteWorkspaces.updateContainer(configuration)
+                try await remoteWorkspaces.updateHost(configuration, progress: progress)
                 return
             }
         }
         guard let configurationID = directory.linux[id], let configuration = remoteWorkspaces.configuration(id: configurationID) else {
             throw BotsError.unavailable("That Linux host is unavailable.")
         }
-        remoteWorkspaces.updateContainer(configuration)
+        try await remoteWorkspaces.updateHost(configuration, progress: progress)
     }
 
     /// Online Linux and macOS tailnet peers and what each needs before it can run bots.
     func discoverBotDevices() async throws -> [BotDiscoveredDevice] {
         let peers = try await Task.detached { try RemoteMachineDiscovery.tailnetMachines(includeMacs: true) }.value
-        // A Linux host another Mac added is already installed: it is in the registry.
         let members = await memberBotWorkspaces()
-        let linuxHosts = Set(remoteWorkspaces.workspaces.filter { $0.kind == .host }.map { $0.hostName.lowercased() })
-            .union(members.filter { $0.kind == .linux }.compactMap { $0.endpoint?.host?.lowercased() }
-                .flatMap { [$0, String($0.split(separator: ".").first ?? "")] })
+        let configured = remoteWorkspaces.workspaces.filter { $0.kind == .host }
+        let linuxMembers = members.filter { $0.kind == .linux }
         let macs = members.filter { $0.kind == .mac }
         let macHosts = Set(macs.compactMap { $0.endpoint?.host?.lowercased() })
         let macNames = Set(macs.map { $0.name.lowercased() })
-        return peers.map { peer in
-            let short = (peer.dnsName ?? peer.hostName).split(separator: ".").first.map { String($0).lowercased() } ?? peer.hostName.lowercased()
+        // Every check starts at once and each is bounded, so the whole list answers in one round trip.
+        var checks: [(device: BotDiscoveredDevice, state: Task<BotDiscoveredDevice.State, Never>?)] = []
+        for peer in peers {
+            let short = Self.shortName(peer.dnsName ?? peer.hostName)
+            let matches = { (host: String) in host.lowercased() == peer.hostName.lowercased() || Self.shortName(host) == short }
+            var device = BotDiscoveredDevice(hostName: peer.hostName, displayName: peer.displayName, dnsName: peer.dnsName,
+                                             system: peer.system == "macOS" ? .macOS : .linux, state: .installBots)
+            var state: Task<BotDiscoveredDevice.State, Never>?
             if peer.system == "macOS" {
                 let connected = macHosts.contains { $0 == peer.dnsName?.lowercased() || $0.hasPrefix(short + ".") } || macNames.contains(peer.displayName.lowercased())
-                return BotDiscoveredDevice(hostName: peer.hostName, displayName: peer.displayName, dnsName: peer.dnsName,
-                                           system: .macOS, state: connected ? .ready : .installApp)
+                device.state = connected ? .ready : .installApp
+            } else if let configuration = configured.first(where: { matches($0.hostName) }) {
+                // A Woven server hosts bots only once it says so: a workspace host has none
+                // until they are added.
+                state = Task { await self.linuxBotsState(hostName: configuration.hostName, userName: configuration.userName) }
+            } else if let workspace = linuxMembers.first(where: { $0.endpoint?.host.map(matches) == true }) {
+                // Another Mac added this server; it answers for itself.
+                state = Task { await self.memberBotsState(workspace) }
             }
-            let installed = linuxHosts.contains(peer.hostName.lowercased()) || linuxHosts.contains(short)
-            return BotDiscoveredDevice(hostName: peer.hostName, displayName: peer.displayName, dnsName: peer.dnsName,
-                                       system: .linux, state: installed ? .ready : .installBots)
+            checks.append((device, state))
+        }
+        var devices: [BotDiscoveredDevice] = []
+        for (device, state) in checks {
+            var checked = device
+            if let state { checked.state = await state.value }
+            devices.append(checked)
+        }
+        return devices
+    }
+
+    private static func shortName(_ host: String) -> String {
+        host.split(separator: ".").first.map { String($0).lowercased() } ?? host.lowercased()
+    }
+
+    /// `remote-host.sh inspect`'s `bots.state` for a host this Mac added.
+    private func linuxBotsState(hostName: String, userName: String?) async -> BotDiscoveredDevice.State {
+        do {
+            let inspected = try await botsTimeout(seconds: 15) { try await self.remoteWorkspaces.inspectHost(hostName: hostName, userName: userName) }
+            return inspected.bots?.isReady == true ? .ready : .installBots
+        } catch {
+            return .failed("Couldn't check it over Tailscale SSH: " + error.localizedDescription)
+        }
+    }
+
+    /// The `GET /v1/bots/status` of a host another Mac added: bots are on when it says so.
+    private func memberBotsState(_ workspace: CompanionExecutionWorkspace) async -> BotDiscoveredDevice.State {
+        do {
+            let client = try await botsClient(for: workspace)
+            let status: BotsRemoteStatus = try await botsTimeout { try await client.request("v1/bots/status", timeout: 10) }
+            return status.enabled ? .ready : .installBots
+        } catch {
+            let text = Self.botsUnavailableText(error)
+            // A server too old to answer has no bots yet.
+            return text.contains("doesn't run bots") ? .installBots : .failed(text)
         }
     }
 }

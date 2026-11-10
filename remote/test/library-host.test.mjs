@@ -183,6 +183,25 @@ test('bot conversation batches wait in the outbox while the library is down and 
   assert.deepEqual((await debugState(library)).botEntries.map(item => item.entries[0].id), [1, 2, 3])
 })
 
+test('a deleted bot\'s conversations are deleted in the library after its pending batches', async t => {
+  const directory = scratch(t, 'wl-botsdel-'), outbox = join(directory, 'outbox')
+  const library = await startedLibrary(t, directory)
+  const adapter = createLocalLibraryBotAdapter({ client: library.client, available: library.available, directory: outbox })
+  const bots = createBotConversationLibrary(adapter), botID = randomUUID(), other = randomUUID()
+  const batch = (id, n) => ({ bot: { id, name: 'Scout' }, conversations: [{ conversationId: 1, kind: 'main' }], entries: [{ id: n, conversationId: 1, role: 'user', text: 'entry ' + n, createdAt: n }] })
+  // While the library is down the deletion waits in the outbox behind the bot's batches.
+  await library.stop()
+  await bots.writeBotEntries(botID, batch(botID, 1)); await bots.deleteBot(botID)
+  const lines = readFileSync(join(outbox, botID + '.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line))
+  assert.deepEqual(lines.map(line => line.deleteBot ?? false), [false, true])
+  library.start(); await library.whenReady(10_000)
+  assert.equal(await adapter.drain(), 2)
+  assert.equal(existsSync(join(outbox, botID + '.jsonl')), false)
+  // With the library up it is sent at once.
+  await bots.writeBotEntries(other, batch(other, 2)); await bots.deleteBot(other)
+  assert.deepEqual((await debugState(library)).botEntries.map(item => item.deleted ?? item.entries[0].id), [1, botID, 2, other])
+})
+
 test('a library host without the bot entries route keeps batches in the outbox', async t => {
   const directory = scratch(t, 'wl-bots404-'), outbox = join(directory, 'outbox')
   const library = await startedLibrary(t, directory, { FAKE_LIBRARY_BOTS: '0' })

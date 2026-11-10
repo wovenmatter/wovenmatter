@@ -125,13 +125,19 @@ test('bot conversation batches validate and upsert by id, and the journal keeps 
   await library.writeBotEntries(botID, batch([{ id: 4, conversationId: 1, role: 'user', text: 'hi', createdAt: 1 }, { id: 5, conversationId: 2, role: 'assistant', text: 'ok' }]))
   assert.deepEqual(memory.entries(botID).map(entry => entry.id), [4, 5])
   assert.equal(memory.bot(botID).conversations.get(2).title, 'Plan')
+  await assert.rejects(library.deleteBot('bot'), /bot UUID/)
+  assert.deepEqual(await library.deleteBot(botID.toUpperCase()), { deleted: true })
+  assert.equal(memory.bot(botID).deleted, true)
+  assert.deepEqual(memory.entries(botID).map(entry => entry.id), [4, 5], 'entries stay for history')
 
   const directory = temporary(t)
   const journal = createBotConversationLibrary(createJournalBotLibraryAdapter(directory))
   await journal.writeBotEntries(botID, batch([{ id: 4, conversationId: 1, role: 'user', text: 'hi' }]))
   await journal.writeBotEntries(botID, batch([]))
+  await journal.deleteBot(botID)
   const lines = readFileSync(join(directory, botID + '.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line))
-  assert.deepEqual(lines.map(line => line.entries.length), [1, 0])
+  assert.deepEqual(lines.map(line => line.entries?.length ?? 'deleted'), [1, 0, 'deleted'])
+  assert.equal(lines[2].deleteBot, true)
   assert.equal(lines[0].bot.name, 'Helper')
   assert.equal(statSync(join(directory, botID + '.jsonl')).mode & 0o777, 0o600)
 })
@@ -223,7 +229,7 @@ test('the runtime supervisor writes a private config with a fresh token, restart
 function engineFixture(t, { pool = 8 * 1024 ** 3, disk = null } = {}) {
   const root = temporary(t), layout = botEngineLayout('wmtest', root)
   mkdirSync(join(root, 'etc/wmtest-bots'), { recursive: true }); mkdirSync(join(layout.var, 'requests'), { recursive: true }); mkdirSync(join(layout.var, 'state'), { recursive: true })
-  writeFileSync(layout.config, JSON.stringify({ user: 'bots', poolBytes: pool, diskBytes: disk, subnet: ['10', '237', '0', '0'].join('.') + '/16', bridge: 'br-wmtest', dockerVersion: '29.9.3' }))
+  writeFileSync(layout.config, JSON.stringify({ user: 'bots', poolBytes: pool, diskBytes: disk, subnet: ['10', '237', '0', '0'].join('.') + '/24', bridge: 'br-wmtest', dockerVersion: '29.9.3' }))
   return { root, layout }
 }
 
@@ -315,7 +321,11 @@ test('the runtime host API requires its own bearer and serves keys, previews, cr
   const key = await f.call('/v1/bots-host/mcp-keys', { method: 'POST', body: { botID, botName: 'Helper' } })
   assert.equal(key.status, 201)
   assert.deepEqual(key.body, { endpoint: 'http://127.0.0.1:1/mcp', token: 'bot-token', principal: `woven:bot:${f.machine.deviceID}:${botID}` })
+  // Before the runtime deletes the bot, its conversations are live in this library copy.
+  await f.call(`/v1/bots-host/conversations/${botID}/entries`, { method: 'POST', body: { bot: { id: botID, name: 'Helper' }, conversations: [{ conversationId: 1, kind: 'main' }], entries: [] } })
+  assert.equal(f.memory.bot(botID).deleted, false)
   assert.equal((await f.call('/v1/bots-host/mcp-keys/' + botID, { method: 'DELETE' })).body.revoked, true)
+  assert.equal(f.memory.bot(botID).deleted, true, 'deleting the bot marks its library conversations deleted')
   const preview = await f.call('/v1/bots-host/previews', { method: 'POST', body: { botID, port: 41000 } })
   assert.equal(preview.body.url, 'https://host.example.ts.net:17000/'); assert.deepEqual(f.publishCalls, [{ botID, port: 41000, containerPort: undefined }])
   assert.equal((await f.call(`/v1/bots-host/previews/${botID}/41000`, { method: 'DELETE' })).body.removed, true)

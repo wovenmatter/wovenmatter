@@ -216,6 +216,13 @@ public final class LibraryHost: @unchecked Sendable {
           let added = try await database.recordBotConversation(machineID: identity.deviceID, batch)
           return try .json(["conversations": batch.conversations.count, "entries": batch.entries.count, "added": added])
         }
+        // The bots runtime deleted this bot: its conversations stop syncing as live ones.
+        if parts.count == 4, parts[0] == "v1", parts[1] == "bots", parts[3] == "conversations" {
+          guard request.method == "DELETE" else { return .error("method_not_allowed", "Use DELETE.", status: 405) }
+          guard WovenMCPCaller.isIdentifier(parts[2]) else { return .error("invalid_request", "A bot ID is required.", status: 400) }
+          try await database.deleteBotConversations(machineID: identity.deviceID, botID: parts[2])
+          return try .json(["deleted": true])
+        }
         return .error("not_found", "Unknown library API route.", status: 404)
       }
     } catch let error as CompanionAPIError {

@@ -456,6 +456,15 @@ struct LibraryHostTests {
     #expect(try await fixture.host.database.botConversationEntries(id: try #require(conversations.first?.id)).count == 1)
     #expect(try send("POST", "/v1/bots/\(UUID().uuidString.lowercased())/entries", unix: fixture.socket, headers: auth, body: JSONEncoder().encode(batch)).status == 400)
 
+    // Deleting the bot marks its conversations deleted for every device; entries stay.
+    #expect(try send("DELETE", "/v1/bots/\(bot)/conversations", unix: fixture.socket).status == 401)
+    #expect(try send("POST", "/v1/bots/\(bot)/conversations", unix: fixture.socket, headers: auth).status == 405)
+    #expect(try send("DELETE", "/v1/bots/not-a-bot!/conversations", unix: fixture.socket, headers: auth).status == 400)
+    let deleted = try send("DELETE", "/v1/bots/\(bot)/conversations", unix: fixture.socket, headers: auth)
+    #expect(deleted.status == 200 && deleted.json?.objectValue?["deleted"] == .bool(true), "\(String(decoding: deleted.body, as: UTF8.self))")
+    #expect(try await fixture.host.database.botConversations().isEmpty)
+    #expect(try await fixture.host.database.botConversationEntries(id: try #require(conversations.first?.id)).count == 1)
+
     // Session history from this machine's Node server lands in its own library.
     let library = try await fixture.host.database.companionLibraryIdentity()
     // On a real host this descriptor arrives with the adding Mac's records.

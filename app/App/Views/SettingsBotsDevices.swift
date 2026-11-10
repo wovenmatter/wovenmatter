@@ -8,17 +8,23 @@ import WovenMatterDashboardStore
 struct BotsDiscoverDevicesCard: View {
     @Bindable var bots: BotsModel
     @State private var searching = false
-    @State private var installing: String?
+    /// The install request being sent; the install itself runs in the background server
+    /// and reports through the device's state.
+    @State private var starting: String?
     @State private var error: String?
     @State private var users: [String: String] = [:]
     @State private var confirming: BotDiscoveredDevice?
+
+    private var installing: Bool {
+        starting != nil || bots.devices?.contains(where: \.isInstalling) == true
+    }
 
     var body: some View {
         SettingsCard(title: "Discover devices", detail: "Online Macs and Linux machines on your Tailscale network.") {
             VStack(alignment: .leading, spacing: 12) {
                 Button(searching ? "Searching…" : "Find devices") { discover() }
                     .buttonStyle(SettingsQuietButtonStyle())
-                    .disabled(searching || installing != nil)
+                    .disabled(searching || installing)
                 if let error { SettingsError(error) }
                 if let devices = bots.devices {
                     if devices.isEmpty { SettingsEmpty("No other Macs or Linux machines are online on your tailnet.") }
@@ -46,18 +52,11 @@ struct BotsDiscoverDevicesCard: View {
                     Text(summary(device)).font(.system(size: 11)).foregroundStyle(DashboardPalette.mutedForeground)
                 }
                 Spacer(minLength: 8)
-                if installing == device.id { ProgressView().controlSize(.small) }
+                if starting == device.id || device.isInstalling { ProgressView().controlSize(.small) }
             }
             Group {
                 switch device.state {
-                case .installBots:
-                    HStack(spacing: 8) {
-                        TextField("SSH user (optional)", text: Binding(get: { users[device.id] ?? "" }, set: { users[device.id] = $0 }))
-                            .dashboardInput().frame(maxWidth: 200)
-                        Button("Install bots") { confirming = device }
-                            .buttonStyle(SettingsQuietButtonStyle())
-                            .disabled(installing != nil)
-                    }
+                case .installBots: installControls(device)
                 case .installApp:
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Install Woven Matter on this Mac first").font(.system(size: 12, weight: .medium))
@@ -66,11 +65,26 @@ struct BotsDiscoverDevicesCard: View {
                         }
                     }
                 case .installing(let message): SettingsNote(message)
-                case .failed(let message): SettingsError(message)
+                case .failed(let message):
+                    VStack(alignment: .leading, spacing: 8) {
+                        SettingsError(message)
+                        // A Linux machine can be tried again once the cause is fixed.
+                        if device.system == .linux { installControls(device) }
+                    }
                 case .ready: EmptyView()
                 }
             }
             .padding(.leading, 34)
+        }
+    }
+
+    private func installControls(_ device: BotDiscoveredDevice) -> some View {
+        HStack(spacing: 8) {
+            TextField("SSH user (optional)", text: Binding(get: { users[device.id] ?? "" }, set: { users[device.id] = $0 }))
+                .dashboardInput().frame(maxWidth: 200)
+            Button("Install bots") { confirming = device }
+                .buttonStyle(SettingsQuietButtonStyle())
+                .disabled(installing)
         }
     }
 
@@ -81,7 +95,7 @@ struct BotsDiscoverDevicesCard: View {
         case .installBots: return system + " · No Woven server yet"
         case .installApp: return system + " · Woven Matter isn't connected"
         case .installing: return system + " · Installing…"
-        case .failed: return system + " · Install failed"
+        case .failed: return system + " · Needs attention"
         }
     }
 
@@ -95,12 +109,14 @@ struct BotsDiscoverDevicesCard: View {
         }
     }
 
+    /// Starts the install. It keeps running if this window closes; its progress and any
+    /// failure come back as the device's state.
     private func install(_ device: BotDiscoveredDevice) {
         confirming = nil
-        installing = device.id
+        starting = device.id
         error = nil
         Task {
-            defer { installing = nil }
+            defer { starting = nil }
             do { try await bots.send(.installBots(hostName: device.hostName, userName: users[device.id]?.nilIfBlank)) }
             catch { self.error = "\(device.displayName): " + error.localizedDescription }
         }
@@ -152,8 +168,7 @@ final class BotsUpdateCoordinator {
             switch step {
             case let .linuxHost(id, name):
                 current = "Updating \(name)…"
-                do { try await bots.send(.updateLinuxHost(machineID: id)) }
-                catch { failures.append("\(name): \(error.localizedDescription)") }
+                if let failure = await updateLinuxHost(machineID: id, name: name, bots: bots) { failures.append("\(name): \(failure)") }
             case let .mac(_, name):
                 current = "Updating Woven Matter on \(name)…"
                 if let failure = await updateMac(named: name) { failures.append("\(name): \(failure)") }
@@ -185,6 +200,22 @@ final class BotsUpdateCoordinator {
             await bots.refresh()
             guard let machine = bots.machines.first(where: { $0.id == machineID }) else { return "It stopped answering." }
             if !machine.updating { return machine.engineUpdateFailure }
+        }
+        return "It did not finish in time."
+    }
+
+    /// Starts a Linux host's update in the background server and follows its job until it
+    /// finishes; nil on success.
+    private func updateLinuxHost(machineID: String, name: String, bots: BotsModel, timeout: Duration = .seconds(3_600)) async -> String? {
+        do { try await bots.send(.updateLinuxHost(machineID: machineID)) }
+        catch { return error.localizedDescription }
+        let deadline = ContinuousClock.now + timeout
+        while ContinuousClock.now < deadline {
+            guard let job = bots.job(.updateLinuxHost, target: machineID) else { return "It stopped answering." }
+            guard job.running else { return job.error }
+            if let progress = job.progress { current = "Updating \(name): \(progress)" }
+            try? await Task.sleep(for: .seconds(2))
+            await bots.refresh()
         }
         return "It did not finish in time."
     }
