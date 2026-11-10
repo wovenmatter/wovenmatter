@@ -17,6 +17,13 @@ import { createBotsService } from '../src/bots-service.mjs'
 import { createMemberVerifier, privateKeyFromSeed, rawPublicKeyFor, signMemberRequest } from '../src/member-auth.mjs'
 
 const temporary = t => { const directory = mkdtempSync(join(tmpdir(), 'woven-bots-')); t.after(() => rmSync(directory, { recursive: true, force: true })); return directory }
+// Waits for a condition instead of a fixed delay, so a loaded machine only slows a test.
+async function eventually(condition, message, timeout = 10_000) {
+  for (const deadline = Date.now() + timeout; !condition();) {
+    assert.ok(Date.now() < deadline, message)
+    await new Promise(resolve => setTimeout(resolve, 5))
+  }
+}
 const listen = server => new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve(server.address().port)))
 
 async function execution(t, fetchImpl) {
@@ -161,7 +168,7 @@ test('the runtime supervisor writes a private config with a fresh token, restart
   const runtime = createBotsRuntime({ packageRoot: '/release/bots', configPath: join(directory, 'run/bots/runtime.json'), spawnImpl, portImpl: async () => ++port,
     environment: { WOVENMATTER_API_TOKEN: 'secret', PATH: '/usr/bin' }, minimumBackoff: 10, configuration: async () => ({ dataDir: '/data/bots', engine: { socket: '/run/wovenmatter/docker.sock', kind: 'linux-dockerd' } }) })
   runtime.start()
-  await new Promise(resolve => setTimeout(resolve, 30))
+  await eventually(() => children.length > 0, 'the runtime starts')
   assert.equal(children.length, 1)
   assert.deepEqual(children[0].args, ['/release/bots/src/cli.ts', 'serve', '--config', join(directory, 'run/bots/runtime.json')])
   assert.equal(children[0].options.env.WOVENMATTER_API_TOKEN, undefined)
@@ -172,8 +179,8 @@ test('the runtime supervisor writes a private config with a fresh token, restart
   assert.equal(statSync(join(directory, 'run/bots/runtime.json')).mode & 0o777, 0o600)
   assert.deepEqual(runtime.endpoint(), { host: '127.0.0.1', port: 40001, token: config.runtimeToken })
   children[0].emit('exit', 1, null)
-  await new Promise(resolve => setTimeout(resolve, 60))
-  assert.equal(children.length, 2, 'a crash restarts the runtime')
+  await eventually(() => children.length > 1, 'a crash restarts the runtime')
+  assert.equal(children.length, 2, 'a crash restarts the runtime once')
   const restarted = JSON.parse(readFileSync(join(directory, 'run/bots/runtime.json'), 'utf8'))
   assert.notEqual(restarted.runtimeToken, config.runtimeToken)
   assert.equal(runtime.status().restarts, 1)

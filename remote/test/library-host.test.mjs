@@ -272,7 +272,7 @@ test('the server accepts signed member requests and rejects wrong keys, replays,
     return fetch(base + path, { method, headers: { ...headers, ...(body ? { 'content-type': 'application/json' } : {}) }, ...(body ? { body } : {}) })
   }
   let identity
-  for (let i = 0; i < 200; i++) {
+  for (const deadline = Date.now() + 20_000; Date.now() < deadline;) {
     // identity.json is written beside the health report; wait for both.
     try { identity = await (await fetch(base + '/v1/health', { headers: { authorization: 'Bearer ' + token } })).json(); if (identity.memberIdentity && existsSync(join(home, 'state/library/identity.json'))) break } catch {}
     await new Promise(r => setTimeout(r, 50))
@@ -323,7 +323,11 @@ test('the server accepts signed member requests and rejects wrong keys, replays,
   const libraryPid = identity.library.pid
   child.kill('SIGTERM'); await exited
   let alive = true
-  for (let i = 0; i < 50 && alive; i++) { try { process.kill(libraryPid, 0); await new Promise(r => setTimeout(r, 50)) } catch { alive = false } }
+  // The library host gets SIGTERM as the server exits; allow a loaded machine
+  // time to deliver it rather than a fixed 2.5 s.
+  for (const deadline = Date.now() + 15_000; alive && Date.now() < deadline;) {
+    try { process.kill(libraryPid, 0); await new Promise(r => setTimeout(r, 25)) } catch { alive = false }
+  }
   assert.equal(alive, false, 'the library host exited with the server')
 })
 

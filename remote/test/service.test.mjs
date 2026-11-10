@@ -38,11 +38,17 @@ test('runtime inspection is authenticated and never starts a Pi worker', async c
   const service = await startService({workspace:root, home:root, catalog:catalogPath, token})
   context.after(() => stopService(service.child))
   assert.equal((await fetch(service.url+'/v1/runtime/inspection')).status,401)
+  // observedAt is seconds since 2001 (Apple's reference date), taken while the
+  // request is served. Bracket the request rather than allow a fixed skew,
+  // which a loaded machine exceeds.
+  const reference = () => Date.now()/1000-978307200
+  const requested = reference()
   const response = await fetch(service.url+'/v1/runtime/inspection', {headers:{Authorization:'Bearer '+token}})
   assert.equal(response.status,200)
   const snapshot = await response.json()
+  const answered = reference()
   assert.equal(snapshot.ownerID,'remote')
-  assert.ok(Math.abs(snapshot.observedAt - (Date.now()/1000-978307200)) < 5)
+  assert.ok(snapshot.observedAt >= requested-1 && snapshot.observedAt <= answered+1, `observedAt ${snapshot.observedAt} outside ${requested}...${answered}`)
   assert.equal(snapshot.items.find(item=>item.kind==='service').processID,service.child.pid)
   assert.ok(!snapshot.items.some(item=>item.id==='pi-worker'))
   assert.ok(!JSON.stringify(snapshot).includes(token))
