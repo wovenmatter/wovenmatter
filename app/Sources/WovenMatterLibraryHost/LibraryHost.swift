@@ -140,6 +140,8 @@ public final class LibraryHost: @unchecked Sendable {
     if path.hasPrefix("/wovenmatter/") { path = String(path.dropFirst("/wovenmatter".count)) }
     if path == "/v1/health" { return await health(request) }
     if path == "/v1/identity" { return await identityResponse(request) }
+    // Signing for the Node server is socket-only; the mobile `/v1/members` mount must not claim it.
+    if path.hasPrefix("/v1/members/") { return .error("not_found", "This library route is not served here.", status: 404) }
     let handler = lock.withLock { mounts.first { path.hasPrefix($0.prefix) }?.handler }
     guard let handler else { return .error("not_found", "This library route is not served here.", status: 404) }
     return await handler(request)

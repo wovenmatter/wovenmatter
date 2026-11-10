@@ -1,3 +1,5 @@
+// NWListener is macOS-only; Linux hosts build these tests without it.
+#if canImport(Network)
 import Foundation
 import Network
 import Testing
@@ -44,3 +46,4 @@ struct PiBotHandshakeTests {
         #expect(headers["cookie"] == nil)
     }
 }
+#endif
