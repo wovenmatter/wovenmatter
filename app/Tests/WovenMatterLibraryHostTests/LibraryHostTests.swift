@@ -324,6 +324,8 @@ struct LibraryHostTests {
 
     let hello = try signed("/wovenmatter/v1/hello")
     #expect(hello.status == 200, "\(String(decoding: hello.body, as: UTF8.self))")
+    // The phone sees this machine's own member name, not a Mac placeholder.
+    #expect(hello.json?.objectValue?["hostName"]?.stringValue == "Box")
     #expect(try signed("/v1/snapshot").status == 200)
     // The phone can show whether some device needs an update.
     let syncStatus = try signed("/wovenmatter/v1/sync/status")

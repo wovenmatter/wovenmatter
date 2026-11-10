@@ -83,9 +83,11 @@ public final class LibraryHost: @unchecked Sendable {
     }
     // Bearer grants are never issued here; the store only backs the API.
     let authentication = try CompanionAuthentication(fileURL: layout.library.appending(path: "companion-devices.json"))
-    let api = await MainActor.run { [database, members, executor, sync] in
+    let api = await MainActor.run { [database, members, executor, sync, ownID = identity.deviceID] in
       CompanionWorkspaceAPI(database: database, authentication: authentication, commands: LibraryHostCommands(executor: executor),
-                            isActive: { true }, members: members, syncStatus: { await sync.status() })
+                            isActive: { true }, members: members, syncStatus: { await sync.status() },
+                            // This machine's own member entry carries its signed, user-visible name.
+                            hostName: { await members.member(ownID)?.name })
     }
     mobile = api
     for prefix in Self.mobilePrefixes {
