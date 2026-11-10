@@ -801,6 +801,32 @@ hands them to the macOS job, which checks them with
   not ready stays listed, dimmed. Settings → Workspaces keeps every saved
   workspace with its connection state. Other Apple devices are never
   connections; their synced Quick Chat history and folders stay listed.
+- **Order and names.** Quick Chat comes first, then the library host, the
+  other Macs and the Linux workspaces, each listed once under its registry
+  name with its own agents (`CompanionAgentGroup.list`). Every Mac that hosts
+  a library advertises `history.central.v1`, so the central agent list
+  ("This Mac", from `GET /v1/providers`) belongs only to the registry row of the
+  library host the phone syncs with, matched by its device ID
+  (`CompanionModel.centralExecutionWorkspace`); any other Mac lists its own
+  agents from its own endpoint. A library host's agent that its central list
+  reports as not ready is offered through its own endpoint when that reports
+  it ready.
+- **Agent freshness.** The phone asks the library host for its agent list on
+  the first refresh after launch, after a failed refresh (reconnect), when it
+  becomes active or the network returns, when the library host changes, when
+  the New Chat menu opens, and otherwise every fifth refresh. Each reachable
+  workspace's own list is fetched on each of its refreshes, and opening New
+  Chat refreshes every workspace at once. The saved agent catalog only fills
+  the lists until those answers arrive; a deleted workspace's saved list is
+  dropped.
+- **Sending.** A message to a Mac or Linux session (direct or central) shows in
+  the chat immediately (`CompanionPendingSend`), the composer clears, and a
+  quiet caption says "Sending to <workspace>…" until the workspace accepts it,
+  then "Starting on <workspace>…" until its transcript shows the message and
+  its turn. The phone then refreshes that workspace at once and every two
+  seconds while the turn starts. A failed send removes the message and puts
+  the text back in the composer; the saved draft is cleared only once the
+  workspace accepts the message.
 
 ### iPhone reach
 

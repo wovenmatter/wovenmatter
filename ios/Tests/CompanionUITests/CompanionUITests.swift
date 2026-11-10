@@ -595,4 +595,57 @@ final class CompanionUITests: XCTestCase {
     XCTAssertTrue(app.buttons["launch-agent-local:pi-durable-device"].waitForExistence(timeout: 5))
   }
 
+
+  /// Saves a screenshot when `WOVENMATTER_UI_SCREENSHOT_DIR` is set (review evidence, kept out of Git).
+  @MainActor func saveScreenshot(_ name: String) {
+    guard let directory = ProcessInfo.processInfo.environment["WOVENMATTER_UI_SCREENSHOT_DIR"], !directory.isEmpty else { return }
+    try? XCUIScreen.main.screenshot().pngRepresentation.write(to: URL(fileURLWithPath: directory).appendingPathComponent(name + ".png"))
+  }
+
+  /// From a phone paired as a member with two Dev Macs that both serve
+  /// central history: the New Chat menu lists Quick Chat first, then each Mac
+  /// once under its own name with its own agents, and no copied snapshot row.
+  @MainActor func testNewChatMenuListsQuickChatFirstAndEachMacOnce() {
+    let app = launch(tab: "Home", scenario: "member-macs")
+    let air = "0446435c-8e64-440e-b9eb-3c5dadb27e04", mini = "b03923c3-89d1-4f29-910a-b7e3ce7b586c"
+    app.buttons["action-new-chat"].tap()
+    let quickChat = app.buttons["choose-chat-agent-local:pi-durable-device"]
+    XCTAssertTrue(quickChat.waitForExistence(timeout: 5))
+    // Review evidence: the whole menu, page by page.
+    let row = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "choose-chat-agent-")).firstMatch
+    for page in 1...3 { sleep(1); saveScreenshot("new-chat-menu-\(page)"); (page == 1 ? row : app).swipeUp() }
+    let groups = app.staticTexts.matching(NSPredicate(format: "identifier BEGINSWITH %@", "chooser-group-"))
+    XCTAssertEqual(groups.allElementsBoundByIndex.map(\.label), ["Quick Chat", "James’s MacBook Air (Dev) · worktrees-b8e80bfb02",
+      "James’s Mac Mini (Dev) · woven-everywhere"], "Quick Chat leads; each Mac appears once under its own name")
+    XCTAssertLessThan(quickChat.frame.minY, app.staticTexts["chooser-group-central"].frame.minY)
+    // The library host's own agents, ready by its own report even though its cached central list was stale.
+    XCTAssertTrue(app.buttons["choose-chat-agent-central:local:default_agent"].isEnabled)
+    XCTAssertTrue(app.buttons["choose-chat-agent-" + air + ":local:codex"].exists, "Codex falls back to the Air's own fresh list")
+    let miniAgent = app.buttons["choose-chat-agent-" + mini + ":local:claude_code"]
+    reveal(miniAgent, in: app)
+    XCTAssertFalse(app.staticTexts["James’s MacBook Air"].exists, "A copied snapshot owner is history, not a workspace")
+    XCTAssertFalse(app.staticTexts["Workstation (Dev)"].exists, "An unreachable Linux workspace waits until it is reachable")
+  }
+
+  /// Sending to a Mac session shows the message at once, with quiet progress,
+  /// while the workspace takes a moment to accept it; the workspace's copy
+  /// then replaces it without a duplicate.
+  @MainActor func testMessageToAMacSessionAppearsImmediately() {
+    let app = launch(tab: "Chats", scenario: "member-macs-send")
+    let composer = app.descendants(matching: .any)["chat-composer"].firstMatch
+    XCTAssertTrue(composer.waitForExistence(timeout: 5))
+    composer.tap()
+    composer.typeText("What should we work on next?")
+    app.buttons["Send message"].tap()
+    let message = app.staticTexts["What should we work on next?"]
+    XCTAssertTrue(message.waitForExistence(timeout: 1), "The message appears before the workspace answers")
+    XCTAssertTrue(app.staticTexts["chat-send-progress"].exists)
+    saveScreenshot("send-pending")
+    let settled = NSPredicate(format: "exists == false")
+    expectation(for: settled, evaluatedWith: app.staticTexts["chat-send-progress"])
+    waitForExpectations(timeout: 10)
+    XCTAssertEqual(app.staticTexts.matching(NSPredicate(format: "label == %@", "What should we work on next?")).count, 1)
+    saveScreenshot("send-settled")
+  }
+
 }

@@ -170,16 +170,19 @@ extension CompanionModel {
     for conversation in conversations {
       if let provider = conversation.providerID { known.insert(executionOwner(of: conversation.id) + ":" + provider) }
     }
+    // The central list belongs to the library host alone; every other Mac
+    // lists its own agents under its own name.
     return CompanionAgentLauncher.list(deviceName: deviceWorkspaceName, centralOnline: online, providers: providers,
-      workspaces: executionWorkspaces, workspaceProviders: workspaceProviders, reachable: workspaceReachable, knownAgentIDs: known)
+      workspaces: executionWorkspaces, workspaceProviders: workspaceProviders, reachable: workspaceReachable, knownAgentIDs: known,
+      centralWorkspaceID: centralExecutionWorkspace?.id, centralName: libraryHostName)
   }
-  /// Quick Chat and the paired Mac and Linux workspaces reachable now
+  /// Quick Chat first, then the paired Mac and Linux workspaces reachable now
   /// (`agentGroupIsActive`). Home, Folders, New Chat and Calendar list these.
   var launcherGroups: [CompanionAgentGroup] {
     // A copied snapshot owner (`retainedHistory`) is history, never an agent source.
     let historyOnly = Set(executionWorkspaces.filter { $0.retainedHistory == true }.map(\.id))
     return CompanionAgentGroup.list(agents: launcherAgents.filter { !historyOnly.contains($0.workspaceID) && !historyOnly.contains($0.groupID) },
-      workspaces: executionWorkspaces).filter(agentGroupIsActive)
+      workspaces: executionWorkspaces, centralWorkspaceID: centralExecutionWorkspace?.id).filter(agentGroupIsActive)
   }
   /// The agents of `launcherGroups`, for pickers that list agents without groups.
   var listedLauncherAgents: [CompanionAgentLauncher] { launcherGroups.flatMap(\.agents) }

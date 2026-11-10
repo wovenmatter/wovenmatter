@@ -24,11 +24,14 @@ extension CompanionModel {
     return host.name
   }
   /// The registered workspace of the library host itself, when it is a Mac.
+  /// Every Mac that hosts a library advertises central history, so the host
+  /// is matched by device; only a pairing that never learned its host's
+  /// device ID falls back to the first such Mac.
   var centralExecutionWorkspace: CompanionExecutionWorkspace? {
     // A copied snapshot owner keeps the capability for its history only.
-    let central = executionWorkspaces.filter { $0.capabilities.contains("history.central.v1") && $0.retainedHistory != true }
-    if memberMode, let host = libraryHostDeviceID {
-      return central.first { $0.kind == .mac && $0.ownerDeviceID.lowercased() == host }
+    let central = executionWorkspaces.filter(\.isLiveCentralMac)
+    if let host = libraryHostDeviceID?.lowercased() {
+      return central.first { $0.ownerDeviceID.lowercased() == host || $0.executionDeviceID?.lowercased() == host }
     }
     return central.first
   }

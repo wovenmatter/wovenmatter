@@ -218,7 +218,7 @@ final class ExecutionRoutingTests: XCTestCase {
     let launchers = model.launcherAgents
     XCTAssertEqual(launchers.map(\.workspaceID), ["local", "central", connected.id, disconnected.id])
     XCTAssertFalse(try XCTUnwrap(launchers.last).isAvailable)
-    XCTAssertEqual(model.launcherGroups.map(\.id), [connected.id, "local"], "Only reachable workspaces are listed")
+    XCTAssertEqual(model.launcherGroups.map(\.id), ["local", connected.id], "Only reachable workspaces are listed")
     await model.launchAgent(try XCTUnwrap(launchers.last))
     XCTAssertEqual(model.selectedConversationID, "existing-chat")
     await model.launchAgent(try XCTUnwrap(launchers.first { $0.workspaceID == connected.id }))
