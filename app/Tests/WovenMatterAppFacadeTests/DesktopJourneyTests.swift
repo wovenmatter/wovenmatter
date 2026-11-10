@@ -8,6 +8,10 @@ import WovenMatterClient
 @testable import WovenMatterDashboardStore
 @testable import WovenMatterAppFacade
 
+private func sessionIsLocked() -> Bool {
+    (CGSessionCopyCurrentDictionary() as? [String: Any])?["CGSSessionScreenIsLocked"] as? Bool == true
+}
+
 @MainActor @Suite(.serialized, .timeLimit(.minutes(2)))
 struct DesktopJourneyTests {
     private func conversation(_ f: FacadeFixture, _ id: String) async throws -> WorkspaceConversationRecord {
@@ -119,10 +123,17 @@ struct DesktopJourneyTests {
         #expect(await f.model.flushNoteDrafts())
         #expect(try journal.entries().isEmpty)
         try await f.model.mutateNote(id: id, mutation: .rename("Renamed"))
-        let export = try await f.model.exportNote(id: id)
-        defer { try? FileManager.default.removeItem(at: export.url) }
-        let exported = try String(contentsOf: export.url, encoding: .utf8)
-        #expect(Data(exported.utf8) == Data(("# Renamed\n\n" + content + "\n").utf8))
+        // Exports are staged with complete file protection. Since macOS 27.2 such
+        // a file cannot be created while the session is locked, as during an
+        // unattended test run; the export then fails rather than leak plaintext.
+        if sessionIsLocked() {
+            await #expect(throws: (any Error).self) { _ = try await f.model.exportNote(id: id) }
+        } else {
+            let export = try await f.model.exportNote(id: id)
+            defer { try? FileManager.default.removeItem(at: export.url) }
+            let exported = try String(contentsOf: export.url, encoding: .utf8)
+            #expect(Data(exported.utf8) == Data(("# Renamed\n\n" + content + "\n").utf8))
+        }
         await #expect(throws: (any Error).self) {
             _ = try await f.database.persistNoteDraft(id: id, title: "Stale", content: "Lost edit", expectedRevision: originalRevision)
         }
