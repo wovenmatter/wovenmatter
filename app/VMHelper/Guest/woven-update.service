@@ -6,4 +6,4 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 ExecStart=/usr/local/lib/woven/provision.sh upgrade
-TimeoutStartSec=3600
+TimeoutStartSec=10800

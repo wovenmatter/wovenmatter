@@ -354,6 +354,11 @@ struct WovenVMTests {
                                                                     engineSocket: paths.engineSocket.path)))
             case ("POST", "/v1/update"):
                 return (409, try JSONEncoder().encode(WovenVMControlHTTP.ErrorBody(error: "The VM can update only when it is ready.")))
+            case ("GET", "/v1/diagnostics"):
+                return (200, try JSONEncoder().encode(WovenVMDiagnostics(
+                    status: WovenVMStatus(phase: .provisioning, detail: "Starting Docker Engine", engineSocket: paths.engineSocket.path),
+                    helperLog: "provisioning: Starting Docker Engine", console: "",
+                    guest: ["kernel_alerts": "Internal error: Oops: 0000000096000004 [#1]  SMP"], guestError: nil)))
             default:
                 return (404, Data())
             }
@@ -378,6 +383,142 @@ struct WovenVMTests {
         await #expect(throws: WovenVMError.unavailable("The VM can update only when it is ready.")) {
             try await controller.update()
         }
+        let diagnostics = try await controller.diagnostics()
+        #expect(diagnostics.status.detail == "Starting Docker Engine")
+        #expect(WovenVMGuestDiagnostics.kernelFault(diagnostics.guest ?? [:])?.hasPrefix("Internal error: Oops") == true)
+    }
+
+    // MARK: Provisioning watch
+
+    private static let boot = "16dc7e85-dd61-41ff-a36a-719a60b1662d"
+
+    private static func status(provision: [String: Any]? = nil, update: [String: Any]? = nil,
+                               provisioned: Bool = false, docker: Bool = false) -> [String: Any] {
+        var status: [String: Any] = ["agent": 1, "boot_id": boot]
+        if let provision { status["provision"] = provision }
+        if let update { status["update"] = update }
+        if provisioned { status["provisioned"] = ["guestVersion": 1] }
+        if docker { status["docker"] = "29.9.3" }
+        return status
+    }
+
+    private static func step(_ name: String, limit: Int?, phase: String = "running", error: String? = nil,
+                             boot: String? = WovenVMTests.boot) -> [String: Any] {
+        var record: [String: Any] = ["phase": phase, "step": name]
+        if let limit { record["timeout"] = limit }
+        if let error { record["error"] = error }
+        if let boot { record["boot_id"] = boot }
+        return record
+    }
+
+    /// The MacBook Air incident: the guest failed "Starting Docker Engine" and
+    /// said so; the helper must see that at once instead of waiting an hour.
+    @Test func provisioningFailsWithTheGuestsOwnReason() {
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        var watch = WovenVMProvisionWatch(now: start)
+        let rules = Self.status(provision: Self.step("Applying network rules", limit: 300))
+        #expect(watch.observe(.init(provisioningIn: rules), now: start) == .waiting(step: "Applying network rules"))
+        let reason = "Starting Docker Engine failed (exit 1): Job for containerd.service failed because a timeout was exceeded."
+        let failed = Self.status(provision: Self.step("Starting Docker Engine", limit: 300, phase: "failed", error: reason))
+        #expect(watch.observe(.init(provisioningIn: failed), now: start + 150) == .failed(reason))
+    }
+
+    @Test func aStuckStepFailsAtItsLimitNamingTheStep() {
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        var watch = WovenVMProvisionWatch(now: start)
+        let installing = Self.status(provision: Self.step("Installing Docker Engine", limit: 1800))
+        // The guest enforces the limit itself; the watch waits `grace` longer.
+        #expect(watch.observe(.init(provisioningIn: installing), now: start + 10) == .waiting(step: "Installing Docker Engine"))
+        #expect(watch.observe(.init(provisioningIn: installing), now: start + 10 + 1800 + 119) == .waiting(step: "Installing Docker Engine"))
+        #expect(watch.observe(.init(provisioningIn: installing), now: start + 10 + 1800 + 120)
+                == .failed("Installing Docker Engine did not finish within 30 minutes."))
+
+        // Each step's limit counts from when it began.
+        var next = WovenVMProvisionWatch(now: start)
+        _ = next.observe(.init(provisioningIn: installing), now: start)
+        let rules = Self.status(provision: Self.step("Applying network rules", limit: 300))
+        #expect(next.observe(.init(provisioningIn: rules), now: start + 1700) == .waiting(step: "Applying network rules"))
+        #expect(next.observe(.init(provisioningIn: rules), now: start + 1700 + 419) == .waiting(step: "Applying network rules"))
+        #expect(next.observe(.init(provisioningIn: rules), now: start + 1700 + 420)
+                == .failed("Applying network rules did not finish within 5 minutes."))
+
+        // An older guest reports no limit.
+        var older = WovenVMProvisionWatch(now: start)
+        let unlimited = Self.status(provision: Self.step("Installing Docker Engine", limit: nil, boot: nil))
+        #expect(older.observe(.init(provisioningIn: unlimited), now: start) == .waiting(step: "Installing Docker Engine"))
+        #expect(older.observe(.init(provisioningIn: unlimited), now: start + 1799) == .waiting(step: "Installing Docker Engine"))
+        #expect(older.observe(.init(provisioningIn: unlimited), now: start + 1800)
+                == .failed("Installing Docker Engine did not finish within 30 minutes."))
+    }
+
+    @Test func aSilentGuestFailsInsteadOfWaitingForever() {
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        var watch = WovenVMProvisionWatch(now: start)
+        #expect(watch.observe(nil, now: start + 599) == .waiting(step: WovenVMProvisionWatch.startingStep))
+        #expect(watch.observe(nil, now: start + 600) == .failed("The guest did not start."))
+
+        var answered = WovenVMProvisionWatch(now: start)
+        let rules = Self.status(provision: Self.step("Applying network rules", limit: 300))
+        _ = answered.observe(.init(provisioningIn: rules), now: start + 20)
+        #expect(answered.observe(nil, now: start + 20 + 299) == .waiting(step: "Applying network rules"))
+        #expect(answered.observe(nil, now: start + 20 + 300)
+                == .failed("The guest stopped answering (last step: Applying network rules)."))
+    }
+
+    @Test func provisioningIsDoneOnlyWithDockerEngineAnswering() {
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        var watch = WovenVMProvisionWatch(now: start)
+        let provisioned = Self.status(provision: Self.step("Ready", limit: nil, phase: "ready"), provisioned: true)
+        #expect(watch.observe(.init(provisioningIn: provisioned), now: start) == .waiting(step: WovenVMProvisionWatch.engineStep))
+        #expect(watch.observe(.init(provisioningIn: provisioned), now: start + 300)
+                == .failed("\(WovenVMProvisionWatch.engineStep) did not finish within 5 minutes."))
+        var ready = WovenVMProvisionWatch(now: start)
+        let answering = Self.status(provision: Self.step("Ready", limit: nil, phase: "ready"), provisioned: true, docker: true)
+        #expect(ready.observe(.init(provisioningIn: answering), now: start) == .done)
+    }
+
+    /// After the helper reboots a failed guest, the last boot's failure must
+    /// not end the retry before this boot's provisioning reports.
+    @Test func anEarlierBootsReportDoesNotCount() {
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        var watch = WovenVMProvisionWatch(now: start)
+        let earlier = Self.status(provision: Self.step("Starting Docker Engine", limit: 300, phase: "failed",
+                                                       error: "Starting Docker Engine failed (exit 1)", boot: "earlier-boot"))
+        #expect(watch.observe(.init(provisioningIn: earlier), now: start + 5) == .waiting(step: WovenVMProvisionWatch.startingStep))
+        let now = Self.status(provision: Self.step("Turning off automatic updates", limit: 900))
+        #expect(watch.observe(.init(provisioningIn: now), now: start + 10) == .waiting(step: "Turning off automatic updates"))
+    }
+
+    @Test func updatesAreWatchedTheSameWay() {
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        var watch = WovenVMProvisionWatch(now: start)
+        // Before update.json exists, and while an old status.json says ready.
+        let waiting = Self.status(provision: Self.step("Ready", limit: nil, phase: "ready"), provisioned: true, docker: true)
+        #expect(watch.observe(.init(updateIn: waiting), now: start) == .waiting(step: WovenVMProvisionWatch.startingStep))
+        let upgrading = Self.status(update: Self.step("Updating guest packages", limit: 3600), provisioned: true, docker: true)
+        #expect(watch.observe(.init(updateIn: upgrading), now: start + 30) == .waiting(step: "Updating guest packages"))
+        let updated = Self.status(update: Self.step("Updated", limit: nil, phase: "ready"), provisioned: true)
+        #expect(watch.observe(.init(updateIn: updated), now: start + 600) == .done)
+    }
+
+    @Test func diagnosticsNameAGuestKernelFault() {
+        // The agent's reply as the MacBook Air guest gave it (abridged).
+        let reply: [String: Any] = [
+            "provision": ["phase": "failed", "step": "Starting Docker Engine"],
+            "kernel_alerts": """
+                Unable to handle kernel paging request at virtual address 33e5de8f893e3af8
+                Mem abort info:
+                Internal error: Oops: 0000000096000004 [#1]  SMP
+                """,
+            "load": [6.5, 6.25, 4], "uptime": 512.5
+        ]
+        let texts = WovenVMGuestDiagnostics.texts(reply)
+        #expect(texts["load"] == "[6.5,6.25,4]")
+        #expect(texts["provision"] == #"{"phase":"failed","step":"Starting Docker Engine"}"#)
+        #expect(WovenVMGuestDiagnostics.kernelFault(texts)
+                == "Unable to handle kernel paging request at virtual address 33e5de8f893e3af8")
+        #expect(WovenVMGuestDiagnostics.kernelFault(["kernel_alerts": "-- No entries --"]) == nil)
+        #expect(WovenVMGuestDiagnostics.kernelFault([:]) == nil)
     }
 }
 

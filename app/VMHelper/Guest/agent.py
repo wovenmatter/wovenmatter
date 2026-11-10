@@ -37,17 +37,17 @@ def read_json(path):
 
 
 class DockerConnection(http.client.HTTPConnection):
-    def __init__(self):
-        super().__init__("localhost", timeout=10)
+    def __init__(self, timeout):
+        super().__init__("localhost", timeout=timeout)
 
     def connect(self):
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.sock.settimeout(10)
+        self.sock.settimeout(self.timeout)
         self.sock.connect(DOCKER_SOCKET)
 
 
-def docker(path):
-    connection = DockerConnection()
+def docker(path, timeout=10):
+    connection = DockerConnection(timeout)
     try:
         connection.request("GET", path)
         response = connection.getresponse()
@@ -122,16 +122,23 @@ _host_addresses = None
 
 
 def op_status(_):
+    # Status must answer at once whatever state Docker is in: the Mac follows
+    # provisioning through it. Docker matters only once the guest is
+    # provisioned; before that, connecting to its (socket-activated) API would
+    # start a half-installed daemon, and a daemon that is still starting holds
+    # the request open.
     docker_version = None
-    try:
-        code, body = docker("/version")
-        if code == 200:
-            docker_version = body.get("Version")
-    except (OSError, http.client.HTTPException, ValueError):
-        pass
+    provisioned = read_json(STATE + "/provisioned")
+    if provisioned is not None:
+        try:
+            code, body = docker("/version", timeout=2)
+            if code == 200:
+                docker_version = body.get("Version")
+        except (OSError, http.client.HTTPException, ValueError):
+            pass
     return {"agent": AGENT_VERSION, "os": os_name(), "kernel": os.uname().release, "docker": docker_version,
             "provision": read_json(STATE + "/status.json"), "update": read_json(STATE + "/update.json"),
-            "provisioned": read_json(STATE + "/provisioned"), "balloon": balloon_features(),
+            "provisioned": provisioned, "balloon": balloon_features(),
             "boot_id": open("/proc/sys/kernel/random/boot_id").read().strip(),
             "cmdline": open("/proc/cmdline").read().strip()}
 
@@ -202,7 +209,7 @@ def op_set_host_addresses(request):
         if not all(c in "0123456789abcdefABCDEF:." for c in address) or len(address) > 45:
             raise ValueError("invalid address")
     if addresses != _host_addresses:
-        subprocess.run(["/usr/local/lib/woven/egress.sh", "host", *addresses], check=True, timeout=30,
+        subprocess.run(["/usr/local/lib/woven/egress.sh", "host", *addresses], check=True, timeout=90,
                        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         _host_addresses = addresses
     return {"addresses": addresses}
@@ -264,9 +271,30 @@ def op_poweroff(_):
     return {"ok": True}
 
 
+def command_output(arguments, timeout=5, lines=80):
+    """A diagnostic command's output (its first lines); its failure is part of the answer."""
+    try:
+        result = subprocess.run(arguments, capture_output=True, text=True, timeout=timeout)
+        return "\n".join((result.stdout + result.stderr).strip().splitlines()[:lines])
+    except (OSError, subprocess.SubprocessError) as error:
+        return "%s: %s" % (type(error).__name__, error)
+
+
 def op_diagnostics(_):
-    cloud = subprocess.run(["cloud-init", "status", "--long"], capture_output=True, text=True, timeout=30)
-    return {"provision_log": tail("/var/log/woven-provision.log", 40), "cloud_init": cloud.stdout.strip()}
+    """What explains a stuck or failed guest, for the Mac's diagnostics."""
+    journal = ["journalctl", "--no-pager", "-b", "-o", "short-iso"]
+    return {"provision": read_json(STATE + "/status.json"), "update": read_json(STATE + "/update.json"),
+            "provision_log": tail("/var/log/woven-provision.log", 60),
+            # The first alert-level lines: the first oops or lockup explains the rest.
+            "kernel_alerts": command_output(["journalctl", "--no-pager", "-b", "-k", "-p", "0..2", "-o", "cat"],
+                                            timeout=10, lines=40),
+            "kernel_log": command_output(journal + ["-k", "-n", "60"], timeout=10),
+            "failed_units": command_output(["systemctl", "--failed", "--no-legend", "--plain", "--no-pager"]),
+            "jobs": command_output(["systemctl", "list-jobs", "--no-legend", "--no-pager"]),
+            "processes": command_output(["ps", "-eo", "pid,stat,pcpu,etime,wchan:24,args", "--sort=-pcpu"],
+                                        lines=25),
+            "load": os.getloadavg(), "uptime": float(open("/proc/uptime").read().split()[0]),
+            "cloud_init": command_output(["cloud-init", "status", "--long"], timeout=10)}
 
 
 OPERATIONS = {"ping": lambda _: {"agent": AGENT_VERSION}, "status": op_status, "meminfo": op_meminfo,

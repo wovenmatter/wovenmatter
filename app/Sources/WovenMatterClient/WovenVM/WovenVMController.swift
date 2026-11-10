@@ -94,6 +94,13 @@ public struct WovenVMController: Sendable {
         try await call("GET", "/v1/status", as: WovenVMStatus.self)
     }
 
+    /// What explains a stuck or failed VM: status, the ends of the helper log
+    /// and console, and the guest agent's report (provisioning log, kernel
+    /// alerts, failed units, processes). Works while provisioning is stuck.
+    public func diagnostics() async throws -> WovenVMDiagnostics {
+        try await call("GET", "/v1/diagnostics", as: WovenVMDiagnostics.self, timeout: 90)
+    }
+
     /// Polls until the VM is ready; throws with the helper's reason if it fails.
     public func waitUntilReady(timeout: Duration = .seconds(3600),
                                progress: (@Sendable (WovenVMStatus) -> Void)? = nil) async throws -> WovenVMStatus {
@@ -175,20 +182,21 @@ public struct WovenVMController: Sendable {
     // MARK: Transport
 
     private func call<Reply: Decodable>(_ method: String, _ path: String, body: (some Encodable)? = Optional<Int>.none,
-                                        as type: Reply.Type) async throws -> Reply {
+                                        as type: Reply.Type, timeout: Int = 30) async throws -> Reply {
         let data = try body.map { try JSONEncoder().encode($0) }
-        let reply = try await raw(method, path, body: data)
+        let reply = try await raw(method, path, body: data, timeout: timeout)
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return try decoder.decode(Reply.self, from: reply)
     }
 
-    private func raw(_ method: String, _ path: String, body: Data?) async throws -> Data {
+    private func raw(_ method: String, _ path: String, body: Data?, timeout: Int = 30) async throws -> Data {
         let socketPath = controlSocket.path, directory = paths.socketDirectory
         return try await Self.background {
             // Only talk to a helper listening in this user's own private directory.
             try WovenVMPaths.preparePrivateDirectory(directory, create: false)
-            let (status, reply) = try Self.exchange(socketPath: socketPath, method: method, path: path, body: body ?? Data())
+            let (status, reply) = try Self.exchange(socketPath: socketPath, method: method, path: path, body: body ?? Data(),
+                                                    timeout: timeout)
             guard (200..<300).contains(status) else {
                 let message = (try? JSONDecoder().decode(WovenVMControlHTTP.ErrorBody.self, from: reply))?.error
                 throw status == 409 || status == 503

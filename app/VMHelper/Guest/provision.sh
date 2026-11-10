@@ -5,6 +5,10 @@
 #   upgrade:    Woven's Update action: guest packages plus the pinned Docker
 #               Engine, then the same configuration. The Mac snapshots the
 #               disks before and reboots and health-checks the guest after.
+# Every step runs under its own time limit, so a hang ends as a failure that
+# names the step. The status file carries the step's limit and this boot's ID:
+# the Mac enforces the same limit when the guest itself is stuck, and never
+# takes an earlier boot's result for this one's.
 set -Eeuo pipefail
 mode="${1:-first-boot}"
 state=/var/lib/woven
@@ -14,29 +18,48 @@ status_file="$state/status.json"
 [ "$mode" = upgrade ] && status_file="$state/update.json"
 mkdir -p "$state"
 exec >>"$log" 2>&1
-echo "=== $(date -Is) $mode"
 # shellcheck source=/dev/null
 . /etc/woven/versions.env
 export DEBIAN_FRONTEND=noninteractive
 step="Starting"
 
-status() {
+status() { # phase step [error [limit-seconds]]
   python3 - "$status_file" "$@" <<'PY'
 import json, os, sys
 path, phase, step = sys.argv[1:4]
-error = sys.argv[4] if len(sys.argv) > 4 else None
+error = sys.argv[4] if len(sys.argv) > 4 and sys.argv[4] else None
+limit = int(sys.argv[5]) if len(sys.argv) > 5 else None
+with open("/proc/sys/kernel/random/boot_id") as handle:
+    boot = handle.read().strip()
 with open(path + ".tmp", "w") as handle:
-    json.dump({"phase": phase, "step": step, "error": error}, handle)
+    json.dump({"phase": phase, "step": step, "error": error, "timeout": limit, "boot_id": boot}, handle)
 os.replace(path + ".tmp", path)
 PY
 }
-begin() { step="$1"; echo "--- $step"; status running "$step"; }
+fail() { # message
+  status failed "$step" "$1"
+  exit 1
+}
+log_tail() { tail -n 4 "$log" | tr '\n' ' ' | cut -c1-600; }
 failed() {
   local code=$?
-  status failed "$step" "$step failed (exit $code): $(tail -n 4 "$log" | tr '\n' ' ' | cut -c1-600)"
-  exit "$code"
+  fail "$step failed (exit $code): $(log_tail)"
 }
-trap failed ERR
+
+# run_step SECONDS TITLE FUNCTION: FUNCTION runs in a child of this script
+# under `timeout`, which ends the child's whole process group at the limit.
+run_step() {
+  local limit="$1" code=0
+  step="$2"
+  echo "--- $step"
+  status running "$step" "" "$limit"
+  timeout --kill-after=30 "$limit" "$0" "$mode" --step "$3" || code=$?
+  case "$code" in
+    0) ;;
+    124 | 137) fail "$step did not finish within $((limit / 60)) minutes." ;;
+    *) fail "$step failed (exit $code): $(log_tail)" ;;
+  esac
+}
 
 apt_get() {
   apt-get -o DPkg::Lock::Timeout=600 -o Dpkg::Options::=--force-confdef \
@@ -44,7 +67,6 @@ apt_get() {
 }
 
 turn_off_automatic_updates() {
-  begin "Turning off automatic updates"
   # Woven decides when the guest changes; nothing upgrades behind its back.
   cat >/etc/apt/apt.conf.d/20auto-upgrades <<'EOF'
 APT::Periodic::Update-Package-Lists "0";
@@ -68,7 +90,6 @@ EOF
 }
 
 prepare_data_disk() {
-  begin "Preparing the bot disk"
   local device=/dev/disk/by-id/virtio-woven-data
   for _ in $(seq 1 30); do [ -e "$device" ] && break; sleep 1; done
   [ -e "$device" ]
@@ -94,7 +115,6 @@ EOF
 }
 
 install_docker() {
-  begin "Installing Docker Engine $DOCKER_CE_VERSION"
   install -d -m 0755 /etc/docker /etc/apt/keyrings
   cat >/etc/docker/daemon.json <<'EOF'
 {
@@ -121,7 +141,6 @@ EOF
 }
 
 configure() {
-  begin "Applying network rules"
   # Containers cannot create AF_VSOCK sockets under Docker's seccomp profile;
   # without the loopback transport not even guest root reaches the guest's
   # own vsock listeners.
@@ -164,7 +183,6 @@ EOF
 }
 
 start_docker() {
-  begin "Starting Docker Engine"
   systemctl enable docker.service containerd.service
   systemctl restart containerd.service docker.service
   for _ in $(seq 1 60); do
@@ -174,29 +192,44 @@ start_docker() {
   false
 }
 
+update_packages() {
+  apt-mark hold docker-ce docker-ce-cli containerd.io >/dev/null 2>&1 || true
+  apt_get update
+  apt_get -y full-upgrade
+}
+
+remove_unused_packages() {
+  apt_get -y autoremove --purge
+  apt_get clean
+}
+
+if [ "${2:-}" = --step ]; then
+  # One step, run by run_step under its time limit; run_step reports it.
+  "$3"
+  exit 0
+fi
+
+echo "=== $(date -Is) $mode"
+trap failed ERR
 case "$mode" in
   first-boot)
-    turn_off_automatic_updates
-    prepare_data_disk
-    install_docker
-    configure
-    start_docker
+    run_step 900 "Turning off automatic updates" turn_off_automatic_updates
+    run_step 900 "Preparing the bot disk" prepare_data_disk
+    run_step 1800 "Installing Docker Engine $DOCKER_CE_VERSION" install_docker
+    run_step 300 "Applying network rules" configure
+    run_step 300 "Starting Docker Engine" start_docker
     printf '{"guestVersion": %s, "at": "%s"}\n' "$WOVEN_GUEST_VERSION" "$(date -Is)" >"$state/provisioned"
     status ready "Ready"
     ;;
   upgrade)
-    turn_off_automatic_updates
-    begin "Updating guest packages"
-    apt-mark hold docker-ce docker-ce-cli containerd.io >/dev/null 2>&1 || true
-    apt_get update
-    apt_get -y full-upgrade
+    run_step 900 "Turning off automatic updates" turn_off_automatic_updates
+    run_step 3600 "Updating guest packages" update_packages
     # Idempotent: refreshes the data disk's mount options for the reboot.
-    prepare_data_disk
-    install_docker
-    apt_get -y autoremove --purge
-    apt_get clean
-    configure
-    start_docker
+    run_step 900 "Preparing the bot disk" prepare_data_disk
+    run_step 1800 "Installing Docker Engine $DOCKER_CE_VERSION" install_docker
+    run_step 900 "Removing unused packages" remove_unused_packages
+    run_step 300 "Applying network rules" configure
+    run_step 300 "Starting Docker Engine" start_docker
     printf '{"guestVersion": %s, "at": "%s"}\n' "$WOVEN_GUEST_VERSION" "$(date -Is)" >"$state/provisioned"
     status ready "Updated"
     ;;

@@ -94,12 +94,16 @@ final class VMHelper: NSObject, VZVirtualMachineDelegate, @unchecked Sendable {
             defer { endSequence() }
             do {
                 try prepare()
-                try bootAndWait(timeout: 3600, report: true)
+                try bootAndWait(timeout: Self.readyLimit, report: true)
             } catch {
                 fail(error)
             }
         }
     }
+
+    /// Each provisioning step has its own limit (`WovenVMProvisionWatch`);
+    /// this only ends a wait that would otherwise never end.
+    static let readyLimit: TimeInterval = 4 * 3600
 
     private var maintenanceTimer: (any DispatchSourceTimer)?
     private var balloonTimer: (any DispatchSourceTimer)?
@@ -263,7 +267,7 @@ final class VMHelper: NSObject, VZVirtualMachineDelegate, @unchecked Sendable {
     private func bootAndWait(timeout: TimeInterval, report: Bool) throws {
         if report { set(.booting, "Starting the VM") }
         try boot()
-        try waitUntilReady(timeout: timeout, report: report)
+        try waitUntilReadyRetrying(timeout: timeout, report: report)
         // Provisioning sets the guest kernel's memory options; they apply from
         // its next boot. Once, so a guest that keeps refusing them still runs.
         if queue.sync(execute: { guestCommandLine.map { !WovenVMBalloonPolicy.guestLeavesBalloonUntouched(commandLine: $0) } ?? false }) {
@@ -271,30 +275,48 @@ final class VMHelper: NSObject, VZVirtualMachineDelegate, @unchecked Sendable {
             if report { set(.booting, "Restarting the VM to apply its memory settings") }
             stopGuest()
             try boot()
-            try waitUntilReady(timeout: timeout, report: report)
+            try waitUntilReadyRetrying(timeout: timeout, report: report)
         }
         if report { set(.ready, nil) }
         afterReady()
     }
 
+    /// A failed or stuck guest gets one fresh boot: provisioning resumes on
+    /// every boot until it succeeds, and a reboot clears what a guest kernel
+    /// fault leaves wedged (measured on a MacBook Air: a slab fault while
+    /// loading `overlay` hung every later module load, so containerd never
+    /// started).
+    private func waitUntilReadyRetrying(timeout: TimeInterval, report: Bool) throws {
+        do {
+            try waitUntilReady(timeout: timeout, report: report)
+        } catch let failure as GuestNotReady {
+            log("\(failure.message) Restarting the VM to try once more.")
+            if report { set(.booting, "Restarting the VM to retry setup") }
+            stopGuest()
+            try boot()
+            try waitUntilReady(timeout: timeout, report: report)
+        }
+    }
+
+    /// Follows provisioning (`WovenVMProvisionWatch`): every step has a time
+    /// limit, so a stuck guest fails naming the step. A failure records the
+    /// guest's diagnostics in `helper.log`.
     private func waitUntilReady(timeout: TimeInterval, report: Bool) throws {
         let started = Date()
-        var reached = false
+        var watch = WovenVMProvisionWatch(now: started)
         while Date().timeIntervalSince(started) < timeout {
             guard queue.sync(execute: { machine != nil }) else {
                 throw WovenVMError.failed("The VM stopped while starting.\(consoleTail())")
             }
-            if let status = try? agent(["op": "status"], timeout: 5) {
-                reached = true
-                recordGuest(status)
-                let provision = status["provision"] as? [String: Any]
-                if status["provisioned"] is [String: Any], status["docker"] is String { return }
-                if provision?["phase"] as? String == "failed" {
-                    throw WovenVMError.failed(provision?["error"] as? String ?? "Provisioning failed.")
-                }
-                if report { set(.provisioning, provision?["step"] as? String ?? "Starting the guest") }
-            } else if !reached && Date().timeIntervalSince(started) > 600 {
-                throw WovenVMError.failed("The guest did not start.\(consoleTail())")
+            let status = try? agent(["op": "status"], timeout: 10)
+            if let status { recordGuest(status) }
+            switch watch.observe(status.map(WovenVMProvisionWatch.Report.init(provisioningIn:)), now: Date()) {
+            case .done:
+                return
+            case .failed(let message):
+                throw GuestNotReady(message: message + (status == nil ? consoleTail() : "") + recordDiagnostics())
+            case .waiting(let step):
+                if report, status != nil { set(.provisioning, step) }
             }
             Thread.sleep(forTimeInterval: 1)
         }
@@ -302,9 +324,47 @@ final class VMHelper: NSObject, VZVirtualMachineDelegate, @unchecked Sendable {
     }
 
     private func consoleTail() -> String {
-        guard let data = try? Data(contentsOf: paths.console), !data.isEmpty else { return "" }
-        let lines = String(decoding: data.suffix(2048), as: UTF8.self).split(separator: "\n").suffix(5)
-        return " Console: " + lines.joined(separator: " | ")
+        let lines = Self.tail(of: paths.console, lines: 5)
+        return lines.isEmpty ? "" : " Console: " + lines.split(separator: "\n").joined(separator: " | ")
+    }
+
+    static func tail(of file: URL, lines: Int, bytes: Int = 16_384) -> String {
+        guard let handle = try? FileHandle(forReadingFrom: file) else { return "" }
+        defer { try? handle.close() }
+        let size = (try? handle.seekToEnd()) ?? 0
+        try? handle.seek(toOffset: size > UInt64(bytes) ? size - UInt64(bytes) : 0)
+        let data = (try? handle.readToEnd()) ?? Data()
+        return String(decoding: data, as: UTF8.self).split(separator: "\n").suffix(lines).joined(separator: "\n")
+    }
+
+    /// Writes what explains a failure to `helper.log` and returns a sentence
+    /// naming a guest kernel fault, if the guest reported one.
+    private func recordDiagnostics() -> String {
+        guard let guest = try? agent(["op": "diagnostics"], timeout: 60) else {
+            log("guest diagnostics unavailable: the guest agent did not answer")
+            return ""
+        }
+        let texts = WovenVMGuestDiagnostics.texts(guest)
+        for key in ["kernel_alerts", "failed_units", "jobs", "provision_log"] {
+            guard let text = texts[key], !text.isEmpty else { continue }
+            let lines = text.split(separator: "\n").suffix(key == "provision_log" ? 15 : 30)
+            log("guest \(key):\n  " + lines.joined(separator: "\n  "))
+        }
+        return WovenVMGuestDiagnostics.kernelFault(texts).map { " The guest kernel reported a fault: \($0)" } ?? ""
+    }
+
+    /// Helper, console and guest state for `GET /v1/diagnostics`.
+    func diagnostics() -> WovenVMDiagnostics {
+        var guest: [String: String]?
+        var guestError: String?
+        do {
+            guest = WovenVMGuestDiagnostics.texts(try agent(["op": "diagnostics"], timeout: 60))
+        } catch {
+            guestError = (error as? WovenVMError)?.errorDescription ?? error.localizedDescription
+        }
+        return WovenVMDiagnostics(status: status(), helperLog: Self.tail(of: paths.log, lines: 80),
+                                  console: Self.tail(of: paths.console, lines: 40), guest: guest,
+                                  guestError: guestError)
     }
 
     private func recordGuest(_ status: [String: Any]) {
@@ -364,7 +424,7 @@ final class VMHelper: NSObject, VZVirtualMachineDelegate, @unchecked Sendable {
         detach { [self] in
             guard beginSequence() else { return }
             defer { endSequence() }
-            do { try bootAndWait(timeout: 1800, report: true) } catch { fail(error) }
+            do { try bootAndWait(timeout: Self.readyLimit, report: true) } catch { fail(error) }
         }
     }
 
@@ -482,7 +542,7 @@ final class VMHelper: NSObject, VZVirtualMachineDelegate, @unchecked Sendable {
     }
 
     private func pushHostAddresses() {
-        _ = try? agent(["op": "set_host_addresses", "addresses": HostMetrics.addresses()], timeout: 30)
+        _ = try? agent(["op": "set_host_addresses", "addresses": HostMetrics.addresses()], timeout: 100)
     }
 
     private func applyDiskCap() {
@@ -626,7 +686,7 @@ final class VMHelper: NSObject, VZVirtualMachineDelegate, @unchecked Sendable {
         defer { endSequence() }
         set(.booting, "Restarting the VM")
         stopGuest()
-        do { try bootAndWait(timeout: 1800, report: true) } catch { fail(error) }
+        do { try bootAndWait(timeout: Self.readyLimit, report: true) } catch { fail(error) }
     }
 
     func terminate(code: Int32) {
@@ -681,7 +741,7 @@ final class VMHelper: NSObject, VZVirtualMachineDelegate, @unchecked Sendable {
         } catch {
             log("snapshot failed: \(error.localizedDescription)")
             queue.sync { state.updateFailure = "The snapshot could not be saved: \(error.localizedDescription)"; saveState() }
-            do { try bootAndWait(timeout: 1800, report: true) } catch { fail(error) }
+            do { try bootAndWait(timeout: Self.readyLimit, report: true) } catch { fail(error) }
             return
         }
         do {
@@ -691,7 +751,7 @@ final class VMHelper: NSObject, VZVirtualMachineDelegate, @unchecked Sendable {
             set(.updating, "Updating guest packages and Docker Engine")
             let files = try WovenVMGuestFiles.files(resources: resources, version: version)
             _ = try agent(["op": "update", "files": files.mapValues { $0.base64EncodedString() }], timeout: 120)
-            try waitForUpdate(timeout: 3600)
+            try waitForUpdate(timeout: Self.readyLimit)
             set(.updating, "Restarting the VM")
             stopGuest()
             try boot()
@@ -711,7 +771,7 @@ final class VMHelper: NSObject, VZVirtualMachineDelegate, @unchecked Sendable {
             do {
                 try restoreSnapshot()
                 queue.sync { state.updateFailure = "The update failed and was rolled back: \(error.localizedDescription)"; saveState() }
-                try bootAndWait(timeout: 1800, report: true)
+                try bootAndWait(timeout: Self.readyLimit, report: true)
             } catch {
                 fail(error)
             }
@@ -720,14 +780,14 @@ final class VMHelper: NSObject, VZVirtualMachineDelegate, @unchecked Sendable {
 
     private func waitForUpdate(timeout: TimeInterval) throws {
         let started = Date()
+        var watch = WovenVMProvisionWatch(now: started)
         while Date().timeIntervalSince(started) < timeout {
             Thread.sleep(forTimeInterval: 2)
-            guard let status = try? agent(["op": "status"], timeout: 10),
-                  let update = status["update"] as? [String: Any] else { continue }
-            switch update["phase"] as? String {
-            case "ready": return
-            case "failed": throw WovenVMError.failed(update["error"] as? String ?? "The guest update failed.")
-            default: set(.updating, update["step"] as? String ?? "Updating")
+            let status = try? agent(["op": "status"], timeout: 10)
+            switch watch.observe(status.map(WovenVMProvisionWatch.Report.init(updateIn:)), now: Date()) {
+            case .done: return
+            case .failed(let message): throw WovenVMError.failed(message + recordDiagnostics())
+            case .waiting(let step): if status != nil { set(.updating, step) }
             }
         }
         throw WovenVMError.failed("The guest update did not finish in time.")
@@ -917,6 +977,8 @@ final class VMHelper: NSObject, VZVirtualMachineDelegate, @unchecked Sendable {
             switch (request.method, request.path) {
             case ("GET", "/v1/status"):
                 return json(200, status())
+            case ("GET", "/v1/diagnostics"):
+                return json(200, diagnostics())
             case ("PUT", "/v1/resources"):
                 try applyResources(JSONDecoder().decode(WovenVMResources.self, from: request.body))
                 return json(200, status())
@@ -975,6 +1037,12 @@ final class VMHelper: NSObject, VZVirtualMachineDelegate, @unchecked Sendable {
         _ = Sockets.writeAll(fd, Data(line.utf8))
         close(fd)
     }
+}
+
+/// Provisioning failed or stopped making progress; worth one fresh boot.
+struct GuestNotReady: Error, LocalizedError {
+    var message: String
+    var errorDescription: String? { message }
 }
 
 struct HelperAlreadyRunning: Error, LocalizedError {
