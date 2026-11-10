@@ -1155,11 +1155,12 @@ login until `stop()`.
     `balloonTargetBytes` the cap in effect.
   - Measured on the Mac Mini, macOS 27.2 (8 GiB pool, guest idle at about
     0.6 GiB). Before: the first image build ended at 8.2 GB footprint and
-    stayed there idle. After: fresh boot 1.3 GB; the first image build (3.3
-    minutes, capped at 3 GiB until a stall opened it) 5.3 GB; idle restart
-    10 minutes later back to 1.3 GB, capped at 2.6 GiB; one bot through the
-    real-engine test 3.5 GB (its snapshot commit re-read evicted cache and
-    opened the balloon).
+    stayed there idle. After, in two runs from a fresh disk: boot 1.3 GB;
+    the first image build (3.3 and 4.3 minutes, capped at 3 GiB until a
+    stall opened it) 5.3 GB; one bot through the real-engine test 3.5 GB
+    from an idle-restarted VM (its snapshot commit re-read evicted cache and
+    opened the balloon), 5.6 GB right after the build; the idle restart 10
+    minutes later back to 1.3 GB, capped at 2.6 GiB.
 - **Limits and disk.** Per-container memory limits (`Memory`, `MemorySwap`)
   are enforced by the guest kernel (cgroup v2). The disk cap is enforced inside the guest by a
   reserve file of unwritten extents on the data disk, so raising and lowering both apply at
