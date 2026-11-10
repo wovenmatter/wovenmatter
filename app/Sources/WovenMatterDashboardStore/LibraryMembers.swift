@@ -50,8 +50,9 @@ public struct LibraryMemberEntry: Codable, Equatable, Sendable {
   func verifies(with key: Data) -> Bool { MemberIdentity.verify(publicKey: key, signature: signature, message: statement) }
 }
 
-/// A signed removal. Applied everywhere as soon as it synchronizes. Re-adding
-/// the device later takes a newer entry from a member Mac.
+/// A signed removal. Applied everywhere as soon as it synchronizes, as long
+/// as its signer stands. Re-adding the device later takes a newer entry from
+/// a standing Mac, which may carry a new key.
 public struct LibraryMemberRevocation: Codable, Equatable, Sendable {
   public let eventID: String
   public let deviceID: String
@@ -75,8 +76,11 @@ public struct LibraryMemberRevocation: Codable, Equatable, Sendable {
   }
 }
 
-/// A local trust root: this device itself, and on a Linux host the Mac that
-/// added it. Anchors are local state and never synchronize.
+/// A local trust root: this device itself, the Mac that adopted a Linux
+/// host, and every Mac this device has trusted (pinned on first sight, so
+/// removing the Mac that introduced it never cuts this device off from the
+/// others). Anchors are local, never synchronize, are never removed and
+/// never change key; any but this device's own can still be revoked.
 public struct LibraryMemberAnchor: Codable, Equatable, Sendable {
   public let deviceID: String
   public let kind: MemberKind
@@ -103,6 +107,13 @@ public struct LibraryMemberList: Codable, Equatable, Sendable {
   public let members: [LibraryMember]
   /// Opaque; changes whenever any resolved field changes.
   public let revision: String
+  /// This device has anchored a Mac (a Linux host's first adoption, or any
+  /// Mac it has trusted). Anchors are never removed, so a Linux host that
+  /// was adopted once never takes the installer's bearer for adoption again.
+  public var adopted: Bool?
+  public init(members: [LibraryMember], revision: String, adopted: Bool? = nil) {
+    self.members = members; self.revision = revision; self.adopted = adopted
+  }
   public func active(_ deviceID: String) -> LibraryMember? {
     members.first { $0.deviceID == deviceID.lowercased() && !$0.revoked }
   }
@@ -120,85 +131,138 @@ public struct LibraryMemberAdoption: Codable, Sendable {
 }
 
 public enum LibraryMemberResolver {
-  /// Trust flows only from anchors through entries signed by trusted Macs.
-  /// - A device's kind comes from an anchor or a Mac-signed entry; its own
-  ///   later entry may change only its name and endpoints.
-  /// - A device that two trusted entries give different keys is not trusted.
-  /// - Removing a Mac does not remove the devices it added before removal.
-  ///   Entries it signed at or after its own removal time are ignored.
-  /// - A revocation counts when a trusted, unremoved Mac (or the device
-  ///   itself) signed it. A later entry from an unremoved Mac re-adds.
+  /// A record dated further ahead than this is ignored until then, so no
+  /// signer can date one to outlast every later record.
+  public static let futureSkew: Int64 = 10 * 60 * 1_000
+
+  struct Trust: Equatable { var key: Data; var kind: MemberKind; var anchor: Bool }
+  struct Reach { var trusted: [String: Trust]; var vouched: [String: [Int]] }
+
+  /// Trust flows from this device's local anchors (itself, and every Mac it
+  /// has trusted, pinned on first sight) through entries signed by Macs that
+  /// still stand. Signer times only order records among standing Macs; they
+  /// never decide which side of a dispute wins. See
+  /// docs/architecture/WOVEN_EVERYWHERE.md, "Trust model".
+  /// - Kind comes from a Mac's entry (or an anchor); a device's own entry
+  ///   changes only its name and endpoints. A pinned anchor's key never changes.
+  /// - An entry counts only while its signer stands and it is newer than every
+  ///   effective revocation of its device, so everything a removed Mac signed
+  ///   is void, whatever its date, and a revocation older than a standing
+  ///   entry does nothing. Two live keys for one device: not trusted.
+  /// - A revocation is effective when a standing Mac (or the device itself)
+  ///   signed it. This device is removed here only by itself, and a Mac that
+  ///   removed this device without a later re-add removes nobody here.
+  /// - Removals that depend on each other are settled from the anchors
+  ///   outward (the well-founded evaluation): a Mac stands only if no Mac that
+  ///   might stand removed it, so two Macs that removed each other both lose
+  ///   here and neither wins.
   public static func resolve(entries rawEntries: [LibraryMemberEntry], revocations rawRevocations: [LibraryMemberRevocation],
-                             anchors: [LibraryMemberAnchor]) -> [LibraryMember] {
-    let entries = rawEntries.filter(\.isWellFormed)
-    let revocations = rawRevocations.filter(\.isWellFormed)
-    struct Trust { var key: Data; var kind: MemberKind; var anchor: Bool }
-    var trusted: [String: Trust] = [:], conflicted = Set<String>()
-    for anchor in anchors where anchor.publicKey.count == 32 { trusted[anchor.deviceID] = .init(key: anchor.publicKey, kind: anchor.kind, anchor: true) }
-    var vouched: [String: [LibraryMemberEntry]] = [:]
-    var changed = true
-    while changed {
-      changed = false
-      for entry in entries where entry.addedBy != entry.deviceID && !conflicted.contains(entry.deviceID) {
-        guard let adder = trusted[entry.addedBy], adder.kind == .mac, !conflicted.contains(entry.addedBy),
-              entry.verifies(with: adder.key) else { continue }
-        if !(vouched[entry.deviceID]?.contains(entry) ?? false) { vouched[entry.deviceID, default: []].append(entry) }
-        if let current = trusted[entry.deviceID] {
-          if current.key != entry.publicKey && !current.anchor { conflicted.insert(entry.deviceID); trusted.removeValue(forKey: entry.deviceID); changed = true }
-          continue
+                             anchors rawAnchors: [LibraryMemberAnchor], own rawOwn: String? = nil,
+                             now: Int64 = MemberRequestSignature.now()) -> [LibraryMember] {
+    let limit = now + futureSkew
+    let entries = rawEntries.filter { $0.isWellFormed && $0.addedAt <= limit }
+    let revocations = rawRevocations.filter { $0.isWellFormed && $0.revokedAt <= limit }
+    var anchors: [String: LibraryMemberAnchor] = [:]
+    for anchor in rawAnchors where anchor.publicKey.count == 32 && anchors[anchor.deviceID] == nil { anchors[anchor.deviceID] = anchor }
+    let own = rawOwn?.lowercased()
+    var checked: [String: Bool] = [:]
+    func entryVerifies(_ index: Int, _ key: Data) -> Bool {
+      let memo = "e\(index):" + key.base64EncodedString()
+      if let known = checked[memo] { return known }
+      let result = entries[index].verifies(with: key); checked[memo] = result; return result
+    }
+    func revocationVerifies(_ index: Int, _ key: Data) -> Bool {
+      let memo = "r\(index):" + key.base64EncodedString()
+      if let known = checked[memo] { return known }
+      let revocation = revocations[index]
+      let result = MemberIdentity.verify(publicKey: key, signature: revocation.signature, message: revocation.statement)
+      checked[memo] = result; return result
+    }
+    func earliest(_ list: [Int]) -> Int? { list.min { (entries[$0].addedAt, entries[$0].addedBy) < (entries[$1].addedAt, entries[$1].addedBy) } }
+
+    // Who is trusted when `cut` holds each device's latest effective removal.
+    func reach(cut: [String: Int64]) -> Reach {
+      var trusted: [String: Trust] = [:], conflicted = Set<String>(), vouched: [String: [Int]] = [:]
+      for (id, anchor) in anchors where id == own || cut[id] == nil {
+        trusted[id] = .init(key: anchor.publicKey, kind: anchor.kind, anchor: true)
+      }
+      var changed = true
+      while changed {
+        changed = false
+        for (index, entry) in entries.enumerated() where entry.addedBy != entry.deviceID && entry.deviceID != own
+          && !conflicted.contains(entry.deviceID) && entry.addedAt > (cut[entry.deviceID] ?? 0) {
+          guard let adder = trusted[entry.addedBy], adder.kind == .mac, !conflicted.contains(entry.addedBy),
+                anchors[entry.deviceID].map({ $0.publicKey == entry.publicKey }) ?? true,
+                entryVerifies(index, adder.key) else { continue }
+          if !(vouched[entry.deviceID]?.contains(index) ?? false) { vouched[entry.deviceID, default: []].append(index) }
+          if let current = trusted[entry.deviceID] {
+            if current.key != entry.publicKey && !current.anchor { conflicted.insert(entry.deviceID); trusted.removeValue(forKey: entry.deviceID); changed = true }
+            continue
+          }
+          trusted[entry.deviceID] = .init(key: entry.publicKey, kind: anchors[entry.deviceID]?.kind ?? entry.kind, anchor: false); changed = true
         }
-        trusted[entry.deviceID] = .init(key: entry.publicKey, kind: entry.kind, anchor: false); changed = true
       }
-    }
-    // Earliest Mac-signed entry fixes the kind; a phone cannot promote itself.
-    for (device, list) in vouched where trusted[device]?.anchor == false {
-      if let first = list.filter({ $0.publicKey == trusted[device]?.key }).min(by: { ($0.addedAt, $0.addedBy) < ($1.addedAt, $1.addedBy) }) {
-        trusted[device]?.kind = first.kind
+      // The earliest live Mac-signed entry fixes the kind; a phone cannot promote itself.
+      for (device, list) in vouched where trusted[device]?.anchor == false && anchors[device] == nil {
+        if let first = earliest(list.filter { entries[$0].publicKey == trusted[device]?.key }) { trusted[device]?.kind = entries[first].kind }
       }
+      return .init(trusted: trusted, vouched: vouched)
     }
-    // Removal times, settled to a fixpoint because an unremoved re-adder and a
-    // removed revoker each depend on removals.
-    func validRevocations(removedAt: [String: Int64]) -> [String: Int64] {
-      var latest: [String: Int64] = [:]
-      for revocation in revocations {
-        guard let revoker = trusted[revocation.revokedBy], revoker.kind == .mac || revocation.revokedBy == revocation.deviceID,
-              MemberIdentity.verify(publicKey: revoker.key, signature: revocation.signature, message: revocation.statement) else { continue }
-        if let revokerRemoved = removedAt[revocation.revokedBy], revocation.revokedBy != revocation.deviceID,
-           revocation.revokedAt >= revokerRemoved { continue }
-        latest[revocation.deviceID] = max(latest[revocation.deviceID] ?? 0, revocation.revokedAt)
-      }
-      return latest
-    }
-    var removedAt: [String: Int64] = [:]
-    for _ in 0..<8 {
-      var next: [String: Int64] = [:]
-      for (device, time) in validRevocations(removedAt: removedAt) {
-        let readded = (vouched[device] ?? []).contains { entry in
-          entry.addedAt > time && entry.publicKey == trusted[device]?.key
-            && (removedAt[entry.addedBy].map { entry.addedAt < $0 } ?? true)
+
+    // Latest effective removal per device when the members of `standing` may revoke.
+    func effectiveCut(_ standing: [String: Trust]) -> [String: Int64] {
+      var hostile = Set<String>()
+      if let own {
+        for (index, revocation) in revocations.enumerated() where revocation.deviceID == own && revocation.revokedBy != own {
+          guard let revoker = standing[revocation.revokedBy], revoker.kind == .mac, revocationVerifies(index, revoker.key) else { continue }
+          let readded = entries.indices.contains { other in
+            let entry = entries[other]
+            return entry.deviceID == own && entry.addedBy != own && entry.addedBy != revocation.revokedBy && entry.addedAt > revocation.revokedAt
+              && standing[entry.addedBy].map { $0.kind == .mac && entryVerifies(other, $0.key) } == true
+          }
+          if !readded { hostile.insert(revocation.revokedBy) }
         }
-        if !readded { next[device] = time }
       }
-      if next == removedAt { break }
-      removedAt = next
+      var cut: [String: Int64] = [:]
+      for (index, revocation) in revocations.enumerated() {
+        guard let revoker = standing[revocation.revokedBy], revoker.kind == .mac || revocation.revokedBy == revocation.deviceID,
+              !hostile.contains(revocation.revokedBy), revocation.deviceID != own || revocation.revokedBy == own,
+              revocationVerifies(index, revoker.key) else { continue }
+        cut[revocation.deviceID] = max(cut[revocation.deviceID] ?? 0, revocation.revokedAt)
+      }
+      return cut
     }
-    return trusted.keys.sorted().compactMap { device in
-      guard let trust = trusted[device] else { return nil }
-      // A removed Mac's entries from its removal on are void.
-      if !trust.anchor, !(vouched[device] ?? []).contains(where: { entry in
-        entry.publicKey == trust.key && (removedAt[entry.addedBy].map { entry.addedAt < $0 } ?? true)
-      }) { return nil }
+
+    // Alternating fixpoint: `upper` is everyone who might stand, `lower`
+    // everyone who stands whatever the undecided Macs do.
+    let ownOnly = own.flatMap { id in anchors[id].map { [id: Trust(key: $0.publicKey, kind: $0.kind, anchor: true)] } } ?? [:]
+    let known = reach(cut: [:])
+    var upper = reach(cut: effectiveCut(ownOnly)).trusted
+    var lower = Reach(trusted: [:], vouched: [:])
+    for _ in 0..<16 {
+      let nextLower = reach(cut: effectiveCut(upper))
+      let nextUpper = reach(cut: effectiveCut(nextLower.trusted)).trusted
+      let settled = nextLower.trusted == lower.trusted && nextUpper == upper
+      lower = nextLower; upper = nextUpper
+      if settled { break }
+    }
+    let disputed = effectiveCut(upper)
+    return Set(known.trusted.keys).union(lower.trusted.keys).sorted().compactMap { device in
+      let standing = lower.trusted[device]
+      // Unreachable and never removed: every Mac that vouched for it is gone.
+      guard let trust = standing ?? (disputed[device] != nil ? known.trusted[device] : nil) else { return nil }
+      let vouchers = ((standing != nil ? lower : known).vouched[device] ?? []).filter { entries[$0].publicKey == trust.key }
       // Name and endpoints: the newest entry with the trusted key, from a
-      // trusted Mac or the device itself.
-      let candidates = entries.filter { entry in
-        entry.deviceID == device && entry.publicKey == trust.key
-          && (entry.addedBy == device ? entry.verifies(with: trust.key)
-              : (vouched[device]?.contains(entry) ?? false))
+      // voucher or the device itself.
+      let candidates = vouchers + entries.indices.filter { index in
+        entries[index].deviceID == device && entries[index].addedBy == device && entries[index].publicKey == trust.key
+          && entryVerifies(index, trust.key)
       }
-      let newest = candidates.max { ($0.addedAt, $0.addedBy) < ($1.addedAt, $1.addedBy) }
-      let adder = vouched[device]?.filter { $0.publicKey == trust.key }.min { ($0.addedAt, $0.addedBy) < ($1.addedAt, $1.addedBy) }?.addedBy
+      let newest = candidates.max { (entries[$0].addedAt, entries[$0].addedBy) < (entries[$1].addedAt, entries[$1].addedBy) }.map { entries[$0] }
+      let adder = earliest(vouchers).map { entries[$0].addedBy }
       return LibraryMember(deviceID: device, kind: trust.kind, name: newest?.name ?? "Device", publicKey: trust.key,
-        endpoints: newest?.endpoints ?? [], addedBy: adder ?? device, revoked: removedAt[device] != nil)
+        endpoints: newest?.endpoints ?? [], addedBy: adder ?? device,
+        revoked: standing == nil || (device == own && disputed[device] != nil))
     }
   }
 }
@@ -265,6 +329,7 @@ extension WorkspaceDatabaseConnection {
         payload TEXT NOT NULL, PRIMARY KEY(device_id, added_by));
       CREATE TABLE IF NOT EXISTS library_member_revocations(event_id TEXT PRIMARY KEY, device_id TEXT NOT NULL, payload TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS library_member_anchors(device_id TEXT PRIMARY KEY, payload TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS library_member_pin_candidates(device_id TEXT PRIMARY KEY, payload TEXT NOT NULL, first_seen INTEGER NOT NULL);
       """)
   }
 
@@ -288,11 +353,14 @@ extension WorkspaceDatabase {
   public func libraryMemberRecords() async throws -> (entries: [LibraryMemberEntry], revocations: [LibraryMemberRevocation], anchors: [LibraryMemberAnchor]) {
     try await read { try $0.memberRecordsUnlocked() }
   }
-  public func libraryMembers() async throws -> LibraryMemberList {
+  /// `own` is this device's member ID: its anchor is removed only by itself.
+  public func libraryMembers(own: String? = nil, now: Int64 = MemberRequestSignature.now()) async throws -> LibraryMemberList {
     let records = try await libraryMemberRecords()
-    let members = LibraryMemberResolver.resolve(entries: records.entries, revocations: records.revocations, anchors: records.anchors)
+    let members = LibraryMemberResolver.resolve(entries: records.entries, revocations: records.revocations, anchors: records.anchors,
+                                                own: own, now: now)
     let revision = SHA256.hash(data: Data(try WorkspaceDatabaseConnection.memberJSON(members).utf8)).hexString
-    return .init(members: members, revision: String(revision.prefix(32)))
+    let adopted = records.anchors.contains { $0.kind == .mac && $0.deviceID != own?.lowercased() }
+    return .init(members: members, revision: String(revision.prefix(32)), adopted: adopted)
   }
   /// Keeps the newest entry per (device, adder). An older copy never replaces
   /// a newer one, so retries and relays are harmless.
@@ -320,12 +388,36 @@ extension WorkspaceDatabase {
       }
     }
   }
-  public func saveLibraryMemberAnchor(_ anchor: LibraryMemberAnchor) async throws {
-    let payload = try WorkspaceDatabaseConnection.memberJSON(anchor)
-    try await write { try $0.toolsExecuteUnlocked("INSERT INTO library_member_anchors VALUES(?,?) ON CONFLICT(device_id) DO UPDATE SET payload=excluded.payload", [anchor.deviceID, payload]) }
+  /// Macs trusted but not yet pinned, with the time each was first trusted
+  /// with its current key (local, unsynced).
+  public func libraryMemberPinCandidates() async throws -> [String: (anchor: LibraryMemberAnchor, firstSeen: Int64)] {
+    try await read { connection in
+      var result: [String: (anchor: LibraryMemberAnchor, firstSeen: Int64)] = [:]
+      for row in try connection.historyRowsUnlocked("SELECT payload,first_seen FROM library_member_pin_candidates", values: []) {
+        guard let fields = row.objectValue, let payload = fields["payload"]?.stringValue,
+              let anchor = try? JSONDecoder().decode(LibraryMemberAnchor.self, from: Data(payload.utf8)) else { continue }
+        result[anchor.deviceID] = (anchor, Int64(fields["first_seen"]?.intValue ?? 0))
+      }
+      return result
+    }
   }
-  /// Pairing state may be reset on upgrade; membership is never reset here.
-  public func removeLibraryMemberAnchor(_ deviceID: String) async throws {
-    try await write { try $0.toolsExecuteUnlocked("DELETE FROM library_member_anchors WHERE device_id=?", [deviceID.lowercased()]) }
+  public func updateLibraryMemberPinCandidates(saving: [(anchor: LibraryMemberAnchor, firstSeen: Int64)], removing: [String]) async throws {
+    let rows = try saving.map { ($0.anchor.deviceID, try WorkspaceDatabaseConnection.memberJSON($0.anchor), String($0.firstSeen)) }
+    try await write { connection in
+      try connection.transaction {
+        for id in removing { try connection.toolsExecuteUnlocked("DELETE FROM library_member_pin_candidates WHERE device_id=?", [id]) }
+        for (id, payload, time) in rows {
+          try connection.toolsExecuteUnlocked("INSERT INTO library_member_pin_candidates VALUES(?,?,?) ON CONFLICT(device_id) DO UPDATE SET payload=excluded.payload,first_seen=excluded.first_seen", [id, payload, time])
+        }
+      }
+    }
+  }
+  /// Pins an anchor. An existing anchor's key is never replaced, except this
+  /// device's own (`replacing`), whose key is its identity.
+  public func saveLibraryMemberAnchor(_ anchor: LibraryMemberAnchor, replacing: Bool = false) async throws {
+    let payload = try WorkspaceDatabaseConnection.memberJSON(anchor)
+    try await write { try $0.toolsExecuteUnlocked(replacing
+      ? "INSERT INTO library_member_anchors VALUES(?,?) ON CONFLICT(device_id) DO UPDATE SET payload=excluded.payload"
+      : "INSERT OR IGNORE INTO library_member_anchors VALUES(?,?)", [anchor.deviceID, payload]) }
   }
 }
