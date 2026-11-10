@@ -541,7 +541,9 @@ listed or fired, and a paused, revoked or disabled bot's are skipped.
   MCP and whenever the library host becomes ready. There is no other polling.
 - On a Mac the app's agent tool tick fires the Mac's own timers as before and
   now also delivers a bot's own timers to it (`deliverBotNotification` accepts
-  `timer` deliveries).
+  `timer` deliveries). Its UI shows a bot's timers in that bot's conversation
+  header, by the bot's name (`WorkspaceAgentToolsModel.timers(forBot:on:)`);
+  session views never list them.
 
 Tool execution is `WorkspaceToolExecutor` in `WovenMatterDashboardStore`, the
 same code the Mac app's `WorkspaceAgentToolsModel` now delegates to. Note edits
